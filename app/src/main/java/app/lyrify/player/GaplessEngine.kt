@@ -31,8 +31,11 @@ interface EngineListener {
     /** Anything the session shows changed. */
     fun onChanged() {}
 
-    /** The song [uid] started from its start: after the one before, after a jump, or again ([lap]: Repeat one). */
-    fun onSongStarted(uid: Long, lap: Boolean) {}
+    /**
+     * The song [uid] started: after the one before, after a jump, or again ([lap]: Repeat one). [natural] when the song
+     * before played to its end (the next one, or a lap of Repeat one), not when the user moved.
+     */
+    fun onSongStarted(uid: Long, lap: Boolean, natural: Boolean) {}
 
     /** The user jumped inside the song playing, from [fromMs] to [toMs]. */
     fun onSeeked(fromMs: Long, toMs: Long) {}
@@ -111,7 +114,9 @@ class GaplessEngine(context: Context, settings: () -> Settings, levels: SongLeve
 
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 val uid = mediaItem?.mediaId?.toLongOrNull() ?: return
-                listeners.forEach { it.onSongStarted(uid, lap = reason == Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT) }
+                val lap = reason == Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT
+                val natural = lap || reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO
+                listeners.forEach { it.onSongStarted(uid, lap, natural) }
             }
 
             override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {

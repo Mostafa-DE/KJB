@@ -140,62 +140,61 @@ class QueueBridge(private val port: PlayerPort) {
 }
 
 /**
- * Tells the play counter ([PlayEvents], milestone S1) about KJB's own plays, one at a time: [start] (a song starts, or
- * starts again: each lap of Repeat one is a new play), the time heard while actually playing ([playing], [seeked],
- * [flush]), and the [end]. Heard time counts [elapsed] time between a start of playing and a pause, a seek, a flush or
- * the end; paused time never counts. Ids grow from the wall clock, so they never repeat across runs. Main thread.
+ * Tells the play counter ([PlayEvents], stats/) about KJB's own plays, raw, one play at a time: [start] (a song starts,
+ * or starts again: each lap of Repeat one is a new play) with its position, the position whenever playing starts or
+ * stops and every [POSITION_EVERY_MS] while it plays ([position]), the seeks, and the [end]: at the song's length when it
+ * played to its end, else where it was last. The counter works out what was heard. Ids grow from the wall clock, so they
+ * never repeat across runs. Main thread.
  */
-class PlayTracker(private val events: PlayEvents, private val elapsed: () -> Long, private val wall: () -> Long) {
-    private class Play(val id: Long, val song: SongRef)
+class PlayTracker(private val events: PlayEvents, private val wall: () -> Long) {
+    private class Play(val id: Long, val song: SongRef, val durationMs: Long, var positionMs: Long)
 
     private var play: Play? = null
-    private var since: Long? = null
     private var lastId: Long = 0
 
-    /** [song] starts (ending the play before); [playing] when it plays at once. */
-    fun start(song: SongRef, durationMs: Long, playing: Boolean) {
-        end()
+    /** [song] starts at [positionMs]; the play before ends, at its length when [naturalEnd] (it played to its end). */
+    fun start(song: SongRef, durationMs: Long, positionMs: Long, playing: Boolean, naturalEnd: Boolean = false) {
+        end(naturalEnd)
         val id = maxOf(lastId + 1, wall())
         lastId = id
-        play = Play(id, song)
+        play = Play(id, song, durationMs, positionMs)
         events.onEvent(PlayEvent.Started(id, song, wall(), durationMs))
-        since = if (playing) elapsed() else null
+        position(positionMs, playing)
     }
 
-    fun playing(playing: Boolean) {
-        if (play == null) return
-        if (playing) {
-            if (since == null) since = elapsed()
-        } else {
-            heard()
-            since = null
-        }
+    /** The player is at [positionMs], playing or not. */
+    fun position(positionMs: Long, playing: Boolean) {
+        val current = play ?: return
+        current.positionMs = positionMs
+        events.onEvent(PlayEvent.Position(current.id, current.song, wall(), positionMs, playing))
     }
 
-    /** A jump from [fromMs] to [toMs]: what was heard so far counts, the part jumped over does not. */
+    /** A jump from [fromMs] to [toMs]: the part jumped over is not heard. */
     fun seeked(fromMs: Long, toMs: Long) {
         val current = play ?: return
-        heard()
+        current.positionMs = toMs
         events.onEvent(PlayEvent.Seeked(current.id, current.song, wall(), fromMs, toMs))
     }
 
-    /** What was heard since the last event, now (the place saving calls it every 10 s). */
-    fun flush() = heard()
-
-    fun end() {
+    /** The play is over: at the song's length when [naturalEnd], else at its last position. */
+    fun end(naturalEnd: Boolean = false) {
         val current = play ?: return
-        heard()
-        events.onEvent(PlayEvent.Ended(current.id, current.song, wall()))
+        val at = if (naturalEnd && current.durationMs > 0) current.durationMs else current.positionMs
+        events.onEvent(PlayEvent.Ended(current.id, current.song, wall(), at))
         play = null
-        since = null
     }
+}
 
-    private fun heard() {
-        val current = play ?: return
-        val from = since ?: return
-        val now = elapsed()
-        since = now
-        if (now > from) events.onEvent(PlayEvent.Heard(current.id, current.song, wall(), now - from))
+/** How often a play reports its position while playing. */
+const val POSITION_EVERY_MS: Long = 5_000
+
+/** Runs [action] every [everyMs] while [playing] says so; a pause stops it until playing starts again. Runs until cancelled. */
+suspend fun repeatWhilePlaying(playing: Flow<Boolean>, everyMs: Long, action: suspend () -> Unit) {
+    playing.distinctUntilChanged().collectLatest { on ->
+        while (on) {
+            delay(everyMs)
+            action()
+        }
     }
 }
 

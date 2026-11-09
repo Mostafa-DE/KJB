@@ -184,58 +184,76 @@ class QueueBridgeTest {
 
     // Play events
 
-    private var elapsed = 0L
     private var wall = 1_000_000L
     private val events = mutableListOf<PlayEvent>()
-    private val tracker = PlayTracker({ events += it }, elapsed = { elapsed }, wall = { wall })
-
-    private fun pass(ms: Long) {
-        elapsed += ms
-        wall += ms
-    }
+    private val tracker = PlayTracker({ events += it }, wall = { wall })
 
     @Test
-    fun `a play tells when it started, what was heard, the seeks and its end`() {
-        tracker.start(refs[0], 180_001, playing = true)
-        pass(30_000)
-        tracker.playing(false)
-        pass(60_000)
-        tracker.playing(true)
-        pass(10_000)
+    fun `a play reports its start, its position on play and pause and while playing, its seeks and its end`() {
+        tracker.start(refs[0], 180_001, positionMs = 0, playing = true)
+        wall += 5_000
+        tracker.position(5_000, playing = true)
+        wall += 25_000
+        tracker.position(30_000, playing = false)
+        wall += 60_000
+        tracker.position(30_000, playing = true)
+        wall += 10_000
         tracker.seeked(40_000, 100_000)
-        pass(5_000)
+        wall += 5_000
         tracker.end()
         val id = (events.first() as PlayEvent.Started).playId
         assertEquals(
             listOf(
                 PlayEvent.Started(id, refs[0], 1_000_000, 180_001),
-                PlayEvent.Heard(id, refs[0], 1_030_000, 30_000),
-                PlayEvent.Heard(id, refs[0], 1_100_000, 10_000),
+                PlayEvent.Position(id, refs[0], 1_000_000, 0, playing = true),
+                PlayEvent.Position(id, refs[0], 1_005_000, 5_000, playing = true),
+                PlayEvent.Position(id, refs[0], 1_030_000, 30_000, playing = false),
+                PlayEvent.Position(id, refs[0], 1_090_000, 30_000, playing = true),
                 PlayEvent.Seeked(id, refs[0], 1_100_000, 40_000, 100_000),
-                PlayEvent.Heard(id, refs[0], 1_105_000, 5_000),
-                PlayEvent.Ended(id, refs[0], 1_105_000),
+                PlayEvent.Ended(id, refs[0], 1_105_000, 100_000),
             ),
             events,
         )
     }
 
     @Test
-    fun `a new play ends the one before, each with its own id, and nothing is heard while paused`() {
-        tracker.start(refs[0], 180_001, playing = false)
-        pass(20_000)
-        tracker.flush()
-        tracker.start(refs[0], 180_001, playing = true)
-        pass(4_000)
-        tracker.flush()
-        tracker.flush()
-        val starts = events.filterIsInstance<PlayEvent.Started>()
-        assertEquals(2, starts.size)
-        assertTrue(starts[0].playId != starts[1].playId)
-        assertEquals(listOf(PlayEvent.Heard(starts[1].playId, refs[0], wall, 4_000)), events.filterIsInstance<PlayEvent.Heard>())
-        assertEquals(PlayEvent.Ended(starts[0].playId, refs[0], 1_020_000), events.filterIsInstance<PlayEvent.Ended>().single())
+    fun `a song that played to its end ends at its length, a skipped one where it was, and each play has its own id`() {
+        tracker.start(refs[0], 180_001, positionMs = 0, playing = true)
+        tracker.position(170_000, playing = true)
+        wall += 10_000
+        // The next song started by itself: the one before ended at its length.
+        tracker.start(refs[1], 180_002, positionMs = 0, playing = true, naturalEnd = true)
+        tracker.position(12_000, playing = true)
+        // Next was pressed: it ended where it was.
+        tracker.start(refs[2], 180_003, positionMs = 0, playing = true)
+        tracker.end(naturalEnd = true)
         tracker.end()
-        tracker.end()
-        assertEquals(2, events.filterIsInstance<PlayEvent.Ended>().size)
+        tracker.position(1_000, playing = true)
+        val ended = events.filterIsInstance<PlayEvent.Ended>()
+        assertEquals(listOf(180_001L, 12_000L, 180_003L), ended.map { it.positionMs })
+        assertEquals(listOf(refs[0], refs[1], refs[2]), ended.map { it.song })
+        val ids = events.filterIsInstance<PlayEvent.Started>().map { it.playId }
+        assertEquals(ids.distinct(), ids)
+        assertEquals(3, ids.size)
+        // Nothing after the end: no play to report on.
+        assertTrue(events.last() is PlayEvent.Ended)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `while playing, something runs every few seconds, and stops on pause`() = runTest {
+        val playing = MutableStateFlow(false)
+        val ran = mutableListOf<Long>()
+        val job = launch { repeatWhilePlaying(playing, 5_000) { ran += testScheduler.currentTime } }
+        runCurrent()
+        playing.value = true
+        runCurrent()
+        advanceTimeBy(12_000)
+        playing.value = false
+        runCurrent()
+        advanceTimeBy(20_000)
+        assertEquals(listOf(5_000L, 10_000L), ran)
+        job.cancel()
     }
 
     // Saving the place

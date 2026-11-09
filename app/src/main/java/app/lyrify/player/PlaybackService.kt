@@ -8,7 +8,6 @@ import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
-import android.os.SystemClock
 import android.provider.MediaStore
 import android.util.Log
 import android.util.Size
@@ -103,7 +102,7 @@ class PlaybackService : MediaLibraryService() {
     private lateinit var library: StateFlow<Library?>
     private lateinit var playlists: StateFlow<List<Playlist>>
     private val playing = MutableStateFlow(false)
-    private val tracker = PlayTracker({ event -> Lyrify.playEvents(this).onEvent(event) }, SystemClock::elapsedRealtime, System::currentTimeMillis)
+    private val tracker = PlayTracker({ event -> Lyrify.playEvents(this).onEvent(event) }, System::currentTimeMillis)
 
     override fun onCreate() {
         super.onCreate()
@@ -113,7 +112,7 @@ class PlaybackService : MediaLibraryService() {
         playlists = LibraryGraph.playlists(this).state.map { it.playlists }.stateIn(scope, SharingStarted.Eagerly, emptyList())
         engine = GaplessEngine(this, settings::value, Levels(), ::mediaItem)
         bridge = QueueBridge(engine)
-        player = LyrifyPlayer(mainLooper, engine, core, skips = ::skips, sync = ::sync)
+        player = LyrifyPlayer(mainLooper, engine, core, skips = ::skips, sync = ::sync, beforeSeek = ::heardSoFar)
         engine.addListener(Follower())
         val built = MediaLibrarySession.Builder(this, player, Callback())
             .setSessionActivity(PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
@@ -126,7 +125,13 @@ class PlaybackService : MediaLibraryService() {
 
         // The queue model, the library and the settings, applied to the engine; the session reads them again.
         scope.launch {
+            var queueId: String? = null
+            var jumps = -1L
             combine(core.ready.filter { it }, core.book, library) { _, book, songs -> book to songs }.collect { (book, songs) ->
+                // Another queue or a jump moves the player: the play counter hears where the song playing was.
+                if (book.currentId != queueId || book.jumps != jumps) heardSoFar()
+                queueId = book.currentId
+                jumps = book.jumps
                 if (songs != null) bridge.sync(book, ::find)
                 player.changed()
             }
@@ -140,6 +145,7 @@ class PlaybackService : MediaLibraryService() {
             }
         }
         scope.launch { savePlaces(playing) { savePlace() } }
+        scope.launch { repeatWhilePlaying(playing, POSITION_EVERY_MS) { tracker.position(engine.positionMs, playing = true) } }
         ownLyrics()
         parts.forEach { it.start(this, built) }
         Log.d(LOG_TAG, "player service started")
@@ -149,6 +155,7 @@ class PlaybackService : MediaLibraryService() {
 
     override fun onDestroy() {
         savePlace()
+        heardSoFar()
         tracker.end()
         parts.forEach { it.stop() }
         session?.release()
@@ -171,14 +178,18 @@ class PlaybackService : MediaLibraryService() {
         if (core.ready.value) library.value?.let { bridge.sync(core.book.value, ::find) }
     }
 
-    /** Where the queue playing is, into `playback.json`; what was heard so far, to the play counter. */
+    /** Where the queue playing is, into `playback.json`. */
     private fun savePlace() {
         if (!::engine.isInitialized) return
         val uid = engine.loaded.getOrNull(engine.index) ?: return
         val queue = core.book.value.current ?: return
         val index = queue.items.indexOfFirst { it.uid == uid }
         if (index >= 0) core.savePlace(index, engine.positionMs)
-        tracker.flush()
+    }
+
+    /** Where the song playing is now, for the play counter. */
+    private fun heardSoFar() {
+        if (::engine.isInitialized && engine.loaded.isNotEmpty()) tracker.position(engine.positionMs, engine.isPlaying)
     }
 
     /** KJB's own queue gets lyrics without notification access: a second sweep on the app's one pipeline. */
@@ -206,15 +217,16 @@ class PlaybackService : MediaLibraryService() {
 
     /** The engine's songs and plays, back into the queue model and the play counter. */
     private inner class Follower : EngineListener {
-        override fun onSongStarted(uid: Long, lap: Boolean) {
+        override fun onSongStarted(uid: Long, lap: Boolean, natural: Boolean) {
             val book = core.book.value
             val item = book.current?.items?.firstOrNull { it.uid == uid } ?: return
             if (!lap) core.change { it.at(uid, core.now()) }
-            tracker.start(item.song, find(item.song)?.durationMs ?: C.TIME_UNSET, engine.isPlaying)
+            tracker.start(item.song, find(item.song)?.durationMs ?: C.TIME_UNSET, engine.positionMs, engine.isPlaying, naturalEnd = natural)
         }
 
         override fun onPlayingChanged(playing: Boolean) {
-            tracker.playing(playing)
+            PlayerGraph.audioSessionId = engine.audioSessionId
+            tracker.position(engine.positionMs, playing)
             this@PlaybackService.playing.value = playing
         }
 
@@ -222,7 +234,7 @@ class PlaybackService : MediaLibraryService() {
 
         /** The queue ended with Repeat off: KJB waits at its first song, paused. */
         override fun onEnded() {
-            tracker.end()
+            tracker.end(naturalEnd = true)
             engine.setPlayWhenReady(false)
             engine.seek(0, 0)
         }

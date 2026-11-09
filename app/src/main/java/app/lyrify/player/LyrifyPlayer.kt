@@ -42,6 +42,8 @@ class LyrifyPlayer(
     private val core: PlayerCore,
     private val skips: () -> SkipAmounts,
     private val sync: () -> Unit,
+    /** Before a controller moves the player (Next, Previous, a seek): the play counter hears where it was. */
+    private val beforeSeek: () -> Unit = {},
 ) : SimpleBasePlayer(looper) {
     init {
         engine.addListener(object : EngineListener {
@@ -108,6 +110,7 @@ class LyrifyPlayer(
 
     override fun handleSeek(mediaItemIndex: Int, positionMs: Long, seekCommand: Int): ListenableFuture<*> {
         val index = if (mediaItemIndex == C.INDEX_UNSET) engine.index else mediaItemIndex
+        beforeSeek()
         engine.seek(index, if (positionMs == C.TIME_UNSET) 0 else positionMs)
         return Futures.immediateVoidFuture()
     }
