@@ -10,6 +10,7 @@ import android.net.Uri
 import android.provider.MediaStore
 import android.util.Log
 import app.lyrify.LOG_TAG
+import app.lyrify.Lyrify
 import app.lyrify.tags.TagsGraph
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -76,9 +77,13 @@ class TonePlayer(context: Context, private val scope: CoroutineScope) {
         state.value = PreviewPlaying(source.key, 0f)
         job = scope.launch {
             val player = MediaPlayer()
-            // The song is busy for the tag writer while its preview plays.
+            // The song is busy for the tag writer while its preview plays; one the writer or its recovery holds is not played.
             val song = (source as? PreviewSource.Window)?.songPath?.also(TagsGraph.held::hold)
             try {
+                if (song != null && song in Lyrify.locks) {
+                    onFailed()
+                    return@launch
+                }
                 player.setAudioAttributes(attributes)
                 withContext(Dispatchers.IO) {
                     when (source) {
