@@ -9,7 +9,7 @@ import org.junit.runner.RunWith
 
 /**
  * Device tests run on the debug build, which installs beside the user's release app and never over it: its own package,
- * name and version.
+ * name and version, and changes to shared storage only in its test folder.
  */
 @RunWith(AndroidJUnit4::class)
 class SmokeTest {
@@ -20,5 +20,10 @@ class SmokeTest {
         assertEquals("app.lyrify.debug", context.packageName)
         assertEquals("KJB dev", context.getString(R.string.app_name))
         assertTrue(BuildConfig.VERSION_NAME, BuildConfig.VERSION_NAME.endsWith("-dev"))
+    }
+
+    @Test
+    fun theDebugBuildChangesOnlyItsTestFolder() {
+        assertTrue(Lyrify.writes.testFolderOnly)
     }
 }
