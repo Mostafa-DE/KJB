@@ -3,6 +3,7 @@ package app.lyrify.library
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
+import java.util.Locale
 
 /** Finding a song again from what queues, playlists, m3u files and backups kept of it. Made-up names only. */
 class SongResolverTest {
@@ -32,6 +33,46 @@ class SongResolverTest {
     fun `an id hint naming a song with another name in another folder is not taken, as after MediaStore rebuilt its ids`() {
         assertNull(resolver.find(SongRef(VOLUME + "Music/Elsewhere/something else.mp3", 11)))
         assertNull(resolver.find(SongRef(VOLUME + "Music/Gone/x.mp3", 99)))
+    }
+
+    @Test
+    fun `the id hint stays on its volume, so the same id on the phone and on a card names two songs`() {
+        val phone = song("Music/Harbour Glass/01 Paper Lantern.mp3", id = 5)
+        val card = phone.copy(ref = SongRef("$CARD/Music/Night Ferry/01 Paper Lantern.mp3", 5))
+        val resolver = SongResolver(listOf(phone, card))
+
+        assertEquals(phone, resolver.find(SongRef(VOLUME + "Music/Old/01 Paper Lantern.mp3", 5)))
+        assertEquals(card, resolver.find(SongRef("$CARD/Music/Old/01 Paper Lantern.mp3", 5)))
+        assertNull(resolver.find(SongRef("/storage/9999-0000/Music/Old/01 Paper Lantern.mp3", 5)))
+        // Without a path there is no volume to look on.
+        assertNull(resolver.find(SongClue(mediaStoreId = 5), SongResolver.IN_APP))
+    }
+
+    @Test
+    fun `an id MediaStore gave out again after a rebuild never finds a song on another volume or with another name`() {
+        val onCard = song("Music/Harbour Glass/01 Paper Lantern.mp3", id = 7).let { it.copy(ref = SongRef("$CARD/Music/Harbour Glass/01 Paper Lantern.mp3", 7)) }
+        val renumbered = song("Music/Night Ferry/04 Low Water.mp3", id = 8)
+        val resolver = SongResolver(listOf(onCard, renumbered))
+
+        // Same folder and file name, but the id now belongs to a song on the card.
+        assertNull(resolver.find(SongRef(VOLUME + "Music/Harbour Glass/01 Paper Lantern.mp3", 7)))
+        // Same volume, but another name in another folder.
+        assertNull(resolver.find(SongRef(VOLUME + "Music/Gone/01 Old Song.mp3", 8)))
+        // A path in no volume MediaStore gives.
+        assertNull(resolver.find(SongRef("/sdcard/Music/Night Ferry/04 Low Water.mp3", 8)))
+    }
+
+    @Test
+    fun `file names compare the same in any phone language`() {
+        val iris = song("Music/Indigo/01 Iris.mp3", id = 41)
+        val before = Locale.getDefault()
+        try {
+            // Turkish lower-cases "I" to a dotless "ı", so "IRIS" would not meet "Iris" there.
+            Locale.setDefault(Locale.forLanguageTag("tr-TR"))
+            assertEquals(iris, SongResolver(listOf(iris)).find(SongClue(path = "/x/INDIGO/01 IRIS.MP3"), SongResolver.M3U))
+        } finally {
+            Locale.setDefault(before)
+        }
     }
 
     @Test
@@ -88,5 +129,10 @@ class SongResolverTest {
         assertNull(resolver.find(clue.copy(durationMs = null), SongResolver.M3U))
         // Two copies with the same tags and length: neither is taken.
         assertNull(SongResolver(listOf(lantern, lantern.copy(ref = SongRef(VOLUME + "Music/B/x.mp3")))).find(SongClue(title = "Paper Lantern", artist = "Kit Calloway", durationMs = 201_000), SongResolver.BACKUP))
+    }
+
+    private companion object {
+        /** A memory card, as MediaStore's paths name it. */
+        const val CARD: String = "/storage/1A2B-3C4D"
     }
 }

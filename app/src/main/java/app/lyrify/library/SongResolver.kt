@@ -1,6 +1,7 @@
 package app.lyrify.library
 
 import app.lyrify.lyrics.TrackNames
+import java.util.Locale
 import kotlin.math.abs
 
 /**
@@ -21,9 +22,9 @@ enum class FindBy {
     PATH,
 
     /**
-     * The same MediaStore id, for a song renamed in its folder or moved with its name. This phone's own data only: ids
-     * differ between phones, and MediaStore gives them out again when it rebuilds, so a song with another name in
-     * another folder is not taken.
+     * The same MediaStore id on the same volume, for a song renamed in its folder or moved with its name. This phone's
+     * own data only: ids differ between phones and volumes, and MediaStore gives them out again when it rebuilds, so a
+     * song on another volume, or with another name in another folder, is not taken.
      */
     ID_HINT,
 
@@ -40,7 +41,11 @@ enum class FindBy {
  */
 class SongResolver(private val songs: List<Song>) {
     private val byPath: Map<String, Song> by lazy { songs.associateBy { it.path } }
-    private val byId: Map<Long, List<Song>> by lazy { songs.filter { it.ref.mediaStoreId != null }.groupBy { checkNotNull(it.ref.mediaStoreId) } }
+    /** By volume and MediaStore id: an id names a file on one volume only. */
+    private val byId: Map<Pair<String, Long>, List<Song>> by lazy {
+        songs.mapNotNull { song -> song.ref.mediaStoreId?.let { id -> volumeOf(song.path)?.let { (it to id) to song } } }
+            .groupBy({ it.first }, { it.second })
+    }
     private val byNameInFolder: Map<String, List<Song>> by lazy {
         songs.mapNotNull { song -> nameInFolder(song.path)?.let { it to song } }.groupBy({ it.first }, { it.second })
     }
@@ -53,10 +58,18 @@ class SongResolver(private val songs: List<Song>) {
     fun find(clue: SongClue, by: Set<FindBy>): Song? = FindBy.entries.filter { it in by }.firstNotNullOfOrNull { step ->
         when (step) {
             FindBy.PATH -> clue.path?.let(byPath::get)
-            FindBy.ID_HINT -> clue.mediaStoreId?.let { id -> byId[id].orEmpty().filter { clue.path == null || renamedOrMoved(clue.path, it.path) }.singleOrNull() }
+            FindBy.ID_HINT -> byIdHint(clue)
             FindBy.NAME_IN_FOLDER -> clue.path?.let(::nameInFolder)?.let { byNameInFolder[it] }?.singleOrNull()
             FindBy.TAGS -> byTags(clue)
         }
+    }
+
+    /** Without a path there is no volume to look on, so nothing. */
+    private fun byIdHint(clue: SongClue): Song? {
+        val path = clue.path ?: return null
+        val id = clue.mediaStoreId ?: return null
+        val volume = volumeOf(path) ?: return null
+        return byId[volume to id].orEmpty().filter { renamedOrMoved(path, it.path) }.singleOrNull()
     }
 
     private fun byTags(clue: SongClue): Song? {
@@ -80,14 +93,31 @@ class SongResolver(private val songs: List<Song>) {
         /** Backup restore: the path, then title, artist and length. */
         val BACKUP: Set<FindBy> = setOf(FindBy.PATH, FindBy.TAGS)
 
-        /** The same name in another folder, or another name in the same folder; not both. */
-        private fun renamedOrMoved(old: String, now: String): Boolean =
-            old.substringAfterLast('/') == now.substringAfterLast('/') || old.substringBeforeLast('/') == now.substringBeforeLast('/')
+        /** On the same volume: the same name in another folder, or another name in the same folder; not both. */
+        private fun renamedOrMoved(old: String, now: String): Boolean {
+            val volume = volumeOf(old) ?: return false
+            if (volume != volumeOf(now)) return false
+            return old.substringAfterLast('/') == now.substringAfterLast('/') || old.substringBeforeLast('/') == now.substringBeforeLast('/')
+        }
+
+        /**
+         * The volume [path] is on, as MediaStore's paths name it: `/storage/emulated/<user>` or `/storage/<volume id>`;
+         * null for any other form of path.
+         */
+        private fun volumeOf(path: String): String? {
+            val names = path.split('/')
+            if (names.size < 4 || names[0].isNotEmpty() || names[1] != "storage") return null
+            return when (names[2]) {
+                "emulated" -> names[3].takeIf { it.isNotEmpty() && it.all(Char::isDigit) }?.let { "/storage/emulated/$it" }
+                "", "self" -> null
+                else -> "/storage/${names[2]}"
+            }
+        }
 
         /** "folder/file" in lower case, from a path with `/` or `\` separators; null without a folder. */
         private fun nameInFolder(path: String): String? {
             val names = path.split('/', '\\').filter(String::isNotEmpty)
-            return if (names.size < 2) null else "${names[names.size - 2]}/${names.last()}".lowercase()
+            return if (names.size < 2) null else "${names[names.size - 2]}/${names.last()}".lowercase(Locale.ROOT)
         }
     }
 }
