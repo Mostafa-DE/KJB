@@ -119,5 +119,11 @@
                 <action android:name="android.service.notification.NotificationListenerService" />
             </intent-filter>
         </service>
+
+        <!-- media3-session adds an activity only the phone's Bluetooth stack may open, so that Bluetooth lists the app as a
+             media player. Lyrify plays nothing yet: left out until P1 adds the player, which deletes this removal. -->
+        <activity
+            android:name="androidx.media3.session.BluetoothValidationActivity"
+            tools:node="remove" />
     </application>
 </manifest>

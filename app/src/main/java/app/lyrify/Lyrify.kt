@@ -2,6 +2,7 @@ package app.lyrify
 
 import android.app.Application
 import android.content.Context
+import android.os.StrictMode
 import android.util.Log
 import app.lyrify.data.LedgerRepository
 import app.lyrify.lyrics.Checked
@@ -35,10 +36,16 @@ fun verbose(): Boolean = Log.isLoggable(LOG_TAG, Log.VERBOSE)
 /** Logs a coroutine failure instead of crashing the process. */
 val logFailures: CoroutineExceptionHandler = CoroutineExceptionHandler { _, e -> Log.e(LOG_TAG, "background work failed", e) }
 
-/** The process: one image loader for the covers, set before any screen asks for one. */
+/**
+ * The process: one image loader for the covers, set before any screen asks for one. Debug builds also log disk work on
+ * the main thread (StrictMode; stack traces only), so the player keeps the main thread free.
+ */
 class LyrifyApplication : Application() {
     override fun onCreate() {
         super.onCreate()
+        if (BuildConfig.DEBUG) {
+            StrictMode.setThreadPolicy(StrictMode.ThreadPolicy.Builder().detectDiskReads().detectDiskWrites().penaltyLog().build())
+        }
         SingletonImageLoader.setSafe(::songImageLoader)
     }
 }

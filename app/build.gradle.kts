@@ -38,6 +38,9 @@ android {
         buildConfigField("String", "ORT_VERSION", "\"${libs.versions.onnxruntime.get()}\"")
         buildConfigField("String", "QNN_EP_VERSION", "\"${libs.versions.qnnEp.get()}\"")
         buildConfigField("String", "QNN_RUNTIME_VERSION", "\"${libs.versions.qnnRuntime.get()}\"")
+
+        // Device tests (app/src/androidTest) run on the debug build, beside the release app.
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     packaging {
@@ -75,6 +78,11 @@ android {
     buildTypes {
         debug {
             enableUnitTestCoverage = true
+            // Installs beside the release app, never over it: app.lyrify.debug, named "KJB dev", with its own data and
+            // grants. It changes shared storage only in Music/Lyrify test/ (data/SharedWrites.kt), and StrictMode logs
+            // disk work on the main thread (Lyrify.kt).
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-dev"
         }
         release {
             isMinifyEnabled = true
@@ -110,8 +118,17 @@ dependencies {
     implementation(libs.qnn.runtime)
     implementation(libs.androidx.work.runtime)
     implementation(libs.coil.compose)
+    implementation(libs.media3.exoplayer)
+    implementation(libs.media3.session)
+    implementation(libs.media3.common)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.onnxruntime.jvm)
+
+    androidTestImplementation(libs.androidx.test.core)
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.rules)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.media3.test.utils)
 }

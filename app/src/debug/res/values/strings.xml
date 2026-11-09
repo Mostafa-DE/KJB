@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The debug build (app.lyrify.debug) installs beside the release app; its name tells the two apart. -->
+<resources>
+    <string name="app_name">KJB dev</string>
+</resources>

@@ -37,7 +37,7 @@ private const val EXTRA_LYRICS = "lyrics"
 private const val EXTRA_THREADS = "threads"
 private const val DEFAULT_THREADS = 4
 private const val MAX_THREADS = 8
-private const val USAGE = "adb shell am broadcast --allow-fgs-start-reason 316 -n app.lyrify/.ai.AiDebugReceiver " +
+private const val USAGE = "adb shell am broadcast --allow-fgs-start-reason 316 -n app.lyrify.debug/app.lyrify.ai.AiDebugReceiver " +
     "--es path <song> --es models <folder> [--es lyrics <plain lyrics file>] [--ei threads 4]"
 
 /**
@@ -46,7 +46,7 @@ private const val USAGE = "adb shell am broadcast --allow-fgs-start-reason 316 -
  * anywhere.
  *
  * ```
- * adb shell am broadcast --allow-fgs-start-reason 316 -n app.lyrify/.ai.AiDebugReceiver \
+ * adb shell am broadcast --allow-fgs-start-reason 316 -n app.lyrify.debug/app.lyrify.ai.AiDebugReceiver \
  *     --es path "/storage/emulated/0/Music/Song.mp3" --es models /sdcard/Download/lyrify-models \
  *     [--es lyrics /sdcard/Download/plain.txt] [--ei threads 4]
  * ```
@@ -59,7 +59,7 @@ private const val USAGE = "adb shell am broadcast --allow-fgs-start-reason 316 -
  * The receiver checks the arguments and starts [AiDebugService], which runs the engine. Android lets a receiver in the
  * background start a foreground service only with an exemption: `--allow-fgs-start-reason 316` makes `am` give the
  * app a 10 s allowance (316 is PowerExemptionManager.REASON_SHELL; `am` has the option from Android 15). An app the
- * user exempted from battery optimisation (`adb shell dumpsys deviceidle whitelist +app.lyrify`) needs none.
+ * user exempted from battery optimisation (`adb shell dumpsys deviceidle whitelist +app.lyrify.debug`) needs none.
  */
 class AiDebugReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
