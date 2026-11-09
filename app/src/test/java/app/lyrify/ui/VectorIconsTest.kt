@@ -156,29 +156,20 @@ class VectorIconsTest {
     }
 
     @Test
-    fun `the debug build's launcher icon is told apart from the release one, on teal and, when themed, with a hollow K`() {
-        // The colour icon: the release K on teal, not black, with the same lifted edge.
-        assertFalse(File(debugDrawables, "ic_launcher_foreground.xml").exists())
-        val background = paths(parse(File(debugDrawables, "ic_launcher_background.xml"))).map { it.first }
-        assertEquals("radial", gradient(background.single())?.attr("type"))
-        assertEquals(listOf("#FF0D3A34", "#FF0D3A34", "#FF14514A", "#FF1C6A60"), colors(File(debugDrawables, "ic_launcher_background.xml")))
-
-        // Themed icons drop the ground, so the debug K's stem and leg are hollow under the solid note: the Note arm K at
-        // 95% about the centre, stroke and all inside the safe circle.
-        val monochrome = parse(File(debugDrawables, "ic_launcher_monochrome.xml"))
-        val outline = paths(monochrome).map { it.first }
-        assertEquals(NOTE_ARM.size, outline.size)
-        assertTrue(outline.first().let { it.attr("fillColor") == null && it.attr("strokeColor") == "#FF000000" && it.attr("strokeWidth") == "3.5" })
-        assertTrue(outline.drop(1).all { it.attr("fillColor") == "#FF000000" && it.attr("strokeColor") == null })
-        NOTE_ARM.zip(outline.map { it.attr("pathData").orEmpty() }).forEach { (k, drawn) ->
-            val expected = points(k).map { (x, y) -> 54 + (x - 54) * 0.95f to 54 + (y - 54) * 0.95f }
-            assertEquals(expected.size, points(drawn).size)
-            expected.zip(points(drawn)).forEach { (want, got) ->
-                assertEquals(want.first, got.first, 0.01f)
-                assertEquals(want.second, got.second, 0.01f)
-            }
-        }
-        assertTrue(inSafeCircle(shapes(File(debugDrawables, "ic_launcher_monochrome.xml")), margin = 3.5f / 2))
+    fun `the debug build's launcher icon is told apart from the release one by a DEV tab, on the same black`() {
+        assertFalse(File(debugDrawables, "ic_launcher_background.xml").exists())
+        // The release K, then a steel tab in the K's open side with DEV cut through it, readable at 48 px.
+        val foreground = paths(parse(File(debugDrawables, "ic_launcher_foreground.xml"))).map { it.first }
+        assertEquals(NOTE_ARM + DEV_TAB, foreground.map { it.attr("pathData") })
+        assertEquals(colors(File(drawables, "ic_launcher_foreground.xml")), colors(File(debugDrawables, "ic_launcher_foreground.xml")))
+        assertEquals("#FFE9E6F5", foreground.last().attr("fillColor"))
+        assertEquals("evenOdd", foreground.last().attr("fillType"))
+        assertTrue(inSafeCircle(shapes(File(debugDrawables, "ic_launcher_foreground.xml"))))
+        // The themed icon keeps the tab: the same shapes in one colour.
+        val monochrome = paths(parse(File(debugDrawables, "ic_launcher_monochrome.xml"))).map { it.first }
+        assertEquals(NOTE_ARM + DEV_TAB, monochrome.map { it.attr("pathData") })
+        assertTrue(monochrome.all { it.attr("fillColor") == "#FF000000" && gradient(it) == null })
+        assertEquals("evenOdd", monochrome.last().attr("fillType"))
     }
 
     @Test
@@ -352,6 +343,9 @@ class VectorIconsTest {
             "M49.39,50.29L65.53,29.32L70.87,29.32L52.74,52.87Z",
             "M65.53,29.32L70.87,29.32L76.86,31.61L77.39,44.3L64.42,37.69Z",
         )
+
+        /** The debug build's DEV tab: a steel plate with chamfered corners and the letters D, E and V cut through it. */
+        const val DEV_TAB = "M60,47L84,47L86,49L86,61L84,63L60,63L58,61L58,49ZM60.45,50.25L64.05,50.25C65.95,50.25 66.95,51.85 66.95,55C66.95,58.15 65.95,59.75 64.05,59.75L60.45,59.75ZM62.65,52.25L63.75,52.25C64.45,52.25 64.75,53.15 64.75,55C64.75,56.85 64.45,57.75 63.75,57.75L62.65,57.75ZM68.75,50.25L74.95,50.25L74.95,52.25L70.95,52.25L70.95,54.05L74.35,54.05L74.35,55.95L70.95,55.95L70.95,57.75L74.95,57.75L74.95,59.75L68.75,59.75ZM77.05,50.25L79.35,50.25L80.3,56.55L81.25,50.25L83.55,50.25L81.45,59.75L79.15,59.75Z"
 
         /** The Note arm K on the 24-unit canvas (blade-k-note-small.svg). */
         val NOTE_ARM_SMALL = listOf(

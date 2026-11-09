@@ -1,23 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The debug build's themed icon ("KJB dev"): themed icons drop the teal ground, so here the K's stem and leg are
-     hollow under the solid note. Scaled to 95% about the centre so the stroke stays inside the 66 dp safe circle. -->
+<!-- The debug build's themed icon ("KJB dev"): the release shapes and the DEV tab in one colour, its letters cut out. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
     <path
-        android:pathData="M31.78,34.4L34.79,30.55L41.41,35.99L41.41,73.6L38.39,77.45L31.78,72.01ZM43.42,62.92L51.17,57.12L59.85,71.58L65.71,77.45L52.14,77.45Z"
-        android:strokeColor="#FF000000"
-        android:strokeLineJoin="round"
-        android:strokeWidth="3.5" />
+        android:fillColor="#FF000000"
+        android:pathData="M30.61,33.37L33.78,29.32L40.75,35.04L40.75,74.63L37.57,78.68L30.61,72.96ZM42.86,63.39L51.02,57.28L60.16,72.51L66.33,78.68L52.04,78.68Z" />
     <path
         android:fillColor="#FF000000"
-        android:pathData="M54.88,47.75C55.9,50.03 54.23,52.99 51.14,54.36C48.05,55.74 44.73,55 43.71,52.72C42.7,50.44 44.38,47.47 47.46,46.1C50.54,44.73 53.87,45.46 54.88,47.75Z" />
+        android:pathData="M54.93,47.42C56,49.82 54.24,52.94 50.99,54.38C47.74,55.83 44.24,55.05 43.17,52.65C42.1,50.25 43.87,47.13 47.12,45.68C50.36,44.24 53.86,45.01 54.93,47.42Z" />
     <path
         android:fillColor="#FF000000"
-        android:pathData="M49.62,50.48L64.95,30.55L70.03,30.55L52.8,52.93Z" />
+        android:pathData="M49.39,50.29L65.53,29.32L70.87,29.32L52.74,52.87Z" />
     <path
         android:fillColor="#FF000000"
-        android:pathData="M64.95,30.55L70.03,30.55L75.72,32.73L76.22,44.78L63.9,38.51Z" />
+        android:pathData="M65.53,29.32L70.87,29.32L76.86,31.61L77.39,44.3L64.42,37.69Z" />
+    <path
+        android:fillColor="#FF000000"
+        android:fillType="evenOdd"
+        android:pathData="M60,47L84,47L86,49L86,61L84,63L60,63L58,61L58,49ZM60.45,50.25L64.05,50.25C65.95,50.25 66.95,51.85 66.95,55C66.95,58.15 65.95,59.75 64.05,59.75L60.45,59.75ZM62.65,52.25L63.75,52.25C64.45,52.25 64.75,53.15 64.75,55C64.75,56.85 64.45,57.75 63.75,57.75L62.65,57.75ZM68.75,50.25L74.95,50.25L74.95,52.25L70.95,52.25L70.95,54.05L74.35,54.05L74.35,55.95L70.95,55.95L70.95,57.75L74.95,57.75L74.95,59.75L68.75,59.75ZM77.05,50.25L79.35,50.25L80.3,56.55L81.25,50.25L83.55,50.25L81.45,59.75L79.15,59.75Z" />
 </vector>

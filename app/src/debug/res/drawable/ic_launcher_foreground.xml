@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The debug build ("KJB dev"): the release Note arm K with a steel DEV tab in the K's open side, its letters cut
+     through to the black ground, inside the 66 dp safe circle. The ground is the release one. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path android:pathData="M30.61,33.37L33.78,29.32L40.75,35.04L40.75,74.63L37.57,78.68L30.61,72.96ZM42.86,63.39L51.02,57.28L60.16,72.51L66.33,78.68L52.04,78.68Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:endX="0"
+                android:endY="84"
+                android:startX="0"
+                android:startY="24"
+                android:type="linear">
+                <item
+                    android:color="#FFFBFAFF"
+                    android:offset="0" />
+                <item
+                    android:color="#FFAEA8C6"
+                    android:offset="1" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <path android:pathData="M54.93,47.42C56,49.82 54.24,52.94 50.99,54.38C47.74,55.83 44.24,55.05 43.17,52.65C42.1,50.25 43.87,47.13 47.12,45.68C50.36,44.24 53.86,45.01 54.93,47.42Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:endX="50"
+                android:endY="56"
+                android:startX="74"
+                android:startY="22"
+                android:type="linear">
+                <item
+                    android:color="#FFFFB49E"
+                    android:offset="0" />
+                <item
+                    android:color="#FFFF5B3C"
+                    android:offset="1" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <path android:pathData="M49.39,50.29L65.53,29.32L70.87,29.32L52.74,52.87Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:endX="50"
+                android:endY="56"
+                android:startX="74"
+                android:startY="22"
+                android:type="linear">
+                <item
+                    android:color="#FFFFB49E"
+                    android:offset="0" />
+                <item
+                    android:color="#FFFF5B3C"
+                    android:offset="1" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <path android:pathData="M65.53,29.32L70.87,29.32L76.86,31.61L77.39,44.3L64.42,37.69Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:endX="50"
+                android:endY="56"
+                android:startX="74"
+                android:startY="22"
+                android:type="linear">
+                <item
+                    android:color="#FFFFB49E"
+                    android:offset="0" />
+                <item
+                    android:color="#FFFF5B3C"
+                    android:offset="1" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <path
+        android:fillColor="#FFE9E6F5"
+        android:fillType="evenOdd"
+        android:pathData="M60,47L84,47L86,49L86,61L84,63L60,63L58,61L58,49ZM60.45,50.25L64.05,50.25C65.95,50.25 66.95,51.85 66.95,55C66.95,58.15 65.95,59.75 64.05,59.75L60.45,59.75ZM62.65,52.25L63.75,52.25C64.45,52.25 64.75,53.15 64.75,55C64.75,56.85 64.45,57.75 63.75,57.75L62.65,57.75ZM68.75,50.25L74.95,50.25L74.95,52.25L70.95,52.25L70.95,54.05L74.35,54.05L74.35,55.95L70.95,55.95L70.95,57.75L74.95,57.75L74.95,59.75L68.75,59.75ZM77.05,50.25L79.35,50.25L80.3,56.55L81.25,50.25L83.55,50.25L81.45,59.75L79.15,59.75Z" />
+</vector>
