@@ -28,6 +28,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROCESSING" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
+    <!-- player: permissions -->
+
+    <!-- lyrics lock: permissions -->
+
     <!-- androidx.core adds this one for dynamic receivers Lyrify never registers. -->
     <uses-permission
         android:name="${applicationId}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
@@ -120,10 +124,17 @@
             </intent-filter>
         </service>
 
+        <!-- player -->
         <!-- media3-session adds an activity only the phone's Bluetooth stack may open, so that Bluetooth lists the app as a
              media player. Lyrify plays nothing yet: left out until P1 adds the player, which deletes this removal. -->
         <activity
             android:name="androidx.media3.session.BluetoothValidationActivity"
             tools:node="remove" />
+
+        <!-- lyrics lock -->
+
+        <!-- widget -->
+
+        <!-- auto -->
     </application>
 </manifest>
