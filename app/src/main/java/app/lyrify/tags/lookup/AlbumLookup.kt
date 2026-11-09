@@ -1,0 +1,147 @@
+package app.lyrify.tags.lookup
+
+import app.lyrify.lyrics.TrackNames
+
+/** How a check of one album ended. */
+sealed interface Lookup {
+    data class Done(val proposal: Proposal) : Lookup
+
+    /** MusicBrainz stayed busy (503) through every backoff: "MusicBrainz is busy". */
+    data object Busy : Lookup
+
+    /** Offline, or an answer was refused or unreadable; [reason] is for the log only. Never Ready on part of the answers. */
+    data class Failed(val reason: String) : Lookup
+}
+
+/**
+ * Checks albums against MusicBrainz: a release search by album title, artist and track count; the details of the best
+ * results (and of any release id already in the files, as one more candidate); then [AlbumMatch]. A single is looked up
+ * by a recording search instead. Song titles and lengths are matched on the phone, never sent one by one.
+ */
+class AlbumLookup(private val musicBrainz: MusicBrainz, private val log: (String) -> Unit = {}) {
+    /** Looks [album] up. [fresh] ("Check again") skips the cache for every request of this album. */
+    suspend fun check(album: PhoneAlbum, fresh: Boolean = false): Lookup {
+        val result = if (album.isSingle) single(album, fresh) else releases(album, searchTitle(album), searchArtist(album), fresh, searched = false)
+        log("tags: album checked: ${summary(result)}")
+        return result
+    }
+
+    /** "Search myself": a release search with the user's own [title] and [artist]; the answer is always Pick one. */
+    suspend fun search(album: PhoneAlbum, title: String, artist: String?, fresh: Boolean = false): Lookup {
+        val asked = album.copy(title = title, albumArtist = artist?.takeIf(String::isNotBlank))
+        val result = releases(asked, title, asked.albumArtist, fresh, searched = true)
+        log("tags: album searched: ${summary(result)}")
+        return result
+    }
+
+    /** [match] with its release group's first release date, asked for only when its release did not carry it. */
+    suspend fun withOriginalYear(match: ReleaseMatch, fresh: Boolean = false): MetaAnswer<ReleaseMatch> {
+        val group = match.release.releaseGroup
+        if (group == null || group.firstReleaseDate != null) return MetaAnswer.Ok(match)
+        return when (val answer = musicBrainz.releaseGroup(group.id, fresh)) {
+            is MetaAnswer.Ok -> MetaAnswer.Ok(match.copy(release = match.release.copy(releaseGroup = answer.value)), answer.fromCache)
+            // Nothing more to know: no year is written.
+            MetaAnswer.NotFound -> MetaAnswer.Ok(match)
+            MetaAnswer.Busy -> MetaAnswer.Busy
+            is MetaAnswer.Failed -> answer
+        }
+    }
+
+    /** The front cover of [release]: the 1200 px image, or the 500 px one when there is no larger one. */
+    suspend fun cover(release: MbRelease, fresh: Boolean = false): MetaAnswer<ByteArray> {
+        // The release says it has none: nothing to ask.
+        if (release.hasFront == false) return MetaAnswer.NotFound
+        for (size in CoverSize.entries) {
+            val answer = musicBrainz.front(release.id, size, fresh)
+            if (answer != MetaAnswer.NotFound) return answer
+        }
+        return MetaAnswer.NotFound
+    }
+
+    /** The search, the details of what it found (and of the files' own id), then the match. */
+    private suspend fun releases(album: PhoneAlbum, title: String, artist: String?, fresh: Boolean, searched: Boolean): Lookup {
+        if (title.isBlank()) return Lookup.Done(AlbumMatch.propose(album, emptyList(), searched))
+        val count = album.songs.size.takeUnless { album.isSingle }
+        var found = when (val answer = musicBrainz.searchReleases(title, artist, count, fresh)) {
+            is MetaAnswer.Ok -> answer.value
+            MetaAnswer.NotFound -> emptyList()
+            else -> return stopped(answer)
+        }
+        // No edition with that many tracks: the editions that have another number can still be picked.
+        if (found.isEmpty() && count != null) {
+            found = when (val answer = musicBrainz.searchReleases(title, artist, null, fresh)) {
+                is MetaAnswer.Ok -> answer.value
+                MetaAnswer.NotFound -> emptyList()
+                else -> return stopped(answer)
+            }
+        }
+        val best = found.sortedWith(compareByDescending<MbRelease> { it.trackCount == album.songs.size }.thenByDescending { it.score ?: 0 })
+            .take(MAX_DETAILED)
+            .map { it.id }
+        val ids = (best + listOfNotNull(album.releaseId.takeUnless { searched })).distinct()
+        val releases = mutableListOf<MbRelease>()
+        for (id in ids) {
+            when (val answer = musicBrainz.release(id, fresh)) {
+                is MetaAnswer.Ok -> releases += answer.value
+                // Gone from MusicBrainz (merged or removed): not a candidate.
+                MetaAnswer.NotFound -> Unit
+                // A missing rival could make another release look sure: no answer for this album yet.
+                else -> return stopped(answer)
+            }
+        }
+        val proposal = AlbumMatch.propose(album, releases, searched)
+        if (proposal !is Proposal.Ready) return Lookup.Done(proposal)
+        return when (val dated = withOriginalYear(proposal.match, fresh)) {
+            is MetaAnswer.Ok -> Lookup.Done(Proposal.Ready(dated.value))
+            else -> stopped(dated)
+        }
+    }
+
+    /** A single: a recording search by its title, artist and length; always Pick one. */
+    private suspend fun single(album: PhoneAlbum, fresh: Boolean): Lookup {
+        val song = album.songs.singleOrNull()
+        val title = song?.title?.let(TrackNames::cleanTitle)?.takeIf(String::isNotBlank)
+            ?: song?.path?.substringAfterLast('/')?.let(TrackNames::fileTitle)
+        if (song == null || title == null) return Lookup.Done(Proposal.PickOne(emptyList(), setOf(Doubt.SINGLE, Doubt.NO_CANDIDATE)))
+        val recordings = when (val answer = musicBrainz.searchRecordings(title, TrackNames.cleanArtist(song.artist), song.durationMs.takeIf { it > 0 }, fresh)) {
+            is MetaAnswer.Ok -> answer.value
+            MetaAnswer.NotFound -> emptyList()
+            else -> return stopped(answer)
+        }
+        return Lookup.Done(AlbumMatch.proposeSingle(song, recordings))
+    }
+
+    /** The album title as searched: without what downloads add ("(320kbps)"); a title that is only that stays. */
+    private fun searchTitle(album: PhoneAlbum): String {
+        val raw = album.title.orEmpty().trim()
+        return TrackNames.cleanAlbum(raw, artist = null) ?: raw
+    }
+
+    /** The album artist as searched; "Various Artists" for a compilation tagged so, none for one tagged nothing. */
+    private fun searchArtist(album: PhoneAlbum): String? =
+        album.artist?.let { TrackNames.cleanArtist(it) ?: it }
+            ?: Names.usable(album.albumArtist)?.takeIf(Names::isVariousName)?.let { VARIOUS_ARTISTS }
+
+    private fun stopped(answer: MetaAnswer<*>): Lookup = when (answer) {
+        MetaAnswer.Busy -> Lookup.Busy
+        is MetaAnswer.Failed -> Lookup.Failed(answer.reason)
+        else -> Lookup.Failed("no answer")
+    }
+
+    /** For the log: the outcome, its doubts and counts, never a name. */
+    private fun summary(result: Lookup): String = when (result) {
+        Lookup.Busy -> "MusicBrainz busy"
+        is Lookup.Failed -> "failed"
+        is Lookup.Done -> when (val proposal = result.proposal) {
+            is Proposal.Ready -> "Ready"
+            is Proposal.PickOne -> "Pick one, ${proposal.candidates.size} candidates (${proposal.doubts.joinToString()})"
+        }
+    }
+
+    companion object {
+        /** Releases fetched in detail per album, beside any id already in the files. */
+        const val MAX_DETAILED: Int = 5
+
+        private const val VARIOUS_ARTISTS = "Various Artists"
+    }
+}
