@@ -1,6 +1,5 @@
 package app.lyrify.library
 
-import android.content.Context
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 
@@ -12,7 +11,7 @@ data class FavouriteCollection(val kind: CollectionKind, val key: String)
 
 /**
  * Favourites, for everything with a heart: the player, the song sheet, Add to, collection pages and the widget.
- * library/Playlists.kt keeps them in `playlists.json` (milestone LC); until then [NoFavourites].
+ * library/Playlists.kt keeps them in `playlists.json` ([LibraryGraph.favourites]); [NoFavourites] stores nothing.
  */
 interface FavouritesPort {
     /** The favourite songs, the latest added first. */
@@ -28,7 +27,7 @@ interface FavouritesPort {
     suspend fun setCollection(collection: FavouriteCollection, favourite: Boolean): Boolean
 }
 
-/** Until milestone LC: nothing is a favourite, and nothing can be stored. */
+/** Nothing is a favourite, and nothing can be stored: for previews and tests. */
 object NoFavourites : FavouritesPort {
     override val songs: Flow<List<SongRef>> = flowOf(emptyList())
 
@@ -37,10 +36,4 @@ object NoFavourites : FavouritesPort {
     override suspend fun setSongs(songs: List<SongRef>, favourite: Boolean): Boolean = false
 
     override suspend fun setCollection(collection: FavouriteCollection, favourite: Boolean): Boolean = false
-}
-
-/** The library's objects, built by hand (milestone LC builds them; it may move this object to its own file). */
-object LibraryGraph {
-    @Suppress("UNUSED_PARAMETER") // Until LC: no store to open.
-    fun favourites(context: Context): FavouritesPort = NoFavourites
 }
