@@ -231,10 +231,10 @@ fun ListHeader(
     onAddAll: (() -> Unit)? = null,
     sort: String? = null,
     onSort: () -> Unit = {},
-    modifier: Modifier = Modifier.padding(horizontal = ScreenPadding),
+    gutter: Dp = ScreenPadding,
 ) {
     val any = songs > 0
-    SubcomposeLayout(modifier.fillMaxWidth().heightIn(min = 60.dp)) { constraints ->
+    SubcomposeLayout(Modifier.fillMaxWidth().padding(horizontal = gutter).heightIn(min = 60.dp)) { constraints ->
         val loose = constraints.copy(minWidth = 0, minHeight = 0)
         fun measure(slot: String, content: @Composable () -> Unit) = subcompose(slot, content).map { it.measure(loose) }
         val gap = 8.dp.roundToPx()
@@ -303,7 +303,15 @@ private fun HeaderButton(@DrawableRes icon: Int, text: String, enabled: Boolean,
             .padding(horizontal = if (label) 14.dp else 11.dp),
     ) {
         Icon(painterResource(icon), contentDescription = null, tint = content, modifier = Modifier.size(18.dp))
-        if (label) Text(text, style = MaterialTheme.typography.labelLarge.copy(fontSize = 15.sp, fontWeight = FontWeight.SemiBold), color = content, maxLines = 1)
+        if (label) {
+            Text(
+                text,
+                style = MaterialTheme.typography.labelLarge.copy(fontSize = 15.sp, fontWeight = FontWeight.SemiBold),
+                color = content,
+                maxLines = 1,
+                modifier = Modifier.clearAndSetSemantics {},
+            )
+        }
     }
 }
 
@@ -318,7 +326,7 @@ private fun AddAllButton(songs: Int, enabled: Boolean, onClick: () -> Unit) {
 private fun SortChip(order: String, label: Boolean, onClick: () -> Unit) {
     val name = stringResource(R.string.lib_sort_by, order)
     LyrifyChip(selected = false, onClick = onClick, role = Role.Button, icon = R.drawable.ic_sort, modifier = Modifier.semantics { contentDescription = name }) {
-        if (label) Text(order, maxLines = 1)
+        if (label) Text(order, maxLines = 1, modifier = Modifier.clearAndSetSemantics {})
     }
 }
 
@@ -371,7 +379,7 @@ fun SongRow(
                 .clip(RoundedCornerShape(16.dp))
                 .background(if (selected) LocalBrandColors.current.highlightContainer else Color.Transparent)
                 .combinedClickable(onClickLabel = tapLabel, onLongClickLabel = holdLabel, onLongClick = if (selecting) null else onLongPress, onClick = onTap)
-                .clearAndSetSemantics {
+                .semantics {
                     contentDescription = description
                     if (selecting) this.selected = selected
                 }
@@ -379,7 +387,7 @@ fun SongRow(
                 .padding(8.dp),
         ) {
             SongCover(SongArt(song.path, song.ref.mediaStoreId))
-            Column(Modifier.weight(1f)) {
+            Column(Modifier.weight(1f).clearAndSetSemantics {}) {
                 Text(title, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     LyricsMarkDot(mark)
@@ -443,7 +451,7 @@ fun NavRow(
             .heightIn(min = 64.dp)
             .padding(horizontal = 8.dp, vertical = 8.dp),
     ) {
-        lead()
+        Box(Modifier.clearAndSetSemantics {}) { lead() }
         Column(Modifier.weight(1f).clearAndSetSemantics {}) {
             Text(title, style = MaterialTheme.typography.bodyLarge, color = titleColor, fontWeight = if (titleColor.isSpecified()) FontWeight.SemiBold else null, maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (sub != null) Text(sub, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)

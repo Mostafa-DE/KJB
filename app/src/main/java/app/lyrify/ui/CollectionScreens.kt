@@ -485,7 +485,7 @@ private fun FavouritesPage(ui: LibraryUi, library: Library) {
     val others = favourites.albums.size + favourites.artists.size + favourites.folders.size + favourites.playlists.size
     SongListFrame(ui, songs, QueueSource(SourceKind.FAVOURITES, "favourites", ""), topBar = { under, backdrop -> CollectionTopBar(title, under, backdrop, ui) }) { list ->
         item(key = "hero") {
-            Hero(title, songsMeta(songs, null).let { if (others > 0) stringResource(R.string.lib_after, it, stringResource(R.string.lib_more_count, others)) else it }, art = { BuiltInTile(BuiltInList.FAVOURITES, HERO) })
+            Hero(title, songsMeta(songs, null).let { if (others > 0) stringResource(R.string.lib_after, it, pluralStringResource(R.plurals.lib_more_count, others, others)) else it }, art = { BuiltInTile(BuiltInList.FAVOURITES, HERO) })
         }
         item(key = "header") { ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll) }
         FavouriteSection.entries.forEach { section ->

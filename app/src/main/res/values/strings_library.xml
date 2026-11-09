@@ -135,7 +135,10 @@
     <string name="lib_delete">Delete</string>
     <string name="lib_view_all">View all</string>
     <!-- Favourites' line, "12 songs · 3 more". -->
-    <string name="lib_more_count">%1$d more</string>
+    <plurals name="lib_more_count">
+        <item quantity="one">%d more</item>
+        <item quantity="other">%d more</item>
+    </plurals>
     <string name="lib_hint_songs">Tap the heart on any song.</string>
     <string name="lib_hint_albums">Tap the heart on an album\'s page.</string>
     <string name="lib_hint_artists">Tap the heart on an artist\'s page.</string>

@@ -358,7 +358,7 @@ private fun AlbumsTab(ui: LibraryUi, library: Library, padding: PaddingValues, r
                 songs = songs.size,
                 sort = stringResource(order.words),
                 onSort = { sorting = true },
-                modifier = Modifier,
+                gutter = 0.dp,
             )
         }
         items(albums, key = { it.key }) { album ->
