@@ -43,7 +43,6 @@
         <item quantity="other">Played %1$s times</item>
     </plurals>
     <string name="stats_not_played">Not played yet</string>
-    <string name="stats_info_last">Last played</string>
     <string name="stats_never">Never</string>
     <string name="stats_today">Today %1$s</string>
     <string name="stats_yesterday">Yesterday</string>
