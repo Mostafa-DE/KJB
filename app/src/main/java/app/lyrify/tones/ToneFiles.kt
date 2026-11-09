@@ -9,8 +9,11 @@ import android.provider.BaseColumns
 import android.provider.MediaStore
 import android.util.Log
 import app.lyrify.LOG_TAG
+import app.lyrify.Lyrify
 import app.lyrify.ai.MixDecoder
 import app.lyrify.ai.MixSource
+import app.lyrify.data.SharedWrite
+import app.lyrify.data.SharedWrites
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -231,10 +234,12 @@ enum class SaveFailure {
  * The tone files Lyrify makes. A tone is a new file: the song is only ever read, through [openSong]. Saving writes a
  * pending MediaStore row, encodes into it, publishes it and lists it; a failure or a cancellation on the way deletes
  * the half-made row (a pending row MediaStore would also expire by itself). Deleting removes only the tone's own row.
+ * Saving, renaming and deleting ask [writes] first (a debug build refuses them all: tones live outside its test folder).
  * Blocking work runs on [io]. Logs name failures only, never a title or path.
  */
 class ToneFiles(
     private val media: ToneMedia,
+    private val writes: SharedWrites,
     private val openSong: (File) -> MixSource,
     private val newEncoder: (FileDescriptor) -> ToneEncoder,
     private val list: ToneList,
@@ -244,6 +249,10 @@ class ToneFiles(
 ) {
     /** Saves [request]; [onProgress] hears the share done. Cancellable: a cancelled save leaves no file. */
     suspend fun save(request: ToneRequest, onProgress: (Float) -> Unit): SaveResult = withContext(io) {
+        val entry = ToneEntry.of(request.songTitle, request.kind)
+        if (!writes.allows(SharedWrite.TONE_SAVE, sharedPath(request.kind, entry.displayName))) {
+            return@withContext SaveResult.Failed(SaveFailure.NOT_SAVED)
+        }
         val source = try {
             openSong(File(request.songPath))
         } catch (e: Exception) {
@@ -256,6 +265,7 @@ class ToneFiles(
 
     /** Deletes [tone]'s file (never the song: only a row that is still this tone, [isSavedTone]) and its row in the list. */
     suspend fun delete(tone: SavedTone): ToneEdit = withContext(io) {
+        if (!writes.allows(SharedWrite.TONE_DELETE, sharedPath(tone.kind, tone.fileName))) return@withContext ToneEdit.Failed
         checked(tone)?.let { return@withContext it }
         try {
             if (!media.delete(tone.id, identity(tone))) return@withContext gone(tone)
@@ -273,6 +283,7 @@ class ToneFiles(
      * pickers list comes from the new file name (MediaStore rescans a moved file before the update returns).
      */
     suspend fun rename(tone: SavedTone, name: String): ToneEdit = withContext(io) {
+        if (!writes.allows(SharedWrite.TONE_RENAME, sharedPath(tone.kind, tone.fileName))) return@withContext ToneEdit.Failed
         checked(tone)?.let { return@withContext it }
         try {
             if (!media.update(tone.id, ToneEntry.renameValues(name), identity(tone))) return@withContext gone(tone)
@@ -321,6 +332,12 @@ class ToneFiles(
     }
 
     private fun identity(tone: SavedTone): MediaRow = MediaRow(tone.name, tone.fileName, tone.size, "${tone.kind.folder}/")
+
+    /**
+     * Where a tone's file is, for [writes]: its kind's folder on the phone's primary volume (VOLUME_EXTERNAL_PRIMARY, as
+     * the owner sees it). Never the test folder, so a debug build saves, renames and deletes no tone.
+     */
+    private fun sharedPath(kind: ToneKind, fileName: String): String = "$PRIMARY_VOLUME/${kind.folder}/$fileName"
 
     private suspend fun gone(tone: SavedTone): ToneEdit {
         log("tone row no longer the saved tone, left alone and unlisted")
@@ -396,9 +413,12 @@ class ToneFiles(
     }
 
     companion object {
+        private const val PRIMARY_VOLUME: String = "/storage/emulated/0"
+
         /** The app's: MediaStore, the song decoder, the AAC encoder and the "Your tones" list. */
         fun of(context: Context): ToneFiles = ToneFiles(
             media = AndroidToneMedia(context.contentResolver),
+            writes = Lyrify.writes,
             openSong = ::MixDecoder,
             newEncoder = ::AacToneEncoder,
             list = ToneListStore.of(context),

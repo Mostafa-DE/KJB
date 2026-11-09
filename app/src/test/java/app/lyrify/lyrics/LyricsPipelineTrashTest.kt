@@ -1,6 +1,7 @@
 package app.lyrify.lyrics
 
 import app.lyrify.data.LyricsStatus
+import app.lyrify.data.SharedWrites
 import app.lyrify.data.recorded
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
@@ -34,7 +35,14 @@ class LyricsPipelineTrashTest {
     private val logs = mutableListOf<String>()
 
     private fun TestScope.pipeline() =
-        LyricsPipeline(client = client, ledger = ledger, clock = { BASE + testScheduler.currentTime }, log = { logs += it }, warn = { logs += it })
+        LyricsPipeline(
+            client = client,
+            ledger = ledger,
+            clock = { BASE + testScheduler.currentTime },
+            writes = SharedWrites.ANYWHERE,
+            log = { logs += it },
+            warn = { logs += it },
+        )
 
     private fun audio(name: String = "Song A.mp3"): LocalTrack {
         val file = File(folder.root, name)

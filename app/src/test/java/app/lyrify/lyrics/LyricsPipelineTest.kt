@@ -3,6 +3,7 @@ package app.lyrify.lyrics
 import app.lyrify.data.LedgerEntry
 import app.lyrify.data.LyricsStatus
 import app.lyrify.data.Retry
+import app.lyrify.data.SharedWrites
 import app.lyrify.data.recorded
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -57,6 +58,7 @@ class LyricsPipelineTest {
         client = client,
         ledger = ledger,
         clock = { BASE + testScheduler.currentTime },
+        writes = SharedWrites.ANYWHERE,
         random = MiddleRandom,
         log = { logs += it },
         warn = { warnings += it },
@@ -224,7 +226,7 @@ class LyricsPipelineTest {
         val path = File(folder.root, "Nemo.lrc").toPath()
         val bytes = expectedLrc.encodeToByteArray()
 
-        val created = SidecarFile.create(path, bytes, log = { logs += it }) { channel, _ ->
+        val created = SidecarFile.create(path, bytes, SharedWrites.ANYWHERE, log = { logs += it }) { channel, _ ->
             channel.write(ByteBuffer.wrap(bytes, 0, 5))
             throw IOException("No space left on device")
         }
@@ -240,7 +242,7 @@ class LyricsPipelineTest {
 
         listOf(OutOfMemoryError("simulated"), CancellationException("listener gone")).forEach { failure ->
             val thrown = assertThrows(Throwable::class.java) {
-                SidecarFile.create(path, bytes, log = { logs += it }) { channel, _ ->
+                SidecarFile.create(path, bytes, SharedWrites.ANYWHERE, log = { logs += it }) { channel, _ ->
                     channel.write(ByteBuffer.wrap(bytes, 0, 5))
                     throw failure
                 }
@@ -255,7 +257,7 @@ class LyricsPipelineTest {
     fun `creating over an existing file changes nothing`() {
         val path = File(folder.root, "Nemo.lrc").apply { writeText("mine") }.toPath()
 
-        assertEquals(Created.ALREADY_THERE, SidecarFile.create(path, expectedLrc.encodeToByteArray(), log = { logs += it }))
+        assertEquals(Created.ALREADY_THERE, SidecarFile.create(path, expectedLrc.encodeToByteArray(), SharedWrites.ANYWHERE, log = { logs += it }))
 
         assertEquals("mine", path.toFile().readText())
     }
@@ -957,7 +959,7 @@ class LyricsPipelineTest {
 
     @Test
     fun `deleting a file that is not there counts as already gone`() {
-        assertEquals(Removal.ALREADY_GONE, SidecarFile.delete(File(folder.root, "Nemo.lrc").toPath(), log = { logs += it }))
+        assertEquals(Removal.ALREADY_GONE, SidecarFile.delete(File(folder.root, "Nemo.lrc").toPath(), SharedWrites.ANYWHERE, log = { logs += it }))
     }
 
     @Test

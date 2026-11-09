@@ -3,6 +3,7 @@ package app.lyrify.media
 import app.lyrify.data.LedgerEntry
 import app.lyrify.data.LyricsStatus
 import app.lyrify.data.Retry
+import app.lyrify.data.SharedWrites
 import app.lyrify.data.recorded
 import app.lyrify.lyrics.FakeLrclib
 import app.lyrify.lyrics.Lane
@@ -418,7 +419,7 @@ class QueueSweepTest {
     private val synced = "[00:01.00]Stars fall\n[00:02.00]from the sky\n[00:03.00]Mystic Queen"
 
     private fun TestScope.realSweep(rows: List<AudioRow>, onCurrent: (SessionTrack, List<LocalTrack>) -> Unit = { _, _ -> }): QueueSweep {
-        val pipeline = LyricsPipeline(client, ledger, clock = { BASE + testScheduler.currentTime }, random = Random(0))
+        val pipeline = LyricsPipeline(client, ledger, clock = { BASE + testScheduler.currentTime }, writes = SharedWrites.ANYWHERE, random = Random(0))
         val sweep = QueueSweep(
             files = { track -> SessionTracks.candidates(rows, track).map(AudioRow::toLocalTrack) },
             process = { track, lane, force -> pipeline.process(track, lane, force) },
@@ -616,7 +617,7 @@ class QueueSweepTest {
 
     @Test
     fun `every connection's sweep settles writes the app's death interrupted`() = runTest {
-        val pipeline = LyricsPipeline(client, ledger, clock = { BASE + testScheduler.currentTime })
+        val pipeline = LyricsPipeline(client, ledger, clock = { BASE + testScheduler.currentTime }, writes = SharedWrites.ANYWHERE)
         fun TestScope.connect() = backgroundScope.launch {
             QueueSweep(
                 files = { emptyList() },

@@ -5,6 +5,7 @@ import android.content.Context
 import android.os.StrictMode
 import android.util.Log
 import app.lyrify.data.LedgerRepository
+import app.lyrify.data.SharedWrites
 import app.lyrify.lyrics.Checked
 import app.lyrify.lyrics.HttpLrclibClient
 import app.lyrify.lyrics.LocalTrack
@@ -57,6 +58,9 @@ class LyrifyApplication : Application() {
 object Lyrify {
     private var pipeline: LyricsPipeline? = null
 
+    /** The one checkpoint for changes to the user's files: a debug build changes only its test folder. */
+    val writes: SharedWrites = SharedWrites.forThisBuild { Log.w(LOG_TAG, it) }
+
     /** Work started from the screen that must finish even if the screen closes. */
     private val background: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO + logFailures)
 
@@ -78,6 +82,7 @@ object Lyrify {
         client = HttpLrclibClient(userAgent = "Lyrify/${BuildConfig.VERSION_NAME} (personal use)"),
         ledger = LedgerRepository(context),
         clock = System::currentTimeMillis,
+        writes = writes,
         log = { Log.d(LOG_TAG, it) },
         warn = { Log.w(LOG_TAG, it) },
     ).also { created ->

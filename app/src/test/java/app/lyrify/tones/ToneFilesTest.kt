@@ -2,6 +2,7 @@ package app.lyrify.tones
 
 import app.lyrify.ai.ArrayMix
 import app.lyrify.ai.MixSource
+import app.lyrify.data.SharedWrites
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -83,6 +84,7 @@ class ToneFilesTest {
     ) {
         val files = ToneFiles(
             media = media,
+            writes = SharedWrites.ANYWHERE,
             openSong = openSong ?: { file -> opened += file; source },
             newEncoder = { encoder },
             list = list,

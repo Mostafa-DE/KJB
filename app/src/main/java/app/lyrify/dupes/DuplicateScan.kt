@@ -3,6 +3,7 @@ package app.lyrify.dupes
 import android.content.ContentResolver
 import android.database.Cursor
 import android.provider.MediaStore
+import app.lyrify.data.SharedWrites
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import java.io.File
@@ -134,9 +135,10 @@ interface AudioLibrary {
 
 /**
  * The phone's songs from MediaStore: every audio file it marks as music, and any other audio file in a Music folder.
- * Trashed and pending files are not listed (MediaStore leaves them out by default). Reads tags and sizes only.
+ * Trashed and pending files are not listed (MediaStore leaves them out by default). Reads tags and sizes only. A debug
+ * build lists only the songs [writes] lets it change (its test folder).
  */
-class MediaStoreLibrary(private val resolver: ContentResolver) : AudioLibrary {
+class MediaStoreLibrary(private val resolver: ContentResolver, private val writes: SharedWrites) : AudioLibrary {
     override fun read(): LibraryRead = try {
         val cursor = resolver.query(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, PROJECTION, null, null, null)
         if (cursor == null) LibraryRead.Unavailable("no cursor") else LibraryRead.Files(cursor.use { files(it, inScopeOnly = true) })
@@ -181,7 +183,7 @@ class MediaStoreLibrary(private val resolver: ContentResolver) : AudioLibrary {
             while (cursor.moveToNext()) {
                 val path = cursor.getString(data) ?: continue
                 val folder = cursor.getString(relativePath)
-                if (inScopeOnly && !inScope(cursor.getInt(isMusic) != 0, folder)) continue
+                if (inScopeOnly && (!inScope(cursor.getInt(isMusic) != 0, folder) || !writes.lists(path))) continue
                 add(
                     AudioFile(
                         id = cursor.getLong(id),

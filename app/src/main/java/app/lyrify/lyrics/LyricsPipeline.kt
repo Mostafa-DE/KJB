@@ -8,6 +8,8 @@ import app.lyrify.data.LedgerStore
 import app.lyrify.data.LyricsSource
 import app.lyrify.data.LyricsStatus
 import app.lyrify.data.Retry
+import app.lyrify.data.SharedWrite
+import app.lyrify.data.SharedWrites
 import app.lyrify.data.recorded
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
@@ -150,7 +152,8 @@ enum class Removal {
  * on-device AI's lyrics are written and recorded here too ([recordAi]), through the same path.
  *
  * Files: only ever creates `<audio name>.lrc` next to the audio, and only where nothing
- * exists ([SidecarFile]). Never opens the audio file. Deletes only what [SidecarFile] allows.
+ * exists ([SidecarFile]). Never opens the audio file. Deletes only what [SidecarFile] allows. Every create and delete
+ * asks [writes] first; a song whose `.lrc` it would refuse is skipped before any lookup.
  * A write is marked in the ledger before the file is created ([LyricsStatus.WRITING]), so one
  * the app's death interrupted is settled the next time the track is seen ([reconcile]).
  * Different files are handled side by side (LRCLIB still gets one request at a time, see
@@ -160,6 +163,8 @@ class LyricsPipeline(
     private val client: LrclibClient,
     private val ledger: LedgerStore,
     private val clock: () -> Long,
+    /** What the pipeline may change in shared storage: in a debug build, only the test folder. */
+    private val writes: SharedWrites,
     private val random: Random = Random.Default,
     private val log: (String) -> Unit = {},
     /** For what needs a person to look: the ledger failing where a file's safety depends on it. */
@@ -186,6 +191,7 @@ class LyricsPipeline(
             log("skip ${track.path}: no file extension")
             return@exclusive null
         }
+        if (!writes.allows(SharedWrite.LRC_CREATE, sidecarPath)) return@exclusive null
         val sidecar = File(sidecarPath).toPath()
         val state = ledger.ledger.first()
         if (!state.readable) {
@@ -400,7 +406,7 @@ class LyricsPipeline(
                             Removal.FAILED
                         } else {
                             val deleted = when (SidecarFile.compare(sidecar, sha256) {}) {
-                                Compared.SAME -> SidecarFile.delete(sidecar) {}
+                                Compared.SAME -> SidecarFile.delete(sidecar, writes) {}
                                 Compared.MISSING -> Removal.ALREADY_GONE
                                 Compared.CHANGED -> Removal.CHANGED
                                 Compared.UNREADABLE -> Removal.FAILED
@@ -451,7 +457,7 @@ class LyricsPipeline(
     private suspend fun deleteRemoved(entry: LedgerEntry, sidecar: Path, sha256: String): Removal {
         if (!ledger.put(entry.removed(clock()))) return Removal.FAILED
         val removal = when (SidecarFile.compare(sidecar, sha256, log)) {
-            Compared.SAME -> SidecarFile.delete(sidecar, log)
+            Compared.SAME -> SidecarFile.delete(sidecar, writes, log)
             Compared.MISSING -> Removal.ALREADY_GONE
             Compared.CHANGED -> Removal.CHANGED
             Compared.UNREADABLE -> Removal.FAILED
@@ -605,7 +611,7 @@ class LyricsPipeline(
             log("${track.title}: ledger not writable, no lyrics written")
             return notWritten(previous, track, written)
         }
-        return when (SidecarFile.create(sidecar, bytes, log, writeBytes)) {
+        return when (SidecarFile.create(sidecar, bytes, writes, log, writeBytes)) {
             Created.YES -> {
                 // Should this entry be lost, the marker stays and reconcile finds the file complete.
                 record(
@@ -663,7 +669,7 @@ class LyricsPipeline(
                 Processed(status)
             }
             Interrupted.PARTIAL ->
-                if (SidecarFile.deleteInterrupted(sidecar, log)) lookUpAndWrite(track, sidecar, marker, lane) else Processed(LyricsStatus.WRITING)
+                if (SidecarFile.deleteInterrupted(sidecar, writes, log)) lookUpAndWrite(track, sidecar, marker, lane) else Processed(LyricsStatus.WRITING)
             Interrupted.FOREIGN -> Processed(keepForeign(marker, track, marker))
         }
     }
@@ -846,7 +852,8 @@ internal enum class Interrupted {
  * Every file operation on `.lrc` files. Lyrify deletes exactly three kinds of file, all here:
  * a partial `.lrc` the same [create] call just made; (by [delete], when the user asks) a `.lrc`
  * Lyrify wrote whose bytes still have the hash it recorded; and (by [deleteInterrupted]) the
- * partial `.lrc` of Lyrify's own write that the app's death cut short.
+ * partial `.lrc` of Lyrify's own write that the app's death cut short. Each create and delete asks [SharedWrites]
+ * first, and changes nothing when refused.
  */
 internal object SidecarFile {
     /** Larger than any lyrics file; such a file is not one Lyrify wrote. */
@@ -863,9 +870,11 @@ internal object SidecarFile {
     fun create(
         path: Path,
         bytes: ByteArray,
+        writes: SharedWrites,
         log: (String) -> Unit,
         write: (FileChannel, ByteBuffer) -> Unit = ::writeFully,
     ): Created {
+        if (!writes.allows(SharedWrite.LRC_CREATE, path.toString())) return Created.FAILED
         val channel = try {
             FileChannel.open(path, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)
         } catch (_: FileAlreadyExistsException) {
@@ -912,20 +921,23 @@ internal object SidecarFile {
 
     /**
      * Deletes [path], which [compare] just found unchanged: REMOVED, ALREADY_GONE, or FAILED
-     * while the file is still there. The file is not held open from the hash to the delete:
+     * while the file is still there (also when [writes] refuses). The file is not held open from the hash to the delete:
      * only another app rewriting this very `.lrc` in those microseconds could lose its change,
      * which is not worth the complexity.
      */
-    fun delete(path: Path, log: (String) -> Unit): Removal = try {
-        Files.delete(path)
-        log("${path.fileName}: removed")
-        Removal.REMOVED
-    } catch (_: NoSuchFileException) {
-        log("${path.fileName}: gone already")
-        Removal.ALREADY_GONE
-    } catch (e: IOException) {
-        log("${path.fileName}: not removed: ${e.javaClass.simpleName}: ${e.message}")
-        if (Files.exists(path, LinkOption.NOFOLLOW_LINKS)) Removal.FAILED else Removal.ALREADY_GONE
+    fun delete(path: Path, writes: SharedWrites, log: (String) -> Unit): Removal {
+        if (!writes.allows(SharedWrite.LRC_DELETE, path.toString())) return Removal.FAILED
+        return try {
+            Files.delete(path)
+            log("${path.fileName}: removed")
+            Removal.REMOVED
+        } catch (_: NoSuchFileException) {
+            log("${path.fileName}: gone already")
+            Removal.ALREADY_GONE
+        } catch (e: IOException) {
+            log("${path.fileName}: not removed: ${e.javaClass.simpleName}: ${e.message}")
+            if (Files.exists(path, LinkOption.NOFOLLOW_LINKS)) Removal.FAILED else Removal.ALREADY_GONE
+        }
     }
 
     /**
@@ -951,14 +963,17 @@ internal object SidecarFile {
         }
     }
 
-    /** Deletes the partial file [interrupted] found at [path]; true when it is gone. */
-    fun deleteInterrupted(path: Path, log: (String) -> Unit): Boolean = try {
-        Files.deleteIfExists(path)
-        log("${path.fileName}: partial file of an interrupted write removed")
-        true
-    } catch (e: IOException) {
-        log("${path.fileName}: partial file of an interrupted write not removed: ${e.javaClass.simpleName}")
-        false
+    /** Deletes the partial file [interrupted] found at [path]; true when it is gone, false when it stays (or [writes] refuses). */
+    fun deleteInterrupted(path: Path, writes: SharedWrites, log: (String) -> Unit): Boolean {
+        if (!writes.allows(SharedWrite.LRC_DELETE, path.toString())) return false
+        return try {
+            Files.deleteIfExists(path)
+            log("${path.fileName}: partial file of an interrupted write removed")
+            true
+        } catch (e: IOException) {
+            log("${path.fileName}: partial file of an interrupted write not removed: ${e.javaClass.simpleName}")
+            false
+        }
     }
 
     /** The hash and modification time of the regular file at [path]; null for anything else (missing, a link, too large). */
@@ -975,7 +990,7 @@ internal object SidecarFile {
         while (buffer.hasRemaining()) channel.write(buffer)
     }
 
-    /** [path] was created by this very call and is incomplete: Lyrify's own partial file. */
+    /** [path] was created by this very call (which [SharedWrites] allowed) and is incomplete: Lyrify's own partial file. */
     private fun deletePartial(path: Path, log: (String) -> Unit) {
         try {
             Files.deleteIfExists(path)

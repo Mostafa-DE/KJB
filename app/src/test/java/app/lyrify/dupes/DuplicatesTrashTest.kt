@@ -1,6 +1,7 @@
 package app.lyrify.dupes
 
 import app.lyrify.data.LyricsStatus
+import app.lyrify.data.SharedWrites
 import app.lyrify.lyrics.FakeLrclib
 import app.lyrify.lyrics.LocalTrack
 import app.lyrify.lyrics.LrcFormat
@@ -40,7 +41,8 @@ class DuplicatesTrashTest {
     /** Placeholder words, never real lyrics. */
     private val synced = "[00:01.00]w0001\n[00:02.00]w0002\n[00:03.00]w0003\n[00:04.00]w0004\n[00:05.00]w0005\n[00:06.00]w0006"
 
-    private fun TestScope.pipeline() = LyricsPipeline(client = client, ledger = ledger, clock = { BASE + testScheduler.currentTime })
+    private fun TestScope.pipeline() =
+        LyricsPipeline(client = client, ledger = ledger, clock = { BASE + testScheduler.currentTime }, writes = SharedWrites.ANYWHERE)
 
     private fun copy(id: Long, folderName: String): AudioFile {
         val file = File(folder.root, "Music/$folderName/Song A.mp3")

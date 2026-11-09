@@ -4,6 +4,7 @@ import app.lyrify.data.LedgerEntry
 import app.lyrify.data.LyricsSource
 import app.lyrify.data.LyricsStatus
 import app.lyrify.data.Retry
+import app.lyrify.data.SharedWrites
 import app.lyrify.data.recorded
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
@@ -56,6 +57,7 @@ class LyricsPipelineCheckTest {
         client = client,
         ledger = ledger,
         clock = { BASE + testScheduler.currentTime },
+        writes = SharedWrites.ANYWHERE,
         random = MiddleRandom,
         log = { logs += it },
     )

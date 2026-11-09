@@ -6,6 +6,7 @@ import app.lyrify.ai.RejectReason
 import app.lyrify.data.LedgerEntry
 import app.lyrify.data.LyricsSource
 import app.lyrify.data.LyricsStatus
+import app.lyrify.data.SharedWrites
 import app.lyrify.data.recorded
 import app.lyrify.overnight.AiJob
 import app.lyrify.overnight.AiQueue
@@ -52,6 +53,7 @@ class LyricsPipelineAiTest {
         client = client,
         ledger = ledger,
         clock = { BASE + testScheduler.currentTime },
+        writes = SharedWrites.ANYWHERE,
         random = MiddleRandom,
         writeBytes = writeBytes,
     )

@@ -10,6 +10,8 @@ import android.provider.MediaStore
 import android.util.Log
 import app.lyrify.LOG_TAG
 import app.lyrify.Lyrify
+import app.lyrify.data.SharedWrite
+import app.lyrify.data.SharedWrites
 import app.lyrify.logFailures
 import app.lyrify.lyrics.LrcFormat
 import kotlinx.coroutines.CoroutineDispatcher
@@ -420,8 +422,9 @@ fun sidecarExists(file: AudioFile): Boolean =
  * `ActivityResultContracts.StartIntentSenderForResult`; RESULT_OK means it is done. The phone shows that dialog to every
  * app without the Media management permission (MANAGE_MEDIA), which Lyrify never asks for: the phone always asks the user
  * itself. Trashed files keep their MediaStore id and can be restored for about 30 days; then the phone deletes them.
+ * Every request asks [writes] first; a debug build asks only for songs in its test folder.
  */
-class MediaStoreTrash(private val resolver: ContentResolver) : PhoneTrash {
+class MediaStoreTrash(private val resolver: ContentResolver, private val writes: SharedWrites) : PhoneTrash {
     sealed interface Request {
         data class Ready(val intent: PendingIntent) : Request
 
@@ -431,11 +434,25 @@ class MediaStoreTrash(private val resolver: ContentResolver) : PhoneTrash {
 
     /** The phone's dialog moving the songs with MediaStore [ids] to its trash, or with [trash] false back out of it. */
     fun request(ids: List<Long>, trash: Boolean = true): Request = try {
-        Request.Ready(MediaStore.createTrashRequest(resolver, ids.map(::uri), trash))
+        if (!writes.allowsIds(if (trash) SharedWrite.TRASH else SharedWrite.UNTRASH, ids, ::paths)) {
+            Request.Unavailable("refused by this build")
+        } else {
+            Request.Ready(MediaStore.createTrashRequest(resolver, ids.map(::uri), trash))
+        }
     } catch (e: IllegalArgumentException) {
         Request.Unavailable(e.javaClass.simpleName)
     } catch (e: SecurityException) {
         Request.Unavailable(e.javaClass.simpleName)
+    }
+
+    /** The absolute paths of the songs with MediaStore [ids], trashed ones included; null when MediaStore gives no answer. */
+    private fun paths(ids: Collection<Long>): Map<Long, String>? {
+        val found = HashMap<Long, String>()
+        for (chunk in ids.distinct().chunked(MAX_IDS_PER_QUERY)) {
+            val cursor = resolver.query(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, arrayOf(MediaStore.Audio.Media._ID, DATA), selection(chunk), null) ?: return null
+            cursor.use { while (it.moveToNext()) it.getString(1)?.let { path -> found[it.getLong(0)] = path } }
+        }
+        return found
     }
 
     override fun inTrash(ids: Collection<Long>): Map<Long, Long?>? = try {
@@ -450,12 +467,7 @@ class MediaStoreTrash(private val resolver: ContentResolver) : PhoneTrash {
 
     /** Adds the trashed ones of [ids] to [found]; false when MediaStore gave no answer. Trashed items are listed too (MATCH_INCLUDE). */
     private fun query(ids: List<Long>, found: MutableMap<Long, Long?>): Boolean {
-        val args = Bundle().apply {
-            putString(ContentResolver.QUERY_ARG_SQL_SELECTION, "${MediaStore.Audio.Media._ID} IN (${ids.joinToString(",") { "?" }})")
-            putStringArray(ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, ids.map(Long::toString).toTypedArray())
-            putInt(MediaStore.QUERY_ARG_MATCH_TRASHED, MediaStore.MATCH_INCLUDE)
-        }
-        val cursor = resolver.query(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, PROJECTION, args, null) ?: return false
+        val cursor = resolver.query(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, PROJECTION, selection(ids), null) ?: return false
         cursor.use {
             val id = it.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
             val trashed = it.getColumnIndexOrThrow(MediaStore.Audio.Media.IS_TRASHED)
@@ -468,11 +480,21 @@ class MediaStoreTrash(private val resolver: ContentResolver) : PhoneTrash {
         return true
     }
 
+    /** The rows with [ids], trashed ones included (MATCH_INCLUDE). */
+    private fun selection(ids: List<Long>): Bundle = Bundle().apply {
+        putString(ContentResolver.QUERY_ARG_SQL_SELECTION, "${MediaStore.Audio.Media._ID} IN (${ids.joinToString(",") { "?" }})")
+        putStringArray(ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, ids.map(Long::toString).toTypedArray())
+        putInt(MediaStore.QUERY_ARG_MATCH_TRASHED, MediaStore.MATCH_INCLUDE)
+    }
+
     private fun uri(id: Long): Uri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id)
 
     private companion object {
         /** Well under SQLite's limit of query arguments. */
         const val MAX_IDS_PER_QUERY: Int = 500
+
+        /** A file's absolute path (MediaStore's `_data`), for [writes]. */
+        const val DATA: String = "_data"
 
         val PROJECTION: Array<String> = arrayOf(MediaStore.Audio.Media._ID, MediaStore.Audio.Media.IS_TRASHED, MediaStore.Audio.Media.DATE_EXPIRES)
     }
@@ -485,10 +507,10 @@ private object DuplicatesHolder {
     @Synchronized
     fun engine(context: Context): Duplicates = engine ?: context.applicationContext.let { app ->
         Duplicates(
-            library = MediaStoreLibrary(app.contentResolver),
+            library = MediaStoreLibrary(app.contentResolver, Lyrify.writes),
             store = DuplicatesStore(File(app.filesDir, "duplicates.json")) { Log.w(LOG_TAG, it) },
             cleanup = { Lyrify.pipeline(app).trashed(it) },
-            phoneTrash = MediaStoreTrash(app.contentResolver),
+            phoneTrash = MediaStoreTrash(app.contentResolver, Lyrify.writes),
             scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + logFailures),
             io = Dispatchers.IO,
             clock = System::currentTimeMillis,

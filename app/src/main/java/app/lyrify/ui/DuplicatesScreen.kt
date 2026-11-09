@@ -51,6 +51,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.lyrify.Lyrify
 import app.lyrify.R
 import app.lyrify.dupes.AudioFile
 import app.lyrify.dupes.Confidence
@@ -210,7 +211,7 @@ fun rememberPhoneTrash(engine: Duplicates, toasts: ToastState): (List<Long>, Boo
     }
     return remember(launcher, engine) {
         { ids, trash ->
-            when (val request = MediaStoreTrash(context.contentResolver).request(ids, trash)) {
+            when (val request = MediaStoreTrash(context.contentResolver, Lyrify.writes).request(ids, trash)) {
                 is MediaStoreTrash.Request.Ready -> launcher.launch(IntentSenderRequest.Builder(request.intent).build())
                 is MediaStoreTrash.Request.Unavailable -> scope.launch {
                     if (trash) engine.systemAnswered(approved = false) else engine.restoreAnswered(approved = false)

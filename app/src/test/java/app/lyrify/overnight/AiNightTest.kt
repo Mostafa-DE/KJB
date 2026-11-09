@@ -10,6 +10,7 @@ import app.lyrify.data.LedgerJson
 import app.lyrify.data.LedgerState
 import app.lyrify.data.LyricsSource
 import app.lyrify.data.LyricsStatus
+import app.lyrify.data.SharedWrites
 import app.lyrify.data.recorded
 import app.lyrify.lyrics.FakeLrclib
 import app.lyrify.lyrics.LOOKUP_REV
@@ -234,7 +235,8 @@ class AiNightTest {
 
     private fun TestScope.runner(): AiRunner {
         pipeline = LyricsPipeline(
-            client, memory, clock = { now + testScheduler.currentTime }, random = Random(1), log = { logs += it }, warn = { logs += it },
+            client, memory, clock = { now + testScheduler.currentTime }, writes = SharedWrites.ANYWHERE, random = Random(1),
+            log = { logs += it }, warn = { logs += it },
         )
         return AiRunner(
             ledger = memory,
