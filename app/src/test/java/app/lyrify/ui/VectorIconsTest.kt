@@ -133,8 +133,8 @@ class VectorIconsTest {
         // The bare K draws the in-app mark; the brand mark puts it on a black tile.
         assertTrue(Regex("""fun BrandK\([^\n]*\n[^\n]*R\.drawable\.ic_brand_k""").containsMatchIn(components))
         assertTrue(Regex("""fun BrandMark\([\s\S]*?background\(BrandBlack\)[\s\S]*?BrandK\(""").containsMatchIn(components))
-        // The top bar, the idle orb, onboarding, About, empty states and the AI ring's centre.
-        listOf("AppShell.kt", "Chrome.kt", "OnboardingScreen.kt", "SettingsScreen.kt", "AiScreen.kt").forEach { name ->
+        // Companion Now's top bar, onboarding, About, empty states and the AI ring's centre.
+        listOf("CompanionNowScreen.kt", "OnboardingScreen.kt", "SettingsScreen.kt", "AiScreen.kt").forEach { name ->
             assertTrue(name, Regex("""BrandMark\(|BrandK\(|R\.drawable\.ic_brand_k""").containsMatchIn(ui.getValue(name)))
         }
         assertTrue(Regex("""EmptyArt\.Glyph -> BrandK\(""").containsMatchIn(components))
