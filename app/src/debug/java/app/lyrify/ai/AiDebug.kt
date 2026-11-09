@@ -18,6 +18,7 @@ import android.util.Log
 import androidx.annotation.RequiresApi
 import app.lyrify.BuildConfig
 import app.lyrify.LOG_TAG
+import app.lyrify.R
 import app.lyrify.logFailures
 import app.lyrify.lyrics.LocalTrack
 import kotlinx.coroutines.CoroutineScope
@@ -143,7 +144,7 @@ class AiDebugService : Service() {
         getSystemService(NotificationManager::class.java)
             .createNotificationChannel(NotificationChannel(CHANNEL, "AI debug run", NotificationManager.IMPORTANCE_LOW))
         return Notification.Builder(this, CHANNEL)
-            .setSmallIcon(android.R.drawable.stat_notify_sync)
+            .setSmallIcon(R.drawable.ic_stat_kjb)
             .setContentTitle("KJB AI debug run")
             .setContentText("Results go to logcat, tag KJB")
             .setOngoing(true)

@@ -473,7 +473,7 @@ object AiLyrics {
             PendingIntent.FLAG_IMMUTABLE,
         )
         val notification = Notification.Builder(context, CHANNEL)
-            .setSmallIcon(R.drawable.ic_launcher_monochrome)
+            .setSmallIcon(R.drawable.ic_stat_kjb)
             .setContentTitle(context.getString(R.string.ai_notification_title))
             .setContentText(text)
             .setContentIntent(open)

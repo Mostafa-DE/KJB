@@ -1,23 +1,44 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- "Karaoke line": three lyric lines, the current one half sung (a coral part over a faint track, 60% from the left). -->
+<!-- The Blade K (blade-k-foreground.svg): a blackletter K cut into three blades, the stem and leg in steel and the arm a
+     coral edge, inside the 66 dp safe circle. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <path
-        android:fillAlpha="0.45"
-        android:fillColor="#FFF4F1FF"
-        android:pathData="M33,35 h34 a3,3 0 0 1 0,6 h-34 a3,3 0 0 1 0,-6 z" />
-    <path
-        android:fillAlpha="0.35"
-        android:fillColor="#FFF4F1FF"
-        android:pathData="M35,49 h38 a5,5 0 0 1 0,10 h-38 a5,5 0 0 1 0,-10 z" />
-    <path
-        android:fillColor="#FFFF8A70"
-        android:pathData="M35,49 h18.8 a5,5 0 0 1 0,10 h-18.8 a5,5 0 0 1 0,-10 z" />
-    <path
-        android:fillAlpha="0.45"
-        android:fillColor="#FFF4F1FF"
-        android:pathData="M33,67 h24 a3,3 0 0 1 0,6 h-24 a3,3 0 0 1 0,-6 z" />
+    <path android:pathData="M34.47,32.83L37.73,28.67L44.88,34.55L44.88,75.17L41.62,79.33L34.47,73.45ZM47.05,62.65L54.37,54.63L65.39,73L71.72,79.33L57.06,79.33Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:endX="0"
+                android:endY="84"
+                android:startX="0"
+                android:startY="24"
+                android:type="linear">
+                <item
+                    android:color="#FFFBFAFF"
+                    android:offset="0" />
+                <item
+                    android:color="#FFAEA8C6"
+                    android:offset="1" />
+            </gradient>
+        </aapt:attr>
+    </path>
+    <path android:pathData="M47.05,43.14L74.73,29.12L47.05,59.43Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:endX="52"
+                android:endY="52"
+                android:startX="70"
+                android:startY="24"
+                android:type="linear">
+                <item
+                    android:color="#FFFFB49E"
+                    android:offset="0" />
+                <item
+                    android:color="#FFFF5B3C"
+                    android:offset="1" />
+            </gradient>
+        </aapt:attr>
+    </path>
 </vector>

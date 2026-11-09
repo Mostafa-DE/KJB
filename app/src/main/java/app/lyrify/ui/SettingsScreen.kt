@@ -18,6 +18,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -68,7 +69,8 @@ fun SettingsScreen(
             item { SectionTitle(stringResource(R.string.settings_about), Modifier.padding(start = ScreenPadding + 4.dp, end = ScreenPadding, top = 24.dp, bottom = 8.dp)) }
             item {
                 GroupedRows {
-                    AboutRow(R.drawable.ic_info, stringResource(R.string.version_label, versionName), first = true)
+                    // The version beside the app's own mark, the Blade K on graphite.
+                    GroupedRow(R.drawable.ic_brand_k, stringResource(R.string.version_label, versionName), tile = BrandGraphite, onTile = Color.Unspecified, first = true)
                     AboutRow(R.drawable.ic_lyrics, stringResource(R.string.settings_source))
                 }
             }

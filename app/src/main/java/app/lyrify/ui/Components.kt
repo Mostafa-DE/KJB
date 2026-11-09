@@ -16,6 +16,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.scaleIn
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -117,17 +118,17 @@ fun TextStyle.tabular(): TextStyle = copy(fontFeatureSettings = TABULAR)
 // The sung line
 
 /**
- * The brand glyph, the karaoke line: three lyric lines in the launcher's proportions, the middle one a track whose
- * coral "sung" part fills from the start. On the ink tile ([onInk]) it is lilac and the launcher's coral; elsewhere it
- * takes the scheme's muted colour and the brand highlight. [sweeping]: the sung part sweeps across and restarts (the
- * "Looking up" signature); otherwise, and with the phone's animations off, it rests still at 65%.
+ * The karaoke line: three lyric lines, the middle one a track whose "sung" part fills from the start, in the scheme's
+ * muted colour and the brand highlight. It stands in for a missing cover and, [sweeping], is the "Looking up"
+ * signature: the sung part sweeps across and restarts; otherwise, and with the phone's animations off, it rests still
+ * at 65%. The app's logo is [BrandMark].
  */
 @Composable
-fun BrandGlyph(modifier: Modifier = Modifier, width: Dp = 18.dp, onInk: Boolean = false, sweeping: Boolean = false) {
+fun BrandGlyph(modifier: Modifier = Modifier, width: Dp = 18.dp, sweeping: Boolean = false) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val lines = if (onInk) BrandLilac.copy(alpha = 0.5f) else muted.copy(alpha = 0.4f)
-    val track = if (onInk) BrandLilac.copy(alpha = 0.3f) else muted.copy(alpha = 0.22f)
-    val sung = if (onInk) LauncherCoral else LocalBrandColors.current.highlight
+    val lines = muted.copy(alpha = 0.4f)
+    val track = muted.copy(alpha = 0.22f)
+    val sung = LocalBrandColors.current.highlight
     // Animators off (animator scale 0, Remove animations, Battery Saver): the still frame, not a sweep pinned at its end.
     val fill = if (glyphSweeps(sweeping, ValueAnimator.areAnimatorsEnabled())) {
         val sweep by rememberInfiniteTransition(label = "glyph").animateFloat(
@@ -141,7 +142,7 @@ fun BrandGlyph(modifier: Modifier = Modifier, width: Dp = 18.dp, onInk: Boolean 
         RESTING_FILL
     }
     val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
-    // The launcher's lines span 48 units across and 38 down: 40, 48 and 30 long, 6, 10 and 6 thick, 8 apart.
+    // The lines span 48 units across and 38 down: 40, 48 and 30 long, 6, 10 and 6 thick, 8 apart.
     Canvas(modifier.size(width, width * GLYPH_HEIGHT / GLYPH_WIDTH)) {
         val unit = size.width / GLYPH_WIDTH
         fun line(top: Float, length: Float, thickness: Float, color: Color) {
@@ -159,14 +160,22 @@ fun BrandGlyph(modifier: Modifier = Modifier, width: Dp = 18.dp, onInk: Boolean 
 /** Whether the glyph's sung part moves: only while [sweeping] with the phone's animations on; else it rests at [RESTING_FILL]. */
 fun glyphSweeps(sweeping: Boolean, animationsOn: Boolean): Boolean = sweeping && animationsOn
 
-/** The ink tile with the glyph, as on the launcher icon. In dark theme a hairline keeps it off the dark background. */
+/**
+ * The app's logo: the Blade K on its graphite tile, as on the launcher icon, in both themes ([shape]: the launcher's
+ * rounded square unless given). In dark theme a hairline keeps it off the dark background. Decorative.
+ */
 @Composable
-fun BrandMark(modifier: Modifier = Modifier, size: Dp = 36.dp) {
-    val shape = RoundedCornerShape(size * 10 / 36)
-    val border = if (LocalDarkTheme.current) Modifier.border(1.dp, BrandInkBorder, shape) else Modifier
-    Box(contentAlignment = Alignment.Center, modifier = modifier.size(size).clip(shape).background(BrandInk).then(border)) {
-        BrandGlyph(width = size / 2, onInk = true)
+fun BrandMark(modifier: Modifier = Modifier, size: Dp = 36.dp, shape: Shape = RoundedCornerShape(size * 10 / 36)) {
+    val border = if (LocalDarkTheme.current) Modifier.border(1.dp, BrandGraphiteBorder, shape) else Modifier
+    Box(contentAlignment = Alignment.Center, modifier = modifier.size(size).clip(shape).background(BrandGraphite).then(border)) {
+        BrandK(height = size * BRAND_K_SHARE)
     }
+}
+
+/** The Blade K alone, [height] tall, in its steel and coral: for a graphite ground. Decorative. */
+@Composable
+fun BrandK(height: Dp, modifier: Modifier = Modifier) {
+    Image(painterResource(R.drawable.ic_brand_k), contentDescription = null, modifier = modifier.size(height * BRAND_K_WIDTH / BRAND_K_HEIGHT, height))
 }
 
 // Statuses
@@ -552,7 +561,7 @@ fun GroupedRow(
 
 /** What an empty state shows in its tile. */
 sealed interface EmptyArt {
-    /** The glyph on ink: nothing yet. */
+    /** The app's Blade K on graphite: nothing yet. */
     data object Glyph : EmptyArt
 
     data class Icon(@DrawableRes val icon: Int, val tone: Tone? = null) : EmptyArt
@@ -573,18 +582,18 @@ fun EmptyState(art: EmptyArt, title: String, modifier: Modifier = Modifier, text
     }
 }
 
-/** Three rounded cards fanned out: two quiet ones behind, the art in front (the glyph on ink, or the icon on its tone). Decorative. */
+/** Three rounded cards fanned out: two quiet ones behind, the art in front (the Blade K on graphite, or the icon on its tone). Decorative. */
 @Composable
 private fun CardStack(art: EmptyArt) {
     val colors = MaterialTheme.colorScheme
     val tone = (art as? EmptyArt.Icon)?.tone?.let { LocalStatusColors.current[it] }
     val front = when {
-        art == EmptyArt.Glyph -> BrandInk
+        art == EmptyArt.Glyph -> BrandGraphite
         tone != null -> tone.container
         else -> colors.surfaceContainerLowest
     }
     val edge = when {
-        art == EmptyArt.Glyph && LocalDarkTheme.current -> Modifier.border(1.dp, BrandInkBorder, StackShape)
+        art == EmptyArt.Glyph && LocalDarkTheme.current -> Modifier.border(1.dp, BrandGraphiteBorder, StackShape)
         art != EmptyArt.Glyph && tone == null -> Modifier.border(1.dp, colors.outlineVariant, StackShape)
         else -> Modifier
     }
@@ -593,7 +602,7 @@ private fun CardStack(art: EmptyArt) {
         StackCard(colors.surfaceContainerHighest, rotation = 6f, shift = 14.dp)
         Box(contentAlignment = Alignment.Center, modifier = Modifier.size(STACK_WIDTH, STACK_HEIGHT).clip(StackShape).background(front).then(edge)) {
             when (art) {
-                EmptyArt.Glyph -> BrandGlyph(width = 36.dp, onInk = true)
+                EmptyArt.Glyph -> BrandK(height = 40.dp)
                 is EmptyArt.Icon -> Icon(
                     painterResource(art.icon),
                     contentDescription = null,
@@ -710,9 +719,14 @@ fun SongCover(model: Any?, modifier: Modifier = Modifier, size: Dp = 48.dp, shap
     }
 }
 
-/** The launcher glyph's extent, in the units of its 108-unit canvas. */
+/** The karaoke line's extent, in the units of the old launcher icon's 108-unit canvas. */
 private const val GLYPH_WIDTH = 48f
 private const val GLYPH_HEIGHT = 38f
+
+/** The Blade K's box (ic_brand_k), and its height on a [BrandMark] tile: a little smaller than on the launcher. */
+private const val BRAND_K_WIDTH = 41f
+private const val BRAND_K_HEIGHT = 52f
+private const val BRAND_K_SHARE = 0.56f
 
 /** The cards of [LyrifyCard], [GroupedRows]; sheets and dialogs. */
 private val CardShape = RoundedCornerShape(24.dp)

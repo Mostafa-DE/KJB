@@ -67,13 +67,13 @@ fun OnboardingScreen(
     BoxWithConstraints(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)) {
         val heroHeight = maxHeight * HERO_SHARE
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-            // The ink hero, the same in both themes: the karaoke line sweeps while the user reads one line.
+            // The graphite hero with the Blade K, the same in both themes.
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterVertically),
-                modifier = Modifier.fillMaxWidth().heightIn(min = heroHeight).background(BrandInk).statusBarsPadding().padding(bottom = PANEL_OVERLAP + 16.dp, top = 16.dp),
+                modifier = Modifier.fillMaxWidth().heightIn(min = heroHeight).background(BrandGraphite).statusBarsPadding().padding(bottom = PANEL_OVERLAP + 16.dp, top = 16.dp),
             ) {
-                BrandGlyph(width = 120.dp, onInk = true, sweeping = true)
+                BrandK(height = 104.dp)
                 Text(stringResource(R.string.app_name), style = MaterialTheme.typography.displaySmall, color = BrandLilac, modifier = Modifier.padding(top = 8.dp).semantics { heading() })
                 Text(stringResource(R.string.setup_intro), style = MaterialTheme.typography.bodyLarge, color = BrandLilac.copy(alpha = 0.7f))
             }

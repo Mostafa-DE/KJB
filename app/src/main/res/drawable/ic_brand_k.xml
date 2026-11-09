@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The Blade K as the app shows it on its ink tiles (the top bar, empty states, onboarding): the launcher foreground
+     cut to the mark's own box, 41 by 52 units. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="41dp"
+    android:height="52dp"
+    android:viewportWidth="41"
+    android:viewportHeight="52">
+    <group
+        android:translateX="-34"
+        android:translateY="-28">
+        <path android:pathData="M34.47,32.83L37.73,28.67L44.88,34.55L44.88,75.17L41.62,79.33L34.47,73.45ZM47.05,62.65L54.37,54.63L65.39,73L71.72,79.33L57.06,79.33Z">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:endX="0"
+                    android:endY="84"
+                    android:startX="0"
+                    android:startY="24"
+                    android:type="linear">
+                    <item
+                        android:color="#FFFBFAFF"
+                        android:offset="0" />
+                    <item
+                        android:color="#FFAEA8C6"
+                        android:offset="1" />
+                </gradient>
+            </aapt:attr>
+        </path>
+        <path android:pathData="M47.05,43.14L74.73,29.12L47.05,59.43Z">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:endX="52"
+                    android:endY="52"
+                    android:startX="70"
+                    android:startY="24"
+                    android:type="linear">
+                    <item
+                        android:color="#FFFFB49E"
+                        android:offset="0" />
+                    <item
+                        android:color="#FFFF5B3C"
+                        android:offset="1" />
+                </gradient>
+            </aapt:attr>
+        </path>
+    </group>
+</vector>

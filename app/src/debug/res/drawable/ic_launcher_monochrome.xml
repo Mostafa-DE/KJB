@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The debug build's themed icon ("KJB dev"): themed icons drop the teal ground, so here the Blade K is an outline,
+     scaled to 95% about the centre so the stroke stays inside the 66 dp safe circle. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:pathData="M35.45,33.89L38.54,29.94L45.34,35.52L45.34,74.11L42.24,78.06L35.45,72.48ZM47.4,62.22L54.35,54.6L64.82,72.05L70.83,78.06L56.91,78.06Z"
+        android:strokeColor="#FF000000"
+        android:strokeLineJoin="round"
+        android:strokeWidth="3.5" />
+    <path
+        android:pathData="M47.4,43.68L73.69,30.36L47.4,59.16Z"
+        android:strokeColor="#FF000000"
+        android:strokeLineJoin="round"
+        android:strokeWidth="3.5" />
+</vector>

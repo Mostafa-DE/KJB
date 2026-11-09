@@ -132,7 +132,7 @@ sealed interface CentreValue {
     data class Fraction(val done: Int, val total: Int) : CentreValue
 }
 
-/** The ring's centre: the glyph (AI off), an icon with maybe a value under it, or a big value with maybe a label. */
+/** The ring's centre: the app's mark (AI off), an icon with maybe a value under it, or a big value with maybe a label. */
 sealed interface Centre {
     data object Glyph : Centre
 
@@ -488,9 +488,7 @@ fun AiRing(ring: Ring?, centre: Centre, size: Dp, modifier: Modifier = Modifier)
 private fun RingCentre(centre: Centre, size: Dp) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     when (centre) {
-        Centre.Glyph -> Box(contentAlignment = Alignment.Center, modifier = Modifier.size(size * 0.6f).clip(CircleShape).background(BrandInk)) {
-            BrandGlyph(width = size * 0.3f, onInk = true)
-        }
+        Centre.Glyph -> BrandMark(size = size * 0.6f, shape = CircleShape)
         is Centre.Icon -> Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Icon(painterResource(centre.icon), contentDescription = null, tint = centre.tint?.let { ringColor(it) } ?: muted, modifier = Modifier.size(size / 5))
             centre.value?.let { Text(centreText(it), style = MaterialTheme.typography.titleMedium.tabular(), color = muted) }
