@@ -11,8 +11,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class NowPlayingTest {
-    private val path = "/music/Nemo.mp3"
-    private val ledger = LedgerState().put(recorded(null, LocalTrack(path, "Nemo", "Nightwish", null, 276_000), LyricsStatus.SYNCED, 1, 5))
+    private val path = "/music/Vael.mp3"
+    private val ledger = LedgerState().put(recorded(null, LocalTrack(path, "Vael", "Quillmere", null, 276_000), LyricsStatus.SYNCED, 1, 5))
 
     private var connection: ListenerConnection? = null
 
@@ -28,23 +28,23 @@ class NowPlayingTest {
 
     @Test
     fun `a track still being looked for in the library`() {
-        assertEquals(PlayingStatus.FindingFile, playingStatus(CurrentTrack("Nemo", "Nightwish"), ledger))
+        assertEquals(PlayingStatus.FindingFile, playingStatus(CurrentTrack("Vael", "Quillmere"), ledger))
     }
 
     @Test
     fun `a track that is not a local file`() {
-        assertEquals(PlayingStatus.NotInLibrary, playingStatus(CurrentTrack("Nemo", "Nightwish", resolved = true), ledger))
+        assertEquals(PlayingStatus.NotInLibrary, playingStatus(CurrentTrack("Vael", "Quillmere", resolved = true), ledger))
     }
 
     @Test
     fun `a local track shows its ledger status, or that it is being looked up`() {
-        assertEquals(PlayingStatus.Done(LyricsStatus.SYNCED), playingStatus(CurrentTrack("Nemo", "Nightwish", listOf(path), resolved = true), ledger))
+        assertEquals(PlayingStatus.Done(LyricsStatus.SYNCED), playingStatus(CurrentTrack("Vael", "Quillmere", listOf(path), resolved = true), ledger))
         assertEquals(PlayingStatus.LookingUp, playingStatus(CurrentTrack("Other", null, listOf("/music/Other.mp3"), resolved = true), ledger))
     }
 
     @Test
     fun `a track with several copies shows the first copy that has a status`() {
-        val copies = CurrentTrack("Nemo", "Nightwish", listOf("/music/copy/Nemo.mp3", path), resolved = true)
+        val copies = CurrentTrack("Vael", "Quillmere", listOf("/music/copy/Vael.mp3", path), resolved = true)
         assertEquals(PlayingStatus.Done(LyricsStatus.SYNCED), playingStatus(copies, ledger))
     }
 
@@ -67,10 +67,10 @@ class NowPlayingTest {
     fun `only the instance that connected last can disconnect`() {
         val old = NowPlaying.connect()
         val new = NowPlaying.connect().also { connection = it }
-        NowPlaying.setTrack(new, CurrentTrack("Nemo", "Nightwish"))
+        NowPlaying.setTrack(new, CurrentTrack("Vael", "Quillmere"))
         NowPlaying.disconnect(old)
         assertTrue(NowPlaying.connected.value)
-        assertEquals(CurrentTrack("Nemo", "Nightwish"), NowPlaying.track.value)
+        assertEquals(CurrentTrack("Vael", "Quillmere"), NowPlaying.track.value)
         NowPlaying.disconnect(new)
         assertFalse(NowPlaying.connected.value)
         assertEquals(null, NowPlaying.track.value)

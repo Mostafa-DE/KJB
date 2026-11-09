@@ -138,10 +138,19 @@ interface AudioLibrary {
  * Trashed and pending files are not listed (MediaStore leaves them out by default). Reads tags and sizes only. A debug
  * build lists only the songs [writes] lets it change (its test folder).
  */
-class MediaStoreLibrary(private val resolver: ContentResolver, private val writes: SharedWrites) : AudioLibrary {
+class MediaStoreLibrary(
+    /** MediaStore's audio rows, with [PROJECTION]'s columns, that match a selection and its arguments; a fake in tests. */
+    private val query: (selection: String?, args: Array<String>?) -> Cursor?,
+    private val writes: SharedWrites,
+) : AudioLibrary {
+    constructor(resolver: ContentResolver, writes: SharedWrites) : this(
+        query = { selection, args -> resolver.query(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, PROJECTION, selection, args, null) },
+        writes = writes,
+    )
+
     override fun read(): LibraryRead = try {
-        val cursor = resolver.query(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, PROJECTION, null, null, null)
-        if (cursor == null) LibraryRead.Unavailable("no cursor") else LibraryRead.Files(cursor.use { files(it, inScopeOnly = true) })
+        val cursor = query(null, null)
+        if (cursor == null) LibraryRead.Unavailable("no cursor") else LibraryRead.Files(cursor.use { files(it, musicOnly = true) })
     } catch (e: SecurityException) {
         LibraryRead.Unavailable("refused: ${e.javaClass.simpleName}")
     } catch (e: IllegalArgumentException) {
@@ -152,9 +161,8 @@ class MediaStoreLibrary(private val resolver: ContentResolver, private val write
         val found = HashMap<Long, AudioFile>()
         val read = ids.distinct().chunked(MAX_IDS_PER_QUERY).all { chunk ->
             val selection = "${MediaStore.Audio.Media._ID} IN (${chunk.joinToString(",") { "?" }})"
-            val cursor = resolver.query(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, PROJECTION, selection, chunk.map(Long::toString).toTypedArray(), null)
-                ?: return@all false
-            cursor.use { files(it, inScopeOnly = false).forEach { file -> found[file.id] = file } }
+            val cursor = query(selection, chunk.map(Long::toString).toTypedArray()) ?: return@all false
+            cursor.use { files(it, musicOnly = false).forEach { file -> found[file.id] = file } }
             true
         }
         if (read) found else null
@@ -164,8 +172,11 @@ class MediaStoreLibrary(private val resolver: ContentResolver, private val write
         null
     }
 
-    /** The files of [cursor]'s rows; with [inScopeOnly], only those [inScope]. */
-    private fun files(cursor: Cursor, inScopeOnly: Boolean): List<AudioFile> {
+    /**
+     * The files of [cursor]'s rows that [writes] lists (a debug build: its test folder only, for every read and lookup);
+     * with [musicOnly], only those also [inScope].
+     */
+    private fun files(cursor: Cursor, musicOnly: Boolean): List<AudioFile> {
         val id = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
         val data = cursor.getColumnIndexOrThrow(DATA)
         val relativePath = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.RELATIVE_PATH)
@@ -183,7 +194,7 @@ class MediaStoreLibrary(private val resolver: ContentResolver, private val write
             while (cursor.moveToNext()) {
                 val path = cursor.getString(data) ?: continue
                 val folder = cursor.getString(relativePath)
-                if (inScopeOnly && (!inScope(cursor.getInt(isMusic) != 0, folder) || !writes.lists(path))) continue
+                if (!writes.lists(path) || musicOnly && !inScope(cursor.getInt(isMusic) != 0, folder)) continue
                 add(
                     AudioFile(
                         id = cursor.getLong(id),

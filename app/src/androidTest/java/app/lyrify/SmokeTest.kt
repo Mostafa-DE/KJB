@@ -2,7 +2,10 @@ package app.lyrify
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import app.lyrify.data.SharedWrite
+import app.lyrify.data.SharedWrites
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -22,8 +25,13 @@ class SmokeTest {
         assertTrue(BuildConfig.VERSION_NAME, BuildConfig.VERSION_NAME.endsWith("-dev"))
     }
 
+    /** Decisions only, on the phone's real folders: nothing is created. */
     @Test
     fun theDebugBuildChangesOnlyItsTestFolder() {
-        assertTrue(Lyrify.writes.testFolderOnly)
+        val writes = Lyrify.writes
+        assertTrue(writes.testFolderOnly)
+        assertTrue(writes.allows(SharedWrite.LRC_CREATE, "/storage/emulated/0/${SharedWrites.TEST_FOLDER}x.lrc"))
+        assertFalse(writes.allows(SharedWrite.LRC_CREATE, "/storage/emulated/0/Music/X.lrc"))
+        assertFalse(writes.allows(SharedWrite.LRC_CREATE, "/sdcard/${SharedWrites.TEST_FOLDER}x.lrc"))
     }
 }

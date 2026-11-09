@@ -1,9 +1,14 @@
 package app.lyrify.data
 
 import app.lyrify.BuildConfig
+import java.io.IOException
+import java.nio.file.Files
 import java.nio.file.InvalidPathException
+import java.nio.file.LinkOption
+import java.nio.file.NoSuchFileException
 import java.nio.file.Path
 import java.nio.file.Paths
+import java.nio.file.attribute.BasicFileAttributes
 
 /**
  * Every kind of change Lyrify makes to shared storage, the user's own files: each one asks [SharedWrites] first. Kinds
@@ -43,20 +48,23 @@ enum class SharedWrite {
 /**
  * The one checkpoint for changes to shared storage: every writer asks [allows] (or [allowsIds]) before it changes a
  * file, and does nothing when refused. A release build allows everything, as 2.0 did. A debug build (app.lyrify.debug,
- * beside the user's release app on the same phone) allows only files under [TEST_FOLDER] on any volume, so tests on the
- * phone never touch the user's music, and its library readers list only that folder ([lists]). New writers take one in
- * their constructor; SharedWritesTest lists every writer in the app and fails for one it does not know.
+ * beside the user's release app on the same phone) allows only files under [TEST_FOLDER] on any volume, reached through
+ * no link ([onDisk]), so tests on the phone never touch the user's music, and its library readers list only that folder
+ * ([lists]). New writers take one in their constructor; SharedWritesTest lists every writer in the app and fails for one
+ * it does not know.
  *
  * Refusals are logged by kind only, never with a path.
  */
 class SharedWrites(
     /** Only [TEST_FOLDER] may change, and only it is listed: the debug build's rule. */
     val testFolderOnly: Boolean,
+    /** Where the phone's absolute paths start on disk: `/`, or a stand-in folder in tests. */
+    private val root: Path = Paths.get("/"),
     private val log: (String) -> Unit = {},
 ) {
     /** Whether [write] may change the file at the absolute [path]. */
     fun allows(write: SharedWrite, path: String): Boolean {
-        if (!testFolderOnly || inTestFolder(path)) return true
+        if (!testFolderOnly || onDisk(path)) return true
         log("shared storage: $write refused, this build changes only the test folder")
         return false
     }
@@ -68,13 +76,47 @@ class SharedWrites(
     fun allowsIds(write: SharedWrite, ids: Collection<Long>, paths: (Collection<Long>) -> Map<Long, String>?): Boolean {
         if (!testFolderOnly) return true
         val found = paths(ids)
-        if (found != null && ids.all { id -> found[id]?.let(::inTestFolder) == true }) return true
+        if (found != null && ids.all { id -> found[id]?.let(::onDisk) == true }) return true
         log("shared storage: $write refused, this build changes only the test folder")
         return false
     }
 
     /** Whether a library reader lists the song at the absolute [path]: a debug build lists only [TEST_FOLDER]. */
-    fun lists(path: String): Boolean = !testFolderOnly || inTestFolder(path)
+    fun lists(path: String): Boolean = !testFolderOnly || onDisk(path)
+
+    /**
+     * Whether [path] is in [TEST_FOLDER] by its text ([inTestFolder]) and on disk: every folder on the way that exists is
+     * a real folder, not a link, and the path with links resolved stays in [TEST_FOLDER] (so the file itself may be a
+     * link only to a file there). A link would let a create or a delete reach a file elsewhere. Refused when the disk
+     * cannot say.
+     */
+    private fun onDisk(path: String): Boolean {
+        if (!inTestFolder(path)) return false
+        return try {
+            val base = root.toRealPath()
+            val names = Paths.get(path).normalize().map(Path::toString)
+            // The deepest path that exists, reached through real folders only, and the names below it.
+            var found = base
+            var below = names
+            for ((index, name) in names.withIndex()) {
+                val next = found.resolve(name)
+                val attributes = try {
+                    Files.readAttributes(next, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
+                } catch (_: NoSuchFileException) {
+                    break
+                }
+                if (index < names.lastIndex && !attributes.isDirectory) return false
+                found = next
+                below = names.drop(index + 1)
+            }
+            val real = below.fold(found.toRealPath()) { at, name -> at.resolve(name) }
+            real.startsWith(base) && inTestFolder("/" + base.relativize(real).joinToString("/"))
+        } catch (_: IOException) {
+            false
+        } catch (_: SecurityException) {
+            false
+        }
+    }
 
     companion object {
         /** The folder a debug build may change, relative to a volume's root (as MediaStore's RELATIVE_PATH has it). */

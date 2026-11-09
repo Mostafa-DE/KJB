@@ -14,10 +14,10 @@ class TrackNamesTest {
 
     @Test
     fun `a bitrate suffix is removed`() {
-        assertEquals("Fear of the Dark", TrackNames.cleanTitle("Fear of the Dark (MP3_160K)"))
-        assertEquals("Fear of the Dark", TrackNames.cleanTitle("Fear of the Dark (MP3_320K)"))
-        assertEquals("Fear of the Dark", TrackNames.cleanTitle("Fear of the Dark [128kbps]"))
-        assertEquals("Fear of the Dark", TrackNames.cleanTitle("Fear of the Dark(MP3_160K)"))
+        assertEquals("Song of the Kettle", TrackNames.cleanTitle("Song of the Kettle (MP3_160K)"))
+        assertEquals("Song of the Kettle", TrackNames.cleanTitle("Song of the Kettle (MP3_320K)"))
+        assertEquals("Song of the Kettle", TrackNames.cleanTitle("Song of the Kettle [128kbps]"))
+        assertEquals("Song of the Kettle", TrackNames.cleanTitle("Song of the Kettle(MP3_160K)"))
     }
 
     @Test
@@ -31,11 +31,11 @@ class TrackNamesTest {
 
     @Test
     fun `numbers that belong to the title stay`() {
-        assertEquals("21 Guns", TrackNames.cleanTitle("21 Guns"))
-        assertEquals("99 Luftballons", TrackNames.cleanTitle("99 Luftballons"))
-        assertEquals("1979", TrackNames.cleanTitle("1979"))
-        assertEquals("1979", TrackNames.cleanTitle("01 - 1979"))
-        assertEquals("2 Minutes to Midnight", TrackNames.cleanTitle("2 Minutes to Midnight"))
+        assertEquals("21 Kettles", TrackNames.cleanTitle("21 Kettles"))
+        assertEquals("99 Laternen", TrackNames.cleanTitle("99 Laternen"))
+        assertEquals("2031", TrackNames.cleanTitle("2031"))
+        assertEquals("2031", TrackNames.cleanTitle("01 - 2031"))
+        assertEquals("2 Minutes to Moonrise", TrackNames.cleanTitle("2 Minutes to Moonrise"))
     }
 
     @Test
@@ -57,58 +57,58 @@ class TrackNamesTest {
 
     @Test
     fun `a title tag keeps a number that may be part of its name`() {
-        // Same shapes as "05 Minutes", "007 Theme", "10 Years Gone", "2-Step", "3-D", "4-Ever": only a file name loses them.
-        listOf("05 Lanterns", "007 Lanterns", "1979", "99 Paper Boats", "10 Paper Days", "2-Lantern", "3-Q", "4-Always", "5-Song Title").forEach {
+        // Same shapes as "05 Minutes", "007 Kettles", "10 Tides Gone", "2-Step", "3-D", "4-Ever": only a file name loses them.
+        listOf("05 Lanterns", "007 Lanterns", "2031", "99 Paper Boats", "10 Paper Days", "2-Lantern", "3-Q", "4-Always", "5-Song Title").forEach {
             assertEquals(it, TrackNames.cleanTitle(it))
         }
     }
 
     @Test
     fun `junk suffixes are removed`() {
-        assertEquals("Nemo", TrackNames.cleanTitle("Nemo (Official Video)"))
-        assertEquals("Nemo", TrackNames.cleanTitle("Nemo (Official Music Video) [HD]"))
-        assertEquals("Nemo", TrackNames.cleanTitle("Nemo (Lyrics)"))
-        assertEquals("Nemo", TrackNames.cleanTitle("Nemo [HQ]"))
-        assertEquals("Nemo", TrackNames.cleanTitle("Nemo (Lyric Video)"))
-        assertEquals("Nemo", TrackNames.cleanTitle("Nemo (Official Audio)"))
-        assertEquals("Nemo", TrackNames.cleanTitle("Nemo - Official Video"))
-        assertEquals("Nemo", TrackNames.cleanTitle("Nemo | Lyrics"))
-        assertEquals("Nemo", TrackNames.cleanTitle("Nemo (4K)"))
-        assertEquals("Nemo", TrackNames.cleanTitle("Nemo (www.mp3-site.com)"))
+        assertEquals("Vael", TrackNames.cleanTitle("Vael (Official Video)"))
+        assertEquals("Vael", TrackNames.cleanTitle("Vael (Official Music Video) [HD]"))
+        assertEquals("Vael", TrackNames.cleanTitle("Vael (Lyrics)"))
+        assertEquals("Vael", TrackNames.cleanTitle("Vael [HQ]"))
+        assertEquals("Vael", TrackNames.cleanTitle("Vael (Lyric Video)"))
+        assertEquals("Vael", TrackNames.cleanTitle("Vael (Official Audio)"))
+        assertEquals("Vael", TrackNames.cleanTitle("Vael - Official Video"))
+        assertEquals("Vael", TrackNames.cleanTitle("Vael | Lyrics"))
+        assertEquals("Vael", TrackNames.cleanTitle("Vael (4K)"))
+        assertEquals("Vael", TrackNames.cleanTitle("Vael (www.mp3-site.com)"))
     }
 
     @Test
     fun `version tags are kept in the first variant`() {
-        assertEquals("Nemo (Live)", TrackNames.cleanTitle("Nemo (Live)"))
-        assertEquals("Nemo (Remastered 2011)", TrackNames.cleanTitle("Nemo (Remastered 2011)"))
+        assertEquals("Vael (Live)", TrackNames.cleanTitle("Vael (Live)"))
+        assertEquals("Vael (Remastered 2011)", TrackNames.cleanTitle("Vael (Remastered 2011)"))
     }
 
     @Test
     fun `unbalanced parentheses are closed and stray closers dropped`() {
         assertEquals(
-            "World Of Fantasy (Demo) (Bonus Track)",
-            TrackNames.cleanTitle("World Of Fantasy (Demo) (Bonus Track"),
+            "World Of Lanterns (Demo) (Bonus Track)",
+            TrackNames.cleanTitle("World Of Lanterns (Demo) (Bonus Track"),
         )
         assertEquals("Title", TrackNames.cleanTitle("Title)"))
-        assertEquals("World Of Fantasy", TrackNames.withoutVersionTags("World Of Fantasy (Demo) (Bonus Track"))
+        assertEquals("World Of Lanterns", TrackNames.withoutVersionTags("World Of Lanterns (Demo) (Bonus Track"))
     }
 
     @Test
     fun `a leading bracket tag is removed`() {
-        assertEquals("G Air - Bach", TrackNames.cleanTitle("[Janinto Voice] G Air - Bach"))
+        assertEquals("K Hymn - Holm", TrackNames.cleanTitle("[Velvo Voice] K Hymn - Holm"))
         assertEquals("Song", TrackNames.cleanTitle("【MV】 Song"))
     }
 
     @Test
     fun `a leading parenthesis that is part of the title stays`() {
-        assertEquals("(I Can't Get No) Satisfaction", TrackNames.cleanTitle("(I Can't Get No) Satisfaction"))
+        assertEquals("(I Can't Find My) Lantern", TrackNames.cleanTitle("(I Can't Find My) Lantern"))
     }
 
     @Test
     fun `stray quotes are removed`() {
-        assertEquals("I Pooh", TrackNames.cleanTitle("\"I Pooh\""))
-        assertEquals("Heroes", TrackNames.cleanTitle("“Heroes”"))
-        assertEquals("Don't Stop Me Now", TrackNames.cleanTitle("Don't Stop Me Now"))
+        assertEquals("I Lanterni", TrackNames.cleanTitle("\"I Lanterni\""))
+        assertEquals("Harbours", TrackNames.cleanTitle("“Harbours”"))
+        assertEquals("Don't Wake Me Now", TrackNames.cleanTitle("Don't Wake Me Now"))
         assertEquals("Song", TrackNames.cleanTitle("'Song'"))
         assertEquals("Song", TrackNames.cleanTitle("Song\""))
     }
@@ -133,27 +133,27 @@ class TrackNamesTest {
 
     @Test
     fun `version tags are removed for the second variant`() {
-        assertEquals("Nemo", TrackNames.withoutVersionTags("Nemo (Live)"))
-        assertEquals("Nemo", TrackNames.withoutVersionTags("Nemo [Remastered]"))
-        assertEquals("Nemo", TrackNames.withoutVersionTags("Nemo - 2011 Remaster"))
-        assertEquals("Nemo", TrackNames.withoutVersionTags("Nemo - Live at Wacken"))
-        assertEquals("Nemo", TrackNames.withoutVersionTags("Nemo - Radio Edit"))
-        assertEquals("Nemo - Part II", TrackNames.withoutVersionTags("Nemo - Part II"))
+        assertEquals("Vael", TrackNames.withoutVersionTags("Vael (Live)"))
+        assertEquals("Vael", TrackNames.withoutVersionTags("Vael [Remastered]"))
+        assertEquals("Vael", TrackNames.withoutVersionTags("Vael - 2011 Remaster"))
+        assertEquals("Vael", TrackNames.withoutVersionTags("Vael - Live at the Pier"))
+        assertEquals("Vael", TrackNames.withoutVersionTags("Vael - Radio Edit"))
+        assertEquals("Vael - Part II", TrackNames.withoutVersionTags("Vael - Part II"))
     }
 
     @Test
     fun `instrumental tags are never removed`() {
-        assertEquals("Nemo (Instrumental)", TrackNames.withoutVersionTags("Nemo (Instrumental)"))
-        assertEquals("Nemo - Karaoke Version", TrackNames.withoutVersionTags("Nemo - Karaoke Version"))
+        assertEquals("Vael (Instrumental)", TrackNames.withoutVersionTags("Vael (Instrumental)"))
+        assertEquals("Vael - Karaoke Version", TrackNames.withoutVersionTags("Vael - Karaoke Version"))
     }
 
     @Test
     fun `instrumental and karaoke titles are recognised`() {
-        assertTrue(TrackNames.isInstrumental("Nemo (Instrumental)"))
-        assertTrue(TrackNames.isInstrumental("Nemo - Instrumental Version"))
-        assertTrue(TrackNames.isInstrumental("Nemo [Karaoke]"))
-        assertFalse(TrackNames.isInstrumental("Nemo"))
-        assertFalse(TrackNames.isInstrumental("Nemo (Live)"))
+        assertTrue(TrackNames.isInstrumental("Vael (Instrumental)"))
+        assertTrue(TrackNames.isInstrumental("Vael - Instrumental Version"))
+        assertTrue(TrackNames.isInstrumental("Vael [Karaoke]"))
+        assertFalse(TrackNames.isInstrumental("Vael"))
+        assertFalse(TrackNames.isInstrumental("Vael (Live)"))
     }
 
     @Test
@@ -173,10 +173,10 @@ class TrackNamesTest {
 
     @Test
     fun `a YouTube topic channel suffix is removed`() {
-        assertEquals("Nightwish", TrackNames.cleanArtist("Nightwish - Topic"))
-        assertEquals("Nightwish", TrackNames.cleanArtist("Nightwish - topic"))
-        assertEquals("Nightwish", TrackNames.cleanArtist("Nightwish – Topic"))
-        assertEquals("Nightwish", TrackNames.cleanArtist("Nightwish — Topic"))
+        assertEquals("Quillmere", TrackNames.cleanArtist("Quillmere - Topic"))
+        assertEquals("Quillmere", TrackNames.cleanArtist("Quillmere - topic"))
+        assertEquals("Quillmere", TrackNames.cleanArtist("Quillmere – Topic"))
+        assertEquals("Quillmere", TrackNames.cleanArtist("Quillmere — Topic"))
     }
 
     @Test
@@ -191,20 +191,20 @@ class TrackNamesTest {
 
     @Test
     fun `artist quotes, handles and VEVO are removed`() {
-        assertEquals("I Pooh", TrackNames.cleanArtist("\"I Pooh\""))
-        assertEquals("Nightwish", TrackNames.cleanArtist("NightwishVEVO"))
-        assertEquals("Nightwish", TrackNames.cleanArtist("Nightwish @metal_bot"))
+        assertEquals("I Lanterni", TrackNames.cleanArtist("\"I Lanterni\""))
+        assertEquals("Quillmere", TrackNames.cleanArtist("QuillmereVEVO"))
+        assertEquals("Quillmere", TrackNames.cleanArtist("Quillmere @metal_bot"))
     }
 
     @Test
     fun `an album equal to the artist is ignored`() {
-        assertNull(TrackNames.cleanAlbum("Nightwish", "Nightwish"))
-        assertNull(TrackNames.cleanAlbum("nightwish ", "Nightwish - Topic"))
-        assertNull(TrackNames.cleanAlbum("<unknown>", "Nightwish"))
-        assertNull(TrackNames.cleanAlbum("Telegram", "Nightwish"))
-        assertNull(TrackNames.cleanAlbum("snaptube", "Nightwish"))
-        assertNull(TrackNames.cleanAlbum("Music", "Nightwish"))
-        assertEquals("Once", TrackNames.cleanAlbum("Once", "Nightwish"))
+        assertNull(TrackNames.cleanAlbum("Quillmere", "Quillmere"))
+        assertNull(TrackNames.cleanAlbum("quillmere ", "Quillmere - Topic"))
+        assertNull(TrackNames.cleanAlbum("<unknown>", "Quillmere"))
+        assertNull(TrackNames.cleanAlbum("Telegram", "Quillmere"))
+        assertNull(TrackNames.cleanAlbum("snaptube", "Quillmere"))
+        assertNull(TrackNames.cleanAlbum("Music", "Quillmere"))
+        assertEquals("Ulso", TrackNames.cleanAlbum("Ulso", "Quillmere"))
     }
 
     // Query variants
@@ -212,8 +212,8 @@ class TrackNamesTest {
     @Test
     fun `a clean tag gives one query with the album`() {
         assertEquals(
-            listOf(TrackQuery("Nightwish", "Nemo", "Once")),
-            TrackNames.queries("Nightwish", "Nemo", "Once"),
+            listOf(TrackQuery("Quillmere", "Vael", "Ulso")),
+            TrackNames.queries("Quillmere", "Vael", "Ulso"),
         )
     }
 
@@ -221,46 +221,46 @@ class TrackNamesTest {
     fun `variants go from cleaned to without version tags to without feat`() {
         assertEquals(
             listOf(
-                TrackQuery("Ayreon feat. Someone", "Day Two (feat. Someone) (Live)", "01011001"),
-                TrackQuery("Ayreon feat. Someone", "Day Two"),
-                TrackQuery("Ayreon", "Day Two"),
+                TrackQuery("Kestrevon feat. Someone", "Day Two (feat. Someone) (Live)", "01100110"),
+                TrackQuery("Kestrevon feat. Someone", "Day Two"),
+                TrackQuery("Kestrevon", "Day Two"),
             ),
-            TrackNames.queries("Ayreon feat. Someone", "04. Day Two (feat. Someone) (Live) (MP3_160K)", "01011001"),
+            TrackNames.queries("Kestrevon feat. Someone", "04. Day Two (feat. Someone) (Live) (MP3_160K)", "01100110"),
         )
     }
 
     @Test
     fun `the album is dropped when it equals the artist`() {
-        assertEquals(TrackQuery("Gary Moore", "The Loner", null), first("Gary Moore - Topic", "04. The Loner", "Gary Moore"))
+        assertEquals(TrackQuery("Garrow Lune", "The Driftwood", null), first("Garrow Lune - Topic", "04. The Driftwood", "Garrow Lune"))
     }
 
     @Test
     fun `artist and title crammed into the title are split both ways`() {
         assertEquals(
             listOf(
-                TrackQuery("Metallica", "One"),
-                TrackQuery("One", "Metallica"),
-                TrackQuery(null, "Metallica - One"),
+                TrackQuery("Brennmoor", "Ten"),
+                TrackQuery("Ten", "Brennmoor"),
+                TrackQuery(null, "Brennmoor - Ten"),
             ),
-            TrackNames.queries("<unknown>", "Metallica - One (Official Video)", null),
+            TrackNames.queries("<unknown>", "Brennmoor - Ten (Official Video)", null),
         )
     }
 
     @Test
     fun `an en dash also splits artist and title`() {
-        assertEquals(TrackQuery("Metallica", "One"), first(null, "Metallica – One"))
+        assertEquals(TrackQuery("Brennmoor", "Ten"), first(null, "Brennmoor – Ten"))
     }
 
     @Test
     fun `a bracket tag before an artist title pair is dropped before splitting`() {
-        val queries = TrackNames.queries(null, "[Janinto Voice] G Air - Bach", null)
-        assertEquals(TrackQuery("G Air", "Bach"), queries[0])
-        assertEquals(TrackQuery("Bach", "G Air"), queries[1])
+        val queries = TrackNames.queries(null, "[Velvo Voice] K Hymn - Holm", null)
+        assertEquals(TrackQuery("K Hymn", "Holm"), queries[0])
+        assertEquals(TrackQuery("Holm", "K Hymn"), queries[1])
     }
 
     @Test
     fun `an artist repeated at the start of the title is removed`() {
-        assertEquals(TrackQuery("Metallica", "One"), first("Metallica", "Metallica - One"))
+        assertEquals(TrackQuery("Brennmoor", "Ten"), first("Brennmoor", "Brennmoor - Ten"))
     }
 
     @Test
@@ -271,7 +271,7 @@ class TrackNamesTest {
 
     @Test
     fun `stray quotes around the artist do not reach the query`() {
-        assertEquals(TrackQuery("I Pooh", "Pensiero"), first("\"I Pooh\"", "Pensiero"))
+        assertEquals(TrackQuery("I Lanterni", "Lucerna"), first("\"I Lanterni\"", "Lucerna"))
     }
 
     @Test
@@ -383,8 +383,8 @@ class TrackNamesTest {
 
     @Test
     fun `normalize folds case, accents, punctuation and ampersands`() {
-        assertEquals("mago de oz", TrackNames.normalize("Mägo de Oz"))
-        assertEquals("simon and garfunkel", TrackNames.normalize("Simon & Garfunkel"))
+        assertEquals("sala de ux", TrackNames.normalize("Säla de Ux"))
+        assertEquals("odile and brandt", TrackNames.normalize("Odile & Brandt"))
         assertEquals("strasse", TrackNames.normalize("Straße"))
         assertEquals("don t stop me now", TrackNames.normalize("Don't  Stop, Me Now!"))
     }

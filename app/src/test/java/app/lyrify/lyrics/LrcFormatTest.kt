@@ -52,7 +52,7 @@ class LrcFormatTest {
 
     @Test
     fun `metadata tags and untimed text are dropped`() {
-        val text = "[ar:Nightwish]\n[ti:Nemo]\n[offset:+200]\n[length: 04:36]\nplain words\n[00:01.00]a"
+        val text = "[ar:Quillmere]\n[ti:Vael]\n[offset:+200]\n[length: 04:36]\nplain words\n[00:01.00]a"
         assertEquals(listOf(LrcLine(1_000, "a")), LrcFormat.parseLrclib(text))
     }
 

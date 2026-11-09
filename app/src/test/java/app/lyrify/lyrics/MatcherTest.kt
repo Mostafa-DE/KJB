@@ -6,7 +6,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MatcherTest {
-    private val nemo = listOf(TrackQuery("Nightwish", "Nemo"))
+    private val vael = listOf(TrackQuery("Quillmere", "Vael"))
     private val synced = "[00:01.00]a\n[00:02.00]b\n[00:03.00]c"
 
     private fun record(
@@ -15,20 +15,20 @@ class MatcherTest {
         synced: String? = this.synced,
         plain: String? = "a\nb\nc",
         instrumental: Boolean = false,
-        track: String = "Nemo",
-        artist: String = "Nightwish",
+        track: String = "Vael",
+        artist: String = "Quillmere",
     ) = LrclibRecord(
         id = id,
         trackName = track,
         artistName = artist,
-        albumName = "Once",
+        albumName = "Ulso",
         duration = duration,
         instrumental = instrumental,
         plainLyrics = plain,
         syncedLyrics = synced,
     )
 
-    private fun match(vararg records: LrclibRecord, duration: Double = 276.0, queries: List<TrackQuery> = nemo): Match =
+    private fun match(vararg records: LrclibRecord, duration: Double = 276.0, queries: List<TrackQuery> = vael): Match =
         Matcher.match(records.toList(), queries, duration)
 
     @Test
@@ -121,14 +121,14 @@ class MatcherTest {
     }
 
     @Test
-    fun `Light Your Cigar - plain lyrics of the exact recording win over a synced live version`() {
-        val queries = listOf(TrackQuery("Millenium", "Light Your Cigar"))
-        fun cigar(id: Long, duration: Double, track: String = "Light Your Cigar", synced: String? = null) =
-            record(id, duration = duration, synced = synced, track = track, artist = "Millenium")
-        val exact = cigar(1, 449.0)
-        val bestOf = cigar(2, 369.0)
-        val bestOfLonger = cigar(3, 376.0)
-        val live = cigar(4, 377.0, track = "Light Your Cigar (live version)", synced = synced)
+    fun `Light Your Lantern - plain lyrics of the exact recording win over a synced live version`() {
+        val queries = listOf(TrackQuery("Brasswick", "Light Your Lantern"))
+        fun lantern(id: Long, duration: Double, track: String = "Light Your Lantern", synced: String? = null) =
+            record(id, duration = duration, synced = synced, track = track, artist = "Brasswick")
+        val exact = lantern(1, 449.0)
+        val bestOf = lantern(2, 369.0)
+        val bestOfLonger = lantern(3, 376.0)
+        val live = lantern(4, 377.0, track = "Light Your Lantern (live version)", synced = synced)
         assertEquals(
             Match.PlainOnly(exact, durationMatched = true),
             Matcher.match(listOf(live, bestOf, bestOfLonger, exact), queries, 448.2),
@@ -148,52 +148,52 @@ class MatcherTest {
 
     @Test
     fun `a record for another song is ignored`() {
-        assertEquals(Match.NotFound, match(record(1, track = "Nemo Part 2")))
-        assertEquals(Match.NotFound, match(record(1, artist = "Metallica")))
+        assertEquals(Match.NotFound, match(record(1, track = "Vael Part 2")))
+        assertEquals(Match.NotFound, match(record(1, artist = "Brennmoor")))
     }
 
     @Test
     fun `relevance tolerates version tags, feat, case and accents`() {
-        assertTrue(Matcher.isRelevant(record(1, track = "Nemo - Remastered 2011"), nemo))
-        assertTrue(Matcher.isRelevant(record(1, track = "nemo (feat. Someone)"), nemo))
-        assertTrue(Matcher.isRelevant(record(1, artist = "Nightwish & Friends"), nemo))
-        assertTrue(Matcher.isRelevant(record(1, track = "Nëmo"), nemo))
-        assertTrue(Matcher.isRelevant(record(1, artist = "Night"), nemo).not())
+        assertTrue(Matcher.isRelevant(record(1, track = "Vael - Remastered 2011"), vael))
+        assertTrue(Matcher.isRelevant(record(1, track = "vael (feat. Someone)"), vael))
+        assertTrue(Matcher.isRelevant(record(1, artist = "Quillmere & Friends"), vael))
+        assertTrue(Matcher.isRelevant(record(1, track = "Väel"), vael))
+        assertTrue(Matcher.isRelevant(record(1, artist = "Quill"), vael).not())
     }
 
     @Test
     fun `an artist containing the queried artist as a word is relevant`() {
-        val queries = listOf(TrackQuery("Ayreon", "Day Two"))
-        assertTrue(Matcher.isRelevant(record(1, track = "Day Two", artist = "Ayreon, Someone"), queries))
-        assertFalse(Matcher.isRelevant(record(1, track = "Day Two", artist = "Ayreonics"), queries))
+        val queries = listOf(TrackQuery("Kestrevon", "Day Two"))
+        assertTrue(Matcher.isRelevant(record(1, track = "Day Two", artist = "Kestrevon, Someone"), queries))
+        assertFalse(Matcher.isRelevant(record(1, track = "Day Two", artist = "Kestrevonics"), queries))
     }
 
     @Test
     fun `a query without an artist never makes a record relevant`() {
-        val queries = listOf(TrackQuery(null, "Nemo"))
+        val queries = listOf(TrackQuery(null, "Vael"))
         assertFalse(Matcher.isRelevant(record(1, artist = "Anyone"), queries))
-        assertFalse(Matcher.isRelevant(record(1, artist = "Nightwish"), queries))
+        assertFalse(Matcher.isRelevant(record(1, artist = "Quillmere"), queries))
         assertEquals(Match.NotFound, match(record(1, artist = "Anyone"), queries = queries))
     }
 
     @Test
     fun `a title-only search still helps when another query names the artist`() {
-        val queries = listOf(TrackQuery("Metallica", "One"), TrackQuery(null, "Metallica - One"))
-        assertTrue(Matcher.isRelevant(record(1, track = "One", artist = "Metallica"), queries))
-        assertFalse(Matcher.isRelevant(record(1, track = "Metallica - One", artist = "Cover Band"), queries))
+        val queries = listOf(TrackQuery("Brennmoor", "Ten"), TrackQuery(null, "Brennmoor - Ten"))
+        assertTrue(Matcher.isRelevant(record(1, track = "Ten", artist = "Brennmoor"), queries))
+        assertFalse(Matcher.isRelevant(record(1, track = "Brennmoor - Ten", artist = "Cover Band"), queries))
     }
 
     @Test
     fun `any query can make a record relevant`() {
-        val swapped = listOf(TrackQuery("G Air", "Bach"), TrackQuery("Bach", "G Air"))
-        assertTrue(Matcher.isRelevant(record(1, track = "G Air", artist = "Johann Sebastian Bach"), swapped))
+        val swapped = listOf(TrackQuery("K Hymn", "Holm"), TrackQuery("Holm", "K Hymn"))
+        assertTrue(Matcher.isRelevant(record(1, track = "K Hymn", artist = "Johann Petrus Holm"), swapped))
     }
 
     @Test
     fun `vocal lyrics are never relevant to an instrumental title`() {
-        val queries = listOf(TrackQuery("Nightwish", "Nemo (Instrumental)"))
-        assertFalse(Matcher.isRelevant(record(1, track = "Nemo"), queries))
-        assertTrue(Matcher.isRelevant(record(1, track = "Nemo (Instrumental)"), queries))
+        val queries = listOf(TrackQuery("Quillmere", "Vael (Instrumental)"))
+        assertFalse(Matcher.isRelevant(record(1, track = "Vael"), queries))
+        assertTrue(Matcher.isRelevant(record(1, track = "Vael (Instrumental)"), queries))
     }
 
     // Candidates for the user to check
@@ -314,11 +314,11 @@ class MatcherTest {
 
     @Test
     fun `an artist inside a longer name counts only when it holds a telling word`() {
-        val theA = listOf(TrackQuery("The A", "Nemo"))
+        val theA = listOf(TrackQuery("The A", "Vael"))
         assertTrue(Matcher.isRelevant(record(1, artist = "The A"), theA))
         assertFalse(Matcher.isRelevant(record(1, artist = "The A Crew"), theA))
-        assertFalse(Matcher.isRelevant(record(1, artist = "DJ"), listOf(TrackQuery("DJ Someone", "Nemo"))))
-        assertTrue(Matcher.isRelevant(record(1, artist = "Band A & Orchestra B"), listOf(TrackQuery("Band A", "Nemo"))))
+        assertFalse(Matcher.isRelevant(record(1, artist = "DJ"), listOf(TrackQuery("DJ Someone", "Vael"))))
+        assertTrue(Matcher.isRelevant(record(1, artist = "Band A & Orchestra B"), listOf(TrackQuery("Band A", "Vael"))))
     }
 
     @Test

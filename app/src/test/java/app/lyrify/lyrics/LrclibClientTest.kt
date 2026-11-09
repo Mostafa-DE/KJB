@@ -27,17 +27,17 @@ import java.util.concurrent.TimeUnit
 
 @OptIn(ExperimentalCoroutinesApi::class) // testScheduler: virtual time
 class LrclibClientTest {
-    private val nemoJson = """
-        {"id":42,"name":"Nemo","trackName":"Nemo","artistName":"Nightwish","albumName":"Once",
+    private val vaelJson = """
+        {"id":42,"name":"Vael","trackName":"Vael","artistName":"Quillmere","albumName":"Ulso",
          "duration":276.0,"instrumental":false,"plainLyrics":"a\nb","syncedLyrics":"[00:01.00]a","future":1}
     """.trimIndent()
 
     @Test
     fun `a record is read and unknown fields are ignored`() {
-        val record = LrclibJson.record(nemoJson)
+        val record = LrclibJson.record(vaelJson)
         assertEquals(42L, record.id)
-        assertEquals("Nemo", record.trackName)
-        assertEquals("Nightwish", record.artistName)
+        assertEquals("Vael", record.trackName)
+        assertEquals("Quillmere", record.artistName)
         assertEquals(276.0, record.duration ?: 0.0, 0.0)
         assertEquals("[00:01.00]a", record.syncedLyrics)
     }
@@ -50,13 +50,13 @@ class LrclibClientTest {
 
     @Test
     fun `a search result is a list`() {
-        assertEquals(listOf(42L, 42L), LrclibJson.records("[$nemoJson,$nemoJson]").map { it.id })
+        assertEquals(listOf(42L, 42L), LrclibJson.records("[$vaelJson,$vaelJson]").map { it.id })
         assertEquals(emptyList<LrclibRecord>(), LrclibJson.records("[]"))
     }
 
     @Test
     fun `200 with a record is found`() {
-        assertEquals(LrclibResult.Found(listOf(LrclibJson.record(nemoJson))), LrclibResponses.get(200, nemoJson))
+        assertEquals(LrclibResult.Found(listOf(LrclibJson.record(vaelJson))), LrclibResponses.get(200, vaelJson))
         assertEquals(LrclibResult.Found(emptyList()), LrclibResponses.search(200, "[]"))
     }
 
@@ -85,12 +85,12 @@ class LrclibClientTest {
     @Test
     fun `the get url carries only artist, title, album and duration`() {
         assertEquals(
-            "https://lrclib.net/api/get?artist_name=Mago+de+Oz&track_name=Fiesta+pagana+%282021%29&album_name=Finisterra&duration=276",
-            LrclibUrls.get("https://lrclib.net", "Mago de Oz", "Fiesta pagana (2021)", "Finisterra", 276),
+            "https://lrclib.net/api/get?artist_name=Sala+de+Ux&track_name=Fiesta+lunar+%282021%29&album_name=Finmarca&duration=276",
+            LrclibUrls.get("https://lrclib.net", "Sala de Ux", "Fiesta lunar (2021)", "Finmarca", 276),
         )
         assertEquals(
-            "https://lrclib.net/api/get?artist_name=AC%2FDC&track_name=T.N.T.&duration=215",
-            LrclibUrls.get("https://lrclib.net", "AC/DC", "T.N.T.", null, 215),
+            "https://lrclib.net/api/get?artist_name=XQ%2FZV&track_name=K.L.M.&duration=215",
+            LrclibUrls.get("https://lrclib.net", "XQ/ZV", "K.L.M.", null, 215),
         )
     }
 
@@ -102,10 +102,10 @@ class LrclibClientTest {
     @Test
     fun `search uses names, or the title alone without an artist`() {
         assertEquals(
-            "https://lrclib.net/api/search?track_name=G%C3%B6tterd%C3%A4mmerung&artist_name=Sabaton",
-            LrclibUrls.search("https://lrclib.net", "Götterdämmerung", "Sabaton"),
+            "https://lrclib.net/api/search?track_name=Nachtf%C3%A4hre&artist_name=Kalvaron",
+            LrclibUrls.search("https://lrclib.net", "Nachtfähre", "Kalvaron"),
         )
-        assertEquals("https://lrclib.net/api/search?q=Metallica+-+One", LrclibUrls.search("https://lrclib.net", "Metallica - One", null))
+        assertEquals("https://lrclib.net/api/search?q=Brennmoor+-+Ten", LrclibUrls.search("https://lrclib.net", "Brennmoor - Ten", null))
     }
 
     @Test
@@ -188,9 +188,9 @@ class LrclibClientTest {
 
     @Test
     fun `a record from the server is found`() = runTest {
-        val server = serve { it.reply(200, "[$nemoJson]".encodeToByteArray()) }
+        val server = serve { it.reply(200, "[$vaelJson]".encodeToByteArray()) }
         try {
-            assertEquals(LrclibResult.Found(listOf(LrclibJson.record(nemoJson))), server.client().search("Nemo", "Nightwish", Lane.HIGH))
+            assertEquals(LrclibResult.Found(listOf(LrclibJson.record(vaelJson))), server.client().search("Vael", "Quillmere", Lane.HIGH))
         } finally {
             server.stop(0)
         }
@@ -201,8 +201,8 @@ class LrclibClientTest {
         val server = serve { it.reply(503, "<html>busy</html>".encodeToByteArray()) }
         try {
             val client = server.client()
-            assertTrue(client.get("Nightwish", "Nemo", null, 276, Lane.HIGH) is LrclibResult.Transient)
-            assertTrue(client.search("Nemo", null, Lane.HIGH) is LrclibResult.Transient)
+            assertTrue(client.get("Quillmere", "Vael", null, 276, Lane.HIGH) is LrclibResult.Transient)
+            assertTrue(client.search("Vael", null, Lane.HIGH) is LrclibResult.Transient)
         } finally {
             server.stop(0)
         }
@@ -213,11 +213,11 @@ class LrclibClientTest {
         val paths = mutableListOf<String>()
         val server = serve { exchange ->
             paths += exchange.requestURI.path
-            if (exchange.requestURI.path == "/api/get/42") exchange.reply(200, nemoJson.encodeToByteArray()) else exchange.reply(404, ByteArray(0))
+            if (exchange.requestURI.path == "/api/get/42") exchange.reply(200, vaelJson.encodeToByteArray()) else exchange.reply(404, ByteArray(0))
         }
         try {
             val client = server.client()
-            assertEquals(LrclibResult.Found(listOf(LrclibJson.record(nemoJson))), client.byId(42, Lane.LOW))
+            assertEquals(LrclibResult.Found(listOf(LrclibJson.record(vaelJson))), client.byId(42, Lane.LOW))
             assertEquals(LrclibResult.NotFound, client.byId(43, Lane.LOW))
             assertEquals(listOf("/api/get/42", "/api/get/43"), paths)
         } finally {
@@ -229,7 +229,7 @@ class LrclibClientTest {
     fun `a 404 from get is not found`() = runTest {
         val server = serve { it.reply(404, """{"code":404}""".encodeToByteArray()) }
         try {
-            assertEquals(LrclibResult.NotFound, server.client().get("Nightwish", "Nemo", null, 276, Lane.HIGH))
+            assertEquals(LrclibResult.NotFound, server.client().get("Quillmere", "Vael", null, 276, Lane.HIGH))
         } finally {
             server.stop(0)
         }
@@ -241,14 +241,14 @@ class LrclibClientTest {
         val server = serve { exchange ->
             if (exchange.requestURI.path == "/elsewhere") {
                 elsewhere++
-                exchange.reply(200, "[$nemoJson]".encodeToByteArray())
+                exchange.reply(200, "[$vaelJson]".encodeToByteArray())
             } else {
                 exchange.responseHeaders.add("Location", "/elsewhere")
                 exchange.reply(302, ByteArray(0))
             }
         }
         try {
-            assertTrue(server.client().search("Nemo", "Nightwish", Lane.HIGH) is LrclibResult.Transient)
+            assertTrue(server.client().search("Vael", "Quillmere", Lane.HIGH) is LrclibResult.Transient)
             assertEquals(0, elsewhere)
         } finally {
             server.stop(0)
@@ -257,11 +257,11 @@ class LrclibClientTest {
 
     @Test
     fun `a body over the cap is transient`() = runTest {
-        val huge = "[" + List(30_000) { nemoJson }.joinToString(",") + "]"
+        val huge = "[" + List(30_000) { vaelJson }.joinToString(",") + "]"
         assertTrue(huge.length > HttpLrclibClient.MAX_BODY_BYTES)
         val server = serve { it.reply(200, huge.encodeToByteArray()) }
         try {
-            assertTrue(server.client().search("Nemo", "Nightwish", Lane.HIGH) is LrclibResult.Transient)
+            assertTrue(server.client().search("Vael", "Quillmere", Lane.HIGH) is LrclibResult.Transient)
         } finally {
             server.stop(0)
         }
@@ -305,19 +305,19 @@ class LrclibClientTest {
     @Test
     fun `a cancelled request is disconnected and frees the gate at once`() = runTest {
         val stuck = StuckConnection()
-        val connections = ArrayDeque(listOf(stuck, AnsweringConnection("[$nemoJson]")))
+        val connections = ArrayDeque(listOf(stuck, AnsweringConnection("[$vaelJson]")))
         val client = HttpLrclibClient(
             userAgent = "Lyrify/test",
             gate = RequestGate(now = { testScheduler.currentTime }),
             open = { connections.removeFirst() },
         )
-        val dropped = launch { client.search("Nemo", "Nightwish", Lane.HIGH) }
+        val dropped = launch { client.search("Vael", "Quillmere", Lane.HIGH) }
         runCurrent()
         assertTrue(stuck.reading.await(10, TimeUnit.SECONDS))
 
         dropped.cancelAndJoin()
 
         assertFalse(stuck.timedOut)
-        assertEquals(LrclibResult.Found(listOf(LrclibJson.record(nemoJson))), client.search("Nemo", "Nightwish", Lane.HIGH))
+        assertEquals(LrclibResult.Found(listOf(LrclibJson.record(vaelJson))), client.search("Vael", "Quillmere", Lane.HIGH))
     }
 }

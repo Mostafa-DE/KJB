@@ -18,7 +18,7 @@ import java.io.IOException
 
 @OptIn(ExperimentalCoroutinesApi::class) // testScheduler: virtual time
 class LedgerTest {
-    private val track = LocalTrack("/music/Nemo.mp3", "Nemo", "Nightwish", "Once", 276_000)
+    private val track = LocalTrack("/music/Vael.mp3", "Vael", "Quillmere", "Ulso", 276_000)
     private val now = 1_800_000_000_000L
     private val minute = 60_000L
     private val hour = 60 * minute
@@ -187,7 +187,7 @@ class LedgerTest {
     @Test
     fun `an entry copies the track's tags`() {
         val entry = recorded(null, track, LyricsStatus.SYNCED, 5, now)
-        assertEquals(LedgerEntry("/music/Nemo.mp3", "Nemo", "Nightwish", "Once", 276_000, LyricsStatus.SYNCED, 5, 0, now, null, now), entry)
+        assertEquals(LedgerEntry("/music/Vael.mp3", "Vael", "Quillmere", "Ulso", 276_000, LyricsStatus.SYNCED, 5, 0, now, null, now), entry)
         assertEquals(track, entry.track)
     }
 

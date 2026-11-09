@@ -29,9 +29,9 @@ class ToneFilesTest {
 
     @Test
     fun `characters a file name cannot hold become spaces, and a name never starts with a dot`() {
-        assertEquals("AC DC Live (Lyrify).m4a", ToneEntry.of("AC/DC: Live?", ToneKind.ALARM).displayName)
+        assertEquals("XQ ZV Live (Lyrify).m4a", ToneEntry.of("XQ/ZV: Live?", ToneKind.ALARM).displayName)
         assertEquals("Hidden Track (Lyrify).m4a", ToneEntry.of("..Hidden\tTrack", ToneKind.ALARM).displayName)
-        assertEquals("AC DC Live (Lyrify)", ToneEntry.of("AC/DC: Live?", ToneKind.ALARM).title)
+        assertEquals("XQ ZV Live (Lyrify)", ToneEntry.of("XQ/ZV: Live?", ToneKind.ALARM).title)
     }
 
     @Test

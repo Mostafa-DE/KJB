@@ -48,11 +48,11 @@ class LyricsPipelineTest {
     private val logs = mutableListOf<String>()
     private val warnings = mutableListOf<String>()
 
-    private val synced = "[00:01.00]Beloved\n[00:02.50]Nemo\n[00:04.13][01:00.00]Sailing home"
-    private val expectedLrc = "[00:01.000]Beloved\n[00:02.500]Nemo\n[00:04.130]Sailing home\n[01:00.000]Sailing home\n"
+    private val synced = "[00:01.00]Low tide\n[00:02.50]Vael\n[00:04.13][01:00.00]Rowing slow"
+    private val expectedLrc = "[00:01.000]Low tide\n[00:02.500]Vael\n[00:04.130]Rowing slow\n[01:00.000]Rowing slow\n"
 
-    private fun record(id: Long = 42, duration: Double = 276.0, synced: String? = this.synced, plain: String? = "Beloved\nNemo") =
-        LrclibRecord(id, "Nemo", "Nightwish", "Once", duration, instrumental = false, plainLyrics = plain, syncedLyrics = synced)
+    private fun record(id: Long = 42, duration: Double = 276.0, synced: String? = this.synced, plain: String? = "Low tide\nVael") =
+        LrclibRecord(id, "Vael", "Quillmere", "Ulso", duration, instrumental = false, plainLyrics = plain, syncedLyrics = synced)
 
     private fun TestScope.pipeline(writeBytes: (FileChannel, ByteBuffer) -> Unit = SidecarFile::writeFully) = LyricsPipeline(
         client = client,
@@ -70,11 +70,11 @@ class LyricsPipelineTest {
 
     private val audioBytes = byteArrayOf(0x49, 0x44, 0x33, 4, 0, 0, 1, 2, 3)
 
-    private fun audio(name: String = "Nemo.mp3", title: String = "Nemo"): LocalTrack {
+    private fun audio(name: String = "Vael.mp3", title: String = "Vael"): LocalTrack {
         val file = File(folder.root, name)
         file.writeBytes(audioBytes)
         file.setLastModified(AUDIO_MTIME)
-        return LocalTrack(file.path, title, "Nightwish", "Once", 276_000)
+        return LocalTrack(file.path, title, "Quillmere", "Ulso", 276_000)
     }
 
     private fun sidecar(track: LocalTrack) = File(LrcFormat.sidecarPath(track.path) ?: error("no sidecar"))
@@ -113,7 +113,7 @@ class LyricsPipelineTest {
         assertEquals(expectedLrc, sidecar(track).readText(Charsets.UTF_8))
         assertEquals(LyricsStatus.SYNCED, ledger[track.path]?.status)
         assertEquals(42L, ledger[track.path]?.lrclibId)
-        assertEquals(setOf("Nemo.mp3", "Nemo.lrc"), folder.root.list().orEmpty().toSet())
+        assertEquals(setOf("Vael.mp3", "Vael.lrc"), folder.root.list().orEmpty().toSet())
         assertAudioUntouched(track)
     }
 
@@ -186,7 +186,7 @@ class LyricsPipelineTest {
         assertEquals(LyricsStatus.EXISTING, pipeline().status(track))
 
         assertEquals("[00:01.000]someone else\n", sidecar(track).readText())
-        assertEquals(setOf("Nemo.mp3", "Nemo.lrc"), folder.root.list().orEmpty().toSet())
+        assertEquals(setOf("Vael.mp3", "Vael.lrc"), folder.root.list().orEmpty().toSet())
         assertAudioUntouched(track)
     }
 
@@ -223,7 +223,7 @@ class LyricsPipelineTest {
 
     @Test
     fun `a write that fails after the create leaves nothing behind`() {
-        val path = File(folder.root, "Nemo.lrc").toPath()
+        val path = File(folder.root, "Vael.lrc").toPath()
         val bytes = expectedLrc.encodeToByteArray()
 
         val created = SidecarFile.create(path, bytes, SharedWrites.ANYWHERE, log = { logs += it }) { channel, _ ->
@@ -237,7 +237,7 @@ class LyricsPipelineTest {
 
     @Test
     fun `anything thrown during the write deletes the partial file and is passed on`() {
-        val path = File(folder.root, "Nemo.lrc").toPath()
+        val path = File(folder.root, "Vael.lrc").toPath()
         val bytes = expectedLrc.encodeToByteArray()
 
         listOf(OutOfMemoryError("simulated"), CancellationException("listener gone")).forEach { failure ->
@@ -255,7 +255,7 @@ class LyricsPipelineTest {
 
     @Test
     fun `creating over an existing file changes nothing`() {
-        val path = File(folder.root, "Nemo.lrc").apply { writeText("mine") }.toPath()
+        val path = File(folder.root, "Vael.lrc").apply { writeText("mine") }.toPath()
 
         assertEquals(Created.ALREADY_THERE, SidecarFile.create(path, expectedLrc.encodeToByteArray(), SharedWrites.ANYWHERE, log = { logs += it }))
 
@@ -273,7 +273,7 @@ class LyricsPipelineTest {
             folder.root.setWritable(true)
         }
         assertFalse(sidecar(track).exists())
-        assertEquals(setOf("Nemo.mp3"), folder.root.list().orEmpty().toSet())
+        assertEquals(setOf("Vael.mp3"), folder.root.list().orEmpty().toSet())
         assertAudioUntouched(track)
     }
 
@@ -397,7 +397,7 @@ class LyricsPipelineTest {
 
         assertEquals(LyricsStatus.EXISTING, pipeline().status(track))
 
-        assertTrue(warnings.any { "Nemo" in it })
+        assertTrue(warnings.any { "Vael" in it })
         assertTrue(sidecar(track).exists())
     }
 
@@ -455,7 +455,7 @@ class LyricsPipelineTest {
 
         assertEquals(1, client.requests)
         assertEquals(expectedLrc, sidecar(track).readText())
-        assertEquals(setOf("Nemo.mp3", "Nemo.lrc"), folder.root.list().orEmpty().toSet())
+        assertEquals(setOf("Vael.mp3", "Vael.lrc"), folder.root.list().orEmpty().toSet())
         assertNull(ledger[track.path]?.pendingText)
         assertAudioUntouched(track)
     }
@@ -654,7 +654,7 @@ class LyricsPipelineTest {
     fun `a file waiting out LRCLIB's backoff does not hold up another file`() = runTest {
         val busy = audio()
         val other = audio("Other.mp3", "Other")
-        client.onGet = { if (it.title == "Nemo") LrclibResult.Transient("HTTP 503") else LrclibResult.NotFound }
+        client.onGet = { if (it.title == "Vael") LrclibResult.Transient("HTTP 503") else LrclibResult.NotFound }
         val pipeline = pipeline()
 
         val slow = async { pipeline.status(busy) }
@@ -669,13 +669,13 @@ class LyricsPipelineTest {
 
     @Test
     fun `not found asks every query, then searches by title once, and is checked again after 30 days`() = runTest {
-        val track = audio(title = "04. Nemo (Live)")
+        val track = audio(title = "04. Vael (Live)")
         val pipeline = pipeline()
 
         assertEquals(LyricsStatus.NOT_FOUND, pipeline.status(track))
 
-        assertEquals(listOf("Nemo (Live)", "Nemo"), client.gets.map { it.title })
-        assertEquals(listOf(TrackQuery("Nightwish", "Nemo (Live)"), TrackQuery("Nightwish", "Nemo"), TrackQuery(null, "Nemo")), client.searches)
+        assertEquals(listOf("Vael (Live)", "Vael"), client.gets.map { it.title })
+        assertEquals(listOf(TrackQuery("Quillmere", "Vael (Live)"), TrackQuery("Quillmere", "Vael"), TrackQuery(null, "Vael")), client.searches)
         assertEquals(BASE + 30 * DAY, ledger[track.path]?.nextAttemptAt)
         val requests = client.requests
         pipeline.process(track)
@@ -700,19 +700,19 @@ class LyricsPipelineTest {
         assertEquals(LyricsStatus.UNIDENTIFIED, pipeline().status(track))
 
         assertEquals(0, client.gets.size)
-        assertEquals(listOf(TrackQuery(null, "Intro"), TrackQuery(null, "Nemo")), client.searches)
+        assertEquals(listOf(TrackQuery(null, "Intro"), TrackQuery(null, "Vael")), client.searches)
         assertEquals(BASE + 30 * DAY, ledger[track.path]?.nextAttemptAt)
         assertFalse(sidecar(track).exists())
     }
 
     @Test
     fun `an artist in the title is enough to look a track up`() = runTest {
-        val track = audio(title = "Nightwish - Nemo").copy(artist = null)
+        val track = audio(title = "Quillmere - Vael").copy(artist = null)
         client.onGet = { LrclibResult.Found(listOf(record())) }
 
         assertEquals(LyricsStatus.SYNCED, pipeline().status(track))
 
-        assertEquals(TrackQuery("Nightwish", "Nemo"), client.gets.first())
+        assertEquals(TrackQuery("Quillmere", "Vael"), client.gets.first())
     }
 
     @Test
@@ -739,13 +739,13 @@ class LyricsPipelineTest {
     }
 
     @Test
-    fun `Light Your Cigar - the exact recording's plain lyrics are kept over a synced live version`() = runTest {
-        val file = File(folder.root, "Light Your Cigar.mp3").apply { writeBytes(audioBytes) }
-        val track = LocalTrack(file.path, "Light Your Cigar", "Millenium", "Millenium", 448_200)
-        fun cigar(id: Long, duration: Double, name: String = "Light Your Cigar", synced: String? = null) =
-            LrclibRecord(id, name, "Millenium", "Millenium", duration, plainLyrics = "Light\nyour\ncigar", syncedLyrics = synced)
+    fun `Light Your Lantern - the exact recording's plain lyrics are kept over a synced live version`() = runTest {
+        val file = File(folder.root, "Light Your Lantern.mp3").apply { writeBytes(audioBytes) }
+        val track = LocalTrack(file.path, "Light Your Lantern", "Brasswick", "Brasswick", 448_200)
+        fun lantern(id: Long, duration: Double, name: String = "Light Your Lantern", synced: String? = null) =
+            LrclibRecord(id, name, "Brasswick", "Brasswick", duration, plainLyrics = "Light\nyour\nlantern", syncedLyrics = synced)
         client.onSearch = {
-            LrclibResult.Found(listOf(cigar(4, 377.0, "Light Your Cigar (live version)", synced), cigar(2, 369.0), cigar(3, 376.0), cigar(1, 449.0)))
+            LrclibResult.Found(listOf(lantern(4, 377.0, "Light Your Lantern (live version)", synced), lantern(2, 369.0), lantern(3, 376.0), lantern(1, 449.0)))
         }
 
         assertEquals(LyricsStatus.PLAIN_ONLY, pipeline().status(track))
@@ -803,7 +803,7 @@ class LyricsPipelineTest {
 
     @Test
     fun `an instrumental title is recorded without asking LRCLIB`() = runTest {
-        val track = audio(title = "Nemo (Instrumental)")
+        val track = audio(title = "Vael (Instrumental)")
 
         assertEquals(LyricsStatus.INSTRUMENTAL, pipeline().status(track))
 
@@ -812,9 +812,9 @@ class LyricsPipelineTest {
 
     @Test
     fun `an audio file without an extension is skipped`() = runTest {
-        val file = File(folder.root, "Nemo")
+        val file = File(folder.root, "Vael")
         file.writeBytes(audioBytes)
-        assertNull(pipeline().process(LocalTrack(file.path, "Nemo", "Nightwish", null, 276_000)))
+        assertNull(pipeline().process(LocalTrack(file.path, "Vael", "Quillmere", null, 276_000)))
         assertEquals(0, client.requests)
     }
 
@@ -849,7 +849,7 @@ class LyricsPipelineTest {
         assertEquals(Removal.REMOVED, pipeline.remove(track.path))
 
         assertFalse(sidecar(track).exists())
-        assertEquals(setOf("Nemo.mp3"), folder.root.list().orEmpty().toSet())
+        assertEquals(setOf("Vael.mp3"), folder.root.list().orEmpty().toSet())
         val entry = ledger[track.path]
         assertEquals(LyricsStatus.REMOVED, entry?.status)
         assertEquals(42L, entry?.lrclibId)
@@ -893,7 +893,7 @@ class LyricsPipelineTest {
         assertEquals(LyricsStatus.REMOVED, ledger[track.path]?.status)
         assertEquals(LyricsStatus.REMOVED, pipeline.status(track))
         assertEquals(requests, client.requests)
-        assertEquals(setOf("Nemo.mp3"), folder.root.list().orEmpty().toSet())
+        assertEquals(setOf("Vael.mp3"), folder.root.list().orEmpty().toSet())
         assertAudioUntouched(track)
     }
 
@@ -959,7 +959,7 @@ class LyricsPipelineTest {
 
     @Test
     fun `deleting a file that is not there counts as already gone`() {
-        assertEquals(Removal.ALREADY_GONE, SidecarFile.delete(File(folder.root, "Nemo.lrc").toPath(), SharedWrites.ANYWHERE, log = { logs += it }))
+        assertEquals(Removal.ALREADY_GONE, SidecarFile.delete(File(folder.root, "Vael.lrc").toPath(), SharedWrites.ANYWHERE, log = { logs += it }))
     }
 
     @Test

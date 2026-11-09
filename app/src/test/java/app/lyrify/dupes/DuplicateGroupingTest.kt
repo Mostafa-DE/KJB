@@ -188,8 +188,8 @@ class DuplicateGroupingTest {
     fun `a maybe never matches on a blank or very short title`() {
         assertTrue(groups(listOf(file(1, title = "Up"), file(2, title = "Up", artist = null))).isEmpty())
         assertTrue(groups(listOf(file(1, title = "Mira Solen - Go", artist = null), file(2, title = "Go", artist = "Band B"))).isEmpty())
-        assertTrue(groups(listOf(file(1, title = "1979", artist = null), file(2, title = "1979"))).isEmpty())
-        assertEquals(1, groups(listOf(file(1, title = "Hush"), file(2, title = "Hush", artist = null))).size)
+        assertTrue(groups(listOf(file(1, title = "2031", artist = null), file(2, title = "2031"))).isEmpty())
+        assertEquals(1, groups(listOf(file(1, title = "Lull"), file(2, title = "Lull", artist = null))).size)
         assertEquals(1, groups(listOf(file(1, title = "Go Go"), file(2, title = "Go Go", artist = null))).size)
         assertEquals(1, groups(listOf(file(1, title = "Mira Solen - Go On", artist = null), file(2, title = "Go On", artist = "Band B"))).size)
     }
@@ -220,8 +220,8 @@ class DuplicateGroupingTest {
             "Paper Comet" to "Night Kites (Remastered 2020)",
             "Paper Comet (Club Mix)" to "Night Kites",
             "Paper Comet (Single Version)" to "Night Kites",
-            "Paper Comet" to "MTV Unplugged",
-            "Paper Comet" to "BBC Sessions",
+            "Paper Comet" to "Harbour Unplugged",
+            "Paper Comet" to "Kettle Sessions",
             "Paper Comet (Re-recorded)" to "Night Kites",
             "Paper Comet (Extended)" to "Night Kites",
             "Paper Comet" to "Night Kites (Deluxe)",

@@ -416,7 +416,7 @@ class QueueSweepTest {
 
     private val client = FakeLrclib()
     private val ledger = MemoryLedger()
-    private val synced = "[00:01.00]Stars fall\n[00:02.00]from the sky\n[00:03.00]Mystic Queen"
+    private val synced = "[00:01.00]Bells ring\n[00:02.00]over the bay\n[00:03.00]Copper Queen"
 
     private fun TestScope.realSweep(rows: List<AudioRow>, onCurrent: (SessionTrack, List<LocalTrack>) -> Unit = { _, _ -> }): QueueSweep {
         val pipeline = LyricsPipeline(client, ledger, clock = { BASE + testScheduler.currentTime }, writes = SharedWrites.ANYWHERE, random = Random(0))
@@ -438,20 +438,20 @@ class QueueSweepTest {
     }
 
     @Test
-    fun `Camel - both copies get lyrics, each looked up with its own tags`() = runTest {
-        val kjb = AudioRow(audioFile("kjb/02. Mystic Queen.mp3"), "Mystic Queen", "Camel", "Camel", 341_000)
-        val de = AudioRow(audioFile("de/camel/02. Mystic Queen.mp3"), "Mystic Queen", "Camel", "Mirage", 341_600)
+    fun `Brindle - both copies get lyrics, each looked up with its own tags`() = runTest {
+        val kjb = AudioRow(audioFile("kjb/02. Copper Queen.mp3"), "Copper Queen", "Brindle", "Brindle", 341_000)
+        val de = AudioRow(audioFile("de/brindle/02. Copper Queen.mp3"), "Copper Queen", "Brindle", "Saltglass", 341_600)
         client.onGet = { query ->
             LrclibResult.Found(listOf(LrclibRecord(1, query.title, query.artist.orEmpty(), query.album, client.durations.last().toDouble(), syncedLyrics = synced)))
         }
-        val queue = listOf(QueueEntry(1, SessionTrack("Lady Fantasy", "Camel")), QueueEntry(2, SessionTrack("Mystic Queen", "Camel")))
+        val queue = listOf(QueueEntry(1, SessionTrack("Lady Lantern", "Brindle")), QueueEntry(2, SessionTrack("Copper Queen", "Brindle")))
         val sweep = realSweep(listOf(kjb, de))
 
-        sweep.submit(SessionSnapshot(SessionTrack("Lady Fantasy", "Camel", durationMs = 760_000), 1, queue))
+        sweep.submit(SessionSnapshot(SessionTrack("Lady Lantern", "Brindle", durationMs = 760_000), 1, queue))
         advanceTimeBy(10_000)
 
         assertEquals(listOf(341L, 342L), client.durations)
-        assertEquals(listOf(null, "Mirage"), client.gets.map { it.album })
+        assertEquals(listOf(null, "Saltglass"), client.gets.map { it.album })
         listOf(kjb, de).forEach { row ->
             assertTrue(File(LrcFormat.sidecarPath(row.path) ?: error("no sidecar")).isFile)
             assertEquals(LyricsStatus.SYNCED, ledger[row.path]?.status)
@@ -609,7 +609,7 @@ class QueueSweepTest {
 
         assertEquals(LyricsStatus.SYNCED, ledger[rows[0].path]?.status)
         assertEquals(
-            "[00:01.000]Stars fall\n[00:02.000]from the sky\n[00:03.000]Mystic Queen\n",
+            "[00:01.000]Bells ring\n[00:02.000]over the bay\n[00:03.000]Copper Queen\n",
             File(LrcFormat.sidecarPath(rows[0].path) ?: error("no sidecar")).readText(),
         )
         assertEquals(2_000L, askedAt("Q8").first())
@@ -626,7 +626,7 @@ class QueueSweepTest {
                 settleInterrupted = pipeline::finishInterrupted,
             ).run()
         }
-        val text = "[00:01.000]Stars fall\n[00:02.000]from the sky\n[00:03.000]Mystic Queen\n"
+        val text = "[00:01.000]Bells ring\n[00:02.000]over the bay\n[00:03.000]Copper Queen\n"
         val bytes = LrcFormat.encode(text)
         /** A complete `.lrc` whose SYNCED entry the app's death lost. */
         suspend fun interrupted(name: String): String {
