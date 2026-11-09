@@ -6,6 +6,8 @@ import android.os.StrictMode
 import android.util.Log
 import app.lyrify.data.LedgerRepository
 import app.lyrify.data.SharedWrites
+import app.lyrify.library.FavouritesPort
+import app.lyrify.library.LibraryGraph
 import app.lyrify.lyrics.Checked
 import app.lyrify.lyrics.HttpLrclibClient
 import app.lyrify.lyrics.LocalTrack
@@ -15,6 +17,13 @@ import app.lyrify.lyrics.Removal
 import app.lyrify.lyrics.Searched
 import app.lyrify.models.ModelDownloads
 import app.lyrify.overnight.AiLyrics
+import app.lyrify.player.PlaybackCommands
+import app.lyrify.player.PlayerGraph
+import app.lyrify.settings.SettingsRepository
+import app.lyrify.settings.SettingsStore
+import app.lyrify.stats.PlayEvents
+import app.lyrify.stats.PlaysQuery
+import app.lyrify.stats.StatsGraph
 import app.lyrify.ui.CheckAnswers
 import app.lyrify.ui.songImageLoader
 import coil3.SingletonImageLoader
@@ -92,6 +101,24 @@ object Lyrify {
             created.compareStored()
         }
     }
+
+    /** The settings (3.0): `settings.json`, one store per process. */
+    fun settings(context: Context): SettingsStore = SettingsRepository(context)
+
+    // 3.0's features: each package builds its own objects by hand (PlayerGraph, StatsGraph, LibraryGraph) and these hooks
+    // only point at them, so a milestone replaces its feature's stub without touching this file.
+
+    /** Plays songs from any list: Lyrify's own player (milestone P1); nothing plays until then. */
+    fun playback(context: Context): PlaybackCommands = PlayerGraph.commands(context.applicationContext)
+
+    /** Where the player's play events go: the play counter (milestone S1). */
+    fun playEvents(context: Context): PlayEvents = StatsGraph.events(context.applicationContext)
+
+    /** Plays per song, for Most played, Recently played and Song info (milestone S1). */
+    fun plays(context: Context): PlaysQuery = StatsGraph.plays(context.applicationContext)
+
+    /** Favourite songs and collections (milestone LC). */
+    fun favourites(context: Context): FavouritesPort = LibraryGraph.favourites(context.applicationContext)
 
     /** "Wrong lyrics" / "Remove lyrics": deletes the `.lrc` Lyrify wrote next to [audioPath], if unchanged. */
     suspend fun remove(context: Context, audioPath: String): Removal =
