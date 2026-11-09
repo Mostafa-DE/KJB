@@ -137,13 +137,44 @@ extern "C" JNIEXPORT void JNI_OnUnload(JavaVM *vm, void *) {
     getValueMethod = nullptr;
 }
 
+// KJB patch: strings cross JNI as UTF-16 (NewString, GetStringChars), not as "modified UTF-8", which mangles characters
+// outside the BMP (an emoji in a title). Every converter checks for a pending Java exception after each JNI call and
+// stops there, returning null or what it has, so no JNI call runs with an exception pending; the caller checks again.
+
+// KJB patch: a TagLib string as a Java string.
+jstring StringToJniString(JNIEnv *env, const TagLib::String &string) {
+    const TagLib::ByteVector utf16 = string.data(TagLib::String::UTF16LE);
+    return env->NewString(reinterpret_cast<const jchar *>(utf16.data()), static_cast<jsize>(utf16.size() / 2));
+}
+
+// KJB patch: a Java string as a TagLib string, its characters released.
+TagLib::String JniStringToString(JNIEnv *env, jstring string) {
+    if (string == nullptr) {
+        return {};
+    }
+    const jsize length = env->GetStringLength(string);
+    const jchar *chars = env->GetStringChars(string, nullptr);
+    if (chars == nullptr) {
+        return {};
+    }
+    const TagLib::ByteVector utf16(reinterpret_cast<const char *>(chars), static_cast<unsigned int>(length) * 2);
+    env->ReleaseStringChars(string, chars);
+    return {utf16, TagLib::String::UTF16LE};
+}
+
 // Helper function to convert C++ StringList to JNI String array
 jobjectArray StringListToJniStringArray(JNIEnv *env, const TagLib::StringList &stringList) {
     jobjectArray array = env->NewObjectArray(static_cast<jsize>(stringList.size()),
                                              stringClass, nullptr);
+    if (array == nullptr) {
+        return nullptr;
+    }
     int i = 0;
     for (const auto &str: stringList) {
-        jstring jStr = env->NewStringUTF(str.toCString(true));
+        jstring jStr = StringToJniString(env, str);
+        if (jStr == nullptr) {
+            return nullptr;
+        }
         env->SetObjectArrayElement(array, i, jStr);
         env->DeleteLocalRef(jStr);
         i++;
@@ -154,16 +185,25 @@ jobjectArray StringListToJniStringArray(JNIEnv *env, const TagLib::StringList &s
 // Helper function to convert C++ PropertyMap to JNI HashMap
 jobject PropertyMapToJniHashMap(JNIEnv *env, const TagLib::PropertyMap &propertyMap) {
     jobject hashMap = env->NewObject(hashMapClass, hashMapInit, static_cast<jint>(propertyMap.size()));
+    if (hashMap == nullptr) {
+        return nullptr;
+    }
 
     for (const auto &property: propertyMap) {
-        const char *key = property.first.toCString(true);
-        const TagLib::StringList &valueList = property.second;
+        jobjectArray valueArray = StringListToJniStringArray(env, property.second);
+        if (valueArray == nullptr) {
+            return nullptr;
+        }
+        jstring jKey = StringToJniString(env, property.first);
+        if (jKey == nullptr) {
+            return nullptr;
+        }
+        jobject previous = env->CallObjectMethod(hashMap, hashMapPut, jKey, valueArray);
+        if (env->ExceptionCheck()) {
+            return nullptr;
+        }
 
-        jobjectArray valueArray = StringListToJniStringArray(env, valueList);
-
-        jstring jKey = env->NewStringUTF(key);
-        env->CallObjectMethod(hashMap, hashMapPut, jKey, valueArray);
-
+        env->DeleteLocalRef(previous);
         env->DeleteLocalRef(jKey);
         env->DeleteLocalRef(valueArray);
     }
@@ -178,10 +218,14 @@ TagLib::StringList JniStringArrayToStringList(JNIEnv *env, jobjectArray stringAr
     const jsize arrayLength = env->GetArrayLength(stringArray);
     for (int i = 0; i < arrayLength; ++i) {
         auto jStr = reinterpret_cast<jstring>(env->GetObjectArrayElement(stringArray, i));
-        const char *cStr = env->GetStringUTFChars(jStr, nullptr);
-        stringList.append(TagLib::String(cStr, TagLib::String::UTF8));
-        env->ReleaseStringUTFChars(jStr, cStr);
+        if (env->ExceptionCheck()) {
+            return stringList;
+        }
+        stringList.append(JniStringToString(env, jStr));
         env->DeleteLocalRef(jStr);
+        if (env->ExceptionCheck()) {
+            return stringList;
+        }
     }
 
     return stringList;
@@ -192,23 +236,44 @@ TagLib::PropertyMap JniHashMapToPropertyMap(JNIEnv *env, jobject hashMap) {
     TagLib::PropertyMap propertyMap;
 
     jobject entrySet = env->CallObjectMethod(hashMap, entrySetMethod);
+    if (env->ExceptionCheck() || entrySet == nullptr) {
+        return propertyMap;
+    }
     jobject iterator = env->CallObjectMethod(entrySet, iteratorMethod);
+    if (env->ExceptionCheck() || iterator == nullptr) {
+        return propertyMap;
+    }
 
     while (env->CallBooleanMethod(iterator, hasNextMethod)) {
+        if (env->ExceptionCheck()) {
+            return propertyMap;
+        }
         jobject entry = env->CallObjectMethod(iterator, nextMethod);
+        if (env->ExceptionCheck()) {
+            return propertyMap;
+        }
         jobject key = env->CallObjectMethod(entry, getKeyMethod);
+        if (env->ExceptionCheck()) {
+            return propertyMap;
+        }
         jobject value = env->CallObjectMethod(entry, getValueMethod);
+        if (env->ExceptionCheck()) {
+            return propertyMap;
+        }
 
-        const char *keyStr = env->GetStringUTFChars(reinterpret_cast<jstring>(key), nullptr);
+        const TagLib::String keyString = JniStringToString(env, reinterpret_cast<jstring>(key));
         const StringList valueList = JniStringArrayToStringList(env, reinterpret_cast<jobjectArray>(value));
+        if (env->ExceptionCheck()) {
+            return propertyMap;
+        }
+        propertyMap[keyString] = valueList;
 
-        propertyMap[TagLib::String(keyStr, TagLib::String::UTF8)] = valueList;
-
-        env->ReleaseStringUTFChars(reinterpret_cast<jstring>(key), keyStr);
         env->DeleteLocalRef(entry);
         env->DeleteLocalRef(key);
         env->DeleteLocalRef(value);
     }
+    env->DeleteLocalRef(iterator);
+    env->DeleteLocalRef(entrySet);
 
     return propertyMap;
 }
@@ -226,6 +291,9 @@ jobjectArray PictureListToJniPictureArray(
         }
     }
     jobjectArray array = env->NewObjectArray(count, pictureClass, nullptr);
+    if (array == nullptr) {
+        return nullptr;
+    }
     int i = 0;
     for (const auto &picture: pictureList) {
         const ByteVector pictureData = picture["data"].toByteVector();
@@ -234,22 +302,27 @@ jobjectArray PictureListToJniPictureArray(
         }
 
         jbyteArray bytes = env->NewByteArray(static_cast<jint>(pictureData.size()));
-        const String description = picture["description"].toString();
-        jstring jDescription = env->NewStringUTF(description.toCString(true));
-        const String pictureType = picture["pictureType"].toString();
-        jstring jPictureType = env->NewStringUTF(pictureType.toCString(true));
-        const String mimeType = picture["mimeType"].toString();
-        jstring jMimeType = env->NewStringUTF(mimeType.toCString(true));
-
+        if (bytes == nullptr) {
+            return nullptr;
+        }
         env->SetByteArrayRegion(
                 bytes,
                 0,
                 static_cast<jint>(pictureData.size()),
                 reinterpret_cast<const jbyte *>(pictureData.data())
         );
+        jstring jDescription = StringToJniString(env, picture["description"].toString());
+        jstring jPictureType = StringToJniString(env, picture["pictureType"].toString());
+        jstring jMimeType = StringToJniString(env, picture["mimeType"].toString());
+        if (env->ExceptionCheck()) {
+            return nullptr;
+        }
         jobject pictureObject = env->NewObject(
                 pictureClass, pictureConstructor,
                 bytes, jDescription, jPictureType, jMimeType);
+        if (pictureObject == nullptr) {
+            return nullptr;
+        }
         env->DeleteLocalRef(bytes);
         env->DeleteLocalRef(jDescription);
         env->DeleteLocalRef(jPictureType);
@@ -261,14 +334,6 @@ jobjectArray PictureListToJniPictureArray(
     return array;
 }
 
-// KJB patch: a Java string as a UTF-8 TagLib string, its characters released.
-TagLib::String JniStringToString(JNIEnv *env, jstring string) {
-    const char *chars = env->GetStringUTFChars(string, nullptr);
-    TagLib::String result(chars, TagLib::String::UTF8);
-    env->ReleaseStringUTFChars(string, chars);
-    return result;
-}
-
 // Helper function to convert JNI Picture array to C++ PictureList
 TagLib::List<TagLib::Map<TagLib::String, TagLib::Variant>>
 JniPictureArrayToPictureList(JNIEnv *env, jobjectArray pictures) {
@@ -277,16 +342,30 @@ JniPictureArrayToPictureList(JNIEnv *env, jobjectArray pictures) {
     const jsize pictureCount = env->GetArrayLength(pictures);
     for (int i = 0; i < pictureCount; i++) {
         jobject pictureObject = env->GetObjectArrayElement(pictures, i);
-        const auto bytes = reinterpret_cast<jbyteArray>(env->CallObjectMethod(pictureObject,
-                                                                              pictureGetData));
-        const auto description = reinterpret_cast<jstring>(env->CallObjectMethod(pictureObject,
-                                                                                 pictureGetDescription));
-        const auto pictureType = reinterpret_cast<jstring>(env->CallObjectMethod(pictureObject,
-                                                                                 pictureGetPictureType));
-        const auto mimeType = reinterpret_cast<jstring>(env->CallObjectMethod(pictureObject,
-                                                                              pictureGetMimeType));
+        if (env->ExceptionCheck() || pictureObject == nullptr) {
+            return pictureList;
+        }
+        const auto bytes = reinterpret_cast<jbyteArray>(env->CallObjectMethod(pictureObject, pictureGetData));
+        if (env->ExceptionCheck() || bytes == nullptr) {
+            return pictureList;
+        }
+        const auto description = reinterpret_cast<jstring>(env->CallObjectMethod(pictureObject, pictureGetDescription));
+        if (env->ExceptionCheck()) {
+            return pictureList;
+        }
+        const auto pictureType = reinterpret_cast<jstring>(env->CallObjectMethod(pictureObject, pictureGetPictureType));
+        if (env->ExceptionCheck()) {
+            return pictureList;
+        }
+        const auto mimeType = reinterpret_cast<jstring>(env->CallObjectMethod(pictureObject, pictureGetMimeType));
+        if (env->ExceptionCheck()) {
+            return pictureList;
+        }
 
         jbyte *pictureData = env->GetByteArrayElements(bytes, nullptr);
+        if (pictureData == nullptr) {
+            return pictureList;
+        }
         const jsize pictureDataSize = env->GetArrayLength(bytes);
         TagLib::ByteVector pictureDataVector(
                 reinterpret_cast<const char *>(pictureData),
@@ -294,12 +373,15 @@ JniPictureArrayToPictureList(JNIEnv *env, jobjectArray pictures) {
         );
         env->ReleaseByteArrayElements(bytes, pictureData, JNI_ABORT);
 
-        // KJB patch: the strings are read as UTF-8 and released, and the local references freed in the loop.
+        // KJB patch: the strings are read as UTF-16 and released, and the local references freed in the loop.
         TagLib::Map<TagLib::String, TagLib::Variant> picture;
         picture["data"] = pictureDataVector;
         picture["description"] = JniStringToString(env, description);
         picture["pictureType"] = JniStringToString(env, pictureType);
         picture["mimeType"] = JniStringToString(env, mimeType);
+        if (env->ExceptionCheck()) {
+            return pictureList;
+        }
         pictureList.append(picture);
         env->DeleteLocalRef(bytes);
         env->DeleteLocalRef(description);
@@ -345,6 +427,9 @@ char *getRealPathFromFd(const int fd) {
 
     size_t size = 128;
     char *link = reinterpret_cast<char *>(malloc(size));
+    if (link == nullptr) {
+        return nullptr;
+    }
 
     ssize_t bytesRead;
     while ((bytesRead = readlink(path, link, size)) == static_cast<ssize_t>(size)) {
@@ -357,6 +442,11 @@ char *getRealPathFromFd(const int fd) {
         link = temp;
     }
 
+    // KJB patch: readlink failing (-1) was used as an index.
+    if (bytesRead < 0) {
+        free(link);
+        return nullptr;
+    }
     link[bytesRead] = '\0';
 
     return link;

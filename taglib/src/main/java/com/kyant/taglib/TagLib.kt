@@ -96,9 +96,10 @@ public object TagLib {
     ): Boolean
 
     /**
-     * KJB patch: saves the whole tag in one go, every key of [propertyMap] and every picture in [pictures]. Keys and
-     * pictures left out are removed, so read them first. An MP3 has only its ID3v2 tag rewritten, as version
-     * [id3v2Version] (3 or 4): no ID3v1 tag is added, and one already there is left as it is.
+     * KJB patch: saves the whole tag in one go, every key of [propertyMap], and [pictures] when given (null leaves the
+     * pictures as they are). Keys left out are removed, so read them first. An MP3 has only its ID3v2 tag rewritten, as
+     * version [id3v2Version] (3 or 4): no ID3v1 tag is added, and one already there is left as it is; an APE tag already
+     * there gets the same changes.
      *
      * @param fd File descriptor, closed by this call on every path
      *
@@ -108,7 +109,16 @@ public object TagLib {
     public external fun saveTags(
         fd: Int,
         propertyMap: PropertyMap,
-        pictures: Array<Picture>,
+        pictures: Array<Picture>?,
         id3v2Version: Int,
     ): Boolean
+
+    /**
+     * KJB patch: an MP3's ID3v2 tag as its major version ("3" or "4") followed by the ID of every frame in it, in order;
+     * null for a file that is not an MP3 or has no ID3v2 tag.
+     *
+     * @param fd File descriptor, closed by this call on every path
+     */
+    @JvmStatic
+    public external fun getId3v2Frames(fd: Int): Array<String>?
 }
