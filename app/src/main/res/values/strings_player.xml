@@ -1,4 +1,139 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- The player: the player screen, queues and the notification (milestones P1 and P2). -->
 <resources>
+    <!-- The notification channel of the music notification, as the phone's settings list it. -->
+    <string name="player_channel">Playback</string>
+
+    <!-- The browse tree (Bluetooth, and Android Auto later). -->
+    <string name="player_tree_queues">Recent queues</string>
+    <string name="player_tree_playlists">Playlists</string>
+    <string name="player_tree_albums">Albums</string>
+    <string name="player_tree_artists">Artists</string>
+    <string name="player_tree_songs">Songs</string>
+
+    <!-- A queue's source: "Album · Harbour Glass". -->
+    <string name="queue_source_named">%1$s · %2$s</string>
+    <string name="queue_source_album">Album</string>
+    <string name="queue_source_artist">Artist</string>
+    <string name="queue_source_folder">Folder</string>
+    <string name="queue_source_genre">Genre</string>
+    <string name="queue_source_playlist">Playlist</string>
+    <string name="queue_source_search">Search</string>
+    <string name="queue_source_songs">Songs</string>
+    <string name="queue_source_favourites">Favourites</string>
+    <string name="queue_source_most_played">Most played</string>
+    <string name="queue_source_recently_played">Recently played</string>
+    <string name="queue_source_recently_added">Recently added</string>
+    <string name="queue_source_picked">Picked · %1$s</string>
+    <plurals name="queue_songs">
+        <item quantity="one">%d song</item>
+        <item quantity="other">%d songs</item>
+    </plurals>
+
+    <!-- The player -->
+    <string name="player_close">Close the player</string>
+    <string name="player_from">From %1$s</string>
+    <string name="player_more">More options</string>
+    <string name="player_menu_add_to">Add to…</string>
+    <string name="player_menu_album">Go to album</string>
+    <string name="player_menu_artist">Go to artist</string>
+    <string name="player_menu_speed">Speed</string>
+    <string name="player_menu_ab">Repeat a part</string>
+    <string name="player_menu_bookmark">Bookmark</string>
+    <string name="player_menu_play_on">Play on</string>
+    <string name="player_menu_equalizer">Equalizer</string>
+    <string name="player_menu_tone">Make a tone</string>
+    <string name="player_menu_info">Song info</string>
+    <string name="player_no_effects">Your phone has no sound effects panel.</string>
+    <string name="player_lyrics_chip">Lyrics</string>
+    <string name="player_show_lyrics">Show the lyrics</string>
+    <string name="player_show_cover">Show the cover of %1$s</string>
+    <string name="player_cover">Cover of %1$s. Tap for lyrics, swipe to skip.</string>
+    <string name="player_flip_hint">Tap the cover for lyrics</string>
+    <string name="player_no_artist">No artist</string>
+    <string name="player_unknown_album">Unknown album</string>
+    <string name="player_not_on_phone">Not on your phone</string>
+    <string name="player_play">Play</string>
+    <string name="player_pause">Pause</string>
+    <string name="player_previous">Previous</string>
+    <string name="player_next">Next</string>
+    <string name="player_back_seconds">Back %1$d seconds</string>
+    <string name="player_forward_seconds">Forward %1$d seconds</string>
+    <string name="player_position">Position</string>
+    <string name="player_shuffle_on">Shuffle, on</string>
+    <string name="player_shuffle_off">Shuffle, off</string>
+    <string name="player_shuffled">Shuffle on</string>
+    <string name="player_unshuffled">Shuffle off</string>
+    <string name="player_favourite_on">Favourite, on</string>
+    <string name="player_favourite_off">Favourite, off</string>
+    <string name="player_favourited">Added to Favourites</string>
+    <string name="player_unfavourited">Removed from Favourites</string>
+    <string name="player_favourite_failed">Favourites could not be saved.</string>
+    <string name="player_sleep_off">Sleep timer, off</string>
+    <string name="player_queue">Queue</string>
+    <string name="player_repeat_off">Repeat off</string>
+    <string name="player_repeat_all">Repeat all</string>
+    <string name="player_repeat_one">Repeat one</string>
+    <string name="player_recent_hint">Your last queue is in Recent</string>
+    <string name="player_undo">Undo</string>
+
+    <!-- The lyrics panel, on the back of the cover -->
+    <string name="player_lyrics">Lyrics</string>
+    <string name="player_finding_lyrics">Finding lyrics</string>
+    <string name="player_no_lyrics">No lyrics yet</string>
+    <string name="player_search_lyrics">Search</string>
+    <string name="player_full_screen">Full screen</string>
+    <string name="player_lyrics_text">Lyrics text: size, weight and alignment</string>
+    <string name="player_line_at">%1$s, %2$s</string>
+
+    <!-- Queues -->
+    <string name="queue_title">Queue</string>
+    <string name="queue_from">From %1$s · %2$s</string>
+    <string name="queue_keep">Keep</string>
+    <string name="queue_keep_named">Keep %1$s</string>
+    <string name="queue_kept">Kept in Saved</string>
+    <string name="queue_saved_tag">Saved</string>
+    <string name="queue_recent_tag">Recent</string>
+    <string name="queue_playing_tag">Playing</string>
+    <string name="queue_recent">Recent</string>
+    <string name="queue_all">All queues</string>
+    <string name="queue_no_recent">No recent queues</string>
+    <string name="queue_nothing">Nothing queued</string>
+    <string name="queue_save_playlist">Save as playlist</string>
+    <string name="queue_playlist_field">Playlist name</string>
+    <string name="queue_playlist_saved">Saved as %1$s</string>
+    <string name="queue_playlist_failed">The playlist could not be saved.</string>
+    <string name="queues_title">Queues</string>
+    <string name="queues_saved">Saved</string>
+    <string name="queues_recent">Recent</string>
+    <string name="queues_saved_empty">Keep a recent queue to save it here.</string>
+    <string name="queue_place">Song %1$d of %2$d · %3$s</string>
+    <string name="queue_line">%1$s · %2$s</string>
+    <string name="queue_resume">Resume</string>
+    <string name="queue_from_start">Play from start</string>
+    <string name="queue_more">More for this queue</string>
+    <string name="queue_rename">Rename</string>
+    <string name="queue_rename_title">Rename queue</string>
+    <string name="queue_name_field">Name</string>
+    <string name="queue_renamed">Renamed</string>
+    <string name="queue_delete">Delete</string>
+    <string name="queue_delete_title">Delete this queue?</string>
+    <string name="queue_delete_text">Only the queue goes. Your songs stay on your phone.</string>
+    <string name="queue_deleted">Queue deleted</string>
+    <string name="queue_cancel">Cancel</string>
+    <string name="queue_removed">Removed from queue</string>
+    <string name="queue_remove_swipe">Remove</string>
+    <string name="queue_remove">Remove from queue</string>
+    <string name="queue_move">Move %1$s</string>
+    <string name="queue_move_up">Move up</string>
+    <string name="queue_move_down">Move down</string>
+    <string name="queue_song_more">More for %1$s</string>
+    <string name="queue_left_at">Left at %1$s</string>
+    <string name="queue_playing_now">%1$s, playing now</string>
+    <string name="queue_your_place">%1$s, your place</string>
+    <string name="queue_add_all">Add all %1$s</string>
+    <string name="queue_play_next">Play next</string>
+    <string name="queue_plays_next">Plays next</string>
+    <string name="queue_added">Added to queue</string>
+    <string name="queue_gone">Queue deleted</string>
 </resources>

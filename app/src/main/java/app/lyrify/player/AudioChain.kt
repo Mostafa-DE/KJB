@@ -1,6 +1,7 @@
 package app.lyrify.player
 
 import androidx.media3.common.audio.AudioProcessor
+import androidx.annotation.OptIn
 import androidx.media3.common.util.UnstableApi
 import app.lyrify.library.SongRef
 import app.lyrify.settings.AdvancedSettings
@@ -22,7 +23,7 @@ interface SongLevels {
     fun albumInOrder(mediaId: String): Boolean
 }
 
-@UnstableApi
+@OptIn(UnstableApi::class)
 object AudioChain {
     /**
      * A new list of processors for one player, from [settings] and [levels]. Empty until A1, which returns

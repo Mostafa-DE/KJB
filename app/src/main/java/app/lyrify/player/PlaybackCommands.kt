@@ -1,7 +1,7 @@
 package app.lyrify.player
 
-import android.content.Context
 import app.lyrify.library.SongRef
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.Serializable
 
 /** What a list in the app is, as the source of a queue. */
@@ -21,7 +21,7 @@ fun interface Undo {
 
 /**
  * What lists, sheets, search and the widget ask of KJB's own player. player/PlayerConnection.kt implements it
- * (milestone P1); until then [NoPlayback]. Called on the main thread; never blocks.
+ * ([PlayerGraph.commands]); [NoPlayback] plays nothing (previews, tests). Called on the main thread; never blocks.
  */
 interface PlaybackCommands {
     /**
@@ -40,7 +40,7 @@ interface PlaybackCommands {
     fun addToQueue(songs: List<SongRef>): Undo?
 }
 
-/** Until milestone P1: nothing plays, and nothing changes. */
+/** Nothing plays, and nothing changes: previews and tests. */
 object NoPlayback : PlaybackCommands {
     override fun play(songs: List<SongRef>, start: Int, source: QueueSource) = Unit
 
@@ -51,8 +51,24 @@ object NoPlayback : PlaybackCommands {
     override fun addToQueue(songs: List<SongRef>): Undo? = null
 }
 
-/** The player's objects, built by hand (milestone P1 builds them; it may move this object to player/PlayerGraph.kt). */
-object PlayerGraph {
-    @Suppress("UNUSED_PARAMETER") // Until P1: no player to connect to.
-    fun commands(context: Context): PlaybackCommands = NoPlayback
+/** A queue the "Add to" sheet offers: saved queues first, then recent ones, each with its song count. */
+data class QueueTarget(val id: String, val source: QueueSource, val name: String?, val songs: Int, val saved: Boolean)
+
+/** Songs added to a queue that is not the one playing: how many were new, how many it held already, and Undo. */
+data class AddedTo(val added: Int, val already: Int, val undo: Undo?)
+
+/**
+ * The "Add to" sheet's Queues section (L1 draws it, P1 keeps the queues): the saved and recent queues, adding to one
+ * (never touching playback, never a song twice), and "New queue". player/PlayerConnection.kt implements it
+ * ([PlayerGraph.queueTargets]). Main thread.
+ */
+interface QueueTargets {
+    /** Saved queues, newest first, then recent ones; the queue playing is "Add to queue" at the sheet's top instead. */
+    val targets: StateFlow<List<QueueTarget>>
+
+    /** [songs] at the end of queue [queueId], those it holds already skipped; null when there is no such queue. */
+    fun addTo(queueId: String, songs: List<SongRef>): AddedTo?
+
+    /** "New queue": a saved queue named [name] (null: the source's name) of [songs], waiting; null when there are none. */
+    fun newQueue(name: String?, songs: List<SongRef>, source: QueueSource): Undo?
 }

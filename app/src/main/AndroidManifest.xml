@@ -29,6 +29,14 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
     <!-- player: permissions -->
+    <!-- KJB's own player (player/PlaybackService): a foreground service of type mediaPlayback while music plays, as
+         Android 14+ requires for media playback in the background (FOREGROUND_SERVICE itself is declared above). Its
+         music notification needs no POST_NOTIFICATIONS: notifications of media sessions are exempt (Android 13+,
+         developer.android.com, "Notification runtime permission", Exemptions). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!-- The player keeps the CPU awake while it plays with the screen off (ExoPlayer's local wake mode). WorkManager
+         adds it too. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <!-- lyrics lock: permissions -->
 
@@ -125,11 +133,28 @@
         </service>
 
         <!-- player -->
-        <!-- media3-session adds an activity only the phone's Bluetooth stack may open, so that Bluetooth lists the app as a
-             media player. KJB plays nothing yet: left out until P1 adds the player, which deletes this removal. -->
-        <activity
-            android:name="androidx.media3.session.BluetoothValidationActivity"
-            tools:node="remove" />
+        <!-- KJB's own player: the media library service that holds the session (notification, lock screen, Bluetooth,
+             headset buttons, Assistant) and the browse tree. Exported, as media controllers in other apps (Bluetooth,
+             the system's media controls, Android Auto later) bind it through these two actions. -->
+        <service
+            android:name=".player.PlaybackService"
+            android:exported="true"
+            android:foregroundServiceType="mediaPlayback">
+            <intent-filter>
+                <action android:name="androidx.media3.session.MediaLibraryService" />
+                <action android:name="android.media.browse.MediaBrowserService" />
+            </intent-filter>
+        </service>
+
+        <!-- Media3's receiver for media buttons when no player runs: Play on a headset or in the car after KJB was
+             closed resumes the last queue (PlaybackService's playback resumption). -->
+        <receiver
+            android:name="androidx.media3.session.MediaButtonReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </receiver>
 
         <!-- lyrics lock -->
 
