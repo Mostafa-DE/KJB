@@ -161,18 +161,19 @@ fun BrandGlyph(modifier: Modifier = Modifier, width: Dp = 18.dp, sweeping: Boole
 fun glyphSweeps(sweeping: Boolean, animationsOn: Boolean): Boolean = sweeping && animationsOn
 
 /**
- * The app's logo: the Blade K on its graphite tile, as on the launcher icon, in both themes ([shape]: the launcher's
- * rounded square unless given). In dark theme a hairline keeps it off the dark background. Decorative.
+ * The app's logo: the Note arm K (the Blade K whose arm is an eighth note) on its black tile, as on the launcher icon,
+ * in both themes ([shape]: the launcher's rounded square unless given). In dark theme a hairline keeps it off the dark
+ * background. Decorative.
  */
 @Composable
 fun BrandMark(modifier: Modifier = Modifier, size: Dp = 36.dp, shape: Shape = RoundedCornerShape(size * 10 / 36)) {
-    val border = if (LocalDarkTheme.current) Modifier.border(1.dp, BrandGraphiteBorder, shape) else Modifier
-    Box(contentAlignment = Alignment.Center, modifier = modifier.size(size).clip(shape).background(BrandGraphite).then(border)) {
+    val border = if (LocalDarkTheme.current) Modifier.border(1.dp, BrandBlackBorder, shape) else Modifier
+    Box(contentAlignment = Alignment.Center, modifier = modifier.size(size).clip(shape).background(BrandBlack).then(border)) {
         BrandK(height = size * BRAND_K_SHARE)
     }
 }
 
-/** The Blade K alone, [height] tall, in its steel and coral: for a graphite ground. Decorative. */
+/** The Note arm K alone, [height] tall, in its steel and coral: for a black ground. Decorative. */
 @Composable
 fun BrandK(height: Dp, modifier: Modifier = Modifier) {
     Image(painterResource(R.drawable.ic_brand_k), contentDescription = null, modifier = modifier.size(height * BRAND_K_WIDTH / BRAND_K_HEIGHT, height))
@@ -561,7 +562,7 @@ fun GroupedRow(
 
 /** What an empty state shows in its tile. */
 sealed interface EmptyArt {
-    /** The app's Blade K on graphite: nothing yet. */
+    /** The app's mark on black: nothing yet. */
     data object Glyph : EmptyArt
 
     data class Icon(@DrawableRes val icon: Int, val tone: Tone? = null) : EmptyArt
@@ -582,18 +583,18 @@ fun EmptyState(art: EmptyArt, title: String, modifier: Modifier = Modifier, text
     }
 }
 
-/** Three rounded cards fanned out: two quiet ones behind, the art in front (the Blade K on graphite, or the icon on its tone). Decorative. */
+/** Three rounded cards fanned out: two quiet ones behind, the art in front (the app's mark on black, or the icon on its tone). Decorative. */
 @Composable
 private fun CardStack(art: EmptyArt) {
     val colors = MaterialTheme.colorScheme
     val tone = (art as? EmptyArt.Icon)?.tone?.let { LocalStatusColors.current[it] }
     val front = when {
-        art == EmptyArt.Glyph -> BrandGraphite
+        art == EmptyArt.Glyph -> BrandBlack
         tone != null -> tone.container
         else -> colors.surfaceContainerLowest
     }
     val edge = when {
-        art == EmptyArt.Glyph && LocalDarkTheme.current -> Modifier.border(1.dp, BrandGraphiteBorder, StackShape)
+        art == EmptyArt.Glyph && LocalDarkTheme.current -> Modifier.border(1.dp, BrandBlackBorder, StackShape)
         art != EmptyArt.Glyph && tone == null -> Modifier.border(1.dp, colors.outlineVariant, StackShape)
         else -> Modifier
     }
@@ -723,9 +724,9 @@ fun SongCover(model: Any?, modifier: Modifier = Modifier, size: Dp = 48.dp, shap
 private const val GLYPH_WIDTH = 48f
 private const val GLYPH_HEIGHT = 38f
 
-/** The Blade K's box (ic_brand_k), and its height on a [BrandMark] tile: a little smaller than on the launcher. */
-private const val BRAND_K_WIDTH = 41f
-private const val BRAND_K_HEIGHT = 52f
+/** The mark's box (ic_brand_k), and its height on a [BrandMark] tile: a little smaller than on the launcher. */
+private const val BRAND_K_WIDTH = 48f
+private const val BRAND_K_HEIGHT = 50f
 private const val BRAND_K_SHARE = 0.56f
 
 /** The cards of [LyrifyCard], [GroupedRows]; sheets and dialogs. */

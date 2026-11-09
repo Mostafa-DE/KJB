@@ -1,16 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The Blade K as the app shows it on its ink tiles (the top bar, empty states, onboarding): the launcher foreground
-     cut to the mark's own box, 41 by 52 units. -->
+<!-- The Note arm K as the app shows it on its black tiles (the top bar, empty states, onboarding, About): the launcher
+     foreground cut to the mark's own box, 48 by 50 units. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:aapt="http://schemas.android.com/aapt"
-    android:width="41dp"
-    android:height="52dp"
-    android:viewportWidth="41"
-    android:viewportHeight="52">
+    android:width="48dp"
+    android:height="50dp"
+    android:viewportWidth="48"
+    android:viewportHeight="50">
     <group
-        android:translateX="-34"
-        android:translateY="-28">
-        <path android:pathData="M34.47,32.83L37.73,28.67L44.88,34.55L44.88,75.17L41.62,79.33L34.47,73.45ZM47.05,62.65L54.37,54.63L65.39,73L71.72,79.33L57.06,79.33Z">
+        android:translateX="-30"
+        android:translateY="-29">
+        <path android:pathData="M30.61,33.37L33.78,29.32L40.75,35.04L40.75,74.63L37.57,78.68L30.61,72.96ZM42.86,63.39L51.02,57.28L60.16,72.51L66.33,78.68L52.04,78.68Z">
             <aapt:attr name="android:fillColor">
                 <gradient
                     android:endX="0"
@@ -27,13 +27,47 @@
                 </gradient>
             </aapt:attr>
         </path>
-        <path android:pathData="M47.05,43.14L74.73,29.12L47.05,59.43Z">
+        <path android:pathData="M54.93,47.42C56,49.82 54.24,52.94 50.99,54.38C47.74,55.83 44.24,55.05 43.17,52.65C42.1,50.25 43.87,47.13 47.12,45.68C50.36,44.24 53.86,45.01 54.93,47.42Z">
             <aapt:attr name="android:fillColor">
                 <gradient
-                    android:endX="52"
-                    android:endY="52"
-                    android:startX="70"
-                    android:startY="24"
+                    android:endX="50"
+                    android:endY="56"
+                    android:startX="74"
+                    android:startY="22"
+                    android:type="linear">
+                    <item
+                        android:color="#FFFFB49E"
+                        android:offset="0" />
+                    <item
+                        android:color="#FFFF5B3C"
+                        android:offset="1" />
+                </gradient>
+            </aapt:attr>
+        </path>
+        <path android:pathData="M49.39,50.29L65.53,29.32L70.87,29.32L52.74,52.87Z">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:endX="50"
+                    android:endY="56"
+                    android:startX="74"
+                    android:startY="22"
+                    android:type="linear">
+                    <item
+                        android:color="#FFFFB49E"
+                        android:offset="0" />
+                    <item
+                        android:color="#FFFF5B3C"
+                        android:offset="1" />
+                </gradient>
+            </aapt:attr>
+        </path>
+        <path android:pathData="M65.53,29.32L70.87,29.32L76.86,31.61L77.39,44.3L64.42,37.69Z">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:endX="50"
+                    android:endY="56"
+                    android:startX="74"
+                    android:startY="22"
                     android:type="linear">
                     <item
                         android:color="#FFFFB49E"

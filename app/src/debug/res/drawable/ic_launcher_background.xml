@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The debug build ("KJB dev"): the Blade K on teal, not graphite, lighter at the top (blade-k-background.svg), so it is
-     never taken for the release app. The foreground is the release one. -->
+<!-- The debug build ("KJB dev"): the Note arm K on teal, not black, with the release ground's lifted edge
+     (blade-k-note-background.svg), so it is never taken for the release app. The foreground is the release one. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
@@ -10,16 +10,21 @@
     <path android:pathData="M0,0L108,0L108,108L0,108Z">
         <aapt:attr name="android:fillColor">
             <gradient
-                android:endX="0"
-                android:endY="90"
-                android:startX="0"
-                android:startY="18"
-                android:type="linear">
+                android:centerX="54"
+                android:centerY="54"
+                android:gradientRadius="52"
+                android:type="radial">
                 <item
-                    android:color="#FF2A6B60"
+                    android:color="#FF0D3A34"
                     android:offset="0" />
                 <item
-                    android:color="#FF0E2724"
+                    android:color="#FF0D3A34"
+                    android:offset="0.58" />
+                <item
+                    android:color="#FF14514A"
+                    android:offset="0.74" />
+                <item
+                    android:color="#FF1C6A60"
                     android:offset="1" />
             </gradient>
         </aapt:attr>

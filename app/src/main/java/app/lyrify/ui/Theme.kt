@@ -67,22 +67,22 @@ import kotlinx.coroutines.launch
 import kotlin.math.max
 import kotlin.math.min
 
-/** Graphite of the Blade K launcher icon: the brand mark's tile and the onboarding hero, in both themes. */
-val BrandGraphite: Color = Color(0xFF1A1922)
+/** The launcher icon's true black: the brand mark's tile and the onboarding hero, in both themes. */
+val BrandBlack: Color = Color(0xFF0A0A0B)
 
-/** The hairline that keeps the graphite tile visible on a dark background. */
-val BrandGraphiteBorder: Color = Color(0xFF48445A)
+/** The hairline that keeps the black tile visible on a dark background, as the launcher icon's lifted edge does. */
+val BrandBlackBorder: Color = Color(0xFF3A3A3F)
 
 /** Deep ink violet: the toast, and the light theme's action colour. */
 val BrandInk: Color = Color(0xFF2E2466)
 
-/** Lilac: text on the graphite hero and on the toast. */
+/** Lilac: text on the black hero and on the toast. */
 val BrandLilac: Color = Color(0xFFF4F1FF)
 
 /** The hairline that keeps the toast visible on a dark background. */
 val BrandInkBorder: Color = Color(0xFF5A50AE)
 
-/** The coral of the Blade K's edge: a toast's action. */
+/** The coral of the K's note: a toast's action. */
 val LauncherCoral: Color = Color(0xFFFF8A70)
 
 /** Side margin of every screen (M3 compact window margin). */

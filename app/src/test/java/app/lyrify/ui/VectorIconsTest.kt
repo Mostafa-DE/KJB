@@ -15,7 +15,7 @@ import kotlin.math.min
  * Every `res/drawable/ic_*.xml` vector (the debug build's too) draws something that shows. A path in another coordinate
  * system than its viewport (24 units in a 960 viewport, or Material Symbols' y from -960 to 0
  * left untranslated) builds fine and draws a speck or nothing at all. The launcher icon, the in-app mark and the
- * notification icon are the Blade K, exactly as its source SVGs draw it.
+ * notification icon are the Note arm K (the Blade K with an eighth note for its arm), exactly as its source SVGs draw it.
  */
 class VectorIconsTest {
     /** Unit tests run in the module's folder. */
@@ -75,37 +75,41 @@ class VectorIconsTest {
         assertEquals(emptyList<String>(), problems)
     }
 
-    // The Blade K
+    // The Note arm K
 
     /** [file]'s shapes as drawn: each path's data, with the translation of the groups around it. */
     private fun shapes(file: File): List<Pair<String, Pair<Float, Float>>> = paths(parse(file)).map { (path, offset) -> path.attr("pathData").orEmpty() to offset }
 
     /**
-     * Whether every corner of the box around each of [shapes] lies within the adaptive icon's 66 dp safe circle (108-unit
-     * canvas), [margin] inside it (half a stroke's width).
+     * Whether every point of each of [shapes] (the ends of its lines, and of its curves with their control points, which
+     * hold the curve) lies within the adaptive icon's 66 dp safe circle (108-unit canvas), [margin] inside it (half a
+     * stroke's width). For paths of absolute commands, as the icon's are.
      */
     private fun inSafeCircle(shapes: List<Pair<String, Pair<Float, Float>>>, margin: Float = 0f): Boolean = shapes.all { (data, offset) ->
-        val drawn = bounds(data)?.shifted(offset) ?: return@all false
-        listOf(drawn.left to drawn.top, drawn.right to drawn.top, drawn.left to drawn.bottom, drawn.right to drawn.bottom)
-            .all { (x, y) -> hypot(x - 54f, y - 54f) <= 33f - margin }
+        points(data).isNotEmpty() && points(data).all { (x, y) -> hypot(x + offset.first - 54f, y + offset.second - 54f) <= 33f - margin }
     }
 
-    /** The absolute points of a path made only of absolute moves and lines ("M1,2L3,4Z"). */
+    /** The absolute points of a path made only of absolute commands ("M1,2L3,4C5,6 7,8 9,10Z"). */
     private fun points(data: String): List<Pair<Float, Float>> =
         Regex("""(-?[\d.]+),(-?[\d.]+)""").findAll(data).map { it.groupValues[1].toFloat() to it.groupValues[2].toFloat() }.toList()
 
+    private fun colors(file: File): List<String> = paths(parse(file)).flatMap { gradientColors(it.first) }
+
     @Test
-    fun `the launcher icon is the Blade K inside the 66 dp safe circle, its themed icon the same shapes in one colour`() {
+    fun `the launcher icon is the Note arm K inside the 66 dp safe circle, its themed icon the same shapes in one colour`() {
         val foreground = shapes(File(drawables, "ic_launcher_foreground.xml"))
-        assertEquals(BLADE_K, foreground.map { it.first })
-        assertEquals(listOf(0f to 0f, 0f to 0f), foreground.map { it.second })
+        assertEquals(NOTE_ARM, foreground.map { it.first })
+        assertEquals(List(NOTE_ARM.size) { 0f to 0f }, foreground.map { it.second })
         assertTrue(inSafeCircle(foreground))
-        // Steel and a coral blade, each a gradient; graphite behind.
-        assertEquals(listOf("#FFFBFAFF", "#FFAEA8C6", "#FFFFB49E", "#FFFF5B3C"), paths(parse(File(drawables, "ic_launcher_foreground.xml"))).flatMap { gradientColors(it.first) })
-        assertEquals(listOf("#FF2C2A38", "#FF0F0E15"), paths(parse(File(drawables, "ic_launcher_background.xml"))).flatMap { gradientColors(it.first) })
+        // A steel stem and leg, then the coral note: head, stem and flag, each a gradient.
+        assertEquals(listOf("#FFFBFAFF", "#FFAEA8C6") + List(3) { listOf("#FFFFB49E", "#FFFF5B3C") }.flatten(), colors(File(drawables, "ic_launcher_foreground.xml")))
+        // True black, its edge lifting toward the mask so the tile keeps a faint rim on a black home screen.
+        val background = paths(parse(File(drawables, "ic_launcher_background.xml"))).map { it.first }
+        assertEquals("radial", gradient(background.single())?.attr("type"))
+        assertEquals(listOf("#FF0A0A0B", "#FF0A0A0B", "#FF161618", "#FF232326"), colors(File(drawables, "ic_launcher_background.xml")))
 
         val monochrome = parse(File(drawables, "ic_launcher_monochrome.xml"))
-        assertEquals(BLADE_K, paths(monochrome).map { it.first.attr("pathData") })
+        assertEquals(NOTE_ARM, paths(monochrome).map { it.first.attr("pathData") })
         assertTrue(paths(monochrome).all { (path, _) -> path.attr("fillColor") == "#FF000000" && gradient(path) == null })
         listOf("ic_launcher.xml", "ic_launcher_round.xml").forEach { name ->
             val layers = File("src/main/res/mipmap-anydpi", name).readText()
@@ -116,19 +120,19 @@ class VectorIconsTest {
     }
 
     @Test
-    fun `the in-app mark is the launcher's Blade K, cut to its own box`() {
+    fun `the in-app mark is the launcher's Note arm K, cut to its own box`() {
         val mark = shapes(File(drawables, "ic_brand_k.xml"))
-        assertEquals(BLADE_K, mark.map { it.first })
-        assertEquals(paths(parse(File(drawables, "ic_launcher_foreground.xml"))).flatMap { gradientColors(it.first) }, paths(parse(File(drawables, "ic_brand_k.xml"))).flatMap { gradientColors(it.first) })
+        assertEquals(NOTE_ARM, mark.map { it.first })
+        assertEquals(colors(File(drawables, "ic_launcher_foreground.xml")), colors(File(drawables, "ic_brand_k.xml")))
     }
 
     @Test
-    fun `wherever the app shows its logo it draws the Blade K on graphite, never the karaoke line on ink`() {
+    fun `wherever the app shows its logo it draws the Note arm K on black, never the karaoke line on ink`() {
         val ui = File("src/main/java/app/lyrify/ui").listFiles { file -> file.extension == "kt" }.orEmpty().associate { it.name to it.readText() }
         val components = ui.getValue("Components.kt")
-        // The bare K draws the in-app Blade K; the mark puts it on a graphite tile.
+        // The bare K draws the in-app mark; the brand mark puts it on a black tile.
         assertTrue(Regex("""fun BrandK\([^\n]*\n[^\n]*R\.drawable\.ic_brand_k""").containsMatchIn(components))
-        assertTrue(Regex("""fun BrandMark\([\s\S]*?background\(BrandGraphite\)[\s\S]*?BrandK\(""").containsMatchIn(components))
+        assertTrue(Regex("""fun BrandMark\([\s\S]*?background\(BrandBlack\)[\s\S]*?BrandK\(""").containsMatchIn(components))
         // The top bar, the idle orb, onboarding, About, empty states and the AI ring's centre.
         listOf("AppShell.kt", "Chrome.kt", "OnboardingScreen.kt", "SettingsScreen.kt", "AiScreen.kt").forEach { name ->
             assertTrue(name, Regex("""BrandMark\(|BrandK\(|R\.drawable\.ic_brand_k""").containsMatchIn(ui.getValue(name)))
@@ -139,10 +143,10 @@ class VectorIconsTest {
     }
 
     @Test
-    fun `every notification shows the Blade K small icon, one colour on a 24 unit canvas`() {
+    fun `every notification shows the Note arm K small icon, one colour on a 24 unit canvas`() {
         val small = parse(File(drawables, "ic_stat_kjb.xml"))
         assertEquals("24", small.attr("viewportWidth"))
-        assertEquals(listOf(BLADE_K_SMALL), paths(small).map { it.first.attr("pathData") })
+        assertEquals(NOTE_ARM_SMALL, paths(small).map { it.first.attr("pathData") })
         assertTrue(paths(small).all { (path, _) -> path.attr("fillColor") == "#FFFFFFFF" && gradient(path) == null })
 
         val calls = listOf("main", "debug", "lite", "full", "fullDebug").map { "src/$it/java" }.filter { File(it).isDirectory }.flatMap { root ->
@@ -152,18 +156,21 @@ class VectorIconsTest {
     }
 
     @Test
-    fun `the debug build's launcher icon is told apart from the release one, on teal and, when themed, as an outline`() {
-        // The colour icon: the release Blade K on a teal ground, not graphite.
+    fun `the debug build's launcher icon is told apart from the release one, on teal and, when themed, with a hollow K`() {
+        // The colour icon: the release K on teal, not black, with the same lifted edge.
         assertFalse(File(debugDrawables, "ic_launcher_foreground.xml").exists())
-        assertEquals(listOf("#FF2A6B60", "#FF0E2724"), paths(parse(File(debugDrawables, "ic_launcher_background.xml"))).flatMap { gradientColors(it.first) })
+        val background = paths(parse(File(debugDrawables, "ic_launcher_background.xml"))).map { it.first }
+        assertEquals("radial", gradient(background.single())?.attr("type"))
+        assertEquals(listOf("#FF0D3A34", "#FF0D3A34", "#FF14514A", "#FF1C6A60"), colors(File(debugDrawables, "ic_launcher_background.xml")))
 
-        // Themed icons drop the ground, so the debug K is an outline: the Blade K at 95% about the centre, stroke and all
-        // inside the safe circle.
+        // Themed icons drop the ground, so the debug K's stem and leg are hollow under the solid note: the Note arm K at
+        // 95% about the centre, stroke and all inside the safe circle.
         val monochrome = parse(File(debugDrawables, "ic_launcher_monochrome.xml"))
         val outline = paths(monochrome).map { it.first }
-        assertTrue(outline.all { it.attr("fillColor") == null && it.attr("strokeColor") == "#FF000000" && it.attr("strokeWidth") == "3.5" })
-        assertEquals(BLADE_K.size, outline.size)
-        BLADE_K.zip(outline.map { it.attr("pathData").orEmpty() }).forEach { (k, drawn) ->
+        assertEquals(NOTE_ARM.size, outline.size)
+        assertTrue(outline.first().let { it.attr("fillColor") == null && it.attr("strokeColor") == "#FF000000" && it.attr("strokeWidth") == "3.5" })
+        assertTrue(outline.drop(1).all { it.attr("fillColor") == "#FF000000" && it.attr("strokeColor") == null })
+        NOTE_ARM.zip(outline.map { it.attr("pathData").orEmpty() }).forEach { (k, drawn) ->
             val expected = points(k).map { (x, y) -> 54 + (x - 54) * 0.95f to 54 + (y - 54) * 0.95f }
             assertEquals(expected.size, points(drawn).size)
             expected.zip(points(drawn)).forEach { (want, got) ->
@@ -335,14 +342,24 @@ class VectorIconsTest {
     private companion object {
         const val ANDROID = "http://schemas.android.com/apk/res/android"
 
-        /** The Blade K on the 108-unit canvas (blade-k-foreground.svg): the stem and leg in steel, then the coral arm. */
-        val BLADE_K = listOf(
-            "M34.47,32.83L37.73,28.67L44.88,34.55L44.88,75.17L41.62,79.33L34.47,73.45ZM47.05,62.65L54.37,54.63L65.39,73L71.72,79.33L57.06,79.33Z",
-            "M47.05,43.14L74.73,29.12L47.05,59.43Z",
+        /**
+         * The Note arm K on the 108-unit canvas (blade-k-note-foreground.svg): the stem and leg in steel, then the arm as a
+         * coral eighth note, its head in the K's joint, its stem the arm, its flag a blade.
+         */
+        val NOTE_ARM = listOf(
+            "M30.61,33.37L33.78,29.32L40.75,35.04L40.75,74.63L37.57,78.68L30.61,72.96ZM42.86,63.39L51.02,57.28L60.16,72.51L66.33,78.68L52.04,78.68Z",
+            "M54.93,47.42C56,49.82 54.24,52.94 50.99,54.38C47.74,55.83 44.24,55.05 43.17,52.65C42.1,50.25 43.87,47.13 47.12,45.68C50.36,44.24 53.86,45.01 54.93,47.42Z",
+            "M49.39,50.29L65.53,29.32L70.87,29.32L52.74,52.87Z",
+            "M65.53,29.32L70.87,29.32L76.86,31.61L77.39,44.3L64.42,37.69Z",
         )
 
-        /** The Blade K on the 24-unit canvas (blade-k-small.svg). */
-        const val BLADE_K_SMALL = "M5.53,4.99L6.61,3.61L8.98,5.56L8.98,19.01L7.9,20.39L5.53,18.44ZM10,8.4L18.87,3.76L10,13.8ZM10,15.34L12.39,12.63L15.79,18.29L17.89,20.39L13.03,20.39Z"
+        /** The Note arm K on the 24-unit canvas (blade-k-note-small.svg). */
+        val NOTE_ARM_SMALL = listOf(
+            "M4.26,5.16L5.31,3.82L7.62,5.72L7.62,18.84L6.57,20.18L4.26,18.28ZM8.67,15.55L11.37,13.53L14.14,18.14L16.19,20.18L11.45,20.18Z",
+            "M12.67,9.82C13.03,10.61 12.44,11.65 11.37,12.13C10.29,12.61 9.13,12.35 8.77,11.55C8.42,10.76 9.01,9.72 10.08,9.24C11.16,8.76 12.32,9.02 12.67,9.82Z",
+            "M10.85,10.78L15.85,3.82L17.58,3.82L11.99,11.6Z",
+            "M15.85,3.82L17.58,3.82L19.57,4.58L19.74,8.79L15.58,6.59Z",
+        )
 
         val SMALL_ICON = Regex("""setSmallIcon\(([^)]*)\)""")
     }

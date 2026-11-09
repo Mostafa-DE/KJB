@@ -69,8 +69,8 @@ fun SettingsScreen(
             item { SectionTitle(stringResource(R.string.settings_about), Modifier.padding(start = ScreenPadding + 4.dp, end = ScreenPadding, top = 24.dp, bottom = 8.dp)) }
             item {
                 GroupedRows {
-                    // The version beside the app's own mark, the Blade K on graphite.
-                    GroupedRow(R.drawable.ic_brand_k, stringResource(R.string.version_label, versionName), tile = BrandGraphite, onTile = Color.Unspecified, first = true)
+                    // The version beside the app's own mark, the Note arm K on black.
+                    GroupedRow(R.drawable.ic_brand_k, stringResource(R.string.version_label, versionName), tile = BrandBlack, onTile = Color.Unspecified, first = true)
                     AboutRow(R.drawable.ic_lyrics, stringResource(R.string.settings_source))
                 }
             }
