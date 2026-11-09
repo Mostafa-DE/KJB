@@ -6,6 +6,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Rect
+import androidx.core.graphics.createBitmap
 import java.io.ByteArrayOutputStream
 import kotlin.math.roundToInt
 
@@ -92,7 +93,7 @@ object AndroidImageCodec : ImageCodec {
         val scale = minOf(1f, maxSide.toFloat() / maxOf(decoded.width, decoded.height))
         val width = (decoded.width * scale).roundToInt().coerceAtLeast(1)
         val height = (decoded.height * scale).roundToInt().coerceAtLeast(1)
-        val opaque = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val opaque = createBitmap(width, height)
         return try {
             Canvas(opaque).apply {
                 drawColor(Color.WHITE)
