@@ -1,0 +1,350 @@
+package app.lyrify.tags.lookup
+
+import app.lyrify.USER_AGENT
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Rule
+import org.junit.Test
+import org.junit.rules.TemporaryFolder
+import java.io.File
+import java.io.IOException
+import java.net.URI
+
+@OptIn(ExperimentalCoroutinesApi::class) // testScheduler: virtual time
+class MetaClientTest {
+    @get:Rule
+    val folder = TemporaryFolder()
+
+    private val logs = mutableListOf<String>()
+    private val json = URI("https://musicbrainz.org/ws/2/release/$ID_A?fmt=json")
+    private val cover = URI("https://coverartarchive.org/release/$ID_A/front-1200")
+    private val archive = "https://archive.org/download/mbid-$ID_A/mbid-$ID_A-1_thumb1200.jpg"
+    private val server = "https://dn721702.ca.archive.org/0/items/mbid-$ID_A/mbid-$ID_A-1_thumb1200.jpg"
+
+    private fun TestScope.web() = FakeWeb(now = { testScheduler.currentTime })
+
+    private fun TestScope.gate() = MetaGate(now = { testScheduler.currentTime }, log = { logs += it })
+
+    private fun TestScope.client(web: FakeWeb, cache: MetaCache = MetaCache(folder.newFolder()), gate: MetaGate = gate(), agent: String? = TEST_AGENT) =
+        if (agent == null) {
+            MetaClient(cache, gate = gate, io = StandardTestDispatcher(testScheduler), open = web::open, log = { logs += it })
+        } else {
+            MetaClient(cache, userAgent = agent, gate = gate, io = StandardTestDispatcher(testScheduler), open = web::open, log = { logs += it })
+        }
+
+    private suspend fun MetaClient.text(uri: URI, fresh: Boolean = false, keep: (String) -> Boolean = { true }): MetaAnswer<String> =
+        get(uri, Body.JSON, fresh, keep) { bytes -> bytes.decodeToString().also { require(it.startsWith("{")) } }
+
+    private suspend fun MetaClient.image(uri: URI, fresh: Boolean = false): MetaAnswer<ByteArray> = get(uri, Body.IMAGE, fresh) { it }
+
+    // Hosts
+
+    @Test
+    fun `requests start only at musicbrainz org and coverartarchive org, over https`() {
+        listOf(
+            "https://musicbrainz.org/ws/2/release/?query=x&fmt=json",
+            "https://coverartarchive.org/release/$ID_A/front-500",
+            "https://MusicBrainz.org/ws/2/release/$ID_A",
+            "https://musicbrainz.org:443/ws/2/",
+        ).forEach { assertTrue(it, MetaHosts.isSource(URI(it))) }
+        listOf(
+            "http://musicbrainz.org/ws/2/",
+            "https://musicbrainz.org:8443/ws/2/",
+            "https://beta.musicbrainz.org/ws/2/",
+            "https://musicbrainz.org.example.com/ws/2/",
+            "https://user@musicbrainz.org/ws/2/",
+            "https://archive.org/download/a",
+            "https://ia800204.us.archive.org/a",
+            "https://example.com/",
+            "ftp://coverartarchive.org/release/a",
+        ).forEach { assertFalse(it, MetaHosts.isSource(URI(it))) }
+    }
+
+    @Test
+    fun `redirects may lead to the cover art archive, archive org and its servers only`() {
+        listOf(
+            "https://archive.org/download/mbid-x/mbid-x-1_thumb500.jpg",
+            "https://dn721702.ca.archive.org/0/items/mbid-x/a.jpg",
+            "https://ia800204.us.archive.org/1/items/mbid-x/a.jpg",
+            "https://coverartarchive.org/release/x/front-500",
+        ).forEach { assertTrue(it, MetaHosts.isRedirect(URI(it))) }
+        listOf(
+            "http://archive.org/download/a",
+            "https://archive.org.example.com/a",
+            "https://notarchive.org/a",
+            "https://archive.org:444/a",
+            "https://user@archive.org/a",
+            "https://example.com/a",
+            "/relative",
+        ).forEach { assertFalse(it, MetaHosts.isRedirect(URI(it))) }
+    }
+
+    // The gate
+
+    @Test
+    fun `requests run one at a time, each 1,1 s after the previous one ends`() = runTest {
+        val gate = gate()
+        val spans = mutableListOf<LongRange>()
+        suspend fun call() = gate.send<Int>({ false }) {
+            val start = testScheduler.currentTime
+            delay(300)
+            spans += start..testScheduler.currentTime
+            200
+        }
+        val a = async { call() }
+        val b = async { call() }
+        val c = async { call() }
+        a.await()
+        b.await()
+        c.await()
+        assertEquals(listOf(0L..300L, 1_400L..1_700L, 2_800L..3_100L), spans)
+    }
+
+    @Test
+    fun `a request long after the last one starts at once`() = runTest {
+        val gate = gate()
+        gate.send<Int>({ false }) { 200 }
+        delay(5_000)
+        val before = testScheduler.currentTime
+        gate.send<Int>({ false }) { 200 }
+        assertEquals(before, testScheduler.currentTime)
+    }
+
+    @Test
+    fun `every request and every redirect hop carries the User-Agent`() = runTest {
+        val web = web()
+        web.on(cover, redirect(307, archive))
+        web.on(archive, redirect(302, server))
+        web.on(server, ok(JPEG_BYTES))
+        assertTrue(client(web).image(cover) is MetaAnswer.Ok)
+        assertEquals(3, web.requests.size)
+        assertTrue(web.requests.toString(), web.requests.all { it.userAgent == TEST_AGENT })
+    }
+
+    @Test
+    fun `the app's User-Agent is the default`() = runTest {
+        val web = web()
+        web.on(json, ok("{}"))
+        client(web, agent = null).text(json)
+        assertEquals(USER_AGENT, web.requests.single().userAgent)
+        assertTrue(USER_AGENT, Regex("""KJB/\S+ \( https://github\.com/Mostafa-DE/Lyrify \)""").matches(USER_AGENT))
+    }
+
+    @Test
+    fun `a 503 waits 2 s then 4 s, holding the gate, and says busy meanwhile`() = runTest {
+        val web = web()
+        val other = URI("https://musicbrainz.org/ws/2/release-group/$GROUP_A?fmt=json")
+        web.on(json, status(503), status(503), ok("{}"))
+        web.on(other, ok("{}"))
+        val gate = gate()
+        val client = client(web, gate = gate)
+        val seen = mutableListOf<Boolean>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { gate.busy.collect { seen += it } }
+
+        val first = async { client.text(json) }
+        val second = async { client.text(other) }
+
+        assertEquals(MetaAnswer.Ok("{}"), first.await())
+        assertEquals(MetaAnswer.Ok("{}"), second.await())
+        assertEquals(listOf(0L, 2_000L, 6_000L, 7_100L), web.requests.map { it.at })
+        assertEquals(listOf(false, true, false), seen)
+    }
+
+    @Test
+    fun `still busy after the 60 s wait is busy, and is not cached`() = runTest {
+        val web = web()
+        web.on(json, status(503))
+        val client = client(web)
+
+        assertEquals(MetaAnswer.Busy, client.text(json))
+        assertEquals(listOf(0L, 2_000L, 6_000L, 14_000L, 30_000L, 62_000L, 122_000L), web.requests.map { it.at })
+        assertEquals(listOf(2_000L, 4_000L, 8_000L, 16_000L, 32_000L, 60_000L), MetaGate.BACKOFF_MS)
+
+        web.on(json, ok("{}"))
+        assertEquals(MetaAnswer.Ok("{}"), client.text(json))
+    }
+
+    // The cache
+
+    @Test
+    fun `a success is cached, and Check again asks again`() = runTest {
+        val web = web()
+        web.on(json, ok("""{"a":1}"""), ok("""{"a":2}"""))
+        val client = client(web)
+
+        assertEquals(MetaAnswer.Ok("""{"a":1}"""), client.text(json))
+        assertEquals(MetaAnswer.Ok("""{"a":1}""", fromCache = true), client.text(json))
+        assertEquals(1, web.requests.size)
+
+        assertEquals(MetaAnswer.Ok("""{"a":2}"""), client.text(json, fresh = true))
+        assertEquals(2, web.requests.size)
+        assertEquals(MetaAnswer.Ok("""{"a":2}""", fromCache = true), client.text(json))
+    }
+
+    @Test
+    fun `errors, 404s, unreadable and empty answers are never cached`() = runTest {
+        val web = web()
+        web.on(json, status(404), status(500), ok("<html>"), ok("{}"), ok("""{"a":1}"""))
+        val client = client(web)
+
+        assertEquals(MetaAnswer.NotFound, client.text(json))
+        assertTrue(client.text(json) is MetaAnswer.Failed)
+        assertTrue(client.text(json) is MetaAnswer.Failed)
+        assertEquals(MetaAnswer.Ok("{}"), client.text(json, keep = { it != "{}" }))
+        assertEquals(MetaAnswer.Ok("""{"a":1}"""), client.text(json))
+        assertEquals(5, web.requests.size)
+    }
+
+    @Test
+    fun `an unreadable cached answer is dropped and asked again`() = runTest {
+        val web = web()
+        web.on(json, ok("""{"a":1}"""))
+        val cache = MetaCache(folder.newFolder())
+        cache.put(json.toString(), "<html>".encodeToByteArray())
+
+        assertEquals(MetaAnswer.Ok("""{"a":1}"""), client(web, cache).text(json))
+        assertEquals(1, web.requests.size)
+        assertArrayEquals("""{"a":1}""".encodeToByteArray(), cache.get(json.toString()))
+    }
+
+    @Test
+    fun `the cache names its files by hash and drops the oldest past its budget`() {
+        val dir = folder.newFolder()
+        val cache = MetaCache(dir, budgetBytes = 250)
+        cache.put("https://musicbrainz.org/ws/2/release/?query=Lanterns", ByteArray(100) { 1 })
+        File(dir.listFiles()!!.single().path).setLastModified(1_000)
+        cache.put("https://musicbrainz.org/ws/2/release/?query=Ember", ByteArray(100) { 2 })
+        dir.listFiles()!!.first { it.lastModified() > 1_000 }.setLastModified(2_000)
+
+        assertTrue(dir.list()!!.none { "Lanterns" in it || "musicbrainz" in it })
+        assertArrayEquals(ByteArray(100) { 1 }, cache.get("https://musicbrainz.org/ws/2/release/?query=Lanterns"))
+
+        cache.put("https://musicbrainz.org/ws/2/release/?query=Vael", ByteArray(100) { 3 })
+
+        assertNull(cache.get("https://musicbrainz.org/ws/2/release/?query=Ember"))
+        assertArrayEquals(ByteArray(100) { 3 }, cache.get("https://musicbrainz.org/ws/2/release/?query=Vael"))
+        assertTrue(dir.listFiles()!!.sumOf { it.length() } <= 250)
+    }
+
+    // Network rules
+
+    @Test
+    fun `an address off the allowlist is never opened`() = runTest {
+        val web = web()
+        val client = client(web)
+        assertTrue(client.text(URI("http://musicbrainz.org/ws/2/release/$ID_A?fmt=json")) is MetaAnswer.Failed)
+        assertTrue(client.text(URI("https://example.com/ws/2/")) is MetaAnswer.Failed)
+        assertTrue(client.image(URI(archive)) is MetaAnswer.Failed)
+        assertEquals(emptyList<FakeWeb.Request>(), web.requests)
+    }
+
+    @Test
+    fun `cover redirects are followed to archive org, each hop through the gate, and cached under the first address`() = runTest {
+        val web = web()
+        web.on(cover, redirect(307, archive))
+        web.on(archive, redirect(302, server))
+        web.on(server, ok(JPEG_BYTES))
+        val client = client(web)
+
+        val answer = client.image(cover)
+
+        assertArrayEquals(JPEG_BYTES, (answer as MetaAnswer.Ok).value)
+        assertEquals(listOf(cover.toString(), archive, server), web.requests.map { it.uri })
+        assertEquals(listOf(0L, 1_100L, 2_200L), web.requests.map { it.at })
+        assertTrue(client.image(cover) is MetaAnswer.Ok)
+        assertEquals(3, web.requests.size)
+    }
+
+    @Test
+    fun `a relative redirect stays on its host`() = runTest {
+        val web = web()
+        web.on(cover, redirect(307, "/release/$ID_A/front-500"))
+        web.on("https://coverartarchive.org/release/$ID_A/front-500", ok(JPEG_BYTES))
+        assertTrue(client(web).image(cover) is MetaAnswer.Ok)
+    }
+
+    @Test
+    fun `a redirect anywhere else is refused before it is opened`() = runTest {
+        val web = web()
+        web.on(cover, redirect(307, "https://example.com/x.jpg"))
+        web.on("https://example.com/x.jpg", ok(JPEG_BYTES))
+        assertTrue(client(web).image(cover) is MetaAnswer.Failed)
+        assertEquals(listOf(cover.toString()), web.requests.map { it.uri })
+
+        web.on(cover, redirect(302, "http://archive.org/download/x.jpg"))
+        assertTrue(client(web).image(cover) is MetaAnswer.Failed)
+        assertEquals(2, web.requests.size)
+    }
+
+    @Test
+    fun `endless redirects fail`() = runTest {
+        val web = web()
+        web.on(cover, redirect(307, archive))
+        web.on(archive, redirect(302, cover.toString()))
+        assertTrue(client(web).image(cover) is MetaAnswer.Failed)
+        assertEquals(MetaClient.MAX_REDIRECTS + 1, web.requests.size)
+    }
+
+    @Test
+    fun `an image over 2 MiB is refused and never cached`() = runTest {
+        val web = web()
+        val big = ByteArray(2 * 1024 * 1024 + 1) { 7 }
+        web.on(cover, ok(big), ok(ByteArray(2 * 1024 * 1024) { 7 }))
+        val client = client(web)
+
+        assertTrue(client.image(cover) is MetaAnswer.Failed)
+        assertEquals(2 * 1024 * 1024, (client.image(cover) as MetaAnswer.Ok).value.size)
+        assertEquals(2, web.requests.size)
+    }
+
+    @Test
+    fun `a length header over the cap is refused too`() = runTest {
+        val web = web()
+        web.on(cover, FakeWeb.Reply(200, JPEG_BYTES, contentLength = 3L * 1024 * 1024))
+        assertTrue(client(web).image(cover) is MetaAnswer.Failed)
+    }
+
+    @Test
+    fun `a JSON answer is capped at 4 MiB`() = runTest {
+        val web = web()
+        web.on(json, ok("{" + " ".repeat(4 * 1024 * 1024) + "}"))
+        assertTrue(client(web).text(json) is MetaAnswer.Failed)
+        assertEquals(4 * 1024 * 1024, Body.JSON.maxBytes)
+        assertEquals(2 * 1024 * 1024, Body.IMAGE.maxBytes)
+    }
+
+    @Test
+    fun `a dropped connection fails, and only its class name is logged`() = runTest {
+        val web = web()
+        web.on(json, FakeWeb.Reply(200, error = IOException("connect to https://musicbrainz.org/ws/2/release/?query=Mira+Solen failed")))
+
+        assertTrue(client(web).text(json) is MetaAnswer.Failed)
+        assertTrue(logs.toString(), logs.any { "IOException" in it })
+        assertTrue(logs.toString(), logs.none { "Mira" in it || "musicbrainz" in it || "http" in it })
+    }
+
+    @Test
+    fun `log lines carry status codes and counts, never an address`() = runTest {
+        val web = web()
+        web.on(json, status(503), status(500))
+        web.on(cover, redirect(307, "https://example.com/Lanterns.jpg"))
+        val client = client(web)
+        client.text(json)
+        client.image(cover)
+
+        assertTrue(logs.toString(), logs.any { "503" in it })
+        assertTrue(logs.toString(), logs.any { "500" in it })
+        assertTrue(logs.toString(), logs.none { "http" in it || ".org" in it || ".com" in it || "Lanterns" in it || ID_A in it })
+    }
+}
