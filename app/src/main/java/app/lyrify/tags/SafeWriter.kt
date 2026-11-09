@@ -214,7 +214,7 @@ class SafeWriter(
                 val edit = edits.getValue(song)
                 val snapshot = undo.snapshot(edit.mediaStoreId)?.takeIf { it.sha256 == edit.before }
                 val make = if (snapshot != null && currentSha(song) == edit.after) {
-                    Make.Bytes(File(dirs.backups, snapshot.file), expected = edit.payload, from = edit.after)
+                    Make.Bytes(File(dirs.backups, snapshot.file), snapshot.sha256, expected = edit.payload, from = edit.after)
                 } else {
                     Make.Tags(expected = edit.payload) { tags ->
                         edit.revert(tags) { undo.picture(it) }.also { skipped[song] = it.skipped }.edit
@@ -275,8 +275,11 @@ class SafeWriter(
         /** TagLib on the second copy, with the edit [edit] makes of the song's own tags (null: nothing to change). */
         class Tags(override val expected: Payload?, val edit: (SongTags) -> TagEdit?) : Make
 
-        /** Another file's bytes as they are, written only over a song whose SHA-256 is [from]: a full-copy Undo. */
-        class Bytes(val source: File, override val expected: Payload?, val from: String) : Make
+        /**
+         * [source]'s bytes as they are (when their SHA-256 is still [sha256]), written only over a song whose SHA-256
+         * is [from]: a full-copy Undo.
+         */
+        class Bytes(val source: File, val sha256: String, override val expected: Payload?, val from: String) : Make
     }
 
     /** What a written song leaves for the record: its state before and after, and the edit TagLib made (if any). */
@@ -383,7 +386,7 @@ class SafeWriter(
     private fun makeContent(make: Make, backup: File, work: File, original: FileState): Made {
         if (make is Make.Bytes) {
             val state = fileState(make.source)
-            return if (state == null || state.payload != original.payload) Made.Failed else Made.Content(make.source, state, null)
+            return if (state == null || state.sha256 != make.sha256 || state.payload != original.payload) Made.Failed else Made.Content(make.source, state, null)
         }
         make as Make.Tags
         copy(backup, work)
