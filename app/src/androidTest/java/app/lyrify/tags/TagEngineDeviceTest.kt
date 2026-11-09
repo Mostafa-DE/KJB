@@ -167,14 +167,14 @@ class TagEngineDeviceTest {
         override suspend fun scan(path: String): Long? = scanned
     }
 
-    private val dirs = TagDirs(root)
+    private val dirs = TagDirs(root, ::fsyncDirectory)
     private val locks = PathLocks()
     private val free = object : BusyFiles {
         override fun check(path: String): Busy = Busy.FREE
     }
 
     private fun writer(songs: SongFiles = PrivateSongs(), writes: SharedWrites = SharedWrites.ANYWHERE): Pair<SafeWriter, JournalRecovery> {
-        val journal = WriteJournal(dirs.journal)
+        val journal = WriteJournal(dirs.journal, dirs.syncDir)
         val undo = UndoStore(dirs)
         val writer = SafeWriter(dirs, tags, songs, free, locks, writes, journal, undo, freeBytes = { Long.MAX_VALUE / 4 }, clock = System::currentTimeMillis)
         return writer to JournalRecovery(dirs, journal, undo, songs, locks, writes)

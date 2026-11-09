@@ -26,7 +26,15 @@ data class TagPicture(val data: ByteArray, val description: String, val type: St
 }
 
 /** What TagLib reads from a song: every field by TagLib's property name, every picture, and the audio length. */
-data class SongTags(val fields: Map<String, List<String>>, val pictures: List<TagPicture>, val durationMs: Long)
+data class SongTags(
+    val fields: Map<String, List<String>>,
+    val pictures: List<TagPicture>,
+    val durationMs: Long,
+    /** An MP3's ID3v2 major version (3 or 4); 0 for other formats or no ID3v2 tag. */
+    val id3v2Version: Int = 0,
+    /** An MP3's ID3v2 frame IDs, in order, frames the property map can't show included; empty for other formats. */
+    val frames: List<String> = emptyList(),
+)
 
 /** The ID3v2 version an MP3's tag is written as. 2.3 until the phone check shows Samsung Music reads 2.4 as well. */
 enum class Id3Version(val number: Int) {
@@ -43,10 +51,10 @@ interface TagFile {
     fun read(file: File): SongTags?
 
     /**
-     * Writes [fields] and [pictures] into [file] as its whole tag: a field or picture left out is removed. An MP3 is
-     * written as [id3], adding no ID3v1 tag. False when TagLib could not.
+     * Writes [fields] and [pictures] into [file] as its whole tag: a field or picture left out is removed, and null
+     * pictures are left as they are. An MP3 is written as [id3], adding no ID3v1 tag. False when TagLib could not.
      */
-    fun write(file: File, fields: Map<String, List<String>>, pictures: List<TagPicture>, id3: Id3Version): Boolean
+    fun write(file: File, fields: Map<String, List<String>>, pictures: List<TagPicture>?, id3: Id3Version): Boolean
 }
 
 /**
@@ -59,23 +67,32 @@ class TagLibFile(private val privateRoot: File) : TagFile {
         return try {
             val metadata = open(file, ParcelFileDescriptor.MODE_READ_ONLY) { TagLib.getMetadata(it, readPictures = true) } ?: return null
             val audio = open(file, ParcelFileDescriptor.MODE_READ_ONLY) { TagLib.getAudioProperties(it, AudioPropertiesReadStyle.Average) } ?: return null
+            // An MP3's ID3v2 version and frame IDs: the first entry is the version.
+            val id3 = if (file.extension.equals("mp3", ignoreCase = true)) open(file, ParcelFileDescriptor.MODE_READ_ONLY) { TagLib.getId3v2Frames(it) } else null
             SongTags(
                 fields = metadata.propertyMap.mapValues { (_, values) -> values.toList() },
                 pictures = metadata.pictures.map { TagPicture(it.data, it.description, it.pictureType, it.mimeType) },
                 durationMs = audio.length.toLong(),
+                id3v2Version = id3?.firstOrNull()?.toIntOrNull() ?: 0,
+                frames = id3?.drop(1).orEmpty(),
             )
         } catch (_: IOException) {
+            null
+        } catch (_: RuntimeException) {
+            // A Java exception TagLib's JNI left pending (out of memory for a picture, a bad string).
             null
         }
     }
 
-    override fun write(file: File, fields: Map<String, List<String>>, pictures: List<TagPicture>, id3: Id3Version): Boolean {
+    override fun write(file: File, fields: Map<String, List<String>>, pictures: List<TagPicture>?, id3: Id3Version): Boolean {
         if (!private(file)) return false
         val map = HashMap<String, Array<String>>().apply { fields.forEach { (key, values) -> put(key, values.toTypedArray()) } }
-        val set = pictures.map { Picture(it.data, it.description, it.type, it.mime) }.toTypedArray()
+        val set = pictures?.map { Picture(it.data, it.description, it.type, it.mime) }?.toTypedArray()
         return try {
             open(file, ParcelFileDescriptor.MODE_READ_WRITE) { TagLib.saveTags(it, map, set, id3.number) }
         } catch (_: IOException) {
+            false
+        } catch (_: RuntimeException) {
             false
         }
     }

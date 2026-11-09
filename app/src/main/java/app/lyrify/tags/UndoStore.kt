@@ -69,7 +69,21 @@ data class Snapshot(
 data class UndoMemory(val entries: List<HistoryEntry> = emptyList(), val snapshots: List<Snapshot> = emptyList())
 
 /** The entry a song's edit belongs to. */
+@Serializable
 data class EntryInfo(val id: Long, val kind: EditKind, val label: String, val at: Long)
+
+/**
+ * What a write records once it is done ([UndoStore.save]): a write's [edit] in [entry], with its [snapshot] when it is the
+ * song's first; or, for an Undo, that [undoneEntry] was taken back for the song. Carried in the write's journal intent,
+ * so the start-up recovery saves it when the app died, or the store could not be written, after the write.
+ */
+@Serializable
+data class UndoRecord(
+    val entry: EntryInfo? = null,
+    val edit: SongEdit? = null,
+    val snapshot: Snapshot? = null,
+    val undoneEntry: Long? = null,
+)
 
 /** [SongEdit.revert]'s answer: the change that takes the edit back ([edit], null when nothing is left to take back). */
 data class Revert(val edit: TagEdit?, val reverted: Int, val skipped: Int)
@@ -150,6 +164,13 @@ class UndoStore(
         return save(UndoMemory(entries, snapshots))
     }
 
+    /** Saves [record] for song [mediaStoreId]; saving it again changes nothing. False when it could not be stored. */
+    fun save(record: UndoRecord, mediaStoreId: Long): Boolean = when {
+        record.undoneEntry != null -> markUndone(record.undoneEntry, mediaStoreId)
+        record.entry != null && record.edit != null -> record(record.entry, record.edit, record.snapshot)
+        else -> true
+    }
+
     @Synchronized
     fun markUndone(entryId: Long, mediaStoreId: Long): Boolean {
         val now = memory()
@@ -159,16 +180,20 @@ class UndoStore(
         return save(now.copy(entries = entries))
     }
 
-    /** Keeps [picture]'s bytes for Undo, once per content. Null when it could not be written. */
+    /** Keeps [picture]'s bytes for Undo, once per content, durably. Null when they could not be kept. */
     fun savePicture(picture: TagPicture): PictureRef? {
         val ref = PictureRef(picture.sha256, picture.description, picture.type, picture.mime)
         val file = File(dirs.pictures, ref.sha256)
-        if (file.isFile) return ref
+        if (picture(ref) != null) return ref
         return try {
             dirs.pictures.mkdirs()
             val aside = File(dirs.pictures, ref.sha256 + TMP)
-            aside.writeBytes(picture.data)
+            FileOutputStream(aside).use { out ->
+                out.write(picture.data)
+                out.fd.sync()
+            }
             Files.move(aside.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+            dirs.syncDir(dirs.pictures)
             ref
         } catch (e: IOException) {
             log("undo: cover not kept (${e.javaClass.simpleName})")
@@ -251,11 +276,13 @@ class UndoStore(
                 out.fd.sync()
             }
             Files.move(aside.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+            // The file holds it now, durable or not: read back the same way either way.
             loaded = memory
+            dirs.syncDir(checkNotNull(file.parentFile))
             true
         } catch (e: IOException) {
             aside.delete()
-            log("undo: not written (${e.javaClass.simpleName})")
+            log("undo: not saved durably (${e.javaClass.simpleName})")
             false
         }
     }

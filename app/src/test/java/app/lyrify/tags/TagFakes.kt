@@ -18,8 +18,9 @@ import java.util.Collections
 class SimulatedKill : Error("killed")
 
 /**
- * [TagFile] over TagFixtures MP3s: the ID3v2 tag holds the fields and pictures as JSON, the audio after it stays as it
- * is, and the duration is the audio's size. [events] records each call; the counters show calls running at once.
+ * [TagFile] over TagFixtures MP3s: the ID3v2 tag holds the fields, pictures and frame IDs as JSON, the audio after it
+ * stays as it is, and the duration is the audio's size. Like TagLib, a write as ID3v2.3 drops the frames v2.3 can't
+ * hold. [events] records each call; the counters show calls running at once. The test can make a write go wrong.
  */
 class FakeTagFile(private val events: MutableList<String> = Collections.synchronizedList(mutableListOf())) : TagFile {
     val given = Collections.synchronizedList(mutableListOf<File>())
@@ -30,11 +31,27 @@ class FakeTagFile(private val events: MutableList<String> = Collections.synchron
 
     /** A write that drops a field it was given: the verify must catch it. */
     var dropField: String? = null
+
+    /** A write that sets a field on its own (one it was given, or a new one): the verify must catch it. */
+    var sneakField: Pair<String, List<String>>? = null
+
+    /** A write that changes the first picture's type, description or mime: the verify must catch it. */
+    var alterPicture: ((TagPicture) -> TagPicture)? = null
+
+    /** A write that drops a frame the property map can't show: the verify must catch it. */
+    var dropFrame: String? = null
+
+    /** The ID3v2 version of the last write. */
+    var lastVersion: Id3Version? = null
     var running = 0
     var mostAtOnce = 0
 
     @Serializable
-    private data class Stored(val fields: Map<String, List<String>> = emptyMap(), val pictures: List<StoredPicture> = emptyList())
+    private data class Stored(
+        val fields: Map<String, List<String>> = emptyMap(),
+        val pictures: List<StoredPicture> = emptyList(),
+        val frames: List<String> = emptyList(),
+    )
 
     @Serializable
     private data class StoredPicture(val data: String, val description: String, val type: String, val mime: String)
@@ -46,21 +63,27 @@ class FakeTagFile(private val events: MutableList<String> = Collections.synchron
         val (stored, audio) = split(bytes) ?: return null
         return SongTags(
             stored.fields,
-            stored.pictures.map { TagPicture(Base64.getDecoder().decode(it.data), it.description, it.type, it.mime) },
+            stored.pictures.map(::picture),
             durationMs = audio.size.toLong() * 10,
+            id3v2Version = bytes[3].toInt(),
+            frames = stored.frames,
         )
     }
 
-    override fun write(file: File, fields: Map<String, List<String>>, pictures: List<TagPicture>, id3: Id3Version): Boolean {
+    override fun write(file: File, fields: Map<String, List<String>>, pictures: List<TagPicture>?, id3: Id3Version): Boolean {
         synchronized(this) { running++; mostAtOnce = maxOf(mostAtOnce, running) }
         try {
             Thread.sleep(5)
             events += "tags write"
             given += file
+            lastVersion = id3
             if (failWrite) return false
-            val (_, audio) = split(file.readBytes()) ?: return false
-            val kept = dropField?.let { fields - it } ?: fields
-            file.writeBytes(encode(kept, pictures, id3.number) + audio.copyOf().also { if (damageAudio) it[it.size / 2] = (it[it.size / 2] + 1).toByte() })
+            val (stored, audio) = split(file.readBytes()) ?: return false
+            val kept = (dropField?.let { fields - it } ?: fields) + listOfNotNull(sneakField)
+            val written = (pictures ?: stored.pictures.map(::picture)).toMutableList()
+            alterPicture?.let { change -> if (written.isNotEmpty()) written[0] = change(written[0]) }
+            val frames = stored.frames.filterNot { (id3 == Id3Version.V2_3 && it in SafeWriter.DROPPED_BY_V23) || it == dropFrame }
+            file.writeBytes(encode(kept, written, id3.number, frames = frames) + audio.copyOf().also { if (damageAudio) it[it.size / 2] = (it[it.size / 2] + 1).toByte() })
             return true
         } finally {
             synchronized(this) { running-- }
@@ -70,14 +93,16 @@ class FakeTagFile(private val events: MutableList<String> = Collections.synchron
     companion object {
         private val json = Json { ignoreUnknownKeys = true }
 
-        /** An MP3 with [fields] and [pictures] in its tag and [audio] after it, as this fake writes them. */
-        fun encode(fields: Map<String, List<String>>, pictures: List<TagPicture> = emptyList(), version: Int = 3, padding: Int = 0): ByteArray {
-            val stored = Stored(fields, pictures.map { StoredPicture(Base64.getEncoder().encodeToString(it.data), it.description, it.type, it.mime) })
+        private fun picture(stored: StoredPicture) = TagPicture(Base64.getDecoder().decode(stored.data), stored.description, stored.type, stored.mime)
+
+        /** An ID3v2 tag ([version]) with [fields], [pictures] and [frames] in it, as this fake writes them. */
+        fun encode(fields: Map<String, List<String>>, pictures: List<TagPicture> = emptyList(), version: Int = 3, padding: Int = 0, frames: List<String> = emptyList()): ByteArray {
+            val stored = Stored(fields, pictures.map { StoredPicture(Base64.getEncoder().encodeToString(it.data), it.description, it.type, it.mime) }, frames)
             return TagFixtures.id3v2(json.encodeToString(Stored.serializer(), stored).encodeToByteArray(), version = version, padding = padding)
         }
 
-        fun song(fields: Map<String, List<String>>, pictures: List<TagPicture> = emptyList(), audio: ByteArray = TagFixtures.mp3Audio(), v1: ByteArray? = null): ByteArray =
-            encode(fields, pictures) + audio + (v1 ?: ByteArray(0))
+        fun song(fields: Map<String, List<String>>, pictures: List<TagPicture> = emptyList(), audio: ByteArray = TagFixtures.mp3Audio(), v1: ByteArray? = null, version: Int = 3, frames: List<String> = emptyList()): ByteArray =
+            encode(fields, pictures, version, frames = frames) + audio + (v1 ?: ByteArray(0))
 
         /** The stored tag and the audio of [bytes] (an ID3v1 tag stays with the audio); null when it is not one. */
         private fun split(bytes: ByteArray): Pair<Stored, ByteArray>? {
@@ -91,6 +116,16 @@ class FakeTagFile(private val events: MutableList<String> = Collections.synchron
             }
             return stored to bytes.copyOfRange(10 + size, bytes.size)
         }
+    }
+}
+
+/** Fsyncs a folder on the JVM (Linux opens a folder for reading); fails for any folder in [failing]. */
+class FolderSync {
+    val failing = Collections.synchronizedSet(mutableSetOf<File>())
+
+    fun sync(dir: File) {
+        if (dir.canonicalFile in failing.map { it.canonicalFile }) throw IOException("fsync failed")
+        FileChannel.open(dir.toPath(), StandardOpenOption.READ).use { it.force(true) }
     }
 }
 
@@ -246,7 +281,8 @@ class WriterRig(root: File, var writes: app.lyrify.data.SharedWrites = app.lyrif
     val events: MutableList<String> = Collections.synchronizedList(mutableListOf())
     val logs: MutableList<String> = Collections.synchronizedList(mutableListOf())
     val music = File(root, "storage/emulated/0/Music/KJB test/Harbour Glass").apply { mkdirs() }
-    val dirs = TagDirs(File(root, "files"))
+    val folders = FolderSync()
+    val dirs = TagDirs(File(root, "files"), folders::sync)
     val tags = FakeTagFile(events)
     val songs = FakeSongFiles(events)
     val busy = FakeBusyFiles(events)
@@ -255,7 +291,7 @@ class WriterRig(root: File, var writes: app.lyrify.data.SharedWrites = app.lyrif
     var now: Long = 1_800_000_000_000L
 
     /** How the writer copies a song to its private files; a test makes it fail or die. */
-    var copy: (File, File) -> Unit = { from, to -> durableCopy(from, to) }
+    var copy: (File, File) -> Unit = { from, to -> durableCopy(from, to, folders::sync) }
 
     lateinit var journal: WriteJournal
     lateinit var undo: UndoStore
@@ -266,7 +302,7 @@ class WriterRig(root: File, var writes: app.lyrify.data.SharedWrites = app.lyrif
     }
 
     fun restart() {
-        journal = WriteJournal(dirs.journal, logs::add)
+        journal = WriteJournal(dirs.journal, folders::sync, logs::add)
         undo = UndoStore(dirs, logs::add)
         writer = SafeWriter(
             dirs = dirs,
@@ -290,9 +326,18 @@ class WriterRig(root: File, var writes: app.lyrify.data.SharedWrites = app.lyrif
     fun recovery(): JournalRecovery = JournalRecovery(dirs, journal, undo, songs, locks, writes, logs::add)
 
     /** A made-up song in the test folder with [fields] in its tag, known to MediaStore as [id]. */
-    fun song(name: String, id: Long, fields: Map<String, List<String>> = mapOf("TITLE" to listOf(name)), pictures: List<TagPicture> = emptyList(), seed: Int = id.toInt(), v1: ByteArray? = null): SongTarget {
+    fun song(
+        name: String,
+        id: Long,
+        fields: Map<String, List<String>> = mapOf("TITLE" to listOf(name)),
+        pictures: List<TagPicture> = emptyList(),
+        seed: Int = id.toInt(),
+        v1: ByteArray? = null,
+        version: Int = 3,
+        frames: List<String> = emptyList(),
+    ): SongTarget {
         val file = File(music, "$name.mp3")
-        file.writeBytes(FakeTagFile.song(fields, pictures, TagFixtures.mp3Audio(seed = seed), v1))
+        file.writeBytes(FakeTagFile.song(fields, pictures, TagFixtures.mp3Audio(seed = seed), v1, version, frames))
         songs.ids[file.path] = id
         return SongTarget(file.path, id)
     }

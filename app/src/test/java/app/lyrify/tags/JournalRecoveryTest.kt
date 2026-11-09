@@ -58,7 +58,7 @@ class JournalRecoveryTest {
                     to.writeBytes(from.readBytes().copyOf(100))
                     throw SimulatedKill()
                 }
-                durableCopy(from, to)
+                durableCopy(from, to, rig.folders::sync)
             }
             killedWhileWriting(song)
             assertEquals(Recovered(), recover())
@@ -195,12 +195,12 @@ class JournalRecoveryTest {
 
     @Test
     fun `an intent round-trips through its file, and a closed one is gone`() {
-        val journal = WriteJournal(File(folder.root, "journal"))
+        val journal = WriteJournal(File(folder.root, "journal"), FolderSync()::sync)
         val state = FileState(4_000, "a".repeat(64), Payload(AudioFormat.MP3, "b".repeat(64)))
         val intent = WriteIntent("1-41-1", "/storage/emulated/0/Music/KJB test/Paper Lantern.mp3", 41, "1-41-1.mp3", state, state.copy(length = 6_000))
 
         assertTrue(journal.open(intent))
-        assertEquals(listOf(intent), WriteJournal(File(folder.root, "journal")).pending())
+        assertEquals(listOf(intent), WriteJournal(File(folder.root, "journal"), FolderSync()::sync).pending())
         assertTrue(journal.close(intent.id))
         assertEquals(emptyList<WriteIntent>(), journal.pending())
     }

@@ -1,6 +1,7 @@
 package app.lyrify.tags
 
 import android.content.Context
+import android.os.StrictMode
 import android.os.storage.StorageManager
 import android.util.Log
 import app.lyrify.LOG_TAG
@@ -30,24 +31,35 @@ object TagsGraph {
     private var recovering = false
 
     private class Parts(context: Context) {
-        val dirs = TagDirs(context.filesDir)
-        val journal = WriteJournal(dirs.journal, ::log)
+        val dirs = TagDirs(context.filesDir, ::fsyncDirectory)
+        val journal = WriteJournal(dirs.journal, dirs.syncDir, ::log)
         val undo = UndoStore(dirs, ::log)
         val songs = PhoneSongFiles(context)
     }
 
     /**
-     * Settles the tag writes the app's death interrupted (see [JournalRecovery]), holding their songs meanwhile. Called
-     * once from LyrifyApplication.onCreate; runs in the background, and no tag write starts before it is done.
+     * Settles the tag writes the app's death interrupted (see [JournalRecovery]). Called once from
+     * LyrifyApplication.onCreate: the songs of unfinished writes are held in [Lyrify.locks] right there, before anything
+     * else runs, so the lyrics pipeline waits for them and the AI and the tone preview skip them; the rest runs in the
+     * background, and no tag write starts before it is done.
      */
     @Synchronized
     fun startRecovery(context: Context) {
         if (recovering) return
         recovering = true
         val parts = parts(context.applicationContext)
+        val recovery = JournalRecovery(parts.dirs, parts.journal, parts.undo, parts.songs, Lyrify.locks, Lyrify.writes, ::log)
+        // A few small files, read on the main thread on purpose: the songs must be held before any other part starts.
+        val policy = StrictMode.allowThreadDiskReads()
+        val held = try {
+            StrictMode.allowThreadDiskWrites()
+            recovery.holdPending()
+        } finally {
+            StrictMode.setThreadPolicy(policy)
+        }
         background.launch {
             try {
-                JournalRecovery(parts.dirs, parts.journal, parts.undo, parts.songs, Lyrify.locks, Lyrify.writes, ::log).recover()
+                recovery.recover(held)
             } finally {
                 recovered.complete(Unit)
             }
