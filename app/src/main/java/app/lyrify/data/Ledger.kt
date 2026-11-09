@@ -143,6 +143,11 @@ data class LedgerEntry(
      * be fetched ([app.lyrify.lyrics.LyricsPipeline.compareStored]).
      */
     val candidatesCompared: Boolean = false,
+    /**
+     * Lyrics the user made or edited in the app (the synced lyrics editor): nothing replaces them by itself, not the
+     * pipeline, Covers & tags or a restore. False in entries from before 3.0, which read as not the user's.
+     */
+    val mine: Boolean = false,
 ) {
     val track: LocalTrack get() = LocalTrack(path, title, artist, album, durationMs)
 

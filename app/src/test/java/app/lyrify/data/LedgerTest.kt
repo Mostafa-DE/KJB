@@ -344,6 +344,28 @@ class LedgerTest {
         assertEquals(LedgerState.SCHEMA_VERSION, ledger.schemaVersion)
     }
 
+    @Test
+    fun `entries from before 3_0 read as lyrics the user did not make`() {
+        // As Lyrify 2.0.1 wrote it: no "mine" field.
+        val text = """{"schemaVersion":2,"entries":{"/m/a.mp3":{"path":"/m/a.mp3","title":"Paper Lantern","artist":"Kit Calloway",""" +
+            """"durationMs":201000,"status":"SYNCED","lrclibId":4,"updatedAt":5,"sha256":"ab12","source":"LRCLIB"}}}"""
+        val entry = LedgerJson.decode(text).entries.getValue("/m/a.mp3")
+        assertFalse(entry.mine)
+        assertEquals(LyricsStatus.SYNCED, entry.status)
+        assertFalse(recorded(null, track, LyricsStatus.SYNCED, 3, now).mine)
+    }
+
+    @Test
+    fun `lyrics the user made stay theirs through a round trip`() {
+        val mine = recorded(null, track, LyricsStatus.SYNCED, null, now, sha256 = "ab12").copy(mine = true)
+        val ledger = LedgerState().put(mine).put(recorded(null, track.copy(path = "/b.mp3"), LyricsStatus.SYNCED, 3, now))
+        val back = LedgerJson.decode(LedgerJson.encode(ledger))
+        assertEquals(ledger, back)
+        assertTrue(back.entries.getValue(track.path).mine)
+        assertFalse(back.entries.getValue("/b.mp3").mine)
+        assertTrue(""""mine":true""" in LedgerJson.encode(ledger))
+    }
+
     @Test(expected = SerializationException::class)
     fun `text that is not a ledger is rejected`() {
         LedgerJson.decode("not json")
