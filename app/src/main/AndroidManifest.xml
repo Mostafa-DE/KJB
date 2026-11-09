@@ -28,6 +28,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROCESSING" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
+    <!-- The AI lyrics engine's parts (ONNX Runtime, the NPU library) are in KJB + AI's manifest, src/full. -->
+
     <!-- player: permissions -->
 
     <!-- lyrics lock: permissions -->
@@ -39,12 +41,6 @@
     <permission
         android:name="${applicationId}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
         tools:node="remove" />
-
-    <!-- onnxruntime-android (the AI lyrics engine) adds ACCESS_NETWORK_STATE, INTERNET and a ContentProvider that
-         starts its 1DS telemetry client. The provider is removed below and telemetry is also switched off in code
-         (ai/Npu.kt). INTERNET stays for LRCLIB and the one-time model download (models/ModelStore.kt: Qualcomm AI Hub,
-         GitHub and Hugging Face only); ACCESS_NETWORK_STATE for that download's unmetered-network constraint. The AI
-         itself never goes online. -->
 
     <!-- Package visibility (not a permission), for the name of the app whose media session KJB follows
          ("Playing in ..."), and for "Open Clock" below: reading sessions needs none. Players show up as apps with a launcher icon or a media
@@ -81,18 +77,6 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.Lyrify">
-
-        <!-- The QNN HTP backend reaches the phone's NPU (the Hexagon DSP) through FastRPC, the vendor public library
-             libcdsprpc.so. Apps targeting Android 12+ get only the vendor public libraries they declare. Not required:
-             a phone without it simply has no AI lyrics. -->
-        <uses-native-library
-            android:name="libcdsprpc.so"
-            android:required="false" />
-
-        <provider
-            android:name="ai.onnxruntime.TelemetryInitializer"
-            android:authorities="${applicationId}.onnxruntime_telemetry_initializer"
-            tools:node="remove" />
 
         <activity
             android:name=".ui.MainActivity"

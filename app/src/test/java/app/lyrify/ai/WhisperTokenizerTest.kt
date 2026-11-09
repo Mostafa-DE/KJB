@@ -15,12 +15,12 @@ import java.io.File
 object TestAssets {
     val tokenizer: WhisperTokenizer by lazy {
         WhisperTokenizer.fromJson(
-            File("src/main/assets/whisper/vocab.json").readText(),
-            File("src/main/assets/whisper/added_tokens.json").readText(),
+            File("src/full/assets/whisper/vocab.json").readText(),
+            File("src/full/assets/whisper/added_tokens.json").readText(),
         )
     }
     val suppression: Suppression by lazy {
-        Suppression.fromGenerationConfig(File("src/main/assets/whisper/generation_config.json").readText())
+        Suppression.fromGenerationConfig(File("src/full/assets/whisper/generation_config.json").readText())
     }
 }
 

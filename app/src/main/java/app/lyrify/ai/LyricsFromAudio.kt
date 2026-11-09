@@ -1,5 +1,6 @@
 package app.lyrify.ai
 
+import android.content.Context
 import app.lyrify.lyrics.LocalTrack
 import app.lyrify.lyrics.LrcFormat
 import app.lyrify.lyrics.LrcLine
@@ -41,8 +42,18 @@ sealed interface AiResult {
 class ModelLoadException(val model: File, cause: Throwable) :
     Exception("${model.name} could not be loaded: ${cause.javaClass.simpleName}: ${cause.message}", cause)
 
-/** The NPU could not be used at all: the QNN execution provider did not register or offers no NPU device. */
+/**
+ * The NPU could not be used at all: the QNN execution provider did not register or offers no NPU device, or this
+ * edition has no AI engine ([AiEngine.included]).
+ */
 class NpuUnavailableException(cause: Throwable) : Exception("the NPU is not available: ${cause.javaClass.simpleName}: ${cause.message}", cause)
+
+/**
+ * ONNX Runtime's private members that the engine's IoTensors (KJB + AI) calls are not what this build expects: one is
+ * missing, of another type, or refuses the call. A uint16 tensor cannot be made, so the w8a16 Whisper cannot run: the
+ * engine reports the NPU as unavailable ([NpuUnavailableException]) instead of failing songs or crashing.
+ */
+class OrtInternalsException(cause: Throwable) : Exception("ONNX Runtime's internals are not as expected: ${cause.javaClass.simpleName}: ${cause.message}", cause)
 
 enum class RejectReason {
     /** Align: the timing's confidence is under its threshold ([TimedLines.confidence]). */
@@ -139,10 +150,11 @@ fun interface Progress {
 }
 
 /**
- * The heavy steps of [LyricsFromAudio]: on the phone [NpuStages], in tests fakes. Their models stay loaded from first
- * use until the caller closes them (a night's run); a model that does not load throws [ModelLoadException]. All block.
+ * The heavy steps of [LyricsFromAudio]: on the phone the edition's engine ([AiEngine.open]), in tests fakes. Their
+ * models stay loaded from first use until the caller closes them (a night's run); a model that does not load throws
+ * [ModelLoadException]. All block.
  */
-interface AiStages {
+interface AiStages : AutoCloseable {
     /** The first audio track of [file], opened read only, as a mix that decodes while it is read; the caller closes it. */
     fun decode(file: File): MixSource
 
@@ -154,6 +166,28 @@ interface AiStages {
 
     /** wav2vec2 CTC emissions of the whole [stem] (16 kHz mono), as [Ctc.wholeSong] makes them. */
     fun emissions(stem: FloatArray, progress: Progress): Emissions
+
+    /** Releases the models; stages that hold none have nothing to do. */
+    override fun close() {}
+}
+
+/**
+ * This edition's AI engine, the one [EditionEngine] its flavour's source set gives. KJB + AI (`full`) runs the stages on
+ * the NPU with ONNX Runtime and QNN; KJB (`lite`) ships neither, so nothing here or elsewhere in `main` names them.
+ */
+interface AiEngine {
+    /** Whether this edition has AI lyrics: KJB + AI does, KJB does not. */
+    val included: Boolean
+
+    /** The engine's software, for the run log ("ONNX Runtime 1.30.0, QNN EP 2.6.0, QNN 2.50.0"); empty without one. */
+    val versions: String
+
+    /**
+     * The stages for [models] on [threads] CPU threads, their sessions created on first use and released when closed;
+     * [log] gets one line per session and per Whisper window, never lyrics. Without an engine, throws
+     * [NpuUnavailableException], which ends a night's run as "no NPU" and fails no song.
+     */
+    fun open(context: Context, models: AiModels, threads: Int, log: (String) -> Unit): AiStages
 }
 
 /** The gate's frames and the 16 kHz mono vocal stem: what a run keeps of the separation ([VocalStem]). */

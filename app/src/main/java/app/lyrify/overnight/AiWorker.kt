@@ -33,9 +33,8 @@ import app.lyrify.R
 import app.lyrify.ai.AiModels
 import app.lyrify.ai.AiResult
 import app.lyrify.ai.AiStage
+import app.lyrify.ai.EditionEngine
 import app.lyrify.ai.LyricsFromAudio
-import app.lyrify.ai.NpuStages
-import app.lyrify.ai.WhisperAssets
 import app.lyrify.data.LedgerRepository
 import app.lyrify.lyrics.LocalTrack
 import app.lyrify.models.ModelDownloads
@@ -70,11 +69,12 @@ import java.util.concurrent.TimeUnit
  * day or until the app is opened. Unplugged ([AiRunner] watches the cable) or cancelled, the engine finishes the step it
  * is on and stops; nothing is recorded for that song. It goes into the foreground before it looks at any song's files.
  * The engine's NPU sessions stay loaded for the whole run and are released at its end. What happens goes to the AI's
- * run log ([AiLyrics.runLog]) as well as logcat. Android 15+ only, on the supported chips ([NpuChips]) only.
+ * run log ([AiLyrics.runLog]) as well as logcat. Android 15+ only, on the supported chips ([NpuChips]) only, in KJB + AI
+ * only ([EditionEngine]): KJB has no engine, and a schedule a KJB + AI install left does nothing.
  */
 class AiWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) night() else Result.success()
+        if (EditionEngine.included && Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) night() else Result.success()
 
     @RequiresApi(Build.VERSION_CODES.VANILLA_ICE_CREAM)
     private suspend fun night(): Result {
@@ -120,8 +120,7 @@ class AiWorker(context: Context, params: WorkerParameters) : CoroutineWorker(con
         val power = context.getSystemService(PowerManager::class.java)
         runLog.append(
             "AI: run started: ${AiLyrics.battery(context)}, thermal status ${power.currentThermalStatus}, " +
-                "${NpuChips.device()?.socModel} NPU, ONNX Runtime ${BuildConfig.ORT_VERSION}, QNN EP ${BuildConfig.QNN_EP_VERSION}, " +
-                "QNN ${BuildConfig.QNN_RUNTIME_VERSION}, $AI_THREADS CPU threads, KJB ${BuildConfig.VERSION_NAME}",
+                "${NpuChips.device()?.socModel} NPU, ${EditionEngine.versions}, $AI_THREADS CPU threads, KJB ${BuildConfig.VERSION_NAME}",
         )
         val log: (String) -> Unit = {
             Log.i(LOG_TAG, it)
@@ -183,17 +182,12 @@ class AiWorker(context: Context, params: WorkerParameters) : CoroutineWorker(con
         }
 
     /**
-     * The engine on the NPU for [models]: [NpuStages] (the QNN EP and its sessions, created on first use and released
-     * by [SongEngine.close]) under [LyricsFromAudio]. Its notes go to the run log: stages, times, counts.
+     * The engine on the NPU for [models]: the edition's stages ([EditionEngine]: the QNN EP and its sessions, created on
+     * first use and released by [SongEngine.close]) under [LyricsFromAudio]. Its notes go to the run log: stages,
+     * times, counts.
      */
     private fun engine(context: Context, models: AiModels, runLog: AiRunLog): SongEngine {
-        val stages = NpuStages(
-            models,
-            context.applicationInfo.nativeLibraryDir,
-            AiLyrics.whisperAssets(context),
-            AI_THREADS,
-            log = { runLog.append("AI:   $it") },
-        )
+        val stages = EditionEngine.open(context, models, AI_THREADS) { runLog.append("AI:   $it") }
         val lyrics = LyricsFromAudio(
             stages,
             SystemClock::elapsedRealtime,
@@ -341,12 +335,6 @@ object AiLyrics {
     /** The crash guard's records (app-private files, see [CrashGuard]). */
     internal fun crashGuard(context: Context, log: (String) -> Unit): CrashGuard =
         CrashGuard(File(context.applicationContext.filesDir, CRASH_GUARD), System::currentTimeMillis, BuildConfig.VERSION_CODE, log)
-
-    /** The Whisper tokenizer's files from the app's assets. */
-    internal fun whisperAssets(context: Context): WhisperAssets {
-        fun asset(name: String) = context.assets.open("whisper/$name").use { it.readBytes().toString(Charsets.UTF_8) }
-        return WhisperAssets(asset("vocab.json"), asset("added_tokens.json"), asset("generation_config.json"))
-    }
 
     /**
      * Off, then [block] once the AI has actually stopped: WorkManager no longer runs it and its engine has let go of

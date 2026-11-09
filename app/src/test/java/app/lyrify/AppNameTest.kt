@@ -38,7 +38,7 @@ class AppNameTest {
 
     @Test
     fun `no text in the code says Lyrify, except the repository's address`() {
-        val found = listOf("src/main/java", "src/debug/java").flatMap { root ->
+        val found = listOf("main", "debug", "lite", "full", "fullDebug").map { "src/$it/java" }.filter { File(it).isDirectory }.flatMap { root ->
             File(root).walkTopDown().filter { it.isFile && it.extension == "kt" }.flatMap { source ->
                 KOTLIN_TOKEN.findAll(source.readText()).map { it.value }
                     .filter { it.startsWith('"') && "Lyrify" in it.replace(REPOSITORY, "") }

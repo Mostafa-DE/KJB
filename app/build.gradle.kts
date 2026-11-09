@@ -34,11 +34,6 @@ android {
             abiFilters += "arm64-v8a"
         }
 
-        // The run log names the stack the AI ran on.
-        buildConfigField("String", "ORT_VERSION", "\"${libs.versions.onnxruntime.get()}\"")
-        buildConfigField("String", "QNN_EP_VERSION", "\"${libs.versions.qnnEp.get()}\"")
-        buildConfigField("String", "QNN_RUNTIME_VERSION", "\"${libs.versions.qnnRuntime.get()}\"")
-
         // Device tests (app/src/androidTest) run on the debug build, beside the release app.
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -61,6 +56,24 @@ android {
                 "**/libQnnHtpV73Skel.so",
                 "**/libQnnHtpV73Stub.so",
             )
+        }
+    }
+
+    // Two editions of one app, the same applicationId and signing key, so either installs over the other or over 2.0.x
+    // and keeps the data: "KJB" (lite) without the AI, and "KJB + AI" (full) with ONNX Runtime and QNN for AI lyrics.
+    // The AI sits behind ai.AiEngine in main; each edition's source set gives its EditionEngine.
+    flavorDimensions += "edition"
+    productFlavors {
+        create("lite") {
+            dimension = "edition"
+        }
+        create("full") {
+            dimension = "edition"
+            // The run log names the stack the AI ran on.
+            buildConfigField("String", "ORT_VERSION", "\"${libs.versions.onnxruntime.get()}\"")
+            buildConfigField("String", "QNN_EP_VERSION", "\"${libs.versions.qnnEp.get()}\"")
+            buildConfigField("String", "QNN_RUNTIME_VERSION", "\"${libs.versions.qnnRuntime.get()}\"")
+            proguardFile("proguard-ai.pro")
         }
     }
 
@@ -113,9 +126,9 @@ dependencies {
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.material3)
-    implementation(libs.onnxruntime.android)
-    implementation(libs.onnxruntime.qnn.ep)
-    implementation(libs.qnn.runtime)
+    "fullImplementation"(libs.onnxruntime.android)
+    "fullImplementation"(libs.onnxruntime.qnn.ep)
+    "fullImplementation"(libs.qnn.runtime)
     implementation(libs.androidx.work.runtime)
     implementation(libs.coil.compose)
     implementation(libs.media3.exoplayer)
@@ -124,7 +137,7 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
-    testImplementation(libs.onnxruntime.jvm)
+    "testFullImplementation"(libs.onnxruntime.jvm)
 
     androidTestImplementation(libs.androidx.test.core)
     androidTestImplementation(libs.androidx.test.runner)

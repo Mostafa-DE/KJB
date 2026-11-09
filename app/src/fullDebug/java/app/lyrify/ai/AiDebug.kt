@@ -42,7 +42,7 @@ private const val USAGE = "adb shell am broadcast --allow-fgs-start-reason 316 -
     "--es path <song> --es models <folder> [--es lyrics <plain lyrics file>] [--ei threads 4]"
 
 /**
- * Debug builds only: runs the AI engine on one song from adb and logs each stage's time and the result, with each LRC
+ * KJB + AI debug builds only: runs the AI engine on one song from adb and logs each stage's time and the result, with each LRC
  * line's time and length (never its text), to logcat (tag KJB). Writes nothing: no `.lrc`, no ledger entry, no file
  * anywhere.
  *
@@ -86,7 +86,7 @@ class AiDebugReceiver : BroadcastReceiver() {
 }
 
 /**
- * Debug builds only: runs one [AiDebugReceiver] request as a foreground service, so the run (under a minute, plus about
+ * KJB + AI debug builds only: runs one [AiDebugReceiver] request as a foreground service, so the run (under a minute, plus about
  * 30 s to create the NPU sessions) keeps the process alive in the background, which a coroutine started from a receiver
  * does not (the process is cached and frozen). Type mediaProcessing, the one Android 15+ prescribes for long work on media files: the system allows 6
  * hours of it in 24, shared by all of the app's mediaProcessing services (the overnight AI worker included) and reset
@@ -168,7 +168,7 @@ class AiDebugService : Service() {
                 "models in ${request.models.path}; ONNX Runtime ${BuildConfig.ORT_VERSION}, QNN EP ${BuildConfig.QNN_EP_VERSION}, " +
                 "QNN ${BuildConfig.QNN_RUNTIME_VERSION}",
         )
-        val assets = WhisperAssets(asset("vocab.json"), asset("added_tokens.json"), asset("generation_config.json"))
+        val assets = WhisperAssets.of(this)
         val start = SystemClock.elapsedRealtime()
         val track = LocalTrack(song.path, song.nameWithoutExtension, artist = null, album = null, durationMs = durationMs)
         val stages = NpuStages(AiModels.inFolder(request.models), applicationInfo.nativeLibraryDir, assets, request.threads) {
@@ -190,8 +190,6 @@ class AiDebugService : Service() {
             Log.i(LOG_TAG, "AI debug: ${line.substringBefore(']')}] (${line.substringAfter(']').length} characters)")
         }
     }
-
-    private fun asset(name: String): String = assets.open("whisper/$name").use { it.readBytes().toString(Charsets.UTF_8) }
 
     private fun describe(result: AiResult): String = when (result) {
         is AiResult.Transcribed -> "transcribed, ${stats(result.stats)}"

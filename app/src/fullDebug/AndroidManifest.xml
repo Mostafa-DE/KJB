@@ -2,13 +2,13 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Debug builds only, for AiDebugService: a mediaProcessing foreground service holding a partial wake lock. -->
+    <!-- KJB + AI debug builds only, for AiDebugService: a mediaProcessing foreground service holding a partial wake lock. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROCESSING" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <application>
-        <!-- Debug builds only: runs the AI lyrics engine on one song from adb (see AiDebug.kt). Exported, but only
+        <!-- KJB + AI debug builds only: runs the AI lyrics engine on one song from adb (see AiDebug.kt). Exported, but only
              a sender holding DUMP may call it: adb's shell has it, no installed app can get it (androidx.profileinstaller's
              ProfileInstallReceiver, already in this app, uses the same guard). With exported="false" the shell's
              broadcast would be refused. -->
