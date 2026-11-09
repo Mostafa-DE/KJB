@@ -39,7 +39,7 @@ import java.lang.reflect.Proxy
 import java.nio.file.Files
 
 /**
- * The one checkpoint for changes to the user's files: a debug build changes only `Music/Lyrify test/`, a release build
+ * The one checkpoint for changes to the user's files: a debug build changes only `Music/KJB test/`, a release build
  * everything, and every writer in the app asks it first. Made-up names only.
  */
 class SharedWritesTest {
@@ -50,29 +50,29 @@ class SharedWritesTest {
     private val debug = SharedWrites(testFolderOnly = true) { logs += it }
 
     private val inTestFolder = listOf(
-        "/storage/emulated/0/Music/Lyrify test/Paper Lantern.mp3",
-        "/storage/emulated/0/Music/Lyrify test/Paper Lantern.lrc",
-        "/storage/emulated/10/Music/Lyrify test/Harbour Glass/01 Tin Roof.flac",
-        "/storage/1A2B-3C4D/Music/Lyrify test/Tin Roof.m4a",
-        "/storage/emulated/0/Music/Lyrify test/Harbour Glass/../Tin Roof.opus",
+        "/storage/emulated/0/Music/KJB test/Paper Lantern.mp3",
+        "/storage/emulated/0/Music/KJB test/Paper Lantern.lrc",
+        "/storage/emulated/10/Music/KJB test/Harbour Glass/01 Tin Roof.flac",
+        "/storage/1A2B-3C4D/Music/KJB test/Tin Roof.m4a",
+        "/storage/emulated/0/Music/KJB test/Harbour Glass/../Tin Roof.opus",
     )
 
     private val elsewhere = listOf(
         "/storage/emulated/0/Music/Paper Lantern.mp3",
-        "/storage/emulated/0/Music/Lyrify test",
-        "/storage/emulated/0/Music/Lyrify test/",
-        "/storage/emulated/0/Music/Lyrify testing/Paper Lantern.mp3",
-        "/storage/emulated/0/Music/Lyrify test/../Paper Lantern.mp3",
-        "/storage/emulated/0/Music/Lyrify test/../../Ringtones/Paper Lantern.m4a",
-        "/storage/emulated/0/Music/Rips/Lyrify test/Paper Lantern.mp3",
-        "/storage/emulated/0/Ringtones/Paper Lantern (Lyrify).m4a",
-        "/storage/emulated/0/music/lyrify test/Paper Lantern.mp3",
-        "/storage/emulated/Music/Lyrify test/Paper Lantern.mp3",
-        "/storage/self/primary/Music/Lyrify test/Paper Lantern.mp3",
-        "/sdcard/Music/Lyrify test/Paper Lantern.mp3",
-        "/data/user/0/app.lyrify.debug/files/Music/Lyrify test/Paper Lantern.mp3",
-        "Music/Lyrify test/Paper Lantern.mp3",
-        "/storage/emulated/0/Music/Lyrify test/Paper\u0000Lantern.mp3",
+        "/storage/emulated/0/Music/KJB test",
+        "/storage/emulated/0/Music/KJB test/",
+        "/storage/emulated/0/Music/KJB testing/Paper Lantern.mp3",
+        "/storage/emulated/0/Music/KJB test/../Paper Lantern.mp3",
+        "/storage/emulated/0/Music/KJB test/../../Ringtones/Paper Lantern.m4a",
+        "/storage/emulated/0/Music/Rips/KJB test/Paper Lantern.mp3",
+        "/storage/emulated/0/Ringtones/Paper Lantern (KJB).m4a",
+        "/storage/emulated/0/music/kjb test/Paper Lantern.mp3",
+        "/storage/emulated/Music/KJB test/Paper Lantern.mp3",
+        "/storage/self/primary/Music/KJB test/Paper Lantern.mp3",
+        "/sdcard/Music/KJB test/Paper Lantern.mp3",
+        "/data/user/0/app.lyrify.debug/files/Music/KJB test/Paper Lantern.mp3",
+        "Music/KJB test/Paper Lantern.mp3",
+        "/storage/emulated/0/Music/KJB test/Paper\u0000Lantern.mp3",
         "",
     )
 
@@ -139,12 +139,12 @@ class SharedWritesTest {
         val ringtones = Files.createDirectories(volume.resolve("Ringtones"))
         val tone = Files.createFile(ringtones.resolve("Paper Lantern.m4a"))
         val music = Files.createDirectories(volume.resolve("Music"))
-        val lrc = "/storage/emulated/0/Music/Lyrify test/Paper Lantern.lrc"
-        val song = "/storage/emulated/0/Music/Lyrify test/Paper Lantern.m4a"
-        val inFolder = "/storage/emulated/0/Music/Lyrify test/Harbour Glass/Tin Roof.lrc"
+        val lrc = "/storage/emulated/0/Music/KJB test/Paper Lantern.lrc"
+        val song = "/storage/emulated/0/Music/KJB test/Paper Lantern.m4a"
+        val inFolder = "/storage/emulated/0/Music/KJB test/Harbour Glass/Tin Roof.lrc"
 
         // The test folder itself a link to another folder.
-        val linked = Files.createSymbolicLink(music.resolve("Lyrify test"), ringtones)
+        val linked = Files.createSymbolicLink(music.resolve("KJB test"), ringtones)
         assertFalse(writes.allows(SharedWrite.LRC_CREATE, lrc))
         assertFalse(writes.allows(SharedWrite.LRC_DELETE, song))
         assertFalse(writes.lists(song))
@@ -152,7 +152,7 @@ class SharedWritesTest {
 
         // A real test folder: a folder not made yet is fine, a folder in it that is a link is not.
         Files.delete(linked)
-        val test = Files.createDirectory(music.resolve("Lyrify test"))
+        val test = Files.createDirectory(music.resolve("KJB test"))
         assertTrue(writes.allows(SharedWrite.LRC_CREATE, lrc))
         assertTrue(writes.allows(SharedWrite.LRC_CREATE, inFolder))
         Files.createSymbolicLink(test.resolve("Harbour Glass"), ringtones)
@@ -165,8 +165,8 @@ class SharedWritesTest {
 
         // A volume that is a link, even to a real test folder.
         Files.createSymbolicLink(root.resolve("storage/1A2B-3C4D"), volume)
-        assertTrue(SharedWrites.inTestFolder("/storage/1A2B-3C4D/Music/Lyrify test/Paper Lantern.lrc"))
-        assertFalse(writes.allows(SharedWrite.LRC_CREATE, "/storage/1A2B-3C4D/Music/Lyrify test/Paper Lantern.lrc"))
+        assertTrue(SharedWrites.inTestFolder("/storage/1A2B-3C4D/Music/KJB test/Paper Lantern.lrc"))
+        assertFalse(writes.allows(SharedWrite.LRC_CREATE, "/storage/1A2B-3C4D/Music/KJB test/Paper Lantern.lrc"))
 
         assertTrue(Files.exists(tone))
         assertFalse(logs.toString(), logs.any { "Paper" in it || "/storage" in it })
@@ -285,8 +285,8 @@ class SharedWritesTest {
             log = {},
             io = Dispatchers.Unconfined,
         )
-        val request = ToneRequest("/storage/emulated/0/Music/Lyrify test/Paper Lantern.mp3", "Paper Lantern", ToneWindow(0, 500), 0, 0, ToneKind.RINGTONE)
-        val tone = SavedTone(41, "Paper Lantern (Lyrify)", ToneKind.RINGTONE, request.songPath, 0, 500, fileName = "Paper Lantern (Lyrify).m4a", size = 48_000)
+        val request = ToneRequest("/storage/emulated/0/Music/KJB test/Paper Lantern.mp3", "Paper Lantern", ToneWindow(0, 500), 0, 0, ToneKind.RINGTONE)
+        val tone = SavedTone(41, "Paper Lantern (KJB)", ToneKind.RINGTONE, request.songPath, 0, 500, fileName = "Paper Lantern (KJB).m4a", size = 48_000)
         list.put(tone)
 
         assertEquals(SaveResult.Failed(SaveFailure.NOT_SAVED), files.save(request) {})
@@ -312,15 +312,15 @@ class SharedWritesTest {
             log = {},
             io = Dispatchers.Unconfined,
         )
-        val fileName = "../Music/Lyrify test/Paper Lantern (Lyrify).m4a"
-        val tone = SavedTone(41, "Paper Lantern (Lyrify)", ToneKind.RINGTONE, inTestFolder[0], 0, 500, fileName = fileName, size = 48_000)
+        val fileName = "../Music/KJB test/Paper Lantern (KJB).m4a"
+        val tone = SavedTone(41, "Paper Lantern (KJB)", ToneKind.RINGTONE, inTestFolder[0], 0, 500, fileName = fileName, size = 48_000)
         list.put(tone)
         // Ringtones/ and then that name is in the test folder by its text.
         assertTrue(SharedWrites.inTestFolder("/storage/emulated/0/Ringtones/$fileName"))
 
         assertEquals(ToneEdit.Failed, files.rename(tone, "Tin Roof"))
         assertEquals(ToneEdit.Failed, files.delete(tone))
-        assertEquals(SaveResult.Failed(SaveFailure.NOT_SAVED), files.save(ToneRequest(inTestFolder[0], "../Music/Lyrify test/Paper Lantern", ToneWindow(0, 500), 0, 0, ToneKind.RINGTONE)) {})
+        assertEquals(SaveResult.Failed(SaveFailure.NOT_SAVED), files.save(ToneRequest(inTestFolder[0], "../Music/KJB test/Paper Lantern", ToneWindow(0, 500), 0, 0, ToneKind.RINGTONE)) {})
 
         assertEquals(emptyList<String>(), media.calls)
         assertEquals(mapOf(41L to tone), list.current.tones)

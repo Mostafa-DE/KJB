@@ -79,7 +79,7 @@ data class AiState(
     val progress: AiProgress?,
     val hold: AiHold?,
     val pluggedIn: Boolean,
-    /** Lyrify is exempt from battery optimisation, so the phone lets it start in the background. */
+    /** KJB is exempt from battery optimisation, so the phone lets it start in the background. */
     val unrestricted: Boolean,
     /** "Delete download" waits for the AI to stop: the button says "Stopping…", and it and the switch wait. */
     val stopping: Boolean,

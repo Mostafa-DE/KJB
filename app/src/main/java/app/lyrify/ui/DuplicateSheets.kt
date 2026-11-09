@@ -47,7 +47,7 @@ import app.lyrify.lyrics.TrackNames
 
 /**
  * A group's files, the suggested keep first with its star: only a hint, never acted on. Every file has a checkbox,
- * unchecked at first, the suggested keep's too: the user picks what goes. "Move to trash" asks Lyrify's dialog for the
+ * unchecked at first, the suggested keep's too: the user picks what goes. "Move to trash" asks KJB's dialog for the
  * checked ones, never every copy ("Keep at least one copy."); "Not duplicates" hides the group for good. Each file row is
  * one TalkBack stop: where it is, its facts, "Suggested keep" when it is, and its checkbox state.
  */
@@ -150,7 +150,7 @@ fun SmallPill(@DrawableRes icon: Int, label: String, container: Color, content: 
     }
 }
 
-/** Lyrify's own dialog before the phone's: "Move 2 songs to trash?" */
+/** KJB's own dialog before the phone's: "Move 2 songs to trash?" */
 @Composable
 fun TrashDialog(count: Int, onCancel: () -> Unit, onConfirm: () -> Unit) {
     ConfirmDialog(
@@ -163,7 +163,7 @@ fun TrashDialog(count: Int, onCancel: () -> Unit, onConfirm: () -> Unit) {
     )
 }
 
-/** "Trashed songs" from the top bar's menu: the songs Lyrify moved to the phone's trash, each with Restore. */
+/** "Trashed songs" from the top bar's menu: the songs KJB moved to the phone's trash, each with Restore. */
 @Composable
 fun TrashedSheet(songs: List<TrashedSong>, onRestore: (TrashedSong) -> Unit, onDismiss: () -> Unit) {
     LyrifySheet(onDismiss = onDismiss, spacing = 0.dp, padding = 0.dp) {

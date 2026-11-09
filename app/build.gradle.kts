@@ -79,7 +79,7 @@ android {
         debug {
             enableUnitTestCoverage = true
             // Installs beside the release app, never over it: app.lyrify.debug, named "KJB dev", with its own data and
-            // grants. It changes shared storage only in Music/Lyrify test/ (data/SharedWrites.kt), and StrictMode logs
+            // grants. It changes shared storage only in Music/KJB test/ (data/SharedWrites.kt), and StrictMode logs
             // disk work on the main thread (Lyrify.kt).
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-dev"

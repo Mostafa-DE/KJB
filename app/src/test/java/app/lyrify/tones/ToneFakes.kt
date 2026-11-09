@@ -43,7 +43,7 @@ class FakeMedia(private val nextId: Long = 41) : ToneMedia {
     var failUpdate = false
     var failRow = false
     var beforeEdit: () -> Unit = {}
-    var listed: MediaRow? = MediaRow("Paper Lanterns (Lyrify) (1)", "Paper Lanterns (Lyrify) (1).m4a", 48_000, "Ringtones/")
+    var listed: MediaRow? = MediaRow("Paper Lanterns (KJB) (1)", "Paper Lanterns (KJB) (1).m4a", 48_000, "Ringtones/")
     var present: Set<Long>? = emptySet()
 
     override fun insert(values: Map<String, Any>): Long {
@@ -151,7 +151,7 @@ class FakeSounds(var writable: Boolean = false) : SystemSounds {
     }
 }
 
-/** A saved tone with made-up values. */
+/** A saved tone with made-up values, named as 2.x named its tones. */
 fun tone(
     id: Long = 41,
     name: String = "Paper Lanterns (Lyrify)",
@@ -172,5 +172,5 @@ fun tone(
     size = size,
 )
 
-/** The row MediaStore lists for [tone] while it is still the file Lyrify saved, in [relativePath]. */
+/** The row MediaStore lists for [tone] while it is still the file KJB saved, in [relativePath]. */
 fun rowOf(tone: SavedTone, relativePath: String = "${tone.kind.folder}/"): MediaRow = MediaRow(tone.name, tone.fileName, tone.size, relativePath)

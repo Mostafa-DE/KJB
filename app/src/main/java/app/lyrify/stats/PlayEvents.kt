@@ -3,7 +3,7 @@ package app.lyrify.stats
 import app.lyrify.library.SongRef
 
 /**
- * What Lyrify's own player tells the play counter, one play at a time: player/ sends them (milestone P1), and
+ * What KJB's own player tells the play counter, one play at a time: player/ sends them (milestone P1), and
  * stats/PlayRules.kt (milestone S1) decides when a play counts ("Count a play after"). Songs played in other apps send
  * none. [playId] ties the events of one play together; [at] is wall-clock millis.
  */

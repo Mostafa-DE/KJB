@@ -141,7 +141,7 @@ class LedgerTest {
     }
 
     @Test
-    fun `only lyrics Lyrify wrote and hashed can be removed`() {
+    fun `only lyrics KJB wrote and hashed can be removed`() {
         assertFalse(recorded(null, track, LyricsStatus.SYNCED, 5, now).removable)
         assertFalse(recorded(null, track, LyricsStatus.EXISTING, null, now).removable)
         assertFalse(recorded(null, track, LyricsStatus.SYNCED, 5, now, sha256 = "ab12").removed(now + hour).removable)

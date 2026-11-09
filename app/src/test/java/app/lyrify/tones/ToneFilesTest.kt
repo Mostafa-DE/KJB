@@ -19,28 +19,28 @@ class ToneFilesTest {
     // Names: made-up song titles only
 
     @Test
-    fun `the file and its title are named after the song and say Lyrify, with no em-dash`() {
+    fun `the file and its title are named after the song and say KJB, with no em-dash`() {
         val entry = ToneEntry.of("Paper Lanterns", ToneKind.RINGTONE)
-        assertEquals("Paper Lanterns (Lyrify).m4a", entry.displayName)
-        assertEquals("Paper Lanterns (Lyrify)", entry.title)
+        assertEquals("Paper Lanterns (KJB).m4a", entry.displayName)
+        assertEquals("Paper Lanterns · KJB", entry.title)
         assertFalse(entry.title.contains('\u2014'))
         assertFalse(entry.displayName.contains('\u2014'))
     }
 
     @Test
     fun `characters a file name cannot hold become spaces, and a name never starts with a dot`() {
-        assertEquals("XQ ZV Live (Lyrify).m4a", ToneEntry.of("XQ/ZV: Live?", ToneKind.ALARM).displayName)
-        assertEquals("Hidden Track (Lyrify).m4a", ToneEntry.of("..Hidden\tTrack", ToneKind.ALARM).displayName)
-        assertEquals("XQ ZV Live (Lyrify)", ToneEntry.of("XQ/ZV: Live?", ToneKind.ALARM).title)
+        assertEquals("XQ ZV Live (KJB).m4a", ToneEntry.of("XQ/ZV: Live?", ToneKind.ALARM).displayName)
+        assertEquals("Hidden Track (KJB).m4a", ToneEntry.of("..Hidden\tTrack", ToneKind.ALARM).displayName)
+        assertEquals("XQ ZV Live · KJB", ToneEntry.of("XQ/ZV: Live?", ToneKind.ALARM).title)
     }
 
     @Test
     fun `a blank title becomes Tone, a long one is cut`() {
-        assertEquals("Tone (Lyrify).m4a", ToneEntry.of(" / ", ToneKind.NOTIFICATION).displayName)
-        assertEquals("Tone (Lyrify)", ToneEntry.of("   ", ToneKind.NOTIFICATION).title)
+        assertEquals("Tone (KJB).m4a", ToneEntry.of(" / ", ToneKind.NOTIFICATION).displayName)
+        assertEquals("Tone · KJB", ToneEntry.of("   ", ToneKind.NOTIFICATION).title)
         val long = ToneEntry.of("x".repeat(500), ToneKind.RINGTONE)
-        assertEquals(ToneEntry.MAX_NAME_CHARS + " (Lyrify).m4a".length, long.displayName.length)
-        assertEquals(ToneEntry.MAX_NAME_CHARS + " (Lyrify)".length, long.title.length)
+        assertEquals(ToneEntry.MAX_NAME_CHARS + " (KJB).m4a".length, long.displayName.length)
+        assertEquals(ToneEntry.MAX_NAME_CHARS + " · KJB".length, long.title.length)
     }
 
     // The MediaStore values
@@ -55,8 +55,8 @@ class ToneFilesTest {
             assertEquals(0, values["is_music"])
             assertEquals(1, values["is_pending"])
             assertEquals("audio/mp4", values["mime_type"])
-            assertEquals("Paper Lanterns (Lyrify).m4a", values["_display_name"])
-            assertEquals("Paper Lanterns (Lyrify)", values["title"])
+            assertEquals("Paper Lanterns (KJB).m4a", values["_display_name"])
+            assertEquals("Paper Lanterns · KJB", values["title"])
         }
         assertEquals(mapOf<String, Any>("is_pending" to 0), ToneEntry.PUBLISH)
     }
@@ -108,7 +108,7 @@ class ToneFilesTest {
 
         val saved = SavedTone(
             id = 41,
-            name = "Paper Lanterns (Lyrify) (1)",
+            name = "Paper Lanterns (KJB) (1)",
             kind = ToneKind.RINGTONE,
             songPath = song,
             startMs = 1_000,
@@ -116,7 +116,7 @@ class ToneFilesTest {
             fadeInMs = 100,
             fadeOutMs = 100,
             createdAt = 5_000,
-            fileName = "Paper Lanterns (Lyrify) (1).m4a",
+            fileName = "Paper Lanterns (KJB) (1).m4a",
             size = 48_000,
         )
         assertEquals(SaveResult.Saved(saved), result)
@@ -127,11 +127,11 @@ class ToneFilesTest {
     fun `the tone is named as MediaStore lists it, or as saved when it cannot say`() = runBlocking {
         val s = Setup(media = FakeMedia().apply { listed = null })
         val result = s.files.save(request) {} as SaveResult.Saved
-        assertEquals("Paper Lanterns (Lyrify)", result.tone.name)
-        assertEquals("Paper Lanterns (Lyrify).m4a", result.tone.fileName)
-        // No size known: such a tone is never deleted or renamed by Lyrify.
+        assertEquals("Paper Lanterns · KJB", result.tone.name)
+        assertEquals("Paper Lanterns (KJB).m4a", result.tone.fileName)
+        // No size known: such a tone is never deleted or renamed by KJB.
         assertEquals(0L, result.tone.size)
-        assertFalse(isSavedTone(result.tone, MediaRow("Paper Lanterns (Lyrify)", "Paper Lanterns (Lyrify).m4a", 0, "Ringtones/")))
+        assertFalse(isSavedTone(result.tone, MediaRow("Paper Lanterns · KJB", "Paper Lanterns (KJB).m4a", 0, "Ringtones/")))
     }
 
     @Test
@@ -216,7 +216,7 @@ class ToneFilesTest {
         assertEquals(listOf("row 41", "update 41", "row 41"), s.media.calls)
         assertEquals(listOf(41L to mapOf<String, Any>("_display_name" to "Morning Call.m4a")), s.media.updated)
         assertEquals(renamed, s.list.current.tones.getValue(41))
-        // The renamed tone is still recognised as Lyrify's for the next change.
+        // The renamed tone is still recognised as KJB's for the next change.
         assertTrue(isSavedTone(renamed, s.media.listed))
     }
 
@@ -305,6 +305,37 @@ class ToneFilesTest {
         }
     }
 
+    // Tones made under either name
+
+    /** File name bases and titles a tone of the app's may have: 2.x saved "(Lyrify)" ones, 3.0 saves "(KJB)" ones. */
+    private val ownNames = listOf(
+        "Paper Lanterns (Lyrify)" to "Paper Lanterns (Lyrify)",
+        "Paper Lanterns (Lyrify)" to "Paper Lanterns · Lyrify",
+        "Paper Lanterns (KJB)" to "Paper Lanterns (KJB)",
+        "Paper Lanterns (KJB)" to "Paper Lanterns · KJB",
+    )
+
+    @Test
+    fun `tones named by 2_x as Lyrify and by 3_0 as KJB are the app's own, kept in Your tones, renamed and deleted`() = runBlocking {
+        ownNames.forEach { (base, title) ->
+            val tone = tone(41).copy(name = title, fileName = "$base.m4a")
+            val row = MediaRow(title, "$base.m4a", tone.size, "Ringtones/")
+            assertTrue(title, isSavedTone(tone, row))
+            assertEquals(title, TonesState().put(tone), TonesJson.decode(TonesJson.encode(TonesState().put(tone))))
+
+            val kept = Setup(media = FakeMedia().apply { listed = row; present = setOf(41L) }, list = MemoryToneList(TonesState().put(tone)))
+            kept.files.prune()
+            assertEquals(title, mapOf(41L to tone), kept.list.current.tones)
+
+            val renamed = Setup(media = FakeMedia().apply { listed = row }, list = MemoryToneList(TonesState().put(tone)))
+            assertTrue(title, renamed.files.rename(tone, "Morning Call") is ToneEdit.Done)
+
+            val deleted = Setup(media = FakeMedia().apply { listed = row }, list = MemoryToneList(TonesState().put(tone)))
+            assertEquals(title, ToneEdit.Done(null), deleted.files.delete(tone))
+            assertEquals(title, listOf("row 41", "delete 41"), deleted.media.calls)
+        }
+    }
+
     // Deleting and pruning
 
     @Test
@@ -316,7 +347,7 @@ class ToneFilesTest {
     }
 
     @Test
-    fun `tones deleted outside Lyrify leave the list, unless MediaStore cannot say`() = runBlocking {
+    fun `tones deleted outside KJB leave the list, unless MediaStore cannot say`() = runBlocking {
         val s = Setup(list = MemoryToneList(TonesState().put(tone(41)).put(tone(42))))
         s.media.present = setOf(42L)
         s.files.prune()

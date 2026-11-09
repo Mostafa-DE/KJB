@@ -52,7 +52,7 @@ class LyricsPipelineTrashTest {
 
     private fun sidecar(track: LocalTrack) = File(LrcFormat.sidecarPath(track.path) ?: error("no sidecar"))
 
-    /** The song with lyrics Lyrify wrote, as a lookup leaves it. */
+    /** The song with lyrics KJB wrote, as a lookup leaves it. */
     private suspend fun LyricsPipeline.withLyrics(track: LocalTrack = audio()): LocalTrack {
         client.onGet = { LrclibResult.Found(listOf(record())) }
         assertEquals(LyricsStatus.SYNCED, process(track)?.status)
@@ -67,7 +67,7 @@ class LyricsPipelineTrashTest {
     }
 
     @Test
-    fun `a trashed song loses the lyrics Lyrify wrote and its ledger entry`() = runTest {
+    fun `a trashed song loses the lyrics KJB wrote and its ledger entry`() = runTest {
         val pipeline = pipeline()
         val track = pipeline.withLyrics()
         trashOnDisk(track)
@@ -77,7 +77,7 @@ class LyricsPipelineTrashTest {
     }
 
     @Test
-    fun `a lyrics file Lyrify did not write stays, and the entry goes`() = runTest {
+    fun `a lyrics file KJB did not write stays, and the entry goes`() = runTest {
         val track = audio()
         sidecar(track).writeText("[00:01.00]mine")
         ledger.put(recorded(null, track, LyricsStatus.EXISTING, null, BASE))
@@ -88,7 +88,7 @@ class LyricsPipelineTrashTest {
     }
 
     @Test
-    fun `lyrics Lyrify wrote and someone changed since stay, and the entry goes`() = runTest {
+    fun `lyrics KJB wrote and someone changed since stay, and the entry goes`() = runTest {
         val pipeline = pipeline()
         val track = pipeline.withLyrics()
         sidecar(track).appendText("[00:09.00]edited by hand\n")
@@ -165,7 +165,7 @@ class LyricsPipelineTrashTest {
     }
 
     @Test
-    fun `a song restored from the trash is new to Lyrify and gets its lyrics again`() = runTest {
+    fun `a song restored from the trash is new to KJB and gets its lyrics again`() = runTest {
         val pipeline = pipeline()
         val track = pipeline.withLyrics()
         trashOnDisk(track)

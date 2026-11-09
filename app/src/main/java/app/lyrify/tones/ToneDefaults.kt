@@ -16,10 +16,10 @@ import androidx.core.net.toUri
  * tests. Only [setDefault] changes anything, and only after the user tapped Set.
  */
 interface SystemSounds {
-    /** "Modify system settings" is allowed for Lyrify. */
+    /** "Modify system settings" is allowed for KJB. */
     fun canWrite(): Boolean
 
-    /** Opens Lyrify's "Modify system settings" screen; false when the phone has none. */
+    /** Opens KJB's "Modify system settings" screen; false when the phone has none. */
     fun openWriteSettings(): Boolean
 
     /** Makes the tone with MediaStore id [toneId] the default sound of [kind]; true when the setting reads back so. */
@@ -28,7 +28,7 @@ interface SystemSounds {
     /** The default sound of [kind] as stored (a content uri), or null. */
     fun defaultUri(kind: ToneKind): String?
 
-    /** Opens the clock app, on its alarms where it lets Lyrify ([openFirstClock]); false when none opened. */
+    /** Opens the clock app, on its alarms where it lets KJB ([openFirstClock]); false when none opened. */
     fun openClock(): Boolean
 
     /** Opens the phone's sound settings (a second SIM's ringtone is set there); false when there are none. */
@@ -37,7 +37,7 @@ interface SystemSounds {
 
 /** What tapping Set did. */
 sealed interface DefaultOutcome {
-    /** "Modify system settings" was off: its screen is open. Back in Lyrify, Set is tapped again. */
+    /** "Modify system settings" was off: its screen is open. Back in KJB, Set is tapped again. */
     data object AskedPermission : DefaultOutcome
 
     /** "Modify system settings" is off and this phone has no screen to turn it on. */
@@ -130,7 +130,7 @@ fun mediaIdOf(uri: String?): Long? {
 class AndroidSystemSounds(private val context: Context) : SystemSounds {
     override fun canWrite(): Boolean = Settings.System.canWrite(context)
 
-    /** With the "package:" data uri the Settings reference gives, so the screen opens on Lyrify. */
+    /** With the "package:" data uri the Settings reference gives, so the screen opens on KJB. */
     override fun openWriteSettings(): Boolean =
         start(Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS, "package:${context.packageName}".toUri()))
 

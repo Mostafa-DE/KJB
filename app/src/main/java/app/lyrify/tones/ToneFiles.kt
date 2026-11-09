@@ -25,12 +25,13 @@ import java.io.IOException
 import kotlin.coroutines.CoroutineContext
 
 /**
- * A new tone's MediaStore row: the file "<Title> (Lyrify).m4a", titled "<Title> (Lyrify)" as the scanner will title it
- * from the file name, in its kind's shared folder.
+ * A new tone's MediaStore row: the file "<Title> (KJB).m4a", titled "<Title> · KJB", in its kind's shared folder. Tones
+ * 2.x saved as "<Title> (Lyrify).m4a" stay the app's own: a tone is known by the id, file name and size it was saved
+ * with ([isSavedTone]), never by the name's mark.
  */
 data class ToneEntry(val displayName: String, val title: String, val kind: ToneKind) {
     /**
-     * The row as inserted: pending (only Lyrify can open it until [PUBLISH]), in `<folder>/`, with the kind's IS_* flag.
+     * The row as inserted: pending (only KJB can open it until [PUBLISH]), in `<folder>/`, with the kind's IS_* flag.
      * MediaStore derives the flags from the folder again when it scans the published file (AOSP MediaProvider,
      * FileUtils.computeAudioTypeValuesFromData), so both agree. The scan also sets the title from the file's tags, and
      * without a title tag from the file name: read it back after publishing ([ToneMedia.row]).
@@ -62,8 +63,8 @@ data class ToneEntry(val displayName: String, val title: String, val kind: ToneK
 
         /** The entry for a tone of the song titled [songTitle]: a name a file can have, "Tone" for a blank title. */
         fun of(songTitle: String, kind: ToneKind): ToneEntry {
-            val name = "${safeName(songTitle)} (Lyrify)"
-            return ToneEntry("$name.$EXTENSION", name, kind)
+            val name = safeName(songTitle)
+            return ToneEntry("$name (KJB).$EXTENSION", "$name · KJB", kind)
         }
 
         /** [text] as a file name's base: characters a file name cannot hold become spaces, no leading dot, "Tone" when blank. */
@@ -82,9 +83,9 @@ data class ToneEntry(val displayName: String, val title: String, val kind: ToneK
 data class MediaRow(val title: String?, val displayName: String, val size: Long, val relativePath: String)
 
 /**
- * Whether [row] is still the file [tone] was saved as: in a tone folder, with the name and size Lyrify recorded. An id
+ * Whether [row] is still the file [tone] was saved as: in a tone folder, with the name and size KJB recorded. An id
  * can come to point at another file (MediaStore rebuilt, the tone replaced), and with All files access nothing else
- * would stop a delete or rename of a song, so Lyrify changes a row only when this holds.
+ * would stop a delete or rename of a song, so KJB changes a row only when this holds.
  */
 fun isSavedTone(tone: SavedTone, row: MediaRow?): Boolean =
     tone.fileName.isNotBlank() && tone.size > 0 && matchesToneRow(row, tone.fileName, tone.size)
@@ -95,7 +96,7 @@ private fun matchesToneRow(row: MediaRow?, fileName: String, size: Long): Boolea
 
 /**
  * The tone rows in MediaStore's audio collection on the phone's shared storage: ContentResolver in the app
- * ([AndroidToneMedia]), a fake in tests. Only rows Lyrify made are ever written or deleted, checked with [isSavedTone].
+ * ([AndroidToneMedia]), a fake in tests. Only rows KJB made are ever written or deleted, checked with [isSavedTone].
  */
 interface ToneMedia {
     /** Inserts a row with [values]; its id. Throws when MediaStore makes none. */
@@ -231,7 +232,7 @@ enum class SaveFailure {
 }
 
 /**
- * The tone files Lyrify makes. A tone is a new file: the song is only ever read, through [openSong]. Saving writes a
+ * The tone files KJB makes. A tone is a new file: the song is only ever read, through [openSong]. Saving writes a
  * pending MediaStore row, encodes into it, publishes it and lists it; a failure or a cancellation on the way deletes
  * the half-made row (a pending row MediaStore would also expire by itself). Deleting removes only the tone's own row.
  * Saving, renaming and deleting ask [writes] first (a debug build refuses them all: tones live outside its test folder).
@@ -300,7 +301,7 @@ class ToneFiles(
         ToneEdit.Done(renamed)
     }
 
-    /** Drops the tones deleted outside Lyrify from the list; when MediaStore cannot say, the list stays as it is. */
+    /** Drops the tones deleted outside KJB from the list; when MediaStore cannot say, the list stays as it is. */
     suspend fun prune(): Unit = withContext(io) {
         val ids = list.state.first().tones.keys
         if (ids.isEmpty()) return@withContext

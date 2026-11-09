@@ -277,7 +277,7 @@ class AiRunner(
                     }
                     log(
                         "AI: ${result.model.name} did not load again after it was downloaded again (${result.reason}); kept, " +
-                            "and the AI is paused until the next version of Lyrify or until the models are deleted",
+                            "and the AI is paused until the next version of KJB or until the models are deleted",
                     )
                     return AiRunEnd.MODEL_FAILED
                 }

@@ -38,7 +38,7 @@ class NowScreenTest {
     }
 
     @Test
-    fun `no file found says what Lyrify knows, never that the song is not on the phone`() {
+    fun `no file found says what KJB knows, never that the song is not on the phone`() {
         // Unit tests run in the module's folder.
         val file = File("src/main/res/values/strings.xml")
         val strings = DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(file).getElementsByTagName("string").let { nodes ->
@@ -47,7 +47,7 @@ class NowScreenTest {
         // The pill and its sheet's title.
         assertEquals("No file found", strings["playing_no_file"])
         assertEquals(
-            "Lyrify adds lyrics to song files stored on your phone, and couldn't find a file for this song. Streamed songs have no file. " +
+            "KJB adds lyrics to song files stored on your phone, and couldn't find a file for this song. Streamed songs have no file. " +
                 "If this one is on your phone, it may be in a folder your phone hides from music apps.",
             strings["playing_no_file_detail"],
         )

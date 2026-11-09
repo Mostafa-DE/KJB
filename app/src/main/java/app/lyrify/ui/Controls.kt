@@ -91,7 +91,7 @@ import kotlin.math.sin
 enum class ButtonKind { PRIMARY, SECONDARY, DESTRUCTIVE, DANGER, GHOST }
 
 /**
- * Lyrify's one button: a capsule 52 dp tall (full-width rows, sheet footers, docks) or 40 dp [compact] (cards, banners,
+ * KJB's one button: a capsule 52 dp tall (full-width rows, sheet footers, docks) or 40 dp [compact] (cards, banners,
  * inline); either way the tap, and what TalkBack outlines, take at least 48 dp. A press squashes the capsule. Disabled, it is a faint fill with 38% text. The label is its name; the
  * icon is decorative. [contentColor] overrides the kind's (the toast's coral action on ink).
  */
@@ -344,7 +344,7 @@ fun LyrifyCheckbox(checked: Boolean, modifier: Modifier = Modifier) {
 // Text fields
 
 /**
- * Lyrify's text field: a 52 dp filled box, no outline, the [label] above it (inside the field's semantics, so TalkBack
+ * KJB's text field: a 52 dp filled box, no outline, the [label] above it (inside the field's semantics, so TalkBack
  * reads it with the field); a coral caret, and a coral [ring] while focused. [isError] swaps the ring for red and adds a
  * line under it.
  */

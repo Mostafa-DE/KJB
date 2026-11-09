@@ -139,7 +139,7 @@ class CheckAnswers(private val scope: CoroutineScope) {
 }
 
 /**
- * "Check these": the songs Lyrify found lyrics for but is not sure about ([checkList]), one per page, opened at
+ * "Check these": the songs KJB found lyrics for but is not sure about ([checkList]), one per page, opened at
  * [initialPath] when it comes from a song. "Use" adds those lyrics, "None of these" leaves the song to the AI, "Search
  * myself" looks for others in a sheet. Answers run in [answers], so the app's message says how ([timing]: what becomes
  * of plain lyrics) even if the screen closes; while it is up, the next song slides in. Lyrics shown stay in memory only.

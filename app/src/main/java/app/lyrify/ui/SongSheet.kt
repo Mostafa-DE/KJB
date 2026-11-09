@@ -51,7 +51,7 @@ class RemovalState internal constructor(private val leftOnDisk: () -> Set<String
     /** What asked, closed once the removal is confirmed: the song sheet. */
     private var onConfirmed: () -> Unit = {}
 
-    /** Lyrify wrote [entry]'s lyrics file and it is unchanged, or a removal left the file behind. */
+    /** KJB wrote [entry]'s lyrics file and it is unchanged, or a removal left the file behind. */
     fun canRemove(entry: LedgerEntry?): Boolean = entry != null && (entry.removable || entry.path in leftOnDisk())
 
     fun ask(paths: List<String>, onConfirmed: () -> Unit = {}) {

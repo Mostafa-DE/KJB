@@ -17,10 +17,10 @@ import java.io.IOException
 /** What happened to a track's lyrics. */
 @Serializable
 enum class LyricsStatus {
-    /** Lyrify wrote a synced `.lrc`. */
+    /** KJB wrote a synced `.lrc`. */
     SYNCED,
 
-    /** A `.lrc` was already there; Lyrify never touches it. */
+    /** A `.lrc` was already there; KJB never touches it. */
     EXISTING,
 
     /** LRCLIB has untimed lyrics only (kept for v2). */
@@ -46,19 +46,19 @@ enum class LyricsStatus {
      */
     NEEDS_CHECK,
 
-    /** The user removed lyrics Lyrify wrote. Never added again automatically. */
+    /** The user removed lyrics KJB wrote. Never added again automatically. */
     REMOVED,
 
     /**
-     * Lyrify is creating the `.lrc`; the entry holds its text, hash and size. Still there later
+     * KJB is creating the `.lrc`; the entry holds its text, hash and size. Still there later
      * only if the app died meanwhile: the file then decides what happened (see LyricsPipeline).
      */
     WRITING,
 
-    /** No lyrics were known: the on-device AI wrote down what it heard, and Lyrify wrote the `.lrc`. */
+    /** No lyrics were known: the on-device AI wrote down what it heard, and KJB wrote the `.lrc`. */
     AI_TRANSCRIBED,
 
-    /** The on-device AI timed LRCLIB's plain lyrics, and Lyrify wrote the `.lrc`. */
+    /** The on-device AI timed LRCLIB's plain lyrics, and KJB wrote the `.lrc`. */
     AI_ALIGNED,
 
     /** The AI heard (almost) no singing: nothing written. */
@@ -71,7 +71,7 @@ enum class LyricsStatus {
     AI_FAILED,
     ;
 
-    /** Lyrify wrote the `.lrc` (LRCLIB's lyrics or the AI's): the user can remove it while it is unchanged. */
+    /** KJB wrote the `.lrc` (LRCLIB's lyrics or the AI's): the user can remove it while it is unchanged. */
     val written: Boolean get() = this == SYNCED || this == AI_TRANSCRIBED || this == AI_ALIGNED
 
     /** One of the AI's statuses: what the on-device AI made of the song. */
@@ -81,7 +81,7 @@ enum class LyricsStatus {
     val waitsForAi: Boolean get() = this == PLAIN_ONLY || this == NOT_FOUND || this == AI_FAILED
 }
 
-/** Who made the lyrics Lyrify wrote. */
+/** Who made the lyrics KJB wrote. */
 @Serializable
 enum class LyricsSource {
     LRCLIB,
@@ -110,7 +110,7 @@ data class LedgerEntry(
     val updatedAt: Long,
     /** For [LyricsStatus.PLAIN_ONLY]: whether the plain lyrics' record has this file's duration (v2 decides what to use). */
     val durationMatched: Boolean? = null,
-    /** SHA-256 (hex) of the `.lrc` bytes Lyrify wrote (or is writing); only a file still equal to it may be removed. */
+    /** SHA-256 (hex) of the `.lrc` bytes KJB wrote (or is writing); only a file still equal to it may be removed. */
     val sha256: String? = null,
     /** When those bytes were written; for [LyricsStatus.WRITING], when the write began. */
     val writtenAt: Long? = null,
@@ -157,7 +157,7 @@ data class LedgerEntry(
      */
     val lookupStale: Boolean get() = (status == LyricsStatus.NOT_FOUND || status == LyricsStatus.UNIDENTIFIED) && lookupRev < LOOKUP_REV
 
-    /** Lyrify wrote this track's `.lrc` and knows its bytes, so the user can remove it from the app. */
+    /** KJB wrote this track's `.lrc` and knows its bytes, so the user can remove it from the app. */
     val removable: Boolean get() = status.written && sha256 != null
 
     fun isDue(now: Long): Boolean = nextAttemptAt != null && now >= nextAttemptAt

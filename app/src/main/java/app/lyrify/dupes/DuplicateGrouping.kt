@@ -46,7 +46,7 @@ private val LOSSLESS_TYPES: Set<String> = setOf(
 )
 private val LOSSLESS_EXTENSIONS: Set<String> = setOf("flac", "wav", "aif", "aiff", "ape")
 
-/** How sure Lyrify is that a group's files are one song, most sure first. */
+/** How sure KJB is that a group's files are one song, most sure first. */
 @Serializable
 enum class Confidence {
     /** The same bytes: the same size and the same content hash. */

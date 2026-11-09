@@ -7,8 +7,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ToneDefaultsTest {
-    private val ringtone = tone(41, name = "Paper Lanterns (Lyrify)", kind = ToneKind.RINGTONE)
-    private val alarm = tone(42, name = "Glass Harbor (Lyrify)", kind = ToneKind.ALARM)
+    private val ringtone = tone(41, name = "Paper Lanterns (KJB)", kind = ToneKind.RINGTONE)
+    private val alarm = tone(42, name = "Glass Harbor (KJB)", kind = ToneKind.ALARM)
 
     // Setting a default
 
@@ -36,9 +36,9 @@ class ToneDefaultsTest {
     @Test
     fun `an alarm sound comes with the Clock guidance, naming the tone as the Clock lists it`() {
         val sounds = FakeSounds(writable = true)
-        assertEquals(DefaultOutcome.AlarmSet("Glass Harbor (Lyrify)"), ToneDefaults(sounds).set(alarm, ToneKind.ALARM))
+        assertEquals(DefaultOutcome.AlarmSet("Glass Harbor (KJB)"), ToneDefaults(sounds).set(alarm, ToneKind.ALARM))
         // Any tone can be the alarm sound, not only one saved as an alarm.
-        assertEquals(DefaultOutcome.AlarmSet("Paper Lanterns (Lyrify)"), ToneDefaults(sounds).set(ringtone, ToneKind.ALARM))
+        assertEquals(DefaultOutcome.AlarmSet("Paper Lanterns (KJB)"), ToneDefaults(sounds).set(ringtone, ToneKind.ALARM))
         assertEquals(listOf("setDefault ALARM 42", "setDefault ALARM 41"), sounds.calls)
     }
 
@@ -89,7 +89,7 @@ class ToneDefaultsTest {
     }
 
     @Test
-    fun `an alarms screen that refuses Lyrify falls back to Samsung Clock`() {
+    fun `an alarms screen that refuses KJB falls back to Samsung Clock`() {
         // A clock app that guards its alarms screen: starting it throws, which reads as not started.
         val started = mutableListOf<String>()
         assertTrue(openFirstClock("alarms", launchOf = { "launch $it" }) { started += it; it != "alarms" })

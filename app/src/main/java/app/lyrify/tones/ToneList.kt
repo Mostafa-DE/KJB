@@ -27,7 +27,7 @@ import java.io.InputStream
 import java.io.OutputStream
 
 /**
- * A tone Lyrify made, in "Your tones": its MediaStore id ([id], the key), its [name] as the phone's sound pickers list
+ * A tone KJB made, in "Your tones": its MediaStore id ([id], the key), its [name] as the phone's sound pickers list
  * it, and how it was cut from the song at [songPath]. [fileName] and [size] are the file's as MediaStore listed it when
  * saved or renamed: a delete or rename goes ahead only while the row still has them ([isSavedTone]). Fields added later
  * get defaults, so older lists load unchanged.

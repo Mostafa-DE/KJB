@@ -24,7 +24,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.lyrify.R
 
-/** Settings: the access Lyrify has (each with a way to turn it on), battery use, and About. */
+/** Settings: the access KJB has (each with a way to turn it on), battery use, and About. */
 @Composable
 fun SettingsScreen(
     access: Access,

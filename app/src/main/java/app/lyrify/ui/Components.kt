@@ -295,7 +295,7 @@ fun HelpSheet(title: String, vararg text: String, action: String? = null, onActi
 }
 
 /**
- * Lyrify's sheet: a floating card 8 dp from the edges, 32 dp corners all round, its own handle, the scrolling [content],
+ * KJB's sheet: a floating card 8 dp from the edges, 32 dp corners all round, its own handle, the scrolling [content],
  * the toast slot, and a pinned [footer] (the action row stays in view). Drag, scrim, back and the window stay
  * ModalBottomSheet's. [padding] is the content's side margin; [scroll] where the content starts (the run log: its end).
  */
@@ -472,7 +472,7 @@ private fun PlainDialogWindow() {
 // Cards and rows
 
 /**
- * Lyrify's card: 24 dp corners on [color], no border, no elevation. With [onClick] it is a button that squashes a
+ * KJB's card: 24 dp corners on [color], no border, no elevation. With [onClick] it is a button that squashes a
  * little when pressed.
  */
 @Composable

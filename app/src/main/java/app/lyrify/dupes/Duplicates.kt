@@ -46,11 +46,11 @@ sealed interface ScanStatus {
     data object Failed : ScanStatus
 }
 
-/** Moving copies to the phone's trash: two confirmations, Lyrify's then the phone's. */
+/** Moving copies to the phone's trash: two confirmations, KJB's then the phone's. */
 sealed interface TrashStep {
     data object None : TrashStep
 
-    /** Lyrify's own dialog asks: "Move 2 songs to trash?" */
+    /** KJB's own dialog asks: "Move 2 songs to trash?" */
     data class Confirm(val files: List<AudioFile>) : TrashStep
 
     /** The phone's dialog is open for [files] ([MediaStoreTrash]); its answer goes to [Duplicates.systemAnswered]. */
@@ -62,7 +62,7 @@ sealed interface TrashStep {
 
 /** What the phone's answer did. */
 sealed interface Trashed {
-    /** [count] songs are in the phone's trash; Lyrify's own lyrics for them are gone too. */
+    /** [count] songs are in the phone's trash; KJB's own lyrics for them are gone too. */
     data class Moved(val count: Int) : Trashed
 
     /** The phone's dialog was cancelled, or nothing waited for an answer: nothing changed. */
@@ -72,7 +72,7 @@ sealed interface Trashed {
     data object NotConfirmed : Trashed
 }
 
-/** What "Move to trash" in Lyrify's dialog did ([Duplicates.confirmTrash]). */
+/** What "Move to trash" in KJB's dialog did ([Duplicates.confirmTrash]). */
 sealed interface Confirmation {
     /** The phone's own dialog is to open for these MediaStore [ids]. */
     data class Ask(val ids: List<Long>) : Confirmation
@@ -83,13 +83,13 @@ sealed interface Confirmation {
     /** MediaStore could not be read: nothing is asked; the user can try again. */
     data object Unavailable : Confirmation
 
-    /** Lyrify's dialog was not open: nothing is asked. */
+    /** KJB's dialog was not open: nothing is asked. */
     data object NotAsked : Confirmation
 }
 
 /** What the phone's answer to "Restore" did. */
 sealed interface Restored {
-    /** The song is back in its place; Lyrify sees it as a new song, so its lyrics come back with the next lookup. */
+    /** The song is back in its place; KJB sees it as a new song, so its lyrics come back with the next lookup. */
     data object Back : Restored
 
     /** The dialog was cancelled, or the song is still in the trash: nothing changed. */
@@ -97,8 +97,8 @@ sealed interface Restored {
 }
 
 /**
- * What happens to a song once the phone moved its audio file to its trash: the `.lrc` Lyrify wrote for it goes (only
- * while byte for byte what Lyrify wrote), and its ledger entry is updated. A `.lrc` Lyrify did not write stays. The
+ * What happens to a song once the phone moved its audio file to its trash: the `.lrc` KJB wrote for it goes (only
+ * while byte for byte what KJB wrote), and its ledger entry is updated. A `.lrc` KJB did not write stays. The
  * lyrics pipeline in the app.
  */
 fun interface TrashCleanup {
@@ -129,7 +129,7 @@ data class DuplicatesState(
 
     val reviewed: Set<String> get() = memory.reviewed
 
-    /** Songs Lyrify moved to the phone's trash and can still restore, the latest first. */
+    /** Songs KJB moved to the phone's trash and can still restore, the latest first. */
     val trashed: List<TrashedSong> get() = memory.trashed.sortedByDescending { it.trashedAt }
 
     /** The tab's badge: groups not opened yet. */
@@ -139,7 +139,7 @@ data class DuplicatesState(
 /**
  * The Duplicates tab's engine. It finds files that may be one song ([scan]: [identicalKeys], then [DuplicateGrouping])
  * and only ever suggests. Nothing is deleted by it: the only way a file goes is the phone's own trash request
- * ([MediaStoreTrash]), opened after Lyrify's own dialog ([askTrash], [confirmTrash]) for files the user checked, and
+ * ([MediaStoreTrash]), opened after KJB's own dialog ([askTrash], [confirmTrash]) for files the user checked, and
  * settled after the phone's answer ([systemAnswered]). Songs moved there are listed until the phone deletes them, and
  * can be taken back out through the phone's own dialog too ([restore]). Audio files are only read, and only to hash them.
  *
@@ -218,7 +218,7 @@ class Duplicates(
     }
 
     /**
-     * "Move to trash" in [group]'s sheet with the files [ids] checked: Lyrify's own dialog asks first ([TrashStep.Confirm]).
+     * "Move to trash" in [group]'s sheet with the files [ids] checked: KJB's own dialog asks first ([TrashStep.Confirm]).
      * Any files of a group shown now, the suggested keep too (it is only a hint), but never all of them, so one copy
      * always stays. False when [ids] are not such files: nothing is asked.
      */
@@ -233,13 +233,13 @@ class Duplicates(
         return true
     }
 
-    /** "Cancel" in Lyrify's dialog: nothing changes. */
+    /** "Cancel" in KJB's dialog: nothing changes. */
     fun cancelTrash() {
         _state.update { if (it.trash is TrashStep.Confirm) it.copy(trash = TrashStep.None) else it }
     }
 
     /**
-     * "Move to trash" in Lyrify's dialog: the files are remembered (so an answer the app does not live to hear is still
+     * "Move to trash" in KJB's dialog: the files are remembered (so an answer the app does not live to hear is still
      * settled), then their MediaStore ids are returned for the phone's own dialog ([MediaStoreTrash.request]). A changed
      * row blocks the request until the next scan.
      */
@@ -270,7 +270,7 @@ class Duplicates(
 
     /**
      * The phone's dialog answered. [approved] (RESULT_OK): for each file MediaStore confirms is trashed, the lyrics
-     * Lyrify wrote go ([cleanup]) and the file leaves the results. Not approved: nothing changes. Finishes even if the
+     * KJB wrote go ([cleanup]) and the file leaves the results. Not approved: nothing changes. Finishes even if the
      * screen goes.
      */
     suspend fun systemAnswered(approved: Boolean): Trashed = withContext(NonCancellable + io) {
@@ -288,7 +288,7 @@ class Duplicates(
     }
 
     /**
-     * "Restore" on a song Lyrify trashed: its MediaStore id for the phone's own dialog ([MediaStoreTrash.request] with
+     * "Restore" on a song KJB trashed: its MediaStore id for the phone's own dialog ([MediaStoreTrash.request] with
      * trash false). Empty while another dialog is open or the song is not listed.
      */
     fun restore(song: TrashedSong): List<Long> {
@@ -300,7 +300,7 @@ class Duplicates(
 
     /**
      * The phone's restore dialog answered: when [approved] (RESULT_OK) and MediaStore no longer has the song in its trash,
-     * the song leaves the list. Its ledger entry went when it was trashed, so Lyrify sees it as a new song.
+     * the song leaves the list. Its ledger entry went when it was trashed, so KJB sees it as a new song.
      */
     suspend fun restoreAnswered(approved: Boolean): Restored = withContext(NonCancellable + io) {
         val song = (state.value.trash as? TrashStep.Restoring)?.song
@@ -420,7 +420,7 @@ fun sidecarExists(file: AudioFile): Boolean =
  * The phone's trash through MediaStore (Android 11 and later). [request] makes the phone's own dialog that moves songs to
  * its trash or back (`MediaStore.createTrashRequest`), launched by the screen with
  * `ActivityResultContracts.StartIntentSenderForResult`; RESULT_OK means it is done. The phone shows that dialog to every
- * app without the Media management permission (MANAGE_MEDIA), which Lyrify never asks for: the phone always asks the user
+ * app without the Media management permission (MANAGE_MEDIA), which KJB never asks for: the phone always asks the user
  * itself. Trashed files keep their MediaStore id and can be restored for about 30 days; then the phone deletes them.
  * Every request asks [writes] first; a debug build asks only for songs in its test folder.
  */

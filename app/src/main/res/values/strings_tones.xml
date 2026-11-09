@@ -22,7 +22,7 @@
     <string name="tones_rename">Rename</string>
     <string name="tones_delete">Delete tone</string>
     <string name="tones_delete_title">Delete this tone?</string>
-    <string name="tones_delete_text">Lyrify deletes the tone file it made. The song stays as it is.</string>
+    <string name="tones_delete_text">KJB deletes the tone file it made. The song stays as it is.</string>
     <string name="tones_delete_confirm">Delete</string>
     <string name="tones_cancel">Cancel</string>
     <string name="tones_rename_title">Rename tone</string>
@@ -73,14 +73,14 @@
     <string name="tones_saved_as">Saved as %1$s.</string>
     <string name="tones_set">Set</string>
     <string name="tones_not_now">Not now</string>
-    <string name="tones_permission_why">To set it, allow Lyrify to modify system settings.</string>
+    <string name="tones_permission_why">To set it, allow KJB to modify system settings.</string>
     <string name="tones_permission_open">Open settings</string>
     <string name="tones_done_ringtone">Ringtone set</string>
     <string name="tones_done_alarm">Alarm sound set</string>
     <string name="tones_done_notification">Notification sound set</string>
     <string name="tones_two_sims">Using two SIMs? Set the second one in your phone\'s sound settings.</string>
     <string name="tones_open_sound_settings">Open sound settings</string>
-    <string name="tones_alarm_clock">Lyrify set it as your phone\'s alarm sound. Your Clock app may keep its own sound per alarm; pick \'%1$s\' there.</string>
+    <string name="tones_alarm_clock">KJB set it as your phone\'s alarm sound. Your Clock app may keep its own sound per alarm; pick \'%1$s\' there.</string>
     <string name="tones_open_clock">Open Clock</string>
     <string name="tones_not_set_title">Not set</string>
     <string name="tones_not_set">Your phone didn\'t take this sound. Try again.</string>

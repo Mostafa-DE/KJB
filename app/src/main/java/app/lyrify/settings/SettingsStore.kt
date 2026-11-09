@@ -93,7 +93,7 @@ internal fun readableSettings(data: Flow<Settings>, log: (String) -> Unit): Flow
 
 /**
  * The app's settings: app-private `files/datastore/settings.json`, copies of an unreadable one in `files`; never backed
- * up by the phone (allowBackup is off; Lyrify's own backup holds them from 3.0). One store per process.
+ * up by the phone (allowBackup is off; KJB's own backup holds them from 3.0). One store per process.
  */
 private object SettingsFile {
     private var store: DataStore<Settings>? = null

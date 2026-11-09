@@ -24,9 +24,9 @@ qnnRuntime = "2.50.0"
 # Covers in the song list and on the now-playing card, from MediaStore (no network artifact). Built with Kotlin 2.4.10 and
 # Compose 1.12.0; published 2026-09-18.
 coil = "3.6.3"
-# Lyrify 3.0's player (milestone M0 adds every 3.0 dependency at once): Media3 1.11.1, the latest stable on Google Maven on
+# KJB 3.0's player (milestone M0 adds every 3.0 dependency at once): Media3 1.11.1, the latest stable on Google Maven on
 # 2026-11-09 (1.12 is alpha). Many of its APIs are @UnstableApi, opted in per file; Media3 is upgraded only on purpose,
-# with the device tests. Not used: media3-ui, media3-ui-compose (Lyrify draws its own UI), media3-cast (proprietary Cast SDK).
+# with the device tests. Not used: media3-ui, media3-ui-compose (KJB draws its own UI), media3-cast (proprietary Cast SDK).
 media3 = "1.11.1"
 # Device tests (app/src/androidTest), run on the debug build only.
 androidxTest = "1.7.0"

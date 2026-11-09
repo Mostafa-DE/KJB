@@ -394,7 +394,7 @@ private fun TabTopBar(
 
 /**
  * The one-line banners under the top bar, each with a button that opens its sheet: the song list unreadable (every tab),
- * and Lyrify not seeing the music app (Now; pass [connected] true elsewhere).
+ * and KJB not seeing the music app (Now; pass [connected] true elsewhere).
  */
 @Composable
 private fun ShellBanners(readable: Boolean, connected: Boolean, onOpenNotificationAccess: () -> Unit, modifier: Modifier = Modifier) {

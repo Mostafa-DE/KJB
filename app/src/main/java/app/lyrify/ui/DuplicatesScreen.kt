@@ -278,7 +278,7 @@ fun DuplicatesTopBar(scrollBehavior: TopAppBarScrollBehavior, backdrop: GlassBac
 
 /**
  * The Duplicates tab: before the first scan, the scan's ring, or the groups found by confidence and the songs in the
- * phone's trash. A group opens its sheet; moving copies to the trash asks twice, Lyrify's dialog and then the phone's.
+ * phone's trash. A group opens its sheet; moving copies to the trash asks twice, KJB's dialog and then the phone's.
  */
 @Composable
 fun DuplicatesScreen(contentPadding: PaddingValues, toasts: ToastState) {
@@ -526,7 +526,7 @@ private fun GroupCard(group: DuplicateGroup, modifier: Modifier, onOpen: () -> U
     }
 }
 
-/** A song Lyrify moved to the phone's trash: its title, where it was and until when it can come back, and Restore. */
+/** A song KJB moved to the phone's trash: its title, where it was and until when it can come back, and Restore. */
 @Composable
 fun TrashedRow(song: TrashedSong, modifier: Modifier = Modifier, onRestore: () -> Unit) {
     val context = LocalContext.current

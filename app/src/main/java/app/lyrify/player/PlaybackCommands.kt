@@ -20,7 +20,7 @@ fun interface Undo {
 }
 
 /**
- * What lists, sheets, search and the widget ask of Lyrify's own player. player/PlayerConnection.kt implements it
+ * What lists, sheets, search and the widget ask of KJB's own player. player/PlayerConnection.kt implements it
  * (milestone P1); until then [NoPlayback]. Called on the main thread; never blocks.
  */
 interface PlaybackCommands {

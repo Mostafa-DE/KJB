@@ -52,7 +52,7 @@ data class NpuChip(
     }
 }
 
-/** The chips the AI runs on. Any other phone has no AI lyrics; the rest of Lyrify works everywhere. */
+/** The chips the AI runs on. Any other phone has no AI lyrics; the rest of KJB works everywhere. */
 object NpuChips {
     /** `Build.SOC_MANUFACTURER` of Qualcomm chips. */
     const val MANUFACTURER: String = "QTI"

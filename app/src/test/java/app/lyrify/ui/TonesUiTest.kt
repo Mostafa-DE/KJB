@@ -201,7 +201,7 @@ class TonesUiTest {
         assertEquals(DefaultSheet.Step.WAITING, stepAfter(DefaultOutcome.AskedPermission))
         assertEquals(DefaultSheet.Step.NO_SCREEN, stepAfter(DefaultOutcome.NoPermissionScreen))
         assertEquals(DefaultSheet.Step.DONE, stepAfter(DefaultOutcome.Set(ToneKind.RINGTONE)))
-        assertEquals(DefaultSheet.Step.DONE, stepAfter(DefaultOutcome.AlarmSet("Glass Harbor (Lyrify)")))
+        assertEquals(DefaultSheet.Step.DONE, stepAfter(DefaultOutcome.AlarmSet("Glass Harbor (KJB)")))
         assertEquals(DefaultSheet.Step.NOT_SET, stepAfter(DefaultOutcome.NotSet))
     }
 
@@ -244,7 +244,7 @@ class TonesUiTest {
     }
 
     @Test
-    fun `a sheet not waiting is left as it is when Lyrify comes back`() {
+    fun `a sheet not waiting is left as it is when KJB comes back`() {
         val sounds = FakeSounds(writable = true)
         DefaultSheet.Step.entries.filter { it != DefaultSheet.Step.WAITING }.forEach { step ->
             assertEquals(ask.copy(step = step), ask.copy(step = step).resumed(ToneDefaults(sounds), tone(41)))

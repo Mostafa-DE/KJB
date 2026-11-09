@@ -1,4 +1,4 @@
-# Lyrify release shrinking rules.
+# KJB release shrinking rules.
 #
 # The activity and the notification listener are referenced from the manifest, which AGP
 # keeps automatically. kotlinx.serialization, DataStore, coroutines and Compose ship their

@@ -333,7 +333,7 @@ private fun PlayerChip(track: CurrentTrack?) {
     }
 }
 
-/** The player's app icon; null when the phone does not show Lyrify that app. */
+/** The player's app icon; null when the phone does not show KJB that app. */
 @Composable
 private fun rememberAppIcon(packageName: String?): ImageBitmap? {
     val context = LocalContext.current
@@ -465,7 +465,7 @@ private fun GroupStat(group: SongGroup, count: Int, modifier: Modifier, onClick:
     }
 }
 
-/** "3 lookups failed · Retry": Lyrify retries by itself, this does it at once. */
+/** "3 lookups failed · Retry": KJB retries by itself, this does it at once. */
 @Composable
 private fun RetryRow(failed: Int, retrying: Boolean, canRetry: Boolean, onRetryFailed: () -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -482,7 +482,7 @@ private fun RetryRow(failed: Int, retrying: Boolean, canRetry: Boolean, onRetryF
     }
 }
 
-/** The last songs Lyrify handled, as covers with their status badge; "See all" opens Songs, recent first. */
+/** The last songs KJB handled, as covers with their status badge; "See all" opens Songs, recent first. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun RecentCarousel(recent: List<LedgerEntry>, onSeeAll: () -> Unit, onOpen: (String) -> Unit) {

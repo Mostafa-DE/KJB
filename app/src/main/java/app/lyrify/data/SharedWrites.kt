@@ -11,7 +11,7 @@ import java.nio.file.Paths
 import java.nio.file.attribute.BasicFileAttributes
 
 /**
- * Every kind of change Lyrify makes to shared storage, the user's own files: each one asks [SharedWrites] first. Kinds
+ * Every kind of change KJB makes to shared storage, the user's own files: each one asks [SharedWrites] first. Kinds
  * a later milestone adds are listed here before their writer exists, so the list is the whole picture.
  */
 enum class SharedWrite {
@@ -21,7 +21,7 @@ enum class SharedWrite {
     /** An existing `.lrc` replaced, after the user saved it in the sync editor (3.0, lyrics/LrcEdits.kt). */
     LRC_REPLACE,
 
-    /** A `.lrc` Lyrify wrote, deleted when the user removes it or trashes its song, or Lyrify's own interrupted write. */
+    /** A `.lrc` KJB wrote, deleted when the user removes it or trashes its song, or KJB's own interrupted write. */
     LRC_DELETE,
 
     /** A new tone file in Ringtones/, Alarms/ or Notifications/ (tones/ToneFiles.kt). */
@@ -120,7 +120,7 @@ class SharedWrites(
 
     companion object {
         /** The folder a debug build may change, relative to a volume's root (as MediaStore's RELATIVE_PATH has it). */
-        const val TEST_FOLDER: String = "Music/Lyrify test/"
+        const val TEST_FOLDER: String = "Music/KJB test/"
 
         /** Everywhere, as 2.0: release builds, and tests of writers that are not about this rule. */
         val ANYWHERE: SharedWrites = SharedWrites(testFolderOnly = false)

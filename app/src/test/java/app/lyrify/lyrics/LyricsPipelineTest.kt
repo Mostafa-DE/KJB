@@ -842,7 +842,7 @@ class LyricsPipelineTest {
     }
 
     @Test
-    fun `removing lyrics Lyrify wrote deletes exactly that file`() = runTest {
+    fun `removing lyrics KJB wrote deletes exactly that file`() = runTest {
         val (pipeline, track) = written()
         delay(MINUTE)
 
@@ -858,7 +858,7 @@ class LyricsPipelineTest {
     }
 
     @Test
-    fun `a lyrics file changed outside Lyrify is left alone`() = runTest {
+    fun `a lyrics file changed outside KJB is left alone`() = runTest {
         val (pipeline, track) = written()
         sidecar(track).appendText("[01:10.000]my own line\n")
 
@@ -997,7 +997,7 @@ class LyricsPipelineTest {
     }
 
     @Test
-    fun `lyrics Lyrify did not write cannot be removed`() = runTest {
+    fun `lyrics KJB did not write cannot be removed`() = runTest {
         val track = audio()
         sidecar(track).writeText("[00:01.000]mine\n")
         val pipeline = pipeline()

@@ -255,7 +255,7 @@ class DuplicatesTest {
     }
 
     @Test
-    fun `Lyrify's dialog asks first, for any copies of a shown group but never every one`() = runTest {
+    fun `KJB's dialog asks first, for any copies of a shown group but never every one`() = runTest {
         library(song(1, "same bytes"), song(2, "same bytes", folderName = "b"), song(3, "same bytes", folderName = "c"))
         val engine = engine()
         val group = scanned(engine).groups.single()

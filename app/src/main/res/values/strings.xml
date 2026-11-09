@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources xmlns:tools="http://schemas.android.com/tools">
-    <string name="app_name">Lyrify</string>
+    <string name="app_name">KJB</string>
 
     <!-- App shell -->
     <string name="menu_search">Search songs</string>
@@ -18,9 +18,9 @@
     <string name="banner_fix">Fix</string>
     <string name="banner_why">Why?</string>
     <string name="listener_not_connected_title">Can\'t see your music app</string>
-    <string name="listener_not_connected">Turn Lyrify\'s notification access off and on again.</string>
+    <string name="listener_not_connected">Turn KJB\'s notification access off and on again.</string>
     <string name="ledger_unreadable_title">Can\'t read the song list</string>
-    <string name="ledger_unreadable">Lyrify pauses until it can read it again. If your phone is low on space, free some up.</string>
+    <string name="ledger_unreadable">KJB pauses until it can read it again. If your phone is low on space, free some up.</string>
 
     <!-- First run -->
     <string name="setup_intro">Synced lyrics for your music</string>
@@ -29,7 +29,7 @@
     <string name="setup_notifications_detail">Which song plays, and what\'s next.</string>
     <string name="setup_notifications_action">Open notification access</string>
     <string name="setup_files_title">Save lyrics files</string>
-    <string name="setup_files_detail">Next to your songs. Lyrify never changes your music on its own.</string>
+    <string name="setup_files_detail">Next to your songs. KJB never changes your music on its own.</string>
     <string name="setup_allow">Allow</string>
     <string name="setup_done">On</string>
     <string name="setup_restricted_title">Greyed out?</string>
@@ -38,8 +38,8 @@
     <string name="setup_optional">Optional</string>
     <string name="setup_battery_detail">Helps on phones that stop apps in the background.</string>
     <!-- TalkBack name of the help button on the Keep running card. -->
-    <string name="setup_battery_help">How to keep Lyrify running</string>
-    <string name="setup_battery_sheet">In App info, open Battery and choose Unrestricted. If your phone has a list of apps that never sleep, add Lyrify.</string>
+    <string name="setup_battery_help">How to keep KJB running</string>
+    <string name="setup_battery_sheet">In App info, open Battery and choose Unrestricted. If your phone has a list of apps that never sleep, add KJB.</string>
     <string name="setup_privacy">Only title, artist, album and length leave your phone.</string>
     <string name="open_app_info">Open App info</string>
 
@@ -50,7 +50,7 @@
     <string name="playing_idle_detail">Play a song in any music app.</string>
     <string name="playing_finding_file">Finding the file…</string>
     <string name="playing_no_file">No file found</string>
-    <string name="playing_no_file_detail">Lyrify adds lyrics to song files stored on your phone, and couldn\'t find a file for this song. Streamed songs have no file. If this one is on your phone, it may be in a folder your phone hides from music apps.</string>
+    <string name="playing_no_file_detail">KJB adds lyrics to song files stored on your phone, and couldn\'t find a file for this song. Streamed songs have no file. If this one is on your phone, it may be in a folder your phone hides from music apps.</string>
     <string name="playing_looking_up">Looking up…</string>
     <string name="wrong_lyrics">Wrong lyrics</string>
     <!-- The queue line: "34/120"; TalkBack hears sweep_progress or sweep_paused. -->
@@ -92,25 +92,25 @@
     <string name="status_synced">Synced</string>
     <string name="status_synced_sentence">Shows in your music app next time the song starts.</string>
     <string name="status_existing">Had lyrics</string>
-    <string name="status_existing_sentence">It already had a lyrics file. Lyrify left it alone.</string>
+    <string name="status_existing_sentence">It already had a lyrics file. KJB left it alone.</string>
     <string name="status_ai_aligned">AI synced</string>
     <string name="status_ai_aligned_sentence">The AI synced plain lyrics to this song.</string>
     <string name="status_ai_transcribed">AI written</string>
     <string name="status_ai_transcribed_sentence">The AI wrote down what it heard.</string>
     <string name="status_needs_check">To check</string>
-    <string name="status_needs_check_sentence">Lyrify found lyrics that may fit. Pick the right ones.</string>
+    <string name="status_needs_check_sentence">KJB found lyrics that may fit. Pick the right ones.</string>
     <string name="status_plain_only">Not synced</string>
     <string name="status_plain_only_sentence">Plain lyrics found. The AI syncs them tonight.</string>
     <string name="status_plain_only_sentence_ai_off">Plain lyrics found. Turn on AI lyrics to sync them.</string>
     <string name="status_plain_only_sentence_no_ai">Plain lyrics found. This phone can\'t sync them.</string>
     <string name="status_error">Retrying</string>
-    <string name="status_error_sentence">The lyrics service didn\'t answer. Lyrify retries soon.</string>
+    <string name="status_error_sentence">The lyrics service didn\'t answer. KJB retries soon.</string>
     <string name="status_ai_failed">AI retry</string>
     <string name="status_ai_failed_sentence">The AI couldn\'t finish. It retries in a day or so.</string>
     <string name="status_writing">Saving</string>
     <string name="status_writing_sentence">Saving the lyrics file.</string>
     <string name="status_not_found">Not found</string>
-    <string name="status_not_found_sentence">No lyrics online. Lyrify looks again in a month.</string>
+    <string name="status_not_found_sentence">No lyrics online. KJB looks again in a month.</string>
     <string name="status_not_found_sentence_ai_on">No lyrics online. The AI can write them tonight.</string>
     <string name="status_instrumental">Instrumental</string>
     <string name="status_instrumental_sentence">Marked instrumental. No lyrics needed.</string>
@@ -121,9 +121,9 @@
     <string name="status_duration_mismatch">Other version</string>
     <string name="status_duration_mismatch_sentence">Synced lyrics exist only for another length, like a live version.</string>
     <string name="status_unidentified">No artist</string>
-    <string name="status_unidentified_sentence">No artist name, so Lyrify can\'t look it up safely.</string>
+    <string name="status_unidentified_sentence">No artist name, so KJB can\'t look it up safely.</string>
     <string name="status_removed">Removed</string>
-    <string name="status_removed_sentence">You removed these. Lyrify won\'t add them again.</string>
+    <string name="status_removed_sentence">You removed these. KJB won\'t add them again.</string>
 
     <!-- Songs -->
     <string name="songs_title">Songs</string>
@@ -160,16 +160,16 @@
     <!-- Removing lyrics -->
     <string name="remove_lyrics">Remove lyrics</string>
     <string name="remove_title">Remove these lyrics?</string>
-    <string name="remove_text">Lyrify deletes its lyrics file and won\'t add lyrics for this song again.</string>
+    <string name="remove_text">KJB deletes its lyrics file and won\'t add lyrics for this song again.</string>
     <string name="remove_confirm">Remove</string>
     <string name="remove_cancel">Cancel</string>
     <string name="removal_done">Lyrics removed</string>
     <!-- Only while Samsung Music is the player followed; %1$s is its name. -->
     <string name="removal_done_samsung">Lyrics removed. %1$s may show them until it restarts.</string>
-    <string name="removal_changed">File changed outside Lyrify. Left as is.</string>
+    <string name="removal_changed">File changed outside KJB. Left as is.</string>
     <string name="removal_failed">Couldn\'t remove the file. Try again.</string>
     <string name="removal_gone">File already gone. No new lyrics for this song.</string>
-    <string name="not_removable">Changed outside Lyrify. Remove it with a file manager.</string>
+    <string name="not_removable">Changed outside KJB. Remove it with a file manager.</string>
 
     <!-- Check these -->
     <string name="check_open">Pick lyrics</string>
@@ -177,7 +177,7 @@
     <string name="check_back">Back</string>
     <string name="check_position" tools:ignore="PluralsCandidate">%1$d of %2$d</string>
     <string name="check_info_cd">About Check these</string>
-    <string name="check_info">Lyrify found lyrics that may fit these songs, but isn\'t sure. Pick the right ones, or say none fit.</string>
+    <string name="check_info">KJB found lyrics that may fit these songs, but isn\'t sure. Pick the right ones, or say none fit.</string>
     <string name="check_file_cd">File %1$s</string>
     <!-- Artist and length under the song's title, "The Quiet Harbour · 3:52". -->
     <string name="check_artist_length">%1$s · %2$s</string>
@@ -215,7 +215,7 @@
     <string name="check_done_existing">It already has a lyrics file. Left as is.</string>
     <string name="check_gone">Those lyrics are gone or don\'t fit any more.</string>
     <string name="check_changed">Already sorted out.</string>
-    <string name="check_not_saved">Couldn\'t save. Lyrify tries again later.</string>
+    <string name="check_not_saved">Couldn\'t save. KJB tries again later.</string>
 
     <!-- AI -->
     <string name="ai_title">AI lyrics</string>
@@ -264,13 +264,13 @@
     <string name="ai_held_not_allowed">Blocked by battery settings</string>
     <string name="ai_held_not_allowed_detail">Your phone didn\'t let the AI start. Set battery use to Unrestricted.</string>
     <string name="ai_held_limit">Paused for today</string>
-    <string name="ai_held_limit_detail">Your phone allows about 6 hours a day. Opening Lyrify gives more time.</string>
+    <string name="ai_held_limit_detail">Your phone allows about 6 hours a day. Opening KJB gives more time.</string>
     <string name="ai_held_model">Paused until the next update</string>
     <string name="ai_held_model_detail">The AI couldn\'t start on this phone. Deleting and downloading the AI again also retries.</string>
     <string name="ai_held_crashed">Paused until the next update</string>
     <string name="ai_held_crashed_detail">The AI stopped unexpectedly several times in a row.</string>
     <string name="ai_held_npu">AI chip busy, retrying soon</string>
-    <string name="ai_held_npu_detail">Lyrify tries again within the hour.</string>
+    <string name="ai_held_npu_detail">KJB tries again within the hour.</string>
     <string name="ai_all_done">All caught up</string>
     <string name="ai_all_done_detail">No songs are waiting for AI lyrics.</string>
     <string name="ai_results_title">Results</string>

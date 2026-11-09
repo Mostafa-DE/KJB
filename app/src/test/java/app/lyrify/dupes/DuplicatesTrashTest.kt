@@ -56,7 +56,7 @@ class DuplicatesTrashTest {
 
     private fun lrc(file: AudioFile) = File(LrcFormat.sidecarPath(file.path) ?: error("no sidecar"))
 
-    /** Keep 1 and copy 2 have lyrics Lyrify wrote; copy 3 has the user's own `.lrc`. */
+    /** Keep 1 and copy 2 have lyrics KJB wrote; copy 3 has the user's own `.lrc`. */
     private suspend fun TestScope.library(): List<AudioFile> {
         val files = listOf(copy(1, "a"), copy(2, "b"), copy(3, "c"))
         lrc(files[2]).writeText("[00:01.00]the user's own")
@@ -101,7 +101,7 @@ class DuplicatesTrashTest {
     }
 
     @Test
-    fun `the phone's OK moves the checked copies, and only the lyrics Lyrify wrote for them go`() = runTest {
+    fun `the phone's OK moves the checked copies, and only the lyrics KJB wrote for them go`() = runTest {
         val files = library()
         val engine = engine(files, pipeline())
         val group = scannedGroup(engine)
@@ -139,7 +139,7 @@ class DuplicatesTrashTest {
     }
 
     @Test
-    fun `cancel in Lyrify's dialog changes nothing and asks the phone nothing`() = runTest {
+    fun `cancel in KJB's dialog changes nothing and asks the phone nothing`() = runTest {
         val files = library()
         val engine = engine(files, pipeline())
         val group = scannedGroup(engine)
@@ -152,7 +152,7 @@ class DuplicatesTrashTest {
     }
 
     @Test
-    fun `a song restored from the trash gets the lyrics Lyrify wrote for it again`() = runTest {
+    fun `a song restored from the trash gets the lyrics KJB wrote for it again`() = runTest {
         val files = library()
         val pipeline = pipeline()
         val engine = engine(files, pipeline)

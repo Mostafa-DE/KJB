@@ -24,8 +24,8 @@ import org.junit.Test
  */
 class ContractsTest {
     private val songs = listOf(
-        SongRef("/storage/emulated/0/Music/Lyrify test/Paper Lantern.mp3", mediaStoreId = 12),
-        SongRef("/storage/emulated/0/Music/Lyrify test/Tin Roof.flac"),
+        SongRef("/storage/emulated/0/Music/KJB test/Paper Lantern.mp3", mediaStoreId = 12),
+        SongRef("/storage/emulated/0/Music/KJB test/Tin Roof.flac"),
     )
     private val album = QueueSource(SourceKind.ALBUM, "Harbour Glass|Kit Calloway", "Harbour Glass")
 
@@ -33,7 +33,7 @@ class ContractsTest {
     fun `a song's file name is the last part of its path`() {
         val song = Song(
             songs[0], "Paper Lantern", "Kit Calloway", "Harbour Glass", "Kit Calloway", 201_000, 3, 1, 2021, "Folk",
-            "Music/Lyrify test/", addedAt = 5, modifiedAt = 6, sizeBytes = 4_000_000, mimeType = "audio/mpeg",
+            "Music/KJB test/", addedAt = 5, modifiedAt = 6, sizeBytes = 4_000_000, mimeType = "audio/mpeg",
         )
         assertEquals("Paper Lantern.mp3", song.fileName)
         assertEquals(songs[0].path, song.path)

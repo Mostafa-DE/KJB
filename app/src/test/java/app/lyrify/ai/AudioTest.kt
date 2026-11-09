@@ -13,7 +13,7 @@ import kotlin.math.abs
 import kotlin.math.sin
 import kotlin.math.sqrt
 
-/** Resampling to the mix rate, whole and streamed, the channel mean and frame RMS (the CPU spike's tests, plus Lyrify's); the decoder's output and limits. */
+/** Resampling to the mix rate, whole and streamed, the channel mean and frame RMS (the CPU spike's tests, plus KJB's); the decoder's output and limits. */
 class AudioTest {
     private fun sine(freq: Double, rate: Int, seconds: Double, amplitude: Double = 0.8): FloatArray =
         FloatArray((rate * seconds).toInt()) { i -> (amplitude * sin(2 * PI * freq * i / rate)).toFloat() }

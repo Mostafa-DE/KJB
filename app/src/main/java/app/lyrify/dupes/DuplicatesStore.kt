@@ -28,11 +28,11 @@ data class DuplicatesMemory(
      * did not live to hear is still settled ([Duplicates]); empty otherwise.
      */
     val pendingTrash: List<AudioFile> = emptyList(),
-    /** Songs Lyrify moved to the phone's trash, restorable from the tab until they expire. */
+    /** Songs KJB moved to the phone's trash, restorable from the tab until they expire. */
     val trashed: List<TrashedSong> = emptyList(),
 )
 
-/** A song Lyrify moved to the phone's trash, at [trashedAt]: [file] as it was, restorable until [expiresAt] (wall-clock millis). */
+/** A song KJB moved to the phone's trash, at [trashedAt]: [file] as it was, restorable until [expiresAt] (wall-clock millis). */
 @Serializable
 data class TrashedSong(val file: AudioFile, val trashedAt: Long, val expiresAt: Long)
 

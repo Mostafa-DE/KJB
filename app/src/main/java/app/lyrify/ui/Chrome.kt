@@ -407,7 +407,7 @@ private fun TabBadge.words(): String = count?.let { pluralStringResource(descrip
 // Top bars
 
 /**
- * Lyrify's top bar: the title in Bricolage, its navigation and actions as glass circles. Clear at rest; once content is
+ * KJB's top bar: the title in Bricolage, its navigation and actions as glass circles. Clear at rest; once content is
  * [under] it, a glass band and a hairline fade in. No colour flip.
  */
 @Composable
@@ -521,7 +521,7 @@ fun LyrifySearchField(
 
 // Menus
 
-/** Lyrify's menu: DropdownMenu (its anchoring, dismiss and focus) as a 20 dp card with a hairline and a soft shadow. */
+/** KJB's menu: DropdownMenu (its anchoring, dismiss and focus) as a 20 dp card with a hairline and a soft shadow. */
 @Composable
 fun LyrifyMenu(expanded: Boolean, onDismiss: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
     DropdownMenu(
@@ -572,7 +572,7 @@ fun MenuRow(text: String, @DrawableRes icon: Int?, onClick: () -> Unit, selected
 data class Toast(val text: String, @DrawableRes val icon: Int? = null, val tone: Tone? = null, val action: String? = null)
 
 /**
- * Lyrify's messages, in place of SnackbarHostState: one at a time, in order. [show] waits until the message has gone
+ * KJB's messages, in place of SnackbarHostState: one at a time, in order. [show] waits until the message has gone
  * and says whether its action was tapped. A message shows in the newest [ToastSlot] on screen (the shell's above the
  * dock, else the open sheet's or full screen's above its buttons), so it never sits on a control.
  */

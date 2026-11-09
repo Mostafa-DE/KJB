@@ -11,9 +11,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-/** The app whose media session Lyrify follows, with [name] as the phone shows it. */
+/** The app whose media session KJB follows, with [name] as the phone shows it. */
 data class Player(val packageName: String, val name: String) {
-    /** The player Lyrify's `.lrc` files and its advice were checked against: advice about Samsung Music is for it only. */
+    /** The player KJB's `.lrc` files and its advice were checked against: advice about Samsung Music is for it only. */
     val isSamsungMusic: Boolean get() = packageName == SAMSUNG_MUSIC
 
     companion object {

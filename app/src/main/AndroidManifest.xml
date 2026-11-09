@@ -15,7 +15,7 @@
     <uses-permission android:name="android.permission.WRITE_SETTINGS" />
 
     <!-- Tones, "Open Clock" after an alarm sound is set: clock apps open their alarm list (AlarmClock.ACTION_SHOW_ALARMS)
-         only for apps holding SET_ALARM (AOSP DeskClock guards it so). A normal permission, granted at install. Lyrify
+         only for apps holding SET_ALARM (AOSP DeskClock guards it so). A normal permission, granted at install. KJB
          never sets, changes or dismisses an alarm. -->
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
 
@@ -32,7 +32,7 @@
 
     <!-- lyrics lock: permissions -->
 
-    <!-- androidx.core adds this one for dynamic receivers Lyrify never registers. -->
+    <!-- androidx.core adds this one for dynamic receivers KJB never registers. -->
     <uses-permission
         android:name="${applicationId}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
         tools:node="remove" />
@@ -46,9 +46,9 @@
          GitHub and Hugging Face only); ACCESS_NETWORK_STATE for that download's unmetered-network constraint. The AI
          itself never goes online. -->
 
-    <!-- Package visibility (not a permission), for the name of the app whose media session Lyrify follows
+    <!-- Package visibility (not a permission), for the name of the app whose media session KJB follows
          ("Playing in ..."), and for "Open Clock" below: reading sessions needs none. Players show up as apps with a launcher icon or a media
-         browser service; Lyrify does not keep a list of players. -->
+         browser service; KJB does not keep a list of players. -->
     <queries>
         <intent>
             <action android:name="android.intent.action.MAIN" />
@@ -126,7 +126,7 @@
 
         <!-- player -->
         <!-- media3-session adds an activity only the phone's Bluetooth stack may open, so that Bluetooth lists the app as a
-             media player. Lyrify plays nothing yet: left out until P1 adds the player, which deletes this removal. -->
+             media player. KJB plays nothing yet: left out until P1 adds the player, which deletes this removal. -->
         <activity
             android:name="androidx.media3.session.BluetoothValidationActivity"
             tools:node="remove" />

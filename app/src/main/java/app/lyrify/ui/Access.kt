@@ -13,7 +13,7 @@ import androidx.core.app.NotificationManagerCompat
 import app.lyrify.LOG_TAG
 import app.lyrify.media.NowPlayingListener
 
-/** The two grants Lyrify needs; the setup screen shows until both are on. */
+/** The two grants KJB needs; the setup screen shows until both are on. */
 data class Access(val notifications: Boolean, val allFiles: Boolean) {
     val complete: Boolean get() = notifications && allFiles
 
@@ -23,17 +23,17 @@ data class Access(val notifications: Boolean, val allFiles: Boolean) {
 }
 
 /**
- * True when Lyrify is exempt from battery optimisation (battery use "Unrestricted"): the phone then lets it start the
+ * True when KJB is exempt from battery optimisation (battery use "Unrestricted"): the phone then lets it start the
  * AI's foreground service from the background at night.
  */
 fun isUnrestricted(context: Context): Boolean =
     context.getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(context.packageName)
 
-/** True when the user has switched Lyrify on in Notification access (Device and app notifications). */
+/** True when the user has switched KJB on in Notification access (Device and app notifications). */
 fun hasNotificationAccess(context: Context): Boolean =
     context.packageName in NotificationManagerCompat.getEnabledListenerPackages(context)
 
-/** Lyrify's own switch in notification access, else the list of all listeners. */
+/** KJB's own switch in notification access, else the list of all listeners. */
 fun notificationAccessIntents(context: Context): List<Intent> = listOf(
     Intent(Settings.ACTION_NOTIFICATION_LISTENER_DETAIL_SETTINGS).putExtra(
         Settings.EXTRA_NOTIFICATION_LISTENER_COMPONENT_NAME,
@@ -42,7 +42,7 @@ fun notificationAccessIntents(context: Context): List<Intent> = listOf(
     Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS),
 )
 
-/** Lyrify's own All files access switch, else the list of apps with that access. */
+/** KJB's own All files access switch, else the list of apps with that access. */
 fun allFilesAccessIntents(context: Context): List<Intent> = listOf(
     Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, packageUri(context)),
     Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION),

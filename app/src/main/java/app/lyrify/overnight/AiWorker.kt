@@ -121,7 +121,7 @@ class AiWorker(context: Context, params: WorkerParameters) : CoroutineWorker(con
         runLog.append(
             "AI: run started: ${AiLyrics.battery(context)}, thermal status ${power.currentThermalStatus}, " +
                 "${NpuChips.device()?.socModel} NPU, ONNX Runtime ${BuildConfig.ORT_VERSION}, QNN EP ${BuildConfig.QNN_EP_VERSION}, " +
-                "QNN ${BuildConfig.QNN_RUNTIME_VERSION}, $AI_THREADS CPU threads, Lyrify ${BuildConfig.VERSION_NAME}",
+                "QNN ${BuildConfig.QNN_RUNTIME_VERSION}, $AI_THREADS CPU threads, KJB ${BuildConfig.VERSION_NAME}",
         )
         val log: (String) -> Unit = {
             Log.i(LOG_TAG, it)
@@ -419,7 +419,7 @@ object AiLyrics {
      * Written at once (commit): the process may be killed right after the timeout.
      */
     internal fun limitReached(context: Context, now: Long) {
-        runLog(context).append("AI: holding off for a day or until Lyrify is opened (daily limit for long media work)")
+        runLog(context).append("AI: holding off for a day or until KJB is opened (daily limit for long media work)")
         preferences(context).edit(commit = true) { putLong(LIMIT_REACHED_AT, now) }
         _hold.value = AiHold.DAILY_LIMIT
     }

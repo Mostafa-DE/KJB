@@ -13,7 +13,7 @@
 
     <!-- Before the first scan, scanning, failed -->
     <string name="dupes_empty_title">Find duplicates</string>
-    <string name="dupes_empty">Lyrify looks for songs stored twice. Nothing is deleted unless you choose.</string>
+    <string name="dupes_empty">KJB looks for songs stored twice. Nothing is deleted unless you choose.</string>
     <string name="dupes_scan">Scan my songs</string>
     <string name="dupes_scanning">Scanning %1$s/%2$s</string>
     <string name="dupes_scanning_start">Scanning…</string>
@@ -25,7 +25,7 @@
     </plurals>
     <string name="dupes_scan_done_none">Scan done. No duplicates found.</string>
     <string name="dupes_failed_title">Can\'t read your songs</string>
-    <string name="dupes_failed">Check that Lyrify still has access to all files on your phone.</string>
+    <string name="dupes_failed">Check that KJB still has access to all files on your phone.</string>
     <string name="dupes_try_again">Try again</string>
 
     <!-- Results -->

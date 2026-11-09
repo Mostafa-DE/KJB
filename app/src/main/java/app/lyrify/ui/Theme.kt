@@ -82,7 +82,7 @@ val LauncherCoral: Color = Color(0xFFFF8A70)
 /** Side margin of every screen (M3 compact window margin). */
 val ScreenPadding = 16.dp
 
-/** The Lyrify palette, for phones without dynamic colour (Android 11): ink as primary, coral as tertiary. */
+/** The KJB palette, for phones without dynamic colour (Android 11): ink as primary, coral as tertiary. */
 internal val LightColors = lightColorScheme(
     primary = Color(0xFF4F44A6),
     onPrimary = Color(0xFFFFFFFF),
@@ -210,7 +210,7 @@ val LocalStatusColors = staticCompositionLocalOf { LightStatusColors }
 val LocalDarkTheme = staticCompositionLocalOf { false }
 
 /**
- * Lyrify's accent on top of either scheme: [highlight] is the "sung line" coral (the glyph's sung part, the queue bar, the
+ * KJB's accent on top of either scheme: [highlight] is the "sung line" coral (the glyph's sung part, the queue bar, the
  * AI ring, the active filter's underline); [highlightContainer] is for brand surfaces only, never a status.
  */
 @Immutable
@@ -230,7 +230,7 @@ fun harmonize(color: Color, toward: Color): Color {
     return Color(ColorUtils.HSLToColor(from))
 }
 
-/** The brand colours nudged toward a wallpaper scheme's [primary], so the coral sits inside it and stays Lyrify's. */
+/** The brand colours nudged toward a wallpaper scheme's [primary], so the coral sits inside it and stays KJB's. */
 private fun BrandColors.harmonized(primary: Color) = copy(highlight = harmonize(highlight, primary), highlightContainer = harmonize(highlightContainer, primary))
 
 /** Bricolage Grotesque (SIL OFL 1.1), the variable font at weight 600: titles and big numbers only. */
@@ -267,7 +267,7 @@ private val AppShapes = Shapes(
 
 /**
  * Dynamic colour from the wallpaper on Android 12 and later (the brand accent and status tones harmonised toward it),
- * the Lyrify palette before; light or dark as the phone is. Lyrify's chrome on top: its colours, its press feedback in
+ * the KJB palette before; light or dark as the phone is. KJB's chrome on top: its colours, its press feedback in
  * place of the ripple, reduced motion and the glass switch, read again each time the app comes back.
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -313,7 +313,7 @@ fun LyrifyTheme(content: @Composable () -> Unit) {
 // The chrome
 
 /**
- * Lyrify's chrome on either scheme: ink [action] for primary buttons, the ink [toast] with a coral [toastAction], the
+ * KJB's chrome on either scheme: ink [action] for primary buttons, the ink [toast] with a coral [toastAction], the
  * frosted [glass] of the dock and top bar (as opaque as it must be for its text over any content, [glassAlpha];
  * [glassSolid] when nothing blurs under it), the soft [shadow] of floating chrome, the brand-tinted [scrim] behind sheets
  * and dialogs, and their [sheet] card.
@@ -388,13 +388,13 @@ private fun glassOn(context: Context): Boolean {
     return glassBlurs(Build.VERSION.SDK_INT, powerSave, contrast)
 }
 
-/** The sung line, Lyrify's one "selected" mark: the dock, the segmented control and the Songs status bar draw it. */
+/** The sung line, KJB's one "selected" mark: the dock, the segmented control and the Songs status bar draw it. */
 internal val SUNG_LINE_WIDTH = 18.dp
 internal val SUNG_LINE_HEIGHT = 3.dp
 
 // Motion
 
-/** Lyrify's springs; with reduced motion every one of them is snap() ([motion]). */
+/** KJB's springs; with reduced motion every one of them is snap() ([motion]). */
 object Motion {
     val press: SpringSpec<Float> = spring(dampingRatio = 0.55f, stiffness = Spring.StiffnessMedium)
 
@@ -415,7 +415,7 @@ fun <T> motion(spec: FiniteAnimationSpec<T>, reduced: Boolean): FiniteAnimationS
 fun pressScale(scale: Float, reduced: Boolean): Float = if (reduced) 1f else scale
 
 /**
- * Lyrify's press feedback in place of the ripple: the pressed thing squashes a little toward its centre and takes a soft
+ * KJB's press feedback in place of the ripple: the pressed thing squashes a little toward its centre and takes a soft
  * tint of the content colour over [shape]. With [scale] 1 (rows, and always with reduced motion) only the tint shows.
  * Put the clickable before the background, so the fill squashes with the content.
  */

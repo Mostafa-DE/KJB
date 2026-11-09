@@ -52,7 +52,7 @@ data class LocalTrack(
 data class Processed(val status: LyricsStatus, val lrclibBusy: Boolean = false)
 
 /**
- * Whether the user can remove [entry]'s lyrics in the app: Lyrify wrote them and knows their
+ * Whether the user can remove [entry]'s lyrics in the app: KJB wrote them and knows their
  * hash, or they are marked removed while the file is still there (its delete and the undo of
  * the entry both failed). Blocking: may look at the file.
  */
@@ -127,16 +127,16 @@ sealed interface Searched {
 
 /** What [LyricsPipeline.remove] did. */
 enum class Removal {
-    /** The `.lrc` Lyrify wrote is deleted, and the track will not get lyrics again by itself. */
+    /** The `.lrc` KJB wrote is deleted, and the track will not get lyrics again by itself. */
     REMOVED,
 
     /** The `.lrc` was gone already; the track will not get lyrics again by itself either. */
     ALREADY_GONE,
 
-    /** The file is not what Lyrify wrote any more: nothing was deleted. */
+    /** The file is not what KJB wrote any more: nothing was deleted. */
     CHANGED,
 
-    /** Lyrify did not write this track's lyrics, or cannot tell its file is unchanged (v1 files changed since). */
+    /** KJB did not write this track's lyrics, or cannot tell its file is unchanged (v1 files changed since). */
     NOT_REMOVABLE,
 
     /** The file could not be read or deleted, or the ledger not written: nothing changed. */
@@ -385,9 +385,9 @@ class LyricsPipeline(
 
     /**
      * The audio file at [audioPath] is in the phone's trash: the user moved it there from the Duplicates tab, and
-     * MediaStore confirmed IS_TRASHED. The `.lrc` Lyrify wrote for it is deleted as [remove] deletes it (only while byte for
-     * byte what Lyrify wrote), then its ledger entry goes, so a song restored from the trash later is new to Lyrify. A
-     * `.lrc` Lyrify did not write, or one changed since, stays. The entry stays when the `.lrc` could not be deleted
+     * MediaStore confirmed IS_TRASHED. The `.lrc` KJB wrote for it is deleted as [remove] deletes it (only while byte for
+     * byte what KJB wrote), then its ledger entry goes, so a song restored from the trash later is new to KJB. A
+     * `.lrc` KJB did not write, or one changed since, stays. The entry stays when the `.lrc` could not be deleted
      * (FAILED), so it can still be removed from the app.
      */
     suspend fun trashed(audioPath: String): Removal = exclusive(audioPath) {
@@ -429,8 +429,8 @@ class LyricsPipeline(
     }
 
     /**
-     * Deletes the `.lrc` Lyrify wrote next to the audio file at [audioPath], only if it is
-     * still byte for byte what Lyrify wrote, and records [LyricsStatus.REMOVED]. A file
+     * Deletes the `.lrc` KJB wrote next to the audio file at [audioPath], only if it is
+     * still byte for byte what KJB wrote, and records [LyricsStatus.REMOVED]. A file
      * already gone is only recorded as removed. See [canRemove].
      */
     suspend fun remove(audioPath: String): Removal = exclusive(audioPath) {
@@ -452,7 +452,7 @@ class LyricsPipeline(
     /**
      * REMOVED is stored before the file goes: deleted without it, the file would be looked up
      * and written again. The file is then checked once more and deleted only if it is still
-     * exactly what Lyrify wrote; a file that stays gets its entry back.
+     * exactly what KJB wrote; a file that stays gets its entry back.
      */
     private suspend fun deleteRemoved(entry: LedgerEntry, sidecar: Path, sha256: String): Removal {
         if (!ledger.put(entry.removed(clock()))) return Removal.FAILED
@@ -633,13 +633,13 @@ class LyricsPipeline(
     }
 
     /**
-     * Records EXISTING over the WRITING [marker] for a `.lrc` Lyrify did not write. If that
+     * Records EXISTING over the WRITING [marker] for a `.lrc` KJB did not write. If that
      * cannot be stored, the marker loses its text instead, so reconcile can never take the
-     * file for Lyrify's own partial and delete it.
+     * file for KJB's own partial and delete it.
      */
     private suspend fun keepForeign(previous: LedgerEntry?, track: LocalTrack, marker: LedgerEntry): LyricsStatus {
         if (!record(previous, track, LyricsStatus.EXISTING) && !ledger.put(marker.copy(pendingText = null))) {
-            warn("${track.title}: ledger not writable twice; its WRITING entry keeps the text, so a later look could delete a file that is not Lyrify's")
+            warn("${track.title}: ledger not writable twice; its WRITING entry keeps the text, so a later look could delete a file that is not KJB's")
         }
         return LyricsStatus.EXISTING
     }
@@ -647,7 +647,7 @@ class LyricsPipeline(
     /**
      * [marker] says a write began and its end was never recorded: the app died in between, or
      * the ledger failed. The file decides. Missing: looked up again. Complete: recorded as
-     * written. Lyrify's own partial: deleted, then looked up again. Anything else: kept.
+     * written. KJB's own partial: deleted, then looked up again. Anything else: kept.
      */
     private suspend fun reconcile(track: LocalTrack, sidecar: Path, marker: LedgerEntry, lane: Lane): Processed {
         val left = try {
@@ -831,7 +831,7 @@ class LyricsPipeline(
 
 internal enum class Created { YES, ALREADY_THERE, FAILED }
 
-/** A `.lrc` compared with the bytes Lyrify wrote there. */
+/** A `.lrc` compared with the bytes KJB wrote there. */
 internal enum class Compared { SAME, CHANGED, MISSING, UNREADABLE }
 
 /** What a write the app's death interrupted left at the `.lrc` path. */
@@ -841,7 +841,7 @@ internal enum class Interrupted {
     /** All the bytes: only the ledger entry saying so was lost. */
     COMPLETE,
 
-    /** A strict prefix of the bytes being written (empty included): Lyrify's own, cut short. */
+    /** A strict prefix of the bytes being written (empty included): KJB's own, cut short. */
     PARTIAL,
 
     /** Not what the write would have left (other bytes, a link or a folder), or the marker cannot tell. */
@@ -849,14 +849,14 @@ internal enum class Interrupted {
 }
 
 /**
- * Every file operation on `.lrc` files. Lyrify deletes exactly three kinds of file, all here:
+ * Every file operation on `.lrc` files. KJB deletes exactly three kinds of file, all here:
  * a partial `.lrc` the same [create] call just made; (by [delete], when the user asks) a `.lrc`
- * Lyrify wrote whose bytes still have the hash it recorded; and (by [deleteInterrupted]) the
- * partial `.lrc` of Lyrify's own write that the app's death cut short. Each create and delete asks [SharedWrites]
+ * KJB wrote whose bytes still have the hash it recorded; and (by [deleteInterrupted]) the
+ * partial `.lrc` of KJB's own write that the app's death cut short. Each create and delete asks [SharedWrites]
  * first, and changes nothing when refused.
  */
 internal object SidecarFile {
-    /** Larger than any lyrics file; such a file is not one Lyrify wrote. */
+    /** Larger than any lyrics file; such a file is not one KJB wrote. */
     private const val MAX_BYTES: Long = 1024 * 1024
 
     /** A file's content hash and modification time. */
@@ -915,7 +915,7 @@ internal object SidecarFile {
             return Compared.UNREADABLE
         }
         if (stamp?.sha256 == sha256) return Compared.SAME
-        log("${path.fileName}: changed outside Lyrify, left alone")
+        log("${path.fileName}: changed outside KJB, left alone")
         return Compared.CHANGED
     }
 
@@ -943,7 +943,7 @@ internal object SidecarFile {
     /**
      * What the write [marker] ([LyricsStatus.WRITING]) describes left at [path], judged by the
      * bytes alone: all of them, or a strict prefix of them, or anything else. A marker without
-     * its text cannot tell a prefix, so nothing is Lyrify's then.
+     * its text cannot tell a prefix, so nothing is KJB's then.
      */
     fun interrupted(path: Path, marker: LedgerEntry): Interrupted {
         val attributes = try {
@@ -990,7 +990,7 @@ internal object SidecarFile {
         while (buffer.hasRemaining()) channel.write(buffer)
     }
 
-    /** [path] was created by this very call (which [SharedWrites] allowed) and is incomplete: Lyrify's own partial file. */
+    /** [path] was created by this very call (which [SharedWrites] allowed) and is incomplete: KJB's own partial file. */
     private fun deletePartial(path: Path, log: (String) -> Unit) {
         try {
             Files.deleteIfExists(path)

@@ -107,7 +107,7 @@ data class DefaultSheet(val toneId: Long, val kind: ToneKind, val step: Step) {
         /** Set was tapped without "Modify system settings": the one-line reason and Open settings. */
         PERMISSION,
 
-        /** That settings screen is open; back in Lyrify, the sound is set if it was allowed. */
+        /** That settings screen is open; back in KJB, the sound is set if it was allowed. */
         WAITING,
         DONE,
         NOT_SET,
@@ -123,7 +123,7 @@ data class DefaultSheet(val toneId: Long, val kind: ToneKind, val step: Step) {
         Step.DONE, Step.NOT_SET, Step.NO_SCREEN -> this
     }
 
-    /** Back in Lyrify: a sheet waiting for the permission sets the sound once allowed, else shows the reason again. */
+    /** Back in KJB: a sheet waiting for the permission sets the sound once allowed, else shows the reason again. */
     fun resumed(defaults: ToneDefaults, tone: SavedTone): DefaultSheet = when {
         step != Step.WAITING -> this
         defaults.canWrite() -> copy(step = stepAfter(defaults.set(tone, kind)))
@@ -246,7 +246,7 @@ fun TonesTopBar(scrollBehavior: TopAppBarScrollBehavior, backdrop: GlassBackdrop
 
 /**
  * The Tones tab: "Pick a song" (the Songs list as a picker, then the editor), and "Your tones", each with its preview,
- * the defaults it is (pills) and a menu: set it as a default sound, rename it, delete it. Tones deleted outside Lyrify
+ * the defaults it is (pills) and a menu: set it as a default sound, rename it, delete it. Tones deleted outside KJB
  * leave the list when the tab comes back. After a save, a sheet offers to set the tone as the phone's sound. Messages go
  * to the app's [toasts], which show them above the dock or in the open sheet.
  */
