@@ -183,6 +183,24 @@ class PayloadHashTest {
     }
 
     @Test
+    fun `the device fixtures, real encoded files, each have a payload of their format`() {
+        val fixtures = File("src/androidTest/assets/tags")
+        assertTrue("run from the app module: ${File("").absolutePath}", fixtures.isDirectory)
+        val formats = fixtures.listFiles()!!.sortedBy { it.name }.associate { it.name to PayloadHash.of(it.toPath())?.format }
+        assertEquals(
+            mapOf(
+                "lanterns-over-kelp-v24.mp3" to AudioFormat.MP3,
+                "northbound-tide.m4a" to AudioFormat.M4A,
+                "paper-comet-messy.ogg" to AudioFormat.OGG_VORBIS,
+                "paper-comet-v23.mp3" to AudioFormat.MP3,
+                "quiet-breakwater.opus" to AudioFormat.OPUS,
+                "salt-clock.flac" to AudioFormat.FLAC,
+            ),
+            formats,
+        )
+    }
+
+    @Test
     fun `the whole-file hash is the SHA-256 of every byte`() {
         val path = file("a.mp3", "abc".encodeToByteArray()).toPath()
         assertEquals("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", PayloadHash.fileSha256(path))
