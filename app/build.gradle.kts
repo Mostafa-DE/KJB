@@ -1,4 +1,6 @@
+import com.android.build.api.artifact.SingleArtifact
 import java.util.Properties
+import java.util.zip.ZipFile
 
 plugins {
     alias(libs.plugins.android.application)
@@ -113,6 +115,68 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+}
+
+androidComponents {
+    onVariants { variant ->
+        val name = variant.name.replaceFirstChar(Char::uppercase)
+        // Release assets: KJB-<version>.apk (lite) and KJB-<version>-ai.apk (full).
+        if (variant.buildType == "release") {
+            val edition = if (variant.flavorName == "full") "-ai" else ""
+            variant.outputs.forEach { output -> output.outputFileName.set(output.versionName.map { "KJB-$it$edition.apk" }) }
+        }
+        // Every lite APK is checked for the AI engine as it is assembled.
+        if (variant.flavorName == "lite") {
+            val check = tasks.register<CheckNoAi>("check${name}NoAi") {
+                apks.set(variant.artifacts.get(SingleArtifact.APK))
+                report.set(layout.buildDirectory.file("reports/no-ai/${variant.name}.txt"))
+            }
+            tasks.named { it == "assemble$name" }.configureEach { dependsOn(check) }
+        }
+    }
+}
+
+/**
+ * Fails when an APK of KJB (the lite edition) holds any of the AI engine: an ONNX Runtime or QNN native library, or an
+ * ONNX Runtime or Qualcomm class in its dex files.
+ */
+abstract class CheckNoAi : DefaultTask() {
+    @get:InputFiles
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val apks: DirectoryProperty
+
+    @get:OutputFile
+    abstract val report: RegularFileProperty
+
+    @TaskAction
+    fun check() {
+        val files = apks.get().asFile.listFiles { file -> file.extension == "apk" }.orEmpty().sortedBy { it.name }
+        if (files.isEmpty()) throw GradleException("no APK in ${apks.get().asFile}")
+        val found = files.flatMap { apk ->
+            ZipFile(apk).use { zip ->
+                zip.entries().asSequence().flatMap { entry ->
+                    when {
+                        NATIVE.matches(entry.name) -> sequenceOf("${apk.name}: ${entry.name}")
+                        entry.name.endsWith(".dex") -> {
+                            val dex = zip.getInputStream(entry).use { String(it.readBytes(), Charsets.ISO_8859_1) }
+                            CLASSES.filter { it in dex }.map { "${apk.name}: ${entry.name} has classes under $it" }.asSequence()
+                        }
+                        else -> emptySequence()
+                    }
+                }.toList()
+            }
+        }
+        if (found.isNotEmpty()) throw GradleException("KJB (lite) must not ship the AI engine:\n" + found.joinToString("\n"))
+        report.get().asFile.writeText("No ONNX Runtime or QNN in ${files.joinToString { it.name }}\n")
+    }
+
+    private companion object {
+        /** ONNX Runtime's and QNN's native libraries. */
+        val NATIVE = Regex("""lib/[^/]+/lib(onnxruntime|Qnn)[^/]*\.so""")
+
+        /** Their Java packages, as dex type descriptors. */
+        val CLASSES = listOf("Lai/onnxruntime/", "Lcom/qualcomm/")
     }
 }
 

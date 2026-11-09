@@ -9,7 +9,8 @@ import java.io.File
 
 /**
  * Two editions of one app (plan section 13, Z1): KJB (the `lite` flavour) without AI lyrics, and KJB + AI (`full`) with
- * ONNX Runtime and QNN. The AI sits behind `ai.AiEngine` in `main`. These tests run once per edition.
+ * ONNX Runtime and QNN. The AI sits behind `ai.AiEngine` in `main`. These tests run once per edition; the build itself
+ * checks every lite APK as it is assembled (`checkLite<BuildType>NoAi` in app/build.gradle.kts).
  */
 class EditionsTest {
     @Test
