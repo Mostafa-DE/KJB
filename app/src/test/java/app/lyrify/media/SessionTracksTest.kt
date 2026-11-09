@@ -518,6 +518,40 @@ class SessionTracksTest {
     private fun chosen(followed: Controller? = null): String? = sessions.choose(followed)?.app
 
     @Test
+    fun `KJB's own sessions, release and debug, are never followed as another app`() {
+        val own = Controller("app.lyrify")
+        val ownDebug = Controller("app.lyrify.debug")
+        val listed = ActiveSessions<Controller>(
+            sameSession = { a, b -> a.app == b.app && a.token == b.token },
+            sameApp = { a, b -> a.app == b.app },
+            playback = { playbackNow[it.app to it.token] ?: Playback.STOPPED },
+            register = { events += "+${it.app}" },
+            unregister = { events += "-${it.app}" },
+            clock = { now },
+            own = { SessionTracks.ownApp(it.app) },
+        )
+        listed.start()
+        playingNow(own)
+        playingNow(ownDebug)
+        listed.update(listOf(own, ownDebug, samsung))
+        assertNull(listed.choose(followed = null))
+        assertEquals(listOf("+${samsung.app}"), events)
+
+        now = 3_000
+        playingNow(samsung)
+        assertTrue(listed.refresh())
+        assertEquals(samsung, listed.choose(followed = own))
+    }
+
+    @Test
+    fun `only KJB's own package names count as its own`() {
+        assertTrue(SessionTracks.ownApp("app.lyrify"))
+        assertTrue(SessionTracks.ownApp("app.lyrify.debug"))
+        assertFalse(SessionTracks.ownApp("app.lyrifyx"))
+        assertFalse(SessionTracks.ownApp("com.sec.android.app.music"))
+    }
+
+    @Test
     fun `the session playing is followed, whichever app it is, and a paused one never takes over`() {
         sessions.start()
         playingNow(poweramp)

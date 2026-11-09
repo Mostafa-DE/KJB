@@ -113,6 +113,9 @@ class NowPlayingListener : NotificationListenerService() {
         },
         unregister = { controller -> watches.remove(controller.sessionToken)?.let(controller::unregisterCallback) },
         clock = SystemClock::elapsedRealtime,
+        // KJB's own player gets its lyrics from its own sweep (player/PlaybackService.kt); a release build never
+        // follows a debug build's player either.
+        own = { SessionTracks.ownApp(it.packageName) },
     )
 
     override fun onListenerConnected() {

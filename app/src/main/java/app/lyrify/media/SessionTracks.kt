@@ -119,6 +119,12 @@ object SessionTracks {
     /** `MediaSession.QueueItem.UNKNOWN_ID`: no active queue item. */
     const val UNKNOWN_QUEUE_ID: Long = -1
 
+    /** KJB's own package, the release ("app.lyrify") or the debug build ("app.lyrify.debug"): its own player's session. */
+    const val OWN_PACKAGE: String = "app.lyrify"
+
+    /** Whether [packageName] is KJB itself: companion mode never follows its own session. */
+    fun ownApp(packageName: String): Boolean = packageName == OWN_PACKAGE || packageName.startsWith("$OWN_PACKAGE.")
+
     /**
      * Every row that may be the file behind [track]: the same title and, when the session
      * names an artist, the same artist (both compared normalized, " - Topic" and the like
@@ -336,6 +342,8 @@ internal class ActiveSessions<C : Any>(
     private val unregister: (C) -> Unit,
     /** Elapsed realtime. */
     private val clock: () -> Long,
+    /** KJB's own session (the release or the debug build): never followed, as if it were not listed. */
+    private val own: (C) -> Boolean = { false },
 ) {
     /**
      * A session, the controller its callback is on; whether it plays, since when (its last start
@@ -366,12 +374,13 @@ internal class ActiveSessions<C : Any>(
     }
 
     /**
-     * [active] are the sessions now, most important first: a callback for each new one, none any
+     * [listed] are the sessions now (KJB's own left out), most important first: a callback for each new one, none any
      * more for those gone. A session listed again keeps the controller its callback is on; one
      * back within [BETWEEN_TRACKS_MS] of leaving keeps its place.
      */
-    fun update(active: List<C>) {
+    fun update(listed: List<C>) {
         if (!running) return
+        val active = listed.filterNot(own)
         val now = clock()
         appearance++
         val left = sessions.filter { old -> active.none { sameSession(it, old.session) } }
