@@ -152,7 +152,8 @@ class VectorIconsTest {
         val calls = listOf("src/main/java", "src/debug/java").flatMap { root ->
             File(root).walkTopDown().filter { it.isFile && it.extension == "kt" }.flatMap { SMALL_ICON.findAll(it.readText()).map { call -> call.groupValues[1] } }.toList()
         }
-        assertEquals(listOf("R.drawable.ic_stat_kjb", "R.drawable.ic_stat_kjb", "R.drawable.ic_stat_kjb"), calls)
+        // The AI's night run, the model download, the debug build's AI notice, and the player's media notification.
+        assertEquals(List(4) { "R.drawable.ic_stat_kjb" }, calls)
     }
 
     @Test

@@ -167,6 +167,10 @@ object PlayerGraph {
     private var core: PlayerCore? = null
     private var connection: PlayerConnection? = null
 
+    /** The audio session of KJB's player, for the phone's sound effects panel; 0 before the service ran. */
+    @Volatile
+    var audioSessionId: Int = 0
+
     /** The queues: app-private `files/datastore/queues.json` and `files/playback.json`, copies of an unreadable file in `files`. */
     @OptIn(ExperimentalCoroutinesApi::class)
     @Synchronized

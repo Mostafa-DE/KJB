@@ -141,9 +141,13 @@ class PlayerConnection(
     private var connecting: ListenableFuture<MediaController>? = null
     private val waiting = mutableListOf<(MediaController) -> Unit>()
     private var users = 0
-    private val libraryNow: StateFlow<Library?> = library.state.map { (it as? LibraryState.Ready)?.library }.stateIn(scope, SharingStarted.Eagerly, null)
+    /** The library, for the songs of queues that are not playing; null while it is read. */
+    val library: StateFlow<Library?> = library.state.map { (it as? LibraryState.Ready)?.library }.stateIn(scope, SharingStarted.Eagerly, null)
 
-    val ui: StateFlow<PlayerUi?> = combine(core.book, core.repeat, core.place, transport, libraryNow) { book, repeat, place, transport, songs ->
+    /** Every queue, for the queue pages. */
+    val book: StateFlow<QueueBook> get() = core.book
+
+    val ui: StateFlow<PlayerUi?> = combine(core.book, core.repeat, core.place, transport, this.library) { book, repeat, place, transport, songs ->
         playerUi(book, repeat, place, transport, songs, SystemClock.elapsedRealtime())
     }.stateIn(scope, SharingStarted.Eagerly, null)
 

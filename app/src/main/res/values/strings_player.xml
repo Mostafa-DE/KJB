@@ -101,6 +101,7 @@
     <string name="queue_nothing">Nothing queued</string>
     <string name="queue_save_playlist">Save as playlist</string>
     <string name="queue_playlist_field">Playlist name</string>
+    <string name="queue_save">Save</string>
     <string name="queue_playlist_saved">Saved as %1$s</string>
     <string name="queue_playlist_failed">The playlist could not be saved.</string>
     <string name="queues_title">Queues</string>
