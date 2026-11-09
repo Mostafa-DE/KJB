@@ -368,6 +368,8 @@ class SharedWritesTest {
         val SHARED: Set<String> = setOf(
             "dupes/Duplicates.kt",
             "lyrics/LyricsPipeline.kt",
+            "tags/SafeWriter.kt",
+            "tags/WriteJournal.kt",
             "tones/ToneFiles.kt",
         )
 
@@ -382,6 +384,7 @@ class SharedWritesTest {
             "overnight/AiWorker.kt",
             "overnight/CrashGuard.kt",
             "settings/SettingsStore.kt",
+            "tags/UndoStore.kt",
             "tones/ToneAudio.kt",
         )
     }
