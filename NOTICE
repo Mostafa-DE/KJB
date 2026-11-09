@@ -1,5 +1,5 @@
-Lyrify
-Copyright (C) 2026 Lyrify contributors
+KJB (formerly called Lyrify)
+Copyright (C) 2026 KJB contributors
 
 This program is free software: you can redistribute it and/or modify it under the
 terms of the GNU General Public License version 3 as published by the Free Software
@@ -7,7 +7,7 @@ Foundation. See LICENSE for the full text.
 
 Credits
 
-- LRCLIB (https://lrclib.net), the free, community-built lyrics database Lyrify
+- LRCLIB (https://lrclib.net), the free, community-built lyrics database KJB
   looks lyrics up in. Lyrics belong to their respective rights holders.
 
 Third-party software built into the app (AI lyrics)
@@ -55,7 +55,7 @@ AI models (downloaded by the app, not part of it)
   (https://huggingface.co/Xenova/wav2vec2-base-960h).
 
 Samsung and Samsung Music are trademarks of Samsung Electronics Co., Ltd. Snapdragon and Qualcomm are trademarks of
-Qualcomm Incorporated. Lyrify is not affiliated with, endorsed by, or sponsored by Samsung or Qualcomm.
+Qualcomm Incorporated. KJB is not affiliated with, endorsed by, or sponsored by Samsung or Qualcomm.
 
 Bricolage Grotesque licence
 

@@ -1,6 +1,6 @@
-# Lyrify
+# KJB
 
-Lyrify makes Samsung Music show synced lyrics for the songs on your phone. It watches what
+KJB (formerly called Lyrify) makes Samsung Music show synced lyrics for the songs on your phone. It watches what
 your music app is playing, looks the song up on [LRCLIB](https://lrclib.net) and saves a
 `.lrc` file next to the audio file: for the current song and the next 5 in the queue first,
 then for the rest of the queue in the background (shuffle can play any of them next), so the
@@ -20,14 +20,14 @@ phones with a supported chip; see "AI lyrics" below. Everything else works on an
   song) in Ringtones/, Alarms/ or Notifications/. It never changes, moves, renames or deletes an
   audio file on its own, never writes tags, and never overwrites a `.lrc` that is already there
   (yours or its own). The one way a song leaves is your choice in the **Duplicates** tab: the
-  songs you check there go to your phone's trash, after Lyrify's dialog and then your phone's
-  own (see "Duplicates"). Lyrify never deletes a song itself.
+  songs you check there go to your phone's trash, after KJB's dialog and then your phone's
+  own (see "Duplicates"). KJB never deletes a song itself.
 - In your folders it deletes only these files: a partial `.lrc` the same write just created
   (when the write fails halfway); when you tap **Wrong lyrics** / **Remove lyrics** and confirm,
-  a `.lrc` Lyrify wrote whose bytes still match the SHA-256 it recorded; the partial `.lrc` of a
+  a `.lrc` KJB wrote whose bytes still match the SHA-256 it recorded; the partial `.lrc` of a
   write of its own that the app's death cut short (see "How it works", step 7); once your phone
-  has moved a song to its trash from the Duplicates tab, the `.lrc` Lyrify wrote for it while
-  its bytes still match; and a tone file Lyrify made, when you tap **Delete tone**, or the
+  has moved a song to its trash from the Duplicates tab, the `.lrc` KJB wrote for it while
+  its bytes still match; and a tone file KJB made, when you tap **Delete tone**, or the
   half-made file of a tone whose saving failed or was cancelled. Never anything else. (In its
   own app-private folders it also deletes the AI models when you tap **Delete download**, a
   model download whose checksum does not match, a model that fails to load, the downloaded
@@ -40,7 +40,7 @@ phones with a supported chip; see "AI lyrics" below. Everything else works on an
 - Plain (untimed) lyrics, other versions and songs LRCLIB does not know are only recorded,
   not written. Plain lyrics keep their LRCLIB id for a later version that times them.
 - A song with no artist in its tags (and no "Artist - Title" title or file name) never gets
-  lyrics written by itself: a title alone could match anyone's song. Lyrify searches by title
+  lyrics written by itself: a title alone could match anyone's song. KJB searches by title
   instead and, when LRCLIB has lyrics of the right length, asks you on **Check these**.
 - Requests to LRCLIB carry artist, title, album and duration only (and, for AI timing, the
   id of an LRCLIB record). The only other network use is the one-time AI model download
@@ -50,7 +50,7 @@ phones with a supported chip; see "AI lyrics" below. Everything else works on an
 
 ## Music players
 
-- **Supported players:** any app playing your own music files. Lyrify follows the app you
+- **Supported players:** any app playing your own music files. KJB follows the app you
   are playing music in: the one playing; of several playing, the one that started playing
   last (one it follows stays followed while it plays, until another one starts); when nothing
   plays, the one it followed before. The Now tab says which
@@ -111,27 +111,27 @@ library from a folder in `ADSP_LIBRARY_PATH`.
 3. Install:
    ```sh
    adb -s <serial> install -r app/build/outputs/apk/debug/app-debug.apk
-   adb -s <serial> shell dumpsys package app.lyrify | grep versionName
+   adb -s <serial> shell dumpsys package app.lyrify.debug | grep versionName
    ```
-4. Diagnostics: `adb -s <serial> logcat -s Lyrify`.
+4. Diagnostics: `adb -s <serial> logcat -s KJB`.
 
 ## First run on Samsung
 
-Lyrify shows two first-run steps until both switches are on (afterwards they are in **Settings**,
+KJB shows two first-run steps until both switches are on (afterwards they are in **Settings**,
 from the top bar's menu).
 
-1. **Notification access.** Tap **Allow** on "See what's playing" and switch Lyrify on. This is
-   what lets an app read another app's media session (title, artist, queue); Lyrify does not
+1. **Notification access.** Tap **Allow** on "See what's playing" and switch KJB on. This is
+   what lets an app read another app's media session (title, artist, queue); KJB does not
    read your notifications.
 2. **If the switch is greyed out** ("Restricted setting"): Android blocks this for apps
-   installed outside an app store. Try to switch it on once, then in Lyrify tap
+   installed outside an app store. Try to switch it on once, then in KJB tap
    **Greyed out?** > **Open App info**, the three-dot menu at the top right > **Allow restricted settings**,
    confirm with your PIN or fingerprint, and go back to step 1.
-3. **All files access.** Tap **Allow** on "Save lyrics files" and switch it on. Lyrify needs it to
+3. **All files access.** Tap **Allow** on "Save lyrics files" and switch it on. KJB needs it to
    find your songs in MediaStore and to create `.lrc` files in folders like
    `SdCardBackUp/Music` or `Music/Telegram`.
 4. **Samsung battery**: Settings > Battery > Background usage limits >
-   **Never sleeping apps** > add Lyrify. Otherwise One UI may stop the listener.
+   **Never sleeping apps** > add KJB. Otherwise One UI may stop the listener.
 5. Play a song in Samsung Music (or another player, see "Music players"). The **Now** tab
    shows it with "Playing in" and the app's name, its cover, its lyrics state and the queue's
    progress; songs appear on the **Songs** tab as they are done.
@@ -145,7 +145,7 @@ lyrics when a track starts), which is why the queue is fetched ahead.
 
 | Status (label) | Meaning | Looked up again |
 | --- | --- | --- |
-| Synced | Lyrify wrote the `.lrc` | never |
+| Synced | KJB wrote the `.lrc` | never |
 | Had lyrics | a `.lrc` was there; untouched | never |
 | Not synced | LRCLIB has untimed lyrics only; the ledger notes whether they are for this length | after 30 days |
 | Not found | nothing on LRCLIB | after 30 days |
@@ -153,8 +153,8 @@ lyrics when a track starts), which is why the queue is fetched ahead.
 | Other version | synced lyrics exist only for a version of another length | after 30 days |
 | Retrying | LRCLIB overloaded or offline, or the file could not be written | 30 min, doubling, at most 24 h |
 | No artist | no artist to look up, and a search by title found nothing to offer | after 30 days |
-| To check | LRCLIB may have the song, but Lyrify is not sure: pick the lyrics on **Check these** | after 30 days; the AI leaves it alone |
-| Removed | you removed lyrics Lyrify wrote | never |
+| To check | LRCLIB may have the song, but KJB is not sure: pick the lyrics on **Check these** | after 30 days; the AI leaves it alone |
+| Removed | you removed lyrics KJB wrote | never |
 | Saving | a write in progress (only seen later if the app died during it) | settled the next time the song is seen |
 | AI written | no lyrics were known; the AI wrote what it heard | never |
 | AI synced | the AI timed LRCLIB's plain lyrics for this recording | never |
@@ -176,7 +176,7 @@ changes, which costs nothing for tracks already done).
 ## Check these
 
 When nothing can be written by itself (not found, no artist, only another version, or plain
-lyrics of another length), Lyrify searches LRCLIB by title (`q=`: the title's words, and the
+lyrics of another length), KJB searches LRCLIB by title (`q=`: the title's words, and the
 file name's when they differ; at most 2 searches). It keeps up to 3 records whose title is the
 song's (or one holds the other as whole words, version tags and feat. aside), whose length is
 within 3 s, with lyrics Samsung Music can show (or plain ones) that are not mostly in Arabic
@@ -197,21 +197,21 @@ background sweep, and the AI waits for that: LRCLIB's lyrics beat the AI's.
 
 ## Songs list and removing wrong lyrics
 
-The **Songs** tab lists every song Lyrify has handled. Its top bar is the search field (the search button on Now and
+The **Songs** tab lists every song KJB has handled. Its top bar is the search field (the search button on Now and
 AI opens it with the keyboard up); search by title or artist (case and accents ignored: "motorhead" finds "Motörhead").
 Filter with the four-part status bar (Has lyrics, To check, Waiting, No lyrics, each with its count) and, within a
 group of several statuses, its status chips; sort by Recent first, Title or Artist, with section headers. The Now tab's
 Library counts, its Recent "See all" and the AI tab's results open the list already filtered. Tapping a song opens its
 sheet: its status and sentence, when it was updated and tries again, its file, and the action that fits.
 
-If lyrics Lyrify added are wrong, tap **Wrong lyrics** on the Now tab or **Remove lyrics** in
-the song's sheet and confirm. Lyrify deletes the `.lrc` only if it is
+If lyrics KJB added are wrong, tap **Wrong lyrics** on the Now tab or **Remove lyrics** in
+the song's sheet and confirm. KJB deletes the `.lrc` only if it is
 byte for byte what it wrote (SHA-256 in the ledger), marks the song "Removed" (before
 deleting, so a deleted file is never added back) and never adds lyrics for it again by itself.
 Samsung Music may keep showing them until it restarts (the message says so when Samsung Music
 is the player followed). A changed file is left alone; a file already gone is just marked
 "Removed". Files v1 wrote (no hash) are adopted on first run if their modification time
-is within 120 s of the ledger entry; others show "Changed outside Lyrify. Remove it with a file manager." in their sheet.
+is within 120 s of the ledger entry; others show "Changed outside KJB. Remove it with a file manager." in their sheet.
 
 ## Duplicates
 
@@ -241,13 +241,13 @@ too, unchecked at first: you pick what goes, and at least one copy always stays 
 
 - **Not duplicates** hides the group for good, remembered by its files' MediaStore ids and sizes: if a file in it
   changes or another copy turns up, the group can come back.
-- **Move to trash** asks twice: Lyrify's dialog, then your phone's own (`MediaStore.createTrashRequest`). Lyrify never
-  holds the Media management permission, so the phone always asks. Only after the phone's OK, the `.lrc` Lyrify wrote
+- **Move to trash** asks twice: KJB's dialog, then your phone's own (`MediaStore.createTrashRequest`). KJB never
+  holds the Media management permission, so the phone always asks. Only after the phone's OK, the `.lrc` KJB wrote
   for each moved song goes (only while byte for byte what it wrote; a `.lrc` it did not write stays), and the song
-  leaves Lyrify's list. Cancel at either dialog changes nothing. Should the app die with the phone's dialog open, the
+  leaves KJB's list. Cancel at either dialog changes nothing. Should the app die with the phone's dialog open, the
   next scan settles the songs the phone moved.
-- **Trashed** (at the end of the results, and in the menu) lists the songs Lyrify moved to the trash until the phone
-  deletes them, about 30 days later. **Restore** asks your phone to put the song back; Lyrify then sees it as a new
+- **Trashed** (at the end of the results, and in the menu) lists the songs KJB moved to the trash until the phone
+  deletes them, about 30 days later. **Restore** asks your phone to put the song back; KJB then sees it as a new
   song and looks its lyrics up again. A song restored or deleted elsewhere drops off the list.
 
 The results and your choices stay in an app-private file (`files/duplicates.json`, not backed up). The log gets counts
@@ -264,22 +264,24 @@ The **Tones** tab (between Duplicates and AI) makes ringtones, alarm sounds and 
   default; a notification sound starts at 15 s), plus **End of line** after a lyric start, which lets the line playing
   at the end finish (60 s at most). **Fade in** and **Fade out** (1.5 s each) are on by default, and the preview plays
   exactly the part with its fades. A song over 20 minutes offers its first 20.
-- **Save tone** decodes the part, fades it and encodes it as AAC-LC at 192 kbps into "<Title> (Lyrify).m4a", saved
-  through MediaStore in the shared `Ringtones/`, `Alarms/` or `Notifications/` folder, so every app's sound picker
-  lists it as "<Title> (Lyrify)". The file stays pending (hidden from other apps) until it is complete; a failed or
-  cancelled save leaves nothing behind. The song itself is only read, never changed.
+- **Save tone** decodes the part, fades it and encodes it as AAC-LC at 192 kbps into "<Title> (KJB).m4a", saved
+  through MediaStore in the shared `Ringtones/`, `Alarms/` or `Notifications/` folder with the title "<Title> · KJB".
+  The phone's scan titles the file from its name, so every app's sound picker lists it as "<Title> (KJB)". Tones
+  saved by 2.x as "<Title> (Lyrify)" stay KJB's own (a tone is known by its saved id, file name and size). The file
+  stays pending (hidden from other apps) until it is complete; a failed or cancelled save leaves nothing behind. The
+  song itself is only read, never changed.
 - After saving, a sheet asks whether to make it your phone's ringtone, alarm or notification sound. Only a tap on
-  **Set** changes it; the first time, Lyrify asks you to allow it to **Modify system settings** (`WRITE_SETTINGS`),
+  **Set** changes it; the first time, KJB asks you to allow it to **Modify system settings** (`WRITE_SETTINGS`),
   at that moment only. On a phone with two SIMs only the phone's default ringtone is set, and the sheet points to your
   phone's sound settings for the second SIM. Clock apps (Samsung Clock among them) can keep a sound per alarm, so for
-  an alarm sound the sheet says to pick the tone there, with **Open Clock**. Lyrify asks to set alarms (`SET_ALARM`,
+  an alarm sound the sheet says to pick the tone there, with **Open Clock**. KJB asks to set alarms (`SET_ALARM`,
   granted at install) only so **Open Clock** can show your alarm list; it never sets or changes an alarm.
-- **Your tones** lists the tones Lyrify made, each with a preview, a pill for each default sound it is, and a menu:
-  set it as a default sound, **Rename** (renames its file) or **Delete tone** (deletes only the tone file Lyrify made,
-  never the song). Tones deleted outside Lyrify leave the list the next time the tab opens.
+- **Your tones** lists the tones KJB made, each with a preview, a pill for each default sound it is, and a menu:
+  set it as a default sound, **Rename** (renames its file) or **Delete tone** (deletes only the tone file KJB made,
+  never the song). Tones deleted outside KJB leave the list the next time the tab opens.
 
 The list stays in an app-private file (`files/datastore/tones.json`, not backed up), and the waveforms in the app's
-cache. Removing Lyrify leaves the tone files in place: they are ordinary sound files in your `Ringtones/`, `Alarms/`
+cache. Removing KJB leaves the tone files in place: they are ordinary sound files in your `Ringtones/`, `Alarms/`
 and `Notifications/` folders. The log never gets titles, paths or lyrics.
 
 ## How it works
@@ -298,7 +300,7 @@ Everything that decides something is plain Kotlin (no Android imports) and unit 
    stops playing, by `SystemClock.elapsedRealtime`; a session first listed while playing counts
    as starting then; a tie keeps the one followed); with none playing, the one followed before
    while it is still active. The system lists the sessions again only when
-   one starts or ends, so Lyrify keeps a callback on every active session to see one start
+   one starts or ends, so KJB keeps a callback on every active session to see one start
    playing (a new playback state, not every position update). Every callback of the session
    followed reads a snapshot (current track, active queue item, queue, app); a new song is a
    new active queue item or new metadata, so players without a queue count too. Only a
@@ -345,11 +347,11 @@ Everything that decides something is plain Kotlin (no Android imports) and unit 
    dies mid-write, the next look at the song (and each listener connect) settles it, by the bytes alone
    (the ledger keeps the text being written until the write is recorded): no file, looked
    up again; the complete file, recorded as written; a regular file holding the first part
-   of those bytes (or none), deleted as Lyrify's own partial and looked up again; anything
+   of those bytes (or none), deleted as KJB's own partial and looked up again; anything
    else (other content, larger, a link) is kept as "Had lyrics".
 
 LRCLIB gets one request at a time app-wide, with the User-Agent
-`Lyrify/<version> (personal use)` and 15 s timeouts: at least 500 ms apart for HIGH work and
+`KJB/<version> ( https://github.com/Mostafa-DE/Lyrify )` and 15 s timeouts: at least 500 ms apart for HIGH work and
 1.5 s for the background sweep. Redirects are not followed and answers over 2 MiB are
 refused. A dropped request closes its connection, so it never holds up the next one.
 
@@ -358,7 +360,7 @@ refused. A dropped request closes its connection, so it never holds up the next 
 ### Supported phones
 
 The AI runs on the phone's NPU (the Hexagon processor of a Snapdragon chip), with models Qualcomm AI Hub built for
-that chip. Lyrify reads the chip with `Build.SOC_MANUFACTURER` and `Build.SOC_MODEL` (Android 12 and later;
+that chip. KJB reads the chip with `Build.SOC_MANUFACTURER` and `Build.SOC_MODEL` (Android 12 and later;
 `models/NpuChips`) and needs Android 15 or later for the overnight run. On any other phone the AI tab says "Not available
 on this phone" and nothing is downloaded; LRCLIB lookups, `.lrc` writing, removal and search work as
 everywhere.
@@ -424,7 +426,7 @@ open sheets.
   each through a `.part` file, its size and SHA-256 recorded as it is written (the zip's CRC-32 is checked too); only
   those five names are written. Their sizes and hashes go into `whisper-npu/manifest.json`, written last, and the zip
   is deleted. The folder counts as in place only when its manifest names the pinned zip and each file has the recorded
-  size. Before anything is fetched Lyrify checks the free space: the most the download holds on disk at once, which is
+  size. Before anything is fetched KJB checks the free space: the most the download holds on disk at once, which is
   the Whisper zip and its unpacked files together (the MDX and wav2vec2 files fit in the zip's room once it is
   deleted), plus 200 MB: about 2.0 GB from nothing. What an earlier version left (below) is deleted first and counts as
   free, and so does a Whisper folder whose unpacking was cut short (the download deletes it before unpacking again).
@@ -433,7 +435,7 @@ open sheets.
 
   A model that fails to load is deleted (that file, or the whole Whisper folder) and downloaded again, once: when the
   same file (same SHA-256) fails again, it is kept and the AI pauses ("Paused until the next update" on the AI
-  tab, and in the run log) until the next version of Lyrify or until you delete the AI download. Each such
+  tab, and in the run log) until the next version of KJB or until you delete the AI download. Each such
   failure also counts as a death of the song in that step (see "Crash guard"). An NPU that cannot be used at all (the
   QNN execution provider offers no NPU device, or this build's ONNX Runtime lacks the internals the w8a16 Whisper's
   tensors need, see "Why reflection") records nothing, deletes no model, ends the run before any song is separated,
@@ -447,7 +449,7 @@ open sheets.
   Whisper zip left in the cache once its folder is in place (the app died after writing the manifest, or the zip could
   not be deleted).
 - **Switch** (off by default, remembered as you set it): on, it starts the model download if needed and schedules the
-  run (a lost schedule is made again when Lyrify opens); off, a run in progress stops after the step it is on. **Delete
+  run (a lost schedule is made again when KJB opens); off, a run in progress stops after the step it is on. **Delete
   download** waits until that run has stopped and closed its sessions (the button says "Stopping…", at most 5 minutes)
   before it deletes anything.
 - **The ring**: songs done tonight (lyrics added or a final verdict; failed runs do not count) of the queue and the
@@ -465,7 +467,7 @@ WorkManager's "requires charging" is not used: it means Android's charging state
 came on only 18-19 minutes after plugging in and went off with the cable still in, as it can when the battery stops
 charging (for example held at 80-85% by Samsung's "Protect battery"). The worker reads the cable itself
 (`EXTRA_PLUGGED`) and the run stops when it comes off. It runs as a long-running worker in a foreground service of type
-`mediaProcessing` (Android 15+), which the phone allows 6 hours in 24 (opening Lyrify resets it); at that limit
+`mediaProcessing` (Android 15+), which the phone allows 6 hours in 24 (opening KJB resets it); at that limit
 WorkManager stops it (`onTimeout`) and the AI waits a day or until the app is opened. It goes into the foreground before
 it looks at the songs' files.
 
@@ -476,14 +478,14 @@ stay loaded until the run ends; creating the MDX session takes about 30 s. Befor
 run waits while the phone is warmer than "light" (`PowerManager.currentThermalStatus`), and logs how long. Unplugged or
 switched off, the engine finishes the step it is on and stops, recording nothing for that song; a later run does it
 again from the start (2.0's per-song checkpoints are gone: a song takes under a minute). The phone has to let it start
-in the background: if the AI tab says it did not, set Lyrify's battery use to **Unrestricted** (App info › Battery).
+in the background: if the AI tab says it did not, set KJB's battery use to **Unrestricted** (App info › Battery).
 
 **Crash guard** (`overnight/CrashGuard`, app-private `files/ai-crash-guard.json`): while a run is in a step, the song's
 record names it; one still named when the next run starts is a run the app died in (a native crash, out of memory). A
 song the app died in twice is recorded as "AI failed" (tried again after a day, doubling) instead of being retried
 forever. Three deaths in the align step with no song finished in between turn timing known lyrics off (those songs wait,
 the rest are transcribed); three in another step pause the AI (the AI tab says so). Both last until the next version of
-Lyrify, songs finished meanwhile or not. A song whose audio file was replaced during its run (a music sync) is not
+KJB, songs finished meanwhile or not. A song whose audio file was replaced during its run (a music sync) is not
 written; a later run does it again.
 
 **Run log** (`overnight/AiRunLog`, app-private `files/ai-run.log`, about 200 KB with one rotated file): each run's start
@@ -533,7 +535,7 @@ lyrics file it wrote, was writing or the user removed marked as LRCLIB's.
    filler over non-vocal frames) per minute of song, vocal above 9.8. The V2 frame share no longer decides: lead guitar
    and violin leak into Voc_FT's vocal stem (set B: AUC 0.960, leave-one-out 75%), while the word rate over the chunks
    separates set B perfectly (AUC 1.000, leave-one-out 100%; lyrify-bench results/summary.md "Separation test
-   (2026-11-03)", `scripts/sep_eval.py`). The bench counted every word; Lyrify leaves junk and fillers out first, so
+   (2026-11-03)", `scripts/sep_eval.py`). The bench counted every word; KJB leaves junk and fillers out first, so
    "Thank you." over an instrumental does not count. An instrumental is recorded as "AI: instrumental" and nothing is
    written;
 6. without known lyrics, each kept segment (no junk, no filler over non-vocal audio) becomes an LRC line at its start
@@ -545,7 +547,7 @@ It returns an `AiResult` and writes nothing; nothing leaves the phone. HTDemucs 
 
 **Why reflection** (`IoTensors` in `ai/Npu.kt`): the w8a16 Whisper takes uint16 inputs (the mel and the attention
 mask), and ONNX Runtime's Java API cannot make a uint16 tensor: `OnnxJavaType` stops at int16, and a `ShortBuffer`
-becomes an int16 tensor, which a uint16 input refuses. So Lyrify makes it the way every `OnnxTensor.createTensor` does,
+becomes an int16 tensor, which a uint16 input refuses. So KJB makes it the way every `OnnxTensor.createTensor` does,
 through the private native `OnnxTensor.createTensorFromBuffer`, with the uint16 element type, by reflection into ONNX
 Runtime 1.30.0's Java classes (the members were checked against `java/src/main/java/ai/onnxruntime` at the v1.30.0
 tag; the Android AAR's classes and the JVM build's declare the same ones). The spike ran it on the phone. Safeguards:
@@ -574,7 +576,7 @@ tag; the Android AAR's classes and the JVM build's declare the same ones). The s
   each side) on slices of the same emissions. The confidence is the share of lines where the two starts agree within
   0.5 s. A song is written at 80% or more and with 90% of its line starts rising by at least 0.2 s, else "AI not
   confident". On the bench's 12 songs this accepted 10, with 57% / 71% / 85% of their lines within 0.3 / 0.5 / 1 s.
-- **Long songs** (Lyrify's own rule; the recommendation's fallback, "use the S2c times and keep the gate", cannot keep
+- **Long songs** (KJB's own rule; the recommendation's fallback, "use the S2c times and keep the gate", cannot keep
   a gate that needs S4): the Viterbi keeps one byte per frame and letter state, up to 64 MB of them at once (the
   bench's largest song needs 56 MB). A longer song's table is made a block of frames at a time from saved scores: the
   same path, bit for bit, for one more pass of arithmetic, so long songs are timed and gated the same way. Past 1 G
@@ -604,7 +606,7 @@ against the bench's `npu_timing.py` and `npu_timing_report.py` on synthetic text
 A test pins every timing number to a copy of `recommendation.json`. No fixture holds real lyrics.
 
 Debug builds can run the engine on one song from adb (Android 15 or later). Push the models to shared storage first
-(Lyrify reads it with its all-files access); `whisper-npu` holds the five files of this phone's AI Hub zip:
+(KJB reads it with its all-files access); `whisper-npu` holds the five files of this phone's AI Hub zip:
 
 ```sh
 D=/sdcard/Download/lyrify-models
@@ -612,24 +614,24 @@ adb shell mkdir -p $D/whisper-npu
 adb push encoder.onnx encoder.bin decoder.onnx decoder.bin metadata.json $D/whisper-npu/
 adb push UVR-MDX-NET-Voc_FT.onnx $D/
 adb push model_q4.onnx $D/wav2vec2-base-960h_q4.onnx   # Xenova's q4, only for timing known lyrics
-adb shell am broadcast --allow-fgs-start-reason 316 -n app.lyrify/.ai.AiDebugReceiver --es models $D \
+adb shell am broadcast --allow-fgs-start-reason 316 -n app.lyrify.debug/app.lyrify.ai.AiDebugReceiver --es models $D \
     --es path "/storage/emulated/0/Music/Song.mp3" [--es lyrics /sdcard/Download/plain.txt] [--ei threads 4]
-adb logcat -s Lyrify
+adb logcat -s KJB
 ```
 
 The receiver starts a debug-only foreground service (type mediaProcessing) that runs the engine, logs each stage's time
 and the resulting LRC's line times and lengths (never the lyrics), and writes no file. `--allow-fgs-start-reason 316` lets the app start that service from the
-background. A run takes under a minute plus about 30 s to create the sessions; open Lyrify once after installing (a
+background. A run takes under a minute plus about 30 s to create the sessions; open KJB once after installing (a
 stopped app gets no broadcasts). The debug run writes nothing to the AI's run log.
 
 ## Verbose logging
 
-`adb -s <serial> logcat -s Lyrify` shows the session followed, each track's outcome,
+`adb -s <serial> logcat -s KJB` shows the session followed, each track's outcome,
 retries and write problems. For more:
 
 ```sh
-adb -s <serial> shell setprop log.tag.Lyrify VERBOSE   # on
-adb -s <serial> shell setprop log.tag.Lyrify ""        # off
+adb -s <serial> shell setprop log.tag.KJB VERBOSE   # on
+adb -s <serial> shell setprop log.tag.KJB ""        # off
 ```
 
 Verbose output logs what the player puts in its session (metadata keys, media id, the
@@ -641,14 +643,14 @@ active queue item and the next items) and the queue items skipped as too generic
   The audio must be in MediaStore; the `.lrc` needs no media scan.
 - A timed line must start with `[` (a BOM or a leading space breaks it). The bracket is
   parsed with `SimpleDateFormat("mm:ss.SS")`: the fraction is raw milliseconds (`.13` is
-  13 ms, so Lyrify always writes three digits), `[mm:ss]` or a comma fraction drops the
+  13 ms, so KJB always writes three digits), `[mm:ss]` or a comma fraction drops the
   line, only the first bracket of a line counts, header tags are skipped, lines with equal
   times merge, and times must ascend (binary search).
 - A file with no timed lines parses to zero lines, is cached as "has lyrics", hides the
   embedded lyrics tag and shows nothing until Samsung Music is force-stopped. A changed
   `.lrc` is not re-read until a force-stop either, so a bad first write sticks: hence no
   overwrites and the validation.
-- Encoding: the first charset that decodes strictly, UTF-8 first. Lyrify writes UTF-8
+- Encoding: the first charset that decodes strictly, UTF-8 first. KJB writes UTF-8
   without BOM.
 - Lyrics load when a track's metadata is set, not when the lyrics view opens. A missing file
   is not cached. A song loaded before its `.lrc` exists keeps showing its embedded (plain)
@@ -663,7 +665,7 @@ active queue item and the next items) and the queue items skipped as too generic
 - Only lyrics timed for a recording of the same length are written; about a third of the
   library is expected to get none (obscure tracks, instrumentals, plain-only lyrics).
 - Lyrics written while a song plays appear the next time it loads.
-- Removing lyrics only stops Lyrify from adding them again; Samsung Music may keep showing
+- Removing lyrics only stops KJB from adding them again; Samsung Music may keep showing
   them until it restarts.
 - Players other than Samsung Music are untested for showing the lyrics; streaming apps get
   none (their songs are no files on the phone).
@@ -677,7 +679,7 @@ active queue item and the next items) and the queue items skipped as too generic
 - [ ] The next songs in the queue get their statuses within a minute or so; the queue line's "X/N" climbs to N
       in the background.
 - [ ] A song in two folders gets a `.lrc` next to each copy.
-- [ ] **Wrong lyrics** on a song Lyrify wrote removes only its `.lrc` (after confirming);
+- [ ] **Wrong lyrics** on a song KJB wrote removes only its `.lrc` (after confirming);
       the song shows "Removed" and does not get lyrics again.
 - [ ] Search "motorhead" finds Motörhead; the status bar and chips, the Now Library counts and the AI results filter
       the list; the search button on Now and AI opens Songs with the keyboard up.
@@ -692,7 +694,7 @@ active queue item and the next items) and the queue items skipped as too generic
 - [ ] AI lyrics: the AI tab's chip row says "Snapdragon 8 Elite Gen 5". Switch on
       over Wi-Fi; the models download with a climbing percentage (also in a notification), survive
       turning Wi-Fi off and on (they resume), unpack, and the AI download row shows "0.98 GB · Ready"; the cache holds no zip.
-- [ ] AI lyrics after updating from a 2.0 build that had downloaded the 2.46 GB float set: on opening Lyrify the old
+- [ ] AI lyrics after updating from a 2.0 build that had downloaded the 2.46 GB float set: on opening KJB the old
       Whisper folder and `wav2vec2-base-960h.onnx` are gone from `files/models` (the MDX file stays), the AI tab asks
       for the rest (about 0.91 GB of the 0.98 GB), and it says space is short only when it really is.
 - [ ] Plugged in at night with the screen off: the notification shows the song and "0 of N done", and by
