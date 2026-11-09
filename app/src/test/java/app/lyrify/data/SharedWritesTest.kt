@@ -375,6 +375,7 @@ class SharedWritesTest {
         val APP_PRIVATE: Set<String> = setOf(
             "data/LedgerRepository.kt",
             "dupes/DuplicatesStore.kt",
+            "library/Playlists.kt",
             "models/ModelDownloadWorker.kt",
             "models/ModelStore.kt",
             "overnight/AiRunLog.kt",
