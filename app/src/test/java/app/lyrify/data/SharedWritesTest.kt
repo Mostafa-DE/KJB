@@ -381,6 +381,7 @@ class SharedWritesTest {
             "overnight/AiWorker.kt",
             "overnight/CrashGuard.kt",
             "settings/SettingsStore.kt",
+            "tags/lookup/MetaClient.kt",
             "tones/ToneAudio.kt",
         )
     }
