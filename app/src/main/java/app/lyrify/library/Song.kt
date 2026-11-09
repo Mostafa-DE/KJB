@@ -31,6 +31,11 @@ data class Song(
     val modifiedAt: Long?,
     val sizeBytes: Long,
     val mimeType: String?,
+    /**
+     * MediaStore's ALBUM_ID, a hint only: albums are grouped by album and album artist ([albumKey]), never by it, because
+     * MediaStore splits an album without an album artist by folder.
+     */
+    val albumId: Long? = null,
 ) {
     val path: String get() = ref.path
 
