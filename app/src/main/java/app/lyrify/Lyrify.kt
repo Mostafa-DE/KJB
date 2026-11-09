@@ -37,10 +37,13 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** Logcat tag (`adb logcat -s Lyrify`). Song titles and file paths appear in it; it never leaves the phone. */
-const val LOG_TAG: String = "Lyrify"
+/** Logcat tag (`adb logcat -s KJB`). Song titles and file paths appear in it; it never leaves the phone. */
+const val LOG_TAG: String = "KJB"
 
-/** Extra diagnostics: `adb shell setprop log.tag.Lyrify VERBOSE`. */
+/** The User-Agent of the app's requests (LRCLIB, the AI download): its name, version and repository. */
+val USER_AGENT: String = "KJB/${BuildConfig.VERSION_NAME} ( https://github.com/Mostafa-DE/Lyrify )"
+
+/** Extra diagnostics: `adb shell setprop log.tag.KJB VERBOSE`. */
 fun verbose(): Boolean = Log.isLoggable(LOG_TAG, Log.VERBOSE)
 
 /** Logs a coroutine failure instead of crashing the process. */
@@ -88,7 +91,7 @@ object Lyrify {
      */
     @Synchronized
     fun pipeline(context: Context): LyricsPipeline = pipeline ?: LyricsPipeline(
-        client = HttpLrclibClient(userAgent = "Lyrify/${BuildConfig.VERSION_NAME} (personal use)"),
+        client = HttpLrclibClient(userAgent = USER_AGENT),
         ledger = LedgerRepository(context),
         clock = System::currentTimeMillis,
         writes = writes,
@@ -108,7 +111,7 @@ object Lyrify {
     // 3.0's features: each package builds its own objects by hand (PlayerGraph, StatsGraph, LibraryGraph) and these hooks
     // only point at them, so a milestone replaces its feature's stub without touching this file.
 
-    /** Plays songs from any list: Lyrify's own player (milestone P1); nothing plays until then. */
+    /** Plays songs from any list: KJB's own player (milestone P1); nothing plays until then. */
     fun playback(context: Context): PlaybackCommands = PlayerGraph.commands(context.applicationContext)
 
     /** Where the player's play events go: the play counter (milestone S1). */
@@ -120,7 +123,7 @@ object Lyrify {
     /** Favourite songs and collections (milestone LC). */
     fun favourites(context: Context): FavouritesPort = LibraryGraph.favourites(context.applicationContext)
 
-    /** "Wrong lyrics" / "Remove lyrics": deletes the `.lrc` Lyrify wrote next to [audioPath], if unchanged. */
+    /** "Wrong lyrics" / "Remove lyrics": deletes the `.lrc` KJB wrote next to [audioPath], if unchanged. */
     suspend fun remove(context: Context, audioPath: String): Removal =
         withContext(Dispatchers.IO) { pipeline(context.applicationContext).remove(audioPath) }
 

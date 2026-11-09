@@ -42,7 +42,7 @@ private const val USAGE = "adb shell am broadcast --allow-fgs-start-reason 316 -
 
 /**
  * Debug builds only: runs the AI engine on one song from adb and logs each stage's time and the result, with each LRC
- * line's time and length (never its text), to logcat (tag Lyrify). Writes nothing: no `.lrc`, no ledger entry, no file
+ * line's time and length (never its text), to logcat (tag KJB). Writes nothing: no `.lrc`, no ledger entry, no file
  * anywhere.
  *
  * ```
@@ -110,7 +110,7 @@ class AiDebugService : Service() {
                 stop()
             }
             else -> run = scope.launch {
-                val wakeLock = getSystemService(PowerManager::class.java).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "Lyrify:aiDebug")
+                val wakeLock = getSystemService(PowerManager::class.java).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "KJB:aiDebug")
                 wakeLock.acquire(WAKE_LOCK_TIMEOUT_MS)
                 try {
                     execute(request)
@@ -144,8 +144,8 @@ class AiDebugService : Service() {
             .createNotificationChannel(NotificationChannel(CHANNEL, "AI debug run", NotificationManager.IMPORTANCE_LOW))
         return Notification.Builder(this, CHANNEL)
             .setSmallIcon(android.R.drawable.stat_notify_sync)
-            .setContentTitle("Lyrify AI debug run")
-            .setContentText("Results go to logcat, tag Lyrify")
+            .setContentTitle("KJB AI debug run")
+            .setContentText("Results go to logcat, tag KJB")
             .setOngoing(true)
             .build()
     }

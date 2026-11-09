@@ -33,7 +33,7 @@ import java.nio.ByteOrder
 /** The process-wide ONNX Runtime environment, and the session options of the models that run on the CPU. */
 object Ort {
     val env: OrtEnvironment by lazy {
-        OrtEnvironment.getEnvironment(OrtLoggingLevel.ORT_LOGGING_LEVEL_WARNING, "Lyrify").also {
+        OrtEnvironment.getEnvironment(OrtLoggingLevel.ORT_LOGGING_LEVEL_WARNING, "KJB").also {
             // onnxruntime-android ships 1DS telemetry. The manifest removes its initializer; this switches the native
             // events off as well. Never worth failing a run over.
             runCatching { it.setTelemetry(false) }.onFailure { e -> Log.w(LOG_TAG, "could not disable ONNX Runtime telemetry", e) }

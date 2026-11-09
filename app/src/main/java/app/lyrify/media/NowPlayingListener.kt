@@ -281,14 +281,14 @@ class NowPlayingListener : NotificationListenerService() {
         return Reading(SessionSnapshot(metadata?.let(::sessionTrack), activeId, queue, player(controller.packageName)), art)
     }
 
-    /** The app [packageName] is, named as the phone shows it; its package name when Lyrify cannot see the app. */
+    /** The app [packageName] is, named as the phone shows it; its package name when KJB cannot see the app. */
     private fun player(packageName: String): Player = player?.takeIf { it.packageName == packageName } ?: run {
         val name = try {
             // Deprecated from Android 13 for the ApplicationInfoFlags overload; the same lookup.
             packageManager.getApplicationLabel(packageManager.getApplicationInfo(packageName, 0)).toString()
         } catch (_: PackageManager.NameNotFoundException) {
             // The exception names the package: not logged.
-            Log.d(LOG_TAG, "the player's app name is not visible to Lyrify; its package name stands in")
+            Log.d(LOG_TAG, "the player's app name is not visible to KJB; its package name stands in")
             packageName
         }
         Player(packageName, name).also { player = it }

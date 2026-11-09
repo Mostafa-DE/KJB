@@ -297,7 +297,7 @@ class ModelStoreTest {
         // The phone's free space: short of what the new one needs while the old folder is there.
         val free = { _: File -> if (dir.exists()) needed - 1 else needed }
         val download = runBlocking {
-            ModelDownloader(store(base, listOf(spec)), "Lyrify/test", loopback, Dispatchers.IO, freeBytes = free).downloadAll { _, _ -> }
+            ModelDownloader(store(base, listOf(spec)), "KJB/test", loopback, Dispatchers.IO, freeBytes = free).downloadAll { _, _ -> }
         }
 
         assertEquals(Download.Done, download)
@@ -382,7 +382,7 @@ class ModelStoreTest {
         File(models, OLD).writeBytes(second)
 
         val download = runBlocking {
-            ModelDownloader(store(base), "Lyrify/test", loopback, Dispatchers.IO, freeBytes = { Long.MAX_VALUE }).downloadAll { _, _ -> }
+            ModelDownloader(store(base), "KJB/test", loopback, Dispatchers.IO, freeBytes = { Long.MAX_VALUE }).downloadAll { _, _ -> }
         }
 
         assertEquals(Download.Done, download)
@@ -482,7 +482,7 @@ class ModelStoreTest {
     }
 
     private fun downloader(base: String, free: Long = Long.MAX_VALUE, list: List<ModelSpec> = specs(base)) =
-        ModelDownloader(store(base, list), userAgent = "Lyrify/test", hosts = loopback, io = Dispatchers.IO, freeBytes = { free })
+        ModelDownloader(store(base, list), userAgent = "KJB/test", hosts = loopback, io = Dispatchers.IO, freeBytes = { free })
 
     private fun download(base: String, progress: MutableList<Long> = mutableListOf(), free: Long = Long.MAX_VALUE, list: List<ModelSpec> = specs(base)): Download =
         runBlocking { downloader(base, free, list).downloadAll { done, _ -> progress += done } }

@@ -179,7 +179,7 @@ class LrclibClientTest {
             start()
         }
 
-    private fun HttpServer.client() = HttpLrclibClient(userAgent = "Lyrify/test", base = "http://127.0.0.1:${address.port}")
+    private fun HttpServer.client() = HttpLrclibClient(userAgent = "KJB/test", base = "http://127.0.0.1:${address.port}")
 
     private fun HttpExchange.reply(code: Int, body: ByteArray) {
         sendResponseHeaders(code, if (body.isEmpty()) -1 else body.size.toLong())
@@ -307,7 +307,7 @@ class LrclibClientTest {
         val stuck = StuckConnection()
         val connections = ArrayDeque(listOf(stuck, AnsweringConnection("[$vaelJson]")))
         val client = HttpLrclibClient(
-            userAgent = "Lyrify/test",
+            userAgent = "KJB/test",
             gate = RequestGate(now = { testScheduler.currentTime }),
             open = { connections.removeFirst() },
         )

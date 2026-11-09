@@ -283,7 +283,7 @@ class Stft(val nFft: Int, val hop: Int, val threads: Int = 1) : AutoCloseable {
     private val synthesis = DoubleArray(nFft) { window[it] / nFft }
     private val workers = List(threads) { Worker() }
     private val pool: ExecutorService? = if (threads > 1) {
-        Executors.newFixedThreadPool(threads - 1) { r -> Thread(r, "Lyrify-stft").apply { isDaemon = true } }
+        Executors.newFixedThreadPool(threads - 1) { r -> Thread(r, "KJB-stft").apply { isDaemon = true } }
     } else {
         null
     }

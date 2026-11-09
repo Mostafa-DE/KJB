@@ -22,9 +22,9 @@ import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
-import app.lyrify.BuildConfig
 import app.lyrify.LOG_TAG
 import app.lyrify.R
+import app.lyrify.USER_AGENT
 import app.lyrify.ui.MainActivity
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -57,7 +57,7 @@ class ModelDownloadWorker(context: Context, params: WorkerParameters) : Coroutin
         if (store.isReady()) return Result.success()
         val downloader = ModelDownloader(
             store = store,
-            userAgent = "Lyrify/${BuildConfig.VERSION_NAME} (personal use)",
+            userAgent = USER_AGENT,
             log = { Log.d(LOG_TAG, "models: $it") },
         )
         val inForeground = foreground(store.bytesOnDisk(), store.totalBytes)
