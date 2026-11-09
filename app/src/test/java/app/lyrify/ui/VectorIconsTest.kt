@@ -149,7 +149,7 @@ class VectorIconsTest {
         assertEquals(NOTE_ARM_SMALL, paths(small).map { it.first.attr("pathData") })
         assertTrue(paths(small).all { (path, _) -> path.attr("fillColor") == "#FFFFFFFF" && gradient(path) == null })
 
-        val calls = listOf("main", "debug", "lite", "full", "fullDebug").map { "src/$it/java" }.filter { File(it).isDirectory }.flatMap { root ->
+        val calls = listOf("src/main/java", "src/debug/java").flatMap { root ->
             File(root).walkTopDown().filter { it.isFile && it.extension == "kt" }.flatMap { SMALL_ICON.findAll(it.readText()).map { call -> call.groupValues[1] } }.toList()
         }
         assertEquals(listOf("R.drawable.ic_stat_kjb", "R.drawable.ic_stat_kjb", "R.drawable.ic_stat_kjb"), calls)

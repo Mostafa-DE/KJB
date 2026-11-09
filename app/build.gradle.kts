@@ -1,6 +1,4 @@
-import com.android.build.api.artifact.SingleArtifact
 import java.util.Properties
-import java.util.zip.ZipFile
 
 plugins {
     alias(libs.plugins.android.application)
@@ -36,6 +34,11 @@ android {
             abiFilters += "arm64-v8a"
         }
 
+        // The run log names the stack the AI ran on.
+        buildConfigField("String", "ORT_VERSION", "\"${libs.versions.onnxruntime.get()}\"")
+        buildConfigField("String", "QNN_EP_VERSION", "\"${libs.versions.qnnEp.get()}\"")
+        buildConfigField("String", "QNN_RUNTIME_VERSION", "\"${libs.versions.qnnRuntime.get()}\"")
+
         // Device tests (app/src/androidTest) run on the debug build, beside the release app.
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -58,24 +61,6 @@ android {
                 "**/libQnnHtpV73Skel.so",
                 "**/libQnnHtpV73Stub.so",
             )
-        }
-    }
-
-    // Two editions of one app, the same applicationId and signing key, so either installs over the other or over 2.0.x
-    // and keeps the data: "KJB" (lite) without the AI, and "KJB + AI" (full) with ONNX Runtime and QNN for AI lyrics.
-    // The AI sits behind ai.AiEngine in main; each edition's source set gives its EditionEngine.
-    flavorDimensions += "edition"
-    productFlavors {
-        create("lite") {
-            dimension = "edition"
-        }
-        create("full") {
-            dimension = "edition"
-            // The run log names the stack the AI ran on.
-            buildConfigField("String", "ORT_VERSION", "\"${libs.versions.onnxruntime.get()}\"")
-            buildConfigField("String", "QNN_EP_VERSION", "\"${libs.versions.qnnEp.get()}\"")
-            buildConfigField("String", "QNN_RUNTIME_VERSION", "\"${libs.versions.qnnRuntime.get()}\"")
-            proguardFile("proguard-ai.pro")
         }
     }
 
@@ -119,64 +104,9 @@ android {
 }
 
 androidComponents {
-    onVariants { variant ->
-        val name = variant.name.replaceFirstChar(Char::uppercase)
-        // Release assets: KJB-<version>.apk (lite) and KJB-<version>-ai.apk (full).
-        if (variant.buildType == "release") {
-            val edition = if (variant.flavorName == "full") "-ai" else ""
-            variant.outputs.forEach { output -> output.outputFileName.set(output.versionName.map { "KJB-$it$edition.apk" }) }
-        }
-        // Every lite APK is checked for the AI engine as it is assembled.
-        if (variant.flavorName == "lite") {
-            val check = tasks.register<CheckNoAi>("check${name}NoAi") {
-                apks.set(variant.artifacts.get(SingleArtifact.APK))
-                report.set(layout.buildDirectory.file("reports/no-ai/${variant.name}.txt"))
-            }
-            tasks.named { it == "assemble$name" }.configureEach { dependsOn(check) }
-        }
-    }
-}
-
-/**
- * Fails when an APK of KJB (the lite edition) holds any of the AI engine: an ONNX Runtime or QNN native library, or an
- * ONNX Runtime or Qualcomm class in its dex files.
- */
-abstract class CheckNoAi : DefaultTask() {
-    @get:InputFiles
-    @get:PathSensitive(PathSensitivity.RELATIVE)
-    abstract val apks: DirectoryProperty
-
-    @get:OutputFile
-    abstract val report: RegularFileProperty
-
-    @TaskAction
-    fun check() {
-        val files = apks.get().asFile.listFiles { file -> file.extension == "apk" }.orEmpty().sortedBy { it.name }
-        if (files.isEmpty()) throw GradleException("no APK in ${apks.get().asFile}")
-        val found = files.flatMap { apk ->
-            ZipFile(apk).use { zip ->
-                zip.entries().asSequence().flatMap { entry ->
-                    when {
-                        NATIVE.matches(entry.name) -> sequenceOf("${apk.name}: ${entry.name}")
-                        entry.name.endsWith(".dex") -> {
-                            val dex = zip.getInputStream(entry).use { String(it.readBytes(), Charsets.ISO_8859_1) }
-                            CLASSES.filter { it in dex }.map { "${apk.name}: ${entry.name} has classes under $it" }.asSequence()
-                        }
-                        else -> emptySequence()
-                    }
-                }.toList()
-            }
-        }
-        if (found.isNotEmpty()) throw GradleException("KJB (lite) must not ship the AI engine:\n" + found.joinToString("\n"))
-        report.get().asFile.writeText("No ONNX Runtime or QNN in ${files.joinToString { it.name }}\n")
-    }
-
-    private companion object {
-        /** ONNX Runtime's and QNN's native libraries. */
-        val NATIVE = Regex("""lib/[^/]+/lib(onnxruntime|Qnn)[^/]*\.so""")
-
-        /** Their Java packages, as dex type descriptors. */
-        val CLASSES = listOf("Lai/onnxruntime/", "Lcom/qualcomm/")
+    // The release asset: KJB-<version>.apk.
+    onVariants(selector().withBuildType("release")) { variant ->
+        variant.outputs.forEach { output -> output.outputFileName.set(output.versionName.map { "KJB-$it.apk" }) }
     }
 }
 
@@ -190,9 +120,9 @@ dependencies {
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.material3)
-    "fullImplementation"(libs.onnxruntime.android)
-    "fullImplementation"(libs.onnxruntime.qnn.ep)
-    "fullImplementation"(libs.qnn.runtime)
+    implementation(libs.onnxruntime.android)
+    implementation(libs.onnxruntime.qnn.ep)
+    implementation(libs.qnn.runtime)
     implementation(libs.androidx.work.runtime)
     implementation(libs.coil.compose)
     implementation(libs.media3.exoplayer)
@@ -201,7 +131,7 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
-    "testFullImplementation"(libs.onnxruntime.jvm)
+    testImplementation(libs.onnxruntime.jvm)
 
     androidTestImplementation(libs.androidx.test.core)
     androidTestImplementation(libs.androidx.test.runner)

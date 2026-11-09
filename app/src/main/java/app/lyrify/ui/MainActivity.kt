@@ -18,7 +18,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import app.lyrify.BuildConfig
 import app.lyrify.Lyrify
-import app.lyrify.ai.EditionEngine
 import app.lyrify.data.LedgerRepository
 import app.lyrify.data.LedgerState
 import app.lyrify.data.LedgerStore
@@ -91,7 +90,7 @@ private fun App(ledger: LedgerStore) {
     }.collectAsStateWithLifecycle(initialValue = false)
     // Songs waiting for the AI need a look at their files: off the main thread, and only while the AI is on.
     val aiCounts by produceState(0 to 0, state, aiEnabled) {
-        if (aiEnabled && EditionEngine.included) {
+        if (aiEnabled) {
             value = withContext(Dispatchers.IO) {
                 val at = System.currentTimeMillis()
                 AiQueue.of(state, at, ::audioWithoutLyrics).size to AiQueue.doneSince(state, at - DAY_MS)
@@ -113,7 +112,6 @@ private fun App(ledger: LedgerStore) {
             pluggedIn = pluggedIn,
             unrestricted = unrestricted,
             stopping = deletingModels,
-            included = EditionEngine.included,
         ),
         aiActions = remember(context) {
             AiActions(

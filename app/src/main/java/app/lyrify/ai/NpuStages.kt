@@ -4,8 +4,6 @@ import ai.onnxruntime.OnnxJavaType
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtSession
 import ai.onnxruntime.TensorInfo
-import android.content.Context
-import app.lyrify.BuildConfig
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -13,26 +11,7 @@ import java.nio.FloatBuffer
 import java.util.Locale
 
 /** The Whisper tokenizer's files, bundled in the app's assets (`whisper/`): openai/whisper-large-v3-turbo's own. */
-class WhisperAssets(val vocabJson: String, val addedTokensJson: String, val generationConfigJson: String) {
-    companion object {
-        /** The files from the app's assets. */
-        fun of(context: Context): WhisperAssets {
-            fun asset(name: String) = context.assets.open("whisper/$name").use { it.readBytes().toString(Charsets.UTF_8) }
-            return WhisperAssets(asset("vocab.json"), asset("added_tokens.json"), asset("generation_config.json"))
-        }
-    }
-}
-
-/** KJB + AI's engine: [NpuStages] on the phone's NPU, the QNN libraries from the app's native library folder. */
-object EditionEngine : AiEngine {
-    override val included: Boolean = true
-
-    override val versions: String =
-        "ONNX Runtime ${BuildConfig.ORT_VERSION}, QNN EP ${BuildConfig.QNN_EP_VERSION}, QNN ${BuildConfig.QNN_RUNTIME_VERSION}"
-
-    override fun open(context: Context, models: AiModels, threads: Int, log: (String) -> Unit): AiStages =
-        NpuStages(models, context.applicationInfo.nativeLibraryDir, WhisperAssets.of(context), threads, log)
-}
+class WhisperAssets(val vocabJson: String, val addedTokensJson: String, val generationConfigJson: String)
 
 /**
  * The engine's stages on the phone, as lyrify-npu-spike's full stage ran them: MediaCodec decoding, UVR-MDX-NET-Voc_FT
@@ -56,7 +35,7 @@ class NpuStages(
     private val threads: Int,
     /** One line per Whisper window (tokens, stop reason, time) and per session created; no lyrics. */
     private val log: (String) -> Unit = {},
-) : AiStages {
+) : AiStages, AutoCloseable {
     private var contract: WhisperContract? = null
     private var qnn: QnnEp? = null
     private var mdx: Mdx? = null

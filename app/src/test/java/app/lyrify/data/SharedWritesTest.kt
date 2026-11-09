@@ -333,8 +333,7 @@ class SharedWritesTest {
      */
     @Test
     fun `every writer is known, and every writer to shared storage asks the checkpoint`() {
-        // Every source set the app is built from: main, the build types' and the editions'.
-        val roots = listOf("main", "debug", "lite", "full", "fullDebug").map { File("src/$it/java/app/lyrify") }.filter { it.isDirectory }
+        val roots = listOf("src/main/java/app/lyrify", "src/debug/java/app/lyrify").map(::File)
         assertTrue("run from the app module: ${File("").absolutePath}", roots[0].isDirectory)
         val writers = roots.flatMap { root ->
             root.walkTopDown().filter { it.isFile && it.extension == "kt" && WRITE_CALLS.containsMatchIn(it.readText()) }

@@ -33,8 +33,9 @@ import app.lyrify.R
 import app.lyrify.ai.AiModels
 import app.lyrify.ai.AiResult
 import app.lyrify.ai.AiStage
-import app.lyrify.ai.EditionEngine
 import app.lyrify.ai.LyricsFromAudio
+import app.lyrify.ai.NpuStages
+import app.lyrify.ai.WhisperAssets
 import app.lyrify.data.LedgerRepository
 import app.lyrify.lyrics.LocalTrack
 import app.lyrify.models.ModelDownloads
@@ -69,12 +70,11 @@ import java.util.concurrent.TimeUnit
  * day or until the app is opened. Unplugged ([AiRunner] watches the cable) or cancelled, the engine finishes the step it
  * is on and stops; nothing is recorded for that song. It goes into the foreground before it looks at any song's files.
  * The engine's NPU sessions stay loaded for the whole run and are released at its end. What happens goes to the AI's
- * run log ([AiLyrics.runLog]) as well as logcat. Android 15+ only, on the supported chips ([NpuChips]) only, in KJB + AI
- * only ([EditionEngine]): KJB has no engine, and a schedule a KJB + AI install left does nothing.
+ * run log ([AiLyrics.runLog]) as well as logcat. Android 15+ only, on the supported chips ([NpuChips]) only.
  */
 class AiWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result =
-        if (EditionEngine.included && Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) night() else Result.success()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) night() else Result.success()
 
     @RequiresApi(Build.VERSION_CODES.VANILLA_ICE_CREAM)
     private suspend fun night(): Result {
@@ -120,7 +120,8 @@ class AiWorker(context: Context, params: WorkerParameters) : CoroutineWorker(con
         val power = context.getSystemService(PowerManager::class.java)
         runLog.append(
             "AI: run started: ${AiLyrics.battery(context)}, thermal status ${power.currentThermalStatus}, " +
-                "${NpuChips.device()?.socModel} NPU, ${EditionEngine.versions}, $AI_THREADS CPU threads, KJB ${BuildConfig.VERSION_NAME}",
+                "${NpuChips.device()?.socModel} NPU, ONNX Runtime ${BuildConfig.ORT_VERSION}, QNN EP ${BuildConfig.QNN_EP_VERSION}, " +
+                "QNN ${BuildConfig.QNN_RUNTIME_VERSION}, $AI_THREADS CPU threads, KJB ${BuildConfig.VERSION_NAME}",
         )
         val log: (String) -> Unit = {
             Log.i(LOG_TAG, it)
@@ -182,12 +183,17 @@ class AiWorker(context: Context, params: WorkerParameters) : CoroutineWorker(con
         }
 
     /**
-     * The engine on the NPU for [models]: the edition's stages ([EditionEngine]: the QNN EP and its sessions, created on
-     * first use and released by [SongEngine.close]) under [LyricsFromAudio]. Its notes go to the run log: stages,
-     * times, counts.
+     * The engine on the NPU for [models]: [NpuStages] (the QNN EP and its sessions, created on first use and released
+     * by [SongEngine.close]) under [LyricsFromAudio]. Its notes go to the run log: stages, times, counts.
      */
     private fun engine(context: Context, models: AiModels, runLog: AiRunLog): SongEngine {
-        val stages = EditionEngine.open(context, models, AI_THREADS) { runLog.append("AI:   $it") }
+        val stages = NpuStages(
+            models,
+            context.applicationInfo.nativeLibraryDir,
+            AiLyrics.whisperAssets(context),
+            AI_THREADS,
+            log = { runLog.append("AI:   $it") },
+        )
         val lyrics = LyricsFromAudio(
             stages,
             SystemClock::elapsedRealtime,
@@ -301,20 +307,13 @@ object AiLyrics {
     fun enabled(context: Context): StateFlow<Boolean> = choice(context).asStateFlow()
 
     /**
-     * When the app starts (KJB, without the AI, stops what a KJB + AI install scheduled): on, with nothing scheduled (the schedule was lost) or a schedule an earlier version made
+     * When the app starts: on, with nothing scheduled (the schedule was lost) or a schedule an earlier version made
      * (waiting for charging, see [schedule]), the run is scheduled again; models not all in place (a new version can
      * pin another file) are downloaded unless a download is under way. A schedule from before the choice was stored (an
      * earlier build) counts as on.
      */
     suspend fun reconcile(context: Context) {
         withContext(Dispatchers.IO) { removeOldFiles(context) }
-        if (!EditionEngine.included) {
-            // KJB has no AI: a schedule or a download a KJB + AI install left is stopped. The stored choice and the
-            // files stay; the AI tab offers to remove the files, and KJB + AI picks up the choice again.
-            WorkManager.getInstance(context).cancelUniqueWork(WORK)
-            ModelDownloads.cancel(context)
-            return
-        }
         val store = ModelDownloads.store(context) ?: return
         val pending = WorkManager.getInstance(context).getWorkInfosForUniqueWorkFlow(WORK).first().filterNot { it.state.isFinished }
         if (pending.isNotEmpty() && !preferences(context).contains(ENABLED)) choose(context, true)
@@ -342,6 +341,12 @@ object AiLyrics {
     /** The crash guard's records (app-private files, see [CrashGuard]). */
     internal fun crashGuard(context: Context, log: (String) -> Unit): CrashGuard =
         CrashGuard(File(context.applicationContext.filesDir, CRASH_GUARD), System::currentTimeMillis, BuildConfig.VERSION_CODE, log)
+
+    /** The Whisper tokenizer's files from the app's assets. */
+    internal fun whisperAssets(context: Context): WhisperAssets {
+        fun asset(name: String) = context.assets.open("whisper/$name").use { it.readBytes().toString(Charsets.UTF_8) }
+        return WhisperAssets(asset("vocab.json"), asset("added_tokens.json"), asset("generation_config.json"))
+    }
 
     /**
      * Off, then [block] once the AI has actually stopped: WorkManager no longer runs it and its engine has let go of

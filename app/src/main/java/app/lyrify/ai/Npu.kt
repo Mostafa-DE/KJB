@@ -164,6 +164,13 @@ fun specs(info: Map<String, NodeInfo>): List<TensorSpec> = info.values.map { nod
 }
 
 /**
+ * ONNX Runtime's private members that [IoTensors] calls are not what this build expects: one is missing, of another
+ * type, or refuses the call. A uint16 tensor cannot be made, so the w8a16 Whisper cannot run: the engine reports the
+ * NPU as unavailable ([NpuUnavailableException]) instead of failing songs or crashing.
+ */
+class OrtInternalsException(cause: Throwable) : Exception("ONNX Runtime's internals are not as expected: ${cause.javaClass.simpleName}: ${cause.message}", cause)
+
+/**
  * Tensors over direct buffers (native order) in the element types of the exports' I/O. ONNX Runtime's Java API cannot
  * make a uint16 tensor: OnnxJavaType stops at int16 and a ShortBuffer becomes an int16 tensor, which a uint16 input
  * refuses. The w8a16 export takes uint16 mel and attention mask inputs, so for those the tensor is made the way every
