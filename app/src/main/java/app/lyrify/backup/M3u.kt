@@ -289,14 +289,17 @@ object M3u {
     )
 }
 
-/** A picked m3u file: its entries, or why it could not be read. */
+/** A picked m3u file: its entries, or why it could not be read. [name] is the file's, when its provider says. */
 sealed interface M3uRead {
-    /** [name] is the file's, [folder] the path of its folder when its provider gives one (for relative paths). */
-    data class Entries(val name: String?, val folder: String?, val entries: List<M3uEntry>) : M3uRead
+    val name: String?
 
-    data object TooBig : M3uRead
+    /** [folder] is the path of the file's folder when its provider gives one, for relative paths. */
+    data class Entries(override val name: String?, val folder: String?, val entries: List<M3uEntry>) : M3uRead
 
-    data object Unreadable : M3uRead
+    /** Over [M3u.MAX_BYTES]. */
+    data class TooBig(override val name: String?) : M3uRead
+
+    data class Unreadable(override val name: String?) : M3uRead
 }
 
 /**
@@ -343,8 +346,9 @@ class M3uDocuments(private val resolver: ContentResolver, private val writes: Sh
 
     /** Reads the m3u file [document], picked in the open dialog. */
     fun read(document: Uri): M3uRead {
+        var name: String? = null
         return try {
-            val name = resolver.query(document, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+            name = resolver.query(document, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
                 if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getString(0) else null
             }
             val folder = try {
@@ -353,12 +357,12 @@ class M3uDocuments(private val resolver: ContentResolver, private val writes: Sh
                 null
             }
             val input = resolver.openInputStream(document) ?: throw IOException("no stream")
-            val bytes = input.use(M3u::readBounded) ?: return M3uRead.TooBig
+            val bytes = input.use(M3u::readBounded) ?: return M3uRead.TooBig(name)
             M3uRead.Entries(name, folder, M3u.read(bytes, name))
         } catch (e: Exception) {
             // IOException, SecurityException, or the provider's own.
             log("m3u: file not read: ${e.javaClass.simpleName}")
-            M3uRead.Unreadable
+            M3uRead.Unreadable(name)
         }
     }
 

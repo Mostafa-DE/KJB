@@ -1,4 +1,32 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Playlist import and export, backup and restore (milestones B1 and B2). -->
 <resources>
+    <!-- Playlists: m3u import and export (B1, ui/M3uScreens.kt). Labels are three words or fewer; sentences only in the sheet. -->
+    <string name="m3u_export">Export</string>
+    <string name="m3u_export_all">Export all</string>
+    <string name="m3u_import">Import</string>
+    <string name="m3u_untitled">Imported playlist</string>
+    <string name="m3u_exported">Playlist exported</string>
+    <string name="m3u_not_exported">Couldn\'t export the playlist</string>
+    <plurals name="m3u_exported_all">
+        <item quantity="one">%1$s playlist exported</item>
+        <item quantity="other">%1$s playlists exported</item>
+    </plurals>
+    <string name="m3u_exported_some">%1$s of %2$s playlists exported</string>
+    <string name="m3u_no_playlists">No playlists to export</string>
+    <plurals name="m3u_found">
+        <item quantity="one">%1$s of %2$s song found</item>
+        <item quantity="other">%1$s of %2$s songs found</item>
+    </plurals>
+    <string name="m3u_missing">Not found</string>
+    <string name="m3u_more_missing">And %1$s more</string>
+    <string name="m3u_create">Create playlist</string>
+    <string name="m3u_skip">Skip</string>
+    <string name="m3u_cancel">Cancel</string>
+    <string name="m3u_close">Close</string>
+    <string name="m3u_created">Playlist created</string>
+    <string name="m3u_not_created">Couldn\'t create the playlist</string>
+    <string name="m3u_no_songs">This file lists no songs.</string>
+    <string name="m3u_too_big">This file is too big to be a playlist.</string>
+    <string name="m3u_unreadable">KJB couldn\'t read this file.</string>
 </resources>
