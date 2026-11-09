@@ -301,13 +301,20 @@ object AiLyrics {
     fun enabled(context: Context): StateFlow<Boolean> = choice(context).asStateFlow()
 
     /**
-     * When the app starts: on, with nothing scheduled (the schedule was lost) or a schedule an earlier version made
+     * When the app starts (KJB, without the AI, stops what a KJB + AI install scheduled): on, with nothing scheduled (the schedule was lost) or a schedule an earlier version made
      * (waiting for charging, see [schedule]), the run is scheduled again; models not all in place (a new version can
      * pin another file) are downloaded unless a download is under way. A schedule from before the choice was stored (an
      * earlier build) counts as on.
      */
     suspend fun reconcile(context: Context) {
         withContext(Dispatchers.IO) { removeOldFiles(context) }
+        if (!EditionEngine.included) {
+            // KJB has no AI: a schedule or a download a KJB + AI install left is stopped. The stored choice and the
+            // files stay; the AI tab offers to remove the files, and KJB + AI picks up the choice again.
+            WorkManager.getInstance(context).cancelUniqueWork(WORK)
+            ModelDownloads.cancel(context)
+            return
+        }
         val store = ModelDownloads.store(context) ?: return
         val pending = WorkManager.getInstance(context).getWorkInfosForUniqueWorkFlow(WORK).first().filterNot { it.state.isFinished }
         if (pending.isNotEmpty() && !preferences(context).contains(ENABLED)) choose(context, true)

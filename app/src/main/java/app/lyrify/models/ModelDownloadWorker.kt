@@ -25,6 +25,7 @@ import androidx.work.workDataOf
 import app.lyrify.LOG_TAG
 import app.lyrify.R
 import app.lyrify.USER_AGENT
+import app.lyrify.ai.EditionEngine
 import app.lyrify.ui.MainActivity
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -51,7 +52,9 @@ import java.util.concurrent.TimeUnit
  */
 class ModelDownloadWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
-        // A phone whose chip the AI does not run on downloads nothing.
+        // KJB has no AI (a download a KJB + AI install left waiting ends here), and a phone whose chip the AI does not
+        // run on downloads nothing.
+        if (!EditionEngine.included) return Result.success()
         val store = ModelDownloads.store(applicationContext) ?: return Result.success()
         // Models in place (switching the AI on starts this too): nothing to fetch, no foreground service.
         if (store.isReady()) return Result.success()
@@ -168,6 +171,11 @@ object ModelDownloads {
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, RETRY_MINUTES, TimeUnit.MINUTES)
             .build()
         WorkManager.getInstance(context).enqueueUniqueWork(WORK, policy, request)
+    }
+
+    /** Stops a download, keeping its parts. */
+    fun cancel(context: Context) {
+        WorkManager.getInstance(context).cancelUniqueWork(WORK)
     }
 
     /** Stops a download and deletes the models and their parts; true when none is left. */

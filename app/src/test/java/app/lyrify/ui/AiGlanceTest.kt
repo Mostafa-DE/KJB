@@ -12,6 +12,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 /** The AI tab's ring, centre, line, sheet and action for every state of the spec's table (5.6), and the Now tile. */
 class AiGlanceTest {
@@ -28,7 +29,8 @@ class AiGlanceTest {
         pluggedIn: Boolean = true,
         unrestricted: Boolean = true,
         stopping: Boolean = false,
-    ) = AiState(chip, newEnough, models, enabled, progress, hold, pluggedIn, unrestricted, stopping)
+        included: Boolean = true,
+    ) = AiState(chip, newEnough, models, enabled, progress, hold, pluggedIn, unrestricted, stopping, included)
 
     private fun glance(state: AiState, waiting: Int = WAITING) = aiGlance(state, waiting)
 
@@ -51,6 +53,56 @@ class AiGlanceTest {
         assertFalse(state(chip = null).supported)
         assertFalse(state(newEnough = false).supported)
         assertTrue(state().supported)
+    }
+
+    // KJB, the edition without the AI
+
+    @Test
+    fun `KJB says AI lyrics need KJB + AI, on any phone, and nothing runs`() {
+        val needsFull = AiGlance(null, Centre.Icon(R.drawable.ic_memory), text(R.string.ai_needs_full), text(R.string.ai_needs_full_detail), null)
+        assertEquals(needsFull, glance(state(included = false, models = null)))
+        assertEquals(needsFull, glance(state(included = false, models = ModelState.Missing(0, TOTAL), enabled = true, progress = AiProgress(1, 2, "Song A"))))
+        assertEquals(needsFull, glance(state(included = false, chip = null, models = null)))
+        assertEquals(needsFull, glance(state(included = false, newEnough = false, models = null)))
+        // No switch, no rows, no tile and no dot: there is nothing to turn on.
+        assertFalse(state(included = false).supported)
+        assertNull(aiTile(state(included = false), WAITING))
+        assertFalse(aiAttention(state(included = false, models = ModelState.Failed(QUARTER, TOTAL)), WAITING))
+        assertFalse(aiAttention(state(included = false, hold = AiHold.NOT_ALLOWED), WAITING))
+    }
+
+    @Test
+    fun `KJB offers to remove the AI files an earlier KJB + AI left, with their size`() {
+        fun remove(bytes: Long) = GlanceAction(AiActionKind.REMOVE_FILES, text(R.string.ai_remove_files, GlanceArg.Bytes(bytes)))
+        assertEquals(remove(TOTAL), glance(state(included = false, models = ModelState.Ready(TOTAL))).action)
+        assertEquals(remove(QUARTER), glance(state(included = false, models = ModelState.Missing(QUARTER, TOTAL))).action)
+        assertEquals(remove(QUARTER), glance(state(included = false, models = ModelState.Downloading(QUARTER, TOTAL, waiting = true))).action)
+        assertEquals(remove(QUARTER), glance(state(included = false, models = ModelState.NoRoom(QUARTER, TOTAL, NEEDED))).action)
+        assertEquals(remove(QUARTER), glance(state(included = false, models = ModelState.Failed(QUARTER, TOTAL))).action)
+        assertNull(glance(state(included = false, models = ModelState.Missing(0, TOTAL))).action)
+        assertNull(glance(state(included = false, models = null)).action)
+        // Never in KJB + AI, whose own download sheet deletes them.
+        assertTrue(listOf(ModelState.Ready(TOTAL), ModelState.Missing(QUARTER, TOTAL)).none { glance(state(models = it)).action?.kind == AiActionKind.REMOVE_FILES })
+    }
+
+    @Test
+    fun `KJB lists the chips KJB + AI runs on`() {
+        assertEquals("Snapdragon 8 Elite Gen 5, Snapdragon 8 Elite, Snapdragon 8 Gen 3, Snapdragon 8 Gen 1", supportedChips())
+    }
+
+    @Test
+    fun `KJB's AI copy names KJB + AI, says your phone, and keeps labels short`() {
+        val strings = File("src/main/res/values/strings_editions.xml").readText()
+        fun string(name: String) = Regex("""<string name="$name">([^<]*)</string>""").find(strings)?.groupValues?.get(1)
+        assertEquals("Needs KJB + AI", string("ai_needs_full"))
+        assertEquals("Remove AI files (%1${'$'}s)", string("ai_remove_files"))
+        assertEquals("Supported chips", string("ai_row_chips"))
+        val detail = string("ai_needs_full_detail").orEmpty()
+        assertTrue(detail, "KJB + AI" in detail && "your phone" in detail)
+        assertEquals("Remove the AI files?", string("ai_remove_title"))
+        assertTrue(string("ai_remove_text").orEmpty(), string("ai_remove_text").orEmpty().startsWith("Frees %1${'$'}s on your phone."))
+        assertEquals("Remove", string("ai_remove_confirm"))
+        assertFalse(strings.contains('\u2014'))
     }
 
     @Test

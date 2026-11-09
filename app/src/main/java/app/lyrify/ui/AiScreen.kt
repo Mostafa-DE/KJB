@@ -62,6 +62,7 @@ import app.lyrify.R
 import app.lyrify.data.LyricsStatus
 import app.lyrify.models.ModelState
 import app.lyrify.models.NpuChip
+import app.lyrify.models.NpuChips
 import app.lyrify.overnight.AiHold
 import app.lyrify.overnight.AiProgress
 import app.lyrify.overnight.NightStatus
@@ -83,9 +84,11 @@ data class AiState(
     val unrestricted: Boolean,
     /** "Delete download" waits for the AI to stop: the button says "Stopping…", and it and the switch wait. */
     val stopping: Boolean,
+    /** This edition has the AI ([app.lyrify.ai.EditionEngine]): KJB + AI does, KJB does not. */
+    val included: Boolean,
 ) {
-    /** The AI runs on this phone: its chip and its software. */
-    val supported: Boolean get() = chip != null && newEnough
+    /** The AI runs here: in KJB + AI, on this phone's chip and software. */
+    val supported: Boolean get() = included && chip != null && newEnough
 
     /** Tonight, from the run, the files, the charger and holds ([waiting] songs from the ledger). */
     fun night(waiting: Int): NightStatus = nightStatus(enabled, models is ModelState.Ready, progress, hold, pluggedIn, waiting)
@@ -141,7 +144,7 @@ sealed interface Centre {
     data class Value(val value: CentreValue, @StringRes val label: Int? = null) : Centre
 }
 
-enum class AiActionKind { DOWNLOAD, RESUME, TRY_AGAIN, OPEN_APP_INFO }
+enum class AiActionKind { DOWNLOAD, RESUME, TRY_AGAIN, OPEN_APP_INFO, REMOVE_FILES }
 
 data class GlanceAction(val kind: AiActionKind, val label: GlanceText)
 
@@ -151,8 +154,17 @@ data class AiGlance(val ring: Ring?, val centre: Centre, val line: GlanceText, v
 
 private val EMPTY_RING = Ring(0f, RingColor.HIGHLIGHT)
 
-/** The spec's state table (5.6): the files while they are not ready, else tonight. [waiting]: songs waiting for the AI. */
+/**
+ * The spec's state table (5.6): the files while they are not ready, else tonight. [waiting]: songs waiting for the AI.
+ * KJB, the edition without the AI, says AI lyrics need KJB + AI on any phone, and offers to remove AI files an earlier
+ * KJB + AI install left in its storage.
+ */
 fun aiGlance(state: AiState, waiting: Int): AiGlance {
+    if (!state.included) {
+        val left = onDisk(state.models).takeIf { it > 0 }
+        val remove = left?.let { GlanceAction(AiActionKind.REMOVE_FILES, GlanceText(R.string.ai_remove_files, listOf(GlanceArg.Bytes(it)))) }
+        return AiGlance(null, Centre.Icon(R.drawable.ic_memory), GlanceText(R.string.ai_needs_full), GlanceText(R.string.ai_needs_full_detail), remove)
+    }
     if (state.chip == null) return AiGlance(null, Centre.Icon(R.drawable.ic_memory), GlanceText(R.string.ai_no_chip), GlanceText(R.string.ai_no_chip_detail), null)
     if (!state.newEnough) {
         return AiGlance(null, Centre.Icon(R.drawable.ic_system_update), GlanceText(R.string.ai_unsupported), GlanceText(R.string.ai_unsupported_detail), null)
@@ -268,6 +280,9 @@ private fun downloadGlance(models: ModelState?): AiGlance = when (models) {
     )
 }
 
+/** The chips KJB + AI runs on, by name, as KJB lists them. */
+fun supportedChips(): String = NpuChips.ALL.joinToString(", ") { it.name }
+
 /** The value on the Now tab's AI tile. */
 sealed interface TileValue {
     data class Fraction(val done: Int, val total: Int) : TileValue
@@ -342,7 +357,8 @@ private fun percent(done: Long, total: Long): Int = (done * 100 / total.coerceAt
 
 /**
  * The AI tab: the switch bar, the ring with one line and at most one button, the results, and rows that open sheets. On
- * a phone the AI does not run on, only the ring area. A result opens Songs filtered to it ([onOpenStatus]).
+ * a phone the AI does not run on, only the ring area; in KJB, the ring area and the chips KJB + AI runs on. A result
+ * opens Songs filtered to it ([onOpenStatus]).
  */
 @Composable
 fun AiScreen(
@@ -379,9 +395,11 @@ fun AiScreen(
                 when (it) {
                     AiActionKind.DOWNLOAD, AiActionKind.RESUME, AiActionKind.TRY_AGAIN -> actions.onDownload()
                     AiActionKind.OPEN_APP_INFO -> actions.onOpenAppInfo()
+                    AiActionKind.REMOVE_FILES -> confirmDelete = true
                 }
             }
         }
+        if (!state.included) item(key = "chips") { SupportedChips() }
         if (state.supported) {
             if (results.isNotEmpty()) item(key = "results") { AiResults(results, doneToday, onOpenStatus) }
             item(key = "rows") {
@@ -401,7 +419,7 @@ fun AiScreen(
         AiDownloadSheet(models, state.stopping, onDelete = { confirmDelete = true }) { downloadSheet = false }
     }
     if (confirmDelete) {
-        DeleteDownloadDialog(models, onDismiss = { confirmDelete = false }) {
+        DeleteDownloadDialog(models, state.included, onDismiss = { confirmDelete = false }) {
             confirmDelete = false
             actions.onDelete()
         }
@@ -613,6 +631,22 @@ private fun AiRows(state: AiState, onDownload: () -> Unit, onBattery: () -> Unit
     }
 }
 
+/** KJB: the chips KJB + AI runs on, in one row. */
+@Composable
+private fun SupportedChips() {
+    val colors = MaterialTheme.colorScheme
+    GroupedRows {
+        GroupedRow(
+            R.drawable.ic_memory,
+            stringResource(R.string.ai_row_chips),
+            tile = colors.surfaceContainerHighest,
+            onTile = colors.onSurfaceVariant,
+            first = true,
+            supporting = { Text(supportedChips()) },
+        )
+    }
+}
+
 /** The download row's line: "980 MB · Ready", else the download state's line. */
 private fun downloadLine(models: ModelState): GlanceText =
     if (models is ModelState.Ready) GlanceText(R.string.ai_models_ready, listOf(GlanceArg.Bytes(models.totalBytes))) else downloadGlance(models).line
@@ -651,12 +685,13 @@ fun AiInfoSheet(onDismiss: () -> Unit) {
     HelpSheet(stringResource(R.string.ai_info_title), stringResource(R.string.ai_intro), stringResource(R.string.ai_charging_note), onDismiss = onDismiss)
 }
 
+/** "Delete the AI download?" in KJB + AI; in KJB, which has no AI to turn off, "Remove the AI files?". */
 @Composable
-private fun DeleteDownloadDialog(models: ModelState?, onDismiss: () -> Unit, onConfirm: () -> Unit) {
+private fun DeleteDownloadDialog(models: ModelState?, included: Boolean, onDismiss: () -> Unit, onConfirm: () -> Unit) {
     ConfirmDialog(
-        title = stringResource(R.string.ai_delete_title),
-        text = stringResource(R.string.ai_delete_text, size(onDisk(models))),
-        confirm = stringResource(R.string.ai_delete_confirm),
+        title = stringResource(if (included) R.string.ai_delete_title else R.string.ai_remove_title),
+        text = stringResource(if (included) R.string.ai_delete_text else R.string.ai_remove_text, size(onDisk(models))),
+        confirm = stringResource(if (included) R.string.ai_delete_confirm else R.string.ai_remove_confirm),
         dismiss = stringResource(R.string.remove_cancel),
         onConfirm = onConfirm,
         onDismiss = onDismiss,

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- KJB, the edition without AI lyrics (the lite flavour): its AI tab. -->
+<resources>
+    <string name="ai_needs_full">Needs KJB + AI</string>
+    <string name="ai_needs_full_detail">AI lyrics come with KJB + AI, the other edition of KJB. It runs them on your phone if your phone has one of the supported chips. Everything else works the same in both.</string>
+    <!-- The AI files an earlier KJB + AI install left in KJB's storage; %1$s is their size ("983 MB"). -->
+    <string name="ai_remove_files">Remove AI files (%1$s)</string>
+    <string name="ai_row_chips">Supported chips</string>
+    <string name="ai_remove_title">Remove the AI files?</string>
+    <string name="ai_remove_text">Frees %1$s on your phone. Lyrics already added stay.</string>
+    <string name="ai_remove_confirm">Remove</string>
+</resources>
