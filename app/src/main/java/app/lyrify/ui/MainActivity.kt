@@ -11,13 +11,16 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import app.lyrify.BuildConfig
 import app.lyrify.Lyrify
+import app.lyrify.R
 import app.lyrify.data.LedgerRepository
 import app.lyrify.data.LedgerState
 import app.lyrify.data.LedgerStore
@@ -51,10 +54,14 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-/** Onboarding until both grants are on, then the app's tabs; collects what every screen shows. */
+/** Onboarding until All files access is on, then the app's shell; collects what every screen shows. */
 @Composable
 private fun App(ledger: LedgerStore) {
     val context = LocalContext.current
+    val resources = LocalResources.current
+    val toasts = LocalToasts.current
+    val scope = rememberCoroutineScope()
+    val store = remember(context) { Lyrify.settings(context) }
     var access by remember { mutableStateOf(Access.of(context)) }
     var unrestricted by remember { mutableStateOf(isUnrestricted(context)) }
 
@@ -76,6 +83,8 @@ private fun App(ledger: LedgerStore) {
         )
         return
     }
+    // The shell opens on the last tab, so it waits for the settings' first read.
+    val settings = store.settings.collectAsStateWithLifecycle(initialValue = null).value ?: return
     val state by ledger.ledger.collectAsStateWithLifecycle(initialValue = LedgerState())
     val track by NowPlaying.track.collectAsStateWithLifecycle()
     val sweep by NowPlaying.sweep.collectAsStateWithLifecycle()
@@ -98,6 +107,8 @@ private fun App(ledger: LedgerStore) {
         }
     }
     AppShell(
+        settings = settings,
+        onSettings = { change -> scope.launch { if (!store.update(change)) toasts.say(resources, R.string.settings_not_saved) } },
         ledger = state,
         track = track,
         sweep = sweep,
@@ -124,8 +135,13 @@ private fun App(ledger: LedgerStore) {
         },
         aiWaiting = aiCounts.first,
         aiDoneToday = aiCounts.second,
-        access = access,
-        unrestricted = unrestricted,
+        grants = Grants(
+            access = access,
+            unrestricted = unrestricted,
+            onOpenNotificationAccess = { context.startFirst(notificationAccessIntents(context)) },
+            onOpenAllFilesAccess = { context.startFirst(allFilesAccessIntents(context)) },
+            onOpenAppInfo = { context.startFirst(appInfoIntents(context)) },
+        ),
         versionName = BuildConfig.VERSION_NAME,
         checkActions = remember(context) {
             CheckActions(
@@ -139,9 +155,6 @@ private fun App(ledger: LedgerStore) {
         // Retries run in the listener's queue sweep.
         onRetryFailed = NowPlaying::requestRetry,
         onRemove = { Lyrify.remove(context, it) },
-        onOpenNotificationAccess = { context.startFirst(notificationAccessIntents(context)) },
-        onOpenAllFilesAccess = { context.startFirst(allFilesAccessIntents(context)) },
-        onOpenAppInfo = { context.startFirst(appInfoIntents(context)) },
     )
 }
 

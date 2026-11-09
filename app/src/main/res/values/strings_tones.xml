@@ -2,7 +2,6 @@
 <!-- The Tones tab: ringtones, alarm and notification sounds made from the user's songs. -->
 <resources>
     <!-- Tab and home -->
-    <string name="nav_tones">Tones</string>
     <string name="tones_title">Tones</string>
     <string name="tones_pick_song">Pick a song</string>
     <string name="tones_yours">Your tones</string>

@@ -129,7 +129,7 @@ fun SongSearchBar(
 
 /** Recent first, Title A to Z, Artist A to Z; the selected one on the brand's container with a check. */
 @Composable
-private fun SortMenu(expanded: Boolean, selected: SongSort, onDismiss: () -> Unit, onSort: (SongSort) -> Unit) {
+internal fun SortMenu(expanded: Boolean, selected: SongSort, onDismiss: () -> Unit, onSort: (SongSort) -> Unit) {
     LyrifyMenu(expanded = expanded, onDismiss = onDismiss) {
         SongSort.entries.forEach { sort -> MenuRow(stringResource(sort.label), icon = null, onClick = { onSort(sort) }, selected = sort == selected) }
     }

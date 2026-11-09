@@ -1,8 +1,6 @@
 package app.lyrify.ui
 
 import androidx.activity.compose.BackHandler
-import androidx.annotation.DrawableRes
-import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.VisibilityThreshold
@@ -14,107 +12,88 @@ import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBarDefaults
-import androidx.compose.material3.TopAppBarScrollBehavior
-import androidx.compose.material3.rememberTopAppBarState
+import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.withFrameNanos
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalResources
-import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.lyrify.R
 import app.lyrify.data.LedgerState
+import app.lyrify.data.LyricsStatus
 import app.lyrify.lyrics.Removal
 import app.lyrify.media.CurrentTrack
 import app.lyrify.media.SweepProgress
-import kotlinx.coroutines.launch
-
-/** The five tabs: Now is the dock's orb, the others its capsule. */
-enum class Tab(@StringRes val label: Int, @DrawableRes val icon: Int, @DrawableRes val selectedIcon: Int) {
-    NOW(R.string.nav_now, R.drawable.ic_play_circle, R.drawable.ic_play_circle_fill),
-    SONGS(R.string.nav_songs, R.drawable.ic_library_music, R.drawable.ic_library_music_fill),
-    DUPLICATES(R.string.nav_duplicates, R.drawable.ic_content_copy, R.drawable.ic_content_copy_fill),
-    TONES(R.string.nav_tones, R.drawable.ic_ring_volume, R.drawable.ic_ring_volume_fill),
-    AI(R.string.nav_ai, R.drawable.ic_auto_awesome, R.drawable.ic_auto_awesome_fill),
-}
-
-/** A full screen over the tabs, without the dock; back returns to the tab. */
-sealed interface Overlay {
-    /** Check these, opened at [path] when it comes from a song. */
-    data class Check(val path: String?) : Overlay
-
-    data object Settings : Overlay
-
-    companion object {
-        val Saver: Saver<Overlay?, String> = Saver(
-            save = {
-                when (it) {
-                    is Overlay.Check -> CHECK + it.path.orEmpty()
-                    Overlay.Settings -> SETTINGS
-                    null -> null
-                }
-            },
-            restore = {
-                when {
-                    it == SETTINGS -> Overlay.Settings
-                    it.startsWith(CHECK) -> Overlay.Check(it.removePrefix(CHECK).ifEmpty { null })
-                    else -> null
-                }
-            },
-        )
-
-        private const val CHECK = "check:"
-        private const val SETTINGS = "settings"
-    }
-}
+import app.lyrify.settings.DockTab
+import app.lyrify.settings.Settings
+import app.lyrify.tones.ToneListStore
+import app.lyrify.tones.TonesState
 
 /**
- * The app once set up: one Scaffold with the top bars and the dock (the toast slot above it), over the five tabs or a
- * full screen ([Overlay]). Back closes a sheet or dialog first, then an overlay, then returns to Now. Each tab keeps its
- * scroll position; the Songs query lives here so Now and AI can open Songs filtered, and search is one tap away. What
- * [checkAnswers] say shows here, also once Check these has closed or the phone has turned. The app's messages go to its
- * one [ToastState] ([LocalToasts]), which shows them above the dock or in the window on top.
+ * Lyrics as every page sees them (2.0's state, gathered by the shell): the ledger, how plain lyrics get timed, Remove
+ * lyrics, and Retry failed ([connected]: the listener runs the retries). [notWatching]: notification access is on but
+ * KJB can't see the music app.
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@Stable
+data class LyricsUi(
+    val ledger: LedgerState,
+    val timing: PlainTiming,
+    val removal: RemovalState,
+    val connected: Boolean,
+    val retrying: Boolean,
+    val onRetryFailed: () -> Unit,
+    val notWatching: Boolean,
+    val onOpenNotificationAccess: () -> Unit,
+)
+
+/** The shell's [LyricsUi]. */
+val LocalLyrics = compositionLocalOf<LyricsUi> { error("No LyricsUi: AppShell provides it") }
+
+/**
+ * The app once set up: each dock tab with its own page stack ([Navigator], kept across a turn of the phone), the Now bar
+ * and the dock over Library and Search and Tools' root, Tools pages as full screens, and the full-screen views over
+ * everything. Every page and view is drawn by its entry composable in its owner's file; this file only routes. Back
+ * closes a sheet, dialog or menu first (their own windows), then a view, then a page, then walks back through the tab
+ * history. The app reopens on the last tab ([Settings.nav]). What [checkAnswers] say shows here, also once Check these
+ * has closed or the phone has turned.
+ */
 @Composable
 fun AppShell(
+    settings: Settings,
+    onSettings: ((Settings) -> Settings) -> Unit,
     ledger: LedgerState,
     track: CurrentTrack?,
     sweep: SweepProgress?,
@@ -123,290 +102,224 @@ fun AppShell(
     aiActions: AiActions,
     aiWaiting: Int,
     aiDoneToday: Int,
-    access: Access,
-    unrestricted: Boolean,
+    grants: Grants,
     versionName: String,
     checkActions: CheckActions,
     checkAnswers: CheckAnswers,
     onRetryFailed: () -> Unit,
     onRemove: suspend (String) -> Removal,
-    onOpenNotificationAccess: () -> Unit,
-    onOpenAllFilesAccess: () -> Unit,
-    onOpenAppInfo: () -> Unit,
 ) {
-    var tab by rememberSaveable { mutableStateOf(Tab.NOW) }
-    var overlay by rememberSaveable(stateSaver = Overlay.Saver) { mutableStateOf<Overlay?>(null) }
-    var songQuery by rememberSaveable(stateSaver = SongQuery.Saver) { mutableStateOf(SongQuery()) }
-    var runLog by remember { mutableStateOf<String?>(null) }
-    var aiInfo by remember { mutableStateOf(false) }
-    // Search is one tap away: Now and AI land on Songs with the keyboard up; tapping Songs again goes to the top.
-    var focusSearch by remember { mutableStateOf(false) }
-    // Saved like the list's own place, so a turn of the phone is not read as a tap.
-    var songsReselect by rememberSaveable { mutableIntStateOf(0) }
-    val searchFocus = remember { FocusRequester() }
-    val keyboard = LocalSoftwareKeyboardController.current
-    val scope = rememberCoroutineScope()
+    val lastTab = settings.nav.lastTab
+    val nav = rememberSaveable(saver = NavState.saver(lastTab)) { Navigator(NavState.start(lastTab)) }
+    val state = nav.state
+    val context = LocalContext.current
     val resources = LocalResources.current
     val toasts = LocalToasts.current
+    val density = LocalDensity.current
     val backdrop = rememberGlassBackdrop()
     val holder = rememberSaveableStateHolder()
-    val bars = Tab.entries.associateWith { TopAppBarDefaults.pinnedScrollBehavior(rememberTopAppBarState()) }
     val reduced = LocalReducedMotion.current
     val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+    var bottom by remember { mutableStateOf(0.dp) }
 
     val timing = PlainTiming.of(ai.supported, ai.enabled)
     val counts = remember(ledger) { ledger.counts() }
     val checks = remember(ledger) { checkList(ledger).size }
     val removal = rememberRemoval(ledger, track?.player, onRemove, toasts)
-    val openSettings = { overlay = Overlay.Settings }
-    val search = {
-        tab = Tab.SONGS
-        focusSearch = true
-    }
-    fun openSongs(query: SongQuery) {
-        songQuery = query
-        tab = Tab.SONGS
-    }
+    val lyrics = LyricsUi(
+        ledger = ledger,
+        timing = timing,
+        removal = removal,
+        connected = connected,
+        retrying = sweep?.retrying == true,
+        onRetryFailed = onRetryFailed,
+        notWatching = grants.access.notifications && !connected,
+        onOpenNotificationAccess = grants.onOpenNotificationAccess,
+    )
+    val dupes by rememberDuplicates().state.collectAsStateWithLifecycle()
+    val tones by remember(context) { ToneListStore.of(context).state }.collectAsStateWithLifecycle(TonesState())
+    val rows = toolRows(checks, dupesView(dupes), dupes.badge, tones.tones.size, coversTagsLine(), ai, aiWaiting)
+    val own = rememberOwnNow()
+    val other = rememberOtherSession(track?.player?.packageName?.takeIf { grants.access.notifications })
+    val otherPlayback = rememberOtherPlayback(other)
+    val bar = nowBarShows(own.now, track, otherPlayback?.playing == true)
+    val backup = rememberBackupActions { on -> onSettings { it.copy(backup = it.backup.copy(automatic = on)) } }
 
-    LaunchedEffect(focusSearch, tab) {
-        if (focusSearch && tab == Tab.SONGS) {
-            // The search bar attaches its requester in the frame the tab changes.
-            withFrameNanos { }
-            try {
-                searchFocus.requestFocus()
-                keyboard?.show()
-            } catch (e: IllegalStateException) {
-                // Not attached yet: the user taps the field.
-            }
-            focusSearch = false
-        }
+    LaunchedEffect(state.tab) {
+        val tab = state.tab
+        onSettings { if (it.nav.lastTab == tab) it else it.copy(nav = it.nav.copy(lastTab = tab)) }
     }
     LaunchedEffect(checkAnswers) {
         checkAnswers.messages.collect { toasts.say(resources, it) }
     }
-    BackHandler(enabled = overlay == null && tab != Tab.NOW) { tab = Tab.NOW }
+    // Pages and the tab history; a page's own back (selection, a page's sheet) is composed later and comes first.
+    BackHandler(enabled = state.views.isEmpty() && (state.pages.isNotEmpty() || state.history.isNotEmpty())) { nav.back() }
 
-    Scaffold(
-        modifier = Modifier.nestedScroll(bars.getValue(tab).nestedScrollConnection),
-        containerColor = MaterialTheme.colorScheme.background,
-        topBar = {
-            if (overlay == null) {
-                when (tab) {
-                    Tab.SONGS -> SongSearchBar(songQuery, { songQuery = it }, searchFocus, openSettings, bars.getValue(tab).contentUnder(), backdrop)
-                    Tab.DUPLICATES -> DuplicatesTopBar(bars.getValue(tab), backdrop, openSettings)
-                    Tab.TONES -> TonesTopBar(bars.getValue(tab), backdrop, openSettings)
-                    else -> TabTopBar(
-                        tab = tab,
-                        scrollBehavior = bars.getValue(tab),
-                        backdrop = backdrop,
-                        runLog = ai.supported,
-                        onSearch = search,
-                        onInfo = { aiInfo = true },
-                        onSettings = openSettings,
-                        onRunLog = { scope.launch { runLog = aiActions.readLog() } },
-                    )
+    CompositionLocalProvider(LocalNavigator provides nav, LocalLyrics provides lyrics) {
+        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+            CompositionLocalProvider(LocalShellChrome provides ShellChrome(backdrop, bottom)) {
+                AnimatedContent(
+                    targetState = state.tab,
+                    transitionSpec = {
+                        // The new tab comes from the side of the tab tapped; with reduced motion it only fades.
+                        val side = tabSlide(initialState, targetState) * if (rtl) -1 else 1
+                        val enter = if (reduced) {
+                            fadeIn(tween(FADE_IN_MS))
+                        } else {
+                            slideInHorizontally(TAB_SLIDE) { it / SLIDE_SHARE * side } + fadeIn(tween(FADE_IN_MS, delayMillis = FADE_DELAY_MS))
+                        }
+                        enter togetherWith fadeOut(tween(FADE_OUT_MS))
+                    },
+                    label = "tab",
+                ) { tab ->
+                    val stack = nav.state.stacks[tab].orEmpty()
+                    // Each page keeps its scroll and its fields while pages are pushed over it, and across a turn of the phone.
+                    holder.SaveableStateProvider(pageKey(tab, stack)) {
+                        when (val page = stack.lastOrNull()) {
+                            null -> when (tab) {
+                                DockTab.LIBRARY -> LibraryPage()
+                                DockTab.SEARCH -> SearchPage()
+                                DockTab.TOOLS -> ToolsScreen(rows, nav::open)
+                            }
+                            else -> PageContent(page, settings, onSettings, grants, ai, aiActions, aiWaiting, aiDoneToday, counts, backup, versionName, checkActions, checkAnswers)
+                        }
+                    }
                 }
             }
-        },
-        bottomBar = {
-            if (overlay == null) {
-                BottomChrome {
-                    OrbDock(
-                        selected = tab,
-                        orb = nowOrb(track, ledger),
-                        badges = tabBadges(checks, duplicatesBadge(), aiAttention(ai, aiWaiting)),
+            BottomChrome(Modifier.align(Alignment.BottomCenter).onSizeChanged { bottom = with(density) { it.height.toDp() } }, chrome = state.chrome) {
+                val selection = nav.selectionBar
+                if (selection != null) selection() else Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    NowBar(
+                        shows = bar,
+                        ledger = ledger,
+                        other = otherPlayback,
                         backdrop = backdrop,
-                        onSelect = {
-                            if (it == Tab.SONGS && tab == Tab.SONGS) {
-                                songsReselect++
-                                focusSearch = true
-                            }
-                            tab = it
+                        onOpen = { nav.show(if (bar is NowBarShows.Own) FullScreen.Player else FullScreen.CompanionNow) },
+                        onPlayPause = when (bar) {
+                            is NowBarShows.Own -> own::playPause
+                            is NowBarShows.Companion -> other?.let { controller -> { controller.playPause(bar.playing) } }
+                            NowBarShows.Hidden -> null
                         },
                     )
+                    Dock(state.tab, dot = toolsDot(checks, dupes.badge, aiAttention(ai, aiWaiting)), backdrop = backdrop, onSelect = nav::select)
                 }
             }
-        },
-    ) { padding ->
-        when (val shown = overlay) {
-            is Overlay.Check -> CheckScreen(ledger, timing, checkActions, checkAnswers, shown.path) { overlay = null }
-            Overlay.Settings -> SettingsScreen(
-                access = access,
-                unrestricted = unrestricted,
-                versionName = versionName,
-                onOpenNotificationAccess = onOpenNotificationAccess,
-                onOpenAllFilesAccess = onOpenAllFilesAccess,
-                onOpenAppInfo = onOpenAppInfo,
-            ) { overlay = null }
-            null -> AnimatedContent(
-                targetState = tab,
-                transitionSpec = {
-                    // The new tab comes from the side of the tab tapped; with reduced motion it only fades.
-                    val side = tabSlide(initialState, targetState) * if (rtl) -1 else 1
-                    val enter = if (reduced) {
-                        fadeIn(tween(FADE_IN_MS))
-                    } else {
-                        slideInHorizontally(TAB_SLIDE) { it / SLIDE_SHARE * side } + fadeIn(tween(FADE_IN_MS, delayMillis = FADE_DELAY_MS))
-                    }
-                    enter togetherWith fadeOut(tween(FADE_OUT_MS))
-                },
-                label = "tab",
-                // What the dock and the top bar's glass blur.
-                modifier = Modifier.glassSource(backdrop, LocalGlassBlur.current),
-            ) { shownTab ->
-                holder.SaveableStateProvider(shownTab) {
-                    val banners: @Composable (Modifier) -> Unit = { modifier ->
-                        ShellBanners(ledger.readable, connected = connected || shownTab != Tab.NOW, onOpenNotificationAccess, modifier)
-                    }
-                    when (shownTab) {
-                        Tab.NOW -> NowScreen(
-                            ledger = ledger,
-                            track = track,
-                            sweep = sweep,
-                            connected = connected,
-                            timing = timing,
-                            checks = checks,
-                            aiTile = aiTile(ai, aiWaiting),
-                            removal = removal,
-                            contentPadding = padding,
-                            banner = { banners(Modifier) },
-                            onRetryFailed = onRetryFailed,
-                            onOpenChecks = { overlay = Overlay.Check(it) },
-                            onOpenGroup = { openSongs(SongQuery(group = it, sort = songQuery.sort)) },
-                            onOpenAi = { tab = Tab.AI },
-                            onSeeAll = { openSongs(SongQuery(sort = SongSort.RECENT)) },
-                        )
-                        Tab.SONGS -> Box(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding).imePadding()) {
-                            SongsScreen(
+
+            // The views over everything, the newest on top. Their back comes before the pages' and after their own.
+            if (state.views.isNotEmpty()) key(state.views.size) { BackHandler { nav.back() } }
+            state.views.forEach { view ->
+                key(view) {
+                    Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                        when (view) {
+                            FullScreen.Player -> PlayerView()
+                            FullScreen.FullLyrics -> FullLyricsView()
+                            is FullScreen.SyncEditor -> SyncEditorView(view)
+                            is FullScreen.EditTags -> EditTagsView(view)
+                            is FullScreen.EditAlbum -> EditAlbumView(view)
+                            FullScreen.Equalizer -> EqualizerView()
+                            FullScreen.CompanionNow -> CompanionNowScreen(
                                 ledger = ledger,
-                                query = songQuery,
-                                onQuery = { songQuery = it },
-                                timing = timing,
-                                removal = removal,
-                                retrying = sweep?.retrying == true,
+                                track = track,
+                                sweep = sweep,
                                 connected = connected,
-                                reselect = songsReselect,
+                                timing = timing,
+                                checks = checks,
+                                aiTile = aiTile(ai, aiWaiting),
+                                removal = removal,
+                                banner = { LyricsBanners(lyrics, Modifier) },
                                 onRetryFailed = onRetryFailed,
-                                onPickLyrics = { overlay = Overlay.Check(it) },
-                                banner = { banners(Modifier.padding(start = ScreenPadding, end = ScreenPadding, bottom = 8.dp)) },
+                                onOpenChecks = { nav.open(Page.Check(it)) },
+                                onOpenAi = { nav.open(Page.Ai) },
+                                onClose = { nav.close(FullScreen.CompanionNow) },
                             )
                         }
-                        Tab.DUPLICATES -> DuplicatesScreen(contentPadding = padding, toasts = toasts)
-                        Tab.TONES -> TonesScreen(ledger = ledger, contentPadding = padding, toasts = toasts)
-                        Tab.AI -> AiScreen(
-                            state = ai,
-                            counts = counts,
-                            waiting = aiWaiting,
-                            doneToday = aiDoneToday,
-                            actions = aiActions,
-                            contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = padding.calculateBottomPadding() + 24.dp),
-                            onOpenStatus = { openSongs(SongQuery(group = it.group, status = it, sort = songQuery.sort)) },
-                            banner = { banners(Modifier.padding(start = ScreenPadding, end = ScreenPadding, bottom = 12.dp)) },
-                        )
                     }
                 }
             }
         }
+        RemoveLyricsDialog(removal)
     }
-
-    RemoveLyricsDialog(removal)
-    runLog?.let { RunLogSheet(it) { runLog = null } }
-    if (aiInfo) AiInfoSheet { aiInfo = false }
+    // A page that left its stack forgets its saved scroll and fields.
+    var keptStacks by remember { mutableStateOf(state.stacks) }
+    LaunchedEffect(state.stacks) {
+        (pageKeys(keptStacks) - pageKeys(state.stacks)).forEach(holder::removeState)
+        keptStacks = state.stacks
+    }
 }
 
-/** Which side a new tab comes from: 1 from the end (a tab after the one shown), -1 from the start, 0 for the same tab. */
-fun tabSlide(from: Tab, to: Tab): Int = to.ordinal.compareTo(from.ordinal).coerceIn(-1, 1)
+/** A page above a tab's root, drawn by its owner's entry composable. */
+@Composable
+private fun PageContent(
+    page: Page,
+    settings: Settings,
+    onSettings: ((Settings) -> Settings) -> Unit,
+    grants: Grants,
+    ai: AiState,
+    aiActions: AiActions,
+    aiWaiting: Int,
+    aiDoneToday: Int,
+    counts: Map<LyricsStatus, Int>,
+    backup: BackupActions,
+    versionName: String,
+    checkActions: CheckActions,
+    checkAnswers: CheckAnswers,
+) {
+    val nav = LocalNavigator.current
+    val lyrics = LocalLyrics.current
+    val back = { nav.back() }
+    when (page) {
+        is Page.Songs -> SongsPage(page)
+        Page.FoldersToSkip -> FoldersToSkipPage()
+        is Page.CollectionPages -> CollectionPage(page)
+        is Page.QueuePages -> QueuePage(page)
+        is Page.ListeningPages -> ListeningPage(page)
+        is Page.SearchAll -> SearchAllPage(page)
+        is Page.Check -> CheckScreen(lyrics.ledger, lyrics.timing, checkActions, checkAnswers, page.path) { back() }
+        Page.Duplicates -> DuplicatesPage { back() }
+        Page.Tones -> TonesPage(lyrics.ledger) { back() }
+        Page.Ai -> AiPage(ai, counts, aiWaiting, aiDoneToday, aiActions, onOpenStatus = { nav.open(Page.Songs(it.group, it)) }) { back() }
+        Page.CoversTags -> CoversTagsPage()
+        Page.TagHistory -> TagHistoryPage()
+        Page.Settings -> SettingsScreen(settings, onSettings, grants, ai, aiActions, backup, versionName, onOpen = nav::open) { back() }
+        Page.LibraryTabs -> LibraryTabsScreen(settings, onSettings) { back() }
+    }
+}
 
-/** Above the gesture area: the toast slot, then the dock; the dock hides while the keyboard is up, and the message stays above it. */
+/**
+ * Above the gesture area: the toast slot, then (where the tab shows [chrome]) the Now bar and the dock, or a page's
+ * selection bar in their place. They hide while the keyboard is up; the message stays above it.
+ */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun BottomChrome(dock: @Composable () -> Unit) {
+private fun BottomChrome(modifier: Modifier, chrome: Boolean, content: @Composable () -> Unit) {
     val reduced = LocalReducedMotion.current
-    Column(Modifier.fillMaxWidth().navigationBarsPadding().imePadding().padding(bottom = 12.dp)) {
+    Column(modifier.fillMaxWidth().navigationBarsPadding().imePadding().padding(bottom = 12.dp)) {
         ToastSlot(Modifier.padding(horizontal = ScreenPadding), padding = PaddingValues(bottom = 8.dp))
         AnimatedVisibility(
-            visible = !WindowInsets.isImeVisible,
+            visible = chrome && !WindowInsets.isImeVisible,
             enter = if (reduced) fadeIn() else slideInVertically { it } + fadeIn(),
             exit = if (reduced) fadeOut() else slideOutVertically { it } + fadeOut(),
-        ) { dock() }
+        ) { content() }
     }
 }
 
 /**
- * Now: the brand, Search and More options (Settings); AI: its name, Search, How it works and More options (Settings,
- * Run log). Clear at rest (Now over its cover backdrop); glass once the list scrolls under it.
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun TabTopBar(
-    tab: Tab,
-    scrollBehavior: TopAppBarScrollBehavior,
-    backdrop: GlassBackdrop,
-    runLog: Boolean,
-    onSearch: () -> Unit,
-    onInfo: () -> Unit,
-    onSettings: () -> Unit,
-    onRunLog: () -> Unit,
-) {
-    var menu by remember { mutableStateOf(false) }
-    LyrifyTopBar(
-        title = {
-            if (tab == Tab.NOW) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    BrandMark()
-                    Text(stringResource(R.string.app_name), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-            } else {
-                Text(stringResource(R.string.ai_title), maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-        },
-        under = scrollBehavior.contentUnder(),
-        backdrop = backdrop,
-        actions = {
-            ChromeIconButton(R.drawable.ic_search, stringResource(R.string.menu_search), onSearch)
-            if (tab == Tab.AI) ChromeIconButton(R.drawable.ic_info, stringResource(R.string.ai_info_cd), onInfo)
-            Box {
-                ChromeIconButton(R.drawable.ic_more_horiz, stringResource(R.string.menu_more), { menu = true })
-                LyrifyMenu(expanded = menu, onDismiss = { menu = false }) {
-                    MenuRow(
-                        stringResource(R.string.menu_settings),
-                        R.drawable.ic_settings,
-                        onClick = {
-                            menu = false
-                            onSettings()
-                        },
-                    )
-                    if (tab == Tab.AI && runLog) {
-                        MenuRow(
-                            stringResource(R.string.menu_run_log),
-                            R.drawable.ic_notes,
-                            onClick = {
-                                menu = false
-                                onRunLog()
-                            },
-                        )
-                    }
-                }
-            }
-        },
-    )
-}
-
-/**
- * The one-line banners under the top bar, each with a button that opens its sheet: the song list unreadable (every tab),
- * and KJB not seeing the music app (Now; pass [connected] true elsewhere).
+ * The one-line banners a page shows under its top bar, each with a button that opens its sheet: the song list
+ * unreadable, and (with [listener]) KJB not seeing the music app while notification access is on.
  */
 @Composable
-private fun ShellBanners(readable: Boolean, connected: Boolean, onOpenNotificationAccess: () -> Unit, modifier: Modifier = Modifier) {
+fun LyricsBanners(lyrics: LyricsUi, modifier: Modifier = Modifier, listener: Boolean = true) {
     var sheet by remember { mutableStateOf<String?>(null) }
     val colors = MaterialTheme.colorScheme
     val brand = LocalBrandColors.current
-    if (readable && connected && sheet == null) return
+    val readable = lyrics.ledger.readable
+    val watching = !listener || !lyrics.notWatching
+    if (readable && watching && sheet == null) return
     Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
         if (!readable) {
             Banner(R.drawable.ic_warning, stringResource(R.string.ledger_unreadable_title), stringResource(R.string.banner_why), colors.errorContainer, colors.onErrorContainer, onAction = { sheet = WHY })
         }
-        if (!connected) {
+        if (!watching) {
             Banner(
                 R.drawable.ic_link_off,
                 stringResource(R.string.listener_not_connected_title),
@@ -423,7 +336,7 @@ private fun ShellBanners(readable: Boolean, connected: Boolean, onOpenNotificati
             stringResource(R.string.listener_not_connected_title),
             stringResource(R.string.listener_not_connected),
             action = stringResource(R.string.setup_notifications_action),
-            onAction = onOpenNotificationAccess,
+            onAction = lyrics.onOpenNotificationAccess,
         ) { sheet = null }
     }
 }

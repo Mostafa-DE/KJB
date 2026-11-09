@@ -17,12 +17,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBarScrollBehavior
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.SideEffect
@@ -217,30 +215,14 @@ fun FullScreen(onDismiss: () -> Unit, content: @Composable () -> Unit) {
     }
 }
 
-/** The Tones tab's top bar: its name and More options (Settings). */
-@OptIn(ExperimentalMaterial3Api::class)
+/** Tones' top bar in Tools: back and its name. */
 @Composable
-fun TonesTopBar(scrollBehavior: TopAppBarScrollBehavior, backdrop: GlassBackdrop, onSettings: () -> Unit) {
-    var menu by remember { mutableStateOf(false) }
+fun TonesTopBar(under: Boolean, backdrop: GlassBackdrop, onBack: () -> Unit) {
     LyrifyTopBar(
         title = { Text(stringResource(R.string.tones_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
-        under = scrollBehavior.contentUnder(),
+        under = under,
         backdrop = backdrop,
-        actions = {
-            Box {
-                ChromeIconButton(R.drawable.ic_more_horiz, stringResource(R.string.menu_more), { menu = true })
-                LyrifyMenu(expanded = menu, onDismiss = { menu = false }) {
-                    MenuRow(
-                        stringResource(R.string.menu_settings),
-                        R.drawable.ic_settings,
-                        onClick = {
-                            menu = false
-                            onSettings()
-                        },
-                    )
-                }
-            }
-        },
+        navigation = { ChromeIconButton(R.drawable.ic_arrow_back, stringResource(R.string.check_back), onBack) },
     )
 }
 

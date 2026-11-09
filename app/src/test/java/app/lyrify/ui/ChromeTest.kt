@@ -6,10 +6,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
 import app.lyrify.R
-import app.lyrify.data.LedgerEntry
-import app.lyrify.data.LedgerState
-import app.lyrify.data.LyricsStatus
-import app.lyrify.media.CurrentTrack
+import app.lyrify.settings.DockTab
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runCurrent
@@ -22,8 +19,6 @@ import org.junit.Assert.assertSame
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
-
-private const val PATH = "/music/Paper Lanterns.mp3"
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ChromeTest {
@@ -120,49 +115,30 @@ class ChromeTest {
     // The dock
 
     @Test
-    fun `badges count the songs to check and the groups to review, and dot the AI`() {
-        assertEquals(emptyMap<Tab, TabBadge>(), tabBadges(checks = 0, duplicates = 0, aiAttention = false))
-        assertEquals(
-            mapOf(
-                Tab.NOW to TabBadge(3, R.plurals.nav_check_badge),
-                Tab.DUPLICATES to TabBadge(4, R.plurals.nav_duplicates_badge),
-                Tab.AI to TabBadge(null, R.string.nav_ai_attention),
-            ),
-            tabBadges(checks = 3, duplicates = 4, aiAttention = true),
-        )
+    fun `the dock has three destinations, Library, Search and Tools`() {
+        assertEquals(listOf(DockTab.LIBRARY, DockTab.SEARCH, DockTab.TOOLS), DOCK_TABS)
+        assertEquals(listOf(R.string.nav_library, R.string.nav_search, R.string.nav_tools), DOCK_TABS.map { it.label })
     }
 
     @Test
-    fun `Now is the orb with its ring, the other tabs the sung line under their place in the capsule`() {
-        assertEquals(listOf(Tab.SONGS, Tab.DUPLICATES, Tab.TONES, Tab.AI), CAPSULE_TABS)
-        assertEquals(DockMark(orb = true, line = null), dockMark(Tab.NOW))
-        assertEquals(DockMark(orb = false, line = 0), dockMark(Tab.SONGS))
-        assertEquals(DockMark(orb = false, line = 1), dockMark(Tab.DUPLICATES))
-        assertEquals(DockMark(orb = false, line = 2), dockMark(Tab.TONES))
-        assertEquals(DockMark(orb = false, line = 3), dockMark(Tab.AI))
+    fun `Tools gets a dot when Check these, Duplicates or the AI need the user`() {
+        assertFalse(toolsDot(checks = 0, duplicates = 0, aiAttention = false))
+        assertTrue(toolsDot(checks = 3, duplicates = 0, aiAttention = false))
+        assertTrue(toolsDot(checks = 0, duplicates = 4, aiAttention = false))
+        assertTrue(toolsDot(checks = 0, duplicates = 0, aiAttention = true))
     }
 
     @Test
-    fun `a dock item's name folds in what is playing and its badge`() {
-        assertEquals("Now, Paper Lanterns, 3 songs to check", dockItemName("Now", "Paper Lanterns", "3 songs to check"))
-        assertEquals("AI", dockItemName("AI", null))
-    }
-
-    @Test
-    fun `the orb shows the playing song's cover and status, the brand mark when nothing plays`() {
-        val entry = LedgerEntry(path = PATH, title = "Paper Lanterns", durationMs = 200_000, status = LyricsStatus.SYNCED, updatedAt = 0)
-        val ledger = LedgerState(entries = mapOf(PATH to entry))
-        assertEquals(NowOrb(cover = null, status = null, title = null, idle = true), nowOrb(null, ledger))
-        val track = CurrentTrack(title = "Paper Lanterns", artist = null, paths = listOf("/music/other.mp3", PATH), resolved = true)
-        assertEquals(NowOrb(SongArt("/music/other.mp3"), LyricsStatus.SYNCED, "Paper Lanterns", idle = false), nowOrb(track, ledger))
-        assertEquals(NowOrb(null, null, "Radio", idle = false), nowOrb(CurrentTrack(title = "Radio", artist = null), ledger))
+    fun `a dock item's name folds in its dot`() {
+        assertEquals("Tools, Something needs you", dockItemName("Tools", "Something needs you"))
+        assertEquals("Library", dockItemName("Library", null))
     }
 
     @Test
     fun `a new tab slides in from the side of the tab tapped`() {
-        assertEquals(1, tabSlide(Tab.SONGS, Tab.DUPLICATES))
-        assertEquals(-1, tabSlide(Tab.AI, Tab.NOW))
-        assertEquals(0, tabSlide(Tab.TONES, Tab.TONES))
+        assertEquals(1, tabSlide(DockTab.LIBRARY, DockTab.SEARCH))
+        assertEquals(-1, tabSlide(DockTab.TOOLS, DockTab.LIBRARY))
+        assertEquals(0, tabSlide(DockTab.SEARCH, DockTab.SEARCH))
     }
 
     // Dialogs

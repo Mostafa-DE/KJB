@@ -24,10 +24,8 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBarScrollBehavior
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -222,10 +220,9 @@ fun rememberPhoneTrash(engine: Duplicates, toasts: ToastState): (List<Long>, Boo
     }
 }
 
-/** The Duplicates tab's top bar: its name and More options (Scan again, Trashed songs, Settings). */
-@OptIn(ExperimentalMaterial3Api::class)
+/** Duplicates' top bar in Tools: back, its name and More options (Scan again, Trashed songs). */
 @Composable
-fun DuplicatesTopBar(scrollBehavior: TopAppBarScrollBehavior, backdrop: GlassBackdrop, onSettings: () -> Unit) {
+fun DuplicatesTopBar(under: Boolean, backdrop: GlassBackdrop, onBack: () -> Unit) {
     val engine = rememberDuplicates()
     val state by engine.state.collectAsStateWithLifecycle()
     val phoneTrash = rememberPhoneTrash(engine, LocalToasts.current)
@@ -233,13 +230,15 @@ fun DuplicatesTopBar(scrollBehavior: TopAppBarScrollBehavior, backdrop: GlassBac
     var trashed by rememberSaveable { mutableStateOf(false) }
     LyrifyTopBar(
         title = { Text(stringResource(R.string.dupes_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
-        under = scrollBehavior.contentUnder(),
+        under = under,
         backdrop = backdrop,
+        navigation = { ChromeIconButton(R.drawable.ic_arrow_back, stringResource(R.string.check_back), onBack) },
         actions = {
-            Box {
+            val scanAgain = state.results != null && state.scan !is ScanStatus.Running
+            if (scanAgain || state.trashed.isNotEmpty()) Box {
                 ChromeIconButton(R.drawable.ic_more_horiz, stringResource(R.string.menu_more), { menu = true })
                 LyrifyMenu(expanded = menu, onDismiss = { menu = false }) {
-                    if (state.results != null && state.scan !is ScanStatus.Running) {
+                    if (scanAgain) {
                         MenuRow(
                             stringResource(R.string.dupes_scan_again),
                             R.drawable.ic_refresh,
@@ -259,14 +258,6 @@ fun DuplicatesTopBar(scrollBehavior: TopAppBarScrollBehavior, backdrop: GlassBac
                             },
                         )
                     }
-                    MenuRow(
-                        stringResource(R.string.menu_settings),
-                        R.drawable.ic_settings,
-                        onClick = {
-                            menu = false
-                            onSettings()
-                        },
-                    )
                 }
             }
         },

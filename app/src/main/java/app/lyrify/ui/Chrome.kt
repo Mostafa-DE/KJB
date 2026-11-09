@@ -88,7 +88,6 @@ import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.TileMode
 import androidx.compose.ui.graphics.TransformOrigin
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.layer.GraphicsLayer
@@ -100,7 +99,6 @@ import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalAccessibilityManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
@@ -120,7 +118,7 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import app.lyrify.BuildConfig
 import app.lyrify.R
-import app.lyrify.data.LyricsStatus
+import app.lyrify.settings.DockTab
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -203,66 +201,63 @@ fun GlassSurface(
 
 // The dock
 
-/**
- * A tab's badge: a count (songs to check, groups to review) or, with [count] null, a dot (AI needs attention).
- * [description] says it for TalkBack: a plural taking the count, else a string.
- */
-@Immutable
-data class TabBadge(val count: Int?, val description: Int)
+/** The dock's three destinations, in order. */
+val DOCK_TABS: List<DockTab> = listOf(DockTab.LIBRARY, DockTab.SEARCH, DockTab.TOOLS)
 
-/** The dock's badges: the songs to check on Now, the groups not opened yet on Duplicates, a dot on AI when it needs the user. */
-fun tabBadges(checks: Int, duplicates: Int, aiAttention: Boolean): Map<Tab, TabBadge> = buildMap {
-    if (checks > 0) put(Tab.NOW, TabBadge(checks, R.plurals.nav_check_badge))
-    if (duplicates > 0) put(Tab.DUPLICATES, TabBadge(duplicates, R.plurals.nav_duplicates_badge))
-    if (aiAttention) put(Tab.AI, TabBadge(null, R.string.nav_ai_attention))
-}
+@get:StringRes
+val DockTab.label: Int
+    get() = when (this) {
+        DockTab.LIBRARY -> R.string.nav_library
+        DockTab.SEARCH -> R.string.nav_search
+        DockTab.TOOLS -> R.string.nav_tools
+    }
 
-/** The tabs in the dock's capsule; Now is the orb beside it. */
-val CAPSULE_TABS: List<Tab> = Tab.entries - Tab.NOW
+@get:DrawableRes
+private val DockTab.icon: Int
+    get() = when (this) {
+        DockTab.LIBRARY -> R.drawable.ic_library_music
+        DockTab.SEARCH -> R.drawable.ic_search
+        DockTab.TOOLS -> R.drawable.ic_handyman
+    }
 
-/** Where the dock marks the selected tab: a coral ring round the orb on Now ([orb]), else the sung line under place [line] of the capsule. */
-data class DockMark(val orb: Boolean, val line: Int?)
+@get:DrawableRes
+private val DockTab.selectedIcon: Int
+    get() = when (this) {
+        DockTab.LIBRARY -> R.drawable.ic_library_music_fill
+        DockTab.SEARCH -> R.drawable.ic_search
+        DockTab.TOOLS -> R.drawable.ic_handyman_fill
+    }
 
-fun dockMark(selected: Tab): DockMark =
-    if (selected == Tab.NOW) DockMark(orb = true, line = null) else DockMark(orb = false, line = CAPSULE_TABS.indexOf(selected))
+/** The dot on Tools: songs to check, duplicate groups not opened yet, or the AI needing the user. */
+fun toolsDot(checks: Int, duplicates: Int, aiAttention: Boolean): Boolean = checks > 0 || duplicates > 0 || aiAttention
 
-/** A dock item's name for TalkBack: its label, then what plays and its badge when there are. */
+/** Which side a new tab comes from: 1 from the end (a tab after the one shown), -1 from the start, 0 for the same tab. */
+fun tabSlide(from: DockTab, to: DockTab): Int = DOCK_TABS.indexOf(to).compareTo(DOCK_TABS.indexOf(from)).coerceIn(-1, 1)
+
+/** A dock item's name for TalkBack: its label, then its dot when it has one. */
 fun dockItemName(vararg parts: String?): String = parts.filterNotNull().joinToString(", ")
 
-/** What the Now orb shows: the playing song's cover, its status, its title for TalkBack; the brand mark when [idle]. */
-@Immutable
-data class NowOrb(val cover: Any?, val status: LyricsStatus?, val title: String?, val idle: Boolean)
-
 /**
- * The orb dock: the Now orb (the playing song's cover, its status, the songs to check) and a glass capsule with the
- * other tabs, each an icon over its label, the selected one marked by the sung line.
+ * The dock: a glass capsule with Library, Search and Tools, each an icon over its label, the selected one marked by the
+ * sung line; a dot on Tools when something there needs the user.
  */
 @Composable
-fun OrbDock(selected: Tab, orb: NowOrb, badges: Map<Tab, TabBadge>, backdrop: GlassBackdrop?, onSelect: (Tab) -> Unit, modifier: Modifier = Modifier) {
-    val mark = dockMark(selected)
-    Row(
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = modifier.fillMaxWidth().padding(horizontal = 12.dp).selectableGroup(),
-    ) {
-        NowOrbButton(orb, mark.orb, badges[Tab.NOW], backdrop) { onSelect(Tab.NOW) }
-        GlassSurface(backdrop, CircleShape, Modifier.weight(1f)) {
-            TabCapsule(selected, mark.line, badges, onSelect)
-        }
+fun Dock(selected: DockTab, dot: Boolean, backdrop: GlassBackdrop?, onSelect: (DockTab) -> Unit, modifier: Modifier = Modifier) {
+    GlassSurface(backdrop, CircleShape, modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+        DockItems(selected, dot, onSelect)
     }
 }
 
-/** The four tabs at equal widths, and the sung line under the selected one; its leading end travels faster, so it stretches on the way. */
+/** The three items at equal widths, and the sung line under the selected one; its leading end travels faster, so it stretches on the way. */
 @Composable
-private fun TabCapsule(selected: Tab, line: Int?, badges: Map<Tab, TabBadge>, onSelect: (Tab) -> Unit) {
+private fun DockItems(selected: DockTab, dot: Boolean, onSelect: (DockTab) -> Unit) {
     val highlight = LocalBrandColors.current.highlight
     val reduced = LocalReducedMotion.current
-    val start = remember { Animatable((line ?: 0).toFloat()) }
-    val end = remember { Animatable((line ?: 0).toFloat()) }
-    // On Now the line fades out where it was.
-    val shown by animateFloatAsState(if (line != null) 1f else 0f, motion(tween(SUNG_FADE_MS), reduced), label = "line shown")
+    val line = DOCK_TABS.indexOf(selected)
+    val start = remember { Animatable(line.toFloat()) }
+    val end = remember { Animatable(line.toFloat()) }
     LaunchedEffect(line, reduced) {
-        val target = line?.toFloat() ?: return@LaunchedEffect
+        val target = line.toFloat()
         if (reduced) {
             start.snapTo(target)
             end.snapTo(target)
@@ -274,33 +269,28 @@ private fun TabCapsule(selected: Tab, line: Int?, badges: Map<Tab, TabBadge>, on
     }
     Row(
         Modifier
+            .selectableGroup()
             .heightIn(min = 64.dp)
             .padding(horizontal = 4.dp)
             .drawBehind {
-                if (shown <= 0f) return@drawBehind
-                val item = size.width / CAPSULE_TABS.size
+                val item = size.width / DOCK_TABS.size
                 val width = SUNG_LINE_WIDTH.toPx()
                 val height = SUNG_LINE_HEIGHT.toPx()
                 val left = min(start.value, end.value) * item + (item - width) / 2
                 val right = max(start.value, end.value) * item + (item + width) / 2
                 val x = if (layoutDirection == LayoutDirection.Rtl) size.width - right else left
-                drawRoundRect(
-                    highlight.copy(alpha = shown.coerceIn(0f, 1f)),
-                    Offset(x, size.height - LINE_BOTTOM.toPx() - height),
-                    Size(right - left, height),
-                    CornerRadius(height / 2),
-                )
+                drawRoundRect(highlight, Offset(x, size.height - LINE_BOTTOM.toPx() - height), Size(right - left, height), CornerRadius(height / 2))
             },
     ) {
-        CAPSULE_TABS.forEach { tab -> CapsuleItem(tab, tab == selected, badges[tab], Modifier.weight(1f)) { onSelect(tab) } }
+        DOCK_TABS.forEach { tab -> DockItem(tab, tab == selected, dot && tab == DockTab.TOOLS, Modifier.weight(1f)) { onSelect(tab) } }
     }
 }
 
 @Composable
-private fun CapsuleItem(tab: Tab, selected: Boolean, badge: TabBadge?, modifier: Modifier, onClick: () -> Unit) {
+private fun DockItem(tab: DockTab, selected: Boolean, dot: Boolean, modifier: Modifier, onClick: () -> Unit) {
     val colors = MaterialTheme.colorScheme
     val label = stringResource(tab.label)
-    val name = dockItemName(label, badge?.words())
+    val name = dockItemName(label, if (dot) stringResource(R.string.nav_attention) else null)
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = modifier
@@ -309,7 +299,15 @@ private fun CapsuleItem(tab: Tab, selected: Boolean, badge: TabBadge?, modifier:
             .heightIn(min = 56.dp)
             .padding(top = 8.dp, bottom = 14.dp),
     ) {
-        BadgedIcon(if (selected) tab.selectedIcon else tab.icon, badge, tint = if (selected) LocalBrandColors.current.highlight else colors.onSurfaceVariant)
+        Box {
+            Icon(
+                painterResource(if (selected) tab.selectedIcon else tab.icon),
+                contentDescription = null,
+                tint = if (selected) LocalBrandColors.current.highlight else colors.onSurfaceVariant,
+                modifier = Modifier.size(24.dp),
+            )
+            if (dot) DotBadge(Modifier.align(Alignment.TopEnd).offset(x = 3.dp, y = (-3).dp))
+        }
         Text(
             label,
             style = MaterialTheme.typography.labelSmall,
@@ -322,54 +320,7 @@ private fun CapsuleItem(tab: Tab, selected: Boolean, badge: TabBadge?, modifier:
     }
 }
 
-/** The Now orb: the playing song's cover in glass with its status, the songs to check; a coral ring on the Now tab. */
-@Composable
-private fun NowOrbButton(orb: NowOrb, selected: Boolean, checks: TabBadge?, backdrop: GlassBackdrop?, onClick: () -> Unit) {
-    val highlight = LocalBrandColors.current.highlight
-    val ring by animateFloatAsState(if (selected) 1f else 0f, motion(Motion.indicator, LocalReducedMotion.current), label = "orb ring")
-    val name = dockItemName(stringResource(Tab.NOW.label), orb.title, checks?.words())
-    Box(
-        contentAlignment = Alignment.Center,
-        modifier = Modifier
-            .size(ORB)
-            .selectable(selected, interactionSource = null, indication = PressIndication(CircleShape, 0.92f), role = Role.Tab, onClick = onClick)
-            .semantics { contentDescription = name }
-            .drawBehind {
-                if (ring > 0f) {
-                    val stroke = ORB_RING.toPx()
-                    // The ring grows into place as it fades in.
-                    val radius = (size.minDimension / 2 - stroke / 2) * (0.9f + 0.1f * ring)
-                    drawCircle(highlight, radius = radius, alpha = ring.coerceIn(0f, 1f), style = Stroke(stroke))
-                }
-            },
-    ) {
-        GlassSurface(backdrop, CircleShape, Modifier.size(56.dp)) {
-            if (orb.idle) {
-                BrandMark(Modifier.align(Alignment.Center), size = 40.dp)
-            } else {
-                SongCover(orb.cover, Modifier.align(Alignment.Center), size = 48.dp, shape = CircleShape)
-            }
-        }
-        // Outside the glass, which is round and would cut the corners off.
-        orb.status?.let { StatusBadge(it, Modifier.align(Alignment.BottomEnd).padding(4.dp)) }
-        checks?.count?.let { CountBadge(it, Modifier.align(Alignment.TopEnd)) }
-    }
-}
-
-/** The 24 dp icon with a [CountBadge] or [DotBadge] on its top-end corner; both are in the tab's name, not read again. */
-@Composable
-private fun BadgedIcon(@DrawableRes icon: Int, badge: TabBadge?, tint: Color) {
-    Box {
-        Icon(painterResource(icon), contentDescription = null, tint = tint, modifier = Modifier.size(24.dp))
-        val count = badge?.count
-        when {
-            count != null -> CountBadge(count, Modifier.align(Alignment.TopEnd).offset(x = 10.dp, y = (-6).dp))
-            badge != null -> DotBadge(Modifier.align(Alignment.TopEnd).offset(x = 3.dp, y = (-3).dp))
-        }
-    }
-}
-
-/** A count on a dock item: a coral capsule ringed in the glass colour, so it reads as cut out of the dock. Decorative. */
+/** A count on a row or a dock item: a coral capsule ringed in the glass colour, so it reads as cut out of it. Decorative. */
 @Composable
 fun CountBadge(count: Int, modifier: Modifier = Modifier) {
     val brand = LocalBrandColors.current
@@ -387,7 +338,7 @@ fun CountBadge(count: Int, modifier: Modifier = Modifier) {
     }
 }
 
-/** An 8 dp coral dot with the same ring, for "AI needs attention". Decorative. */
+/** An 8 dp coral dot with the same ring, for "something needs you". Decorative. */
 @Composable
 fun DotBadge(modifier: Modifier = Modifier) {
     Box(
@@ -399,10 +350,6 @@ fun DotBadge(modifier: Modifier = Modifier) {
             .background(LocalBrandColors.current.highlight, CircleShape),
     )
 }
-
-/** A badge's words: "3 songs to check", "AI needs attention". */
-@Composable
-private fun TabBadge.words(): String = count?.let { pluralStringResource(description, it, it) } ?: stringResource(description)
 
 // Top bars
 
@@ -749,12 +696,9 @@ private val GLASS_BLUR = 24.dp
 private val GLASS_SHADOW = 16.dp
 private val BAR_HEIGHT = 64.dp
 private const val BAND_FADE_MS = 180
-private val ORB = 64.dp
-private val ORB_RING = 2.5.dp
 
 /** The sung line sits this far above the capsule's bottom edge, under the labels. */
 private val LINE_BOTTOM = 8.dp
-private const val SUNG_FADE_MS = 160
 private val LINE_LEAD = spring(dampingRatio = 0.8f, stiffness = 700f, visibilityThreshold = 0.001f)
 private val LINE_TRAIL = spring(dampingRatio = 0.8f, stiffness = 260f, visibilityThreshold = 0.001f)
 private const val DISABLED_ALPHA = 0.38f

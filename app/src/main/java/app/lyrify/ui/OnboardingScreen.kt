@@ -23,7 +23,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -51,10 +50,13 @@ import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import app.lyrify.R
 
-/** Where a first-run step stands: done ones say "On", the first one not done is the card, later ones wait quietly. */
-private enum class StepState { DONE, OPEN, LATER }
+/** Where a first-run step stands: done ones say "On", the required one not done is the card. */
+private enum class StepState { DONE, OPEN }
 
-/** Shown until notification access and All files access are both on: the brand hero, two steps and an optional third on a rail. */
+/**
+ * Shown until All files access is on: the brand hero, that one step, then two optional ones on a rail, each with its
+ * reason (notification access for music played in other apps, and battery use).
+ */
 @Composable
 fun OnboardingScreen(
     access: Access,
@@ -84,21 +86,15 @@ fun OnboardingScreen(
             ) {
                 Column(Modifier.navigationBarsPadding().padding(start = ScreenPadding, end = ScreenPadding, top = 20.dp, bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     SectionTitle(stringResource(R.string.onboarding_steps))
+                    val files = if (access.allFiles) StepState.DONE else StepState.OPEN
                     val notifications = if (access.notifications) StepState.DONE else StepState.OPEN
-                    val files = when {
-                        access.allFiles -> StepState.DONE
-                        access.notifications -> StepState.OPEN
-                        else -> StepState.LATER
-                    }
                     Column {
-                        Step(1, R.string.setup_notifications_title, R.string.setup_notifications_detail, notifications) {
-                            AllowButton(notifications, onOpenNotificationAccess)
-                            if (notifications != StepState.DONE) {
-                                LyrifyButton(stringResource(R.string.setup_restricted_title), onClick = { help = RESTRICTED }, kind = ButtonKind.GHOST, compact = true)
-                            }
-                        }
-                        Step(2, R.string.setup_files_title, R.string.setup_files_detail, files) {
+                        Step(1, R.string.setup_files_title, R.string.setup_files_detail, files) {
                             AllowButton(files, onOpenAllFilesAccess)
+                        }
+                        Step(2, R.string.setup_notifications_title, R.string.setup_notifications_detail, notifications, optional = true) {
+                            LyrifyButton(stringResource(R.string.setup_allow), onClick = onOpenNotificationAccess, kind = ButtonKind.SECONDARY, compact = true)
+                            LyrifyButton(stringResource(R.string.setup_restricted_title), onClick = { help = RESTRICTED }, kind = ButtonKind.GHOST, compact = true)
                         }
                         Step(
                             3,
@@ -133,21 +129,16 @@ fun OnboardingScreen(
     }
 }
 
-/** "Allow": primary on the step to do now, quiet on a later one; nothing once it is on. */
+/** "Allow" on the step to do now; nothing once it is on. */
 @Composable
 private fun AllowButton(state: StepState, onClick: () -> Unit) {
-    when (state) {
-        StepState.OPEN -> LyrifyButton(stringResource(R.string.setup_allow), onClick = onClick, compact = true)
-        StepState.LATER -> LyrifyButton(stringResource(R.string.setup_allow), onClick = onClick, kind = ButtonKind.SECONDARY, compact = true)
-        StepState.DONE -> Unit
-    }
+    if (state == StepState.OPEN) LyrifyButton(stringResource(R.string.setup_allow), onClick = onClick, compact = true)
 }
 
 /**
  * One step on the rail: its circle (1, 2, 3; a coral check once done) and the rail down to the next step, coral below a
  * done step, so the sung line runs down as steps are done. Done: the title and "On", one line. The step to do now: a
- * raised card with the title, the detail and [actions]. Later: the title, muted, and its button. [optional]: its tag,
- * the detail and the help circle, no card.
+ * raised card with the title, the detail and [actions]. [optional]: its tag, the detail and the help circle, no card.
  */
 @Composable
 private fun Step(
@@ -201,10 +192,6 @@ private fun Step(
                     }
                     Text(stringResource(detail), style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant)
                     StepActions(actions)
-                }
-                else -> Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(stringResource(title), style = MaterialTheme.typography.titleMedium, color = colors.onSurfaceVariant, modifier = heading.weight(1f).wrapContentHeight())
-                    actions()
                 }
             }
         }

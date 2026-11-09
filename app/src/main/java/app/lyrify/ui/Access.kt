@@ -13,9 +13,12 @@ import androidx.core.app.NotificationManagerCompat
 import app.lyrify.LOG_TAG
 import app.lyrify.media.NowPlayingListener
 
-/** The two grants KJB needs; the setup screen shows until both are on. */
+/**
+ * KJB's two grants. All files access is required (the library, `.lrc` files, tags): the setup screen shows until it is
+ * on. Notification access is optional, only for music played in other apps (companion mode).
+ */
 data class Access(val notifications: Boolean, val allFiles: Boolean) {
-    val complete: Boolean get() = notifications && allFiles
+    val complete: Boolean get() = allFiles
 
     companion object {
         fun of(context: Context): Access = Access(hasNotificationAccess(context), Environment.isExternalStorageManager())

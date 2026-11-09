@@ -2,11 +2,6 @@
 <!-- The Duplicates tab (ui/DuplicatesScreen.kt). Labels are three words or fewer; sentences only in sheets, dialogs and empty states. -->
 <resources>
     <!-- Tab and top bar -->
-    <string name="nav_duplicates">Duplicates</string>
-    <plurals name="nav_duplicates_badge">
-        <item quantity="one">%d group to review</item>
-        <item quantity="other">%d groups to review</item>
-    </plurals>
     <string name="dupes_title">Duplicates</string>
     <string name="dupes_scan_again">Scan again</string>
     <string name="dupes_menu_trashed">Trashed songs</string>

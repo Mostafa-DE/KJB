@@ -22,11 +22,10 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
-import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -35,13 +34,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.carousel.HorizontalMultiBrowseCarousel
-import androidx.compose.material3.carousel.rememberCarouselState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -66,7 +63,6 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
@@ -75,7 +71,6 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
 import app.lyrify.R
-import app.lyrify.data.LedgerEntry
 import app.lyrify.data.LedgerState
 import app.lyrify.data.LyricsStatus
 import app.lyrify.media.CurrentTrack
@@ -124,21 +119,13 @@ fun nowPill(status: PlayingStatus): NowPill = when (status) {
 /** The playing song's cover: the player's picture, else the first copy's own; null for a song that is no file. */
 fun nowCover(track: CurrentTrack?): Any? = track?.art ?: track?.paths?.firstOrNull()?.let(::SongArt)
 
-/** What the dock's Now orb shows: the hero's cover, the status of the first copy with one, the title; idle when nothing plays. */
-fun nowOrb(track: CurrentTrack?, ledger: LedgerState): NowOrb = NowOrb(
-    cover = nowCover(track),
-    status = track?.paths?.firstNotNullOfOrNull { ledger.entries[it]?.status },
-    title = track?.title,
-    idle = track == null,
-)
-
 /**
- * The Now tab: the song playing over its blurred cover, with one pill that answers "does it have lyrics?", "Wrong
- * lyrics" and the queue; then what needs the user (to check, the AI), the Library in numbers and the Recent covers.
- * [contentPadding] is the bars' room: the hero's backdrop reaches under the top bar.
+ * Companion Now, over everything from the Now bar while another app plays: the song playing there over its blurred
+ * cover, with one pill that answers "does it have lyrics?", "Wrong lyrics" and the queue; then what needs the user (to
+ * check, the AI) and Retry failed. A pill or a song opens the song sheet; the down arrow and back close it.
  */
 @Composable
-fun NowScreen(
+fun CompanionNowScreen(
     ledger: LedgerState,
     track: CurrentTrack?,
     sweep: SweepProgress?,
@@ -147,53 +134,70 @@ fun NowScreen(
     checks: Int,
     aiTile: AiTile?,
     removal: RemovalState,
-    contentPadding: PaddingValues,
     banner: @Composable () -> Unit,
     onRetryFailed: () -> Unit,
     onOpenChecks: (String?) -> Unit,
-    onOpenGroup: (SongGroup) -> Unit,
     onOpenAi: () -> Unit,
-    onSeeAll: () -> Unit,
+    onClose: () -> Unit,
 ) {
-    val counts = remember(ledger) { ledger.counts() }
-    val recent = remember(ledger) { ledger.recent(RECENT_SONGS) }
     val retrying = sweep?.retrying == true
+    val failed = ledger.counts()[LyricsStatus.ERROR] ?: 0
     var sheet by rememberSaveable { mutableStateOf<String?>(null) }
     val status = playingStatus(track, ledger)
     // The entry the pill speaks for: the first copy of the song with a status.
     val playingEntry = track?.paths?.firstOrNull { ledger.entries[it] != null }
     val removableNow = track?.paths.orEmpty().filter { removal.canRemove(ledger.entries[it]) }
-    LazyColumn(
-        state = rememberLazyListState(),
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(bottom = contentPadding.calculateBottomPadding() + 24.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        item(key = "hero") {
-            NowHero(
-                track = track,
-                pill = nowPill(status),
-                sweep = sweep,
-                canRemove = removableNow.isNotEmpty(),
-                top = contentPadding.calculateTopPadding(),
-                banner = banner,
-                onPill = { playingEntry?.let { sheet = it } },
-                onWrongLyrics = { removal.ask(removableNow) },
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        topBar = {
+            LyrifyTopBar(
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        BrandMark(size = 28.dp)
+                        Text(stringResource(R.string.app_name), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                },
+                navigation = { ChromeIconButton(R.drawable.ic_keyboard_arrow_down, stringResource(R.string.companion_close), onClose) },
             )
-        }
-        val ai = aiTile
-        if (checks > 0 || ai != null) {
-            item(key = "tiles") {
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(horizontal = ScreenPadding)) {
-                    if (checks > 0) CheckTile(checks, Modifier.weight(1f)) { onOpenChecks(null) }
-                    if (ai != null) AiTileCard(ai, Modifier.weight(1f), onOpenAi)
+        },
+        // Messages dock at the bottom, above the gesture area.
+        bottomBar = { ToastSlot(Modifier.navigationBarsPadding().padding(horizontal = ScreenPadding), padding = PaddingValues(bottom = 12.dp)) },
+    ) { contentPadding ->
+        LazyColumn(
+            state = rememberLazyListState(),
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = contentPadding.calculateBottomPadding() + 24.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            item(key = "hero") {
+                NowHero(
+                    track = track,
+                    pill = nowPill(status),
+                    sweep = sweep,
+                    canRemove = removableNow.isNotEmpty(),
+                    top = contentPadding.calculateTopPadding(),
+                    banner = banner,
+                    onPill = { playingEntry?.let { sheet = it } },
+                    onWrongLyrics = { removal.ask(removableNow) },
+                )
+            }
+            val ai = aiTile
+            if (checks > 0 || ai != null) {
+                item(key = "tiles") {
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(horizontal = ScreenPadding)) {
+                        if (checks > 0) CheckTile(checks, Modifier.weight(1f)) { onOpenChecks(null) }
+                        if (ai != null) AiTileCard(ai, Modifier.weight(1f), onOpenAi)
+                    }
+                }
+            }
+            if (failed > 0) {
+                item(key = "retry") {
+                    LyrifyCard(Modifier.fillMaxWidth().padding(horizontal = ScreenPadding)) {
+                        Box(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) { RetryRow(failed, retrying, canRetry = connected, onRetryFailed) }
+                    }
                 }
             }
         }
-        item(key = "library") {
-            LibraryCard(counts, retrying, canRetry = connected, onRetryFailed, onOpenGroup, Modifier.padding(horizontal = ScreenPadding))
-        }
-        if (recent.isNotEmpty()) item(key = "recent") { RecentCarousel(recent, onSeeAll) { sheet = it } }
     }
 
     sheet?.let { ledger.entries[it] }?.let { entry ->
@@ -333,11 +337,11 @@ private fun PlayerChip(track: CurrentTrack?) {
     }
 }
 
-/** The player's app icon; null when the phone does not show KJB that app. */
+/** The player's app icon at [size]; null when the phone does not show KJB that app. */
 @Composable
-private fun rememberAppIcon(packageName: String?): ImageBitmap? {
+fun rememberAppIcon(packageName: String?, size: Dp = 16.dp): ImageBitmap? {
     val context = LocalContext.current
-    val px = with(LocalDensity.current) { 16.dp.roundToPx() }
+    val px = with(LocalDensity.current) { size.roundToPx() }
     return remember(packageName, px) {
         packageName?.let {
             try {
@@ -405,66 +409,6 @@ private fun TileContent(chevron: Boolean, content: @Composable RowScope.() -> Un
     }
 }
 
-/** The Library in numbers: a bar and three stats that open Songs filtered, and the retry row while lookups failed. */
-@Composable
-private fun LibraryCard(
-    counts: Map<LyricsStatus, Int>,
-    retrying: Boolean,
-    canRetry: Boolean,
-    onRetryFailed: () -> Unit,
-    onOpenGroup: (SongGroup) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val groups = groupCounts(counts)
-    val total = groups.values.sum()
-    val tones = LocalStatusColors.current
-    LyrifyCard(modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(stringResource(R.string.library_title), style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f).semantics { heading() })
-                Text(formatCount(total), style = MaterialTheme.typography.bodyMedium.tabular(), color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            // Decorative: the stats carry the numbers.
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(2.dp),
-                modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)).clearAndSetSemantics {},
-            ) {
-                SongGroup.entries.filter { groups.getValue(it) > 0 }.forEach { group ->
-                    // A sliver stays visible however small the group.
-                    Box(Modifier.weight(maxOf(groups.getValue(group).toFloat(), total * MIN_SEGMENT)).fillMaxHeight().background(tones[group.tone].accent))
-                }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf(SongGroup.HAS_LYRICS, SongGroup.WAITING, SongGroup.NO_LYRICS).forEach { group ->
-                    GroupStat(group, groups.getValue(group), Modifier.weight(1f)) { onOpenGroup(group) }
-                }
-            }
-            val failed = counts[LyricsStatus.ERROR] ?: 0
-            if (failed > 0) RetryRow(failed, retrying, canRetry, onRetryFailed)
-        }
-    }
-}
-
-@Composable
-private fun GroupStat(group: SongGroup, count: Int, modifier: Modifier, onClick: () -> Unit) {
-    val label = stringResource(group.label)
-    val description = stringResource(R.string.filter_count, label, formatCount(count))
-    Column(
-        modifier = modifier
-            .clip(MaterialTheme.shapes.medium)
-            .clickable(onClick = onClick)
-            .semantics { contentDescription = description }
-            .heightIn(min = 48.dp)
-            .padding(horizontal = 4.dp, vertical = 6.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Icon(painterResource(group.icon), contentDescription = null, tint = LocalStatusColors.current[group.tone].accent, modifier = Modifier.size(18.dp))
-            Text(formatCount(count), style = MaterialTheme.typography.titleLarge.tabular(), maxLines = 1)
-        }
-        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-    }
-}
-
 /** "3 lookups failed · Retry": KJB retries by itself, this does it at once. */
 @Composable
 private fun RetryRow(failed: Int, retrying: Boolean, canRetry: Boolean, onRetryFailed: () -> Unit) {
@@ -482,47 +426,7 @@ private fun RetryRow(failed: Int, retrying: Boolean, canRetry: Boolean, onRetryF
     }
 }
 
-/** The last songs KJB handled, as covers with their status badge; "See all" opens Songs, recent first. */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun RecentCarousel(recent: List<LedgerEntry>, onSeeAll: () -> Unit, onOpen: (String) -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = ScreenPadding, end = 4.dp)) {
-            Text(stringResource(R.string.recent_title), style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f).semantics { heading() })
-            LyrifyButton(stringResource(R.string.recent_all), onClick = onSeeAll, kind = ButtonKind.GHOST, compact = true)
-        }
-        val openLabel = stringResource(R.string.song_open)
-        HorizontalMultiBrowseCarousel(
-            state = rememberCarouselState { recent.size },
-            preferredItemWidth = RECENT_ITEM,
-            itemSpacing = 8.dp,
-            contentPadding = PaddingValues(horizontal = ScreenPadding),
-            modifier = Modifier.fillMaxWidth(),
-        ) { index ->
-            val entry = recent[index]
-            val description = listOf(entry.title, stringResource(entry.status.style.label)).joinToString(", ")
-            Column(
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-                modifier = Modifier
-                    .clickable(onClickLabel = openLabel) { onOpen(entry.path) }
-                    .semantics { contentDescription = description },
-            ) {
-                Box(Modifier.fillMaxWidth().aspectRatio(1f).maskClip(MaterialTheme.shapes.large)) {
-                    SongCover(SongArt(entry.path), modifier = Modifier.fillMaxSize(), size = RECENT_ITEM, shape = RoundedCornerShape(0.dp))
-                    StatusBadge(entry.status, Modifier.align(Alignment.BottomEnd).padding(6.dp), size = 22.dp)
-                }
-                Text(entry.title, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-        }
-    }
-}
-
 private const val BACKDROP_ALPHA = 0.6f
 private val BACKDROP_HEIGHT = 300.dp
 private const val COVER_FADE_MS = 300
 private const val PILL_MS = 220
-private const val RECENT_SONGS = 12
-private val RECENT_ITEM = 108.dp
-
-/** The smallest share of the Library bar a group with songs gets. */
-private const val MIN_SEGMENT = 0.006f

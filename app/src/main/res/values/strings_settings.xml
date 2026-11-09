@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Settings (ui/SettingsScreen.kt). Labels are three words or fewer; sentences only in sheets. -->
+<resources>
+    <!-- Sections -->
+    <string name="settings_playback">Playback</string>
+    <string name="settings_library">Library</string>
+    <string name="settings_lyrics">Lyrics</string>
+    <string name="settings_ai">AI</string>
+    <string name="settings_backup">Backup</string>
+    <string name="settings_advanced">Advanced</string>
+    <string name="settings_not_saved">Couldn\'t save that setting. Try again.</string>
+    <string name="settings_done">Done</string>
+
+    <!-- Playback -->
+    <string name="set_remember">Remember my place</string>
+    <string name="set_remember_sheet">Songs pick up where you left them, with a way to start over.</string>
+    <string name="set_remember_long">Long songs</string>
+    <string name="set_remember_long_detail">10 minutes or longer</string>
+    <string name="set_remember_all">All songs</string>
+    <string name="set_remember_all_detail">Every song</string>
+    <string name="set_remember_off">Off</string>
+    <string name="set_remember_off_detail">Always from the start</string>
+    <string name="set_headset">Headset buttons</string>
+    <string name="set_headset_detail">Play, skip, back</string>
+    <string name="set_autostart">Start when connected</string>
+    <string name="set_autostart_detail">Bluetooth or car</string>
+    <string name="set_clips">Skip short clips</string>
+    <string name="set_clips_detail">Under 30 seconds</string>
+    <string name="set_playpct">Count plays after</string>
+    <string name="set_playpct_value">%1$d%% heard</string>
+    <string name="set_playpct_option">%1$d%%</string>
+    <string name="set_playpct_sheet">A song counts as played once you have heard this much of it. Paused time and skipping ahead don\'t count, and songs under 30 seconds never do.</string>
+    <string name="set_skips">Skip amounts</string>
+    <string name="set_skips_value">Back %1$d s · Forward %2$d s</string>
+    <string name="set_skips_sheet">The jump buttons beside Previous and Next. Hold one to keep jumping.</string>
+    <string name="set_skips_back">Back</string>
+    <string name="set_skips_forward">Forward</string>
+    <string name="set_seconds">%1$d s</string>
+    <string name="set_levelling">Volume levelling</string>
+    <string name="set_levelling_sheet">Evens out how loud songs are, from the levelling tags in your songs. Songs without them play unchanged.</string>
+    <string name="set_levelling_off">Off</string>
+    <string name="set_levelling_off_detail">Songs as they are</string>
+    <string name="set_levelling_auto">Auto</string>
+    <string name="set_levelling_auto_detail">Albums in order as one</string>
+    <string name="set_levelling_song">Song</string>
+    <string name="set_levelling_song_detail">Every song alike</string>
+    <string name="set_levelling_album">Album</string>
+    <string name="set_levelling_album_detail">Albums as mastered</string>
+    <string name="set_crossfade">Crossfade</string>
+    <string name="set_crossfade_off">Off</string>
+    <string name="set_crossfade_sheet">Fades one song into the next. Songs of an album played in order stay gapless.</string>
+
+    <!-- Library -->
+    <string name="set_tabs">Library tabs</string>
+    <plurals name="set_tabs_value">
+        <item quantity="one">%d shown</item>
+        <item quantity="other">%d shown</item>
+    </plurals>
+    <string name="set_tabs_sheet">Use the arrows to change the order. Switch a tab off to hide it.</string>
+    <string name="set_tab_up">Move %1$s up</string>
+    <string name="set_tab_down">Move %1$s down</string>
+    <string name="library_tab_songs">Songs</string>
+    <string name="library_tab_albums">Albums</string>
+    <string name="library_tab_artists">Artists</string>
+    <string name="library_tab_folders">Folders</string>
+    <string name="library_tab_playlists">Playlists</string>
+    <string name="library_tab_genres">Genres</string>
+    <string name="set_skip">Folders to skip</string>
+    <string name="set_skip_none">None</string>
+    <plurals name="set_skip_value">
+        <item quantity="one">%d folder</item>
+        <item quantity="other">%d folders</item>
+    </plurals>
+    <string name="set_filenames">Show file names</string>
+    <string name="set_filenames_detail">Instead of titles</string>
+
+    <!-- Lyrics -->
+    <string name="set_notifications_detail">Other apps only</string>
+    <string name="set_lock">Show when locked</string>
+    <string name="set_lock_on">Automatically</string>
+    <string name="set_lock_off">From the notification</string>
+
+    <!-- AI -->
+    <string name="set_ai">Use AI lyrics</string>
+    <string name="set_ai_download">AI download</string>
+    <string name="set_ai_not_downloaded">Not downloaded</string>
+
+    <!-- Backup -->
+    <string name="set_backup_now">Back up now</string>
+    <string name="set_restore">Restore</string>
+    <string name="set_auto_backup">Automatic backup</string>
+    <string name="set_auto_backup_detail">Weekly while charging</string>
+
+    <!-- About -->
+    <string name="set_auto">Using Android Auto</string>
+    <string name="set_auto_sheet">Android Auto shows apps from outside an app store only once you allow it. In Android Auto\'s settings, tap Version 10 times to turn on developer settings. Then turn on Unknown sources there.</string>
+
+    <!-- Advanced -->
+    <string name="set_gapless">Gapless playback</string>
+    <string name="set_gapless_detail">No pause between songs</string>
+    <string name="set_offload">Audio offload</string>
+    <string name="set_offload_detail">Saves battery</string>
+    <string name="set_nbtn">Notification buttons</string>
+    <string name="set_nbtn_sheet">Your phone draws the music controls in notifications and on the lock screen. KJB picks the extra buttons.</string>
+    <string name="set_nbtn_favourite">Favourite</string>
+    <string name="set_nbtn_favourite_detail">A heart beside Next</string>
+    <string name="set_nbtn_shuffle">Shuffle and repeat</string>
+    <string name="set_nbtn_shuffle_detail">Both beside the controls</string>
+    <string name="set_boost">Levelling boost</string>
+    <string name="set_boost_value">%1$+d dB</string>
+    <string name="set_boost_sheet">Added to what Volume levelling does, for songs that still sound too quiet or too loud.</string>
+    <string name="set_albums_gapless">Keep albums gapless</string>
+    <string name="set_albums_gapless_detail">No crossfade in albums</string>
+</resources>

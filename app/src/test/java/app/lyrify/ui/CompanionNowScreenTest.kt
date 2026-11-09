@@ -15,7 +15,7 @@ import javax.xml.parsers.DocumentBuilderFactory
 
 private const val PATH = "/music/Paper Lanterns.mp3"
 
-class NowScreenTest {
+class CompanionNowScreenTest {
     // The status pill: "does this song have lyrics?"
 
     @Test
