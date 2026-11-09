@@ -231,6 +231,18 @@ object SearchGraph {
     private val asks = MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     private var lyrics: LyricsIndex? = null
     private var recent: RecentSearches? = null
+    private var names: Triple<Library, Boolean, SearchIndex>? = null
+
+    /**
+     * The index of [library]'s names, titles as [settings] shows them: the last one built while it is for the same
+     * library and the same "Show file names", so opening Search again or a "View all" does not build it again. On
+     * Dispatchers.Default.
+     */
+    @Synchronized
+    fun names(library: Library, settings: LibrarySettings): SearchIndex {
+        names?.let { (built, fileNames, index) -> if (built === library && fileNames == settings.showFileNames) return index }
+        return SearchIndex.of(library, settings).also { names = Triple(library, settings.showFileNames, it) }
+    }
 
     /**
      * The lyrics index in app-private `databases/search.db`. From its first use it follows the library: it reads the

@@ -1,4 +1,39 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- The Search tab (milestone L2). -->
 <resources>
+    <string name="search_field_hint">Songs, artists, lyrics</string>
+    <string name="search_recent">Recent</string>
+    <string name="search_recent_none">Nothing yet</string>
+    <!-- A recent search's "×", for TalkBack: the search's words. -->
+    <string name="search_recent_remove">Remove %1$s</string>
+    <string name="search_no_matches">No matches</string>
+    <string name="search_view_all">View all</string>
+    <string name="search_group_songs">Songs</string>
+    <string name="search_group_artists">Artists</string>
+    <string name="search_group_albums">Albums</string>
+    <string name="search_group_folders">Folders</string>
+    <string name="search_group_playlists">Playlists</string>
+    <string name="search_group_lyrics">In lyrics</string>
+    <!-- The title of "View all": a group, then the words searched ("Songs · ferry"). -->
+    <string name="search_all_title">%1$s · %2$s</string>
+    <!-- Under a folder found: how many songs, then where it is ("12 songs · Music/Rips"). -->
+    <string name="search_folder_line">%1$s · %2$s</string>
+    <!-- The built-in lists, found by name like playlists. -->
+    <string name="search_list_favourites">Favourites</string>
+    <string name="search_list_most_played">Most played</string>
+    <string name="search_list_recently_played">Recently played</string>
+    <string name="search_list_recently_added">Recently added</string>
+    <string name="search_shuffle">Shuffle</string>
+    <string name="search_play">Play</string>
+    <string name="search_open">Open</string>
+    <string name="search_reading_lyrics">Reading your lyrics…</string>
+    <!-- For TalkBack, as the words change. -->
+    <plurals name="search_results">
+        <item quantity="one">%d result</item>
+        <item quantity="other">%d results</item>
+    </plurals>
+    <plurals name="search_songs">
+        <item quantity="one">%s song</item>
+        <item quantity="other">%s songs</item>
+    </plurals>
 </resources>
