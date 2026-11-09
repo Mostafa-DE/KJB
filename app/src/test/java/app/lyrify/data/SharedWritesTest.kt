@@ -366,7 +366,7 @@ class SharedWritesTest {
 
         /** Change the user's files (shared storage): each asks [SharedWrites] first. */
         val SHARED: Set<String> = setOf(
-            "dupes/Duplicates.kt",
+            "dupes/SongTrash.kt",
             "lyrics/LyricsPipeline.kt",
             "tones/ToneFiles.kt",
         )

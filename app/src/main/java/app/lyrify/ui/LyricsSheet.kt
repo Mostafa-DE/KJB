@@ -29,6 +29,8 @@ import app.lyrify.R
 import app.lyrify.data.LedgerEntry
 import app.lyrify.data.LedgerState
 import app.lyrify.data.LyricsStatus
+import app.lyrify.library.Song
+import app.lyrify.library.SongRef
 import app.lyrify.lyrics.Removal
 import app.lyrify.lyrics.TrackNames
 import app.lyrify.lyrics.canRemove
@@ -37,6 +39,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+
+// The Lyrics row of the song sheet: its sheet, and removing lyrics.
 
 /**
  * Removing lyrics, from the Now tab ("Wrong lyrics") or the song sheet: which songs can be, the confirm dialog
@@ -127,31 +131,47 @@ fun artistOf(entry: LedgerEntry): String = entry.artist?.takeIf { TrackNames.cle
 /** A length as "3:26". */
 fun songLength(ms: Long): String = DateUtils.formatElapsedTime(ms / MS_PER_SECOND)
 
-/** Where the details went: the status's sentence, three facts, and the one action that fits, pinned under them. */
+/**
+ * A song's lyrics: the head, the status pill and its sentence, three facts, and the actions that fit pinned under them:
+ * Make synced (plain lyrics) or Edit timing (synced lyrics), Remove lyrics, Pick lyrics, Retry now. [song] is the
+ * library's song when it is one; [entry] is null while KJB has not looked the song up.
+ */
 @Composable
-fun SongSheet(
-    entry: LedgerEntry,
-    timing: PlainTiming,
-    removal: RemovalState,
-    canRetry: Boolean,
-    retrying: Boolean,
-    onRetryFailed: () -> Unit,
-    onPickLyrics: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    val style = entry.status.style
-    val now = remember(entry) { System.currentTimeMillis() }
+fun LyricsSheet(entry: LedgerEntry?, song: Song?, onPickLyrics: () -> Unit, onDismiss: () -> Unit) {
+    val lyrics = LocalLyrics.current
+    val nav = LocalNavigator.current
+    val removal = lyrics.removal
+    val path = song?.path ?: entry?.path ?: return
+    val mark = lyricsMark(entry?.status)
+    val sync = when {
+        entry?.status == LyricsStatus.PLAIN_ONLY -> R.string.lib_make_synced
+        mark == LyricsMark.SYNCED -> R.string.lib_edit_timing
+        else -> null
+    }
     val removable = removal.canRemove(entry)
-    val pick = entry.status == LyricsStatus.NEEDS_CHECK
-    val retry = entry.status == LyricsStatus.ERROR
+    val pick = entry?.status == LyricsStatus.NEEDS_CHECK
+    val retry = entry?.status == LyricsStatus.ERROR
+    val now = remember(entry) { System.currentTimeMillis() }
     LyrifySheet(
         onDismiss = onDismiss,
-        footer = if (!removable && !pick && !retry) {
+        footer = if (sync == null && !removable && !pick && !retry) {
             null
         } else {
             {
                 val full = Modifier.fillMaxWidth()
-                if (removable) {
+                if (sync != null) {
+                    LyrifyButton(
+                        stringResource(sync),
+                        onClick = {
+                            onDismiss()
+                            nav.show(FullScreen.SyncEditor(SongRef(path, song?.ref?.mediaStoreId)))
+                        },
+                        modifier = full,
+                        kind = ButtonKind.SECONDARY,
+                        icon = R.drawable.ic_edit,
+                    )
+                }
+                if (removable && entry != null) {
                     LyrifyButton(
                         stringResource(R.string.remove_lyrics),
                         onClick = { removal.ask(listOf(entry.path), onConfirmed = onDismiss) },
@@ -163,33 +183,41 @@ fun SongSheet(
                 if (pick) LyrifyButton(stringResource(R.string.check_open), onClick = onPickLyrics, modifier = full)
                 if (retry) {
                     LyrifyButton(
-                        stringResource(if (retrying) R.string.retrying else R.string.retry_now),
-                        onClick = onRetryFailed,
+                        stringResource(if (lyrics.retrying) R.string.retrying else R.string.retry_now),
+                        onClick = lyrics.onRetryFailed,
                         modifier = full,
                         kind = ButtonKind.SECONDARY,
                         icon = R.drawable.ic_refresh,
-                        enabled = canRetry && !retrying,
+                        enabled = lyrics.connected && !lyrics.retrying,
                     )
                 }
             }
         },
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            SongCover(SongArt(entry.path), size = 88.dp, shape = MaterialTheme.shapes.large)
+            SongCover(SongArt(path, song?.ref?.mediaStoreId), size = 88.dp, shape = MaterialTheme.shapes.large)
             Column(Modifier.weight(1f)) {
-                Text(entry.title, style = MaterialTheme.typography.titleLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text(artistOf(entry), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                val length = songLength(entry.durationMs)
+                Text(song?.title ?: entry?.title.orEmpty(), style = MaterialTheme.typography.titleLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Text(
-                    entry.album?.takeIf { it.isNotBlank() }?.let { stringResource(R.string.song_album_length, it, length) } ?: length,
+                    song?.artist ?: entry?.let { artistOf(it) } ?: stringResource(R.string.check_no_artist),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                val length = songLength(song?.durationMs ?: entry?.durationMs ?: 0)
+                Text(
+                    (song?.album ?: entry?.album)?.takeIf { it.isNotBlank() }?.let { stringResource(R.string.song_album_length, it, length) } ?: length,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
+        if (entry == null) {
+            Text(stringResource(R.string.lib_lyrics_unknown), style = MaterialTheme.typography.bodyLarge)
+            return@LyrifySheet
+        }
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             StatusPill(entry.status)
-            Text(stringResource(style.sentence(timing)), style = MaterialTheme.typography.bodyLarge)
+            Text(stringResource(entry.status.style.sentence(lyrics.timing)), style = MaterialTheme.typography.bodyLarge)
         }
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Fact(R.drawable.ic_history, stringResource(R.string.song_updated, relative(entry.updatedAt, now)))

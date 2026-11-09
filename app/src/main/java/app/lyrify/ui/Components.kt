@@ -649,14 +649,17 @@ fun Fact(@DrawableRes icon: Int, text: String, modifier: Modifier = Modifier, st
 
 // Covers
 
-/** A song file's cover, by its path: MediaStore's thumbnail of the audio file (its embedded art). */
-data class SongArt(val path: String)
+/**
+ * A song file's cover, by its path: MediaStore's thumbnail of the audio file (its embedded art). [mediaStoreId] is the
+ * library's id for it, from the same MediaStore read: with it, a row's cover skips the lookup by path.
+ */
+data class SongArt(val path: String, val mediaStoreId: Long? = null)
 
 /** Loads a [SongArt] through MediaStore; a song without a cover fails, and the glyph under it shows. */
 class SongArtFetcher(private val art: SongArt, private val options: Options) : Fetcher {
     override suspend fun fetch(): FetchResult? {
         val context = options.context
-        val uri = audioUri(context, art.path) ?: return null
+        val uri = art.mediaStoreId?.let { ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, it) } ?: audioUri(context, art.path) ?: return null
         val px = options.size.width.pxOrElse { DEFAULT_PX }
         val bitmap = try {
             context.contentResolver.loadThumbnail(uri, android.util.Size(px, px), null)
