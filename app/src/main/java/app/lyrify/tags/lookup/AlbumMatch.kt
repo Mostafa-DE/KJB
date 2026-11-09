@@ -221,8 +221,8 @@ object AlbumMatch {
     }
 
     /**
-     * A single's candidates from a recording search: always Pick one, best first (closest title, length and artist,
-     * then not a compilation, then the earliest), one per release group.
+     * A single's candidates from a recording search: always Pick one, best first (those that fit, then the closest
+     * title, length and artist, then not a compilation, then the earliest), one per release group.
      */
     fun proposeSingle(song: PhoneSong, recordings: List<MbRecording>): Proposal.PickOne {
         val candidates = recordings.flatMap { it.releases }.distinctBy { it.id }.mapNotNull { release ->
@@ -230,7 +230,12 @@ object AlbumMatch {
             ReleaseMatch(release, pair(listOf(song), listOf(track)), singleDistance(song, track))
         }
         val ranked = candidates
-            .sortedWith(compareBy<ReleaseMatch> { it.distance }.thenBy { it.release.releaseGroup?.isCompilation == true }.thenBy { it.release.date ?: LAST_DATE })
+            .sortedWith(
+                compareByDescending<ReleaseMatch> { it.fit.fitting }
+                    .thenBy { it.distance }
+                    .thenBy { it.release.releaseGroup?.isCompilation == true }
+                    .thenBy { it.release.date ?: LAST_DATE },
+            )
             .distinctBy { it.release.releaseGroup?.id ?: it.release.id }
         return Proposal.PickOne(ranked.take(MAX_SHOWN), setOf(Doubt.SINGLE))
     }
@@ -380,7 +385,7 @@ object AlbumMatch {
 
     private fun trackDistance(pair: SongPair, various: Boolean): Double {
         val penalties = Penalties()
-        penalties.add(W_TRACK_TITLE, stringDistance(pair.song.title, pair.track.track.title))
+        penalties.add(W_TRACK_TITLE, stringDistance(comparableTitle(pair.song.title), pair.track.track.title))
         pair.track.track.lengthMs?.let { penalties.add(W_TRACK_LENGTH, lengthPenalty(pair.song.durationMs, it)) }
         if (various) {
             Names.usable(pair.song.artist)?.takeUnless(Names::isVariousName)?.let { penalties.add(W_TRACK_ARTIST, stringDistance(it, pair.track.track.artist.text)) }
@@ -392,11 +397,14 @@ object AlbumMatch {
     /** A single against one track: its title, length and artist. */
     private fun singleDistance(song: PhoneSong, track: ReleaseTrack): Double {
         val penalties = Penalties()
-        penalties.add(W_TRACK_TITLE, stringDistance(song.title, track.track.title))
+        penalties.add(W_TRACK_TITLE, stringDistance(comparableTitle(song.title), track.track.title))
         penalties.add(W_TRACK_LENGTH, track.track.lengthMs?.let { lengthPenalty(song.durationMs, it) } ?: 1.0)
         penalties.add(W_ARTIST, Names.usable(song.artist)?.let { stringDistance(it, track.track.artist.text) } ?: 1.0)
         return penalties.distance
     }
+
+    /** A song's title as distances compare it: without what downloads add ("(Official Video)"), as pairing does. */
+    private fun comparableTitle(title: String?): String? = title?.let(TrackNames::cleanTitle)
 
     /** beets: nothing within the 10 s grace, then up to 1 at 30 s past it. */
     private fun lengthPenalty(songMs: Long, trackMs: Long): Double = (abs(songMs - trackMs) - LENGTH_GRACE_MS).toDouble() / LENGTH_MAX_MS

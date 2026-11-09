@@ -375,6 +375,17 @@ class AlbumMatchTest {
     }
 
     @Test
+    fun `what downloads add to a title never favours another version`() {
+        val recordings = MusicBrainzJson.recordings(fixture("recording-search.json"))
+        val song = song("Kestrel Lights (Official Video)", 251_400, artist = "Quillmere", album = null, albumArtist = null)
+
+        val ids = AlbumMatch.proposeSingle(song, recordings).candidates.map { it.release.id.takeLast(3) }
+
+        // The live version, whose title does not pair, comes last.
+        assertEquals(listOf("e09", "e10", "e11"), ids)
+    }
+
+    @Test
     fun `an id already in the files is a candidate, never trusted blindly`() {
         // The id names the release that fits: Ready, on the rules alone.
         assertTrue(AlbumMatch.propose(album(lanternSongs(releaseId = ID_A)), listOf(release())) is Proposal.Ready)
