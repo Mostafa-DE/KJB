@@ -218,8 +218,14 @@ jobjectArray PictureListToJniPictureArray(
         JNIEnv *env,
         const TagLib::List<TagLib::Map<TagLib::String, TagLib::Variant>> &pictureList
 ) {
-    jobjectArray array = env->NewObjectArray(static_cast<jsize>(pictureList.size()),
-                                             pictureClass, nullptr);
+    // KJB patch: pictures without data are left out, so the array is sized to the rest (no null at its end).
+    jsize count = 0;
+    for (const auto &picture: pictureList) {
+        if (!picture["data"].toByteVector().isEmpty()) {
+            count++;
+        }
+    }
+    jobjectArray array = env->NewObjectArray(count, pictureClass, nullptr);
     int i = 0;
     for (const auto &picture: pictureList) {
         const ByteVector pictureData = picture["data"].toByteVector();
@@ -255,6 +261,14 @@ jobjectArray PictureListToJniPictureArray(
     return array;
 }
 
+// KJB patch: a Java string as a UTF-8 TagLib string, its characters released.
+TagLib::String JniStringToString(JNIEnv *env, jstring string) {
+    const char *chars = env->GetStringUTFChars(string, nullptr);
+    TagLib::String result(chars, TagLib::String::UTF8);
+    env->ReleaseStringUTFChars(string, chars);
+    return result;
+}
+
 // Helper function to convert JNI Picture array to C++ PictureList
 TagLib::List<TagLib::Map<TagLib::String, TagLib::Variant>>
 JniPictureArrayToPictureList(JNIEnv *env, jobjectArray pictures) {
@@ -280,12 +294,18 @@ JniPictureArrayToPictureList(JNIEnv *env, jobjectArray pictures) {
         );
         env->ReleaseByteArrayElements(bytes, pictureData, JNI_ABORT);
 
+        // KJB patch: the strings are read as UTF-8 and released, and the local references freed in the loop.
         TagLib::Map<TagLib::String, TagLib::Variant> picture;
         picture["data"] = pictureDataVector;
-        picture["description"] = TagLib::String(env->GetStringUTFChars(description, nullptr));
-        picture["pictureType"] = TagLib::String(env->GetStringUTFChars(pictureType, nullptr));
-        picture["mimeType"] = TagLib::String(env->GetStringUTFChars(mimeType, nullptr));
+        picture["description"] = JniStringToString(env, description);
+        picture["pictureType"] = JniStringToString(env, pictureType);
+        picture["mimeType"] = JniStringToString(env, mimeType);
         pictureList.append(picture);
+        env->DeleteLocalRef(bytes);
+        env->DeleteLocalRef(description);
+        env->DeleteLocalRef(pictureType);
+        env->DeleteLocalRef(mimeType);
+        env->DeleteLocalRef(pictureObject);
     }
 
     return pictureList;

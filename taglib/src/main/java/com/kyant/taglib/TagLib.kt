@@ -94,4 +94,21 @@ public object TagLib {
         fd: Int,
         pictures: Array<Picture>,
     ): Boolean
+
+    /**
+     * KJB patch: saves the whole tag in one go, every key of [propertyMap] and every picture in [pictures]. Keys and
+     * pictures left out are removed, so read them first. An MP3 has only its ID3v2 tag rewritten, as version
+     * [id3v2Version] (3 or 4): no ID3v1 tag is added, and one already there is left as it is.
+     *
+     * @param fd File descriptor, closed by this call on every path
+     *
+     * @return Whether the operation was successful
+     */
+    @JvmStatic
+    public external fun saveTags(
+        fd: Int,
+        propertyMap: PropertyMap,
+        pictures: Array<Picture>,
+        id3v2Version: Int,
+    ): Boolean
 }

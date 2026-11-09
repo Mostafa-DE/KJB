@@ -35,6 +35,17 @@ Third-party software and assets built into the app (screens)
   BricolageGrotesque[opsz,wdth,wght].ttf as Google Fonts ships it (google/fonts, ofl/bricolagegrotesque), bundled as
   app/src/main/res/font/bricolage_grotesque.ttf. SIL Open Font License 1.1, full text at the end of this file.
 
+Third-party software built into the app (tags)
+
+- TagLib 2.3.2 (https://github.com/taglib/taglib), GNU Lesser General Public License 2.1 (TagLib is offered under
+  LGPL-2.1 or MPL-1.1; KJB takes the LGPL-2.1 option), Copyright Scott Wheeler and the TagLib authors. Built from
+  source in taglib/src/main/cpp/taglib (unchanged; licence text in COPYING.LGPL there) into libtaglib.so, which reads
+  and writes tags and covers on KJB's private copies of a song.
+- Kyant0/taglib 1.0.6 (https://github.com/Kyant0/taglib), the JNI wrapper around TagLib, Apache License 2.0,
+  Copyright Kyant. Vendored in taglib/ with KJB's changes, which taglib/README.md lists; its licence is taglib/LICENSE.
+- utfcpp 4.2.0 (https://github.com/nemtrif/utfcpp), Boost Software License 1.0, Copyright Nemanja Trifunovic. Used
+  by TagLib; licence text in taglib/src/main/cpp/taglib/3rdparty/utfcpp/LICENSE.
+
 AI models (downloaded by the app, not part of it)
 
 - Whisper-Large-V3-Turbo by OpenAI, as quantized (w8a16) and compiled for Snapdragon NPUs by Qualcomm AI Hub

@@ -1,4 +1,6 @@
 #include "tfilestream.h"
+#include "id3v2tag.h"
+#include "mpegfile.h"
 #include "utils.h"
 
 extern "C" {
@@ -183,5 +185,49 @@ Java_com_kyant_taglib_TagLib_savePictures(
     const bool success = f.save();
     free(path);
     return success;
+}
+
+// KJB patch: one save for the whole tag, the property map and the pictures together. Keys and pictures left out are
+// removed, so the caller reads them first. An MP3 gets only its ID3v2 tag rewritten, as version id3v2_version (3 or
+// 4): no ID3v1 tag is added, and one already there is left as it is, as is an APE tag. The descriptor is closed here
+// on every path.
+JNIEXPORT jboolean JNICALL
+Java_com_kyant_taglib_TagLib_saveTags(
+        JNIEnv *env,
+        jclass,
+        jint fd,
+        jobject property_map,
+        jobjectArray pictures,
+        jint id3v2_version
+) {
+    if (id3v2_version != 3 && id3v2_version != 4) {
+        close(fd);
+        return false;
+    }
+    char *path = getRealPathFromFd(fd);
+    if (path == nullptr) {
+        close(fd);
+        return false;
+    }
+    const auto stream = std::make_unique<TagLib::FileStream>(fd, false);
+    TagLibExt::FileRef f(path, stream.get(), false);
+    free(path);
+
+    if (f.isNull()) {
+        return false;
+    }
+
+    const PropertyMap propertyMap = JniHashMapToPropertyMap(env, property_map);
+    const auto pictureList = JniPictureArrayToPictureList(env, pictures);
+    if (auto *mpeg = dynamic_cast<TagLib::MPEG::File *>(f.file())) {
+        TagLib::ID3v2::Tag *tag = mpeg->ID3v2Tag(true);
+        tag->setProperties(propertyMap);
+        tag->setComplexProperties("PICTURE", pictureList);
+        const auto version = id3v2_version == 3 ? TagLib::ID3v2::v3 : TagLib::ID3v2::v4;
+        return mpeg->save(TagLib::MPEG::File::ID3v2, TagLib::File::StripNone, version, TagLib::File::DoNotDuplicate);
+    }
+    f.setProperties(propertyMap);
+    f.setComplexProperties("PICTURE", pictureList);
+    return f.save();
 }
 }

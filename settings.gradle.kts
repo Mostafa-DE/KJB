@@ -16,3 +16,5 @@ dependencyResolutionManagement {
 
 rootProject.name = "Lyrify"
 include(":app")
+// TagLib for the tag writer (tags/), a vendored native module.
+include(":taglib")

@@ -36,22 +36,18 @@
 #include "tpropertymap.h"
 #include "tstringlist.h"
 #include "tvariant.h"
-#include "aifffile.h"
 #include "apefile.h"
-#include "asffile.h"
 #include "flacfile.h"
 #include "mp4file.h"
 #include "mpegfile.h"
 #include "oggflacfile.h"
 #include "opusfile.h"
 #include "vorbisfile.h"
-#include "wavfile.h"
 #include "wavpackfile.h"
-#include "dsffile.h"
-#include "dsdifffile.h"
-#include "matroskafile.h"
 
 using namespace TagLib;
+
+// KJB patch: only the formats built in (see CMakeLists.txt); ASF, AIFF, WAV, DSF, DSDIFF and Matroska are left out.
 
 namespace TagLibExt {
     // Detect the file type based on the file extension.
@@ -99,20 +95,8 @@ namespace TagLibExt {
         else if (ext == "M4A" || ext == "M4R" || ext == "M4B" || ext == "M4P" || ext == "MP4" || ext == "3G2" ||
                  ext == "M4V")
             file = new MP4::File(stream, readAudioProperties, audioPropertiesStyle);
-        else if (ext == "WMA" || ext == "ASF")
-            file = new ASF::File(stream, readAudioProperties, audioPropertiesStyle);
-        else if (ext == "AIF" || ext == "AIFF" || ext == "AFC" || ext == "AIFC")
-            file = new RIFF::AIFF::File(stream, readAudioProperties, audioPropertiesStyle);
-        else if (ext == "WAV")
-            file = new RIFF::WAV::File(stream, readAudioProperties, audioPropertiesStyle);
         else if (ext == "APE")
             file = new APE::File(stream, readAudioProperties, audioPropertiesStyle);
-        else if (ext == "DSF")
-            file = new DSF::File(stream, readAudioProperties, audioPropertiesStyle);
-        else if (ext == "DFF" || ext == "DSDIFF")
-            file = new DSDIFF::File(stream, readAudioProperties, audioPropertiesStyle);
-        else if(ext == "MKA" || ext == "MKV" || ext == "WEBM")
-            file = new Matroska::File(stream, readAudioProperties, audioPropertiesStyle);
 
         // if file is not valid, leave it to content-based detection.
 
@@ -145,20 +129,8 @@ namespace TagLibExt {
             file = new Ogg::Opus::File(stream, readAudioProperties, audioPropertiesStyle);
         else if (MP4::File::isSupported(stream))
             file = new MP4::File(stream, readAudioProperties, audioPropertiesStyle);
-        else if (ASF::File::isSupported(stream))
-            file = new ASF::File(stream, readAudioProperties, audioPropertiesStyle);
-        else if (RIFF::AIFF::File::isSupported(stream))
-            file = new RIFF::AIFF::File(stream, readAudioProperties, audioPropertiesStyle);
-        else if (RIFF::WAV::File::isSupported(stream))
-            file = new RIFF::WAV::File(stream, readAudioProperties, audioPropertiesStyle);
         else if (APE::File::isSupported(stream))
             file = new APE::File(stream, readAudioProperties, audioPropertiesStyle);
-        else if (DSF::File::isSupported(stream))
-            file = new DSF::File(stream, readAudioProperties, audioPropertiesStyle);
-        else if (DSDIFF::File::isSupported(stream))
-            file = new DSDIFF::File(stream, readAudioProperties, audioPropertiesStyle);
-        else if(Matroska::File::isSupported(stream))
-            file = new Matroska::File(stream, readAudioProperties, audioPropertiesStyle);
 
         // isSupported() only does a quick check, so double check the file here.
 
