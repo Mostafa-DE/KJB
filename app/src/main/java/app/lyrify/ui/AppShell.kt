@@ -56,6 +56,7 @@ import app.lyrify.data.LedgerState
 import app.lyrify.data.LyricsStatus
 import app.lyrify.lyrics.Removal
 import app.lyrify.media.CurrentTrack
+import app.lyrify.media.NowPlaying
 import app.lyrify.media.SweepProgress
 import app.lyrify.settings.DockTab
 import app.lyrify.settings.Settings
@@ -87,8 +88,8 @@ val LocalLyrics = compositionLocalOf<LyricsUi> { error("No LyricsUi: AppShell pr
  * and the dock over Library and Search and Tools' root, Tools pages as full screens, and the full-screen views over
  * everything. Every page and view is drawn by its entry composable in its owner's file; this file only routes. Back
  * closes a sheet, dialog or menu first (their own windows), then a view, then a page, then walks back through the tab
- * history. The app reopens on the last tab ([Settings.nav]). What [checkAnswers] say shows here, also once Check these
- * has closed or the phone has turned.
+ * history. The app reopens on the last tab ([Settings.nav]), or on the page a notification names ([destination]). What
+ * [checkAnswers] say shows here, also once Check these has closed or the phone has turned.
  */
 @Composable
 fun AppShell(
@@ -108,6 +109,8 @@ fun AppShell(
     checkAnswers: CheckAnswers,
     onRetryFailed: () -> Unit,
     onRemove: suspend (String) -> Removal,
+    destination: Page?,
+    onDestinationOpened: () -> Unit,
 ) {
     val lastTab = settings.nav.lastTab
     val nav = rememberSaveable(saver = NavState.saver(lastTab)) { Navigator(NavState.start(lastTab)) }
@@ -140,14 +143,22 @@ fun AppShell(
     val tones by remember(context) { ToneListStore.of(context).state }.collectAsStateWithLifecycle(TonesState())
     val rows = toolRows(checks, dupesView(dupes), dupes.badge, tones.tones.size, coversTagsLine(), ai, aiWaiting)
     val own = rememberOwnNow()
-    val other = rememberOtherSession(track?.player?.packageName?.takeIf { grants.access.notifications })
-    val otherPlayback = rememberOtherPlayback(other)
+    val followed by NowPlaying.followed.collectAsStateWithLifecycle()
+    val other = rememberOtherSession(followed?.takeIf { grants.access.notifications })
+    val otherPlayback = other?.playback
     val bar = nowBarShows(own.now, track, otherPlayback?.playing == true)
     val backup = rememberBackupActions { on -> onSettings { it.copy(backup = it.backup.copy(automatic = on)) } }
 
     LaunchedEffect(state.tab) {
         val tab = state.tab
         onSettings { if (it.nav.lastTab == tab) it else it.copy(nav = it.nav.copy(lastTab = tab)) }
+    }
+    // A notification's tap (the AI's: Tools > AI lyrics), also on a cold start.
+    LaunchedEffect(destination) {
+        destination?.let {
+            nav.open(it)
+            onDestinationOpened()
+        }
     }
     LaunchedEffect(checkAnswers) {
         checkAnswers.messages.collect { toasts.say(resources, it) }
@@ -195,11 +206,7 @@ fun AppShell(
                         other = otherPlayback,
                         backdrop = backdrop,
                         onOpen = { nav.show(if (bar is NowBarShows.Own) FullScreen.Player else FullScreen.CompanionNow) },
-                        onPlayPause = when (bar) {
-                            is NowBarShows.Own -> own::playPause
-                            is NowBarShows.Companion -> other?.let { controller -> { controller.playPause(bar.playing) } }
-                            NowBarShows.Hidden -> null
-                        },
+                        onPlayPause = barPlayPause(bar, own::playPause, otherPlayback, other?.let { session -> session::playPause }),
                     )
                     Dock(state.tab, dot = toolsDot(checks, dupes.badge, aiAttention(ai, aiWaiting)), backdrop = backdrop, onSelect = nav::select)
                 }

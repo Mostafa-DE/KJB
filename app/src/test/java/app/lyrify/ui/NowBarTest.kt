@@ -6,6 +6,7 @@ import app.lyrify.data.LyricsStatus
 import app.lyrify.media.CurrentTrack
 import app.lyrify.media.Player
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 private const val PATH = "/music/Paper Lanterns.mp3"
@@ -68,9 +69,48 @@ class NowBarTest {
 
     @Test
     fun `the position never runs past the song's end or before its start`() {
-        assertEquals(200_000L, sessionPosition(positionMs = 199_000, reportedAt = 0, speed = 1f, playing = true, now = 9_000, durationMs = 200_000))
+        assertEquals(200_000L, sessionPosition(positionMs = 199_000, reportedAt = 1_000, speed = 1f, playing = true, now = 10_000, durationMs = 200_000))
         assertEquals(0L, sessionPosition(positionMs = -5, reportedAt = 0, speed = 1f, playing = false, now = 0, durationMs = 200_000))
     }
+
+    @Test
+    fun `a session that never said when it reported its position is not moved on`() {
+        assertEquals(10_000L, sessionPosition(positionMs = 10_000, reportedAt = 0, speed = 1f, playing = true, now = 4_000_000, durationMs = 200_000))
+        assertEquals(0.05f, ringShare(sessionPosition(10_000, 0, 1f, true, 4_000_000, 200_000), 200_000), 0.0001f)
+    }
+
+    // Controlling the other app
+
+    @Test
+    fun `the bar controls the session the listener follows, never another session of the same app`() {
+        val first = FakeSession("com.example.player", token = "first")
+        val second = FakeSession("com.example.player", token = "second")
+        assertEquals(second, followedSession(listOf(first, second), followed = "second", token = FakeSession::token))
+        assertEquals(null, followedSession(listOf(first, second), followed = null, token = FakeSession::token))
+        // The followed session ended: no other session of its app stands in.
+        assertEquals(null, followedSession(listOf(first), followed = "second", token = FakeSession::token))
+    }
+
+    @Test
+    fun `a session that ended or never said its state gives the bar no Play or Pause`() {
+        val toggled = mutableListOf<Boolean>()
+        val companion = NowBarShows.Companion(other, playing = true)
+        val known = OtherPlayback(playing = true, positionMs = 0, reportedAt = 1, speed = 1f, durationMs = 200_000)
+        assertNull(barPlayPause(companion, ownPlayPause = {}, otherPlayback = known, otherToggle = null))
+        assertNull(barPlayPause(companion, ownPlayPause = {}, otherPlayback = null, otherToggle = { toggled += it }))
+        barPlayPause(companion, ownPlayPause = {}, otherPlayback = known, otherToggle = { toggled += it })!!.invoke()
+        assertEquals(listOf(true), toggled)
+        assertNull(barPlayPause(NowBarShows.Hidden, ownPlayPause = {}, otherPlayback = known, otherToggle = { toggled += it }))
+    }
+
+    @Test
+    fun `KJB's own song plays and pauses KJB's own player`() {
+        var pressed = 0
+        barPlayPause(NowBarShows.Own(own(playing = true)), ownPlayPause = { pressed++ }, otherPlayback = null, otherToggle = null)!!.invoke()
+        assertEquals(1, pressed)
+    }
+
+    private data class FakeSession(val packageName: String, val token: String)
 
     @Test
     fun `the ring's share is the position over the length, empty when the length is unknown`() {

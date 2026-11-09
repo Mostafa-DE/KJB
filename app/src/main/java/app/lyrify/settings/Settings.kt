@@ -174,6 +174,8 @@ data class NavSettings(
     val lastTab: DockTab = DockTab.LIBRARY,
     /** The Library tab last open. */
     val libraryTab: LibraryTab = LibraryTab.SONGS,
+    /** The first-run screen was finished with Continue, or skipped on a phone that already had both grants. */
+    val setupDone: Boolean = false,
 )
 
 enum class DockTab { LIBRARY, SEARCH, TOOLS }
@@ -238,7 +240,7 @@ object SettingsJson {
                         "keepAlbumsGapless" to it.keepAlbumsGapless,
                     )
                 },
-                "nav" to settings.nav.let { obj("lastTab" to it.lastTab.name, "libraryTab" to it.libraryTab.name) },
+                "nav" to settings.nav.let { obj("lastTab" to it.lastTab.name, "libraryTab" to it.libraryTab.name, "setupDone" to it.setupDone) },
             ),
         ),
     )
@@ -308,7 +310,7 @@ object SettingsJson {
                 )
             } ?: d.advanced,
             nav = root.section("nav")?.let {
-                NavSettings(lastTab = it.choice("lastTab", d.nav.lastTab), libraryTab = it.choice("libraryTab", d.nav.libraryTab))
+                NavSettings(lastTab = it.choice("lastTab", d.nav.lastTab), libraryTab = it.choice("libraryTab", d.nav.libraryTab), setupDone = it.flag("setupDone", d.nav.setupDone))
             } ?: d.nav,
         )
     }

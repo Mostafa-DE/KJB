@@ -53,13 +53,15 @@
 
     <!-- First run -->
     <string name="setup_intro">Synced lyrics for your music</string>
-    <string name="onboarding_steps">Two quick steps</string>
+    <string name="onboarding_steps">Quick setup</string>
     <string name="setup_notifications_title">See what\'s playing</string>
     <string name="setup_notifications_detail">Only for music you play in other apps.</string>
     <string name="setup_notifications_action">Open notification access</string>
     <string name="setup_files_title">Save lyrics files</string>
     <string name="setup_files_detail">Next to your songs. KJB never changes your music on its own.</string>
     <string name="setup_allow">Allow</string>
+    <string name="setup_not_now">Not now</string>
+    <string name="setup_continue">Continue</string>
     <string name="setup_done">On</string>
     <string name="setup_restricted_title">Greyed out?</string>
     <string name="setup_restricted_detail">Your phone blocks this for apps from outside an app store. In App info, tap the three dots, then Allow restricted settings. Then try again.</string>

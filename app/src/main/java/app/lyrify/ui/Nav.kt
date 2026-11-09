@@ -207,8 +207,12 @@ data class NavState(
     /** The Now bar and the dock show: over Library and Search pages and on Tools' root; Tools pages and views are full screens. */
     val chrome: Boolean get() = views.isEmpty() && (tab != DockTab.TOOLS || pages.isEmpty())
 
-    /** A dock tap: another tab (the one left joins the history), or the tab shown popped to its root, or at its root to the top. */
+    /**
+     * A dock tap: another tab (the one left joins the history), or the tab shown popped to its root, or at its root to
+     * the top. Opening Search also counts for Search: its field takes focus whenever the tab opens.
+     */
     fun select(tab: DockTab): NavState = when {
+        tab == DockTab.SEARCH && tab != this.tab -> visit(tab).copy(views = emptyList(), reselects = reselects + (tab to reselectsOf(tab) + 1))
         tab != this.tab -> visit(tab).copy(views = emptyList())
         pages.isNotEmpty() -> copy(stacks = stacks - tab, views = emptyList())
         else -> copy(reselects = reselects + (tab to reselectsOf(tab) + 1), views = emptyList())
@@ -297,6 +301,18 @@ data class NavState(
             null
         }
     }
+}
+
+/** The extra on a notification's tap that names where KJB opens ([destinationPage]); MainActivity reads it. */
+const val EXTRA_DESTINATION: String = "app.lyrify.destination"
+
+/** The AI's notifications (the night's run, the model download) open Tools > AI lyrics. */
+const val DESTINATION_AI: String = "ai"
+
+/** The page [destination] names; null for none, or one this version does not know. */
+fun destinationPage(destination: String?): Page? = when (destination) {
+    DESTINATION_AI -> Page.Ai
+    else -> null
 }
 
 /** The saved-state key of the page at the top of [stack] on [tab], or of the tab's root when it is empty. */

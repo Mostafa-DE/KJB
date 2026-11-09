@@ -25,6 +25,8 @@ import androidx.work.workDataOf
 import app.lyrify.LOG_TAG
 import app.lyrify.R
 import app.lyrify.USER_AGENT
+import app.lyrify.ui.DESTINATION_AI
+import app.lyrify.ui.EXTRA_DESTINATION
 import app.lyrify.ui.MainActivity
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -225,7 +227,7 @@ object ModelDownloads {
         val open = PendingIntent.getActivity(
             context,
             0,
-            Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra(EXTRA_DESTINATION, DESTINATION_AI),
             PendingIntent.FLAG_IMMUTABLE,
         )
         val notification = Notification.Builder(context, CHANNEL)

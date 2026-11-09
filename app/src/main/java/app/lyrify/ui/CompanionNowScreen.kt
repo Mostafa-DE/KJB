@@ -409,9 +409,9 @@ private fun TileContent(chevron: Boolean, content: @Composable RowScope.() -> Un
     }
 }
 
-/** "3 lookups failed · Retry": KJB retries by itself, this does it at once. */
+/** "3 lookups failed · Retry": KJB retries by itself, this does it at once; on Companion Now and on Tools. */
 @Composable
-private fun RetryRow(failed: Int, retrying: Boolean, canRetry: Boolean, onRetryFailed: () -> Unit) {
+internal fun RetryRow(failed: Int, retrying: Boolean, canRetry: Boolean, onRetryFailed: () -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         Icon(painterResource(R.drawable.ic_sync_problem), contentDescription = null, tint = LocalStatusColors.current[Tone.ERROR].accent, modifier = Modifier.size(20.dp))
         Text(pluralStringResource(R.plurals.retry_title, failed, failed), style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))

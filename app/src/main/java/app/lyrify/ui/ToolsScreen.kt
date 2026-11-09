@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -106,11 +107,13 @@ private fun ToolLine.text(): String = when (this) {
 
 /**
  * Tools, the third tab: Check these, Duplicates, Tones, Covers & tags and AI lyrics, each with its status and badge,
- * then Settings on its own. The banners say when the song list can't be read or KJB can't see the music app.
+ * then Settings on its own. The banners say when the song list can't be read or KJB can't see the music app; while
+ * lookups failed, "Retry" is here too, whatever plays (2.0 had it on its Now tab).
  */
 @Composable
 fun ToolsScreen(rows: List<ToolRow>, onOpen: (Page) -> Unit) {
     val lyrics = LocalLyrics.current
+    val failed = remember(lyrics.ledger) { lyrics.ledger.counts()[LyricsStatus.ERROR] ?: 0 }
     PageFrame(
         topBar = { under, backdrop ->
             LyrifyTopBar(title = { Text(stringResource(R.string.tools_title), maxLines = 1, overflow = TextOverflow.Ellipsis) }, under = under, backdrop = backdrop)
@@ -118,6 +121,13 @@ fun ToolsScreen(rows: List<ToolRow>, onOpen: (Page) -> Unit) {
     ) { padding ->
         LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding() + 8.dp, bottom = padding.calculateBottomPadding() + 24.dp)) {
             item(key = "banners") { LyricsBanners(lyrics, Modifier.padding(start = ScreenPadding, end = ScreenPadding, bottom = 12.dp)) }
+            if (failed > 0) {
+                item(key = "retry") {
+                    LyrifyCard(Modifier.fillMaxWidth().padding(start = ScreenPadding, end = ScreenPadding, bottom = 16.dp)) {
+                        Box(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) { RetryRow(failed, lyrics.retrying, canRetry = lyrics.connected, lyrics.onRetryFailed) }
+                    }
+                }
+            }
             item(key = "tools") {
                 GroupedRows {
                     rows.filter { it.tool != Tool.SETTINGS }.forEachIndexed { index, row -> ToolRowView(row, first = index == 0) { onOpen(row.tool.page) } }

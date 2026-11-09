@@ -26,6 +26,18 @@ data class Access(val notifications: Boolean, val allFiles: Boolean) {
 }
 
 /**
+ * Whether the first-run screen shows, given whether it [was] showing (null when KJB just opened). On opening: unless All
+ * files access is on and setup was finished before ([setupDone]) or the phone already has both grants (an update from
+ * 2.0). Once showing, until the user taps Continue (which needs All files access). Afterwards, again whenever All files
+ * access is off.
+ */
+fun setupShows(access: Access, setupDone: Boolean, was: Boolean?): Boolean = when (was) {
+    null -> !access.allFiles || !(setupDone || access.notifications)
+    true -> true
+    false -> !access.allFiles
+}
+
+/**
  * True when KJB is exempt from battery optimisation (battery use "Unrestricted"): the phone then lets it start the
  * AI's foreground service from the background at night.
  */

@@ -1,17 +1,21 @@
 package app.lyrify.ui
 
 import android.os.Build
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
@@ -32,14 +36,20 @@ import app.lyrify.overnight.AiLyrics
 import app.lyrify.overnight.AiQueue
 import app.lyrify.overnight.audioWithoutLyrics
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
+    /** Where a notification's tap asked KJB to open, until the shell has opened it. */
+    private val destination = MutableStateFlow<Page?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        // A turn of the phone or a restore after process death delivers the same intent again: it was handled then.
+        if (savedInstanceState == null) destination.value = destinationPage(intent.getStringExtra(EXTRA_DESTINATION))
         // The stored AI switch is the truth: a schedule that got lost is made again.
         lifecycleScope.launch(logFailures) { AiLyrics.reconcile(applicationContext) }
         val ledger = LedgerRepository(this)
@@ -47,16 +57,24 @@ class MainActivity : ComponentActivity() {
             LyrifyTheme {
                 // The app's one message queue: the shell shows it above the dock, a sheet or full screen above its buttons.
                 CompositionLocalProvider(LocalToasts provides remember { ToastState() }) {
-                    App(ledger)
+                    App(ledger, destination.collectAsStateWithLifecycle().value) { destination.value = null }
                 }
             }
         }
     }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        destinationPage(intent.getStringExtra(EXTRA_DESTINATION))?.let { destination.value = it }
+    }
 }
 
-/** Onboarding until All files access is on, then the app's shell; collects what every screen shows. */
+/**
+ * The first-run screen while [setupShows] says so, then the app's shell, opened at [destination] when a notification
+ * asked for a page; collects what every screen shows.
+ */
 @Composable
-private fun App(ledger: LedgerStore) {
+private fun App(ledger: LedgerStore, destination: Page?, onDestinationOpened: () -> Unit) {
     val context = LocalContext.current
     val resources = LocalResources.current
     val toasts = LocalToasts.current
@@ -74,17 +92,26 @@ private fun App(ledger: LedgerStore) {
         onPauseOrDispose { }
     }
 
-    if (!access.complete) {
+    // Setup and the shell's last tab both come from the settings: wait for their first read.
+    val settings = store.settings.collectAsStateWithLifecycle(initialValue = null).value ?: return
+    // Null until decided on opening; then the setup screen stays until Continue, and comes back without All files access.
+    var setup by rememberSaveable { mutableStateOf<Boolean?>(null) }
+    val showsSetup = setupShows(access, settings.nav.setupDone, setup)
+    SideEffect { setup = showsSetup }
+    // Finished with Continue, or skipped by a phone that already had both grants (an update from 2.0): not shown again.
+    LaunchedEffect(showsSetup, settings.nav.setupDone) {
+        if (!showsSetup && !settings.nav.setupDone) store.update { it.copy(nav = it.nav.copy(setupDone = true)) }
+    }
+    if (showsSetup) {
         OnboardingScreen(
             access = access,
             onOpenNotificationAccess = { context.startFirst(notificationAccessIntents(context)) },
             onOpenAllFilesAccess = { context.startFirst(allFilesAccessIntents(context)) },
             onOpenAppInfo = { context.startFirst(appInfoIntents(context)) },
+            onContinue = { setup = false },
         )
         return
     }
-    // The shell opens on the last tab, so it waits for the settings' first read.
-    val settings = store.settings.collectAsStateWithLifecycle(initialValue = null).value ?: return
     val state by ledger.ledger.collectAsStateWithLifecycle(initialValue = LedgerState())
     val track by NowPlaying.track.collectAsStateWithLifecycle()
     val sweep by NowPlaying.sweep.collectAsStateWithLifecycle()
@@ -155,6 +182,8 @@ private fun App(ledger: LedgerStore) {
         // Retries run in the listener's queue sweep.
         onRetryFailed = NowPlaying::requestRetry,
         onRemove = { Lyrify.remove(context, it) },
+        destination = destination,
+        onDestinationOpened = onDestinationOpened,
     )
 }
 

@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -19,7 +20,7 @@ import app.lyrify.settings.DockTab
 
 /**
  * Search, the second tab, at its root: the field at the top, focused when the tab opens and when Search is tapped
- * again. Until L2: 2.0's text filter over the songs KJB knows.
+ * again, not when the phone turns. Until L2: 2.0's text filter over the songs KJB knows.
  */
 @Composable
 fun SearchPage() {
@@ -28,7 +29,11 @@ fun SearchPage() {
     val focus = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
     val reselects = nav.state.reselectsOf(DockTab.SEARCH)
+    // Kept across a turn of the phone, so only opening the tab or tapping it again asks for the keyboard.
+    var handled by rememberSaveable { mutableIntStateOf(0) }
     LaunchedEffect(reselects) {
+        if (reselects == handled) return@LaunchedEffect
+        handled = reselects
         // The field attaches its requester in the frame the tab shows.
         withFrameNanos { }
         try {

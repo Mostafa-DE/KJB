@@ -1,6 +1,7 @@
 package app.lyrify.media
 
 import android.graphics.Bitmap
+import android.media.session.MediaSession
 import app.lyrify.data.LedgerState
 import app.lyrify.data.LyricsStatus
 import kotlinx.coroutines.channels.BufferOverflow
@@ -78,6 +79,11 @@ object NowPlaying {
     private val _sweep = MutableStateFlow<SweepProgress?>(null)
     val sweep: StateFlow<SweepProgress?> = _sweep.asStateFlow()
 
+    private val _followed = MutableStateFlow<MediaSession.Token?>(null)
+
+    /** The media session the listener follows, so the Now bar controls that one and no other session of its app. */
+    val followed: StateFlow<MediaSession.Token?> = _followed.asStateFlow()
+
     private val _retryRequests = MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
 
     /** Handled by the connected listener's sweep; a press with no listener connected is dropped. */
@@ -109,12 +115,18 @@ object NowPlaying {
         _connected.value = false
         _track.value = null
         _sweep.value = null
+        _followed.value = null
     }
 
     /** Ignored unless [connection] is the newest one: work that outlives its listener must not show. */
     @Synchronized
     internal fun setTrack(connection: ListenerConnection, track: CurrentTrack?) {
         if (current === connection) _track.value = track
+    }
+
+    @Synchronized
+    internal fun setFollowed(connection: ListenerConnection, token: MediaSession.Token?) {
+        if (current === connection) _followed.value = token
     }
 
     @Synchronized

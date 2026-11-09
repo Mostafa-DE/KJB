@@ -119,6 +119,35 @@ class NavTest {
         assertEquals(emptyList<DockTab>(), top.history)
     }
 
+    @Test
+    fun `opening Search from another tab asks its field for focus, coming back to Library keeps its place`() {
+        val search = NavState.start(DockTab.LIBRARY).select(DockTab.SEARCH)
+        assertEquals(1, search.reselectsOf(DockTab.SEARCH))
+        assertEquals(0, search.select(DockTab.LIBRARY).reselectsOf(DockTab.LIBRARY))
+        assertEquals(2, search.select(DockTab.SEARCH).reselectsOf(DockTab.SEARCH))
+    }
+
+    // Notifications
+
+    @Test
+    fun `a tap on the AI's notifications opens Tools, AI lyrics`() {
+        assertEquals(Page.Ai, destinationPage(DESTINATION_AI))
+        assertNull(destinationPage(null))
+        assertNull(destinationPage("radio"))
+        val opened = NavState.start(DockTab.LIBRARY).show(FullScreen.CompanionNow).open(destinationPage(DESTINATION_AI)!!)
+        assertEquals(DockTab.TOOLS, opened.tab)
+        assertEquals(listOf<Page>(Page.Ai), opened.pages)
+        assertEquals(emptyList<FullScreen>(), opened.views)
+    }
+
+    @Test
+    fun `the AI run's and the model download's notifications carry the AI as their destination`() {
+        // Unit tests run in the module's folder.
+        listOf("src/main/java/app/lyrify/overnight/AiWorker.kt", "src/main/java/app/lyrify/models/ModelDownloadWorker.kt").forEach { path ->
+            assertTrue(path, java.io.File(path).readText().contains(".putExtra(EXTRA_DESTINATION, DESTINATION_AI)"))
+        }
+    }
+
     // What shows
 
     @Test

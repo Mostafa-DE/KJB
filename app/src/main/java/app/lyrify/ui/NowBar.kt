@@ -3,6 +3,7 @@ package app.lyrify.ui
 import android.content.ComponentName
 import android.media.MediaMetadata
 import android.media.session.MediaController
+import android.media.session.MediaSession
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
 import android.os.Handler
@@ -117,10 +118,11 @@ fun nowOrb(track: CurrentTrack, ledger: LedgerState): NowOrb = NowOrb(
 
 /**
  * Where another app's song is at [now] (elapsed realtime): the [positionMs] its session reported at [reportedAt], moved
- * on at [speed] while [playing], kept between the start and [durationMs].
+ * on at [speed] while [playing], kept between the start and [durationMs]. A session that never said when ([reportedAt]
+ * 0) is not moved on.
  */
 fun sessionPosition(positionMs: Long, reportedAt: Long, speed: Float, playing: Boolean, now: Long, durationMs: Long?): Long {
-    val moved = if (playing) positionMs + ((now - reportedAt) * speed).toLong() else positionMs
+    val moved = if (playing && reportedAt > 0) positionMs + ((now - reportedAt) * speed).toLong() else positionMs
     return moved.coerceIn(0, durationMs?.takeIf { it > 0 } ?: Long.MAX_VALUE)
 }
 
@@ -135,20 +137,20 @@ fun ringShare(positionMs: Long, durationMs: Long?): Float =
 data class OtherPlayback(val playing: Boolean, val positionMs: Long, val reportedAt: Long, val speed: Float, val durationMs: Long?)
 
 /**
- * The media session of the app [packageName] (the app the listener follows), for the Now bar's ring and Play/Pause.
- * Needs notification access; null without it, or while that app has no session.
+ * The session the listener follows ([followed], NowPlaying.followed), for the Now bar's ring and Play/Pause: its play
+ * state as it changes, and its controls. Null without notification access, and from the moment that session ends.
  */
 @Composable
-fun rememberOtherSession(packageName: String?): MediaController? {
+fun rememberOtherSession(followed: MediaSession.Token?): OtherSession? {
     val context = LocalContext.current
-    var controller by remember(packageName) { mutableStateOf<MediaController?>(null) }
-    DisposableEffect(context, packageName) {
+    var controller by remember(followed) { mutableStateOf<MediaController?>(null) }
+    DisposableEffect(context, followed) {
         val manager = context.getSystemService(MediaSessionManager::class.java)
         val listener = ComponentName(context, NowPlayingListener::class.java)
-        val changed = MediaSessionManager.OnActiveSessionsChangedListener { sessions -> controller = sessions?.firstOrNull { it.packageName == packageName } }
-        if (packageName != null) {
+        val changed = MediaSessionManager.OnActiveSessionsChangedListener { sessions -> controller = followedSession(sessions.orEmpty(), followed) { it.sessionToken } }
+        if (followed != null) {
             try {
-                controller = manager.getActiveSessions(listener).firstOrNull { it.packageName == packageName }
+                controller = followedSession(manager.getActiveSessions(listener), followed) { it.sessionToken }
                 manager.addOnActiveSessionsChangedListener(changed, listener)
             } catch (e: SecurityException) {
                 // Notification access was turned off: the bar shows the song without its controls.
@@ -157,31 +159,46 @@ fun rememberOtherSession(packageName: String?): MediaController? {
         }
         onDispose { manager.removeOnActiveSessionsChangedListener(changed) }
     }
-    return controller
+    val session = remember(controller) { controller?.let(::OtherSession) }
+    DisposableEffect(session) {
+        session?.let { it.controller.registerCallback(it.callback, Handler(Looper.getMainLooper())) }
+        onDispose { session?.let { it.controller.unregisterCallback(it.callback) } }
+    }
+    return session?.takeUnless { it.ended }
 }
 
-/** [controller]'s play state and position, as they change; null without a session or a state. */
-@Composable
-fun rememberOtherPlayback(controller: MediaController?): OtherPlayback? {
-    var playback by remember(controller) { mutableStateOf(controller?.let(::playbackOf)) }
-    DisposableEffect(controller) {
-        val callback = object : MediaController.Callback() {
-            override fun onPlaybackStateChanged(state: PlaybackState?) {
-                playback = controller?.let(::playbackOf)
-            }
+/** Another app's session while the Now bar shows it: its [playback] as it changes, and whether it [ended]. */
+@Stable
+class OtherSession internal constructor(internal val controller: MediaController) {
+    var playback: OtherPlayback? by mutableStateOf(playbackOf(controller))
+        private set
 
-            override fun onMetadataChanged(metadata: MediaMetadata?) {
-                playback = controller?.let(::playbackOf)
-            }
+    var ended: Boolean by mutableStateOf(false)
+        private set
 
-            override fun onSessionDestroyed() {
-                playback = null
-            }
+    internal val callback = object : MediaController.Callback() {
+        override fun onPlaybackStateChanged(state: PlaybackState?) {
+            playback = playbackOf(controller)
         }
-        controller?.registerCallback(callback, Handler(Looper.getMainLooper()))
-        onDispose { controller?.unregisterCallback(callback) }
+
+        override fun onMetadataChanged(metadata: MediaMetadata?) {
+            playback = playbackOf(controller)
+        }
+
+        override fun onSessionDestroyed() {
+            ended = true
+            playback = null
+        }
     }
-    return playback
+
+    /** Pauses the app while it [playing], else plays it, as its own button would; a session that died meanwhile does nothing. */
+    fun playPause(playing: Boolean) {
+        try {
+            if (playing) controller.transportControls.pause() else controller.transportControls.play()
+        } catch (e: RuntimeException) {
+            Log.w(LOG_TAG, "now bar: the other app's session did not take the command (${e.javaClass.simpleName})")
+        }
+    }
 }
 
 private fun playbackOf(controller: MediaController): OtherPlayback? {
@@ -195,9 +212,24 @@ private fun playbackOf(controller: MediaController): OtherPlayback? {
     )
 }
 
-/** Play or pause the other app, as its own button would. */
-fun MediaController.playPause(playing: Boolean) {
-    if (playing) transportControls.pause() else transportControls.play()
+/**
+ * The session among [sessions] whose [token] is the one the listener follows ([followed], NowPlaying.followed); null
+ * when it is gone. Never another session of the same app: that one may be paused, or another player of the app.
+ */
+fun <C, T> followedSession(sessions: List<C>, followed: T?, token: (C) -> T): C? = followed?.let { sessions.firstOrNull { session -> token(session) == it } }
+
+/**
+ * The bar's Play/Pause: KJB's own player's; for another app's song only while its session lives ([otherToggle], which
+ * takes whether it plays) and has told its state ([otherPlayback]), so a session that ended gives none.
+ */
+fun barPlayPause(bar: NowBarShows, ownPlayPause: () -> Unit, otherPlayback: OtherPlayback?, otherToggle: ((Boolean) -> Unit)?): (() -> Unit)? = when (bar) {
+    NowBarShows.Hidden -> null
+    is NowBarShows.Own -> ownPlayPause
+    is NowBarShows.Companion -> if (otherToggle != null && otherPlayback != null) {
+        { otherToggle(otherPlayback.playing) }
+    } else {
+        null
+    }
 }
 
 // The bar

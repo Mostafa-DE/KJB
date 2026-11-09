@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -50,12 +51,13 @@ import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import app.lyrify.R
 
-/** Where a first-run step stands: done ones say "On", the required one not done is the card. */
-private enum class StepState { DONE, OPEN }
+/** Where a first-run step stands: done ones say "On", skipped ones "Not now", the required one not done is the card. */
+private enum class StepState { DONE, SKIPPED, OPEN }
 
 /**
- * Shown until All files access is on: the brand hero, that one step, then two optional ones on a rail, each with its
- * reason (notification access for music played in other apps, and battery use).
+ * The first run: the brand hero, All files access (required), then two optional steps on a rail, each with its reason
+ * (notification access, only for music played in other apps; battery use). Continue, once All files access is on, opens
+ * the app ([onContinue]).
  */
 @Composable
 fun OnboardingScreen(
@@ -63,9 +65,11 @@ fun OnboardingScreen(
     onOpenNotificationAccess: () -> Unit,
     onOpenAllFilesAccess: () -> Unit,
     onOpenAppInfo: () -> Unit,
+    onContinue: () -> Unit,
 ) {
     LightStatusBarIcons(false)
     var help by rememberSaveable { mutableStateOf<String?>(null) }
+    var notNow by rememberSaveable { mutableStateOf(false) }
     BoxWithConstraints(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface)) {
         val heroHeight = maxHeight * HERO_SHARE
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
@@ -87,13 +91,18 @@ fun OnboardingScreen(
                 Column(Modifier.navigationBarsPadding().padding(start = ScreenPadding, end = ScreenPadding, top = 20.dp, bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     SectionTitle(stringResource(R.string.onboarding_steps))
                     val files = if (access.allFiles) StepState.DONE else StepState.OPEN
-                    val notifications = if (access.notifications) StepState.DONE else StepState.OPEN
+                    val notifications = when {
+                        access.notifications -> StepState.DONE
+                        notNow -> StepState.SKIPPED
+                        else -> StepState.OPEN
+                    }
                     Column {
                         Step(1, R.string.setup_files_title, R.string.setup_files_detail, files) {
                             AllowButton(files, onOpenAllFilesAccess)
                         }
                         Step(2, R.string.setup_notifications_title, R.string.setup_notifications_detail, notifications, optional = true) {
                             LyrifyButton(stringResource(R.string.setup_allow), onClick = onOpenNotificationAccess, kind = ButtonKind.SECONDARY, compact = true)
+                            LyrifyButton(stringResource(R.string.setup_not_now), onClick = { notNow = true }, kind = ButtonKind.GHOST, compact = true)
                             LyrifyButton(stringResource(R.string.setup_restricted_title), onClick = { help = RESTRICTED }, kind = ButtonKind.GHOST, compact = true)
                         }
                         Step(
@@ -109,6 +118,7 @@ fun OnboardingScreen(
                         }
                     }
                     Fact(R.drawable.ic_lock, stringResource(R.string.setup_privacy), Modifier.padding(top = 8.dp), style = MaterialTheme.typography.bodySmall)
+                    LyrifyButton(stringResource(R.string.setup_continue), onClick = onContinue, enabled = access.complete, modifier = Modifier.fillMaxWidth().padding(top = 8.dp))
                 }
             }
         }
@@ -137,7 +147,8 @@ private fun AllowButton(state: StepState, onClick: () -> Unit) {
 
 /**
  * One step on the rail: its circle (1, 2, 3; a coral check once done) and the rail down to the next step, coral below a
- * done step, so the sung line runs down as steps are done. Done: the title and "On", one line. The step to do now: a
+ * done step, so the sung line runs down as steps are done. Done: the title and "On", one line; skipped, the same muted
+ * with "Not now". The step to do now: a
  * raised card with the title, the detail and [actions]. [optional]: its tag, the detail and the help circle, no card.
  */
 @Composable
@@ -166,6 +177,10 @@ private fun Step(
                 done -> Row(verticalAlignment = Alignment.CenterVertically, modifier = heading) {
                     Text(stringResource(title), style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
                     Text(stringResource(R.string.setup_done), style = MaterialTheme.typography.labelLarge, color = highlight)
+                }
+                state == StepState.SKIPPED -> Row(verticalAlignment = Alignment.CenterVertically, modifier = heading) {
+                    Text(stringResource(title), style = MaterialTheme.typography.titleMedium, color = colors.onSurfaceVariant, modifier = Modifier.weight(1f))
+                    Text(stringResource(R.string.setup_not_now), style = MaterialTheme.typography.labelLarge, color = colors.onSurfaceVariant)
                 }
                 current -> {
                     val shape = RoundedCornerShape(24.dp)
@@ -200,7 +215,7 @@ private fun Step(
 
 @Composable
 private fun StepActions(actions: @Composable () -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.padding(top = 8.dp)) { actions() }
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.padding(top = 8.dp)) { actions() }
 }
 
 /** The step's number in a ring (coral on the step to do now), or a coral disc with a check once it is done. Decorative. */

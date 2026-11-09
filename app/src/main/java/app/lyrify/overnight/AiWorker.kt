@@ -43,6 +43,8 @@ import app.lyrify.models.ModelSpec
 import app.lyrify.models.ModelStore
 import app.lyrify.models.NpuChips
 import app.lyrify.models.inForeground
+import app.lyrify.ui.DESTINATION_AI
+import app.lyrify.ui.EXTRA_DESTINATION
 import app.lyrify.ui.MainActivity
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -469,7 +471,7 @@ object AiLyrics {
         val open = PendingIntent.getActivity(
             context,
             0,
-            Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra(EXTRA_DESTINATION, DESTINATION_AI),
             PendingIntent.FLAG_IMMUTABLE,
         )
         val notification = Notification.Builder(context, CHANNEL)

@@ -220,6 +220,7 @@ class NowPlayingListener : NotificationListenerService() {
         if (!follower.running) return
         val chosen = activeSessions.choose(follower.followed)
         if (!follower.follow(chosen)) return
+        connection?.let { NowPlaying.setFollowed(it, chosen?.sessionToken) }
         activeQueueId = chosen?.playbackState?.activeQueueItemId
         Log.d(LOG_TAG, if (chosen != null) "following 1 media session" else "no media session followed")
         changed()
