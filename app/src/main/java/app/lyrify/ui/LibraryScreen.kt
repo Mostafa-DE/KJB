@@ -98,7 +98,8 @@ fun LibraryPage() {
     val reselect = nav.state.reselectsOf(DockTab.LIBRARY)
     val sheets = rememberSongSheets()
     var menu by remember { mutableStateOf(false) }
-    // B1 (m3u): val m3u = rememberM3uActions() here, for the Playlists tab's "⋯" rows and its import sheet.
+    // The Playlists tab's "⋯" rows and its import sheet (B1).
+    val m3u = rememberM3uActions()
     LifecycleResumeEffect(ui.state) {
         // All files access may have been turned on meanwhile.
         if (ui.state == LibraryState.Unreadable) LibraryGraph.repository(context).refresh()
@@ -118,7 +119,7 @@ fun LibraryPage() {
                                 menu = false
                                 sheets.show(OpenSheet.NewPlaylist(emptyList()))
                             })
-                            // B1 (m3u): PlaylistsM3uRows(m3u, close = { menu = false }) here: Export all and Import.
+                            PlaylistsM3uRows(m3u, close = { menu = false })
                         }
                     }
                 },
@@ -148,7 +149,7 @@ fun LibraryPage() {
         }
     }
     SongSheetsHost(sheets, ui)
-    // B1 (m3u): M3uImportSheet(m3u) here, on the Playlists tab.
+    M3uImportSheet(m3u)
 }
 
 /** While the songs are read, nothing; when they cannot be, why, and the way to Settings. */

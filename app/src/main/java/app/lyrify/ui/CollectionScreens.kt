@@ -71,7 +71,7 @@ import java.util.concurrent.TimeUnit
 
 /**
  * Menu rows other milestones fill (plan section 4), each with a one-line change here; until then null, and the menu
- * does not show. B1's m3u rows are marked where they go, in [PlaylistPage] and LibraryPage.
+ * does not show.
  */
 internal object CollectionSlots {
     /** T3: "Rename artist" and "Merge with…" in an artist page's "⋯" (its own menu rows); [close] closes the menu. */
@@ -358,7 +358,7 @@ private fun PlaylistPage(ui: LibraryUi, library: Library, id: String) {
     var renaming by rememberSaveable { mutableStateOf(false) }
     var deleting by rememberSaveable { mutableStateOf(false) }
     var menu by remember { mutableStateOf(false) }
-    // B1 (m3u): val m3u = rememberM3uActions() here, for "Export" in the "⋯".
+    val m3u = rememberM3uActions()
     val playlist = ui.playlists.playlist(id) ?: return MissingPage(ui)
     // Each song with its place in the playlist, for "Remove from playlist"; songs gone or hidden are left out.
     val entries = remember(playlist, library, byTitle, ui.settings.library) {
@@ -375,7 +375,7 @@ private fun PlaylistPage(ui: LibraryUi, library: Library, id: String) {
                         menu = false
                         renaming = true
                     })
-                    // B1 (m3u): PlaylistExportRow(m3u, playlist, close = { menu = false }) here.
+                    PlaylistExportRow(m3u, playlist, close = { menu = false })
                     MenuRow(stringResource(R.string.lib_delete_playlist), R.drawable.ic_delete, destructive = true, onClick = {
                         menu = false
                         deleting = true
