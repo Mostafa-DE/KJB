@@ -9,8 +9,11 @@ import android.provider.MediaStore
 import app.lyrify.data.SharedWrite
 import app.lyrify.data.SharedWrites
 import app.lyrify.library.Song
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.util.concurrent.TimeUnit
 
@@ -151,11 +154,11 @@ class SongTrash(
     val trashed: List<TrashedSong> get() = host.memory.trashed.sortedByDescending { it.trashedAt }
 
     /**
-     * "Move to trash" for [files]: KJB's own dialog asks first ([TrashStep.Confirm]). False while another answer is
-     * awaited or nothing is given: nothing is asked.
+     * "Move to trash" for [files]: KJB's own dialog asks first ([TrashStep.Confirm]). False while a dialog is open (KJB's,
+     * or the phone's to trash or restore), another answer is awaited, or nothing is given: nothing is asked.
      */
     fun ask(files: List<AudioFile>): Boolean {
-        if (files.isEmpty() || host.memory.pending.isNotEmpty() || host.step is TrashStep.System) return false
+        if (files.isEmpty() || host.memory.pending.isNotEmpty() || host.step != TrashStep.None) return false
         host.step { TrashStep.Confirm(files) }
         return true
     }
@@ -166,30 +169,44 @@ class SongTrash(
     }
 
     /**
-     * "Move to trash" in KJB's dialog: the files are remembered (so an answer the app does not live to hear is still
-     * settled), then their MediaStore ids are returned for the phone's own dialog ([MediaStoreTrash.request]). A file
-     * that changed since it was listed blocks the request.
+     * "Move to trash" in KJB's dialog, which shows [shown]: the files are remembered (so an answer the app does not live
+     * to hear is still settled), then their MediaStore ids are returned for the phone's own dialog
+     * ([MediaStoreTrash.request]). Nothing is asked unless that dialog is open on [shown], and a file that changed since it
+     * was listed blocks the request. Cancelled before it returns (the page went), the phone's dialog never opens, so
+     * nothing is left waiting for its answer and a later trash can ask.
      */
-    suspend fun confirm(): Confirmation {
-        val files = (host.step as? TrashStep.Confirm)?.files ?: return Confirmation.NotAsked
-        val now = withContext(io) { rows(files.map { it.id }) }
-        if (now == null) {
-            host.step { TrashStep.None }
-            return Confirmation.Unavailable
+    suspend fun confirm(shown: List<AudioFile>): Confirmation {
+        if (host.step != TrashStep.Confirm(shown)) return Confirmation.NotAsked
+        try {
+            val now = withContext(io) { rows(shown.map { it.id }) }
+            if (now == null) {
+                host.step { TrashStep.None }
+                return Confirmation.Unavailable
+            }
+            val changed = shown.any { file ->
+                val row = now[file.id]
+                row == null || row.path != file.path || row.size != file.size || row.displayName != file.displayName
+            }
+            if (changed) {
+                host.step { TrashStep.None }
+                host.changed(shown.map { it.id }.toSet())
+                return Confirmation.Changed
+            }
+            if (host.step != TrashStep.Confirm(shown)) return Confirmation.NotAsked
+            // The memory and the step change together, whatever happens to the caller meanwhile.
+            withContext(NonCancellable) {
+                host.commit(emptySet()) { it.copy(pending = shown) }
+                host.step { TrashStep.System(shown) }
+            }
+            currentCoroutineContext().ensureActive()
+            return Confirmation.Ask(shown.map { it.id })
+        } catch (e: CancellationException) {
+            withContext(NonCancellable) {
+                host.step { if (it == TrashStep.Confirm(shown) || it == TrashStep.System(shown)) TrashStep.None else it }
+                if (host.memory.pending == shown) host.commit(emptySet()) { it.copy(pending = emptyList()) }
+            }
+            throw e
         }
-        val changed = files.any { file ->
-            val row = now[file.id]
-            row == null || row.path != file.path || row.size != file.size || row.displayName != file.displayName
-        }
-        if (changed) {
-            host.step { TrashStep.None }
-            host.changed(files.map { it.id }.toSet())
-            return Confirmation.Changed
-        }
-        if (host.step != TrashStep.Confirm(files)) return Confirmation.NotAsked
-        withContext(NonCancellable) { host.commit(emptySet()) { it.copy(pending = files) } }
-        host.step { TrashStep.System(files) }
-        return Confirmation.Ask(files.map { it.id })
     }
 
     /**

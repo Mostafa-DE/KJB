@@ -188,8 +188,8 @@ class Duplicates(
     /** "Cancel" in KJB's dialog: nothing changes. */
     fun cancelTrash() = trash.cancel()
 
-    /** "Move to trash" in KJB's dialog ([SongTrash.confirm]); a changed file's group waits for the next scan. */
-    suspend fun confirmTrash(): Confirmation = trash.confirm()
+    /** "Move to trash" in KJB's dialog for the [files] it shows ([SongTrash.confirm]); a changed file's group waits for the next scan. */
+    suspend fun confirmTrash(files: List<AudioFile>): Confirmation = trash.confirm(files)
 
     /** The phone's dialog answered ([SongTrash.answered]); the files it trashed leave the results. */
     suspend fun systemAnswered(approved: Boolean): Trashed = trash.answered(approved)

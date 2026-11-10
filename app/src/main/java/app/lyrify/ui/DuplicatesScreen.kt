@@ -336,7 +336,7 @@ fun DuplicatesScreen(contentPadding: PaddingValues, toasts: ToastState) {
                 // The group shows again with what is left; the message shows above the dock.
                 open = null
                 scope.launch {
-                    when (val confirmation = engine.confirmTrash()) {
+                    when (val confirmation = engine.confirmTrash(confirm.files)) {
                         is Confirmation.Ask -> phoneTrash(confirmation.ids, true)
                         Confirmation.Changed -> toasts.say(resources, R.string.dupes_changed)
                         Confirmation.Unavailable -> toasts.say(resources, R.string.dupes_trash_failed)

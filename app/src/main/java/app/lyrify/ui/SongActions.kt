@@ -547,7 +547,7 @@ fun SongSheetsHost(sheets: SongSheets, ui: LibraryUi, onActed: () -> Unit = {}) 
                     toasts.say(resources, R.string.dupes_trash_failed)
                     return@launch
                 }
-                when (val confirmation = trash.confirm()) {
+                when (val confirmation = trash.confirm(files)) {
                     is Confirmation.Ask -> {
                         onActed()
                         phoneTrash(confirmation.ids, true)
