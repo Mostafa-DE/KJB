@@ -3,6 +3,9 @@ package app.lyrify.player
 import app.lyrify.library.Song
 import app.lyrify.library.SongRef
 import app.lyrify.library.song
+import app.lyrify.stats.FakePlayLog
+import app.lyrify.stats.LoggedPlay
+import app.lyrify.stats.PlayCounter
 import app.lyrify.stats.PlayEvent
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -246,6 +249,44 @@ class QueueBridgeTest {
         assertEquals(3, ids.size)
         // Nothing after the end: no play to report on.
         assertTrue(events.last() is PlayEvent.Ended)
+    }
+
+    /**
+     * What the service sends on a restart: the queue loaded at its place starts a play there, paused ([PlayTracker.start]
+     * with the engine's position, a Position right after the Started). The counter goes on with the play it kept, and a
+     * restored song never played leaves nothing.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `a queue restored after a restart goes on as the play kept before it, and one never played leaves no play`() = runTest {
+        val log = FakePlayLog()
+        val share = MutableStateFlow<Int?>(50)
+        val started = wall
+        val before = PlayTracker(PlayCounter(log, share, backgroundScope), wall = { wall })
+        before.start(refs[0], 180_000, positionMs = 0, playing = true)
+        for (at in 5_000L..60_000L step 5_000L) {
+            wall += 5_000
+            before.position(at, playing = true)
+        }
+        before.position(60_000, playing = false)
+        runCurrent()
+
+        // The app starts again: the player loads the song at its place, paused, then plays it to its end.
+        wall += 600_000
+        val after = PlayTracker(PlayCounter(log, share, backgroundScope), wall = { wall })
+        after.start(refs[0], 180_000, positionMs = 60_000, playing = false)
+        after.position(60_000, playing = true)
+        for (at in 65_000L..175_000L step 5_000L) {
+            wall += 5_000
+            after.position(at, playing = true)
+        }
+        wall += 5_000
+        // On to the next song, which the app stops before it is played: no play of it.
+        after.start(refs[1], 180_000, positionMs = 0, playing = false, naturalEnd = true)
+        after.end()
+        runCurrent()
+
+        assertEquals(listOf(LoggedPlay(refs[0], started, 180_000, counted = true)), log.plays)
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
