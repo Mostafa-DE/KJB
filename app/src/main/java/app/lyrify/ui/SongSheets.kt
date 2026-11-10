@@ -107,6 +107,37 @@ internal fun SongMenuSheet(
     }
 }
 
+/**
+ * An album's or an artist's "⋯", as the song sheet: [art], [title] and [line] at its head, then [rows] (Play next, Add
+ * to, Shuffle, then the album's or the artist's own).
+ */
+@Composable
+internal fun CollectionMenuSheet(title: String, line: String, art: @Composable () -> Unit, rows: List<CollectionRow>, onDismiss: () -> Unit, onRow: (CollectionRow) -> Unit) {
+    LyrifySheet(onDismiss = onDismiss, spacing = 14.dp, padding = 12.dp) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.padding(horizontal = 8.dp)) {
+            art()
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(title, style = SheetSongTitle, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.semantics { heading() })
+                Text(line, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        Column {
+            rows.forEach { row ->
+                when (row) {
+                    CollectionRow.PLAY_NEXT -> ActionRow(R.drawable.ic_queue_play_next, stringResource(R.string.lib_play_next)) { onRow(row) }
+                    CollectionRow.ADD_TO -> ActionRow(R.drawable.ic_playlist_add, stringResource(R.string.lib_add_to), chevron = true) { onRow(row) }
+                    CollectionRow.SHUFFLE -> ActionRow(R.drawable.ic_shuffle, stringResource(R.string.lib_shuffle)) { onRow(row) }
+                    CollectionRow.GO_TO_ARTIST -> ActionRow(R.drawable.ic_person, stringResource(R.string.player_menu_artist)) { onRow(row) }
+                    CollectionRow.COVERS_TAGS -> ActionRow(R.drawable.ic_album, stringResource(R.string.tools_covers)) { onRow(row) }
+                    CollectionRow.EDIT_ALBUM -> ActionRow(R.drawable.ic_edit, stringResource(R.string.lib_edit_album)) { onRow(row) }
+                    CollectionRow.RENAME_ARTIST -> ActionRow(R.drawable.ic_edit, stringResource(R.string.edit_rename_artist)) { onRow(row) }
+                    CollectionRow.MERGE_WITH -> ActionRow(R.drawable.ic_merge, stringResource(R.string.edit_merge_with)) { onRow(row) }
+                }
+            }
+        }
+    }
+}
+
 /** The sheet's head: the cover, the title, and the artist and album as links when their pages exist, with the length. */
 @Composable
 private fun SongSheetHeader(song: Song, title: String, onArtist: (() -> Unit)?, onAlbum: (() -> Unit)?, modifier: Modifier = Modifier) {

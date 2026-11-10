@@ -115,6 +115,63 @@ class SongActionsTest {
         assertEquals(common + SheetRow.MOVE_TO_TRASH, sheetRows(SheetPlace.Queue("q1", 3), coversTags = false, removeFromQueue = false))
     }
 
+    // An album's or an artist's "⋯"
+
+    @Test
+    fun `an album's menu has Play next, Add to, Shuffle, Go to artist, Covers and tags, then Edit album`() {
+        assertEquals(
+            listOf(CollectionRow.PLAY_NEXT, CollectionRow.ADD_TO, CollectionRow.SHUFFLE, CollectionRow.GO_TO_ARTIST, CollectionRow.COVERS_TAGS, CollectionRow.EDIT_ALBUM),
+            albumRows(artistPage = true, coversTags = true),
+        )
+        // An album artist without a page has no Go to artist; until its slot is filled, no Covers & tags.
+        assertEquals(listOf(CollectionRow.PLAY_NEXT, CollectionRow.ADD_TO, CollectionRow.SHUFFLE, CollectionRow.EDIT_ALBUM), albumRows(artistPage = false, coversTags = false))
+    }
+
+    @Test
+    fun `an artist's menu has Play next, Add to, Shuffle, Rename artist and Merge with`() {
+        assertEquals(
+            listOf(CollectionRow.PLAY_NEXT, CollectionRow.ADD_TO, CollectionRow.SHUFFLE, CollectionRow.RENAME_ARTIST, CollectionRow.MERGE_WITH),
+            artistRows(),
+        )
+    }
+
+    @Test
+    fun `each row of an album's or an artist's menu calls its own action, once`() {
+        val calls = mutableListOf<String>()
+        val actions = object : CollectionActions {
+            override fun playNext() { calls += "play next" }
+
+            override fun addTo() { calls += "add to" }
+
+            override fun shuffle() { calls += "shuffle" }
+
+            override fun goToArtist() { calls += "go to artist" }
+
+            override fun coversTags() { calls += "covers and tags" }
+
+            override fun editAlbum() { calls += "edit album" }
+
+            override fun renameArtist() { calls += "rename artist" }
+
+            override fun mergeWith() { calls += "merge with" }
+        }
+        val expected = mapOf(
+            CollectionRow.PLAY_NEXT to "play next",
+            CollectionRow.ADD_TO to "add to",
+            CollectionRow.SHUFFLE to "shuffle",
+            CollectionRow.GO_TO_ARTIST to "go to artist",
+            CollectionRow.COVERS_TAGS to "covers and tags",
+            CollectionRow.EDIT_ALBUM to "edit album",
+            CollectionRow.RENAME_ARTIST to "rename artist",
+            CollectionRow.MERGE_WITH to "merge with",
+        )
+        for (row in CollectionRow.entries) {
+            calls.clear()
+            actions.act(row)
+            assertEquals("$row", listOf(expected.getValue(row)), calls)
+        }
+    }
+
     // Add to
 
     @Test
