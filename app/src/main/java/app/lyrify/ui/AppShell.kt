@@ -529,6 +529,8 @@ private fun SharedTransitionScope.ViewLayers(
                             // The card the player grows in: opaque from its first frame, so the dock stays under it.
                             .drawBehind { drawRect(fill?.value ?: page) },
                         color = Color.Transparent,
+                        // The card is drawn behind, so the Surface cannot tell the ink from it: the page's, light or dark.
+                        contentColor = MaterialTheme.colorScheme.onBackground,
                     ) {
                         // Inside the growing card, the player's own content fades in, and out first on the way back.
                         val content = if (growing) Modifier.animateEnterExit(containerContentEnter(), containerContentExit()) else Modifier

@@ -864,11 +864,7 @@ private fun LyricsPanel(ui: PlayerUi, enabled: Boolean, onFlipBack: () -> Unit, 
                 entry != null -> StatusPill(entry.status)
             }
             Spacer(Modifier.weight(1f))
-            val aa = stringResource(R.string.player_lyrics_text)
-            Box(
-                contentAlignment = Alignment.Center,
-                modifier = Modifier.size(48.dp).clip(CircleShape).clickable(enabled = enabled, role = Role.Button) { onRoute(PlayerRoute.LYRICS_TEXT) }.semantics { contentDescription = aa },
-            ) { Text("Aa", style = AaLetters) }
+            AaButton(enabled) { onRoute(PlayerRoute.LYRICS_TEXT) }
             LyrifyButton(stringResource(R.string.player_full_screen), { nav.show(FullScreen.FullLyrics) }, kind = ButtonKind.GHOST, icon = R.drawable.ic_open_in_full, compact = true, enabled = enabled)
         }
         Box(Modifier.weight(1f).fillMaxWidth()) {

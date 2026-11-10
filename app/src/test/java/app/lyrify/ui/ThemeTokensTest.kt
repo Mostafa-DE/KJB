@@ -210,4 +210,18 @@ class ThemeTokensTest {
         assertTrue(nowBar.contains("color = ink.title"))
         assertTrue(nowBar.contains("color = ink.line"))
     }
+
+    @Test
+    fun `a view's card is drawn behind its content, which still takes the page's ink, so nothing in it is left black on dark`() {
+        // Read from the source, as above: the card (the player's included) draws its own fill behind a see-through
+        // Surface, so the Surface must still hand its content the page's ink, or every word and icon without a colour of
+        // its own (the lyrics' "Aa") falls back to black.
+        val source = { name: String -> java.io.File("src/main/java/app/lyrify/ui/$name").readText() }
+        assertTrue(Regex("color = Color\\.Transparent,\\s*(//[^\\n]*\\s*)?contentColor = MaterialTheme\\.colorScheme\\.onBackground,").containsMatchIn(source("AppShell.kt")))
+        listOf(LightColors, DarkColors).forEach { scheme -> assertTrue(contrast(scheme.onBackground, scheme.background) >= 4.5f) }
+        // And "Aa", on the lyrics panel and on full lyrics, is one button in the surface's own ink.
+        assertTrue(source("LyricsViews.kt").contains("Text(\"Aa\", style = AaLetters, color = MaterialTheme.colorScheme.onSurface)"))
+        assertTrue(source("PlayerScreen.kt").contains("AaButton(enabled)"))
+        listOf(LightColors, DarkColors).forEach { scheme -> assertTrue(contrast(scheme.onSurface, scheme.surfaceContainerLow) >= 4.5f) }
+    }
 }
