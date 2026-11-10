@@ -201,10 +201,7 @@ fun AppShell(
     val resting = layer.takeIf { swipe.taking !is BackTaking.Page }
     LaunchedEffect(resting) {
         val target = resting ?: return@LaunchedEffect
-        when {
-            pages.currentState == target && pages.targetState != target -> pages.snapTo(target)
-            pages.currentState != target || pages.targetState != target -> pages.animateTo(target)
-        }
+        if (pages.currentState != target || pages.targetState != target) pages.animateTo(target)
     }
     // Pages and the tab history; a page's own back (selection, a page's sheet) is composed later and comes first.
     PredictiveBackHandler(enabled = state.views.isEmpty() && (state.pages.isNotEmpty() || state.history.isNotEmpty())) { events ->
@@ -574,10 +571,10 @@ private class PlainBack(private val nav: Navigator) : ShellBack {
  * Back from a page or across the tab history, following the finger ([PageSwipe]): the page it goes back to (or the tab)
  * is drawn under the one leaving, which shrinks and stays whole. Committed (the platform's progress ended normally), the
  * move happens at once and the page fades away while the one under it settles. Cancelled (given up, slow or fast), the
- * page springs back to rest first, covering the screen again, and only then is the page under it let go of, so every
- * layer is as it was: its offset, scale, alpha, which page is drawn, and the order they are drawn in. Back to the player
- * (or another view) a page was opened from draws that view under the page, its bar and dock instead. With reduced
- * motion nothing follows the finger: Back just fades.
+ * page springs back to rest, covering the screen again, while the page layer runs back to it, and only then is the page
+ * under it let go of, so every layer is as it was: its offset, scale, alpha, which page is drawn, and the order they are
+ * drawn in. Back to the player (or another view) a page was opened from draws that view under the page, its bar and
+ * dock instead. With reduced motion nothing follows the finger: Back just fades.
  */
 private fun backFromPages(nav: Navigator, pages: SeekableTransitionState<PageLayer>, swipe: BackSwipe, reduced: Boolean): ShellBack {
     val from = nav.state
@@ -612,9 +609,13 @@ private fun backFromPages(nav: Navigator, pages: SeekableTransitionState<PageLay
         override suspend fun cancel() {
             layers = layers.cancelled()
             try {
-                swipe.springBack(taking)
+                coroutineScope {
+                    // Run back, never snapped: a snap after a seek leaves the page current, taking touches, but drawn
+                    // as it was leaving (gone), with the page under it showing through.
+                    launch { swipe.springBack(taking) }
+                    if (!intoViews) pages.animateTo(layers.current)
+                }
             } finally {
-                if (!intoViews) pages.snapTo(layers.current)
                 swipe.clear(taking)
             }
         }
