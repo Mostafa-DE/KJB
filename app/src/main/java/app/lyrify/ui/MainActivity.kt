@@ -17,6 +17,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalAccessibilityManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.lifecycle.compose.LifecycleResumeEffect
@@ -58,7 +59,8 @@ class MainActivity : ComponentActivity() {
         setContent {
             LyrifyTheme {
                 // The app's one message queue: the shell shows it above the dock, a sheet or full screen above its buttons.
-                CompositionLocalProvider(LocalToasts provides remember { ToastState() }) {
+                val a11y = LocalAccessibilityManager.current
+                CompositionLocalProvider(LocalToasts provides remember { ToastState(a11y) }) {
                     App(ledger, destination.collectAsStateWithLifecycle().value, view.collectAsStateWithLifecycle().value, { view.value = null }) { destination.value = null }
                 }
             }
