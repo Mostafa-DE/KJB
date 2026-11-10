@@ -21,6 +21,7 @@ import app.lyrify.LOG_TAG
 import app.lyrify.R
 import app.lyrify.logFailures
 import app.lyrify.lyrics.LocalTrack
+import app.lyrify.verbose
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -181,6 +182,8 @@ class AiDebugService : Service() {
             stages.close()
         }
         Log.i(LOG_TAG, "AI debug: done in ${(SystemClock.elapsedRealtime() - start) / 1000} s: ${describe(result)}")
+        // A failure's message can name the song's file: only under VERBOSE.
+        if (verbose() && result is AiResult.Failed) Log.v(LOG_TAG, "AI debug: ${result.message}")
         val lrc = when (result) {
             is AiResult.Transcribed -> result.lrc
             is AiResult.Aligned -> result.lrc
@@ -200,7 +203,7 @@ class AiDebugService : Service() {
         is AiResult.Instrumental -> "instrumental, %.1f words per minute".format(Locale.ROOT, result.wordsPerMinute)
         is AiResult.Rejected -> "rejected: ${result.reason}" + (result.agreement?.let { " (agreement %.2f)".format(Locale.ROOT, it) } ?: "") +
             (result.problem?.let { " ($it)" } ?: "")
-        is AiResult.Failed -> "failed: ${result.reason}"
+        is AiResult.Failed -> "failed: ${result.kind}"
     }
 
     private fun stats(s: AiStats): String =

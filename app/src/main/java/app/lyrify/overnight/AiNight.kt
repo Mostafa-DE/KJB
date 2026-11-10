@@ -263,7 +263,7 @@ class AiRunner(
                 }
                 if (result is AiResult.Failed && result.npu) {
                     // The phone's NPU, not the song: nothing is recorded, and the next period tries again.
-                    runLog("AI: the phone's NPU could not be used (${result.reason}); trying again later")
+                    runLog("AI: the phone's NPU could not be used (${result.message}); trying again later")
                     return AiRunEnd.NO_NPU
                 }
                 if (result is AiResult.Failed && result.model != null) {
@@ -271,13 +271,13 @@ class AiRunner(
                     // a death in the stage it was in all the same, so a song is not run forever.
                     song.died()
                     if (loadFailures.failed(result.model)) {
-                        runLog("AI: ${result.model.name} did not load (${result.reason}); deleted, to be downloaded again")
+                        runLog("AI: ${result.model.name} did not load (${result.message}); deleted, to be downloaded again")
                         closeEngine()
                         badModel(result.model)
                         return AiRunEnd.BAD_MODEL
                     }
                     runLog(
-                        "AI: ${result.model.name} did not load again after it was downloaded again (${result.reason}); kept, " +
+                        "AI: ${result.model.name} did not load again after it was downloaded again (${result.message}); kept, " +
                             "and the AI is paused until the next version of KJB or until the models are deleted",
                     )
                     return AiRunEnd.MODEL_FAILED
@@ -357,7 +357,7 @@ class AiRunner(
         is AiResult.Aligned -> "timed, agreement %.2f".format(Locale.ROOT, result.agreement)
         is AiResult.Instrumental -> "instrumental, %.1f words per minute".format(Locale.ROOT, result.wordsPerMinute)
         is AiResult.Rejected -> "rejected (${result.reason}${result.agreement?.let { ", agreement %.2f".format(Locale.ROOT, it) }.orEmpty()})"
-        is AiResult.Failed -> "failed (${result.reason.substringBefore(':')})"
+        is AiResult.Failed -> "failed (${result.kind})"
     }
 
     private fun AiStage.label(): String = name.lowercase()

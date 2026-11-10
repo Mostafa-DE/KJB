@@ -155,12 +155,13 @@ class LyricsFromAudioTest {
         val reason = "FileNotFoundException: 01 Song One.mp3: open failed: ENOENT (No such file or directory); " +
             "Load model from ${AiModels.MDX} failed:Protobuf parsing failed."
         assertEquals(AiResult.Failed(reason), engine.run(song, null))
-        // Logcat gets the exception's kind only: no file name, no message (the run log has the reason).
+        // Logcat gets the exception's kind only: no file name, no message (the run log has the message).
         assertEquals(listOf("AI failed: FileNotFoundException"), logged)
         // Under VERBOSE it has the whole trace.
         val traced = mutableListOf<String>()
-        LyricsFromAudio(FakeStages(4..27, sung, failDecode = FileNotFoundException(message)), { now++ }, traced::add, traces = true).run(song, null)
-        assertTrue(traced.toString(), traced.single().contains(message) && traced.single().contains("\tat "))
+        LyricsFromAudio(FakeStages(4..27, sung, failDecode = FileNotFoundException(message)), { now++ }, traced::add, verbose = true).run(song, null)
+        assertEquals(traced.toString(), "AI failed: FileNotFoundException", traced.first())
+        assertTrue(traced.toString(), traced.last().contains(message) && traced.last().contains("\tat "))
         // Other slashes stay.
         val ratio = engine(FakeStages(4..27, sung, failDecode = IllegalStateException("3/4 windows, audio/mpeg")))
         assertEquals(AiResult.Failed("IllegalStateException: 3/4 windows, audio/mpeg"), ratio.run(track, null))
