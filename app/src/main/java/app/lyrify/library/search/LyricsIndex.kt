@@ -69,6 +69,9 @@ interface LrcFiles {
 
     /** The text of the file at [path]; null when it cannot be read or is too large to be lyrics. */
     fun read(path: String): String?
+
+    /** The modified time of the file at [path] now; null when it is gone. */
+    fun modified(path: String): Long?
 }
 
 /**
@@ -144,8 +147,8 @@ class LyricsIndex(
      * Brings the index up to [songs]: reads the `.lrc` of each song that is new or whose `.lrc` changed since it was
      * read (by its modified time), and forgets songs that left [songs] or lost their `.lrc`. Each folder is listed
      * once; files are read on [io] and stored [BATCH] songs at a time, so a sync cancelled midway keeps what it did.
-     * A folder that cannot be listed keeps its songs as they were, and a file that cannot be read is tried again next
-     * time. One sync at a time; a failing store ends it.
+     * A folder that cannot be listed keeps its songs as they were, and a file that cannot be read, or that changes while
+     * it is read, is tried again next time. One sync at a time; a failing store ends it.
      */
     suspend fun sync(songs: List<Song>) = syncing.withLock {
         val started = TimeSource.Monotonic.markNow()
@@ -160,7 +163,13 @@ class LyricsIndex(
             if (changed.isNotEmpty()) _building.value = true
             changed.chunked(BATCH).forEach { batch ->
                 val lyrics = withContext(io) {
-                    batch.mapNotNull { file -> files.read(file.lrc)?.let { IndexedSong(file.song, file.modifiedAt, lrcLines(it)) } }
+                    batch.mapNotNull { file ->
+                        val text = files.read(file.lrc) ?: return@mapNotNull null
+                        // Written to while it was read, so it may be half read: stored under its old time, the next sync
+                        // would take it as unchanged.
+                        if (files.modified(file.lrc) != file.modifiedAt) return@mapNotNull null
+                        IndexedSong(file.song, file.modifiedAt, lrcLines(text))
+                    }
                 }
                 read += lyrics.size
                 unreadable += batch.size - lyrics.size
@@ -245,6 +254,8 @@ object FileLrcFiles : LrcFiles {
     } catch (e: IOException) {
         null
     }
+
+    override fun modified(path: String): Long? = File(path).lastModified().takeIf { it != 0L }
 
     private const val LRC: String = ".lrc"
 }

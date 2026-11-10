@@ -201,6 +201,21 @@ class LyricsIndexTest {
     }
 
     @Test
+    fun `an lrc that changes while it is read waits for the next sync`() = runTest {
+        files.put(lrc(lantern), 100, lanternLyrics)
+        // Written again while it is read: what was read may be half of either.
+        files.onRead = { files.put(lrc(lantern), 200, "[00:03.00]Harbour lights are calling\n") }
+        val index = index()
+        index.sync(listOf(lantern))
+        assertEquals(emptyMap<String, Long>(), store.indexed())
+
+        files.onRead = {}
+        index.sync(listOf(lantern))
+        assertEquals(mapOf(lantern.path to 200L), store.indexed())
+        assertEquals(3_000L, index.find("harbour lights", library(lantern), settings).single().timeMs)
+    }
+
+    @Test
     fun `the version moves when the index changes, and it is building while files are read`() = runTest {
         files.put(lrc(lantern), 100, lanternLyrics)
         val index = index()
@@ -276,6 +291,8 @@ private class FakeLrcFiles : LrcFiles {
         onRead()
         return if (path in unreadable) null else texts[path]?.second
     }
+
+    override fun modified(path: String): Long? = texts[path]?.first
 }
 
 /** The index in memory: a line matches as FTS4's phrase query does, whole words in a row with the last as a prefix. */
