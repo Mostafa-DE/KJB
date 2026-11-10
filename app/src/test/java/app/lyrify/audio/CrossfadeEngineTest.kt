@@ -551,6 +551,27 @@ class CrossfadeEngineTest {
     }
 
     @Test
+    fun `a second player left at another speed takes the song's own speed before its fade, and the fade length follows it`() = runTest {
+        val songs = listOf(200_000L, 20_000L, 20_000L).mapIndexed { i, ms -> song("Music/Fade Test/Speed %d.flac".format(i + 1), durationMs = ms) }
+        val rig = FadeRig(this, crossfadeSeconds = 12, songs = songs)
+        var speed = 1f
+        rig.speeds = { uid -> PlaybackParameters(if (uid == rig.uids[1]) speed else 1f) }
+        rig.runToLeft(12_000 + 2_000)
+        val waiting = rig.made(1)
+        assertEquals(1f, waiting.playbackParameters.speed, 0f)
+        // The Speed sheet: song 2 now plays at 1.5x, after its player was made.
+        speed = 1.5f
+        rig.run(1_000)
+        assertEquals(1.5f, waiting.playbackParameters.speed, 0f)
+        // Half of its 20 s at 1.5x is 6.7 s of time: the fade starts 6.7 s before the end, not 10.
+        rig.runToLeft(6_666 + 10)
+        assertEquals(listOf(rig.start(0)), rig.heard.starts)
+        rig.run(20)
+        assertEquals(rig.start(1, natural = true), rig.heard.starts.last())
+        assertEquals(1.5f, rig.engine.playbackParameters.speed, 0f)
+    }
+
+    @Test
     fun `the song coming in is capped by its real length once loaded, so a short file never ends inside the fade`() = runTest {
         // The library says song 2 is 60 s; its file is 5 s.
         val rig = FadeRig(this, crossfadeSeconds = 12, files = mapOf(1 to 5_000L))
