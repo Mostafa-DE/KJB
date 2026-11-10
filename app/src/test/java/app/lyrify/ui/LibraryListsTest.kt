@@ -34,7 +34,7 @@ class LibraryListsTest {
         for (status in LyricsStatus.entries) {
             val expected = when (status) {
                 in synced -> LyricsMark.SYNCED
-                LyricsStatus.PLAIN_ONLY -> LyricsMark.PLAIN
+                LyricsStatus.PLAIN_ONLY, LyricsStatus.EXISTING_PLAIN -> LyricsMark.PLAIN
                 else -> LyricsMark.NONE
             }
             assertEquals("$status", expected, lyricsMark(status))
@@ -82,6 +82,28 @@ class LibraryListsTest {
         assertEquals(ListSection.Added(AddedWhen.THIS_MONTH), added(29))
         assertEquals(ListSection.Added(AddedWhen.EARLIER), added(31))
         assertEquals(ListSection.Added(AddedWhen.EARLIER), listSection(clock, SortSongs.RECENTLY_ADDED, settings, now, zone))
+    }
+
+    @Test
+    fun `title order and headings skip leading punctuation and brackets, digits under hash first, Arabic after Z`() {
+        val settings = LibrarySettings(songSort = SortSongs.TITLE)
+        val zone = ZoneId.of("UTC")
+        val titles = listOf(
+            "سفينة الملح", "Dune Lights", "'Til Morning", "(Dear Tide) Harbour", "Amber Field", "باب الضباب", "12 Paper Moons",
+            "Écume", "& Copper Wings", "Dawn Engines", "...Ashen Bell", "أمواج نحاسية",
+        )
+        val sorted = songsTab(titles.mapIndexed { at, title -> song("Music/t/$at.mp3", title = title) }, status, settings)
+        fun heading(song: Song) = (listSection(song, SortSongs.TITLE, settings, 0, zone) as ListSection.Letter).letter
+
+        assertEquals(
+            listOf(
+                "12 Paper Moons", "Amber Field", "...Ashen Bell", "& Copper Wings", "Dawn Engines", "(Dear Tide) Harbour", "Dune Lights",
+                "Écume", "'Til Morning", "أمواج نحاسية", "باب الضباب", "سفينة الملح",
+            ),
+            sorted.map { it.title },
+        )
+        // One heading per run of songs: "(Dear Tide)" sits among the other D titles, never above "#" and "A".
+        assertEquals(listOf("#", "A", "A", "C", "D", "D", "D", "E", "T", "ا", "ب", "س"), sorted.map(::heading))
     }
 
     @Test

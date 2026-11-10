@@ -56,6 +56,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -77,6 +78,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
@@ -94,6 +96,7 @@ import app.lyrify.player.QueueItem
 import app.lyrify.player.SourceKind
 import app.lyrify.player.Undo
 import app.lyrify.player.queueLabel
+import app.lyrify.player.sourceLabel
 import app.lyrify.settings.LibrarySettings
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -120,7 +123,8 @@ private fun place(context: Context, queue: Queue, ui: PlayerUi?): String {
 }
 
 /** A queue's name without its kind, the default name of a playlist saved from it ("Harbour Glass"). */
-private fun plainName(context: Context, queue: Queue): String = queue.name ?: queue.source.name.takeIf { it.isNotBlank() && queue.source.kind != SourceKind.PICKED } ?: queueLabel(context, queue)
+private fun plainName(context: Context, queue: Queue): String =
+    queue.name ?: queue.source.name.takeIf { it.isNotBlank() && queue.source.kind != SourceKind.PICKED } ?: sourceLabel(context, queue.source, queue.items.size)
 
 /** The Queues page: Saved, then Recent; each row opens the queue's page, a recent one also has Keep. */
 @Composable
@@ -168,7 +172,7 @@ private fun QueuesPage() {
 private fun QueueLine(queue: Queue, book: QueueBook, ui: PlayerUi?, onKeep: (() -> Unit)?, onOpen: () -> Unit) {
     val context = LocalContext.current
     val resources = LocalResources.current
-    val name = queueLabel(context, queue)
+    val name = queueLabel(context, book, queue)
     val size = pluralStringResource(R.plurals.queue_songs, queue.items.size, queue.items.size)
     val line = stringResource(R.string.queue_line, size, place(context, queue, ui))
     val playing = queue.id == book.currentId
@@ -257,7 +261,7 @@ private fun OneQueuePage(id: String) {
                         else -> R.string.queue_recent_tag
                     }
                     StatusPill(stringResource(tag), tone = null)
-                    Text(queueLabel(context, queue), style = MaterialTheme.typography.headlineMedium, modifier = Modifier.semantics { heading() })
+                    Text(queueLabel(context, book, queue), style = MaterialTheme.typography.headlineMedium, modifier = Modifier.semantics { heading() })
                     Text(pluralStringResource(R.plurals.queue_songs, queue.items.size, queue.items.size), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(place(context, queue, ui), style = MaterialTheme.typography.bodyMedium.tabular(), color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
@@ -276,7 +280,7 @@ private fun OneQueuePage(id: String) {
             })
         }
     }
-    QueueDialogs(dialog, queue, connection, onDone = { dialog = null }, onDeleted = { nav.back() })
+    QueueDialogs(dialog, queue, book, connection, onDone = { dialog = null }, onDeleted = { nav.back() })
     SongSheetsHost(sheets)
 }
 
@@ -328,14 +332,14 @@ private enum class QueueDialog { RENAME, DELETE, SAVE_AS_PLAYLIST }
 
 /** Rename, Delete (asks first, removes only the queue) and Save as playlist. */
 @Composable
-private fun QueueDialogs(dialog: QueueDialog?, queue: Queue?, connection: PlayerConnection, onDone: () -> Unit, onDeleted: () -> Unit) {
+private fun QueueDialogs(dialog: QueueDialog?, queue: Queue?, book: QueueBook, connection: PlayerConnection, onDone: () -> Unit, onDeleted: () -> Unit) {
     if (dialog == null || queue == null) return
     val context = LocalContext.current
     val toasts = LocalToasts.current
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     when (dialog) {
-        QueueDialog.RENAME -> NameDialog(stringResource(R.string.queue_rename_title), stringResource(R.string.queue_name_field), queueLabel(context, queue), stringResource(R.string.queue_rename), R.drawable.ic_edit, onDone) { name ->
+        QueueDialog.RENAME -> NameDialog(stringResource(R.string.queue_rename_title), stringResource(R.string.queue_name_field), queueLabel(context, book, queue), stringResource(R.string.queue_rename), R.drawable.ic_edit, onDone) { name ->
             connection.rename(queue.id, name)
             scope.launch { toasts.show(Toast(resources.getString(R.string.queue_renamed), R.drawable.ic_edit)) }
         }
@@ -375,20 +379,20 @@ private fun SaveAsPlaylistDialog(queue: Queue, connection: PlayerConnection, onD
 /** A dialog with one name field, starting at [start]; a blank name cannot be confirmed. */
 @Composable
 private fun NameDialog(title: String, field: String, start: String, confirm: String, icon: Int, onDismiss: () -> Unit, onName: (String) -> Unit) {
-    var name by remember { mutableStateOf(start) }
+    var name by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(nameField(start)) }
     ConfirmDialog(
         title = title,
         confirm = confirm,
         dismiss = stringResource(R.string.queue_cancel),
         onConfirm = {
             onDismiss()
-            onName(name.trim())
+            onName(name.text.trim())
         },
         onDismiss = onDismiss,
         icon = icon,
         destructive = false,
-        confirmEnabled = name.isNotBlank(),
-        body = { LyrifyField(name, { name = it }, Modifier.fillMaxWidth(), label = field) },
+        confirmEnabled = name.text.isNotBlank(),
+        body = { NameField(name, { name = it }, field) },
     )
 }
 
@@ -455,7 +459,7 @@ fun QueueSheet(onDismiss: () -> Unit) {
                         Column(Modifier.weight(1f)) {
                             Text(stringResource(R.string.queue_title), style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { heading() })
                             Text(
-                                stringResource(R.string.queue_from, queueLabel(context, queue), pluralStringResource(R.plurals.queue_songs, queue.items.size, queue.items.size)),
+                                stringResource(R.string.queue_from, queueLabel(context, book, queue), pluralStringResource(R.plurals.queue_songs, queue.items.size, queue.items.size)),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = colors.onSurfaceVariant,
                             )
@@ -480,7 +484,7 @@ fun QueueSheet(onDismiss: () -> Unit) {
                         if (recent.isEmpty()) Text(stringResource(R.string.queue_no_recent), style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant)
                         recent.forEach { other ->
                             LyrifyChip(selected = false, onClick = { open(Page.Queue(other.id)) }, role = Role.Button, icon = R.drawable.ic_queue_music) {
-                                Text(queueLabel(context, other), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(queueLabel(context, book, other), maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
                         }
                     }

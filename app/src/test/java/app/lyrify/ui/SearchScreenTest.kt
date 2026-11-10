@@ -10,6 +10,10 @@ import app.lyrify.library.search.LyricHit
 import app.lyrify.library.search.Match
 import app.lyrify.library.search.MatchKind
 import app.lyrify.library.song
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -118,5 +122,28 @@ class SearchScreenTest {
         // A turn of the phone restores the handled count: no keyboard then.
         assertFalse(focusDue(opens = 1, handled = 1))
         assertFalse(focusDue(opens = 0, handled = 0))
+    }
+
+    @Test
+    fun `the field takes the focus while a list not laid out yet waits to go to the top`() = runTest {
+        // With the field empty the results list is not composed, so its scroll to the top waits for a first layout
+        // that may never come (the phone: Search opened with no keyboard).
+        var tries = 0
+        var taken: Boolean? = null
+        val opening = launch { taken = openAndFocus(listOf({ awaitCancellation() }), frame = { yield() }) { ++tries == 3 } }
+        testScheduler.advanceUntilIdle()
+        assertEquals(true, taken)
+        assertEquals(3, tries)
+        opening.cancel()
+    }
+
+    @Test
+    fun `a field that never attaches stops being asked after the tries`() = runTest {
+        var tries = 0
+        var taken: Boolean? = null
+        launch { taken = openAndFocus(emptyList(), frame = { yield() }) { tries++; false } }
+        testScheduler.advanceUntilIdle()
+        assertEquals(false, taken)
+        assertEquals(60, tries)
     }
 }

@@ -373,6 +373,54 @@ class QueuesTest {
         assertEquals(book.refresh { it }, book)
     }
 
+    // Names
+
+    /** The made name as the app builds it: the list's name and the minute the queue started. */
+    private fun made(queue: Queue) = "${queue.source.name.ifEmpty { "Picked" }} · ${queue.startedAt / 60_000}"
+
+    @Test
+    fun `a queue starts at the time it was made, and playing, leaving or keeping it later does not change that`() {
+        var book = playing(0)
+        val first = book.currentId!!
+        book = book.play(folder, 0, folderSource, now = 120_000).book
+        val second = book.currentId!!
+        book = book.keep(first).resume(first, now = 300_000).book.place(2, 5_000)
+        assertEquals(1L, book.queue(first)!!.startedAt)
+        assertEquals(120_000L, book.queue(second)!!.startedAt)
+        val made = book.newQueue(null, folder, folderSource, now = 400_000)!!.book
+        assertEquals(400_000L, made.queue(made.saved.first())!!.startedAt)
+    }
+
+    @Test
+    fun `two queues from the same list show their start times, and the same minute twice takes a number, the older plain`() {
+        // The phone: a saved queue and a recent one, both from Songs, both read "Songs".
+        val songs = QueueSource(SourceKind.SONGS, "songs", "Songs")
+        var book = QueueBook().play(album, 0, songs, now = 60_000).book
+        val first = book.currentId!!
+        book = book.keep(first).play(album, 1, songs, now = 30 * 60_000).book
+        val second = book.currentId!!
+        assertEquals(mapOf(first to "Songs · 1", second to "Songs · 30"), queueNames(book.queues, ::made))
+
+        book = book.keep(second).resume(first, now = 30 * 60_000 + 10_000).book.play(album, 2, songs, now = 30 * 60_000 + 20_000).book
+        val third = book.currentId!!
+        val names = queueNames(book.queues, ::made)
+        assertEquals("Songs · 30", names[second])
+        assertEquals("Songs · 30 2", names[third])
+        assertEquals(3, names.values.toSet().size)
+    }
+
+    @Test
+    fun `the user's name stays as given, and a made name it already takes gets the next number`() {
+        var book = playing(0).play(folder, 0, folderSource, now = 120_000).book
+        val named = book.currentId!!
+        book = book.keep(named).rename(named, "Rips · 2")
+        book = book.play(folder, 1, QueueSource(SourceKind.FOLDER, "folder:Music/Rips/2", "Rips"), now = 150_000).book
+        val names = queueNames(book.queues, ::made)
+        assertEquals("Rips · 2", names[named])
+        assertEquals("Rips · 2 2", names[book.currentId])
+        assertEquals("Harbour Glass · 0", names[book.recent.single()])
+    }
+
     // albumInOrder
 
     @Test

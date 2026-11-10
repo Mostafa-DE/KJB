@@ -8,6 +8,7 @@ import app.lyrify.settings.SortSongs
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
 import java.text.Collator
+import java.text.Normalizer
 
 /**
  * An album: the songs with one album tag and one album artist (a song without an album artist counts its artist), in
@@ -149,7 +150,7 @@ class Library private constructor(
             }.let { sortArtists(it, SortArtists.NAME) }
             val genres = songs.groupBy { text(it.genre) }
                 .mapNotNull { (name, its) -> name?.let { Genre(it, its) } }
-                .sortedWith(compareBy(collator) { it.name })
+                .sortedWith(compareBy(nameOrder(collator)) { it.name })
             return Library(all, songs, albums, byAlbum[null].orEmpty(), artists, genres, root)
         }
 
@@ -193,41 +194,42 @@ fun displayTitle(song: Song, settings: LibrarySettings): String = if (settings.s
 
 /**
  * [songs] in the Songs tab's [sort]: by title as shown ([displayTitle]); by artist, then the newest year, album and track;
- * by album, then album artist and track; or the latest added first. Missing tags go last; ties keep path order.
+ * by album, then album artist and track; or the latest added first. Names in [nameOrder]; missing tags go last; ties keep
+ * path order.
  */
 fun sortSongs(songs: List<Song>, sort: SortSongs, settings: LibrarySettings): List<Song> {
     val collator = collator()
-    val byTitle = compareBy<Song, String>(collator) { displayTitle(it, settings) }
+    val names = nameOrder(collator)
+    val byTitle = compareBy<Song, String>(names) { displayTitle(it, settings) }
     val order = when (sort) {
         SortSongs.TITLE -> byTitle
-        SortSongs.ARTIST -> compareBy<Song, String?>(nullsLast(collator)) { text(it.artist) }
+        SortSongs.ARTIST -> compareBy<Song, String?>(nullsLast(names)) { text(it.artist) }
             .thenBy(nullsLast(reverseOrder())) { it.year }
-            .thenBy(nullsLast(collator)) { text(it.album) }
+            .thenBy(nullsLast(names)) { text(it.album) }
             .then(trackOrder(collator))
-        SortSongs.ALBUM -> compareBy<Song, String?>(nullsLast(collator)) { text(it.album) }
-            .thenBy(nullsLast(collator)) { albumArtistOf(it) }
+        SortSongs.ALBUM -> compareBy<Song, String?>(nullsLast(names)) { text(it.album) }
+            .thenBy(nullsLast(names)) { albumArtistOf(it) }
             .then(trackOrder(collator))
         SortSongs.RECENTLY_ADDED -> compareBy<Song, Long?>(nullsLast(reverseOrder())) { it.addedAt }.then(byTitle)
     }
     return songs.sortedWith(order)
 }
 
-/** [albums] by title, by artist (then title), or the newest year first (then title); missing ones go last. */
+/** [albums] by title, by artist (then title), or the newest year first (then title), names in [nameOrder]; missing ones go last. */
 fun sortAlbums(albums: List<Album>, sort: SortAlbums): List<Album> {
-    val collator = collator()
-    val byTitle = compareBy<Album, String>(collator) { it.title }.thenBy(nullsLast(collator)) { it.artist }
+    val names = nameOrder(collator())
+    val byTitle = compareBy<Album, String>(names) { it.title }.thenBy(nullsLast(names)) { it.artist }
     val order = when (sort) {
         SortAlbums.TITLE -> byTitle
-        SortAlbums.ARTIST -> compareBy<Album, String?>(nullsLast(collator)) { it.artist }.then(byTitle)
+        SortAlbums.ARTIST -> compareBy<Album, String?>(nullsLast(names)) { it.artist }.then(byTitle)
         SortAlbums.YEAR -> compareBy<Album, Int?>(nullsLast(reverseOrder())) { it.year }.then(byTitle)
     }
     return albums.sortedWith(order)
 }
 
-/** [artists] by name, or the most songs first (then name). */
+/** [artists] by name, or the most songs first (then name), names in [nameOrder]. */
 fun sortArtists(artists: List<Artist>, sort: SortArtists): List<Artist> {
-    val collator = collator()
-    val byName = compareBy<Artist, String>(collator) { it.name }
+    val byName = compareBy<Artist, String>(nameOrder(collator())) { it.name }
     val order = when (sort) {
         SortArtists.NAME -> byName
         SortArtists.MOST_SONGS -> compareByDescending<Artist> { it.songs.size }.then(byName)
@@ -250,3 +252,43 @@ private fun text(tag: String?): String? = tag?.trim()?.takeIf(String::isNotEmpty
 
 /** Names in the phone's language order, case and accents second. A new one per call, so none is shared between threads. */
 private fun collator(): Collator = Collator.getInstance()
+
+/**
+ * The heading [name] files under in an A to Z list, from its first letter or digit (leading punctuation, brackets and
+ * symbols skipped, so "(Don't Go) Home" is under "D"): "#" for a digit or no letter at all, else that letter's capital
+ * without accents ("É" is "E", Arabic "أ" is "ا").
+ */
+fun nameLetter(name: String): String {
+    val from = fromFirstLetter(name)
+    if (from.isEmpty() || !Character.isLetter(from.codePointAt(0))) return "#"
+    val first = from.substring(0, Character.charCount(from.codePointAt(0)))
+    return String(Character.toChars(Character.toUpperCase(Normalizer.normalize(first, Normalizer.Form.NFKD).codePointAt(0))))
+}
+
+/**
+ * The A to Z order of names, by their [nameLetter] headings so a heading never shows twice: "#" first, then Latin
+ * letters, then other scripts' (Arabic after Z), each heading in [collator]'s order; under one heading by [collator]
+ * from the first letter or digit, then by the whole name, so names alike past their punctuation never mix.
+ */
+fun nameOrder(collator: Collator): Comparator<String> = Comparator { a, b ->
+    val letterA = nameLetter(a)
+    val letterB = nameLetter(b)
+    headingRank(letterA).compareTo(headingRank(letterB)).takeIf { it != 0 }
+        ?: collator.compare(letterA, letterB).takeIf { it != 0 }
+        ?: letterA.compareTo(letterB).takeIf { it != 0 }
+        ?: collator.compare(fromFirstLetter(a), fromFirstLetter(b)).takeIf { it != 0 }
+        ?: collator.compare(a, b).takeIf { it != 0 }
+        ?: a.compareTo(b)
+}
+
+/** "#" first, then Latin letters, then every other script's. */
+private fun headingRank(letter: String): Int = when {
+    letter == "#" -> 0
+    Character.UnicodeScript.of(letter.codePointAt(0)) == Character.UnicodeScript.LATIN -> 1
+    else -> 2
+}
+
+/** [name] from its first letter or digit. */
+private fun fromFirstLetter(name: String): String = name.replace(LEADING_NON_ALPHANUMERIC, "")
+
+private val LEADING_NON_ALPHANUMERIC = Regex("""^[^\p{L}\p{N}]+""")

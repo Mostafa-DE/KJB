@@ -62,6 +62,9 @@ object LrcFormat {
     fun parseLrclib(synced: String): List<LrcLine> =
         synced.removePrefix("\uFEFF").lineSequence().flatMap(::parseLrclibLine).sortedBy { it.timeMs }.toList()
 
+    /** Whether LRC [text] has a timed line with words: synced lyrics, not plain ones. */
+    fun timed(text: String): Boolean = parseLrclib(text).any { it.text.isNotBlank() }
+
     /**
      * The `[offset:+/-ms]` tag of LRC [text]: a positive offset shows every line that much sooner. 0 without one (or one
      * that is not a whole number). Samsung Music ignores the tag, so KJB's sync editor applies it and writes the times

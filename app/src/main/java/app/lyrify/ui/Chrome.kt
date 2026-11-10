@@ -105,6 +105,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.platform.AccessibilityManager
 import androidx.compose.ui.platform.LocalAccessibilityManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
@@ -571,11 +572,12 @@ data class Toast(val text: String, @DrawableRes val icon: Int? = null, val tone:
  * stays done), but a message with an action only at its own time ([toastMillis]), so what its Undo needs (a backup, a
  * record) is never let go sooner than had it stayed. [show] waits until its message has gone and says whether its action
  * was tapped. A message floats at the newest [ToastSlot] on screen (the shell's above the Now bar and the dock, else the
- * open sheet's or full screen's), over the content, never moving it.
+ * open sheet's or full screen's), over the content, never moving it. [a11y], the window's [LocalAccessibilityManager],
+ * stretches each message's time to the phone's accessibility timeout.
  */
 @Stable
-class ToastState private constructor(private val live: Boolean) {
-    constructor() : this(live = true)
+class ToastState private constructor(private val live: Boolean, private val a11y: AccessibilityManager?) {
+    constructor(a11y: AccessibilityManager? = null) : this(live = true, a11y)
 
     private val slots = mutableStateListOf<Any>()
 
@@ -591,8 +593,8 @@ class ToastState private constructor(private val live: Boolean) {
         REPLACED,
     }
 
-    /** The message on screen; [dismiss] takes it off, [acted] when its action was tapped. */
-    class Shown internal constructor(val toast: Toast) {
+    /** The message on screen, for [millis] ([toastMillis]); [dismiss] takes it off, [acted] when its action was tapped. */
+    class Shown internal constructor(val toast: Toast, internal val millis: Long) {
         internal val result = CompletableDeferred<End>()
 
         fun dismiss(acted: Boolean = false) {
@@ -605,14 +607,14 @@ class ToastState private constructor(private val live: Boolean) {
 
     suspend fun show(toast: Toast): Boolean {
         if (!live) return false
-        val shown = Shown(toast)
+        val shown = Shown(toast, toastMillis(toast, a11y))
         // The message on screen goes at once, its action with it; a late tap or timer on it changes nothing.
         current?.result?.complete(End.REPLACED)
         current = shown
         return try {
             coroutineScope {
                 // Its own time, from now: replaced, a message with an action ends for its caller no sooner.
-                val due = if (toast.action != null) launch { delay(toastMillis(toast)) } else null
+                val due = if (toast.action != null) launch { delay(shown.millis) } else null
                 val end = shown.result.await()
                 if (end == End.REPLACED) due?.join() else due?.cancel()
                 end == End.ACTED
@@ -637,7 +639,7 @@ class ToastState private constructor(private val live: Boolean) {
 
     internal companion object {
         /** Stands in for the app's state where none was provided (release builds only): drops every message at once. */
-        val Detached = ToastState(live = false)
+        val Detached = ToastState(live = false, a11y = null)
     }
 }
 
@@ -657,8 +659,15 @@ internal fun missingToasts(debug: Boolean): ToastState {
     return ToastState.Detached
 }
 
-/** How long a message stays: 4 s, 6 s with an action or two lines (TalkBack and a longer timeout stretch it). */
-fun toastMillis(toast: Toast): Long = if (toast.action != null || toast.text.length > TWO_LINES) LONG_MS else SHORT_MS
+/**
+ * How long a message stays: 3 s, 6 s with an action or two lines, or the phone's accessibility timeout ([a11y], asked
+ * for text, and for controls when it has an action) when that is longer. Never shorter, whatever the phone answers.
+ */
+fun toastMillis(toast: Toast, a11y: AccessibilityManager?): Long {
+    val own = if (toast.action != null || toast.text.length > TWO_LINES) LONG_MS else SHORT_MS
+    val asked = a11y?.calculateRecommendedTimeoutMillis(own, containsIcons = toast.icon != null, containsText = true, containsControls = toast.action != null) ?: own
+    return maxOf(own, asked)
+}
 
 /** [text], the words of the string or plural [message], with the icon and tone that fit it: failures in the error tone. */
 fun messageToast(message: Int, text: String): Toast = when (message) {
@@ -733,12 +742,11 @@ private fun Modifier.floatOver(float: ToastFloat): Modifier = layout { measurabl
 private fun ToastPill(message: ToastState.Shown, modifier: Modifier = Modifier) {
     val toast = message.toast
     val chrome = LocalChromeColors.current
-    val a11y = LocalAccessibilityManager.current
+    // Its time stops while a finger is on it and starts again, whole, when the finger lifts, as Snackbar's does.
     var held by remember(message) { mutableStateOf(false) }
     LaunchedEffect(message, held) {
         if (held) return@LaunchedEffect
-        val base = toastMillis(toast)
-        delay(a11y?.calculateRecommendedTimeoutMillis(base, containsIcons = toast.icon != null, containsText = true, containsControls = toast.action != null) ?: base)
+        delay(message.millis)
         message.dismiss()
     }
     val shape = RoundedCornerShape(26.dp)
@@ -794,7 +802,7 @@ private val LINE_LEAD = spring(dampingRatio = 0.8f, stiffness = 700f, visibility
 private val LINE_TRAIL = spring(dampingRatio = 0.8f, stiffness = 260f, visibilityThreshold = 0.001f)
 private const val DISABLED_ALPHA = 0.38f
 
-private const val SHORT_MS = 4_000L
+private const val SHORT_MS = 3_000L
 private const val LONG_MS = 6_000L
 
 /** About two lines of a toast at the default font size. */

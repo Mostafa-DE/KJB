@@ -11,7 +11,11 @@ class StatusStyleTest {
 
     private val table = listOf(
         Row(LyricsStatus.SYNCED, SongGroup.HAS_LYRICS, Tone.SYNCED, R.drawable.ic_lyrics_fill, R.string.status_synced, R.string.status_synced_sentence),
-        Row(LyricsStatus.EXISTING, SongGroup.HAS_LYRICS, Tone.SYNCED, R.drawable.ic_task_alt, R.string.status_existing, R.string.status_existing_sentence),
+        Row(LyricsStatus.EXISTING, SongGroup.HAS_LYRICS, Tone.SYNCED, R.drawable.ic_lyrics_fill, R.string.status_synced, R.string.status_existing_sentence),
+        Row(
+            LyricsStatus.EXISTING_PLAIN, SongGroup.HAS_LYRICS, Tone.SYNCED, R.drawable.ic_lyrics,
+            R.string.status_existing_plain, R.string.status_existing_plain_sentence,
+        ),
         Row(LyricsStatus.AI_ALIGNED, SongGroup.HAS_LYRICS, Tone.AI_SYNCED, R.drawable.ic_auto_awesome_fill, R.string.status_ai_aligned, R.string.status_ai_aligned_sentence),
         Row(
             LyricsStatus.AI_TRANSCRIBED, SongGroup.HAS_LYRICS, Tone.AI_WRITTEN, R.drawable.ic_hearing_fill,
@@ -38,9 +42,9 @@ class StatusStyleTest {
     )
 
     @Test
-    fun `the table covers all 16 statuses once`() {
-        assertEquals(16, LyricsStatus.entries.size)
-        assertEquals(16, table.size)
+    fun `the table covers all 17 statuses once`() {
+        assertEquals(17, LyricsStatus.entries.size)
+        assertEquals(17, table.size)
         assertEquals(LyricsStatus.entries.toSet(), table.map { it.status }.toSet())
     }
 
@@ -58,8 +62,12 @@ class StatusStyleTest {
     }
 
     @Test
-    fun `one label per status`() {
+    fun `one label per status, except a lyrics file already there, which reads by what it holds`() {
+        // The phone: a synced .lrc copied next to a song read "Had lyrics" where synced songs read "Synced".
+        assertEquals(LyricsStatus.SYNCED.style.label, LyricsStatus.EXISTING.style.label)
         assertEquals(16, LyricsStatus.entries.map { it.style.label }.toSet().size)
+        assertEquals(LyricsMark.SYNCED, lyricsMark(LyricsStatus.EXISTING))
+        assertEquals(LyricsMark.PLAIN, lyricsMark(LyricsStatus.EXISTING_PLAIN))
     }
 
     @Test
@@ -88,7 +96,7 @@ class StatusStyleTest {
     @Test
     fun `groups hold their statuses in the spec's order, each status in one group`() {
         assertEquals(
-            listOf(LyricsStatus.SYNCED, LyricsStatus.EXISTING, LyricsStatus.AI_ALIGNED, LyricsStatus.AI_TRANSCRIBED),
+            listOf(LyricsStatus.SYNCED, LyricsStatus.EXISTING, LyricsStatus.EXISTING_PLAIN, LyricsStatus.AI_ALIGNED, LyricsStatus.AI_TRANSCRIBED),
             SongGroup.HAS_LYRICS.statuses,
         )
         assertEquals(listOf(LyricsStatus.NEEDS_CHECK), SongGroup.TO_CHECK.statuses)

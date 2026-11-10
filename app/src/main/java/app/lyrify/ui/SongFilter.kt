@@ -8,7 +8,10 @@ import app.lyrify.R
 import app.lyrify.data.LedgerEntry
 import app.lyrify.data.LedgerState
 import app.lyrify.data.LyricsStatus
+import app.lyrify.library.nameLetter
+import app.lyrify.library.nameOrder
 import app.lyrify.lyrics.TrackNames
+import java.text.Collator
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -17,7 +20,7 @@ import java.time.ZoneId
 enum class SongGroup(@StringRes val label: Int, val statuses: List<LyricsStatus>, val tone: Tone, @DrawableRes val icon: Int) {
     HAS_LYRICS(
         R.string.group_has_lyrics,
-        listOf(LyricsStatus.SYNCED, LyricsStatus.EXISTING, LyricsStatus.AI_ALIGNED, LyricsStatus.AI_TRANSCRIBED),
+        listOf(LyricsStatus.SYNCED, LyricsStatus.EXISTING, LyricsStatus.EXISTING_PLAIN, LyricsStatus.AI_ALIGNED, LyricsStatus.AI_TRANSCRIBED),
         Tone.SYNCED,
         R.drawable.ic_lyrics_fill,
     ),
@@ -86,7 +89,7 @@ sealed interface Section {
 
     data object Earlier : Section
 
-    /** A first letter, "#" for digits, symbols and songs with no artist. */
+    /** A first letter ([nameLetter]), "#" for digits, nothing and songs with no artist. */
     data class Letter(val letter: String) : Section
 }
 
@@ -105,22 +108,28 @@ data class SongList(
     val statuses: List<LyricsStatus>,
 ) {
     val songs: List<LedgerEntry> get() = sections.flatMap { it.songs }
+
+    /** The songs [status]'s chip counts: with the statuses that read the same ([sameChip]). */
+    fun chipCount(status: LyricsStatus): Int = statusCounts.filterKeys { sameChip(it, status) }.values.sum()
     val shown: Int get() = sections.sumOf { it.songs.size }
 }
 
 /**
  * The ledger's songs matching [query]: the text in the title or the artist (case and accents aside), then its group and
  * status, sorted and sectioned (days are [now]'s in [zone]). Counts follow the search. The status chips show when the
- * selected group has two or more statuses with songs (the selected status counts as one), so each of the 16 statuses can
- * still be shown on its own.
+ * selected group has two or more statuses with songs (the selected status counts as one), so each of the statuses can
+ * still be shown, one chip for the statuses that read the same ([sameChip]).
  */
 fun songList(ledger: LedgerState, query: SongQuery, now: Long = System.currentTimeMillis(), zone: ZoneId = ZoneId.systemDefault()): SongList {
     val words = TrackNames.normalize(query.text)
     val found = ledger.entries.values.filter { words.isEmpty() || matches(it, words) }
     val counted = found.groupingBy { it.status }.eachCount()
     val statusCounts = LyricsStatus.entries.associateWith { counted[it] ?: 0 }
-    val statuses = query.group?.statuses.orEmpty().filter { statusCounts.getValue(it) > 0 || it == query.status }
-    val shown = found.filter { (query.group == null || it.status.group == query.group) && (query.status == null || it.status == query.status) }
+    val chipCounts = statusCounts.keys.associateWith { status -> statusCounts.filterKeys { sameChip(it, status) }.values.sum() }
+    val statuses = query.group?.statuses.orEmpty()
+        .filter { status -> chipCounts.getValue(status) > 0 || query.status?.let { sameChip(it, status) } == true }
+        .distinctBy { it.style.label }
+    val shown = found.filter { (query.group == null || it.status.group == query.group) && (query.status == null || sameChip(it.status, query.status)) }
     return SongList(
         sections = sections(shown, query.sort, dateOf(now, zone), zone),
         total = found.size,
@@ -129,6 +138,9 @@ fun songList(ledger: LedgerState, query: SongQuery, now: Long = System.currentTi
         statuses = if (statuses.size >= 2) statuses else emptyList(),
     )
 }
+
+/** Whether [a] and [b] share a chip: they read the same (a synced lyrics file already there, and KJB's own). */
+fun sameChip(a: LyricsStatus, b: LyricsStatus): Boolean = a.style.label == b.style.label
 
 /** Songs per group, from the songs per status ([LedgerState.counts]). */
 fun groupCounts(counts: Map<LyricsStatus, Int>): Map<SongGroup, Int> = SongGroup.entries.associateWith { group -> group.statuses.sumOf { counts[it] ?: 0 } }
@@ -144,20 +156,16 @@ private fun sections(songs: List<LedgerEntry>, sort: SongSort, today: LocalDate,
         .sortedWith(compareByDescending<LedgerEntry> { it.updatedAt }.thenBy { it.path })
         .groupBy { day(dateOf(it.updatedAt, zone), today) }
         .map { (section, inIt) -> SongSection(section, inIt) }
-    SongSort.TITLE -> byLetter(songs) { TrackNames.normalize(it.title) }
-    SongSort.ARTIST -> byLetter(songs) { song -> song.artist?.let(TrackNames::cleanArtist)?.let(TrackNames::normalize).orEmpty() }
+    SongSort.TITLE -> byLetter(songs) { it.title }
+    SongSort.ARTIST -> byLetter(songs) { song -> song.artist?.let(TrackNames::cleanArtist).orEmpty() }
 }
 
-/** Sorted by [key] (normalized text), "#" (digits, symbols, nothing) first, then a section per letter. */
-private fun byLetter(songs: List<LedgerEntry>, key: (LedgerEntry) -> String): List<SongSection> {
-    val keyed = songs.map { it to key(it) }
-    return keyed
-        .sortedWith(compareBy<Pair<LedgerEntry, String>> { (_, k) -> if (letterOf(k) == HASH) 0 else 1 }.thenBy { it.second }.thenBy { it.first.title }.thenBy { it.first.path })
-        .groupBy({ (_, k) -> letterOf(k) }, { it.first })
+/** Sorted by [name] as the library's lists are ([nameOrder]), with a section per [nameLetter]: "#" (digits, nothing) first. */
+private fun byLetter(songs: List<LedgerEntry>, name: (LedgerEntry) -> String): List<SongSection> =
+    songs
+        .sortedWith(compareBy(nameOrder(Collator.getInstance()), name).thenBy { it.title }.thenBy { it.path })
+        .groupBy { nameLetter(name(it)) }
         .map { (letter, inIt) -> SongSection(Section.Letter(letter), inIt) }
-}
-
-private fun letterOf(key: String): String = key.firstOrNull()?.takeIf { it.isLetter() }?.uppercase() ?: HASH
 
 private fun dateOf(millis: Long, zone: ZoneId): LocalDate = Instant.ofEpochMilli(millis).atZone(zone).toLocalDate()
 
@@ -170,8 +178,6 @@ private fun day(date: LocalDate, today: LocalDate): Section = when {
 
 private fun matches(entry: LedgerEntry, words: String): Boolean =
     TrackNames.normalize(entry.title).contains(words) || TrackNames.normalize(entry.artist.orEmpty()).contains(words)
-
-private const val HASH = "#"
 
 /** "This week": today and the six days before. */
 private const val WEEK_DAYS = 7L

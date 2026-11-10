@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -34,6 +33,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.takeOrElse
 import androidx.compose.ui.platform.LocalContext
@@ -44,7 +45,9 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.lyrify.R
@@ -100,6 +103,37 @@ internal fun SongMenuSheet(
         if (SheetRow.MOVE_TO_TRASH in rows) {
             HorizontalDivider(Modifier.padding(horizontal = 8.dp), color = MaterialTheme.colorScheme.outlineVariant)
             ActionRow(R.drawable.ic_delete, stringResource(R.string.lib_move_to_trash), danger = true) { onRow(SheetRow.MOVE_TO_TRASH) }
+        }
+    }
+}
+
+/**
+ * An album's or an artist's "⋯", as the song sheet: [art], [title] and [line] at its head, then [rows] (Play next, Add
+ * to, Shuffle, then the album's or the artist's own).
+ */
+@Composable
+internal fun CollectionMenuSheet(title: String, line: String, art: @Composable () -> Unit, rows: List<CollectionRow>, onDismiss: () -> Unit, onRow: (CollectionRow) -> Unit) {
+    LyrifySheet(onDismiss = onDismiss, spacing = 14.dp, padding = 12.dp) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.padding(horizontal = 8.dp)) {
+            art()
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(title, style = SheetSongTitle, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.semantics { heading() })
+                Text(line, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        Column {
+            rows.forEach { row ->
+                when (row) {
+                    CollectionRow.PLAY_NEXT -> ActionRow(R.drawable.ic_queue_play_next, stringResource(R.string.lib_play_next)) { onRow(row) }
+                    CollectionRow.ADD_TO -> ActionRow(R.drawable.ic_playlist_add, stringResource(R.string.lib_add_to), chevron = true) { onRow(row) }
+                    CollectionRow.SHUFFLE -> ActionRow(R.drawable.ic_shuffle, stringResource(R.string.lib_shuffle)) { onRow(row) }
+                    CollectionRow.GO_TO_ARTIST -> ActionRow(R.drawable.ic_person, stringResource(R.string.player_menu_artist)) { onRow(row) }
+                    CollectionRow.COVERS_TAGS -> ActionRow(R.drawable.ic_album, stringResource(R.string.tools_covers)) { onRow(row) }
+                    CollectionRow.EDIT_ALBUM -> ActionRow(R.drawable.ic_edit, stringResource(R.string.lib_edit_album)) { onRow(row) }
+                    CollectionRow.RENAME_ARTIST -> ActionRow(R.drawable.ic_edit, stringResource(R.string.edit_rename_artist)) { onRow(row) }
+                    CollectionRow.MERGE_WITH -> ActionRow(R.drawable.ic_merge, stringResource(R.string.edit_merge_with)) { onRow(row) }
+                }
+            }
         }
     }
 }
@@ -184,18 +218,20 @@ private fun ActionRow(
     }
 }
 
-/** The heart as a sheet row: a switch for TalkBack, a filled coral heart and "On" while it is on. */
+/** The heart as a sheet row: a filled coral heart and "On" while it is on; TalkBack hears what a tap does. */
 @Composable
 private fun FavouriteRow(on: Boolean, onToggle: () -> Unit) {
     val brand = LocalBrandColors.current
     val colors = MaterialTheme.colorScheme
+    val label = stringResource(heartLabel(on))
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(16.dp),
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
-            .toggleable(on, role = Role.Switch) { onToggle() }
+            .clickable(role = Role.Button, onClick = onToggle)
+            .semantics { contentDescription = label }
             .heightIn(min = 52.dp)
             .padding(horizontal = 8.dp),
     ) {
@@ -376,7 +412,7 @@ internal fun SelectionMoreSheet(count: Int, onInfo: (() -> Unit)?, onEditTags: (
     }
 }
 
-/** A name for something new or renamed: a field that starts at [start]; Create (or [confirm]) waits for a name. */
+/** A name for something new or renamed: a field that starts at [start] ([NameField]); Create (or [confirm]) waits for a name. */
 @Composable
 internal fun NameDialog(
     title: String,
@@ -386,20 +422,34 @@ internal fun NameDialog(
     @StringRes confirm: Int = R.string.lib_create,
     onName: (String) -> Unit,
 ) {
-    var name by rememberSaveable { mutableStateOf(start) }
+    var name by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(nameField(start)) }
     ConfirmDialog(
         title = title,
         confirm = stringResource(confirm),
         dismiss = stringResource(R.string.remove_cancel),
-        onConfirm = { onName(name.trim()) },
+        onConfirm = { onName(name.text.trim()) },
         onDismiss = onDismiss,
         icon = icon,
         destructive = false,
-        confirmEnabled = name.isNotBlank(),
+        confirmEnabled = name.text.isNotBlank(),
     ) {
-        LyrifyField(value = name, onValueChange = { name = it.take(MAX_NAME) }, label = stringResource(R.string.lib_name), modifier = Modifier.fillMaxWidth())
+        NameField(name, { name = it.copy(text = it.text.take(MAX_NAME)) }, stringResource(R.string.lib_name))
     }
 }
+
+/**
+ * A dialog's name field: focused with the keyboard up when the dialog opens, not again after a turn of the phone
+ * ([FocusOnOpen]), so a name is typed at once; a rename's text starts selected ([nameField]).
+ */
+@Composable
+internal fun NameField(name: TextFieldValue, onName: (TextFieldValue) -> Unit, label: String) {
+    val focus = remember { FocusRequester() }
+    FocusOnOpen(focus, opens = 1)
+    LyrifyField(name, onName, Modifier.fillMaxWidth().focusRequester(focus), label = label)
+}
+
+/** A name field's start: [start] all selected, so typing replaces it; empty for a new name. */
+fun nameField(start: String): TextFieldValue = TextFieldValue(start, TextRange(0, start.length))
 
 /** KJB's own "Move 2 songs to trash?", before the phone's. */
 @Composable

@@ -63,12 +63,12 @@ import app.lyrify.library.RECENTLY_ADDED_DAYS
 import app.lyrify.library.Song
 import app.lyrify.library.displayTitle
 import app.lyrify.library.mostPlayed
+import app.lyrify.library.nameLetter
 import app.lyrify.library.recentlyAdded
 import app.lyrify.library.recentlyPlayed
 import app.lyrify.library.sortAlbums
 import app.lyrify.library.sortArtists
 import app.lyrify.library.sortSongs
-import app.lyrify.lyrics.TrackNames
 import app.lyrify.player.QueueSource
 import app.lyrify.player.SourceKind
 import app.lyrify.settings.DockTab
@@ -760,7 +760,7 @@ enum class LyricsMark { SYNCED, PLAIN, NONE }
 /** The mark for a song whose ledger status is [status] (null: KJB has not looked it up). */
 fun lyricsMark(status: LyricsStatus?): LyricsMark = when (status) {
     LyricsStatus.SYNCED, LyricsStatus.EXISTING, LyricsStatus.AI_ALIGNED, LyricsStatus.AI_TRANSCRIBED -> LyricsMark.SYNCED
-    LyricsStatus.PLAIN_ONLY -> LyricsMark.PLAIN
+    LyricsStatus.PLAIN_ONLY, LyricsStatus.EXISTING_PLAIN -> LyricsMark.PLAIN
     else -> LyricsMark.NONE
 }
 
@@ -797,7 +797,7 @@ enum class AddedWhen { TODAY, THIS_WEEK, THIS_MONTH, EARLIER }
 
 /** A heading over the Songs tab's rows: the first letter by title, the artist, the album, or when it was added. */
 sealed interface ListSection {
-    /** A letter, or "#" for digits, symbols and nothing. */
+    /** A letter, or "#" for digits and nothing ([nameLetter]). */
     data class Letter(val letter: String) : ListSection
 
     /** An artist or album name; null for songs without one. */
@@ -808,9 +808,7 @@ sealed interface ListSection {
 
 /** [song]'s heading under [sort], with "Recently added" by [now]'s day in [zone]. */
 fun listSection(song: Song, sort: SortSongs, settings: LibrarySettings, now: Long, zone: ZoneId): ListSection = when (sort) {
-    SortSongs.TITLE -> ListSection.Letter(
-        TrackNames.normalize(displayTitle(song, settings)).trim().firstOrNull()?.takeIf { it.isLetter() }?.uppercase() ?: "#",
-    )
+    SortSongs.TITLE -> ListSection.Letter(nameLetter(displayTitle(song, settings)))
     SortSongs.ARTIST -> ListSection.Name(song.artist?.trim()?.takeIf(String::isNotEmpty))
     SortSongs.ALBUM -> ListSection.Name(song.album?.trim()?.takeIf(String::isNotEmpty))
     SortSongs.RECENTLY_ADDED -> {

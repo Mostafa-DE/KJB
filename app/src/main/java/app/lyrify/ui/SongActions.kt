@@ -52,6 +52,7 @@ import app.lyrify.Lyrify
 import app.lyrify.R
 import app.lyrify.dupes.Confirmation
 import app.lyrify.dupes.trashFile
+import app.lyrify.library.CollectionKind
 import app.lyrify.library.FavouriteCollection
 import app.lyrify.library.FavouritesPort
 import app.lyrify.library.Library
@@ -105,6 +106,54 @@ fun sheetRows(place: SheetPlace, coversTags: Boolean, removeFromQueue: Boolean):
         SheetRow.REMOVE_FROM_PLAYLIST -> place is SheetPlace.Playlist
         else -> true
     }
+}
+
+/** The rows of an album's or an artist's "⋯", in the order they show. */
+enum class CollectionRow { PLAY_NEXT, ADD_TO, SHUFFLE, GO_TO_ARTIST, COVERS_TAGS, EDIT_ALBUM, RENAME_ARTIST, MERGE_WITH }
+
+/** An album's "⋯": Go to artist when its artist has a page ([artistPage]), Covers & tags when its slot is filled. */
+fun albumRows(artistPage: Boolean, coversTags: Boolean): List<CollectionRow> = CollectionRow.entries.filter { row ->
+    when (row) {
+        CollectionRow.GO_TO_ARTIST -> artistPage
+        CollectionRow.COVERS_TAGS -> coversTags
+        CollectionRow.RENAME_ARTIST, CollectionRow.MERGE_WITH -> false
+        else -> true
+    }
+}
+
+/** An artist's "⋯". */
+fun artistRows(): List<CollectionRow> =
+    listOf(CollectionRow.PLAY_NEXT, CollectionRow.ADD_TO, CollectionRow.SHUFFLE, CollectionRow.RENAME_ARTIST, CollectionRow.MERGE_WITH)
+
+/** What the rows of an album's or an artist's "⋯" do, each on the page's collection. */
+interface CollectionActions {
+    fun playNext()
+
+    fun addTo()
+
+    fun shuffle()
+
+    fun goToArtist()
+
+    fun coversTags()
+
+    fun editAlbum()
+
+    fun renameArtist()
+
+    fun mergeWith()
+}
+
+/** Does what [row] says. */
+fun CollectionActions.act(row: CollectionRow) = when (row) {
+    CollectionRow.PLAY_NEXT -> playNext()
+    CollectionRow.ADD_TO -> addTo()
+    CollectionRow.SHUFFLE -> shuffle()
+    CollectionRow.GO_TO_ARTIST -> goToArtist()
+    CollectionRow.COVERS_TAGS -> coversTags()
+    CollectionRow.EDIT_ALBUM -> editAlbum()
+    CollectionRow.RENAME_ARTIST -> renameArtist()
+    CollectionRow.MERGE_WITH -> mergeWith()
 }
 
 /** One place in the Add to sheet, in the order they show. */
@@ -297,9 +346,9 @@ class SongActions(private val playback: PlaybackCommands, private val playlists:
             Outcome(Said.NotSaved)
         }
 
-    /** Only the playlist goes; the songs stay on the phone. */
-    suspend fun delete(playlist: Playlist): Outcome =
-        if (playlists.delete(playlist.id)) Outcome(Said.PlaylistDeleted) { playlists.put(playlist) } else Outcome(Said.NotSaved)
+    /** Only the playlist goes; the songs stay on the phone. Undo puts it back, then [reopen] (from its page: that page again). */
+    suspend fun delete(playlist: Playlist, reopen: () -> Unit = {}): Outcome =
+        if (playlists.delete(playlist.id)) Outcome(Said.PlaylistDeleted) { playlists.put(playlist).also { if (it) reopen() } } else Outcome(Said.NotSaved)
 
     private fun Undo.asUndo(): suspend () -> Boolean = {
         undo()
@@ -483,6 +532,23 @@ private fun saidIcon(said: Said): Int = when (said) {
     Said.Renamed -> R.drawable.ic_edit
     Said.PlaylistDeleted -> R.drawable.ic_delete
     Said.NotSaved -> R.drawable.ic_error
+}
+
+/** A song's heart for TalkBack (the sheet's, the player's, the widget's, the notification's): what a tap does now. */
+@StringRes
+fun heartLabel(on: Boolean): Int = if (on) R.string.lib_unfavourite else R.string.lib_favourite_song
+
+/** A collection page's heart for TalkBack: "Favourite this album", or "Remove from Favourites" while it is on. */
+@StringRes
+fun heartLabel(kind: CollectionKind, on: Boolean): Int = if (on) {
+    R.string.lib_unfavourite
+} else {
+    when (kind) {
+        CollectionKind.ALBUM -> R.string.lib_favourite_album
+        CollectionKind.ARTIST -> R.string.lib_favourite_artist
+        CollectionKind.FOLDER -> R.string.lib_favourite_folder
+        CollectionKind.PLAYLIST -> R.string.lib_favourite_playlist
+    }
 }
 
 /** How a queue's source reads: "Album · Harbour Glass", "Favourites"; the start of a new queue's name. */

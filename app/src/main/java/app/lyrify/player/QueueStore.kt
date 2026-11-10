@@ -98,6 +98,7 @@ object QueuesJson {
             put(INDEX_KEY, JsonPrimitive(queue.index))
             put(POSITION_KEY, JsonPrimitive(queue.positionMs))
             put(UPDATED_AT_KEY, JsonPrimitive(queue.updatedAt))
+            put(STARTED_AT_KEY, JsonPrimitive(queue.startedAt))
             queue.unshuffled?.let { put(UNSHUFFLED_KEY, JsonArray(it.map(::JsonPrimitive))) }
             put(ITEMS_KEY, JsonArray(queue.items.map(::item)))
         },
@@ -135,6 +136,8 @@ object QueuesJson {
             name = stored[NAME_KEY]?.text()?.takeIf(String::isNotBlank),
             unshuffled = (stored[UNSHUFFLED_KEY] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.takeUnless { p -> p.isString }?.longOrNull }?.filter { it in uids },
             updatedAt = stored.long(UPDATED_AT_KEY) ?: 0,
+            // Queues stored before start times were kept: their last play is as near as is known.
+            startedAt = stored.long(STARTED_AT_KEY) ?: stored.long(UPDATED_AT_KEY) ?: 0,
         )
     }
 
@@ -168,6 +171,7 @@ object QueuesJson {
     private const val INDEX_KEY: String = "index"
     private const val POSITION_KEY: String = "positionMs"
     private const val UPDATED_AT_KEY: String = "updatedAt"
+    private const val STARTED_AT_KEY: String = "startedAt"
     private const val UNSHUFFLED_KEY: String = "unshuffled"
     private const val ITEMS_KEY: String = "items"
     private const val UID_KEY: String = "uid"

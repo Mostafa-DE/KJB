@@ -76,6 +76,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.border
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
@@ -101,7 +102,7 @@ import app.lyrify.player.PlayerUi
 import app.lyrify.player.Queue
 import app.lyrify.player.QueueItem
 import app.lyrify.player.Repeat
-import app.lyrify.player.queueLabel
+import app.lyrify.player.sourceLabel
 import app.lyrify.settings.LibrarySettings
 import app.lyrify.settings.PlayerUiSettings
 import app.lyrify.settings.Settings
@@ -576,7 +577,8 @@ private fun PlayerTopBar(ui: PlayerUi, onClose: () -> Unit, onRoute: (PlayerRout
             .pointerInput(Unit) { detectVerticalDragGestures(onDragEnd = onDragEnd, onDragCancel = onDragEnd) { change, dy -> onDrag(change, dy) } },
     ) {
         ChromeIconButton(R.drawable.ic_keyboard_arrow_down, stringResource(R.string.player_close), onClose)
-        val name = queueLabel(context, ui.queue)
+        // Where it plays from, without the time the queue started that the queue lists add.
+        val name = ui.queue.name ?: sourceLabel(context, ui.queue.source, ui.queue.items.size)
         Text(
             fromLine(stringResource(R.string.player_from, name), name, MaterialTheme.colorScheme.onSurface),
             style = SourceStyle,
@@ -928,7 +930,7 @@ private fun TitleAndLinks(ui: PlayerUi, settings: LibrarySettings) {
         overflow = TextOverflow.Ellipsis,
         modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
     )
-    Row(horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().height(TOUCH)) {
+    Row(horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().heightIn(min = TOUCH)) {
         if (song == null) {
             PlayerLink(stringResource(R.string.player_not_on_phone), onClick = null, Modifier)
             return@Row
@@ -948,8 +950,10 @@ private fun PlayerLink(text: String, onClick: (() -> Unit)?, modifier: Modifier)
     val colors = MaterialTheme.colorScheme
     Box(
         contentAlignment = Alignment.Center,
+        // At least 48 dp to touch whatever room the line is given; the words look the same.
         modifier = modifier
-            .height(TOUCH)
+            .minimumInteractiveComponentSize()
+            .heightIn(min = TOUCH)
             .clip(RoundedCornerShape(12.dp))
             .then(if (onClick != null) Modifier.clickable(role = Role.Button, onClick = onClick) else Modifier)
             .padding(horizontal = 4.dp),

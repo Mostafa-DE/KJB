@@ -176,10 +176,11 @@ class LyricsPipelineAiTest {
         waiting(track)
         sidecar(track).writeText("the user's own file")
 
-        assertEquals(LyricsStatus.EXISTING, pipeline().recordAi(track, AiResult.Transcribed(lrc, stats)))
+        // Words without times: plain lyrics.
+        assertEquals(LyricsStatus.EXISTING_PLAIN, pipeline().recordAi(track, AiResult.Transcribed(lrc, stats)))
 
         assertEquals("the user's own file", sidecar(track).readText())
-        assertEquals(LyricsStatus.EXISTING, ledger[track.path]?.status)
+        assertEquals(LyricsStatus.EXISTING_PLAIN, ledger[track.path]?.status)
     }
 
     @Test

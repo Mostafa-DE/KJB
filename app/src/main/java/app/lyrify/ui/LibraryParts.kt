@@ -1,7 +1,13 @@
 package app.lyrify.ui
 
 import androidx.compose.animation.Crossfade
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntSize
 import app.lyrify.library.SongRef
 import androidx.compose.ui.text.font.lerp
 import androidx.compose.ui.graphics.lerp
@@ -164,7 +170,10 @@ class PageSongs(
     fun shuffle() = playback.shuffle(songs.map { it.ref }, source)
 
     /** "Add all": the Add to sheet for every song, in the list's order. */
-    fun addAll() = sheets.show(OpenSheet.AddTo(songs.map { it.ref }, source, sourceName))
+    fun addAll() = addTo(songs)
+
+    /** The Add to sheet for [these], from this list's source: an album's "⋯" gives its songs in album order. */
+    fun addTo(these: List<Song>) = sheets.show(OpenSheet.AddTo(these.map { it.ref }, source, sourceName))
 
     /** A tap on [song] at [at] in [songs]: it plays from there, or while selecting, it is picked or unpicked. */
     fun tap(song: Song, at: Int) = if (selection.active) onSelection(selection.toggle(song)) else play(at)
@@ -173,7 +182,8 @@ class PageSongs(
 /**
  * A page of songs under its own top bar ([topBar], or the selection's while it selects): the list, its selection and
  * its sheets. [content] adds the list's items, the header and the rows ([songRows]) among them. [loaded] false: [songs]
- * is empty only because the list is still being read.
+ * is empty only because the list is still being read. [sheet] is the page's own sheet on its songs (an album's or an
+ * artist's "⋯"), always in the composition.
  */
 @Composable
 fun SongListFrame(
@@ -183,6 +193,7 @@ fun SongListFrame(
     topBar: @Composable (under: Boolean, backdrop: GlassBackdrop) -> Unit,
     state: LazyListState = rememberLazyListState(),
     loaded: Boolean = true,
+    sheet: @Composable (PageSongs) -> Unit = {},
     content: LazyListScope.(PageSongs) -> Unit,
 ) {
     val sheets = rememberSongSheets()
@@ -199,6 +210,22 @@ fun SongListFrame(
         }
     }
     SongSheetsHost(sheets, ui) { selection = SongSelection() }
+    sheet(list)
+}
+
+/**
+ * An item of a page's list kept clear of the shell's Now bar and dock: once laid out, the list scrolls just enough for
+ * all of it to show above them (an empty playlist's hint, under its hero).
+ */
+@Composable
+fun AboveChrome(content: @Composable () -> Unit) {
+    val chrome = with(LocalDensity.current) { LocalShellChrome.current.bottom.toPx() }
+    val requester = remember { BringIntoViewRequester() }
+    var size by remember { mutableStateOf(IntSize.Zero) }
+    LaunchedEffect(size, chrome) {
+        if (size.height > 0) requester.bringIntoView(Rect(0f, 0f, size.width.toFloat(), size.height + chrome))
+    }
+    Box(Modifier.bringIntoViewRequester(requester).onSizeChanged { size = it }) { content() }
 }
 
 /**
@@ -269,7 +296,8 @@ fun ListHeader(
         val shuffles = listOf(true, false).associateWith { label ->
             measure("shuffle $label") { HeaderButton(R.drawable.ic_shuffle, stringResource(R.string.lib_shuffle), any, primary = false, label = label, onShuffle) }
         }
-        val add = onAddAll?.let { onClick -> measure("add") { AddAllButton(songs, any, onClick) } }.orEmpty()
+        // Nothing to add from an empty list: no "Add all 0 songs".
+        val add = onAddAll?.takeIf { any }?.let { onClick -> measure("add") { AddAllButton(songs, onClick) } }.orEmpty()
         val chips = sort?.let { order -> listOf(true, false).associateWith { label -> measure("sort $label") { SortChip(order, label, onSort) } } }
         fun width(parts: List<androidx.compose.ui.layout.Placeable>) = parts.sumOf { it.width }
         fun widths(parts: Map<Boolean, List<androidx.compose.ui.layout.Placeable>>, before: Int = 0) =
@@ -377,8 +405,8 @@ private fun HeaderButton(@DrawableRes icon: Int, text: String, enabled: Boolean,
 
 /** Add all: an icon button that opens Add to for every song; TalkBack hears "Add all 7 songs". */
 @Composable
-private fun AddAllButton(songs: Int, enabled: Boolean, onClick: () -> Unit) {
-    ChromeIconButton(R.drawable.ic_playlist_add, pluralStringResource(R.plurals.lib_add_all, songs, songs), onClick, enabled = enabled, glass = false, iconSize = 22.dp)
+private fun AddAllButton(songs: Int, onClick: () -> Unit) {
+    ChromeIconButton(R.drawable.ic_playlist_add, pluralStringResource(R.plurals.lib_add_all, songs, songs), onClick, glass = false, iconSize = 22.dp)
 }
 
 /** The order shown, as a chip that opens the sort sheet; with [label] false only its icon. */

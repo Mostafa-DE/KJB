@@ -13,6 +13,8 @@
 
     <!-- A queue's source: "Album · Harbour Glass". -->
     <string name="queue_source_named">%1$s · %2$s</string>
+    <!-- A queue without the user's name: its source and the time it started, "Songs · 21:30". -->
+    <string name="queue_name_made">%1$s · %2$s</string>
     <string name="queue_source_album">Album</string>
     <string name="queue_source_artist">Artist</string>
     <string name="queue_source_folder">Folder</string>
@@ -71,8 +73,6 @@
     <string name="player_shuffle_off">Shuffle, off</string>
     <string name="player_shuffled">Shuffle on</string>
     <string name="player_unshuffled">Shuffle off</string>
-    <string name="player_favourite_on">Favourite, on</string>
-    <string name="player_favourite_off">Favourite, off</string>
     <string name="player_favourited">Added to Favourites</string>
     <string name="player_unfavourited">Removed from Favourites</string>
     <string name="player_favourite_failed">Favourites could not be saved.</string>

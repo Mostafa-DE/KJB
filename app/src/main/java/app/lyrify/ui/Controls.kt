@@ -74,6 +74,7 @@ import androidx.compose.ui.graphics.takeOrElse
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -366,7 +367,6 @@ fun LyrifyField(
     keyboardActions: KeyboardActions = KeyboardActions.Default,
 ) {
     val colors = MaterialTheme.colorScheme
-    val highlight = LocalBrandColors.current.highlight
     var focused by remember { mutableStateOf(false) }
     BasicTextField(
         value = value,
@@ -374,35 +374,68 @@ fun LyrifyField(
         modifier = modifier.onFocusChanged { focused = it.isFocused },
         singleLine = true,
         textStyle = MaterialTheme.typography.bodyLarge.copy(color = colors.onSurface),
-        cursorBrush = SolidColor(highlight),
+        cursorBrush = SolidColor(LocalBrandColors.current.highlight),
         keyboardOptions = keyboardOptions,
         keyboardActions = keyboardActions,
-        decorationBox = { field ->
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                if (label != null) Text(label, style = MaterialTheme.typography.labelMedium, color = colors.onSurfaceVariant)
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 52.dp)
-                        .background(colors.surfaceContainerHigh, shape)
-                        .then(if (isError || focused) Modifier.border(ring, if (isError) colors.error else highlight, shape) else Modifier)
-                        .padding(start = if (leading != null) 14.dp else 16.dp, end = if (trailing != null) 2.dp else 16.dp),
-                ) {
-                    leading?.invoke()
-                    Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
-                        if (value.isEmpty() && placeholder != null) {
-                            Text(placeholder, style = MaterialTheme.typography.bodyLarge, color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        }
-                        field()
-                    }
-                    trailing?.invoke(this)
-                }
-                if (isError) Box(Modifier.padding(start = 16.dp).width(24.dp).height(2.dp).background(colors.error, CircleShape))
-            }
-        },
+        decorationBox = { field -> FieldFrame(field, value.isEmpty(), focused, label, placeholder, shape, ring, leading, trailing, isError) },
     )
+}
+
+/** [LyrifyField] with its text's selection, for a name that starts selected (a rename). */
+@Composable
+fun LyrifyField(value: TextFieldValue, onValueChange: (TextFieldValue) -> Unit, modifier: Modifier = Modifier, label: String? = null) {
+    val colors = MaterialTheme.colorScheme
+    var focused by remember { mutableStateOf(false) }
+    BasicTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = modifier.onFocusChanged { focused = it.isFocused },
+        singleLine = true,
+        textStyle = MaterialTheme.typography.bodyLarge.copy(color = colors.onSurface),
+        cursorBrush = SolidColor(LocalBrandColors.current.highlight),
+        decorationBox = { field -> FieldFrame(field, value.text.isEmpty(), focused, label, placeholder = null, RoundedCornerShape(16.dp), 2.dp, leading = null, trailing = null, isError = false) },
+    )
+}
+
+/** What [LyrifyField] draws round its [field]: the label, the filled box with its ring, the placeholder while [empty]. */
+@Composable
+private fun FieldFrame(
+    field: @Composable () -> Unit,
+    empty: Boolean,
+    focused: Boolean,
+    label: String?,
+    placeholder: String?,
+    shape: Shape,
+    ring: Dp,
+    leading: (@Composable () -> Unit)?,
+    trailing: (@Composable RowScope.() -> Unit)?,
+    isError: Boolean,
+) {
+    val colors = MaterialTheme.colorScheme
+    val highlight = LocalBrandColors.current.highlight
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        if (label != null) Text(label, style = MaterialTheme.typography.labelMedium, color = colors.onSurfaceVariant)
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 52.dp)
+                .background(colors.surfaceContainerHigh, shape)
+                .then(if (isError || focused) Modifier.border(ring, if (isError) colors.error else highlight, shape) else Modifier)
+                .padding(start = if (leading != null) 14.dp else 16.dp, end = if (trailing != null) 2.dp else 16.dp),
+        ) {
+            leading?.invoke()
+            Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                if (empty && placeholder != null) {
+                    Text(placeholder, style = MaterialTheme.typography.bodyLarge, color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                field()
+            }
+            trailing?.invoke(this)
+        }
+        if (isError) Box(Modifier.padding(start = 16.dp).width(24.dp).height(2.dp).background(colors.error, CircleShape))
+    }
 }
 
 // Progress

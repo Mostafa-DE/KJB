@@ -180,6 +180,35 @@ class LyricsPipelineTest {
     }
 
     @Test
+    fun `an existing sidecar without timed lines is plain lyrics`() = runTest {
+        val track = audio()
+        sidecar(track).writeText("Low tide\nA made-up line\n")
+
+        assertEquals(LyricsStatus.EXISTING_PLAIN, pipeline().status(track))
+
+        assertEquals(LyricsStatus.EXISTING_PLAIN, ledger[track.path]?.status)
+        assertEquals(0, client.requests)
+    }
+
+    @Test
+    fun `a lyrics file put there after plain lyrics were found, or changed since, is read again when the song plays`() = runTest {
+        // The phone: LRCLIB's plain lyrics were recorded, then a synced .lrc was copied next to the song.
+        val track = audio()
+        client.onGet = { LrclibResult.Found(listOf(record(synced = null))) }
+        assertEquals(LyricsStatus.PLAIN_ONLY, pipeline().status(track))
+
+        sidecar(track).writeText("[00:01.000]Low tide\n[00:05.000]A made-up line\n")
+        assertEquals(LyricsStatus.EXISTING, pipeline().status(track))
+        sidecar(track).writeText("Low tide\nA made-up line\n")
+        assertEquals(LyricsStatus.EXISTING_PLAIN, pipeline().status(track))
+        assertEquals(LyricsStatus.EXISTING_PLAIN, ledger[track.path]?.status)
+        sidecar(track).writeText("[00:01.000]Low tide\n")
+        assertEquals(LyricsStatus.EXISTING, pipeline().status(track))
+        assertEquals(LyricsStatus.EXISTING, ledger[track.path]?.status)
+        assertEquals("[00:01.000]Low tide\n", sidecar(track).readText())
+    }
+
+    @Test
     fun `a sidecar that appears during the lookup is kept`() = runTest {
         val track = audio()
         client.onGet = {
@@ -374,15 +403,16 @@ class LyricsPipelineTest {
             sidecar(track).writeBytes(ByteArray(0)) // empty: a prefix of any lyrics
             LrclibResult.Found(listOf(record()))
         }
-        ledger.accepts = { it.status != LyricsStatus.EXISTING }
+        // An empty file has no timed lines: plain lyrics, as far as its status goes.
+        ledger.accepts = { it.status != LyricsStatus.EXISTING_PLAIN }
         val pipeline = pipeline()
 
-        assertEquals(LyricsStatus.EXISTING, pipeline.status(track))
+        assertEquals(LyricsStatus.EXISTING_PLAIN, pipeline.status(track))
         assertEquals(LyricsStatus.WRITING, ledger[track.path]?.status)
         assertNull(ledger[track.path]?.pendingText)
 
         ledger.accepts = { true }
-        assertEquals(LyricsStatus.EXISTING, pipeline.status(track))
+        assertEquals(LyricsStatus.EXISTING_PLAIN, pipeline.status(track))
 
         assertTrue(sidecar(track).exists())
         assertEquals(0L, sidecar(track).length())
@@ -397,9 +427,9 @@ class LyricsPipelineTest {
             sidecar(track).writeBytes(ByteArray(0))
             LrclibResult.Found(listOf(record()))
         }
-        ledger.accepts = { it.status != LyricsStatus.EXISTING && !(it.status == LyricsStatus.WRITING && it.pendingText == null) }
+        ledger.accepts = { it.status != LyricsStatus.EXISTING_PLAIN && !(it.status == LyricsStatus.WRITING && it.pendingText == null) }
 
-        assertEquals(LyricsStatus.EXISTING, pipeline().status(track))
+        assertEquals(LyricsStatus.EXISTING_PLAIN, pipeline().status(track))
 
         assertTrue(warnings.isNotEmpty())
         assertTrue(warnings.toString(), warnings.none { "Vael" in it || folder.root.path in it })

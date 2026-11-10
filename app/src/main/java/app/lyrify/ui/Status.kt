@@ -22,6 +22,7 @@ data class StatusStyle(val status: LyricsStatus, @StringRes val label: Int, @Dra
     fun sentence(timing: PlainTiming): Int = when (status) {
         LyricsStatus.SYNCED -> R.string.status_synced_sentence
         LyricsStatus.EXISTING -> R.string.status_existing_sentence
+        LyricsStatus.EXISTING_PLAIN -> R.string.status_existing_plain_sentence
         LyricsStatus.AI_ALIGNED -> R.string.status_ai_aligned_sentence
         LyricsStatus.AI_TRANSCRIBED -> R.string.status_ai_transcribed_sentence
         LyricsStatus.NEEDS_CHECK -> R.string.status_needs_check_sentence
@@ -43,11 +44,15 @@ data class StatusStyle(val status: LyricsStatus, @StringRes val label: Int, @Dra
     }
 }
 
-/** The spec's status set: one label, one icon and one tone per status. Only "To check", errors and the AI's work stand out. */
+/**
+ * The spec's status set: one label, one icon and one tone per status. Only "To check", errors and the AI's work stand out.
+ * A lyrics file that was already there reads by what it holds: Synced like KJB's own with timed lines, else Lyrics.
+ */
 val LyricsStatus.style: StatusStyle
     get() = when (this) {
         LyricsStatus.SYNCED -> StatusStyle(this, R.string.status_synced, R.drawable.ic_lyrics_fill, Tone.SYNCED)
-        LyricsStatus.EXISTING -> StatusStyle(this, R.string.status_existing, R.drawable.ic_task_alt, Tone.SYNCED)
+        LyricsStatus.EXISTING -> StatusStyle(this, R.string.status_synced, R.drawable.ic_lyrics_fill, Tone.SYNCED)
+        LyricsStatus.EXISTING_PLAIN -> StatusStyle(this, R.string.status_existing_plain, R.drawable.ic_lyrics, Tone.SYNCED)
         LyricsStatus.AI_ALIGNED -> StatusStyle(this, R.string.status_ai_aligned, R.drawable.ic_auto_awesome_fill, Tone.AI_SYNCED)
         LyricsStatus.AI_TRANSCRIBED -> StatusStyle(this, R.string.status_ai_transcribed, R.drawable.ic_hearing_fill, Tone.AI_WRITTEN)
         LyricsStatus.NEEDS_CHECK -> StatusStyle(this, R.string.status_needs_check, R.drawable.ic_help_fill, Tone.CHECK)

@@ -267,9 +267,9 @@ private fun StatusChips(list: SongList, query: SongQuery, onQuery: (SongQuery) -
     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(horizontal = ScreenPadding), modifier = Modifier.padding(top = 8.dp)) {
         items(list.statuses, key = { it.name }, contentType = { "chip" }) { status ->
             val style = status.style
-            val selected = query.status == status
+            val selected = query.status?.let { sameChip(it, status) } == true
             val label = stringResource(style.label)
-            val count = list.statusCounts.getValue(status)
+            val count = list.chipCount(status)
             val description = stringResource(R.string.filter_count, label, formatCount(count))
             LyrifyChip(
                 selected = selected,

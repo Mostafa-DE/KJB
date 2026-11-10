@@ -22,6 +22,7 @@ import app.lyrify.library.LibraryGraph
 import app.lyrify.library.SongRef
 import app.lyrify.settings.NotificationButtons
 import app.lyrify.settings.Settings
+import app.lyrify.ui.heartLabel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
@@ -104,9 +105,9 @@ const val COMMAND_REPEAT: String = "app.lyrify.player.REPEAT"
 fun notificationButtons(choice: NotificationButtons, favourite: Boolean, shuffled: Boolean, repeat: Repeat): List<NotificationButton> = when (choice) {
     NotificationButtons.FAVOURITE -> listOf(
         if (favourite) {
-            NotificationButton(COMMAND_FAVOURITE, CommandButton.ICON_HEART_FILLED, R.string.player_favourite_on)
+            NotificationButton(COMMAND_FAVOURITE, CommandButton.ICON_HEART_FILLED, heartLabel(on = true))
         } else {
-            NotificationButton(COMMAND_FAVOURITE, CommandButton.ICON_HEART_UNFILLED, R.string.player_favourite_off)
+            NotificationButton(COMMAND_FAVOURITE, CommandButton.ICON_HEART_UNFILLED, heartLabel(on = false))
         },
     )
     NotificationButtons.SHUFFLE_REPEAT -> listOf(

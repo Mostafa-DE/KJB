@@ -15,9 +15,9 @@ data class QueueItem(val uid: Long, val song: SongRef, val sourceIndex: Int? = n
 
 /**
  * A queue: its songs in play order, each song once (by path), the [index] of the current one and the [positionMs] in it,
- * the list it came from ([source]), and the user's [name] for it (Rename; null shows the source). While shuffled,
- * [unshuffled] keeps the order before, by uid, so turning Shuffle off restores it. [updatedAt] is when it last played or
- * was left, wall-clock millis.
+ * the list it came from ([source]), and the user's [name] for it (Rename; null shows the source and [startedAt], see
+ * [queueNames]). While shuffled, [unshuffled] keeps the order before, by uid, so turning Shuffle off restores it.
+ * [startedAt] is when it was made, [updatedAt] when it last played or was left, wall-clock millis.
  */
 data class Queue(
     val id: String,
@@ -28,6 +28,7 @@ data class Queue(
     val name: String? = null,
     val unshuffled: List<Long>? = null,
     val updatedAt: Long = 0,
+    val startedAt: Long = 0,
 ) {
     val shuffled: Boolean get() = unshuffled != null
 
@@ -349,6 +350,7 @@ data class QueueBook(
             index = startPath?.let { path -> items.indexOfFirst { it.song.path == path } }?.coerceAtLeast(0) ?: 0,
             unshuffled = if (shuffle != null) ordered.map { it.uid } else null,
             updatedAt = now,
+            startedAt = now,
         )
         return copy(queues = queues + queue, nextId = nextId + 1, nextUid = nextUid + items.size) to queue
     }
@@ -417,6 +419,24 @@ data class QueueBook(
 /** These items with the one at [index] no longer waiting as a Play next song: it is playing. */
 private fun List<QueueItem>.unmarked(index: Int): List<QueueItem> =
     if (getOrNull(index)?.playNext == true) mapIndexed { i, item -> if (i == index) item.copy(playNext = false) else item } else this
+
+/**
+ * The names the queues show, by id: the user's name as given, else [made] (the list the queue came from and the time it
+ * started, "Songs · 21:30"). A made name that another queue shows already, a user's name or an older queue's, takes the
+ * first free number ("Songs · 21:30 2"), so two queues never read the same.
+ */
+fun queueNames(queues: List<Queue>, made: (Queue) -> String): Map<String, String> {
+    val taken = queues.mapNotNull { it.name }.toMutableSet()
+    val names = queues.mapNotNull { queue -> queue.name?.let { queue.id to it } }.toMap().toMutableMap()
+    // Oldest first, so a queue keeps its name when a newer one comes from the same list in the same minute.
+    queues.filter { it.name == null }.sortedWith(compareBy({ it.startedAt }, { it.id.length }, { it.id })).forEach { queue ->
+        val base = made(queue)
+        val name = if (base !in taken) base else generateSequence(2) { it + 1 }.map { "$base $it" }.first { it !in taken }
+        taken += name
+        names[queue.id] = name
+    }
+    return names
+}
 
 /**
  * Whether the song at [index] of [queue] continues an album in track order: the queue came from an album, Shuffle is

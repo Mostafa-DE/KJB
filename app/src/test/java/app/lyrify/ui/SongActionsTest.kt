@@ -2,6 +2,8 @@ package app.lyrify.ui
 
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.SaverScope
+import androidx.compose.ui.text.TextRange
+import app.lyrify.R
 import app.lyrify.library.CollectionKind
 import app.lyrify.library.FavouriteCollection
 import app.lyrify.library.Playlist
@@ -111,6 +113,63 @@ class SongActionsTest {
         )
         // Until P2 fills its slot, a queue's song has no Remove from queue.
         assertEquals(common + SheetRow.MOVE_TO_TRASH, sheetRows(SheetPlace.Queue("q1", 3), coversTags = false, removeFromQueue = false))
+    }
+
+    // An album's or an artist's "⋯"
+
+    @Test
+    fun `an album's menu has Play next, Add to, Shuffle, Go to artist, Covers and tags, then Edit album`() {
+        assertEquals(
+            listOf(CollectionRow.PLAY_NEXT, CollectionRow.ADD_TO, CollectionRow.SHUFFLE, CollectionRow.GO_TO_ARTIST, CollectionRow.COVERS_TAGS, CollectionRow.EDIT_ALBUM),
+            albumRows(artistPage = true, coversTags = true),
+        )
+        // An album artist without a page has no Go to artist; until its slot is filled, no Covers & tags.
+        assertEquals(listOf(CollectionRow.PLAY_NEXT, CollectionRow.ADD_TO, CollectionRow.SHUFFLE, CollectionRow.EDIT_ALBUM), albumRows(artistPage = false, coversTags = false))
+    }
+
+    @Test
+    fun `an artist's menu has Play next, Add to, Shuffle, Rename artist and Merge with`() {
+        assertEquals(
+            listOf(CollectionRow.PLAY_NEXT, CollectionRow.ADD_TO, CollectionRow.SHUFFLE, CollectionRow.RENAME_ARTIST, CollectionRow.MERGE_WITH),
+            artistRows(),
+        )
+    }
+
+    @Test
+    fun `each row of an album's or an artist's menu calls its own action, once`() {
+        val calls = mutableListOf<String>()
+        val actions = object : CollectionActions {
+            override fun playNext() { calls += "play next" }
+
+            override fun addTo() { calls += "add to" }
+
+            override fun shuffle() { calls += "shuffle" }
+
+            override fun goToArtist() { calls += "go to artist" }
+
+            override fun coversTags() { calls += "covers and tags" }
+
+            override fun editAlbum() { calls += "edit album" }
+
+            override fun renameArtist() { calls += "rename artist" }
+
+            override fun mergeWith() { calls += "merge with" }
+        }
+        val expected = mapOf(
+            CollectionRow.PLAY_NEXT to "play next",
+            CollectionRow.ADD_TO to "add to",
+            CollectionRow.SHUFFLE to "shuffle",
+            CollectionRow.GO_TO_ARTIST to "go to artist",
+            CollectionRow.COVERS_TAGS to "covers and tags",
+            CollectionRow.EDIT_ALBUM to "edit album",
+            CollectionRow.RENAME_ARTIST to "rename artist",
+            CollectionRow.MERGE_WITH to "merge with",
+        )
+        for (row in CollectionRow.entries) {
+            calls.clear()
+            actions.act(row)
+            assertEquals("$row", listOf(expected.getValue(row)), calls)
+        }
     }
 
     // Add to
@@ -415,6 +474,32 @@ class SongActionsTest {
     }
 
     @Test
+    fun `a playlist deleted from its page opens again with its Undo, and not when the Undo could not be stored`() = runBlocking {
+        val store = MemoryPlaylists(PlaylistsState(listOf(roadTrip)))
+        val actions = SongActions(NoPlayback, store)
+        var reopened = 0
+        val deleted = actions.delete(roadTrip) { reopened++ }
+        assertEquals(Said.PlaylistDeleted, deleted.said)
+        assertEquals(0, reopened)
+        assertEquals(true, deleted.undo?.invoke())
+        assertEquals(roadTrip, store.now.playlist("p1"))
+        assertEquals(1, reopened)
+
+        val failing = MemoryPlaylists(PlaylistsState(listOf(roadTrip)))
+        val undo = SongActions(NoPlayback, failing).delete(roadTrip) { reopened++ }.undo!!
+        failing.fail = true
+        assertEquals(false, undo())
+        assertEquals(1, reopened)
+    }
+
+    @Test
+    fun `a rename starts with the whole name selected, so typing replaces it, and a new name starts empty`() {
+        assertEquals("Road trip", nameField("Road trip").text)
+        assertEquals(TextRange(0, "Road trip".length), nameField("Road trip").selection)
+        assertEquals(TextRange(0), nameField("").selection)
+    }
+
+    @Test
     fun `a change that could not be stored says so and offers no Undo`() = runBlocking {
         val store = MemoryPlaylists(PlaylistsState(listOf(roadTrip)), fail = true)
         val actions = SongActions(NoPlayback, store)
@@ -427,5 +512,18 @@ class SongActionsTest {
             assertEquals(Said.NotSaved, it.said)
             assertNull(it.undo)
         }
+    }
+
+    // The hearts
+
+    @Test
+    fun `every heart tells TalkBack what a tap does, Remove from Favourites while it is on`() {
+        assertEquals(R.string.lib_favourite_song, heartLabel(on = false))
+        assertEquals(R.string.lib_unfavourite, heartLabel(on = true))
+        assertEquals(R.string.lib_favourite_album, heartLabel(CollectionKind.ALBUM, on = false))
+        assertEquals(R.string.lib_favourite_artist, heartLabel(CollectionKind.ARTIST, on = false))
+        assertEquals(R.string.lib_favourite_folder, heartLabel(CollectionKind.FOLDER, on = false))
+        assertEquals(R.string.lib_favourite_playlist, heartLabel(CollectionKind.PLAYLIST, on = false))
+        CollectionKind.entries.forEach { assertEquals(R.string.lib_unfavourite, heartLabel(it, on = true)) }
     }
 }

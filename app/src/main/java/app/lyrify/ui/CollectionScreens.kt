@@ -15,6 +15,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.annotation.StringRes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,7 +31,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
@@ -61,6 +61,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.lifecycleScope
 import app.lyrify.Lyrify
 import app.lyrify.R
 import app.lyrify.library.Album
@@ -69,8 +71,10 @@ import app.lyrify.library.FavouriteCollection
 import app.lyrify.library.Folder
 import app.lyrify.library.Library
 import app.lyrify.library.PLAYED_LIST_SIZE
+import app.lyrify.library.Playlist
 import app.lyrify.library.PlaylistsState
 import app.lyrify.library.Song
+import app.lyrify.library.nameOrder
 import app.lyrify.library.recentlyAdded
 import app.lyrify.library.sortSongs
 import app.lyrify.player.QueueSource
@@ -83,15 +87,6 @@ import kotlinx.coroutines.launch
 import java.util.concurrent.TimeUnit
 
 // Collection pages: an album, artist, folder, genre or playlist, Built for you, Unknown album, and Favourites.
-
-/**
- * Menu rows other milestones fill (plan section 4), each with a one-line change here; until then null, and the menu
- * does not show.
- */
-internal object CollectionSlots {
-    /** T3: "Rename artist" and "Merge with…" in an artist page's "⋯" (its own menu rows); [close] closes the menu. */
-    val artistMenu: (@Composable (name: String, close: () -> Unit) -> Unit)? = { name, close -> ArtistMenuRows(name, close) }
-}
 
 /** An album, artist, folder, genre or playlist page, Built for you (Favourites among them), or Unknown album. */
 @Composable
@@ -151,7 +146,7 @@ private fun CollectionTopBar(
     )
 }
 
-/** The collection's heart: a switch for TalkBack ("Favourite this album"); Added or Removed with Undo. */
+/** The collection's heart: TalkBack hears what a tap does ("Favourite this album", "Remove from Favourites"); Added or Removed with Undo. */
 @Composable
 private fun HeartButton(collection: FavouriteCollection, ui: LibraryUi) {
     val chrome = LocalChromeColors.current
@@ -161,18 +156,11 @@ private fun HeartButton(collection: FavouriteCollection, ui: LibraryUi) {
     val scope = rememberCoroutineScope()
     val actions = rememberSongActions()
     val on = collection in ui.playlists.favouriteCollections
-    val name = stringResource(
-        when (collection.kind) {
-            CollectionKind.ALBUM -> R.string.lib_favourite_album
-            CollectionKind.ARTIST -> R.string.lib_favourite_artist
-            CollectionKind.FOLDER -> R.string.lib_favourite_folder
-            CollectionKind.PLAYLIST -> R.string.lib_favourite_playlist
-        },
-    )
+    val name = stringResource(heartLabel(collection.kind, on))
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
-            .toggleable(on, role = Role.Switch) { scope.launch { toasts.say(resources, actions.favourite(collection, it)) } }
+            .clickable(role = Role.Button) { scope.launch { toasts.say(resources, actions.favourite(collection, !on)) } }
             .semantics { contentDescription = name }
             .minimumInteractiveComponentSize(),
     ) {
@@ -263,23 +251,15 @@ private fun AlbumPage(ui: LibraryUi, library: Library, key: String) {
     val album = library.album(key) ?: return MissingPage(ui)
     var byTitle by rememberSaveable { mutableStateOf(false) }
     var sorting by rememberSaveable { mutableStateOf(false) }
-    var menu by remember { mutableStateOf(false) }
+    var menu by rememberSaveable { mutableStateOf(false) }
     val songs = remember(album, byTitle, ui.settings.library) { if (byTitle) sortSongs(album.songs, SortSongs.TITLE, ui.settings.library) else album.songs }
     val source = QueueSource(SourceKind.ALBUM, key, album.title)
     val reduced = LocalReducedMotion.current
     SongListFrame(ui, songs, source, topBar = { under, backdrop ->
         CollectionTopBar(album.title, under, backdrop, ui, heart = FavouriteCollection(CollectionKind.ALBUM, key)) {
-            Box {
-                ChromeIconButton(R.drawable.ic_more_horiz, stringResource(R.string.lib_more_album), { menu = true })
-                LyrifyMenu(expanded = menu, onDismiss = { menu = false }) {
-                    MenuRow(stringResource(R.string.lib_edit_album), R.drawable.ic_edit, onClick = {
-                        menu = false
-                        nav.show(FullScreen.EditAlbum(key, byTitle))
-                    })
-                }
-            }
+            ChromeIconButton(R.drawable.ic_more_horiz, stringResource(R.string.lib_more_album), { menu = true })
         }
-    }) { list ->
+    }, sheet = { list -> AlbumMenu(menu, album, library, list, byTitle) { menu = false } }) { list ->
         item(key = "hero", contentType = "hero") {
             Box(rowMotion(reduced)) {
                 Hero(
@@ -308,20 +288,15 @@ private fun ArtistPage(ui: LibraryUi, library: Library, name: String) {
     val artist = library.artist(name) ?: return MissingPage(ui)
     var byTitle by rememberSaveable { mutableStateOf(false) }
     var sorting by rememberSaveable { mutableStateOf(false) }
-    var menu by remember { mutableStateOf(false) }
+    var menu by rememberSaveable { mutableStateOf(false) }
     val songs = remember(artist, byTitle, ui.settings.library) { if (byTitle) sortSongs(artist.songs, SortSongs.TITLE, ui.settings.library) else artist.songs }
     val source = QueueSource(SourceKind.ARTIST, name, name)
     val reduced = LocalReducedMotion.current
     SongListFrame(ui, songs, source, topBar = { under, backdrop ->
         CollectionTopBar(name, under, backdrop, ui, heart = FavouriteCollection(CollectionKind.ARTIST, name)) {
-            CollectionSlots.artistMenu?.let { rows ->
-                Box {
-                    ChromeIconButton(R.drawable.ic_more_horiz, stringResource(R.string.lib_more_artist), { menu = true })
-                    LyrifyMenu(expanded = menu, onDismiss = { menu = false }) { rows(name) { menu = false } }
-                }
-            }
+            ChromeIconButton(R.drawable.ic_more_horiz, stringResource(R.string.lib_more_artist), { menu = true })
         }
-    }) { list ->
+    }, sheet = { list -> ArtistMenu(menu, artist, list) { menu = false } }) { list ->
         item(key = "hero", contentType = "hero") {
             val face = artist.albums.firstOrNull()?.songs?.firstOrNull()
             Box(rowMotion(reduced)) { Hero(name, artistLine(artist), art = { ArtistAvatar(artist, size = AVATAR) }, glow = face?.let { SongArt(it.path, it.ref.mediaStoreId) }) }
@@ -339,6 +314,98 @@ private fun ArtistPage(ui: LibraryUi, library: Library, name: String) {
     }
     if (sorting) OrderSheet(R.string.lib_sort_album, byTitle, { byTitle = it }) { sorting = false }
     ArtistEditHost(library, name)
+}
+
+/**
+ * An album's "⋯" while [open]: Play next and Add to for its songs in album order (whatever order the page shows),
+ * Shuffle as the header's, Go to artist when the artist has a page, Covers & tags at this album's review, Edit album.
+ */
+@Composable
+private fun AlbumMenu(open: Boolean, album: Album, library: Library, list: PageSongs, byTitle: Boolean, onClose: () -> Unit) {
+    val nav = LocalNavigator.current
+    val playSongsNext = rememberPlayNext()
+    if (!open) return
+    val artist = album.artist?.takeIf { library.artist(it) != null }
+    val first = album.songs.firstOrNull()
+    val review = SongSheetSlots.coversTags
+    val actions = object : CollectionActions {
+        override fun playNext() = playSongsNext(album.songs)
+
+        override fun addTo() = list.addTo(album.songs)
+
+        override fun shuffle() = list.shuffle()
+
+        override fun goToArtist() {
+            artist?.let { nav.open(Page.Artist(it)) }
+        }
+
+        // The song sheet's Covers & tags opens the review of a song's album: here, the album's first song.
+        override fun coversTags() {
+            first?.let { review?.invoke(it, nav) }
+        }
+
+        override fun editAlbum() = nav.show(FullScreen.EditAlbum(album.key, byTitle))
+
+        // An artist's rows.
+        override fun renameArtist() = Unit
+
+        override fun mergeWith() = Unit
+    }
+    CollectionMenuSheet(
+        title = album.title,
+        line = songsMeta(album.songs, album.artist),
+        art = { SongCover(first?.let { SongArt(it.path, it.ref.mediaStoreId) }, size = MENU_ART, shape = MaterialTheme.shapes.medium) },
+        rows = albumRows(artistPage = artist != null, coversTags = review != null && first != null),
+        onDismiss = onClose,
+    ) { row ->
+        onClose()
+        actions.act(row)
+    }
+}
+
+/** An artist's "⋯" while [open]: Play next and Add to for their songs by album, Shuffle as the header's, Rename and Merge. */
+@Composable
+private fun ArtistMenu(open: Boolean, artist: app.lyrify.library.Artist, list: PageSongs, onClose: () -> Unit) {
+    val playSongsNext = rememberPlayNext()
+    if (!open) return
+    val actions = object : CollectionActions {
+        override fun playNext() = playSongsNext(artist.songs)
+
+        override fun addTo() = list.addTo(artist.songs)
+
+        override fun shuffle() = list.shuffle()
+
+        override fun renameArtist() = openRename(artist.name)
+
+        override fun mergeWith() = openMerge(artist.name)
+
+        // An album's rows.
+        override fun goToArtist() = Unit
+
+        override fun coversTags() = Unit
+
+        override fun editAlbum() = Unit
+    }
+    CollectionMenuSheet(
+        title = artist.name,
+        line = artistLine(artist),
+        art = { ArtistAvatar(artist, size = MENU_ART) },
+        rows = artistRows(),
+        onDismiss = onClose,
+    ) { row ->
+        onClose()
+        actions.act(row)
+    }
+}
+
+/** Play next for a "⋯" sheet's songs; its toast runs on the page's scope, so it outlives the sheet. */
+@Composable
+private fun rememberPlayNext(): (List<Song>) -> Unit {
+    val toasts = LocalToasts.current
+    val resources = LocalResources.current
+    val scope = rememberCoroutineScope()
+    val actions = rememberSongActions()
+    return { songs -> scope.launch { toasts.say(resources, actions.playNext(songs.map { it.ref })) } }
 }
 
 /** An artist's albums, the newest first, as a row of cards that scrolls sideways inside the page. */
@@ -407,7 +474,8 @@ private fun UnknownAlbumPage(ui: LibraryUi, library: Library) {
 
 /**
  * One of the user's playlists, its songs in the user's order (a song possibly twice); "⋯" has Rename and Delete, and the
- * song sheet "Remove from playlist". A deleted playlist's page says so, so its toast's Undo can bring it back here.
+ * song sheet "Remove from playlist". Delete goes back to where the page was opened from, and its toast's Undo brings the
+ * playlist back and opens it again. A playlist deleted elsewhere leaves its page saying so.
  */
 @Composable
 internal fun PlaylistPage(ui: LibraryUi, library: Library, id: String) {
@@ -421,11 +489,16 @@ internal fun PlaylistPage(ui: LibraryUi, library: Library, id: String) {
     var deleting by rememberSaveable { mutableStateOf(false) }
     var menu by remember { mutableStateOf(false) }
     val m3u = rememberM3uActions()
-    val playlist = ui.playlists.playlist(id) ?: return MissingPage(ui)
+    val nav = LocalNavigator.current
+    // The toast outlives the page Delete leaves: it runs in the activity's scope, not the page's.
+    val lifecycle = LocalLifecycleOwner.current.lifecycleScope
+    // Deleted here: the page keeps drawing it while it leaves.
+    var leaving by remember { mutableStateOf<Playlist?>(null) }
+    val playlist = ui.playlists.playlist(id) ?: leaving ?: return MissingPage(ui)
     // Each song with its place in the playlist, for "Remove from playlist"; songs gone or hidden are left out.
     val entries = remember(playlist, library, byTitle, ui.settings.library) {
         val listed = playlist.songs.mapIndexedNotNull { at, ref -> library.resolver.find(ref)?.takeIf(library::shows)?.let { at to it } }
-        if (byTitle) listed.sortedWith(compareBy(java.text.Collator.getInstance()) { ui.title(it.second) }) else listed
+        if (byTitle) listed.sortedWith(compareBy(nameOrder(java.text.Collator.getInstance())) { ui.title(it.second) }) else listed
     }
     val songs = entries.map { it.second }
     val reduced = LocalReducedMotion.current
@@ -455,7 +528,11 @@ internal fun PlaylistPage(ui: LibraryUi, library: Library, id: String) {
                 ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll, sort = stringResource(if (byTitle) R.string.lib_sort_title else R.string.lib_your_order), onSort = { sorting = true })
             }
         }
-        if (songs.isEmpty()) item(key = "empty", contentType = "empty") { EmptyState(EmptyArt.Glyph, stringResource(R.string.songs_empty_title), rowMotion(reduced), text = stringResource(R.string.lib_playlist_empty)) }
+        if (songs.isEmpty()) {
+            item(key = "empty", contentType = "empty") {
+                AboveChrome { EmptyState(EmptyArt.Glyph, stringResource(R.string.songs_empty_title), rowMotion(reduced), text = stringResource(R.string.lib_playlist_empty)) }
+            }
+        }
         songRows(list, place = { at -> SheetPlace.Playlist(id, entries[at].first) }, repeats = true)
     }
     if (sorting) OrderSheet(R.string.lib_your_order, byTitle, { byTitle = it }) { sorting = false }
@@ -473,7 +550,12 @@ internal fun PlaylistPage(ui: LibraryUi, library: Library, id: String) {
             dismiss = stringResource(R.string.remove_cancel),
             onConfirm = {
                 deleting = false
-                scope.launch { toasts.say(resources, actions.delete(playlist)) }
+                leaving = playlist
+                lifecycle.launch {
+                    val deleted = actions.delete(playlist) { nav.open(Page.Playlist(id)) }
+                    if (deleted.said == Said.PlaylistDeleted) nav.back() else leaving = null
+                    toasts.say(resources, deleted)
+                }
             },
             onDismiss = { deleting = false },
         )
@@ -499,7 +581,7 @@ private fun BuiltInPage(ui: LibraryUi, library: Library, list: BuiltInList) {
             else -> recentlyAdded(library, System.currentTimeMillis()).map { it to null }
         }
     }
-    val ordered = remember(rows, byTitle, ui.settings.library) { rows.orEmpty().let { all -> if (byTitle) all.sortedWith(compareBy(java.text.Collator.getInstance()) { ui.title(it.first) }) else all } }
+    val ordered = remember(rows, byTitle, ui.settings.library) { rows.orEmpty().let { all -> if (byTitle) all.sortedWith(compareBy(nameOrder(java.text.Collator.getInstance())) { ui.title(it.first) }) else all } }
     val songs = ordered.map { it.first }
     val plays = ordered.associate { it.first.path to it.second }
     val kind = when (list) {
@@ -677,3 +759,6 @@ private val HERO_BAR = 64.dp
 private val HeroMeta = body(13.5f, 19)
 private val AVATAR = 104.dp
 private val ALBUM_CARD = 112.dp
+
+/** The art at the head of an album's or an artist's "⋯", as the song sheet's. */
+private val MENU_ART = 72.dp

@@ -365,10 +365,11 @@ class LyricsPipelineCheckTest {
             LrclibResult.Found(listOf(record(it, artist = "Band B", synced = null)))
         }
 
-        assertEquals(Checked.Done(LyricsStatus.EXISTING), pipeline.choose(track.path, 2))
+        // Words without times: plain lyrics.
+        assertEquals(Checked.Done(LyricsStatus.EXISTING_PLAIN), pipeline.choose(track.path, 2))
 
         assertEquals("theirs", sidecar(track).readText())
-        assertEquals(LyricsStatus.EXISTING, ledger[track.path]?.status)
+        assertEquals(LyricsStatus.EXISTING_PLAIN, ledger[track.path]?.status)
     }
 
     @Test
@@ -417,7 +418,7 @@ class LyricsPipelineCheckTest {
         val requests = client.requests
         sidecar(track).writeText("theirs")
 
-        assertEquals(Checked.Done(LyricsStatus.EXISTING), pipeline.choose(track.path, 1))
+        assertEquals(Checked.Done(LyricsStatus.EXISTING_PLAIN), pipeline.choose(track.path, 1))
 
         assertEquals("theirs", sidecar(track).readText())
         assertEquals(requests, client.requests)
