@@ -36,7 +36,10 @@ data class LrclibRecord(
 sealed interface LrclibResult {
     data class Found(val records: List<LrclibRecord>) : LrclibResult
 
-    /** `/api/get` has no such track. */
+    /**
+     * `/api/get` has no such track, or LRCLIB refused the request for good ([LrclibResponses.refused]): asked again, it
+     * would answer the same.
+     */
     data object NotFound : LrclibResult
 
     /**
@@ -82,6 +85,8 @@ class HttpLrclibClient(
     private val gate: RequestGate = RequestGate { System.nanoTime() / NANOS_PER_MILLI },
     /** Makes the connection for a URL without connecting yet; tests pass a fake. */
     private val open: (String) -> HttpURLConnection = { URI(it).toURL().openConnection() as HttpURLConnection },
+    /** A refused request's status code; never the address, which holds the song. */
+    private val log: (String) -> Unit = {},
 ) : LrclibClient {
     override suspend fun get(artist: String, title: String, album: String?, durationSeconds: Long, lane: Lane): LrclibResult =
         fetch(LrclibUrls.get(base, artist, title, album, durationSeconds), lane, LrclibResponses::get)
@@ -123,6 +128,7 @@ class HttpLrclibClient(
         val code = connection.responseCode
         // Error bodies come on errorStream (null when empty); either one is closed here.
         val stream = if (code < HttpURLConnection.HTTP_BAD_REQUEST) connection.inputStream else connection.errorStream
+        if (code != HttpURLConnection.HTTP_NOT_FOUND && LrclibResponses.refused(code)) log("LRCLIB refused a request (HTTP $code): not found, not asked again")
         stream.use { input ->
             when {
                 code != HttpURLConnection.HTTP_OK -> interpret(code, null)
@@ -190,16 +196,28 @@ internal object LrclibUrls {
         params.mapNotNull { (name, value) -> value?.let { "$name=${URLEncoder.encode(it, "UTF-8")}" } }.joinToString("&")
 }
 
-/** HTTP status and body to a result: anything but a readable 200 (or a 404 from `/api/get`) is transient. */
+/** HTTP status and body to a result: a readable 200 is found, a [refused] request not found, anything else transient. */
 internal object LrclibResponses {
-    fun get(code: Int, body: String?): LrclibResult = when (code) {
-        HttpURLConnection.HTTP_OK -> parse(body) { listOf(LrclibJson.record(it)) }
-        HttpURLConnection.HTTP_NOT_FOUND -> LrclibResult.NotFound
+    fun get(code: Int, body: String?): LrclibResult = when {
+        code == HttpURLConnection.HTTP_OK -> parse(body) { listOf(LrclibJson.record(it)) }
+        refused(code) -> LrclibResult.NotFound
         else -> LrclibResult.Transient("HTTP $code")
     }
 
-    fun search(code: Int, body: String?): LrclibResult =
-        if (code == HttpURLConnection.HTTP_OK) parse(body, LrclibJson::records) else LrclibResult.Transient("HTTP $code")
+    fun search(code: Int, body: String?): LrclibResult = when {
+        code == HttpURLConnection.HTTP_OK -> parse(body, LrclibJson::records)
+        refused(code) -> LrclibResult.NotFound
+        else -> LrclibResult.Transient("HTTP $code")
+    }
+
+    /**
+     * A 4xx LRCLIB answers the same however often it is asked (a 400 for a request it can't read, a 404): the lookup
+     * takes it as not found, never retried. 408 (timeout) and 429 (too many requests) mean later, as a 5xx does.
+     */
+    fun refused(code: Int): Boolean =
+        code in HttpURLConnection.HTTP_BAD_REQUEST until HttpURLConnection.HTTP_INTERNAL_ERROR && code != HttpURLConnection.HTTP_CLIENT_TIMEOUT && code != HTTP_TOO_MANY_REQUESTS
+
+    private const val HTTP_TOO_MANY_REQUESTS: Int = 429
 
     private inline fun parse(body: String?, read: (String) -> List<LrclibRecord>): LrclibResult {
         if (body == null) return LrclibResult.Transient("no body")

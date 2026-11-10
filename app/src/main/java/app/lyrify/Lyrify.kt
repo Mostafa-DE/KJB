@@ -104,7 +104,7 @@ object Lyrify {
      */
     @Synchronized
     fun pipeline(context: Context): LyricsPipeline = pipeline ?: LyricsPipeline(
-        client = HttpLrclibClient(userAgent = USER_AGENT),
+        client = HttpLrclibClient(userAgent = USER_AGENT, log = { Log.d(LOG_TAG, it) }),
         ledger = LedgerRepository(context),
         clock = System::currentTimeMillis,
         writes = writes,

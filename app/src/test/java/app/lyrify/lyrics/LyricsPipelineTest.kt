@@ -597,6 +597,23 @@ class LyricsPipelineTest {
     }
 
     @Test
+    fun `a request LRCLIB refuses (HTTP 400) is not retried, the song is not found, LRCLIB was not busy, and it is not asked again`() = runTest {
+        val track = audio()
+        client.onGet = { LrclibResponses.get(400, """{"code":400,"name":"BadRequest"}""") }
+        client.onSearch = { LrclibResponses.search(400, null) }
+        val pipeline = pipeline()
+
+        assertEquals(Processed(LyricsStatus.NOT_FOUND, lrclibBusy = false), pipeline.process(track))
+
+        assertEquals(1, client.gets.size)
+        assertEquals(0L, testScheduler.currentTime)
+        assertEquals(LyricsStatus.NOT_FOUND, ledger[track.path]?.status)
+        val asked = client.requests
+        assertEquals(LyricsStatus.NOT_FOUND, pipeline.status(track))
+        assertEquals(asked, client.requests)
+    }
+
+    @Test
     fun `a lookup that keeps failing is recorded as an error and retried later`() = runTest {
         val track = audio()
         client.onGet = { LrclibResult.Transient("HTTP 503") }

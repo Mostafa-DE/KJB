@@ -67,6 +67,16 @@ class LrclibClientTest {
     }
 
     @Test
+    fun `a request LRCLIB refuses (a 4xx but 408 and 429) is not found for good, never busy`() {
+        assertEquals(LrclibResult.NotFound, LrclibResponses.get(400, """{"code":400,"name":"BadRequest"}"""))
+        assertEquals(LrclibResult.NotFound, LrclibResponses.search(400, null))
+        for (code in listOf(403, 404, 410, 414, 422)) {
+            assertEquals("get $code", LrclibResult.NotFound, LrclibResponses.get(code, null))
+            assertEquals("search $code", LrclibResult.NotFound, LrclibResponses.search(code, ""))
+        }
+    }
+
+    @Test
     fun `redirects are transient`() {
         assertTrue(LrclibResponses.get(301, null) is LrclibResult.Transient)
         assertTrue(LrclibResponses.search(302, "[]") is LrclibResult.Transient)
@@ -77,7 +87,8 @@ class LrclibClientTest {
         assertTrue(LrclibResponses.get(503, "<html>busy</html>") is LrclibResult.Transient)
         assertTrue(LrclibResponses.get(500, null) is LrclibResult.Transient)
         assertTrue(LrclibResponses.get(429, "") is LrclibResult.Transient)
-        assertTrue(LrclibResponses.search(404, "") is LrclibResult.Transient)
+        assertTrue(LrclibResponses.get(408, null) is LrclibResult.Transient)
+        assertTrue(LrclibResponses.search(429, null) is LrclibResult.Transient)
         assertTrue(LrclibResponses.get(200, "<html>overloaded</html>") is LrclibResult.Transient)
         assertTrue(LrclibResponses.search(200, "{\"not\":\"a list\"}") is LrclibResult.Transient)
         assertTrue(LrclibResponses.get(200, null) is LrclibResult.Transient)
@@ -204,6 +215,22 @@ class LrclibClientTest {
             val client = server.client()
             assertTrue(client.get("Quillmere", "Vael", null, 276, Lane.HIGH) is LrclibResult.Transient)
             assertTrue(client.search("Vael", null, Lane.HIGH) is LrclibResult.Transient)
+        } finally {
+            server.stop(0)
+        }
+    }
+
+    @Test
+    fun `a refused request is not found, and the log names its status only`() = runTest {
+        val server = serve { it.reply(400, """{"code":400,"name":"BadRequest"}""".encodeToByteArray()) }
+        val logs = mutableListOf<String>()
+        try {
+            val client = HttpLrclibClient(userAgent = "KJB/test", base = "http://127.0.0.1:${server.address.port}", log = { logs += it })
+            assertEquals(LrclibResult.NotFound, client.get("Quillmere", "Vael", "Ulso", 276, Lane.HIGH))
+            assertEquals(LrclibResult.NotFound, client.search("Vael", "Quillmere", Lane.HIGH))
+            assertEquals(2, logs.size)
+            assertTrue(logs.all { "HTTP 400" in it })
+            assertTrue(logs.none { "Vael" in it || "Quillmere" in it || "Ulso" in it || "127.0.0.1" in it || "/api" in it })
         } finally {
             server.stop(0)
         }
