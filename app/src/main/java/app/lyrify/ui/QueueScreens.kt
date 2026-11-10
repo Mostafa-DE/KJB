@@ -66,7 +66,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import app.lyrify.BuildConfig
 import app.lyrify.Lyrify
 import app.lyrify.R
 import app.lyrify.library.Library
@@ -202,6 +201,7 @@ private fun OneQueuePage(id: String) {
     val names = rememberNames()
     val drag = remember { DragState() }
     var dialog by remember { mutableStateOf<QueueDialog?>(null) }
+    val sheets = rememberSongSheets()
     PageFrame(
         topBar = { under, backdrop ->
             LyrifyTopBar(
@@ -210,7 +210,17 @@ private fun OneQueuePage(id: String) {
                 backdrop = backdrop,
                 navigation = { ChromeIconButton(R.drawable.ic_arrow_back, stringResource(R.string.check_back), { nav.back() }) },
                 actions = {
-                    if (queue != null) QueueActions(queue, book, connection, onRename = { dialog = QueueDialog.RENAME }, onSave = { dialog = QueueDialog.SAVE_AS_PLAYLIST }, onDelete = { dialog = QueueDialog.DELETE })
+                    if (queue != null) {
+                        QueueActions(
+                            queue,
+                            book,
+                            connection,
+                            onAddAll = { sheets.show(OpenSheet.AddTo(queue.items.map { it.song }, queue.source, plainName(context, queue))) },
+                            onRename = { dialog = QueueDialog.RENAME },
+                            onSave = { dialog = QueueDialog.SAVE_AS_PLAYLIST },
+                            onDelete = { dialog = QueueDialog.DELETE },
+                        )
+                    }
                 },
             )
         },
@@ -249,19 +259,25 @@ private fun OneQueuePage(id: String) {
         }
     }
     QueueDialogs(dialog, queue, connection, onDone = { dialog = null }, onDeleted = { nav.back() })
+    SongSheetsHost(sheets)
 }
 
 /** A queue page's top bar actions: Add all (the Add to sheet, L1's), and "⋯" with Rename, Keep, Save as playlist and Delete. */
 @Composable
-private fun QueueActions(queue: Queue, book: QueueBook, connection: PlayerConnection, onRename: () -> Unit, onSave: () -> Unit, onDelete: () -> Unit) {
+private fun QueueActions(
+    queue: Queue,
+    book: QueueBook,
+    connection: PlayerConnection,
+    onAddAll: () -> Unit,
+    onRename: () -> Unit,
+    onSave: () -> Unit,
+    onDelete: () -> Unit,
+) {
     val toasts = LocalToasts.current
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     var menu by remember { mutableStateOf(false) }
-    // "Add all": the Add to sheet is L1's; it plugs in here.
-    ChromeIconButton(R.drawable.ic_playlist_add, stringResource(R.string.queue_add_all, pluralStringResource(R.plurals.queue_songs, queue.items.size, queue.items.size)), {
-        if (BuildConfig.DEBUG) scope.launch { toasts.show(Toast("Coming in L1")) }
-    })
+    ChromeIconButton(R.drawable.ic_playlist_add, stringResource(R.string.queue_add_all, pluralStringResource(R.plurals.queue_songs, queue.items.size, queue.items.size)), onAddAll)
     Box {
         ChromeIconButton(R.drawable.ic_more_horiz, stringResource(R.string.queue_more), { menu = true })
         LyrifyMenu(expanded = menu, onDismiss = { menu = false }) {

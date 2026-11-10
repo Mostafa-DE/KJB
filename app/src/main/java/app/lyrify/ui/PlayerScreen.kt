@@ -62,7 +62,6 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import app.lyrify.BuildConfig
 import app.lyrify.Lyrify
 import app.lyrify.R
 import app.lyrify.data.LyricsStatus
@@ -170,18 +169,18 @@ fun ownNow(ui: PlayerUi?, settings: LibrarySettings, now: Long): OwnNow? {
     )
 }
 
-/** The routes later milestones fill: P2 (the menu's library and playback extras, the sleep timer) and P3 (lyrics). */
-enum class PlayerRoute(val milestone: String) {
-    ADD_TO("P2"),
-    SPEED("P2"),
-    REPEAT_PART("P2"),
-    BOOKMARK("P2"),
-    PLAY_ON("P2"),
-    MAKE_TONE("P2"),
-    SONG_INFO("P2"),
-    SLEEP("P2"),
-    SEARCH_LYRICS("P3"),
-    LYRICS_TEXT("P3"),
+/** Where the player's "⋯", its sleep button and its lyrics panel lead: P2's extras ([PlayerExtrasUi]) and P3's lyrics. */
+enum class PlayerRoute {
+    ADD_TO,
+    SPEED,
+    REPEAT_PART,
+    BOOKMARK,
+    PLAY_ON,
+    MAKE_TONE,
+    SONG_INFO,
+    SLEEP,
+    SEARCH_LYRICS,
+    LYRICS_TEXT,
 }
 
 // The Now bar's own player
@@ -261,8 +260,7 @@ fun PlayerView() {
         when (route) {
             // The lyrics panel's Search and "Aa" (LyricsViews.kt).
             PlayerRoute.SEARCH_LYRICS, PlayerRoute.LYRICS_TEXT -> lyricsRoute = route
-            // Declared now, filled by its milestone; a debug build says which.
-            else -> if (!extras.route(route, ui, settings.library) && BuildConfig.DEBUG) scope.launch { toasts.show(Toast("Coming in ${route.milestone}")) }
+            else -> extras.route(route, ui, settings.library)
         }
     }
     var queueSheet by remember { mutableStateOf(false) }
