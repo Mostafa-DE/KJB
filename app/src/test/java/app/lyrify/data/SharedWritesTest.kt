@@ -386,6 +386,7 @@ class SharedWritesTest {
             "overnight/CrashGuard.kt",
             "settings/SettingsStore.kt",
             "stats/PlayLog.kt",
+            "tags/lookup/MetaClient.kt",
             "tones/ToneAudio.kt",
         )
     }
