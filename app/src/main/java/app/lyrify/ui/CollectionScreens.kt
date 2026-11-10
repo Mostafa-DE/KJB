@@ -75,7 +75,7 @@ import java.util.concurrent.TimeUnit
  */
 internal object CollectionSlots {
     /** T3: "Rename artist" and "Merge with…" in an artist page's "⋯" (its own menu rows); [close] closes the menu. */
-    val artistMenu: (@Composable (name: String, close: () -> Unit) -> Unit)? = null
+    val artistMenu: (@Composable (name: String, close: () -> Unit) -> Unit)? = { name, close -> ArtistMenuRows(name, close) }
 }
 
 /** An album, artist, folder, genre or playlist page, Built for you, Unknown album, or a Favourites section's View all. */
@@ -281,6 +281,7 @@ private fun ArtistPage(ui: LibraryUi, library: Library, name: String) {
         songRows(list)
     }
     if (sorting) OrderSheet(R.string.lib_sort_album, byTitle, { byTitle = it }) { sorting = false }
+    ArtistEditHost(library, name)
 }
 
 /** An artist's albums, the newest first, as a row of cards that scrolls sideways inside the page. */

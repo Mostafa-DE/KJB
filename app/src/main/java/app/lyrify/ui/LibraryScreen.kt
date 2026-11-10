@@ -73,6 +73,7 @@ import app.lyrify.settings.LyricsFilter
 import app.lyrify.settings.SortAlbums
 import app.lyrify.settings.SortArtists
 import app.lyrify.settings.SortSongs
+import app.lyrify.tags.NameKind
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.text.Collator
@@ -361,6 +362,7 @@ private fun AlbumsTab(ui: LibraryUi, library: Library, padding: PaddingValues, r
                 gutter = 0.dp,
             )
         }
+        item(key = "same", span = { GridItemSpan(maxLineSpan) }) { SameNamesLine(NameKind.ALBUM, library) }
         items(albums, key = { it.key }) { album ->
             AlbumCard(album.title, album.artist, album.songs.firstOrNull()) { nav.open(Page.Album(album.key)) }
         }
@@ -415,6 +417,7 @@ private fun ArtistsTab(ui: LibraryUi, library: Library, padding: PaddingValues, 
                 onSort = { sorting = true },
             )
         }
+        item(key = "same") { SameNamesLine(NameKind.ARTIST, library, Modifier.padding(horizontal = ScreenPadding)) }
         items(artists, key = { it.name }) { artist ->
             NavRow(artist.name, artistLine(artist), lead = { ArtistAvatar(artist) }) { nav.open(Page.Artist(artist.name)) }
         }
