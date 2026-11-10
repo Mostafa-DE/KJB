@@ -203,7 +203,7 @@ class ThemeTokensTest {
         val source = { name: String -> java.io.File("src/main/java/app/lyrify/ui/$name").readText() }
         val nowBar = source("NowBar.kt")
         val chromeKt = source("Chrome.kt")
-        assertTrue(Regex("GlassSurface\\(backdrop, CircleShape, [^\\n]*containerBounds\\(container\\)\\), solid = true\\)").containsMatchIn(nowBar))
+        assertTrue(Regex("GlassSurface\\(null, CircleShape, [^\\n]*, solid = true\\)").containsMatchIn(nowBar))
         assertTrue(Regex("fun Dock\\([^\\n]*\\n\\s*GlassSurface\\([^\\n]*solid = true\\)").containsMatchIn(chromeKt))
         assertTrue(chromeKt.contains("drawRect(if (solid) chrome.bar else chrome.glassSolid)"))
         // The bar's words take the ink, never the colour left by whatever is around them.

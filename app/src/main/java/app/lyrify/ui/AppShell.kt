@@ -136,7 +136,6 @@ fun AppShell(
     val resources = LocalResources.current
     val toasts = LocalToasts.current
     val density = LocalDensity.current
-    val backdrop = rememberGlassBackdrop()
     val holder = rememberSaveableStateHolder()
     val reduced = LocalReducedMotion.current
     val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
@@ -227,7 +226,7 @@ fun AppShell(
             // goes back to (the player it was opened from), shrinking to show them.
             val overViews = swipe.taking is BackTaking.Pages
             Box(Modifier.fillMaxSize().zIndex(if (overViews) 2f else 0f).backPeek(swipe) { swipe.taking is BackTaking.Pages }) {
-                CompositionLocalProvider(LocalShellChrome provides ShellChrome(backdrop, bottom)) {
+                CompositionLocalProvider(LocalShellChrome provides ShellChrome(bottom)) {
                     PageLayers(pages, swipe, rtl, reduced) { shown ->
                         // Each page keeps its scroll and its fields while pages are pushed over it, and across a turn of the phone.
                         holder.SaveableStateProvider(shown.key) {
@@ -253,12 +252,11 @@ fun AppShell(
                             shows = bar,
                             ledger = ledger,
                             other = otherPlayback,
-                            backdrop = backdrop,
                             onOpen = { nav.show(if (bar is NowBarShows.Own) FullScreen.Player else FullScreen.CompanionNow) },
                             onPlayPause = barPlayPause(bar, own::playPause, otherPlayback, other?.let { session -> session::playPause }),
                         )
                     },
-                    dock = { Dock(state.tab, dot = toolsDot(checks, dupes.badge, aiAttention(ai, aiWaiting)), backdrop = backdrop, onSelect = nav::select) },
+                    dock = { Dock(state.tab, dot = toolsDot(checks, dupes.badge, aiAttention(ai, aiWaiting)), onSelect = nav::select) },
                 )
             }
             // The views a back swipe from a page goes back to dim under it as the page does over a view.
