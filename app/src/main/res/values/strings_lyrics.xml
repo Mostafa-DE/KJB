@@ -1,4 +1,84 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Lyrics on the player: the lyrics panel, the sync editor, lyrics on the lock screen (milestone P3). -->
 <resources>
+    <!-- Full lyrics, over the player -->
+    <string name="lyrics_close">Back to the player</string>
+    <string name="lyrics_more">More for these lyrics</string>
+    <string name="lyrics_make_synced">Make synced</string>
+    <string name="lyrics_edit_timing">Edit timing</string>
+
+    <!-- "Aa": the lyrics text -->
+    <string name="lyrics_text">Lyrics text</string>
+    <string name="lyrics_text_sample">Every line looks like this</string>
+    <string name="lyrics_size">Size</string>
+    <string name="lyrics_weight">Weight</string>
+    <string name="lyrics_align">Alignment</string>
+    <string name="lyrics_size_s" translatable="false">S</string>
+    <string name="lyrics_size_m" translatable="false">M</string>
+    <string name="lyrics_size_l" translatable="false">L</string>
+    <string name="lyrics_size_xl" translatable="false">XL</string>
+    <string name="lyrics_regular">Regular</string>
+    <string name="lyrics_bold">Bold</string>
+    <string name="lyrics_left">Left</string>
+    <string name="lyrics_centre">Centre</string>
+    <string name="lyrics_done">Done</string>
+    <string name="lyrics_not_saved">Your choice could not be saved.</string>
+
+    <!-- The synced lyrics editor -->
+    <string name="sync_close">Close</string>
+    <string name="sync_save">Save</string>
+    <string name="sync_stamp">Stamp</string>
+    <string name="sync_all_stamped">All stamped</string>
+    <string name="sync_undo">Undo</string>
+    <string name="sync_preview">Preview</string>
+    <string name="sync_stop">Stop</string>
+    <string name="sync_previewing">Preview</string>
+    <plurals name="sync_stamped">
+        <item quantity="one">%1$d of %2$d line stamped</item>
+        <item quantity="other">%1$d of %2$d lines stamped</item>
+    </plurals>
+    <plurals name="sync_to_go">
+        <item quantity="one">%d line to go</item>
+        <item quantity="other">%d lines to go</item>
+    </plurals>
+    <string name="sync_every_line">Every line stamped</string>
+    <string name="sync_no_time" translatable="false">-:--.-</string>
+    <string name="sync_no_time_cd">No time yet</string>
+    <string name="sync_line_cd">%1$s, %2$s</string>
+    <string name="sync_break">(music)</string>
+    <string name="sync_earlier">−0.1 s</string>
+    <string name="sync_later">+0.1 s</string>
+    <string name="sync_earlier_cd">0.1 seconds earlier</string>
+    <string name="sync_later_cd">0.1 seconds later</string>
+    <string name="sync_fix">Fix text</string>
+    <string name="sync_fix_title">Fix this line</string>
+    <string name="sync_fix_field">Line</string>
+    <string name="sync_fix_done">Done</string>
+    <string name="sync_cancel">Cancel</string>
+    <string name="sync_back5">Back 5 seconds</string>
+    <string name="sync_leave_title">Leave without saving?</string>
+    <string name="sync_leave_text">The changes on this screen are lost.</string>
+    <string name="sync_leave">Leave</string>
+    <string name="sync_saved">Synced lyrics saved</string>
+    <string name="sync_undone">Lyrics put back</string>
+    <string name="sync_undo_changed">The lyrics changed since, so they stay.</string>
+    <string name="sync_undo_failed">The lyrics could not be put back.</string>
+    <string name="sync_not_saved">The lyrics could not be saved.</string>
+    <string name="sync_out_of_order">This line starts before the line above it.</string>
+    <string name="sync_too_few">Your music app needs at least 3 lines with words.</string>
+    <string name="sync_past_end">A line starts after the song ends.</string>
+    <string name="sync_nothing">No lyrics to sync</string>
+    <string name="sync_nothing_text">Find lyrics for this song first, then sync them here.</string>
+    <string name="sync_unplayable">This song could not be played.</string>
+
+    <!-- Lyrics on the lock screen -->
+    <string name="lock_title">Lyrics on the lock screen</string>
+    <string name="lock_close">Back to the lock screen</string>
+    <string name="lock_hint">Swipe to close</string>
+    <string name="lock_permission_title">One permission first</string>
+    <string name="lock_permission_text">Your phone asks for “Display over other apps” so KJB can show the lyrics the moment you lock it.</string>
+    <string name="lock_continue">Continue</string>
+    <string name="lock_cancel">Cancel</string>
+    <string name="lock_on">Lyrics show when you lock your phone</string>
+    <string name="lock_denied">Not allowed, so it stays off</string>
 </resources>
