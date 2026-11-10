@@ -4,13 +4,16 @@ import android.content.ComponentName
 import android.os.Bundle
 import android.os.Looper
 import androidx.annotation.OptIn
+import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaBrowser
 import androidx.media3.session.MediaConstants
 import androidx.media3.session.MediaLibraryService.LibraryParams
+import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionToken
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import app.lyrify.player.COMMAND_FAVOURITE
 import app.lyrify.player.LibraryTree
 import app.lyrify.player.PlaybackService
 import org.junit.After
@@ -23,7 +26,8 @@ import java.util.concurrent.TimeUnit
 
 /**
  * The browse tree as a car asks for it, from the real service (debug build, its test folder's library): Android Auto's
- * root hint, the list and grid hints, and a search answered through the session's search callbacks. Plays nothing.
+ * root hint, the list and grid hints, and a search answered through the session's search callbacks; and what KJB's own
+ * controller is offered as it connects. Plays nothing.
  */
 @OptIn(UnstableApi::class)
 @RunWith(AndroidJUnit4::class)
@@ -51,6 +55,17 @@ class CarBrowseDeviceTest {
         }
         return MediaBrowser.Builder(context, token).setListener(listener).setApplicationLooper(Looper.getMainLooper()).buildAsync().get(10, TimeUnit.SECONDS)
             .also { browser = it }
+    }
+
+    /** This process is KJB's own controller (the debug build's package): every command, the library and the player's own buttons. */
+    @Test
+    fun kjbsOwnControllerMayPlayBrowseAndUseTheButtons() {
+        val browser = connect()
+        val player = onMain { browser.availableCommands }
+        listOf(Player.COMMAND_PLAY_PAUSE, Player.COMMAND_PREPARE, Player.COMMAND_SET_SHUFFLE_MODE, Player.COMMAND_SET_REPEAT_MODE, Player.COMMAND_CHANGE_MEDIA_ITEMS)
+            .forEach { assertTrue("missing player command $it", player.contains(it)) }
+        assertTrue(onMain { browser.isSessionCommandAvailable(SessionCommand.COMMAND_CODE_LIBRARY_GET_LIBRARY_ROOT) })
+        assertTrue(onMain { browser.isSessionCommandAvailable(SessionCommand(COMMAND_FAVOURITE, Bundle.EMPTY)) })
     }
 
     @Test

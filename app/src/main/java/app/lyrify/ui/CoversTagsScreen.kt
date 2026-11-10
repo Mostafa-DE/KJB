@@ -270,9 +270,18 @@ private fun Words.text(): String = text(LocalResources.current)
 
 // The page
 
-/** What the page lists, row by row, so the song sheet's album can be scrolled to by its key. */
-private sealed interface PageRow {
+/**
+ * What the page lists, row by row. Each row's [key] is its own on the page, or the list crashes: an album's row is keyed
+ * by its section and its id ([app.lyrify.tags.TagAlbum.id], KJB's own, from its files' paths), so it keeps its key as
+ * rows come and go, and a second row of one album in one section gets "#2" ([pageRows]). An album can be in two sections
+ * at once ("Check again" places it before its Skipped record goes) or twice in one (History can rebuild two Done
+ * records of it).
+ */
+internal sealed interface PageRow {
     val key: String
+
+    /** The album the row shows, by its id: the song sheet's album is scrolled to by it. */
+    val albumId: String? get() = null
 
     data object Start : PageRow {
         override val key = "start"
@@ -282,12 +291,12 @@ private sealed interface PageRow {
         override val key = "section ${section.name}"
     }
 
-    data class Ready(val waiting: Waiting) : PageRow {
-        override val key = "album ${waiting.album.id}"
+    data class Ready(val waiting: Waiting, override val key: String) : PageRow {
+        override val albumId: String get() = waiting.album.id
     }
 
-    data class Pick(val waiting: Waiting) : PageRow {
-        override val key = "album ${waiting.album.id}"
+    data class Pick(val waiting: Waiting, override val key: String) : PageRow {
+        override val albumId: String get() = waiting.album.id
     }
 
     data object SamsungNote : PageRow {
@@ -302,8 +311,8 @@ private sealed interface PageRow {
         override val key = "paused"
     }
 
-    data class Record(val record: AlbumRecord) : PageRow {
-        override val key = "album ${record.id}"
+    data class Record(val record: AlbumRecord, override val key: String) : PageRow {
+        override val albumId: String get() = record.id
     }
 
     data object History : PageRow {
@@ -311,20 +320,27 @@ private sealed interface PageRow {
     }
 }
 
-private fun pageRows(state: CoversTagsState, uncheckable: Int, paused: Boolean): List<PageRow> = buildList {
+internal fun pageRows(state: CoversTagsState, uncheckable: Int, paused: Boolean): List<PageRow> = buildList {
+    val seen = HashMap<String, Int>()
+    fun key(section: ReviewSection, albumId: String): String {
+        val key = "${section.name} $albumId"
+        val nth = (seen[key] ?: 0) + 1
+        seen[key] = nth
+        return if (nth == 1) key else "$key#$nth"
+    }
     add(PageRow.Start)
     pausedWords(paused)?.let { add(PageRow.Paused(it)) }
     uncheckableWords(uncheckable)?.let { add(PageRow.Uncheckable(it)) }
     for ((section, count) in reviewSections(state)) {
         add(PageRow.Section(section, count))
         when (section) {
-            ReviewSection.READY -> state.ready.forEach { add(PageRow.Ready(it)) }
-            ReviewSection.PICK_ONE -> state.pickOne.forEach { add(PageRow.Pick(it)) }
+            ReviewSection.READY -> state.ready.forEach { add(PageRow.Ready(it, key(section, it.album.id))) }
+            ReviewSection.PICK_ONE -> state.pickOne.forEach { add(PageRow.Pick(it, key(section, it.album.id))) }
             ReviewSection.DONE -> {
                 add(PageRow.SamsungNote)
-                state.done.forEach { add(PageRow.Record(it)) }
+                state.done.forEach { add(PageRow.Record(it, key(section, it.id))) }
             }
-            ReviewSection.SKIPPED -> state.skipped.forEach { add(PageRow.Record(it)) }
+            ReviewSection.SKIPPED -> state.skipped.forEach { add(PageRow.Record(it, key(section, it.id))) }
         }
     }
     add(PageRow.History)
@@ -380,7 +396,7 @@ fun CoversTagsPage() {
         if (focus in state.checkingAlbums) return@LaunchedEffect
         val ready = state.ready.firstOrNull { it.album.id == focus }
         if (ready != null) open = OpenAlbum(focus, (ready.proposal as Proposal.Ready).match.release.id)
-        val at = rows.indexOfFirst { it.key == "album $focus" }
+        val at = rows.indexOfFirst { it.albumId == focus }
         if (at >= 0) list.animateScrollToItem(at)
         tags.focused()
     }

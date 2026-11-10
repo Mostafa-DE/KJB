@@ -102,6 +102,29 @@ class LibraryTest {
     }
 
     @Test
+    fun `album, artist and song keys stay unique when copies share MediaStore's album id and two artists share an album name`() {
+        val lib = library(
+            // A copy in a test folder gets the original's album id; a catalogue number makes another album.
+            song("Music/Harbour Glass/01 Tide Bell.mp3", album = "Harbour Glass", albumArtist = "Kit Calloway", id = 1, albumId = 7),
+            song("Test/Harbour Glass/01 Tide Bell.mp3", album = "Harbour Glass", albumArtist = "Kit Calloway", id = 2, albumId = 7),
+            song("Test/Harbour Glass XE/01 Tide Bell.mp3", album = "Harbour Glass [XE-0042]", albumArtist = "Kit Calloway", id = 3, albumId = 7),
+            // One album name, two album artists.
+            song("Music/Mira/01 Low Water.mp3", album = "Night Ferry", artist = "Mira Solen", id = 4, albumId = 8),
+            song("Music/Oren/01 Low Water.mp3", album = "Night Ferry", artist = "Oren Vale", id = 5, albumId = 8),
+        )
+
+        assertEquals(4, lib.albums.size)
+        assertEquals(lib.albums.size, lib.albums.map { it.key }.toSet().size)
+        // The copy joins its original's album as a song of its own, keyed by its own path.
+        val glass = lib.albums.single { it.title == "Harbour Glass" }
+        assertEquals(2, glass.songs.size)
+        assertEquals(2, glass.songs.map { it.path }.toSet().size)
+        assertEquals(lib.songs.size, lib.songs.map { it.path }.toSet().size)
+        assertEquals(lib.artists.size, lib.artists.map { it.name }.toSet().size)
+        lib.artists.forEach { artist -> assertEquals(artist.albums.size, artist.albums.map { it.key }.toSet().size) }
+    }
+
+    @Test
     fun `songs without an album tag go to Unknown album, never to an album`() {
         val lib = library(
             song("Music/Loose/a.mp3", album = null),
