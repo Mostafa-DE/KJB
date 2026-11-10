@@ -27,16 +27,26 @@ class LyricsIndexDeviceTest {
         context.deleteDatabase(NAME)
     }
 
-    /** Android's SQLite is built with FTS3 and FTS4 (and without FTS5): an FTS4 table can be made. */
+    /**
+     * The phone's SQLite has FTS4, proved by using it: an FTS4 table made as the index makes its own (unicode61, a kept
+     * column) finds a row by a word's start and nothing else. `PRAGMA compile_options` proves nothing: the Galaxy S26's
+     * SQLite (Android 17) answers it with no rows at all.
+     */
     @Test
     fun ftsFourIsThere() {
         val db = SQLiteDatabase.create(null)
         try {
-            val options = db.rawQuery("PRAGMA compile_options", null).use { row -> buildList { while (row.moveToNext()) add(row.getString(0)) } }
             val version = db.rawQuery("SELECT sqlite_version()", null).use { row -> row.moveToFirst(); row.getString(0) }
-            Log.i(LOG_TAG, "search device test: SQLite $version, ${options.filter { "FTS" in it }}")
-            assertTrue(options.toString(), options.any { it.startsWith("ENABLE_FTS3") || it.startsWith("ENABLE_FTS4") })
-            db.execSQL("CREATE VIRTUAL TABLE probe USING fts4(text, kept, notindexed=kept)")
+            Log.i(LOG_TAG, "search device test: SQLite $version")
+            db.execSQL("CREATE VIRTUAL TABLE temp.probe USING fts4(text, kept, notindexed=kept, tokenize=unicode61 \"remove_diacritics=0\")")
+            db.execSQL("INSERT INTO probe (text, kept) VALUES (?, ?)", arrayOf<Any?>("paper boats on the river", "kept one"))
+            db.execSQL("INSERT INTO probe (text, kept) VALUES (?, ?)", arrayOf<Any?>("harbour lights are calling", "kept two"))
+            fun found(query: String) = db.rawQuery("SELECT kept FROM probe WHERE probe MATCH ?", arrayOf(query)).use { row -> buildList { while (row.moveToNext()) add(row.getString(0)) } }
+            assertEquals(listOf("kept one"), found("boat*"))
+            assertEquals(listOf("kept two"), found("harbour light*"))
+            assertEquals(emptyList<String>(), found("oats"))
+            // A column FTS4 keeps without indexing is never matched.
+            assertEquals(emptyList<String>(), found("kept"))
         } finally {
             db.close()
         }

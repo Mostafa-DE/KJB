@@ -167,7 +167,8 @@ fun Modifier.glassSource(backdrop: GlassBackdrop, enabled: Boolean): Modifier = 
 
 /**
  * Frosted glass: the content under it blurred (when [LocalGlassBlur]) under the translucent glass tint, a hairline and a
- * soft shadow; without blur the tint is nearly opaque, so text on it always has its contrast.
+ * soft shadow; without blur the tint is nearly opaque, so text on it always has its contrast. [solid] (the Now bar and
+ * the dock) never blurs: it is the opaque [ChromeColors.bar], with the same hairline and shadow.
  */
 @Composable
 fun GlassSurface(
