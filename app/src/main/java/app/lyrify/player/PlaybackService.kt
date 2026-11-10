@@ -8,6 +8,8 @@ import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
+import android.os.Handler
+import android.os.SystemClock
 import android.provider.MediaStore
 import android.util.Log
 import android.util.Size
@@ -29,8 +31,11 @@ import androidx.media3.session.SessionResult
 import app.lyrify.LOG_TAG
 import app.lyrify.Lyrify
 import app.lyrify.R
+import app.lyrify.audio.CrossfadeEngine
 import app.lyrify.audio.LiveEq
+import app.lyrify.audio.MediaFocus
 import app.lyrify.audio.OutputRoutesPart
+import app.lyrify.audio.QueueFadeRules
 import app.lyrify.auto.Access
 import app.lyrify.auto.CarBrowse
 import app.lyrify.auto.ControllerAccess
@@ -113,7 +118,7 @@ class PlaybackService : MediaLibraryService() {
     private val io = CoroutineScope(SupervisorJob() + Dispatchers.IO + logFailures)
     private var session: MediaLibrarySession? = null
     private lateinit var core: PlayerCore
-    private lateinit var engine: GaplessEngine
+    private lateinit var engine: CrossfadeEngine
 
     /** The engine, for the parts that work on the player itself (speed, the sleep timer's fade). */
     internal val playbackEngine: PlaybackEngine get() = engine
@@ -135,7 +140,18 @@ class PlaybackService : MediaLibraryService() {
         core = PlayerGraph.core(this)
         settings = Lyrify.settings(this).settings.stateIn(scope, SharingStarted.Eagerly, Settings())
         library = LibraryGraph.repository(this).state.map { (it as? LibraryState.Ready)?.library }.stateIn(scope, SharingStarted.Eagerly, null)
-        engine = GaplessEngine(this, settings::value, Levels(), ::mediaItem)
+        val levels = Levels()
+        val main = Handler(mainLooper)
+        // One gapless player; with Crossfade on, a second one around each fade (A2), in the same audio session. Focus is
+        // the engine's then.
+        engine = CrossfadeEngine(
+            newSlot = { GaplessEngine(this, settings::value, levels, ::mediaItem) },
+            rules = QueueFadeRules(core, PlayerExtras.of(this), settings::value),
+            focusOf = { control -> MediaFocus(this, mainLooper, control) },
+            scope = scope,
+            clock = SystemClock::elapsedRealtime,
+            later = { task -> main.post(task) },
+        )
         // The phone's sound effects panel needs the player's own session from the start (A1).
         PlayerGraph.audioSessionId = engine.audioSessionId
         bridge = QueueBridge(engine)
@@ -174,6 +190,7 @@ class PlaybackService : MediaLibraryService() {
         scope.launch { core.repeat.collect { engine.setRepeat(it); player.changed() } }
         scope.launch {
             settings.collect {
+                engine.setCrossfade(it.audio.crossfadeSeconds)
                 engine.setGapless(it.advanced.gaplessPlayback)
                 player.changed()
             }
