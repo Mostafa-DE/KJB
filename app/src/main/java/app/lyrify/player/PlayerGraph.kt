@@ -23,6 +23,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -112,6 +113,15 @@ class PlayerCore(
             _ready.value = true
             launch { _book.drop(1).collect { storage.saveBook(it) } }
         }
+    }
+
+    /**
+     * Returns once the queues are read and nothing is loaded: the player closes then. Never before they are read, so a
+     * player opened on a cold start (the widget's cover, the notification) waits for the queues instead of closing.
+     */
+    suspend fun awaitNothingLoaded() {
+        // The book as it is now: it is set before ready, so a ready read never meets the empty book from before the read.
+        combine(_ready, _book) { ready, _ -> ready && _book.value.current?.current == null }.first { it }
     }
 
     /** [change] applied to the book (the live place folded in first); before the queues are read, once they are. */

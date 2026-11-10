@@ -245,7 +245,7 @@ internal fun rememberClock(running: Boolean, everyMs: Long = 250): Long {
 
 // The player
 
-/** The player, over everything; it closes itself when nothing is loaded. */
+/** The player, over everything; it closes itself when nothing is loaded, once the queues are read. */
 @Composable
 fun PlayerView() {
     val nav = LocalNavigator.current
@@ -254,8 +254,15 @@ fun PlayerView() {
     val store = remember(context) { Lyrify.settings(context) }
     val settings = store.settings.collectAsStateWithLifecycle(initialValue = null).value
     val ui = connection.ui.collectAsStateWithLifecycle().value
-    LaunchedEffect(ui == null) { if (ui == null) nav.close(FullScreen.Player) }
-    if (ui == null || settings == null) return
+    // On a cold start the queues are read after the player opens: it waits for them, and closes only if nothing loads.
+    LaunchedEffect(connection) {
+        connection.awaitNothingLoaded()
+        nav.close(FullScreen.Player)
+    }
+    if (ui == null || settings == null) {
+        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background))
+        return
+    }
     val scope = rememberCoroutineScope()
     val toasts = LocalToasts.current
     val resources = LocalResources.current

@@ -1,10 +1,12 @@
 package app.lyrify.player
 
 import app.lyrify.library.SongRef
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -332,5 +334,36 @@ class QueueStoreTest {
         runCurrent()
         assertEquals(1, core.book.value.current!!.index)
         assertEquals(0L, core.book.value.current!!.positionMs)
+    }
+
+    // A cold start: the player screen opens before the queues are read
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `on a cold start the player stays open until the queues have loaded, and closes only when they load empty`() = runTest {
+        for (stored in listOf(QueueBook().play(listOf(album[0]), 0, albumSource, now = 1).book, QueueBook())) {
+            val read = CompletableDeferred<Unit>()
+            val files = object : QueueStorage {
+                override suspend fun load(): Pair<QueueBook, Repeat> = read.await().let { stored to Repeat.OFF }
+
+                override suspend fun saveBook(book: QueueBook) = Unit
+
+                override suspend fun savePlace(place: PlaybackPlace) = Unit
+            }
+            val core = PlayerCore(files, backgroundScope, wall = { currentTime })
+            val closes = backgroundScope.async { core.awaitNothingLoaded() }
+            runCurrent()
+            assertFalse("closed while the queues were read", closes.isCompleted)
+
+            read.complete(Unit)
+            runCurrent()
+            assertEquals(stored.current == null, closes.isCompleted)
+            if (stored.current == null) continue
+
+            // Its one song removed later: nothing is loaded now, and the player closes.
+            core.change { it.remove(it.currentId!!, it.current!!.items.single().uid)!!.book }
+            runCurrent()
+            assertTrue(closes.isCompleted)
+        }
     }
 }
