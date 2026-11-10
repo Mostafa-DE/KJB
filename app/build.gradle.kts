@@ -4,6 +4,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.androidx.baselineprofile)
 }
 
 /**
@@ -91,6 +92,21 @@ android {
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.findByName("release")
         }
+        // The Baseline Profile plugin's two copies of release, for the phone only (baselineprofile/): nonMinifiedRelease
+        // records the profile, benchmarkRelease measures it. The plugin forces them non-debuggable and profileable, and
+        // nonMinifiedRelease unminified. Declared here to give them app.lyrify.bench, beside the user's KJB and never over
+        // it (a run uninstalls its app at the end, data and all), and the debug key, so they install on any phone without
+        // the release keystore.
+        create("nonMinifiedRelease") {
+            initWith(getByName("release"))
+            applicationIdSuffix = ".bench"
+            signingConfig = signingConfigs.getByName("debug")
+        }
+        create("benchmarkRelease") {
+            initWith(getByName("release"))
+            applicationIdSuffix = ".bench"
+            signingConfig = signingConfigs.getByName("debug")
+        }
     }
 
     compileOptions {
@@ -131,6 +147,9 @@ dependencies {
     implementation(libs.media3.common)
     implementation(project(":taglib"))
     implementation(libs.glance.appwidget)
+    implementation(libs.androidx.profileinstaller)
+    // The rules that :baselineprofile records on the phone, saved in src/release/generated/baselineProfiles/.
+    baselineProfile(project(":baselineprofile"))
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
