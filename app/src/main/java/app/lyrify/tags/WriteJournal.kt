@@ -106,6 +106,8 @@ data class WriteIntent(
     val record: UndoRecord? = null,
     /** The file the new content was written from (the private copy, or a snapshot for a full-copy Undo). */
     val source: String? = null,
+    /** The identity (`lstat`) of the file at [path] when the intent was written: nothing is written over another. */
+    val fileId: FileId? = null,
     /**
      * Set, durably, once the song was written and verified: from then on its backup is never written back, so a song
      * changed after the write (while its Undo record still waits to be saved) is never overwritten with old bytes.
@@ -348,10 +350,13 @@ class JournalRecovery(
                     Settled.WAITING -> result.copy(waiting = result.waiting + 1)
                 }
             } finally {
-                if (last[intent.path] == index) locks.release(intent.path)
+                if (last[intent.path] == index) {
+                    // A song whose intent stays open is pinned before its lock is let go: nothing can take it in between.
+                    if (intent.path in journal.openPaths()) locks.pin(intent.path)
+                    locks.release(intent.path)
+                }
             }
         }
-        journal.pending().forEach { locks.pin(it.path) }
         cleanUp()
         result = result.copy(setAside = setAside().size - asideBefore)
         if (result != Recovered()) log("journal: ${result.settled} unfinished writes settled (${result.restored} put back), ${result.setAside} set aside, ${result.waiting} waiting")
@@ -383,18 +388,25 @@ class JournalRecovery(
             closeAndDrop(intent)
             return Settled.AS_IT_WAS
         }
-        // Neither: the write was cut short. Written back only from a whole backup, and only over this song torn.
+        // Neither: the write was cut short. Written back only from a whole backup, and only over this song torn: the
+        // same file at the path as when the intent was written, holding the old and new content's bytes ([tornFrom]),
+        // and the descriptor opened on it naming that file too.
+        val pathId = songs.fileId(intent.path) ?: return Settled.WAITING
+        if (intent.fileId != null && pathId != intent.fileId) return setAside(intent, "another file took the song's place")
         val backup = File(dirs.backups, intent.backup)
         val saved = if (regularFile(backup) && backup.length() == intent.original.length) fileState(backup) else null
         val source = intent.source?.let(::File)
         val torn = saved == intent.original && source != null && tornFrom(song, source, backup)
-        if (!torn || !writes.allows(SharedWrite.TAG_RESTORE, intent.path)) {
-            journal.setAside(intent.id)
-            return Settled.SET_ASIDE
+        if (!torn || !writes.allows(SharedWrite.TAG_RESTORE, intent.path)) return setAside(intent, "the song is not as the write left it")
+        val open = songs.openInPlace(SongTarget(intent.path, id)) ?: return Settled.WAITING
+        // The descriptor comes from MediaStore, maybe on the file system under the path's: the inode must match.
+        val openId = open.fileId()
+        if (openId == null || openId.ino != pathId.ino || songs.fileId(intent.path) != pathId) {
+            open.close()
+            return setAside(intent, "the song changed while it was checked")
         }
-        val channel = songs.openInPlace(SongTarget(intent.path, id)) ?: return Settled.WAITING
         try {
-            channel.use { writeInPlace(it, backup, intent.original.length) }
+            open.use { writeInPlace(it.channel, backup, intent.original.length) }
         } catch (e: IOException) {
             log("journal: backup not written back yet (${e.javaClass.simpleName})")
             return Settled.WAITING
@@ -403,6 +415,12 @@ class JournalRecovery(
         songs.scan(intent.path)
         closeAndDrop(intent)
         return Settled.RESTORED
+    }
+
+    private fun setAside(intent: WriteIntent, why: String): Settled {
+        journal.setAside(intent.id)
+        log("journal: an unfinished write set aside, $why")
+        return Settled.SET_ASIDE
     }
 
     /** Closes [intent], and deletes its backup unless it is a song's snapshot. */

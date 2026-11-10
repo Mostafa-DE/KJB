@@ -43,8 +43,8 @@ class TagKillService : Service() {
         val dirs = TagDirs(root, ::fsyncDirectory)
         val phone = PhoneSongFiles(this)
         val stopping = object : SongFiles by phone {
-            override fun openInPlace(song: SongTarget): FileChannel? = phone.openInPlace(song)?.let { channel ->
-                StopsMidWrite(channel, bytes) { reply.send(STOPPED, Bundle().apply { putInt(PID, Process.myPid()) }) }
+            override fun openInPlace(song: SongTarget): OpenSong? = phone.openInPlace(song)?.let { open ->
+                OpenSong(StopsMidWrite(open.channel, bytes) { reply.send(STOPPED, Bundle().apply { putInt(PID, Process.myPid()) }) }, open::fileId)
             }
         }
         val free = object : BusyFiles {

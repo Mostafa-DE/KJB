@@ -148,7 +148,11 @@ class FakeBusyFiles(private val events: MutableList<String> = mutableListOf()) :
     }
 }
 
-/** What the next in-place write does, for a test: each open takes the next plan; with none, it simply writes. */
+/**
+ * What the next pass of writing a song in place does, for a test: each pass (the write, then a put-back through the
+ * same descriptor, or a recovery's write) takes the next plan when it starts at byte 0; with none, it simply writes.
+ * [Refuse] is taken when the song is opened instead.
+ */
 sealed interface WritePlan {
     /** Throws an IOException after this many bytes. */
     data class FailAfter(val bytes: Long) : WritePlan
@@ -174,6 +178,9 @@ sealed interface WritePlan {
 class FakeSongFiles(private val events: MutableList<String> = Collections.synchronizedList(mutableListOf())) : SongFiles {
     val ids = mutableMapOf<String, Long>()
     var mounted = true
+
+    /** Asked whenever the writer or the recovery checks a song's volume, with the song's path. */
+    var onMounted: (String) -> Unit = {}
     var scanned: (String) -> Long? = { ids[it] }
     val plans = ArrayDeque<WritePlan>()
 
@@ -185,23 +192,44 @@ class FakeSongFiles(private val events: MutableList<String> = Collections.synchr
     var running = 0
     var mostAtOnce = 0
 
-    override fun mounted(path: String): Boolean = mounted.also { events += "mounted" }
+    override fun mounted(path: String): Boolean {
+        events += "mounted"
+        onMounted(path)
+        return mounted
+    }
 
     override fun sameFile(mediaStoreId: Long, path: String): Boolean = (ids[path] == mediaStoreId).also { events += "same file" }
 
     override fun idOf(path: String): Long? = ids[path]
 
-    override fun openInPlace(song: SongTarget): FileChannel? {
+    override fun openInPlace(song: SongTarget): OpenSong? {
         events += "open rw"
         onOpen()
-        val plan = plans.removeFirstOrNull()
-        if (plan == WritePlan.Refuse || !File(song.path).isFile) return null
-        synchronized(this) { running++; mostAtOnce = maxOf(mostAtOnce, running) }
-        val channel = FileChannel.open(File(song.path).toPath(), StandardOpenOption.WRITE)
-        return PlannedChannel(channel, plan) {
-            synchronized(this) { running-- }
-            events += "closed"
+        if (plans.firstOrNull() == WritePlan.Refuse) {
+            plans.removeFirst()
+            return null
         }
+        if (!File(song.path).isFile) return null
+        synchronized(this) { running++; mostAtOnce = maxOf(mostAtOnce, running) }
+        // The descriptor names the file at the path when it was opened, whatever is put at the path later.
+        val opened = fileId(song.path)
+        val channel = FileChannel.open(File(song.path).toPath(), StandardOpenOption.WRITE)
+        return OpenSong(
+            PlannedChannel(channel, plans) {
+                synchronized(this) { running-- }
+                events += "closed"
+            },
+        ) { opened }
+    }
+
+    override fun fileId(path: String): FileId? = try {
+        val file = File(path).toPath()
+        FileId(
+            (java.nio.file.Files.getAttribute(file, "unix:dev", java.nio.file.LinkOption.NOFOLLOW_LINKS) as Number).toLong(),
+            (java.nio.file.Files.getAttribute(file, "unix:ino", java.nio.file.LinkOption.NOFOLLOW_LINKS) as Number).toLong(),
+        )
+    } catch (_: IOException) {
+        null
     }
 
     override suspend fun scan(path: String): Long? {
@@ -214,12 +242,14 @@ class FakeSongFiles(private val events: MutableList<String> = Collections.synchr
     }
 }
 
-/** A file channel that writes through to [inner], failing, dying or damaging as [plan] says. */
-private class PlannedChannel(private val inner: FileChannel, private val plan: WritePlan?, private val onClose: () -> Unit) : FileChannel() {
+/** A file channel that writes through to [inner], failing, dying or damaging as each pass's plan from [plans] says. */
+private class PlannedChannel(private val inner: FileChannel, private val plans: ArrayDeque<WritePlan>, private val onClose: () -> Unit) : FileChannel() {
+    private var plan: WritePlan? = null
     private var written = 0L
-    private var damage = plan == WritePlan.Damage
+    private var damage = false
 
     override fun write(src: ByteBuffer): Int {
+        val plan = plan
         val limit = when (plan) {
             is WritePlan.FailAfter -> plan.bytes
             is WritePlan.KillAfter -> plan.bytes
@@ -260,7 +290,16 @@ private class PlannedChannel(private val inner: FileChannel, private val plan: W
     override fun read(dsts: Array<out ByteBuffer>, offset: Int, length: Int): Long = inner.read(dsts, offset, length)
     override fun write(srcs: Array<out ByteBuffer>, offset: Int, length: Int): Long = srcs.drop(offset).take(length).sumOf { write(it).toLong() }
     override fun position(): Long = inner.position()
-    override fun position(newPosition: Long): FileChannel = apply { inner.position(newPosition) }
+    override fun position(newPosition: Long): FileChannel {
+        // A pass starts at byte 0: it takes its plan.
+        if (newPosition == 0L) {
+            plan = plans.firstOrNull()?.takeIf { it != WritePlan.Refuse }?.also { plans.removeFirst() }
+            written = 0
+            damage = plan == WritePlan.Damage
+        }
+        inner.position(newPosition)
+        return this
+    }
     override fun size(): Long = inner.size()
     override fun transferTo(position: Long, count: Long, target: WritableByteChannel): Long = inner.transferTo(position, count, target)
     override fun transferFrom(src: ReadableByteChannel, position: Long, count: Long): Long = inner.transferFrom(src, position, count)

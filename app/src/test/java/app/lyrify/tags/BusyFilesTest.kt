@@ -74,7 +74,7 @@ class BusyFilesTest {
             rig.busy.inUse += songs[2].path
             rig.writer.write(listOf(WriteJob(songs[2], edit)), EditKind.ALBUM, "Harbour Glass")
             rig.songs.plans += WritePlan.FailAfter(500)
-            rig.songs.plans += WritePlan.Refuse
+            rig.songs.plans += WritePlan.FailAfter(0)
             rig.writer.write(listOf(WriteJob(songs[3], edit)), EditKind.ALBUM, "Harbour Glass")
             rig.writer.undo(checkNotNull(written.entryId))
             rig.recovery().recover()

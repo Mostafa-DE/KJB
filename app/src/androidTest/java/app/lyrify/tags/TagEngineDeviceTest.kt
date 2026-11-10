@@ -224,11 +224,14 @@ class TagEngineDeviceTest {
 
         override fun idOf(path: String): Long = 41
 
-        override fun openInPlace(song: SongTarget): FileChannel {
+        override fun openInPlace(song: SongTarget): OpenSong {
+            val opened = fileId(song.path)
             val channel = FileChannel.open(File(song.path).toPath(), StandardOpenOption.WRITE)
-            val fail = failAfter.also { failAfter = null } ?: return channel
-            return CutShort(channel, fail)
+            val fail = failAfter.also { failAfter = null }
+            return OpenSong(if (fail == null) channel else CutShort(channel, fail)) { opened }
         }
+
+        override fun fileId(path: String): FileId? = PhoneSongFiles(context).fileId(path)
 
         override suspend fun scan(path: String): Long? = scanned
     }
