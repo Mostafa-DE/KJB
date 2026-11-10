@@ -1,6 +1,5 @@
 package app.lyrify.player
 
-import android.content.Context
 import app.lyrify.library.SongRef
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -75,10 +74,4 @@ object NoPlayback : PlaybackCommands {
     override fun addToQueue(id: String, songs: List<SongRef>): QueueAdded? = null
 
     override fun newQueue(name: String, songs: List<SongRef>, source: QueueSource?): Undo? = null
-}
-
-/** The player's objects, built by hand (milestone P1 builds them; it may move this object to player/PlayerGraph.kt). */
-object PlayerGraph {
-    @Suppress("UNUSED_PARAMETER") // Until P1: no player to connect to.
-    fun commands(context: Context): PlaybackCommands = NoPlayback
 }

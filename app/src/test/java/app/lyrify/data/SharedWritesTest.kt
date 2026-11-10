@@ -386,6 +386,7 @@ class SharedWritesTest {
             "overnight/AiRunLog.kt",
             "overnight/AiWorker.kt",
             "overnight/CrashGuard.kt",
+            "player/QueueStore.kt",
             "settings/SettingsStore.kt",
             "stats/PlayLog.kt",
             "tags/UndoStore.kt",
