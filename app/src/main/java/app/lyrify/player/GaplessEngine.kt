@@ -29,6 +29,7 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.extractor.mp4.Mp4Extractor
+import app.lyrify.audio.FadeSlot
 import app.lyrify.library.Song
 import app.lyrify.library.displayTitle
 import app.lyrify.settings.LibrarySettings
@@ -109,10 +110,11 @@ interface PlaybackEngine : PlayerPort {
  * One ExoPlayer holding the queue playing: media audio attributes with audio focus (it pauses when another app takes
  * focus and comes back after a short loss), pause on becoming noisy (headphones out), a local wake lock, and gapless
  * playback as ExoPlayer does it (MP3 with LAME or iTunes gapless info, FLAC, M4A with an edit list). Its audio sink runs
- * the audio chain ([AudioChain]) with float output off, so the chain always runs.
+ * the audio chain ([AudioChain]) with float output off, so the chain always runs. The crossfade engine (A2) holds one,
+ * or two around a fade, each with its own chain.
  */
 @OptIn(UnstableApi::class)
-class GaplessEngine(context: Context, settings: () -> Settings, levels: SongLevels, private val itemOf: (Projected) -> MediaItem) : PlaybackEngine {
+class GaplessEngine(context: Context, settings: () -> Settings, levels: SongLevels, private val itemOf: (Projected) -> MediaItem) : FadeSlot {
     private val extractors = DefaultExtractorsFactory()
     private val listeners = mutableListOf<EngineListener>()
 
@@ -126,6 +128,9 @@ class GaplessEngine(context: Context, settings: () -> Settings, levels: SongLeve
     init {
         player.addListener(object : Player.Listener {
             override fun onEvents(player: Player, events: Player.Events) {
+                // The volume alone (the sleep timer's fade, a crossfade's gains) is nothing the session shows; these
+                // events come a moment later, so passing them on would make a fade set its gains again at once.
+                if (events.size() == 1 && events.contains(Player.EVENT_VOLUME_CHANGED)) return
                 listeners.forEach { it.onChanged() }
             }
 
@@ -182,7 +187,11 @@ class GaplessEngine(context: Context, settings: () -> Settings, levels: SongLeve
             player.clearMediaItems()
             return
         }
-        player.setMediaItems(items.map(itemOf), index, positionMs)
+        loadItems(items.map(itemOf), index, positionMs)
+    }
+
+    override fun loadItems(items: List<MediaItem>, index: Int, positionMs: Long) {
+        player.setMediaItems(items, index, positionMs)
         player.prepare()
     }
 
@@ -241,6 +250,16 @@ class GaplessEngine(context: Context, settings: () -> Settings, levels: SongLeve
      */
     override fun setGapless(on: Boolean) {
         extractors.setMp4ExtractorFlags(if (on) 0 else Mp4Extractor.FLAG_WORKAROUND_IGNORE_EDIT_LISTS)
+    }
+
+    override fun setPauseAtEndOfItems(pause: Boolean) {
+        player.pauseAtEndOfMediaItems = pause
+    }
+
+    override fun setFocusHandled(handled: Boolean) = player.setAudioAttributes(player.audioAttributes, handled)
+
+    override fun setAudioSessionId(id: Int) {
+        player.audioSessionId = id
     }
 
     override fun addListener(listener: EngineListener) {
