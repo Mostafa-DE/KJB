@@ -65,8 +65,8 @@ class BackupScreensTest {
         assertEquals("Couldn't read this backup", strings()["backup_unreadable"])
         assertEquals("Lyrics choices", strings()["restore_section_lyrics"])
         assertTrue(strings()["restore_undo"]?.contains("Undo history") == true)
-        assertFalse(FILE.readText().contains('—'))
-        assertFalse(File("src/main/java/app/lyrify/ui/BackupScreens.kt").readText().contains('—'))
+        assertFalse(FILE.readText().contains('\u2014'))
+        assertFalse(File("src/main/java/app/lyrify/ui/BackupScreens.kt").readText().contains('\u2014'))
     }
 
     @Test
