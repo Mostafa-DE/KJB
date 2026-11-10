@@ -80,7 +80,6 @@ import app.lyrify.lyrics.LrcFormat
 import app.lyrify.lyrics.LrcLine
 import app.lyrify.lyrics.LrcProblem
 import app.lyrify.lyrics.LrcSave
-import app.lyrify.lyrics.LrcUndo
 import app.lyrify.lyrics.LrcUndone
 import app.lyrify.player.PlayerGraph
 import kotlinx.coroutines.CoroutineScope
@@ -89,6 +88,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -112,6 +112,12 @@ enum class SyncMode { MAKE, EDIT }
 
 /** A stamp as the editor shows it: "1:02.3" (minutes, seconds and tenths). */
 fun stampText(ms: Long): String = clock(ms) + "." + (ms.coerceAtLeast(0) % 1_000 / 100)
+
+/** Where the editor's player is: right after a jump, the place jumped to, which it may not report until the jump is done. */
+fun playerPosition(seekingTo: Long?, reported: Long): Long = seekingTo ?: reported
+
+/** A song's length for Save's check: the library's, else the one the player read (0 when neither knows). */
+fun knownLength(library: Long, player: Long): Long = if (library > 0) library else player
 
 /** Whether the lines can be saved, and as what. */
 sealed interface SaveCheck {
@@ -223,13 +229,14 @@ data class SyncEdit(
 
         /**
          * The editor for a song whose `.lrc` holds [lrc] (null without one): its timed lines for Edit timing (a break
-         * without words stays), or its plain text for Make synced; without a file, LRCLIB's [plain] lyrics for Make
+         * without words stays; an `[offset:]` tag applied, so Save writes the times meant), or its plain text for Make synced; without a file, LRCLIB's [plain] lyrics for Make
          * synced. Null when there are no lines.
          */
         fun from(lrc: String?, plain: String?): SyncEdit? {
             if (lrc != null) {
+                val offset = LrcFormat.offsetMs(lrc)
                 val timed = LrcFormat.parseLrclib(lrc)
-                if (timed.any { it.text.isNotBlank() }) return SyncEdit(SyncMode.EDIT, timed.map { EditLine(it.text, it.timeMs) })
+                if (timed.any { it.text.isNotBlank() }) return SyncEdit(SyncMode.EDIT, timed.map { EditLine(it.text, (it.timeMs - offset).coerceAtLeast(0)) })
                 plainLines(lrc).takeIf { it.isNotEmpty() }?.let { return SyncEdit(SyncMode.MAKE, it.map(::EditLine)) }
             }
             return plain?.let(::plainLines)?.takeIf { it.isNotEmpty() }?.let { lines -> SyncEdit(SyncMode.MAKE, lines.map(::EditLine)) }
@@ -252,7 +259,7 @@ private val EDIT_SAVER: Saver<SyncEdit?, String> = Saver(
 )
 
 /** Save and its Undo message go on once the editor has closed. */
-private val editorScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + logFailures)
+private val editorScope: CoroutineScope by lazy { CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + logFailures) }
 
 /**
  * Make synced or Edit timing, over everything: the song plays in the editor's own player (KJB's queue, or another app,
@@ -277,10 +284,13 @@ fun SyncEditorView(view: FullScreen.SyncEditor) {
     var previewing by remember { mutableStateOf(false) }
     var fixing by remember { mutableStateOf<Int?>(null) }
     var leaving by remember { mutableStateOf(false) }
-    var saving by remember { mutableStateOf(false) }
+    // Kept across a turn of the phone and the app's death: a Save under way is not started twice, the song not again.
+    var saving by rememberSaveable { mutableStateOf(false) }
+    val resumedSave = remember { saving }
+    var started by rememberSaveable { mutableStateOf(false) }
+    var position by rememberSaveable { mutableLongStateOf(0L) }
     val player = remember(context) { EditorPlayer(context) }
     var ready by remember { mutableStateOf(false) }
-    var position by remember { mutableLongStateOf(0L) }
 
     // The lines, once: what the file or the ledger do later never replaces the user's work here.
     LaunchedEffect(song?.path) {
@@ -293,10 +303,25 @@ fun SyncEditorView(view: FullScreen.SyncEditor) {
         }
         if (edit != null && player.open(path)) {
             ready = true
-            player.play()
+            // The first time it plays; brought back, it waits where it was.
+            if (started) {
+                player.seekTo(position)
+            } else {
+                started = true
+                player.play()
+            }
         } else if (edit != null) {
             toasts.say(resources, R.string.sync_unplayable)
         }
+    }
+    // Brought back while a Save was under way: once it is done, closed when the lyrics are on disk, else Save again.
+    LaunchedEffect(Unit) {
+        val path = song?.path ?: view.song.path
+        val lrc = (edit?.check(0) as? SaveCheck.Ready)?.lrc
+        if (!resumedSave) return@LaunchedEffect
+        val edits = LrcEdits.of(context.applicationContext)
+        edits.saving.first { path !in it }
+        if (lrc != null && withContext(Dispatchers.IO) { edits.isOnDisk(path, lrc) }) close() else saving = false
     }
     DisposableEffect(player) { onDispose { player.release() } }
     LaunchedEffect(player.playing) {
@@ -320,12 +345,13 @@ fun SyncEditorView(view: FullScreen.SyncEditor) {
     }
 
     fun save(lines: SyncEdit, found: Song) {
-        when (val check = lines.check(found.durationMs)) {
+        when (val check = lines.check(knownLength(found.durationMs, player.durationMs))) {
             is SaveCheck.Ready -> {
                 if (saving) return
                 saving = true
                 val app = context.applicationContext
                 val track = LocalTrack(found.path, found.title, found.artist, found.album, found.durationMs)
+                // Its message and Undo come from the shell ([LyricsUndoOffers]), also once this view is gone.
                 editorScope.launch {
                     val result = withContext(Dispatchers.IO) { LrcEdits.of(app).save(track, check.lrc) }
                     saving = false
@@ -335,9 +361,6 @@ fun SyncEditorView(view: FullScreen.SyncEditor) {
                     }
                     player.pause()
                     close()
-                    if (toasts.show(Toast(resources.getString(R.string.sync_saved), R.drawable.ic_lyrics, Tone.SYNCED, action = resources.getString(R.string.sync_undo)))) {
-                        undoSave(app, result.undo, toasts, resources)
-                    }
                 }
             }
             is SaveCheck.OutOfOrder -> {
@@ -460,17 +483,37 @@ fun SyncEditorView(view: FullScreen.SyncEditor) {
     }
 }
 
-/** Undo from the "Synced lyrics saved" message, and what it says after. */
-private suspend fun undoSave(app: Context, undo: LrcUndo, toasts: ToastState, resources: android.content.res.Resources) {
-    val undone = withContext(Dispatchers.IO) { LrcEdits.of(app).undo(undo) }
-    toasts.say(
-        resources,
-        when (undone) {
-            LrcUndone.DONE -> R.string.sync_undone
-            LrcUndone.CHANGED -> R.string.sync_undo_changed
-            LrcUndone.FAILED -> R.string.sync_undo_failed
-        },
-    )
+/**
+ * "Synced lyrics saved" with Undo, for each Save whose Undo is neither used nor let go ([LrcEdits.pending]), one at a
+ * time: also after a turn of the phone or a restart of the app, so an Undo is never lost while its message is due. The
+ * message gone, the Undo is let go. The shell shows it.
+ */
+@Composable
+fun LyricsUndoOffers() {
+    val context = LocalContext.current
+    val toasts = LocalToasts.current
+    val resources = LocalResources.current
+    LaunchedEffect(toasts) {
+        val edits = LrcEdits.of(context.applicationContext)
+        withContext(Dispatchers.IO) { edits.load() }
+        edits.pending.collect { pending ->
+            val undo = pending.firstOrNull() ?: return@collect
+            val asked = toasts.show(Toast(resources.getString(R.string.sync_saved), R.drawable.ic_lyrics, Tone.SYNCED, action = resources.getString(R.string.sync_undo)))
+            if (asked) {
+                val undone = withContext(Dispatchers.IO) { edits.undo(undo) }
+                toasts.say(
+                    resources,
+                    when (undone) {
+                        LrcUndone.DONE -> R.string.sync_undone
+                        LrcUndone.CHANGED -> R.string.sync_undo_changed
+                        LrcUndone.FAILED -> R.string.sync_undo_failed
+                    },
+                )
+            } else {
+                withContext(Dispatchers.IO) { edits.forget(undo) }
+            }
+        }
+    }
 }
 
 /** The song, how far the stamping is (or "Preview"), Back 5 s and Play/Pause, and the position. */
@@ -665,13 +708,16 @@ private class EditorPlayer(context: Context) {
     private var player: MediaPlayer? = null
     private var released = false
 
+    /** A jump not done yet: until it is, the player may still report where it was. */
+    private var seekingTo: Long? = null
+
     var playing: Boolean by mutableStateOf(false)
         private set
 
     var durationMs: Long by mutableLongStateOf(0L)
         private set
 
-    val positionMs: Long get() = player?.currentPosition?.toLong() ?: 0
+    val positionMs: Long get() = playerPosition(seekingTo, player?.currentPosition?.toLong() ?: 0)
 
     /** Opens the song at [path]; false when it cannot be played. */
     suspend fun open(path: String): Boolean {
@@ -701,6 +747,7 @@ private class EditorPlayer(context: Context) {
         player = opened
         durationMs = opened.duration.toLong().coerceAtLeast(0)
         opened.setOnCompletionListener { stopped() }
+        opened.setOnSeekCompleteListener { seekingTo = null }
         return true
     }
 
@@ -718,7 +765,10 @@ private class EditorPlayer(context: Context) {
     }
 
     fun seekTo(ms: Long) {
-        player?.seekTo(ms.coerceIn(0, durationMs.takeIf { it > 0 } ?: Long.MAX_VALUE), MediaPlayer.SEEK_CLOSEST)
+        val media = player ?: return
+        val target = ms.coerceIn(0, durationMs.takeIf { it > 0 } ?: Long.MAX_VALUE)
+        seekingTo = target
+        media.seekTo(target, MediaPlayer.SEEK_CLOSEST)
     }
 
     fun release() {

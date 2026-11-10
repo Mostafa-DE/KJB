@@ -46,6 +46,23 @@ class SyncEditorTest {
         assertNull(SyncEdit.from("  \n", plain = " \n"))
     }
 
+    @Test
+    fun `Edit timing opens an lrc with an offset at the times it means, and Save writes them without the tag`() {
+        val shifted = "[ti:Harbour Lights]\n[offset:+250]\n[00:01.00]Paper lanterns rise\n[00:04.50]Over the harbour glass\n[00:00.10]Low tide\n"
+        assertEquals(250L, LrcFormat.offsetMs(shifted))
+        val edit = SyncEdit.from(shifted, plain = null)!!
+        // A positive offset shows the lines earlier; never before the start.
+        assertEquals(listOf(0L, 750L, 4_250L), edit.lines.map { it.timeMs })
+        assertFalse(edit.changed)
+        val lrc = (edit.check(200_000) as SaveCheck.Ready).lrc
+        assertFalse(lrc.contains("offset"))
+        assertEquals("[00:00.000]Low tide\n[00:00.750]Paper lanterns rise\n[00:04.250]Over the harbour glass\n", lrc)
+
+        assertEquals(listOf(1_300L), SyncEdit.from("[offset:-300]\n[00:01.00]Paper lanterns rise\n", null)!!.lines.map { it.timeMs })
+        assertEquals(0L, LrcFormat.offsetMs("[00:01.00]Paper lanterns rise\n"))
+        assertEquals(0L, LrcFormat.offsetMs("[offset:soon]\n[00:01.00]Paper lanterns rise\n"))
+    }
+
     // Stamp and Undo
 
     @Test
@@ -91,6 +108,13 @@ class SyncEditorTest {
         val restamped = edit.stamp(4_400)
         assertEquals(4_400L, restamped.lines[1].timeMs)
         assertEquals(2, restamped.cursor)
+    }
+
+    @Test
+    fun `Stamp right after a jump takes the time jumped to, not the one the player still reports`() {
+        assertEquals(42_000L, playerPosition(seekingTo = 42_000, reported = 3_100))
+        assertEquals(3_100L, playerPosition(seekingTo = null, reported = 3_100))
+        assertEquals(42_000L, making().stamp(playerPosition(42_000, 3_100)).lines[0].timeMs)
     }
 
     // The nudge and Fix text
@@ -147,6 +171,13 @@ class SyncEditorTest {
         )
         // Same times are allowed: your phone shows the lines together.
         assertTrue(stampedAll(1_000, 4_000, 4_000, 12_000).check(200_000) is SaveCheck.Ready)
+    }
+
+    @Test
+    fun `a song the library has no length for is judged by the length the player reads`() {
+        assertEquals(180_000L, knownLength(library = 0, player = 180_000))
+        assertEquals(200_000L, knownLength(library = 200_000, player = 180_000))
+        assertEquals(SaveCheck.Rejected(LrcProblem.PAST_DURATION), stampedAll(1_000, 4_000, 8_000, 120_000).check(knownLength(0, 60_000)))
     }
 
     @Test

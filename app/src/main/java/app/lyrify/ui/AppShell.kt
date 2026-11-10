@@ -254,6 +254,8 @@ fun AppShell(
             }
         }
         RemoveLyricsDialog(removal)
+        // The sync editor's "Synced lyrics saved" and its Undo (P3).
+        LyricsUndoOffers()
     }
     // A page that left its stack forgets its saved scroll and fields.
     var keptStacks by remember { mutableStateOf(state.stacks) }
