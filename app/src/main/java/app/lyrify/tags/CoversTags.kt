@@ -602,6 +602,7 @@ class CoversTags(
             val path = change.song.path
             WriteJob(SongTarget(path, album.ids.getValue(path)), coversTagsEdit(change.fields, original, waiting.keepMyYear, coverFor(path, cover, opus)))
         }
+        // TODO(integration): write through T3's writeEdit (tags/TagEdits.kt, 072e137 on v3/t3-edit) once both merge.
         return when (val result = writer.write(jobs, EditKind.COVERS_TAGS, dated.release.title)) {
             BatchResult.SessionsUnknown -> Applied.NoAccess
             BatchResult.NotEnoughSpace -> Applied.NotEnoughSpace
@@ -667,6 +668,8 @@ class CoversTags(
      */
     suspend fun undo(entryId: Long): Undone {
         if (!access()) return Undone.NoAccess
+        // TODO(integration): undo through T3's undoEdit(context, entryId) (tags/TagEdits.kt, 072e137 on v3/t3-edit) once
+        // both merge, so favourite hearts move back too.
         val result = when (val batch = writer.undo(entryId)) {
             BatchResult.SessionsUnknown -> return Undone.NoAccess
             BatchResult.NotEnoughSpace -> return Undone.NotEnoughSpace
