@@ -141,6 +141,25 @@ class NavTest {
     }
 
     @Test
+    fun `a tap on the player's notification shows the player over the tab it finds`() {
+        assertEquals(FullScreen.Player, destinationView(DESTINATION_PLAYER))
+        assertNull(destinationView(DESTINATION_AI))
+        assertNull(destinationView(null))
+        assertNull(destinationPage(DESTINATION_PLAYER))
+        val shown = NavState.start(DockTab.LIBRARY).show(destinationView(DESTINATION_PLAYER)!!)
+        assertEquals(DockTab.LIBRARY, shown.tab)
+        assertEquals(listOf<FullScreen>(FullScreen.Player), shown.views)
+    }
+
+    @Test
+    fun `the player's notification carries the player as its destination, apart from the AI's notifications`() {
+        val service = java.io.File("src/main/java/app/lyrify/player/PlaybackService.kt").readText()
+        assertTrue(service.contains(".putExtra(EXTRA_DESTINATION, DESTINATION_PLAYER)"))
+        // The AI's notifications use request code 0 for MainActivity: the session's must differ, or one replaces the other.
+        assertFalse(Regex("""PendingIntent\.getActivity\(\s*this,\s*0,""").containsMatchIn(service))
+    }
+
+    @Test
     fun `the AI run's and the model download's notifications carry the AI as their destination`() {
         // Unit tests run in the module's folder.
         listOf("src/main/java/app/lyrify/overnight/AiWorker.kt", "src/main/java/app/lyrify/models/ModelDownloadWorker.kt").forEach { path ->
