@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android Auto: KJB is a media app; the car browses and plays through player/PlaybackService. -->
+<automotiveApp>
+    <uses name="media" />
+</automotiveApp>

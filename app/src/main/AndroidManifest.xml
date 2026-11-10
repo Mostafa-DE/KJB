@@ -161,5 +161,33 @@
         <!-- widget -->
 
         <!-- auto -->
+        <!-- Android Auto: KJB is a media app, and the car browses and plays through PlaybackService above. An app installed
+             from outside an app store shows in Android Auto only once its developer setting "Unknown sources" is on
+             (Settings, About, "Using Android Auto"). The monochrome icon marks KJB's items in the car. -->
+        <meta-data
+            android:name="com.google.android.gms.car.application"
+            android:resource="@xml/automotive_app_desc" />
+        <meta-data
+            android:name="androidx.car.app.TintableAttributionIcon"
+            android:resource="@drawable/ic_stat_kjb" />
+        <!-- Voice requests: Android Auto and the Assistant send "Play <words> on KJB" to the media session
+             (auto/CarBrowse.kt). Some systems look for this older search intent to know KJB takes them; one sent this
+             way only opens KJB. -->
+        <activity-alias
+            android:name=".auto.PlayFromSearch"
+            android:exported="true"
+            android:targetActivity=".ui.MainActivity">
+            <intent-filter>
+                <action android:name="android.media.action.MEDIA_PLAY_FROM_SEARCH" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity-alias>
+        <!-- Covers for the car's lists (auto/CarBrowse.kt), by MediaStore id only, read-only. Not exported: the browse tree
+             grants each app that browses it read access to the covers. -->
+        <provider
+            android:name=".auto.CarCovers"
+            android:authorities="${applicationId}.covers"
+            android:exported="false"
+            android:grantUriPermissions="true" />
     </application>
 </manifest>
