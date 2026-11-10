@@ -1,6 +1,7 @@
 package app.lyrify.ui
 
 import app.lyrify.backup.BackupFixtures
+import app.lyrify.backup.RestoreResult
 import app.lyrify.backup.Section
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -67,6 +68,23 @@ class BackupScreensTest {
         assertTrue(strings()["restore_undo"]?.contains("Undo history") == true)
         assertFalse(FILE.readText().contains('\u2014'))
         assertFalse(File("src/main/java/app/lyrify/ui/BackupScreens.kt").readText().contains('\u2014'))
+    }
+
+    @Test
+    fun `a restore that left places or bookmarks out, or failed a part, says so in a sheet, the limit named`() {
+        assertTrue(complete(RestoreResult(listOf(Section.PLAYS), emptyList())))
+        assertFalse(complete(RestoreResult(listOf(Section.PLAYS), listOf(Section.QUEUES))))
+        assertFalse(complete(RestoreResult(listOf(Section.BOOKMARKS), emptyList(), placesLeftOut = 3)))
+        assertFalse(complete(RestoreResult(listOf(Section.BOOKMARKS), emptyList(), bookmarksLeftOut = 1)))
+        assertEquals("3 places not restored, the limit is reached.", plural("restore_places_full")["other"]?.format("3"))
+        assertEquals("1 place not restored, the limit is reached.", plural("restore_places_full")["one"]?.format("1"))
+        assertEquals("3 bookmarks not restored, the limit is reached.", plural("restore_bookmarks_full")["other"]?.format("3"))
+        assertEquals("1 bookmark not restored, the limit is reached.", plural("restore_bookmarks_full")["one"]?.format("1"))
+    }
+
+    private fun plural(name: String): Map<String, String> {
+        val body = Regex("""<plurals name="$name">([\s\S]*?)</plurals>""").find(FILE.readText())?.groupValues?.get(1).orEmpty()
+        return Regex("""<item quantity="(\w+)">([^<]*)</item>""").findAll(body).associate { it.groupValues[1] to it.groupValues[2] }
     }
 
     @Test

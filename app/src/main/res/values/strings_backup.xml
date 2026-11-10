@@ -83,5 +83,13 @@
     <string name="restore_close">Close</string>
     <string name="restore_done">Backup restored</string>
     <string name="restore_partly">Partly restored</string>
+    <plurals name="restore_places_full">
+        <item quantity="one">%1$s place not restored, the limit is reached.</item>
+        <item quantity="other">%1$s places not restored, the limit is reached.</item>
+    </plurals>
+    <plurals name="restore_bookmarks_full">
+        <item quantity="one">%1$s bookmark not restored, the limit is reached.</item>
+        <item quantity="other">%1$s bookmarks not restored, the limit is reached.</item>
+    </plurals>
     <string name="restore_failed">These parts couldn\'t be restored: %1$s. The others are.</string>
 </resources>

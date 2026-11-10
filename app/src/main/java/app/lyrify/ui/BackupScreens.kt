@@ -47,6 +47,7 @@ import app.lyrify.backup.BackupRead
 import app.lyrify.backup.Backups
 import app.lyrify.backup.MissingSong
 import app.lyrify.backup.RestorePlan
+import app.lyrify.backup.RestoreResult
 import app.lyrify.backup.Section
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -86,6 +87,9 @@ internal fun sectionLabel(section: Section): Int = when (section) {
     Section.SETTINGS -> R.string.restore_section_settings
 }
 
+/** Whether a restore brought back all it was asked to: else a sheet says what it did not. */
+internal fun complete(result: RestoreResult): Boolean = result.failed.isEmpty() && result.placesLeftOut == 0 && result.bookmarksLeftOut == 0
+
 /** The line under a row: favourites, places to resume, own presets. */
 @PluralsRes
 private fun sectionMore(section: Section): Int? = when (section) {
@@ -98,11 +102,11 @@ private fun sectionMore(section: Section): Int? = when (section) {
 /** The summary lists this many songs not found, then "And 12 more". */
 private const val SHOWN: Int = 50
 
-/** What the restore sheet shows: the summary of a picked backup, or which parts a restore could not bring back. */
+/** What the restore sheet shows: the summary of a picked backup, or what a restore could not bring back ([complete]). */
 private sealed interface RestoreSheet {
     data class Summary(val plan: RestorePlan, val chosen: Set<Section>, val restoring: Boolean = false) : RestoreSheet
 
-    data class Partly(val failed: List<Section>) : RestoreSheet
+    data class Done(val result: RestoreResult) : RestoreSheet
 }
 
 /**
@@ -210,8 +214,8 @@ fun rememberBackupActions(setAutomatic: (Boolean) -> Unit): BackupActions {
             scope.launch {
                 val result = withContext(NonCancellable) { Backups.restore(app, summary.plan, summary.chosen) }
                 picked.value = null
-                sheet.value = if (result.failed.isEmpty()) null else RestoreSheet.Partly(result.failed)
-                if (result.failed.isEmpty()) say(R.string.restore_done, false)
+                sheet.value = if (complete(result)) null else RestoreSheet.Done(result)
+                if (complete(result)) say(R.string.restore_done, false)
             }
         },
         onClose = {
@@ -241,20 +245,34 @@ private fun release(app: Context, tree: String) {
 /**
  * The restore sheet: the summary (when the backup was made, a check box per section with what it holds, the parts a
  * newer KJB made, the songs not on this phone, what merges and what replaces, and that Undo history isn't included),
- * then Restore; or, after a restore some parts of which failed, which ones. Shows nothing otherwise.
+ * then Restore; or, after a restore, the parts that failed and the places and bookmarks the limits left out. Shows
+ * nothing otherwise.
  */
 @Composable
 private fun RestoreSheet(state: MutableState<RestoreSheet?>, onRestore: (RestoreSheet.Summary) -> Unit, onClose: () -> Unit) {
     val sheet = state.value ?: return
     val colors = MaterialTheme.colorScheme
     when (sheet) {
-        is RestoreSheet.Partly -> LyrifySheet(
+        is RestoreSheet.Done -> LyrifySheet(
             onDismiss = onClose,
             footer = { LyrifyButton(stringResource(R.string.restore_close), onClick = onClose, modifier = Modifier.fillMaxWidth(), kind = ButtonKind.SECONDARY) },
         ) {
-            Text(stringResource(R.string.restore_partly), style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { heading() })
-            val names = sheet.failed.map { stringResource(sectionLabel(it)) }.joinToString(", ")
-            Text(stringResource(R.string.restore_failed, names), style = MaterialTheme.typography.bodyLarge, color = colors.onSurfaceVariant)
+            val result = sheet.result
+            Text(
+                stringResource(if (result.failed.isEmpty()) R.string.restore_done else R.string.restore_partly),
+                style = MaterialTheme.typography.titleLarge,
+                modifier = Modifier.semantics { heading() },
+            )
+            if (result.failed.isNotEmpty()) {
+                val names = result.failed.map { stringResource(sectionLabel(it)) }.joinToString(", ")
+                Text(stringResource(R.string.restore_failed, names), style = MaterialTheme.typography.bodyLarge, color = colors.onSurfaceVariant)
+            }
+            if (result.placesLeftOut > 0) {
+                Text(pluralStringResource(R.plurals.restore_places_full, result.placesLeftOut, formatCount(result.placesLeftOut)), style = MaterialTheme.typography.bodyLarge, color = colors.onSurfaceVariant)
+            }
+            if (result.bookmarksLeftOut > 0) {
+                Text(pluralStringResource(R.plurals.restore_bookmarks_full, result.bookmarksLeftOut, formatCount(result.bookmarksLeftOut)), style = MaterialTheme.typography.bodyLarge, color = colors.onSurfaceVariant)
+            }
         }
         is RestoreSheet.Summary -> {
             val contents = sheet.plan.contents

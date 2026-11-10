@@ -206,6 +206,64 @@ class BackupRestoreTest {
         assertEquals(BackupFixtures.ledger.entries[bell.path], stores.ledger.entries[bell.path])
     }
 
+    @Test
+    fun `with Recent full, a restore keeps every saved queue, the phone's and the backup's`() {
+        val source = QueueSource(SourceKind.SONGS, "songs", "Songs")
+        val other = song("Music/Salt Road/01 Salt Road.mp3", title = "Salt Road", id = 14)
+        // Ten recent queues, the first holding the songs of the backup's saved queue, and a saved one.
+        val recent = (1..10).map { n -> Queue("q$n", source, listOf(QueueItem(n.toLong(), if (n == 1) water.ref else SongRef(VOLUME_PHONE + "Music/r$n.mp3"))), updatedAt = T0) }
+        val mine = Queue("q11", source, listOf(QueueItem(11, other.ref)), name = "Mine", updatedAt = T0)
+        val stores = MemoryStores(queues = QueueBook(recent + mine, recent = recent.map { it.id }, saved = listOf("q11"), nextId = 12, nextUid = 12))
+        // The backup saves a queue of the songs of one of its recent queues.
+        val backup = contents().let { it.copy(queues = it.queues!!.let { book -> book.copy(queues = book.queues + book.queue("q1")!!.copy(id = "q9", name = "Kept"), saved = book.saved + "q9") }) }
+
+        runBlocking { plan(BackupFixtures.library + other, backup).apply(setOf(Section.QUEUES), stores, newId) }
+
+        val book = stores.queues
+        assertEquals(recent.map { it.id }, book.recent)
+        assertEquals(listOf("Mine", "Ferry songs", "Kept"), book.saved.map { book.queue(it)!!.name })
+        assertEquals(listOf(listOf(other.ref), listOf(water.ref), listOf(lantern.ref, bell.ref)), book.saved.map { id -> book.queue(id)!!.items.map { it.song } })
+    }
+
+    @Test
+    fun `places past the cap are left out and counted, never pushing out the phone's own`() {
+        val mine = (1..SongState.MAX_PLACES).associate { n -> "${VOLUME_PHONE}Music/p$n.mp3" to n * 1_000L }
+        val stores = MemoryStores(songState = SongState(places = mine))
+
+        val result = restore(stores, chosen = setOf(Section.BOOKMARKS))
+
+        assertEquals(mine, stores.songState.places)
+        assertEquals(1, result.placesLeftOut)
+        assertEquals(2, stores.songState.bookmarksOf(lantern.path).size)
+        assertEquals(0, result.bookmarksLeftOut)
+    }
+
+    @Test
+    fun `bookmarks past a song's cap or the cap of all are left out and counted`() {
+        val full = (1..SongState.MAX_BOOKMARKS_PER_SONG).map { Bookmark(it.toLong(), it * 1_000L, "Mine") }
+        val perSong = MemoryStores(songState = SongState(bookmarks = mapOf(lantern.path to full), nextBookmarkId = 1_000))
+        val all = (1..SongState.MAX_BOOKMARKS / SongState.MAX_BOOKMARKS_PER_SONG).associate { n -> "${VOLUME_PHONE}Music/b$n.mp3" to full }
+        val everywhere = MemoryStores(songState = SongState(bookmarks = all, nextBookmarkId = 1_000))
+
+        val one = restore(perSong, chosen = setOf(Section.BOOKMARKS))
+        val two = restore(everywhere, chosen = setOf(Section.BOOKMARKS))
+
+        assertEquals(full, perSong.songState.bookmarksOf(lantern.path))
+        assertEquals(RestoreResult(listOf(Section.BOOKMARKS), emptyList(), placesLeftOut = 0, bookmarksLeftOut = 2), one)
+        assertEquals(all, everywhere.songState.bookmarks)
+        assertEquals(2, two.bookmarksLeftOut)
+    }
+
+    @Test
+    fun `a bookmark is compared in the form the phone keeps it, so a second restore adds nothing`() {
+        val loose = contents().copy(bookmarks = listOf(BackupMarks(lantern.path, null, listOf(BackupBookmark(30_500, " Chorus "), BackupBookmark(30_200, "Chorus")))))
+        val stores = MemoryStores()
+
+        repeat(2) { runBlocking { plan(contents = loose).apply(setOf(Section.BOOKMARKS), stores, newId) } }
+
+        assertEquals(listOf(30_000L to "Chorus"), stores.songState.bookmarksOf(lantern.path).map { it.positionMs to it.note })
+    }
+
     // Twice
 
     @Test
@@ -279,6 +337,10 @@ class BackupRestoreTest {
         val twin = song("Music/Copies/Low Water.mp3", title = "Low Water", artist = "Mira Solen", durationMs = 240_500)
 
         assertEquals(listOf(water.path), plan(newLibrary - newWater + moved(newWater) + twin).missing(setOf(Section.PLAYLISTS)).map { it.path })
+    }
+
+    private companion object {
+        const val VOLUME_PHONE: String = "/storage/emulated/0/"
     }
 
     private fun moved(song: Song) = BackupFixtures.moved(song, "/storage/1A2B-3C4D/Other/Low Water.flac", 239_000)

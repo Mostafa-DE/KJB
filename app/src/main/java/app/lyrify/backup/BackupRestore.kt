@@ -9,6 +9,7 @@ import app.lyrify.library.Song
 import app.lyrify.library.SongClue
 import app.lyrify.library.SongRef
 import app.lyrify.library.SongResolver
+import app.lyrify.player.Bookmark
 import app.lyrify.player.Queue
 import app.lyrify.player.QueueBook
 import app.lyrify.player.SongState
@@ -59,8 +60,14 @@ suspend fun BackupStores.snapshot(): BackupSnapshot = BackupSnapshot(playlists()
 /** A song a backup names that is not on this phone, as the backup knew it: the summary lists it. */
 data class MissingSong(val path: String, val title: String?, val artist: String?)
 
-/** What a restore did: the sections restored and those that failed, in the summary's order. */
-data class RestoreResult(val restored: List<Section>, val failed: List<Section>)
+/** A song state with a backup's places and bookmarks in, and how many of each the caps left out. */
+internal data class MergedMarks(val state: SongState, val placesLeftOut: Int, val bookmarksLeftOut: Int)
+
+/**
+ * What a restore did: the sections restored and those that failed, in the summary's order, and the places and bookmarks
+ * left out because the phone holds as many as it keeps (a restore never pushes out the phone's own).
+ */
+data class RestoreResult(val restored: List<Section>, val failed: List<Section>, val placesLeftOut: Int = 0, val bookmarksLeftOut: Int = 0)
 
 /**
  * A backup matched against this phone's library: each song by its path, then by its title, artist and length within 2 s
@@ -123,9 +130,10 @@ class RestorePlan(val contents: BackupContents, resolver: SongResolver) {
         val ready = chosen(chosen).map { it to prepare(it) }
         val restored = mutableListOf<Section>()
         val failed = mutableListOf<Section>()
+        var marks: MergedMarks? = null
         ready.forEach { (section, prepared) ->
             val done = try {
-                write(prepared, stores, newId)
+                write(prepared, stores, newId) { marks = it }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -135,8 +143,11 @@ class RestorePlan(val contents: BackupContents, resolver: SongResolver) {
             }
             if (done) restored += section else failed += section
         }
+        val placesLeftOut = marks?.placesLeftOut ?: 0
+        val bookmarksLeftOut = marks?.bookmarksLeftOut ?: 0
         log("restore: ${restored.size} sections restored, ${failed.size} failed${if (failed.isEmpty()) "" else ": " + failed.joinToString { it.key }}")
-        return RestoreResult(restored, failed)
+        if (placesLeftOut + bookmarksLeftOut > 0) log("restore: $placesLeftOut places and $bookmarksLeftOut bookmarks left out at the limit")
+        return RestoreResult(restored, failed, placesLeftOut, bookmarksLeftOut)
     }
 
     /** A section matched to this phone, ready to be written. */
@@ -195,11 +206,15 @@ class RestorePlan(val contents: BackupContents, resolver: SongResolver) {
         )
     }
 
-    private suspend fun write(prepared: Prepared, stores: BackupStores, newId: () -> String): Boolean = when (prepared) {
+    /** Writes [prepared] in one change of its store; [onMarks] hears what the places and bookmarks written left out. */
+    private suspend fun write(prepared: Prepared, stores: BackupStores, newId: () -> String, onMarks: (MergedMarks) -> Unit): Boolean = when (prepared) {
         is Prepared.Playlists -> stores.updatePlaylists { mergePlaylists(it, prepared.state, newId) }
         is Prepared.Queues -> stores.updateQueues { mergeQueues(it, prepared.recent, prepared.saved) }
         is Prepared.Plays -> stores.addPlays(prepared.plays)
-        is Prepared.Bookmarks -> stores.updateSongState { mergeMarks(it, prepared.marks) }
+        is Prepared.Bookmarks -> {
+            var merged: MergedMarks? = null
+            stores.updateSongState { now -> mergeMarks(now, prepared.marks).also { merged = it }.state }.also { written -> if (written) merged?.let(onMarks) }
+        }
         is Prepared.Equalizer -> stores.replaceEqualizer(prepared.profiles)
         is Prepared.Lyrics -> stores.updateLedger { mergeLedger(it, prepared.entries) }
         // The phone keeps its own automatic backup and its first-run state.
@@ -251,14 +266,16 @@ class RestorePlan(val contents: BackupContents, resolver: SongResolver) {
 
         /**
          * [now] with the backup's [recent] and [saved] queues added after its own, with new ids and uids from its
-         * counters: Recent up to its cap, Saved all. A queue holding the same songs in the same order as one there is
-         * not added again. Nothing plays.
+         * counters. A saved queue is never lost: it is added unless the phone saves one with the same songs in the same
+         * order, whatever Recent holds. A recent queue is added while Recent has room, unless a queue there or a saved one
+         * restored has its songs. Nothing plays.
          */
         internal fun mergeQueues(now: QueueBook, recent: List<Queue>, saved: List<Queue>): QueueBook {
-            val seen = now.queues.map { queue -> queue.items.map { it.song.path } }.toMutableSet()
-            fun fresh(queues: List<Queue>) = queues.filter { queue -> seen.add(queue.items.map { it.song.path }) }
-            val toRecent = fresh(recent).take((QueueBook.MAX_RECENT - now.recent.size).coerceAtLeast(0))
-            val toSaved = fresh(saved)
+            fun songs(queue: Queue) = queue.items.map { it.song.path }
+            val savedHere = now.saved.mapNotNull(now::queue).map(::songs).toMutableSet()
+            val toSaved = saved.filter { savedHere.add(songs(it)) }
+            val seen = (now.queues + toSaved).map(::songs).toMutableSet()
+            val toRecent = recent.filter { seen.add(songs(it)) }.take((QueueBook.MAX_RECENT - now.recent.size).coerceAtLeast(0))
             if (toRecent.isEmpty() && toSaved.isEmpty()) return now
             var nextId = now.nextId
             var nextUid = now.nextUid
@@ -277,17 +294,33 @@ class RestorePlan(val contents: BackupContents, resolver: SongResolver) {
 
         /**
          * [now] with the backup's places for songs that have none, and its bookmarks not there yet (the same spot and
-         * note), each on its song as this phone knows it (its path and id hint, [Song.ref]), so they follow it when it
-         * moves. Through the song state's own API ([SongState.withPlace], [SongState.withBookmark]), which gives each
-         * bookmark its new id, keeps the newest places and holds its caps (a bookmark past them is left out).
+         * note in the form the song state keeps them), each on its song as this phone knows it (its path and id hint,
+         * [Song.ref]), so they follow it when it moves. Through the song state's own API ([SongState.withPlace],
+         * [SongState.withBookmark]), which gives each bookmark its new id. A restore never pushes out the phone's own: a
+         * place or a bookmark past the song state's caps is left out, and counted.
          */
-        internal fun mergeMarks(now: SongState, marks: List<Pair<Song, BackupMarks>>): SongState = marks.fold(now) { before, (song, kept) ->
-            val key = song.ref
-            val placed = kept.placeMs?.takeIf { key.path !in before.places }?.let { before.withPlace(key, it) } ?: before
-            kept.bookmarks.fold(placed) { state, mark ->
-                if (state.bookmarksOf(key.path).any { it.positionMs == mark.positionMs && it.note == mark.note }) state else state.withBookmark(key, mark.positionMs, mark.note)?.first ?: state
+        internal fun mergeMarks(now: SongState, marks: List<Pair<Song, BackupMarks>>): MergedMarks {
+            var state = now
+            var placesLeftOut = 0
+            var bookmarksLeftOut = 0
+            marks.forEach { (song, kept) ->
+                val key = song.ref
+                if (kept.placeMs != null && key.path !in state.places) {
+                    if (state.places.size < SongState.MAX_PLACES) state = state.withPlace(key, kept.placeMs) else placesLeftOut++
+                }
+                kept.bookmarks.forEach { mark ->
+                    val stored = keptForm(key, mark)
+                    if (state.bookmarksOf(key.path).none { it.positionMs == stored.positionMs && it.note == stored.note }) {
+                        val added = state.withBookmark(key, stored.positionMs, stored.note)
+                        if (added == null) bookmarksLeftOut++ else state = added.first
+                    }
+                }
             }
+            return MergedMarks(state, placesLeftOut, bookmarksLeftOut)
         }
+
+        /** [mark] as the song state would keep it (its spot to the second, its note trimmed and capped), by its own rules. */
+        private fun keptForm(song: SongRef, mark: BackupBookmark): Bookmark = checkNotNull(SongState().withBookmark(song, mark.positionMs, mark.note)).second
 
         /** [now] with the backup's choices for songs it knows nothing about: a choice the phone has, the user's own above all, stays. */
         internal fun mergeLedger(now: LedgerState, restored: List<LedgerEntry>): LedgerState {
