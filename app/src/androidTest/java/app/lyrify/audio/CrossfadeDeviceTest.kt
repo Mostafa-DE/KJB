@@ -118,6 +118,8 @@ class CrossfadeDeviceTest {
         override fun mayFade(from: Long, to: Long): Boolean = true
 
         override fun parametersOf(uid: Long): PlaybackParameters? = null
+
+        override fun placeOf(uid: Long, durationMs: Long): Long? = null
     }
 
     private class Built(val engine: CrossfadeEngine, val made: List<GaplessEngine>)

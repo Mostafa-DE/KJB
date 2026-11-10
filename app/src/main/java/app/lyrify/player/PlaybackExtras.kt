@@ -38,6 +38,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 import kotlin.math.pow
 import kotlin.math.roundToInt
 
@@ -261,6 +262,10 @@ fun resumeAt(mode: RememberPlace, durationMs: Long, kept: Long?, startMs: Long):
     return placeToKeep(mode, durationMs, kept)
 }
 
+/** Whether a song that started at [startMs] stands at its [kept] place already (crossfade loads the next song there). */
+fun startedAtPlace(mode: RememberPlace, durationMs: Long, kept: Long, startMs: Long): Boolean =
+    placeToKeep(mode, durationMs, kept) != null && abs(startMs - kept) < FROM_THE_START_MS
+
 /** A song that starts this close to its beginning starts from it. */
 private const val FROM_THE_START_MS: Long = 1_000
 
@@ -481,7 +486,10 @@ class ExtrasDriver(
         extras.jumpingTo = null
         // Not a new play: a lap, a bookmark's jump, a park at the start, or a song held by its part.
         if (lap || jump || parked || extras.state.value.part?.path == song.path) return
-        val at = resumeAt(mode(), song.durationMs, extras.state.value.places[song.path], port.positionMs) ?: return
+        val kept = extras.state.value.places[song.path] ?: return
+        // Come in at its place already (crossfade loads the next song there): nothing to move, only the toast.
+        if (natural && startedAtPlace(mode(), song.durationMs, kept, port.positionMs)) return extras.say(ExtrasSaid.Resumed(song.path, kept))
+        val at = resumeAt(mode(), song.durationMs, kept, port.positionMs) ?: return
         port.seek(port.index, at)
         lastMs = at
         extras.say(ExtrasSaid.Resumed(song.path, at))

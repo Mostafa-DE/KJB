@@ -7,9 +7,11 @@ import app.lyrify.player.QueueBook
 import app.lyrify.player.QueueSource
 import app.lyrify.player.Repeat
 import app.lyrify.player.SleepTimer
+import app.lyrify.player.SongState
 import app.lyrify.player.SourceKind
 import app.lyrify.player.sleepAfter
 import app.lyrify.player.sleepFor
+import app.lyrify.settings.RememberPlace
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -71,13 +73,24 @@ class CrossfadeTest {
 
     @Test
     fun `a natural fade lasts the chosen seconds, at most half of either song`() {
-        assertEquals(0L, naturalFadeMs(0, 200_000, 200_000))
-        assertEquals(6_000L, naturalFadeMs(6_000, 200_000, 200_000))
-        assertEquals(12_000L, naturalFadeMs(12_000, 200_000, null))
-        assertEquals(4_000L, naturalFadeMs(12_000, 8_000, 200_000))
-        assertEquals(5_000L, naturalFadeMs(12_000, 200_000, 10_000))
+        assertEquals(0L, naturalFadeMs(0, 200_000, 1f, 200_000, 1f))
+        assertEquals(6_000L, naturalFadeMs(6_000, 200_000, 1f, 200_000, 1f))
+        assertEquals(12_000L, naturalFadeMs(12_000, 200_000, 1f, null, 1f))
+        assertEquals(4_000L, naturalFadeMs(12_000, 8_000, 1f, 200_000, 1f))
+        assertEquals(5_000L, naturalFadeMs(12_000, 200_000, 1f, 10_000, 1f))
         // A song of unknown length does not fade.
-        assertEquals(0L, naturalFadeMs(6_000, C.TIME_UNSET, 200_000))
+        assertEquals(0L, naturalFadeMs(6_000, C.TIME_UNSET, 1f, 200_000, 1f))
+    }
+
+    @Test
+    fun `the half-song cap is time at each song's own speed, as the fade runs`() {
+        // 20 s songs at 1.5x last 13.3 s: half is 6.7 s of time, not 10.
+        assertEquals(6_666L, naturalFadeMs(12_000, 20_000, 1.5f, 20_000, 1.5f))
+        // At 0.75x they last 26.7 s: half is 13.3 s, so the full 12 s fade fits.
+        assertEquals(12_000L, naturalFadeMs(12_000, 20_000, 0.75f, 20_000, 0.75f))
+        // Each song at its own speed: the one coming in at 2x halves its cap.
+        assertEquals(5_000L, naturalFadeMs(12_000, 200_000, 1f, 20_000, 2f))
+        assertEquals(10_000L, naturalFadeMs(12_000, 30_000, 1.5f, 200_000, 1f))
     }
 
     @Test
@@ -133,6 +146,23 @@ class CrossfadeTest {
         val (first, inserted, second) = withNext.items.map { it.uid }
         assertTrue(mayCrossfade(withNext, first, inserted, keepAlbumsGapless = true, part = null, sleep = null))
         assertTrue(mayCrossfade(withNext, inserted, second, keepAlbumsGapless = true, part = null, sleep = null))
+    }
+
+    @Test
+    fun `a song comes in at its kept place when Remember my place keeps one, else from its start`() {
+        val long = (1..2).map { song("Music/Talks/Night Ferry Talk %d.mp3".format(it), durationMs = 1_800_000) }
+        val queue = QueueBook().play(long.map { it.ref }, 0, listSource, now = 1).book.current!!
+        val (a, b) = queue.items.map { it.uid }
+        val kept = SongState(places = mapOf(long[1].path to 240_000L))
+        assertEquals(240_000L, comingInAt(queue, b, 1_800_000, kept, RememberPlace.LONG_SONGS))
+        assertNull(comingInAt(queue, a, 1_800_000, kept, RememberPlace.LONG_SONGS))
+        assertNull(comingInAt(queue, b, 1_800_000, kept, RememberPlace.OFF))
+        // A short song does not resume under Long songs, and a place too near the end is not one.
+        assertNull(comingInAt(queue, b, 300_000, kept, RememberPlace.LONG_SONGS))
+        assertNull(comingInAt(queue, b, 245_000, kept, RememberPlace.ALL_SONGS))
+        // A song with a part repeating starts in its part, not at its place.
+        assertNull(comingInAt(queue, b, 1_800_000, kept.copy(part = AbPart(long[1].path, 10_000, 20_000)), RememberPlace.LONG_SONGS))
+        assertNull(comingInAt(null, b, 1_800_000, kept, RememberPlace.LONG_SONGS))
     }
 
     @Test

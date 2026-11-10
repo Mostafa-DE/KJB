@@ -9,6 +9,8 @@ import app.lyrify.player.Edit
 import app.lyrify.player.EngineExtras
 import app.lyrify.player.EngineListener
 import app.lyrify.player.ExtrasDriver
+import app.lyrify.player.ExtrasSaid
+import app.lyrify.player.FakeExtrasPort
 import app.lyrify.player.POSITION_EVERY_MS
 import app.lyrify.player.PlayTracker
 import app.lyrify.player.PlayerExtras
@@ -331,6 +333,27 @@ class CrossfadeEngineTest {
     }
 
     @Test
+    fun `inside an album kept gapless a song playing on stays gapless, and Next by hand still takes the short fade`() = runTest {
+        val rig = FadeRig(this, crossfadeSeconds = 6, songs = tones(3, album = "Fade Test"), source = ALBUM)
+        rig.mayFade = { from, to -> mayCrossfade(rig.queue, from, to, keepAlbumsGapless = true, part = null, sleep = null) }
+        rig.runToLeft(3_000)
+        rig.run(4_000)
+        assertEquals(1, rig.slots.size)
+        assertEquals(rig.start(1, natural = true), rig.heard.starts.last())
+        rig.run(5_000)
+        // The spec: "A manual Next or Previous uses a short fade of 300 ms", album or not.
+        rig.engine.seek(2, 0)
+        val (first, second) = rig.two(rig.live)
+        rig.run(FakeSlot.BUFFER_MS + 150)
+        assertTrue(first.volume in 0.01f..0.99f)
+        assertTrue(second.volume in 0.01f..0.99f)
+        rig.run(400)
+        assertEquals(listOf(second), rig.live)
+        assertEquals(1f, second.volume, 0f)
+        assertEquals(rig.start(2), rig.heard.starts.last())
+    }
+
+    @Test
     fun `the sleep timer's fade lowers both players of a fade, and its stop pauses the fade where it is`() = runTest {
         val rig = FadeRig(this, crossfadeSeconds = 6)
         val timer = MutableStateFlow<SleepTimer?>(null)
@@ -393,10 +416,10 @@ class CrossfadeEngineTest {
         }
     }
 
-    /** The service's extras on the rig's engine, as ExtrasPart wires them: speeds, the part looping, places. */
-    private fun TestScope.extrasOn(rig: FadeRig, stored: SongState = SongState()): PlayerExtras {
+    /** The service's extras on the rig's engine, as ExtrasPart wires them: speeds, the part looping, places in [mode]. */
+    private fun TestScope.extrasOn(rig: FadeRig, stored: SongState = SongState(), mode: RememberPlace = RememberPlace.OFF): PlayerExtras {
         val extras = PlayerExtras(MemorySongState(stored), backgroundScope)
-        val driver = ExtrasDriver(EngineExtras(rig.engine), extras, { uid -> Playing(uid, rig.songOf(uid).ref, rig.songOf(uid).durationMs) }) { RememberPlace.OFF }
+        val driver = ExtrasDriver(EngineExtras(rig.engine), extras, { uid -> Playing(uid, rig.songOf(uid).ref, rig.songOf(uid).durationMs) }) { mode }
         rig.engine.addListener(object : EngineListener {
             override fun onSongStarted(uid: Long, lap: Boolean, natural: Boolean) = driver.songStarted(uid, lap, natural)
 
@@ -428,7 +451,138 @@ class CrossfadeEngineTest {
         assertEquals(rig.start(1, natural = true), rig.heard.starts.last())
     }
 
+    @Test
+    fun `a song coming in at its kept place loads there and fades in over the full fade, never as a seek`() = runTest {
+        val long = tones(3, lengthMs = 700_000)
+        lateinit var extras: PlayerExtras
+        val rig = FadeRig(this, crossfadeSeconds = 8, songs = long) {
+            extras = extrasOn(it, SongState(places = mapOf(long[1].path to 240_000L)), RememberPlace.LONG_SONGS)
+        }
+        rig.places = { uid, durationMs -> comingInAt(rig.queue, uid, durationMs, extras.state.value, RememberPlace.LONG_SONGS) }
+        val said = mutableListOf<ExtrasSaid>()
+        backgroundScope.launch { extras.said.collect { said += it } }
+        runCurrent()
+        rig.engine.seek(0, 700_000 - 20_000)
+        rig.runToLeft(8_000)
+        val (first, second) = rig.two(rig.slots)
+        assertEquals(rig.start(1, natural = true), rig.heard.starts.last())
+        assertTrue("loadItems ${rig.uids} 1 240000" in second.calls)
+        rig.run(4_000)
+        // Half way through the full 8 s fade, the song 4 s past its place.
+        assertEquals(fadeInGain(0.5f), second.volume, 0.02f)
+        assertEquals(1f, squares(first, second), 0.02f)
+        assertTrue(second.positionMs in 243_950L..244_050L)
+        assertFalse(second.calls.any { it.startsWith("seek") })
+        // P2's toast still says where it picked up.
+        assertEquals(listOf<ExtrasSaid>(ExtrasSaid.Resumed(long[1].path, 240_000)), said)
+        rig.run(4_100)
+        assertEquals(listOf(second), rig.live)
+        assertEquals(1f, second.volume, 0f)
+    }
+
+    @Test
+    fun `a song at its kept place says Resumed only when a fade brought it there, never when a queue is loaded there`() = runTest {
+        val talks = tones(2, lengthMs = 700_000)
+        val extras = PlayerExtras(MemorySongState(SongState(places = talks.associate { it.path to 240_000L })), backgroundScope)
+        val port = FakeExtrasPort().apply {
+            positionMs = 240_000
+            durationMs = 700_000
+        }
+        val driver = ExtrasDriver(port, extras, { uid -> Playing(uid, talks[uid.toInt() - 1].ref, 700_000) }) { RememberPlace.LONG_SONGS }
+        val said = mutableListOf<ExtrasSaid>()
+        backgroundScope.launch { extras.said.collect { said += it } }
+        runCurrent()
+        // The queue restored at its place, which is also the song's: as before, no toast.
+        driver.songStarted(1, lap = false, natural = false)
+        runCurrent()
+        assertEquals(emptyList<ExtrasSaid>(), said)
+        // Crossfade brought the next song in at its place: the toast, and nothing moves.
+        port.index = 1
+        driver.songStarted(2, lap = false, natural = true)
+        runCurrent()
+        assertEquals(listOf<ExtrasSaid>(ExtrasSaid.Resumed(talks[1].path, 240_000)), said)
+        assertEquals(emptyList<Pair<Int, Long>>(), port.seeks)
+    }
+
     // Speed, Repeat one, the end of the queue
+
+    /** Where the song going out was when the song coming in started, as the session heard it. */
+    private fun FadeRig.outAtFadeStart(): () -> Long? {
+        var at: Long? = null
+        engine.addListener(object : EngineListener {
+            override fun onSongStarted(uid: Long, lap: Boolean, natural: Boolean) {
+                if (natural && at == null) at = slots.first().positionMs
+            }
+        })
+        return { at }
+    }
+
+    @Test
+    fun `at one and a half times the speed the fade fits half the song in time, starting at its middle`() = runTest {
+        val rig = FadeRig(this, crossfadeSeconds = 12, songs = tones(3, lengthMs = 20_000))
+        rig.speeds = { PlaybackParameters(1.5f) }
+        rig.engine.setPlaybackParameters(PlaybackParameters(1.5f))
+        val out = rig.outAtFadeStart()
+        rig.run(7_000)
+        // Half of 20 s at 1.5x is 6.7 s of time: the fade starts at 0:10 of the song, never before.
+        assertTrue("began at ${out()}", out()!! in 9_950L..10_050L)
+        val (first, _) = rig.two(rig.slots.take(2))
+        assertFalse(first.released)
+        // And it is over 6.7 s later, as the song ends.
+        rig.run(6_700)
+        assertTrue(first.released)
+    }
+
+    @Test
+    fun `at three quarters of the speed the full 12 s fade fits, in time`() = runTest {
+        val rig = FadeRig(this, crossfadeSeconds = 12, songs = tones(3, lengthMs = 20_000))
+        rig.speeds = { PlaybackParameters(0.75f) }
+        rig.engine.setPlaybackParameters(PlaybackParameters(0.75f))
+        val out = rig.outAtFadeStart()
+        rig.run(18_000)
+        // 12 s of time at 0.75x is 9 s of the song: the fade starts at 0:11.
+        assertTrue("began at ${out()}", out()!! in 10_950L..11_050L)
+        val (first, second) = rig.two(rig.slots.take(2))
+        rig.run(6_000)
+        assertTrue(first.volume in 0.01f..0.99f)
+        assertEquals(1f, squares(first, second), 0.02f)
+        rig.run(6_100)
+        assertTrue(first.released)
+    }
+
+    @Test
+    fun `the song coming in is capped by its real length once loaded, so a short file never ends inside the fade`() = runTest {
+        // The library says song 2 is 60 s; its file is 5 s.
+        val rig = FadeRig(this, crossfadeSeconds = 12, files = mapOf(1 to 5_000L))
+        rig.runToLeft(12_000 - 100)
+        assertEquals(listOf(rig.start(0)), rig.heard.starts)
+        rig.runToLeft(2_500 + 10)
+        assertEquals(listOf(rig.start(0)), rig.heard.starts)
+        rig.run(20)
+        assertEquals(rig.start(1, natural = true), rig.heard.starts.last())
+        rig.run(2_500 + 30)
+        // Over in 2.5 s, half the real file; song 2 then plays on, and song 3 has not started inside the fade.
+        val (first, second) = rig.two(rig.slots.take(2))
+        assertTrue(first.released)
+        assertEquals(1f, second.volume, 0f)
+        assertEquals(listOf(rig.start(0), rig.start(1, natural = true)), rig.heard.starts)
+    }
+
+    @Test
+    fun `a song coming in that ends inside the fade anyway finishes the fade at once and plays on`() = runTest {
+        // Song 2 says 60 s, as decoded too, but its file stops at 4 s.
+        val rig = FadeRig(this, crossfadeSeconds = 12, ends = mapOf(1 to 4_000L))
+        rig.runToLeft(12_000)
+        val (first, second) = rig.two(rig.slots)
+        assertEquals(rig.start(1, natural = true), rig.heard.starts.last())
+        rig.run(4_000 + 20)
+        // Its player went on to song 3 by itself: the fade is over at once, song 3 at full volume on it.
+        assertEquals(rig.start(2, natural = true), rig.heard.starts.last())
+        assertTrue(first.released)
+        assertEquals(listOf(second), rig.live)
+        assertEquals(1f, second.volume, 0f)
+        assertEquals(2, rig.engine.index)
+    }
 
     @Test
     fun `the song coming in starts at its own speed, and the song going out keeps its own`() = runTest {

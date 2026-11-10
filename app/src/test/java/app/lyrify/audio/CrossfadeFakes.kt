@@ -35,12 +35,19 @@ import org.junit.Assert.assertTrue
 class LoadError : PlaybackException("unreadable", null, ERROR_CODE_IO_FILE_NOT_FOUND, Bundle.EMPTY, 0)
 
 /**
- * One ExoPlayer as the crossfade engine drives it, on virtual time: the songs it holds by uid, each [lengthOf] long;
- * a load or a jump to another song buffers for [BUFFER_MS] first; playing moves the position at its speed, and the end
- * of a song goes on as ExoPlayer does (the next song, Repeat one's lap, the end of the queue, or a pause at the end when
- * asked). It tells its listeners as GaplessEngine does. [calls] notes what it was asked, for the Off path.
+ * One ExoPlayer as the crossfade engine drives it, on virtual time: the songs it holds by uid, each [lengthOf] long as
+ * decoded, [tagOf] long as the library says, and ending at [endOf] (a file shorter than it says); a load or a jump to
+ * another song buffers for [BUFFER_MS] first; playing moves the position at its speed, and the end of a song goes on as
+ * ExoPlayer does (the next song, Repeat one's lap, the end of the queue, or a pause at the end when asked). It tells its
+ * listeners as GaplessEngine does. [calls] notes what it was asked, for the Off path.
  */
-class FakeSlot(val number: Int, private val clock: () -> Long, private val lengthOf: (Long) -> Long) : FadeSlot {
+class FakeSlot(
+    val number: Int,
+    private val clock: () -> Long,
+    private val lengthOf: (Long) -> Long,
+    private val tagOf: (Long) -> Long = lengthOf,
+    private val endOf: (Long) -> Long = lengthOf,
+) : FadeSlot {
     val calls = mutableListOf<String>()
     private val listeners = mutableListOf<EngineListener>()
     var released: Boolean = false
@@ -85,7 +92,7 @@ class FakeSlot(val number: Int, private val clock: () -> Long, private val lengt
     override val isPlaying: Boolean get() = playWhenReady && playbackState == Player.STATE_READY
     override val positionMs: Long get() = if (isPlaying) base + ((clock() - since) * playbackParameters.speed).toLong() else base
     override val items: List<MediaItem>
-        get() = loaded.map { uid -> MediaItem.Builder().setMediaId("$uid").setMediaMetadata(MediaMetadata.Builder().setDurationMs(lengthOf(uid)).build()).build() }
+        get() = loaded.map { uid -> MediaItem.Builder().setMediaId("$uid").setMediaMetadata(MediaMetadata.Builder().setDurationMs(tagOf(uid)).build()).build() }
     override val isLoading: Boolean get() = playbackState == Player.STATE_BUFFERING
     override val suppression: Int get() = Player.PLAYBACK_SUPPRESSION_REASON_NONE
     override val audioSessionId: Int get() = sessionId
@@ -222,7 +229,7 @@ class FakeSlot(val number: Int, private val clock: () -> Long, private val lengt
     fun advance() {
         if (released) return
         if (playbackState == Player.STATE_BUFFERING && clock() >= readyAt) changing { playbackState = Player.STATE_READY }
-        val length = durationMs
+        val length = uid?.let(endOf) ?: C.TIME_UNSET
         if (!isPlaying || length == C.TIME_UNSET || positionMs < length) return
         changing {
             val over = positionMs - length
@@ -362,8 +369,9 @@ val ALBUM: QueueSource = QueueSource(SourceKind.ALBUM, "album:fade", "Fade Test"
 
 /**
  * The crossfade engine over fake players on virtual time ([scope]'s scheduler): a queue of [songs] from [source],
- * loaded from its first song and playing unless [play] is false. [before] runs before the load, to listen from the
- * first song. The players' time runs every [STEP_MS].
+ * loaded from its first song and playing unless [play] is false. A song's length is its library length unless [files]
+ * gives the decoded one (by its place in [songs]), and its file ends there unless [ends] says sooner. [before] runs
+ * before the load, to listen from the first song. The players' time runs every [STEP_MS].
  */
 @kotlin.OptIn(ExperimentalCoroutinesApi::class)
 class FadeRig(
@@ -372,6 +380,8 @@ class FadeRig(
     val songs: List<Song> = tones(4),
     source: QueueSource = PLAYLIST,
     play: Boolean = true,
+    private val files: Map<Int, Long> = emptyMap(),
+    private val ends: Map<Int, Long> = emptyMap(),
     before: (FadeRig) -> Unit = {},
 ) {
     val clock: () -> Long = { scope.testScheduler.currentTime }
@@ -382,13 +392,19 @@ class FadeRig(
     val focus = FakeFocus()
     var mayFade: (Long, Long) -> Boolean = { _, _ -> true }
     var speeds: (Long) -> PlaybackParameters? = { null }
+    var places: (Long, Long) -> Long? = { _, _ -> null }
     val heard = Heard()
+    private fun decoded(uid: Long): Long = files[uids.indexOf(uid)] ?: songOf(uid).durationMs
     val engine = CrossfadeEngine(
-        newSlot = { FakeSlot(slots.size, clock) { uid -> songOf(uid).durationMs }.also { slots += it } },
+        newSlot = {
+            FakeSlot(slots.size, clock, ::decoded, tagOf = { songOf(it).durationMs }, endOf = { ends[uids.indexOf(it)] ?: decoded(it) }).also { slots += it }
+        },
         rules = object : FadeRules {
             override fun mayFade(from: Long, to: Long): Boolean = this@FadeRig.mayFade(from, to)
 
             override fun parametersOf(uid: Long): PlaybackParameters? = speeds(uid)
+
+            override fun placeOf(uid: Long, durationMs: Long): Long? = places(uid, durationMs)
         },
         focusOf = { control -> focus.also { it.control = control } },
         scope = scope.backgroundScope,

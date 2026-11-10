@@ -23,7 +23,10 @@ import app.lyrify.player.Projected
 import app.lyrify.player.Queue
 import app.lyrify.player.Repeat
 import app.lyrify.player.SleepTimer
+import app.lyrify.player.SongState
 import app.lyrify.player.albumInOrder
+import app.lyrify.player.resumeAt
+import app.lyrify.settings.RememberPlace
 import app.lyrify.settings.Settings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -89,10 +92,14 @@ data class Ramp(val up: Boolean, val lengthMs: Long, val fromGain: Float = if (u
     fun played(ms: Long): Ramp = copy(playedMs = (playedMs + ms).coerceAtMost(lengthMs))
 }
 
-/** How long a song [outMs] long fades into one [inMs] long (null: not known yet): "Crossfade", at most half of either. */
-fun naturalFadeMs(crossfadeMs: Long, outMs: Long, inMs: Long?): Long {
-    if (crossfadeMs <= 0 || outMs <= 0) return 0
-    return minOf(crossfadeMs, outMs / 2, (inMs?.takeIf { it > 0 } ?: outMs) / 2)
+/**
+ * How long, in time, a song [outMs] long playing at [outSpeed] fades into one that plays [inMs] (null: not known yet) at
+ * [inSpeed]: "Crossfade", at most half of either song as each one plays, since the fade runs on the clock.
+ */
+fun naturalFadeMs(crossfadeMs: Long, outMs: Long, outSpeed: Float, inMs: Long?, inSpeed: Float): Long {
+    val inPart = inMs ?: outMs
+    if (crossfadeMs <= 0 || outMs <= 0 || inPart <= 0) return 0
+    return minOf(crossfadeMs.toFloat(), outMs / 2 / outSpeed.coerceAtLeast(MIN_SPEED), inPart / 2 / inSpeed.coerceAtLeast(MIN_SPEED)).toLong()
 }
 
 /** What a natural change needs now: the next song loaded ([prepare]), the fade begun ([start]), and when to look again. */
@@ -130,6 +137,16 @@ fun mayCrossfade(queue: Queue?, from: Long, to: Long, keepAlbumsGapless: Boolean
     return !(sleep is SleepTimer.BySongs && sleep.left <= 1)
 }
 
+/**
+ * Where song [uid] of [queue], [durationMs] long, comes in: its kept place when Remember my place ([mode]) picks it up
+ * there, as P2's resume would; null for its start, and for a song with a part repeating, which starts in its part.
+ */
+fun comingInAt(queue: Queue?, uid: Long, durationMs: Long, state: SongState, mode: RememberPlace): Long? {
+    val path = queue?.items?.firstOrNull { it.uid == uid }?.song?.path ?: return null
+    if (state.part?.path == path) return null
+    return resumeAt(mode, durationMs, state.places[path], 0)
+}
+
 /** One ExoPlayer as the crossfade engine drives it: a [PlaybackEngine] holding the queue (GaplessEngine), and what a fade needs. */
 interface FadeSlot : PlaybackEngine {
     /** Loads the media items another player holds, as they are. */
@@ -152,6 +169,9 @@ interface FadeRules {
 
     /** The speed and pitch song [uid] plays at, so the song coming in starts at its own; null for those of the song playing. */
     fun parametersOf(uid: Long): PlaybackParameters?
+
+    /** Where song [uid], [durationMs] long, comes in: its kept place ([comingInAt]); null for its start. */
+    fun placeOf(uid: Long, durationMs: Long): Long?
 }
 
 /** The phone's audio focus, one for both players while crossfade is on ([MediaFocus]: Media3's own rules). */
@@ -200,9 +220,10 @@ class CrossfadeEngine(
     /** The player of the song playing: the one the session sees. */
     private var active: FadeSlot = newSlot().also { it.addListener(SlotEvents(it)) }
 
-    /** The next song, loaded and waiting silent on the second player ([standbyFor] its uid). */
+    /** The next song, loaded and waiting silent on the second player ([standbyFor] its uid, at [standbyAt]). */
     private var standby: FadeSlot? = null
     private var standbyFor: Long? = null
+    private var standbyAt: Long = 0
 
     /** The song going out of a fade, on the other player, and its fade; the song playing's fade in. */
     private var tail: FadeSlot? = null
@@ -494,28 +515,58 @@ class CrossfadeEngine(
             return if (from == null || toIndex == null) null else LOOK_EVERY_MS
         }
         val to = loaded[toIndex]
-        val leftMs = ((outMs - active.positionMs) / active.playbackParameters.speed.coerceAtLeast(MIN_SPEED)).toLong()
-        // Far from the end the next song's length is not needed yet.
-        val inMs = if (leftMs > crossfadeMs + PREPARE_LEAD_MS) null else active.items.getOrNull(toIndex)?.mediaMetadata?.durationMs
-        val fadeMs = naturalFadeMs(crossfadeMs, outMs, inMs)
+        val outSpeed = active.playbackParameters.speed.coerceAtLeast(MIN_SPEED)
+        val leftMs = ((outMs - active.positionMs) / outSpeed).toLong()
         val waiting = standby?.takeIf { standbyFor == to }
+        // Far from the end the song coming in is not needed yet.
+        val coming = if (leftMs > crossfadeMs + PREPARE_LEAD_MS) null else comingIn(toIndex, to, waiting)
+        val fadeMs = naturalFadeMs(crossfadeMs, outMs, outSpeed, coming?.playsMs, coming?.parameters?.speed ?: outSpeed)
         val step = fadeStep(leftMs, fadeMs, ready = waiting?.playbackState == Player.STATE_READY && waiting.error == null)
-        if (!step.prepare || to == failedAhead || !rules.mayFade(from, to)) {
+        // A song waiting already stays while its fade may still come: its real length may have shortened the fade.
+        val stays = waiting != null && leftMs > FADE_STEP_MS && leftMs <= crossfadeMs + PREPARE_LEAD_MS
+        if (!step.prepare && !stays) {
             dropStandby()
-            return if (step.prepare) LOOK_EVERY_MS else step.nextMs
+            return step.nextMs
         }
-        if (waiting == null) prepareAhead(toIndex, to)
+        if (to == failedAhead || !rules.mayFade(from, to)) {
+            dropStandby()
+            return LOOK_EVERY_MS
+        }
+        if (waiting == null) prepareAhead(toIndex, to, coming ?: comingIn(toIndex, to, null))
         if (step.start) startFade(minOf(fadeMs, leftMs))
         return step.nextMs
     }
 
-    /** The next song [to], at [index], loaded on a second player that waits silent at the song's own speed. */
-    private fun prepareAhead(index: Int, to: Long) {
+    /** The song coming in as its fade sees it: where it comes in ([atMs]), how much of it plays from there, its speed. */
+    private class Coming(val atMs: Long, val playsMs: Long?, val parameters: PlaybackParameters?)
+
+    /**
+     * The song [to] at [index], coming in: at its kept place, if any; as long as the library says, or as its file really
+     * is once loaded on the second player ([waiting]), whichever is shorter; at its own speed.
+     */
+    private fun comingIn(index: Int, to: Long, waiting: FadeSlot?): Coming {
+        val libraryMs = active.items.getOrNull(index)?.mediaMetadata?.durationMs?.takeIf { it > 0 }
+        val fileMs = waiting?.durationMs?.takeIf { it > 0 }
+        val lengthMs = listOfNotNull(libraryMs, fileMs).minOrNull()
+        val atMs = if (waiting != null) standbyAt else (libraryMs ?: lengthMs)?.let { rules.placeOf(to, it) } ?: 0
+        return Coming(atMs, lengthMs?.let { it - atMs }, waiting?.playbackParameters ?: rules.parametersOf(to))
+    }
+
+    /** The next song [to], at [index], loaded on a second player that waits silent where it comes in, at its own speed. */
+    private fun prepareAhead(index: Int, to: Long, coming: Coming) {
         dropStandby()
-        val slot = makeSlot(rules.parametersOf(to))
-        slot.loadItems(active.items, index, 0)
+        val slot = makeSlot(coming.parameters)
+        slot.loadItems(active.items, index, coming.atMs)
         standby = slot
         standbyFor = to
+        standbyAt = coming.atMs
+    }
+
+    /** The song coming in ended inside its fade (a file shorter than it said) and its player went on: the fade is over. */
+    private fun finishFade() {
+        letTailGo()
+        activeRamp = null
+        applyVolumes()
     }
 
     /** The natural fade: the song waiting comes in over [lengthMs] as the song playing goes out to its end. */
@@ -688,6 +739,7 @@ class CrossfadeEngine(
 
         override fun onSongStarted(uid: Long, lap: Boolean, natural: Boolean) {
             if (slot !== active) return
+            if (natural && fading) finishFade()
             failedAhead = null
             if (offloadAtNextSong) {
                 offloadAtNextSong = false
@@ -707,7 +759,10 @@ class CrossfadeEngine(
         }
 
         override fun onEnded() {
-            if (slot === active) tell { it.onEnded() }
+            if (slot === active) {
+                if (fading) finishFade()
+                tell { it.onEnded() }
+            }
             if (slot === tail) {
                 letTailGo()
                 look()
@@ -750,6 +805,9 @@ class MediaFocus(context: Context, looper: Looper, control: AudioFocusManager.Pl
 class QueueFadeRules(private val core: PlayerCore, private val extras: PlayerExtras, private val settings: () -> Settings) : FadeRules {
     override fun mayFade(from: Long, to: Long): Boolean =
         mayCrossfade(core.book.value.current, from, to, settings().advanced.keepAlbumsGapless, extras.state.value.part, extras.sleep.value)
+
+    override fun placeOf(uid: Long, durationMs: Long): Long? =
+        comingInAt(core.book.value.current, uid, durationMs, extras.state.value, settings().playback.rememberPlace)
 
     override fun parametersOf(uid: Long): PlaybackParameters? {
         val song = core.book.value.current?.items?.firstOrNull { it.uid == uid }?.song ?: return null
