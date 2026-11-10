@@ -523,17 +523,20 @@ class Backups(
     /**
      * Closes [intent], deleting its backup, only on proof that the backup is no longer needed: the file at the song's
      * path, opened anew here and read whole, holds exactly [proof] (the written state after a write; the original when
-     * nothing was written, or the backup was put back), and that descriptor is still the file at the path (`fstat`
-     * against `lstat`). Proven twice, the second time right before the delete, so a write into the same file in between
-     * (the same inode, other bytes) is caught. No fsync, scan or Undo save runs between the proofs and the delete; the
+     * nothing was written, or the backup was put back), that descriptor is still the file at the path (`fstat` against
+     * `lstat`), and MediaStore's row at the path is still the song's own, [mediaStoreId]. A song another app deletes and
+     * makes again under its name through MediaStore gets a new row at once, while the phone's file system may still show
+     * this process the old file for a while (seen on Android 17: the descriptor and the path both kept the old file's
+     * identity and size): the row tells it. Proven twice, the second time right before the delete, so a write into the
+     * same file in between (the same inode, other bytes) is caught. No fsync, scan or Undo save runs between the proofs and the delete; the
      * intent is closed after it. A backup Undo keeps as the song's snapshot is never deleted here.
      *
      * A read or `lstat` that fails throws, and leaves the backup and the intent as they are: an error decides nothing.
      */
-    fun releaseBackup(intent: WriteIntent, proof: FileState): Release {
+    fun releaseBackup(intent: WriteIntent, proof: FileState, mediaStoreId: Long): Release {
         val snapshot = intent.backup in undo.keptBackups()
         val proven = songs.openToRead(intent.path).use { song ->
-            fun proven() = song.holds(proof) && song.fileId() == songs.fileId(intent.path)
+            fun proven() = song.holds(proof) && song.fileId() == songs.fileId(intent.path) && songs.idOf(intent.path) == mediaStoreId
             val proven = proven() && proven()
             if (proven && !snapshot) Files.deleteIfExists(File(dirs.backups, intent.backup).toPath())
             proven
@@ -699,30 +702,33 @@ class JournalRecovery(
     /** [settle] on a mounted volume: any read, `lstat`, query or write that fails throws. */
     private suspend fun settleRead(intent: WriteIntent): Settled {
         if (!regularFile(File(intent.path))) return Settled.WAITING
-        // The write never began: nothing was written, so the song must be at its path as it was.
-        val expected = intent.expected ?: return released(intent, intent.original, Settled.AS_IT_WAS)
         val id = songs.idOf(intent.path) ?: return Settled.WAITING
+        // The write never began: nothing was written, so the song must be at its path as it was.
+        val expected = intent.expected ?: return released(intent, intent.original, id, Settled.AS_IT_WAS)
         // The file at the path right before it is opened, compared with the path's again before anything is written
         // (path against path: MediaStore's descriptor is mostly on the file system under the path's, with another device
         // number), while the descriptor is held, so its inode can't be reused by another file meanwhile.
         val atOpen = songs.fileId(intent.path)
         if (intent.fileId != null && atOpen != intent.fileId) log("journal: the song's file identity changed since its write; its bytes decide")
         val open = songs.openInPlace(SongTarget(intent.path, id)) ?: throw IOException("song not opened")
-        val settled = open.use { settleThrough(intent, expected, it, atOpen) }
+        val settled = open.use { settleThrough(intent, expected, it, atOpen, id) }
         if (settled == Settled.RESTORED) songs.scan(intent.path)
         return settled
     }
 
-    /** [settle] with the song held open: decided on what [open] reads, written through [open] only. */
-    private fun settleThrough(intent: WriteIntent, expected: FileState, open: OpenSong, atOpen: FileId): Settled {
+    /**
+     * [settle] with the song held open: decided on what [open] reads, written through [open] only. [id]: the song's
+     * MediaStore row at its path when it was opened, which its backup's release must find still there.
+     */
+    private fun settleThrough(intent: WriteIntent, expected: FileState, open: OpenSong, atOpen: FileId, id: Long): Settled {
         if (open.holds(expected)) {
             // The write finished; its History record may not have been saved.
             if (intent.record != null && !undo.save(intent.record, intent.mediaStoreId)) return historyNotSaved(intent)
-            return released(intent, expected, Settled.AS_IT_WAS)
+            return released(intent, expected, id, Settled.AS_IT_WAS)
         }
         // Written and verified, then changed by someone else: old bytes are never written over it.
         if (intent.committed) return setAside(intent, "the song changed after its write was committed")
-        if (open.holds(intent.original)) return released(intent, intent.original, Settled.AS_IT_WAS)
+        if (open.holds(intent.original)) return released(intent, intent.original, id, Settled.AS_IT_WAS)
         // Neither: the write was cut short. Written back only from a whole backup, and only over this song torn.
         val backup = File(dirs.backups, intent.backup)
         // No backup any more (it went once, on proof): never written back, and not a failed read.
@@ -735,14 +741,14 @@ class JournalRecovery(
         if (songs.fileId(intent.path) != atOpen) return setAside(intent, "the song was replaced during recovery")
         writeInPlace(open.channel, backup, intent.original.length)
         if (!open.holds(intent.original)) throw IOException("the backup did not read back as written")
-        return released(intent, intent.original, Settled.RESTORED)
+        return released(intent, intent.original, id, Settled.RESTORED)
     }
 
     /**
      * [settled] once [intent]'s backup is released on proof that the song is at its path as [proof]; else set aside. A
      * backup released whose intent could not be closed waits, uncounted: the next start closes it.
      */
-    private fun released(intent: WriteIntent, proof: FileState, settled: Settled): Settled = when (backups.releaseBackup(intent, proof)) {
+    private fun released(intent: WriteIntent, proof: FileState, id: Long, settled: Settled): Settled = when (backups.releaseBackup(intent, proof, id)) {
         Backups.Release.RELEASED -> settled
         Backups.Release.SET_ASIDE -> Settled.SET_ASIDE
         Backups.Release.NOT_CLOSED -> Settled.WAITING

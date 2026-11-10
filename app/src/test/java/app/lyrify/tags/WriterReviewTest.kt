@@ -115,13 +115,16 @@ class WriterReviewTest {
         assertEquals(0, rig.journal.pending().size)
         assertTrue(backupKept(original))
 
-        // MediaStore's row moved off the path: the song itself is as it was, so its backup goes.
+        // MediaStore's row at the path is no longer the song's: not written, and, as a row that moved can't be told from
+        // a song replaced through MediaStore, its backup stays, set aside.
         File(rig.dirs.journal, WriteJournal.SET_ASIDE).deleteRecursively()
         rig.dirs.backups.listFiles()!!.forEach { it.delete() }
         checks = 0
         rig.busy.onCheck = { if (++checks == 3) rig.songs.ids[song.path] = 99 }
-        assertEquals(SongOutcome.COULD_NOT_CHANGE, write(song))
-        unopened(song, changed)
+        assertEquals(SongOutcome.SET_ASIDE, write(song))
+        assertArrayEquals(changed, rig.bytes(song))
+        assertFalse("open rw" in rig.events)
+        assertTrue(backupKept(changed))
     }
 
     // 3. A backup goes back only over the same file
@@ -1305,6 +1308,27 @@ class WriterReviewTest {
 
         assertEquals(BatchResult.HistoryUnreadable, undone)
         assertArrayEquals(written, rig.bytes(song))
+    }
+
+    // The phone: a replacement made through MediaStore that the file system does not show yet
+
+    @Test
+    fun `a song MediaStore replaced while its backup's release reads it keeps its backup, though the path still shows the old file`() {
+        val song = rig.song("Paper Lantern", 41, fields)
+        assertEquals(SongOutcome.WRITTEN, write(song, titleOnly))
+        val before = rig.bytes(song)
+        // Right after the release's first read, another app deletes the song and makes a new one under its name through
+        // MediaStore: a new row at the path. This process's view of the path is not refreshed yet (as on the phone), so the
+        // path and the descriptor still show the old file.
+        rig.songs.onRead = {
+            if (rig.events.last() == "open r") {
+                rig.songs.onRead = {}
+                rig.songs.ids[song.path] = 77
+            }
+        }
+
+        assertEquals(SongOutcome.SET_ASIDE, write(song))
+        assertTrue(backupKept(before))
     }
 
     /**
