@@ -8,17 +8,22 @@ import app.lyrify.LOG_TAG
 import app.lyrify.Lyrify
 import app.lyrify.logFailures
 import app.lyrify.media.TrackResolver
+import app.lyrify.tags.lookup.AlbumLookup
+import app.lyrify.tags.lookup.MetaCache
+import app.lyrify.tags.lookup.MetaClient
+import app.lyrify.tags.lookup.MusicBrainz
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import java.io.File
 import java.io.IOException
 
 /**
  * The tag engine's objects, built by hand once per process: one writer (so one tag write at a time app-wide, on one
- * thread), its journal and Undo store, and the start-up recovery that every write waits for. Covers & tags (T2) and
- * Edit tags (T3) get the writer and History from here.
+ * thread), its journal and Undo store, the start-up recovery that every write waits for, and the one album lookup.
+ * Covers & tags (T2) and Edit tags (T3) get the writer, the lookup and History from here.
  */
 object TagsGraph {
     /** KJB's own open songs: the tone preview holds its song here, and KJB's player its current song (milestone P1). */
@@ -28,6 +33,7 @@ object TagsGraph {
     private val recovered = CompletableDeferred<Unit>()
     private var parts: Parts? = null
     private var writer: SafeWriter? = null
+    private var lookup: AlbumLookup? = null
     private var recovering = false
 
     private class Parts(context: Context) {
@@ -91,6 +97,16 @@ object TagsGraph {
             ready = { recovered.await() },
         ).also { writer = it }
     }
+
+    /**
+     * The one album lookup (Covers & tags): one MusicBrainz and Cover Art Archive client for the app, so its gate (one
+     * request at a time, 1.1 s apart, the 503 backoff) and its answer cache in `cache/tag-cache/` hold app-wide.
+     */
+    @Synchronized
+    fun lookup(context: Context): AlbumLookup = lookup ?: run {
+        val app = context.applicationContext
+        AlbumLookup(MusicBrainz(MetaClient(MetaCache(File(app.cacheDir, "tag-cache")), log = ::log)), ::log)
+    }.also { lookup = it }
 
     /** History and Undo's records, for the History list. */
     fun undo(context: Context): UndoStore = parts(context.applicationContext).undo

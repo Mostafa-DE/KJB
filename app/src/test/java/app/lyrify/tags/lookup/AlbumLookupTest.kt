@@ -337,4 +337,15 @@ class AlbumLookupTest {
         val forbidden = listOf("Lanterns", "Ulso", "Mira", "Solen", "Kestrel", "Quillmere", "Ember", "/storage", ".mp3", "http", ".org", ".com", ID_A, ID_B, GROUP_A)
         logs.forEach { line -> forbidden.forEach { assertFalse("\"$it\" in: $line", it in line) } }
     }
+
+    @Test
+    fun `the app has one lookup and one MusicBrainz client, built in TagsGraph, so one gate spaces every request`() {
+        // Unit tests run in the module's folder.
+        val graph = java.io.File("src/main/java/app/lyrify/tags/TagsGraph.kt").readText()
+        assertTrue(graph.contains("fun lookup(context: Context): AlbumLookup"))
+        val built = Regex("""\b(AlbumLookup|MetaClient)\(""")
+        fun builds(line: String) = built.containsMatchIn(line) && !line.trimStart().startsWith("class ") && !line.trimStart().startsWith("*")
+        val builders = java.io.File("src/main/java").walkTopDown().filter { it.isFile && it.extension == "kt" && it.readLines().any(::builds) }.map { it.name }.toSet()
+        assertEquals(setOf("TagsGraph.kt"), builders)
+    }
 }
