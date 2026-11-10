@@ -1,14 +1,37 @@
 package app.lyrify.tags.lookup
 
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.ExecutorCoroutineDispatcher
+import kotlinx.coroutines.asCoroutineDispatcher
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.IOException
 import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URI
+import java.util.concurrent.Executors
+import kotlin.coroutines.CoroutineContext
 
 /** The User-Agent the tests give the client. */
 internal const val TEST_AGENT: String = "KJB/3.0.0 ( https://github.com/Mostafa-DE/Lyrify )"
+
+/** A dispatcher on one thread named [name], to see where work ran. Close it after the test. */
+internal fun namedThread(name: String): ExecutorCoroutineDispatcher =
+    Executors.newSingleThreadExecutor { Thread(it, name) }.asCoroutineDispatcher()
+
+/** Hands work to [inner], counting how often work was sent here. */
+internal class CountingDispatcher(private val inner: CoroutineDispatcher) : CoroutineDispatcher() {
+    @Volatile
+    var dispatches: Int = 0
+        private set
+
+    override fun isDispatchNeeded(context: CoroutineContext): Boolean = true
+
+    override fun dispatch(context: CoroutineContext, block: Runnable) {
+        dispatches++
+        inner.dispatch(context, block)
+    }
+}
 
 /** A recorded answer (made-up names only) from `src/test/resources/tags`. */
 internal fun fixture(name: String): ByteArray = File("src/test/resources/tags/$name").readBytes()

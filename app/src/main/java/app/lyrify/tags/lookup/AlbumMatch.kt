@@ -30,17 +30,21 @@ data class PhoneAlbum(val title: String?, val albumArtist: String?, val songs: L
     /** A song with no album tag, or alone: it always goes to Pick one. */
     val isSingle: Boolean get() = songs.size < 2 || title.isNullOrBlank()
 
-    /** The album's artist: its album artist tag, else the one artist every song has; null for a compilation. */
+    /**
+     * The album's artist: its album artist tag, else the one artist the songs name (blank and "Unknown" tags aside);
+     * null for a compilation, or when no song names one.
+     */
     val artist: String?
         get() {
             Names.usable(albumArtist)?.let { return it.takeUnless(Names::isVariousName) }
-            val artists = songs.map { Names.usable(it.artist) }
-            val first = artists.firstOrNull() ?: return null
-            return first.takeIf { artists.all { other -> other != null && Names.key(other) == Names.key(first) } }
+            val named = songs.mapNotNull { Names.usable(it.artist) }
+            return named.firstOrNull()?.takeIf { first -> named.all { Names.key(it) == Names.key(first) } }
         }
 
-    /** "Various Artists" as album artist, or no album artist and songs by different artists. */
-    val isVarious: Boolean get() = artist == null
+    /** "Various Artists" as album artist, or no album artist and songs that name different artists. */
+    val isVarious: Boolean
+        get() = Names.usable(albumArtist)?.let(Names::isVariousName)
+            ?: (songs.mapNotNull { Names.usable(it.artist)?.let(Names::key) }.distinct().size > 1)
 
     /** The year most songs carry. */
     internal val year: Int? get() = mostCommon(songs.mapNotNull { it.year })
@@ -67,7 +71,7 @@ internal fun <T> mostCommon(values: List<T>): T? = values.groupingBy { it }.each
 /** Builds albums from the whole library, never from the ledger. */
 object PhoneAlbums {
     /** "CD1", "Disc 2", "Lanterns CD2": a folder holding one disc of an album. */
-    private val DISC_FOLDER = Regex("""^(.*?)[\s._-]*(?:cd|disc|disk)[\s._-]*\d{1,2}$""", RegexOption.IGNORE_CASE)
+    private val DISC_FOLDER = Regex("""^(?:(.*?)[\s._-]+)?(?:cd|disc|disk)[\s._-]*\d{1,2}$""", RegexOption.IGNORE_CASE)
 
     /**
      * Songs with the same album tag and album artist form one album across folders, so "CD1" and "CD2" merge into one
@@ -144,7 +148,10 @@ enum class Doubt {
     /** Rule 4: the distance is over [AlbumMatch.SURE_DISTANCE]. */
     DISTANCE,
 
-    /** Rule 4: another release is within [AlbumMatch.MIN_GAP] (and is not the same edition). */
+    /**
+     * Rule 4: another release is within [AlbumMatch.MIN_GAP] (and is not the same edition), or the search found more
+     * releases with the album's track count than it listed, so a rival may be among those unseen.
+     */
     GAP,
 
     /** Rule 4: the only candidate, and a title pairs below [AlbumMatch.LONE_SIMILARITY]. */
@@ -211,10 +218,13 @@ object AlbumMatch {
     /** Thresholds compare with this much room, so 0.06 - 0.04 counts as the 0.02 it is. */
     private const val EPSILON = 1e-9
 
-    /** Ready when the best of [releases] holds every "sure" rule; Pick one with the best [MAX_SHOWN] otherwise. */
-    fun propose(album: PhoneAlbum, releases: List<MbRelease>, searched: Boolean = false): Proposal {
+    /**
+     * Ready when the best of [releases] holds every "sure" rule; Pick one with the best [MAX_SHOWN] otherwise.
+     * [unseenRivals]: the search found releases it did not list, any of which could be a rival.
+     */
+    fun propose(album: PhoneAlbum, releases: List<MbRelease>, searched: Boolean = false, unseenRivals: Boolean = false): Proposal {
         val matches = releases.distinctBy { it.id }.map { match(album, it) }.sortedBy { it.distance }
-        val extra = setOfNotNull(Doubt.SEARCHED.takeIf { searched }, Doubt.SINGLE.takeIf { album.isSingle })
+        val extra = setOfNotNull(Doubt.SEARCHED.takeIf { searched }, Doubt.SINGLE.takeIf { album.isSingle }, Doubt.GAP.takeIf { unseenRivals })
         val best = matches.firstOrNull() ?: return Proposal.PickOne(emptyList(), extra + Doubt.NO_CANDIDATE)
         val doubts = doubts(album, best, matches.drop(1)) + extra
         return if (doubts.isEmpty()) Proposal.Ready(best) else Proposal.PickOne(matches.take(MAX_SHOWN), doubts)
@@ -247,16 +257,19 @@ object AlbumMatch {
 
     /**
      * Pairs songs with tracks: only by title at [MIN_SIMILARITY] or more, the most pairs first, then the most similar
-     * titles, then the closest lengths. Never by file order, never by length alone.
+     * titles, then disc and track numbers that agree, then the closest lengths. Never by file order, never by length
+     * alone, and a song never lands on another disc for a closer length.
      */
     fun pair(songs: List<PhoneSong>, tracks: List<ReleaseTrack>): Pairing {
         if (songs.isEmpty() || tracks.isEmpty() || songs.size > MAX_SONGS || tracks.size > MAX_SONGS) return Pairing(emptyList(), songs, tracks)
         val similarity = Array(songs.size) { i -> DoubleArray(tracks.size) { j -> titleSimilarity(songs[i].title, tracks[j].track.title) } }
+        val discs = discCount(tracks)
         fun cost(i: Int, j: Int): Long {
             if (similarity[i][j] < MIN_SIMILARITY - EPSILON) return FORBIDDEN
             val title = ((1 - similarity[i][j]) * TITLE_STEPS).roundToLong()
+            val numbers = if (numbersAgree(songs[i], tracks[j], discs)) 0 else NUMBERS_SCALE
             val length = tracks[j].track.lengthMs?.let { (abs(songs[i].durationMs - it) / MS_PER_STEP).coerceAtMost(LENGTH_CAP) } ?: LENGTH_CAP
-            return title * TITLE_SCALE + length
+            return title * TITLE_SCALE + numbers + length
         }
         // The assignment wants no more rows than columns.
         val bySong = songs.size <= tracks.size
@@ -285,6 +298,7 @@ object AlbumMatch {
         val tracks = release.tracks
         val rival = others.filterNot { sameEdition(release, it.release) }.minByOrNull { it.distance }
         val trackTotal = tracks.sumOf { it.track.lengthMs ?: 0 }
+        val discs = discCount(tracks)
         return buildSet {
             if (album.isSingle) add(Doubt.SINGLE)
             if (!release.hasAllTracks || release.trackCount != album.songs.size) add(Doubt.TRACK_COUNT)
@@ -293,10 +307,11 @@ object AlbumMatch {
             if (abs(album.songs.sumOf { it.durationMs } - trackTotal) > LENGTH_TOLERANCE_MS) add(Doubt.ALBUM_LENGTH)
             if (Names.key(album.title).isEmpty() || Names.key(album.title) != Names.key(release.title)) add(Doubt.ALBUM_NAME)
             if (!sameArtist(album, release)) add(Doubt.ALBUM_ARTIST)
-            if (pairs.any { !numbersAgree(it) }) add(Doubt.NUMBERS)
+            if (pairs.any { !numbersAgree(it.song, it.track, discs) }) add(Doubt.NUMBERS)
             if (best.distance > SURE_DISTANCE + EPSILON) add(Doubt.DISTANCE)
             if (rival != null && rival.distance - best.distance < MIN_GAP - EPSILON) add(Doubt.GAP)
-            if (others.isEmpty() && pairs.any { it.similarity < LONE_SIMILARITY - EPSILON }) add(Doubt.LONE_TITLES)
+            // Twins of the same edition are no second opinion: only a real rival lifts the lone rule.
+            if (rival == null && pairs.any { it.similarity < LONE_SIMILARITY - EPSILON }) add(Doubt.LONE_TITLES)
         }
     }
 
@@ -378,10 +393,18 @@ object AlbumMatch {
     private fun sameArtist(album: PhoneAlbum, release: MbRelease): Boolean =
         album.isVarious == release.artist.isVarious && (album.isVarious || Names.key(album.artist) == Names.key(release.artist.text))
 
-    /** The song's numbers, where it has them, are its track's: disc, and position on the disc or over the release. */
-    private fun numbersAgree(pair: SongPair): Boolean =
-        (pair.song.disc == null || pair.song.disc == pair.track.disc) &&
-            (pair.song.track == null || pair.song.track == pair.track.track.position || pair.song.track == pair.track.index)
+    /**
+     * The song's numbers, where it has them, are its track's: its disc, and its number on that disc or over the whole
+     * release. Without a disc number on a release of several discs, only the number over the release can tell which
+     * disc a song is on, so a number on the disc does not count.
+     */
+    private fun numbersAgree(song: PhoneSong, track: ReleaseTrack, discs: Int): Boolean {
+        if (song.disc != null && song.disc != track.disc) return false
+        val number = song.track ?: return true
+        return number == track.index || (number == track.track.position && (song.disc != null || discs <= 1))
+    }
+
+    private fun discCount(tracks: List<ReleaseTrack>): Int = tracks.map { it.disc }.distinct().size
 
     private fun trackDistance(pair: SongPair, various: Boolean): Double {
         val penalties = Penalties()
@@ -410,13 +433,13 @@ object AlbumMatch {
     private fun lengthPenalty(songMs: Long, trackMs: Long): Double = (abs(songMs - trackMs) - LENGTH_GRACE_MS).toDouble() / LENGTH_MAX_MS
 
     /**
-     * beets: none when the songs' year is the release's or the original one; otherwise more the further off, up to 1 at
-     * [YEAR_SPAN] years. Null when the release has no year.
+     * As beets: none when the songs' year is the edition's or the original one; otherwise more the further it is from
+     * the CLOSER of the two, up to 1 at [YEAR_SPAN] years. So a year near the original favours no pressing over
+     * another. Null when the release has no year at all.
      */
     private fun yearPenalty(year: Int, release: MbRelease): Double? {
-        val releaseYear = release.year ?: release.releaseGroup?.originalYear ?: return null
-        if (year == releaseYear || year == release.releaseGroup?.originalYear) return 0.0
-        return abs(year - releaseYear).coerceAtMost(YEAR_SPAN).toDouble() / YEAR_SPAN
+        val off = listOfNotNull(release.year, release.releaseGroup?.originalYear).minOfOrNull { abs(year - it) } ?: return null
+        return off.coerceAtMost(YEAR_SPAN).toDouble() / YEAR_SPAN
     }
 
     private fun endWordsFirst(text: String): String =
@@ -533,16 +556,22 @@ object AlbumMatch {
     /** Two editions' tracks of "identical" length differ by at most this (disc lengths round differently). */
     private const val EDITION_LENGTH_MS = 1_000L
 
-    /** Pairing costs: titles first (1 - similarity in 10,000 steps), then lengths in tenths of a second, never mixed. */
-    private const val TITLE_STEPS = 10_000.0
+    /**
+     * Pairing costs, never mixed: titles first (1 - similarity in 1,000 steps), then numbers that disagree, then lengths
+     * in tenths of a second (up to about 17 minutes apart).
+     */
+    private const val TITLE_STEPS = 1_000.0
     private const val MS_PER_STEP = 100L
-    private const val LENGTH_CAP = 99_999L
+    private const val LENGTH_CAP = 9_999L
 
-    /** Above every length total of [MAX_SONGS] pairs, so one title step outweighs any lengths. */
-    private const val TITLE_SCALE = 100_000_000L
+    /** Above every length total of [MAX_SONGS] pairs, so numbers that disagree outweigh any lengths. */
+    private const val NUMBERS_SCALE = 10_000_000L
+
+    /** Above every numbers and lengths total of [MAX_SONGS] pairs, so one title step outweighs them all. */
+    private const val TITLE_SCALE = 10_000_000_000L
 
     /** Above every total of allowed pairs, so the most pairs always win. */
-    private const val FORBIDDEN = 100_000_000_000_000L
+    private const val FORBIDDEN = 1_000_000_000_000_000L
     private const val UNREACHED = Long.MAX_VALUE / 4
 
     private const val LAST_DATE = "9999"

@@ -237,6 +237,13 @@ class AlbumMatchTest {
     // Rule 4: a clear winner
 
     @Test
+    fun `releases the search found but did not list are rivals, so nothing is sure`() {
+        val proposal = AlbumMatch.propose(album(lanternSongs()), listOf(release()), unseenRivals = true)
+        assertEquals(setOf(Doubt.GAP), (proposal as Proposal.PickOne).doubts)
+        assertEquals(listOf(ID_A), proposal.candidates.map { it.release.id })
+    }
+
+    @Test
     fun `the distance and the gap are pinned`() {
         assertEquals(0.04, AlbumMatch.SURE_DISTANCE, 0.0)
         assertEquals(0.02, AlbumMatch.MIN_GAP, 0.0)
@@ -341,6 +348,122 @@ class AlbumMatchTest {
         // Numbered over the whole release: Brennmoor is track 4.
         val whole = songs.mapIndexed { i, s -> s.copy(track = i + 1, disc = null) }
         assertTrue(doubtsOf(album(whole), release()).isEmpty())
+    }
+
+    // The same title on two discs
+
+    /** "Intro" opens both discs; disc 2's is 0.4 s longer. */
+    private val twoIntros = listOf(
+        listOf(T("Intro", 60_000), T("Quiet Ember", 254_000)),
+        listOf(T("Intro", 60_400), T("Salt Road", 198_500)),
+    )
+
+    @Test
+    fun `with disc numbers, each song pairs on its own disc even when lengths say otherwise`() {
+        val songs = listOf(
+            song("Intro", 60_400, track = 1, disc = 1),
+            song("Quiet Ember", 254_000, track = 2, disc = 1),
+            song("Intro", 60_000, track = 1, disc = 2),
+            song("Salt Road", 198_500, track = 2, disc = 2),
+        )
+
+        val proposal = AlbumMatch.propose(album(songs), listOf(release(discs = twoIntros)))
+
+        assertTrue(proposal.toString(), proposal is Proposal.Ready)
+        (proposal as Proposal.Ready).match.pairing.pairs.forEach { assertEquals(it.song.disc, it.track.disc) }
+    }
+
+    @Test
+    fun `numbered over the whole release, each song pairs on its own disc even when lengths say otherwise`() {
+        val songs = listOf(
+            song("Intro", 60_400, track = 1),
+            song("Quiet Ember", 254_000, track = 2),
+            song("Intro", 60_000, track = 3),
+            song("Salt Road", 198_500, track = 4),
+        )
+
+        val proposal = AlbumMatch.propose(album(songs), listOf(release(discs = twoIntros)))
+
+        assertTrue(proposal.toString(), proposal is Proposal.Ready)
+        (proposal as Proposal.Ready).match.pairing.pairs.forEach { assertEquals(it.song.track, it.track.index) }
+    }
+
+    @Test
+    fun `without disc numbers, numbers counted per disc are never sure on two discs`() {
+        val songs = listOf(
+            song("Intro", 60_000, track = 1),
+            song("Quiet Ember", 254_000, track = 2),
+            song("Intro", 60_400, track = 1),
+            song("Salt Road", 198_500, track = 2),
+        )
+        assertTrue(Doubt.NUMBERS in doubtsOf(album(songs), release(discs = twoIntros)))
+        // One disc: numbers on the disc are numbers on the release.
+        val one = songs.take(2)
+        assertTrue(doubtsOf(album(one), release(discs = twoIntros.take(1))).isEmpty())
+    }
+
+    // The year, measured from the closer of the edition's year and the original
+
+    @Test
+    fun `a year near the original favours no pressing over another`() {
+        val songs = album(lanternSongs(year = 1999))
+        // Two pressings of a 1998 album, in two release groups: a 2001 remaster and a 2015 reissue.
+        val remaster = release(id = ID_A, group = GROUP_A, date = "2001")
+        val reissue = release(id = ID_B, group = GROUP_B, date = "2015")
+
+        val proposal = AlbumMatch.propose(songs, listOf(reissue, remaster))
+
+        assertTrue(proposal.toString(), proposal is Proposal.PickOne)
+        assertTrue(Doubt.GAP in (proposal as Proposal.PickOne).doubts)
+        assertEquals(AlbumMatch.match(songs, remaster).distance, AlbumMatch.match(songs, reissue).distance, 1e-9)
+    }
+
+    // A twin of the same edition is no second opinion
+
+    @Test
+    fun `a lone candidate and its twin edition still need 0,95 on every title`() {
+        val tracks = listOf(lanterns[0] + T("Brennmoor", 222_000) + T("Vael Reprise Two", 187_000))
+        val songs = album(tracks[0].mapIndexed { i, t -> song(if (i == 4) "Vael Reprise Tw" else t.title, t.lengthMs!!) })
+
+        val doubts = doubtsOf(songs, release(id = ID_A, discs = tracks), release(id = ID_B, discs = tracks))
+
+        assertEquals(setOf(Doubt.LONE_TITLES), doubts)
+    }
+
+    // Various Artists only when the tags say so
+
+    @Test
+    fun `one blank or unknown artist tag never makes an album Various Artists`() {
+        val songs = lanternSongs().map { it.copy(albumArtist = null) }
+        val gaps = songs.mapIndexed { i, s ->
+            when (i) {
+                0 -> s.copy(artist = null)
+                1 -> s.copy(artist = " ")
+                else -> if (i == 2) s.copy(artist = "Unknown Artist") else s
+            }
+        }
+        val album = album(gaps, albumArtist = null)
+
+        assertFalse(album.isVarious)
+        assertEquals("Mira Solen", album.artist)
+        assertTrue(doubtsOf(album, release()).isEmpty())
+        assertTrue(Doubt.ALBUM_ARTIST in doubtsOf(album, release(artist = "Various Artists")))
+    }
+
+    @Test
+    fun `no artist at all is not Various Artists either, and is never sure`() {
+        val nobody = album(lanternSongs().map { it.copy(artist = null, albumArtist = null) }, albumArtist = null)
+        assertFalse(nobody.isVarious)
+        assertEquals(null, nobody.artist)
+        assertTrue(Doubt.ALBUM_ARTIST in doubtsOf(nobody, release()))
+        assertTrue(Doubt.ALBUM_ARTIST in doubtsOf(nobody, release(artist = "Various Artists")))
+    }
+
+    @Test
+    fun `songs by artists that really differ, without an album artist, are Various Artists`() {
+        val mixed = album(lanternSongs().mapIndexed { i, s -> s.copy(albumArtist = null, artist = if (i == 0) "Glass Harbour" else s.artist) }, albumArtist = null)
+        assertTrue(mixed.isVarious)
+        assertEquals(null, mixed.artist)
     }
 
     // Singles and ids
@@ -451,6 +574,13 @@ class AlbumMatchTest {
             untagged("Vael", "/storage/emulated/0/Music/Lanterns Disc 3"),
         )
         assertEquals(listOf(3), PhoneAlbums.group(discs).map { it.songs.size })
+
+        val subfolders = listOf(untagged("Quiet Ember", "/storage/emulated/0/Music/Lanterns/CD1"), untagged("Brennmoor", "/storage/emulated/0/Music/Lanterns/cd 2"))
+        assertEquals(listOf(2), PhoneAlbums.group(subfolders).map { it.songs.size })
+
+        // "cd", "disc" or "disk" inside a word is not a disc folder.
+        val words = listOf(untagged("Quiet Ember", "/storage/emulated/0/Music/Abcd1"), untagged("Brennmoor", "/storage/emulated/0/Music/Abcd2"))
+        assertEquals(2, PhoneAlbums.group(words).size)
 
         val apart = listOf(
             untagged("Quiet Ember", "/storage/emulated/0/Music/Mira").copy(album = "Greatest Hits"),

@@ -219,6 +219,40 @@ class MetaClientTest {
     }
 
     @Test
+    fun `answers are read off the caller's thread, from the network and from the cache`() = runTest {
+        val web = web()
+        web.on(json, ok("""{"a":1}"""))
+        val io = namedThread("meta-io")
+        try {
+            val client = MetaClient(MetaCache(folder.newFolder()), userAgent = TEST_AGENT, gate = gate(), io = io, open = web::open)
+            val readers = mutableListOf<String>()
+            val read: (ByteArray) -> String = { bytes -> synchronized(readers) { readers += Thread.currentThread().name }; bytes.decodeToString() }
+
+            client.get(json, Body.JSON, read = read)
+            client.get(json, Body.JSON, read = read)
+
+            assertEquals(listOf("meta-io", "meta-io"), readers)
+        } finally {
+            io.close()
+        }
+    }
+
+    @Test
+    fun `the cache keeps whole answers when threads write the same query at once`() {
+        val cache = MetaCache(folder.newFolder(), budgetBytes = 1024 * 1024)
+        val ones = ByteArray(256 * 1024) { 1 }
+        val twos = ByteArray(256 * 1024) { 2 }
+        repeat(40) { round ->
+            val key = "https://musicbrainz.org/ws/2/release/?query=$round"
+            val writers = listOf(ones, twos).map { body -> Thread { repeat(3) { cache.put(key, body) } } }
+            writers.forEach(Thread::start)
+            writers.forEach(Thread::join)
+            val kept = cache.get(key)
+            assertTrue("round $round", kept != null && (kept.contentEquals(ones) || kept.contentEquals(twos)))
+        }
+    }
+
+    @Test
     fun `the cache names its files by hash and drops the oldest past its budget`() {
         val dir = folder.newFolder()
         val cache = MetaCache(dir, budgetBytes = 250)
