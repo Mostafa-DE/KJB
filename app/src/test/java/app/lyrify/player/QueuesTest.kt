@@ -165,6 +165,21 @@ class QueuesTest {
         assertEquals(4, moved.current!!.index)
     }
 
+    @Test
+    fun `a controller moving several songs at once moves them all, and the current song stays current`() {
+        val book = playing(1)
+        val numbers = { queue: Queue? -> paths(queue).map { it.removePrefix("Harbour Glass ").toInt() } }
+        val up = controllerMove(book, book.current!!.items.map { it.uid }, fromIndex = 3, toIndex = 5, newIndex = 1)
+        assertEquals(listOf(1, 4, 5, 2, 3, 6), numbers(up.current))
+        assertEquals("Harbour Glass 2", currentName(up))
+        val down = controllerMove(up, up.current!!.items.map { it.uid }, fromIndex = 0, toIndex = 2, newIndex = 4)
+        assertEquals(listOf(5, 2, 3, 6, 1, 4), numbers(down.current))
+        assertEquals("Harbour Glass 2", currentName(down))
+        // One song, as before.
+        val one = controllerMove(down, down.current!!.items.map { it.uid }, fromIndex = 5, toIndex = 6, newIndex = 0)
+        assertEquals(listOf(4, 5, 2, 3, 6, 1), numbers(one.current))
+    }
+
     // Recent and Saved
 
     @Test
