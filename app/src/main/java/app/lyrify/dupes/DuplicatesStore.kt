@@ -54,10 +54,11 @@ fun stillTrashed(songs: List<TrashedSong>, inTrash: Map<Long, Long?>?, now: Long
  * The stored form of [DuplicatesMemory]: JSON with a version. Read leniently, as the ledger is: fields a newer version
  * wrote are ignored, fields added since take their defaults, and each group or file is read on its own, so one this
  * version cannot read (a newer confidence, a missing field) is left out instead of losing the rest. The user's
- * decisions are plain strings, always read.
+ * decisions are plain strings, always read. Version 1 grouped identical files by their bytes and keyed groups by ids
+ * and sizes: its groups are dropped, to be found again by their audio, and its decisions keep their ids.
  */
 object DuplicatesJson {
-    const val VERSION: Int = 1
+    const val VERSION: Int = 2
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -83,10 +84,11 @@ object DuplicatesJson {
         } catch (_: SerializationException) {
             null
         } ?: return null
+        val version = (root[VERSION_KEY] as? JsonPrimitive)?.intOrNull ?: 1
         return DuplicatesMemory(
-            results = (root[RESULTS_KEY] as? JsonObject)?.let(::results),
-            notDuplicates = strings(root[NOT_DUPLICATES_KEY]),
-            reviewed = strings(root[REVIEWED_KEY]),
+            results = (root[RESULTS_KEY] as? JsonObject)?.takeIf { version >= VERSION }?.let(::results),
+            notDuplicates = strings(root[NOT_DUPLICATES_KEY]).mapTo(mutableSetOf(), ::idsOnly),
+            reviewed = strings(root[REVIEWED_KEY]).mapTo(mutableSetOf(), ::idsOnly),
             pendingTrash = items(root[PENDING_TRASH_KEY], AudioFile.serializer()),
             trashed = items(root[TRASHED_KEY], TrashedSong.serializer()),
         )
@@ -108,6 +110,9 @@ object DuplicatesJson {
                 null
             }
         }
+
+    /** A group key as [DuplicateGroup.key] has it: "1:10,2:10" (version 1, ids and sizes) is "1,2". */
+    private fun idsOnly(key: String): String = key.split(',').joinToString(",") { it.substringBefore(':') }
 
     private fun strings(element: JsonElement?): Set<String> =
         (element as? JsonArray).orEmpty().mapNotNull { (it as? JsonPrimitive)?.takeIf(JsonPrimitive::isString)?.content }.toSet()

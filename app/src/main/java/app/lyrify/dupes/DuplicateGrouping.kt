@@ -49,7 +49,7 @@ private val LOSSLESS_EXTENSIONS: Set<String> = setOf("flac", "wav", "aif", "aiff
 /** How sure KJB is that a group's files are one song, most sure first. */
 @Serializable
 enum class Confidence {
-    /** The same bytes: the same size and the same content hash. */
+    /** The same audio, whatever the tags: the same audio payload hash (for a format without one, the same bytes). */
     IDENTICAL,
 
     /** The same title and artist and a length within 2 s, in other files (another bitrate or format). */
@@ -70,10 +70,10 @@ data class DuplicateGroup(val confidence: Confidence, val files: List<AudioFile>
     val extraBytes: Long get() = files.sumOf { it.size } - keep.size
 
     /**
-     * The group's files by id and size: what "Not duplicates" remembers. A file added, gone or changed in size makes
-     * another key, so the group can come back.
+     * The group's files by id: what "Not duplicates" remembers. A file added or gone makes another key, so the group can
+     * come back; a retag, which changes a file's size, keeps it.
      */
-    val key: String get() = files.map { it.id to it.size }.sortedBy { it.first }.joinToString(",") { (id, size) -> "$id:$size" }
+    val key: String get() = files.map { it.id }.sorted().joinToString(",")
 }
 
 /** What a scan found: [scanned] files looked at, at [scannedAt] (wall-clock millis), and the groups not ruled out by the user. */
