@@ -98,12 +98,12 @@ data class LibrarySettings(
     val artistSort: SortArtists = SortArtists.NAME,
 ) {
     companion object {
-        /** Songs, Albums, Artists, Folders and Playlists shown; Genres hidden. */
+        /** Songs, Playlists, Albums, Artists and Folders shown; Genres hidden. */
         val DEFAULT_TABS: List<LibraryTabSetting> = LibraryTab.entries.map { LibraryTabSetting(it, shown = it != LibraryTab.GENRES) }
     }
 }
 
-enum class LibraryTab { SONGS, ALBUMS, ARTISTS, FOLDERS, PLAYLISTS, GENRES }
+enum class LibraryTab { SONGS, PLAYLISTS, ALBUMS, ARTISTS, FOLDERS, GENRES }
 
 data class LibraryTabSetting(val tab: LibraryTab, val shown: Boolean)
 
@@ -174,26 +174,30 @@ data class AdvancedSettings(
 /** "Notification buttons": a heart beside Next, or Shuffle and Repeat. */
 enum class NotificationButtons { FAVOURITE, SHUFFLE_REPEAT }
 
-/** Where the app reopens. */
+/** Where the app reopens. Library itself always opens on Songs, so its tab is not kept here. */
 data class NavSettings(
     /** The dock tab last open. */
     val lastTab: DockTab = DockTab.LIBRARY,
-    /** The Library tab last open. */
-    val libraryTab: LibraryTab = LibraryTab.SONGS,
+    /** The Favourites page's tab last open. */
+    val favouritesTab: FavouritesTab = FavouritesTab.SONGS,
     /** The first-run screen was finished with Continue, or skipped on a phone that already had both grants. */
     val setupDone: Boolean = false,
 )
 
-enum class DockTab { LIBRARY, SEARCH, TOOLS }
+enum class DockTab { LIBRARY, PLAYLISTS, SEARCH, TOOLS }
+
+/** The Favourites page's tabs: the favourite songs, then the albums, artists, folders and playlists with a heart. */
+enum class FavouritesTab { SONGS, ALBUMS, ARTISTS, FOLDERS, PLAYLISTS }
 
 /**
  * The stored form of [Settings]: a JSON object with a version and one object per section, enums by name. Read leniently,
  * field by field: a key this version does not know is ignored, and a field missing, of another type, out of range or
  * naming an unknown choice reads as its default while the fields around it are read as stored. A section that is
  * missing or not an object reads as its defaults. Only text that is not a JSON object at all is not settings.
+ * Version 2 put Playlists right after Songs in the Library tabs; a file without a version reads as this version.
  */
 object SettingsJson {
-    const val VERSION: Int = 1
+    const val VERSION: Int = 2
 
     fun encode(settings: Settings): String = Json.encodeToString(
         JsonObject.serializer(),
@@ -246,7 +250,7 @@ object SettingsJson {
                         "keepAlbumsGapless" to it.keepAlbumsGapless,
                     )
                 },
-                "nav" to settings.nav.let { obj("lastTab" to it.lastTab.name, "libraryTab" to it.libraryTab.name, "setupDone" to it.setupDone) },
+                "nav" to settings.nav.let { obj("lastTab" to it.lastTab.name, "favouritesTab" to it.favouritesTab.name, "setupDone" to it.setupDone) },
             ),
         ),
     )
@@ -258,6 +262,7 @@ object SettingsJson {
         } catch (_: SerializationException) {
             null
         } ?: return null
+        val version = (root["version"] as? JsonPrimitive)?.takeUnless { it.isString }?.intOrNull ?: VERSION
         val d = Settings()
         return Settings(
             playback = root.section("playback")?.let {
@@ -279,7 +284,7 @@ object SettingsJson {
             } ?: d.audio,
             library = root.section("library")?.let {
                 LibrarySettings(
-                    tabs = tabs(it["tabs"]),
+                    tabs = tabs(it["tabs"], version),
                     foldersToSkip = (it["foldersToSkip"] as? JsonArray).orEmpty().mapNotNull { folder -> folder.text()?.takeIf(String::isNotBlank) }.distinct(),
                     showFileNames = it.flag("showFileNames", d.library.showFileNames),
                     songSort = it.choice("songSort", d.library.songSort),
@@ -316,25 +321,43 @@ object SettingsJson {
                 )
             } ?: d.advanced,
             nav = root.section("nav")?.let {
-                NavSettings(lastTab = it.choice("lastTab", d.nav.lastTab), libraryTab = it.choice("libraryTab", d.nav.libraryTab), setupDone = it.flag("setupDone", d.nav.setupDone))
+                NavSettings(
+                    lastTab = it.choice("lastTab", d.nav.lastTab),
+                    favouritesTab = it.choice("favouritesTab", d.nav.favouritesTab),
+                    setupDone = it.flag("setupDone", d.nav.setupDone),
+                )
             } ?: d.nav,
         )
     }
 
     /**
      * The stored tabs in their order: unknown and repeated ones dropped, a missing "shown" read as the tab's default, and
-     * the tabs not stored (new in a later version) after them in their default order. The defaults when none is shown.
+     * the tabs not stored (new in a later version) after them in their default order. A file of [version] 1 had Playlists
+     * last by default: it moves right after Songs, shown or hidden as stored, the others in their stored order. The
+     * defaults when none is shown.
      */
-    private fun tabs(element: JsonElement?): List<LibraryTabSetting> {
+    private fun tabs(element: JsonElement?, version: Int): List<LibraryTabSetting> {
         val stored = element as? JsonArray ?: return LibrarySettings.DEFAULT_TABS
         val read = stored.mapNotNull { item ->
             val tab = item as? JsonObject ?: return@mapNotNull null
             val name = tab.choiceOrNull<LibraryTab>("tab") ?: return@mapNotNull null
             LibraryTabSetting(name, tab.flag("shown", LibrarySettings.DEFAULT_TABS.first { it.tab == name }.shown))
         }.distinctBy { it.tab }
-        val all = read + LibrarySettings.DEFAULT_TABS.filter { default -> read.none { it.tab == default.tab } }
+        val all = (read + LibrarySettings.DEFAULT_TABS.filter { default -> read.none { it.tab == default.tab } })
+            .let { if (version < PLAYLISTS_AFTER_SONGS) playlistsAfterSongs(it) else it }
         return if (all.any { it.shown }) all else LibrarySettings.DEFAULT_TABS
     }
+
+    /** [tabs], every tab once, with Playlists moved right after Songs. */
+    private fun playlistsAfterSongs(tabs: List<LibraryTabSetting>): List<LibraryTabSetting> {
+        val playlists = tabs.first { it.tab == LibraryTab.PLAYLISTS }
+        val others = tabs - playlists
+        val at = others.indexOfFirst { it.tab == LibraryTab.SONGS } + 1
+        return others.take(at) + playlists + others.drop(at)
+    }
+
+    /** The version from which Playlists follows Songs in the Library tabs. */
+    private const val PLAYLISTS_AFTER_SONGS: Int = 2
 
     /** The picked devices: entries with a whole positive id and a name, the first one of each id. */
     private fun connectDevices(element: JsonElement?): List<ConnectDevice> = (element as? JsonArray).orEmpty().mapNotNull { item ->

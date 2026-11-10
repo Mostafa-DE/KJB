@@ -1,5 +1,6 @@
 package app.lyrify.ui
 
+import androidx.compose.ui.text.font.FontWeight
 import android.text.format.Formatter
 import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
@@ -424,7 +425,7 @@ private fun AiSwitchBar(on: Boolean, enabled: Boolean, onSwitch: (Boolean) -> Un
             .heightIn(min = 64.dp)
             .padding(start = 24.dp, end = 16.dp),
     ) {
-        Text(stringResource(R.string.ai_switch), style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+        Text(stringResource(R.string.ai_switch), style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
         LyrifySwitch(on, enabled = enabled, pressed = pressed)
     }
 }
@@ -445,7 +446,8 @@ private fun AiGlanceView(glance: AiGlance, onLine: () -> Unit, onAction: (AiActi
                 .padding(horizontal = 12.dp)
                 .semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite },
         ) {
-            Text(line, style = MaterialTheme.typography.titleMedium, textAlign = TextAlign.Center)
+            // The line under the ring (.statline): 16/24 medium.
+            Text(line, style = body(16f, 24, 500), textAlign = TextAlign.Center)
             if (glance.sheet != null) Icon(painterResource(R.drawable.ic_info), contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
         }
         glance.action?.let { action ->

@@ -49,7 +49,10 @@ enum class Tool(@StringRes val title: Int, @DrawableRes val icon: Int, val page:
     SETTINGS(R.string.settings_title, R.drawable.ic_settings, Page.Settings),
 }
 
-/** A Tools row's one-line status: a string, a plural with its count, or the AI tile's value and label. */
+/**
+ * A row's one-line status (on Tools, and the Favourites row on Songs): a string, a plural with its count, or the AI
+ * tile's value and label.
+ */
 sealed interface ToolLine {
     data class Text(@StringRes val res: Int) : ToolLine
 
@@ -58,19 +61,19 @@ sealed interface ToolLine {
     data class Ai(val value: TileValue, @StringRes val label: Int) : ToolLine
 }
 
-/** A Tools row: its status [line], a count [badge] (songs to check, groups not opened yet), and a [dot] (AI needs the user). */
+/** A Tools row: its status [line], a count [badge] (songs to check, groups not opened yet, albums to review), and a [dot] (AI needs the user). */
 data class ToolRow(val tool: Tool, val line: ToolLine?, val badge: Int? = null, val dot: Boolean = false)
 
 /**
  * The rows of Tools for what each feature says now: [checks] songs to check, Duplicates' [dupes] view and [dupesBadge]
- * groups not opened yet, [tones] made, Covers & tags' own line ([coversTags], from its milestone), and the AI's state
- * with [aiWaiting] songs waiting for it.
+ * groups not opened yet, [tones] made, Covers & tags' line and badge ([coversTags], from its milestone), and the AI's
+ * state with [aiWaiting] songs waiting for it.
  */
-fun toolRows(checks: Int, dupes: DupesView, dupesBadge: Int, tones: Int, coversTags: ToolLine?, ai: AiState, aiWaiting: Int): List<ToolRow> = listOf(
+fun toolRows(checks: Int, dupes: DupesView, dupesBadge: Int, tones: Int, coversTags: EntryRow?, ai: AiState, aiWaiting: Int): List<ToolRow> = listOf(
     ToolRow(Tool.CHECK, if (checks > 0) ToolLine.Count(R.plurals.tools_check, checks) else ToolLine.Text(R.string.tools_check_none), badge = checks.takeIf { it > 0 }),
     ToolRow(Tool.DUPLICATES, dupesLine(dupes), badge = dupesBadge.takeIf { it > 0 }),
     ToolRow(Tool.TONES, if (tones > 0) ToolLine.Count(R.plurals.tools_tones, tones) else ToolLine.Text(R.string.tools_tones_none)),
-    ToolRow(Tool.COVERS_TAGS, coversTags),
+    ToolRow(Tool.COVERS_TAGS, coversTags?.line, badge = coversTags?.badge),
     ToolRow(Tool.AI, aiLine(ai, aiWaiting), dot = aiAttention(ai, aiWaiting)),
     ToolRow(Tool.SETTINGS, null),
 )
@@ -97,7 +100,7 @@ private fun aiLine(ai: AiState, waiting: Int): ToolLine {
 }
 
 @Composable
-private fun ToolLine.text(): String = when (this) {
+internal fun ToolLine.text(): String = when (this) {
     is ToolLine.Text -> stringResource(res)
     is ToolLine.Count -> pluralStringResource(res, count, count)
     is ToolLine.Ai -> stringResource(R.string.tools_ai_line, tileText(value), stringResource(label))
@@ -154,6 +157,7 @@ private fun ToolRowView(row: ToolRow, first: Boolean, onClick: () -> Unit) {
         first = first,
         supporting = line?.let { { Text(it, maxLines = 1, overflow = TextOverflow.Ellipsis) } },
         onClick = onClick,
+        minHeight = 72.dp,
         trailing = {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 row.badge?.let { CountBadge(it) }

@@ -1,5 +1,6 @@
 package app.lyrify.ui
 
+import androidx.compose.ui.text.font.FontWeight
 import android.os.Build
 import android.text.format.Formatter
 import androidx.activity.compose.BackHandler
@@ -175,7 +176,7 @@ fun SettingsScreen(
                 ActionRow(R.drawable.ic_description, R.string.set_licences) { onOpen(Page.Licences) }
             }
             item(key = "advanced") {
-                GroupedRows(Modifier.padding(top = 24.dp)) {
+                GroupedRows(Modifier.padding(top = 16.dp)) {
                     GroupedRow(
                         R.drawable.ic_tune,
                         stringResource(R.string.settings_advanced),
@@ -183,7 +184,7 @@ fun SettingsScreen(
                         onTile = MaterialTheme.colorScheme.onSurfaceVariant,
                         first = true,
                         modifier = Modifier.toggleable(advanced, role = Role.DropdownList) { advanced = it },
-                        trailing = { Icon(painterResource(if (advanced) R.drawable.ic_expand_less else R.drawable.ic_expand_more), contentDescription = null) },
+                        trailing = { Icon(painterResource(if (advanced) R.drawable.ic_expand_less else R.drawable.ic_expand_more), contentDescription = null, modifier = Modifier.size(20.dp)) },
                     )
                     if (advanced) {
                         val engine = settings.advanced
@@ -305,7 +306,7 @@ fun LibraryTabsScreen(settings: Settings, onChange: ((Settings) -> Settings) -> 
 private fun androidx.compose.foundation.lazy.LazyListScope.section(@StringRes title: Int, first: Boolean = false, rows: @Composable () -> Unit) {
     item(key = title) {
         Column {
-            SectionTitle(stringResource(title), Modifier.padding(start = ScreenPadding + 4.dp, end = ScreenPadding, top = if (first) 8.dp else 24.dp, bottom = 8.dp))
+            SectionTitle(stringResource(title), Modifier.padding(start = ScreenPadding + 4.dp, end = ScreenPadding, top = if (first) 4.dp else 18.dp, bottom = 8.dp))
             GroupedRows { rows() }
         }
     }
@@ -377,23 +378,22 @@ private fun GrantRow(
     first: Boolean = false,
 ) {
     val colors = MaterialTheme.colorScheme
-    val synced = LocalStatusColors.current[Tone.SYNCED]
     val highlight = LocalBrandColors.current.highlight
     GroupedRow(
         icon,
         stringResource(title),
-        tile = if (on) synced.container else colors.surfaceContainerHighest,
-        onTile = if (on) synced.onContainer else colors.onSurfaceVariant,
+        tile = if (on) colors.surfaceContainerHighest else colors.errorContainer,
+        onTile = if (on) colors.onSurfaceVariant else colors.onErrorContainer,
         first = first,
         supporting = { Text(stringResource(setting)) },
         trailing = {
             if (on) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     Icon(painterResource(R.drawable.ic_check), contentDescription = null, tint = highlight, modifier = Modifier.size(18.dp))
-                    Text(stringResource(onLabel), style = MaterialTheme.typography.labelLarge, color = highlight)
+                    Text(stringResource(onLabel), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, color = colors.onSurface)
                 }
             } else {
-                LyrifyButton(stringResource(action), onClick = onAction, kind = ButtonKind.SECONDARY, compact = true)
+                LyrifyButton(stringResource(action), onClick = onAction, kind = ButtonKind.GHOST, compact = true)
             }
         },
     )
@@ -440,7 +440,7 @@ private fun OptionsSheet(@StringRes title: Int, @StringRes sentence: Int, onDism
 
 @Composable
 private fun SheetHead(@StringRes title: Int, @StringRes sentence: Int) {
-    Text(stringResource(title), style = MaterialTheme.typography.headlineSmall, modifier = Modifier.semantics { heading() })
+    Text(stringResource(title), style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { heading() })
     Text(stringResource(sentence), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
 }
 

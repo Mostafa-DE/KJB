@@ -35,7 +35,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -69,8 +68,8 @@ import app.lyrify.tags.lookup.ReleaseMatch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 
-// Covers & tags (covers-tags-spec.md, "Where it lives" and "Reviewing"): its page in Tools, its row at the top of Songs
-// and on Tools, and its row to History (T3's page, Page.TagHistory, where each Undo goes through undoEdit).
+// Covers & tags (covers-tags-spec.md, "Where it lives" and "Reviewing"): its page in Tools, its row on Tools, and its
+// row to History (T3's page, Page.TagHistory, where each Undo goes through undoEdit).
 
 // The page's logic, pure
 
@@ -93,10 +92,10 @@ fun reviewSections(state: CoversTagsState): List<Pair<ReviewSection, Int>> = lis
     ReviewSection.SKIPPED to state.skipped.size,
 ).filter { it.second > 0 }
 
-/** The Covers & tags row on Tools and at the top of Songs: its title, its line, and its badge. */
-data class EntryRow(@StringRes val title: Int, val line: ToolLine, val badge: Int?)
+/** The Covers & tags row on Tools: its line, and its badge. */
+data class EntryRow(val line: ToolLine, val badge: Int?)
 
-/** "Find covers & tags" before the first check; then what waits (the badge), what was changed, or nothing to review. */
+/** Where names and covers come from before the first check; then what waits (the badge), what changed, or nothing to review. */
 fun coversTagsEntry(state: CoversTagsState): EntryRow {
     val first = !state.memory.checkedOnce && state.waiting.isEmpty() && state.memory.albums.isEmpty()
     val line = when {
@@ -106,7 +105,7 @@ fun coversTagsEntry(state: CoversTagsState): EntryRow {
         state.done.isNotEmpty() -> ToolLine.Count(R.plurals.tags_albums_changed, state.done.size)
         else -> ToolLine.Text(R.string.tags_line_none)
     }
-    return EntryRow(if (first) R.string.tags_find else R.string.tools_covers, line, state.badge.takeIf { it > 0 })
+    return EntryRow(line, state.badge.takeIf { it > 0 })
 }
 
 /** What an apply's dialog says: [albums] changing [songs] songs, and the backup and sync [note] on the first apply only. */
@@ -227,39 +226,11 @@ private fun rememberCoversTags(): CoversTags {
     return remember(context) { TagsGraph.coversTags(context) }
 }
 
-/** Covers & tags' status line on its Tools row. */
+/** Covers & tags' status line and badge on its Tools row; null until its state is read. */
 @Composable
-fun coversTagsLine(): ToolLine? {
+fun coversTagsRow(): EntryRow? {
     val state by rememberCoversTags().state.collectAsStateWithLifecycle()
-    return if (state.loaded) coversTagsEntry(state).line else null
-}
-
-/** The row at the top of Library > Songs: "Find covers & tags" at first, then what waits, with its badge. */
-@Composable
-fun CoversTagsEntry() {
-    val nav = LocalNavigator.current
-    val state by rememberCoversTags().state.collectAsStateWithLifecycle()
-    if (!state.loaded) return
-    val row = coversTagsEntry(state)
-    val brand = LocalBrandColors.current
-    NavRow(
-        title = stringResource(row.title),
-        sub = row.line.words(),
-        lead = { Tile(R.drawable.ic_sell, brand.highlightContainer, brand.onHighlightContainer) },
-        trailing = {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                row.badge?.let { CountBadge(it) }
-                Icon(painterResource(R.drawable.ic_chevron_right), contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
-            }
-        },
-    ) { nav.open(Page.CoversTags) }
-}
-
-@Composable
-private fun ToolLine.words(): String = when (this) {
-    is ToolLine.Text -> stringResource(res)
-    is ToolLine.Count -> pluralStringResource(res, count, count)
-    is ToolLine.Ai -> ""
+    return if (state.loaded) coversTagsEntry(state) else null
 }
 
 private fun Words.text(resources: Resources): String =

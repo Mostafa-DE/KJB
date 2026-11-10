@@ -25,6 +25,7 @@ import androidx.compose.ui.unit.dp
 import app.lyrify.data.LyricsStatus
 import app.lyrify.library.SongRef
 import app.lyrify.settings.DockTab
+import app.lyrify.settings.LibraryTab
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -35,11 +36,13 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonObject
 
 /**
- * A page on a tab's stack, above the tab's root (Library's tabs, Search's field, Tools' rows). Every page of 3.0 is
- * declared here once; its entry composable lives in its owner's file and takes the page (AppShell's [PageContent]).
- * Stored by its type name and fields ([NavState.encode]), so a rename here needs a [SerialName] that keeps the old one.
+ * A page on a tab's stack, above the tab's root (Library's tabs, Playlists' list, Search's field, Tools' rows). Every
+ * page of 3.0 is declared here once; its entry composable lives in its owner's file and takes the page (AppShell's
+ * [PageContent]). Stored by its type name and fields ([NavState.encode]), so a rename here needs a [SerialName] that
+ * keeps the old one.
  */
 @Serializable
 sealed interface Page {
@@ -72,16 +75,12 @@ sealed interface Page {
     @Serializable @SerialName("playlist")
     data class Playlist(val id: String) : CollectionPages
 
-    /** Built for you: Favourites (with its sections), Most played, Recently played, Recently added. */
+    /** Built for you: Favourites (with its tabs), Most played, Recently played, Recently added. */
     @Serializable @SerialName("builtIn")
     data class BuiltIn(val list: BuiltInList) : CollectionPages
 
     @Serializable @SerialName("unknownAlbum")
     data object UnknownAlbum : CollectionPages
-
-    /** "View all" of one section of Favourites. */
-    @Serializable @SerialName("favouritesAll")
-    data class FavouritesAll(val section: FavouriteSection) : CollectionPages
 
     /** Queues (QueueScreens.kt, P1). */
     sealed interface QueuePages : Page
@@ -147,8 +146,6 @@ sealed interface Page {
 
 enum class BuiltInList { FAVOURITES, MOST_PLAYED, RECENTLY_PLAYED, RECENTLY_ADDED }
 
-enum class FavouriteSection { SONGS, ALBUMS, ARTISTS, FOLDERS, PLAYLISTS }
-
 enum class TopKind { SONGS, ARTISTS, ALBUMS }
 
 enum class SearchGroup { SONGS, ARTISTS, ALBUMS, FOLDERS, PLAYLISTS, LYRICS }
@@ -185,78 +182,136 @@ sealed interface FullScreen {
     data object CompanionNow : FullScreen
 }
 
+/** A page on a tab's stack, and where Back from it goes when it was opened from a full-screen view or a song's sheet. */
+@Immutable
+data class StackEntry(val page: Page, val origin: Origin? = null)
+
+/**
+ * Where a page opened from the player (or another full-screen view) or from a song's sheet came from: the [tab], the tab
+ * [history] and the [views] shown then, and the [sheet] to show again. Back from the page goes back there.
+ */
+@Serializable
+data class Origin(
+    val tab: DockTab,
+    val history: List<DockTab> = emptyList(),
+    val views: List<FullScreen> = emptyList(),
+    val sheet: SheetReturn? = null,
+)
+
+/**
+ * The song sheet a page was opened from (Go to album, Go to artist): Back from that page shows [sheet] again, from the
+ * sheet host at [at] (its place in the composition, [SongSheetsHost]), over its list as it was.
+ */
+@Serializable
+data class SheetReturn(val at: String, val sheet: OpenSheet.Menu)
+
 /**
  * Where the user is: the [tab] shown, each tab's own page stack ([stacks], the pages above its root, the top last), the
  * tabs to go back to ([history], each once, the latest last), and the full-screen [views] over everything (the top
- * last). [reselects] counts, per tab, taps on it while at its root: its list goes to the top. Pure, so the back rules
- * are tested on the JVM; the shell keeps it in a [Navigator].
+ * last). [reselects] counts, per tab, taps on it while at its root: its list goes to the top. [libraryTab] is the top
+ * tab Library's root shows: Songs at a launch and whenever Library's icon lands on its root. [reopen] is the song sheet
+ * Back has just come back to, until its host shows it ([Navigator.takeSheet]) or the next move. Pure, so the back
+ * rules are tested on the JVM; the shell keeps it in a [Navigator].
  */
 @Immutable
 data class NavState(
     val tab: DockTab,
-    val stacks: Map<DockTab, List<Page>> = emptyMap(),
+    val stacks: Map<DockTab, List<StackEntry>> = emptyMap(),
     val history: List<DockTab> = emptyList(),
     val views: List<FullScreen> = emptyList(),
     val reselects: Map<DockTab, Int> = emptyMap(),
+    val libraryTab: LibraryTab = LibraryTab.SONGS,
+    val reopen: SheetReturn? = null,
 ) {
     /** The shown tab's pages above its root. */
-    val pages: List<Page> get() = stacks[tab].orEmpty()
+    val pages: List<Page> get() = pagesOf(tab)
+
+    /** [tab]'s pages above its root, the top last. */
+    fun pagesOf(tab: DockTab): List<Page> = stacks[tab].orEmpty().map { it.page }
 
     /** How often [tab] was tapped while at its root: each new count sends its list to the top. */
     fun reselectsOf(tab: DockTab): Int = reselects[tab] ?: 0
 
-    /** The Now bar and the dock show: over Library and Search pages and on Tools' root; Tools pages and views are full screens. */
+    /** The Now bar and the dock show: over Library, Playlists and Search pages and on Tools' root; Tools pages and views are full screens. */
     val chrome: Boolean get() = views.isEmpty() && (tab != DockTab.TOOLS || pages.isEmpty())
 
     /**
      * A dock tap: another tab (the one left joins the history), or the tab shown popped to its root, or at its root to
-     * the top. Opening Search also counts for Search: its field takes focus whenever the tab opens.
+     * the top. Opening Search also counts for Search: its field takes focus whenever the tab opens. Library's icon always
+     * lands on Songs: wherever it shows Library's root, Songs is its top tab, and only a tap while on Songs goes to the
+     * top. A page left open on Library keeps the top tab under it.
      */
-    fun select(tab: DockTab): NavState = when {
-        tab == DockTab.SEARCH && tab != this.tab -> visit(tab).copy(views = emptyList(), reselects = reselects + (tab to reselectsOf(tab) + 1))
-        tab != this.tab -> visit(tab).copy(views = emptyList())
-        pages.isNotEmpty() -> copy(stacks = stacks - tab, views = emptyList())
-        else -> copy(reselects = reselects + (tab to reselectsOf(tab) + 1), views = emptyList())
+    fun select(tab: DockTab): NavState = with(copy(views = emptyList(), reopen = null)) {
+        when {
+            tab == DockTab.SEARCH && tab != this.tab -> visit(tab).copy(reselects = reselects + (tab to reselectsOf(tab) + 1))
+            tab != this.tab -> visit(tab).onSongs()
+            pages.isNotEmpty() -> copy(stacks = stacks - tab).onSongs()
+            tab == DockTab.LIBRARY && libraryTab != LibraryTab.SONGS -> copy(libraryTab = LibraryTab.SONGS)
+            else -> copy(reselects = reselects + (tab to reselectsOf(tab) + 1))
+        }
     }
 
-    /** Opens [page] on its tab ([homeOf]), closing the views; the page on top already is not opened twice. */
-    fun open(page: Page): NavState {
+    /** A tap on one of Library's top tabs. */
+    fun pickLibraryTab(tab: LibraryTab): NavState = copy(libraryTab = tab, reopen = null)
+
+    /** Library at its root shows Songs; another tab, or Library with a page open, stays as it is. */
+    private fun onSongs(): NavState = if (tab == DockTab.LIBRARY && pages.isEmpty()) copy(libraryTab = LibraryTab.SONGS) else this
+
+    /**
+     * Opens [page] on its tab ([homeOf]), closing the views; the page on top already is not opened twice. Opened from a
+     * view (the player) or from a song's [sheet], it keeps where it came from ([Origin]), and Back from it goes there.
+     */
+    fun open(page: Page, sheet: SheetReturn? = null): NavState {
         val home = homeOf(page, tab, views.isNotEmpty())
-        val moved = visit(home).copy(views = emptyList())
-        val stack = moved.pages
-        return if (stack.lastOrNull() == page) moved else moved.copy(stacks = stacks + (home to stack + page))
+        val origin = Origin(tab, history, views, sheet).takeIf { views.isNotEmpty() || sheet != null }
+        val moved = visit(home).copy(views = emptyList(), reopen = null)
+        val stack = moved.stacks[home].orEmpty()
+        return if (stack.lastOrNull()?.page == page) moved else moved.copy(stacks = stacks + (home to stack + StackEntry(page, origin)))
     }
 
     /** Shows [view] over everything; the view on top already is not shown twice. */
-    fun show(view: FullScreen): NavState = if (views.lastOrNull() == view) this else copy(views = views + view)
+    fun show(view: FullScreen): NavState = if (views.lastOrNull() == view) copy(reopen = null) else copy(views = views + view, reopen = null)
 
     /** Closes [view] and the views above it; nothing when it is not shown. */
     fun close(view: FullScreen): NavState {
         val at = views.indexOf(view)
-        return if (at < 0) this else copy(views = views.take(at))
+        return if (at < 0) this else copy(views = views.take(at), reopen = null)
     }
 
-    /** Back: the top view, else the top page, else the last tab in the history; null when only leaving the app is left. */
+    /**
+     * Back: the top view, else the top page (back where it was opened from, when that was a view or a song's sheet), else
+     * the last tab in the history; null when only leaving the app is left.
+     */
     fun back(): NavState? = when {
-        views.isNotEmpty() -> copy(views = views.dropLast(1))
-        pages.isNotEmpty() -> copy(stacks = stacks + (tab to pages.dropLast(1)))
-        history.isNotEmpty() -> copy(tab = history.last(), history = history.dropLast(1))
+        views.isNotEmpty() -> copy(views = views.dropLast(1), reopen = null)
+        pages.isNotEmpty() -> pop()
+        history.isNotEmpty() -> copy(tab = history.last(), history = history.dropLast(1), reopen = null)
         else -> null
+    }
+
+    /** The shown tab without its top page, back where that page was opened from when it keeps it. */
+    private fun pop(): NavState {
+        val stack = stacks.getValue(tab)
+        val rest = stack.dropLast(1)
+        val popped = copy(stacks = if (rest.isEmpty()) stacks - tab else stacks + (tab to rest), reopen = null)
+        val origin = stack.last().origin ?: return popped
+        return popped.copy(tab = origin.tab, history = origin.history, views = origin.views, reopen = origin.sheet)
     }
 
     private fun visit(tab: DockTab): NavState = if (tab == this.tab) this else copy(tab = tab, history = history - tab + this.tab)
 
-    /** The state as text, for the saved instance state: tabs and pages by name, each page and view on its own. */
+    /** The state as text, for the saved instance state: tabs and pages by name, each page (with its origin) and view on its own. */
     fun encode(): String = JSON.encodeToString(
         JsonObject.serializer(),
         JsonObject(
             mapOf(
                 "tab" to JsonPrimitive(tab.name),
-                "stacks" to JsonObject(stacks.filterValues { it.isNotEmpty() }.entries.associate { (tab, pages) -> tab.name to JsonArray(pages.map { JSON.encodeToJsonElement(Page.serializer(), it) }) }),
+                "stacks" to JsonObject(stacks.filterValues { it.isNotEmpty() }.entries.associate { (tab, entries) -> tab.name to JsonArray(entries.map(::entryJson)) }),
                 "history" to JsonArray(history.map { JsonPrimitive(it.name) }),
                 "views" to JsonArray(views.map { JSON.encodeToJsonElement(FullScreen.serializer(), it) }),
                 "reselects" to JsonObject(reselects.entries.associate { (tab, count) -> tab.name to JsonPrimitive(count) }),
-            ),
+                "libraryTab" to JsonPrimitive(libraryTab.name),
+            ) + listOfNotNull(reopen?.let { REOPEN to JSON.encodeToJsonElement(SheetReturn.serializer(), it) }),
         ),
     )
 
@@ -265,7 +320,8 @@ data class NavState(
 
         /**
          * The state in [text], read leniently: a page, view or history tab this version does not know is dropped and the
-         * rest kept; an unknown tab opens Library. Null when [text] is no saved state at all.
+         * rest kept, as is an origin it cannot read (its page stays); an unknown tab opens Library, and an unknown Library
+         * top tab Songs. Null when [text] is no saved state at all.
          */
         fun decode(text: String): NavState? {
             val root = try {
@@ -273,9 +329,11 @@ data class NavState(
             } catch (_: SerializationException) {
                 null
             } ?: return null
-            val stacks = (root["stacks"] as? JsonObject).orEmpty().mapNotNull { (name, pages) ->
+            val stacks = (root["stacks"] as? JsonObject).orEmpty().mapNotNull { (name, entries) ->
                 val tab = dockTab(name) ?: return@mapNotNull null
-                tab to (pages as? JsonArray).orEmpty().mapNotNull { decodeOrNull(it, Page.serializer()) }
+                tab to (entries as? JsonArray).orEmpty().mapNotNull { entry ->
+                    decodeOrNull(entry, Page.serializer())?.let { page -> StackEntry(page, (entry as? JsonObject)?.get(ORIGIN)?.let { decodeOrNull(it, Origin.serializer()) }) }
+                }
             }.toMap()
             return NavState(
                 tab = (root["tab"] as? JsonPrimitive)?.takeIf { it.isString }?.content?.let(::dockTab) ?: DockTab.LIBRARY,
@@ -286,6 +344,9 @@ data class NavState(
                     val tab = dockTab(name) ?: return@mapNotNull null
                     (count as? JsonPrimitive)?.takeUnless { it.isString }?.intOrNull?.let { tab to it }
                 }.toMap(),
+                libraryTab = (root["libraryTab"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+                    ?.let { name -> LibraryTab.entries.firstOrNull { it.name == name } } ?: LibraryTab.SONGS,
+                reopen = root[REOPEN]?.let { decodeOrNull(it, SheetReturn.serializer()) },
             )
         }
 
@@ -294,6 +355,13 @@ data class NavState(
 
         private fun dockTab(name: String): DockTab? = DockTab.entries.firstOrNull { it.name == name }
 
+        /** A stack entry as its page's object, with its origin under [ORIGIN] when it has one. */
+        private fun entryJson(entry: StackEntry): JsonElement {
+            val page = JSON.encodeToJsonElement(Page.serializer(), entry.page)
+            val origin = entry.origin ?: return page
+            return JsonObject(page.jsonObject + (ORIGIN to JSON.encodeToJsonElement(Origin.serializer(), origin)))
+        }
+
         private fun <T> decodeOrNull(element: JsonElement, serializer: KSerializer<T>): T? = try {
             JSON.decodeFromJsonElement(serializer, element)
         } catch (_: SerializationException) {
@@ -301,6 +369,9 @@ data class NavState(
         } catch (_: IllegalArgumentException) {
             null
         }
+
+        private const val ORIGIN: String = "origin"
+        private const val REOPEN: String = "reopen"
     }
 }
 
@@ -326,23 +397,30 @@ fun destinationView(destination: String?): FullScreen? = if (destination == DEST
 fun pageKey(tab: DockTab, stack: List<Page>): String =
     tab.name + "/" + stack.size + stack.lastOrNull()?.let { "/" + JSON.encodeToString(Page.serializer(), it) }.orEmpty()
 
-/** The saved-state keys of every page on [stacks] and of every tab's root. */
-fun pageKeys(stacks: Map<DockTab, List<Page>>): Set<String> =
-    DockTab.entries.flatMap { tab -> stacks[tab].orEmpty().let { stack -> (0..stack.size).map { pageKey(tab, stack.take(it)) } } }.toSet()
+/** The saved-state keys of every page on [state]'s stacks and of every tab's root. */
+fun pageKeys(state: NavState): Set<String> =
+    DockTab.entries.flatMap { tab -> state.pagesOf(tab).let { stack -> (0..stack.size).map { pageKey(tab, stack.take(it)) } } }.toSet()
 
 /** The saved state in [saved] when it is KJB's, else a fresh start on [lastTab], the tab kept in settings.json. */
 fun restoreNav(saved: Any?, lastTab: DockTab): NavState = (saved as? String)?.let(NavState::decode) ?: NavState.start(lastTab)
 
 /**
- * The tab [page] opens on from [from]: Tools pages on Tools; Search's "View all" on Search; a collection opened from
- * Search stays there unless a view (the player) is open; everything else on Library.
+ * The tab [page] opens on from [from] ([viewOpen]: from a full-screen view, such as the player, over [from]): Tools
+ * pages on Tools; Search's "View all" on Search; Library > Songs with a filter on Library. A playlist, Built for you
+ * (Favourites among them), Queues and Your listening open inside Library or Playlists when opened there, else on
+ * Playlists. An album, artist, folder or genre opens inside Search or Playlists when opened there, else on Library.
  */
-fun homeOf(page: Page, from: DockTab, viewOpen: Boolean): DockTab = when (page) {
-    is Page.CollectionPages -> if (from == DockTab.SEARCH && !viewOpen) DockTab.SEARCH else DockTab.LIBRARY
-    is Page.SearchAll -> DockTab.SEARCH
-    is Page.Songs, is Page.QueuePages, is Page.ListeningPages -> DockTab.LIBRARY
-    is Page.Check, Page.Duplicates, Page.Tones, Page.Ai, Page.CoversTags, Page.TagHistory, Page.Settings, Page.LibraryTabs, Page.FoldersToSkip,
-    Page.Licences, is Page.Licence -> DockTab.TOOLS
+fun homeOf(page: Page, from: DockTab, viewOpen: Boolean): DockTab {
+    val here = from.takeUnless { viewOpen }
+    return when (page) {
+        is Page.Playlist, is Page.BuiltIn, is Page.QueuePages, is Page.ListeningPages ->
+            here?.takeIf { it == DockTab.LIBRARY || it == DockTab.PLAYLISTS } ?: DockTab.PLAYLISTS
+        is Page.CollectionPages -> here?.takeIf { it == DockTab.SEARCH || it == DockTab.PLAYLISTS } ?: DockTab.LIBRARY
+        is Page.SearchAll -> DockTab.SEARCH
+        is Page.Songs -> DockTab.LIBRARY
+        is Page.Check, Page.Duplicates, Page.Tones, Page.Ai, Page.CoversTags, Page.TagHistory, Page.Settings, Page.LibraryTabs, Page.FoldersToSkip,
+        Page.Licences, is Page.Licence -> DockTab.TOOLS
+    }
 }
 
 private val JSON = Json { ignoreUnknownKeys = true }
@@ -359,8 +437,12 @@ class Navigator(initial: NavState) {
         state = state.select(tab)
     }
 
-    fun open(page: Page) {
-        state = state.open(page)
+    fun pickLibraryTab(tab: LibraryTab) {
+        state = state.pickLibraryTab(tab)
+    }
+
+    fun open(page: Page, sheet: SheetReturn? = null) {
+        state = state.open(page, sheet)
     }
 
     fun show(view: FullScreen) {
@@ -376,6 +458,16 @@ class Navigator(initial: NavState) {
      * dock. The page sets it when selection starts and clears it when selection ends or the page leaves.
      */
     var selectionBar: (@Composable () -> Unit)? by mutableStateOf(null)
+
+    /**
+     * The song sheet Back has just come back to, for the host at [at] to show; null when it is another host's or there is
+     * none. Taken once.
+     */
+    fun takeSheet(at: String): OpenSheet.Menu? {
+        val sheet = state.reopen?.takeIf { it.at == at } ?: return null
+        state = state.copy(reopen = null)
+        return sheet.sheet
+    }
 
     /** False when there is nothing left to go back to: the phone's back then leaves the app. */
     fun back(): Boolean {

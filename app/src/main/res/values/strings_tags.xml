@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Covers and tags, Edit tags (milestones T2 and T3). -->
 <resources>
-    <!-- The row on Tools and at the top of Songs -->
+    <!-- The row on Tools, and the page before the first check -->
     <string name="tags_find">Find covers &amp; tags</string>
     <string name="tags_line_start">Names and covers from MusicBrainz</string>
     <string name="tags_line_checking">Checking your albums</string>

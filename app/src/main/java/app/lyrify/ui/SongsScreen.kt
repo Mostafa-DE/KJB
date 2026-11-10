@@ -359,7 +359,7 @@ private fun SongRow(entry: LedgerEntry, modifier: Modifier, @StringRes openLabel
     val description = listOf(entry.title, artist, stringResource(entry.status.style.label)).joinToString(", ")
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
         modifier = modifier
             .fillMaxWidth()
             // The press tints a pill inside the gutter, not a band across the screen.

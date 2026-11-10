@@ -192,7 +192,7 @@ fun CheckScreen(ledger: LedgerState, timing: PlainTiming, actions: CheckActions,
             )
         },
         bottomBar = {
-            // The message docks above the buttons, so it never covers them.
+            // The message floats above the buttons, so it never covers them.
             Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 12.dp)) {
                 ToastSlot(Modifier.padding(horizontal = ScreenPadding), padding = PaddingValues(bottom = 8.dp))
                 if (current != null) {

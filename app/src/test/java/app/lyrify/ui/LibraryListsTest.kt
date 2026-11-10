@@ -1,14 +1,18 @@
 package app.lyrify.ui
 
+import app.lyrify.R
 import app.lyrify.data.LyricsStatus
 import app.lyrify.library.Song
 import app.lyrify.library.song
+import app.lyrify.settings.DockTab
 import app.lyrify.settings.LibrarySettings
 import app.lyrify.settings.LyricsFilter
 import app.lyrify.settings.SortSongs
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.ZoneOffset
@@ -125,7 +129,42 @@ class LibraryListsTest {
         )
     }
 
+    @Test
+    fun `the Songs tab's Favourites row counts the favourite songs, or says None yet, and opens Favourites inside Library`() {
+        assertEquals(FavouritesRow(ToolLine.Count(R.plurals.lib_songs, 120), Page.BuiltIn(BuiltInList.FAVOURITES)), favouritesRow(120))
+        assertEquals(ToolLine.Count(R.plurals.lib_songs, 1), favouritesRow(1).line)
+        assertEquals(ToolLine.Text(R.string.lib_none_yet), favouritesRow(0).line)
+        val opened = NavState.start(DockTab.LIBRARY).open(favouritesRow(3).page)
+        assertEquals(DockTab.LIBRARY, opened.tab)
+        assertEquals(listOf<Page>(Page.BuiltIn(BuiltInList.FAVOURITES)), opened.pages)
+        // Unit tests run in the module's folder.
+        assertTrue("""<string name="lib_none_yet">None yet</string>""" in File("src/main/res/values/strings_library.xml").readText())
+    }
+
+    @Test
+    fun `the Songs tab starts with the Favourites row, and Covers and tags is no longer there`() {
+        val screen = File("src/main/java/app/lyrify/ui/LibraryScreen.kt").readText()
+        val songsTab = screen.substringAfter("private fun SongsTab(").substringBefore("\n}\n")
+        val firstItem = Regex("""item\(key = "([^"]+)"\)""").find(songsTab)?.groupValues?.get(1)
+        assertEquals("favourites", firstItem)
+        assertFalse("CoversTagsEntry" in screen)
+        assertFalse("CoversTagsEntry" in File("src/main/java/app/lyrify/ui/CoversTagsScreen.kt").readText())
+    }
+
     private companion object {
         const val DAY: Long = 24 * 60 * 60_000L
+    }
+
+    @Test
+    fun `a playlist's mosaic takes one cover per folder, the first four, filling four places when it has two or three`() {
+        fun ref(path: String) = app.lyrify.library.SongRef("/Music/KJB test/$path")
+        assertEquals(emptyList<app.lyrify.library.SongRef>(), mosaicCovers(emptyList()))
+        // One folder (an album, mostly): one cover, shown alone rather than four times.
+        assertEquals(listOf(ref("Paper Harbour/01.mp3")), mosaicCovers(listOf(ref("Paper Harbour/01.mp3"), ref("Paper Harbour/02.mp3"))))
+        // Two folders: four places, taken in turn.
+        val two = mosaicCovers(listOf(ref("Paper Harbour/01.mp3"), ref("Paper Harbour/02.mp3"), ref("Glass Kites/01.mp3")))
+        assertEquals(listOf("Paper Harbour/01.mp3", "Glass Kites/01.mp3", "Paper Harbour/01.mp3", "Glass Kites/01.mp3"), two.map { it.path.removePrefix("/Music/KJB test/") })
+        val many = mosaicCovers((1..6).map { ref("Folder $it/01.mp3") })
+        assertEquals((1..4).map { "/Music/KJB test/Folder $it/01.mp3" }, many.map { it.path })
     }
 }

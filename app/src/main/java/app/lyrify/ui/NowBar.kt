@@ -68,7 +68,7 @@ import kotlinx.coroutines.delay
  * Milestone P1 supplies it ([rememberOwnNow] in PlayerScreen.kt); the bar only shows it.
  */
 @Immutable
-data class OwnNow(val title: String, val artist: String?, val cover: Any?, val playing: Boolean, val progress: Float)
+data class OwnNow(val title: String, val artist: String?, val cover: Any?, val playing: Boolean, val progress: Float, val path: String? = null)
 
 /** KJB's own player for the Now bar: what is loaded ([now], null when nothing is) and its Play/Pause. */
 @Stable
@@ -344,14 +344,14 @@ private fun BarRow(
                     modifier = Modifier
                         .size(48.dp)
                         .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.inverseSurface, CircleShape)
+                        .background(LocalChromeColors.current.action, CircleShape)
                         .clickable(role = Role.Button, onClickLabel = null, onClick = onPlayPause)
                         .semantics { contentDescription = playLabel },
                 ) {
                     Icon(
                         painterResource(if (playing) R.drawable.ic_pause_fill else R.drawable.ic_play_arrow_fill),
                         contentDescription = null,
-                        tint = MaterialTheme.colorScheme.inverseOnSurface,
+                        tint = LocalChromeColors.current.onAction,
                         modifier = Modifier.size(28.dp),
                     )
                 }
@@ -362,7 +362,7 @@ private fun BarRow(
 
 @Composable
 private fun BarLine(text: String) {
-    Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    Text(text, style = BarLineStyle, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
 }
 
 /** The old Now orb: the cover in a ring that fills with the song's progress, and its lyrics status. */
@@ -382,6 +382,9 @@ private fun Orb(cover: Any?, status: LyricsStatus?, ring: Float) {
         status?.let { StatusBadge(it, Modifier.align(Alignment.BottomEnd), size = 16.dp) }
     }
 }
+
+/** The bar's second line (.nowbar .s): 13/18. */
+private val BarLineStyle = body(13f, 18)
 
 private val RING_STROKE = 2.5.dp
 private const val RING_TRACK_ALPHA = 0.2f

@@ -6,6 +6,8 @@ import android.content.Context
 import android.os.Build
 import android.os.PowerManager
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.Easing
 import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.SpringSpec
@@ -26,8 +28,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -46,7 +46,6 @@ import androidx.compose.ui.graphics.drawOutline
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.luminance
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.node.CompositionLocalConsumerModifierNode
 import androidx.compose.ui.node.DelegatableNode
 import androidx.compose.ui.node.DrawModifierNode
@@ -57,9 +56,10 @@ import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontVariation
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
-import androidx.core.graphics.ColorUtils
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import app.lyrify.R
 import kotlinx.coroutines.flow.collectLatest
@@ -88,7 +88,10 @@ val LauncherCoral: Color = Color(0xFFFF8A70)
 /** Side margin of every screen (M3 compact window margin). */
 val ScreenPadding = 16.dp
 
-/** The KJB palette, for phones without dynamic colour (Android 11): ink as primary, coral as tertiary. */
+/**
+ * The KJB palette, the prototype's tokens, on every phone: ink as primary, coral as tertiary. Fixed rather than Material
+ * You's wallpaper colours (dropped in 3.0), so the app looks the same on every phone and on every wallpaper.
+ */
 internal val LightColors = lightColorScheme(
     primary = Color(0xFF4F44A6),
     onPrimary = Color(0xFFFFFFFF),
@@ -168,22 +171,17 @@ internal val DarkColors = darkColorScheme(
 data class ToneColors(val container: Color, val onContainer: Color, val accent: Color)
 
 /**
- * The status tones, fixed rather than dynamic: each comes with its own container, so it reads on any wallpaper scheme.
+ * The status tones: each comes with its own container.
  * On-container text is 7:1 or more on its container, accents 3:1 or more on the container and on the surface.
  */
 @Immutable
 class StatusColors(private val tones: Map<Tone, ToneColors>) {
     operator fun get(tone: Tone): ToneColors = tones.getValue(tone)
-
-    /** Every tone nudged toward a wallpaper scheme's [primary] ([harmonize]). */
-    fun harmonized(primary: Color): StatusColors = StatusColors(
-        tones.mapValues { (_, it) -> ToneColors(harmonize(it.container, primary), harmonize(it.onContainer, primary), harmonize(it.accent, primary)) },
-    )
 }
 
 private fun tone(container: Long, onContainer: Long, accent: Long) = ToneColors(Color(container), Color(onContainer), Color(accent))
 
-private val LightStatusColors = StatusColors(
+internal val LightStatusColors = StatusColors(
     mapOf(
         Tone.SYNCED to tone(0xFFD3F3DF, 0xFF0B4F30, 0xFF1D7A4A),
         Tone.AI_SYNCED to tone(0xFFCDEFF1, 0xFF084A50, 0xFF12767E),
@@ -196,7 +194,7 @@ private val LightStatusColors = StatusColors(
     ),
 )
 
-private val DarkStatusColors = StatusColors(
+internal val DarkStatusColors = StatusColors(
     mapOf(
         Tone.SYNCED to tone(0xFF12392A, 0xFFA9EBC4, 0xFF72D69E),
         Tone.AI_SYNCED to tone(0xFF0F383C, 0xFFA4E3E8, 0xFF5ECED6),
@@ -227,38 +225,77 @@ internal val DarkBrandColors = BrandColors(Color(0xFFFF9A80), Color(0xFF4A1205),
 
 val LocalBrandColors = staticCompositionLocalOf { LightBrandColors }
 
-/** [color] with its hue moved toward [toward]'s by half their difference, at most 15 degrees (Material's harmonize rule). */
-fun harmonize(color: Color, toward: Color): Color {
-    val from = FloatArray(3).also { ColorUtils.colorToHSL(color.toArgb(), it) }
-    val to = FloatArray(3).also { ColorUtils.colorToHSL(toward.toArgb(), it) }
-    val diff = ((to[0] - from[0] + 540f) % 360f) - 180f
-    from[0] = (from[0] + diff.coerceIn(-30f, 30f) / 2f + 360f) % 360f
-    return Color(ColorUtils.HSLToColor(from))
-}
-
-/** The brand colours nudged toward a wallpaper scheme's [primary], so the coral sits inside it and stays KJB's. */
-private fun BrandColors.harmonized(primary: Color) = copy(highlight = harmonize(highlight, primary), highlightContainer = harmonize(highlightContainer, primary))
-
-/** Bricolage Grotesque (SIL OFL 1.1), the variable font at weight 600: titles and big numbers only. */
-private val Bricolage = FontFamily(
-    Font(R.font.bricolage_grotesque, FontWeight.SemiBold, variationSettings = FontVariation.Settings(FontVariation.weight(600))),
-)
-
-private fun display(size: Int, lineHeight: Int, tracking: Double = 0.0) =
-    TextStyle(fontFamily = Bricolage, fontWeight = FontWeight.SemiBold, fontSize = size.sp, lineHeight = lineHeight.sp, letterSpacing = tracking.sp)
+/** The weights the prototype sets: regular, medium, semibold, its 650 for a selected tab or a lyric, and bold. */
+private val WEIGHTS = listOf(400, 500, 600, 650, 700)
 
 /**
- * Bricolage for the ring's count, the wordmark, the now-playing title, top bar and sheet titles and big counts; the
- * phone's own font, which follows the user's font choice, for the rest.
+ * Roboto Flex (SIL OFL 1.1), cut to its weight and optical size axes: the body text, as the prototype sets it, at its
+ * default optical size (14, the body size).
  */
-private val AppTypography: Typography = Typography().let { base ->
-    base.copy(
-        displayMedium = display(44, 52, -0.5),
-        displaySmall = display(36, 44),
-        headlineSmall = display(26, 32),
-        titleLarge = display(22, 28),
+val BodyFont: FontFamily = FontFamily(
+    WEIGHTS.map { Font(R.font.roboto_flex, FontWeight(it), variationSettings = FontVariation.Settings(FontVariation.weight(it))) },
+)
+
+private val displayFamilies = HashMap<Int, FontFamily>()
+
+/**
+ * Bricolage Grotesque (SIL OFL 1.1) drawn for [size] sp: its optical size follows the text size, as a browser's
+ * font-optical-sizing does, so a 44 sp count is tighter than a 17 sp heading. Titles, big numbers and lyrics.
+ */
+fun displayFont(size: Int): FontFamily = displayFamilies.getOrPut(size) {
+    FontFamily(
+        WEIGHTS.map {
+            Font(R.font.bricolage_grotesque, FontWeight(it), variationSettings = FontVariation.Settings(FontVariation.weight(it), FontVariation.Setting("opsz", size.toFloat())))
+        },
     )
 }
+
+/** CSS's line box: the extra height of a line split evenly above and below the text. */
+private val CssLine = LineHeightStyle(LineHeightStyle.Alignment.Center, LineHeightStyle.Trim.None)
+
+/** A display style: Bricolage at [size]/[lineHeight] sp, [weight], tracked by [tracking] em. */
+fun display(size: Int, lineHeight: Int, tracking: Double = 0.0, weight: Int = 600): TextStyle = TextStyle(
+    fontFamily = displayFont(size),
+    fontWeight = FontWeight(weight),
+    fontSize = size.sp,
+    lineHeight = lineHeight.sp,
+    letterSpacing = tracking.em,
+    lineHeightStyle = CssLine,
+)
+
+/** A body style: Roboto Flex at [size]/[lineHeight] sp, [weight], untracked as the prototype's text is. */
+fun body(size: Float, lineHeight: Int, weight: Int = 400): TextStyle = TextStyle(
+    fontFamily = BodyFont,
+    fontWeight = FontWeight(weight),
+    fontSize = size.sp,
+    lineHeight = lineHeight.sp,
+    letterSpacing = 0.sp,
+    lineHeightStyle = CssLine,
+)
+
+/**
+ * The prototype's text roles. Bricolage: big numbers (display), page and player titles (headline), sheet and dialog
+ * titles (titleLarge), group headings (titleMedium). Roboto Flex: the Now bar's title (titleSmall), row titles
+ * (bodyLarge), subtitles and sentences (bodyMedium), small print (bodySmall), chips (labelLarge), pills (labelMedium)
+ * and the dock (labelSmall).
+ */
+internal val AppTypography: Typography = Typography(
+    displayLarge = display(57, 64, -0.02),
+    displayMedium = display(44, 52, -0.02),
+    displaySmall = display(36, 44, -0.02),
+    headlineLarge = display(32, 40, -0.015),
+    headlineMedium = display(28, 36, -0.015),
+    headlineSmall = display(26, 32, -0.015),
+    titleLarge = display(22, 28, -0.01),
+    titleMedium = display(17, 22, -0.01),
+    titleSmall = body(15f, 20, 600),
+    bodyLarge = body(16f, 22),
+    bodyMedium = body(14f, 20),
+    bodySmall = body(12f, 16),
+    labelLarge = body(14f, 20, 500),
+    labelMedium = body(12f, 16, 500),
+    labelSmall = body(11.5f, 16, 500),
+)
 
 /** Counts line up: tabular figures. */
 const val TABULAR: String = "tnum"
@@ -271,24 +308,21 @@ private val AppShapes = Shapes(
     extraLarge = RoundedCornerShape(32.dp),
 )
 
+/** The scheme for a light or [dark] phone: the prototype's, the same on every Android version and wallpaper. */
+fun appColors(dark: Boolean): ColorScheme = if (dark) DarkColors else LightColors
+
 /**
- * Dynamic colour from the wallpaper on Android 12 and later (the brand accent and status tones harmonised toward it),
- * the KJB palette before; light or dark as the phone is. KJB's chrome on top: its colours, its press feedback in
- * place of the ripple, reduced motion and the glass switch, read again each time the app comes back.
+ * The KJB palette (the prototype's tokens), light or dark as the phone is. KJB's chrome on top: its colours, its press
+ * feedback in place of the ripple, reduced motion and the glass switch, read again each time the app comes back.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LyrifyTheme(content: @Composable () -> Unit) {
     val dark = isSystemInDarkTheme()
     val context = LocalContext.current
-    val dynamic = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
-    val colors = when {
-        dynamic -> if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-        dark -> DarkColors
-        else -> LightColors
-    }
+    val colors = appColors(dark)
     val status = if (dark) DarkStatusColors else LightStatusColors
-    val brand = if (dark) DarkBrandColors else LightBrandColors
+    val brandColors = if (dark) DarkBrandColors else LightBrandColors
     var reduced by remember { mutableStateOf(!ValueAnimator.areAnimatorsEnabled()) }
     var glass by remember { mutableStateOf(glassOn(context)) }
     LifecycleResumeEffect(context) {
@@ -296,9 +330,8 @@ fun LyrifyTheme(content: @Composable () -> Unit) {
         glass = glassOn(context)
         onPauseOrDispose { }
     }
-    val brandColors = if (dynamic) remember(colors.primary, brand) { brand.harmonized(colors.primary) } else brand
     CompositionLocalProvider(
-        LocalStatusColors provides if (dynamic) remember(colors.primary, status) { status.harmonized(colors.primary) } else status,
+        LocalStatusColors provides status,
         LocalBrandColors provides brandColors,
         LocalDarkTheme provides dark,
     ) {
@@ -321,8 +354,8 @@ fun LyrifyTheme(content: @Composable () -> Unit) {
 /**
  * KJB's chrome on either scheme: ink [action] for primary buttons, the ink [toast] with a coral [toastAction], the
  * frosted [glass] of the dock and top bar (as opaque as it must be for its text over any content, [glassAlpha];
- * [glassSolid] when nothing blurs under it), the soft [shadow] of floating chrome, the brand-tinted [scrim] behind sheets
- * and dialogs, and their [sheet] card.
+ * [glassSolid] when nothing blurs under it), the soft [shadow] of floating chrome, the deeper [shadowStrong] under covers
+ * and the Play button, the brand-tinted [scrim] behind sheets and dialogs, and their [sheet] card.
  */
 @Immutable
 data class ChromeColors(
@@ -336,6 +369,7 @@ data class ChromeColors(
     val glassSolid: Color,
     val glassEdge: Color,
     val shadow: Color,
+    val shadowStrong: Color,
     val scrim: Color,
     val sheet: Color,
 )
@@ -352,6 +386,7 @@ internal fun chromeColors(scheme: ColorScheme, brand: BrandColors, dark: Boolean
     glassSolid = scheme.surfaceContainer.copy(alpha = GLASS_SOLID_ALPHA),
     glassEdge = Color.White.copy(alpha = if (dark) 0.09f else 0.6f),
     shadow = if (dark) Color.Black.copy(alpha = 0.5f) else ShadowInk.copy(alpha = 0.18f),
+    shadowStrong = if (dark) Color.Black.copy(alpha = 0.65f) else ShadowInk.copy(alpha = 0.38f),
     scrim = if (dark) Color.Black.copy(alpha = 0.56f) else ShadowInk.copy(alpha = 0.36f),
     sheet = if (dark) scheme.surfaceContainer else scheme.surfaceContainerLowest,
 )
@@ -400,7 +435,11 @@ internal val SUNG_LINE_HEIGHT = 3.dp
 
 // Motion
 
-/** KJB's springs; with reduced motion every one of them is snap() ([motion]). */
+/**
+ * KJB's motion tokens: springs, and the durations and curves of the prototype's CSS transitions
+ * (player-design/lyrify-prototype.html), with Material 3's standard and emphasized curves where it gives none. Every
+ * screen takes its motion from here; with reduced motion each one is snap() or a short fade ([motion]).
+ */
 object Motion {
     val press: SpringSpec<Float> = spring(dampingRatio = 0.55f, stiffness = Spring.StiffnessMedium)
 
@@ -412,6 +451,55 @@ object Motion {
 
     /** Sizes and content that moves. */
     val settle: SpringSpec<Float> = spring(dampingRatio = 1f, stiffness = 300f)
+
+    // Curves
+
+    /** CSS "ease": the prototype's default (the cover springing back, a queue row moving). */
+    val Ease: Easing = CubicBezierEasing(0.25f, 0.1f, 0.25f, 1f)
+
+    /** Material 3 standard: things that move within the screen. */
+    val Standard: Easing = CubicBezierEasing(0.2f, 0f, 0f, 1f)
+
+    /** Material 3 emphasized decelerate: things that arrive. */
+    val EmphasizedIn: Easing = CubicBezierEasing(0.05f, 0.7f, 0.1f, 1f)
+
+    /** Material 3 emphasized accelerate: things that leave. */
+    val EmphasizedOut: Easing = CubicBezierEasing(0.3f, 0f, 0.8f, 0.15f)
+
+    /** The prototype's arrivals with a little overshoot: toastIn, menuIn, dlgIn. */
+    val Pop: Easing = CubicBezierEasing(0.2f, 0.9f, 0.3f, 1.1f)
+
+    /** The prototype's sheets and the player rising: sheetIn, upIn. */
+    val Rise: Easing = CubicBezierEasing(0.2f, 0.8f, 0.2f, 1f)
+
+    /** The cover turning to its lyrics. */
+    val Flip: Easing = CubicBezierEasing(0.3f, 0.7f, 0.15f, 1f)
+
+    /** The equalizer's knobs gliding to a preset: ease-out cubic. */
+    val Glide: Easing = CubicBezierEasing(0.33f, 1f, 0.68f, 1f)
+
+    // Durations, in milliseconds
+
+    /** A press, a chip's fill, a knob growing under the finger. */
+    const val QUICK_MS = 120
+
+    /** A top bar's glass band, a menu. */
+    const val SHORT_MS = 180
+
+    /** The scrim behind a sheet; the cover springing back or finishing a swipe; an off section dimming. */
+    const val SETTLE_MS = 200
+
+    /** A dialog. */
+    const val DIALOG_MS = 220
+
+    /** A toast or a sheet arriving. */
+    const val ARRIVE_MS = 280
+
+    /** The player opening; a lyric line taking its colour. */
+    const val OPEN_MS = 300
+
+    /** The cover turning to its lyrics. */
+    const val FLIP_MS = 550
 }
 
 /** [spec], or with reduced motion snap(): the value lands at once. */

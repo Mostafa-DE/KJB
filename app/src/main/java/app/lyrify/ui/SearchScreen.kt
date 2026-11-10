@@ -1,5 +1,8 @@
 package app.lyrify.ui
 
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.font.FontWeight
 import android.content.Context
 import androidx.annotation.DrawableRes
 import androidx.compose.foundation.background
@@ -45,6 +48,7 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -157,21 +161,9 @@ fun SearchPage() {
     val recentList = rememberLazyListState()
     val resultList = rememberLazyListState()
     val reselects = nav.state.reselectsOf(DockTab.SEARCH)
-    // Kept across a turn of the phone, so only opening the tab or tapping it again asks for the keyboard.
-    var handled by rememberSaveable { mutableIntStateOf(0) }
-    LaunchedEffect(reselects) {
-        if (reselects == handled) return@LaunchedEffect
-        handled = reselects
+    FocusOnOpen(focus, reselects) {
         recentList.scrollToItem(0)
         resultList.scrollToItem(0)
-        // The field attaches its requester in the frame the tab shows.
-        withFrameNanos { }
-        try {
-            focus.requestFocus()
-            keyboard?.show()
-        } catch (e: IllegalStateException) {
-            // Not attached yet: the user taps the field.
-        }
     }
     // New words start at the top; coming back to the tab or turning the phone keeps the place.
     var shownQuery by rememberSaveable { mutableStateOf(query) }
@@ -435,13 +427,49 @@ private fun LazyListScope.resultRows(
     }
 }
 
+/**
+ * Each time [opens] grows (Search opened from the dock, or tapped again at its root), first [onOpen], then the focus in
+ * the field of [focus] with the keyboard shown. The count already handled is kept across a turn of the phone, so the
+ * keyboard never pops up again then. The field attaches while the tab slides in, so the focus is tried on each frame
+ * until it takes, for at most [FOCUS_TRIES] frames.
+ */
+@Composable
+fun FocusOnOpen(focus: FocusRequester, opens: Int, onOpen: suspend () -> Unit = {}) {
+    val keyboard = LocalSoftwareKeyboardController.current
+    var handled by rememberSaveable { mutableIntStateOf(0) }
+    LaunchedEffect(opens) {
+        if (!focusDue(opens, handled)) return@LaunchedEffect
+        handled = opens
+        onOpen()
+        repeat(FOCUS_TRIES) {
+            withFrameNanos { }
+            val taken = try {
+                focus.requestFocus(FocusDirection.Enter)
+            } catch (e: IllegalStateException) {
+                // Not attached yet: try on the next frame.
+                false
+            }
+            if (taken) {
+                keyboard?.show()
+                return@LaunchedEffect
+            }
+        }
+    }
+}
+
+/** Whether the field takes the focus: the tab was opened or tapped again since the count last [handled]. */
+fun focusDue(opens: Int, handled: Int): Boolean = opens != handled
+
+/** About half a second of frames. */
+private const val FOCUS_TRIES = 30
+
 /** The field in its band: Clear while there is text; the keyboard's search key calls [onSearch]. */
 @Composable
 private fun SearchBar(query: String, onQuery: (String) -> Unit, focus: FocusRequester, onSearch: () -> Unit, under: Boolean, backdrop: GlassBackdrop) {
     TopBand(under, backdrop) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.statusBarsPadding().heightIn(min = 64.dp).padding(start = ScreenPadding, end = ScreenPadding, top = 4.dp, bottom = 8.dp),
+            modifier = Modifier.statusBarsPadding().heightIn(min = 68.dp).padding(horizontal = ScreenPadding, vertical = 8.dp),
         ) {
             LyrifySearchField(
                 value = query,
@@ -467,7 +495,7 @@ private fun SearchBar(query: String, onQuery: (String) -> Unit, focus: FocusRequ
 private fun RecentSearches(searches: List<String>?, state: LazyListState, onPick: (String) -> Unit, onRemove: (String) -> Unit, modifier: Modifier) {
     LazyColumn(state = state, modifier = modifier, contentPadding = PaddingValues(bottom = 16.dp)) {
         item(key = "title") {
-            SectionTitle(stringResource(R.string.search_recent), Modifier.padding(start = ScreenPadding, end = ScreenPadding, top = 8.dp, bottom = 4.dp))
+            SectionTitle(stringResource(R.string.search_recent), Modifier.padding(start = ScreenPadding + 4.dp, end = ScreenPadding, top = 8.dp, bottom = 8.dp))
         }
         when {
             // Still being read: nothing rather than "Nothing yet".
@@ -520,15 +548,18 @@ private fun GroupHeader(group: ResultGroup, onViewAll: (() -> Unit)?) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
-        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(start = ScreenPadding, end = 4.dp, top = 4.dp),
+        modifier = Modifier.fillMaxWidth().padding(start = ScreenPadding, end = 4.dp, top = 4.dp).heightIn(min = 48.dp),
     ) {
         Text(groupLabel(group.group), style = MaterialTheme.typography.titleMedium, modifier = Modifier.semantics { heading() })
         Text(
             formatCount(group.count),
             style = MaterialTheme.typography.labelMedium.tabular(),
+            fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier
                 .background(MaterialTheme.colorScheme.surfaceContainerHigh, CircleShape)
+                .widthIn(min = 22.dp)
                 .heightIn(min = 22.dp)
                 .wrapContentHeight()
                 .padding(horizontal = 7.dp),
@@ -560,6 +591,7 @@ private fun NavResult(title: AnnotatedString, sub: String?, onClick: () -> Unit,
 
 @Composable
 private fun ResultRow(title: AnnotatedString, sub: String?, description: String, clickLabel: String, onClick: () -> Unit, lead: @Composable () -> Unit) {
+    // A NavRow (.nrow): 14 dp gaps and a chevron at the end.
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -571,7 +603,7 @@ private fun ResultRow(title: AnnotatedString, sub: String?, description: String,
             .heightIn(min = 64.dp)
             .padding(horizontal = 8.dp, vertical = 8.dp),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
             lead()
             Column(Modifier.weight(1f)) {
                 Text(title, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -579,6 +611,7 @@ private fun ResultRow(title: AnnotatedString, sub: String?, description: String,
                     Text(sub, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
+            Icon(painterResource(R.drawable.ic_chevron_right), contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
         }
     }
 }
@@ -586,7 +619,7 @@ private fun ResultRow(title: AnnotatedString, sub: String?, description: String,
 /** A 48 dp tile with an icon: a folder or a list without a cover of its own. Decorative. */
 @Composable
 private fun IconTile(@DrawableRes icon: Int) {
-    Box(contentAlignment = Alignment.Center, modifier = Modifier.size(48.dp).clip(MaterialTheme.shapes.small).background(MaterialTheme.colorScheme.surfaceContainerHighest)) {
+    Box(contentAlignment = Alignment.Center, modifier = Modifier.size(48.dp).clip(RoundedCornerShape(14.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh)) {
         Icon(painterResource(icon), contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(24.dp))
     }
 }

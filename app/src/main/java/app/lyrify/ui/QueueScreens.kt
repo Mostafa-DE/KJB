@@ -1,5 +1,10 @@
 package app.lyrify.ui
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.animateColorAsState
 import android.content.Context
 import android.os.SystemClock
 import androidx.compose.foundation.background
@@ -188,6 +193,8 @@ private fun QueueLine(queue: Queue, book: QueueBook, ui: PlayerUi?, onKeep: (() 
 /** A queue's own page: its name and place, Resume (or Play/Pause while it plays) and Play from start, then its songs. */
 @Composable
 private fun OneQueuePage(id: String) {
+    // The rows sit on the page colour (.qpage .qin).
+    val pageSurface = MaterialTheme.colorScheme.background
     val nav = LocalNavigator.current
     val context = LocalContext.current
     val connection = remember(context) { PlayerGraph.connection(context) }
@@ -253,7 +260,7 @@ private fun OneQueuePage(id: String) {
                     }
                 }
             }
-            queueSongs(queue, playing, library, names, connection, drag, onRemoved = { undo ->
+            queueSongs(queue, playing, library, names, connection, drag, pageSurface, onRemoved = { undo ->
                 scope.launch { if (toasts.show(Toast(resources.getString(R.string.queue_removed), R.drawable.ic_playlist_remove, action = undo?.let { resources.getString(R.string.player_undo) }))) undo?.undo() }
             })
         }
@@ -382,6 +389,8 @@ private fun NameDialog(title: String, field: String, start: String, confirm: Str
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun QueueSheet(onDismiss: () -> Unit) {
+    // The rows sit on the sheet colour (.qin).
+    val sheetSurface = LocalChromeColors.current.sheet
     val nav = LocalNavigator.current
     val context = LocalContext.current
     val connection = remember(context) { PlayerGraph.connection(context) }
@@ -463,11 +472,11 @@ fun QueueSheet(onDismiss: () -> Unit) {
                         }
                     }
                 }
-                queueSongs(queue, playing = true, library, names, connection, drag, onRemoved = { undo ->
+                queueSongs(queue, playing = true, library, names, connection, drag, sheetSurface, onRemoved = { undo ->
                     scope.launch { if (toasts.show(Toast(resources.getString(R.string.queue_removed), R.drawable.ic_playlist_remove, action = undo?.let { resources.getString(R.string.player_undo) }))) undo?.undo() }
                 })
             }
-            ToastSlot(Modifier.padding(horizontal = 12.dp), padding = PaddingValues(top = 4.dp))
+            ToastSlot(Modifier.padding(horizontal = 12.dp), padding = PaddingValues(bottom = 8.dp))
             LyrifyButton(stringResource(R.string.queue_save_playlist), { saving = true }, Modifier.fillMaxWidth().padding(16.dp), kind = ButtonKind.SECONDARY, icon = R.drawable.ic_playlist_add)
             if (saving) SaveAsPlaylistDialog(queue, connection) { saving = false }
         }
@@ -479,9 +488,9 @@ fun QueueSheet(onDismiss: () -> Unit) {
  * a swipe to the start, or "Remove from queue" in the row's menu, takes it out (with Undo through [onRemoved]). Songs
  * not on the phone stay listed, quietly marked, and are skipped.
  */
-private fun LazyListScope.queueSongs(queue: Queue, playing: Boolean, library: Library?, names: LibrarySettings, connection: PlayerConnection, drag: DragState, onRemoved: (Undo?) -> Unit) {
+private fun LazyListScope.queueSongs(queue: Queue, playing: Boolean, library: Library?, names: LibrarySettings, connection: PlayerConnection, drag: DragState, surface: Color, onRemoved: (Undo?) -> Unit) {
     itemsIndexed(queue.items, key = { _, item -> item.uid }) { index, item ->
-        QueueSongRow(queue, item, index, playing, library, names, connection, drag, onRemoved)
+        QueueSongRow(queue, item, index, playing, library, names, connection, drag, surface, onRemoved)
     }
 }
 
@@ -500,7 +509,18 @@ private class DragState {
 }
 
 @Composable
-private fun QueueSongRow(queue: Queue, item: QueueItem, index: Int, playing: Boolean, library: Library?, names: LibrarySettings, connection: PlayerConnection, drag: DragState, onRemoved: (Undo?) -> Unit) {
+private fun QueueSongRow(
+    queue: Queue,
+    item: QueueItem,
+    index: Int,
+    playing: Boolean,
+    library: Library?,
+    names: LibrarySettings,
+    connection: PlayerConnection,
+    drag: DragState,
+    surface: Color,
+    onRemoved: (Undo?) -> Unit,
+) {
     val resources = LocalResources.current
     val song = library?.resolver?.find(item.song)
     val title = song?.let { displayTitle(it, names) } ?: item.song.path.substringAfterLast('/')
@@ -545,12 +565,19 @@ private fun QueueSongRow(queue: Queue, item: QueueItem, index: Int, playing: Boo
             }
         },
     ) {
+        val brand = LocalBrandColors.current
+        val colors = MaterialTheme.colorScheme
+        val reduced = LocalReducedMotion.current
+        val fill by animateColorAsState(if (here) brand.highlightContainer.copy(alpha = CURRENT_ALPHA).compositeOver(surface) else surface, motion(tween(Motion.SETTLE_MS), reduced), label = "queue row")
+        val words by animateColorAsState(if (here) brand.onHighlightContainer else colors.onSurface, motion(tween(Motion.SETTLE_MS), reduced), label = "queue words")
+        val muted by animateColorAsState(if (here) brand.onHighlightContainer else colors.onSurfaceVariant, motion(tween(Motion.SETTLE_MS), reduced), label = "queue muted")
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .fillMaxWidth()
                 .height(ROW)
-                .background(if (here) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceContainerLow)
+                .background(surface)
+                .background(fill, RoundedCornerShape(16.dp))
                 .semantics {
                     customActions = listOfNotNull(
                         CustomAccessibilityAction(resources.getString(R.string.queue_remove)) { remove(); true },
@@ -570,23 +597,29 @@ private fun QueueSongRow(queue: Queue, item: QueueItem, index: Int, playing: Boo
                     .padding(start = ScreenPadding),
             ) {
                 Box {
-                    SongCover(SongArt(item.song.path), size = 44.dp)
-                    if (here) {
-                        Icon(
-                            painterResource(if (playing) R.drawable.ic_graphic_eq else R.drawable.ic_resume),
-                            contentDescription = null,
-                            tint = LocalBrandColors.current.highlight,
-                            modifier = Modifier.align(Alignment.Center).size(28.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surface.copy(alpha = 0.8f)).padding(4.dp),
-                        )
+                    SongCover(SongArt(item.song.path), size = 44.dp, shape = RoundedCornerShape(10.dp))
+                    // The song here (.eqo): the cover dimmed under a white mark, playing or left at a place; it fades in and out.
+                    val shade by animateFloatAsState(if (here) 1f else 0f, motion(tween(Motion.SETTLE_MS), reduced), label = "queue mark")
+                    if (shade > 0f) {
+                        Box(contentAlignment = Alignment.Center, modifier = Modifier.matchParentSize().graphicsLayer { alpha = shade }.background(QueueOverlay, RoundedCornerShape(10.dp))) {
+                            Icon(painterResource(if (playing) R.drawable.ic_graphic_eq else R.drawable.ic_resume), contentDescription = null, tint = Color.White, modifier = Modifier.size(22.dp))
+                        }
                     }
                 }
                 Column(Modifier.weight(1f)) {
-                    Text(title, style = MaterialTheme.typography.bodyLarge, color = if (index < queue.index) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        title,
+                        style = QueueTitle,
+                        fontWeight = if (here) FontWeight.SemiBold else null,
+                        color = if (!here && index < queue.index) colors.onSurfaceVariant else words,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(sub, style = QueueLine, color = muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
             Box {
-                ChromeIconButton(R.drawable.ic_more_horiz, stringResource(R.string.queue_song_more, title), { menu = true }, glass = false)
+                ChromeIconButton(R.drawable.ic_more_horiz, stringResource(R.string.queue_song_more, title), { menu = true }, glass = false, tint = muted)
                 LyrifyMenu(expanded = menu, onDismiss = { menu = false }) {
                     MenuRow(stringResource(R.string.queue_remove), R.drawable.ic_playlist_remove, {
                         menu = false
@@ -617,10 +650,20 @@ private fun QueueSongRow(queue: Queue, item: QueueItem, index: Int, playing: Boo
                             },
                         ) { _, amount -> drag.offset += amount.y }
                     },
-            ) { Icon(painterResource(R.drawable.ic_drag_indicator), contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant) }
+            ) { Icon(painterResource(R.drawable.ic_drag_indicator), contentDescription = null, tint = muted, modifier = Modifier.size(20.dp)) }
         }
     }
 }
 
-/** A queue row's height; a drag moves a song by whole rows. */
-private val ROW = 64.dp
+/** A queue row's height (.qrow, 60 dp); a drag moves a song by whole rows. */
+private val ROW = 60.dp
+
+/** The current row's fill: the brand's container at 70% over the list's colour (.qrow.cur). */
+private const val CURRENT_ALPHA = 0.7f
+
+/** The dimming over the cover of the song here (--eqo-bg). */
+private val QueueOverlay = Color(0x80141028)
+
+/** A queue row's title (15.5/21) and line (13.5/19). */
+private val QueueTitle = body(15.5f, 21)
+private val QueueLine = body(13.5f, 19)

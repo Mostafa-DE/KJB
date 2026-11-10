@@ -252,8 +252,8 @@ private fun LockLyricsScreen(ledger: LedgerState, onClose: () -> Unit) {
                 ChromeIconButton(R.drawable.ic_keyboard_arrow_down, stringResource(R.string.lock_close), onClose, glass = false, size = 48.dp, iconSize = 28.dp, tint = LockText)
                 SongCover(SongArt(path), size = 44.dp, shape = RoundedCornerShape(10.dp))
                 Column(Modifier.weight(1f)) {
-                    Text(ui.song?.title ?: path.substringAfterLast('/'), style = MaterialTheme.typography.titleMedium, color = LockText, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    ui.song?.artist?.takeIf(String::isNotBlank)?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = LockMuted, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                    Text(ui.song?.title ?: path.substringAfterLast('/'), style = MaterialTheme.typography.titleSmall, color = LockText, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    ui.song?.artist?.takeIf(String::isNotBlank)?.let { Text(it, style = body(13f, 18), color = LockMuted, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                 }
             }
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
@@ -277,7 +277,7 @@ private fun LockLines(lyrics: PanelLyrics?, positionMs: Long) {
                 lockWindow(lyrics.lines.size, at).forEach { i ->
                     Text(
                         lyrics.lines[i].text,
-                        style = look.style(if (i == at) type.headlineMedium else type.headlineSmall, playing = i == at),
+                        style = look.style(if (i == at) LockLineNow else LockLine, playing = i == at),
                         textAlign = look.align,
                         color = if (i == at) LockText else LockMuted,
                         modifier = Modifier.fillMaxWidth(),
@@ -285,7 +285,7 @@ private fun LockLines(lyrics: PanelLyrics?, positionMs: Long) {
                 }
             }
             is PanelLyrics.Plain -> lyrics.lines.take(PLAIN_LINES).forEach {
-                Text(it, style = look.style(type.titleLarge, playing = false), textAlign = look.align, color = LockText, modifier = Modifier.fillMaxWidth())
+                Text(it, style = look.style(LockStill, playing = false, still = true), textAlign = look.align, color = LockText, modifier = Modifier.fillMaxWidth())
             }
             PanelLyrics.Finding, PanelLyrics.None -> Text(stringResource(R.string.player_no_lyrics), style = type.titleLarge, color = LockMuted, textAlign = look.align, modifier = Modifier.fillMaxWidth())
             null -> Unit
@@ -417,3 +417,8 @@ fun rememberLockSwitch(on: Boolean, onChange: ((Settings) -> Settings) -> Unit):
         }
     }
 }
+
+/** The prototype's lock-screen lyrics (.ll-lines): the line playing at 34 sp, the others at 22, plain lyrics at 22. */
+private val LockLineNow = display(34, 41, -0.015)
+private val LockLine = display(22, 29, -0.015)
+private val LockStill = display(22, 33)

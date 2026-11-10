@@ -134,7 +134,8 @@ val THIRD_PARTY: List<Shipped> = listOf(
         "MIT", "OpenAI", listOf("mit-whisper.txt"),
     ),
     Shipped("Material Symbols", "The app's icons", APACHE, "Google LLC", listOf(APACHE_TEXT)),
-    Shipped("Bricolage Grotesque", "The app's font", "OFL 1.1", "The Bricolage Grotesque Project Authors", listOf("ofl-1.1.txt")),
+    Shipped("Bricolage Grotesque", "The app's title font", "OFL 1.1", "The Bricolage Grotesque Project Authors", listOf("ofl-1.1.txt")),
+    Shipped("Roboto Flex", "The app's text font", "OFL 1.1", "The Roboto Flex Project Authors", listOf("ofl-1.1-roboto-flex.txt")),
 )
 
 /** Every row of the Licences page. */

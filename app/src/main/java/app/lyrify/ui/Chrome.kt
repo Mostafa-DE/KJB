@@ -1,18 +1,24 @@
 package app.lyrify.ui
 
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.animation.core.VisibilityThreshold
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.ContentTransform
+import androidx.compose.ui.text.font.lerp
+import androidx.compose.ui.graphics.lerp
 import android.content.res.Resources
 import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.VisibilityThreshold
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
+import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -94,6 +100,7 @@ import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalAccessibilityManager
@@ -112,8 +119,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import app.lyrify.BuildConfig
@@ -122,8 +129,6 @@ import app.lyrify.settings.DockTab
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlin.math.max
 import kotlin.math.min
 
@@ -201,13 +206,14 @@ fun GlassSurface(
 
 // The dock
 
-/** The dock's three destinations, in order. */
-val DOCK_TABS: List<DockTab> = listOf(DockTab.LIBRARY, DockTab.SEARCH, DockTab.TOOLS)
+/** The dock's four destinations, in order. */
+val DOCK_TABS: List<DockTab> = listOf(DockTab.LIBRARY, DockTab.PLAYLISTS, DockTab.SEARCH, DockTab.TOOLS)
 
 @get:StringRes
 val DockTab.label: Int
     get() = when (this) {
         DockTab.LIBRARY -> R.string.nav_library
+        DockTab.PLAYLISTS -> R.string.nav_playlists
         DockTab.SEARCH -> R.string.nav_search
         DockTab.TOOLS -> R.string.nav_tools
     }
@@ -216,6 +222,7 @@ val DockTab.label: Int
 private val DockTab.icon: Int
     get() = when (this) {
         DockTab.LIBRARY -> R.drawable.ic_library_music
+        DockTab.PLAYLISTS -> R.drawable.ic_queue_music
         DockTab.SEARCH -> R.drawable.ic_search
         DockTab.TOOLS -> R.drawable.ic_handyman
     }
@@ -224,6 +231,8 @@ private val DockTab.icon: Int
 private val DockTab.selectedIcon: Int
     get() = when (this) {
         DockTab.LIBRARY -> R.drawable.ic_library_music_fill
+        // Material Symbols' filled queue_music is the same shape as the outlined one.
+        DockTab.PLAYLISTS -> R.drawable.ic_queue_music
         DockTab.SEARCH -> R.drawable.ic_search
         DockTab.TOOLS -> R.drawable.ic_handyman_fill
     }
@@ -234,12 +243,30 @@ fun toolsDot(checks: Int, duplicates: Int, aiAttention: Boolean): Boolean = chec
 /** Which side a new tab comes from: 1 from the end (a tab after the one shown), -1 from the start, 0 for the same tab. */
 fun tabSlide(from: DockTab, to: DockTab): Int = DOCK_TABS.indexOf(to).compareTo(DOCK_TABS.indexOf(from)).coerceIn(-1, 1)
 
+/**
+ * How a tab's page replaces another (the dock's and Library's top tabs): it slides in a tenth of the width from the
+ * [side] of the tab tapped while it fades in, the old one fades out; with [reduced] motion it only fades.
+ */
+fun tabSwitch(side: Int, reduced: Boolean): ContentTransform {
+    val enter = if (reduced) {
+        fadeIn(tween(Motion.SHORT_MS))
+    } else {
+        slideInHorizontally(TabSlide) { it / TAB_SLIDE_SHARE * side } + fadeIn(tween(Motion.SHORT_MS, delayMillis = TAB_FADE_DELAY_MS))
+    }
+    return enter togetherWith fadeOut(tween(TAB_FADE_OUT_MS))
+}
+
+private const val TAB_SLIDE_SHARE = 10
+private const val TAB_FADE_DELAY_MS = 40
+private const val TAB_FADE_OUT_MS = 90
+private val TabSlide = spring(dampingRatio = 1f, stiffness = 300f, visibilityThreshold = IntOffset.VisibilityThreshold)
+
 /** A dock item's name for TalkBack: its label, then its dot when it has one. */
 fun dockItemName(vararg parts: String?): String = parts.filterNotNull().joinToString(", ")
 
 /**
- * The dock: a glass capsule with Library, Search and Tools, each an icon over its label, the selected one marked by the
- * sung line; a dot on Tools when something there needs the user.
+ * The dock: a glass capsule with Library, Playlists, Search and Tools, each an icon over its label, the selected one
+ * marked by the sung line; a dot on Tools when something there needs the user.
  */
 @Composable
 fun Dock(selected: DockTab, dot: Boolean, backdrop: GlassBackdrop?, onSelect: (DockTab) -> Unit, modifier: Modifier = Modifier) {
@@ -248,7 +275,7 @@ fun Dock(selected: DockTab, dot: Boolean, backdrop: GlassBackdrop?, onSelect: (D
     }
 }
 
-/** The three items at equal widths, and the sung line under the selected one; its leading end travels faster, so it stretches on the way. */
+/** The items at equal widths, and the sung line under the selected one; its leading end travels faster, so it stretches on the way. */
 @Composable
 private fun DockItems(selected: DockTab, dot: Boolean, onSelect: (DockTab) -> Unit) {
     val highlight = LocalBrandColors.current.highlight
@@ -271,7 +298,7 @@ private fun DockItems(selected: DockTab, dot: Boolean, onSelect: (DockTab) -> Un
         Modifier
             .selectableGroup()
             .heightIn(min = 64.dp)
-            .padding(horizontal = 4.dp)
+            .padding(horizontal = 6.dp)
             .drawBehind {
                 val item = size.width / DOCK_TABS.size
                 val width = SUNG_LINE_WIDTH.toPx()
@@ -289,6 +316,9 @@ private fun DockItems(selected: DockTab, dot: Boolean, onSelect: (DockTab) -> Un
 @Composable
 private fun DockItem(tab: DockTab, selected: Boolean, dot: Boolean, modifier: Modifier, onClick: () -> Unit) {
     val colors = MaterialTheme.colorScheme
+    val brand = LocalBrandColors.current
+    // The label and icon take the selected look over the line's own travel time, never at once.
+    val lit by animateFloatAsState(if (selected) 1f else 0f, motion(tween(Motion.SHORT_MS, easing = Motion.Standard), LocalReducedMotion.current), label = "dock item")
     val label = stringResource(tab.label)
     val name = dockItemName(label, if (dot) stringResource(R.string.nav_attention) else null)
     Column(
@@ -297,13 +327,13 @@ private fun DockItem(tab: DockTab, selected: Boolean, dot: Boolean, modifier: Mo
             .selectable(selected, interactionSource = null, indication = PressIndication(RoundedCornerShape(20.dp), 0.92f), role = Role.Tab, onClick = onClick)
             .semantics { contentDescription = name }
             .heightIn(min = 56.dp)
-            .padding(top = 8.dp, bottom = 14.dp),
+            .padding(top = 9.dp, bottom = 14.dp),
     ) {
         Box {
             Icon(
                 painterResource(if (selected) tab.selectedIcon else tab.icon),
                 contentDescription = null,
-                tint = if (selected) LocalBrandColors.current.highlight else colors.onSurfaceVariant,
+                tint = lerp(colors.onSurfaceVariant, brand.highlight, lit),
                 modifier = Modifier.size(24.dp),
             )
             if (dot) DotBadge(Modifier.align(Alignment.TopEnd).offset(x = 3.dp, y = (-3).dp))
@@ -311,8 +341,8 @@ private fun DockItem(tab: DockTab, selected: Boolean, dot: Boolean, modifier: Mo
         Text(
             label,
             style = MaterialTheme.typography.labelSmall,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
-            color = if (selected) colors.onSurface else colors.onSurfaceVariant,
+            fontWeight = lerp(FontWeight.Medium, FontWeight(650), lit),
+            color = lerp(colors.onSurfaceVariant, colors.onSurface, lit),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(top = 2.dp).clearAndSetSemantics {},
@@ -367,12 +397,15 @@ fun LyrifyTopBar(
     actions: @Composable RowScope.() -> Unit = {},
 ) {
     TopBand(under, backdrop, modifier) {
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.statusBarsPadding().heightIn(min = BAR_HEIGHT).padding(horizontal = 12.dp)) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.statusBarsPadding().heightIn(min = BAR_HEIGHT).padding(start = if (navigation != null) 8.dp else 20.dp, end = 12.dp),
+        ) {
             navigation?.let {
                 it()
                 Spacer(Modifier.width(4.dp))
             }
-            Box(Modifier.weight(1f).padding(start = 4.dp).semantics(mergeDescendants = true) { heading() }) {
+            Box(Modifier.weight(1f).semantics(mergeDescendants = true) { heading() }) {
                 ProvideTextStyle(MaterialTheme.typography.headlineSmall) { title() }
             }
             Row(verticalAlignment = Alignment.CenterVertically, content = actions)
@@ -459,7 +492,7 @@ fun LyrifySearchField(
         placeholder = placeholder,
         shape = CircleShape,
         ring = 1.5.dp,
-        leading = { Icon(painterResource(R.drawable.ic_search), contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+        leading = { Icon(painterResource(R.drawable.ic_search), contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(22.dp)) },
         trailing = trailing,
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
         keyboardActions = KeyboardActions(onSearch = { onSearch() }),
@@ -495,7 +528,7 @@ fun MenuRow(text: String, @DrawableRes icon: Int?, onClick: () -> Unit, selected
     }
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
         modifier = Modifier
             .padding(horizontal = 6.dp)
             .fillMaxWidth()
@@ -506,7 +539,7 @@ fun MenuRow(text: String, @DrawableRes icon: Int?, onClick: () -> Unit, selected
             .then(if (selected) Modifier.semantics { this.selected = true } else Modifier)
             .padding(horizontal = 12.dp),
     ) {
-        if (icon != null) Icon(painterResource(icon), contentDescription = null, tint = content, modifier = Modifier.size(20.dp))
+        if (icon != null) Icon(painterResource(icon), contentDescription = null, tint = if (destructive || selected) content else colors.onSurfaceVariant, modifier = Modifier.size(20.dp))
         Text(text, style = MaterialTheme.typography.bodyLarge, color = content, modifier = Modifier.weight(1f))
         if (selected) Icon(painterResource(R.drawable.ic_check), contentDescription = null, tint = content, modifier = Modifier.size(20.dp))
     }
@@ -519,15 +552,16 @@ fun MenuRow(text: String, @DrawableRes icon: Int?, onClick: () -> Unit, selected
 data class Toast(val text: String, @DrawableRes val icon: Int? = null, val tone: Tone? = null, val action: String? = null)
 
 /**
- * KJB's messages, in place of SnackbarHostState: one at a time, in order. [show] waits until the message has gone
- * and says whether its action was tapped. A message shows in the newest [ToastSlot] on screen (the shell's above the
- * dock, else the open sheet's or full screen's above its buttons), so it never sits on a control.
+ * KJB's messages, in place of SnackbarHostState: one at a time, and the newest wins. [show] replaces the message on
+ * screen at once, as Android's Snackbar does: the replaced one's caller hears "no action" (its Undo goes away, its change
+ * stays done). [show] waits until its message has gone and says whether its action was tapped. A message floats at the
+ * newest [ToastSlot] on screen (the shell's above the Now bar and the dock, else the open sheet's or full screen's), over
+ * the content, never moving it.
  */
 @Stable
 class ToastState private constructor(private val live: Boolean) {
     constructor() : this(live = true)
 
-    private val mutex = Mutex()
     private val slots = mutableStateListOf<Any>()
 
     /** The message on screen; [dismiss] takes it off, [acted] when its action was tapped. */
@@ -542,13 +576,16 @@ class ToastState private constructor(private val live: Boolean) {
     var current: Shown? by mutableStateOf(null)
         private set
 
-    suspend fun show(toast: Toast): Boolean = if (!live) false else mutex.withLock {
+    suspend fun show(toast: Toast): Boolean {
+        if (!live) return false
         val shown = Shown(toast)
+        // The message on screen goes at once; its caller hears that its action was not tapped.
+        current?.dismiss()
         current = shown
-        try {
+        return try {
             shown.result.await()
         } finally {
-            current = null
+            if (current === shown) current = null
         }
     }
 
@@ -602,13 +639,23 @@ fun messageToast(message: Int, text: String): Toast = when (message) {
     else -> Toast(text)
 }
 
+/** Which way a message floats from its [ToastSlot]: up from it (above a dock or buttons), or down from it (under a top bar). */
+enum class ToastFloat { UP, DOWN }
+
 /**
- * Where the app's message shows in this window, docked above the window's bottom row. Each slot registers while it is
- * composed and only the newest shows the message, so one raised under an open sheet appears in the sheet. Takes no
- * space while empty; grows and shrinks with its message ([padding] round it while it shows).
+ * Where the app's message floats in this window. The slot takes no space: the message is drawn over the content, up
+ * from the slot ([ToastFloat.UP], its bottom edge at the slot, [padding] round it) or down from it, and nothing under it
+ * moves. Each slot registers while it is composed and only the newest shows the message, so one raised under an open
+ * sheet appears in the sheet. Put the slot after the content it floats over, so it draws on top. A newer message
+ * replaces the one shown at once: the old one fades, the new one rises in (the prototype's toastIn).
  */
 @Composable
-fun ToastSlot(modifier: Modifier = Modifier, padding: PaddingValues = PaddingValues(0.dp), state: ToastState = LocalToasts.current) {
+fun ToastSlot(
+    modifier: Modifier = Modifier,
+    padding: PaddingValues = PaddingValues(0.dp),
+    float: ToastFloat = ToastFloat.UP,
+    state: ToastState = LocalToasts.current,
+) {
     val key = remember { Any() }
     DisposableEffect(state) {
         state.register(key)
@@ -616,24 +663,31 @@ fun ToastSlot(modifier: Modifier = Modifier, padding: PaddingValues = PaddingVal
     }
     val shown = state.current?.takeIf { state.showsIn(key) }
     val reduced = LocalReducedMotion.current
+    val rise = with(LocalDensity.current) { TOAST_RISE.roundToPx() }
     AnimatedContent(
         targetState = shown,
         transitionSpec = {
-            // The slot grows up from its bottom edge and clips the pill while it does, so no frame of it lands on the
-            // control under the slot (the dock, a sheet's buttons, Save).
             val enter = if (reduced) {
-                fadeIn()
+                fadeIn(tween(TOAST_IN_MS))
             } else {
-                fadeIn(tween(TOAST_IN_MS)) + scaleIn(Motion.snappy, initialScale = 0.92f, transformOrigin = TransformOrigin(0.5f, 1f))
+                fadeIn(tween(TOAST_IN_MS, easing = ToastEasing)) +
+                    scaleIn(tween(TOAST_IN_MS, easing = ToastEasing), initialScale = TOAST_SCALE, transformOrigin = TransformOrigin(0.5f, if (float == ToastFloat.UP) 1f else 0f)) +
+                    slideInVertically(tween(TOAST_IN_MS, easing = ToastEasing)) { if (float == ToastFloat.UP) rise else -rise }
             }
-            (enter togetherWith fadeOut(tween(TOAST_OUT_MS))).using(SizeTransform(clip = true) { _, _ -> motion(TOAST_SIZE, reduced) })
+            (enter togetherWith fadeOut(tween(TOAST_OUT_MS))).using(SizeTransform(clip = false))
         },
-        contentAlignment = Alignment.BottomCenter,
+        contentAlignment = if (float == ToastFloat.UP) Alignment.BottomCenter else Alignment.TopCenter,
         label = "toast",
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth().floatOver(float),
     ) { message ->
         if (message != null) ToastPill(message, Modifier.padding(padding))
     }
+}
+
+/** Measures the message but reports no height, and draws it up or down from this point: it never pushes the layout. */
+private fun Modifier.floatOver(float: ToastFloat): Modifier = layout { measurable, constraints ->
+    val placeable = measurable.measure(constraints.copy(minHeight = 0, maxHeight = Constraints.Infinity))
+    layout(placeable.width, 0) { placeable.place(0, if (float == ToastFloat.UP) -placeable.height else 0) }
 }
 
 /** The ink pill: its icon, up to three lines, its action; hold it to keep it, swipe it away, TalkBack can dismiss it. */
@@ -698,7 +752,7 @@ private val BAR_HEIGHT = 64.dp
 private const val BAND_FADE_MS = 180
 
 /** The sung line sits this far above the capsule's bottom edge, under the labels. */
-private val LINE_BOTTOM = 8.dp
+private val LINE_BOTTOM = 7.dp
 private val LINE_LEAD = spring(dampingRatio = 0.8f, stiffness = 700f, visibilityThreshold = 0.001f)
 private val LINE_TRAIL = spring(dampingRatio = 0.8f, stiffness = 260f, visibilityThreshold = 0.001f)
 private const val DISABLED_ALPHA = 0.38f
@@ -708,6 +762,9 @@ private const val LONG_MS = 6_000L
 
 /** About two lines of a toast at the default font size. */
 private const val TWO_LINES = 48
-private const val TOAST_IN_MS = 160
-private const val TOAST_OUT_MS = 120
-private val TOAST_SIZE = spring(dampingRatio = 1f, stiffness = 300f, visibilityThreshold = IntSize.VisibilityThreshold)
+/** The prototype's toastIn: 0.28 s on its pop curve, from 16 dp below at 92% size and transparent. */
+private const val TOAST_IN_MS = Motion.ARRIVE_MS
+private val ToastEasing = Motion.Pop
+private const val TOAST_SCALE = 0.92f
+private val TOAST_RISE = 16.dp
+private const val TOAST_OUT_MS = Motion.QUICK_MS

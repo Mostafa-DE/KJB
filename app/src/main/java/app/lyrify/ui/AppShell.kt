@@ -3,15 +3,10 @@ package app.lyrify.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.VisibilityThreshold
-import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -47,7 +42,6 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -85,8 +79,8 @@ val LocalLyrics = compositionLocalOf<LyricsUi> { error("No LyricsUi: AppShell pr
 
 /**
  * The app once set up: each dock tab with its own page stack ([Navigator], kept across a turn of the phone), the Now bar
- * and the dock over Library and Search and Tools' root, Tools pages as full screens, and the full-screen views over
- * everything. Every page and view is drawn by its entry composable in its owner's file; this file only routes. Back
+ * and the dock over Library, Playlists, Search and Tools' root, Tools pages as full screens, and the full-screen views
+ * over everything. Every page and view is drawn by its entry composable in its owner's file; this file only routes. Back
  * closes a sheet, dialog or menu first (their own windows), then a view, then a page, then walks back through the tab
  * history. The app reopens on the last tab ([Settings.nav]), or on the page a notification names ([destination]). What
  * [checkAnswers] say shows here, also once Check these has closed or the phone has turned.
@@ -143,7 +137,7 @@ fun AppShell(
     )
     val dupes by rememberDuplicates().state.collectAsStateWithLifecycle()
     val tones by remember(context) { ToneListStore.of(context).state }.collectAsStateWithLifecycle(TonesState())
-    val rows = toolRows(checks, dupesView(dupes), dupes.badge, tones.tones.size, coversTagsLine(), ai, aiWaiting)
+    val rows = toolRows(checks, dupesView(dupes), dupes.badge, tones.tones.size, coversTagsRow(), ai, aiWaiting)
     val own = rememberOwnNow()
     val followed by NowPlaying.followed.collectAsStateWithLifecycle()
     val other = rememberOtherSession(followed?.takeIf { grants.access.notifications })
@@ -175,29 +169,25 @@ fun AppShell(
     // Pages and the tab history; a page's own back (selection, a page's sheet) is composed later and comes first.
     BackHandler(enabled = state.views.isEmpty() && (state.pages.isNotEmpty() || state.history.isNotEmpty())) { nav.back() }
 
-    CompositionLocalProvider(LocalNavigator provides nav, LocalLyrics provides lyrics) {
+    // The song KJB plays shows as playing in the lists, while the Now bar shows KJB's own song (not another app's).
+    CompositionLocalProvider(LocalNavigator provides nav, LocalLyrics provides lyrics, LocalPlayingPath provides (bar as? NowBarShows.Own)?.now?.path) {
         Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
             CompositionLocalProvider(LocalShellChrome provides ShellChrome(backdrop, bottom)) {
                 AnimatedContent(
                     targetState = state.tab,
                     transitionSpec = {
                         // The new tab comes from the side of the tab tapped; with reduced motion it only fades.
-                        val side = tabSlide(initialState, targetState) * if (rtl) -1 else 1
-                        val enter = if (reduced) {
-                            fadeIn(tween(FADE_IN_MS))
-                        } else {
-                            slideInHorizontally(TAB_SLIDE) { it / SLIDE_SHARE * side } + fadeIn(tween(FADE_IN_MS, delayMillis = FADE_DELAY_MS))
-                        }
-                        enter togetherWith fadeOut(tween(FADE_OUT_MS))
+                        tabSwitch(tabSlide(initialState, targetState) * if (rtl) -1 else 1, reduced)
                     },
                     label = "tab",
                 ) { tab ->
-                    val stack = nav.state.stacks[tab].orEmpty()
+                    val stack = nav.state.pagesOf(tab)
                     // Each page keeps its scroll and its fields while pages are pushed over it, and across a turn of the phone.
                     holder.SaveableStateProvider(pageKey(tab, stack)) {
                         when (val page = stack.lastOrNull()) {
                             null -> when (tab) {
                                 DockTab.LIBRARY -> LibraryPage()
+                                DockTab.PLAYLISTS -> PlaylistsPage()
                                 DockTab.SEARCH -> SearchPage()
                                 DockTab.TOOLS -> ToolsScreen(rows, nav::open)
                             }
@@ -258,10 +248,10 @@ fun AppShell(
         LyricsUndoOffers()
     }
     // A page that left its stack forgets its saved scroll and fields.
-    var keptStacks by remember { mutableStateOf(state.stacks) }
+    var kept by remember { mutableStateOf(state) }
     LaunchedEffect(state.stacks) {
-        (pageKeys(keptStacks) - pageKeys(state.stacks)).forEach(holder::removeState)
-        keptStacks = state.stacks
+        (pageKeys(kept) - pageKeys(state)).forEach(holder::removeState)
+        kept = state
     }
 }
 
@@ -361,12 +351,5 @@ fun LyricsBanners(lyrics: LyricsUi, modifier: Modifier = Modifier, listener: Boo
     }
 }
 
-private const val FADE_IN_MS = 180
-private const val FADE_DELAY_MS = 40
-private const val FADE_OUT_MS = 90
-
-/** A new tab slides in from a tenth of the width, on the settle spring (Motion.settle). */
-private const val SLIDE_SHARE = 10
-private val TAB_SLIDE = spring(dampingRatio = 1f, stiffness = 300f, visibilityThreshold = IntOffset.VisibilityThreshold)
 private const val WHY = "why"
 private const val FIX = "fix"

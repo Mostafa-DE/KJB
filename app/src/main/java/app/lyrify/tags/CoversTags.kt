@@ -141,7 +141,7 @@ data class CoversTagsState(
 
     val skipped: List<AlbumRecord> get() = memory.albums.filter { it.state == Settled.SKIPPED }.sortedByDescending { it.at }
 
-    /** The albums waiting for the user: the badge on the Songs tab's row. */
+    /** The albums waiting for the user: the badge on its Tools row. */
     val badge: Int get() = waiting.size
 }
 

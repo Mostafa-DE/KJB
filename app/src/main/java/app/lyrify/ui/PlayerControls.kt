@@ -1,5 +1,9 @@
 package app.lyrify.ui
 
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.draw.shadow
 import androidx.annotation.DrawableRes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -106,7 +110,19 @@ internal fun ProgressBar(ui: PlayerUi, onSeek: (Long) -> Unit, marks: @Composabl
         // P2: the bookmarks' ticks and the part repeating.
         marks()
         BoxWithConstraints(Modifier.fillMaxWidth()) {
-            Box(Modifier.offset(x = maxWidth * share - 8.dp).size(if (dragging != null) 20.dp else 16.dp).clip(CircleShape).background(highlight))
+            val knob by animateFloatAsState(if (dragging != null) KNOB_DRAG_SCALE else 1f, motion(tween(Motion.QUICK_MS), LocalReducedMotion.current), label = "knob")
+            Box(
+                Modifier
+                    .offset(x = maxWidth * share - 11.dp)
+                    .size(22.dp)
+                    .graphicsLayer {
+                        scaleX = knob
+                        scaleY = knob
+                    }
+                    .background(MaterialTheme.colorScheme.background, CircleShape)
+                    .padding(3.dp)
+                    .background(highlight, CircleShape),
+            )
         }
     }
     Row(Modifier.fillMaxWidth()) {
@@ -125,21 +141,22 @@ internal fun MainRow(ui: PlayerUi, settings: Settings, connection: PlayerConnect
     Row(horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
         SeekJump(seekIcon(back = true, back), pluralStringResource(R.plurals.player_back_seconds, back, back)) { connection.seekBy(-back * 1_000L) }
         RoundButton(R.drawable.ic_skip_previous_fill, stringResource(R.string.player_previous), size = 56.dp, iconSize = 38.dp, onClick = connection::previous)
-        val colors = MaterialTheme.colorScheme
+        val chrome = LocalChromeColors.current
         val label = stringResource(if (ui.playing) R.string.player_pause else R.string.player_play)
         Box(
             contentAlignment = Alignment.Center,
             modifier = Modifier
                 .size(76.dp)
+                .shadow(12.dp, CircleShape, ambientColor = chrome.shadowStrong, spotColor = chrome.shadowStrong)
                 .clip(CircleShape)
-                .background(colors.inverseSurface, CircleShape)
+                .background(chrome.action, CircleShape)
                 .clickable(role = Role.Button, onClick = connection::playPause)
                 .semantics { contentDescription = label },
         ) {
             Icon(
                 painterResource(if (ui.playing) R.drawable.ic_pause_fill else R.drawable.ic_play_arrow_fill),
                 contentDescription = null,
-                tint = colors.inverseOnSurface,
+                tint = chrome.onAction,
                 modifier = Modifier.size(40.dp),
             )
         }
@@ -247,3 +264,5 @@ private fun ToggleButton(@DrawableRes icon: Int, label: String, on: Boolean, bar
     }
 }
 
+/** The progress knob grows this much under the finger (the prototype's scale(1.3) over 0.12 s). */
+private const val KNOB_DRAG_SCALE = 1.3f

@@ -485,8 +485,8 @@ private fun TonePicker(ledger: LedgerState, onDismiss: () -> Unit, onPick: (Ledg
                     picker = SongPicker(R.string.tones_choose_song, onPick),
                 )
             }
-            // Messages take their own room under the list, above the keyboard.
-            ToastSlot(Modifier.navigationBarsPadding().imePadding().padding(horizontal = ScreenPadding), padding = PaddingValues(top = 8.dp, bottom = 12.dp))
+            // Messages float over the end of the list, above the keyboard.
+            ToastSlot(Modifier.navigationBarsPadding().imePadding().padding(horizontal = ScreenPadding), padding = PaddingValues(bottom = 12.dp))
         }
     }
 }

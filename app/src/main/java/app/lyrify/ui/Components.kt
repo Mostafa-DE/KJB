@@ -1,5 +1,8 @@
 package app.lyrify.ui
 
+import androidx.compose.foundation.layout.height
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.material3.minimumInteractiveComponentSize
 import android.animation.ValueAnimator
 import android.content.ContentUris
 import android.content.Context
@@ -203,6 +206,7 @@ fun StatusPill(
     @DrawableRes icon: Int? = null,
     leading: @Composable (() -> Unit)? = null,
     onClick: (() -> Unit)? = null,
+    large: Boolean = false,
 ) {
     val colors = tone?.let { LocalStatusColors.current[it] }
     val container = colors?.container ?: MaterialTheme.colorScheme.surfaceContainerHighest
@@ -212,31 +216,33 @@ fun StatusPill(
     } else {
         Modifier
     }
+    // The prototype's .pill (24 dp, 12/16) and, [large], the Now screen's .spill (40 dp, 14 semibold).
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(if (large) 6.dp else 4.dp),
         modifier = modifier
             .then(click)
+            .then(if (onClick != null) Modifier.minimumInteractiveComponentSize() else Modifier)
             .background(container, CircleShape)
-            .heightIn(min = 40.dp)
-            .padding(start = 12.dp, end = if (onClick != null) 10.dp else 16.dp),
+            .heightIn(min = if (large) 40.dp else 24.dp)
+            .padding(start = if (large) 10.dp else 6.dp, end = if (large) 12.dp else if (onClick != null) 4.dp else 9.dp),
     ) {
         CompositionLocalProvider(LocalContentColor provides content) {
             when {
                 leading != null -> leading()
-                icon != null -> Icon(painterResource(icon), contentDescription = null, modifier = Modifier.size(20.dp))
+                icon != null -> Icon(painterResource(icon), contentDescription = null, modifier = Modifier.size(if (large) 18.dp else 16.dp))
             }
-            Text(label, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            if (onClick != null) Icon(painterResource(R.drawable.ic_chevron_right), contentDescription = null, modifier = Modifier.size(18.dp))
+            Text(label, style = if (large) MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold) else MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (onClick != null) Icon(painterResource(R.drawable.ic_chevron_right), contentDescription = null, modifier = Modifier.size(16.dp))
         }
     }
 }
 
 /** [status]'s pill: its tone, icon and label. */
 @Composable
-fun StatusPill(status: LyricsStatus, modifier: Modifier = Modifier, onClick: (() -> Unit)? = null) {
+fun StatusPill(status: LyricsStatus, modifier: Modifier = Modifier, onClick: (() -> Unit)? = null, large: Boolean = false) {
     val style = status.style
-    StatusPill(stringResource(style.label), style.tone, modifier, icon = style.icon, onClick = onClick)
+    StatusPill(stringResource(style.label), style.tone, modifier, icon = style.icon, onClick = onClick, large = large)
 }
 
 /** The 18 dp badge on a cover's corner: the status's icon on its tone. Decorative: the label is text elsewhere. */
@@ -355,20 +361,18 @@ fun LyrifySheet(
             Box(
                 Modifier
                     .align(Alignment.CenterHorizontally)
-                    .padding(vertical = 12.dp)
+                    .padding(vertical = 9.dp)
                     .size(36.dp, 4.dp)
-                    .background(colors.onSurfaceVariant.copy(alpha = 0.4f), CircleShape),
+                    .background(colors.outline.copy(alpha = 0.5f), CircleShape),
             )
             Column(
-                Modifier.weight(1f, fill = false).verticalScroll(scroll).padding(start = padding, end = padding, bottom = 8.dp),
+                Modifier.weight(1f, fill = false).verticalScroll(scroll).padding(start = padding, end = padding, top = 2.dp, bottom = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(spacing),
                 content = content,
             )
-            ToastSlot(Modifier.padding(horizontal = 12.dp), padding = PaddingValues(top = 4.dp))
+            ToastSlot(Modifier.padding(horizontal = 12.dp), padding = PaddingValues(bottom = 8.dp))
             if (footer != null) {
-                Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp), content = footer)
-            } else {
-                Box(Modifier.padding(bottom = 12.dp))
+                Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp), content = footer)
             }
         }
     }
@@ -394,7 +398,6 @@ fun ConfirmDialog(
 ) {
     val chrome = LocalChromeColors.current
     val colors = MaterialTheme.colorScheme
-    val brand = LocalBrandColors.current
     val reduced = LocalReducedMotion.current
     val shown = remember { MutableTransitionState(false) }.apply { targetState = true }
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
@@ -411,9 +414,9 @@ fun ConfirmDialog(
             AnimatedVisibility(visibleState = shown, enter = if (reduced) fadeIn() else fadeIn(tween(DIALOG_FADE_MS)) + scaleIn(Motion.snappy, initialScale = 0.94f)) {
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
                     modifier = Modifier
-                        .widthIn(max = 400.dp)
+                        .widthIn(max = 340.dp)
                         .fillMaxWidth()
                         // A tap on the card stays on it.
                         .pointerInput(Unit) { detectTapGestures { } }
@@ -427,26 +430,26 @@ fun ConfirmDialog(
                         modifier = Modifier
                             .size(56.dp)
                             .clip(RoundedCornerShape(18.dp))
-                            .background(if (destructive) colors.errorContainer else brand.highlightContainer),
+                            .background(if (destructive) colors.errorContainer else colors.surfaceContainerHigh),
                     ) {
-                        Icon(painterResource(icon), contentDescription = null, tint = if (destructive) colors.onErrorContainer else brand.onHighlightContainer, modifier = Modifier.size(28.dp))
+                        Icon(painterResource(icon), contentDescription = null, tint = if (destructive) colors.onErrorContainer else colors.onSurfaceVariant, modifier = Modifier.size(28.dp))
                     }
-                    Text(title, style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.Center, modifier = Modifier.semantics { heading() })
+                    Text(title, style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 4.dp).semantics { heading() })
                     if (text != null) Text(text, style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant, textAlign = TextAlign.Center)
                     body?.invoke(this)
                     val button: @Composable (DialogButton, Modifier) -> Unit = { which, at ->
                         when (which) {
-                            DialogButton.DISMISS -> LyrifyButton(dismiss, onDismiss, at, kind = ButtonKind.SECONDARY)
+                            DialogButton.DISMISS -> LyrifyButton(dismiss, onDismiss, at.height(48.dp), kind = ButtonKind.SECONDARY)
                             DialogButton.CONFIRM ->
-                                LyrifyButton(confirm, onConfirm, at, kind = if (destructive) ButtonKind.DANGER else ButtonKind.PRIMARY, enabled = confirmEnabled)
+                                LyrifyButton(confirm, onConfirm, at.height(48.dp), kind = if (destructive) ButtonKind.DANGER else ButtonKind.PRIMARY, enabled = confirmEnabled)
                         }
                     }
                     if (LocalDensity.current.fontScale > STACK_FONT_SCALE) {
-                        Column(Modifier.fillMaxWidth().padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Column(Modifier.fillMaxWidth().padding(top = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             DIALOG_BUTTONS.forEach { button(it, Modifier.fillMaxWidth()) }
                         }
                     } else {
-                        Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(Modifier.fillMaxWidth().padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             DIALOG_BUTTONS.forEach { button(it, Modifier.weight(1f)) }
                         }
                     }
@@ -530,13 +533,14 @@ fun GroupedRow(
     first: Boolean = false,
     supporting: (@Composable () -> Unit)? = null,
     onClick: (() -> Unit)? = null,
+    minHeight: Dp = 64.dp,
     trailing: (@Composable () -> Unit)? = null,
 ) {
     val colors = MaterialTheme.colorScheme
     val hairline = colors.outlineVariant.copy(alpha = HAIRLINE_ALPHA)
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
         modifier = modifier
             .fillMaxWidth()
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier.semantics(mergeDescendants = true) {})
@@ -546,16 +550,16 @@ fun GroupedRow(
                     drawRect(hairline, Offset(if (layoutDirection == LayoutDirection.Rtl) 0f else start, 0f), Size(size.width - start, 1.dp.toPx()))
                 }
             }
-            .heightIn(min = 64.dp)
-            .padding(horizontal = 16.dp, vertical = 10.dp),
+            .heightIn(min = minHeight)
+            .padding(start = 14.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
     ) {
-        Box(contentAlignment = Alignment.Center, modifier = Modifier.size(36.dp).clip(RoundedCornerShape(10.dp)).background(tile)) {
+        Box(contentAlignment = Alignment.Center, modifier = Modifier.size(36.dp).clip(RoundedCornerShape(11.dp)).background(tile)) {
             Icon(painterResource(icon), contentDescription = null, tint = onTile, modifier = Modifier.size(20.dp))
         }
         Column(Modifier.weight(1f)) {
             Text(title, style = MaterialTheme.typography.bodyLarge, color = colors.onSurface)
             if (supporting != null) {
-                CompositionLocalProvider(LocalContentColor provides colors.onSurfaceVariant, LocalTextStyle provides MaterialTheme.typography.bodyMedium) { supporting() }
+                CompositionLocalProvider(LocalContentColor provides colors.onSurfaceVariant, LocalTextStyle provides RowLine) { supporting() }
             }
         }
         if (trailing != null) CompositionLocalProvider(LocalContentColor provides colors.onSurfaceVariant) { trailing() }
@@ -576,11 +580,12 @@ fun EmptyState(art: EmptyArt, title: String, modifier: Modifier = Modifier, text
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp),
-        modifier = modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 32.dp),
+        modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 48.dp),
     ) {
         CardStack(art)
-        Text(title, style = MaterialTheme.typography.headlineSmall, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 8.dp).semantics { heading() })
-        if (text != null) Text(text, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
+        // The prototype's .empty: the title 18 dp under the cards, the line 15/22 within about 30 characters.
+        Text(title, style = MaterialTheme.typography.headlineSmall, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 18.dp).semantics { heading() })
+        if (text != null) Text(text, style = EmptyLine, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center, modifier = Modifier.widthIn(max = 270.dp))
         if (action != null) LyrifyButton(action, onClick = onAction, modifier = Modifier.padding(top = 8.dp), compact = true)
     }
 }
@@ -628,10 +633,16 @@ private fun StackCard(color: Color, rotation: Float, shift: Dp) {
     )
 }
 
+/** An empty state's line (.empty .ed): 15/22. */
+private val EmptyLine = body(15f, 22)
+
+/** A section's label (.slabel): 13/18 semibold. */
+internal val SectionLabel = body(13f, 18, 600)
+
 /** A section's title, a heading for TalkBack. */
 @Composable
 fun SectionTitle(text: String, modifier: Modifier = Modifier) {
-    Text(text, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = modifier.semantics { heading() })
+    Text(text, style = SectionLabel, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = modifier.semantics { heading() })
 }
 
 /** An icon and a short text: the song sheet's facts, the AI download sheet, the first run's privacy line. */
@@ -752,10 +763,13 @@ private const val DIALOG_FADE_MS = 150
 
 /** Above this text scale, a dialog's buttons stack. */
 private const val STACK_FONT_SCALE = 1.3f
-private const val HAIRLINE_ALPHA = 0.5f
+private const val HAIRLINE_ALPHA = 0.7f
 
 /** Where a grouped row's hairline starts: after its 36 dp icon and the 16 dp on each side of it. */
-private val HAIRLINE_START = 68.dp
+private val HAIRLINE_START = 64.dp
+
+/** A grouped row's second line (.gr .s): 13.5/19. */
+private val RowLine = body(13.5f, 19)
 private val StackShape = RoundedCornerShape(16.dp)
 private val STACK_WIDTH = 64.dp
 private val STACK_HEIGHT = 84.dp
@@ -765,3 +779,15 @@ internal const val RESTING_FILL = 0.65f
 
 /** One sweep of the sung line. */
 private const val SWEEP_MS = 1_400
+
+/**
+ * The prototype's link (.lnk): a 2 dp [color] underline. CSS puts it 4 dp under the baseline; at the body sizes that is
+ * the bottom of the text's line box, where it is drawn.
+ */
+fun Modifier.linkUnderline(color: Color): Modifier = drawBehind {
+    val thickness = LINK_LINE.toPx()
+    val y = size.height - thickness / 2
+    drawLine(color, Offset(0f, y), Offset(size.width, y), thickness)
+}
+
+private val LINK_LINE = 2.dp

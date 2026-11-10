@@ -23,6 +23,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
+import androidx.compose.runtime.currentCompositeKeyHash
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -31,6 +32,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -506,7 +508,8 @@ fun SongSheetsHost(sheets: SongSheets) {
 /**
  * The sheet or dialog [sheets] has open, over the page: the song sheet, Add to, Lyrics, Song info, the selection's More,
  * the name dialogs, Move to trash (KJB's dialog, then the phone's) and the Tone editor. Each action closes it and says
- * what it did, with Undo; [onActed] hears it too, so a selection ends.
+ * what it did, with Undo; [onActed] hears it too, so a selection ends. The song sheet's album and artist open their pages
+ * with this host's place, so Back from them shows the sheet here again.
  */
 @Composable
 fun SongSheetsHost(sheets: SongSheets, ui: LibraryUi, onActed: () -> Unit = {}) {
@@ -517,6 +520,9 @@ fun SongSheetsHost(sheets: SongSheets, ui: LibraryUi, onActed: () -> Unit = {}) 
     val actions = rememberSongActions()
     val trash = rememberDuplicates().trash
     val phoneTrash = rememberPhoneTrash(trash, toasts)
+    // This host's place in the composition, which is the same when its page comes back, as rememberSaveable's keys are.
+    val at = currentCompositeKeyHash.toString(36)
+    LaunchedEffect(nav, sheets, at) { snapshotFlow { nav.state.reopen }.collect { nav.takeSheet(at)?.let(sheets::show) } }
     val library = ui.library ?: return
     val open = sheets.open ?: return
     fun songOf(ref: SongRef): Song? = library.resolver.find(ref)
@@ -538,8 +544,8 @@ fun SongSheetsHost(sheets: SongSheets, ui: LibraryUi, onActed: () -> Unit = {}) 
                 song = song,
                 ui = ui,
                 rows = rows,
-                onArtist = song.artist?.takeIf { library.artist(it) != null }?.let { name -> { sheets.close(); nav.open(Page.Artist(name)) } },
-                onAlbum = albumPageOf(song, library)?.let { page -> { sheets.close(); nav.open(page) } },
+                onArtist = song.artist?.takeIf { library.artist(it) != null }?.let { name -> { sheets.close(); nav.open(Page.Artist(name), SheetReturn(at, open)) } },
+                onAlbum = albumPageOf(song, library)?.let { page -> { sheets.close(); nav.open(page, SheetReturn(at, open)) } },
                 bookmarks = SongSheetSlots.bookmarks?.let { slot -> { slot(song.ref, sheets::close) } },
                 onDismiss = sheets::close,
             ) { row ->

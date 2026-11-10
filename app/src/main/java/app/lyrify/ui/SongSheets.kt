@@ -1,5 +1,9 @@
 package app.lyrify.ui
 
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.AnimatedVisibility
 import android.text.format.Formatter
 import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
@@ -73,8 +77,8 @@ internal fun SongMenuSheet(
 ) {
     val favourite = ui.isFavourite(song)
     val status = ui.status(song)
-    LyrifySheet(onDismiss = onDismiss, spacing = 8.dp, padding = 12.dp) {
-        SongSheetHeader(song, ui.title(song), onArtist, onAlbum, Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
+    LyrifySheet(onDismiss = onDismiss, spacing = 14.dp, padding = 12.dp) {
+        SongSheetHeader(song, ui.title(song), onArtist, onAlbum, Modifier.padding(horizontal = 8.dp))
         Column {
             rows.forEach { row ->
                 when (row) {
@@ -103,10 +107,10 @@ internal fun SongMenuSheet(
 /** The sheet's head: the cover, the title, and the artist and album as links when their pages exist, with the length. */
 @Composable
 private fun SongSheetHeader(song: Song, title: String, onArtist: (() -> Unit)?, onAlbum: (() -> Unit)?, modifier: Modifier = Modifier) {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp), modifier = modifier) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp), modifier = modifier) {
         SongCover(SongArt(song.path, song.ref.mediaStoreId), size = 72.dp, shape = MaterialTheme.shapes.medium)
-        Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.titleLarge, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.semantics { heading() })
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(title, style = SheetSongTitle, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.semantics { heading() })
             LinkText(song.artist ?: stringResource(R.string.check_no_artist), onArtist)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 LinkText(song.album ?: stringResource(R.string.lib_unknown_album), onAlbum, Modifier.weight(1f, fill = false))
@@ -121,7 +125,10 @@ private fun SongSheetHeader(song: Song, title: String, onArtist: (() -> Unit)?, 
     }
 }
 
-/** An artist or album name: a coral link with a 48 dp target when it opens a page, else plain text. */
+/**
+ * An artist or album name: the prototype's link (.lnk, on-surface medium with a coral underline) when it opens a page,
+ * else plain text. The line keeps its 20 dp; Compose widens a small target's touch to 48 dp.
+ */
 @Composable
 internal fun LinkText(text: String, onClick: (() -> Unit)?, modifier: Modifier = Modifier) {
     val style = MaterialTheme.typography.bodyMedium
@@ -129,17 +136,19 @@ internal fun LinkText(text: String, onClick: (() -> Unit)?, modifier: Modifier =
         Text(text, style = style, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = modifier)
         return
     }
-    Box(
-        contentAlignment = Alignment.CenterStart,
-        modifier = modifier
-            .clip(RoundedCornerShape(8.dp))
-            .clickable(role = Role.Button, onClick = onClick)
-            .heightIn(min = 48.dp)
-            .widthIn(min = 48.dp),
-    ) {
-        Text(text, style = style, fontWeight = FontWeight.SemiBold, color = LocalBrandColors.current.highlight, maxLines = 1, overflow = TextOverflow.Ellipsis)
-    }
+    Text(
+        text,
+        style = style,
+        fontWeight = FontWeight.Medium,
+        color = MaterialTheme.colorScheme.onSurface,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = modifier.clickable(role = Role.Button, onClick = onClick).linkUnderline(LocalBrandColors.current.highlight),
+    )
 }
+
+/** The sheet's song title (.shh .t): Bricolage 21/26. */
+private val SheetSongTitle = display(21, 26, -0.01)
 
 /** A row of a sheet: its icon, its words, maybe a value and a chevron; 52 dp tall; [danger] in red. */
 @Composable
@@ -160,15 +169,18 @@ private fun ActionRow(
         horizontalArrangement = Arrangement.spacedBy(16.dp),
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(14.dp))
             .clickable(role = Role.Button, onClick = onClick)
             .heightIn(min = 52.dp)
             .padding(horizontal = 8.dp),
     ) {
         Icon(painterResource(icon), contentDescription = null, tint = iconTint.takeOrElse { if (danger) colors.error else colors.onSurfaceVariant }, modifier = Modifier.size(22.dp))
         Text(text, style = MaterialTheme.typography.bodyLarge, color = content, modifier = Modifier.weight(1f))
-        trailing?.invoke()
-        if (chevron) Icon(painterResource(R.drawable.ic_chevron_right), contentDescription = null, tint = colors.onSurfaceVariant, modifier = Modifier.size(20.dp))
+        // The tail (.tail): its value and the chevron 6 dp apart.
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            trailing?.invoke()
+            if (chevron) Icon(painterResource(R.drawable.ic_chevron_right), contentDescription = null, tint = colors.onSurfaceVariant, modifier = Modifier.size(20.dp))
+        }
     }
 }
 
@@ -182,7 +194,7 @@ private fun FavouriteRow(on: Boolean, onToggle: () -> Unit) {
         horizontalArrangement = Arrangement.spacedBy(16.dp),
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
+            .clip(RoundedCornerShape(14.dp))
             .toggleable(on, role = Role.Switch) { onToggle() }
             .heightIn(min = 52.dp)
             .padding(horizontal = 8.dp),
@@ -194,7 +206,13 @@ private fun FavouriteRow(on: Boolean, onToggle: () -> Unit) {
             modifier = Modifier.size(22.dp),
         )
         Text(stringResource(R.string.lib_favourite), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
-        if (on) Text(stringResource(R.string.lib_on), style = MaterialTheme.typography.labelLarge, color = brand.highlight)
+        // "On" with a coral check (.tick), fading in and out with the heart.
+        AnimatedVisibility(on, enter = fadeIn(tween(Motion.QUICK_MS)), exit = fadeOut(tween(Motion.QUICK_MS))) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                Icon(painterResource(R.drawable.ic_check), contentDescription = null, tint = brand.highlight, modifier = Modifier.size(20.dp))
+                Text(stringResource(R.string.lib_on), style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, color = colors.onSurface)
+            }
+        }
     }
 }
 

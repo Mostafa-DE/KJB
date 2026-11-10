@@ -110,4 +110,13 @@ class SearchScreenTest {
         val again = namedResults("lantern", found, emptyList(), results)
         assertEquals(results.lyrics, again.lyrics)
     }
+
+    @Test
+    fun `the field takes the focus when Search opens or is tapped again, not when the count is already handled`() {
+        assertTrue(focusDue(opens = 1, handled = 0))
+        assertTrue(focusDue(opens = 2, handled = 1))
+        // A turn of the phone restores the handled count: no keyboard then.
+        assertFalse(focusDue(opens = 1, handled = 1))
+        assertFalse(focusDue(opens = 0, handled = 0))
+    }
 }

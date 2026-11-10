@@ -1,5 +1,15 @@
 package app.lyrify.ui
 
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.graphics.Color
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.material3.LocalTextStyle
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.border
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.animateColorAsState
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
@@ -14,8 +24,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -284,7 +292,6 @@ private const val MEDIA_OUTPUT_PACKAGE: String = "com.android.settings.panel.ext
 // The sleep timer
 
 /** After a time (15 min to 1 hour, Custom) or after songs (End of song, 3, 5, Custom); the readout and Turn off while one runs. */
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SleepSheet(extras: PlayerExtrasUi, ui: PlayerUi) {
     val timer = extras.extras.sleep.collectAsStateWithLifecycle().value
@@ -294,29 +301,44 @@ private fun SleepSheet(extras: PlayerExtrasUi, ui: PlayerUi) {
     LyrifySheet(onDismiss = extras::close, footer = footer) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Icon(painterResource(R.drawable.ic_snooze), contentDescription = null, tint = LocalBrandColors.current.highlight, modifier = Modifier.size(26.dp))
-            Text(stringResource(R.string.sleep_title), style = MaterialTheme.typography.headlineSmall, modifier = Modifier.semantics { heading() })
+            Text(stringResource(R.string.sleep_title), style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { heading() })
         }
         if (timer != null) SleepReadout(timer, ui)
         Text(stringResource(R.string.sleep_sentence), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         SectionTitle(stringResource(R.string.sleep_after_time))
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth().selectableGroup()) {
-            val byTime = timer as? SleepTimer.ByTime
-            SLEEP_MINUTES.forEach { minutes ->
-                LyrifyChip(selected = byTime?.let { !it.custom && it.minutes == minutes } == true, onClick = { extras.setSleep(sleepFor(minutes, SystemClock.elapsedRealtime()), ui) }, role = Role.RadioButton) {
-                    Text(if (minutes == 60) stringResource(R.string.sleep_hour) else stringResource(R.string.sleep_minutes_chip, minutes))
-                }
-            }
-            LyrifyChip(selected = byTime?.custom == true, onClick = { extras.open = ExtrasSheet.SLEEP_MINUTES }, role = Role.RadioButton) { Text(stringResource(R.string.sleep_custom)) }
+        val byTime = timer as? SleepTimer.ByTime
+        // The prototype's .srow2.t5: the times and Custom in five equal capsules.
+        OptionRow(
+            count = SLEEP_MINUTES.size + 1,
+            chosen = { at -> if (at == SLEEP_MINUTES.size) byTime?.custom == true else byTime?.let { !it.custom && it.minutes == SLEEP_MINUTES[at] } == true },
+            onPick = { at -> if (at == SLEEP_MINUTES.size) extras.open = ExtrasSheet.SLEEP_MINUTES else extras.setSleep(sleepFor(SLEEP_MINUTES[at], SystemClock.elapsedRealtime()), ui) },
+        ) { at ->
+            val minutes = SLEEP_MINUTES.getOrNull(at)
+            Text(
+                when (minutes) {
+                    null -> stringResource(R.string.sleep_custom)
+                    60 -> stringResource(R.string.sleep_hour)
+                    else -> stringResource(R.string.sleep_minutes_chip, minutes)
+                },
+            )
         }
         SectionTitle(stringResource(R.string.sleep_after_songs))
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth().selectableGroup()) {
-            val bySongs = timer as? SleepTimer.BySongs
-            SLEEP_SONGS.forEach { songs ->
-                LyrifyChip(selected = bySongs?.let { !it.custom && it.songs == songs } == true, onClick = { extras.setSleep(sleepAfter(songs), ui) }, role = Role.RadioButton) {
-                    Text(if (songs == 1) stringResource(R.string.sleep_end_of_song) else pluralStringResource(R.plurals.sleep_songs_chip, songs, songs))
-                }
-            }
-            LyrifyChip(selected = bySongs?.custom == true, onClick = { extras.open = ExtrasSheet.SLEEP_SONGS }, role = Role.RadioButton) { Text(stringResource(R.string.sleep_custom)) }
+        val bySongs = timer as? SleepTimer.BySongs
+        // The prototype's .srow2.s4: "End of song" wider (1.55 to 1), then the counts and Custom.
+        OptionRow(
+            count = SLEEP_SONGS.size + 1,
+            weights = listOf(END_OF_SONG_SHARE) + List(SLEEP_SONGS.size) { 1f },
+            chosen = { at -> if (at == SLEEP_SONGS.size) bySongs?.custom == true else bySongs?.let { !it.custom && it.songs == SLEEP_SONGS[at] } == true },
+            onPick = { at -> if (at == SLEEP_SONGS.size) extras.open = ExtrasSheet.SLEEP_SONGS else extras.setSleep(sleepAfter(SLEEP_SONGS[at]), ui) },
+        ) { at ->
+            val songs = SLEEP_SONGS.getOrNull(at)
+            Text(
+                when (songs) {
+                    null -> stringResource(R.string.sleep_custom)
+                    1 -> stringResource(R.string.sleep_end_of_song)
+                    else -> pluralStringResource(R.plurals.sleep_songs_chip, songs, songs)
+                },
+            )
         }
     }
 }
@@ -358,7 +380,7 @@ private fun CustomSleepSheet(extras: PlayerExtrasUi, ui: PlayerUi, songs: Boolea
         onDismiss = extras::close,
         footer = { LyrifyButton(stringResource(R.string.sleep_start), start, Modifier.fillMaxWidth(), icon = R.drawable.ic_snooze) },
     ) {
-        Text(stringResource(if (songs) R.string.sleep_custom_songs else R.string.sleep_custom_time), style = MaterialTheme.typography.headlineSmall, modifier = Modifier.semantics { heading() })
+        Text(stringResource(if (songs) R.string.sleep_custom_songs else R.string.sleep_custom_time), style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { heading() })
         Text(
             stringResource(if (songs) R.string.sleep_custom_songs_sentence else R.string.sleep_custom_time_sentence),
             style = MaterialTheme.typography.bodyMedium,
@@ -370,7 +392,7 @@ private fun CustomSleepSheet(extras: PlayerExtrasUi, ui: PlayerUi, songs: Boolea
             val unit = if (songs) pluralStringResource(R.plurals.sleep_unit_songs, value) else stringResource(R.string.sleep_unit_minutes)
             Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.semantics(mergeDescendants = true) {}) {
                 Text(value.toString(), style = MaterialTheme.typography.displayMedium.tabular().copy(fontWeight = FontWeight.SemiBold))
-                Text(unit, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 8.dp))
+                Text(unit, style = body(15f, 20, 500), color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 8.dp))
             }
             StepButton(R.drawable.ic_add, stringResource(R.string.sleep_more), enabled = value < range.last) { value = nextCustom(value, up = true, songs) }
         }
@@ -398,7 +420,6 @@ private fun StepButton(@DrawableRes icon: Int, label: String, enabled: Boolean, 
  * "This song only": what is set moves to the song, and the usual speed goes back to what it was when the sheet opened.
  * Sliders store their value when let go.
  */
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SpeedSheet(extras: PlayerExtrasUi, ui: PlayerUi) {
     val store = extras.extras
@@ -420,7 +441,7 @@ private fun SpeedSheet(extras: PlayerExtrasUi, ui: PlayerUi) {
             }
         },
     ) {
-        Text(stringResource(R.string.speed_title), style = MaterialTheme.typography.headlineSmall, modifier = Modifier.semantics { heading() })
+        Text(stringResource(R.string.speed_title), style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { heading() })
         Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(stringResource(R.string.speed_value, speedNumber(shown.speed)), style = MaterialTheme.typography.displaySmall.tabular().copy(fontWeight = FontWeight.SemiBold))
             val pitch = when {
@@ -430,12 +451,9 @@ private fun SpeedSheet(extras: PlayerExtrasUi, ui: PlayerUi) {
             }
             Text(pitch, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 6.dp))
         }
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth().selectableGroup()) {
-            SPEEDS.forEach { choice ->
-                LyrifyChip(selected = shown.speed == choice, onClick = { set { it.copy(speed = choice) } }, role = Role.RadioButton) {
-                    Text(stringResource(R.string.speed_value, speedNumber(choice)), style = MaterialTheme.typography.labelLarge.tabular())
-                }
-            }
+        // The prototype's .spdchips: six equal 44 dp capsules.
+        OptionRow(count = SPEEDS.size, height = 44.dp, chosen = { at -> shown.speed == SPEEDS[at] }, onPick = { at -> set { it.copy(speed = SPEEDS[at]) } }) { at ->
+            Text(stringResource(R.string.speed_value, speedNumber(SPEEDS[at])), style = OptionText.tabular())
         }
         val fine = stringResource(R.string.speed_fine)
         val fineValue = stringResource(R.string.speed_value, speedNumber(shown.speed))
@@ -650,3 +668,50 @@ private fun startOver(context: Context, path: String) {
     if (connection.ui.value?.path() == path) connection.seekTo(0)
     PlayerExtras.of(context).change { it.withPlace(SongRef(path, it.ids[path]), null) }
 }
+
+/**
+ * One choice of a few as equal capsules in a row (the prototype's .opt grid): [height] tall, 6 dp apart, shared by
+ * [weights]; the chosen one ([chosen]) on the brand's container with a coral ring and semibold words, changing over 0.12 s.
+ */
+@Composable
+private fun OptionRow(
+    count: Int,
+    chosen: (Int) -> Boolean,
+    onPick: (Int) -> Unit,
+    height: Dp = 48.dp,
+    weights: List<Float> = List(count) { 1f },
+    label: @Composable (Int) -> Unit,
+) {
+    val colors = MaterialTheme.colorScheme
+    val brand = LocalBrandColors.current
+    val reduced = LocalReducedMotion.current
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth().selectableGroup()) {
+        repeat(count) { at ->
+            val on = chosen(at)
+            val fill by animateColorAsState(if (on) brand.highlightContainer else colors.surfaceContainerHigh, motion(tween(Motion.QUICK_MS), reduced), label = "option")
+            val ring by animateColorAsState(if (on) brand.highlight else Color.Transparent, motion(tween(Motion.QUICK_MS), reduced), label = "option ring")
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .weight(weights[at])
+                    .height(height)
+                    .clip(CircleShape)
+                    .selectable(on, role = Role.RadioButton) { onPick(at) }
+                    .background(fill, CircleShape)
+                    .border(1.5.dp, ring, CircleShape)
+                    .padding(horizontal = 2.dp),
+            ) {
+                CompositionLocalProvider(
+                    LocalContentColor provides if (on) brand.onHighlightContainer else colors.onSurface,
+                    LocalTextStyle provides OptionText.copy(fontWeight = if (on) FontWeight.SemiBold else FontWeight.Medium),
+                ) { label(at) }
+            }
+        }
+    }
+}
+
+/** An option's words (.opt): 14/20 medium. */
+private val OptionText = body(14f, 20, 500)
+
+/** "End of song" takes this much of the row against 1 for each count (.srow2.s4). */
+private const val END_OF_SONG_SHARE = 1.55f
