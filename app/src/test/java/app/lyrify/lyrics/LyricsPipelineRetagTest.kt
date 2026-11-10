@@ -15,6 +15,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
+import java.io.IOException
 
 /** What a Covers & tags apply does to a song's lyrics (covers-tags-spec, "Effects on the rest of KJB"). */
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -32,11 +33,15 @@ class LyricsPipelineRetagTest {
     private fun record(id: Long, track: String = "Salt Road", artist: String = "Mira Solen", synced: String? = this.synced) =
         LrclibRecord(id, track, artist, "Lanterns of Ulso", 200.0, plainLyrics = "w0001", syncedLyrics = synced)
 
+    /** Makes every lyrics write fail from now on, as a full disk would. */
+    private var failWrites = false
+
     private fun TestScope.pipeline() = LyricsPipeline(
         client = client,
         ledger = ledger,
         clock = { BASE + testScheduler.currentTime },
         writes = SharedWrites.ANYWHERE,
+        writeBytes = { channel, buffer -> if (failWrites) throw IOException("disk full") else SidecarFile.writeFully(channel, buffer) },
     )
 
     private fun audio(title: String = "Salt Road", artist: String? = "Mira Solen"): LocalTrack {
@@ -254,6 +259,56 @@ class LyricsPipelineRetagTest {
 
         assertEquals(lrc, sidecar(track).readText())
         assertEquals(LyricsStatus.NEEDS_CHECK, ledger[track.path]?.status)
+    }
+
+    // Other lyrics over KJB's own: never without a .lrc
+
+    @Test
+    fun `picking other lyrics whose write fails keeps the old lrc and the ledger as they were`() = runTest {
+        val pipeline = pipeline()
+        val track = audio()
+        val lrc = pipeline.withLyrics(track)
+        pipeline.retagged(track.copy(title = "Salt Roads"), namesChanged = true)
+        val waiting = ledger[track.path]
+        client.onId = { LrclibResult.Found(listOf(record(77, track = "Salt Roads", synced = otherSynced))) }
+        failWrites = true
+
+        assertEquals(Checked.NotSaved, pipeline.choose(track.path, 77))
+
+        assertTrue("the old lrc is gone", sidecar(track).isFile)
+        assertEquals(lrc, sidecar(track).readText())
+        assertEquals(waiting, ledger[track.path])
+        assertEquals(listOf("Salt Road.lrc", "Salt Road.mp3"), folder.root.list().orEmpty().sorted())
+    }
+
+    @Test
+    fun `other lyrics picked are the user's, and leave no temp file`() = runTest {
+        val pipeline = pipeline()
+        val track = audio()
+        pipeline.withLyrics(track)
+        pipeline.retagged(track.copy(title = "Salt Roads"), namesChanged = true)
+        client.onId = { LrclibResult.Found(listOf(record(77, track = "Salt Roads", synced = otherSynced))) }
+
+        assertEquals(Checked.Done(LyricsStatus.SYNCED), pipeline.choose(track.path, 77))
+
+        val entry = ledger[track.path]
+        assertTrue(entry?.mine == true)
+        assertTrue(entry?.removable == true)
+        assertEquals(listOf("Salt Road.lrc", "Salt Road.mp3"), folder.root.list().orEmpty().sorted())
+    }
+
+    @Test
+    fun `a temp file left by a replace the app's death cut short is tidied at the next start`() = runTest {
+        val pipeline = pipeline()
+        val track = audio()
+        val lrc = pipeline.withLyrics(track)
+        pipeline.retagged(track.copy(title = "Salt Roads"), namesChanged = true)
+        val left = File(folder.root, ".Salt Road.lrc.kjb-tmp").apply { writeText("[00:01.00]w01") }
+
+        pipeline.finishInterrupted()
+
+        assertFalse(left.exists())
+        assertEquals(lrc, sidecar(track).readText())
     }
 
     private companion object {

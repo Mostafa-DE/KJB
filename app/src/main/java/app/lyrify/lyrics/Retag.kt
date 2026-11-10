@@ -3,6 +3,15 @@ package app.lyrify.lyrics
 import app.lyrify.data.LedgerEntry
 import app.lyrify.data.LyricsStatus
 import app.lyrify.data.Retry
+import app.lyrify.data.SharedWrite
+import app.lyrify.data.SharedWrites
+import java.io.IOException
+import java.nio.ByteBuffer
+import java.nio.channels.FileChannel
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.StandardCopyOption
+import java.nio.file.StandardOpenOption
 
 // After Covers & tags changed a song's tags (covers-tags-spec, "Effects on the rest of KJB"): what its lyrics get.
 
@@ -65,5 +74,48 @@ fun LedgerEntry.retagged(track: LocalTrack, now: Long): LedgerEntry = copy(
  * user's choice ([LedgerEntry.mine]): never asked about again.
  */
 fun LedgerEntry.kept(now: Long): LedgerEntry = copy(status = writtenStatus(), candidates = emptyList(), nextAttemptAt = null, updatedAt = now, mine = true)
+
+/**
+ * Replaces a retag check's own `.lrc` with the lyrics the user picked, never leaving the song without one: the new bytes
+ * go to a temp file in the same folder ([temp]), synced, then renamed over the old `.lrc` in one step. When any of that
+ * fails the old `.lrc` stays as it was. A temp file the app's death left behind goes at the next start ([tidy]). Small
+ * and local on purpose: the sync editor's Save follows the same rule, and the two become one writer later.
+ */
+internal object RetagLrc {
+    /** Where a replace of [sidecar] writes first: hidden, next to it, so the rename stays on one file system. */
+    fun temp(sidecar: Path): Path = sidecar.resolveSibling(".${sidecar.fileName}$TEMP")
+
+    /** [sidecar] holds [bytes] now (true), or is exactly as it was (false). */
+    fun replace(sidecar: Path, bytes: ByteArray, writes: SharedWrites, log: (String) -> Unit, write: (FileChannel, ByteBuffer) -> Unit): Boolean {
+        if (!writes.allows(SharedWrite.LRC_REPLACE, sidecar.toString())) return false
+        val temp = temp(sidecar)
+        return try {
+            Files.deleteIfExists(temp)
+            FileChannel.open(temp, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE).use { channel ->
+                write(channel, ByteBuffer.wrap(bytes))
+                channel.force(true)
+            }
+            Files.move(temp, sidecar, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+            true
+        } catch (e: IOException) {
+            log("lyrics: replace not made (${e.javaClass.simpleName}), the old file stays")
+            tidy(sidecar, writes, log)
+            false
+        }
+    }
+
+    /** Deletes the temp file a replace of [sidecar] left, if any. */
+    fun tidy(sidecar: Path, writes: SharedWrites, log: (String) -> Unit) {
+        val temp = temp(sidecar)
+        if (!writes.allows(SharedWrite.LRC_DELETE, temp.toString())) return
+        try {
+            Files.deleteIfExists(temp)
+        } catch (e: IOException) {
+            log("lyrics: temp file not removed (${e.javaClass.simpleName})")
+        }
+    }
+
+    private const val TEMP = ".kjb-tmp"
+}
 
 private const val MS_PER_SECOND: Double = 1_000.0

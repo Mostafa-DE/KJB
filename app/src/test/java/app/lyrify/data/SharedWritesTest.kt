@@ -369,6 +369,7 @@ class SharedWritesTest {
             "backup/M3u.kt",
             "dupes/SongTrash.kt",
             "lyrics/LyricsPipeline.kt",
+            "lyrics/Retag.kt",
             "tags/SafeWriter.kt",
             "tags/WriteJournal.kt",
             "tones/ToneFiles.kt",
