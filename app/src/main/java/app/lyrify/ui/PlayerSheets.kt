@@ -885,3 +885,11 @@ private fun PlayerTone(ui: PlayerUi, onClose: () -> Unit) {
         scope.launch { toasts.say(resources, R.string.tones_saved_as, tone.name) }
     }, onClose = onClose)
 }
+
+/** Whether the song playing has its part repeating: the menu says "Stop the part" then. */
+@Composable
+internal fun rememberPartOn(ui: PlayerUi): Boolean {
+    val context = LocalContext.current
+    val extras = remember(context) { PlayerExtras.of(context) }
+    return partShown(extras.state.collectAsStateWithLifecycle().value.part, ui.path())
+}

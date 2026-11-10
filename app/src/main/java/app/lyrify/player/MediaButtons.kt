@@ -6,6 +6,7 @@ import android.os.Bundle
 import android.view.KeyEvent
 import androidx.annotation.OptIn
 import androidx.annotation.StringRes
+import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.common.util.Util
 import androidx.media3.session.CommandButton
@@ -123,17 +124,48 @@ fun notificationButtons(choice: NotificationButtons, favourite: Boolean, shuffle
 }
 
 /**
- * The headset buttons and the notification's extra buttons in the service. Presses from headsets and Bluetooth go
- * through the [PressCounter] ("Headset buttons"); with nothing loaded (KJB was closed) they go to the session, which
- * resumes the last queue. The notification's own taps on Android 11 and 12 are not presses and go to the session too.
- * The extra buttons follow the setting, the song playing, Shuffle and Repeat.
+ * Headset presses on a session's player: media button events through the [PressCounter] while [enabled] ("Headset
+ * buttons"). With nothing loaded (KJB was closed) a press goes to the session, which resumes the last queue; the
+ * notification's own taps on Android 11 and 12 are not presses and go to the session too. Main thread.
  */
+@OptIn(UnstableApi::class)
+class HeadsetButtons(scope: CoroutineScope, private val enabled: () -> Boolean) {
+    private var player: Player? = null
+    private val counter = PressCounter(scope) { press ->
+        val on = player ?: return@PressCounter
+        when (press) {
+            Press.PLAY_PAUSE -> Util.handlePlayPauseButtonAction(on)
+            Press.NEXT -> on.seekToNext()
+            Press.PREVIOUS -> on.seekToPrevious()
+        }
+    }
+
+    /** [MediaSession.Callback.onMediaButtonEvent]: true when the press was taken. */
+    fun onMediaButton(session: MediaSession, controller: MediaSession.ControllerInfo, intent: Intent): Boolean {
+        if (session.isMediaNotificationController(controller)) return false
+        val event = keyEvent(intent) ?: return false
+        val enabled = enabled()
+        if (enabled && session.player.mediaItemCount == 0) return false
+        player = session.player
+        return counter.onKey(event.keyCode, event.action == KeyEvent.ACTION_DOWN, event.repeatCount, enabled)
+    }
+
+    private fun keyEvent(intent: Intent): KeyEvent? =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            intent.getParcelableExtra(Intent.EXTRA_KEY_EVENT, KeyEvent::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            intent.getParcelableExtra(Intent.EXTRA_KEY_EVENT)
+        }
+}
+
+/** The headset buttons ([HeadsetButtons]) and the notification's extra buttons, which follow the setting, the song playing, Shuffle and Repeat. */
 @OptIn(UnstableApi::class)
 class ButtonsPart : ServicePart {
     override val commands: List<SessionCommand> = listOf(COMMAND_FAVOURITE, COMMAND_SHUFFLE, COMMAND_REPEAT).map { SessionCommand(it, Bundle.EMPTY) }
 
     private var scope: CoroutineScope? = null
-    private var counter: PressCounter? = null
+    private var headset: HeadsetButtons? = null
     private var core: PlayerCore? = null
     private var favourites: FavouritesPort? = null
     private var favouriteSongs: StateFlow<List<SongRef>> = MutableStateFlow(emptyList())
@@ -145,14 +177,7 @@ class ButtonsPart : ServicePart {
         val favourites = LibraryGraph.favourites(service).also { favourites = it }
         settings = Lyrify.settings(service).settings.stateIn(scope, SharingStarted.Eagerly, Settings())
         favouriteSongs = favourites.songs.stateIn(scope, SharingStarted.Eagerly, emptyList())
-        counter = PressCounter(scope) { press ->
-            val player = session.player
-            when (press) {
-                Press.PLAY_PAUSE -> Util.handlePlayPauseButtonAction(player)
-                Press.NEXT -> player.seekToNext()
-                Press.PREVIOUS -> player.seekToPrevious()
-            }
-        }
+        headset = HeadsetButtons(scope) { settings.value.playback.headsetButtons }
         scope.launch {
             combine(settings.map { it.advanced.notificationButtons }.distinctUntilChanged(), favouriteSongs, core.book, core.repeat) { choice, favourite, book, repeat ->
                 val path = book.current?.current?.song?.path
@@ -174,7 +199,7 @@ class ButtonsPart : ServicePart {
     override fun stop() {
         scope?.cancel()
         scope = null
-        counter = null
+        headset = null
     }
 
     override fun onCommand(command: SessionCommand, args: Bundle): SessionResult? {
@@ -192,19 +217,6 @@ class ButtonsPart : ServicePart {
         return SessionResult(SessionResult.RESULT_SUCCESS)
     }
 
-    override fun onMediaButton(session: MediaSession, controller: MediaSession.ControllerInfo, intent: Intent): Boolean {
-        if (session.isMediaNotificationController(controller)) return false
-        val event = keyEvent(intent) ?: return false
-        val enabled = settings.value.playback.headsetButtons
-        if (enabled && session.player.mediaItemCount == 0) return false
-        return counter?.onKey(event.keyCode, event.action == KeyEvent.ACTION_DOWN, event.repeatCount, enabled) ?: false
-    }
-
-    private fun keyEvent(intent: Intent): KeyEvent? =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            intent.getParcelableExtra(Intent.EXTRA_KEY_EVENT, KeyEvent::class.java)
-        } else {
-            @Suppress("DEPRECATION")
-            intent.getParcelableExtra(Intent.EXTRA_KEY_EVENT)
-        }
+    override fun onMediaButton(session: MediaSession, controller: MediaSession.ControllerInfo, intent: Intent): Boolean =
+        headset?.onMediaButton(session, controller, intent) ?: false
 }

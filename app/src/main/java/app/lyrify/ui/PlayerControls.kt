@@ -63,7 +63,7 @@ import kotlinx.coroutines.launch
 
 /** The progress bar: a 6 dp track in a 48 dp touch area, a tap or a drag seeks (on release), and the times under it. */
 @Composable
-internal fun ProgressBar(ui: PlayerUi, onSeek: (Long) -> Unit) {
+internal fun ProgressBar(ui: PlayerUi, onSeek: (Long) -> Unit, marks: @Composable () -> Unit = {}) {
     val now = rememberClock(ui.playing, everyMs = 500)
     val position = ui.positionAt(now)
     val duration = ui.durationMs
@@ -103,6 +103,8 @@ internal fun ProgressBar(ui: PlayerUi, onSeek: (Long) -> Unit) {
     ) {
         Box(Modifier.fillMaxWidth().height(6.dp).clip(CircleShape).background(highlight.copy(alpha = 0.16f)))
         Box(Modifier.fillMaxWidth(share).height(6.dp).clip(CircleShape).background(highlight))
+        // P2: the bookmarks' ticks and the part repeating.
+        marks()
         BoxWithConstraints(Modifier.fillMaxWidth()) {
             Box(Modifier.offset(x = maxWidth * share - 8.dp).size(if (dragging != null) 20.dp else 16.dp).clip(CircleShape).background(highlight))
         }
@@ -208,8 +210,8 @@ internal fun SecondaryRow(ui: PlayerUi, connection: PlayerConnection, onQueue: (
                 if (undo) favourites.setSongs(song, favourite)
             }
         }
-        // The sleep timer: P2 adds its sheet and its chip.
-        RoundButton(R.drawable.ic_snooze, stringResource(R.string.player_sleep_off)) { onRoute(PlayerRoute.SLEEP) }
+        // The sleep timer (P2): its button, or its chip while it runs.
+        SleepButton(ui) { onRoute(PlayerRoute.SLEEP) }
         RoundButton(R.drawable.ic_queue_music, stringResource(R.string.player_queue), onClick = onQueue)
         val repeat = ui.repeat
         ToggleButton(if (repeat == Repeat.ONE) R.drawable.ic_repeat_one else R.drawable.ic_repeat, stringResource(repeatLabel(repeat)), on = repeat != Repeat.OFF) {

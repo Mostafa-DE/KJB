@@ -212,6 +212,7 @@ fun rememberOwnNow(): OwnNowSource {
     val settings by store.settings.collectAsStateWithLifecycle(initialValue = Settings())
     val ui by connection.ui.collectAsStateWithLifecycle()
     val now = rememberClock(ui?.playing == true)
+    ExtrasToasts()
     val toasts = LocalToasts.current
     val resources = LocalResources.current
     val shown by rememberUpdatedState(settings.playerUi.recentQueueHintShown)
@@ -260,9 +261,10 @@ fun PlayerView() {
     val toasts = LocalToasts.current
     val resources = LocalResources.current
     val close = { nav.close(FullScreen.Player) }
+    val extras = rememberPlayerExtras()
     val route: (PlayerRoute) -> Unit = { route ->
         // Declared now, filled by its milestone; a debug build says which.
-        if (BuildConfig.DEBUG) scope.launch { toasts.show(Toast("Coming in ${route.milestone}")) }
+        if (!extras.route(route, ui) && BuildConfig.DEBUG) scope.launch { toasts.show(Toast("Coming in ${route.milestone}")) }
     }
     var queueSheet by remember { mutableStateOf(false) }
 
@@ -293,9 +295,10 @@ fun PlayerView() {
                     modifier = Modifier.weight(1f),
                 )
                 TitleAndLinks(ui, settings.library)
-                PlayerChips(ui)
+                PlayerChips(ui, extras)
                 Spacer(Modifier.height(LINKS_GAP))
-                ProgressBar(ui, onSeek = connection::seekTo)
+                PartHandles(ui, extras)
+                ProgressBar(ui, onSeek = connection::seekTo, marks = { BarMarks(ui) })
                 MainRow(ui, settings, connection)
                 SecondaryRow(ui, connection, onQueue = { queueSheet = true }, onRoute = route)
             }
@@ -303,6 +306,7 @@ fun PlayerView() {
         }
     }
     if (queueSheet) QueueSheet(onDismiss = { queueSheet = false })
+    PlayerExtrasHost(extras, ui)
 }
 
 /** The cover, blurred and faded, behind the top of the player. */
@@ -355,7 +359,7 @@ private fun PlayerTopBar(ui: PlayerUi, onClose: () -> Unit, onRoute: (PlayerRout
                 song?.let(::albumKey)?.let { key -> MenuRow(stringResource(R.string.player_menu_album), R.drawable.ic_album, pick { nav.open(Page.Album(key)) }) }
                 song?.artist?.takeIf(String::isNotBlank)?.let { artist -> MenuRow(stringResource(R.string.player_menu_artist), R.drawable.ic_person, pick { nav.open(Page.Artist(artist)) }) }
                 MenuRow(stringResource(R.string.player_menu_speed), R.drawable.ic_speed, pick { onRoute(PlayerRoute.SPEED) })
-                MenuRow(stringResource(R.string.player_menu_ab), R.drawable.ic_repeat, pick { onRoute(PlayerRoute.REPEAT_PART) })
+                MenuRow(stringResource(if (rememberPartOn(ui)) R.string.part_stop else R.string.player_menu_ab), R.drawable.ic_repeat, pick { onRoute(PlayerRoute.REPEAT_PART) })
                 MenuRow(stringResource(R.string.player_menu_bookmark), R.drawable.ic_bookmark_add, pick { onRoute(PlayerRoute.BOOKMARK) })
                 MenuRow(stringResource(R.string.player_menu_play_on), R.drawable.ic_speaker, pick { onRoute(PlayerRoute.PLAY_ON) })
                 // The phone's own sound effects panel, until A1's equalizer takes this route.
@@ -654,10 +658,9 @@ private fun LinkText(text: String, onClick: (() -> Unit)?, modifier: Modifier) {
     }
 }
 
-/** The chips row (speed, A-B) while one is active: P2 fills it; it keeps [CHIPS_GAP] above the progress bar's touch area. */
+/** The chips row (speed, A-B) while one is active (P2); it keeps [CHIPS_GAP] above the progress bar's touch area. */
 @Composable
-@Suppress("UNUSED_PARAMETER") // Until P2: no chips.
-private fun PlayerChips(ui: PlayerUi) = Unit
+private fun PlayerChips(ui: PlayerUi, extras: PlayerExtrasUi) = ExtrasChips(ui, extras)
 
 private const val FLIP_MS = 550
 private const val FADE_MS = 220
