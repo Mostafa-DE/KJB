@@ -33,6 +33,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.io.IOException
 import java.security.MessageDigest
 
 // Covers & tags (covers-tags-spec.md): the check, the review (Ready, Pick one, Done, Skipped), apply and Undo through
@@ -739,25 +740,36 @@ class CoversTags(
 
     /**
      * [memory] with a Done album for each Covers & tags History entry newer than [CoversTagsMemory.historySeen] that has
-     * none: the app died after the files were written and before `covers-tags.json` was. Blocking.
+     * none: the app died after the files were written and before `covers-tags.json` was. One Done album per album: the
+     * newest entry's, with its own Undo, never in place of a newer record kept. A file from before historySeen was kept
+     * rebuilds nothing (what it settled is unknown): from then on only entries newer than the newest one now count.
+     * History that can't be read rebuilds nothing, and decides nothing. Blocking.
      */
     private fun withLostDone(memory: CoversTagsMemory): CoversTagsMemory {
-        val lost = undo.memory().entries.filter { entry ->
-            entry.kind == EditKind.COVERS_TAGS && entry.id > memory.historySeen && entry.songs.any { !it.undone } && memory.albums.none { it.entryId == entry.id }
+        val entries = try {
+            undo.whole().entries
+        } catch (e: IOException) {
+            log("tags: History could not be read (${e.javaClass.simpleName}), no Done album rebuilt")
+            return memory
+        }
+        val seen = memory.historySeen ?: return memory.copy(historySeen = entries.maxOfOrNull { it.id } ?: 0)
+        val lost = entries.filter { entry ->
+            entry.kind == EditKind.COVERS_TAGS && entry.id > seen && entry.songs.any { !it.undone } && memory.albums.none { it.entryId == entry.id }
         }
         if (lost.isEmpty()) return memory
-        log("tags: ${lost.size} Done albums rebuilt from History")
         val rebuilt = lost.map { entry ->
             val paths = entry.songs.map { it.path }
             AlbumRecord(albumId(paths), Settled.DONE, entry.label, songs = paths.mapNotNull(files), at = entry.at, entryId = entry.id, changed = entry.songs.size)
-        }
-        return memory.copy(albums = memory.albums.filterNot { record -> rebuilt.any { it.id == record.id } } + rebuilt, historySeen = lost.maxOf { it.id })
+        }.groupBy { it.id }.values.map { records -> records.maxBy { it.at } }
+            .filter { record -> memory.albums.none { it.id == record.id && it.at >= record.at } }
+        log("tags: ${rebuilt.size} Done albums rebuilt from History")
+        return memory.copy(albums = memory.albums.filterNot { record -> rebuilt.any { it.id == record.id } } + rebuilt, historySeen = maxOf(seen, lost.maxOf { it.id }))
     }
 
     /** [record] replaces the album's own, and the album waits no more. */
     private suspend fun settle(record: AlbumRecord) {
         commit { memory ->
-            memory.copy(albums = memory.albums.filterNot { it.id == record.id } + record, historySeen = maxOf(memory.historySeen, record.entryId ?: 0))
+            memory.copy(albums = memory.albums.filterNot { it.id == record.id } + record, historySeen = maxOf(memory.historySeen ?: 0, record.entryId ?: 0))
         }
         _state.update { state -> state.copy(waiting = state.waiting.filterNot { it.album.id == record.id }) }
     }

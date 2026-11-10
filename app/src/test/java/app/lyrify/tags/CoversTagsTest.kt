@@ -716,6 +716,76 @@ class CoversTagsTest {
         assertEquals(1, source.checked.size)
     }
 
+    /** A second Covers & tags History entry for the album of [first], newer by [later] ms, with the same songs. */
+    private fun again(first: HistoryEntry, later: Long): HistoryEntry {
+        val entry = EntryInfo(first.id + later, first.kind, first.label, first.at + later)
+        first.songs.forEach { assertTrue(rig.undo.record(entry, it, null)) }
+        return rig.undo.memory().entries.single { it.id == entry.id }
+    }
+
+    @Test
+    fun `an old covers-tags file with no historySeen gains no Done rows from History`() = runTest {
+        library = lanternsSongs()
+        answers("Lanterns" to lanterns)
+        val flow = flow()
+        val waiting = checked(flow).waiting("Lanterns")
+        flow.apply(waiting.album.id, waiting.match())
+        advanceUntilIdle()
+        val entry = rig.undo.memory().entries.single()
+        // As a file from before historySeen was kept: no such key, and no album the History entry is missing from it.
+        storeFile.writeText("""{"version":1,"checkedOnce":true,"noted":true,"albums":[]}""")
+
+        val reloaded = flow()
+        advanceUntilIdle()
+
+        assertEquals(emptyList<AlbumRecord>(), reloaded.state.value.done)
+        // From now on only History entries newer than the newest one now count.
+        assertEquals(entry.id, CoversTagsStore(storeFile).load().historySeen)
+        val later = flow()
+        advanceUntilIdle()
+        assertEquals(emptyList<AlbumRecord>(), later.state.value.done)
+    }
+
+    @Test
+    fun `two History entries for one album give one Done row, the newer one, with its Undo`() = runTest {
+        library = lanternsSongs()
+        answers("Lanterns" to lanterns)
+        val flow = flow()
+        val waiting = checked(flow).waiting("Lanterns")
+        flow.apply(waiting.album.id, waiting.match())
+        advanceUntilIdle()
+        val newer = again(rig.undo.memory().entries.single(), later = 60_000)
+        // Neither album record kept, nothing settled seen: both entries look lost.
+        CoversTagsStore(storeFile).save(CoversTagsStore(storeFile).load().copy(albums = emptyList(), historySeen = 0))
+
+        val reloaded = flow()
+        advanceUntilIdle()
+
+        assertEquals(listOf(newer.id), reloaded.state.value.done.map { it.entryId })
+    }
+
+    @Test
+    fun `a Done row kept for an album is never replaced by an older History entry`() = runTest {
+        library = lanternsSongs()
+        answers("Lanterns" to lanterns)
+        val flow = flow()
+        val waiting = checked(flow).waiting("Lanterns")
+        flow.apply(waiting.album.id, waiting.match())
+        advanceUntilIdle()
+        val older = rig.undo.memory().entries.single()
+        val newer = again(older, later = 60_000)
+        // The album's record is the newer entry's; the older entry has none, and nothing settled is seen.
+        val stored = CoversTagsStore(storeFile).load()
+        val record = stored.albums.single().copy(entryId = newer.id, at = newer.at)
+        CoversTagsStore(storeFile).save(stored.copy(albums = listOf(record), historySeen = 0))
+
+        val reloaded = flow()
+        advanceUntilIdle()
+
+        assertEquals(listOf(newer.id), reloaded.state.value.done.map { it.entryId })
+    }
+
+    // The song sheet
     // The song sheet
 
     @Test
