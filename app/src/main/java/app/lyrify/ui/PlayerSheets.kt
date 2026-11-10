@@ -34,7 +34,6 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
@@ -65,9 +64,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.lyrify.R
-import app.lyrify.data.LedgerEntry
-import app.lyrify.data.LyricsStatus
 import app.lyrify.library.SongRef
+import app.lyrify.library.displayTitle
 import app.lyrify.player.AbPart
 import app.lyrify.player.Bookmark
 import app.lyrify.player.ExtrasSaid
@@ -92,8 +90,7 @@ import app.lyrify.player.sleepAfter
 import app.lyrify.player.sleepFor
 import app.lyrify.player.sleepLeftMs
 import app.lyrify.player.toSpot
-import app.lyrify.tones.ToneFiles
-import app.lyrify.tones.TonePlayer
+import app.lyrify.settings.LibrarySettings
 import java.math.BigDecimal
 import java.math.RoundingMode
 import kotlin.math.roundToInt
@@ -101,8 +98,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
 // The player's extras (milestone P2), their sheets and actions: the sleep timer's sheets, the Speed sheet, Repeat a
-// part on and off, the bookmark dialog and the song sheet's bookmarks list, Play on, Make a tone from the player, and
-// the toasts the service sends. What shows on the player itself is in PlayerChips.kt; player/PlaybackExtras.kt and
+// part on and off, the bookmark dialog and the song sheet's bookmarks list, Play on, the player's Add to, Song info and
+// Make a tone (the library's sheets), and the toasts the service sends. What shows on the player itself is in PlayerChips.kt; player/PlaybackExtras.kt and
 // player/Sleep.kt hold the rules and the state.
 
 // Rules, as pure functions
@@ -139,15 +136,17 @@ internal fun PlayerUi.path(): String = song?.path ?: item.song.path
 // What the player opens
 
 /** The extras' sheets and dialogs: one at a time. */
-enum class ExtrasSheet { SLEEP, SLEEP_MINUTES, SLEEP_SONGS, SPEED, BOOKMARK, TONE }
+enum class ExtrasSheet { SLEEP, SLEEP_MINUTES, SLEEP_SONGS, SPEED, BOOKMARK }
 
 /**
- * The player's extras on screen: which sheet is open, and the actions of P2's routes ([route]). The state lives in
- * [PlayerExtras]; the service applies it. Main thread.
+ * The player's extras on screen: which sheet is open, and the actions of P2's routes ([route]). Add to, Song info and
+ * Make a tone open the library's sheets ([songSheets], L1's one door). The state lives in [PlayerExtras]; the service
+ * applies it. Main thread.
  */
 @Stable
 class PlayerExtrasUi internal constructor(
     val extras: PlayerExtras,
+    val songSheets: SongSheets,
     private val connection: PlayerConnection,
     private val context: Context,
     private val toasts: ToastState,
@@ -160,12 +159,15 @@ class PlayerExtrasUi internal constructor(
     var bookmarkAt: Long by mutableLongStateOf(0)
         private set
 
-    /** P2's routes of the player's "⋯" and the sleep button; false for a route it does not fill. */
-    fun route(route: PlayerRoute, ui: PlayerUi): Boolean {
+    /** P2's routes of the player's "⋯" and the sleep button; false for a route it does not fill. [names]: "Show file names". */
+    fun route(route: PlayerRoute, ui: PlayerUi, names: LibrarySettings): Boolean {
+        val song = ui.song?.ref ?: ui.item.song
         when (route) {
+            PlayerRoute.ADD_TO -> songSheets.show(OpenSheet.AddTo(listOf(song), null, ui.song?.let { displayTitle(it, names) } ?: song.path.substringAfterLast('/')))
+            PlayerRoute.SONG_INFO -> songSheets.show(OpenSheet.Info(song))
+            PlayerRoute.MAKE_TONE -> songSheets.show(OpenSheet.MakeTone(song))
             PlayerRoute.SPEED -> open = ExtrasSheet.SPEED
             PlayerRoute.SLEEP -> open = ExtrasSheet.SLEEP
-            PlayerRoute.MAKE_TONE -> if (ui.song != null) open = ExtrasSheet.TONE
             PlayerRoute.REPEAT_PART -> togglePart(ui)
             PlayerRoute.PLAY_ON -> if (!playOn(context)) say(Toast(resources.getString(R.string.play_on_none), R.drawable.ic_speaker))
             PlayerRoute.BOOKMARK -> {
@@ -233,12 +235,13 @@ fun rememberPlayerExtras(): PlayerExtrasUi {
     val toasts = LocalToasts.current
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
-    return remember(context, toasts, resources, scope) {
-        PlayerExtrasUi(PlayerExtras.of(context), PlayerGraph.connection(context), context, toasts, resources, scope)
+    val songSheets = rememberSongSheets()
+    return remember(context, toasts, resources, scope, songSheets) {
+        PlayerExtrasUi(PlayerExtras.of(context), songSheets, PlayerGraph.connection(context), context, toasts, resources, scope)
     }
 }
 
-/** The sheet or dialog [extras] has open, over the player. */
+/** The sheet or dialog [extras] has open over the player, P2's or the library's. */
 @Composable
 fun PlayerExtrasHost(extras: PlayerExtrasUi, ui: PlayerUi) {
     when (extras.open) {
@@ -247,9 +250,9 @@ fun PlayerExtrasHost(extras: PlayerExtrasUi, ui: PlayerUi) {
         ExtrasSheet.SLEEP_SONGS -> CustomSleepSheet(extras, ui, songs = true)
         ExtrasSheet.SPEED -> SpeedSheet(extras, ui)
         ExtrasSheet.BOOKMARK -> BookmarkDialog(extras, ui)
-        ExtrasSheet.TONE -> PlayerTone(ui, onClose = extras::close)
         null -> Unit
     }
+    SongSheetsHost(extras.songSheets)
 }
 
 /**
@@ -613,7 +616,7 @@ internal fun jumpTo(context: Context, song: SongRef, positionMs: Long) {
     connection.play()
 }
 
-// The toasts the service sends, Make a tone
+// The toasts the service sends
 
 /** "Resumed at 23:10" with Start over, and the sleep timer's end: shown while the app is in view. */
 @Composable
@@ -642,23 +645,4 @@ private fun startOver(context: Context, path: String) {
     val connection = PlayerGraph.connection(context)
     if (connection.ui.value?.path() == path) connection.seekTo(0)
     PlayerExtras.of(context).change { it.withPlace(path, null) }
-}
-
-/** Make a tone from the player: today's Tone editor with the song playing. */
-@Composable
-private fun PlayerTone(ui: PlayerUi, onClose: () -> Unit) {
-    val song = ui.song ?: return
-    val context = LocalContext.current
-    val toasts = LocalToasts.current
-    val resources = LocalResources.current
-    val scope = rememberCoroutineScope()
-    val files = remember(context) { ToneFiles.of(context.applicationContext) }
-    val player = remember(context, scope) { TonePlayer(context, scope) }
-    DisposableEffect(player) { onDispose { player.stop() } }
-    val entry = LocalLyrics.current.ledger.entries[song.path]
-        ?: LedgerEntry(path = song.path, title = song.title, artist = song.artist, album = song.album, durationMs = song.durationMs, status = LyricsStatus.NOT_FOUND, updatedAt = 0)
-    ToneEditor(song = entry, files = files, player = player, onSaved = { tone ->
-        onClose()
-        scope.launch { toasts.say(resources, R.string.tones_saved_as, tone.name) }
-    }, onClose = onClose)
 }

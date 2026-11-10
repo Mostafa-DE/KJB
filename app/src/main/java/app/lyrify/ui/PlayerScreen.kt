@@ -264,7 +264,7 @@ fun PlayerView() {
     val extras = rememberPlayerExtras()
     val route: (PlayerRoute) -> Unit = { route ->
         // Declared now, filled by its milestone; a debug build says which.
-        if (!extras.route(route, ui) && BuildConfig.DEBUG) scope.launch { toasts.show(Toast("Coming in ${route.milestone}")) }
+        if (!extras.route(route, ui, settings.library) && BuildConfig.DEBUG) scope.launch { toasts.show(Toast("Coming in ${route.milestone}")) }
     }
     var queueSheet by remember { mutableStateOf(false) }
 

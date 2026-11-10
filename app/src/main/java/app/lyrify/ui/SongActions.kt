@@ -328,7 +328,7 @@ internal object SongSheetSlots {
     val removeFromQueue: ((queueId: String, position: Int) -> Undo?)? = null
 
     /** P2: the song's bookmarks under the rows, each jumping there; [close] closes the sheet. */
-    val bookmarks: (@Composable (song: SongRef, close: () -> Unit) -> Unit)? = null
+    val bookmarks: (@Composable (song: SongRef, close: () -> Unit) -> Unit)? = { song, close -> SongBookmarks(song, close) }
 
     /** T2: "Covers & tags", which opens the review of the song's album. */
     val coversTags: ((song: Song, nav: Navigator) -> Unit)? = null
