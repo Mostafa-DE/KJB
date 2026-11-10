@@ -1,5 +1,14 @@
 package app.lyrify.ui
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.animation.core.VisibilityThreshold
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.animation.core.rememberTransition
 import androidx.compose.foundation.layout.height
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.material3.minimumInteractiveComponentSize
@@ -16,8 +25,6 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.scaleIn
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.ScrollState
@@ -316,8 +323,8 @@ fun HelpSheet(title: String, vararg text: String, action: String? = null, onActi
  * KJB's sheet: a floating card 8 dp from the edges, 32 dp corners all round, its own handle, the scrolling [content],
  * the toast slot, and a pinned [footer] (the action row stays in view). Drag, scrim, back and the window stay
  * ModalBottomSheet's. [padding] is the content's side margin; [scroll] where the content starts (the run log: its end).
+ * Inside a [SheetFlow] it is only that flow's current step, in the flow's own window.
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LyrifySheet(
     onDismiss: () -> Unit,
@@ -327,6 +334,42 @@ fun LyrifySheet(
     scroll: ScrollState = rememberScrollState(),
     content: @Composable ColumnScope.() -> Unit,
 ) {
+    if (LocalSheetFlow.current) {
+        Column { SheetBody(footer, spacing, padding, scroll, content) }
+    } else {
+        SheetWindow(onDismiss) { SheetBody(footer, spacing, padding, scroll, content) }
+    }
+}
+
+/**
+ * Sheets that lead to one another (a song's sheet, then Add to): one window whose card changes [step] as one smooth
+ * change, the old step fading out before the new one fades in while the card takes its new height. Each step draws
+ * its LyrifySheet as usual; null closes the window. [onDismiss]: the sheet dragged, tapped or backed away.
+ */
+@Composable
+fun <K : Any> SheetFlow(step: K?, onDismiss: () -> Unit, content: @Composable (K) -> Unit) {
+    // Closed, the window leaves at once and its exit ([SheetWindowExit]) carries it away.
+    step ?: return
+    val reduced = LocalReducedMotion.current
+    SheetWindow(onDismiss) {
+        AnimatedContent(
+            targetState = step,
+            modifier = Modifier.weight(1f, fill = false),
+            transitionSpec = { fadeThrough(reduced) using SizeTransform { _, _ -> spring(dampingRatio = 1f, stiffness = 300f, visibilityThreshold = IntSize.VisibilityThreshold) } },
+            label = "sheet step",
+        ) { at ->
+            CompositionLocalProvider(LocalSheetFlow provides true) { content(at) }
+        }
+    }
+}
+
+/** Whether a LyrifySheet is a step of a [SheetFlow], drawn in the flow's window. */
+private val LocalSheetFlow = staticCompositionLocalOf { false }
+
+/** A sheet's window and card: the scrim, the card floating 8 dp from the edges with its handle, short of the status bar. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun SheetWindow(onDismiss: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
     val chrome = LocalChromeColors.current
     val colors = MaterialTheme.colorScheme
     // A tall sheet stops short of the status bar.
@@ -342,6 +385,7 @@ fun LyrifySheet(
         dragHandle = null,
         contentWindowInsets = { WindowInsets(0) },
     ) {
+        SheetWindowExit()
         Column(
             Modifier
                 .layout { measurable, constraints ->
@@ -365,23 +409,41 @@ fun LyrifySheet(
                     .size(36.dp, 4.dp)
                     .background(colors.outline.copy(alpha = 0.5f), CircleShape),
             )
-            Column(
-                Modifier.weight(1f, fill = false).verticalScroll(scroll).padding(start = padding, end = padding, top = 2.dp, bottom = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(spacing),
-                content = content,
-            )
-            ToastSlot(Modifier.padding(horizontal = 12.dp), padding = PaddingValues(bottom = 8.dp))
-            if (footer != null) {
-                Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp), content = footer)
-            }
+            content()
         }
     }
+}
+
+/** A sheet's scrolling content, its toast slot and its pinned footer. */
+@Composable
+private fun ColumnScope.SheetBody(footer: (@Composable ColumnScope.() -> Unit)?, spacing: Dp, padding: Dp, scroll: ScrollState, content: @Composable ColumnScope.() -> Unit) {
+    Column(
+        Modifier.weight(1f, fill = false).verticalScroll(scroll).padding(start = padding, end = padding, top = 2.dp, bottom = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(spacing),
+        content = content,
+    )
+    ToastSlot(Modifier.padding(horizontal = 12.dp), padding = PaddingValues(bottom = 8.dp))
+    if (footer != null) {
+        Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp), content = footer)
+    }
+}
+
+/**
+ * Inside a sheet's content: its window's exit ([R.style.SheetWindow]). A sheet its own button closes leaves the
+ * composition at once, so the window slides a little and fades away with its scrim instead of vanishing.
+ */
+@Composable
+fun SheetWindowExit() {
+    val view = LocalView.current
+    SideEffect { (view.parent as? DialogWindowProvider)?.window?.setWindowAnimations(R.style.SheetWindow) }
 }
 
 /**
  * The confirm dialog: a card with an icon tile, the title (a heading), the text, maybe a [body] (a field), and two equal
  * buttons, Cancel at the start and the confirm at the end ([destructive]: red; else ink). The buttons stack when the
- * phone's text is large, Cancel still first ([DIALOG_BUTTONS]). Over a brand-tinted scrim; a tap on it or back cancels.
+ * phone's text is large, Cancel still first ([DIALOG_BUTTONS]). Over a brand-tinted scrim that fades in with it; a tap
+ * on it or back cancels. It never leaves at once: the card and the scrim fade away first, and the action runs once they
+ * have (decision D5, [DialogExit]).
  */
 @Composable
 fun ConfirmDialog(
@@ -399,19 +461,27 @@ fun ConfirmDialog(
     val chrome = LocalChromeColors.current
     val colors = MaterialTheme.colorScheme
     val reduced = LocalReducedMotion.current
-    val shown = remember { MutableTransitionState(false) }.apply { targetState = true }
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
+    val exit = remember { DialogExit() }
+    val shown = remember { MutableTransitionState(false) }.apply { targetState = !exit.leaving }
+    // The action runs only once the card and the scrim are gone.
+    if (exit.leaving && shown.isIdle && !shown.currentState) LaunchedEffect(Unit) { exit.ended() }
+    val cancel = { exit.leave(onDismiss) }
+    Dialog(onDismissRequest = { cancel() }, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         PlainDialogWindow()
+        val scrim by rememberTransition(shown, label = "scrim").animateFloat(
+            transitionSpec = { tween(if (reduced) Motion.REDUCED_MS else if (targetState) Motion.FADE_IN_MS else Motion.FADE_OUT_MS) },
+            label = "scrim",
+        ) { if (it) 1f else 0f }
         Box(
             contentAlignment = Alignment.Center,
             modifier = Modifier
                 .fillMaxSize()
-                .background(chrome.scrim)
-                .pointerInput(onDismiss) { detectTapGestures { onDismiss() } }
+                .drawBehind { drawRect(chrome.scrim, alpha = chrome.scrim.alpha * scrim) }
+                .pointerInput(Unit) { detectTapGestures { cancel() } }
                 .imePadding()
                 .padding(24.dp),
         ) {
-            AnimatedVisibility(visibleState = shown, enter = if (reduced) fadeIn() else fadeIn(tween(DIALOG_FADE_MS)) + scaleIn(Motion.snappy, initialScale = 0.94f)) {
+            AnimatedVisibility(visibleState = shown, enter = dialogEnter(reduced), exit = dialogExit(reduced)) {
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -439,9 +509,9 @@ fun ConfirmDialog(
                     body?.invoke(this)
                     val button: @Composable (DialogButton, Modifier) -> Unit = { which, at ->
                         when (which) {
-                            DialogButton.DISMISS -> LyrifyButton(dismiss, onDismiss, at.height(48.dp), kind = ButtonKind.SECONDARY)
+                            DialogButton.DISMISS -> LyrifyButton(dismiss, { cancel() }, at.height(48.dp), kind = ButtonKind.SECONDARY)
                             DialogButton.CONFIRM ->
-                                LyrifyButton(confirm, onConfirm, at.height(48.dp), kind = if (destructive) ButtonKind.DANGER else ButtonKind.PRIMARY, enabled = confirmEnabled)
+                                LyrifyButton(confirm, { exit.leave(onConfirm) }, at.height(48.dp), kind = if (destructive) ButtonKind.DANGER else ButtonKind.PRIMARY, enabled = confirmEnabled)
                         }
                     }
                     if (LocalDensity.current.fontScale > STACK_FONT_SCALE) {
@@ -574,13 +644,26 @@ sealed interface EmptyArt {
     data class Icon(@DrawableRes val icon: Int, val tone: Tone? = null) : EmptyArt
 }
 
-/** An empty screen: a fan of three cards, a title, one line, maybe one button. */
+/**
+ * An empty screen: a fan of three cards, a title, one line, maybe one button. It never appears at once: the cards fade
+ * in as they rise 8 dp (motion spec 2.6), the words with them.
+ */
 @Composable
 fun EmptyState(art: EmptyArt, title: String, modifier: Modifier = Modifier, text: String? = null, action: String? = null, onAction: () -> Unit = {}) {
+    val reduced = LocalReducedMotion.current
+    val shown = remember { Animatable(0f) }
+    LaunchedEffect(Unit) { shown.animateTo(1f, tween(if (reduced) Motion.REDUCED_MS else Motion.OPEN_MS, easing = Motion.Rise)) }
+    val rise = with(LocalDensity.current) { EMPTY_RISE.toPx() }
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp),
-        modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 48.dp),
+        modifier = modifier
+            .fillMaxWidth()
+            .graphicsLayer {
+                alpha = shown.value
+                translationY = if (reduced) 0f else rise * (1f - shown.value)
+            }
+            .padding(horizontal = 16.dp, vertical = 48.dp),
     ) {
         CardStack(art)
         // The prototype's .empty: the title 18 dp under the cards, the line 15/22 within about 30 characters.
@@ -757,9 +840,11 @@ private val CardShape = RoundedCornerShape(24.dp)
 private val SheetShape = RoundedCornerShape(32.dp)
 private val DialogShape = RoundedCornerShape(32.dp)
 
+/** How far an empty state rises as it appears. */
+private val EMPTY_RISE = 8.dp
+
 /** A sheet's distance from the screen's sides and bottom. */
 private val SHEET_GAP = 8.dp
-private const val DIALOG_FADE_MS = 150
 
 /** Above this text scale, a dialog's buttons stack. */
 private const val STACK_FONT_SCALE = 1.3f
