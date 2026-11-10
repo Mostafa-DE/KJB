@@ -10,6 +10,8 @@ import app.lyrify.settings.DockTab
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeoutOrNull
@@ -34,8 +36,7 @@ class ChromeTest {
         val second = async { toasts.show(Toast("Shuffle on")) }
         runCurrent()
         assertEquals("Shuffle on", toasts.current?.toast?.text)
-        // The replaced message's caller is done: its Undo went away untapped.
-        assertFalse(first.isActive)
+        // Its Undo went away untapped; its caller hears so at the message's own time (the tests below).
         assertFalse(first.await())
         toasts.current?.dismiss()
         runCurrent()
@@ -56,12 +57,10 @@ class ChromeTest {
         val replaced = toasts.current!!
         val newer = async { toasts.show(Toast("Lyrics saved")) }
         runCurrent()
-        assertEquals(1, ended)
-        assertEquals(false, acted)
         // The replaced pill's own timer, or a tap on its Undo while it fades, arrives late: nothing changes.
         replaced.dismiss(acted = true)
         replaced.dismiss()
-        runCurrent()
+        advanceUntilIdle()
         assertEquals(1, ended)
         assertEquals(false, acted)
         assertEquals("Lyrics saved", toasts.current?.toast?.text)
@@ -76,12 +75,72 @@ class ChromeTest {
         val calls = (1..3).map { n -> async { toasts.show(Toast("Message $n")) } }
         runCurrent()
         assertEquals("Message 3", toasts.current?.toast?.text)
+        // Without an action there is nothing to keep: the replaced callers are done at once.
         assertFalse(calls[0].isActive)
         assertFalse(calls[1].isActive)
         assertTrue(calls[2].isActive)
         toasts.current?.dismiss()
         runCurrent()
         assertNull(toasts.current)
+    }
+
+    // Toasts: what an Undo needs is never let go sooner than its message's own time
+
+    @Test
+    fun `a replaced Undo message lets go of what its Undo needs no sooner than its own time`() = runTest {
+        val toasts = ToastState()
+        var letGo = false
+        var undone = false
+        // As the sync editor's Save: Undo tapped, it is undone; else its backup is deleted.
+        launch {
+            val acted = toasts.show(Toast("Synced lyrics saved", action = "Undo"))
+            undone = acted
+            letGo = !acted
+        }
+        runCurrent()
+        val newer = async { toasts.show(Toast("Shuffle on")) }
+        runCurrent()
+        // Its Undo went away at once, as Snackbar's does; the backup stays until its 6 s are up.
+        assertEquals("Shuffle on", toasts.current?.toast?.text)
+        advanceTimeBy(5_999)
+        assertFalse(letGo)
+        advanceTimeBy(2)
+        assertTrue(letGo)
+        assertFalse(undone)
+        toasts.current?.dismiss()
+        assertFalse(newer.await())
+    }
+
+    @Test
+    fun `an Undo tapped still undoes at once, and one whose time ran out or was swiped away still lets go at once`() = runTest {
+        val toasts = ToastState()
+        val tapped = async { toasts.show(Toast("Synced lyrics saved", action = "Undo")) }
+        runCurrent()
+        toasts.current?.dismiss(acted = true)
+        runCurrent()
+        assertFalse(tapped.isActive)
+        assertTrue(tapped.await())
+        val gone = async { toasts.show(Toast("Synced lyrics saved", action = "Undo")) }
+        runCurrent()
+        toasts.current?.dismiss()
+        runCurrent()
+        assertFalse(gone.isActive)
+        assertFalse(gone.await())
+    }
+
+    @Test
+    fun `a message replaced after its own time was up ends for its caller at once`() = runTest {
+        val toasts = ToastState()
+        val held = async { toasts.show(Toast("Synced lyrics saved", action = "Undo")) }
+        runCurrent()
+        // Held under a finger past its 6 s, then replaced.
+        advanceTimeBy(7_000)
+        val newer = async { toasts.show("Shuffle on") }
+        runCurrent()
+        assertFalse(held.isActive)
+        assertFalse(held.await())
+        toasts.current?.dismiss()
+        assertFalse(newer.await())
     }
 
     @Test

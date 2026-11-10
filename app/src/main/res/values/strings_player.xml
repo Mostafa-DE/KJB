@@ -52,6 +52,7 @@
     <string name="player_flip_hint">Tap the cover for lyrics</string>
     <string name="player_no_artist">No artist</string>
     <string name="player_unknown_album">Unknown album</string>
+    <string name="player_no_album">No album</string>
     <string name="player_not_on_phone">Not on your phone</string>
     <string name="player_play">Play</string>
     <string name="player_pause">Pause</string>

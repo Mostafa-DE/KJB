@@ -1,6 +1,7 @@
 package app.lyrify.ui
 
 import androidx.annotation.DrawableRes
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
@@ -36,6 +37,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.LocalTextStyle
@@ -500,3 +502,15 @@ private val DOT_GAP = 9.dp
 /** The busy bar's segment, a share of its width, and one sweep across. */
 private const val SEGMENT = 0.3f
 private const val SWEEP_MS = 1_400
+
+/**
+ * Play or Pause ([playing]) as one icon that never swaps at once: the new one fades in and grows from 80% as the old
+ * one fades out ([playPauseSwap]). Decorative: its button says what it does.
+ */
+@Composable
+fun PlayPauseIcon(playing: Boolean, tint: Color, modifier: Modifier = Modifier) {
+    val reduced = LocalReducedMotion.current
+    AnimatedContent(playing, modifier, transitionSpec = { playPauseSwap(reduced) }, contentAlignment = Alignment.Center, label = "play pause") { shown ->
+        Icon(painterResource(if (shown) R.drawable.ic_pause_fill else R.drawable.ic_play_arrow_fill), contentDescription = null, tint = tint, modifier = Modifier.fillMaxSize())
+    }
+}

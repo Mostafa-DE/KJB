@@ -10,6 +10,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -24,11 +25,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
@@ -42,18 +44,23 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import app.lyrify.LOG_TAG
 import app.lyrify.R
@@ -61,6 +68,9 @@ import app.lyrify.data.LedgerState
 import app.lyrify.data.LyricsStatus
 import app.lyrify.media.CurrentTrack
 import app.lyrify.media.NowPlayingListener
+import app.lyrify.tags.CoverVersions
+import coil3.imageLoader
+import coil3.request.ImageRequest
 import kotlinx.coroutines.delay
 
 /**
@@ -68,7 +78,7 @@ import kotlinx.coroutines.delay
  * Milestone P1 supplies it ([rememberOwnNow] in PlayerScreen.kt); the bar only shows it.
  */
 @Immutable
-data class OwnNow(val title: String, val artist: String?, val cover: Any?, val playing: Boolean, val progress: Float, val path: String? = null)
+data class OwnNow(val title: String, val artist: String?, val cover: Any?, val playing: Boolean, val progress: Float, val path: String? = null, val album: String? = null)
 
 /** KJB's own player for the Now bar: what is loaded ([now], null when nothing is) and its Play/Pause. */
 @Stable
@@ -235,29 +245,47 @@ fun barPlayPause(bar: NowBarShows, ownPlayPause: () -> Unit, otherPlayback: Othe
 // The bar
 
 /**
- * The Now bar: a glass capsule above the dock with the cover in an orb ringed by the song's progress, the title, the
- * artist (or "In Samsung Music" for another app's song) and Play/Pause. A tap or a swipe up opens the player, or for
- * another app's song the Companion Now screen. Without the other app's session, its Play/Pause is left out.
+ * The Now bar: a capsule above the dock with the cover in an orb ringed by the song's progress, the title, "Artist ·
+ * Album" (each tag's placeholder when it is missing), or "In Samsung Music" for another app's song, and Play/Pause. A
+ * tap or a swipe up opens the player (growing out of the bar), or for another app's song the Companion Now screen.
+ * Without the other app's session, its Play/Pause is left out. It rises in when a song loads and fades away when
+ * nothing is left, keeping its last song while it leaves.
  */
 @Composable
 fun NowBar(shows: NowBarShows, ledger: LedgerState, other: OtherPlayback?, backdrop: GlassBackdrop?, onOpen: () -> Unit, onPlayPause: (() -> Unit)?, modifier: Modifier = Modifier) {
+    val reduced = LocalReducedMotion.current
+    val kept = remember { Kept(shows) }
+    if (shows != NowBarShows.Hidden) kept.value = shows
+    AnimatedVisibility(shows != NowBarShows.Hidden, modifier, enter = barEnter(reduced), exit = barExit(reduced)) {
+        // The gap above the dock goes with the bar, so nothing is left where it was.
+        Box(Modifier.padding(bottom = 8.dp)) { BarFor(kept.value, ledger, other, backdrop, onOpen, onPlayPause) }
+    }
+}
+
+@Composable
+private fun BarFor(shows: NowBarShows, ledger: LedgerState, other: OtherPlayback?, backdrop: GlassBackdrop?, onOpen: () -> Unit, onPlayPause: (() -> Unit)?) {
+    val ink = barInk(MaterialTheme.colorScheme)
     when (shows) {
         NowBarShows.Hidden -> Unit
         is NowBarShows.Own -> {
             val now = shows.now
+            PrewarmCover(now.cover)
+            val meta = metaLine(now.artist, now.album)
+            val artist = meta.artist.text ?: stringResource(R.string.player_no_artist)
+            val album = meta.album.text ?: stringResource(R.string.player_no_album)
             BarRow(
                 cover = now.cover,
                 status = null,
                 ring = now.progress,
                 title = now.title,
-                line = { now.artist?.let { BarLine(it) } },
+                line = { BarLine(metaText(meta, artist, album, ink.line, MaterialTheme.colorScheme.outline)) },
                 playing = now.playing,
-                openLabel = stringResource(R.string.nowbar_open_player, listOfNotNull(now.title, now.artist).joinToString(", ")),
+                openLabel = stringResource(R.string.nowbar_open_player, listOf(now.title, artist, album).joinToString(", ")),
                 playLabel = stringResource(if (now.playing) R.string.nowbar_pause else R.string.nowbar_play),
                 backdrop = backdrop,
                 onOpen = onOpen,
                 onPlayPause = onPlayPause,
-                modifier = modifier,
+                sharedCover = true,
             )
         }
         is NowBarShows.Companion -> {
@@ -279,7 +307,7 @@ fun NowBar(shows: NowBarShows, ledger: LedgerState, other: OtherPlayback?, backd
                 line = {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         rememberAppIcon(player?.packageName, 14.dp)?.let { Image(it, contentDescription = null, modifier = Modifier.size(14.dp).clip(RoundedCornerShape(4.dp))) }
-                        BarLine(stringResource(R.string.nowbar_in_app, app))
+                        BarLine(AnnotatedString(stringResource(R.string.nowbar_in_app, app)))
                     }
                 },
                 playing = shows.playing,
@@ -288,9 +316,31 @@ fun NowBar(shows: NowBarShows, ledger: LedgerState, other: OtherPlayback?, backd
                 backdrop = backdrop,
                 onOpen = onOpen,
                 onPlayPause = onPlayPause,
-                modifier = modifier,
+                sharedCover = false,
             )
         }
+    }
+}
+
+/** "Artist · Album" with a missing tag's placeholder ([MetaName.text] null) in the quieter [placeholder] ink. */
+fun metaText(meta: MetaLine, artist: String, album: String, ink: Color, placeholder: Color): AnnotatedString = buildAnnotatedString {
+    withStyle(SpanStyle(color = if (meta.artist.tappable) ink else placeholder)) { append(artist) }
+    withStyle(SpanStyle(color = ink)) { append(" · ") }
+    withStyle(SpanStyle(color = if (meta.album.tappable) ink else placeholder)) { append(album) }
+}
+
+/**
+ * The player's cover, loaded at the player's size while the bar shows its song: the cover that grows out of the bar
+ * is already in memory, so its first frame is never an empty tile.
+ */
+@Composable
+private fun PrewarmCover(cover: Any?) {
+    val context = LocalContext.current
+    val side = LocalWindowInfo.current.containerSize.width
+    val versions by CoverVersions.versions.collectAsState()
+    val shown = (cover as? SongArt)?.let { it.copy(version = versions[it.path] ?: 0) } ?: cover
+    LaunchedEffect(shown, side) {
+        if (shown != null && side > 0) context.imageLoader.execute(ImageRequest.Builder(context).data(shown).size(side, side).build())
     }
 }
 
@@ -307,10 +357,12 @@ private fun BarRow(
     backdrop: GlassBackdrop?,
     onOpen: () -> Unit,
     onPlayPause: (() -> Unit)?,
-    modifier: Modifier,
+    sharedCover: Boolean,
 ) {
     val swipe = with(LocalDensity.current) { SWIPE_UP.toPx() }
-    GlassSurface(backdrop, CircleShape, modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+    val ink = barInk(MaterialTheme.colorScheme)
+    val container = LocalContainer.current
+    GlassSurface(backdrop, CircleShape, Modifier.fillMaxWidth().padding(horizontal = 12.dp).then(containerBounds(container)), solid = true) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
@@ -332,9 +384,9 @@ private fun BarRow(
                     .heightIn(min = 64.dp)
                     .padding(start = 8.dp, end = 4.dp),
             ) {
-                Orb(cover, status, ring)
+                Orb(cover, status, ring, if (sharedCover) containerCover(container) else Modifier)
                 Column(Modifier.weight(1f).clearAndSetSemantics {}) {
-                    Text(title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(title, style = MaterialTheme.typography.titleSmall, color = ink.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     line()
                 }
             }
@@ -348,26 +400,23 @@ private fun BarRow(
                         .clickable(role = Role.Button, onClickLabel = null, onClick = onPlayPause)
                         .semantics { contentDescription = playLabel },
                 ) {
-                    Icon(
-                        painterResource(if (playing) R.drawable.ic_pause_fill else R.drawable.ic_play_arrow_fill),
-                        contentDescription = null,
-                        tint = LocalChromeColors.current.onAction,
-                        modifier = Modifier.size(28.dp),
-                    )
+                    PlayPauseIcon(playing, tint = LocalChromeColors.current.onAction, modifier = Modifier.size(28.dp))
                 }
             }
         }
     }
 }
 
+/** The bar's second line (.nowbar .s), in the secondary ink; a placeholder in it keeps its own quieter colour. */
 @Composable
-private fun BarLine(text: String) {
-    Text(text, style = BarLineStyle, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+private fun BarLine(text: AnnotatedString) {
+    val ink = barInk(MaterialTheme.colorScheme)
+    Text(text, style = BarLineStyle, color = ink.line, maxLines = 1, overflow = TextOverflow.Ellipsis)
 }
 
 /** The old Now orb: the cover in a ring that fills with the song's progress, and its lyrics status. */
 @Composable
-private fun Orb(cover: Any?, status: LyricsStatus?, ring: Float) {
+private fun Orb(cover: Any?, status: LyricsStatus?, ring: Float, coverModifier: Modifier) {
     val highlight = LocalBrandColors.current.highlight
     Box(
         Modifier.size(48.dp).drawBehind {
@@ -378,7 +427,7 @@ private fun Orb(cover: Any?, status: LyricsStatus?, ring: Float) {
             if (ring > 0f) drawArc(highlight, -90f, 360f * ring, useCenter = false, topLeft = Offset(inset, inset), size = arc, style = Stroke(stroke, cap = StrokeCap.Round))
         },
     ) {
-        SongCover(cover, Modifier.align(Alignment.Center), size = 38.dp, shape = CircleShape)
+        SongCover(cover, Modifier.align(Alignment.Center).then(coverModifier), size = 38.dp, shape = CircleShape)
         status?.let { StatusBadge(it, Modifier.align(Alignment.BottomEnd), size = 16.dp) }
     }
 }
