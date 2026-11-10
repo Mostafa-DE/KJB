@@ -107,6 +107,54 @@ fun sheetRows(place: SheetPlace, coversTags: Boolean, removeFromQueue: Boolean):
     }
 }
 
+/** The rows of an album's or an artist's "⋯", in the order they show. */
+enum class CollectionRow { PLAY_NEXT, ADD_TO, SHUFFLE, GO_TO_ARTIST, COVERS_TAGS, EDIT_ALBUM, RENAME_ARTIST, MERGE_WITH }
+
+/** An album's "⋯": Go to artist when its artist has a page ([artistPage]), Covers & tags when its slot is filled. */
+fun albumRows(artistPage: Boolean, coversTags: Boolean): List<CollectionRow> = CollectionRow.entries.filter { row ->
+    when (row) {
+        CollectionRow.GO_TO_ARTIST -> artistPage
+        CollectionRow.COVERS_TAGS -> coversTags
+        CollectionRow.RENAME_ARTIST, CollectionRow.MERGE_WITH -> false
+        else -> true
+    }
+}
+
+/** An artist's "⋯". */
+fun artistRows(): List<CollectionRow> =
+    listOf(CollectionRow.PLAY_NEXT, CollectionRow.ADD_TO, CollectionRow.SHUFFLE, CollectionRow.RENAME_ARTIST, CollectionRow.MERGE_WITH)
+
+/** What the rows of an album's or an artist's "⋯" do, each on the page's collection. */
+interface CollectionActions {
+    fun playNext()
+
+    fun addTo()
+
+    fun shuffle()
+
+    fun goToArtist()
+
+    fun coversTags()
+
+    fun editAlbum()
+
+    fun renameArtist()
+
+    fun mergeWith()
+}
+
+/** Does what [row] says. */
+fun CollectionActions.act(row: CollectionRow) = when (row) {
+    CollectionRow.PLAY_NEXT -> playNext()
+    CollectionRow.ADD_TO -> addTo()
+    CollectionRow.SHUFFLE -> shuffle()
+    CollectionRow.GO_TO_ARTIST -> goToArtist()
+    CollectionRow.COVERS_TAGS -> coversTags()
+    CollectionRow.EDIT_ALBUM -> editAlbum()
+    CollectionRow.RENAME_ARTIST -> renameArtist()
+    CollectionRow.MERGE_WITH -> mergeWith()
+}
+
 /** One place in the Add to sheet, in the order they show. */
 sealed interface AddTarget {
     data object PlayNext : AddTarget
