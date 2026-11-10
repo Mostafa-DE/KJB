@@ -18,8 +18,10 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
 import java.net.URI
+import java.util.concurrent.CountDownLatch
 
 @OptIn(ExperimentalCoroutinesApi::class) // testScheduler: virtual time
 class MetaClientTest {
@@ -238,18 +240,46 @@ class MetaClientTest {
     }
 
     @Test
-    fun `the cache keeps whole answers when threads write the same query at once`() {
-        val cache = MetaCache(folder.newFolder(), budgetBytes = 1024 * 1024)
+    fun `a second write of the same query waits for the first, so the cache never keeps half of each`() {
+        val key = "https://musicbrainz.org/ws/2/release/?query=Harbour"
         val ones = ByteArray(256 * 1024) { 1 }
         val twos = ByteArray(256 * 1024) { 2 }
-        repeat(40) { round ->
-            val key = "https://musicbrainz.org/ws/2/release/?query=$round"
-            val writers = listOf(ones, twos).map { body -> Thread { repeat(3) { cache.put(key, body) } } }
-            writers.forEach(Thread::start)
-            writers.forEach(Thread::join)
-            val kept = cache.get(key)
-            assertTrue("round $round", kept != null && (kept.contentEquals(ones) || kept.contentEquals(twos)))
+        val halfway = CountDownLatch(1)
+        val goOn = CountDownLatch(1)
+        // The first write stops halfway through its file until told to go on; the second writes at once.
+        val cache = MetaCache(folder.newFolder(), budgetBytes = 1024 * 1024) { file, body ->
+            if (body === ones) {
+                FileOutputStream(file).use { out ->
+                    out.write(body, 0, body.size / 2)
+                    halfway.countDown()
+                    goOn.await()
+                    out.write(body, body.size / 2, body.size - body.size / 2)
+                }
+            } else {
+                file.writeBytes(body)
+            }
         }
+        // The cache's classes loaded first, so the second write can wait on nothing but the cache's own lock.
+        MetaCache(folder.newFolder()).put(key, byteArrayOf(0))
+        val first = Thread { cache.put(key, ones) }.apply { isDaemon = true }
+        val second = Thread { cache.put(key, twos) }.apply { isDaemon = true }
+        try {
+            first.start()
+            halfway.await()
+            second.start()
+            // Unlocked, the second write runs to its end over the first one's file; locked, it waits.
+            val deadline = System.nanoTime() + 10_000_000_000L
+            while (second.state != Thread.State.BLOCKED && second.state != Thread.State.TERMINATED) {
+                assertTrue("the second write neither ran nor waited", System.nanoTime() < deadline)
+                Thread.yield()
+            }
+        } finally {
+            goOn.countDown()
+        }
+        first.join()
+        second.join()
+
+        assertArrayEquals(twos, cache.get(key))
     }
 
     @Test

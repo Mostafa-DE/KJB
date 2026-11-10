@@ -28,7 +28,7 @@ class ListeningScreenTest {
     }
 
     @Test
-    fun `the library's pages show plays as Your listening says them, and Top songs open the song sheet`() {
+    fun `the library's pages show plays as Your listening says them, and both Your listening pages give Top songs a song sheet`() {
         val pages = source("CollectionScreens.kt")
         val tabs = source("LibraryScreen.kt")
         val sheets = source("SongSheets.kt")
@@ -37,7 +37,9 @@ class ListeningScreenTest {
         listOf("ListeningCard(", "playsNote(", "lastPlayedText(", "StatsGraph.counter(context).written").forEach { assertTrue(it, pages.contains(it)) }
         assertTrue(tabs.contains("StatsGraph.counter(context).written"))
         listOf("songPlaysInfo(song.ref)", "dateText(").forEach { assertTrue(it, sheets.contains(it)) }
-        listOf("val sheets = rememberSongSheets()", "sheets::openSong", "SongSheetsHost(sheets)").forEach { assertTrue(it, listening.contains(it)) }
+        // A Top songs row opening the sheet is ListeningScreenDeviceTest's; the two pages read plays.db and the library
+        // themselves, with no seam for a test to draw them, so that each passes its rows a sheet stays a source check.
+        listOf("val sheets = rememberSongSheets()", "onOpen, sheets::openSong)", "SongSheetsHost(sheets)").forEach { assertEquals(it, 2, Regex(Regex.escape(it)).findAll(listening).count()) }
         listOf(pages, tabs, sheets, listening).forEach { assertFalse(it.contains("S1:")) }
     }
 

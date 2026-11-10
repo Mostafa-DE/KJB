@@ -350,7 +350,7 @@ private fun UnknownAlbumPage(ui: LibraryUi, library: Library) {
  * song sheet "Remove from playlist". A deleted playlist's page says so, so its toast's Undo can bring it back here.
  */
 @Composable
-private fun PlaylistPage(ui: LibraryUi, library: Library, id: String) {
+internal fun PlaylistPage(ui: LibraryUi, library: Library, id: String) {
     val toasts = LocalToasts.current
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()

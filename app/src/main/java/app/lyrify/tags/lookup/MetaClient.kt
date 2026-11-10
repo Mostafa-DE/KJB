@@ -129,7 +129,12 @@ class MetaGate(private val now: () -> Long, private val log: (String) -> Unit = 
  * first once the folder passes [budgetBytes]. One lock covers every read, write and trim. Blocking: call it off the
  * main thread.
  */
-class MetaCache(private val folder: File, private val budgetBytes: Long = BUDGET_BYTES) {
+class MetaCache(
+    private val folder: File,
+    private val budgetBytes: Long = BUDGET_BYTES,
+    /** Writes a body into a file; tests pass one that stops part-way. */
+    private val write: (File, ByteArray) -> Unit = File::writeBytes,
+) {
     private val lock = Any()
 
     fun get(key: String): ByteArray? = synchronized(lock) {
@@ -146,7 +151,7 @@ class MetaCache(private val folder: File, private val budgetBytes: Long = BUDGET
             folder.mkdirs()
             val file = file(key)
             val part = File(folder, file.name + PART)
-            part.writeBytes(body)
+            write(part, body)
             Files.move(part.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
             trim(keep = file)
         } catch (_: IOException) {
