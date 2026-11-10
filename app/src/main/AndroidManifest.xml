@@ -2,12 +2,15 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- LRCLIB lookups. Requests carry artist, title, album and duration only. -->
+    <!-- LRCLIB lookups carry artist, title, album and duration only. Covers & tags asks musicbrainz.org with album
+         titles, artists, song titles, track counts and lengths, and gets covers from coverartarchive.org and the
+         archive.org servers it redirects to. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
     <!-- All files access: find songs in MediaStore and create .lrc files next to them in any
-         folder. Granted by the user in Settings. The app never changes music; songs leave only when the user
-         moves them to the system trash from the Duplicates tab (MediaStore.createTrashRequest, confirmed twice). -->
+         folder. Granted by the user in Settings. KJB changes a song file only when the user confirms (Covers & tags),
+         and only its tags and cover, never the music; every change can be undone. Songs leave only when the user
+         moves them to the system trash (MediaStore.createTrashRequest, confirmed twice). -->
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
 
     <!-- Tones: set a tone as the phone's ringtone, alarm or notification sound, only when the user taps Set. Granted by
@@ -50,7 +53,8 @@
 
     <!-- onnxruntime-android (the AI lyrics engine) adds ACCESS_NETWORK_STATE, INTERNET and a ContentProvider that
          starts its 1DS telemetry client. The provider is removed below and telemetry is also switched off in code
-         (ai/Npu.kt). INTERNET stays for LRCLIB and the one-time model download (models/ModelStore.kt: Qualcomm AI Hub,
+         (ai/Npu.kt). INTERNET stays for LRCLIB, Covers & tags (tags/lookup/MetaClient.kt: MusicBrainz
+         and the Cover Art Archive only) and the one-time model download (models/ModelStore.kt: Qualcomm AI Hub,
          GitHub and Hugging Face only); ACCESS_NETWORK_STATE for that download's unmetered-network constraint. The AI
          itself never goes online. -->
 
