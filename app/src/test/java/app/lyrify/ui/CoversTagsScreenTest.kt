@@ -9,6 +9,7 @@ import app.lyrify.tags.CoversTagsMemory
 import app.lyrify.tags.CoversTagsState
 import app.lyrify.tags.FileMark
 import app.lyrify.tags.Settled
+import app.lyrify.tags.Stopped
 import app.lyrify.tags.SongOutcome
 import app.lyrify.tags.SongProblem
 import app.lyrify.tags.TagAlbum
@@ -127,6 +128,12 @@ class CoversTagsScreenTest {
         assertEquals(Words(R.string.tags_busy), appliedWords(Applied.Busy))
         assertEquals(Words(R.string.tags_failed), appliedWords(Applied.Failed))
         assertEquals(Words(R.string.tags_gone), appliedWords(Applied.Gone))
+        assertEquals(Words(R.string.tags_in_progress), appliedWords(Applied.InProgress))
+        assertEquals(Words(R.string.tags_changed_since), appliedWords(Applied.ChangedSince))
+        // Apply all stopped after changing some: both are said.
+        assertEquals(Words(R.plurals.tags_applied_then_busy, 2, listOf(2)), appliedWords(Applied.Done(2, 9, emptyList(), stopped = Stopped.BUSY)))
+        assertEquals(Words(R.plurals.tags_applied_then_space, 1, listOf(1)), appliedWords(Applied.Done(1, 3, emptyList(), stopped = Stopped.NOT_ENOUGH_SPACE)))
+        assertEquals(Words(R.plurals.tags_applied_then_access, 1, listOf(1)), appliedWords(Applied.Done(1, 3, emptyList(), stopped = Stopped.NO_ACCESS)))
     }
 
     @Test

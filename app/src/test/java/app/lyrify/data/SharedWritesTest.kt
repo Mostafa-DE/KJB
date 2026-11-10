@@ -389,7 +389,7 @@ class SharedWritesTest {
             "player/QueueStore.kt",
             "settings/SettingsStore.kt",
             "stats/PlayLog.kt",
-            "tags/CoversTags.kt",
+            "tags/CoversTagsStore.kt",
             "tags/UndoStore.kt",
             "tags/lookup/MetaClient.kt",
             "tones/ToneAudio.kt",

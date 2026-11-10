@@ -58,6 +58,7 @@ import app.lyrify.tags.CoversTagsState
 import app.lyrify.tags.EditKind
 import app.lyrify.tags.HistoryEntry
 import app.lyrify.tags.Settled
+import app.lyrify.tags.Stopped
 import app.lyrify.tags.SongOutcome
 import app.lyrify.tags.TagsGraph
 import app.lyrify.tags.Undone
@@ -134,9 +135,21 @@ fun outcomeWords(outcome: SongOutcome): Int = when (outcome) {
     SongOutcome.NOT_TRIED -> R.string.tags_outcome_not_tried
 }
 
-/** The toast after Apply or Apply all: songs left as they were come first, then albums with no answer. */
+/**
+ * The toast after Apply or Apply all: why Apply all stopped (with the albums it changed) comes first, then songs left as
+ * they were, then albums with no answer.
+ */
 fun appliedWords(applied: Applied): Words = when (applied) {
     is Applied.Done -> when {
+        applied.stopped != null -> Words(
+            when (applied.stopped) {
+                Stopped.BUSY -> R.plurals.tags_applied_then_busy
+                Stopped.NOT_ENOUGH_SPACE -> R.plurals.tags_applied_then_space
+                Stopped.NO_ACCESS -> R.plurals.tags_applied_then_access
+            },
+            applied.albums,
+            listOf(applied.albums),
+        )
         applied.problems.isNotEmpty() -> Words(R.plurals.tags_songs_left, applied.problems.size, listOf(applied.problems.size))
         applied.failed > 0 -> Words(R.plurals.tags_not_applied, applied.failed, listOf(applied.failed))
         applied.albums > 0 -> Words(R.plurals.tags_applied, applied.albums, listOf(applied.albums))
@@ -147,6 +160,8 @@ fun appliedWords(applied: Applied): Words = when (applied) {
     Applied.Busy -> Words(R.string.tags_busy)
     Applied.Failed -> Words(R.string.tags_failed)
     Applied.Gone -> Words(R.string.tags_gone)
+    Applied.InProgress -> Words(R.string.tags_in_progress)
+    Applied.ChangedSince -> Words(R.string.tags_changed_since)
 }
 
 /** The toast after Undo: fields changed since are kept, and it says so. */
@@ -159,6 +174,7 @@ fun undoneWords(undone: Undone): Words = when (undone) {
     }
     Undone.NoAccess -> Words(R.string.tags_need_access)
     Undone.NotEnoughSpace -> Words(R.string.tags_no_space)
+    Undone.InProgress -> Words(R.string.tags_in_progress)
     Undone.Gone -> Words(R.string.tags_gone)
 }
 

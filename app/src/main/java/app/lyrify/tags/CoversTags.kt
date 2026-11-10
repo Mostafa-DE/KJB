@@ -23,6 +23,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -32,20 +33,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.KSerializer
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.SerializationException
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.booleanOrNull
-import java.io.File
-import java.io.FileOutputStream
-import java.io.IOException
-import java.nio.file.Files
-import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 
 // Covers & tags (covers-tags-spec.md): the check, the review (Ready, Pick one, Done, Skipped), apply and Undo through
@@ -109,38 +96,11 @@ fun albumId(paths: Collection<String>): String =
 
 private const val ID_BYTES = 12
 
-/** An album waiting for the user: Ready with one release, or Pick one with its candidates; [keepMyYear] is its sheet's switch. */
-data class Waiting(val album: TagAlbum, val proposal: Proposal, val keepMyYear: Boolean = true)
-
-/** A file as it was when its album was settled: a change to its size or modified time brings the album back. */
-@Serializable
-data class FileMark(val path: String, val size: Long, val modified: Long)
-
-enum class Settled { DONE, SKIPPED }
-
-/** A song an apply left as it was, and why. */
-@Serializable
-data class SongProblem(val path: String, val outcome: SongOutcome)
-
 /**
- * An album done or skipped, by its [id]: its [songs] as they were then, and what it shows. DONE: the History entry
- * Undo takes back ([entryId], none when nothing had to change), the songs [changed], and the [problems].
+ * An album waiting for the user: Ready with one release, or Pick one with its candidates; [keepMyYear] is its sheet's
+ * switch. [marks] are its files as they were when it was checked: one changed since is not written.
  */
-@Serializable
-data class AlbumRecord(
-    val id: String,
-    val state: Settled,
-    val title: String,
-    val artist: String? = null,
-    val songs: List<FileMark>,
-    val at: Long,
-    val entryId: Long? = null,
-    val changed: Int = 0,
-    val problems: List<SongProblem> = emptyList(),
-)
-
-/** What `covers-tags.json` keeps: the albums settled, whether a check ever ran, whether the sync note was shown. */
-data class CoversTagsMemory(val albums: List<AlbumRecord> = emptyList(), val checkedOnce: Boolean = false, val noted: Boolean = false)
+data class Waiting(val album: TagAlbum, val proposal: Proposal, val keepMyYear: Boolean = true, val marks: List<FileMark> = emptyList())
 
 /** "Checking 12/84": [done] of [total] albums looked up; [total] is 0 while the library is read. */
 data class Checking(val done: Int, val total: Int)
@@ -187,7 +147,13 @@ data class CoversTagsState(
 /** What an apply did. */
 sealed interface Applied {
     /** [albums] moved to Done with [songs] songs written; [problems] were left as they were; [failed] albums got no answer. */
-    data class Done(val albums: Int, val songs: Int, val problems: List<SongProblem>, val failed: Int = 0) : Applied
+    data class Done(val albums: Int, val songs: Int, val problems: List<SongProblem>, val failed: Int = 0, val stopped: Stopped? = null) : Applied
+
+    /** Another apply or Undo is running: nothing was started. */
+    data object InProgress : Applied
+
+    /** One of the album's files changed since the check: nothing written, and the album waits for the next check. */
+    data object ChangedSince : Applied
 
     /** No notification access, so the media sessions can't be listed: nothing written. */
     data object NoAccess : Applied
@@ -204,6 +170,9 @@ sealed interface Applied {
     data object Gone : Applied
 }
 
+/** Why Apply all stopped before the last album, after it changed others. */
+enum class Stopped { NO_ACCESS, NOT_ENOUGH_SPACE, BUSY }
+
 /** What an Undo did. */
 sealed interface Undone {
     /** [songs] taken back; [skippedFields] changed again since and kept; [changedSince] songs skipped; [problems] left. */
@@ -212,6 +181,9 @@ sealed interface Undone {
     data object NoAccess : Undone
 
     data object NotEnoughSpace : Undone
+
+    /** An apply or another Undo is running: nothing was started. */
+    data object InProgress : Undone
 
     data object Gone : Undone
 }
@@ -325,10 +297,15 @@ class CoversTags(
     private val saving = Mutex()
 
     private val loading: Job = scope.launch(io) {
-        val memory = store.load()
+        val stored = store.load()
+        val memory = withLostDone(stored)
+        if (memory != stored) store.save(memory)
         _state.update { it.copy(loaded = true, memory = memory) }
         readHistory()
     }
+
+    /** One apply or Undo at a time: a second one while one runs is refused, never queued behind it. */
+    private val writing = Mutex()
 
     /** The check running ("Check my albums"); only it changes [CoversTagsState.checking]. */
     @Volatile
@@ -380,10 +357,10 @@ class CoversTags(
         scope.launch(compute) {
             loading.join()
             val record = _state.value.memory.albums.firstOrNull { it.id == recordId } ?: return@launch
-            commit { memory -> memory.copy(albums = memory.albums.filterNot { it.id == recordId }) }
             val paths = record.songs.map { it.path }.toSet()
             val album = albumsOf(songs()?.filter { it.path in paths } ?: return@launch).maxByOrNull { it.paths.size } ?: return@launch
-            single(album, fresh = true)
+            // Skipped no more only once the lookup placed the album again.
+            if (single(album, fresh = true)) commit { memory -> memory.copy(albums = memory.albums.filterNot { it.id == recordId }) }
         }
     }
 
@@ -436,7 +413,7 @@ class CoversTags(
         for ((index, album) in albums.withIndex()) {
             if (progress) _state.update { it.copy(checking = Checking(index, albums.size)) }
             when (val result = source.check(album.album, fresh)) {
-                is Lookup.Done -> place(album, result.proposal)
+                is Lookup.Done -> place(album, result.proposal, marks(album))
                 Lookup.Busy -> {
                     _state.update { it.copy(stoppedBusy = true, notChecked = it.notChecked + albums.size - index) }
                     return false
@@ -448,19 +425,23 @@ class CoversTags(
         return true
     }
 
-    /** One album checked on its own, shown as such meanwhile; with [focus], the page opens it once it is checked. */
-    private suspend fun single(album: TagAlbum, fresh: Boolean, focus: Boolean = false) {
+    /**
+     * One album checked on its own, shown as such meanwhile; with [focus], the page opens it once it is checked. True
+     * when the album waits for the user now.
+     */
+    private suspend fun single(album: TagAlbum, fresh: Boolean, focus: Boolean = false): Boolean {
         _state.update { it.copy(checkingAlbums = it.checkingAlbums + album.id, stoppedBusy = false, focus = if (focus) album.id else it.focus) }
         try {
             lookUp(listOf(album), fresh, progress = false)
         } finally {
             _state.update { it.copy(checkingAlbums = it.checkingAlbums - album.id) }
         }
+        return waiting(album.id) != null
     }
 
-    private fun place(album: TagAlbum, proposal: Proposal) = _state.update { state ->
+    private fun place(album: TagAlbum, proposal: Proposal, marks: List<FileMark>) = _state.update { state ->
         val at = state.waiting.indexOfFirst { it.album.id == album.id }
-        val waiting = Waiting(album, proposal, state.waiting.getOrNull(at)?.keepMyYear ?: true)
+        val waiting = Waiting(album, proposal, state.waiting.getOrNull(at)?.keepMyYear ?: true, marks)
         state.copy(waiting = if (at < 0) state.waiting + waiting else state.waiting.toMutableList().also { it[at] = waiting })
     }
 
@@ -507,7 +488,7 @@ class CoversTags(
         val waiting = waiting(albumId) ?: return SearchOutcome.Gone
         return when (val result = source.search(waiting.album.album, title.trim(), artist?.trim()?.takeIf(String::isNotEmpty))) {
             is Lookup.Done -> {
-                place(waiting.album, result.proposal)
+                place(waiting.album, result.proposal, waiting.marks)
                 SearchOutcome.Found((result.proposal as? Proposal.PickOne)?.candidates?.size ?: 1)
             }
             Lookup.Busy -> SearchOutcome.Busy
@@ -538,48 +519,76 @@ class CoversTags(
 
     // Applying
 
-    /** "Apply" in the album sheet: [match] written into the album's songs. */
-    suspend fun apply(albumId: String, match: ReleaseMatch): Applied {
-        val waiting = waiting(albumId) ?: return Applied.Gone
-        if (!access()) return Applied.NoAccess
-        _state.update { it.copy(applying = Applying(0, 1)) }
-        return try {
-            applyOne(waiting, match)
-        } finally {
-            _state.update { it.copy(applying = null) }
-        }
+    /**
+     * [work] in [scope], holding [writing], with [applying] shown: leaving the page (which cancels the caller) never cuts
+     * it short once a file is written, so Done, the cover versions and the lyrics follow. Null while another runs.
+     */
+    private suspend fun <T> writingAlone(applying: Applying?, work: suspend () -> T): T? {
+        if (!writing.tryLock()) return null
+        return scope.async(compute) {
+            try {
+                _state.update { it.copy(applying = applying) }
+                work()
+            } finally {
+                _state.update { it.copy(applying = null) }
+                writing.unlock()
+            }
+        }.await()
     }
 
-    /** "Apply all": every Ready album, one after the other; no access, no space or MusicBrainz busy stops the rest. */
+    /** "Apply" in the album sheet: [match] written into the album's songs. */
+    suspend fun apply(albumId: String, match: ReleaseMatch): Applied {
+        if (waiting(albumId) == null) return Applied.Gone
+        if (!access()) return Applied.NoAccess
+        return writingAlone(Applying(0, 1)) {
+            // The album may have been applied meanwhile.
+            waiting(albumId)?.let { applyOne(it, match) } ?: Applied.Gone
+        } ?: Applied.InProgress
+    }
+
+    /**
+     * "Apply all": every Ready album, one after the other. No access, no space or MusicBrainz busy stops the rest; the
+     * albums changed before are reported with why the rest stopped.
+     */
     suspend fun applyAll(): Applied {
         if (!access()) return Applied.NoAccess
         val ready = _state.value.ready
-        var albums = 0
-        var written = 0
-        var failed = 0
-        val problems = mutableListOf<SongProblem>()
-        try {
+        return writingAlone(Applying(0, ready.size)) {
+            var albums = 0
+            var written = 0
+            var failed = 0
+            val problems = mutableListOf<SongProblem>()
             for ((index, planned) in ready.withIndex()) {
                 _state.update { it.copy(applying = Applying(index, ready.size)) }
                 // Applied, skipped or picked again meanwhile: left as it is now.
                 val waiting = waiting(planned.album.id)?.takeIf { it.proposal == planned.proposal } ?: continue
-                when (val result = applyOne(waiting, (waiting.proposal as Proposal.Ready).match)) {
+                val stop = when (val result = applyOne(waiting, (waiting.proposal as Proposal.Ready).match)) {
                     is Applied.Done -> {
                         albums += result.albums
                         written += result.songs
                         problems += result.problems
+                        null
                     }
-                    Applied.Failed -> failed++
-                    else -> return result
-                }
+                    Applied.Failed, Applied.ChangedSince -> null.also { failed++ }
+                    Applied.NoAccess -> Stopped.NO_ACCESS to result
+                    Applied.NotEnoughSpace -> Stopped.NOT_ENOUGH_SPACE to result
+                    Applied.Busy -> Stopped.BUSY to result
+                    Applied.Gone, Applied.InProgress -> null
+                } ?: continue
+                // Nothing changed yet: the stop is all there is to say.
+                return@writingAlone if (albums == 0 && problems.isEmpty()) stop.second else Applied.Done(albums, written, problems, failed, stop.first)
             }
-        } finally {
-            _state.update { it.copy(applying = null) }
-        }
-        return Applied.Done(albums, written, problems, failed)
+            Applied.Done(albums, written, problems, failed)
+        } ?: Applied.InProgress
     }
 
     private suspend fun applyOne(waiting: Waiting, match: ReleaseMatch): Applied {
+        // A file replaced since the check would get another song's names: the album waits for the next check.
+        if (marks(waiting.album) != waiting.marks) {
+            _state.update { state -> state.copy(waiting = state.waiting.filterNot { it.album.id == waiting.album.id }) }
+            log("tags: album changed since the check, not written")
+            return Applied.ChangedSince
+        }
         val dated = when (val answer = source.dated(match)) {
             is MetaAnswer.Ok -> answer.value
             MetaAnswer.NotFound -> match
@@ -619,7 +628,11 @@ class CoversTags(
         val problems = result.songs.filter { it.outcome != SongOutcome.WRITTEN && it.outcome != SongOutcome.UNCHANGED }.map { SongProblem(it.song.path, it.outcome) } + missing
         if (written.isNotEmpty()) coversChanged(written)
         val done = written.isNotEmpty() || problems.isEmpty()
-        if (done) {
+        val kept = _state.value.memory.albums.firstOrNull { it.id == waiting.album.id && it.state == Settled.DONE && it.entryId != null }
+        if (done && result.entryId == null && kept != null) {
+            // Nothing written over an album already done: its Done row, and its Undo, stay.
+            _state.update { state -> state.copy(waiting = state.waiting.filterNot { it.album.id == waiting.album.id }) }
+        } else if (done) {
             settle(
                 AlbumRecord(
                     id = waiting.album.id,
@@ -668,6 +681,10 @@ class CoversTags(
      */
     suspend fun undo(entryId: Long): Undone {
         if (!access()) return Undone.NoAccess
+        return writingAlone(null) { undoing(entryId) } ?: Undone.InProgress
+    }
+
+    private suspend fun undoing(entryId: Long): Undone {
         // TODO(integration): undo through T3's undoEdit(context, entryId) (tags/TagEdits.kt, 072e137 on v3/t3-edit) once
         // both merge, so favourite hearts move back too.
         val result = when (val batch = writer.undo(entryId)) {
@@ -706,9 +723,28 @@ class CoversTags(
 
     private suspend fun marks(album: TagAlbum): List<FileMark> = withContext(io) { album.paths.mapNotNull(files) }
 
+    /**
+     * [memory] with a Done album for each Covers & tags History entry newer than [CoversTagsMemory.historySeen] that has
+     * none: the app died after the files were written and before `covers-tags.json` was. Blocking.
+     */
+    private fun withLostDone(memory: CoversTagsMemory): CoversTagsMemory {
+        val lost = undo.memory().entries.filter { entry ->
+            entry.kind == EditKind.COVERS_TAGS && entry.id > memory.historySeen && entry.songs.any { !it.undone } && memory.albums.none { it.entryId == entry.id }
+        }
+        if (lost.isEmpty()) return memory
+        log("tags: ${lost.size} Done albums rebuilt from History")
+        val rebuilt = lost.map { entry ->
+            val paths = entry.songs.map { it.path }
+            AlbumRecord(albumId(paths), Settled.DONE, entry.label, songs = paths.mapNotNull(files), at = entry.at, entryId = entry.id, changed = entry.songs.size)
+        }
+        return memory.copy(albums = memory.albums.filterNot { record -> rebuilt.any { it.id == record.id } } + rebuilt, historySeen = lost.maxOf { it.id })
+    }
+
     /** [record] replaces the album's own, and the album waits no more. */
     private suspend fun settle(record: AlbumRecord) {
-        commit { memory -> memory.copy(albums = memory.albums.filterNot { it.id == record.id } + record) }
+        commit { memory ->
+            memory.copy(albums = memory.albums.filterNot { it.id == record.id } + record, historySeen = maxOf(memory.historySeen, record.entryId ?: 0))
+        }
         _state.update { state -> state.copy(waiting = state.waiting.filterNot { it.album.id == record.id }) }
     }
 
@@ -725,85 +761,3 @@ class CoversTags(
         const val OPUS_KEY = "opus:"
     }
 }
-
-/**
- * `covers-tags.json`, app-private: the albums done or skipped, and two flags. Read leniently, as the ledger is: unknown
- * keys ignored, an album this version can't read left out, a file that can't be read at all kept aside and started over.
- * Written to a temporary file, fsynced, then moved over. Logs counts and exception class names only. Blocking.
- */
-class CoversTagsStore(private val file: File, private val log: (String) -> Unit = {}) {
-    fun load(): CoversTagsMemory {
-        if (!file.isFile) return CoversTagsMemory()
-        val text = try {
-            file.readText()
-        } catch (e: IOException) {
-            log("tags: covers-tags.json not readable (${e.javaClass.simpleName})")
-            return CoversTagsMemory()
-        }
-        val root = try {
-            json.parseToJsonElement(text) as? JsonObject
-        } catch (_: SerializationException) {
-            null
-        }
-        if (root == null) {
-            file.renameTo(File(file.path + UndoStore.ASIDE))
-            log("tags: covers-tags.json unreadable (${text.length} chars), kept aside")
-            return CoversTagsMemory()
-        }
-        val items = root[ALBUMS] as? JsonArray ?: JsonArray(emptyList())
-        val albums = items.mapNotNull { decode(it, AlbumRecord.serializer()) }
-        if (albums.size < items.size) log("tags: ${items.size - albums.size} stored albums unreadable, left out")
-        return CoversTagsMemory(albums, flag(root, CHECKED), flag(root, NOTED))
-    }
-
-    fun save(memory: CoversTagsMemory): Boolean {
-        val root = JsonObject(
-            mapOf(
-                VERSION_KEY to JsonPrimitive(VERSION),
-                CHECKED to JsonPrimitive(memory.checkedOnce),
-                NOTED to JsonPrimitive(memory.noted),
-                ALBUMS to JsonArray(memory.albums.map { json.encodeToJsonElement(AlbumRecord.serializer(), it) }),
-            ),
-        )
-        val aside = File(file.path + TMP)
-        return try {
-            file.parentFile?.mkdirs()
-            FileOutputStream(aside).use { out ->
-                out.write(json.encodeToString(JsonObject.serializer(), root).encodeToByteArray())
-                out.fd.sync()
-            }
-            Files.move(aside.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
-            true
-        } catch (e: IOException) {
-            aside.delete()
-            log("tags: covers-tags.json not saved (${e.javaClass.simpleName})")
-            false
-        }
-    }
-
-    private fun <T> decode(element: JsonElement, serializer: KSerializer<T>): T? = try {
-        json.decodeFromJsonElement(serializer, element)
-    } catch (_: IllegalArgumentException) {
-        // A SerializationException is one.
-        null
-    }
-
-    private fun flag(root: JsonObject, key: String): Boolean = (root[key] as? JsonPrimitive)?.booleanOrNull ?: false
-
-    private companion object {
-        const val VERSION = 1
-        const val VERSION_KEY = "version"
-        const val ALBUMS = "albums"
-        const val CHECKED = "checkedOnce"
-        const val NOTED = "noted"
-        const val TMP = ".tmp"
-
-        val json = Json {
-            ignoreUnknownKeys = true
-            encodeDefaults = true
-        }
-    }
-}
-
-/** [path]'s size and modified time now, or null when it is not a file. Blocking. */
-fun fileMark(path: String): FileMark? = File(path).takeIf { it.isFile }?.let { FileMark(path, it.length(), it.lastModified()) }

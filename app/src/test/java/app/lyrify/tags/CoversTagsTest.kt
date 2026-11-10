@@ -21,6 +21,8 @@ import app.lyrify.tags.lookup.ReleaseMatch
 import app.lyrify.tags.lookup.SongFields
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
@@ -531,6 +533,129 @@ class CoversTagsTest {
         assertArrayEquals(big, FakeTagFile().read(File(songs[0].path))!!.pictures.single().data)
     }
 
+    // Review findings: what happens off the happy path
+
+    /** Runs the test scheduler until [done], waiting in real time for the writer's own thread; at most about 2 s. */
+    private fun TestScope.until(done: () -> Boolean) {
+        repeat(200) {
+            advanceUntilIdle()
+            if (done()) return
+            Thread.sleep(10)
+        }
+    }
+
+    @Test
+    fun `leaving the page while an album is written still finishes it, with Done, covers and lyrics`() = runTest {
+        val songs = lanternsSongs()
+        library = songs
+        answers("Lanterns" to lanterns)
+        val flow = flow()
+        val waiting = checked(flow).waiting("Lanterns")
+        val page = launch { flow.apply(waiting.album.id, waiting.match()) }
+        // The page goes once the writer has started.
+        rig.busy.onCheck = { page.cancel() }
+
+        until { flow.state.value.done.isNotEmpty() && handedToLyrics.size == 2 }
+
+        assertEquals(1, flow.state.value.done.size)
+        assertEquals(songs.map { it.path }, bumped)
+        assertEquals(2, handedToLyrics.size)
+        assertNull(flow.state.value.applying)
+    }
+
+    @Test
+    fun `a second apply of the same album while the first runs changes nothing and keeps the first one's Undo`() = runTest {
+        library = lanternsSongs()
+        answers("Lanterns" to lanterns)
+        val flow = flow()
+        val waiting = checked(flow).waiting("Lanterns")
+
+        val first = async { flow.apply(waiting.album.id, waiting.match()) }
+        val second = async { flow.apply(waiting.album.id, waiting.match()) }
+
+        assertEquals(Applied.Done(albums = 1, songs = 2, problems = emptyList()), first.await())
+        assertEquals(Applied.InProgress, second.await())
+        val done = flow.state.value.done.single()
+        assertEquals(rig.undo.memory().entries.single().id, done.entryId)
+        assertEquals(2, done.changed)
+    }
+
+    @Test
+    fun `Apply all stopped by a busy MusicBrainz still reports the albums it changed`() = runTest {
+        library = lanternsSongs() + harbourSongs()
+        answers("Lanterns" to lanterns, "Harbour" to harbour)
+        source.coverOf = { release -> if (release.id == ID_B) MetaAnswer.Busy else source.cover }
+        val flow = flow()
+        checked(flow)
+
+        val applied = flow.applyAll()
+
+        assertEquals(Applied.Done(albums = 1, songs = 2, problems = emptyList(), stopped = Stopped.BUSY), applied)
+        assertEquals(1, flow.state.value.done.size)
+        assertEquals(1, flow.state.value.ready.size)
+    }
+
+    @Test
+    fun `Check again keeps the skipped album when its lookup fails`() = runTest {
+        library = lanternsSongs()
+        answers("Lanterns" to lanterns)
+        val flow = flow()
+        flow.skip(checked(flow).waiting("Lanterns").album.id)
+        source.answer = { Lookup.Failed("offline") }
+
+        flow.checkAgain(flow.state.value.skipped.single().id)
+        advanceUntilIdle()
+
+        assertEquals(listOf("Lanterns"), flow.state.value.skipped.map { it.title })
+        assertEquals(emptyList<Waiting>(), flow.state.value.waiting)
+    }
+
+    @Test
+    fun `an album one of whose files changed since the check is not written, and is checked again`() = runTest {
+        val songs = lanternsSongs()
+        library = songs
+        answers("Lanterns" to lanterns)
+        val flow = flow()
+        val waiting = checked(flow).waiting("Lanterns")
+        // Replaced in place: the same path and MediaStore id, other content.
+        File(songs[1].path).appendBytes(byteArrayOf(1, 2, 3))
+        val before = songs.map { rig.bytes(it.target()) }
+
+        assertEquals(Applied.ChangedSince, flow.apply(waiting.album.id, waiting.match()))
+
+        songs.forEachIndexed { i, song -> assertArrayEquals(before[i], rig.bytes(song.target())) }
+        assertEquals(emptyList<HistoryEntry>(), rig.undo.memory().entries)
+        assertEquals(emptyList<Waiting>(), flow.state.value.waiting)
+    }
+
+    @Test
+    fun `a Done album whose record was lost to a kill is rebuilt from History at the next start`() = runTest {
+        val songs = lanternsSongs()
+        library = songs
+        answers("Lanterns" to lanterns)
+        // covers-tags.json can't be written: as if the app died right after the write.
+        val blocked = File(folder.root, "not a folder").apply { writeText("") }
+        val dying = CoversTags(
+            songs = { library }, source = source, writer = rig.writer, undo = rig.undo, store = CoversTagsStore(File(blocked, "covers-tags.json")),
+            lyrics = { _, _ -> }, coversChanged = {}, access = { true }, scope = this,
+            io = StandardTestDispatcher(testScheduler), compute = StandardTestDispatcher(testScheduler), clock = { BASE },
+        )
+        val waiting = checked(dying).waiting("Lanterns")
+        dying.apply(waiting.album.id, waiting.match())
+        val entry = rig.undo.memory().entries.single()
+
+        val again = flow()
+        advanceUntilIdle()
+
+        val done = again.state.value.done.single()
+        assertEquals(entry.id, done.entryId)
+        assertEquals("Lanterns of Ulso", done.title)
+        assertEquals(2, done.changed)
+        again.check()
+        advanceUntilIdle()
+        assertEquals(1, source.checked.size)
+    }
+
     // The song sheet
 
     @Test
@@ -662,7 +787,9 @@ class FakeAlbumSource : AlbumSource {
 
     override suspend fun dated(match: ReleaseMatch): MetaAnswer<ReleaseMatch> = MetaAnswer.Ok(match)
 
-    override suspend fun cover(release: MbRelease): MetaAnswer<Cover> = cover.also { assertNotNull(release.id) }
+    var coverOf: (MbRelease) -> MetaAnswer<Cover> = { cover }
+
+    override suspend fun cover(release: MbRelease): MetaAnswer<Cover> = coverOf(release)
 
     override suspend fun opusCover(release: MbRelease): MetaAnswer<Cover> {
         opusCovers += release.id
