@@ -45,6 +45,7 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -157,21 +158,9 @@ fun SearchPage() {
     val recentList = rememberLazyListState()
     val resultList = rememberLazyListState()
     val reselects = nav.state.reselectsOf(DockTab.SEARCH)
-    // Kept across a turn of the phone, so only opening the tab or tapping it again asks for the keyboard.
-    var handled by rememberSaveable { mutableIntStateOf(0) }
-    LaunchedEffect(reselects) {
-        if (reselects == handled) return@LaunchedEffect
-        handled = reselects
+    FocusOnOpen(focus, reselects) {
         recentList.scrollToItem(0)
         resultList.scrollToItem(0)
-        // The field attaches its requester in the frame the tab shows.
-        withFrameNanos { }
-        try {
-            focus.requestFocus()
-            keyboard?.show()
-        } catch (e: IllegalStateException) {
-            // Not attached yet: the user taps the field.
-        }
     }
     // New words start at the top; coming back to the tab or turning the phone keeps the place.
     var shownQuery by rememberSaveable { mutableStateOf(query) }
@@ -434,6 +423,42 @@ private fun LazyListScope.resultRows(
         }
     }
 }
+
+/**
+ * Each time [opens] grows (Search opened from the dock, or tapped again at its root), first [onOpen], then the focus in
+ * the field of [focus] with the keyboard shown. The count already handled is kept across a turn of the phone, so the
+ * keyboard never pops up again then. The field attaches while the tab slides in, so the focus is tried on each frame
+ * until it takes, for at most [FOCUS_TRIES] frames.
+ */
+@Composable
+fun FocusOnOpen(focus: FocusRequester, opens: Int, onOpen: suspend () -> Unit = {}) {
+    val keyboard = LocalSoftwareKeyboardController.current
+    var handled by rememberSaveable { mutableIntStateOf(0) }
+    LaunchedEffect(opens) {
+        if (!focusDue(opens, handled)) return@LaunchedEffect
+        handled = opens
+        onOpen()
+        repeat(FOCUS_TRIES) {
+            withFrameNanos { }
+            val taken = try {
+                focus.requestFocus(FocusDirection.Enter)
+            } catch (e: IllegalStateException) {
+                // Not attached yet: try on the next frame.
+                false
+            }
+            if (taken) {
+                keyboard?.show()
+                return@LaunchedEffect
+            }
+        }
+    }
+}
+
+/** Whether the field takes the focus: the tab was opened or tapped again since the count last [handled]. */
+fun focusDue(opens: Int, handled: Int): Boolean = opens != handled
+
+/** About half a second of frames. */
+private const val FOCUS_TRIES = 30
 
 /** The field in its band: Clear while there is text; the keyboard's search key calls [onSearch]. */
 @Composable
