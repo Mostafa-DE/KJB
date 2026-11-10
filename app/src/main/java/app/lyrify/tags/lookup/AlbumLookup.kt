@@ -1,6 +1,9 @@
 package app.lyrify.tags.lookup
 
 import app.lyrify.lyrics.TrackNames
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /** How a check of one album ended. */
 sealed interface Lookup {
@@ -14,11 +17,17 @@ sealed interface Lookup {
 }
 
 /**
- * Checks albums against MusicBrainz: a release search by album title, artist and track count; the details of the best
- * results (and of any release id already in the files, as one more candidate); then [AlbumMatch]. A single is looked up
- * by a recording search instead. Song titles and lengths are matched on the phone, never sent one by one.
+ * Checks albums against MusicBrainz: a release search by album title, artist and track count; the details of every
+ * result with that track count (no rival is left out) and of the best others, and of any release id already in the
+ * files, as one more candidate; then [AlbumMatch], on [compute]. A single is looked up by a recording search instead.
+ * Song titles and lengths are matched on the phone, never sent one by one.
  */
-class AlbumLookup(private val musicBrainz: MusicBrainz, private val log: (String) -> Unit = {}) {
+class AlbumLookup(
+    private val musicBrainz: MusicBrainz,
+    private val log: (String) -> Unit = {},
+    /** Where matching runs: never the caller's thread. */
+    private val compute: CoroutineDispatcher = Dispatchers.Default,
+) {
     /** Looks [album] up. [fresh] ("Check again") skips the cache for every request of this album. */
     suspend fun check(album: PhoneAlbum, fresh: Boolean = false): Lookup {
         val result = if (album.isSingle) single(album, fresh) else releases(album, searchTitle(album), searchArtist(album), fresh, searched = false)
@@ -75,10 +84,10 @@ class AlbumLookup(private val musicBrainz: MusicBrainz, private val log: (String
                 else -> return stopped(answer)
             }
         }
-        val best = found.sortedWith(compareByDescending<MbRelease> { it.trackCount == album.songs.size }.thenByDescending { it.score ?: 0 })
-            .take(MAX_DETAILED)
-            .map { it.id }
-        val ids = (best + listOfNotNull(album.releaseId.takeUnless { searched })).distinct()
+        // Every hit with the album's track count could be a rival, so each is asked for; the others fill up to MAX_DETAILED.
+        val (exact, other) = found.sortedByDescending { it.score ?: 0 }.partition { it.trackCount == album.songs.size }
+        val best = exact + other.take((MAX_DETAILED - exact.size).coerceAtLeast(0))
+        val ids = (best.map { it.id } + listOfNotNull(album.releaseId.takeUnless { searched })).distinct()
         val releases = mutableListOf<MbRelease>()
         for (id in ids) {
             when (val answer = musicBrainz.release(id, fresh)) {
@@ -89,12 +98,11 @@ class AlbumLookup(private val musicBrainz: MusicBrainz, private val log: (String
                 else -> return stopped(answer)
             }
         }
-        val proposal = AlbumMatch.propose(album, releases, searched)
+        val proposal = withContext(compute) { AlbumMatch.propose(album, releases, searched) }
         if (proposal !is Proposal.Ready) return Lookup.Done(proposal)
-        return when (val dated = withOriginalYear(proposal.match, fresh)) {
-            is MetaAnswer.Ok -> Lookup.Done(Proposal.Ready(dated.value))
-            else -> stopped(dated)
-        }
+        // Without the release group, the album stays Ready and no year is written (as when MusicBrainz has none).
+        val dated = (withOriginalYear(proposal.match, fresh) as? MetaAnswer.Ok)?.value ?: proposal.match
+        return Lookup.Done(Proposal.Ready(dated))
     }
 
     /** A single: a recording search by its title, artist and length; always Pick one. */
@@ -108,7 +116,7 @@ class AlbumLookup(private val musicBrainz: MusicBrainz, private val log: (String
             MetaAnswer.NotFound -> emptyList()
             else -> return stopped(answer)
         }
-        return Lookup.Done(AlbumMatch.proposeSingle(song, recordings))
+        return Lookup.Done(withContext(compute) { AlbumMatch.proposeSingle(song, recordings) })
     }
 
     /** The album title as searched: without what downloads add ("(320kbps)"); a title that is only that stays. */
@@ -139,7 +147,10 @@ class AlbumLookup(private val musicBrainz: MusicBrainz, private val log: (String
     }
 
     companion object {
-        /** Releases fetched in detail per album, beside any id already in the files. */
+        /**
+         * Releases fetched in detail per album when fewer search hits have its track count: every hit with that count
+         * is fetched whatever this says (a search lists at most [MusicBrainzUrls.SEARCH_LIMIT]), plus any id in the files.
+         */
         const val MAX_DETAILED: Int = 5
 
         private const val VARIOUS_ARTISTS = "Various Artists"
