@@ -145,7 +145,7 @@ class LibraryListsTest {
     fun `the Songs tab starts with the Favourites row, and Covers and tags is no longer there`() {
         val screen = File("src/main/java/app/lyrify/ui/LibraryScreen.kt").readText()
         val songsTab = screen.substringAfter("private fun SongsTab(").substringBefore("\n}\n")
-        val firstItem = Regex("""item\(key = "([^"]+)"\)""").find(songsTab)?.groupValues?.get(1)
+        val firstItem = Regex("""item\(key = "([^"]+)"[,)]""").find(songsTab)?.groupValues?.get(1)
         assertEquals("favourites", firstItem)
         assertFalse("CoversTagsEntry" in screen)
         assertFalse("CoversTagsEntry" in File("src/main/java/app/lyrify/ui/CoversTagsScreen.kt").readText())
@@ -166,5 +166,36 @@ class LibraryListsTest {
         assertEquals(listOf("Paper Harbour/01.mp3", "Glass Kites/01.mp3", "Paper Harbour/01.mp3", "Glass Kites/01.mp3"), two.map { it.path.removePrefix("/Music/KJB test/") })
         val many = mosaicCovers((1..6).map { ref("Folder $it/01.mp3") })
         assertEquals((1..4).map { "/Music/KJB test/Folder $it/01.mp3" }, many.map { it.path })
+    }
+
+    // A song row's marks: the lyrics icon after the artist, the playing dot before it
+
+    @Test
+    fun `a row shows the lyrics icon for synced and plain lyrics, and none without lyrics`() {
+        assertEquals(LyricsMark.SYNCED, rowMarks(LyricsStatus.SYNCED, lantern.path, playingPath = null).lyrics)
+        assertEquals(LyricsMark.SYNCED, rowMarks(LyricsStatus.AI_ALIGNED, lantern.path, playingPath = null).lyrics)
+        assertEquals(LyricsMark.PLAIN, rowMarks(LyricsStatus.PLAIN_ONLY, bell.path, playingPath = null).lyrics)
+        assertEquals(LyricsMark.NONE, rowMarks(LyricsStatus.NOT_FOUND, water.path, playingPath = null).lyrics)
+        assertEquals(LyricsMark.NONE, rowMarks(null, clock.path, playingPath = null).lyrics)
+    }
+
+    @Test
+    fun `only the song playing has the dot, so one row of a list at most, and it moves with the song`() {
+        fun dots(playing: String?) = songs.filter { rowMarks(status(it), it.path, playing).playing }
+        assertEquals(listOf(bell), dots(bell.path))
+        assertEquals(listOf(water), dots(water.path))
+        assertEquals(emptyList<Song>(), dots(null))
+        assertEquals(emptyList<Song>(), dots("Music/Elsewhere/Not Here.mp3"))
+        // Lyrics or not, the dot is the playing song's alone.
+        assertFalse(rowMarks(LyricsStatus.SYNCED, lantern.path, playingPath = bell.path).playing)
+    }
+
+    @Test
+    fun `no lyrics dot is left in the rows, and no help text explains one`() {
+        val parts = File("src/main/java/app/lyrify/ui/LibraryParts.kt").readText()
+        assertFalse(parts.contains("LyricsMarkDot"))
+        val strings = File("src/main/res/values").listFiles().orEmpty().filter { it.name.startsWith("strings") }.joinToString("\n") { it.readText() }
+        // The one dot left in the copy is Android's own "three dots" menu.
+        assertFalse(Regex("(?i)\\bdots?\\b").containsMatchIn(strings.replace("tap the three dots", "")))
     }
 }

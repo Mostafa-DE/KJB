@@ -1,5 +1,6 @@
 package app.lyrify.ui
 
+import androidx.compose.animation.Crossfade
 import androidx.compose.ui.graphics.RectangleShape
 import app.lyrify.library.SongRef
 import androidx.compose.ui.text.font.lerp
@@ -8,6 +9,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.annotation.DrawableRes
 import androidx.annotation.PluralsRes
@@ -213,7 +215,7 @@ fun LazyListScope.songRows(
     note: ((Song) -> String?)? = null,
     repeats: Boolean = false,
 ) {
-    itemsIndexed(shown, key = { at, song -> songRowKey(song, offset + at, repeats) }) { at, song ->
+    itemsIndexed(shown, key = { at, song -> songRowKey(song, offset + at, repeats) }, contentType = { _, _ -> "song" }) { at, song ->
         val index = offset + at
         SongRow(
             song = song,
@@ -224,7 +226,8 @@ fun LazyListScope.songRows(
             onTap = { list.tap(song, index) },
             onLongPress = { list.onSelection(SongSelection(setOf(song.path))) },
             onMore = { list.sheets.show(OpenSheet.Menu(song.ref, place(index))) },
-            modifier = Modifier.animateItem(),
+            // An extension on the list, not a composable: reduced motion is read in the row.
+            modifier = rowMotion(LocalReducedMotion.current),
         )
     }
 }
@@ -402,8 +405,9 @@ fun <T> SortSheet(title: String, options: List<Pair<T, String>>, selected: T, on
 // Rows and tiles
 
 /**
- * A song's row: its cover, title and artist with the lyrics mark; a tap plays, "⋯" opens the song sheet, a long press
- * selects (none without [onLongPress]). Search passes its [shownTitle] with the match highlighted, and for a song found
+ * A song's row: its cover, title and artist, the lyrics icon after the artist for a song with lyrics, and for the song
+ * playing its coral title, the equalizer mark and the green dot before the artist ([rowMarks]), which fade from row to
+ * row as the song changes; a tap plays, "⋯" opens the song sheet, a long press selects (none without [onLongPress]). Search passes its [shownTitle] with the match highlighted, and for a song found
  * in its lyrics the matching [line] under the artist.
  */
 @OptIn(ExperimentalFoundationApi::class)
@@ -424,8 +428,8 @@ fun SongRow(
     val colors = MaterialTheme.colorScheme
     val title = shownTitle?.text ?: ui.title(song)
     val artist = song.artist ?: stringResource(R.string.check_no_artist)
-    val mark = lyricsMark(ui.status(song))
-    val markWords = when (mark) {
+    val marks = rowMarks(ui.status(song), song.path, LocalPlayingPath.current)
+    val markWords = when (marks.lyrics) {
         LyricsMark.SYNCED -> stringResource(R.string.lib_mark_synced)
         LyricsMark.PLAIN -> stringResource(R.string.lib_mark_plain)
         LyricsMark.NONE -> null
@@ -434,8 +438,18 @@ fun SongRow(
     val tapLabel = stringResource(if (selecting) R.string.lib_select else R.string.lib_play)
     val holdLabel = if (onLongPress != null) stringResource(R.string.lib_select) else null
     val brand = LocalBrandColors.current
-    val playing = LocalPlayingPath.current == song.path
-    val fill by animateColorAsState(if (selected) brand.highlightContainer.copy(alpha = SELECTED_ALPHA) else Color.Transparent, motion(tween(Motion.QUICK_MS), LocalReducedMotion.current), label = "row fill")
+    val playing = marks.playing
+    val reduced = LocalReducedMotion.current
+    val fill by animateColorAsState(if (selected) brand.highlightContainer.copy(alpha = SELECTED_ALPHA) else Color.Transparent, motion(tween(Motion.QUICK_MS), reduced), label = "row fill")
+    val titleInk by animateColorAsState(
+        when {
+            playing && selected -> brand.onHighlightContainer
+            playing -> brand.highlight
+            else -> colors.onSurface
+        },
+        motion(tween(Motion.OPEN_MS), reduced),
+        label = "row title",
+    )
     Row(verticalAlignment = Alignment.CenterVertically, modifier = modifier.fillMaxWidth().padding(start = 8.dp, end = 4.dp)) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -454,31 +468,33 @@ fun SongRow(
         ) {
             SongCover(SongArt(song.path, song.ref.mediaStoreId))
             Column(Modifier.weight(1f).clearAndSetSemantics {}) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
                     // The song playing (.srow.playing): the equalizer mark and its title in coral.
-                    if (playing) Icon(painterResource(R.drawable.ic_graphic_eq), contentDescription = null, tint = if (selected) brand.onHighlightContainer else brand.highlight, modifier = Modifier.size(18.dp))
+                    RowMark(playing, reduced) {
+                        Icon(painterResource(R.drawable.ic_graphic_eq), contentDescription = null, tint = if (selected) brand.onHighlightContainer else brand.highlight, modifier = Modifier.padding(end = 4.dp).size(18.dp))
+                    }
                     Text(
                         shownTitle ?: AnnotatedString(title),
                         style = MaterialTheme.typography.bodyLarge,
-                        color = when {
-                            playing && selected -> brand.onHighlightContainer
-                            playing -> brand.highlight
-                            else -> Color.Unspecified
-                        },
+                        color = titleInk,
                         fontWeight = if (playing) FontWeight.SemiBold else null,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    LyricsMarkDot(mark)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Only the song playing has the green dot.
+                    RowMark(playing, reduced) { PlayingDot(Modifier.padding(end = 6.dp)) }
                     Text(
                         listOfNotNull(artist, note).joinToString(" · "),
                         style = MaterialTheme.typography.bodyMedium,
                         color = colors.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false),
                     )
+                    // A song with lyrics, synced or plain: the lyrics icon right after its artist.
+                    if (marks.lyrics != LyricsMark.NONE) LyricsIcon(Modifier.padding(start = 6.dp))
                 }
                 if (line != null) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 4.dp)) {
@@ -488,10 +504,13 @@ fun SongRow(
                 }
             }
         }
-        if (selecting) {
-            Box(contentAlignment = Alignment.Center, modifier = Modifier.size(48.dp).clearAndSetSemantics {}) { LyrifyCheckbox(selected) }
-        } else {
-            ChromeIconButton(R.drawable.ic_more_horiz, stringResource(R.string.lib_more_for, title), onMore, glass = false, tint = colors.onSurfaceVariant)
+        // Selection starts and ends with "⋯" and the checkbox fading through each other, never swapped at once.
+        Crossfade(selecting, animationSpec = tween(if (reduced) Motion.REDUCED_MS else Motion.FADE_IN_MS), label = "row end") { checking ->
+            if (checking) {
+                Box(contentAlignment = Alignment.Center, modifier = Modifier.size(48.dp).clearAndSetSemantics {}) { LyrifyCheckbox(selected) }
+            } else {
+                ChromeIconButton(R.drawable.ic_more_horiz, stringResource(R.string.lib_more_for, title), onMore, glass = false, tint = colors.onSurfaceVariant)
+            }
         }
     }
 }
@@ -505,21 +524,23 @@ private const val SELECTED_ALPHA = 0.62f
 /** A list header's count (.cnt b): Bricolage 19/22. */
 private val CountNumber = display(19, 22, -0.01)
 
-/** The lyrics mark: a filled dot for synced lyrics, a ring for plain ones, nothing for none. Decorative: the row says it. */
+/** A mark of the song playing that fades and slides in and out beside the words, never appearing at once. */
 @Composable
-fun LyricsMarkDot(mark: LyricsMark) {
-    val tones = LocalStatusColors.current
-    when (mark) {
-        LyricsMark.NONE -> Unit
-        LyricsMark.SYNCED -> {
-            val color = tones[Tone.SYNCED].accent
-            Canvas(Modifier.size(8.dp)) { drawCircle(color) }
-        }
-        LyricsMark.PLAIN -> {
-            val color = tones[Tone.PLAIN].accent
-            Canvas(Modifier.size(8.dp)) { drawCircle(color, radius = size.minDimension / 2 - 1.dp.toPx(), center = Offset(size.width / 2, size.height / 2), style = Stroke(2.dp.toPx())) }
-        }
-    }
+private fun RowMark(shown: Boolean, reduced: Boolean, content: @Composable () -> Unit) {
+    AnimatedVisibility(shown, enter = chipIn(reduced), exit = chipOut(reduced)) { content() }
+}
+
+/** The green dot before the artist of the song playing. Decorative: the row is marked by its coral title. */
+@Composable
+private fun PlayingDot(modifier: Modifier) {
+    val color = LocalStatusColors.current[Tone.SYNCED].accent
+    Canvas(modifier.size(8.dp)) { drawCircle(color) }
+}
+
+/** The lyrics icon after a song's artist, in the secondary ink. Decorative: the row says "Synced lyrics" or "Lyrics". */
+@Composable
+fun LyricsIcon(modifier: Modifier = Modifier) {
+    Icon(painterResource(R.drawable.ic_lyrics), contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = modifier.size(15.dp))
 }
 
 /** A row that opens something (a folder, an artist, a playlist, a queue): its tile, title, line and a chevron. One TalkBack stop. */
@@ -684,7 +705,7 @@ fun LibraryTabsRow(tabs: List<String>, selected: Int, onSelect: (Int) -> Unit) {
         contentPadding = PaddingValues(horizontal = 8.dp),
         modifier = Modifier.fillMaxWidth().selectableGroup(),
     ) {
-        itemsIndexed(tabs) { at, name ->
+        itemsIndexed(tabs, contentType = { _, _ -> "tab" }) { at, name ->
             val on = at == selected
             val reduced = LocalReducedMotion.current
             val lit by animateFloatAsState(if (on) 1f else 0f, motion(tween(Motion.SHORT_MS, easing = Motion.Standard), reduced), label = "tab")

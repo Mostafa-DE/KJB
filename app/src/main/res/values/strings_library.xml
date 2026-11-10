@@ -81,8 +81,8 @@
     <string name="lib_no_name">Unnamed</string>
 
     <!-- Song rows -->
-    <string name="lib_mark_synced">synced lyrics</string>
-    <string name="lib_mark_plain">plain lyrics</string>
+    <string name="lib_mark_synced">Synced lyrics</string>
+    <string name="lib_mark_plain">Lyrics</string>
     <string name="lib_mark_synced_short">Synced</string>
     <!-- TalkBack name of a row's "⋯". -->
     <string name="lib_more_for">More for %1$s</string>
