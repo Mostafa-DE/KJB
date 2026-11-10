@@ -1,5 +1,15 @@
 package app.lyrify.ui
 
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.foundation.lazy.items
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.mutableFloatStateOf
+import kotlinx.coroutines.delay
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.animation.core.VisibilityThreshold
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.graphics.compositeOver
@@ -206,7 +216,8 @@ private fun OneQueuePage(id: String) {
     val scope = rememberCoroutineScope()
     val queue = book.queue(id)
     val names = rememberNames()
-    val drag = remember { DragState() }
+    val reorder = remember { Reorder() }
+    SettleReorder(queue?.items, reorder)
     var dialog by remember { mutableStateOf<QueueDialog?>(null) }
     val sheets = rememberSongSheets()
     PageFrame(
@@ -260,7 +271,7 @@ private fun OneQueuePage(id: String) {
                     }
                 }
             }
-            queueSongs(queue, playing, library, names, connection, drag, pageSurface, onRemoved = { undo ->
+            queueSongs(queue, playing, library, names, connection, reorder, pageSurface, onRemoved = { undo ->
                 scope.launch { if (toasts.show(Toast(resources.getString(R.string.queue_removed), R.drawable.ic_playlist_remove, action = undo?.let { resources.getString(R.string.player_undo) }))) undo?.undo() }
             })
         }
@@ -403,7 +414,8 @@ fun QueueSheet(onDismiss: () -> Unit) {
     val colors = MaterialTheme.colorScheme
     var saving by remember { mutableStateOf(false) }
     val names = rememberNames()
-    val drag = remember { DragState() }
+    val reorder = remember { Reorder() }
+    SettleReorder(book.current?.items, reorder)
     val top = WindowInsets.statusBars.getTop(LocalDensity.current)
     val open: (Page) -> Unit = { page ->
         onDismiss()
@@ -420,6 +432,7 @@ fun QueueSheet(onDismiss: () -> Unit) {
         dragHandle = null,
         contentWindowInsets = { WindowInsets(0) },
     ) {
+        SheetWindowExit()
         Column(
             Modifier
                 .padding(top = with(LocalDensity.current) { top.toDp() } + 8.dp)
@@ -472,7 +485,7 @@ fun QueueSheet(onDismiss: () -> Unit) {
                         }
                     }
                 }
-                queueSongs(queue, playing = true, library, names, connection, drag, sheetSurface, onRemoved = { undo ->
+                queueSongs(queue, playing = true, library, names, connection, reorder, sheetSurface, onRemoved = { undo ->
                     scope.launch { if (toasts.show(Toast(resources.getString(R.string.queue_removed), R.drawable.ic_playlist_remove, action = undo?.let { resources.getString(R.string.player_undo) }))) undo?.undo() }
                 })
             }
@@ -484,13 +497,103 @@ fun QueueSheet(onDismiss: () -> Unit) {
 }
 
 /**
- * A queue's songs, the place marked: a tap plays the queue from that song; the handle drags a song to another place;
- * a swipe to the start, or "Remove from queue" in the row's menu, takes it out (with Undo through [onRemoved]). Songs
- * not on the phone stay listed, quietly marked, and are skipped.
+ * A queue's songs, the place marked: a tap plays the queue from that song; the handle drags a song to another place, the
+ * others sliding out of its way ([Reorder]); a swipe to the start, or "Remove from queue" in the row's menu, takes it
+ * out (with Undo through [onRemoved]), the rows under it closing up. Songs not on the phone stay listed, quietly marked,
+ * and are skipped.
  */
-private fun LazyListScope.queueSongs(queue: Queue, playing: Boolean, library: Library?, names: LibrarySettings, connection: PlayerConnection, drag: DragState, surface: Color, onRemoved: (Undo?) -> Unit) {
-    itemsIndexed(queue.items, key = { _, item -> item.uid }) { index, item ->
-        QueueSongRow(queue, item, index, playing, library, names, connection, drag, surface, onRemoved)
+private fun LazyListScope.queueSongs(queue: Queue, playing: Boolean, library: Library?, names: LibrarySettings, connection: PlayerConnection, reorder: Reorder, surface: Color, onRemoved: (Undo?) -> Unit) {
+    // Each row acts on its place in the queue itself, also while a drag shows another order.
+    val places = queue.items.withIndex().associate { (index, item) -> item.uid to index }
+    items(reorder.shown(queue), key = { it.uid }, contentType = { "song" }) { item ->
+        val reduced = LocalReducedMotion.current
+        // The held row follows the finger above the others; they move by their placement, a removed one fades.
+        val motion = Modifier.animateItem(
+            fadeInSpec = tween(if (reduced) Motion.REDUCED_MS else Motion.FADE_IN_MS),
+            placementSpec = if (reorder.held == item.uid || reduced) null else spring(dampingRatio = 1f, stiffness = 300f, visibilityThreshold = IntOffset.VisibilityThreshold),
+            fadeOutSpec = tween(if (reduced) Motion.REDUCED_MS else Motion.FADE_OUT_MS),
+        )
+        QueueSongRow(queue, item, places[item.uid] ?: -1, playing, library, names, connection, reorder, surface, motion, onRemoved)
+    }
+}
+
+/**
+ * Where a row held [offset] px from its place at [index] (of [size] rows, each [row] px tall) belongs: past half a
+ * neighbour it takes that neighbour's place, as often as it has passed one; the offset left is from its new place. At
+ * either end it stays, the finger's offset with it.
+ */
+fun reorderStep(index: Int, size: Int, offset: Float, row: Float): Pair<Int, Float> {
+    var at = index
+    var left = offset
+    while (left > row / 2 && at < size - 1) {
+        at++
+        left -= row
+    }
+    while (left < -row / 2 && at > 0) {
+        at--
+        left += row
+    }
+    return at to left
+}
+
+/**
+ * A queue being reordered by a row's handle: while a row is [held] (by its uid) the list shows [order], in which the row
+ * takes its neighbours' places as it passes them ([reorderStep]) while they slide out of its way (their placement
+ * animates); the held row follows the finger, [offset] px from its place, lifted. Let go, it settles into its place and
+ * the queue moves it; the order shown stays until the queue's own order is the same, or a moment has passed.
+ */
+@Stable
+private class Reorder {
+    var order: List<QueueItem>? by mutableStateOf(null)
+        private set
+
+    var held: Long? by mutableStateOf(null)
+        private set
+
+    var offset: Float by mutableFloatStateOf(0f)
+        private set
+
+    private var from = -1
+
+    fun shown(queue: Queue): List<QueueItem> = order ?: queue.items
+
+    fun start(queue: Queue, uid: Long) {
+        order = queue.items
+        from = queue.items.indexOfFirst { it.uid == uid }
+        held = uid
+        offset = 0f
+    }
+
+    fun drag(dy: Float, row: Float) {
+        val list = order ?: return
+        val at = list.indexOfFirst { it.uid == held }
+        if (at < 0) return
+        val (to, left) = reorderStep(at, list.size, offset + dy, row)
+        if (to != at) order = list.toMutableList().apply { add(to, removeAt(at)) }
+        offset = left
+    }
+
+    suspend fun drop(queue: Queue, connection: PlayerConnection) {
+        val to = order?.indexOfFirst { it.uid == held } ?: -1
+        if (to >= 0 && from >= 0 && to != from) connection.move(queue.id, from, to) else order = null
+        animate(offset, 0f, animationSpec = tween(Motion.SHORT_MS, easing = Motion.Standard)) { value, _ -> offset = value }
+        held = null
+    }
+
+    /** The queue has caught up with the order shown, or will not: its own order shows again. */
+    fun settle() {
+        if (held == null) order = null
+    }
+}
+
+/** After a drop, the queue's own order shows again once it says the same, or after a moment if the move did not take. */
+@Composable
+private fun SettleReorder(items: List<QueueItem>?, reorder: Reorder) {
+    LaunchedEffect(items, reorder.held) {
+        val shown = reorder.order ?: return@LaunchedEffect
+        if (reorder.held != null) return@LaunchedEffect
+        if (items?.map { it.uid } != shown.map { it.uid }) delay(CATCH_UP_MS)
+        reorder.settle()
     }
 }
 
@@ -502,12 +605,6 @@ private fun rememberNames(): LibrarySettings {
     return flow.collectAsStateWithLifecycle(initialValue = LibrarySettings()).value
 }
 
-/** Which row is being dragged, and how far. */
-private class DragState {
-    var from by mutableStateOf(-1)
-    var offset by mutableStateOf(0f)
-}
-
 @Composable
 private fun QueueSongRow(
     queue: Queue,
@@ -517,8 +614,9 @@ private fun QueueSongRow(
     library: Library?,
     names: LibrarySettings,
     connection: PlayerConnection,
-    drag: DragState,
+    reorder: Reorder,
     surface: Color,
+    motion: Modifier,
     onRemoved: (Undo?) -> Unit,
 ) {
     val resources = LocalResources.current
@@ -531,13 +629,12 @@ private fun QueueSongRow(
         else -> song?.artist ?: ""
     }
     val rowPx = with(LocalDensity.current) { ROW.toPx() }
-    val target = if (drag.from >= 0) (drag.from + (drag.offset / rowPx).roundToInt()).coerceIn(0, queue.items.lastIndex) else -1
-    val shift = when {
-        drag.from < 0 || index == drag.from -> 0f
-        drag.from < target && index in (drag.from + 1)..target -> -rowPx
-        drag.from > target && index in target until drag.from -> rowPx
-        else -> 0f
-    }
+    val held = reorder.held == item.uid
+    val reduced = LocalReducedMotion.current
+    val lift = animateFloatAsState(if (held) 1f else 0f, motion(Motion.press, reduced), label = "queue lift")
+    val lifted = with(LocalDensity.current) { LIFT.toPx() }
+    val latest by rememberUpdatedState(queue)
+    val scope = rememberCoroutineScope()
     val remove = { onRemoved(connection.remove(queue.id, item.uid)) }
     val state = rememberSwipeToDismissBoxState()
     var menu by remember { mutableStateOf(false) }
@@ -550,9 +647,16 @@ private fun QueueSongRow(
         state = state,
         enableDismissFromStartToEnd = false,
         onDismiss = { if (it == SwipeToDismissBoxValue.EndToStart) remove() },
-        modifier = Modifier
-            .zIndex(if (index == drag.from) 1f else 0f)
-            .graphicsLayer { translationY = if (index == drag.from) drag.offset else shift },
+        modifier = motion
+            .zIndex(if (held) 1f else 0f)
+            .graphicsLayer {
+                if (held) translationY = reorder.offset
+                val up = lift.value
+                scaleX = 1f + LIFT_SCALE * up
+                scaleY = 1f + LIFT_SCALE * up
+                shadowElevation = lifted * up
+                shape = RoundedCornerShape(16.dp)
+            },
         backgroundContent = {
             Row(
                 horizontalArrangement = Arrangement.End,
@@ -567,7 +671,6 @@ private fun QueueSongRow(
     ) {
         val brand = LocalBrandColors.current
         val colors = MaterialTheme.colorScheme
-        val reduced = LocalReducedMotion.current
         val fill by animateColorAsState(if (here) brand.highlightContainer.copy(alpha = CURRENT_ALPHA).compositeOver(surface) else surface, motion(tween(Motion.SETTLE_MS), reduced), label = "queue row")
         val words by animateColorAsState(if (here) brand.onHighlightContainer else colors.onSurface, motion(tween(Motion.SETTLE_MS), reduced), label = "queue words")
         val muted by animateColorAsState(if (here) brand.onHighlightContainer else colors.onSurfaceVariant, motion(tween(Motion.SETTLE_MS), reduced), label = "queue muted")
@@ -632,23 +735,16 @@ private fun QueueSongRow(
                 modifier = Modifier
                     .size(48.dp)
                     .semantics { contentDescription = resources.getString(R.string.queue_move, title) }
-                    .pointerInput(queue.id, index) {
+                    .pointerInput(queue.id, item.uid) {
+                        val drop = { scope.launch { reorder.drop(latest, connection) } }
                         detectDragGestures(
-                            onDragStart = {
-                                drag.from = index
-                                drag.offset = 0f
-                            },
-                            onDragEnd = {
-                                val to = (drag.from + (drag.offset / rowPx).roundToInt()).coerceIn(0, queue.items.lastIndex)
-                                if (drag.from >= 0 && to != drag.from) connection.move(queue.id, drag.from, to)
-                                drag.from = -1
-                                drag.offset = 0f
-                            },
-                            onDragCancel = {
-                                drag.from = -1
-                                drag.offset = 0f
-                            },
-                        ) { _, amount -> drag.offset += amount.y }
+                            onDragStart = { reorder.start(latest, item.uid) },
+                            onDragEnd = { drop() },
+                            onDragCancel = { drop() },
+                        ) { change, amount ->
+                            change.consume()
+                            reorder.drag(amount.y, rowPx)
+                        }
                     },
             ) { Icon(painterResource(R.drawable.ic_drag_indicator), contentDescription = null, tint = muted, modifier = Modifier.size(20.dp)) }
         }
@@ -657,6 +753,13 @@ private fun QueueSongRow(
 
 /** A queue row's height (.qrow, 60 dp); a drag moves a song by whole rows. */
 private val ROW = 60.dp
+
+/** A held row is lifted: a little larger, with a shadow. */
+private const val LIFT_SCALE = 0.03f
+private val LIFT = 8.dp
+
+/** How long the order a drag left waits for the queue to say the same before the queue's own order shows. */
+private const val CATCH_UP_MS = 1_500L
 
 /** The current row's fill: the brand's container at 70% over the list's colour (.qrow.cur). */
 private const val CURRENT_ALPHA = 0.7f
