@@ -71,6 +71,7 @@ import app.lyrify.library.Library
 import app.lyrify.library.PLAYED_LIST_SIZE
 import app.lyrify.library.PlaylistsState
 import app.lyrify.library.Song
+import app.lyrify.library.nameOrder
 import app.lyrify.library.recentlyAdded
 import app.lyrify.library.sortSongs
 import app.lyrify.player.QueueSource
@@ -425,7 +426,7 @@ internal fun PlaylistPage(ui: LibraryUi, library: Library, id: String) {
     // Each song with its place in the playlist, for "Remove from playlist"; songs gone or hidden are left out.
     val entries = remember(playlist, library, byTitle, ui.settings.library) {
         val listed = playlist.songs.mapIndexedNotNull { at, ref -> library.resolver.find(ref)?.takeIf(library::shows)?.let { at to it } }
-        if (byTitle) listed.sortedWith(compareBy(java.text.Collator.getInstance()) { ui.title(it.second) }) else listed
+        if (byTitle) listed.sortedWith(compareBy(nameOrder(java.text.Collator.getInstance())) { ui.title(it.second) }) else listed
     }
     val songs = entries.map { it.second }
     val reduced = LocalReducedMotion.current
@@ -499,7 +500,7 @@ private fun BuiltInPage(ui: LibraryUi, library: Library, list: BuiltInList) {
             else -> recentlyAdded(library, System.currentTimeMillis()).map { it to null }
         }
     }
-    val ordered = remember(rows, byTitle, ui.settings.library) { rows.orEmpty().let { all -> if (byTitle) all.sortedWith(compareBy(java.text.Collator.getInstance()) { ui.title(it.first) }) else all } }
+    val ordered = remember(rows, byTitle, ui.settings.library) { rows.orEmpty().let { all -> if (byTitle) all.sortedWith(compareBy(nameOrder(java.text.Collator.getInstance())) { ui.title(it.first) }) else all } }
     val songs = ordered.map { it.first }
     val plays = ordered.associate { it.first.path to it.second }
     val kind = when (list) {
