@@ -264,6 +264,7 @@ fun ownNow(ui: PlayerUi?, settings: LibrarySettings, now: Long): OwnNow? {
         cover = SongArt(path),
         playing = ui.playing,
         progress = ringShare(ui.positionAt(now), ui.durationMs),
+        path = path,
     )
 }
 

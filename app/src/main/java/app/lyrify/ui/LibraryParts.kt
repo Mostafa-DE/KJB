@@ -1,5 +1,12 @@
 package app.lyrify.ui
 
+import androidx.compose.ui.text.font.lerp
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.animateColorAsState
 import androidx.annotation.DrawableRes
 import androidx.annotation.PluralsRes
 import androidx.compose.foundation.Canvas
@@ -319,8 +326,8 @@ private fun CountLabel(count: Int, @PluralsRes noun: Int) {
     val words = pluralStringResource(noun, count)
     val number = formatCount(count)
     Column(Modifier.clearAndSetSemantics { contentDescription = "$number $words" }) {
-        Text(number, style = MaterialTheme.typography.titleLarge.tabular(), fontWeight = FontWeight.SemiBold, maxLines = 1)
-        Text(words, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+        Text(number, style = CountNumber.tabular(), maxLines = 1)
+        Text(words, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
     }
 }
 
@@ -330,7 +337,7 @@ private fun HeaderButton(@DrawableRes icon: Int, text: String, enabled: Boolean,
     val chrome = LocalChromeColors.current
     val colors = MaterialTheme.colorScheme
     val fill = when {
-        !enabled -> colors.onSurface.copy(alpha = 0.12f)
+        !enabled -> colors.onSurface.copy(alpha = 0.08f)
         primary -> chrome.action
         else -> colors.surfaceContainerHigh
     }
@@ -348,7 +355,7 @@ private fun HeaderButton(@DrawableRes icon: Int, text: String, enabled: Boolean,
             .minimumInteractiveComponentSize()
             .background(fill, CircleShape)
             .heightIn(min = 40.dp)
-            .padding(horizontal = if (label) 14.dp else 11.dp),
+            .padding(horizontal = if (label) 16.dp else 11.dp),
     ) {
         Icon(painterResource(icon), contentDescription = null, tint = content, modifier = Modifier.size(18.dp))
         if (label) {
@@ -373,7 +380,7 @@ private fun AddAllButton(songs: Int, enabled: Boolean, onClick: () -> Unit) {
 @Composable
 private fun SortChip(order: String, label: Boolean, onClick: () -> Unit) {
     val name = stringResource(R.string.lib_sort_by, order)
-    LyrifyChip(selected = false, onClick = onClick, role = Role.Button, icon = R.drawable.ic_sort, modifier = Modifier.semantics { contentDescription = name }) {
+    LyrifyChip(selected = false, onClick = onClick, role = Role.Button, icon = R.drawable.ic_sort, iconTint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.semantics { contentDescription = name }) {
         if (label) Text(order, maxLines = 1, modifier = Modifier.clearAndSetSemantics {})
     }
 }
@@ -424,14 +431,17 @@ fun SongRow(
     val description = listOfNotNull(title, artist, markWords, note, line?.text).joinToString(", ")
     val tapLabel = stringResource(if (selecting) R.string.lib_select else R.string.lib_play)
     val holdLabel = if (onLongPress != null) stringResource(R.string.lib_select) else null
+    val brand = LocalBrandColors.current
+    val playing = LocalPlayingPath.current == song.path
+    val fill by animateColorAsState(if (selected) brand.highlightContainer.copy(alpha = SELECTED_ALPHA) else Color.Transparent, motion(tween(Motion.QUICK_MS), LocalReducedMotion.current), label = "row fill")
     Row(verticalAlignment = Alignment.CenterVertically, modifier = modifier.fillMaxWidth().padding(start = 8.dp, end = 4.dp)) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
             modifier = Modifier
                 .weight(1f)
                 .clip(RoundedCornerShape(16.dp))
-                .background(if (selected) LocalBrandColors.current.highlightContainer else Color.Transparent)
+                .background(fill)
                 .combinedClickable(onClickLabel = tapLabel, onLongClickLabel = holdLabel, onLongClick = onLongPress?.takeUnless { selecting }, onClick = onTap)
                 .semantics {
                     contentDescription = description
@@ -442,7 +452,22 @@ fun SongRow(
         ) {
             SongCover(SongArt(song.path, song.ref.mediaStoreId))
             Column(Modifier.weight(1f).clearAndSetSemantics {}) {
-                Text(shownTitle ?: AnnotatedString(title), style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    // The song playing (.srow.playing): the equalizer mark and its title in coral.
+                    if (playing) Icon(painterResource(R.drawable.ic_graphic_eq), contentDescription = null, tint = if (selected) brand.onHighlightContainer else brand.highlight, modifier = Modifier.size(18.dp))
+                    Text(
+                        shownTitle ?: AnnotatedString(title),
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = when {
+                            playing && selected -> brand.onHighlightContainer
+                            playing -> brand.highlight
+                            else -> Color.Unspecified
+                        },
+                        fontWeight = if (playing) FontWeight.SemiBold else null,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     LyricsMarkDot(mark)
                     Text(
@@ -464,10 +489,19 @@ fun SongRow(
         if (selecting) {
             Box(contentAlignment = Alignment.Center, modifier = Modifier.size(48.dp).clearAndSetSemantics {}) { LyrifyCheckbox(selected) }
         } else {
-            ChromeIconButton(R.drawable.ic_more_horiz, stringResource(R.string.lib_more_for, title), onMore, glass = false)
+            ChromeIconButton(R.drawable.ic_more_horiz, stringResource(R.string.lib_more_for, title), onMore, glass = false, tint = colors.onSurfaceVariant)
         }
     }
 }
+
+/** The path of the song KJB's own player has loaded; the shell provides it, so its row shows it playing. */
+val LocalPlayingPath = staticCompositionLocalOf<String?> { null }
+
+/** A selected row's fill: the brand's container at 62% (.srow.sel). */
+private const val SELECTED_ALPHA = 0.62f
+
+/** A list header's count (.cnt b): Bricolage 19/22. */
+private val CountNumber = display(19, 22, -0.01)
 
 /** The lyrics mark: a filled dot for synced lyrics, a ring for plain ones, nothing for none. Decorative: the row says it. */
 @Composable
@@ -501,7 +535,7 @@ fun NavRow(
     val words = description ?: listOfNotNull(title, sub).joinToString(", ")
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 8.dp)
@@ -526,19 +560,21 @@ private fun Color.isSpecified(): Boolean = this != Color.Unspecified
 @Composable
 fun NewRow(title: String, onClick: () -> Unit) {
     val brand = LocalBrandColors.current
-    NavRow(title = title, sub = null, titleColor = brand.highlight, lead = { Tile(R.drawable.ic_add, brand.highlightContainer, brand.highlight) }, trailing = null, onClick = onClick)
+    NavRow(title = title, sub = null, titleColor = brand.highlight, lead = { Tile(R.drawable.ic_add, MaterialTheme.colorScheme.surfaceContainerHigh, brand.highlight) }, trailing = null, onClick = onClick)
 }
 
 /** An icon on a tinted rounded square, in place of a cover. */
 @Composable
 fun Tile(
     @DrawableRes icon: Int,
-    container: Color = MaterialTheme.colorScheme.surfaceContainerHighest,
+    container: Color = MaterialTheme.colorScheme.surfaceContainerHigh,
     content: Color = MaterialTheme.colorScheme.onSurfaceVariant,
     size: Dp = 48.dp,
 ) {
-    Box(contentAlignment = Alignment.Center, modifier = Modifier.size(size).clip(RoundedCornerShape(size / 4)).background(container)) {
-        Icon(painterResource(icon), contentDescription = null, tint = content, modifier = Modifier.size(size / 2))
+    // The prototype's .tile48 (14 dp corners, a 24 dp icon) and its 200 dp hero (28 dp corners, a 72 dp icon).
+    val hero = size > 64.dp
+    Box(contentAlignment = Alignment.Center, modifier = Modifier.size(size).clip(RoundedCornerShape(if (hero) 28.dp else 14.dp)).background(container)) {
+        Icon(painterResource(icon), contentDescription = null, tint = content, modifier = Modifier.size(if (hero) size * 9 / 25 else size / 2))
     }
 }
 
@@ -558,8 +594,8 @@ fun ArtistAvatar(artist: Artist, size: Dp = 48.dp) {
         return
     }
     val initials = artist.name.split(' ').filter(String::isNotBlank).take(2).joinToString("") { it.take(1) }.uppercase()
-    Box(contentAlignment = Alignment.Center, modifier = Modifier.size(size).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceContainerHighest)) {
-        Text(initials, style = if (size > 64.dp) MaterialTheme.typography.headlineMedium else MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Box(contentAlignment = Alignment.Center, modifier = Modifier.size(size).clip(CircleShape).background(MaterialTheme.colorScheme.primaryContainer)) {
+        Text(initials, style = if (size > 64.dp) MaterialTheme.typography.headlineMedium else MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
     }
 }
 
@@ -577,10 +613,14 @@ fun AlbumCard(title: String, sub: String?, cover: Song?, modifier: Modifier = Mo
         BoxWithConstraints(Modifier.fillMaxWidth()) {
             SongCover(cover?.let { SongArt(it.path, it.ref.mediaStoreId) }, size = maxWidth, shape = RoundedCornerShape(20.dp))
         }
-        Text(title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 8.dp).clearAndSetSemantics {})
-        if (sub != null) Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.clearAndSetSemantics {})
+        Text(title, style = CardTitle, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 8.dp).clearAndSetSemantics {})
+        if (sub != null) Text(sub, style = CardLine, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.clearAndSetSemantics {})
     }
 }
+
+/** An album card's title (.acard .at, 15/20 medium) and line (.aa, 13/18). */
+private val CardTitle = body(15f, 20, 500)
+private val CardLine = body(13f, 18)
 
 /** A section's title over a list, with its count and maybe "View all". */
 @Composable
@@ -621,6 +661,8 @@ fun LibraryTabsRow(tabs: List<String>, selected: Int, onSelect: (Int) -> Unit) {
     ) {
         itemsIndexed(tabs) { at, name ->
             val on = at == selected
+            val reduced = LocalReducedMotion.current
+            val lit by animateFloatAsState(if (on) 1f else 0f, motion(tween(Motion.SHORT_MS, easing = Motion.Standard), reduced), label = "tab")
             Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
@@ -631,13 +673,29 @@ fun LibraryTabsRow(tabs: List<String>, selected: Int, onSelect: (Int) -> Unit) {
             ) {
                 Text(
                     name,
-                    style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = if (on) FontWeight.SemiBold else FontWeight.Medium,
-                    color = if (on) colors.onSurface else colors.onSurfaceVariant,
+                    style = TabText,
+                    fontWeight = lerp(FontWeight.Medium, FontWeight(650), lit),
+                    color = lerp(colors.onSurfaceVariant, colors.onSurface, lit),
                     maxLines = 1,
                 )
-                if (on) Box(Modifier.align(Alignment.BottomCenter).padding(bottom = 6.dp).size(SUNG_LINE_WIDTH, SUNG_LINE_HEIGHT).background(highlight, CircleShape))
+                // The sung line grows and fades in under the tab chosen as it leaves the one before.
+                if (lit > 0f) {
+                    Box(
+                        Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(bottom = 6.dp)
+                            .size(SUNG_LINE_WIDTH, SUNG_LINE_HEIGHT)
+                            .graphicsLayer {
+                                alpha = lit
+                                scaleX = lit
+                            }
+                            .background(highlight, RoundedCornerShape(2.dp)),
+                    )
+                }
             }
         }
     }
 }
+
+/** A library tab's name (.lt): 15/20. */
+private val TabText = body(15f, 20, 500)

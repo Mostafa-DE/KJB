@@ -175,7 +175,8 @@ fun AppShell(
     // Pages and the tab history; a page's own back (selection, a page's sheet) is composed later and comes first.
     BackHandler(enabled = state.views.isEmpty() && (state.pages.isNotEmpty() || state.history.isNotEmpty())) { nav.back() }
 
-    CompositionLocalProvider(LocalNavigator provides nav, LocalLyrics provides lyrics) {
+    // The song KJB plays shows as playing in the lists, while the Now bar shows KJB's own song (not another app's).
+    CompositionLocalProvider(LocalNavigator provides nav, LocalLyrics provides lyrics, LocalPlayingPath provides (bar as? NowBarShows.Own)?.now?.path) {
         Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
             CompositionLocalProvider(LocalShellChrome provides ShellChrome(backdrop, bottom)) {
                 AnimatedContent(

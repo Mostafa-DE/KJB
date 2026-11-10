@@ -68,7 +68,7 @@ import kotlinx.coroutines.delay
  * Milestone P1 supplies it ([rememberOwnNow] in PlayerScreen.kt); the bar only shows it.
  */
 @Immutable
-data class OwnNow(val title: String, val artist: String?, val cover: Any?, val playing: Boolean, val progress: Float)
+data class OwnNow(val title: String, val artist: String?, val cover: Any?, val playing: Boolean, val progress: Float, val path: String? = null)
 
 /** KJB's own player for the Now bar: what is loaded ([now], null when nothing is) and its Play/Pause. */
 @Stable

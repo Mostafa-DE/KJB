@@ -1,5 +1,7 @@
 package app.lyrify.ui
 
+import androidx.compose.ui.text.font.lerp
+import androidx.compose.ui.graphics.lerp
 import android.content.res.Resources
 import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
@@ -270,7 +272,7 @@ private fun DockItems(selected: DockTab, dot: Boolean, onSelect: (DockTab) -> Un
         Modifier
             .selectableGroup()
             .heightIn(min = 64.dp)
-            .padding(horizontal = 4.dp)
+            .padding(horizontal = 6.dp)
             .drawBehind {
                 val item = size.width / DOCK_TABS.size
                 val width = SUNG_LINE_WIDTH.toPx()
@@ -288,6 +290,9 @@ private fun DockItems(selected: DockTab, dot: Boolean, onSelect: (DockTab) -> Un
 @Composable
 private fun DockItem(tab: DockTab, selected: Boolean, dot: Boolean, modifier: Modifier, onClick: () -> Unit) {
     val colors = MaterialTheme.colorScheme
+    val brand = LocalBrandColors.current
+    // The label and icon take the selected look over the line's own travel time, never at once.
+    val lit by animateFloatAsState(if (selected) 1f else 0f, motion(tween(Motion.SHORT_MS, easing = Motion.Standard), LocalReducedMotion.current), label = "dock item")
     val label = stringResource(tab.label)
     val name = dockItemName(label, if (dot) stringResource(R.string.nav_attention) else null)
     Column(
@@ -296,13 +301,13 @@ private fun DockItem(tab: DockTab, selected: Boolean, dot: Boolean, modifier: Mo
             .selectable(selected, interactionSource = null, indication = PressIndication(RoundedCornerShape(20.dp), 0.92f), role = Role.Tab, onClick = onClick)
             .semantics { contentDescription = name }
             .heightIn(min = 56.dp)
-            .padding(top = 8.dp, bottom = 14.dp),
+            .padding(top = 9.dp, bottom = 14.dp),
     ) {
         Box {
             Icon(
                 painterResource(if (selected) tab.selectedIcon else tab.icon),
                 contentDescription = null,
-                tint = if (selected) LocalBrandColors.current.highlight else colors.onSurfaceVariant,
+                tint = lerp(colors.onSurfaceVariant, brand.highlight, lit),
                 modifier = Modifier.size(24.dp),
             )
             if (dot) DotBadge(Modifier.align(Alignment.TopEnd).offset(x = 3.dp, y = (-3).dp))
@@ -310,8 +315,8 @@ private fun DockItem(tab: DockTab, selected: Boolean, dot: Boolean, modifier: Mo
         Text(
             label,
             style = MaterialTheme.typography.labelSmall,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
-            color = if (selected) colors.onSurface else colors.onSurfaceVariant,
+            fontWeight = lerp(FontWeight.Medium, FontWeight(650), lit),
+            color = lerp(colors.onSurfaceVariant, colors.onSurface, lit),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(top = 2.dp).clearAndSetSemantics {},
@@ -366,12 +371,15 @@ fun LyrifyTopBar(
     actions: @Composable RowScope.() -> Unit = {},
 ) {
     TopBand(under, backdrop, modifier) {
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.statusBarsPadding().heightIn(min = BAR_HEIGHT).padding(horizontal = 12.dp)) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.statusBarsPadding().heightIn(min = BAR_HEIGHT).padding(start = if (navigation != null) 8.dp else 20.dp, end = 12.dp),
+        ) {
             navigation?.let {
                 it()
                 Spacer(Modifier.width(4.dp))
             }
-            Box(Modifier.weight(1f).padding(start = 4.dp).semantics(mergeDescendants = true) { heading() }) {
+            Box(Modifier.weight(1f).semantics(mergeDescendants = true) { heading() }) {
                 ProvideTextStyle(MaterialTheme.typography.headlineSmall) { title() }
             }
             Row(verticalAlignment = Alignment.CenterVertically, content = actions)
@@ -718,7 +726,7 @@ private val BAR_HEIGHT = 64.dp
 private const val BAND_FADE_MS = 180
 
 /** The sung line sits this far above the capsule's bottom edge, under the labels. */
-private val LINE_BOTTOM = 8.dp
+private val LINE_BOTTOM = 7.dp
 private val LINE_LEAD = spring(dampingRatio = 0.8f, stiffness = 700f, visibilityThreshold = 0.001f)
 private val LINE_TRAIL = spring(dampingRatio = 0.8f, stiffness = 260f, visibilityThreshold = 0.001f)
 private const val DISABLED_ALPHA = 0.38f

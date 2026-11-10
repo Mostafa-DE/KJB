@@ -530,13 +530,14 @@ fun GroupedRow(
     first: Boolean = false,
     supporting: (@Composable () -> Unit)? = null,
     onClick: (() -> Unit)? = null,
+    minHeight: Dp = 64.dp,
     trailing: (@Composable () -> Unit)? = null,
 ) {
     val colors = MaterialTheme.colorScheme
     val hairline = colors.outlineVariant.copy(alpha = HAIRLINE_ALPHA)
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
         modifier = modifier
             .fillMaxWidth()
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier.semantics(mergeDescendants = true) {})
@@ -546,16 +547,16 @@ fun GroupedRow(
                     drawRect(hairline, Offset(if (layoutDirection == LayoutDirection.Rtl) 0f else start, 0f), Size(size.width - start, 1.dp.toPx()))
                 }
             }
-            .heightIn(min = 64.dp)
-            .padding(horizontal = 16.dp, vertical = 10.dp),
+            .heightIn(min = minHeight)
+            .padding(start = 14.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
     ) {
-        Box(contentAlignment = Alignment.Center, modifier = Modifier.size(36.dp).clip(RoundedCornerShape(10.dp)).background(tile)) {
+        Box(contentAlignment = Alignment.Center, modifier = Modifier.size(36.dp).clip(RoundedCornerShape(11.dp)).background(tile)) {
             Icon(painterResource(icon), contentDescription = null, tint = onTile, modifier = Modifier.size(20.dp))
         }
         Column(Modifier.weight(1f)) {
             Text(title, style = MaterialTheme.typography.bodyLarge, color = colors.onSurface)
             if (supporting != null) {
-                CompositionLocalProvider(LocalContentColor provides colors.onSurfaceVariant, LocalTextStyle provides MaterialTheme.typography.bodyMedium) { supporting() }
+                CompositionLocalProvider(LocalContentColor provides colors.onSurfaceVariant, LocalTextStyle provides RowLine) { supporting() }
             }
         }
         if (trailing != null) CompositionLocalProvider(LocalContentColor provides colors.onSurfaceVariant) { trailing() }
@@ -628,10 +629,13 @@ private fun StackCard(color: Color, rotation: Float, shift: Dp) {
     )
 }
 
+/** A section's label (.slabel): 13/18 semibold. */
+internal val SectionLabel = body(13f, 18, 600)
+
 /** A section's title, a heading for TalkBack. */
 @Composable
 fun SectionTitle(text: String, modifier: Modifier = Modifier) {
-    Text(text, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = modifier.semantics { heading() })
+    Text(text, style = SectionLabel, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = modifier.semantics { heading() })
 }
 
 /** An icon and a short text: the song sheet's facts, the AI download sheet, the first run's privacy line. */
@@ -752,10 +756,13 @@ private const val DIALOG_FADE_MS = 150
 
 /** Above this text scale, a dialog's buttons stack. */
 private const val STACK_FONT_SCALE = 1.3f
-private const val HAIRLINE_ALPHA = 0.5f
+private const val HAIRLINE_ALPHA = 0.7f
 
 /** Where a grouped row's hairline starts: after its 36 dp icon and the 16 dp on each side of it. */
-private val HAIRLINE_START = 68.dp
+private val HAIRLINE_START = 64.dp
+
+/** A grouped row's second line (.gr .s): 13.5/19. */
+private val RowLine = body(13.5f, 19)
 private val StackShape = RoundedCornerShape(16.dp)
 private val STACK_WIDTH = 64.dp
 private val STACK_HEIGHT = 84.dp

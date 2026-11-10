@@ -154,6 +154,7 @@ private fun ToolRowView(row: ToolRow, first: Boolean, onClick: () -> Unit) {
         first = first,
         supporting = line?.let { { Text(it, maxLines = 1, overflow = TextOverflow.Ellipsis) } },
         onClick = onClick,
+        minHeight = 72.dp,
         trailing = {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 row.badge?.let { CountBadge(it) }
