@@ -146,7 +146,7 @@ class UndoStore(
      * the snapshots works from this, never from an empty stand-in.
      */
     @Synchronized
-    private fun whole(): UndoMemory {
+    fun whole(): UndoMemory {
         val memory = memory()
         unreadable?.let { throw IOException("Undo's list could not be read", it) }
         return memory

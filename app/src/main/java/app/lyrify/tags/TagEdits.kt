@@ -463,7 +463,9 @@ fun BatchResult.Done.report(): EditReport {
             SongOutcome.WRITTEN, SongOutcome.UNDO_NOT_SAVED -> written++
             SongOutcome.BUSY -> busy++
             // A song replaced while it was written was set aside, its backup kept: not changed.
-            SongOutcome.COULD_NOT_CHANGE, SongOutcome.LEFT_AS_IT_WAS, SongOutcome.RECOVERY_PENDING, SongOutcome.SET_ASIDE, SongOutcome.NOT_ALLOWED, SongOutcome.NOT_TRIED -> failed++
+            SongOutcome.COULD_NOT_CHANGE, SongOutcome.LEFT_AS_IT_WAS, SongOutcome.RECOVERY_PENDING, SongOutcome.SET_ASIDE, SongOutcome.NOT_ALLOWED, SongOutcome.NOT_TRIED,
+            SongOutcome.PAUSED,
+            -> failed++
             SongOutcome.CHANGED_SINCE, SongOutcome.DIFFERENT_FILE -> changedSince++
             SongOutcome.UNCHANGED -> Unit
         }

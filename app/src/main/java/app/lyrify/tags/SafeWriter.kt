@@ -246,6 +246,12 @@ enum class SongOutcome {
 
     /** The media sessions could no longer be listed, so the rest of the batch was not tried. */
     NOT_TRIED,
+
+    /**
+     * Tag changes are paused: KJB can't read, or change, its safety records (the write journal), so no song is written
+     * blind. Shown on Covers & tags until it can.
+     */
+    PAUSED,
 }
 
 data class SongResult(val song: SongTarget, val outcome: SongOutcome)
@@ -263,6 +269,9 @@ sealed interface BatchResult {
 
     /** Not enough free space for the backups, a second copy and a margin: nothing was written. */
     data object NotEnoughSpace : BatchResult
+
+    /** An Undo's answer: History and Undo's list can't be read now, so nothing was changed. Try again. */
+    data object HistoryUnreadable : BatchResult
 }
 
 /**
@@ -347,7 +356,14 @@ class SafeWriter(
      * it still holds this edit's value. A song whose audio changed since is skipped.
      */
     suspend fun undo(entryId: Long): BatchResult {
-        val entry = undo.memory().entries.firstOrNull { it.id == entryId } ?: return BatchResult.Done(emptyList(), null)
+        // History read whole, or nothing is undone: an empty stand-in would pass for an entry with nothing left to undo.
+        val memory = try {
+            withContext(io) { undo.whole() }
+        } catch (e: IOException) {
+            log("tags: History could not be read (${e.javaClass.simpleName}), nothing undone")
+            return BatchResult.HistoryUnreadable
+        }
+        val entry = memory.entries.firstOrNull { it.id == entryId } ?: return BatchResult.Done(emptyList(), null)
         val edits = entry.songs.filterNot { it.undone }.associateBy { SongTarget(it.path, it.mediaStoreId) }
         val skipped = mutableMapOf<SongTarget, Int>()
         return batch(edits.keys.toList()) {
@@ -444,6 +460,8 @@ class SafeWriter(
      */
     private suspend fun change(song: SongTarget, kind: SharedWrite, make: Make, record: (Written) -> UndoRecord): SongOutcome {
         val path = song.path
+        // KJB can't change its safety records: no song is written blind.
+        if (journal.paused) return SongOutcome.PAUSED
         // An earlier write of this song still waits for the start-up recovery: never edited, nor snapshotted, now.
         if (locks.pinned(path)) return SongOutcome.RECOVERY_PENDING
         if (!locks.tryHold(path)) return SongOutcome.BUSY
@@ -452,9 +470,9 @@ class SafeWriter(
             val openPaths = try {
                 journal.openPaths()
             } catch (e: IOException) {
-                // An open intent that can't be read may be this song's: nothing is written until it can be.
+                // An open intent that can't be read may be this song's: tag changes pause until it can be.
                 log("tags: the journal could not be read (${e.javaClass.simpleName}), nothing written")
-                return SongOutcome.RECOVERY_PENDING
+                return SongOutcome.PAUSED
             }
             if (path in openPaths) return SongOutcome.RECOVERY_PENDING.also { pin = true }
             if (!foldersReady) {
@@ -528,7 +546,13 @@ class SafeWriter(
              * backup, when the proof fails; left for the start-up recovery when the song can't be read for it.
              */
             fun release(proof: FileState, outcome: SongOutcome): SongOutcome = try {
-                if (backups.releaseBackup(intentBegun, proof)) outcome else SongOutcome.SET_ASIDE
+                when (backups.releaseBackup(intentBegun, proof)) {
+                    Backups.Release.RELEASED -> outcome
+                    Backups.Release.SET_ASIDE -> SongOutcome.SET_ASIDE
+                    // Settled, its intent still open: the start-up recovery closes it.
+                    Backups.Release.NOT_CLOSED -> outcome.also { pin = true }
+                    Backups.Release.NOT_SET_ASIDE -> SongOutcome.PAUSED.also { pin = true }
+                }
             } catch (e: IOException) {
                 log("tags: the song could not be checked, its backup left for the start-up recovery (${e.javaClass.simpleName})")
                 pin = true
@@ -637,9 +661,12 @@ class SafeWriter(
                 Step.REPLACED -> {
                     // Not this song any more: nothing written over the file at the path, the write (and its backup) set
                     // aside.
-                    journal.setAside(id)
                     work.delete()
                     log("tags: the song was replaced during its write, set aside")
+                    if (!journal.setAside(id)) {
+                        pin = true
+                        return SongOutcome.PAUSED
+                    }
                     return SongOutcome.SET_ASIDE
                 }
                 Step.LEFT -> {

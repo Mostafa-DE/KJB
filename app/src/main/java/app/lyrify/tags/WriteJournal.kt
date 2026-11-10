@@ -278,6 +278,14 @@ private const val COPY_BYTES: Int = 256 * 1024
  * class names only. Blocking.
  */
 class WriteJournal(private val dir: File, private val syncDir: (File) -> Unit, private val log: (String) -> Unit = {}) {
+    /**
+     * Whether an intent could not be set aside in this process: KJB can't change its safety records, so tag changes are
+     * paused (the writer writes nothing, and Covers & tags says so) until it can.
+     */
+    @Volatile
+    var paused: Boolean = false
+        private set
+
     /** Records [intent] durably. False when it could not be: then no intent is left, and the song must not be opened. */
     fun open(intent: WriteIntent): Boolean = store(intent) || false.also { File(dir, intent.id + SUFFIX).delete() }
 
@@ -313,10 +321,13 @@ class WriteJournal(private val dir: File, private val syncDir: (File) -> Unit, p
         }
     }
 
-    /** Closes the intent [id]: the song is settled. Throws when its file can't be deleted (it stays open then). */
+    /**
+     * Closes the intent [id]: the song is settled. The count beside it goes first, so a close that fails leaves the
+     * intent whole. Throws when either can't be deleted (the intent stays open then).
+     */
     fun close(id: String) {
-        Files.deleteIfExists(File(dir, id + SUFFIX).toPath())
         Files.deleteIfExists(File(dir, id + UNREAD).toPath())
+        Files.deleteIfExists(File(dir, id + SUFFIX).toPath())
         try {
             syncDir(dir)
         } catch (e: IOException) {
@@ -336,22 +347,25 @@ class WriteJournal(private val dir: File, private val syncDir: (File) -> Unit, p
     fun listing(): Listing = listing(tidy = true)
 
     private fun listing(tidy: Boolean): Listing {
-        val files = entriesOf(dir).filter(::regularFile).sortedBy { it.name }
-        if (tidy) {
-            files.filter { it.name.endsWith(TMP) }.forEach { aside ->
-                try {
-                    Files.deleteIfExists(aside.toPath())
-                } catch (e: IOException) {
-                    // An aside file is never read as an intent: left, it changes nothing.
-                    log("journal: an aside file not deleted (${e.javaClass.simpleName})")
-                }
-            }
-        }
         val intents = mutableListOf<WriteIntent>()
         val unread = mutableListOf<String>()
         var setAside = 0
-        for (file in files.filter { it.name.endsWith(SUFFIX) }) {
+        for (file in entriesOf(dir).sortedBy { it.name }) {
             val id = file.name.removeSuffix(SUFFIX)
+            // An entry that can't be looked at: an intent waits as one that can't be read, anything else is passed by.
+            val regular = try {
+                regularFile(file)
+            } catch (e: IOException) {
+                if (file.name.endsWith(SUFFIX)) unread += id
+                continue
+            }
+            if (!regular) continue
+            if (file.name.endsWith(TMP)) {
+                // An aside file is never read as an intent: left, it changes nothing.
+                if (tidy) forget(file, "an aside file")
+                continue
+            }
+            if (!file.name.endsWith(SUFFIX)) continue
             val intent = try {
                 read(file)
             } catch (e: IOException) {
@@ -360,15 +374,27 @@ class WriteJournal(private val dir: File, private val syncDir: (File) -> Unit, p
                 continue
             }
             when {
-                intent != null -> intents += intent
+                intent != null -> {
+                    intents += intent
+                    // Read: the starts it could not be are forgotten, so only starts in a row count.
+                    if (tidy) forget(File(dir, id + UNREAD), "a count")
+                }
                 tidy -> {
-                    setAside(id)
-                    setAside++
                     log("journal: a file that is not an intent, set aside")
+                    if (setAside(id)) setAside++
                 }
             }
         }
         return Listing(intents, unread, setAside)
+    }
+
+    /** Deletes [file], the journal's own bookkeeping; one that can't be is logged as [what], and changes nothing. */
+    private fun forget(file: File, what: String) {
+        try {
+            Files.deleteIfExists(file.toPath())
+        } catch (e: IOException) {
+            log("journal: $what not deleted (${e.javaClass.simpleName})")
+        }
     }
 
     /** The intents still open ([listing]); throws when one of them can't be read now, as when the folder can't be listed. */
@@ -406,17 +432,26 @@ class WriteJournal(private val dir: File, private val syncDir: (File) -> Unit, p
 
     /**
      * Moves intent [id] to [SET_ASIDE], for a person to look at; it is never acted on again. [uncheckable]: because its
-     * song, or the intent itself, could not be read ([uncheckable] counts those). When it can't be moved, it stays open.
+     * song, or the intent itself, could not be read ([uncheckable] counts those). False when it can't be moved: it stays
+     * open, and tag changes are [paused].
      */
-    fun setAside(id: String, uncheckable: Boolean = false) {
-        val aside = File(dir, SET_ASIDE).apply { mkdirs() }
+    fun setAside(id: String, uncheckable: Boolean = false): Boolean {
+        val aside = File(dir, SET_ASIDE)
         try {
+            Files.createDirectories(aside.toPath())
             Files.move(File(dir, id + SUFFIX).toPath(), File(aside, id + (if (uncheckable) UNCHECKABLE else "") + SUFFIX).toPath())
-            Files.deleteIfExists(File(dir, id + UNREAD).toPath())
+        } catch (e: IOException) {
+            log("journal: an intent could not be set aside (${e.javaClass.simpleName}), tag changes paused")
+            paused = true
+            return false // safe: a failure report: the intent stays open, and tag changes pause
+        }
+        forget(File(dir, id + UNREAD), "a count")
+        try {
             syncDir(dir)
         } catch (e: IOException) {
-            log("journal: an intent not set aside, or its folder not fsynced (${e.javaClass.simpleName})")
+            log("journal: folder not fsynced after setting aside (${e.javaClass.simpleName})")
         }
+        return true
     }
 
     /**
@@ -471,6 +506,7 @@ data class Recovered(
     val waiting: Int = 0,
     val unreadable: Int = 0,
     val undoNotSaved: Int = 0,
+    val paused: Boolean = false,
 )
 
 /**
@@ -492,11 +528,9 @@ class Backups(
      * (the same inode, other bytes) is caught. No fsync, scan or Undo save runs between the proofs and the delete; the
      * intent is closed after it. A backup Undo keeps as the song's snapshot is never deleted here.
      *
-     * True: released. False: a read proved otherwise (other bytes, or another file at the path), so the backup is kept
-     * and the intent set aside. A read or `lstat` that fails throws, and leaves the backup and the intent as they are:
-     * an error decides nothing.
+     * A read or `lstat` that fails throws, and leaves the backup and the intent as they are: an error decides nothing.
      */
-    fun releaseBackup(intent: WriteIntent, proof: FileState): Boolean {
+    fun releaseBackup(intent: WriteIntent, proof: FileState): Release {
         val snapshot = intent.backup in undo.keptBackups()
         val proven = songs.openToRead(intent.path).use { song ->
             fun proven() = song.holds(proof) && song.fileId() == songs.fileId(intent.path)
@@ -505,12 +539,31 @@ class Backups(
             proven
         }
         if (!proven) {
-            journal.setAside(intent.id)
-            log("tags: the song is not as proven at its path, its backup kept and its write set aside")
-            return false
+            log("tags: the song is not as proven at its path, its backup kept")
+            return if (journal.setAside(intent.id)) Release.SET_ASIDE else Release.NOT_SET_ASIDE
         }
-        journal.close(intent.id)
-        return true
+        try {
+            journal.close(intent.id)
+        } catch (e: IOException) {
+            log("tags: a backup released, but its intent not closed (${e.javaClass.simpleName})")
+            return Release.NOT_CLOSED
+        }
+        return Release.RELEASED
+    }
+
+    /** What [releaseBackup] did. */
+    enum class Release {
+        /** Proven: the backup deleted (unless Undo keeps it) and the intent closed. */
+        RELEASED,
+
+        /** A read proved otherwise (other bytes, or another file at the path): the backup kept, the intent set aside. */
+        SET_ASIDE,
+
+        /** Proven and the backup deleted, but the intent could not be closed: the next start closes it. Not a failed read. */
+        NOT_CLOSED,
+
+        /** A read proved otherwise, but the intent could not be set aside: the backup kept, and tag changes pause. */
+        NOT_SET_ASIDE,
     }
 }
 
@@ -583,7 +636,7 @@ class JournalRecovery(
                 locks.pin(path)
                 locks.release(path)
             }
-            return Recovered(waiting = held?.size ?: 0)
+            return Recovered(waiting = held?.size ?: 0, paused = true)
         }
         val intents = held ?: listing.intents.also { pending -> pending.map { it.path }.distinct().forEach { locks.hold(it) } }
         val last = intents.withIndex().associate { (index, intent) -> intent.path to index }
@@ -604,7 +657,14 @@ class JournalRecovery(
                 }
             }
         }
-        listing.unread.forEach { id -> result = result.counted(unreadIntent(id)) }
+        // An intent left that can't be read may be any song's: tag changes stay paused while it is there.
+        var unreadLeft = false
+        listing.unread.forEach { id ->
+            val settled = unreadIntent(id)
+            if (settled == Settled.WAITING || settled == Settled.PAUSED) unreadLeft = true
+            result = result.counted(settled)
+        }
+        result = result.copy(paused = journal.paused || unreadLeft)
         if (listing.unread.isEmpty()) cleanUp()
         if (result != Recovered()) {
             log(
@@ -615,7 +675,7 @@ class JournalRecovery(
         return result
     }
 
-    private enum class Settled { AS_IT_WAS, RESTORED, SET_ASIDE, UNREADABLE, UNDO_NOT_SAVED, WAITING }
+    private enum class Settled { AS_IT_WAS, RESTORED, SET_ASIDE, UNREADABLE, UNDO_NOT_SAVED, WAITING, PAUSED }
 
     private fun Recovered.counted(settled: Settled): Recovered = when (settled) {
         Settled.AS_IT_WAS -> copy(settled = this.settled + 1)
@@ -624,6 +684,7 @@ class JournalRecovery(
         Settled.UNREADABLE -> copy(setAside = setAside + 1, unreadable = unreadable + 1)
         Settled.UNDO_NOT_SAVED -> copy(settled = this.settled + 1, setAside = setAside + 1, undoNotSaved = undoNotSaved + 1)
         Settled.WAITING -> copy(waiting = waiting + 1)
+        Settled.PAUSED -> copy(waiting = waiting + 1, paused = true)
     }
 
     private suspend fun settle(intent: WriteIntent): Settled {
@@ -664,6 +725,8 @@ class JournalRecovery(
         if (open.holds(intent.original)) return released(intent, intent.original, Settled.AS_IT_WAS)
         // Neither: the write was cut short. Written back only from a whole backup, and only over this song torn.
         val backup = File(dirs.backups, intent.backup)
+        // No backup any more (it went once, on proof): never written back, and not a failed read.
+        if (attributesOf(backup) == null) return setAside(intent, "nothing to restore from")
         val saved = if (regularFile(backup) && sizeOf(backup) == intent.original.length) fileState(backup) else null
         val source = intent.source?.let(::File)
         val torn = saved == intent.original && source != null && tornFrom(open::read, open.size(), source, backup)
@@ -675,22 +738,29 @@ class JournalRecovery(
         return released(intent, intent.original, Settled.RESTORED)
     }
 
-    /** [settled] once [intent]'s backup is released on proof that the song is at its path as [proof]; else set aside. */
-    private fun released(intent: WriteIntent, proof: FileState, settled: Settled): Settled =
-        if (backups.releaseBackup(intent, proof)) settled else Settled.SET_ASIDE
+    /**
+     * [settled] once [intent]'s backup is released on proof that the song is at its path as [proof]; else set aside. A
+     * backup released whose intent could not be closed waits, uncounted: the next start closes it.
+     */
+    private fun released(intent: WriteIntent, proof: FileState, settled: Settled): Settled = when (backups.releaseBackup(intent, proof)) {
+        Backups.Release.RELEASED -> settled
+        Backups.Release.SET_ASIDE -> Settled.SET_ASIDE
+        Backups.Release.NOT_CLOSED -> Settled.WAITING
+        Backups.Release.NOT_SET_ASIDE -> Settled.PAUSED
+    }
 
     /**
      * A start that could not read [intent]'s song (or query it, or write it back): it waits, until [READ_TRIES] starts in
-     * a row could not. Set aside at the last even when the count could not be kept: the count can't hold it forever.
+     * a row could not (a start that reads it and only waits for its History record starts the count again). When the
+     * count can't be kept it could never reach the last start: the intent is set aside now, its backup kept.
      */
     private fun failed(intent: WriteIntent, e: IOException): Settled {
         val tries = intent.readFailures + 1
         log("journal: a song could not be read (${e.javaClass.simpleName}), $tries of $READ_TRIES starts")
-        if (!journal.update(intent.copy(readFailures = tries))) log("journal: the count could not be kept")
-        if (tries < READ_TRIES) return Settled.WAITING
-        journal.setAside(intent.id, uncheckable = true)
-        log("journal: an unfinished write set aside, its song could not be read at $READ_TRIES starts in a row")
-        return Settled.UNREADABLE
+        val kept = journal.update(intent.copy(readFailures = tries))
+        if (kept && tries < READ_TRIES) return Settled.WAITING
+        log("journal: an unfinished write set aside, its song could not be read" + if (kept) " at $READ_TRIES starts in a row" else ", nor its count kept")
+        return if (journal.setAside(intent.id, uncheckable = true)) Settled.UNREADABLE else Settled.PAUSED
     }
 
     /**
@@ -701,11 +771,11 @@ class JournalRecovery(
     private fun historyNotSaved(intent: WriteIntent): Settled {
         val tries = intent.saveFailures + 1
         log("journal: a History record could not be saved, $tries of $READ_TRIES starts")
-        if (!journal.update(intent.copy(saveFailures = tries))) log("journal: the count could not be kept")
-        if (tries < READ_TRIES) return Settled.WAITING
-        journal.setAside(intent.id)
+        // The song was read: the starts that could not read it no longer count.
+        val kept = journal.update(intent.copy(saveFailures = tries, readFailures = 0))
+        if (kept && tries < READ_TRIES) return Settled.WAITING
         log("journal: an unfinished write settled as written, Undo not saved, its backup kept")
-        return Settled.UNDO_NOT_SAVED
+        return if (journal.setAside(intent.id)) Settled.UNDO_NOT_SAVED else Settled.PAUSED
     }
 
     /**
@@ -716,20 +786,23 @@ class JournalRecovery(
         val tries = try {
             journal.unreadStarts(id) + 1
         } catch (e: IOException) {
+            // The count can't be read, so it could never reach the last start: set aside now.
             log("journal: the count of an intent that could not be read could not be read (${e.javaClass.simpleName})")
-            return Settled.WAITING
+            return unreadSetAside(id)
         }
-        if (!journal.countUnread(id, tries)) log("journal: the count could not be kept")
-        if (tries < READ_TRIES) return Settled.WAITING
-        journal.setAside(id, uncheckable = true)
-        log("journal: an intent that could not be read at $READ_TRIES starts in a row, set aside")
-        return Settled.UNREADABLE
+        if (journal.countUnread(id, tries) && tries < READ_TRIES) return Settled.WAITING
+        return unreadSetAside(id)
+    }
+
+    /** Intent [id], which could not be read, set aside with its backup; tag changes pause when even that can't be done. */
+    private fun unreadSetAside(id: String): Settled {
+        log("journal: an intent that could not be read, set aside")
+        return if (journal.setAside(id, uncheckable = true)) Settled.UNREADABLE else Settled.PAUSED
     }
 
     private fun setAside(intent: WriteIntent, why: String): Settled {
-        journal.setAside(intent.id)
         log("journal: an unfinished write set aside, $why")
-        return Settled.SET_ASIDE
+        return if (journal.setAside(intent.id)) Settled.SET_ASIDE else Settled.PAUSED
     }
 
     /** Deletes the private copies no open intent needs. Backups are left alone: only [Backups.releaseBackup] deletes one. */

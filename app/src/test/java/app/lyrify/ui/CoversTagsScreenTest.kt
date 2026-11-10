@@ -115,10 +115,18 @@ class CoversTagsScreenTest {
     }
 
     @Test
+    fun `paused tag changes get one line, and none when they are not`() {
+        assertEquals(null, pausedWords(false))
+        assertEquals(Words(R.string.tags_paused), pausedWords(true))
+    }
+
+    @Test
     fun `every song outcome has its own words`() {
         assertEquals(R.string.tags_outcome_busy, outcomeWords(SongOutcome.BUSY))
         assertEquals(R.string.tags_outcome_recovery, outcomeWords(SongOutcome.RECOVERY_PENDING))
         assertEquals(R.string.tags_outcome_set_aside, outcomeWords(SongOutcome.SET_ASIDE))
+        assertEquals(R.string.tags_paused, outcomeWords(SongOutcome.PAUSED))
+        assertEquals(Words(R.string.tags_undo_failed), undoneWords(Undone.Failed))
         assertEquals(R.string.tags_outcome_left, outcomeWords(SongOutcome.LEFT_AS_IT_WAS))
         assertEquals(R.string.tags_outcome_could_not, outcomeWords(SongOutcome.COULD_NOT_CHANGE))
         assertEquals(R.string.tags_outcome_changed_since, outcomeWords(SongOutcome.CHANGED_SINCE))

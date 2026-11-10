@@ -913,7 +913,7 @@ class WriterReviewTest {
             intent.setReadable(true)
         }
 
-        assertEquals(Recovered(waiting = 1), recovered)
+        assertEquals(Recovered(waiting = 1, paused = true), recovered)
         assertTrue(intent.isFile)
         rig.restart()
         assertEquals(Recovered(settled = 1, restored = 1), runBlocking { rig.recovery().recover() })
@@ -931,7 +931,8 @@ class WriterReviewTest {
             runBlocking { rig.recovery().recover() }
         }
 
-        assertEquals(listOf(Recovered(waiting = 1), Recovered(waiting = 1), Recovered(setAside = 1, unreadable = 1)), starts)
+        // While it waits, tag changes are paused: any song may be its song.
+        assertEquals(listOf(Recovered(waiting = 1, paused = true), Recovered(waiting = 1, paused = true), Recovered(setAside = 1, unreadable = 1)), starts)
         assertEquals(1, rig.journal.uncheckable())
         assertEquals(0, rig.journal.pending().size)
     }
@@ -949,7 +950,8 @@ class WriterReviewTest {
             intent.setReadable(true)
         }
 
-        assertEquals(SongOutcome.RECOVERY_PENDING, outcome)
+        // Any song may be its song: tag changes are paused, and say so.
+        assertEquals(SongOutcome.PAUSED, outcome)
         assertArrayEquals(torn, rig.bytes(song))
     }
 
@@ -967,7 +969,7 @@ class WriterReviewTest {
             rig.dirs.journal.setReadable(true)
         }
 
-        assertEquals(Recovered(), recovered)
+        assertEquals(Recovered(paused = true), recovered)
         assertEquals(copies, rig.dirs.work.listFiles()!!.map { it.name })
         rig.restart()
         assertEquals(Recovered(settled = 1, restored = 1), runBlocking { rig.recovery().recover() })
@@ -1125,6 +1127,184 @@ class WriterReviewTest {
 
         assertEquals(listOf("tags/UndoStore.kt: dropped.forEach { File(dirs.backups, it.file).delete() }"), found)
         assertTrue(roots.any { File(it, "tags/WriteJournal.kt").readText().contains("fun releaseBackup(") })
+    }
+
+    // Eighth review: bookkeeping that fails gives up safely, and never silently
+
+    @Test
+    fun `an intent that can't be read, whose count can't be read either, is set aside on that start`() {
+        val song = rig.song("Paper Lantern", 41, fields)
+        killedMidWrite(song)
+        val intent = intentFile()
+        val count = File(rig.dirs.journal, intent.name.removeSuffix(".json") + ".unread").apply { writeText("1") }
+        intent.setReadable(false)
+        count.setReadable(false)
+
+        assertEquals(Recovered(setAside = 1, unreadable = 1), runBlocking { rig.recovery().recover() })
+        assertEquals(1, rig.journal.uncheckable())
+    }
+
+    @Test
+    fun `an intent that can't be read, whose count can't be kept, is set aside on that start`() {
+        val song = rig.song("Paper Lantern", 41, fields)
+        killedMidWrite(song)
+        val intent = intentFile()
+        // Where the count is written aside before it is moved into place, a folder: it can't be written.
+        File(rig.dirs.journal, intent.name.removeSuffix(".json") + ".unread.tmp").mkdirs()
+        intent.setReadable(false)
+
+        assertEquals(Recovered(setAside = 1, unreadable = 1), runBlocking { rig.recovery().recover() })
+    }
+
+    @Test
+    fun `a song that can't be read, whose count can't be rewritten, is set aside on that start`() {
+        val song = rig.song("Paper Lantern", 41, fields)
+        killedMidWrite(song)
+        rig.songs.failReads = Int.MAX_VALUE
+        rig.folders.failing += rig.dirs.journal
+        val recovered = runBlocking { rig.recovery().recover() }
+        rig.folders.failing.clear()
+        rig.songs.failReads = 0
+
+        assertEquals(Recovered(setAside = 1, unreadable = 1), recovered)
+    }
+
+    @Test
+    fun `a write whose History can't be saved, nor its count rewritten, is settled on that start, Undo not saved`() {
+        val song = rig.song("Paper Lantern", 41, fields)
+        val backup = secondWriteKilledOnScan(song)
+        rig.folders.failing += rig.dirs.root
+        rig.folders.failing += rig.dirs.journal
+        val recovered = runBlocking { rig.recovery().recover() }
+        rig.folders.failing.clear()
+
+        assertEquals(Recovered(settled = 1, setAside = 1, undoNotSaved = 1), recovered)
+        assertTrue(backup.isFile)
+    }
+
+    @Test
+    fun `an intent that can't be set aside pauses tag changes, and says so`() {
+        val song = rig.song("Paper Lantern", 41, fields)
+        killedMidWrite(song)
+        replace(song)
+        // Where intents are set aside, a file: none can be moved there.
+        File(rig.dirs.journal, WriteJournal.SET_ASIDE).writeText("in the way")
+        val other = rig.song("Tin Roof", 42, fields)
+        val before = rig.bytes(other)
+
+        assertEquals(Recovered(waiting = 1, paused = true), runBlocking { rig.recovery().recover() })
+        assertEquals(1, rig.journal.pending().size)
+        assertEquals(SongOutcome.PAUSED, write(other))
+        assertArrayEquals(before, rig.bytes(other))
+        assertArrayEquals(saltClock, rig.bytes(song))
+    }
+
+    @Test
+    fun `a journal entry that can't be looked at goes through the count, and pauses tag changes meanwhile`() {
+        val song = rig.song("Paper Lantern", 41, fields)
+        val original = rig.bytes(song)
+        killedMidWrite(song)
+        // The folder can be listed, but nothing in it looked at.
+        rig.dirs.journal.setExecutable(false)
+        val recovered = try {
+            runBlocking { rig.recovery().recover() }
+        } finally {
+            rig.dirs.journal.setExecutable(true)
+        }
+
+        assertEquals(Recovered(waiting = 1, paused = true), recovered)
+        rig.restart()
+        assertEquals(Recovered(settled = 1, restored = 1), runBlocking { rig.recovery().recover() })
+        assertArrayEquals(original, rig.bytes(song))
+    }
+
+    @Test
+    fun `a start that reads the song starts the count of starts that could not again`() {
+        val song = rig.song("Paper Lantern", 41, fields)
+        secondWriteKilledOnScan(song)
+        fun start(): Recovered {
+            rig.restart()
+            return runBlocking { rig.recovery().recover() }
+        }
+        rig.songs.failReads = Int.MAX_VALUE
+        repeat(2) { start() }
+        // Read as written; only its History can't be saved.
+        rig.songs.failReads = 0
+        rig.folders.failing += rig.dirs.root
+        assertEquals(Recovered(waiting = 1), start())
+        rig.folders.failing.clear()
+        rig.songs.failReads = Int.MAX_VALUE
+
+        assertEquals(Recovered(waiting = 1), start())
+        rig.songs.failReads = 0
+    }
+
+    @Test
+    fun `the count beside an intent goes once the intent reads, so only starts in a row count`() {
+        val song = rig.song("Paper Lantern", 41, fields)
+        killedMidWrite(song)
+        val intent = intentFile()
+        fun start(unreadable: Boolean): Recovered {
+            intent.setReadable(!unreadable)
+            rig.restart()
+            return runBlocking { rig.recovery().recover() }.also { intent.setReadable(true) }
+        }
+        start(unreadable = true)
+        // Read, but its volume is not there: waits, and the count of starts it could not be read goes.
+        rig.songs.mounted = false
+        start(unreadable = false)
+        rig.songs.mounted = true
+        start(unreadable = true)
+
+        assertEquals(Recovered(waiting = 1, paused = true), start(unreadable = true))
+        assertEquals(1, rig.journal.pending().size)
+    }
+
+    @Test
+    fun `a close that fails after the backup went is not a failed read, and the next start closes it`() {
+        val song = rig.song("Paper Lantern", 41, fields)
+        val backup = secondWriteKilledOnScan(song)
+        val id = intentFile().name.removeSuffix(".json")
+        // A folder where the count beside the intent would be: closing the intent can't delete it.
+        val inTheWay = File(rig.dirs.journal, "$id.unread").apply { mkdirs() }
+        File(inTheWay, "x").writeText("x")
+
+        assertEquals(Recovered(waiting = 1), runBlocking { rig.recovery().recover() })
+        assertFalse(backup.exists())
+        assertEquals(0, rig.journal.pending().single().readFailures)
+        inTheWay.deleteRecursively()
+        rig.restart()
+        assertEquals(Recovered(settled = 1), runBlocking { rig.recovery().recover() })
+        assertEquals(0, rig.journal.pending().size)
+    }
+
+    @Test
+    fun `a torn song whose backup is gone is never written back, and is set aside`() {
+        val song = rig.song("Paper Lantern", 41, fields)
+        killedMidWrite(song)
+        val torn = rig.bytes(song)
+        File(rig.dirs.backups, rig.journal.pending().single().backup).delete()
+
+        assertEquals(Recovered(setAside = 1), runBlocking { rig.recovery().recover() })
+        assertArrayEquals(torn, rig.bytes(song))
+        assertTrue(rig.logs.any { "nothing to restore from" in it })
+    }
+
+    @Test
+    fun `an Undo whose History can't be read changes nothing, and says it couldn't`() {
+        val song = rig.song("Paper Lantern", 41, fields)
+        val result = runBlocking { rig.writer.write(listOf(WriteJob(song, edit)), EditKind.SONG, "Paper Lantern") } as BatchResult.Done
+        val written = rig.bytes(song)
+        rig.dirs.undo.setReadable(false)
+        rig.restart()
+        val undone = try {
+            runBlocking { rig.writer.undo(checkNotNull(result.entryId)) }
+        } finally {
+            rig.dirs.undo.setReadable(true)
+        }
+
+        assertEquals(BatchResult.HistoryUnreadable, undone)
+        assertArrayEquals(written, rig.bytes(song))
     }
 
     /**
