@@ -378,6 +378,7 @@ class SharedWritesTest {
             "data/LedgerRepository.kt",
             "dupes/DuplicatesStore.kt",
             "library/Playlists.kt",
+            "library/search/RecentSearches.kt",
             "models/ModelDownloadWorker.kt",
             "models/ModelStore.kt",
             "overnight/AiRunLog.kt",
