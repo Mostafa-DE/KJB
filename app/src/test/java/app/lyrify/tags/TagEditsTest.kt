@@ -319,21 +319,21 @@ class TagEditsTest {
     private val credits = listOf(
         song("Music/a.mp3", title = "Lamp Oil", artist = "Kit Calloway", albumArtist = "Kit Calloway", id = 11),
         song("Music/b.mp3", title = "Porch Wire", artist = "Kit Calloway feat. Mira Okafor", albumArtist = "Mira Okafor", id = 12),
-        song("Music/c.mp3", title = "Tin Roof", artist = "Mira Okafor & Kit Calloway", albumArtist = null, id = 13),
+        song("Music/c.mp3", title = "Tin Roof", artist = "Mira Okafor; Kit Calloway", albumArtist = null, id = 13),
         song("Music/d.mp3", title = "Lantern Fish", artist = "Kit Calloways", albumArtist = "Kit Calloways", id = 14),
         song("Music/e.mp3", title = "Low Tide", artist = "kit calloway", albumArtist = null, id = 15),
         song("Music/f.mp3", title = "Ferry Bell", artist = "Hollis Brandt", albumArtist = "Kit Calloway", id = 16),
     )
 
     @Test
-    fun `Rename replaces the name as a whole word in artist and album artist, credits included`() {
+    fun `Rename replaces the name in artist and album artist, credits included`() {
         val plans = TagEdits.rename(credits, listOf("Kit Calloway"), "Kit Callaway")
 
         assertEquals(
             listOf(
                 "Lamp Oil" to mapOf(TagField.ARTIST to "Kit Callaway", TagField.ALBUM_ARTIST to "Kit Callaway"),
                 "Porch Wire" to mapOf(TagField.ARTIST to "Kit Callaway feat. Mira Okafor"),
-                "Tin Roof" to mapOf(TagField.ARTIST to "Mira Okafor & Kit Callaway"),
+                "Tin Roof" to mapOf(TagField.ARTIST to "Mira Okafor; Kit Callaway"),
                 "Ferry Bell" to mapOf(TagField.ALBUM_ARTIST to "Kit Callaway"),
             ),
             plans.map { it.song.title to it.fields },
@@ -346,30 +346,59 @@ class TagEditsTest {
             song("Music/a.mp3", title = "Lamp Oil", artist = "Glass", albumArtist = "Glass", id = 1),
             song("Music/b.mp3", title = "Porch Wire", artist = "Glass Harbour", albumArtist = "Glass Harbour", id = 2),
             song("Music/c.mp3", title = "Tin Roof", artist = "Mira Okafor feat. Glass", id = 3),
-            song("Music/d.mp3", title = "Low Tide", artist = "Ann Wilson & Glass", id = 4),
+            song("Music/d.mp3", title = "Low Tide", artist = "Ann Wilson featuring Glass", id = 4),
             song("Music/e.mp3", title = "Ferry Bell", artist = "Kit Calloway (with Glass)", id = 5),
-            song("Music/f.mp3", title = "Moth Signal", artist = "Glass, Mira Okafor", id = 6),
+            song("Music/f.mp3", title = "Moth Signal", artist = "Glass; Mira Okafor", id = 6),
         )
 
         assertEquals(
             listOf(
                 "Lamp Oil" to mapOf(TagField.ARTIST to "Pane", TagField.ALBUM_ARTIST to "Pane"),
                 "Tin Roof" to mapOf(TagField.ARTIST to "Mira Okafor feat. Pane"),
-                "Low Tide" to mapOf(TagField.ARTIST to "Ann Wilson & Pane"),
+                "Low Tide" to mapOf(TagField.ARTIST to "Ann Wilson featuring Pane"),
                 "Ferry Bell" to mapOf(TagField.ARTIST to "Kit Calloway (with Pane)"),
-                "Moth Signal" to mapOf(TagField.ARTIST to "Pane, Mira Okafor"),
+                "Moth Signal" to mapOf(TagField.ARTIST to "Pane; Mira Okafor"),
             ),
             TagEdits.rename(songs, listOf("Glass"), "Pane").map { it.song.title to it.fields },
         )
-        assertEquals("Ann Wilson & Glass", TagEdits.replaceNames("Ann Wilson & Glass", listOf("Ann"), "Anna"))
+        assertEquals("Ann Wilson featuring Glass", TagEdits.replaceNames("Ann Wilson featuring Glass", listOf("Ann"), "Anna"))
         assertEquals("Glass Harbour", TagEdits.replaceNames("Glass Harbour", listOf("Glass"), "Pane"))
+    }
+
+    @Test
+    fun `a band whose name holds a comma or an ampersand is one name, never split for a rename`() {
+        val songs = listOf(
+            song("Music/a.mp3", title = "Lamp Oil", artist = "Rowan", albumArtist = "Rowan", id = 1),
+            song("Music/b.mp3", title = "Porch Wire", artist = "Rowan, the Lantern", albumArtist = "Rowan, the Lantern", id = 2),
+            song("Music/c.mp3", title = "Tin Roof", artist = "Rowan & Fennick", albumArtist = "Rowan & Fennick", id = 3),
+        )
+
+        assertEquals(
+            listOf("Lamp Oil" to mapOf(TagField.ARTIST to "Rowan Vale", TagField.ALBUM_ARTIST to "Rowan Vale")),
+            TagEdits.rename(songs, listOf("Rowan"), "Rowan Vale").map { it.song.title to it.fields },
+        )
+        assertEquals("Rowan, the Lantern", TagEdits.replaceNames("Rowan, the Lantern", listOf("Rowan"), "Rowan Vale"))
+        assertEquals("Rowan & Fennick", TagEdits.replaceNames("Rowan & Fennick", listOf("Fennick"), "Fen"))
+        // Renaming the duo itself is a whole value.
+        assertEquals("Rowan and Fennick", TagEdits.replaceNames("Rowan & Fennick", listOf("Rowan & Fennick"), "Rowan and Fennick"))
+    }
+
+    @Test
+    fun `a rename's songs are the artist's own first, then those that only credit it, for Also credited on`() {
+        val plans = TagEdits.rename(credits, listOf("Kit Calloway"), "Kit Callaway")
+
+        val split = TagEdits.credits(plans, listOf("Kit Calloway"))
+
+        // Lamp Oil is by the artist, Ferry Bell on its album; Porch Wire and Tin Roof only credit it.
+        assertEquals(listOf("Lamp Oil", "Ferry Bell"), split.own.map { it.song.title })
+        assertEquals(listOf("Porch Wire", "Tin Roof"), split.credited.map { it.song.title })
     }
 
     @Test
     fun `Rename to the same name, or to nothing, changes nothing`() {
         assertEquals(emptyList<SongPlan>(), TagEdits.rename(credits, listOf("Kit Calloway"), "Kit Calloway"))
         assertEquals(emptyList<SongPlan>(), TagEdits.rename(credits, listOf("Kit Calloway"), "  "))
-        assertEquals("Mira Okafor & Kit Calloway", TagEdits.replaceNames("Mira Okafor & Kit Calloway", listOf(""), "Kit"))
+        assertEquals("Mira Okafor; Kit Calloway", TagEdits.replaceNames("Mira Okafor; Kit Calloway", listOf(""), "Kit"))
     }
 
     @Test
@@ -387,7 +416,7 @@ class TagEditsTest {
             listOf("K. Calloway", "K. Calloway feat. Mira Okafor"),
             TagEdits.rename(songs, listOf("Kit Calloway", "Kit Caloway"), "K. Calloway").map { it.fields.getValue(TagField.ARTIST) },
         )
-        assertEquals("Kit Calloway & Kit Calloway", TagEdits.replaceNames("Kit & Calloway", listOf("Kit", "Calloway"), "Kit Calloway"))
+        assertEquals("Kit Calloway; Kit Calloway", TagEdits.replaceNames("Kit; Calloway", listOf("Kit", "Calloway"), "Kit Calloway"))
     }
 
     @Test

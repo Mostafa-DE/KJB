@@ -148,9 +148,11 @@
         <item quantity="one">Merge · %d song</item>
         <item quantity="other">Merge · %d songs</item>
     </plurals>
-    <plurals name="edit_more_songs">
-        <item quantity="one">and %d more song</item>
-        <item quantity="other">and %d more songs</item>
+    <string name="edit_also_credited">Also credited on</string>
+    <string name="edit_rename_preview">“%1$s” becomes “%2$s” in the artist and album artist fields of these songs.</string>
+    <plurals name="edit_rename_songs">
+        <item quantity="one">Rename · %d song</item>
+        <item quantity="other">Rename · %d songs</item>
     </plurals>
 
     <!-- May be the same -->

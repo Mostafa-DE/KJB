@@ -46,6 +46,7 @@ import app.lyrify.library.Artist
 import app.lyrify.library.Library
 import app.lyrify.library.Song
 import app.lyrify.lyrics.TrackNames
+import app.lyrify.tags.CreditSplit
 import app.lyrify.tags.EditKind
 import app.lyrify.tags.NameKind
 import app.lyrify.tags.NamePair
@@ -97,8 +98,9 @@ internal fun ArtistEditHost(library: Library, name: String) {
 }
 
 /**
- * Rename artist: a new name, then one confirmation, then [name] becomes it in the artist and album artist of every
- * song, inside credits as a whole word. The page follows the artist to the new name.
+ * Rename artist: a new name; then every song it changes, the artist's own and those that only credit it ("Also
+ * credited on"); then one confirmation, and [name] becomes the new name in the artist and album artist of each. The
+ * page follows the artist to the new name.
  */
 @Composable
 private fun RenameArtist(library: Library, name: String, onDone: () -> Unit) {
@@ -120,13 +122,55 @@ private fun RenameArtist(library: Library, name: String, onDone: () -> Unit) {
         }
         return
     }
-    ConfirmWrite(plans.size, stringResource(R.string.edit_confirm_rename, name, chosen), onDismiss = onDone) {
-        onDone()
-        val label = resources.getString(R.string.edit_label_rename, name, chosen)
-        startWrite(context, toasts, resources, plans, EditKind.ARTIST, label, resources.getString(R.string.edit_renamed)) { result ->
-            // Only once a song has the new name: a failed rename never opens another artist who already had it.
-            if (result.wroteAny() && awaitLibrary(context) { it.artist(chosen) != null }) nav.replaceTop(Page.Artist(name), Page.Artist(chosen))
+    var asking by remember { mutableStateOf(false) }
+    LyrifySheet(
+        onDismiss = onDone,
+        spacing = 12.dp,
+        footer = {
+            LyrifyButton(pluralStringResource(R.plurals.edit_rename_songs, plans.size, plans.size), onClick = { asking = true }, modifier = Modifier.fillMaxWidth(), icon = R.drawable.ic_edit)
+        },
+    ) {
+        Text(stringResource(R.string.edit_rename_artist), style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { heading() })
+        Sentence(stringResource(R.string.edit_rename_preview, name, chosen))
+        NameChanges(plans, listOf(name))
+    }
+    if (asking) {
+        ConfirmWrite(plans.size, stringResource(R.string.edit_confirm_rename, name, chosen), onDismiss = { asking = false }) {
+            asking = false
+            onDone()
+            val label = resources.getString(R.string.edit_label_rename, name, chosen)
+            startWrite(context, toasts, resources, plans, EditKind.ARTIST, label, resources.getString(R.string.edit_renamed)) { result ->
+                // Only once a song has the new name: a failed rename never opens another artist who already had it.
+                if (result.wroteAny() && awaitLibrary(context) { it.artist(chosen) != null }) nav.replaceTop(Page.Artist(name), Page.Artist(chosen))
+            }
         }
+    }
+}
+
+/**
+ * "Changes 12 songs" and every song a rename or a merge changes: first the songs of the names themselves, then, under
+ * "Also credited on", those that only credit one of [names] among other artists, which their pages do not list. An
+ * album merge ([names] null) has no credits.
+ */
+@Composable
+private fun NameChanges(plans: List<SongPlan>, names: Collection<String>?) {
+    val resources = LocalResources.current
+    Text(
+        if (plans.isEmpty()) stringResource(R.string.edit_nothing_yet) else pluralStringResource(R.plurals.edit_changes, plans.size, plans.size),
+        style = MaterialTheme.typography.titleMedium,
+        modifier = Modifier.semantics { heading() },
+    )
+    if (plans.isEmpty()) return
+    val split = remember(plans, names) { names?.let { TagEdits.credits(plans, it) } ?: CreditSplit(plans, emptyList()) }
+    if (split.own.isNotEmpty()) ChangeList(split.own.flatMap { mergeLines(it, resources) })
+    if (split.credited.isNotEmpty()) {
+        Text(
+            stringResource(R.string.edit_also_credited),
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 4.dp).semantics { heading() },
+        )
+        ChangeList(split.credited.flatMap { mergeLines(it, resources) })
     }
 }
 
@@ -222,15 +266,7 @@ private fun MergeSheet(kind: NameKind, first: String, second: String?, library: 
                 KeepRow(stringResource(R.string.edit_another_name), null, kept == Keep.ANOTHER) { keep = Keep.ANOTHER }
             }
             if (kept == Keep.ANOTHER) LyrifyField(typed, { typed = it.take(MAX_NAME) }, label = stringResource(R.string.edit_new_name), modifier = Modifier.fillMaxWidth())
-            Text(
-                if (plans.isEmpty()) stringResource(R.string.edit_nothing_yet) else pluralStringResource(R.plurals.edit_changes, plans.size, plans.size),
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.semantics { heading() },
-            )
-            if (plans.isNotEmpty()) {
-                val more = plans.size - PREVIEW_SONGS
-                ChangeList(plans.take(PREVIEW_SONGS).flatMap { mergeLines(it, resources) }, if (more > 0) pluralStringResource(R.plurals.edit_more_songs, more, more) else null)
-            }
+            NameChanges(plans, if (kind == NameKind.ARTIST) listOf(a.name, b.name) else null)
         }
     }
     if (asking && b != null) {
@@ -421,4 +457,3 @@ private fun SuggestSheet(kind: NameKind, pairs: List<Pair<Named, Named>>, onDism
 
 private const val MAX_NAME = 120
 private const val MAX_LISTED = 50
-private const val PREVIEW_SONGS = 4

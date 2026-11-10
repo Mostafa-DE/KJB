@@ -166,6 +166,9 @@ data class SongPlan(val song: Song, val fields: Map<TagField, String>, val cover
         }
 }
 
+/** A rename's songs: the artist's [own], and those [credited] with it among others ([TagEdits.credits]). */
+data class CreditSplit(val own: List<SongPlan>, val credited: List<SongPlan>)
+
 /** One line of what an edit changes: [field] from [old] to [new] (empty: none); [song] when it is that song's own line. */
 data class PreviewLine(val field: TagField, val old: String, val new: String, val song: Song? = null)
 
@@ -230,6 +233,16 @@ object TagEdits {
         }
     }
 
+    /**
+     * A rename's or a merge's [plans] split for its preview: the songs whose whole artist or album artist is one of
+     * [names] (the artist's page and albums), then those that only credit one among others ("Also credited on").
+     */
+    fun credits(plans: List<SongPlan>, names: Collection<String>): CreditSplit {
+        val whole = names.map(String::trim).toSet()
+        val (own, credited) = plans.partition { it.song.artist?.trim() in whole || it.song.albumArtist?.trim() in whole }
+        return CreditSplit(own, credited)
+    }
+
     /** Merge albums: every song of [albums] whose album is not [keep] takes it. */
     fun mergeAlbums(albums: List<Album>, keep: String): List<SongPlan> {
         val name = keep.trim()
@@ -242,8 +255,9 @@ object TagEdits {
     /**
      * [text], a credit, with each part that is exactly one of [names] replaced by [to], in one pass so [to] is never
      * replaced again: the whole value, or a name between the joins a credit uses ("feat.", "ft.", "featuring", "(with
-     * ...)", "&", ",", ";"). A word inside another name ("Glass" in "Glass Harbour") is never one. Blank names and [to]
-     * itself are left out.
+     * ...)", ";"). A word inside another name ("Glass" in "Glass Harbour") is never one, nor is a name beside "&" or ","
+     * ("Rowan & Fennick", "Rowan, the Lantern"): those are mostly one band's name. Blank names and [to] itself are left
+     * out.
      */
     fun replaceNames(text: String, names: Collection<String>, to: String): String {
         val replaced = names.filter { it.isNotBlank() && it != to }.toSet()
@@ -269,8 +283,8 @@ object TagEdits {
         return out.toString()
     }
 
-    /** What joins the names of a credit, after TrackNames' "feat." forms; "and", "x" and "/" are left to names ("AC/DC"). */
-    private val CREDIT_JOIN = Regex("""\s*[(\[]\s*(?:feat\.?|ft\.?|featuring|with)\s+|\s*[)\]]\s*|\s+(?:feat\.?|ft\.?|featuring)\s+|\s*[&,;]\s*""", RegexOption.IGNORE_CASE)
+    /** What joins the names of a credit: TrackNames' "feat." forms, and ";". "&", ",", "and", "x" and "/" stay in names. */
+    private val CREDIT_JOIN = Regex("""\s*[(\[]\s*(?:feat\.?|ft\.?|featuring|with)\s+|\s*[)\]]\s*|\s+(?:feat\.?|ft\.?|featuring)\s+|\s*;\s*""", RegexOption.IGNORE_CASE)
 
     /**
      * The cover change [song] gets: an Opus song ([opusOther]: the rest of its comment header, from [OpusHeader]) keeps

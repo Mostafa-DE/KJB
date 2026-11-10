@@ -596,7 +596,7 @@ internal class ChangeLine(val what: String, val old: String, val new: String)
 
 /** The lines of what changes, on a card: each one's name, then old → new. */
 @Composable
-internal fun ChangeList(lines: List<ChangeLine>, more: String? = null) {
+internal fun ChangeList(lines: List<ChangeLine>) {
     LyrifyCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             lines.forEach { line ->
@@ -609,7 +609,6 @@ internal fun ChangeList(lines: List<ChangeLine>, more: String? = null) {
                     )
                 }
             }
-            if (more != null) Text(more, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
