@@ -33,8 +33,9 @@ class PlaysDbDeviceTest {
     private val dir = File(context.cacheDir, "plays-device-test")
     private val file = File(dir, PlaysSchema.NAME)
     private val opened = mutableListOf<PlaysDb>()
+    private val logs = mutableListOf<String>()
 
-    private fun open(): SqlPlayLog = SqlPlayLog(PlaysDb(context, file.absolutePath).also(opened::add))
+    private fun open(): SqlPlayLog = SqlPlayLog(PlaysDb(context, file.absolutePath, log = logs::add).also(opened::add), log = logs::add)
 
     @Before
     fun clean() {
@@ -127,17 +128,24 @@ class PlaysDbDeviceTest {
         assertEquals(listOf(SongPlays(SongRef(PATH), 1, T0, 0)), store.totals())
     }
 
+    /**
+     * SQLite finds the junk while the file is being opened: it is kept aside and the same open goes on with a new file,
+     * so the very first write lands. (Closing the database there, mid-open, failed that first call on the phone.)
+     */
     @Test
     fun anUnreadableFileIsKeptAsideAndANewOneStarted() = runBlocking {
         val junk = ByteArray(8_192) { (it * 31 + 7).toByte() }
         file.writeBytes(junk)
         val store = open()
 
-        assertTrue(store.put(LoggedPlay(SongRef(PATH), T0, 120_000, counted = true)))
+        assertTrue(logs.toString(), store.put(LoggedPlay(SongRef(PATH), T0, 120_000, counted = true)))
         assertEquals(1, store.totals().size)
         val aside = dir.listFiles { it: File -> it.name.startsWith("plays-unreadable-") && it.name.endsWith(".db") }.orEmpty()
         assertEquals(1, aside.size)
         assertArrayEquals(junk, aside.single().readBytes())
+        assertEquals(listOf("plays: plays.db unreadable, kept aside"), logs)
+        // The new file is a real one: opened again, it has the play.
+        assertEquals(listOf(SongPlays(SongRef(PATH), 1, T0, 120_000)), open().totals())
     }
 
     @Test

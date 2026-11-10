@@ -148,7 +148,7 @@ object PlaysSchema {
 
 /**
  * `plays.db` in app-private storage ([name] null: in memory, for device tests). A file SQLite can't read is moved aside
- * as `plays-unreadable-<millis>.db` and a new one started, never deleted, so the plays can still be rescued.
+ * ([keepAside]) and a new one started, never deleted, so the plays can still be rescued.
  */
 class PlaysDb(context: Context, name: String? = PlaysSchema.NAME, clock: () -> Long = System::currentTimeMillis, log: (String) -> Unit = {}) :
     SQLiteOpenHelper(context, name, null, PlaysSchema.VERSION, KeepAside(clock, log)) {
@@ -165,15 +165,31 @@ class PlaysDb(context: Context, name: String? = PlaysSchema.NAME, clock: () -> L
 
     private class KeepAside(private val clock: () -> Long, private val log: (String) -> Unit) : DatabaseErrorHandler {
         override fun onCorruption(db: SQLiteDatabase) {
-            val path = db.path
-            runCatching { db.close() }
-            val file = File(path)
+            // A file that is no database at all is found while SQLiteDatabase.open() is still opening it: the database is
+            // not open yet, and open() starts again on a new file once this returns. Closing it then dropped its last
+            // reference, so the helper's first query threw IllegalStateException and the first read or write failed.
+            if (db.isOpen) runCatching { db.close() }
+            val file = File(db.path)
             if (!file.exists()) return
-            val aside = "plays-unreadable-${clock()}.db"
-            listOf("", "-wal", "-shm", "-journal").forEach { end -> File(path + end).takeIf(File::exists)?.renameTo(File(file.parentFile, aside + end)) }
-            log("plays: plays.db unreadable, kept aside")
+            val kept = keepAside(file, clock()) != null
+            log(if (kept) "plays: plays.db unreadable, kept aside" else "plays: plays.db unreadable, could not be kept aside")
         }
     }
+}
+
+/**
+ * Moves [file], an unreadable `plays.db`, aside with its journal files as `plays-unreadable-<now>.db` (and `-wal`, `-shm`,
+ * `-journal`) beside it, so the next open starts a new file. Never deletes, and never overwrites: when a name is taken,
+ * the next millisecond's is used. Null when there is no file, or it could not be moved.
+ */
+fun keepAside(file: File, now: Long): File? {
+    if (!file.exists()) return null
+    val ends = listOf("", "-wal", "-shm", "-journal")
+    val dir = file.absoluteFile.parentFile
+    val aside = generateSequence(now) { it + 1 }.map { File(dir, "plays-unreadable-$it.db") }.first { taken -> ends.none { File(taken.path + it).exists() } }
+    if (!file.renameTo(aside)) return null
+    ends.drop(1).forEach { end -> File(file.path + end).takeIf(File::exists)?.renameTo(File(aside.path + end)) }
+    return aside
 }
 
 /** [PlayLogStore] over [db], on [io]. The log gets exception names only. */
