@@ -93,7 +93,7 @@
 
     <!-- About -->
     <string name="set_auto">Using Android Auto</string>
-    <string name="set_auto_sheet">Android Auto shows apps from outside an app store only once you allow it. In Android Auto\'s settings, tap Version 10 times to turn on developer settings. Then turn on Unknown sources there.</string>
+    <string name="set_auto_sheet">Android Auto shows apps from outside an app store only once you allow it. On your phone, open Android Auto\'s settings, tap Version, then tap Version and permission info 10 times and allow development settings. Open Developer settings from the ⋮ menu, turn on Unknown sources, then connect to your car again.</string>
 
     <!-- Advanced -->
     <string name="set_gapless">Gapless playback</string>
