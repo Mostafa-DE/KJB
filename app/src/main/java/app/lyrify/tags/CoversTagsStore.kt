@@ -48,9 +48,10 @@ data class AlbumRecord(
 /**
  * What `covers-tags.json` keeps: the albums settled, whether a check ever ran, whether the sync note was shown, and the
  * newest Covers & tags History entry it has settled ([historySeen]): a newer one without a Done album lost its record to
- * the app's death, and the album is rebuilt from History.
+ * the app's death, and the album is rebuilt from History. [historySeen] is null for a file from before it was kept:
+ * what that file settled is unknown, so nothing is rebuilt from it.
  */
-data class CoversTagsMemory(val albums: List<AlbumRecord> = emptyList(), val checkedOnce: Boolean = false, val noted: Boolean = false, val historySeen: Long = 0)
+data class CoversTagsMemory(val albums: List<AlbumRecord> = emptyList(), val checkedOnce: Boolean = false, val noted: Boolean = false, val historySeen: Long? = 0)
 
 /**
  * `covers-tags.json`, app-private: the albums done or skipped, and two flags. Read leniently, as the ledger is: unknown
@@ -79,18 +80,19 @@ class CoversTagsStore(private val file: File, private val log: (String) -> Unit 
         val items = root[ALBUMS] as? JsonArray ?: JsonArray(emptyList())
         val albums = items.mapNotNull { decode(it, AlbumRecord.serializer()) }
         if (albums.size < items.size) log("tags: ${items.size - albums.size} stored albums unreadable, left out")
-        return CoversTagsMemory(albums, flag(root, CHECKED), flag(root, NOTED), (root[HISTORY_SEEN] as? JsonPrimitive)?.longOrNull ?: 0)
+        // No historySeen: a file from before it was kept (null, never 0, which would take every History entry for lost).
+        return CoversTagsMemory(albums, flag(root, CHECKED), flag(root, NOTED), (root[HISTORY_SEEN] as? JsonPrimitive)?.longOrNull)
     }
 
     fun save(memory: CoversTagsMemory): Boolean {
         val root = JsonObject(
-            mapOf(
+            listOfNotNull(
                 VERSION_KEY to JsonPrimitive(VERSION),
                 CHECKED to JsonPrimitive(memory.checkedOnce),
                 NOTED to JsonPrimitive(memory.noted),
-                HISTORY_SEEN to JsonPrimitive(memory.historySeen),
+                memory.historySeen?.let { HISTORY_SEEN to JsonPrimitive(it) },
                 ALBUMS to JsonArray(memory.albums.map { json.encodeToJsonElement(AlbumRecord.serializer(), it) }),
-            ),
+            ).toMap(),
         )
         val aside = File(file.path + TMP)
         return try {
