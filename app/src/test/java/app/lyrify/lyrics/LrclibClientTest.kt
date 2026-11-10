@@ -67,12 +67,20 @@ class LrclibClientTest {
     }
 
     @Test
-    fun `a request LRCLIB refuses (a 4xx but 408 and 429) is not found for good, never busy`() {
+    fun `a request LRCLIB refuses (400, 404, 410, 414, 422) is not found for good, never busy`() {
         assertEquals(LrclibResult.NotFound, LrclibResponses.get(400, """{"code":400,"name":"BadRequest"}"""))
         assertEquals(LrclibResult.NotFound, LrclibResponses.search(400, null))
-        for (code in listOf(403, 404, 410, 414, 422)) {
+        for (code in listOf(404, 410, 414, 422)) {
             assertEquals("get $code", LrclibResult.NotFound, LrclibResponses.get(code, null))
             assertEquals("search $code", LrclibResult.NotFound, LrclibResponses.search(code, ""))
+        }
+    }
+
+    @Test
+    fun `any other 4xx is busy, a CDN's 403 for bots or too many requests included`() {
+        for (code in listOf(401, 403, 405, 408, 409, 418, 429, 451)) {
+            assertTrue("get $code", LrclibResponses.get(code, null) is LrclibResult.Transient)
+            assertTrue("search $code", LrclibResponses.search(code, "") is LrclibResult.Transient)
         }
     }
 

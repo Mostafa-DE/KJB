@@ -196,6 +196,8 @@ internal object LrclibUrls {
         params.mapNotNull { (name, value) -> value?.let { "$name=${URLEncoder.encode(it, "UTF-8")}" } }.joinToString("&")
 }
 
+private const val HTTP_UNPROCESSABLE: Int = 422
+
 /** HTTP status and body to a result: a readable 200 is found, a [refused] request not found, anything else transient. */
 internal object LrclibResponses {
     fun get(code: Int, body: String?): LrclibResult = when {
@@ -211,13 +213,19 @@ internal object LrclibResponses {
     }
 
     /**
-     * A 4xx LRCLIB answers the same however often it is asked (a 400 for a request it can't read, a 404): the lookup
-     * takes it as not found, never retried. 408 (timeout) and 429 (too many requests) mean later, as a 5xx does.
+     * A status LRCLIB answers the same however often it is asked: the lookup takes it as not found, never retried. Any
+     * other 4xx means later, as a 5xx does: a CDN in front of LRCLIB can answer 403 while it blocks bots or rate-limits.
      */
-    fun refused(code: Int): Boolean =
-        code in HttpURLConnection.HTTP_BAD_REQUEST until HttpURLConnection.HTTP_INTERNAL_ERROR && code != HttpURLConnection.HTTP_CLIENT_TIMEOUT && code != HTTP_TOO_MANY_REQUESTS
+    fun refused(code: Int): Boolean = code in REFUSED
 
-    private const val HTTP_TOO_MANY_REQUESTS: Int = 429
+    /** Bad request, not found, gone, address too long, unprocessable. */
+    private val REFUSED: Set<Int> = setOf(
+        HttpURLConnection.HTTP_BAD_REQUEST,
+        HttpURLConnection.HTTP_NOT_FOUND,
+        HttpURLConnection.HTTP_GONE,
+        HttpURLConnection.HTTP_REQ_TOO_LONG,
+        HTTP_UNPROCESSABLE,
+    )
 
     private inline fun parse(body: String?, read: (String) -> List<LrclibRecord>): LrclibResult {
         if (body == null) return LrclibResult.Transient("no body")
