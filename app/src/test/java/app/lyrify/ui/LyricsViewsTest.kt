@@ -1,6 +1,7 @@
 package app.lyrify.ui
 
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import app.lyrify.data.LyricsStatus
@@ -16,6 +17,7 @@ import app.lyrify.settings.Settings
 import app.lyrify.settings.SettingsJson
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -160,10 +162,28 @@ class LyricsViewsTest {
     @Test
     fun `a seek or a jump to another line ends the pause at once, the song moving on to the next line does not`() {
         val paused = LyricsFollow().touched(now = 10_000)
-        assertFalse(paused.moved(from = 4, to = 5).follows(now = 10_500, held = false))
-        assertFalse(paused.moved(from = 4, to = 4).follows(now = 10_500, held = false))
-        assertTrue(paused.moved(from = 4, to = 12).follows(now = 10_500, held = false))
-        assertTrue(paused.moved(from = 4, to = 2).follows(now = 10_500, held = false))
+        assertFalse(paused.moved(from = 4, to = 5).follows(now = 10_500))
+        assertFalse(paused.moved(from = 4, to = 4).follows(now = 10_500))
+        assertTrue(paused.moved(from = 4, to = 12).follows(now = 10_500))
+        assertTrue(paused.moved(from = 4, to = 2).follows(now = 10_500))
+    }
+
+    @Test
+    fun `the line playing is the accent, darker on light, and the lines to come are clearly dimmer than it`() {
+        listOf(Triple(LightColors, LightBrandColors, false), Triple(DarkColors, DarkBrandColors, true)).forEach { (scheme, brand, dark) ->
+            val tones = lyricTones(scheme, brand, dark)
+            // The orange of the song playing's title: the token itself on dark, the token darkened toward its own ink on light.
+            if (dark) assertEquals(brand.highlight, tones.now) else assertNotEquals(brand.highlight, tones.now)
+            assertEquals(scheme.outline, tones.past)
+            listOf(scheme.background, scheme.surfaceContainerLow).forEach { under ->
+                val now = contrast(tones.now, under)
+                val next = contrast(tones.next.compositeOver(under), under)
+                assertTrue("now $now", now >= 4.5f)
+                assertTrue("next $next", next >= 3f)
+                // Lit apart by its lightness too, not by its hue alone.
+                assertTrue("now $now, next $next", now / next >= 1.3f)
+            }
+        }
     }
 
     @Test
@@ -179,11 +199,19 @@ class LyricsViewsTest {
     }
 
     @Test
-    fun `nothing scrolls the lines while a finger is on them, however long it stays`() {
+    fun `a finger resting on the lines stops the follow from its touch, however long it stays, and the wait starts when it lifts`() {
         val follow = LyricsFollow()
-        assertTrue(follow.follows(now = 0, held = false))
-        assertFalse(follow.follows(now = 0, held = true))
-        assertFalse(follow.touched(now = 0).follows(now = 60_000, held = true))
+        assertTrue(follow.follows(now = 0))
+        // Down, not moving: no follow, however long.
+        val down = follow.down(now = 1_000)
+        assertFalse(down.follows(now = 1_000))
+        assertFalse(down.follows(now = 60_000))
+        // Up: the 3.5 s wait starts then.
+        val up = down.up(now = 61_000)
+        assertFalse(up.follows(now = 64_499))
+        assertTrue(up.follows(now = 64_500))
+        // A tap on a line while held follows at once once the finger is up, as a tap's own down and up do.
+        assertTrue(down.up(now = 2_000).tapped().follows(now = 2_001))
     }
 
     @Test

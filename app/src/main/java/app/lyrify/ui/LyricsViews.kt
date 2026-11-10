@@ -1,5 +1,9 @@
 package app.lyrify.ui
 
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.material3.ColorScheme
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.BlendMode
@@ -19,7 +23,6 @@ import android.content.Context
 import android.os.SystemClock
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -238,12 +241,26 @@ data class LyricsFrame(val sides: Dp, val top: Float, val anchor: Float, val bot
 @Immutable
 data class LineTones(val now: Color, val past: Color, val next: Color)
 
-/** The theme's line colours: on-surface for the line playing, outline for sung lines, the secondary ink to come. */
+/**
+ * The lines' colours on [scheme]: the line playing in the accent, the orange of the song playing's title (on light a
+ * little darker toward its own ink, so it reads as well as the rest), sung lines in outline as before, and the lines to
+ * come at [NEXT_INK] of the ink: clearly dimmer than the lit line, by lightness as well as by hue.
+ */
+fun lyricTones(scheme: ColorScheme, brand: BrandColors, dark: Boolean): LineTones = LineTones(
+    now = if (dark) brand.highlight else lerp(brand.highlight, brand.onHighlightContainer, LIGHT_ACCENT_DEPTH),
+    past = scheme.outline,
+    next = scheme.onSurface.copy(alpha = NEXT_INK),
+)
+
+/** The theme's line colours ([lyricTones]). */
 @Composable
-fun themeTones(): LineTones {
-    val colors = MaterialTheme.colorScheme
-    return LineTones(now = colors.onSurface, past = colors.outline, next = colors.onSurfaceVariant)
-}
+fun themeTones(): LineTones = lyricTones(MaterialTheme.colorScheme, LocalBrandColors.current, LocalDarkTheme.current)
+
+/** How much of the ink the lines to come take. */
+internal const val NEXT_INK = 0.58f
+
+/** How far the accent goes toward its own ink on light, for the lit line's contrast. */
+private const val LIGHT_ACCENT_DEPTH = 0.25f
 
 /** Where a line is in the song: sung, playing (a whole group of lines sharing a time plays together), or to come. */
 enum class LineState { PAST, NOW, NEXT }
@@ -304,9 +321,6 @@ fun SyncedLyrics(
     val reduced = LocalReducedMotion.current
     val at = currentLine(lines, positionMs)
     var follow by remember { mutableStateOf(LyricsFollow()) }
-    val dragged = list.interactionSource.collectIsDraggedAsState()
-    // A touch and its release both count: the list waits from the moment the finger lets go.
-    LaunchedEffect(dragged.value) { if (dragged.value || follow != LyricsFollow()) follow = follow.touched(SystemClock.elapsedRealtime()) }
     // The line the list last went toward: a jump from it (a seek) ends the wait.
     val last = remember { Kept(at) }
     BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -324,7 +338,8 @@ fun SyncedLyrics(
             if (at < 0) return@LaunchedEffect
             delay(follow.waitMs(SystemClock.elapsedRealtime()))
             // A finger still on the list: its release starts the wait again.
-            if (!follow.follows(SystemClock.elapsedRealtime(), held = dragged.value)) return@LaunchedEffect
+            // A finger still on the list: its lift starts the wait again.
+            if (!follow.follows(SystemClock.elapsedRealtime())) return@LaunchedEffect
             followLine(LazyLines(list), at, padTop, viewport, frame.anchor, smooth = !reduced)
         }
         val density = LocalDensity.current
@@ -336,6 +351,15 @@ fun SyncedLyrics(
             // the fade above its first line and below its last, so each can still rest in full view.
             modifier = Modifier
                 .fillMaxSize()
+                // Any finger on the list holds it from the moment it touches, scrolling or not; the wait starts as the last one lifts.
+                .pointerInput(Unit) {
+                    awaitPointerEventScope {
+                        while (true) {
+                            val pressed = awaitPointerEvent(PointerEventPass.Initial).changes.any { it.pressed }
+                            if (pressed != follow.held) follow = if (pressed) follow.down(SystemClock.elapsedRealtime()) else follow.up(SystemClock.elapsedRealtime())
+                        }
+                    }
+                }
                 .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
                 .drawWithContent {
                     drawContent()
@@ -453,13 +477,20 @@ const val LEAVE_ALONE_MS = 3_500L
  * last touch ([touchedAt], elapsed realtime); a tap on a line follows again at once (the prototype's rule).
  */
 @Immutable
-data class LyricsFollow(val touchedAt: Long = NEVER) {
-    fun touched(now: Long): LyricsFollow = copy(touchedAt = now)
+data class LyricsFollow(val touchedAt: Long = NEVER, val held: Boolean = false) {
+    /** The list was touched and let go at [now]. */
+    fun touched(now: Long): LyricsFollow = copy(touchedAt = now, held = false)
 
     fun tapped(): LyricsFollow = LyricsFollow()
 
-    /** Never while a finger is [held] on the list, however long; else once the wait is over. */
-    fun follows(now: Long, held: Boolean = false): Boolean = !held && now - touchedAt >= LEAVE_ALONE_MS
+    /** Never while a finger is on the list ([held]), however long and however still; else once the wait is over. */
+    fun follows(now: Long): Boolean = !held && now - touchedAt >= LEAVE_ALONE_MS
+
+    /** A finger touched the list, moving or not: it stays where it is for as long as one is on it. */
+    fun down(now: Long): LyricsFollow = copy(touchedAt = now, held = true)
+
+    /** The last finger lifted: the wait starts now. */
+    fun up(now: Long): LyricsFollow = copy(touchedAt = now, held = false)
 
     /** The line playing went [from] one line [to] another: on to the [next] (or nowhere) the wait goes on; a seek ends it. */
     fun moved(from: Int, to: Int, next: Int = from + 1): LyricsFollow = if (to == from || to == next) this else tapped()
