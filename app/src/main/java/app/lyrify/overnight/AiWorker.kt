@@ -205,7 +205,7 @@ class AiWorker(context: Context, params: WorkerParameters) : CoroutineWorker(con
             SystemClock::elapsedRealtime,
             log = { Log.d(LOG_TAG, "AI: $it") },
             notes = { runLog.append("AI:   $it") },
-            traces = verbose(),
+            verbose = verbose(),
         )
         return object : SongEngine {
             override suspend fun run(track: LocalTrack, plainLyrics: String?, onStage: (AiStage) -> Unit, beforeChunk: suspend () -> Unit): AiResult =

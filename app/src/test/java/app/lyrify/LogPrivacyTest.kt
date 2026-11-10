@@ -20,11 +20,13 @@ import java.io.File
  *   toString can hold all of it;
  * - a throwable handed to Log (its message and trace), unless it is handed only under VERBOSE;
  * - and anywhere: `println`, `System.out` and `System.err`.
+ * A function of the same file that a line calls (`"done: ${describe(result)}"`) is read too, one level deep. A call on a
+ * line that starts with `if (verbose` (`if (verbose()) Log.v(...)`) is the VERBOSE detail, and is not read.
  * Not logcat, so not read: `detail(…)`, the lyrics pipeline's song line, which the app passes on only under VERBOSE
  * (checked below), and `runLog(…)` and `notes(…)`, the AI's run log in the app's own files.
  *
  * Its limits: it reads text, not types. A value under an innocent name passes (`log(line)`, or `"$x"` where x holds a
- * title), and so do a function's result (`"${kind(e)}"`), a reason string built from an exception's message somewhere
+ * title), and so do a function of another file or two calls deep, a string built from an exception's message somewhere
  * else, an object joined with `+`, and a sink that forwards to logcat under another name. The tests that run the code with made-up names and check every line it logs cover what
  * it cannot see (LyricsPipelineTest, LyricsFromAudioTest, LrclibClientTest, QueueSweepTest, LyricsPipelineTrashTest,
  * ToneFilesTest, BusyFilesTest, AlbumLookupTest and others).
@@ -63,7 +65,35 @@ class LogPrivacyTest {
         assertEquals(emptyList<String>(), problems("""if (strings.any { '\u0000' in it }) log("tags: a value holds U+0000")"""))
         assertEquals(emptyList<String>(), problems("""detail("${'$'}{track.title}: ${'$'}status")"""))
         assertEquals(emptyList<String>(), problems("""runLog("AI: ${'$'}title: stopped")"""))
-        assertEquals(emptyList<String>(), problems("""log("AI failed: ${'$'}{kind(e)}, ${'$'}{items.size} items")"""))
+        assertEquals(emptyList<String>(), problems("""log("AI failed: ${'$'}{logged(e)}, ${'$'}{items.size} items")"""))
+    }
+
+    @Test
+    fun `a function of the same file that a log line calls is read too`() {
+        val source = """
+            |class Debug {
+            |    fun done(result: Result) {
+            |        Log.i(LOG_TAG, "done: ${'$'}{describe(result)}")
+            |    }
+            |
+            |    private fun describe(result: Result): String = when (result) {
+            |        is Result.Failed -> "failed: ${'$'}{result.message}"
+            |        else -> "done"
+            |    }
+            |
+            |    private fun title(song: Song): String = song.title
+            |}
+        """.trimMargin()
+        assertEquals(listOf("message"), problems(source))
+        assertEquals(emptyList<String>(), problems(source.replace("result.message", "result.kind")))
+    }
+
+    @Test
+    fun `a call on a line that starts with if verbose is the VERBOSE detail`() {
+        assertEquals(emptyList<String>(), problems("""if (verbose()) Log.v(LOG_TAG, "AI debug: ${'$'}{result.message}")"""))
+        assertEquals(emptyList<String>(), problems("""if (verbose && failed) log(e.stackTraceToString())"""))
+        assertEquals(listOf("message"), problems("""if (!verbose()) Log.v(LOG_TAG, "AI debug: ${'$'}{result.message}")"""))
+        assertEquals(listOf("title"), problems("""val gate = verbose(); Log.v(LOG_TAG, "on ${'$'}{track.title}")"""))
     }
 
     @Test
@@ -111,22 +141,61 @@ class LogPrivacyTest {
         val found = mutableListOf<Finding>()
         STREAMS.findAll(plain).forEach { found += Finding(lineOf(it.range.first), it.groupValues[1], it.value) }
         for (call in CALL.findAll(plain)) {
-            if (plain.substring(0, call.range.first).trimEnd().endsWith("fun")) continue
+            val before = plain.substring(0, call.range.first)
+            if (before.trimEnd().endsWith("fun")) continue
+            // The VERBOSE detail: `if (verbose()) Log.v(...)` on one line.
+            if (VERBOSE_GATE.containsMatchIn(before.substringAfterLast('\n'))) continue
             val arguments = argumentsAt(plain, call.range.last)
             val shown = source.substring(call.range.first, minOf(source.length, call.range.last + 1 + arguments.length + 1)).replace(Regex("""\s+"""), " ")
-            problemsIn(arguments, isLog = call.value.startsWith("Log.")).forEach { found += Finding(lineOf(call.range.first), it, shown) }
+            problemsIn(arguments, isLog = call.value.startsWith("Log."), plain).forEach { found += Finding(lineOf(call.range.first), it, shown) }
         }
         return found
     }
 
-    /** The problems of one call's [arguments], the words of its strings already dropped. */
-    private fun problemsIn(arguments: String, isLog: Boolean): List<String> {
+    /** The problems of one call's [arguments], the words of its strings already dropped, and of the same file's functions they call. */
+    private fun problemsIn(arguments: String, isLog: Boolean, plain: String): List<String> {
         val parts = topLevel(arguments)
         // Log's own arguments: the tag, the line, the throwable.
         val read = if (isLog) parts.drop(1).take(1) else parts
-        val problems = read.flatMap(::namesIn).toMutableList()
+        val helpers = read.flatMap { part -> HELPER_CALL.findAll(part).mapNotNull { bodyOf(plain, it.groupValues[1]) }.toList() }
+        val problems = (read + helpers).flatMap(::namesIn).toMutableList()
         if (isLog && parts.size > 2 && "verbose()" !in parts[2]) problems += "throwable"
         return problems.distinct()
+    }
+
+    /**
+     * The body of the function [name] declared in [plain] (`fun name(...)`), or null when the file declares none: its
+     * block, or its expression up to the next line indented no deeper than the declaration.
+     */
+    private fun bodyOf(plain: String, name: String): String? {
+        val declaration = Regex("""\bfun\s+${Regex.escape(name)}\(""").find(plain) ?: return null
+        val indent = declaration.range.first - (plain.lastIndexOf('\n', declaration.range.first) + 1)
+        var i = declaration.range.last
+        var depth = 0
+        // Past the parameters.
+        while (i < plain.length) {
+            when (plain[i]) {
+                '(' -> depth++
+                ')' -> if (--depth == 0) break
+            }
+            i++
+        }
+        val start = (i until plain.length).firstOrNull { plain[it] == '=' || plain[it] == '{' } ?: return null
+        depth = 0
+        var end = start
+        while (end < plain.length) {
+            val c = plain[end]
+            when (c) {
+                '(', '[', '{' -> depth++
+                ')', ']', '}' -> if (--depth == 0 && plain[start] == '{') return plain.substring(start, end + 1)
+            }
+            if (c == '\n' && depth == 0 && plain[start] == '=') {
+                val next = plain.substring(end + 1).lineSequence().firstOrNull { it.isNotBlank() } ?: break
+                if (next.length - next.trimStart().length <= indent) break
+            }
+            end++
+        }
+        return plain.substring(start, end)
     }
 
     private fun namesIn(text: String): List<String> = IDENTIFIER.findAll(text).mapNotNull { token ->
@@ -290,6 +359,12 @@ class LogPrivacyTest {
         val IDENTIFIER = Regex("""[A-Za-z_][A-Za-z0-9_]*""")
 
         val MEMBER_NEXT = Regex("""^\)*\s*\??\.""")
+
+        /** A call of a function by its plain name, `describe(`: maybe one the same file declares. */
+        val HELPER_CALL = Regex("""(?<![\w.])([a-z]\w*)\(""")
+
+        /** A line that starts the VERBOSE detail: `if (verbose()`, `if (verbose &&`. */
+        val VERBOSE_GATE = Regex("""\bif \(verbose\b""")
 
         /** Where a string's templates were: `$name`, and `${` with its `}`. */
         const val SIMPLE: Char = '\u0001'
