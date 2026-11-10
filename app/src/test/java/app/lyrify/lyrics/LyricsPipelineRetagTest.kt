@@ -311,6 +311,34 @@ class LyricsPipelineRetagTest {
         assertEquals(lrc, sidecar(track).readText())
     }
 
+    @Test
+    fun `a replace cut off between the rename and the ledger is settled at the next start, and the screen shows what the file holds`() = runTest {
+        val pipeline = pipeline()
+        val track = audio()
+        pipeline.withLyrics(track)
+        pipeline.retagged(track.copy(title = "Salt Roads"), namesChanged = true)
+        client.onId = { LrclibResult.Found(listOf(record(77, track = "Salt Roads", synced = otherSynced))) }
+        // Nothing more reaches the ledger once the new lyrics are in place: as if the app died right after the rename.
+        ledger.accepts = { it.status != LyricsStatus.SYNCED }
+
+        val checked = pipeline.choose(track.path, 77)
+
+        val lrc = sidecar(track).readBytes()
+        assertTrue(String(lrc).contains("w0101"))
+        assertEquals(Checked.Done(LyricsStatus.SYNCED), checked)
+
+        // The next start: the ledger works again, and the write it never heard the end of is settled by the file.
+        ledger.accepts = { true }
+        pipeline().finishInterrupted()
+
+        val entry = ledger[track.path]
+        assertEquals(LyricsStatus.SYNCED, entry?.status)
+        assertEquals(SidecarFile.sha256(lrc), entry?.sha256)
+        assertEquals(77L, entry?.lrclibId)
+        assertTrue(entry?.mine == true)
+        assertEquals(listOf("Salt Road.lrc", "Salt Road.mp3"), folder.root.list().orEmpty().sorted())
+    }
+
     private companion object {
         const val BASE: Long = 1_800_000_000_000
     }

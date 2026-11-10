@@ -28,8 +28,6 @@ import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.NoSuchFileException
 import java.nio.file.Path
-import java.nio.file.StandardCopyOption
-import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.BasicFileAttributes
 import java.util.UUID
 
@@ -102,9 +100,10 @@ private const val MAX_LRC_BYTES: Long = 1024 * 1024
  * The sync editor's writes, one song at a time with the pipeline ([hold]). Save writes the lines as the song's `.lrc` in
  * one step: the bytes go into a temporary file beside it, synced, then renamed into place, so the `.lrc` never holds a
  * part of them, even when the app dies. One that is there already, the user's own from before KJB included, is replaced
- * only by this Save, after its bytes are copied into app-private [folder]. The lyrics are then marked in the ledger as
- * the user's ([LedgerEntry.mine], so nothing replaces them by itself); without that mark nothing stays: the file is put
- * back. Each Save's Undo ([LrcUndo]) is kept in [folder] with its own copy, until it is used ([undo]) or let go
+ * only by this Save, after its bytes are copied into app-private [folder]. The lyrics are marked in the ledger as the
+ * user's ([LedgerEntry.mine], so nothing replaces them by itself): Save goes through the app's one writer for the
+ * user's lyrics ([placeMine]), the one Check these uses, so a Save the app's death cuts short is settled at the next
+ * start, and a new file the ledger can't mark goes again. Each Save's Undo ([LrcUndo]) is kept in [folder] with its own copy, until it is used ([undo]) or let go
  * ([forget]), also across a restart of the app ([load], [pending]). Undo puts back the entry before, then the copy (or
  * deletes a new file), only while the `.lrc` is still what was saved. Every change to the user's files asks [writes]
  * first. The log gets outcomes and exception names, never a name, a path or a line.
@@ -152,7 +151,7 @@ class LrcEdits(
             undo
         }
         val copies = found.mapNotNull { it.backup }.toSet()
-        files.filter { (it.name.endsWith(COPY) && it.name !in copies) || it.name.endsWith(TEMP) }.forEach { delete(it.toPath()) }
+        files.filter { (it.name.endsWith(COPY) && it.name !in copies) || SidecarFile.isTemp(it.name) }.forEach { delete(it.toPath()) }
         if (files.any { it.name.endsWith(RECORD) } && found.size < files.count { it.name.endsWith(RECORD) }) log("sync editor: unreadable undo records dropped")
         waiting.update { now -> (found.sortedBy { File(folder, it.id + RECORD).lastModified() } + now).distinctBy { it.id } }
     }
@@ -192,18 +191,11 @@ class LrcEdits(
         }
         val copy = old?.let { File(folder, id + COPY) }
         if (old != null && copy != null && !keep(copy.toPath(), old)) return LrcSave.Failed
-        if (!writeInPlace(sidecar, bytes, replace = replacing)) {
-            copy?.let { delete(it.toPath()) }
-            log("sync editor: not saved")
-            return LrcSave.Failed
-        }
         val sha256 = SidecarFile.sha256(bytes)
         val entry = recorded(before, track, LyricsStatus.SYNCED, before?.lrclibId, clock(), sha256 = sha256, size = bytes.size.toLong(), source = before?.source)
-        if (!ledger.put(entry.copy(mine = true))) {
-            // Unmarked lyrics would read as found by a lookup: what was there before comes back.
-            val back = if (old != null) writeInPlace(sidecar, old, replace = true) else SidecarFile.delete(sidecar, writes, log = {}) != Removal.FAILED
-            copy?.let { if (back) delete(it.toPath()) }
-            log("sync editor: not saved, the ledger not written${if (back) "" else "; the new file stays"}")
+        if (!placeMine(ledger, writes, sidecar, bytes, before, entry, replace = replacing, log, writeBytes)) {
+            copy?.let { delete(it.toPath()) }
+            log("sync editor: not saved")
             return LrcSave.Failed
         }
         val undo = LrcUndo(id, track.path, sha256, copy?.name, before)
@@ -285,7 +277,7 @@ class LrcEdits(
     /** [bytes] in app-private [path] in one step; false when they could not be kept. */
     private fun keep(path: Path, bytes: ByteArray): Boolean = try {
         Files.createDirectories(path.parent)
-        writeAtomically(path, bytes, replace = true, writeBytes = SidecarFile::writeFully)
+        SidecarFile.putWhole(path, bytes, replace = true)
         true
     } catch (e: IOException) {
         log("sync editor: not saved, the file before not kept: ${e.javaClass.simpleName}")
@@ -293,40 +285,16 @@ class LrcEdits(
     }
 
     /**
-     * [bytes] at the `.lrc` [sidecar] in one step: over the regular file there ([replace]), or where nothing is; false
-     * when that could not be done (nothing changed then, but for a temporary file a failed delete leaves).
+     * [bytes] at the `.lrc` [sidecar] in one step ([SidecarFile.putWhole]): over the regular file there ([replace]), or
+     * where nothing is (checked under the pipeline's hold, so no lookup creates one meanwhile); false when that could not
+     * be done, and nothing changed.
      */
     private fun writeInPlace(sidecar: Path, bytes: ByteArray, replace: Boolean): Boolean = try {
-        writeAtomically(sidecar, bytes, replace, writeBytes)
+        SidecarFile.putWhole(sidecar, bytes, replace, writeBytes)
         true
     } catch (e: IOException) {
         log("sync editor: not written: ${e.javaClass.simpleName}")
         false
-    }
-
-    /**
-     * A temporary file beside [target] (one an edit the app's death cut short left goes first), synced, then renamed to
-     * [target] atomically: over it with [replace], else only while nothing is there (checked under the pipeline's hold,
-     * so no lookup creates one meanwhile). Throws an IOException, after deleting the temporary file.
-     */
-    private fun writeAtomically(target: Path, bytes: ByteArray, replace: Boolean, writeBytes: (FileChannel, ByteBuffer) -> Unit) {
-        val temp = target.resolveSibling("." + target.fileName + TEMP)
-        try {
-            Files.deleteIfExists(temp)
-            FileChannel.open(temp, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE).use { channel ->
-                writeBytes(channel, ByteBuffer.wrap(bytes))
-                channel.force(true)
-            }
-            if (!replace && Files.exists(target, LinkOption.NOFOLLOW_LINKS)) throw IOException("a file appeared")
-            if (replace) {
-                Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
-            } else {
-                Files.move(temp, target, StandardCopyOption.ATOMIC_MOVE)
-            }
-        } catch (e: IOException) {
-            delete(temp)
-            throw e
-        }
     }
 
     private fun delete(path: Path) {
@@ -338,7 +306,6 @@ class LrcEdits(
     }
 
     companion object {
-        private const val TEMP = ".kjb-edit"
         private const val RECORD = ".json"
         private const val COPY = ".lrc"
         private val JSON = Json { ignoreUnknownKeys = true }

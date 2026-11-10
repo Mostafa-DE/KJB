@@ -324,11 +324,35 @@ class LrcEditsTest {
         assertFalse(sidecar(fresh).exists())
         assertEquals(before, sidecar(existing).readText())
         assertNull(ledger[fresh.path])
-        assertNull(ledger[existing.path])
+        // Over a `.lrc` that was there, the write's marker waits for the next start: the file before is the user's, as it is.
+        assertEquals(LyricsStatus.WRITING, ledger[existing.path]?.status)
+        pipeline().finishInterrupted()
+        assertEquals(LyricsStatus.EXISTING, ledger[existing.path]?.status)
+        assertTrue(ledger[existing.path]?.mine == true)
+        assertEquals(before, sidecar(existing).readText())
+        assertEquals(setOf("Harbour Lights.mp3", "Harbour Lights.lrc", "Kitchen Radio.mp3", ".Kitchen Radio.lrc.kjb-tmp"), songFolder(existing))
 
         assertTrue(edits().save(fresh, saved) is LrcSave.Saved)
         assertTrue(edits().save(existing, saved) is LrcSave.Saved)
         assertEquals(setOf("Harbour Lights.mp3", "Harbour Lights.lrc", "Kitchen Radio.mp3", "Kitchen Radio.lrc"), songFolder(existing))
+    }
+
+    @Test
+    fun `a Save cut off between the rename and the ledger is the user's lyrics at the next start`() = runTest {
+        val existing = audio()
+        sidecar(existing).writeText(before)
+        // Nothing more reaches the ledger once the lines are in place: as if the app died right after the rename.
+        ledger.accepts = { it.status != LyricsStatus.SYNCED }
+
+        assertTrue(edits().save(existing, saved) is LrcSave.Saved)
+        assertEquals(saved, sidecar(existing).readText())
+
+        ledger.accepts = { true }
+        pipeline().finishInterrupted()
+        val entry = ledger[existing.path]
+        assertEquals(LyricsStatus.SYNCED, entry?.status)
+        assertEquals(sha(saved), entry?.sha256)
+        assertTrue(entry?.mine == true)
     }
 
     @Test
