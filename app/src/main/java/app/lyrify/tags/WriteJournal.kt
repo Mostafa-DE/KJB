@@ -132,35 +132,79 @@ private fun FileInputStream.readUpTo(buffer: ByteArray, count: Int): Int {
  * theirs. A song torn by a write, or by putting its backup back after one, is this; another file is not.
  */
 fun tornFrom(file: File, a: File, b: File): Boolean {
-    if (!regularFile(file) || !regularFile(a) || !regularFile(b)) return false
-    val length = file.length()
+    if (!regularFile(file)) return false
+    return try {
+        FileInputStream(file).use { input -> tornFrom({ buffer, at -> input.channel.read(buffer, at) }, file.length(), a, b) }
+    } catch (_: IOException) {
+        false
+    }
+}
+
+/** [tornFrom] for the [length] bytes [read] gives, positionally: a song's held descriptor. */
+fun tornFrom(read: (ByteBuffer, Long) -> Int, length: Long, a: File, b: File): Boolean {
+    if (!regularFile(a) || !regularFile(b)) return false
     if (length < minOf(a.length(), b.length()) || length > maxOf(a.length(), b.length())) return false
     return try {
-        FileInputStream(file).use { f ->
-            FileInputStream(a).use { fa ->
-                FileInputStream(b).use { fb ->
-                    val chunk = 64 * 1024
-                    val bf = ByteArray(chunk)
-                    val ba = ByteArray(chunk)
-                    val bb = ByteArray(chunk)
-                    var at = 0L
-                    while (at < length) {
-                        val n = f.readUpTo(bf, minOf(chunk.toLong(), length - at).toInt())
-                        if (n <= 0) return false
-                        val na = fa.readUpTo(ba, n)
-                        val nb = fb.readUpTo(bb, n)
-                        for (i in 0 until n) {
-                            if (!(i < na && bf[i] == ba[i]) && !(i < nb && bf[i] == bb[i])) return false
-                        }
-                        at += n
+        FileInputStream(a).use { fa ->
+            FileInputStream(b).use { fb ->
+                val chunk = 64 * 1024
+                val bf = ByteBuffer.allocate(chunk)
+                val ba = ByteArray(chunk)
+                val bb = ByteArray(chunk)
+                var at = 0L
+                while (at < length) {
+                    bf.clear().limit(minOf(chunk.toLong(), length - at).toInt())
+                    val n = readFully(read, bf, at)
+                    if (n <= 0) return false
+                    val na = fa.readUpTo(ba, n)
+                    val nb = fb.readUpTo(bb, n)
+                    for (i in 0 until n) {
+                        val byte = bf.get(i)
+                        if (!(i < na && byte == ba[i]) && !(i < nb && byte == bb[i])) return false
                     }
-                    true
+                    at += n
                 }
+                true
             }
         }
     } catch (_: IOException) {
         false
     }
+}
+
+/** SHA-256 (hex) of every byte the song's descriptor reads now, by positional reads that never move its offset. */
+fun OpenSong.sha256(): String {
+    val digest = java.security.MessageDigest.getInstance("SHA-256")
+    val buffer = ByteBuffer.allocate(COPY_BYTES)
+    val length = size()
+    var at = 0L
+    while (at < length) {
+        buffer.clear().limit(minOf(COPY_BYTES.toLong(), length - at).toInt())
+        val n = readFully(::read, buffer, at)
+        if (n <= 0) throw IOException("song ended early")
+        buffer.flip()
+        digest.update(buffer)
+        at += n
+    }
+    return digest.digest().joinToString("") { "%02x".format(it) }
+}
+
+/** Whether the song's descriptor reads exactly [state]'s bytes: its length and SHA-256. */
+fun OpenSong.holds(state: FileState): Boolean = try {
+    size() == state.length && sha256() == state.sha256
+} catch (_: IOException) {
+    false
+}
+
+/** Fills [buffer] from [read] at [position], stopping early only at the end of the file; the bytes read. */
+private fun readFully(read: (ByteBuffer, Long) -> Int, buffer: ByteBuffer, position: Long): Int {
+    var done = 0
+    while (buffer.hasRemaining()) {
+        val n = read(buffer, position + done)
+        if (n <= 0) break
+        done += n
+    }
+    return done
 }
 
 /** Copies [from] to [to] and fsyncs the copy and its folder: on disk once this returns, else it throws. */
@@ -301,16 +345,20 @@ data class Recovered(val settled: Int = 0, val restored: Int = 0, val setAside: 
  * still open in [locks], so the lyrics pipeline, the AI and the tone preview stay off them; then [recover] settles each
  * one and lets it go:
  * - a song that is not a regular file at its path (a link is never followed), not mounted, or in no MediaStore row
- *   waits for the next start, untouched. The song is known by its path and content, not by its old id: closing the
- *   "rw" descriptor may have made MediaStore index the path again under a new one;
+ *   waits for the next start, untouched. Otherwise the song is opened, read and write, and held to the end: every
+ *   decision below is made on the bytes read through that descriptor, and any write goes through it, so nothing put at
+ *   the path meanwhile (even reusing the song's inode) is written over. Its MediaStore id is found by its path (closing
+ *   the "rw" descriptor may have made MediaStore index the path again under a new one), and the file identity stored in
+ *   the intent is only a hint (a remount changes the device number; an inode can be reused);
  * - a song exactly as written keeps its new tags, and the write's History record is saved (if that still fails, the
  *   intent waits);
  * - a committed intent (the write was finished and verified) never has its backup written back: a song changed since
  *   is set aside, untouched;
  * - a song exactly as before is left so;
- * - a song torn by the write ([tornFrom]: every byte is the old or the new content's) gets its backup written back, in
- *   place, if the backup is whole (a regular file with the original's length and SHA-256); anything else (another
- *   file at the path, a backup that is not whole) has its intent set aside, with its backup, and is left alone.
+ * - a song torn by the write ([tornFrom]: every byte is the old or the new content's) gets its backup written back
+ *   through the held descriptor, if the backup is whole (a regular file with the original's length and SHA-256);
+ *   anything else (another file at the path, a backup that is not whole) has its intent set aside, with its backup,
+ *   and is left alone.
  * An intent left waiting keeps its song [PathLocks.pin]ned for the rest of the process. Then the private copies and
  * the backups nothing needs are deleted. Logs counts only.
  */
@@ -369,50 +417,44 @@ class JournalRecovery(
         val song = File(intent.path)
         if (!songs.mounted(intent.path) || !regularFile(song)) return Settled.WAITING
         val id = songs.idOf(intent.path) ?: return Settled.WAITING
-        val now = fileState(song)
-        val written = now != null && now.sha256 == intent.expected.sha256 && now.length == intent.expected.length
-        val untouched = now != null && now.sha256 == intent.original.sha256 && now.length == intent.original.length
-        if (written) {
+        if (intent.fileId != null && songs.fileId(intent.path) != intent.fileId) log("journal: the song's file identity changed since its write; its bytes decide")
+        val open = songs.openInPlace(SongTarget(intent.path, id)) ?: return Settled.WAITING
+        val settled = open.use { settleThrough(intent, it) }
+        if (settled == Settled.RESTORED) songs.scan(intent.path)
+        return settled
+    }
+
+    /** [settle] with the song held open: decided on what [open] reads, written through [open] only. */
+    private fun settleThrough(intent: WriteIntent, open: OpenSong): Settled {
+        if (open.holds(intent.expected)) {
             // The write finished; its History record may not have been saved.
             if (intent.record != null && !undo.save(intent.record, intent.mediaStoreId)) return Settled.WAITING
             closeAndDrop(intent)
             return Settled.AS_IT_WAS
         }
-        if (intent.committed) {
-            // Written and verified, then changed by someone else: old bytes are never written over it.
-            journal.setAside(intent.id)
-            log("journal: a song changed after its write was committed, set aside")
-            return Settled.SET_ASIDE
-        }
-        if (untouched) {
+        // Written and verified, then changed by someone else: old bytes are never written over it.
+        if (intent.committed) return setAside(intent, "the song changed after its write was committed")
+        if (open.holds(intent.original)) {
             closeAndDrop(intent)
             return Settled.AS_IT_WAS
         }
-        // Neither: the write was cut short. Written back only from a whole backup, and only over this song torn: the
-        // same file at the path as when the intent was written, holding the old and new content's bytes ([tornFrom]),
-        // and the descriptor opened on it naming that file too.
-        val pathId = songs.fileId(intent.path) ?: return Settled.WAITING
-        if (intent.fileId != null && pathId != intent.fileId) return setAside(intent, "another file took the song's place")
+        // Neither: the write was cut short. Written back only from a whole backup, and only over this song torn.
         val backup = File(dirs.backups, intent.backup)
         val saved = if (regularFile(backup) && backup.length() == intent.original.length) fileState(backup) else null
         val source = intent.source?.let(::File)
-        val torn = saved == intent.original && source != null && tornFrom(song, source, backup)
-        if (!torn || !writes.allows(SharedWrite.TAG_RESTORE, intent.path)) return setAside(intent, "the song is not as the write left it")
-        val open = songs.openInPlace(SongTarget(intent.path, id)) ?: return Settled.WAITING
-        // The descriptor comes from MediaStore, maybe on the file system under the path's: the inode must match.
-        val openId = open.fileId()
-        if (openId == null || openId.ino != pathId.ino || songs.fileId(intent.path) != pathId) {
-            open.close()
-            return setAside(intent, "the song changed while it was checked")
+        val torn = saved == intent.original && source != null && try {
+            tornFrom(open::read, open.size(), source, backup)
+        } catch (_: IOException) {
+            false
         }
+        if (!torn || !writes.allows(SharedWrite.TAG_RESTORE, intent.path)) return setAside(intent, "the song is not as the write left it")
         try {
-            open.use { writeInPlace(it.channel, backup, intent.original.length) }
+            writeInPlace(open.channel, backup, intent.original.length)
         } catch (e: IOException) {
             log("journal: backup not written back yet (${e.javaClass.simpleName})")
             return Settled.WAITING
         }
-        if (fileState(song) != intent.original) return Settled.WAITING
-        songs.scan(intent.path)
+        if (!open.holds(intent.original)) return Settled.WAITING
         closeAndDrop(intent)
         return Settled.RESTORED
     }

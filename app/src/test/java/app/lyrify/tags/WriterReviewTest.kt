@@ -360,22 +360,22 @@ class WriterReviewTest {
     }
 
     @Test
-    fun `the recovery never writes over a file that took the song's place after its write began`() {
+    fun `a file holding exactly the torn song's bytes is the song, whatever its inode, and is put back`() {
         val song = rig.song("Paper Lantern", 41, fields)
+        val original = rig.bytes(song)
         rig.songs.plans += WritePlan.KillAfter(3_000)
         try {
             runBlocking { rig.writer.write(listOf(WriteJob(song, edit)), EditKind.SONG, "Paper Lantern") }
         } catch (_: SimulatedKill) {
         }
-        // The same torn bytes, but another file (another inode) at the path; the old one moved away, so its inode
-        // number can't be given to the new one.
+        // The same torn bytes in another file (another inode) at the path: what it holds decides, not its inode.
         val torn = rig.bytes(song)
         File(song.path).renameTo(File(folder.root, "moved.mp3"))
         File(song.path).writeBytes(torn)
         rig.restart()
 
-        assertEquals(Recovered(setAside = 1), runBlocking { rig.recovery().recover() })
-        assertArrayEquals(torn, rig.bytes(song))
+        assertEquals(Recovered(settled = 1, restored = 1), runBlocking { rig.recovery().recover() })
+        assertArrayEquals(original, rig.bytes(song))
     }
 
     @Test
@@ -398,6 +398,73 @@ class WriterReviewTest {
         assertEquals(1, runBlocking { rig.recovery().recover() }.waiting)
         assertEquals(false, taken)
         assertTrue(rig.locks.pinned(first.path))
+    }
+
+    // Fourth review: what the held descriptor reads decides
+
+    /** Kills a write of [song] in the middle, then starts a new "process". */
+    private fun killedMidWrite(song: SongTarget) {
+        rig.songs.plans += WritePlan.KillAfter(3_000)
+        try {
+            runBlocking { rig.writer.write(listOf(WriteJob(song, edit)), EditKind.SONG, "Paper Lantern") }
+        } catch (_: SimulatedKill) {
+        }
+        rig.restart()
+    }
+
+    @Test
+    fun `a file made at the song's path in its place, even reusing its inode, is never written over by the recovery`() {
+        val song = rig.song("Paper Lantern", 41, fields)
+        killedMidWrite(song)
+        val songId = checkNotNull(rig.songs.fileId(song.path))
+        val foreign = FakeTagFile.song(mapOf("TITLE" to listOf("Salt Clock")), audio = TagFixtures.mp3Audio(seed = 77))
+        // Right as the recovery opens it: the song deleted, a new file made at its path, given the song's inode.
+        rig.songs.onOpen = {
+            File(song.path).delete()
+            File(song.path).writeBytes(foreign)
+            rig.songs.fileIds[song.path] = songId
+        }
+
+        assertEquals(Recovered(setAside = 1), runBlocking { rig.recovery().recover() })
+        assertArrayEquals(foreign, rig.bytes(song))
+    }
+
+    @Test
+    fun `a torn song whose device number changed, as after a remount, is still put back`() {
+        val song = rig.song("Paper Lantern", 41, fields)
+        val original = rig.bytes(song)
+        killedMidWrite(song)
+        val now = checkNotNull(rig.songs.fileId(song.path))
+        rig.songs.fileIds[song.path] = now.copy(dev = now.dev + 1)
+
+        assertEquals(Recovered(settled = 1, restored = 1), runBlocking { rig.recovery().recover() })
+        assertArrayEquals(original, rig.bytes(song))
+    }
+
+    @Test
+    fun `a write whose descriptor names other bytes than the backed-up song stops before the first byte`() {
+        val song = rig.song("Paper Lantern", 41, fields)
+        val before = rig.bytes(song)
+        val foreign = FakeTagFile.song(mapOf("TITLE" to listOf("Salt Clock")), audio = TagFixtures.mp3Audio(seed = 77))
+        val elsewhere = File(folder.root, "elsewhere.mp3").apply { writeBytes(foreign) }
+        rig.songs.redirect[song.path] = elsewhere
+
+        assertEquals(SongOutcome.COULD_NOT_CHANGE, write(song))
+        assertArrayEquals(foreign, elsewhere.readBytes())
+        assertArrayEquals(before, rig.bytes(song))
+        assertEquals(0, rig.journal.pending().size)
+    }
+
+    @Test
+    fun `an old journal without a file id still recovers, by content`() {
+        val song = rig.song("Paper Lantern", 41, fields)
+        val original = rig.bytes(song)
+        killedMidWrite(song)
+        val intent = rig.journal.pending().single()
+        File(rig.dirs.journal, intent.id + ".json").writeText(kotlinx.serialization.json.Json.encodeToString(WriteIntent.serializer(), intent.copy(fileId = null)))
+
+        assertEquals(Recovered(settled = 1, restored = 1), runBlocking { rig.recovery().recover() })
+        assertArrayEquals(original, rig.bytes(song))
     }
 
     // 7. Pending songs

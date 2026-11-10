@@ -22,6 +22,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.io.FileNotFoundException
 import java.io.IOException
+import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
 import kotlin.coroutines.resume
 
@@ -57,10 +58,21 @@ interface SongFiles {
 data class FileId(val dev: Long, val ino: Long)
 
 /**
- * A song opened for writing in place: its [channel], and [fileId], the identity of the file its descriptor names now
- * (`fstat`). Closing it closes the descriptor.
+ * A song opened in place, read and write: its [channel] for writing, positional reads of the same descriptor
+ * ([read], `pread`, which never moves its offset) and its [size], and [fileId], the identity of the file it names now
+ * (`fstat`). What is decided from its bytes holds for the file it writes. Closing it closes the descriptor.
  */
-class OpenSong(val channel: FileChannel, private val identify: () -> FileId?) : java.io.Closeable {
+class OpenSong(
+    val channel: FileChannel,
+    private val reader: (ByteBuffer, Long) -> Int,
+    private val sizer: () -> Long,
+    private val identify: () -> FileId?,
+) : java.io.Closeable {
+    /** Reads from [position] into [buffer]; 0 or less at the end of the file. */
+    fun read(buffer: ByteBuffer, position: Long): Int = reader(buffer, position)
+
+    fun size(): Long = sizer()
+
     fun fileId(): FileId? = identify()
 
     override fun close() = channel.close()
@@ -107,7 +119,24 @@ class PhoneSongFiles(context: Context) : SongFiles {
 
     override fun openInPlace(song: SongTarget): OpenSong? = try {
         app.contentResolver.openFileDescriptor(uri(song.mediaStoreId), "rw")?.let { pfd ->
-            OpenSong(ParcelFileDescriptor.AutoCloseOutputStream(pfd).channel) {
+            OpenSong(
+                ParcelFileDescriptor.AutoCloseOutputStream(pfd).channel,
+                // As IOException, which every reader of a song's bytes handles.
+                reader = { buffer, position ->
+                    try {
+                        Os.pread(pfd.fileDescriptor, buffer, position)
+                    } catch (e: ErrnoException) {
+                        throw e.rethrowAsIOException()
+                    }
+                },
+                sizer = {
+                    try {
+                        Os.fstat(pfd.fileDescriptor).st_size
+                    } catch (e: ErrnoException) {
+                        throw e.rethrowAsIOException()
+                    }
+                },
+            ) {
                 try {
                     Os.fstat(pfd.fileDescriptor).let { FileId(it.st_dev, it.st_ino) }
                 } catch (_: ErrnoException) {
@@ -461,8 +490,11 @@ class SafeWriter(
             val open = songs.openInPlace(song)
             val openId = open?.fileId()
             // Once more with the descriptor open, right before the first byte: the same file at the path, still the song
-            // backed up, still its row.
-            if (open == null || openId == null || songs.fileId(path) != pathId || fileState(file) != original || !songs.sameFile(song.mediaStoreId, path)) {
+            // backed up, still its row, and the descriptor reading exactly the song's bytes, so the row and the path
+            // name the same file.
+            if (open == null || openId == null || songs.fileId(path) != pathId || fileState(file) != original ||
+                !songs.sameFile(song.mediaStoreId, path) || !open.holds(original)
+            ) {
                 // Nothing was written: the song is as it was.
                 open?.close()
                 journal.close(id)

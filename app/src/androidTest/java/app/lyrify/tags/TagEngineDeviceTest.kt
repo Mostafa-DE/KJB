@@ -375,9 +375,9 @@ class TagEngineDeviceTest {
 
         override fun openInPlace(song: SongTarget): OpenSong {
             val opened = fileId(song.path)
-            val channel = FileChannel.open(File(song.path).toPath(), StandardOpenOption.WRITE)
+            val channel = FileChannel.open(File(song.path).toPath(), StandardOpenOption.READ, StandardOpenOption.WRITE)
             val fail = failAfter.also { failAfter = null }
-            return OpenSong(if (fail == null) channel else CutShort(channel, fail)) { opened }
+            return OpenSong(if (fail == null) channel else CutShort(channel, fail), { buffer, at -> channel.read(buffer, at) }, { channel.size() }) { opened }
         }
 
         override fun fileId(path: String): FileId? = PhoneSongFiles(context).fileId(path)
@@ -445,12 +445,12 @@ class TagEngineDeviceTest {
 
     // MediaStore's "rw" path, on a probe file KJB makes in the test folder and deletes
 
-    /** A probe song in the test folder holding [bytes], with its MediaStore id and path; deleted after [block]. */
-    private fun withProbe(bytes: ByteArray, block: (id: Long, path: String) -> Unit) {
+    /** A probe song [name]d in the test folder holding [bytes], with its MediaStore id and path; deleted after [block]. */
+    private fun withProbe(bytes: ByteArray, name: String = "kjb-t1-probe-${System.currentTimeMillis()}.mp3", block: (id: Long, path: String) -> Unit) {
         assumeTrue("shared storage is not mounted", Environment.getExternalStorageState() == Environment.MEDIA_MOUNTED)
         val resolver = context.contentResolver
         val values = ContentValues().apply {
-            put(MediaStore.MediaColumns.DISPLAY_NAME, "kjb-t1-probe-${System.currentTimeMillis()}.mp3")
+            put(MediaStore.MediaColumns.DISPLAY_NAME, name)
             put(MediaStore.MediaColumns.RELATIVE_PATH, SharedWrites.TEST_FOLDER)
             put(MediaStore.MediaColumns.IS_PENDING, 1)
         }
@@ -504,55 +504,104 @@ class TagEngineDeviceTest {
      * writing the probe through MediaStore's "rw" descriptor, with nothing fsynced; this process kills it with SIGKILL.
      * Then the recovery, here, as at the next start, puts the probe back byte for byte.
      */
+    /**
+     * Has the tag writer, in a process of its own (TagKillService, debug builds only), write probe [id] at [path] over
+     * the folders in [killRoot], stops it after [bytes] bytes went through MediaStore's "rw" descriptor with nothing
+     * fsynced, and kills it with SIGKILL.
+     */
+    private fun killMidWrite(id: Long, path: String, bytes: Long, killRoot: String) {
+        val replied = CountDownLatch(1)
+        var code = -1
+        var pid = -1
+        val reply = object : ResultReceiver(Handler(Looper.getMainLooper())) {
+            override fun onReceiveResult(resultCode: Int, resultData: Bundle) {
+                code = resultCode
+                pid = resultData.getInt(TagKillService.PID, -1)
+                replied.countDown()
+            }
+        }
+        val connection = object : ServiceConnection {
+            override fun onServiceConnected(name: ComponentName, service: IBinder) = Unit
+
+            override fun onServiceDisconnected(name: ComponentName) = Unit
+        }
+        val intent = Intent(context, TagKillService::class.java)
+            .putExtra(TagKillService.EXTRA_PATH, path)
+            .putExtra(TagKillService.EXTRA_ID, id)
+            .putExtra(TagKillService.EXTRA_ROOT, killRoot)
+            .putExtra(TagKillService.EXTRA_BYTES, bytes)
+            .putExtra(TagKillService.EXTRA_REPLY, reply)
+        assertTrue(context.bindService(intent, connection, Context.BIND_AUTO_CREATE))
+        try {
+            assertTrue("the helper did not reach the middle of the write", replied.await(60, TimeUnit.SECONDS))
+            assertEquals(TagKillService.STOPPED, code)
+            assertTrue(pid > 0 && pid != Process.myPid())
+            Process.killProcess(pid)
+            val dead = System.currentTimeMillis() + 10_000
+            while (File("/proc/$pid").exists() && System.currentTimeMillis() < dead) Thread.sleep(50)
+            assertFalse("the helper is still alive", File("/proc/$pid").exists())
+        } finally {
+            runCatching { context.unbindService(connection) }
+        }
+    }
+
+    /** The start-up recovery over the folders in [killRoot], as the next process runs it. */
+    private fun recoverAfterKill(killRoot: String): Pair<Recovered, WriteJournal> {
+        val dirs = TagDirs(File(context.filesDir, killRoot), ::fsyncDirectory)
+        val journal = WriteJournal(dirs.journal, dirs.syncDir)
+        val recovery = JournalRecovery(dirs, journal, UndoStore(dirs), PhoneSongFiles(context), PathLocks(), Lyrify.writes)
+        return runBlocking { recovery.recover(recovery.holdPending()) } to journal
+    }
+
+    /**
+     * The tag writer runs in a process of its own and is stopped halfway through writing the probe through MediaStore's
+     * "rw" descriptor, with nothing fsynced; this process kills it with SIGKILL. Then the recovery, here, as at the next
+     * start, reads the probe through the descriptor it holds, finds it torn by the write, and puts it back byte for byte.
+     */
     @Test
     fun aSigkillMidWriteInAnotherProcessIsPutBackByTheRecovery() {
         val original = assets.open("tags/paper-comet-v23.mp3").use { it.readBytes() }
         val killRoot = "tag-kill-test"
         File(context.filesDir, killRoot).deleteRecursively()
         withProbe(original) { id, path ->
-            val replied = CountDownLatch(1)
-            var code = -1
-            var pid = -1
-            val reply = object : ResultReceiver(Handler(Looper.getMainLooper())) {
-                override fun onReceiveResult(resultCode: Int, resultData: Bundle) {
-                    code = resultCode
-                    pid = resultData.getInt(TagKillService.PID, -1)
-                    replied.countDown()
-                }
-            }
-            val connection = object : ServiceConnection {
-                override fun onServiceConnected(name: ComponentName, service: IBinder) = Unit
-
-                override fun onServiceDisconnected(name: ComponentName) = Unit
-            }
-            val intent = Intent(context, TagKillService::class.java)
-                .putExtra(TagKillService.EXTRA_PATH, path)
-                .putExtra(TagKillService.EXTRA_ID, id)
-                .putExtra(TagKillService.EXTRA_ROOT, killRoot)
-                .putExtra(TagKillService.EXTRA_BYTES, original.size / 2L)
-                .putExtra(TagKillService.EXTRA_REPLY, reply)
-            assertTrue(context.bindService(intent, connection, Context.BIND_AUTO_CREATE))
-            try {
-                assertTrue("the helper did not reach the middle of the write", replied.await(60, TimeUnit.SECONDS))
-                assertEquals(TagKillService.STOPPED, code)
-                assertTrue(pid > 0 && pid != Process.myPid())
-                Process.killProcess(pid)
-                val dead = System.currentTimeMillis() + 10_000
-                while (File("/proc/$pid").exists() && System.currentTimeMillis() < dead) Thread.sleep(50)
-                assertFalse("the helper is still alive", File("/proc/$pid").exists())
-            } finally {
-                runCatching { context.unbindService(connection) }
-            }
+            killMidWrite(id, path, original.size / 2L, killRoot)
             assertFalse("the probe is not torn", original.contentEquals(File(path).readBytes()))
 
-            val dirs = TagDirs(File(context.filesDir, killRoot), ::fsyncDirectory)
-            val journal = WriteJournal(dirs.journal, dirs.syncDir)
-            val recovery = JournalRecovery(dirs, journal, UndoStore(dirs), PhoneSongFiles(context), PathLocks(), Lyrify.writes)
-            val recovered = runBlocking { recovery.recover(recovery.holdPending()) }
+            val (recovered, journal) = recoverAfterKill(killRoot)
 
             assertEquals(Recovered(settled = 1, restored = 1), recovered)
             assertArrayEquals(original, File(path).readBytes())
             assertEquals(0, journal.pending().size)
+        }
+        File(context.filesDir, killRoot).deleteRecursively()
+    }
+
+    /**
+     * After the kill, the probe is deleted and another file made under its name, through MediaStore, as another app
+     * would. Whether the new file reuses the probe's inode is up to the file system (it is logged; a test can't force
+     * it): either way the recovery reads the new file through the descriptor it holds, finds it is not the song torn by
+     * the write, and never writes over it.
+     */
+    @Test
+    fun aFileMadeAtAKilledWritesPathIsNeverWrittenOverByTheRecovery() {
+        val original = assets.open("tags/paper-comet-v23.mp3").use { it.readBytes() }
+        val foreign = assets.open("tags/lanterns-over-kelp-v24.mp3").use { it.readBytes() }
+        val killRoot = "tag-kill-test"
+        val name = "kjb-t1-probe-${System.currentTimeMillis()}.mp3"
+        File(context.filesDir, killRoot).deleteRecursively()
+        withProbe(original, name) { id, path ->
+            killMidWrite(id, path, original.size / 2L, killRoot)
+            val songInode = Os.lstat(path).st_ino
+            context.contentResolver.delete(ContentUris.withAppendedId(MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), id), null, null)
+            withProbe(foreign, name) { _, newPath ->
+                assumeTrue("MediaStore put the new file under another name", newPath == path)
+                Log.i(LOG_TAG, "tags device test: the new file ${if (Os.lstat(path).st_ino == songInode) "reused" else "did not reuse"} the song's inode")
+
+                val (recovered, _) = recoverAfterKill(killRoot)
+
+                assertEquals(Recovered(setAside = 1), recovered)
+                assertArrayEquals(foreign, File(path).readBytes())
+            }
         }
         File(context.filesDir, killRoot).deleteRecursively()
     }

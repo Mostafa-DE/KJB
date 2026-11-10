@@ -179,6 +179,12 @@ class FakeSongFiles(private val events: MutableList<String> = Collections.synchr
     val ids = mutableMapOf<String, Long>()
     var mounted = true
 
+    /** File identities to report instead of the real ones, by path: a reused inode, a remount's new device number. */
+    val fileIds = mutableMapOf<String, FileId>()
+
+    /** A path whose descriptor opens another file: MediaStore's row naming other bytes than the path. */
+    val redirect = mutableMapOf<String, File>()
+
     /** Asked whenever the writer or the recovery checks a song's volume, with the song's path. */
     var onMounted: (String) -> Unit = {}
     var scanned: (String) -> Long? = { ids[it] }
@@ -209,20 +215,23 @@ class FakeSongFiles(private val events: MutableList<String> = Collections.synchr
             plans.removeFirst()
             return null
         }
-        if (!File(song.path).isFile) return null
+        val target = redirect[song.path] ?: File(song.path)
+        if (!target.isFile) return null
         synchronized(this) { running++; mostAtOnce = maxOf(mostAtOnce, running) }
         // The descriptor names the file at the path when it was opened, whatever is put at the path later.
         val opened = fileId(song.path)
-        val channel = FileChannel.open(File(song.path).toPath(), StandardOpenOption.WRITE)
+        val channel = FileChannel.open(target.toPath(), StandardOpenOption.READ, StandardOpenOption.WRITE)
         return OpenSong(
             PlannedChannel(channel, plans) {
                 synchronized(this) { running-- }
                 events += "closed"
             },
+            reader = { buffer, position -> channel.read(buffer, position) },
+            sizer = { channel.size() },
         ) { opened }
     }
 
-    override fun fileId(path: String): FileId? = try {
+    override fun fileId(path: String): FileId? = fileIds[path] ?: try {
         val file = File(path).toPath()
         FileId(
             (java.nio.file.Files.getAttribute(file, "unix:dev", java.nio.file.LinkOption.NOFOLLOW_LINKS) as Number).toLong(),
