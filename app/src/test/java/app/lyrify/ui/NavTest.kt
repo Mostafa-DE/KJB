@@ -440,7 +440,7 @@ class NavTest {
         assertEquals(nav, NavState.decode(nav.encode()))
         val every = listOf(
             Page.Songs(SongGroup.NO_LYRICS, LyricsStatus.NOT_FOUND), Page.FoldersToSkip, Page.Folder("Music/Rips"), Page.Genre("Folk"),
-            Page.Playlist("p3"), Page.BuiltIn(BuiltInList.MOST_PLAYED), Page.UnknownAlbum, Page.FavouritesAll(FavouriteSection.ALBUMS),
+            Page.Playlist("p3"), Page.BuiltIn(BuiltInList.MOST_PLAYED), Page.UnknownAlbum,
             Page.Queue("q1"), Page.Listening, Page.TopList(TopKind.ARTISTS), Page.Tones, Page.Ai, Page.CoversTags, Page.TagHistory, Page.LibraryTabs,
             Page.Licences, Page.Licence("Media3"),
         ).fold(NavState.start(DockTab.LIBRARY)) { state, page -> state.copy(stacks = state.stacks + (DockTab.LIBRARY to state.stacks[DockTab.LIBRARY].orEmpty() + StackEntry(page))) }
@@ -466,7 +466,8 @@ class NavTest {
 
     @Test
     fun `a saved page or view this version does not know is dropped, the rest kept`() {
-        val saved = """{"tab":"LIBRARY","stacks":{"LIBRARY":[{"type":"artist","name":"Paper Lanterns"},{"type":"hologram"},{"type":"album"}]},
+        // Favourites' "View all" (favouritesAll) is gone since its tabs came.
+        val saved = """{"tab":"LIBRARY","stacks":{"LIBRARY":[{"type":"artist","name":"Paper Lanterns"},{"type":"hologram"},{"type":"album"},{"type":"favouritesAll","section":"ALBUMS"}]},
             |"history":["TOOLS","RADIO"],"views":[{"type":"player"},{"type":"karaoke"}],"reselects":{"SEARCH":2,"NOW":1}}""".trimMargin()
         val nav = NavState.decode(saved)!!
         assertEquals(listOf<Page>(artist), nav.pages)

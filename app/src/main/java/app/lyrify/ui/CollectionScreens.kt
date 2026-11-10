@@ -9,12 +9,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -57,11 +57,13 @@ import app.lyrify.library.FavouriteCollection
 import app.lyrify.library.Folder
 import app.lyrify.library.Library
 import app.lyrify.library.PLAYED_LIST_SIZE
+import app.lyrify.library.PlaylistsState
 import app.lyrify.library.Song
 import app.lyrify.library.recentlyAdded
 import app.lyrify.library.sortSongs
 import app.lyrify.player.QueueSource
 import app.lyrify.player.SourceKind
+import app.lyrify.settings.FavouritesTab
 import app.lyrify.settings.SortSongs
 import app.lyrify.stats.SongPlays
 import app.lyrify.stats.StatsGraph
@@ -79,7 +81,7 @@ internal object CollectionSlots {
     val artistMenu: (@Composable (name: String, close: () -> Unit) -> Unit)? = { name, close -> ArtistMenuRows(name, close) }
 }
 
-/** An album, artist, folder, genre or playlist page, Built for you, Unknown album, or a Favourites section's View all. */
+/** An album, artist, folder, genre or playlist page, Built for you (Favourites among them), or Unknown album. */
 @Composable
 fun CollectionPage(page: Page.CollectionPages) {
     val ui = rememberLibraryUi() ?: return
@@ -92,7 +94,6 @@ fun CollectionPage(page: Page.CollectionPages) {
         is Page.Playlist -> PlaylistPage(ui, library, page.id)
         is Page.BuiltIn -> if (page.list == BuiltInList.FAVOURITES) FavouritesPage(ui, library) else BuiltInPage(ui, library, page.list)
         Page.UnknownAlbum -> UnknownAlbumPage(ui, library)
-        is Page.FavouritesAll -> FavouritesAllPage(ui, library, page.section)
     }
 }
 
@@ -472,113 +473,108 @@ private fun BuiltInPage(ui: LibraryUi, library: Library, list: BuiltInList) {
     if (sorting) OrderSheet(own, byTitle, { byTitle = it }) { sorting = false }
 }
 
-/** Favourites: its songs (Shuffle and Play use them), then sections for songs, albums, artists, folders and playlists. */
+/**
+ * Favourites: its songs (Shuffle and Play use them), then a top tab, as Library's are, for each kind with something in
+ * it ("Songs 120"), each its whole list: Songs as song rows, Albums as the grid, Artists, Folders and Playlists as rows.
+ * One kind alone shows without tabs, and nothing at all the empty state. It reopens on the tab used last (kept in
+ * settings.json), or on the first with something while that one is empty.
+ */
 @Composable
 private fun FavouritesPage(ui: LibraryUi, library: Library) {
-    val nav = LocalNavigator.current
+    val change = rememberSettingsChange()
     val title = stringResource(R.string.lib_favourites)
-    val favourites = remember(library, ui.playlists) { Favourites.of(ui, library) }
+    val favourites = remember(library, ui.playlists) { Favourites.of(ui.playlists, library) }
     val songs = favourites.songs
-    val others = favourites.albums.size + favourites.artists.size + favourites.folders.size + favourites.playlists.size
+    val others = FavouritesTab.entries.filter { it != FavouritesTab.SONGS }.sumOf { favourites.count(it) }
+    var picked by rememberSaveable { mutableStateOf<FavouritesTab?>(null) }
+    val shown = favourites.shown(picked ?: ui.settings.nav.favouritesTab)
     SongListFrame(ui, songs, QueueSource(SourceKind.FAVOURITES, "favourites", ""), topBar = { under, backdrop -> CollectionTopBar(title, under, backdrop, ui) }) { list ->
         item(key = "hero") {
             Hero(title, songsMeta(songs, null).let { if (others > 0) stringResource(R.string.lib_after, it, pluralStringResource(R.plurals.lib_more_count, others, others)) else it }, art = { BuiltInTile(BuiltInList.FAVOURITES, HERO) })
         }
         item(key = "header") { ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll) }
-        FavouriteSection.entries.forEach { section ->
-            val count = favourites.count(section)
-            val cap = if (section == FavouriteSection.SONGS) SONGS_SHOWN else ITEMS_SHOWN
-            item(key = "section $section") {
-                ListHeading(stringResource(section.words), count, onViewAll = if (count > cap) ({ nav.open(Page.FavouritesAll(section)) }) else null)
-            }
-            if (count == 0) {
-                item(key = "hint $section") {
-                    Text(
-                        stringResource(section.hint),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = ScreenPadding, vertical = 4.dp),
-                    )
+        val tabs = favourites.tabs
+        if (tabs.isNotEmpty()) {
+            item(key = "tabs") {
+                LibraryTabsRow(tabs.map { stringResource(R.string.lib_tab_count, stringResource(it.words), formatCount(favourites.count(it))) }, tabs.indexOf(shown)) { at ->
+                    val chosen = tabs[at]
+                    picked = chosen
+                    change { if (it.nav.favouritesTab == chosen) it else it.copy(nav = it.nav.copy(favouritesTab = chosen)) }
                 }
-            } else if (section == FavouriteSection.SONGS) {
-                songRows(list, songs.take(cap))
-            } else {
-                favouriteRows(section, favourites, library, cap)
             }
+        } else if (shown != null && shown != FavouritesTab.SONGS) {
+            item(key = "heading") { ListHeading(stringResource(shown.words), favourites.count(shown)) }
         }
-    }
-}
-
-/** The "View all" of one Favourites section. */
-@Composable
-private fun FavouritesAllPage(ui: LibraryUi, library: Library, section: FavouriteSection) {
-    val nav = LocalNavigator.current
-    val favourites = remember(library, ui.playlists) { Favourites.of(ui, library) }
-    val title = stringResource(section.words)
-    if (section == FavouriteSection.SONGS) {
-        SongListFrame(ui, favourites.songs, QueueSource(SourceKind.FAVOURITES, "favourites", ""), topBar = { under, backdrop -> BackTopBar(title, under, backdrop) { nav.back() } }) { list ->
-            item(key = "header") { ListHeader(favourites.songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll) }
-            songRows(list)
-        }
-        return
-    }
-    PageFrame(topBar = { under, backdrop -> BackTopBar(title, under, backdrop) { nav.back() } }) { padding ->
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = padding.calculateBottomPadding() + 16.dp)) {
-            favouriteRows(section, favourites, library, Int.MAX_VALUE)
+        when (shown) {
+            null -> item(key = "empty") { EmptyState(EmptyArt.Icon(R.drawable.ic_favorite), stringResource(R.string.lib_fav_empty_title), text = stringResource(R.string.lib_fav_empty)) }
+            FavouritesTab.SONGS -> songRows(list)
+            else -> favouriteRows(shown, favourites, library)
         }
     }
 }
 
 /** What is a favourite now: the songs and the collections, those gone from the phone or the library left out. */
-private class Favourites(
+internal class Favourites(
     val songs: List<Song>,
     val albums: List<Album>,
     val artists: List<app.lyrify.library.Artist>,
     val folders: List<Folder>,
     val playlists: List<app.lyrify.library.Playlist>,
 ) {
-    fun count(section: FavouriteSection): Int = when (section) {
-        FavouriteSection.SONGS -> songs.size
-        FavouriteSection.ALBUMS -> albums.size
-        FavouriteSection.ARTISTS -> artists.size
-        FavouriteSection.FOLDERS -> folders.size
-        FavouriteSection.PLAYLISTS -> playlists.size
+    /** How many favourites of [tab]'s kind. */
+    fun count(tab: FavouritesTab): Int = when (tab) {
+        FavouritesTab.SONGS -> songs.size
+        FavouritesTab.ALBUMS -> albums.size
+        FavouritesTab.ARTISTS -> artists.size
+        FavouritesTab.FOLDERS -> folders.size
+        FavouritesTab.PLAYLISTS -> playlists.size
     }
 
+    /** The page's top tabs: the kinds with something in them, in order; none when fewer than two have (one shows alone). */
+    val tabs: List<FavouritesTab> = FavouritesTab.entries.filter { count(it) > 0 }.takeIf { it.size > 1 }.orEmpty()
+
+    /** The kind the page shows: [remembered] while it has something, else the first that has; null when nothing has. */
+    fun shown(remembered: FavouritesTab): FavouritesTab? = remembered.takeIf { count(it) > 0 } ?: FavouritesTab.entries.firstOrNull { count(it) > 0 }
+
     companion object {
-        fun of(ui: LibraryUi, library: Library): Favourites {
-            val collections = ui.playlists.favouriteCollections
-            fun keys(kind: CollectionKind) = collections.filter { it.kind == kind }.map { it.key }
+        /** The favourites [state] names, found in [library]. */
+        fun of(state: PlaylistsState, library: Library): Favourites {
+            fun keys(kind: CollectionKind) = state.favouriteCollections.filter { it.kind == kind }.map { it.key }
             return Favourites(
-                songs = library.listed(ui.playlists.favouriteSongs),
+                songs = library.listed(state.favouriteSongs),
                 albums = keys(CollectionKind.ALBUM).mapNotNull(library::album),
                 artists = keys(CollectionKind.ARTIST).mapNotNull(library::artist),
                 folders = keys(CollectionKind.FOLDER).mapNotNull(library::folder),
-                playlists = keys(CollectionKind.PLAYLIST).mapNotNull(ui.playlists::playlist),
+                playlists = keys(CollectionKind.PLAYLIST).mapNotNull(state::playlist),
             )
         }
     }
 }
 
-/** The first [cap] favourite albums, artists, folders or playlists, each a row that opens its page. */
-private fun LazyListScope.favouriteRows(section: FavouriteSection, favourites: Favourites, library: Library, cap: Int) {
-    when (section) {
-        FavouriteSection.SONGS -> Unit
-        FavouriteSection.ALBUMS -> items(favourites.albums.take(cap), key = { "album ${it.key}" }) { album ->
+/**
+ * One Favourites tab other than Songs, whole, each item opening its page: albums as Library's two-column grid, artists
+ * with their round images, folders and playlists as rows.
+ */
+private fun LazyListScope.favouriteRows(tab: FavouritesTab, favourites: Favourites, library: Library) {
+    when (tab) {
+        FavouritesTab.SONGS -> Unit
+        FavouritesTab.ALBUMS -> items(favourites.albums.chunked(2), key = { "albums ${it.first().key}" }) { pair ->
             val nav = LocalNavigator.current
-            val sub = listOfNotNull(album.artist, pluralStringResource(R.plurals.lib_songs, album.songs.size, album.songs.size)).joinToString(" · ")
-            NavRow(album.title, sub, lead = { SongCover(album.songs.firstOrNull()?.let { SongArt(it.path, it.ref.mediaStoreId) }) }) { nav.open(Page.Album(album.key)) }
+            Row(Modifier.fillMaxWidth().padding(horizontal = ScreenPadding, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                pair.forEach { album -> AlbumCard(album.title, album.artist, album.songs.firstOrNull(), Modifier.weight(1f)) { nav.open(Page.Album(album.key)) } }
+                if (pair.size == 1) Spacer(Modifier.weight(1f))
+            }
         }
-        FavouriteSection.ARTISTS -> items(favourites.artists.take(cap), key = { "artist ${it.name}" }) { artist ->
+        FavouritesTab.ARTISTS -> items(favourites.artists, key = { "artist ${it.name}" }) { artist ->
             val nav = LocalNavigator.current
             NavRow(artist.name, artistLine(artist), lead = { ArtistAvatar(artist) }) { nav.open(Page.Artist(artist.name)) }
         }
-        FavouriteSection.FOLDERS -> items(favourites.folders.take(cap), key = { "folder ${it.path}" }) { folder ->
+        FavouritesTab.FOLDERS -> items(favourites.folders, key = { "folder ${it.path}" }) { folder ->
             val nav = LocalNavigator.current
             val sub = stringResource(R.string.lib_after, pluralStringResource(R.plurals.lib_songs, folder.allSongs.size, folder.allSongs.size), folder.path)
             NavRow(folder.name, sub, lead = { Tile(R.drawable.ic_folder_fill) }) { nav.open(Page.Folder(folder.path)) }
         }
-        FavouriteSection.PLAYLISTS -> items(favourites.playlists.take(cap), key = { "playlist ${it.id}" }) { playlist ->
+        FavouritesTab.PLAYLISTS -> items(favourites.playlists, key = { "playlist ${it.id}" }) { playlist ->
             val nav = LocalNavigator.current
             val count = library.listed(playlist.songs).size
             NavRow(playlist.name, pluralStringResource(R.plurals.lib_songs, count, count), lead = { PlaylistTile(playlist) }) { nav.open(Page.Playlist(playlist.id)) }
@@ -587,30 +583,15 @@ private fun LazyListScope.favouriteRows(section: FavouriteSection, favourites: F
 }
 
 @get:StringRes
-private val FavouriteSection.words: Int
+private val FavouritesTab.words: Int
     get() = when (this) {
-        FavouriteSection.SONGS -> R.string.library_tab_songs
-        FavouriteSection.ALBUMS -> R.string.library_tab_albums
-        FavouriteSection.ARTISTS -> R.string.library_tab_artists
-        FavouriteSection.FOLDERS -> R.string.library_tab_folders
-        FavouriteSection.PLAYLISTS -> R.string.library_tab_playlists
-    }
-
-/** What an empty section says: where its hearts are. */
-@get:StringRes
-private val FavouriteSection.hint: Int
-    get() = when (this) {
-        FavouriteSection.SONGS -> R.string.lib_hint_songs
-        FavouriteSection.ALBUMS -> R.string.lib_hint_albums
-        FavouriteSection.ARTISTS -> R.string.lib_hint_artists
-        FavouriteSection.FOLDERS -> R.string.lib_hint_folders
-        FavouriteSection.PLAYLISTS -> R.string.lib_hint_playlists
+        FavouritesTab.SONGS -> R.string.library_tab_songs
+        FavouritesTab.ALBUMS -> R.string.library_tab_albums
+        FavouritesTab.ARTISTS -> R.string.library_tab_artists
+        FavouritesTab.FOLDERS -> R.string.library_tab_folders
+        FavouritesTab.PLAYLISTS -> R.string.library_tab_playlists
     }
 
 private val HERO = 200.dp
 private val AVATAR = 104.dp
 private val ALBUM_CARD = 112.dp
-
-/** Favourites shows the first 5 songs and the first 4 of each other section, then "View all". */
-private const val SONGS_SHOWN = 5
-private const val ITEMS_SHOWN = 4

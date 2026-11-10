@@ -136,11 +136,10 @@
         <item quantity="one">%d more</item>
         <item quantity="other">%d more</item>
     </plurals>
-    <string name="lib_hint_songs">Tap the heart on any song.</string>
-    <string name="lib_hint_albums">Tap the heart on an album\'s page.</string>
-    <string name="lib_hint_artists">Tap the heart on an artist\'s page.</string>
-    <string name="lib_hint_folders">Tap the heart on a folder\'s page.</string>
-    <string name="lib_hint_playlists">Tap the heart on one of your playlists.</string>
+    <!-- A Favourites tab with its count, "Songs 120". -->
+    <string name="lib_tab_count">%1$s %2$s</string>
+    <string name="lib_fav_empty_title">No favourites yet</string>
+    <string name="lib_fav_empty">Tap the heart on a song, or on an album, artist, folder or playlist page.</string>
 
     <!-- The song sheet -->
     <string name="lib_play_next">Play next</string>

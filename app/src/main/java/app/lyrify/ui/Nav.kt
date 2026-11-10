@@ -75,16 +75,12 @@ sealed interface Page {
     @Serializable @SerialName("playlist")
     data class Playlist(val id: String) : CollectionPages
 
-    /** Built for you: Favourites (with its sections), Most played, Recently played, Recently added. */
+    /** Built for you: Favourites (with its tabs), Most played, Recently played, Recently added. */
     @Serializable @SerialName("builtIn")
     data class BuiltIn(val list: BuiltInList) : CollectionPages
 
     @Serializable @SerialName("unknownAlbum")
     data object UnknownAlbum : CollectionPages
-
-    /** "View all" of one section of Favourites. */
-    @Serializable @SerialName("favouritesAll")
-    data class FavouritesAll(val section: FavouriteSection) : CollectionPages
 
     /** Queues (QueueScreens.kt, P1). */
     sealed interface QueuePages : Page
@@ -149,8 +145,6 @@ sealed interface Page {
 }
 
 enum class BuiltInList { FAVOURITES, MOST_PLAYED, RECENTLY_PLAYED, RECENTLY_ADDED }
-
-enum class FavouriteSection { SONGS, ALBUMS, ARTISTS, FOLDERS, PLAYLISTS }
 
 enum class TopKind { SONGS, ARTISTS, ALBUMS }
 
