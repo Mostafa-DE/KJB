@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The Baseline Profile builds (app.lyrify.bench, baselineprofile/) install beside the user's KJB; the name tells them apart. -->
+<resources>
+    <string name="app_name">KJB bench</string>
+</resources>

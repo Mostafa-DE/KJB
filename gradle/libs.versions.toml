@@ -34,6 +34,14 @@ glance = "1.2.0"
 # Device tests (app/src/androidTest), run on the debug build only.
 androidxTest = "1.7.0"
 androidxTestExtJunit = "1.3.0"
+# The Baseline Profile (:baselineprofile, read 2026-11-10). Macrobenchmark and its Gradle plugin 1.5.0, the latest stable
+# on Google Maven (2026-09-09; 1.6 is alpha): the plugin supports AGP 8.0 up to 10.0 and no longer needs newDsl=false
+# on AGP 9 (benchmark release notes, 1.5.0-alpha01). profileinstaller 1.4.1 and benchmark-macro-junit4 1.5.0 are the
+# minimum stable versions developer.android.com lists ("Baseline Profiles overview"). UiAutomator 2.4.0, the version
+# Macrobenchmark 1.5.0 itself depends on, for its onElement { } calls.
+benchmark = "1.5.0"
+profileinstaller = "1.4.1"
+uiautomator = "2.4.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -67,8 +75,14 @@ androidx-test-core = { group = "androidx.test", name = "core", version.ref = "an
 androidx-test-runner = { group = "androidx.test", name = "runner", version.ref = "androidxTest" }
 androidx-test-rules = { group = "androidx.test", name = "rules", version.ref = "androidxTest" }
 androidx-test-ext-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidxTestExtJunit" }
+# Installs the Baseline Profile on the phone at first run: KJB ships as an APK, not through Google Play.
+androidx-profileinstaller = { group = "androidx.profileinstaller", name = "profileinstaller", version.ref = "profileinstaller" }
+androidx-benchmark-macro-junit4 = { group = "androidx.benchmark", name = "benchmark-macro-junit4", version.ref = "benchmark" }
+androidx-uiautomator = { group = "androidx.test.uiautomator", name = "uiautomator", version.ref = "uiautomator" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
+android-test = { id = "com.android.test", version.ref = "agp" }
+androidx-baselineprofile = { id = "androidx.baselineprofile", version.ref = "benchmark" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }

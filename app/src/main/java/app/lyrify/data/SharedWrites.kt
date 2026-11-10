@@ -53,16 +53,16 @@ enum class SharedWrite {
 
 /**
  * The one checkpoint for changes to shared storage: every writer asks [allows] (or [allowsIds]) before it changes a
- * file, and does nothing when refused. A release build allows everything, as 2.0 did. A debug build (app.lyrify.debug,
- * beside the user's release app on the same phone) allows only files under [TEST_FOLDER] on any volume, reached through
- * no link ([onDisk]), so tests on the phone never touch the user's music, and its library readers list only that folder
- * ([lists]). New writers take one in their constructor; SharedWritesTest lists every writer in the app and fails for one
- * it does not know.
+ * file, and does nothing when refused. A release build allows everything, as 2.0 did. Every other build (the debug
+ * build app.lyrify.debug, and the Baseline Profile's bench builds app.lyrify.bench, beside the user's release app on the
+ * same phone) allows only files under [TEST_FOLDER] on any volume, reached through no link ([onDisk]), so runs on the
+ * phone never touch the user's music, and its library readers list only that folder ([lists]). New writers take one in
+ * their constructor; SharedWritesTest lists every writer in the app and fails for one it does not know.
  *
  * Refusals are logged by kind only, never with a path.
  */
 class SharedWrites(
-    /** Only [TEST_FOLDER] may change, and only it is listed: the debug build's rule. */
+    /** Only [TEST_FOLDER] may change, and only it is listed: the rule of every build but release. */
     val testFolderOnly: Boolean,
     /** Where the phone's absolute paths start on disk: `/`, or a stand-in folder in tests. */
     private val root: Path = Paths.get("/"),
@@ -98,7 +98,7 @@ class SharedWrites(
         return false
     }
 
-    /** Whether a library reader lists the song at the absolute [path]: a debug build lists only [TEST_FOLDER]. */
+    /** Whether a library reader lists the song at the absolute [path]: a fenced build lists only [TEST_FOLDER]. */
     fun lists(path: String): Boolean = !testFolderOnly || onDiskOrRefused(path)
 
     /** [onDisk], false when the disk can't say: for what a refusal keeps safe (a write not made, a song not listed). */
@@ -141,14 +141,17 @@ class SharedWrites(
     }
 
     companion object {
-        /** The folder a debug build may change, relative to a volume's root (as MediaStore's RELATIVE_PATH has it). */
+        /** The folder a fenced build may change, relative to a volume's root (as MediaStore's RELATIVE_PATH has it). */
         const val TEST_FOLDER: String = "Music/KJB test/"
 
         /** Everywhere, as 2.0: release builds, and tests of writers that are not about this rule. */
         val ANYWHERE: SharedWrites = SharedWrites(testFolderOnly = false)
 
-        /** This build's rule: [TEST_FOLDER] only in a debug build, anywhere in a release build. */
-        fun forThisBuild(log: (String) -> Unit): SharedWrites = SharedWrites(testFolderOnly = BuildConfig.DEBUG, log = log)
+        /**
+         * This build's rule, from its TEST_FOLDER_ONLY flag (app/build.gradle.kts): anywhere in release, [TEST_FOLDER] only
+         * in every other build type, the bench builds included, which are not debuggable but must not change the user's music.
+         */
+        fun forThisBuild(log: (String) -> Unit): SharedWrites = SharedWrites(testFolderOnly = BuildConfig.TEST_FOLDER_ONLY, log = log)
 
         /**
          * Whether the absolute [path] names a file in [TEST_FOLDER] or below it, on any volume: `/storage/emulated/<user>/`
