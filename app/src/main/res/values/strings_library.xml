@@ -1,4 +1,252 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Library: the tabs, collection pages, the song sheet and Add to (milestones LC and L1). -->
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- The list header -->
+    <string name="lib_shuffle">Shuffle</string>
+    <string name="lib_play">Play</string>
+    <!-- TalkBack name of Add all on a collection page. -->
+    <plurals name="lib_add_all">
+        <item quantity="one">Add all %d song</item>
+        <item quantity="other">Add all %d songs</item>
+    </plurals>
+    <!-- TalkBack name of the sort chip, "Sort by Title". -->
+    <string name="lib_sort_by">Sort by %1$s</string>
+    <!-- The word under a list's count. -->
+    <plurals name="lib_noun_songs">
+        <item quantity="one">song</item>
+        <item quantity="other">songs</item>
+    </plurals>
+    <plurals name="lib_noun_albums">
+        <item quantity="one">album</item>
+        <item quantity="other">albums</item>
+    </plurals>
+    <plurals name="lib_noun_artists">
+        <item quantity="one">artist</item>
+        <item quantity="other">artists</item>
+    </plurals>
+    <plurals name="lib_noun_folders">
+        <item quantity="one">folder</item>
+        <item quantity="other">folders</item>
+    </plurals>
+    <plurals name="lib_noun_playlists">
+        <item quantity="one">playlist</item>
+        <item quantity="other">playlists</item>
+    </plurals>
+    <plurals name="lib_noun_genres">
+        <item quantity="one">genre</item>
+        <item quantity="other">genres</item>
+    </plurals>
+    <plurals name="lib_songs">
+        <item quantity="one">%d song</item>
+        <item quantity="other">%d songs</item>
+    </plurals>
+    <plurals name="lib_albums">
+        <item quantity="one">%d album</item>
+        <item quantity="other">%d albums</item>
+    </plurals>
+    <plurals name="lib_minutes">
+        <item quantity="one">%d min</item>
+        <item quantity="other">%d min</item>
+    </plurals>
+    <!-- Two facts on one line, "2 albums · 14 songs". -->
+    <string name="lib_after">%1$s · %2$s</string>
+    <!-- After a name, " · 3:26". -->
+    <string name="lib_after_dot">" · %1$s"</string>
+
+    <!-- Sorting -->
+    <string name="lib_sort">Sort</string>
+    <string name="lib_sort_filter">Sort and filter</string>
+    <string name="lib_sort_albums">Sort albums</string>
+    <string name="lib_sort_artists">Sort artists</string>
+    <string name="lib_sort_title">Title</string>
+    <string name="lib_sort_artist">Artist</string>
+    <string name="lib_sort_album">Album</string>
+    <string name="lib_sort_year">Year</string>
+    <string name="lib_sort_name">Name</string>
+    <string name="lib_sort_most_songs">Most songs</string>
+    <string name="lib_sort_track">Track</string>
+    <string name="lib_sort_recent_short">Recent</string>
+    <string name="lib_your_order">Your order</string>
+    <string name="lib_order_plays">Most plays</string>
+    <string name="lib_order_latest">Latest</string>
+    <string name="lib_order_newest">Newest</string>
+    <string name="lib_show">Show</string>
+    <string name="lib_filter_all">All</string>
+    <string name="lib_filter_plain">Plain lyrics</string>
+    <string name="lib_filter_plain_short">Plain</string>
+    <string name="lib_filter_none">No lyrics</string>
+    <string name="lib_done">Done</string>
+    <string name="lib_this_month">This month</string>
+    <!-- The heading for songs without an artist or album, when sorted by them. -->
+    <string name="lib_no_name">Unnamed</string>
+
+    <!-- Song rows -->
+    <string name="lib_mark_synced">synced lyrics</string>
+    <string name="lib_mark_plain">plain lyrics</string>
+    <string name="lib_mark_synced_short">Synced</string>
+    <!-- TalkBack name of a row's "⋯". -->
+    <string name="lib_more_for">More for %1$s</string>
+    <string name="lib_select">Select</string>
+
+    <!-- The tabs and their pages -->
+    <string name="lib_no_songs">Songs on your phone show here.</string>
+    <string name="lib_show_all">Show all</string>
+    <string name="lib_unreadable_title">Can\'t read your songs</string>
+    <string name="lib_unreadable">Turn on All files access in Settings.</string>
+    <string name="lib_unknown_album">Unknown album</string>
+    <string name="lib_queues">Queues</string>
+    <plurals name="lib_saved">
+        <item quantity="one">%d saved</item>
+        <item quantity="other">%d saved</item>
+    </plurals>
+    <string name="lib_built_for_you">Built for you</string>
+    <string name="lib_favourites">Favourites</string>
+    <string name="lib_most_played">Most played</string>
+    <string name="lib_recently_played">Recently played</string>
+    <string name="lib_recently_added">Recently added</string>
+    <string name="lib_your_playlists">Your playlists</string>
+    <string name="lib_new_playlist">New playlist</string>
+    <string name="lib_your_listening">Your listening</string>
+    <plurals name="lib_plays">
+        <item quantity="one">%d play</item>
+        <item quantity="other">%d plays</item>
+    </plurals>
+    <string name="lib_played_empty">Play some music and it shows here.</string>
+    <string name="lib_added_empty">Songs added in the last 30 days show here.</string>
+    <string name="lib_playlist_empty">Use Add to on any song.</string>
+    <string name="lib_gone_title">Not on your phone</string>
+    <string name="lib_gone">It was moved, renamed or deleted.</string>
+    <string name="lib_skip_sentence">Songs in a skipped folder stay on your phone but leave your library.</string>
+
+    <!-- Collection pages -->
+    <string name="lib_favourite_album">Favourite this album</string>
+    <string name="lib_favourite_artist">Favourite this artist</string>
+    <string name="lib_favourite_folder">Favourite this folder</string>
+    <string name="lib_favourite_playlist">Favourite this playlist</string>
+    <string name="lib_more_album">More for this album</string>
+    <string name="lib_more_artist">More for this artist</string>
+    <string name="lib_more_playlist">More for this playlist</string>
+    <string name="lib_edit_album">Edit album</string>
+    <string name="lib_rename">Rename</string>
+    <string name="lib_rename_playlist">Rename playlist</string>
+    <string name="lib_delete_playlist">Delete playlist</string>
+    <string name="lib_delete_title">Delete this playlist?</string>
+    <string name="lib_delete_text">Only the playlist goes. Your songs stay on your phone.</string>
+    <string name="lib_delete">Delete</string>
+    <string name="lib_view_all">View all</string>
+    <!-- Favourites' line, "12 songs · 3 more". -->
+    <plurals name="lib_more_count">
+        <item quantity="one">%d more</item>
+        <item quantity="other">%d more</item>
+    </plurals>
+    <string name="lib_hint_songs">Tap the heart on any song.</string>
+    <string name="lib_hint_albums">Tap the heart on an album\'s page.</string>
+    <string name="lib_hint_artists">Tap the heart on an artist\'s page.</string>
+    <string name="lib_hint_folders">Tap the heart on a folder\'s page.</string>
+    <string name="lib_hint_playlists">Tap the heart on one of your playlists.</string>
+
+    <!-- The song sheet -->
+    <string name="lib_play_next">Play next</string>
+    <string name="lib_add_to">Add to…</string>
+    <string name="lib_favourite">Favourite</string>
+    <string name="lib_on">On</string>
+    <string name="lib_lyrics">Lyrics</string>
+    <string name="lib_make_tone">Make a tone</string>
+    <string name="lib_song_info">Song info</string>
+    <string name="lib_edit_tags">Edit tags</string>
+    <string name="lib_remove_from_queue">Remove from queue</string>
+    <string name="lib_remove_from_playlist">Remove from playlist</string>
+    <string name="lib_move_to_trash">Move to trash</string>
+    <string name="lib_trash_text">They leave your music app and its playlists. You can restore them in Tools, Duplicates for about 30 days.</string>
+    <string name="lib_trash_changed">This song changed. Try again.</string>
+
+    <!-- The Lyrics row's sheet -->
+    <string name="lib_make_synced">Make synced</string>
+    <string name="lib_edit_timing">Edit timing</string>
+    <string name="lib_lyrics_unknown">KJB looks for lyrics when the song plays.</string>
+
+    <!-- Song info -->
+    <string name="lib_info_title">Title</string>
+    <string name="lib_info_artist">Artist</string>
+    <string name="lib_info_album">Album</string>
+    <string name="lib_info_album_artist">Album artist</string>
+    <string name="lib_info_genre">Genre</string>
+    <string name="lib_info_track">Track</string>
+    <string name="lib_disc">Disc %1$d</string>
+    <string name="lib_info_length">Length</string>
+    <string name="lib_info_file">File</string>
+    <string name="lib_info_format">Format</string>
+    <string name="lib_kbps">%1$d kbps</string>
+    <string name="lib_info_plays">Plays</string>
+    <plurals name="lib_played_times">
+        <item quantity="one">Played %d time</item>
+        <item quantity="other">Played %d times</item>
+    </plurals>
+    <string name="lib_not_played">Not played yet</string>
+    <string name="lib_info_last_played">Last played</string>
+    <string name="lib_info_added">Added</string>
+    <string name="lib_not_looked_up">Not looked up yet</string>
+
+    <!-- Add to -->
+    <string name="lib_add_to_title">Add to</string>
+    <string name="lib_add_to_queue">Add to queue</string>
+    <plurals name="lib_queue_saved">
+        <item quantity="one">Saved · %d song</item>
+        <item quantity="other">Saved · %d songs</item>
+    </plurals>
+    <plurals name="lib_queue_recent">
+        <item quantity="one">Recent · %d song</item>
+        <item quantity="other">Recent · %d songs</item>
+    </plurals>
+    <string name="lib_new_queue">New queue</string>
+    <string name="lib_added">Added</string>
+    <string name="lib_name">Name</string>
+    <string name="lib_create">Create</string>
+
+    <!-- Where a queue comes from, its name to start with: "Album · Harbour Glass". -->
+    <string name="lib_source_album">Album · %1$s</string>
+    <string name="lib_source_artist">Artist · %1$s</string>
+    <string name="lib_source_folder">Folder · %1$s</string>
+    <string name="lib_source_genre">Genre · %1$s</string>
+    <string name="lib_source_playlist">Playlist · %1$s</string>
+    <string name="lib_source_search">Search · %1$s</string>
+    <string name="lib_source_picked">Picked · %1$s</string>
+
+    <!-- Selection -->
+    <plurals name="lib_selected">
+        <item quantity="one">%d selected</item>
+        <item quantity="other">%d selected</item>
+    </plurals>
+    <string name="lib_leave_selection">Leave selection</string>
+    <string name="lib_all">All</string>
+    <string name="lib_add">Add</string>
+    <string name="lib_more">More</string>
+
+    <!-- Toasts after a song action -->
+    <string name="lib_undo">Undo</string>
+    <string name="lib_plays_next">Plays next</string>
+    <string name="lib_added_to_queue">Added to queue</string>
+    <string name="lib_added_to">Added to %1$s</string>
+    <plurals name="lib_added_songs">
+        <item quantity="one">Added %1$d song to %2$s</item>
+        <item quantity="other">Added %1$d songs to %2$s</item>
+    </plurals>
+    <!-- "Added 5 songs to Road trip, 2 already there": a queue holds a song once. -->
+    <plurals name="lib_added_already" tools:ignore="PluralsCandidate">
+        <item quantity="one">Added %1$d song to %2$s, %3$d already there</item>
+        <item quantity="other">Added %1$d songs to %2$s, %3$d already there</item>
+    </plurals>
+    <string name="lib_already_in">Already in %1$s</string>
+    <plurals name="lib_all_already_in">
+        <item quantity="one">%1$d song is already in %2$s</item>
+        <item quantity="other">All %1$d songs are already in %2$s</item>
+    </plurals>
+    <string name="lib_favourites_added">Added to Favourites</string>
+    <string name="lib_favourites_removed">Removed from Favourites</string>
+    <string name="lib_made">%1$s made</string>
+    <string name="lib_removed_from">Removed from %1$s</string>
+    <string name="lib_removed_from_queue">Removed from queue</string>
+    <string name="lib_renamed">Renamed</string>
+    <string name="lib_playlist_deleted">Playlist deleted</string>
+    <string name="lib_not_saved">Couldn\'t save. Try again.</string>
 </resources>

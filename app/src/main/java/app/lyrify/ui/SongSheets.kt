@@ -1,0 +1,406 @@
+package app.lyrify.ui
+
+import android.text.format.DateUtils
+import android.text.format.Formatter
+import androidx.annotation.DrawableRes
+import androidx.annotation.StringRes
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.takeOrElse
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import app.lyrify.Lyrify
+import app.lyrify.R
+import app.lyrify.data.LedgerEntry
+import app.lyrify.data.LyricsStatus
+import app.lyrify.library.Song
+import app.lyrify.library.SongRef
+import app.lyrify.stats.SongPlays
+import app.lyrify.tones.SavedTone
+import app.lyrify.tones.ToneFiles
+import app.lyrify.tones.TonePlayer
+import java.util.Locale
+
+// The song sheet, Add to, Song info, the selection's More and their dialogs; [SongSheetsHost] opens them.
+
+/**
+ * The song sheet: the cover, the title, the artist and the album as links, then [rows] (Play next, Add to, the heart,
+ * Lyrics with its status, Make a tone, Song info, Edit tags and the rows of where it was opened), the [bookmarks] slot,
+ * and Move to trash apart at the bottom, in the danger colour.
+ */
+@Composable
+internal fun SongMenuSheet(
+    song: Song,
+    ui: LibraryUi,
+    rows: List<SheetRow>,
+    onArtist: (() -> Unit)?,
+    onAlbum: (() -> Unit)?,
+    bookmarks: (@Composable () -> Unit)?,
+    onDismiss: () -> Unit,
+    onRow: (SheetRow) -> Unit,
+) {
+    val favourite = ui.isFavourite(song)
+    val status = ui.status(song)
+    LyrifySheet(onDismiss = onDismiss, spacing = 8.dp, padding = 12.dp) {
+        SongSheetHeader(song, ui.title(song), onArtist, onAlbum, Modifier.padding(horizontal = 8.dp, vertical = 4.dp))
+        Column {
+            rows.forEach { row ->
+                when (row) {
+                    SheetRow.PLAY_NEXT -> ActionRow(R.drawable.ic_queue_play_next, stringResource(R.string.lib_play_next)) { onRow(row) }
+                    SheetRow.ADD_TO -> ActionRow(R.drawable.ic_playlist_add, stringResource(R.string.lib_add_to), chevron = true) { onRow(row) }
+                    SheetRow.FAVOURITE -> FavouriteRow(favourite) { onRow(row) }
+                    SheetRow.LYRICS -> ActionRow(R.drawable.ic_lyrics, stringResource(R.string.lib_lyrics), chevron = true, trailing = status?.let { { StatusPill(it) } }) { onRow(row) }
+                    SheetRow.MAKE_TONE -> ActionRow(R.drawable.ic_ring_volume, stringResource(R.string.lib_make_tone)) { onRow(row) }
+                    SheetRow.SONG_INFO -> ActionRow(R.drawable.ic_info, stringResource(R.string.lib_song_info)) { onRow(row) }
+                    SheetRow.EDIT_TAGS -> ActionRow(R.drawable.ic_sell, stringResource(R.string.lib_edit_tags)) { onRow(row) }
+                    SheetRow.COVERS_TAGS -> ActionRow(R.drawable.ic_album, stringResource(R.string.tools_covers)) { onRow(row) }
+                    SheetRow.REMOVE_FROM_QUEUE -> ActionRow(R.drawable.ic_playlist_remove, stringResource(R.string.lib_remove_from_queue)) { onRow(row) }
+                    SheetRow.REMOVE_FROM_PLAYLIST -> ActionRow(R.drawable.ic_playlist_remove, stringResource(R.string.lib_remove_from_playlist)) { onRow(row) }
+                    SheetRow.MOVE_TO_TRASH -> Unit
+                }
+            }
+        }
+        bookmarks?.invoke()
+        if (SheetRow.MOVE_TO_TRASH in rows) {
+            HorizontalDivider(Modifier.padding(horizontal = 8.dp), color = MaterialTheme.colorScheme.outlineVariant)
+            ActionRow(R.drawable.ic_delete, stringResource(R.string.lib_move_to_trash), danger = true) { onRow(SheetRow.MOVE_TO_TRASH) }
+        }
+    }
+}
+
+/** The sheet's head: the cover, the title, and the artist and album as links when their pages exist, with the length. */
+@Composable
+private fun SongSheetHeader(song: Song, title: String, onArtist: (() -> Unit)?, onAlbum: (() -> Unit)?, modifier: Modifier = Modifier) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp), modifier = modifier) {
+        SongCover(SongArt(song.path, song.ref.mediaStoreId), size = 72.dp, shape = MaterialTheme.shapes.medium)
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.titleLarge, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.semantics { heading() })
+            LinkText(song.artist ?: stringResource(R.string.check_no_artist), onArtist)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                LinkText(song.album ?: stringResource(R.string.lib_unknown_album), onAlbum, Modifier.weight(1f, fill = false))
+                Text(
+                    stringResource(R.string.lib_after_dot, songLength(song.durationMs)),
+                    style = MaterialTheme.typography.bodyMedium.tabular(),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                )
+            }
+        }
+    }
+}
+
+/** An artist or album name: a coral link with a 48 dp target when it opens a page, else plain text. */
+@Composable
+internal fun LinkText(text: String, onClick: (() -> Unit)?, modifier: Modifier = Modifier) {
+    val style = MaterialTheme.typography.bodyMedium
+    if (onClick == null) {
+        Text(text, style = style, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = modifier)
+        return
+    }
+    Box(
+        contentAlignment = Alignment.CenterStart,
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(role = Role.Button, onClick = onClick)
+            .heightIn(min = 48.dp)
+            .widthIn(min = 48.dp),
+    ) {
+        Text(text, style = style, fontWeight = FontWeight.SemiBold, color = LocalBrandColors.current.highlight, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+/** A row of a sheet: its icon, its words, maybe a value and a chevron; 52 dp tall; [danger] in red. */
+@Composable
+private fun ActionRow(
+    @DrawableRes icon: Int,
+    text: String,
+    modifier: Modifier = Modifier,
+    danger: Boolean = false,
+    chevron: Boolean = false,
+    iconTint: Color = Color.Unspecified,
+    trailing: (@Composable () -> Unit)? = null,
+    onClick: () -> Unit,
+) {
+    val colors = MaterialTheme.colorScheme
+    val content = if (danger) colors.error else colors.onSurface
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(role = Role.Button, onClick = onClick)
+            .heightIn(min = 52.dp)
+            .padding(horizontal = 8.dp),
+    ) {
+        Icon(painterResource(icon), contentDescription = null, tint = iconTint.takeOrElse { if (danger) colors.error else colors.onSurfaceVariant }, modifier = Modifier.size(22.dp))
+        Text(text, style = MaterialTheme.typography.bodyLarge, color = content, modifier = Modifier.weight(1f))
+        trailing?.invoke()
+        if (chevron) Icon(painterResource(R.drawable.ic_chevron_right), contentDescription = null, tint = colors.onSurfaceVariant, modifier = Modifier.size(20.dp))
+    }
+}
+
+/** The heart as a sheet row: a switch for TalkBack, a filled coral heart and "On" while it is on. */
+@Composable
+private fun FavouriteRow(on: Boolean, onToggle: () -> Unit) {
+    val brand = LocalBrandColors.current
+    val colors = MaterialTheme.colorScheme
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .toggleable(on, role = Role.Switch) { onToggle() }
+            .heightIn(min = 52.dp)
+            .padding(horizontal = 8.dp),
+    ) {
+        Icon(
+            painterResource(if (on) R.drawable.ic_favorite_fill else R.drawable.ic_favorite),
+            contentDescription = null,
+            tint = if (on) brand.highlight else colors.onSurfaceVariant,
+            modifier = Modifier.size(22.dp),
+        )
+        Text(stringResource(R.string.lib_favourite), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+        if (on) Text(stringResource(R.string.lib_on), style = MaterialTheme.typography.labelLarge, color = brand.highlight)
+    }
+}
+
+/**
+ * Add to, the one door for one song or many: Play next and Add to queue, then the saved and recent queues and New
+ * queue, then Favourites, then the user's playlists and New playlist. A place that already holds every song is ticked.
+ */
+@Composable
+internal fun AddToSheet(songs: List<SongRef>, title: String, ui: LibraryUi, onDismiss: () -> Unit, onTarget: (AddTarget) -> Unit) {
+    val targets = remember(ui.queues, ui.playlists.playlists) { addTargets(ui.queues, ui.playlists.playlists) }
+    val paths = remember(songs) { songs.mapTo(HashSet()) { it.path } }
+    val colors = MaterialTheme.colorScheme
+    val brand = LocalBrandColors.current
+    LyrifySheet(onDismiss = onDismiss, spacing = 4.dp, padding = 12.dp) {
+        Column(Modifier.padding(horizontal = 8.dp)) {
+            Text(stringResource(R.string.lib_add_to_title), style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { heading() })
+            Text(title, style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp)) {
+            LyrifyButton(stringResource(R.string.lib_play_next), { onTarget(AddTarget.PlayNext) }, Modifier.weight(1f), kind = ButtonKind.SECONDARY)
+            LyrifyButton(stringResource(R.string.lib_add_to_queue), { onTarget(AddTarget.AddToQueue) }, Modifier.weight(1f), kind = ButtonKind.SECONDARY)
+        }
+        var heading: Int? = null
+        targets.forEach { target ->
+            val section = when (target) {
+                AddTarget.PlayNext, AddTarget.AddToQueue -> null
+                is AddTarget.Queue, AddTarget.NewQueue -> R.string.lib_queues
+                AddTarget.Favourites -> R.string.lib_favourites
+                is AddTarget.ToPlaylist, AddTarget.NewPlaylist -> R.string.lib_your_playlists
+            }
+            if (section != null && section != heading) {
+                heading = section
+                SectionTitle(stringResource(section), Modifier.padding(start = 8.dp, top = 12.dp, bottom = 4.dp))
+            }
+            when (target) {
+                AddTarget.PlayNext, AddTarget.AddToQueue -> Unit
+                is AddTarget.Queue -> NavRow(
+                    title = target.queue.name,
+                    sub = pluralStringResource(if (target.queue.saved) R.plurals.lib_queue_saved else R.plurals.lib_queue_recent, target.queue.songs, target.queue.songs),
+                    lead = { Tile(R.drawable.ic_queue_music) },
+                    trailing = null,
+                ) { onTarget(target) }
+                AddTarget.NewQueue -> NewRow(stringResource(R.string.lib_new_queue)) { onTarget(target) }
+                AddTarget.Favourites -> {
+                    val favourites = ui.playlists.favouriteSongs
+                    val all = favourites.mapTo(HashSet()) { it.path }.containsAll(paths)
+                    NavRow(
+                        title = stringResource(R.string.lib_favourites),
+                        sub = pluralStringResource(R.plurals.lib_songs, favourites.size, favourites.size),
+                        lead = { Tile(R.drawable.ic_favorite_fill, brand.highlightContainer, brand.highlight) },
+                        trailing = if (all) ({ AddedTick() }) else null,
+                    ) { onTarget(target) }
+                }
+                is AddTarget.ToPlaylist -> {
+                    val all = target.playlist.songs.mapTo(HashSet()) { it.path }.containsAll(paths)
+                    NavRow(
+                        title = target.playlist.name,
+                        sub = pluralStringResource(R.plurals.lib_songs, target.playlist.songs.size, target.playlist.songs.size),
+                        lead = { PlaylistTile(target.playlist) },
+                        trailing = if (all) ({ AddedTick() }) else null,
+                    ) { onTarget(target) }
+                }
+                AddTarget.NewPlaylist -> NewRow(stringResource(R.string.lib_new_playlist)) { onTarget(target) }
+            }
+        }
+    }
+}
+
+/** "Added", on a place that holds every song already. */
+@Composable
+private fun AddedTick() {
+    val brand = LocalBrandColors.current
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.padding(end = 8.dp)) {
+        Icon(painterResource(R.drawable.ic_check), contentDescription = null, tint = brand.highlight, modifier = Modifier.size(18.dp))
+        Text(stringResource(R.string.lib_added), style = MaterialTheme.typography.labelLarge, color = brand.highlight)
+    }
+}
+
+/** Song info: its tags, length, file, format, plays (Lyrify's own player's, through [Lyrify.plays]), when it was added, and its lyrics. */
+@Composable
+internal fun SongInfoSheet(song: Song, ui: LibraryUi, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val plays by produceState<SongPlays?>(null, song.path) { value = Lyrify.plays(context).plays(song.ref) }
+    fun date(millis: Long) = DateUtils.formatDateTime(context, millis, DateUtils.FORMAT_SHOW_DATE or DateUtils.FORMAT_SHOW_YEAR or DateUtils.FORMAT_ABBREV_MONTH)
+    val format = listOfNotNull(
+        song.fileName.substringAfterLast('.', "").ifEmpty { song.mimeType?.substringAfterLast('/').orEmpty() }.uppercase(Locale.ROOT).ifEmpty { null },
+        song.durationMs.takeIf { it > 0 }?.let { stringResource(R.string.lib_kbps, song.sizeBytes * BITS_PER_BYTE / it) },
+        Formatter.formatShortFileSize(context, song.sizeBytes),
+    ).joinToString(" · ")
+    LyrifySheet(onDismiss = onDismiss, spacing = 0.dp) {
+        Text(stringResource(R.string.lib_song_info), style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(bottom = 8.dp).semantics { heading() })
+        InfoRow(R.drawable.ic_music_note, R.string.lib_info_title, song.title)
+        InfoRow(R.drawable.ic_person, R.string.lib_info_artist, song.artist ?: stringResource(R.string.check_no_artist))
+        InfoRow(R.drawable.ic_album, R.string.lib_info_album, listOfNotNull(song.album ?: stringResource(R.string.lib_unknown_album), song.year?.toString()).joinToString(" · "))
+        song.albumArtist?.let { InfoRow(R.drawable.ic_person, R.string.lib_info_album_artist, it) }
+        song.genre?.let { InfoRow(R.drawable.ic_category, R.string.lib_info_genre, it) }
+        song.track?.let { InfoRow(R.drawable.ic_queue_music, R.string.lib_info_track, listOfNotNull(it.toString(), song.disc?.let { disc -> stringResource(R.string.lib_disc, disc) }).joinToString(" · ")) }
+        InfoRow(R.drawable.ic_schedule, R.string.lib_info_length, songLength(song.durationMs))
+        InfoRow(R.drawable.ic_folder_open, R.string.lib_info_file, song.folder + song.fileName, middleEllipsis = true)
+        InfoRow(R.drawable.ic_graphic_eq, R.string.lib_info_format, format)
+        // S1: songPlaysInfo, lastPlayedText and dateText can take over the plays, last played and added rows here.
+        val count = plays?.count ?: 0
+        InfoRow(R.drawable.ic_bar_chart, R.string.lib_info_plays, if (count > 0) pluralStringResource(R.plurals.lib_played_times, count, count) else stringResource(R.string.lib_not_played))
+        plays?.lastPlayedAt?.let { InfoRow(R.drawable.ic_history, R.string.lib_info_last_played, date(it)) }
+        song.addedAt?.let { InfoRow(R.drawable.ic_download, R.string.lib_info_added, date(it)) }
+        InfoRow(R.drawable.ic_lyrics, R.string.lib_lyrics, ui.status(song)?.let { stringResource(it.style.label) } ?: stringResource(R.string.lib_not_looked_up))
+    }
+}
+
+/** One fact of Song info: its icon, what it is, and its value; one TalkBack stop. */
+@Composable
+private fun InfoRow(@DrawableRes icon: Int, @StringRes label: Int, value: String, middleEllipsis: Boolean = false) {
+    val colors = MaterialTheme.colorScheme
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+        modifier = Modifier.fillMaxWidth().semantics(mergeDescendants = true) {}.heightIn(min = 52.dp).padding(vertical = 4.dp),
+    ) {
+        Icon(painterResource(icon), contentDescription = null, tint = colors.onSurfaceVariant, modifier = Modifier.size(20.dp))
+        Column(Modifier.weight(1f)) {
+            Text(stringResource(label), style = MaterialTheme.typography.labelMedium, color = colors.onSurfaceVariant)
+            Text(
+                value,
+                style = MaterialTheme.typography.bodyLarge,
+                maxLines = if (middleEllipsis) 1 else 2,
+                overflow = if (middleEllipsis) TextOverflow.MiddleEllipsis else TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+/** The selection's More: Song info (one song only), Edit tags and Move to trash. */
+@Composable
+internal fun SelectionMoreSheet(count: Int, onInfo: (() -> Unit)?, onEditTags: () -> Unit, onTrash: () -> Unit, onDismiss: () -> Unit) {
+    LyrifySheet(onDismiss = onDismiss, spacing = 8.dp, padding = 12.dp) {
+        Text(
+            pluralStringResource(R.plurals.lib_selected, count, count),
+            style = MaterialTheme.typography.titleLarge,
+            modifier = Modifier.padding(horizontal = 8.dp).semantics { heading() },
+        )
+        Column {
+            onInfo?.let { ActionRow(R.drawable.ic_info, stringResource(R.string.lib_song_info), onClick = it) }
+            ActionRow(R.drawable.ic_sell, stringResource(R.string.lib_edit_tags), onClick = onEditTags)
+            ActionRow(R.drawable.ic_delete, stringResource(R.string.lib_move_to_trash), danger = true, onClick = onTrash)
+        }
+    }
+}
+
+/** A name for something new or renamed: a field that starts at [start]; Create (or [confirm]) waits for a name. */
+@Composable
+internal fun NameDialog(
+    title: String,
+    start: String,
+    @DrawableRes icon: Int,
+    onDismiss: () -> Unit,
+    @StringRes confirm: Int = R.string.lib_create,
+    onName: (String) -> Unit,
+) {
+    var name by rememberSaveable { mutableStateOf(start) }
+    ConfirmDialog(
+        title = title,
+        confirm = stringResource(confirm),
+        dismiss = stringResource(R.string.remove_cancel),
+        onConfirm = { onName(name.trim()) },
+        onDismiss = onDismiss,
+        icon = icon,
+        destructive = false,
+        confirmEnabled = name.isNotBlank(),
+    ) {
+        LyrifyField(value = name, onValueChange = { name = it.take(MAX_NAME) }, label = stringResource(R.string.lib_name), modifier = Modifier.fillMaxWidth())
+    }
+}
+
+/** KJB's own "Move 2 songs to trash?", before the phone's. */
+@Composable
+internal fun SongTrashDialog(count: Int, onCancel: () -> Unit, onConfirm: () -> Unit) {
+    ConfirmDialog(
+        title = pluralStringResource(R.plurals.dupes_trash_title, count, count),
+        text = stringResource(R.string.lib_trash_text),
+        confirm = stringResource(R.string.dupes_trash_confirm),
+        dismiss = stringResource(R.string.remove_cancel),
+        onConfirm = onConfirm,
+        onDismiss = onCancel,
+    )
+}
+
+/**
+ * Today's Tone editor with a library song. The editor reads only the song's path, title and length, so a song KJB has
+ * not looked up yet gets an entry made for it here, never stored.
+ */
+@Composable
+internal fun ToneEditorFor(song: Song, entry: LedgerEntry?, onSaved: (SavedTone) -> Unit, onClose: () -> Unit) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val files = remember(context) { ToneFiles.of(context.applicationContext) }
+    val player = remember(context, scope) { TonePlayer(context, scope) }
+    DisposableEffect(player) { onDispose { player.stop() } }
+    val tone = entry ?: LedgerEntry(path = song.path, title = song.title, artist = song.artist, album = song.album, durationMs = song.durationMs, status = LyricsStatus.NOT_FOUND, updatedAt = 0)
+    ToneEditor(song = tone, files = files, player = player, onSaved = onSaved, onClose = onClose)
+}
+
+private const val BITS_PER_BYTE: Long = 8
+
+/** The longest playlist or queue name. */
+private const val MAX_NAME = 80

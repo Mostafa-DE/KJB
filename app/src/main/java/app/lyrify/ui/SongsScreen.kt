@@ -193,13 +193,9 @@ fun SongsScreen(
     }
 
     sheet?.let { ledger.entries[it] }?.let { entry ->
-        SongSheet(
+        LyricsSheet(
             entry = entry,
-            timing = timing,
-            removal = removal,
-            canRetry = connected,
-            retrying = retrying,
-            onRetryFailed = onRetryFailed,
+            song = null,
             onPickLyrics = {
                 sheet = null
                 onPickLyrics(entry.path)
