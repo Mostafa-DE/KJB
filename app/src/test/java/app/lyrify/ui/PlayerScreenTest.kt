@@ -115,7 +115,8 @@ class PlayerScreenTest {
         val book = QueueBook().play(listOf(lantern.ref), 0, QueueSource(SourceKind.ALBUM, "album:x", "Harbour Glass"), now = 1).book
         val queue = book.current!!
         val ui = PlayerUi(book, queue, queue.current!!, lantern, playing = true, positionMs = 50_000, at = 1_000, speed = 1f, durationMs = 200_000, repeat = Repeat.OFF, library = null)
-        assertEquals(OwnNow("Paper Lantern", "Kit Calloway", SongArt(lantern.path), playing = true, progress = 0.255f), ownNow(ui, LibrarySettings(), now = 2_000))
+        // Its path too, so the song's row in the lists shows it playing.
+        assertEquals(OwnNow("Paper Lantern", "Kit Calloway", SongArt(lantern.path), playing = true, progress = 0.255f, path = lantern.path), ownNow(ui, LibrarySettings(), now = 2_000))
         assertEquals("01 Paper Lantern.mp3", ownNow(ui, LibrarySettings(showFileNames = true), now = 2_000)!!.title)
         assertEquals("01 Paper Lantern.mp3", ownNow(ui.copy(song = null), LibrarySettings(), now = 2_000)!!.title)
         assertNull(ownNow(null, LibrarySettings(), now = 2_000))
