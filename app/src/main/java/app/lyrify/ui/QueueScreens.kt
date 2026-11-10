@@ -153,6 +153,7 @@ private fun QueuesPage() {
 @Composable
 private fun QueueLine(queue: Queue, book: QueueBook, ui: PlayerUi?, onKeep: (() -> Unit)?, onOpen: () -> Unit) {
     val context = LocalContext.current
+    val resources = LocalResources.current
     val name = queueLabel(context, queue)
     val size = pluralStringResource(R.plurals.queue_songs, queue.items.size, queue.items.size)
     val line = stringResource(R.string.queue_line, size, place(context, queue, ui))
@@ -165,7 +166,7 @@ private fun QueueLine(queue: Queue, book: QueueBook, ui: PlayerUi?, onKeep: (() 
                 .weight(1f)
                 .clip(RoundedCornerShape(16.dp))
                 .clickable(role = Role.Button, onClick = onOpen)
-                .semantics(mergeDescendants = true) { contentDescription = if (playing) context.getString(R.string.queue_playing_now, "$name, $line") else "$name, $line" }
+                .semantics(mergeDescendants = true) { contentDescription = if (playing) resources.getString(R.string.queue_playing_now, "$name, $line") else "$name, $line" }
                 .padding(8.dp),
         ) {
             val path = queue.current?.song?.path
@@ -180,7 +181,7 @@ private fun QueueLine(queue: Queue, book: QueueBook, ui: PlayerUi?, onKeep: (() 
             if (onKeep == null) Icon(painterResource(R.drawable.ic_chevron_right), contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         if (onKeep != null) {
-            LyrifyButton(stringResource(R.string.queue_keep), onKeep, kind = ButtonKind.GHOST, compact = true, modifier = Modifier.semantics { contentDescription = context.getString(R.string.queue_keep_named, name) })
+            LyrifyButton(stringResource(R.string.queue_keep), onKeep, kind = ButtonKind.GHOST, compact = true, modifier = Modifier.semantics { contentDescription = resources.getString(R.string.queue_keep_named, name) })
         }
     }
 }
@@ -484,7 +485,7 @@ private class DragState {
 
 @Composable
 private fun QueueSongRow(queue: Queue, item: QueueItem, index: Int, playing: Boolean, library: Library?, names: LibrarySettings, connection: PlayerConnection, drag: DragState, onRemoved: (Undo?) -> Unit) {
-    val context = LocalContext.current
+    val resources = LocalResources.current
     val song = library?.resolver?.find(item.song)
     val title = song?.let { displayTitle(it, names) } ?: item.song.path.substringAfterLast('/')
     val here = index == queue.index
@@ -505,8 +506,8 @@ private fun QueueSongRow(queue: Queue, item: QueueItem, index: Int, playing: Boo
     val state = rememberSwipeToDismissBoxState()
     var menu by remember { mutableStateOf(false) }
     val label = when {
-        here && playing -> context.getString(R.string.queue_playing_now, title)
-        here -> context.getString(R.string.queue_your_place, title)
+        here && playing -> resources.getString(R.string.queue_playing_now, title)
+        here -> resources.getString(R.string.queue_your_place, title)
         else -> title
     }
     SwipeToDismissBox(
@@ -536,9 +537,9 @@ private fun QueueSongRow(queue: Queue, item: QueueItem, index: Int, playing: Boo
                 .background(if (here) MaterialTheme.colorScheme.surfaceContainerHigh else MaterialTheme.colorScheme.surfaceContainerLow)
                 .semantics {
                     customActions = listOfNotNull(
-                        CustomAccessibilityAction(context.getString(R.string.queue_remove)) { remove(); true },
-                        if (index > 0) CustomAccessibilityAction(context.getString(R.string.queue_move_up)) { connection.move(queue.id, index, index - 1); true } else null,
-                        if (index < queue.items.lastIndex) CustomAccessibilityAction(context.getString(R.string.queue_move_down)) { connection.move(queue.id, index, index + 1); true } else null,
+                        CustomAccessibilityAction(resources.getString(R.string.queue_remove)) { remove(); true },
+                        if (index > 0) CustomAccessibilityAction(resources.getString(R.string.queue_move_up)) { connection.move(queue.id, index, index - 1); true } else null,
+                        if (index < queue.items.lastIndex) CustomAccessibilityAction(resources.getString(R.string.queue_move_down)) { connection.move(queue.id, index, index + 1); true } else null,
                     )
                 },
         ) {
@@ -581,7 +582,7 @@ private fun QueueSongRow(queue: Queue, item: QueueItem, index: Int, playing: Boo
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
                     .size(48.dp)
-                    .semantics { contentDescription = context.getString(R.string.queue_move, title) }
+                    .semantics { contentDescription = resources.getString(R.string.queue_move, title) }
                     .pointerInput(queue.id, index) {
                         detectDragGestures(
                             onDragStart = {

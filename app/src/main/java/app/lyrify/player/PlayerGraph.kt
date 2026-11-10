@@ -1,5 +1,6 @@
 package app.lyrify.player
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.util.Log
 import androidx.datastore.core.DataStore
@@ -165,6 +166,9 @@ class PlayerCore(
 object PlayerGraph {
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + logFailures)
     private var core: PlayerCore? = null
+
+    // Holds the application's context only, as every graph object does.
+    @SuppressLint("StaticFieldLeak")
     private var connection: PlayerConnection? = null
 
     /** The audio session of KJB's player, for the phone's sound effects panel; 0 before the service ran. */
@@ -200,7 +204,4 @@ object PlayerGraph {
 
     /** Plays songs from any list. */
     fun commands(context: Context): PlaybackCommands = connection(context)
-
-    /** The "Add to" sheet's queues. */
-    fun queueTargets(context: Context): QueueTargets = connection(context)
 }

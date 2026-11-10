@@ -36,6 +36,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.Role
@@ -120,7 +121,7 @@ internal fun MainRow(ui: PlayerUi, settings: Settings, connection: PlayerConnect
     val back = settings.playback.skipBackSeconds
     val forward = settings.playback.skipForwardSeconds
     Row(horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
-        SeekJump(seekIcon(back = true, back), stringResource(R.string.player_back_seconds, back)) { connection.seekBy(-back * 1_000L) }
+        SeekJump(seekIcon(back = true, back), pluralStringResource(R.plurals.player_back_seconds, back, back)) { connection.seekBy(-back * 1_000L) }
         RoundButton(R.drawable.ic_skip_previous_fill, stringResource(R.string.player_previous), size = 56.dp, iconSize = 38.dp, onClick = connection::previous)
         val colors = MaterialTheme.colorScheme
         val label = stringResource(if (ui.playing) R.string.player_pause else R.string.player_play)
@@ -141,7 +142,7 @@ internal fun MainRow(ui: PlayerUi, settings: Settings, connection: PlayerConnect
             )
         }
         RoundButton(R.drawable.ic_skip_next_fill, stringResource(R.string.player_next), size = 56.dp, iconSize = 38.dp, onClick = connection::next)
-        SeekJump(seekIcon(back = false, forward), stringResource(R.string.player_forward_seconds, forward)) { connection.seekBy(forward * 1_000L) }
+        SeekJump(seekIcon(back = false, forward), pluralStringResource(R.plurals.player_forward_seconds, forward, forward)) { connection.seekBy(forward * 1_000L) }
     }
 }
 

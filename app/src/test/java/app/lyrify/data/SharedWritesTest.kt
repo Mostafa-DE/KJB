@@ -381,6 +381,7 @@ class SharedWritesTest {
             "overnight/AiRunLog.kt",
             "overnight/AiWorker.kt",
             "overnight/CrashGuard.kt",
+            "player/QueueStore.kt",
             "settings/SettingsStore.kt",
             "tones/ToneAudio.kt",
         )

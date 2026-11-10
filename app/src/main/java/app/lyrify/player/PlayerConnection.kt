@@ -126,7 +126,7 @@ fun sourceLabel(context: Context, source: QueueSource, songs: Int): String {
  * The screens' side of KJB's player, one per process ([PlayerGraph.connection]): [ui] for the player, the Now bar and
  * the queue pages; transport through a MediaController to [PlaybackService] (which starts the service, and keeps it in
  * the foreground while it plays); queue changes straight into the model ([PlayerCore]), which the service applies.
- * Implements the lists' [PlaybackCommands] and the Add to sheet's [QueueTargets]. Connected while a screen is shown
+ * Implements the lists' [PlaybackCommands], the Add to sheet's queues included. Connected while a screen is shown
  * ([attach], [detach]), or on demand for a command. Main thread only.
  */
 @OptIn(UnstableApi::class)
@@ -135,7 +135,7 @@ class PlayerConnection(
     private val core: PlayerCore,
     library: LibraryRepository,
     private val scope: CoroutineScope,
-) : PlaybackCommands, QueueTargets {
+) : PlaybackCommands {
     private val transport = MutableStateFlow(Transport())
     private var controller: MediaController? = null
     private var connecting: ListenableFuture<MediaController>? = null
@@ -154,8 +154,10 @@ class PlayerConnection(
     /** A queue just moved to Recent. */
     val toRecent: SharedFlow<Unit> get() = core.toRecent
 
-    override val targets: StateFlow<List<QueueTarget>> = core.book.map { book ->
-        (book.saved + book.recent).mapNotNull(book::queue).map { QueueTarget(it.id, it.source, it.name, it.items.size, saved = it.id in book.saved) }
+    override val queues: StateFlow<List<QueueTarget>> = core.book.map { book ->
+        (book.saved + book.recent + listOfNotNull(book.currentId)).distinct().mapNotNull(book::queue).map { queue ->
+            QueueTarget(queue.id, queueLabel(context, queue), queue.items.size, saved = queue.id in book.saved, playing = queue.id == book.currentId)
+        }
     }.stateIn(scope, SharingStarted.Eagerly, emptyList())
 
     private val listener = object : Player.Listener {
@@ -235,15 +237,18 @@ class PlayerConnection(
 
     // The Add to sheet's queues
 
-    override fun addTo(queueId: String, songs: List<SongRef>): AddedTo? = core.edit { book ->
-        book.addTo(queueId, songs)?.let { added ->
+    override fun addToQueue(id: String, songs: List<SongRef>): QueueAdded? = core.edit { book ->
+        book.addTo(id, songs)?.let { added ->
             val undo = if (added.added > 0) Undo { core.change { it.removeUids(added.queueId, added.uids) } } else null
-            added.book to AddedTo(added.added, added.already, undo)
+            added.book to QueueAdded(added.added, added.already, undo)
         }
     }
 
-    override fun newQueue(name: String?, songs: List<SongRef>, source: QueueSource): Undo? = core.edit { book ->
-        book.newQueue(name, songs, source, core.now())?.let { made ->
+    override fun newQueue(name: String, songs: List<SongRef>, source: QueueSource?): Undo? = core.edit { book ->
+        val from = source ?: picked()
+        // The source's own name as the name keeps the queue named after its source, as Rename can change later.
+        val own = name.trim().takeUnless { it == sourceLabel(context, from, songs.distinctBy { song -> song.path }.size) }
+        book.newQueue(own, songs, from, core.now())?.let { made ->
             val id = made.book.saved.first()
             made.book to Undo { core.change { it.delete(id) } }
         }

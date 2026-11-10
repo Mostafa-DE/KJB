@@ -57,8 +57,14 @@
     <string name="player_pause">Pause</string>
     <string name="player_previous">Previous</string>
     <string name="player_next">Next</string>
-    <string name="player_back_seconds">Back %1$d seconds</string>
-    <string name="player_forward_seconds">Forward %1$d seconds</string>
+    <plurals name="player_back_seconds">
+        <item quantity="one">Back %d second</item>
+        <item quantity="other">Back %d seconds</item>
+    </plurals>
+    <plurals name="player_forward_seconds">
+        <item quantity="one">Forward %d second</item>
+        <item quantity="other">Forward %d seconds</item>
+    </plurals>
     <string name="player_position">Position</string>
     <string name="player_shuffle_on">Shuffle, on</string>
     <string name="player_shuffle_off">Shuffle, off</string>
@@ -78,7 +84,6 @@
     <string name="player_undo">Undo</string>
 
     <!-- The lyrics panel, on the back of the cover -->
-    <string name="player_lyrics">Lyrics</string>
     <string name="player_finding_lyrics">Finding lyrics</string>
     <string name="player_no_lyrics">No lyrics yet</string>
     <string name="player_search_lyrics">Search</string>
@@ -133,8 +138,5 @@
     <string name="queue_playing_now">%1$s, playing now</string>
     <string name="queue_your_place">%1$s, your place</string>
     <string name="queue_add_all">Add all %1$s</string>
-    <string name="queue_play_next">Play next</string>
-    <string name="queue_plays_next">Plays next</string>
-    <string name="queue_added">Added to queue</string>
     <string name="queue_gone">Queue deleted</string>
 </resources>

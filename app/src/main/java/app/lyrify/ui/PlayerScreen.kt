@@ -151,7 +151,7 @@ fun panelLyrics(lrc: String?, status: LyricsStatus?): PanelLyrics {
     if (lrc != null) {
         val timed = LrcFormat.parseLrclib(lrc).filter { it.text.isNotBlank() }
         if (timed.isNotEmpty()) return PanelLyrics.Synced(timed)
-        val plain = lrc.removePrefix("﻿").lines().map(String::trim).filter { it.isNotEmpty() && !HEADER_TAG.matches(it) }
+        val plain = lrc.removePrefix("\uFEFF").lines().map(String::trim).filter { it.isNotEmpty() && !HEADER_TAG.matches(it) }
         if (plain.isNotEmpty()) return PanelLyrics.Plain(plain)
         return PanelLyrics.None
     }
