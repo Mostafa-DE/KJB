@@ -77,10 +77,55 @@ class CarAccessTest {
         assertEquals(emptySet<String>(), offered(Caller(ControllerAccess.ANDROID_AUTO, 10_300, trusted = false)))
     }
 
+    // What each controller is offered as it connects. On the phone [every] and [sessionDefaults] are Media3's
+    // ConnectionResult defaults; Media3 1.11's own onConnect offers no command at all, so the offer never starts from it.
+
+    /** Every player command, by code. */
+    private val every = (Player.COMMAND_PLAY_PAUSE..Player.COMMAND_SET_AUDIO_ATTRIBUTES).toSet()
+    private val sessionDefaults = setOf("session", "library root", "children", "search")
+    private val parts = listOf("favourite", "shuffle", "repeat")
+
+    private fun offered(caller: Caller, rule: ControllerAccess = access) = ControllerAccess.offer(rule.of(caller), every, sessionDefaults, parts)
+
     @Test
-    fun `plain transport is play, pause, next, previous and the song playing, never the queue or a change to it`() {
+    fun `KJB's own in-process controller gets every command and the library, the debug build's package and the release's alike`() {
+        // KJB's own controller is not trusted in Media3's eyes when KJB has no notification access.
+        val debug = offered(Caller("app.lyrify.debug", ownUid, trusted = false))
+        assertTrue("play and pause refused", Player.COMMAND_PLAY_PAUSE in debug.player)
+        assertEquals(every, debug.player)
+        assertEquals(sessionDefaults + parts, debug.session)
+
+        val release = ControllerAccess(ownPackage = "app.lyrify", ownUid = ownUid, signedBy = { _, _ -> false }, platform = { emptySet() })
+        assertEquals(Offer(every, sessionDefaults + parts), offered(Caller("app.lyrify", ownUid, trusted = false), release))
+        // The release's rule never takes the debug build for itself, nor the other way round.
+        assertEquals(emptySet<String>(), offered(Caller("app.lyrify.debug", ownUid, trusted = false), release).session)
+        assertEquals(emptySet<String>(), offered(Caller("app.lyrify", ownUid, trusted = false)).session)
+    }
+
+    @Test
+    fun `the notification, the lock screen, Samsung's trusted controllers and a signed car get every command and the library`() {
+        val full = Offer(every, sessionDefaults + parts)
+        assertEquals(full, offered(Caller("com.android.systemui", 10_050, trusted = true)))
+        assertEquals(full, offered(Caller("com.samsung.android.app.routineplus", 10_060, trusted = true)))
+        assertEquals(full, offered(Caller(ControllerAccess.ANDROID_AUTO, autoUid, trusted = false)))
+        assertEquals(full, offered(Caller("com.android.car.media", centreUid, trusted = false)))
+    }
+
+    @Test
+    fun `any other app gets plain transport (play, pause, skip, seek) and no library or custom command`() {
+        for (stranger in listOf(Caller("com.example.player", 10_400, trusted = false), Caller(ControllerAccess.ANDROID_AUTO, 10_300, trusted = false), Caller("app.lyrify.debug", 10_401, trusted = false))) {
+            val offer = offered(stranger)
+            listOf(Player.COMMAND_PLAY_PAUSE, Player.COMMAND_SEEK_TO_NEXT, Player.COMMAND_SEEK_TO_PREVIOUS, Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM)
+                .forEach { assertTrue("$stranger misses $it", it in offer.player) }
+            assertEquals(ControllerAccess.TRANSPORT_COMMANDS.toSet(), offer.player)
+            assertEquals(emptySet<String>(), offer.session)
+        }
+    }
+
+    @Test
+    fun `plain transport is play, pause, next, previous, seek and the song playing, never the queue or a change to it`() {
         val transport = ControllerAccess.TRANSPORT_COMMANDS
-        listOf(Player.COMMAND_PLAY_PAUSE, Player.COMMAND_SEEK_TO_NEXT, Player.COMMAND_SEEK_TO_PREVIOUS, Player.COMMAND_GET_CURRENT_MEDIA_ITEM, Player.COMMAND_GET_METADATA)
+        listOf(Player.COMMAND_PLAY_PAUSE, Player.COMMAND_SEEK_TO_NEXT, Player.COMMAND_SEEK_TO_PREVIOUS, Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM, Player.COMMAND_GET_CURRENT_MEDIA_ITEM, Player.COMMAND_GET_METADATA)
             .forEach { assertTrue("missing $it", it in transport) }
         listOf(Player.COMMAND_GET_TIMELINE, Player.COMMAND_SET_MEDIA_ITEM, Player.COMMAND_CHANGE_MEDIA_ITEMS, Player.COMMAND_SET_SHUFFLE_MODE, Player.COMMAND_SET_REPEAT_MODE)
             .forEach { assertFalse("has $it", it in transport) }
