@@ -1,36 +1,51 @@
 package app.lyrify.tags.lookup
 
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.IdentityHashMap
 
 class CoverPipelineTest {
-    /** Says [source] for any image, and makes "JPEGs" of the size [bytesAt] gives, baseline unless [progressive]. */
+    /**
+     * Says [source] for the image it is given, and makes "JPEGs" of the size [bytesAt] gives, baseline unless
+     * [progressive], each [encodedSize] in pixels. Records the threads it ran on.
+     */
     private class FakeCodec(
         private val source: ImageSize?,
         private val progressive: Boolean = false,
+        private val encodedSize: ((Int) -> ImageSize)? = null,
         private val bytesAt: (side: Int, quality: Int) -> Int,
     ) : ImageCodec {
         val calls = mutableListOf<Pair<Int, Int>>()
+        val threads = mutableListOf<String>()
         var sizeCalls = 0
+        private val encoded = IdentityHashMap<ByteArray, ImageSize>()
 
         override fun size(image: ByteArray): ImageSize? {
+            threads += Thread.currentThread().name
+            encoded[image]?.let { return it }
             sizeCalls++
             return source
         }
 
         override fun jpeg(image: ByteArray, maxSide: Int, quality: Int): ByteArray {
+            threads += Thread.currentThread().name
             calls += maxSide to quality
-            return fakeJpeg(bytesAt(maxSide, quality), progressive)
+            val size = encodedSize?.invoke(maxSide) ?: source!!.let { s ->
+                val longer = maxOf(s.width, s.height)
+                if (longer <= maxSide) s else ImageSize(s.width * maxSide / longer, s.height * maxSide / longer)
+            }
+            return fakeJpeg(bytesAt(maxSide, quality), progressive).also { encoded[it] = size }
         }
     }
 
     private val kib = 1024
 
     @Test
-    fun `a 1200 px cover becomes a 1000 px baseline JPEG at the best quality within about 300 KB`() {
+    fun `a 1200 px cover becomes a 1000 px baseline JPEG at the best quality within about 300 KB`() = runTest {
         val codec = FakeCodec(ImageSize(1200, 900)) { _, quality -> if (quality >= 90) 350 * kib else 290 * kib }
 
         val cover = CoverPipeline(codec).prepare(JPEG_BYTES)!!
@@ -44,7 +59,7 @@ class CoverPipelineTest {
     }
 
     @Test
-    fun `a smaller cover is never enlarged`() {
+    fun `a smaller cover is never enlarged`() = runTest {
         val codec = FakeCodec(ImageSize(500, 500)) { _, _ -> 80 * kib }
         val cover = CoverPipeline(codec).prepare(JPEG_BYTES)!!
         assertEquals(listOf(500 to 90), codec.calls)
@@ -52,7 +67,7 @@ class CoverPipelineTest {
     }
 
     @Test
-    fun `too large at every quality, the side steps down`() {
+    fun `too large at every quality, the side steps down`() = runTest {
         val codec = FakeCodec(ImageSize(1200, 1200)) { side, _ -> if (side > 800) 400 * kib else 200 * kib }
         val cover = CoverPipeline(codec).prepare(JPEG_BYTES)!!
         assertEquals(CoverPipeline.QUALITIES.map { 1000 to it } + (800 to 90), codec.calls)
@@ -60,14 +75,14 @@ class CoverPipelineTest {
     }
 
     @Test
-    fun `a cover that never fits is left out`() {
+    fun `a cover that never fits is left out`() = runTest {
         val codec = FakeCodec(ImageSize(1200, 1200)) { _, _ -> 400 * kib }
         assertNull(CoverPipeline(codec).prepare(JPEG_BYTES))
         assertEquals(CoverPipeline.SIDES.size * CoverPipeline.QUALITIES.size, codec.calls.size)
     }
 
     @Test
-    fun `what is not a sane image is never decoded`() {
+    fun `what is not a sane image is never decoded`() = runTest {
         val unreadable = FakeCodec(null) { _, _ -> 1 }
         assertNull(CoverPipeline(unreadable).prepare(JPEG_BYTES))
         assertEquals(emptyList<Pair<Int, Int>>(), unreadable.calls)
@@ -82,7 +97,7 @@ class CoverPipelineTest {
     }
 
     @Test
-    fun `an image over 2 MiB is not decoded`() {
+    fun `an image over 2 MiB is not decoded`() = runTest {
         val codec = FakeCodec(ImageSize(1200, 1200)) { _, _ -> 1 }
         val big = JPEG_BYTES + ByteArray(Body.IMAGE.maxBytes)
         assertNull(CoverPipeline(codec).prepare(big))
@@ -90,9 +105,41 @@ class CoverPipelineTest {
     }
 
     @Test
-    fun `a progressive JPEG from the encoder is refused`() {
+    fun `a progressive JPEG from the encoder is refused`() = runTest {
         val codec = FakeCodec(ImageSize(1200, 1200), progressive = true) { _, _ -> 100 * kib }
         assertNull(CoverPipeline(codec).prepare(JPEG_BYTES))
+    }
+
+    @Test
+    fun `an image over about 4 megapixels or 4096 px a side is refused before it is decoded`() = runTest {
+        listOf(ImageSize(2100, 2100), ImageSize(4097, 100), ImageSize(100, 4097)).forEach { size ->
+            val codec = FakeCodec(size) { _, _ -> 1 }
+            assertNull(size.toString(), CoverPipeline(codec).prepare(JPEG_BYTES))
+            assertEquals(size.toString(), emptyList<Pair<Int, Int>>(), codec.calls)
+        }
+        val largest = FakeCodec(ImageSize(2048, 2048)) { _, _ -> 100 * kib }
+        assertEquals(ImageSize(1000, 1000), CoverPipeline(largest).prepare(JPEG_BYTES)?.size)
+        assertEquals(4096, CoverPipeline.MAX_SOURCE_SIDE)
+        assertEquals(2048 * 2048, CoverPipeline.MAX_SOURCE_PIXELS)
+    }
+
+    @Test
+    fun `the cover's size is what the encoder made, read back from the JPEG`() = runTest {
+        val codec = FakeCodec(ImageSize(1200, 900), encodedSize = { ImageSize(999, 751) }) { _, _ -> 100 * kib }
+        assertEquals(ImageSize(999, 751), CoverPipeline(codec).prepare(JPEG_BYTES)?.size)
+    }
+
+    @Test
+    fun `images are decoded and encoded on the compute dispatcher, never the caller's thread`() = runTest {
+        val codec = FakeCodec(ImageSize(1200, 1200)) { _, _ -> 100 * kib }
+        val compute = namedThread("covers-test")
+        try {
+            assertTrue(CoverPipeline(codec, compute).prepare(JPEG_BYTES) != null)
+        } finally {
+            compute.close()
+        }
+        assertTrue(codec.threads.isNotEmpty())
+        assertEquals(setOf("covers-test"), codec.threads.toSet())
     }
 
     // Opus

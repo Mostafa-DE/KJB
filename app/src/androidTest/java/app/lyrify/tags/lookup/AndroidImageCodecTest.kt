@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -26,7 +27,7 @@ class AndroidImageCodecTest {
         // Noise compresses badly, so the quality steps are really used.
         val image = png(1200, 960) { x, y -> Color.rgb((x * 7 + y * 13) % 256, (x * y) % 256, (x xor y) % 256) }
 
-        val cover = CoverPipeline(AndroidImageCodec).prepare(image)
+        val cover = runBlocking { CoverPipeline(AndroidImageCodec).prepare(image) }
 
         assertNotNull(cover)
         assertTrue(Images.isBaselineJpeg(cover!!.jpeg))
@@ -40,7 +41,7 @@ class AndroidImageCodecTest {
     fun aTransparentCoverTurnsWhiteNotBlack() {
         val image = png(600, 600) { _, _ -> Color.TRANSPARENT }
 
-        val cover = CoverPipeline(AndroidImageCodec).prepare(image)!!
+        val cover = runBlocking { CoverPipeline(AndroidImageCodec).prepare(image) }!!
 
         val pixel = BitmapFactory.decodeByteArray(cover.jpeg, 0, cover.jpeg.size).getPixel(300, 300)
         assertTrue(Integer.toHexString(pixel), Color.red(pixel) > 240 && Color.green(pixel) > 240 && Color.blue(pixel) > 240)
@@ -50,6 +51,6 @@ class AndroidImageCodecTest {
     @Test
     fun whatIsNotAnImageIsRefused() {
         assertNull(AndroidImageCodec.size("<html>moved</html>".encodeToByteArray()))
-        assertNull(CoverPipeline(AndroidImageCodec).prepare("<html>moved</html>".encodeToByteArray()))
+        assertNull(runBlocking { CoverPipeline(AndroidImageCodec).prepare("<html>moved</html>".encodeToByteArray()) })
     }
 }

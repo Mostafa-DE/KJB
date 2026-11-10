@@ -126,19 +126,22 @@ class MetaGate(private val now: () -> Long, private val log: (String) -> Unit = 
 /**
  * Successful answers, keyed by the query (its URI), in [folder] (`tag-cache/`). Errors, 404s and empty results are never
  * kept. Each entry is a file named by the SHA-256 of its key; reading one marks it used, and the least recently used go
- * first once the folder passes [budgetBytes]. Blocking: call it off the main thread.
+ * first once the folder passes [budgetBytes]. One lock covers every read, write and trim. Blocking: call it off the
+ * main thread.
  */
 class MetaCache(private val folder: File, private val budgetBytes: Long = BUDGET_BYTES) {
-    fun get(key: String): ByteArray? {
+    private val lock = Any()
+
+    fun get(key: String): ByteArray? = synchronized(lock) {
         val file = file(key)
-        return try {
+        try {
             file.readBytes().also { file.setLastModified(System.currentTimeMillis()) }
         } catch (_: IOException) {
             null
         }
     }
 
-    fun put(key: String, body: ByteArray) {
+    fun put(key: String, body: ByteArray): Unit = synchronized(lock) {
         try {
             folder.mkdirs()
             val file = file(key)
@@ -151,11 +154,11 @@ class MetaCache(private val folder: File, private val budgetBytes: Long = BUDGET
         }
     }
 
-    fun remove(key: String) {
+    fun remove(key: String): Unit = synchronized(lock) {
         file(key).delete()
     }
 
-    /** Drops the least recently used entries, never [keep], while the folder is over budget. */
+    /** Drops the least recently used entries, never [keep], while the folder is over budget. Called holding [lock]. */
     private fun trim(keep: File) {
         val entries = folder.listFiles().orEmpty().filter { it.isFile }.sortedBy { it.lastModified() }
         var total = entries.sumOf { it.length() }
@@ -200,7 +203,7 @@ class MetaClient(
     /**
      * The answer at [uri], read by [read] (which throws [IllegalArgumentException] on an unreadable body). It is cached
      * only when [read] took it and [keep] says it is worth keeping (an empty search result is not). [fresh] skips the
-     * cache but still stores the new answer.
+     * cache but still stores the new answer. [read] and the cache run on [io], never the caller's thread.
      */
     suspend fun <T> get(uri: URI, body: Body, fresh: Boolean = false, keep: (T) -> Boolean = { true }, read: (ByteArray) -> T): MetaAnswer<T> {
         if (!MetaHosts.isSource(uri)) {
@@ -208,25 +211,15 @@ class MetaClient(
             return MetaAnswer.Failed("not an allowed address")
         }
         val key = uri.toString()
-        if (!fresh) {
-            withContext(io) { cache.get(key) }?.let { cached ->
-                try {
-                    return MetaAnswer.Ok(read(cached), fromCache = true)
-                } catch (_: IllegalArgumentException) {
-                    withContext(io) { cache.remove(key) }
-                }
-            }
-        }
+        if (!fresh) withContext(io) { cached(key, read) }?.let { return it }
         return when (val hop = follow(uri, body)) {
-            is Hop.Content -> {
-                val value = try {
-                    read(hop.bytes)
+            is Hop.Content -> withContext<MetaAnswer<T>>(io) {
+                try {
+                    read(hop.bytes).also { if (keep(it)) cache.put(key, hop.bytes) }.let { MetaAnswer.Ok(it) }
                 } catch (e: IllegalArgumentException) {
                     log("tags: unreadable answer: ${e.javaClass.simpleName}")
-                    return MetaAnswer.Failed("unreadable: ${e.javaClass.simpleName}")
+                    MetaAnswer.Failed("unreadable: ${e.javaClass.simpleName}")
                 }
-                if (keep(value)) withContext(io) { cache.put(key, hop.bytes) }
-                MetaAnswer.Ok(value)
             }
             is Hop.Status -> when (hop.code) {
                 HttpURLConnection.HTTP_NOT_FOUND -> MetaAnswer.NotFound
@@ -244,6 +237,17 @@ class MetaClient(
                 MetaAnswer.Failed(hop.reason)
             }
             is Hop.Redirect -> MetaAnswer.Failed("redirect not followed")
+        }
+    }
+
+    /** The cached answer for [key], read by [read]; one that no longer reads is dropped. Blocking. */
+    private fun <T> cached(key: String, read: (ByteArray) -> T): MetaAnswer.Ok<T>? {
+        val bytes = cache.get(key) ?: return null
+        return try {
+            MetaAnswer.Ok(read(bytes), fromCache = true)
+        } catch (_: IllegalArgumentException) {
+            cache.remove(key)
+            null
         }
     }
 

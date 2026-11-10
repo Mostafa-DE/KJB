@@ -7,6 +7,9 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Rect
 import androidx.core.graphics.createBitmap
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import kotlin.math.roundToInt
 
@@ -27,35 +30,41 @@ interface ImageCodec {
     fun jpeg(image: ByteArray, maxSide: Int, quality: Int): ByteArray?
 }
 
-/** A cover ready to embed: a baseline JPEG of at most [CoverPipeline.MAX_SIDE] px and about [CoverPipeline.TARGET_BYTES]. */
+/**
+ * A cover ready to embed: a baseline JPEG of at most [CoverPipeline.MAX_SIDE] px and about [CoverPipeline.TARGET_BYTES];
+ * [size] is read back from the JPEG itself.
+ */
 class Cover(val jpeg: ByteArray, val size: ImageSize)
 
 /**
- * Turns a Cover Art Archive image into the cover written into songs: decoded only when its header is sane, re-encoded
- * as a baseline JPEG with its longer side at most [MAX_SIDE] px (never enlarged), at the best quality that keeps it
- * within [TARGET_BYTES].
+ * Turns a Cover Art Archive image into the cover written into songs: decoded only when its header is sane (at most
+ * [MAX_SOURCE_SIDE] px a side and [MAX_SOURCE_PIXELS] in all), re-encoded as a baseline JPEG with its longer side at
+ * most [MAX_SIDE] px (never enlarged), at the best quality that keeps it within [TARGET_BYTES]. The work runs on
+ * [compute], never the caller's thread.
  */
-class CoverPipeline(private val codec: ImageCodec) {
+class CoverPipeline(
+    private val codec: ImageCodec,
+    /** Where images are decoded and encoded: never the caller's thread. */
+    private val compute: CoroutineDispatcher = Dispatchers.Default,
+) {
     /** The cover made from [image], or null when it is not a usable image. */
-    fun prepare(image: ByteArray): Cover? {
+    suspend fun prepare(image: ByteArray): Cover? = withContext(compute) { made(image) }
+
+    private fun made(image: ByteArray): Cover? {
         if (image.size > Body.IMAGE.maxBytes || !Images.isImage(image)) return null
+        // The header's size, read before any pixel is decoded.
         val source = codec.size(image) ?: return null
         val longer = maxOf(source.width, source.height)
-        if (minOf(source.width, source.height) <= 0 || longer > MAX_SOURCE_SIDE) return null
+        val pixels = source.width.toLong() * source.height
+        if (minOf(source.width, source.height) <= 0 || longer > MAX_SOURCE_SIDE || pixels > MAX_SOURCE_PIXELS) return null
         for (side in SIDES.map { minOf(it, longer) }.distinct()) {
             for (quality in QUALITIES) {
                 val jpeg = codec.jpeg(image, side, quality) ?: return null
                 if (!Images.isBaselineJpeg(jpeg)) return null
-                if (jpeg.size <= TARGET_BYTES) return Cover(jpeg, scaled(source, side))
+                if (jpeg.size <= TARGET_BYTES) return codec.size(jpeg)?.let { Cover(jpeg, it) }
             }
         }
         return null
-    }
-
-    private fun scaled(source: ImageSize, side: Int): ImageSize {
-        val longer = maxOf(source.width, source.height)
-        if (longer <= side) return source
-        return ImageSize((source.width.toLong() * side / longer).toInt(), (source.height.toLong() * side / longer).toInt())
     }
 
     companion object {
@@ -69,7 +78,10 @@ class CoverPipeline(private val codec: ImageCodec) {
         val SIDES: List<Int> = listOf(MAX_SIDE, 800, 600)
 
         /** An image whose header claims more than this per side is not decoded. */
-        const val MAX_SOURCE_SIDE: Int = 10_000
+        const val MAX_SOURCE_SIDE: Int = 4096
+
+        /** Nor one of more pixels than this (about 4 megapixels). */
+        const val MAX_SOURCE_PIXELS: Int = 2048 * 2048
     }
 }
 
