@@ -48,20 +48,17 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import app.lyrify.R
-import app.lyrify.library.Library
-import app.lyrify.library.LibraryGraph
-import app.lyrify.library.LibraryState
 import app.lyrify.library.Song
 import app.lyrify.library.albumKey
 import app.lyrify.library.sortSongs
-import app.lyrify.logFailures
 import app.lyrify.lyrics.readCapped
 import app.lyrify.settings.SortSongs
-import app.lyrify.tags.BatchResult
 import app.lyrify.tags.CoverEdit
 import app.lyrify.tags.EditKind
 import app.lyrify.tags.FRONT_COVER
 import app.lyrify.tags.FieldProblem
+import app.lyrify.tags.OpusHeader
+import app.lyrify.tags.PreviewLine
 import app.lyrify.tags.SongPlan
 import app.lyrify.tags.TagEdits
 import app.lyrify.tags.TagField
@@ -77,19 +74,15 @@ import app.lyrify.tags.lookup.MbRelease
 import app.lyrify.tags.lookup.MetaAnswer
 import app.lyrify.tags.lookup.Proposal
 import app.lyrify.tags.pickedCover
-import app.lyrify.tags.report
-import app.lyrify.tags.undoEdit
-import app.lyrify.tags.writeEdit
-import kotlinx.coroutines.CoroutineScope
+import app.lyrify.tags.wroteAny
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
+import java.io.File
 import java.io.IOException
+import java.util.UUID
 
 // Edit tags and Edit album (milestone T3), and how every tag edit is written: KJB's own confirmation, then the one tag
 // writer (TagsGraph), one song at a time, as one History entry with Undo. History's list is Covers & tags' (T2): it
@@ -112,20 +105,23 @@ fun EditTagsView(view: FullScreen.EditTags) {
     val one = songs.size == 1
     val needed = if (one) setOf(TagField.TITLE) else emptySet()
     var form by rememberSaveable(stateSaver = FORM_SAVER) { mutableStateOf(TagForm.of(songs)) }
-    var cover by remember { mutableStateOf<CoverEdit>(CoverEdit.Keep) }
+    val token = rememberSaveable { UUID.randomUUID().toString() }
+    var cover by rememberSaveable(stateSaver = coverSaver(token)) { mutableStateOf<CoverEdit>(CoverEdit.Keep) }
+    val opus = rememberOpusHeaders(songs)
     var problems by remember { mutableStateOf(emptyMap<TagField, FieldProblem>()) }
     var asking by remember { mutableStateOf<List<SongPlan>?>(null) }
     var saving by remember { mutableStateOf(false) }
+    val plans = remember(songs, form, cover, opus) { opus?.let { TagEdits.songs(songs, form, cover, it) }.orEmpty() }
 
     EditorFrame(
         title = stringResource(R.string.lib_edit_tags),
         edited = form.edited || cover != CoverEdit.Keep,
+        ready = opus != null,
         saving = saving,
         onClose = { nav.close(view) },
         onSave = {
             problems = form.problems(needed)
             if (problems.isEmpty()) {
-                val plans = TagEdits.songs(songs, form, cover)
                 if (plans.isEmpty()) {
                     nav.close(view)
                     toasts.later(Toast(resources.getString(R.string.edit_nothing_changed), R.drawable.ic_sell))
@@ -135,7 +131,7 @@ fun EditTagsView(view: FullScreen.EditTags) {
             }
         },
     ) {
-        CoverEditor(songs, cover, { cover = it }, album = form.value(TagField.ALBUM), artist = form.value(TagField.ARTIST).ifBlank { form.value(TagField.ALBUM_ARTIST) })
+        CoverEditor(songs, opus.orEmpty(), cover, { cover = it }, album = form.value(TagField.ALBUM), artist = form.value(TagField.ARTIST).ifBlank { form.value(TagField.ALBUM_ARTIST) })
         if (one) {
             songs.single().let { Fact(R.drawable.ic_folder_open, it.folder + it.fileName, middleEllipsis = true) }
         } else {
@@ -153,23 +149,26 @@ fun EditTagsView(view: FullScreen.EditTags) {
         field(TagField.ALBUM_ARTIST, Modifier.fillMaxWidth())
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             field(TagField.YEAR, Modifier.weight(1f))
+            // Several songs never share a track number (the prototype's Edit tags shows it for one song only).
             if (one) field(TagField.TRACK, Modifier.weight(1f))
             field(TagField.DISC, Modifier.weight(1f))
         }
         field(TagField.GENRE, Modifier.fillMaxWidth())
+        // Several songs: what changes in them, an emptied field too, before Save.
+        if (!one) Changes(plans, previewLines(TagEdits.preview(plans), plans, resources))
     }
 
-    asking?.let { plans ->
+    asking?.let { asked ->
         val label = if (one) {
-            resources.getString(R.string.edit_label_song, plans.single().after.title)
+            resources.getString(R.string.edit_label_song, asked.single().after.title)
         } else {
-            resources.getQuantityString(R.plurals.edit_label_songs, plans.size, plans.size)
+            resources.getQuantityString(R.plurals.edit_label_songs, asked.size, asked.size)
         }
-        val saved = if (plans.size == 1) resources.getString(R.string.edit_saved) else resources.getQuantityString(R.plurals.edit_saved_songs, plans.size, plans.size)
-        ConfirmWrite(plans.size, pluralStringResource(R.plurals.edit_confirm_tags, plans.size), onDismiss = { asking = null }) {
+        val saved = if (asked.size == 1) resources.getString(R.string.edit_saved) else resources.getQuantityString(R.plurals.edit_saved_songs, asked.size, asked.size)
+        ConfirmWrite(asked.size, pluralStringResource(R.plurals.edit_confirm_tags, asked.size), onDismiss = { asking = null }) {
             asking = null
             saving = true
-            startWrite(context, toasts, resources, plans, EditKind.SONG, label, saved) { nav.close(view) }
+            startWrite(context, toasts, resources, asked, EditKind.SONG, label, saved) { nav.close(view) }
         }
     }
 }
@@ -194,15 +193,18 @@ fun EditAlbumView(view: FullScreen.EditAlbum) {
     val songs = remember(album, view.byTitle, ui.settings.library) { if (view.byTitle) sortSongs(album.songs, SortSongs.TITLE, ui.settings.library) else album.songs }
     var form by rememberSaveable(stateSaver = FORM_SAVER) { mutableStateOf(TagForm.of(songs, TagEdits.ALBUM_FIELDS)) }
     var numberInOrder by rememberSaveable { mutableStateOf(false) }
-    var cover by remember { mutableStateOf<CoverEdit>(CoverEdit.Keep) }
+    val token = rememberSaveable { UUID.randomUUID().toString() }
+    var cover by rememberSaveable(stateSaver = coverSaver(token)) { mutableStateOf<CoverEdit>(CoverEdit.Keep) }
+    val opus = rememberOpusHeaders(songs)
     var problems by remember { mutableStateOf(emptyMap<TagField, FieldProblem>()) }
     var asking by remember { mutableStateOf(false) }
     var saving by remember { mutableStateOf(false) }
-    val plans = remember(songs, form, cover, numberInOrder) { TagEdits.album(songs, form, cover, numberInOrder) }
+    val plans = remember(songs, form, cover, numberInOrder, opus) { opus?.let { TagEdits.album(songs, form, cover, numberInOrder, it) }.orEmpty() }
 
     EditorFrame(
         title = stringResource(R.string.lib_edit_album),
         edited = form.edited || cover != CoverEdit.Keep || numberInOrder,
+        ready = opus != null,
         saving = saving,
         onClose = { nav.close(view) },
         onSave = {
@@ -217,7 +219,7 @@ fun EditAlbumView(view: FullScreen.EditAlbum) {
             }
         },
     ) {
-        CoverEditor(songs, cover, { cover = it }, album = form.value(TagField.ALBUM), artist = form.value(TagField.ALBUM_ARTIST).ifBlank { album.artist.orEmpty() })
+        CoverEditor(songs, opus.orEmpty(), cover, { cover = it }, album = form.value(TagField.ALBUM), artist = form.value(TagField.ALBUM_ARTIST).ifBlank { album.artist.orEmpty() })
         Sentence(stringResource(R.string.edit_album_sentence))
         val field: @Composable (TagField, Modifier) -> Unit = { which, modifier ->
             TagInput(which, form, problems, modifier) {
@@ -233,13 +235,7 @@ fun EditAlbumView(view: FullScreen.EditAlbum) {
         }
         Text(stringResource(R.string.edit_track_numbers), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
         LyrifySegmented(listOf(stringResource(R.string.edit_track_keep), stringResource(R.string.edit_track_order)), if (numberInOrder) 1 else 0, { numberInOrder = it == 1 })
-        Text(
-            if (plans.isEmpty()) stringResource(R.string.edit_no_changes) else pluralStringResource(R.plurals.edit_changes, plans.size, plans.size),
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.padding(top = 8.dp).semantics { heading() },
-        )
-        val rows = albumPreview(plans, form, cover, numberInOrder, resources)
-        if (rows.isNotEmpty()) ChangeList(rows)
+        Changes(plans, previewLines(TagEdits.preview(plans, perSong = setOf(TagField.TRACK)), plans, resources))
     }
 
     if (asking) {
@@ -248,40 +244,32 @@ fun EditAlbumView(view: FullScreen.EditAlbum) {
             asking = false
             saving = true
             val moved = plans.first().after.let(::albumKey)?.takeIf { it != view.key }
-            startWrite(context, toasts, resources, plans, EditKind.ALBUM, resources.getString(R.string.edit_label_album, name), resources.getString(R.string.edit_album_saved)) {
+            startWrite(context, toasts, resources, plans, EditKind.ALBUM, resources.getString(R.string.edit_label_album, name), resources.getString(R.string.edit_album_saved)) { result ->
                 nav.close(view)
-                // The album's page follows it to its new name.
-                if (moved != null && awaitLibrary(context) { it.album(moved) != null }) nav.replaceTop(Page.Album(view.key), Page.Album(moved))
+                // The album's page follows it to its new name, once a song has it.
+                if (moved != null && result.wroteAny() && awaitLibrary(context) { it.album(moved) != null }) nav.replaceTop(Page.Album(view.key), Page.Album(moved))
             }
         }
     }
 }
 
-/** Tools > Covers & tags > History: every edit, each with Undo (T3). */
-@Composable
-fun TagHistoryPage() {
-    val nav = LocalNavigator.current
-    PageStub("T3") { nav.back() }
-}
-
 // The editor's parts
 
 /**
- * An editor over everything: Close, the title and Save in the top bar, the notification access line when it is off
- * (no tag is written without it), the scrolling [content], the footer sentence and the message slot. Closing with
- * something typed ([edited]) asks first; while [saving], Save waits.
+ * An editor over everything: Close, the title, History and Save in the top bar, the notification access line when it
+ * is off (no tag is written without it), the scrolling [content], the footer sentence and the message slot. Leaving
+ * with something typed ([edited]), for History too, asks first; Save waits until the editor is [ready] and while
+ * [saving].
  */
 @Composable
-private fun EditorFrame(title: String, edited: Boolean, saving: Boolean, onClose: () -> Unit, onSave: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
-    val context = LocalContext.current
-    var access by remember { mutableStateOf(hasNotificationAccess(context)) }
-    var leaving by remember { mutableStateOf(false) }
-    LifecycleResumeEffect(Unit) {
-        // Turned on in Settings meanwhile.
-        access = hasNotificationAccess(context)
-        onPauseOrDispose {}
+private fun EditorFrame(title: String, edited: Boolean, ready: Boolean, saving: Boolean, onClose: () -> Unit, onSave: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
+    val nav = LocalNavigator.current
+    val access = rememberNotificationAccess()
+    var leaving by remember { mutableStateOf<(() -> Unit)?>(null) }
+    fun leave(then: () -> Unit) {
+        if (edited && !saving) leaving = then else then()
     }
-    val close = { if (edited && !saving) leaving = true else onClose() }
+    val close = { leave(onClose) }
     BackHandler(onBack = close)
     Scaffold(
         topBar = {
@@ -289,12 +277,14 @@ private fun EditorFrame(title: String, edited: Boolean, saving: Boolean, onClose
                 title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 navigation = { ChromeIconButton(R.drawable.ic_close, stringResource(R.string.edit_close), close) },
                 actions = {
+                    // History, where every edit can be undone after its message has gone.
+                    ChromeIconButton(R.drawable.ic_history, stringResource(R.string.edit_history), { leave { nav.open(Page.TagHistory) } })
                     LyrifyButton(
                         stringResource(if (saving) R.string.edit_saving else R.string.edit_save),
                         onClick = onSave,
                         icon = R.drawable.ic_save,
                         compact = true,
-                        enabled = access && !saving,
+                        enabled = access && ready && !saving,
                     )
                 },
             )
@@ -306,35 +296,80 @@ private fun EditorFrame(title: String, edited: Boolean, saving: Boolean, onClose
             verticalArrangement = Arrangement.spacedBy(16.dp),
             modifier = Modifier.padding(padding).verticalScroll(rememberScrollState()).padding(horizontal = ScreenPadding, vertical = 8.dp),
         ) {
-            if (!access) {
-                val brand = LocalBrandColors.current
-                Banner(
-                    R.drawable.ic_notifications,
-                    stringResource(R.string.edit_no_access),
-                    stringResource(R.string.edit_turn_on),
-                    brand.highlightContainer,
-                    brand.onHighlightContainer,
-                    onAction = { context.startFirst(notificationAccessIntents(context)) },
-                )
-            }
+            if (!access) AccessLine()
             content()
             Sentence(stringResource(R.string.edit_footer))
         }
     }
-    if (leaving) {
+    leaving?.let { then ->
         ConfirmDialog(
             title = stringResource(R.string.edit_leave_title),
             text = stringResource(R.string.edit_leave_text),
             confirm = stringResource(R.string.edit_leave),
             dismiss = stringResource(R.string.edit_cancel),
             onConfirm = {
-                leaving = false
-                onClose()
+                leaving = null
+                then()
             },
-            onDismiss = { leaving = false },
+            onDismiss = { leaving = null },
             icon = R.drawable.ic_edit,
         )
     }
+}
+
+/** Whether notification access is on, checked again each time the screen comes back (it may be turned on meanwhile). */
+@Composable
+internal fun rememberNotificationAccess(): Boolean {
+    val context = LocalContext.current
+    var access by remember { mutableStateOf(hasNotificationAccess(context)) }
+    LifecycleResumeEffect(Unit) {
+        access = hasNotificationAccess(context)
+        onPauseOrDispose {}
+    }
+    return access
+}
+
+/** "Changes need notification access", with Turn on: without it no tag is written (plan section 11, decision 1). */
+@Composable
+internal fun AccessLine(modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    val brand = LocalBrandColors.current
+    Banner(
+        R.drawable.ic_notifications,
+        stringResource(R.string.edit_no_access),
+        stringResource(R.string.edit_turn_on),
+        brand.highlightContainer,
+        brand.onHighlightContainer,
+        onAction = { context.startFirst(notificationAccessIntents(context)) },
+        modifier = modifier,
+    )
+}
+
+/**
+ * Each song's Opus comment header besides its front cover ([OpusHeader]), read once off the main thread: what a new
+ * cover is weighed against. Null until read.
+ */
+@Composable
+private fun rememberOpusHeaders(songs: List<Song>): Map<String, Int>? {
+    val headers by produceState<Map<String, Int>?>(null, songs) {
+        value = withContext(Dispatchers.IO) {
+            songs.filter { it.path.substringAfterLast('.').lowercase() in OGG_EXTENSIONS }
+                .mapNotNull { song -> OpusHeader.otherBytes(File(song.path))?.let { song.path to it } }
+                .toMap()
+        }
+    }
+    return headers
+}
+
+/** "Changes 7 songs" and its "old → new" lines, or "No changes yet". */
+@Composable
+private fun Changes(plans: List<SongPlan>, lines: List<ChangeLine>) {
+    Text(
+        if (plans.isEmpty()) stringResource(R.string.edit_no_changes) else pluralStringResource(R.plurals.edit_changes, plans.size, plans.size),
+        style = MaterialTheme.typography.titleMedium,
+        modifier = Modifier.padding(top = 8.dp).semantics { heading() },
+    )
+    if (lines.isNotEmpty()) ChangeList(lines)
 }
 
 /** One field: its label above, "Keep as is" while the songs do not share it, its problem under it. */
@@ -361,7 +396,7 @@ private fun TagInput(field: TagField, form: TagForm, problems: Map<TagField, Fie
     }
 }
 
-private val TagField.label: Int
+internal val TagField.label: Int
     get() = when (this) {
         TagField.TITLE -> R.string.edit_field_title
         TagField.ARTIST -> R.string.edit_field_artist
@@ -386,10 +421,11 @@ internal fun Sentence(text: String) {
 
 /**
  * The cover: as it is (the first song's), the new one, or none; Change (the phone's photo picker), Find online (Covers
- * & tags' lookup, for [album] by [artist]) and Remove. Either new cover is made by Covers & tags' cover pipeline.
+ * & tags' lookup, for [album] by [artist]) and Remove. Either new cover is made by Covers & tags' cover pipeline; the
+ * Opus songs it would not fit ([opus]) keep theirs, and a line says so.
  */
 @Composable
-private fun CoverEditor(songs: List<Song>, cover: CoverEdit, onCover: (CoverEdit) -> Unit, album: String, artist: String) {
+private fun CoverEditor(songs: List<Song>, opus: Map<String, Int>, cover: CoverEdit, onCover: (CoverEdit) -> Unit, album: String, artist: String) {
     val context = LocalContext.current
     val resources = LocalResources.current
     val toasts = LocalToasts.current
@@ -429,7 +465,7 @@ private fun CoverEditor(songs: List<Song>, cover: CoverEdit, onCover: (CoverEdit
             )
         }
     }
-    if (cover is CoverEdit.Replace && songs.any { TagEdits.coverFor(it, cover) == CoverEdit.Keep }) Fact(R.drawable.ic_info, stringResource(R.string.edit_opus_note))
+    if (cover is CoverEdit.Replace && songs.any { TagEdits.coverFor(it, cover, opus[it.path]) == CoverEdit.Keep }) Fact(R.drawable.ic_info, stringResource(R.string.edit_opus_note))
     if (finding) {
         FindOnlineSheet(songs, album, artist, onDismiss = { finding = false }) {
             finding = false
@@ -539,24 +575,20 @@ private suspend fun findCovers(lookup: AlbumLookup, songs: List<Song>, album: St
     return Found.Done(covers)
 }
 
-/** Edit album's "old → new" lines: each shared field that changes, the cover, then the first renumbered tracks. */
-private fun albumPreview(plans: List<SongPlan>, form: TagForm, cover: CoverEdit, numberInOrder: Boolean, resources: Resources): List<ChangeLine> {
+/**
+ * [lines] as the editor shows them: each field's name, "None" for no value, a song's own line ("3 · Lamp Oil") for
+ * Number in this order; then the cover, when [plans] change it.
+ */
+private fun previewLines(lines: List<PreviewLine>, plans: List<SongPlan>, resources: Resources): List<ChangeLine> {
     val none = resources.getString(R.string.edit_none)
-    val lines = mutableListOf<ChangeLine>()
-    for (field in TagEdits.ALBUM_FIELDS) {
-        val first = plans.firstOrNull { field in it.fields } ?: continue
-        lines += ChangeLine(resources.getString(field.label), field.of(first.song).ifEmpty { none }, first.fields.getValue(field).ifEmpty { none })
+    val shown = lines.map { line ->
+        val old = line.old.ifEmpty { none }
+        ChangeLine(resources.getString(line.field.label), line.song?.let { resources.getString(R.string.edit_two_parts, old, it.title) } ?: old, line.new.ifEmpty { none })
     }
-    if (plans.any { it.cover != CoverEdit.Keep }) {
-        lines += ChangeLine(resources.getString(R.string.edit_cover), resources.getString(R.string.edit_old_cover), resources.getString(if (cover is CoverEdit.Replace) R.string.edit_new_cover else R.string.edit_no_cover))
+    val cover = plans.firstOrNull { it.cover != CoverEdit.Keep }?.cover?.let { change ->
+        ChangeLine(resources.getString(R.string.edit_cover), resources.getString(R.string.edit_old_cover), resources.getString(if (change is CoverEdit.Replace) R.string.edit_new_cover else R.string.edit_no_cover))
     }
-    if (numberInOrder) {
-        plans.filter { TagField.TRACK in it.fields }.take(PREVIEW_TRACKS).forEach { plan ->
-            val old = resources.getString(R.string.edit_two_parts, plan.song.track?.toString() ?: none, plan.song.title)
-            lines += ChangeLine(resources.getString(R.string.edit_field_track), old, plan.fields.getValue(TagField.TRACK))
-        }
-    }
-    return lines.take(PREVIEW_LINES)
+    return (shown + listOfNotNull(cover)).take(PREVIEW_LINES)
 }
 
 /** One "old → new" line: what it is ([what], a field or a song), and its values. */
@@ -597,92 +629,37 @@ internal fun ConfirmWrite(count: Int, text: String, onDismiss: () -> Unit, onCon
     )
 }
 
-// Writing
-
-/** Tag edits run here: a write runs to its end, and says how it went, even when the screen that started it closes. */
-private val edits = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + logFailures)
-
-/** Shows [toast] from [edits], so it stays up after the screen that asked for it closes. */
-internal fun ToastState.later(toast: Toast) {
-    edits.launch { show(toast) }
-}
-
 /**
- * Writes [plans] as one History entry of [kind] shown as [label] ([writeEdit]: favourites follow); once done, says how
- * it went ([saved] when every song took it), with Undo, while [after] moves the screen on.
+ * The pictures chosen in open editors, by each editor's token: too large for the saved state, so they stay in memory
+ * across a turn of the phone and only a word is saved. The last few only; main thread only.
  */
-internal fun startWrite(
-    context: Context,
-    toasts: ToastState,
-    resources: Resources,
-    plans: List<SongPlan>,
-    kind: EditKind,
-    label: String,
-    saved: String,
-    after: suspend () -> Unit = {},
-) {
-    val app = context.applicationContext
-    edits.launch {
-        val result = writeEdit(app, plans, kind, label)
-        edits.launch {
-            val entry = (result as? BatchResult.Done)?.entryId
-            val toast = writtenToast(resources, result, saved, plans.count { it.job != null })
-            if (toasts.show(toast.copy(action = entry?.let { resources.getString(R.string.lib_undo) })) && entry != null) {
-                toasts.show(undoneToast(resources, undoEdit(app, entry)))
-            }
+private val coverDrafts = object : LinkedHashMap<String, TagPicture>() {
+    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, TagPicture>?): Boolean = size > MAX_DRAFTS
+}
+
+/** An editor's cover choice across a turn of the phone; a picture lost with the process comes back as Keep. */
+internal fun coverSaver(token: String): Saver<CoverEdit, String> = Saver(
+    save = { cover ->
+        when (cover) {
+            CoverEdit.Keep -> KEEP
+            CoverEdit.Remove -> REMOVE
+            is CoverEdit.Replace -> REPLACE.also { coverDrafts[token] = cover.picture }
         }
-        after()
-    }
-}
-
-/** What a write says. */
-private fun writtenToast(resources: Resources, result: BatchResult, saved: String, asked: Int): Toast = when (result) {
-    BatchResult.SessionsUnknown -> Toast(resources.getString(R.string.edit_need_access), R.drawable.ic_error, Tone.ERROR)
-    BatchResult.NotEnoughSpace -> Toast(resources.getString(R.string.edit_no_space), R.drawable.ic_error, Tone.ERROR)
-    is BatchResult.Done -> {
-        val report = result.report()
-        when {
-            report.written == 0 && report.busy == 0 && report.failed == 0 -> Toast(resources.getString(R.string.edit_nothing_changed), R.drawable.ic_sell)
-            report.written == 0 && report.failed == 0 -> Toast(resources.getString(R.string.edit_in_use), R.drawable.ic_error, Tone.ERROR)
-            report.written == 0 -> Toast(resources.getString(R.string.edit_not_changed), R.drawable.ic_error, Tone.ERROR)
-            report.busy + report.failed > 0 -> Toast(resources.getQuantityString(R.plurals.edit_partly, asked, report.written, asked), R.drawable.ic_sell)
-            else -> Toast(saved, R.drawable.ic_sell)
+    },
+    restore = { saved ->
+        when (saved) {
+            REMOVE -> CoverEdit.Remove
+            REPLACE -> coverDrafts[token]?.let(CoverEdit::Replace) ?: CoverEdit.Keep
+            else -> CoverEdit.Keep
         }
-    }
-}
+    },
+)
 
-/** What an Undo says: done, the fields or songs it kept because they changed since, or what it could not do. */
-private fun undoneToast(resources: Resources, result: BatchResult): Toast = when (result) {
-    BatchResult.SessionsUnknown -> Toast(resources.getString(R.string.edit_need_access), R.drawable.ic_error, Tone.ERROR)
-    BatchResult.NotEnoughSpace -> Toast(resources.getString(R.string.edit_no_space), R.drawable.ic_error, Tone.ERROR)
-    is BatchResult.Done -> {
-        val report = result.report()
-        when {
-            report.busy + report.failed > 0 -> Toast(resources.getString(R.string.edit_undo_partly), R.drawable.ic_error, Tone.ERROR)
-            report.written == 0 -> Toast(resources.getString(R.string.edit_nothing_to_undo), R.drawable.ic_undo)
-            report.changedSince > 0 -> Toast(resources.getQuantityString(R.plurals.edit_undone_skipped, report.changedSince, report.changedSince), R.drawable.ic_undo)
-            report.skippedFields > 0 -> Toast(resources.getQuantityString(R.plurals.edit_undone_kept, report.skippedFields, report.skippedFields), R.drawable.ic_undo)
-            else -> Toast(resources.getString(R.string.edit_undone), R.drawable.ic_undo)
-        }
-    }
-}
-
-/**
- * Reads the library again now (a write has just changed it), and waits up to [LIBRARY_WAIT_MS] until it is [ready]:
- * then a page can follow its album or artist to the new name. False when it did not get there in time.
- */
-internal suspend fun awaitLibrary(context: Context, ready: (Library) -> Boolean): Boolean {
-    val repository = LibraryGraph.repository(context)
-    repository.refresh()
-    return withTimeoutOrNull(LIBRARY_WAIT_MS) { repository.state.first { state -> (state as? LibraryState.Ready)?.library?.let(ready) == true } } != null
-}
-
-/** Puts [new] in place of [old] when [old] is the page on top, nothing over it: a renamed album or artist. */
-internal fun Navigator.replaceTop(old: Page, new: Page) {
-    if (state.views.isNotEmpty() || state.pages.lastOrNull() != old) return
-    back()
-    open(new)
-}
+private const val KEEP = "keep"
+private const val REMOVE = "remove"
+private const val REPLACE = "replace"
+private const val MAX_DRAFTS = 4
+private val OGG_EXTENSIONS = setOf("ogg", "opus")
 
 private val FORM_JSON = Json { ignoreUnknownKeys = true }
 
@@ -706,6 +683,4 @@ private const val NUMBER_LENGTH = 4
 private const val PHOTO_MAX_BYTES = 64 * 1024 * 1024
 private const val MAX_COVERS = 3
 private const val MAX_TRIED = 5
-private const val PREVIEW_TRACKS = 3
 private const val PREVIEW_LINES = 6
-private const val LIBRARY_WAIT_MS = 5_000L

@@ -119,6 +119,14 @@
     <string name="edit_nothing_to_undo">Nothing to undo: those tags changed since</string>
     <string name="edit_undo_partly">Couldn\'t undo every song. The rest were left as they were.</string>
 
+    <!-- History -->
+    <string name="edit_history">History</string>
+    <string name="edit_no_edits">No edits yet</string>
+    <string name="edit_history_empty">Tag edits, album edits, renames and merges show here, each with Undo.</string>
+    <string name="edit_undo">Undo</string>
+    <string name="edit_undo_named">Undo %1$s</string>
+    <string name="edit_undone_pill">Undone</string>
+
     <!-- Rename and merge -->
     <string name="edit_rename_artist">Rename artist</string>
     <string name="edit_merge_with">Merge with…</string>

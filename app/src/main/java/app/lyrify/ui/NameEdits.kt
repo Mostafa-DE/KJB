@@ -1,5 +1,6 @@
 package app.lyrify.ui
 
+import android.content.res.Resources
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -51,8 +52,8 @@ import app.lyrify.tags.NamePair
 import app.lyrify.tags.SameNames
 import app.lyrify.tags.SongPlan
 import app.lyrify.tags.TagEdits
-import app.lyrify.tags.TagField
 import app.lyrify.tags.TagsGraph
+import app.lyrify.tags.wroteAny
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -122,8 +123,9 @@ private fun RenameArtist(library: Library, name: String, onDone: () -> Unit) {
     ConfirmWrite(plans.size, stringResource(R.string.edit_confirm_rename, name, chosen), onDismiss = onDone) {
         onDone()
         val label = resources.getString(R.string.edit_label_rename, name, chosen)
-        startWrite(context, toasts, resources, plans, EditKind.ARTIST, label, resources.getString(R.string.edit_renamed)) {
-            if (awaitLibrary(context) { it.artist(chosen) != null }) nav.replaceTop(Page.Artist(name), Page.Artist(chosen))
+        startWrite(context, toasts, resources, plans, EditKind.ARTIST, label, resources.getString(R.string.edit_renamed)) { result ->
+            // Only once a song has the new name: a failed rename never opens another artist who already had it.
+            if (result.wroteAny() && awaitLibrary(context) { it.artist(chosen) != null }) nav.replaceTop(Page.Artist(name), Page.Artist(chosen))
         }
     }
 }
@@ -206,7 +208,8 @@ private fun MergeSheet(kind: NameKind, first: String, second: String?, library: 
                 Sentence(stringResource(R.string.edit_no_others))
             } else {
                 if (others.size > MAX_LISTED) LyrifySearchField(filter, { filter = it }, stringResource(R.string.edit_find_name), Modifier.fillMaxWidth())
-                val listed = remember(others, filter) { mergeList(a, others, filter) }
+                // Ranked away from the main thread: a library may hold thousands of artists.
+                val listed by produceState(emptyList<Pair<Named, Boolean>>(), others, filter) { value = withContext(Dispatchers.Default) { mergeList(a, others, filter) } }
                 Column {
                     listed.forEach { (named, similar) -> OtherRow(named, similar) { other = named.id } }
                 }
@@ -226,7 +229,7 @@ private fun MergeSheet(kind: NameKind, first: String, second: String?, library: 
             )
             if (plans.isNotEmpty()) {
                 val more = plans.size - PREVIEW_SONGS
-                ChangeList(plans.take(PREVIEW_SONGS).map(::mergeLine), if (more > 0) pluralStringResource(R.plurals.edit_more_songs, more, more) else null)
+                ChangeList(plans.take(PREVIEW_SONGS).flatMap { mergeLines(it, resources) }, if (more > 0) pluralStringResource(R.plurals.edit_more_songs, more, more) else null)
             }
         }
     }
@@ -237,9 +240,9 @@ private fun MergeSheet(kind: NameKind, first: String, second: String?, library: 
             asking = false
             onDone()
             val label = resources.getString(R.string.edit_label_merge, a.name, b.name)
-            startWrite(context, toasts, resources, plans, EditKind.MERGE, label, resources.getString(R.string.edit_merged, keepName)) {
-                // Merged from an artist's page: the page follows to the name kept.
-                if (kind == NameKind.ARTIST && keepName != a.name && awaitLibrary(context) { it.artist(keepName) != null }) {
+            startWrite(context, toasts, resources, plans, EditKind.MERGE, label, resources.getString(R.string.edit_merged, keepName)) { result ->
+                // Merged from an artist's page: the page follows to the name kept, once a song has it.
+                if (kind == NameKind.ARTIST && keepName != a.name && result.wroteAny() && awaitLibrary(context) { it.artist(keepName) != null }) {
                     nav.replaceTop(Page.Artist(a.name), Page.Artist(keepName))
                 }
             }
@@ -257,10 +260,9 @@ private fun mergeList(a: Named, others: List<Named>, filter: String): List<Pair<
     return similar.map { it to true } + shown.take(MAX_LISTED).map { it to false }
 }
 
-/** A song's line in the merge's preview: its title, and the artist or album it had and gets. */
-private fun mergeLine(plan: SongPlan): ChangeLine {
-    val field = listOf(TagField.ARTIST, TagField.ALBUM_ARTIST, TagField.ALBUM).first { it in plan.fields }
-    return ChangeLine(plan.song.title, field.of(plan.song), plan.fields.getValue(field))
+/** A song's lines in the merge's preview: one per field it changes ("Porch Wire · Album artist"), old → new. */
+private fun mergeLines(plan: SongPlan, resources: Resources): List<ChangeLine> = plan.changes.map { change ->
+    ChangeLine(resources.getString(R.string.edit_two_parts, plan.song.title, resources.getString(change.field.label)), change.old, change.new)
 }
 
 @Composable
