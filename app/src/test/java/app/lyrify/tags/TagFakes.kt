@@ -256,10 +256,11 @@ class FakeSongFiles(private val events: MutableList<String> = Collections.synchr
     override fun openToRead(path: String): OpenSong {
         events += "open r"
         if (!regularFile(File(path))) throw IOException("no song at the path")
-        // Opened on the path itself, so its identity is the path's own.
-        val opened = fileIds[path] ?: lstat(path)
+        // Opened on the path itself. As on the phone's FUSE, its identity (fstat) is whatever file is at its path now:
+        // MediaProvider's daemon answers getattr by lstat of the path (FuseDaemon pf_getattr), never by the open file,
+        // while the size and the bytes stay the open file's.
         val channel = FileChannel.open(File(path).toPath(), StandardOpenOption.READ, java.nio.file.LinkOption.NOFOLLOW_LINKS)
-        return OpenSong(channel, reader = { buffer, position -> read(channel, buffer, position) }, sizer = { channel.size() }) { opened }
+        return OpenSong(channel, reader = { buffer, position -> read(channel, buffer, position) }, sizer = { channel.size() }) { fileIds[path] ?: lstat(path) }
     }
 
     private fun read(channel: FileChannel, buffer: ByteBuffer, position: Long): Int {
