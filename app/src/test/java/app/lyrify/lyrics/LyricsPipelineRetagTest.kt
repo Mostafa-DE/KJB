@@ -36,12 +36,26 @@ class LyricsPipelineRetagTest {
     /** Makes every lyrics write fail from now on, as a full disk would. */
     private var failWrites = false
 
+    /** The process killed while the bytes go in: no cleanup runs after that. */
+    private class Killed : Error("killed")
+
+    /** Makes the next lyrics write die halfway, as the app's death would. */
+    private var killWrites = false
+
     private fun TestScope.pipeline() = LyricsPipeline(
         client = client,
         ledger = ledger,
         clock = { BASE + testScheduler.currentTime },
         writes = SharedWrites.ANYWHERE,
-        writeBytes = { channel, buffer -> if (failWrites) throw IOException("disk full") else SidecarFile.writeFully(channel, buffer) },
+        writeBytes = { channel, buffer ->
+            if (failWrites) throw IOException("disk full")
+            if (killWrites) {
+                buffer.limit(buffer.limit() / 2)
+                SidecarFile.writeFully(channel, buffer)
+                throw Killed()
+            }
+            SidecarFile.writeFully(channel, buffer)
+        },
     )
 
     private fun audio(title: String = "Salt Road", artist: String? = "Mira Solen"): LocalTrack {
@@ -298,7 +312,7 @@ class LyricsPipelineRetagTest {
     }
 
     @Test
-    fun `a temp file left by a replace the app's death cut short is tidied at the next start`() = runTest {
+    fun `a temp file no write's marker names is left where it is`() = runTest {
         val pipeline = pipeline()
         val track = audio()
         val lrc = pipeline.withLyrics(track)
@@ -307,8 +321,74 @@ class LyricsPipelineRetagTest {
 
         pipeline.finishInterrupted()
 
-        assertFalse(left.exists())
+        assertTrue(left.exists())
         assertEquals(lrc, sidecar(track).readText())
+    }
+
+    // A pick the app's death cut short (review panel-int1, item A)
+
+    @Test
+    fun `a user's pick killed after the rename keeps its lyrics and its mark`() = runTest {
+        val pipeline = pipeline()
+        val track = audio()
+        ledger.put(recorded(null, track, LyricsStatus.NEEDS_CHECK, null, BASE, candidates = listOf(Candidate(42, "Salt Road", "Mira Solen", null, 200.0, synced = true))))
+        client.onId = { LrclibResult.Found(listOf(record(42))) }
+        // Nothing more reaches the ledger once the lyrics are in place: as if the app died right after the rename.
+        ledger.accepts = { it.status != LyricsStatus.SYNCED }
+
+        assertEquals(Checked.Done(LyricsStatus.SYNCED), pipeline.choose(track.path, 42))
+
+        ledger.accepts = { true }
+        val asked = client.requests
+        pipeline().finishInterrupted()
+
+        val lrc = sidecar(track).readBytes()
+        val entry = ledger[track.path]
+        assertEquals(LyricsStatus.SYNCED, entry?.status)
+        assertEquals(SidecarFile.sha256(lrc), entry?.sha256)
+        assertTrue(entry?.mine == true)
+        assertEquals(asked, client.requests)
+        assertEquals(listOf("Salt Road.lrc", "Salt Road.mp3"), folder.root.list().orEmpty().sorted())
+    }
+
+    @Test
+    fun `a user's pick killed before the rename leaves the old file and its entry, and nothing is looked up`() = runTest {
+        val pipeline = pipeline()
+        val track = audio()
+        val lrc = pipeline.withLyrics(track)
+        pipeline.retagged(track.copy(title = "Salt Roads"), namesChanged = true)
+        val waiting = ledger[track.path]
+        client.onId = { LrclibResult.Found(listOf(record(77, track = "Salt Roads", synced = otherSynced))) }
+        killWrites = true
+        assertTrue(runCatching { pipeline.choose(track.path, 77) }.exceptionOrNull() is Killed)
+        killWrites = false
+        val asked = client.requests
+
+        pipeline().finishInterrupted()
+
+        assertEquals(lrc, sidecar(track).readText())
+        assertEquals(waiting, ledger[track.path])
+        assertEquals(asked, client.requests)
+        assertEquals(listOf("Salt Road.lrc", "Salt Road.mp3"), folder.root.list().orEmpty().sorted())
+    }
+
+    @Test
+    fun `a pick killed before the rename on a song with no lrc waits for its check again, with nothing looked up`() = runTest {
+        val pipeline = pipeline()
+        val track = audio()
+        val waiting = recorded(null, track, LyricsStatus.NEEDS_CHECK, null, BASE, candidates = listOf(Candidate(42, "Salt Road", "Mira Solen", null, 200.0, synced = true)))
+        ledger.put(waiting)
+        client.onId = { LrclibResult.Found(listOf(record(42))) }
+        killWrites = true
+        assertTrue(runCatching { pipeline.choose(track.path, 42) }.exceptionOrNull() is Killed)
+        killWrites = false
+        val asked = client.requests
+
+        pipeline().finishInterrupted()
+
+        assertEquals(waiting, ledger[track.path])
+        assertEquals(asked, client.requests)
+        assertEquals(listOf("Salt Road.mp3"), folder.root.list().orEmpty().sorted())
     }
 
     @Test

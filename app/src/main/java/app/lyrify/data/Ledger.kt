@@ -148,6 +148,11 @@ data class LedgerEntry(
      * pipeline, Covers & tags or a restore. False in entries from before 3.0, which read as not the user's.
      */
     val mine: Boolean = false,
+    /**
+     * For [LyricsStatus.WRITING] of the user's lyrics put in place whole ([app.lyrify.lyrics.placeMine]): its temporary
+     * file and what was there before, so the next start settles it by the `.lrc` alone; null for any other entry.
+     */
+    val whole: WholeWrite? = null,
 ) {
     val track: LocalTrack get() = LocalTrack(path, title, artist, album, durationMs)
 
@@ -175,6 +180,17 @@ data class LedgerEntry(
     /** After the user removed the lyrics at [now]: never looked up again, the LRCLIB id kept for v2. */
     fun removed(now: Long): LedgerEntry = copy(status = LyricsStatus.REMOVED, nextAttemptAt = null, updatedAt = now)
 }
+
+/** A whole-file write of the user's lyrics under way ([LedgerEntry.whole]). */
+@Serializable
+data class WholeWrite(
+    /** The temporary file's name, beside the `.lrc`: the one file the next start deletes. */
+    val temp: String,
+    /** The hash of the `.lrc` the write replaces; null when there was none. */
+    val oldSha256: String? = null,
+    /** The song's entry before the write, which comes back when the `.lrc` is as it was; null for none. */
+    val before: LedgerEntry? = null,
+)
 
 /** The ledger, stored by [LedgerJson]. */
 data class LedgerState(

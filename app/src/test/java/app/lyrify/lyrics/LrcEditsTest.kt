@@ -323,14 +323,14 @@ class LrcEditsTest {
 
         assertFalse(sidecar(fresh).exists())
         assertEquals(before, sidecar(existing).readText())
-        assertNull(ledger[fresh.path])
-        // Over a `.lrc` that was there, the write's marker waits for the next start: the file before is the user's, as it is.
+        // Each write's marker waits for the next start, which finds the files as they were and puts their entries back.
+        assertEquals(LyricsStatus.WRITING, ledger[fresh.path]?.status)
         assertEquals(LyricsStatus.WRITING, ledger[existing.path]?.status)
         pipeline().finishInterrupted()
-        assertEquals(LyricsStatus.EXISTING, ledger[existing.path]?.status)
-        assertTrue(ledger[existing.path]?.mine == true)
+        assertNull(ledger[fresh.path])
+        assertNull(ledger[existing.path])
         assertEquals(before, sidecar(existing).readText())
-        assertEquals(setOf("Harbour Lights.mp3", "Harbour Lights.lrc", "Kitchen Radio.mp3", ".Kitchen Radio.lrc.kjb-tmp"), songFolder(existing))
+        assertEquals(setOf("Harbour Lights.mp3", "Harbour Lights.lrc", "Kitchen Radio.mp3"), songFolder(existing))
 
         assertTrue(edits().save(fresh, saved) is LrcSave.Saved)
         assertTrue(edits().save(existing, saved) is LrcSave.Saved)
@@ -350,6 +350,39 @@ class LrcEditsTest {
         ledger.accepts = { true }
         pipeline().finishInterrupted()
         val entry = ledger[existing.path]
+        assertEquals(LyricsStatus.SYNCED, entry?.status)
+        assertEquals(sha(saved), entry?.sha256)
+        assertTrue(entry?.mine == true)
+    }
+
+    @Test
+    fun `a first Save killed before the rename leaves no lrc, and the next start deletes the temp file its marker names, nothing else`() = runTest {
+        val fresh = audio("Kitchen Radio.mp3")
+        // A file of that kind no write of this app names: never KJB's to delete.
+        val stray = File(File(fresh.path).parentFile, ".Harbour Lights.lrc.kjb-tmp").apply { writeText("[00:01.00]w01") }
+
+        assertThrows(Killed::class.java) { runBlocking { edits(writeBytes = dies(sidecar(fresh))).save(fresh, saved) } }
+        assertEquals(LyricsStatus.WRITING, ledger[fresh.path]?.status)
+
+        pipeline().finishInterrupted()
+
+        assertNull(ledger[fresh.path])
+        assertFalse(sidecar(fresh).exists())
+        assertTrue(stray.exists())
+        assertEquals(setOf("Kitchen Radio.mp3", ".Harbour Lights.lrc.kjb-tmp"), songFolder(fresh))
+    }
+
+    @Test
+    fun `a first Save cut off between the rename and the ledger is the user's lyrics at the next start`() = runTest {
+        val fresh = audio("Kitchen Radio.mp3")
+        ledger.accepts = { it.status != LyricsStatus.SYNCED }
+
+        assertTrue(edits().save(fresh, saved) is LrcSave.Saved)
+        assertEquals(saved, sidecar(fresh).readText())
+
+        ledger.accepts = { true }
+        pipeline().finishInterrupted()
+        val entry = ledger[fresh.path]
         assertEquals(LyricsStatus.SYNCED, entry?.status)
         assertEquals(sha(saved), entry?.sha256)
         assertTrue(entry?.mine == true)
