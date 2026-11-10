@@ -297,9 +297,9 @@ class SongActions(private val playback: PlaybackCommands, private val playlists:
             Outcome(Said.NotSaved)
         }
 
-    /** Only the playlist goes; the songs stay on the phone. */
-    suspend fun delete(playlist: Playlist): Outcome =
-        if (playlists.delete(playlist.id)) Outcome(Said.PlaylistDeleted) { playlists.put(playlist) } else Outcome(Said.NotSaved)
+    /** Only the playlist goes; the songs stay on the phone. Undo puts it back, then [reopen] (from its page: that page again). */
+    suspend fun delete(playlist: Playlist, reopen: () -> Unit = {}): Outcome =
+        if (playlists.delete(playlist.id)) Outcome(Said.PlaylistDeleted) { playlists.put(playlist).also { if (it) reopen() } } else Outcome(Said.NotSaved)
 
     private fun Undo.asUndo(): suspend () -> Boolean = {
         undo()

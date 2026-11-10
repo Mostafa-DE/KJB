@@ -61,6 +61,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.lifecycleScope
 import app.lyrify.Lyrify
 import app.lyrify.R
 import app.lyrify.library.Album
@@ -69,6 +71,7 @@ import app.lyrify.library.FavouriteCollection
 import app.lyrify.library.Folder
 import app.lyrify.library.Library
 import app.lyrify.library.PLAYED_LIST_SIZE
+import app.lyrify.library.Playlist
 import app.lyrify.library.PlaylistsState
 import app.lyrify.library.Song
 import app.lyrify.library.recentlyAdded
@@ -407,7 +410,8 @@ private fun UnknownAlbumPage(ui: LibraryUi, library: Library) {
 
 /**
  * One of the user's playlists, its songs in the user's order (a song possibly twice); "⋯" has Rename and Delete, and the
- * song sheet "Remove from playlist". A deleted playlist's page says so, so its toast's Undo can bring it back here.
+ * song sheet "Remove from playlist". Delete goes back to where the page was opened from, and its toast's Undo brings the
+ * playlist back and opens it again. A playlist deleted elsewhere leaves its page saying so.
  */
 @Composable
 internal fun PlaylistPage(ui: LibraryUi, library: Library, id: String) {
@@ -421,7 +425,12 @@ internal fun PlaylistPage(ui: LibraryUi, library: Library, id: String) {
     var deleting by rememberSaveable { mutableStateOf(false) }
     var menu by remember { mutableStateOf(false) }
     val m3u = rememberM3uActions()
-    val playlist = ui.playlists.playlist(id) ?: return MissingPage(ui)
+    val nav = LocalNavigator.current
+    // The toast outlives the page Delete leaves: it runs in the activity's scope, not the page's.
+    val lifecycle = LocalLifecycleOwner.current.lifecycleScope
+    // Deleted here: the page keeps drawing it while it leaves.
+    var leaving by remember { mutableStateOf<Playlist?>(null) }
+    val playlist = ui.playlists.playlist(id) ?: leaving ?: return MissingPage(ui)
     // Each song with its place in the playlist, for "Remove from playlist"; songs gone or hidden are left out.
     val entries = remember(playlist, library, byTitle, ui.settings.library) {
         val listed = playlist.songs.mapIndexedNotNull { at, ref -> library.resolver.find(ref)?.takeIf(library::shows)?.let { at to it } }
@@ -455,7 +464,11 @@ internal fun PlaylistPage(ui: LibraryUi, library: Library, id: String) {
                 ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll, sort = stringResource(if (byTitle) R.string.lib_sort_title else R.string.lib_your_order), onSort = { sorting = true })
             }
         }
-        if (songs.isEmpty()) item(key = "empty", contentType = "empty") { EmptyState(EmptyArt.Glyph, stringResource(R.string.songs_empty_title), rowMotion(reduced), text = stringResource(R.string.lib_playlist_empty)) }
+        if (songs.isEmpty()) {
+            item(key = "empty", contentType = "empty") {
+                AboveChrome { EmptyState(EmptyArt.Glyph, stringResource(R.string.songs_empty_title), rowMotion(reduced), text = stringResource(R.string.lib_playlist_empty)) }
+            }
+        }
         songRows(list, place = { at -> SheetPlace.Playlist(id, entries[at].first) }, repeats = true)
     }
     if (sorting) OrderSheet(R.string.lib_your_order, byTitle, { byTitle = it }) { sorting = false }
@@ -473,7 +486,12 @@ internal fun PlaylistPage(ui: LibraryUi, library: Library, id: String) {
             dismiss = stringResource(R.string.remove_cancel),
             onConfirm = {
                 deleting = false
-                scope.launch { toasts.say(resources, actions.delete(playlist)) }
+                leaving = playlist
+                lifecycle.launch {
+                    val deleted = actions.delete(playlist) { nav.open(Page.Playlist(id)) }
+                    if (deleted.said == Said.PlaylistDeleted) nav.back() else leaving = null
+                    toasts.say(resources, deleted)
+                }
             },
             onDismiss = { deleting = false },
         )

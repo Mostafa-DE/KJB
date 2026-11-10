@@ -416,6 +416,25 @@ class SongActionsTest {
     }
 
     @Test
+    fun `a playlist deleted from its page opens again with its Undo, and not when the Undo could not be stored`() = runBlocking {
+        val store = MemoryPlaylists(PlaylistsState(listOf(roadTrip)))
+        val actions = SongActions(NoPlayback, store)
+        var reopened = 0
+        val deleted = actions.delete(roadTrip) { reopened++ }
+        assertEquals(Said.PlaylistDeleted, deleted.said)
+        assertEquals(0, reopened)
+        assertEquals(true, deleted.undo?.invoke())
+        assertEquals(roadTrip, store.now.playlist("p1"))
+        assertEquals(1, reopened)
+
+        val failing = MemoryPlaylists(PlaylistsState(listOf(roadTrip)))
+        val undo = SongActions(NoPlayback, failing).delete(roadTrip) { reopened++ }.undo!!
+        failing.fail = true
+        assertEquals(false, undo())
+        assertEquals(1, reopened)
+    }
+
+    @Test
     fun `a rename starts with the whole name selected, so typing replaces it, and a new name starts empty`() {
         assertEquals("Road trip", nameField("Road trip").text)
         assertEquals(TextRange(0, "Road trip".length), nameField("Road trip").selection)

@@ -1,7 +1,13 @@
 package app.lyrify.ui
 
 import androidx.compose.animation.Crossfade
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntSize
 import app.lyrify.library.SongRef
 import androidx.compose.ui.text.font.lerp
 import androidx.compose.ui.graphics.lerp
@@ -202,6 +208,21 @@ fun SongListFrame(
 }
 
 /**
+ * An item of a page's list kept clear of the shell's Now bar and dock: once laid out, the list scrolls just enough for
+ * all of it to show above them (an empty playlist's hint, under its hero).
+ */
+@Composable
+fun AboveChrome(content: @Composable () -> Unit) {
+    val chrome = with(LocalDensity.current) { LocalShellChrome.current.bottom.toPx() }
+    val requester = remember { BringIntoViewRequester() }
+    var size by remember { mutableStateOf(IntSize.Zero) }
+    LaunchedEffect(size, chrome) {
+        if (size.height > 0) requester.bringIntoView(Rect(0f, 0f, size.width.toFloat(), size.height + chrome))
+    }
+    Box(Modifier.bringIntoViewRequester(requester).onSizeChanged { size = it }) { content() }
+}
+
+/**
  * The rows of [shown], the page's songs from [offset] on (all of them, a heading's, or a folder's own songs, which come
  * first), each playing [PageSongs.songs] from where it is in them. [place] says where the song sheet opens (a playlist:
  * the song's place in it); [note] adds a word after the artist ("12 plays"); [repeats]: the list may hold a song twice
@@ -269,7 +290,8 @@ fun ListHeader(
         val shuffles = listOf(true, false).associateWith { label ->
             measure("shuffle $label") { HeaderButton(R.drawable.ic_shuffle, stringResource(R.string.lib_shuffle), any, primary = false, label = label, onShuffle) }
         }
-        val add = onAddAll?.let { onClick -> measure("add") { AddAllButton(songs, any, onClick) } }.orEmpty()
+        // Nothing to add from an empty list: no "Add all 0 songs".
+        val add = onAddAll?.takeIf { any }?.let { onClick -> measure("add") { AddAllButton(songs, onClick) } }.orEmpty()
         val chips = sort?.let { order -> listOf(true, false).associateWith { label -> measure("sort $label") { SortChip(order, label, onSort) } } }
         fun width(parts: List<androidx.compose.ui.layout.Placeable>) = parts.sumOf { it.width }
         fun widths(parts: Map<Boolean, List<androidx.compose.ui.layout.Placeable>>, before: Int = 0) =
@@ -377,8 +399,8 @@ private fun HeaderButton(@DrawableRes icon: Int, text: String, enabled: Boolean,
 
 /** Add all: an icon button that opens Add to for every song; TalkBack hears "Add all 7 songs". */
 @Composable
-private fun AddAllButton(songs: Int, enabled: Boolean, onClick: () -> Unit) {
-    ChromeIconButton(R.drawable.ic_playlist_add, pluralStringResource(R.plurals.lib_add_all, songs, songs), onClick, enabled = enabled, glass = false, iconSize = 22.dp)
+private fun AddAllButton(songs: Int, onClick: () -> Unit) {
+    ChromeIconButton(R.drawable.ic_playlist_add, pluralStringResource(R.plurals.lib_add_all, songs, songs), onClick, glass = false, iconSize = 22.dp)
 }
 
 /** The order shown, as a chip that opens the sort sheet; with [label] false only its icon. */
