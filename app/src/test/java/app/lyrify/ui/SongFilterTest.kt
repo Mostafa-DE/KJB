@@ -113,16 +113,29 @@ class SongFilterTest {
     }
 
     @Test
-    fun `every one of the 16 statuses can still be shown on its own`() {
+    fun `every one of the 17 statuses can still be shown, with the ones that read the same`() {
         val every = LyricsStatus.entries.foldIndexed(LedgerState()) { i, state, status ->
             state.put(song("/s$i.mp3", "Song $i", "Artist $i", status, i.toLong())).put(song("/t$i.mp3", "Tune $i", "Artist $i", status, i.toLong()))
         }
         LyricsStatus.entries.forEach { status ->
+            val same = LyricsStatus.entries.filter { it.style.label == status.style.label }.toSet()
             val picked = list(SongQuery(group = status.group, status = status), every)
-            assertEquals(status.name, setOf(status), picked.songs.map { it.status }.toSet())
-            assertEquals(status.name, 2, picked.songs.size)
-            if (status.group.statuses.size > 1) assertEquals(status.name, status.group.statuses, picked.statuses)
+            assertEquals(status.name, same, picked.songs.map { it.status }.toSet())
+            assertEquals(status.name, 2 * same.size, picked.songs.size)
+            if (status.group.statuses.size > 1) assertEquals(status.name, status.group.statuses.distinctBy { it.style.label }, picked.statuses)
         }
+    }
+
+    @Test
+    fun `a synced file already there shares the Synced chip, counted with it, and a plain one has its own`() {
+        val files = ledger
+            .put(song("/f.mp3", "Lamp Field", "Velvet Transit", LyricsStatus.EXISTING, 3))
+            .put(song("/g.mp3", "Quiet Ferry", "Velvet Transit", LyricsStatus.EXISTING_PLAIN, 2))
+        val chips = list(SongQuery(group = SongGroup.HAS_LYRICS), files)
+        assertEquals(listOf(LyricsStatus.SYNCED, LyricsStatus.EXISTING_PLAIN), chips.statuses)
+        assertEquals(3, chips.chipCount(LyricsStatus.SYNCED))
+        assertEquals(listOf("/c.mp3", "/a.mp3", "/f.mp3"), list(SongQuery(group = SongGroup.HAS_LYRICS, status = LyricsStatus.SYNCED), files).songs.map { it.path })
+        assertEquals(listOf("/c.mp3", "/a.mp3", "/f.mp3"), list(SongQuery(group = SongGroup.HAS_LYRICS, status = LyricsStatus.EXISTING), files).songs.map { it.path })
     }
 
     @Test

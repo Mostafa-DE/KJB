@@ -34,7 +34,7 @@ class LibraryListsTest {
         for (status in LyricsStatus.entries) {
             val expected = when (status) {
                 in synced -> LyricsMark.SYNCED
-                LyricsStatus.PLAIN_ONLY -> LyricsMark.PLAIN
+                LyricsStatus.PLAIN_ONLY, LyricsStatus.EXISTING_PLAIN -> LyricsMark.PLAIN
                 else -> LyricsMark.NONE
             }
             assertEquals("$status", expected, lyricsMark(status))

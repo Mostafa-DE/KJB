@@ -120,8 +120,9 @@
     <!-- Statuses: a label everywhere on screen, a sentence in the song sheet. -->
     <string name="status_synced">Synced</string>
     <string name="status_synced_sentence">Shows in your music app next time the song starts.</string>
-    <string name="status_existing">Had lyrics</string>
     <string name="status_existing_sentence">It already had a lyrics file. KJB left it alone.</string>
+    <string name="status_existing_plain">Lyrics</string>
+    <string name="status_existing_plain_sentence">It already had lyrics without times. KJB left them alone.</string>
     <string name="status_ai_aligned">AI synced</string>
     <string name="status_ai_aligned_sentence">The AI synced plain lyrics to this song.</string>
     <string name="status_ai_transcribed">AI written</string>

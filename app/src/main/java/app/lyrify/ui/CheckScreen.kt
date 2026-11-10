@@ -404,7 +404,7 @@ fun checkedMessage(result: Checked, timing: PlainTiming): Int = when (result) {
             PlainTiming.NO_AI -> R.string.check_done_plain_no_ai
         }
         LyricsStatus.NOT_FOUND -> R.string.check_done_none
-        LyricsStatus.EXISTING -> R.string.check_done_existing
+        LyricsStatus.EXISTING, LyricsStatus.EXISTING_PLAIN -> R.string.check_done_existing
         else -> R.string.check_changed
     }
     Checked.Changed -> R.string.check_changed

@@ -760,7 +760,7 @@ enum class LyricsMark { SYNCED, PLAIN, NONE }
 /** The mark for a song whose ledger status is [status] (null: KJB has not looked it up). */
 fun lyricsMark(status: LyricsStatus?): LyricsMark = when (status) {
     LyricsStatus.SYNCED, LyricsStatus.EXISTING, LyricsStatus.AI_ALIGNED, LyricsStatus.AI_TRANSCRIBED -> LyricsMark.SYNCED
-    LyricsStatus.PLAIN_ONLY -> LyricsMark.PLAIN
+    LyricsStatus.PLAIN_ONLY, LyricsStatus.EXISTING_PLAIN -> LyricsMark.PLAIN
     else -> LyricsMark.NONE
 }
 

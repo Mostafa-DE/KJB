@@ -20,8 +20,14 @@ enum class LyricsStatus {
     /** KJB wrote a synced `.lrc`. */
     SYNCED,
 
-    /** A `.lrc` was already there; KJB never touches it. */
+    /**
+     * A `.lrc` with timed lines was already there (or one from before 3.0, which may hold plain lyrics until it is read
+     * again); KJB never touches it.
+     */
     EXISTING,
+
+    /** A `.lrc` without timed lines (plain lyrics) was already there; KJB never touches it. */
+    EXISTING_PLAIN,
 
     /** LRCLIB has untimed lyrics only (kept for v2). */
     PLAIN_ONLY,
@@ -345,9 +351,9 @@ fun recorded(
         status = status,
         lrclibId = if (status == LyricsStatus.ERROR) lrclibId ?: previous?.lrclibId else lrclibId,
         attempts = attempts,
-        lastAttemptAt = if (status == LyricsStatus.EXISTING) previous?.lastAttemptAt else now,
+        lastAttemptAt = if (status == LyricsStatus.EXISTING || status == LyricsStatus.EXISTING_PLAIN) previous?.lastAttemptAt else now,
         nextAttemptAt = when (status) {
-            LyricsStatus.SYNCED, LyricsStatus.EXISTING, LyricsStatus.REMOVED, LyricsStatus.WRITING -> null
+            LyricsStatus.SYNCED, LyricsStatus.EXISTING, LyricsStatus.EXISTING_PLAIN, LyricsStatus.REMOVED, LyricsStatus.WRITING -> null
             // The AI settled the song (a failed run has its own retry, aiRetryAt): LRCLIB is not asked again by itself.
             LyricsStatus.AI_TRANSCRIBED,
             LyricsStatus.AI_ALIGNED,

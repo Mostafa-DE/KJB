@@ -213,8 +213,7 @@ class LyricsPipeline(
             previous != null && previous.status == LyricsStatus.WRITING -> reconcile(track, sidecar, previous, lane)
             // Waiting for a check since Covers & tags renamed it: its `.lrc` is still KJB's own, not one that was there.
             previous?.retagCheck == true && Files.exists(sidecar, LinkOption.NOFOLLOW_LINKS) -> Processed(LyricsStatus.NEEDS_CHECK)
-            Files.exists(sidecar, LinkOption.NOFOLLOW_LINKS) ->
-                Processed(previous?.status?.takeIf { it in ON_DISK } ?: outcome(previous, track, LyricsStatus.EXISTING))
+            Files.exists(sidecar, LinkOption.NOFOLLOW_LINKS) -> Processed(onDisk(previous, track))
             previous != null && previous.status !in ON_DISK && !force && !previous.isDue(clock()) && !previous.lookupStale ->
                 Processed(previous.status)
             TrackNames.isInstrumental(track.title) -> Processed(outcome(previous, track, LyricsStatus.INSTRUMENTAL))
@@ -256,7 +255,7 @@ class LyricsPipeline(
         val previous = ledger.entry(track.path) ?: return@exclusive null
         when {
             previous.mine || !previous.status.waitsForAi || previous.lookupStale -> previous.status
-            Files.exists(sidecar, LinkOption.NOFOLLOW_LINKS) -> outcome(previous, track, LyricsStatus.EXISTING)
+            Files.exists(sidecar, LinkOption.NOFOLLOW_LINKS) -> foreign(previous, track)
             // The file and its ledger entries go together, even if the run is stopped.
             else -> withContext(NonCancellable) { recordAiResult(track, sidecar, previous, result) }
         }
@@ -363,7 +362,7 @@ class LyricsPipeline(
         val retag = previous?.takeIf { it.retagCheck && Files.exists(sidecar, LinkOption.NOFOLLOW_LINKS) }
         // "This one" on the lyrics a retag check has: they stay, KJB's own as before.
         if (retag != null && id == retag.lrclibId) return@exclusive if (ledger.put(retag.kept(clock()))) Checked.Done(retag.writtenStatus()) else Checked.NotSaved
-        if (retag == null && Files.exists(sidecar, LinkOption.NOFOLLOW_LINKS)) return@exclusive Checked.Done(outcome(previous, track, LyricsStatus.EXISTING))
+        if (retag == null && Files.exists(sidecar, LinkOption.NOFOLLOW_LINKS)) return@exclusive Checked.Done(foreign(previous, track))
         val found = when (val result = client.byId(id, Lane.HIGH)) {
             is LrclibResult.Found -> result.records.firstOrNull { it.id == id }
             LrclibResult.NotFound -> null
@@ -386,11 +385,11 @@ class LyricsPipeline(
                 // what KJB wrote; when the ledger can't be saved, it stays.
                 retag != null -> when {
                     !record(retag, track, LyricsStatus.PLAIN_ONLY, id, durationMatched = true) -> Checked.NotSaved
-                    !clearRetagged(sidecar, retag) -> Checked.Done(outcome(retag, track, LyricsStatus.EXISTING))
+                    !clearRetagged(sidecar, retag) -> Checked.Done(foreign(retag, track))
                     else -> Checked.Done(LyricsStatus.PLAIN_ONLY)
                 }
                 // A `.lrc` made during the fetch wins.
-                Files.exists(sidecar, LinkOption.NOFOLLOW_LINKS) -> Checked.Done(outcome(previous, track, LyricsStatus.EXISTING))
+                Files.exists(sidecar, LinkOption.NOFOLLOW_LINKS) -> Checked.Done(foreign(previous, track))
                 // The user picked them: put in place whole and marked as theirs, so nothing replaces them by itself.
                 text != null -> {
                     val bytes = LrcFormat.encode(text)
@@ -413,7 +412,7 @@ class LyricsPipeline(
                 !record(previous, previous.track, LyricsStatus.NOT_FOUND, declined = true) -> Checked.NotSaved
                 // A retag check's own lyrics are not the song either: KJB's `.lrc` goes, while it is still exactly what
                 // KJB wrote. One changed since is someone else's now, and stays.
-                sidecar != null && !clearRetagged(sidecar, previous) -> Checked.Done(outcome(previous, previous.track, LyricsStatus.EXISTING))
+                sidecar != null && !clearRetagged(sidecar, previous) -> Checked.Done(foreign(previous, previous.track))
                 else -> Checked.Done(LyricsStatus.NOT_FOUND)
             }
         }
@@ -426,7 +425,7 @@ class LyricsPipeline(
      */
     private suspend fun replaceRetagged(track: LocalTrack, sidecar: Path, previous: LedgerEntry, text: String, id: Long): Checked {
         val sha256 = previous.sha256
-        if (sha256 == null || SidecarFile.compare(sidecar, sha256, log) != Compared.SAME) return Checked.Done(outcome(previous, track, LyricsStatus.EXISTING))
+        if (sha256 == null || SidecarFile.compare(sidecar, sha256, log) != Compared.SAME) return Checked.Done(foreign(previous, track))
         val bytes = LrcFormat.encode(text)
         val entry = recorded(previous, track, LyricsStatus.SYNCED, id, clock(), sha256 = SidecarFile.sha256(bytes), size = bytes.size.toLong(), source = LyricsSource.LRCLIB)
         return if (placeMine(ledger, writes, sidecar, bytes, previous, entry, replace = true, log, writeBytes)) Checked.Done(LyricsStatus.SYNCED) else Checked.NotSaved
@@ -715,10 +714,11 @@ class LyricsPipeline(
      * file for KJB's own partial and delete it.
      */
     private suspend fun keepForeign(previous: LedgerEntry?, track: LocalTrack, marker: LedgerEntry): LyricsStatus {
-        if (!record(previous, track, LyricsStatus.EXISTING) && !ledger.put(marker.copy(pendingText = null))) {
+        val status = foreignStatus(track)
+        if (!record(previous, track, status) && !ledger.put(marker.copy(pendingText = null))) {
             warn("lyrics: ledger not writable twice; a WRITING entry keeps its text, so a later look could delete a file that is not KJB's")
         }
-        return LyricsStatus.EXISTING
+        return status
     }
 
     /**
@@ -904,6 +904,36 @@ class LyricsPipeline(
      * [record] where a ledger failure needs nothing more: the entry stays as it was, so the
      * track is simply handled again the next time it is seen. Returns [status].
      */
+    /**
+     * [track] has a `.lrc`: its status when that is lyrics KJB wrote; else the file is one KJB did not write, read again
+     * each time (when the song plays, on a library read), and recorded again only when what it holds changed: timed lines
+     * over plain ones, or back. A lyrics file on disk always wins.
+     */
+    private suspend fun onDisk(previous: LedgerEntry?, track: LocalTrack): LyricsStatus {
+        val status = previous?.status
+        if (status != null && status in ON_DISK && status !in FOREIGN) return status
+        val now = foreignStatus(track)
+        return if (now == status) now else outcome(previous, track, now)
+    }
+
+    /** Records [track]'s `.lrc` as one KJB did not write, by what it holds ([foreignStatus]). */
+    private suspend fun foreign(previous: LedgerEntry?, track: LocalTrack): LyricsStatus = outcome(previous, track, foreignStatus(track))
+
+    /**
+     * What [track]'s `.lrc`, one KJB did not write, holds: [LyricsStatus.EXISTING] for timed lines, or when it cannot be
+     * read (a link, too large); [LyricsStatus.EXISTING_PLAIN] for plain lyrics. Blocking.
+     */
+    private fun foreignStatus(track: LocalTrack): LyricsStatus {
+        val path = LrcFormat.sidecarPath(track.path) ?: return LyricsStatus.EXISTING
+        val bytes = try {
+            readSidecar(File(path).toPath())
+        } catch (e: IOException) {
+            log("lyrics: a lyrics file not readable: ${e.javaClass.simpleName}")
+            null
+        }
+        return if (bytes == null || LrcFormat.timed(bytes.decodeToString())) LyricsStatus.EXISTING else LyricsStatus.EXISTING_PLAIN
+    }
+
     private suspend fun outcome(
         previous: LedgerEntry?,
         track: LocalTrack,
@@ -931,7 +961,10 @@ class LyricsPipeline(
         const val ADOPT_WINDOW_MS: Long = 120_000
 
         /** Statuses that mean a `.lrc` is on disk: decided by the file, never by the schedule. */
-        val ON_DISK: Set<LyricsStatus> = setOf(LyricsStatus.SYNCED, LyricsStatus.EXISTING, LyricsStatus.AI_TRANSCRIBED, LyricsStatus.AI_ALIGNED)
+        /** A `.lrc` KJB did not write: read again each time, as what it holds may change. */
+        private val FOREIGN: Set<LyricsStatus> = setOf(LyricsStatus.EXISTING, LyricsStatus.EXISTING_PLAIN)
+
+        val ON_DISK: Set<LyricsStatus> = setOf(LyricsStatus.SYNCED, LyricsStatus.EXISTING, LyricsStatus.EXISTING_PLAIN, LyricsStatus.AI_TRANSCRIBED, LyricsStatus.AI_ALIGNED)
     }
 }
 

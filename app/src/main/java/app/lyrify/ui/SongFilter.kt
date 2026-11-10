@@ -17,7 +17,7 @@ import java.time.ZoneId
 enum class SongGroup(@StringRes val label: Int, val statuses: List<LyricsStatus>, val tone: Tone, @DrawableRes val icon: Int) {
     HAS_LYRICS(
         R.string.group_has_lyrics,
-        listOf(LyricsStatus.SYNCED, LyricsStatus.EXISTING, LyricsStatus.AI_ALIGNED, LyricsStatus.AI_TRANSCRIBED),
+        listOf(LyricsStatus.SYNCED, LyricsStatus.EXISTING, LyricsStatus.EXISTING_PLAIN, LyricsStatus.AI_ALIGNED, LyricsStatus.AI_TRANSCRIBED),
         Tone.SYNCED,
         R.drawable.ic_lyrics_fill,
     ),
@@ -105,22 +105,28 @@ data class SongList(
     val statuses: List<LyricsStatus>,
 ) {
     val songs: List<LedgerEntry> get() = sections.flatMap { it.songs }
+
+    /** The songs [status]'s chip counts: with the statuses that read the same ([sameChip]). */
+    fun chipCount(status: LyricsStatus): Int = statusCounts.filterKeys { sameChip(it, status) }.values.sum()
     val shown: Int get() = sections.sumOf { it.songs.size }
 }
 
 /**
  * The ledger's songs matching [query]: the text in the title or the artist (case and accents aside), then its group and
  * status, sorted and sectioned (days are [now]'s in [zone]). Counts follow the search. The status chips show when the
- * selected group has two or more statuses with songs (the selected status counts as one), so each of the 16 statuses can
- * still be shown on its own.
+ * selected group has two or more statuses with songs (the selected status counts as one), so each of the statuses can
+ * still be shown, one chip for the statuses that read the same ([sameChip]).
  */
 fun songList(ledger: LedgerState, query: SongQuery, now: Long = System.currentTimeMillis(), zone: ZoneId = ZoneId.systemDefault()): SongList {
     val words = TrackNames.normalize(query.text)
     val found = ledger.entries.values.filter { words.isEmpty() || matches(it, words) }
     val counted = found.groupingBy { it.status }.eachCount()
     val statusCounts = LyricsStatus.entries.associateWith { counted[it] ?: 0 }
-    val statuses = query.group?.statuses.orEmpty().filter { statusCounts.getValue(it) > 0 || it == query.status }
-    val shown = found.filter { (query.group == null || it.status.group == query.group) && (query.status == null || it.status == query.status) }
+    val chipCounts = statusCounts.keys.associateWith { status -> statusCounts.filterKeys { sameChip(it, status) }.values.sum() }
+    val statuses = query.group?.statuses.orEmpty()
+        .filter { status -> chipCounts.getValue(status) > 0 || query.status?.let { sameChip(it, status) } == true }
+        .distinctBy { it.style.label }
+    val shown = found.filter { (query.group == null || it.status.group == query.group) && (query.status == null || sameChip(it.status, query.status)) }
     return SongList(
         sections = sections(shown, query.sort, dateOf(now, zone), zone),
         total = found.size,
@@ -129,6 +135,9 @@ fun songList(ledger: LedgerState, query: SongQuery, now: Long = System.currentTi
         statuses = if (statuses.size >= 2) statuses else emptyList(),
     )
 }
+
+/** Whether [a] and [b] share a chip: they read the same (a synced lyrics file already there, and KJB's own). */
+fun sameChip(a: LyricsStatus, b: LyricsStatus): Boolean = a.style.label == b.style.label
 
 /** Songs per group, from the songs per status ([LedgerState.counts]). */
 fun groupCounts(counts: Map<LyricsStatus, Int>): Map<SongGroup, Int> = SongGroup.entries.associateWith { group -> group.statuses.sumOf { counts[it] ?: 0 } }
