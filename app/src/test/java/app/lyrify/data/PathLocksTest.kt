@@ -37,6 +37,19 @@ class PathLocksTest {
     }
 
     @Test
+    fun `a pinned path stays held for tag writes, the AI and the preview, while the lyrics pipeline goes on`() = runTest {
+        val locks = PathLocks()
+        locks.pin(song)
+        assertTrue(locks.pinned(song))
+        assertTrue(song in locks)
+        assertFalse(locks.tryHold(song))
+        // The pipeline never touches a song's bytes: it is not kept waiting for good.
+        assertEquals("ran", locks.exclusive(song) { "ran" })
+        assertTrue(song in locks)
+        assertFalse(locks.pinned(other))
+    }
+
+    @Test
     fun `exclusive waits for the path, then holds it while its block runs`() = runTest {
         val locks = PathLocks()
         locks.tryHold(song)

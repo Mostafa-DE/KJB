@@ -132,6 +132,7 @@
     <string name="tags_outcome_could_not">Couldn\'t change</string>
     <string name="tags_outcome_left">Couldn\'t change, left as it was</string>
     <string name="tags_outcome_recovery">Left until KJB restarts</string>
+    <string name="tags_outcome_set_aside">Replaced meanwhile, left alone</string>
     <string name="tags_outcome_undo_not_saved">Changed, Undo not saved</string>
     <string name="tags_outcome_not_tried">Not tried</string>
 

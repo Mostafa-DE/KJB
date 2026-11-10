@@ -56,6 +56,40 @@ class PayloadHashTest {
     }
 
     @Test
+    fun `an MP3's APE tag, before an ID3v1 tag or at the end, is not part of its payload`() {
+        val audio = mp3Audio()
+        val before = payload("plain.mp3", mp3(audio = audio))
+        val ape = TagFixtures.ape(mapOf("Title" to "Paper Lantern"), cover = bigTag(2_000))
+        val other = TagFixtures.ape(mapOf("Title" to "Tin Roof", "KJB Only" to "kept"), cover = bigTag(5_000), header = true)
+        assertEquals(before, payload("ape.mp3", mp3(audio = audio + ape)))
+        assertEquals(before, payload("ape v1.mp3", mp3(audio = audio + ape, v1 = id3v1())))
+        assertEquals(before, payload("other ape v1.mp3", mp3(audio = audio + other, v1 = id3v1())))
+        // A footer whose size runs past the tag is not an APE tag's: the bytes stay in the payload.
+        val broken = ape.copyOf().also { it[it.size - 32 + 12] = 0x7F; it[it.size - 32 + 15] = 0x7F }
+        assertNotEquals(before, payload("broken ape.mp3", mp3(audio = audio + broken)))
+    }
+
+    @Test
+    fun `an APE footer whose size, items or header don't hold together is audio, not a tag`() {
+        val audio = mp3Audio()
+        fun footer(size: Int, count: Int, flags: Int = 0): ByteArray = "APETAGEX".encodeToByteArray() +
+            java.nio.ByteBuffer.allocate(24).order(java.nio.ByteOrder.LITTLE_ENDIAN).putInt(2000).putInt(size).putInt(count).putInt(flags).putLong(0).array()
+        // A footer alone, claiming the audio before it as its items: those bytes stay in the payload.
+        val bogus = footer(size = 2_000, count = 1)
+        val changed = audio.copyOf().also { it[it.size - 500] = (it[it.size - 500] + 1).toByte() }
+        assertNotNull(payload("a.mp3", mp3(audio = audio + bogus)))
+        assertNotEquals(payload("a.mp3", mp3(audio = audio + bogus)), payload("b.mp3", mp3(audio = changed + bogus)))
+        // A tag whose item count is wrong, or which claims a header that is not there, is not a tag either.
+        val plain = payload("plain.mp3", mp3(audio = audio))
+        val wrongCount = TagFixtures.ape(mapOf("Title" to "Paper Lantern", "Artist" to "Kit Calloway")).also { it[it.size - 32 + 16] = 3 }
+        val noHeader = TagFixtures.ape(mapOf("Title" to "Paper Lantern")).also { it[it.size - 32 + 23] = 0x80.toByte() }
+        assertNotEquals(plain, payload("count.mp3", mp3(audio = audio + wrongCount)))
+        assertNotEquals(plain, payload("header.mp3", mp3(audio = audio + noHeader)))
+        // A real tag with its header is still a tag.
+        assertEquals(payload("plain.mp3", mp3(audio = audio)), payload("real.mp3", mp3(audio = audio + TagFixtures.ape(mapOf("Title" to "Tin Roof"), header = true))))
+    }
+
+    @Test
     fun `an MP3 audio change changes the payload`() {
         val audio = mp3Audio()
         val before = payload("a.mp3", mp3(audio = audio))
@@ -219,6 +253,8 @@ class PayloadHashTest {
         val formats = fixtures.listFiles()!!.sortedBy { it.name }.associate { it.name to PayloadHash.of(it.toPath())?.format }
         assertEquals(
             mapOf(
+                "harbour-lights-ape.mp3" to AudioFormat.MP3,
+                "kelp-lighthouse-v24-ape.mp3" to AudioFormat.MP3,
                 "lanterns-over-kelp-v24.mp3" to AudioFormat.MP3,
                 "northbound-tide.m4a" to AudioFormat.M4A,
                 "paper-comet-messy.ogg" to AudioFormat.OGG_VORBIS,

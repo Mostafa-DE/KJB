@@ -16,14 +16,16 @@ KJB's patches, each marked "KJB patch" in the code:
 - `TagLib.saveTags`: one save for the property map and the pictures together (null pictures: left as they are; a
   picture passed back unchanged keeps the width, height and colour details the file had). An MP3 has only its ID3v2
   tag rewritten, as the ID3v2 version asked for (3 or 4), with `DoNotDuplicate`: no ID3v1 tag is added, and an
-  existing one is left as it is. An APE tag already there gets the keys whose values changed; none is added.
+  existing one is left as it is. An APE tag already there gets the keys whose values changed and, when pictures are
+  written and it has cover items, covers to match; none is added. A key, value or picture string holding U+0000
+  refuses the save.
 - `TagLib.getId3v2Frames`: an MP3's ID3v2 major version and every frame ID, so KJB keeps v2.4 when a downgrade would
   drop frames and checks that no frame the property map can't show went missing.
 - Every JNI call: the descriptor is closed on every path (also when `/proc/self/fd` can't be read or no stream opens),
   TagLib's work runs in `try`/`catch (...)` so no C++ exception crosses into Java, and a pending Java exception is
   checked after each JNI call.
 - `utils.h`: strings cross JNI as UTF-16 (`NewString`, `GetStringChars`), not modified UTF-8, which broke characters
-  outside the BMP; `readlink` failing (-1) is no longer used as an index; a picture without data no longer leaves a
+  outside the BMP, and a Java string becomes a TagLib string by its length (never cut at a U+0000); `readlink` failing (-1) is no longer used as an index; a picture without data no longer leaves a
   null at the end of the picture array; local references are freed in the loops.
 - `CMakeLists.txt`: CMake 3.22.1, `-Wl,-z,max-page-size=16384` (NDK r27.1 does not align to 16 KB pages by itself),
   and only the formats KJB changes (MP3, FLAC, M4A, Ogg Vorbis, Opus; APE for an MP3's APE tags). `fileref_ext.cpp`

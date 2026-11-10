@@ -46,6 +46,24 @@ object TagFixtures {
     fun id3v1(title: String = "Paper Lantern"): ByteArray =
         ("TAG" + title.padEnd(30, '\u0000')).encodeToByteArray().copyOf(128)
 
+    /** An APEv2 tag (items, then a footer; with [header], a header first) holding text [items] and a binary cover. */
+    fun ape(items: Map<String, String>, cover: ByteArray? = null, header: Boolean = false): ByteArray {
+        val out = ByteArrayOutputStream()
+        fun item(key: String, value: ByteArray, binary: Boolean) {
+            out.write(ByteBuffer.allocate(8).order(java.nio.ByteOrder.LITTLE_ENDIAN).putInt(value.size).putInt(if (binary) 2 else 0).array())
+            out.write(key.encodeToByteArray() + byteArrayOf(0) + value)
+        }
+        items.forEach { (key, value) -> item(key, value.encodeToByteArray(), binary = false) }
+        cover?.let { item("Cover Art (Front)", byteArrayOf(0) + it, binary = true) }
+        val count = items.size + if (cover != null) 1 else 0
+        val body = out.toByteArray()
+        fun frame(isHeader: Boolean): ByteArray = "APETAGEX".encodeToByteArray() +
+            ByteBuffer.allocate(24).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                .putInt(2000).putInt(body.size + 32).putInt(count)
+                .putInt((if (header) 1 shl 31 else 0) or (if (isHeader) 1 shl 29 else 0)).putLong(0).array()
+        return (if (header) frame(true) else ByteArray(0)) + body + frame(false)
+    }
+
     fun mp3(tag: ByteArray? = id3v2("TIT2 Paper Lantern".encodeToByteArray()), audio: ByteArray = mp3Audio(), v1: ByteArray? = null): ByteArray =
         (tag ?: ByteArray(0)) + audio + (v1 ?: ByteArray(0))
 

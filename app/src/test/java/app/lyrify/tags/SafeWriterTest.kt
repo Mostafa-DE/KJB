@@ -83,7 +83,8 @@ class SafeWriterTest {
 
         val events = rig.events.toList()
         fun at(event: String) = events.indexOf(event).also { assertTrue("$event in $events", it >= 0) }
-        val order = listOf("busy check", "mounted", "same file", "copy backup", "copy work", "tags read", "tags write", "open rw", "closed", "scan")
+        // The rescan runs with the descriptor still open: a put-back would go through it.
+        val order = listOf("busy check", "mounted", "same file", "copy backup", "copy work", "tags read", "tags write", "open rw", "scan", "closed")
         assertEquals(order, order.sortedBy(::at))
         // A second busy check right before the write, after the private copy was verified.
         assertTrue(events.lastIndexOf("busy check") in at("tags write")..at("open rw"))
@@ -245,7 +246,8 @@ class SafeWriterTest {
         val song = rig.song("Paper Lantern", 41, fields)
         val before = rig.bytes(song)
         rig.songs.plans += WritePlan.FailAfter(700)
-        rig.songs.plans += WritePlan.Refuse
+        // The put-back, through the same descriptor, fails too.
+        rig.songs.plans += WritePlan.FailAfter(0)
 
         assertEquals(listOf(SongOutcome.RECOVERY_PENDING), outcomes(write(WriteJob(song, edit))))
         assertEquals(1, rig.journal.pending().size)
