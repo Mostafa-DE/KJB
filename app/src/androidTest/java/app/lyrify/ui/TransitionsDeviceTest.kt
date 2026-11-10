@@ -2,8 +2,11 @@ package app.lyrify.ui
 
 import androidx.compose.foundation.clickable
 import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -29,9 +32,7 @@ class TransitionsDeviceTest {
     fun aDialogsActionRunsOnlyOnceItHasLeft() {
         var confirmed = 0
         compose.setContent {
-            LyrifyTheme {
-                ConfirmDialog(title = "Delete Harbour Glass?", confirm = "Delete", dismiss = "Keep", onConfirm = { confirmed++ }, onDismiss = {})
-            }
+            Host { ConfirmDialog(title = "Delete Harbour Glass?", confirm = "Delete", dismiss = "Keep", onConfirm = { confirmed++ }, onDismiss = {}) }
         }
         compose.waitForIdle()
         compose.mainClock.autoAdvance = false
@@ -48,7 +49,7 @@ class TransitionsDeviceTest {
     @Test
     fun aStateFadesThroughTheOtherInsteadOfCutting() {
         var state by mutableStateOf("Finding lyrics")
-        compose.setContent { LyrifyTheme { FadeThrough(state) { Text(it) } } }
+        compose.setContent { Host { FadeThrough(state) { Text(it) } } }
         compose.waitForIdle()
         compose.mainClock.autoAdvance = false
         state = "No lyrics yet"
@@ -66,9 +67,7 @@ class TransitionsDeviceTest {
     fun theSongSheetsChangeStepInOneWindow() {
         var step by mutableStateOf("Paper Lantern")
         compose.setContent {
-            LyrifyTheme {
-                SheetFlow(step, onDismiss = {}) { shown -> LyrifySheet(onDismiss = {}) { Text(shown) } }
-            }
+            Host { SheetFlow(step, onDismiss = {}) { shown -> LyrifySheet(onDismiss = {}) { Text(shown) } } }
         }
         compose.waitForIdle()
         compose.mainClock.autoAdvance = false
@@ -88,7 +87,7 @@ class TransitionsDeviceTest {
         var step by mutableStateOf("Paper Lantern")
         var tapped = 0
         compose.setContent {
-            LyrifyTheme {
+            Host {
                 SheetFlow(step, onDismiss = {}) { shown ->
                     LyrifySheet(onDismiss = {}) { Text(shown, Modifier.clickable { if (shown == "Paper Lantern") tapped++ }) }
                 }
@@ -102,5 +101,11 @@ class TransitionsDeviceTest {
         // Still drawn while it fades, the old step is gone for the finger from the first frame of its exit.
         compose.onNodeWithText("Paper Lantern").performClick()
         compose.runOnIdle { assertEquals(0, tapped) }
+    }
+
+    /** What the activity gives every screen: the theme and the app's messages, which a sheet's [ToastSlot] reads. */
+    @Composable
+    private fun Host(content: @Composable () -> Unit) {
+        LyrifyTheme { CompositionLocalProvider(LocalToasts provides remember { ToastState() }, content = content) }
     }
 }
