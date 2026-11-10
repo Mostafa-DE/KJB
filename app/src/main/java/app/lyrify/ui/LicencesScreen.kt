@@ -50,8 +50,8 @@ private const val JETBRAINS: String = "JetBrains s.r.o. and contributors"
 @Immutable
 data class Shipped(val name: String, val parts: String, val licence: String, val copyright: String, val texts: List<String>)
 
-/** KJB itself. */
-val KJB_LICENCE: Shipped = Shipped("KJB", "This app", "GPL 3.0", "KJB contributors", listOf("gpl-3.0.txt"))
+/** KJB itself: the additional permission under GPL section 7 that ends LICENSE, then the GPL. */
+val KJB_LICENCE: Shipped = Shipped("KJB", "This app", "GPL 3.0", "KJB contributors", listOf("kjb-additional-permission.txt", "gpl-3.0.txt"))
 
 /** The repository's NOTICE: credits, every library at more length, the Apache NOTICE files and the trademarks. */
 val NOTICES: Shipped = Shipped("Notices", "Credits, trademarks and the Apache 2.0 NOTICE files", "Credits and notices", "KJB contributors", listOf("NOTICE.txt"))

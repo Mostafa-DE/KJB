@@ -167,7 +167,16 @@ leaves the phone.
 ## Licence and credits
 
 KJB is free software under the GNU General Public License, version 3 (see `LICENSE`). Settings > About > Licences lists
-everything the app is built with and shows each licence in full; `NOTICE` says the same in the repository.
+everything the app is built with and shows each licence in full; `NOTICE` says the same in the repository. `LICENSE`
+ends with this additional permission, which also opens KJB's own page in the app's Licences:
+
+Additional permission under GNU GPL version 3 section 7
+
+If you modify this Program, or any covered work, by linking or combining it with the Qualcomm AI Engine Direct (QNN)
+runtime libraries (com.qualcomm.qti:qnn-runtime), or with the other libraries that the KJB app bundles under licences
+other than the GNU GPL as listed in the NOTICE file (or a modified version of any of those libraries), containing parts
+covered by the terms of the Qualcomm AI Stack License or of those other libraries' licences, the licensors of this
+Program grant you additional permission to convey the resulting work.
 
 - Lyrics come from [LRCLIB](https://lrclib.net), a free, community-built lyrics database. Lyrics belong to their
   rights holders.
