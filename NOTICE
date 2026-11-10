@@ -5,6 +5,9 @@ This program is free software: you can redistribute it and/or modify it under th
 terms of the GNU General Public License version 3 as published by the Free Software
 Foundation. See LICENSE for the full text.
 
+The app shows this file, and the full text of every licence named in it, in Settings > About > Licences
+(app/src/main/assets/licences).
+
 Credits
 
 - LRCLIB (https://lrclib.net), the free, community-built lyrics database KJB
@@ -13,21 +16,47 @@ Credits
 Third-party software built into the app (AI lyrics)
 
 - ONNX Runtime 1.30.0 (https://github.com/microsoft/onnxruntime), MIT License, Copyright (c)
-  Microsoft Corporation. Its telemetry is switched off.
+  Microsoft Corporation. Its telemetry is switched off. Its third-party notices (ThirdPartyNotices.txt at v1.30.0)
+  ship in the app.
+- Microsoft 1DS C++ SDK (https://github.com/microsoft/cpp_client_telemetry), inside ONNX Runtime's Java library
+  (its META-INF/LICENSE-1DS), Apache License 2.0, Copyright Microsoft Corporation.
 - ONNX Runtime QNN Execution Provider 2.6.0 (com.qualcomm.qti:onnxruntime-android-qnn,
-  https://github.com/onnxruntime/onnxruntime-qnn), MIT License.
-- Qualcomm AI Engine Direct (QNN) runtime 2.50.0 (com.qualcomm.qti:qnn-runtime), distributed under the
-  Qualcomm AI Hub Model License
-  (https://softwarecenter.qualcomm.com/api/download/software/licenses/ai_model_hub/v1/LICENSE.pdf), as its
-  Maven POM states. Only its HTP backend and Hexagon v69, v75, v79 and v81 libraries are packaged.
+  https://github.com/onnxruntime/onnxruntime-qnn), MIT License, Copyright (c) Qualcomm Technologies, Inc. and/or its
+  subsidiaries, Copyright (c) Microsoft Corporation. Its third-party notices (ThirdPartyNotices.txt at v2.6.0) ship in
+  the app.
+- Qualcomm AI Engine Direct (QNN) runtime 2.50.0 (com.qualcomm.qti:qnn-runtime), Copyright Qualcomm Technologies, Inc.
+  Its Maven POM names the Qualcomm AI Hub Model License
+  (https://softwarecenter.qualcomm.com/api/download/software/licenses/ai_model_hub/v1/LICENSE.pdf); the licence inside
+  the package (LICENSE.pdf) is Qualcomm Technologies' "AI Stack License", which allows it to be distributed in object
+  code as part of an app. That licence and the package's NOTICE.txt ship in the app. Only its HTP backend and Hexagon
+  v69, v75, v79 and v81 libraries are packaged.
 - The Whisper tokenizer files in app/src/main/assets/whisper (vocab.json, added_tokens.json,
   generation_config.json) are openai/whisper-large-v3-turbo's (https://huggingface.co/openai/whisper-large-v3-turbo),
   MIT License, Copyright (c) OpenAI.
 
-Third-party software and assets built into the app (screens)
+Third-party software and assets built into the app (player, screens and storage)
 
+- AndroidX, Jetpack Compose, Media3 1.11.1 and Glance 1.2.0 (androidx.*, https://developer.android.com/jetpack/androidx,
+  https://github.com/androidx/media), Apache License 2.0, Copyright The Android Open Source Project.
+- Compose Multiplatform 1.12.0 (org.jetbrains.compose, org.jetbrains.androidx;
+  https://github.com/JetBrains/compose-multiplatform), Apache License 2.0, Copyright JetBrains s.r.o. and respective
+  authors and developers. Brought in by Coil.
+- The Kotlin standard library 2.4.21, kotlinx.coroutines 1.11.0, kotlinx.serialization 1.12.0 and atomicfu 0.28.0
+  (https://github.com/JetBrains/kotlin, https://github.com/Kotlin), Apache License 2.0, Copyright JetBrains s.r.o.
+  Their NOTICE files are below.
+- JetBrains Java annotations 23.0.0 (https://github.com/JetBrains/java-annotations), Apache License 2.0, Copyright
+  JetBrains s.r.o.
+- JSpecify 1.0.0 (https://github.com/jspecify/jspecify), Apache License 2.0, Copyright The JSpecify Authors.
 - Coil 3.6.3 (io.coil-kt.coil3:coil-compose, https://github.com/coil-kt/coil), Apache License 2.0,
   Copyright 2026 Coil Contributors. Loads song covers from the phone; no network use.
+- Okio 3.18.1 (https://github.com/square/okio), Apache License 2.0, Copyright Square, Inc. Brought in by Coil and
+  DataStore.
+- Guava 33.3.1-android and failureaccess 1.0.2 (https://github.com/google/guava), Apache License 2.0, Copyright The
+  Guava Authors. Brought in by Media3.
+- Accompanist Drawable Painter 0.37.3 (https://github.com/google/accompanist), Apache License 2.0, Copyright The
+  Android Open Source Project. Brought in by Coil.
+- Protocol Buffers (https://github.com/protocolbuffers/protobuf), inside AndroidX DataStore and Glance, BSD 3-Clause
+  License, Copyright 2008 Google Inc.
 - Material Symbols Rounded (https://github.com/google/material-design-icons), Apache License 2.0, Copyright Google LLC.
   The icons in app/src/main/res/drawable/ic_*.xml (except the launcher's own) are its vector drawables, weight 400,
   grade 0, 24 dp, as Google publishes them.
@@ -45,6 +74,8 @@ Third-party software built into the app (tags)
   Copyright Kyant. Vendored in taglib/ with KJB's changes, which taglib/README.md lists; its licence is taglib/LICENSE.
 - utfcpp 4.2.0 (https://github.com/nemtrif/utfcpp), Boost Software License 1.0, Copyright Nemanja Trifunovic. Used
   by TagLib; licence text in taglib/src/main/cpp/taglib/3rdparty/utfcpp/LICENSE.
+- LLVM libc++ (https://libcxx.llvm.org), the Android NDK's C++ library, linked into libtaglib.so, Apache License 2.0
+  with LLVM Exceptions, The LLVM Project.
 
 Third-party code (sound)
 
@@ -72,6 +103,44 @@ AI models (downloaded by the app, not part of it)
 - wav2vec2-base-960h by Facebook AI (https://huggingface.co/facebook/wav2vec2-base-960h),
   Apache License 2.0, as exported to ONNX and quantized to 4 bits (onnx/model_q4.onnx) by Xenova
   (https://huggingface.co/Xenova/wav2vec2-base-960h).
+
+Apache License 2.0 NOTICE files (section 4(d)), as their projects publish them
+
+   =========================================================================
+   ==  NOTICE file corresponding to the section 4 d of                    ==
+   ==  the Apache License, Version 2.0,                                   ==
+   ==  in this case for the Kotlin Compiler distribution.                 ==
+   =========================================================================
+
+   Kotlin Compiler
+   Copyright 2010-2024 JetBrains s.r.o and respective authors and developers
+
+=========================================================================
+==  NOTICE file corresponding to the section 4 d of                    ==
+==  the Apache License, Version 2.0,                                   ==
+==  in this case for the kotlinx.coroutines library.                   ==
+=========================================================================
+
+kotlinx.coroutines library.
+Copyright 2016-2025 JetBrains s.r.o and contributors
+
+   =========================================================================
+   ==  NOTICE file corresponding to the section 4 d of                    ==
+   ==  the Apache License, Version 2.0,                                   ==
+   ==  in this case for the kotlix.serialization library.                 ==
+   =========================================================================
+
+   kotlinx.serialization library.
+   Copyright 2017-2019 JetBrains s.r.o and respective authors and developers
+
+   =========================================================================
+   ==  NOTICE file corresponding to the section 4 d of                    ==
+   ==  the Apache License, Version 2.0,                                   ==
+   ==  in this case for the kotlix.atomicfu library.                      ==
+   =========================================================================
+
+   kotlinx.atoimcfu library.
+   Copyright 2017 JetBrains s.r.o and respective authors and developers
 
 Samsung and Samsung Music are trademarks of Samsung Electronics Co., Ltd. Snapdragon and Qualcomm are trademarks of
 Qualcomm Incorporated. KJB is not affiliated with, endorsed by, or sponsored by Samsung or Qualcomm.

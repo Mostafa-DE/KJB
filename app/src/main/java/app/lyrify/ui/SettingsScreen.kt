@@ -172,6 +172,7 @@ fun SettingsScreen(
                 GroupedRow(R.drawable.ic_brand_k, stringResource(R.string.version_label, versionName), tile = BrandBlack, onTile = Color.Unspecified, first = true)
                 ActionRow(R.drawable.ic_lyrics, stringResource(R.string.settings_source))
                 ActionRow(R.drawable.ic_directions_car, stringResource(R.string.set_auto)) { sheet = SettingsSheet.ANDROID_AUTO }
+                ActionRow(R.drawable.ic_description, R.string.set_licences) { onOpen(Page.Licences) }
             }
             item(key = "advanced") {
                 GroupedRows(Modifier.padding(top = 24.dp)) {

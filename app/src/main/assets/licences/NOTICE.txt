@@ -1,0 +1,242 @@
+KJB (formerly called Lyrify)
+Copyright (C) 2026 KJB contributors
+
+This program is free software: you can redistribute it and/or modify it under the
+terms of the GNU General Public License version 3 as published by the Free Software
+Foundation. See LICENSE for the full text.
+
+The app shows this file, and the full text of every licence named in it, in Settings > About > Licences
+(app/src/main/assets/licences).
+
+Credits
+
+- LRCLIB (https://lrclib.net), the free, community-built lyrics database KJB
+  looks lyrics up in. Lyrics belong to their respective rights holders.
+
+Third-party software built into the app (AI lyrics)
+
+- ONNX Runtime 1.30.0 (https://github.com/microsoft/onnxruntime), MIT License, Copyright (c)
+  Microsoft Corporation. Its telemetry is switched off. Its third-party notices (ThirdPartyNotices.txt at v1.30.0)
+  ship in the app.
+- Microsoft 1DS C++ SDK (https://github.com/microsoft/cpp_client_telemetry), inside ONNX Runtime's Java library
+  (its META-INF/LICENSE-1DS), Apache License 2.0, Copyright Microsoft Corporation.
+- ONNX Runtime QNN Execution Provider 2.6.0 (com.qualcomm.qti:onnxruntime-android-qnn,
+  https://github.com/onnxruntime/onnxruntime-qnn), MIT License, Copyright (c) Qualcomm Technologies, Inc. and/or its
+  subsidiaries, Copyright (c) Microsoft Corporation. Its third-party notices (ThirdPartyNotices.txt at v2.6.0) ship in
+  the app.
+- Qualcomm AI Engine Direct (QNN) runtime 2.50.0 (com.qualcomm.qti:qnn-runtime), Copyright Qualcomm Technologies, Inc.
+  Its Maven POM names the Qualcomm AI Hub Model License
+  (https://softwarecenter.qualcomm.com/api/download/software/licenses/ai_model_hub/v1/LICENSE.pdf); the licence inside
+  the package (LICENSE.pdf) is Qualcomm Technologies' "AI Stack License", which allows it to be distributed in object
+  code as part of an app. That licence and the package's NOTICE.txt ship in the app. Only its HTP backend and Hexagon
+  v69, v75, v79 and v81 libraries are packaged.
+- The Whisper tokenizer files in app/src/main/assets/whisper (vocab.json, added_tokens.json,
+  generation_config.json) are openai/whisper-large-v3-turbo's (https://huggingface.co/openai/whisper-large-v3-turbo),
+  MIT License, Copyright (c) OpenAI.
+
+Third-party software and assets built into the app (player, screens and storage)
+
+- AndroidX, Jetpack Compose, Media3 1.11.1 and Glance 1.2.0 (androidx.*, https://developer.android.com/jetpack/androidx,
+  https://github.com/androidx/media), Apache License 2.0, Copyright The Android Open Source Project.
+- Compose Multiplatform 1.12.0 (org.jetbrains.compose, org.jetbrains.androidx;
+  https://github.com/JetBrains/compose-multiplatform), Apache License 2.0, Copyright JetBrains s.r.o. and respective
+  authors and developers. Brought in by Coil.
+- The Kotlin standard library 2.4.21, kotlinx.coroutines 1.11.0, kotlinx.serialization 1.12.0 and atomicfu 0.28.0
+  (https://github.com/JetBrains/kotlin, https://github.com/Kotlin), Apache License 2.0, Copyright JetBrains s.r.o.
+  Their NOTICE files are below.
+- JetBrains Java annotations 23.0.0 (https://github.com/JetBrains/java-annotations), Apache License 2.0, Copyright
+  JetBrains s.r.o.
+- JSpecify 1.0.0 (https://github.com/jspecify/jspecify), Apache License 2.0, Copyright The JSpecify Authors.
+- Coil 3.6.3 (io.coil-kt.coil3:coil-compose, https://github.com/coil-kt/coil), Apache License 2.0,
+  Copyright 2026 Coil Contributors. Loads song covers from the phone; no network use.
+- Okio 3.18.1 (https://github.com/square/okio), Apache License 2.0, Copyright Square, Inc. Brought in by Coil and
+  DataStore.
+- Guava 33.3.1-android and failureaccess 1.0.2 (https://github.com/google/guava), Apache License 2.0, Copyright The
+  Guava Authors. Brought in by Media3.
+- Accompanist Drawable Painter 0.37.3 (https://github.com/google/accompanist), Apache License 2.0, Copyright The
+  Android Open Source Project. Brought in by Coil.
+- Protocol Buffers (https://github.com/protocolbuffers/protobuf), inside AndroidX DataStore and Glance, BSD 3-Clause
+  License, Copyright 2008 Google Inc.
+- Material Symbols Rounded (https://github.com/google/material-design-icons), Apache License 2.0, Copyright Google LLC.
+  The icons in app/src/main/res/drawable/ic_*.xml (except the launcher's own) are its vector drawables, weight 400,
+  grade 0, 24 dp, as Google publishes them.
+- Bricolage Grotesque (https://github.com/ateliertriay/bricolage), the variable font
+  BricolageGrotesque[opsz,wdth,wght].ttf as Google Fonts ships it (google/fonts, ofl/bricolagegrotesque), bundled as
+  app/src/main/res/font/bricolage_grotesque.ttf. SIL Open Font License 1.1, full text at the end of this file.
+
+Third-party software built into the app (tags)
+
+- TagLib 2.3.2 (https://github.com/taglib/taglib), GNU Lesser General Public License 2.1 (TagLib is offered under
+  LGPL-2.1 or MPL-1.1; KJB takes the LGPL-2.1 option), Copyright Scott Wheeler and the TagLib authors. Built from
+  source in taglib/src/main/cpp/taglib (unchanged; licence text in COPYING.LGPL there) into libtaglib.so, which reads
+  and writes tags and covers on KJB's private copies of a song.
+- Kyant0/taglib 1.0.6 (https://github.com/Kyant0/taglib), the JNI wrapper around TagLib, Apache License 2.0,
+  Copyright Kyant. Vendored in taglib/ with KJB's changes, which taglib/README.md lists; its licence is taglib/LICENSE.
+- utfcpp 4.2.0 (https://github.com/nemtrif/utfcpp), Boost Software License 1.0, Copyright Nemanja Trifunovic. Used
+  by TagLib; licence text in taglib/src/main/cpp/taglib/3rdparty/utfcpp/LICENSE.
+- LLVM libc++ (https://libcxx.llvm.org), the Android NDK's C++ library, linked into libtaglib.so, Apache License 2.0
+  with LLVM Exceptions, The LLVM Project.
+
+Third-party code (sound)
+
+- Gramophone (https://github.com/FoedusProgramme/Gramophone), GNU General Public License version 3 or later,
+  Copyright (C) 2025 nift4. KJB's ReplayGain tag reading (app/src/main/java/app/lyrify/audio/ReplayGain.kt) is ported
+  from its ReplayGainUtil.kt at commit e6fa468f7a1e3e1c832afbd0dc67ef2966146e96: the tag names and units, the
+  reference loudness shift, the +5 dB offset for Opus R128 gains, and the rule that peak times gain stays at or below
+  full scale.
+
+AI models (downloaded by the app, not part of it)
+
+- Whisper-Large-V3-Turbo by OpenAI, as quantized (w8a16) and compiled for Snapdragon NPUs by Qualcomm AI Hub
+  (Whisper-Large-V3-Turbo-Quantized, https://huggingface.co/qualcomm/Whisper-Large-V3-Turbo-Quantized, release
+  v0.65.0, precompiled_qnn_onnx), Apache License 2.0 per its model card (its License section links
+  https://github.com/huggingface/transformers/blob/v4.42.3/LICENSE). The source checkpoint,
+  openai/whisper-large-v3-turbo (https://huggingface.co/openai/whisper-large-v3-turbo), is MIT License per its model
+  card, Copyright (c) OpenAI. A chip given AI Hub's float build instead
+  (https://huggingface.co/qualcomm/Whisper-Large-V3-Turbo, Apache License 2.0 per its model card) downloads that one;
+  none does at present.
+- UVR-MDX-NET-Voc_FT by the Ultimate Vocal Remover team (Anjok07, aufr33), MIT License, with credit to UVR and
+  its developers, as UVR's README asks of third-party application developers
+  (https://github.com/Anjok07/ultimatevocalremovergui). Architecture: KUIELab MDX-Net. Downloaded from
+  https://github.com/TRvlvr/model_repo/releases/tag/all_public_uvr_models. The licence comes from UVR's README
+  note, not from a licence file next to the weights; training data are not documented.
+- wav2vec2-base-960h by Facebook AI (https://huggingface.co/facebook/wav2vec2-base-960h),
+  Apache License 2.0, as exported to ONNX and quantized to 4 bits (onnx/model_q4.onnx) by Xenova
+  (https://huggingface.co/Xenova/wav2vec2-base-960h).
+
+Apache License 2.0 NOTICE files (section 4(d)), as their projects publish them
+
+   =========================================================================
+   ==  NOTICE file corresponding to the section 4 d of                    ==
+   ==  the Apache License, Version 2.0,                                   ==
+   ==  in this case for the Kotlin Compiler distribution.                 ==
+   =========================================================================
+
+   Kotlin Compiler
+   Copyright 2010-2024 JetBrains s.r.o and respective authors and developers
+
+=========================================================================
+==  NOTICE file corresponding to the section 4 d of                    ==
+==  the Apache License, Version 2.0,                                   ==
+==  in this case for the kotlinx.coroutines library.                   ==
+=========================================================================
+
+kotlinx.coroutines library.
+Copyright 2016-2025 JetBrains s.r.o and contributors
+
+   =========================================================================
+   ==  NOTICE file corresponding to the section 4 d of                    ==
+   ==  the Apache License, Version 2.0,                                   ==
+   ==  in this case for the kotlix.serialization library.                 ==
+   =========================================================================
+
+   kotlinx.serialization library.
+   Copyright 2017-2019 JetBrains s.r.o and respective authors and developers
+
+   =========================================================================
+   ==  NOTICE file corresponding to the section 4 d of                    ==
+   ==  the Apache License, Version 2.0,                                   ==
+   ==  in this case for the kotlix.atomicfu library.                      ==
+   =========================================================================
+
+   kotlinx.atoimcfu library.
+   Copyright 2017 JetBrains s.r.o and respective authors and developers
+
+Samsung and Samsung Music are trademarks of Samsung Electronics Co., Ltd. Snapdragon and Qualcomm are trademarks of
+Qualcomm Incorporated. KJB is not affiliated with, endorsed by, or sponsored by Samsung or Qualcomm.
+
+Bricolage Grotesque licence
+
+Copyright 2022 The Bricolage Grotesque Project Authors (https://github.com/ateliertriay/bricolage)
+
+This Font Software is licensed under the SIL Open Font License, Version 1.1.
+This license is copied below, and is also available with a FAQ at:
+https://scripts.sil.org/OFL
+
+
+-----------------------------------------------------------
+SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007
+-----------------------------------------------------------
+
+PREAMBLE
+The goals of the Open Font License (OFL) are to stimulate worldwide
+development of collaborative font projects, to support the font creation
+efforts of academic and linguistic communities, and to provide a free and
+open framework in which fonts may be shared and improved in partnership
+with others.
+
+The OFL allows the licensed fonts to be used, studied, modified and
+redistributed freely as long as they are not sold by themselves. The
+fonts, including any derivative works, can be bundled, embedded, 
+redistributed and/or sold with any software provided that any reserved
+names are not used by derivative works. The fonts and derivatives,
+however, cannot be released under any other type of license. The
+requirement for fonts to remain under this license does not apply
+to any document created using the fonts or their derivatives.
+
+DEFINITIONS
+"Font Software" refers to the set of files released by the Copyright
+Holder(s) under this license and clearly marked as such. This may
+include source files, build scripts and documentation.
+
+"Reserved Font Name" refers to any names specified as such after the
+copyright statement(s).
+
+"Original Version" refers to the collection of Font Software components as
+distributed by the Copyright Holder(s).
+
+"Modified Version" refers to any derivative made by adding to, deleting,
+or substituting -- in part or in whole -- any of the components of the
+Original Version, by changing formats or by porting the Font Software to a
+new environment.
+
+"Author" refers to any designer, engineer, programmer, technical
+writer or other person who contributed to the Font Software.
+
+PERMISSION & CONDITIONS
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of the Font Software, to use, study, copy, merge, embed, modify,
+redistribute, and sell modified and unmodified copies of the Font
+Software, subject to the following conditions:
+
+1) Neither the Font Software nor any of its individual components,
+in Original or Modified Versions, may be sold by itself.
+
+2) Original or Modified Versions of the Font Software may be bundled,
+redistributed and/or sold with any software, provided that each copy
+contains the above copyright notice and this license. These can be
+included either as stand-alone text files, human-readable headers or
+in the appropriate machine-readable metadata fields within text or
+binary files as long as those fields can be easily viewed by the user.
+
+3) No Modified Version of the Font Software may use the Reserved Font
+Name(s) unless explicit written permission is granted by the corresponding
+Copyright Holder. This restriction only applies to the primary font name as
+presented to the users.
+
+4) The name(s) of the Copyright Holder(s) or the Author(s) of the Font
+Software shall not be used to promote, endorse or advertise any
+Modified Version, except to acknowledge the contribution(s) of the
+Copyright Holder(s) and the Author(s) or with their explicit written
+permission.
+
+5) The Font Software, modified or unmodified, in part or in whole,
+must be distributed entirely under this license, and must not be
+distributed under any other license. The requirement for fonts to
+remain under this license does not apply to any document created
+using the Font Software.
+
+TERMINATION
+This license becomes null and void if any of the above conditions are
+not met.
+
+DISCLAIMER
+THE FONT SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT
+OF COPYRIGHT, PATENT, TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL THE
+COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+INCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL
+DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
+OTHER DEALINGS IN THE FONT SOFTWARE.

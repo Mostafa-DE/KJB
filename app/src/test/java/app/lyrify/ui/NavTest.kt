@@ -37,6 +37,8 @@ class NavTest {
         assertEquals(DockTab.TOOLS, start.open(Page.Check(null)).tab)
         assertEquals(DockTab.TOOLS, start.open(Page.Settings).tab)
         assertEquals(DockTab.TOOLS, start.open(Page.FoldersToSkip).tab)
+        assertEquals(DockTab.TOOLS, start.open(Page.Licences).tab)
+        assertEquals(DockTab.TOOLS, NavState.start(DockTab.LIBRARY).open(Page.Licence("Media3")).tab)
         assertEquals(DockTab.LIBRARY, NavState.start(DockTab.TOOLS).open(Page.Songs(status = LyricsStatus.AI_ALIGNED)).tab)
         assertEquals(DockTab.LIBRARY, NavState.start(DockTab.SEARCH).open(Page.Queues).tab)
         assertEquals(DockTab.SEARCH, start.open(Page.SearchAll(SearchGroup.SONGS, "lantern")).tab)
@@ -198,6 +200,7 @@ class NavTest {
             Page.Songs(SongGroup.NO_LYRICS, LyricsStatus.NOT_FOUND), Page.FoldersToSkip, Page.Folder("Music/Rips"), Page.Genre("Folk"),
             Page.Playlist("p3"), Page.BuiltIn(BuiltInList.MOST_PLAYED), Page.UnknownAlbum, Page.FavouritesAll(FavouriteSection.ALBUMS),
             Page.Queue("q1"), Page.Listening, Page.TopList(TopKind.ARTISTS), Page.Tones, Page.Ai, Page.CoversTags, Page.TagHistory, Page.LibraryTabs,
+            Page.Licences, Page.Licence("Media3"),
         ).fold(NavState.start(DockTab.LIBRARY)) { state, page -> state.copy(stacks = state.stacks + (DockTab.LIBRARY to state.pages + page)) }
             .show(FullScreen.SyncEditor(SongRef("/music/a.mp3"))).show(FullScreen.EditAlbum("Harbour Glass")).show(FullScreen.CompanionNow)
         assertEquals(every, NavState.decode(every.encode()))

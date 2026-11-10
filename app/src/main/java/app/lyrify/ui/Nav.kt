@@ -142,6 +142,14 @@ sealed interface Page {
     /** Settings > Library tabs. */
     @Serializable @SerialName("libraryTabs")
     data object LibraryTabs : Page
+
+    /** Settings > About > Licences (LicencesScreen.kt, R1). */
+    @Serializable @SerialName("licences")
+    data object Licences : Page
+
+    /** One row of Licences, by its name: what it is and its licence's full text. */
+    @Serializable @SerialName("licence")
+    data class Licence(val name: String) : Page
 }
 
 enum class BuiltInList { FAVOURITES, MOST_PLAYED, RECENTLY_PLAYED, RECENTLY_ADDED }
@@ -340,7 +348,8 @@ fun homeOf(page: Page, from: DockTab, viewOpen: Boolean): DockTab = when (page) 
     is Page.CollectionPages -> if (from == DockTab.SEARCH && !viewOpen) DockTab.SEARCH else DockTab.LIBRARY
     is Page.SearchAll -> DockTab.SEARCH
     is Page.Songs, is Page.QueuePages, is Page.ListeningPages -> DockTab.LIBRARY
-    is Page.Check, Page.Duplicates, Page.Tones, Page.Ai, Page.CoversTags, Page.TagHistory, Page.Settings, Page.LibraryTabs, Page.FoldersToSkip -> DockTab.TOOLS
+    is Page.Check, Page.Duplicates, Page.Tones, Page.Ai, Page.CoversTags, Page.TagHistory, Page.Settings, Page.LibraryTabs, Page.FoldersToSkip,
+    Page.Licences, is Page.Licence -> DockTab.TOOLS
 }
 
 private val JSON = Json { ignoreUnknownKeys = true }
