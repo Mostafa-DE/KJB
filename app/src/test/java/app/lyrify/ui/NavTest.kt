@@ -238,6 +238,106 @@ class NavTest {
         assertEquals(listOf<FullScreen>(FullScreen.Player), NavState.start(DockTab.LIBRARY).show(FullScreen.Player).show(FullScreen.Player).views)
     }
 
+    // Back to where a page was opened from: the player, or a song's sheet
+
+    @Test
+    fun `an album opened from the player goes back to the player, over the tab and page it was on`() {
+        val player = NavState.start(DockTab.SEARCH).open(Page.SearchAll(SearchGroup.SONGS, "lantern")).show(FullScreen.Player)
+        val opened = player.open(album)
+        assertEquals(DockTab.LIBRARY, opened.tab)
+        assertEquals(listOf<Page>(album), opened.pages)
+        assertEquals(emptyList<FullScreen>(), opened.views)
+        assertEquals(player, opened.back())
+    }
+
+    @Test
+    fun `an artist opened from the player over Library goes back to the player there`() {
+        val player = NavState.start(DockTab.LIBRARY).pickLibraryTab(LibraryTab.ALBUMS).show(FullScreen.Player)
+        val back = player.open(artist).back()!!
+        assertEquals(player, back)
+        assertEquals(listOf<FullScreen>(FullScreen.Player), back.views)
+        assertEquals(emptyList<Page>(), back.pages)
+    }
+
+    @Test
+    fun `player, album, artist, then Back lands on the album, and Back again on the player`() {
+        val player = NavState.start(DockTab.PLAYLISTS).open(Page.Queues).show(FullScreen.Player)
+        val artistPage = player.open(album).open(artist)
+        assertEquals(listOf<Page>(album, artist), artistPage.pages)
+        val albumPage = artistPage.back()!!
+        assertEquals(DockTab.LIBRARY, albumPage.tab)
+        assertEquals(listOf<Page>(album), albumPage.pages)
+        assertEquals(emptyList<FullScreen>(), albumPage.views)
+        assertEquals(player, albumPage.back())
+    }
+
+    @Test
+    fun `a page opened from a view other than the player goes back to it too`() {
+        val companion = NavState.start(DockTab.TOOLS).show(FullScreen.CompanionNow)
+        val check = companion.open(Page.Check("/music/a.mp3"))
+        assertEquals(emptyList<FullScreen>(), check.views)
+        assertEquals(companion, check.back())
+    }
+
+    @Test
+    fun `a page opened from a song's sheet goes back to its list, with the sheet asked to show again`() {
+        val list = NavState.start(DockTab.LIBRARY).open(Page.Playlist("p3"))
+        val sheet = SheetReturn("list host", OpenSheet.Menu(SongRef("/music/a.mp3"), SheetPlace.Playlist("p3", 2)))
+        val opened = list.open(artist, sheet)
+        assertEquals(listOf(Page.Playlist("p3"), artist), opened.pages)
+        assertNull(opened.reopen)
+        val back = opened.back()!!
+        assertEquals(DockTab.LIBRARY, back.tab)
+        assertEquals(listOf<Page>(Page.Playlist("p3")), back.pages)
+        assertEquals(sheet, back.reopen)
+        // Only the host that opened it shows it, and only once.
+        val navigator = Navigator(back)
+        assertNull(navigator.takeSheet("another host"))
+        assertEquals(sheet.sheet, navigator.takeSheet("list host"))
+        assertNull(navigator.takeSheet("list host"))
+        assertEquals(list, navigator.state)
+    }
+
+    @Test
+    fun `a sheet over Search goes back to Search's root with the sheet, and the artist's own pages pop first`() {
+        val search = NavState.start(DockTab.SEARCH)
+        val sheet = SheetReturn("search host", OpenSheet.Menu(SongRef("/music/b.flac")))
+        val opened = search.open(artist, sheet).open(album)
+        assertEquals(DockTab.SEARCH, opened.tab)
+        val artistPage = opened.back()!!
+        assertEquals(listOf<Page>(artist), artistPage.pages)
+        assertNull(artistPage.reopen)
+        val root = artistPage.back()!!
+        assertEquals(emptyList<Page>(), root.pages)
+        assertEquals(sheet, root.reopen)
+    }
+
+    @Test
+    fun `leaving the page another way does not bring the sheet back`() {
+        val sheet = SheetReturn("list host", OpenSheet.Menu(SongRef("/music/a.mp3")))
+        val opened = NavState.start(DockTab.LIBRARY).open(artist, sheet)
+        // The Library icon pops the page: no sheet.
+        assertNull(opened.select(DockTab.LIBRARY).reopen)
+        assertEquals(emptyList<Page>(), opened.select(DockTab.LIBRARY).pages)
+        // A sheet not shown before the next move is dropped.
+        val back = opened.back()!!
+        assertNull(back.select(DockTab.SEARCH).reopen)
+        assertNull(back.open(album).reopen)
+        assertNull(back.show(FullScreen.Player).reopen)
+    }
+
+    @Test
+    fun `a page's own Back button is the phone's Back`() {
+        // Unit tests run in the module's folder.
+        val shell = java.io.File("src/main/java/app/lyrify/ui/AppShell.kt").readText()
+        assertTrue(Regex("""BackHandler\(enabled = .*state\.pages\.isNotEmpty\(\).*\{ nav\.back\(\) }""").containsMatchIn(shell))
+        val collections = java.io.File("src/main/java/app/lyrify/ui/CollectionScreens.kt").readText()
+        assertTrue(Regex("""ic_arrow_back[^\n]*\{ nav\.back\(\) }""").containsMatchIn(collections))
+        val library = java.io.File("src/main/java/app/lyrify/ui/LibraryScreen.kt").readText()
+        assertTrue(Regex("""ic_arrow_back[^\n]*onBack\)""").containsMatchIn(library))
+        assertTrue("BackTopBar(title, under, backdrop) { nav.back() }" in library)
+    }
+
     // Reselect
 
     @Test
@@ -343,9 +443,25 @@ class NavTest {
             Page.Playlist("p3"), Page.BuiltIn(BuiltInList.MOST_PLAYED), Page.UnknownAlbum, Page.FavouritesAll(FavouriteSection.ALBUMS),
             Page.Queue("q1"), Page.Listening, Page.TopList(TopKind.ARTISTS), Page.Tones, Page.Ai, Page.CoversTags, Page.TagHistory, Page.LibraryTabs,
             Page.Licences, Page.Licence("Media3"),
-        ).fold(NavState.start(DockTab.LIBRARY)) { state, page -> state.copy(stacks = state.stacks + (DockTab.LIBRARY to state.pages + page)) }
+        ).fold(NavState.start(DockTab.LIBRARY)) { state, page -> state.copy(stacks = state.stacks + (DockTab.LIBRARY to state.stacks[DockTab.LIBRARY].orEmpty() + StackEntry(page))) }
             .show(FullScreen.SyncEditor(SongRef("/music/a.mp3"))).show(FullScreen.EditAlbum("Harbour Glass")).show(FullScreen.CompanionNow)
         assertEquals(every, NavState.decode(every.encode()))
+        // Where pages came from, and the sheet Back asks for, too.
+        val sheet = SheetReturn("list host", OpenSheet.Menu(SongRef("/music/a.mp3", 7), SheetPlace.Queue("q1", 3)))
+        val origins = NavState.start(DockTab.SEARCH).show(FullScreen.Player).open(album).open(artist, sheet).back()!!.open(Page.Genre("Folk"), sheet)
+        assertEquals(origins, NavState.decode(origins.encode()))
+        val reopened = origins.back()!!
+        assertEquals(sheet, reopened.reopen)
+        assertEquals(reopened, NavState.decode(reopened.encode()))
+    }
+
+    @Test
+    fun `a saved origin this version cannot read is dropped, its page kept`() {
+        val saved = """{"tab":"LIBRARY","stacks":{"LIBRARY":[{"type":"artist","name":"Paper Lanterns","origin":{"tab":"SEARCH","views":[{"type":"karaoke"}]}}]}}"""
+        val nav = NavState.decode(saved)!!
+        assertEquals(listOf<Page>(artist), nav.pages)
+        assertNull(nav.back()!!.reopen)
+        assertEquals(DockTab.LIBRARY, nav.back()!!.tab)
     }
 
     @Test

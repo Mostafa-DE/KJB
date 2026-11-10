@@ -192,7 +192,7 @@ fun AppShell(
                     },
                     label = "tab",
                 ) { tab ->
-                    val stack = nav.state.stacks[tab].orEmpty()
+                    val stack = nav.state.pagesOf(tab)
                     // Each page keeps its scroll and its fields while pages are pushed over it, and across a turn of the phone.
                     holder.SaveableStateProvider(pageKey(tab, stack)) {
                         when (val page = stack.lastOrNull()) {
@@ -259,10 +259,10 @@ fun AppShell(
         LyricsUndoOffers()
     }
     // A page that left its stack forgets its saved scroll and fields.
-    var keptStacks by remember { mutableStateOf(state.stacks) }
+    var kept by remember { mutableStateOf(state) }
     LaunchedEffect(state.stacks) {
-        (pageKeys(keptStacks) - pageKeys(state.stacks)).forEach(holder::removeState)
-        keptStacks = state.stacks
+        (pageKeys(kept) - pageKeys(state)).forEach(holder::removeState)
+        kept = state
     }
 }
 
