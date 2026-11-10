@@ -1,5 +1,6 @@
 package app.lyrify.ui
 
+import android.os.Build
 import android.text.format.Formatter
 import androidx.activity.compose.BackHandler
 import androidx.annotation.DrawableRes
@@ -30,6 +31,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -47,6 +49,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.lyrify.R
 import app.lyrify.models.ModelState
+import app.lyrify.player.StartWhenConnected
+import app.lyrify.player.connectNames
 import app.lyrify.settings.AdvancedSettings
 import app.lyrify.settings.AudioSettings
 import app.lyrify.settings.LibraryTab
@@ -71,7 +75,7 @@ data class Grants(
 )
 
 /** The sheet open over Settings. */
-private enum class SettingsSheet { REMEMBER, PLAY_SHARE, SKIPS, LEVELLING, CROSSFADE, ANDROID_AUTO, NOTIFICATION_BUTTONS, BOOST }
+private enum class SettingsSheet { REMEMBER, PLAY_SHARE, SKIPS, LEVELLING, CROSSFADE, ANDROID_AUTO, NOTIFICATION_BUTTONS, BOOST, START_WHEN_CONNECTED }
 
 /**
  * Tools > Settings: every option of 3.0 in its section (Playback, Library, Lyrics, AI, Backup, About), engine detail
@@ -95,6 +99,8 @@ fun SettingsScreen(
     var advanced by rememberSaveable { mutableStateOf(false) }
     val playback = settings.playback
     val library = settings.library
+    val context = LocalContext.current
+    val connect = remember(context) { StartWhenConnected.supported(context) }
     fun setPlayback(change: (PlaybackSettings) -> PlaybackSettings) = onChange { it.copy(playback = change(it.playback)) }
     fun setAudio(change: (AudioSettings) -> AudioSettings) = onChange { it.copy(audio = change(it.audio)) }
     fun setAdvanced(change: (AdvancedSettings) -> AdvancedSettings) = onChange { it.copy(advanced = change(it.advanced)) }
@@ -115,6 +121,11 @@ fun SettingsScreen(
             section(R.string.settings_playback, first = true) {
                 ValueRow(R.drawable.ic_resume, R.string.set_remember, stringResource(playback.rememberPlace.label), first = true) { sheet = SettingsSheet.REMEMBER }
                 SwitchRow(R.drawable.ic_headphones, R.string.set_headset, stringResource(R.string.set_headset_detail), playback.headsetButtons) { on -> setPlayback { it.copy(headsetButtons = on) } }
+                if (connect) {
+                    ValueRow(R.drawable.ic_bluetooth, R.string.set_autostart, connectNames(playback.connectDevices) ?: stringResource(R.string.set_autostart_off)) {
+                        sheet = SettingsSheet.START_WHEN_CONNECTED
+                    }
+                }
                 SwitchRow(R.drawable.ic_timer_off, R.string.set_clips, stringResource(R.string.set_clips_detail), playback.skipShortClips) { on -> setPlayback { it.copy(skipShortClips = on) } }
                 ValueRow(R.drawable.ic_bar_chart, R.string.set_playpct, stringResource(R.string.set_playpct_value, playback.countPlayAfterPercent)) { sheet = SettingsSheet.PLAY_SHARE }
                 ValueRow(R.drawable.ic_forward_10, R.string.set_skips, stringResource(R.string.set_skips_value, playback.skipBackSeconds, playback.skipForwardSeconds)) { sheet = SettingsSheet.SKIPS }
@@ -221,6 +232,7 @@ fun SettingsScreen(
             Options(AdvancedSettings.LEVELLING_BOOST_DB.toList(), settings.advanced.levellingBoostDb, { stringResource(R.string.set_boost_value, it) }) { db -> setAdvanced { it.copy(levellingBoostDb = db) } }
         }
         SettingsSheet.ANDROID_AUTO -> HelpSheet(stringResource(R.string.set_auto), stringResource(R.string.set_auto_sheet), onDismiss = close)
+        SettingsSheet.START_WHEN_CONNECTED -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) StartWhenConnectedSheet(playback.connectDevices, close)
         null -> Unit
     }
 }

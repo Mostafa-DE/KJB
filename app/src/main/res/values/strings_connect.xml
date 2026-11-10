@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Start when connected (player/StartWhenConnected.kt, ui/StartWhenConnectedSheet.kt). Labels are three words or fewer;
+     sentences only in the sheet. -->
+<resources>
+    <string name="set_autostart">Start when connected</string>
+    <string name="set_autostart_off">Off</string>
+    <string name="connect_sheet">Plays when these connect</string>
+    <string name="connect_add">Add headphones</string>
+    <string name="connect_add_note">Android asks you to pick the device once.</string>
+    <string name="connect_remove">Remove</string>
+    <!-- TalkBack's name for Remove beside a device: "Remove Example Buds". -->
+    <string name="connect_remove_device">Remove %1$s</string>
+    <!-- A picked device whose name Android does not give. -->
+    <string name="connect_device">Headphones</string>
+</resources>
