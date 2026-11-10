@@ -34,6 +34,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.takeOrElse
 import androidx.compose.ui.platform.LocalContext
@@ -44,7 +46,9 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.lyrify.R
@@ -376,7 +380,7 @@ internal fun SelectionMoreSheet(count: Int, onInfo: (() -> Unit)?, onEditTags: (
     }
 }
 
-/** A name for something new or renamed: a field that starts at [start]; Create (or [confirm]) waits for a name. */
+/** A name for something new or renamed: a field that starts at [start] ([NameField]); Create (or [confirm]) waits for a name. */
 @Composable
 internal fun NameDialog(
     title: String,
@@ -386,20 +390,34 @@ internal fun NameDialog(
     @StringRes confirm: Int = R.string.lib_create,
     onName: (String) -> Unit,
 ) {
-    var name by rememberSaveable { mutableStateOf(start) }
+    var name by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(nameField(start)) }
     ConfirmDialog(
         title = title,
         confirm = stringResource(confirm),
         dismiss = stringResource(R.string.remove_cancel),
-        onConfirm = { onName(name.trim()) },
+        onConfirm = { onName(name.text.trim()) },
         onDismiss = onDismiss,
         icon = icon,
         destructive = false,
-        confirmEnabled = name.isNotBlank(),
+        confirmEnabled = name.text.isNotBlank(),
     ) {
-        LyrifyField(value = name, onValueChange = { name = it.take(MAX_NAME) }, label = stringResource(R.string.lib_name), modifier = Modifier.fillMaxWidth())
+        NameField(name, { name = it.copy(text = it.text.take(MAX_NAME)) }, stringResource(R.string.lib_name))
     }
 }
+
+/**
+ * A dialog's name field: focused with the keyboard up when the dialog opens, not again after a turn of the phone
+ * ([FocusOnOpen]), so a name is typed at once; a rename's text starts selected ([nameField]).
+ */
+@Composable
+internal fun NameField(name: TextFieldValue, onName: (TextFieldValue) -> Unit, label: String) {
+    val focus = remember { FocusRequester() }
+    FocusOnOpen(focus, opens = 1)
+    LyrifyField(name, onName, Modifier.fillMaxWidth().focusRequester(focus), label = label)
+}
+
+/** A name field's start: [start] all selected, so typing replaces it; empty for a new name. */
+fun nameField(start: String): TextFieldValue = TextFieldValue(start, TextRange(0, start.length))
 
 /** KJB's own "Move 2 songs to trash?", before the phone's. */
 @Composable

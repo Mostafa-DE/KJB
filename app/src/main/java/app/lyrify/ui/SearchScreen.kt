@@ -52,6 +52,7 @@ import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -92,6 +93,7 @@ import app.lyrify.library.search.searchSource
 import app.lyrify.settings.DockTab
 import app.lyrify.settings.LibrarySettings
 import app.lyrify.stats.PlaysQuery
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -161,10 +163,7 @@ fun SearchPage() {
     val recentList = rememberLazyListState()
     val resultList = rememberLazyListState()
     val reselects = nav.state.reselectsOf(DockTab.SEARCH)
-    FocusOnOpen(focus, reselects) {
-        recentList.scrollToItem(0)
-        resultList.scrollToItem(0)
-    }
+    FocusOnOpen(focus, reselects, toTop = listOf({ recentList.scrollToItem(0) }, { resultList.scrollToItem(0) }))
     // New words start at the top; coming back to the tab or turning the phone keeps the place.
     var shownQuery by rememberSaveable { mutableStateOf(query) }
     LaunchedEffect(query) {
@@ -443,40 +442,52 @@ private fun LazyListScope.resultRows(
 }
 
 /**
- * Each time [opens] grows (Search opened from the dock, or tapped again at its root), first [onOpen], then the focus in
- * the field of [focus] with the keyboard shown. The count already handled is kept across a turn of the phone, so the
- * keyboard never pops up again then. The field attaches while the tab slides in, so the focus is tried on each frame
- * until it takes, for at most [FOCUS_TRIES] frames.
+ * Each time [opens] grows (Search opened from the dock, or tapped again at its root; 1 for a dialog's field), its lists
+ * go back to the top ([toTop]) and the field of [focus] takes the focus with the keyboard shown ([openAndFocus]). The
+ * count already handled is kept across a turn of the phone, so the keyboard never pops up again then.
  */
 @Composable
-fun FocusOnOpen(focus: FocusRequester, opens: Int, onOpen: suspend () -> Unit = {}) {
+fun FocusOnOpen(focus: FocusRequester, opens: Int, toTop: List<suspend () -> Unit> = emptyList()) {
     val keyboard = LocalSoftwareKeyboardController.current
+    val window = LocalWindowInfo.current
     var handled by rememberSaveable { mutableIntStateOf(0) }
     LaunchedEffect(opens) {
         if (!focusDue(opens, handled)) return@LaunchedEffect
         handled = opens
-        onOpen()
-        repeat(FOCUS_TRIES) {
-            withFrameNanos { }
-            val taken = try {
+        // The keyboard comes up only in a window that has the focus: a dialog's gets it a few frames after it shows.
+        snapshotFlow { window.isWindowFocused }.first { it }
+        val taken = openAndFocus(toTop, frame = { withFrameNanos { } }) {
+            try {
                 focus.requestFocus(FocusDirection.Enter)
             } catch (e: IllegalStateException) {
                 // Not attached yet: try on the next frame.
                 false
             }
-            if (taken) {
-                keyboard?.show()
-                return@LaunchedEffect
-            }
         }
+        if (taken) keyboard?.show()
     }
+}
+
+/**
+ * What opening Search does: each of [toTop] (a list back to the top) in a coroutine of its own, as a list not laid out
+ * yet (the results under an empty field) waits for its first layout and must never hold the focus back; and the focus
+ * asked for on each [frame] until [request] takes it, for at most [FOCUS_TRIES] frames, as the field attaches while the
+ * tab slides in. Whether it took.
+ */
+suspend fun CoroutineScope.openAndFocus(toTop: List<suspend () -> Unit>, frame: suspend () -> Unit, request: () -> Boolean): Boolean {
+    toTop.forEach { launch { it() } }
+    repeat(FOCUS_TRIES) {
+        frame()
+        if (request()) return true
+    }
+    return false
 }
 
 /** Whether the field takes the focus: the tab was opened or tapped again since the count last [handled]. */
 fun focusDue(opens: Int, handled: Int): Boolean = opens != handled
 
-/** About half a second of frames. */
-private const val FOCUS_TRIES = 30
+/** Half a second of frames at 120 Hz. */
+private const val FOCUS_TRIES = 60
 
 /** The field in its band: Clear while there is text; the keyboard's search key calls [onSearch]. */
 @Composable

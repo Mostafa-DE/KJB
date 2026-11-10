@@ -2,6 +2,7 @@ package app.lyrify.ui
 
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.SaverScope
+import androidx.compose.ui.text.TextRange
 import app.lyrify.library.CollectionKind
 import app.lyrify.library.FavouriteCollection
 import app.lyrify.library.Playlist
@@ -412,6 +413,13 @@ class SongActionsTest {
         assertEquals(roadTrip, store.now.playlist("p1"))
         assertEquals(Said.Renamed, actions.rename(roadTrip, "Long road").said)
         assertEquals("Long road", store.now.playlist("p1")?.name)
+    }
+
+    @Test
+    fun `a rename starts with the whole name selected, so typing replaces it, and a new name starts empty`() {
+        assertEquals("Road trip", nameField("Road trip").text)
+        assertEquals(TextRange(0, "Road trip".length), nameField("Road trip").selection)
+        assertEquals(TextRange(0), nameField("").selection)
     }
 
     @Test
