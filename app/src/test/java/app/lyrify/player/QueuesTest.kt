@@ -297,6 +297,17 @@ class QueuesTest {
     }
 
     @Test
+    fun `a controller removing the song playing makes the next one current from its start`() {
+        val book = playing(2).place(2, 61_000)
+        val queue = book.current!!
+        val removed = book.removeUids(queue.id, setOf(queue.items[2].uid))
+        assertEquals(queue.items[3].uid, removed.current!!.current!!.uid)
+        assertEquals(0L, removed.current!!.positionMs)
+        // Removing another song keeps the place.
+        assertEquals(61_000L, book.removeUids(queue.id, setOf(queue.items[0].uid)).current!!.positionMs)
+    }
+
+    @Test
     fun `the player loading the song already current keeps its place, only its Play next wait ends`() {
         val book = playing(2).place(2, 61_000)
         assertEquals(book, book.at(book.current!!.current!!.uid, now = 9))
