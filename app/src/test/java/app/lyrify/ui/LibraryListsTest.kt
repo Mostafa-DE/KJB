@@ -112,6 +112,19 @@ class LibraryListsTest {
         assertEquals(3, keys(twice, repeats = true).toSet().size)
     }
 
+    @Test
+    fun `Folders to skip offers every folder of the tree, with the songs in it or below, and any other folder skipped`() {
+        val live = song("Music/Rips/Live/Harbour Night.mp3")
+        val rip = song("Music/Rips/Low Tide.mp3")
+        val talk = song("Podcasts/Talk/Episode 1.mp3")
+        val loose = song("Music/Loose.mp3")
+
+        assertEquals(
+            listOf("Music" to 3, "Music/Rips" to 2, "Music/Rips/Live" to 1, "Old/Tapes" to 0, "Podcasts" to 1, "Podcasts/Talk" to 1),
+            skipChoices(listOf(live, rip, talk, loose), skipped = listOf("/Old/Tapes/", "music/rips")),
+        )
+    }
+
     private companion object {
         const val DAY: Long = 24 * 60 * 60_000L
     }
