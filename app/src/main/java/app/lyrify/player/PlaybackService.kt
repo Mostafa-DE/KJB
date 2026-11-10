@@ -40,6 +40,7 @@ import app.lyrify.media.NowPlaying
 import app.lyrify.media.QueueSweep
 import app.lyrify.settings.Settings
 import app.lyrify.ui.MainActivity
+import app.lyrify.widget.WidgetPart
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
@@ -89,7 +90,7 @@ interface ServicePart {
 @OptIn(UnstableApi::class)
 class PlaybackService : MediaLibraryService() {
     /** The service's parts: P2, A1, A3 and A4 each add one line here, in merge order. */
-    private val parts: List<ServicePart> = listOf()
+    private val parts: List<ServicePart> = listOf(WidgetPart())
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + logFailures)
     private val io = CoroutineScope(SupervisorJob() + Dispatchers.IO + logFailures)
