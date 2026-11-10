@@ -9,21 +9,16 @@ import android.os.Build
 import android.os.SystemClock
 import android.provider.Settings
 import androidx.annotation.DrawableRes
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -38,13 +33,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -55,33 +48,20 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.CustomAccessibilityAction
-import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.heading
-import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.lyrify.R
@@ -99,7 +79,6 @@ import app.lyrify.player.QueueSource
 import app.lyrify.player.SEMITONES
 import app.lyrify.player.SLEEP_CUSTOM_MINUTES
 import app.lyrify.player.SLEEP_CUSTOM_SONGS
-import app.lyrify.player.SLEEP_FADE_MS
 import app.lyrify.player.SLEEP_MINUTES
 import app.lyrify.player.SLEEP_SONGS
 import app.lyrify.player.SPEEDS
@@ -109,50 +88,24 @@ import app.lyrify.player.SongState
 import app.lyrify.player.SourceKind
 import app.lyrify.player.Speed
 import app.lyrify.player.abPart
-import app.lyrify.player.bookmarkTicks
 import app.lyrify.player.sleepAfter
 import app.lyrify.player.sleepFor
 import app.lyrify.player.sleepLeftMs
 import app.lyrify.player.toSpot
-import app.lyrify.player.withEnd
-import app.lyrify.player.withStart
-import app.lyrify.tones.TonePlayer
 import app.lyrify.tones.ToneFiles
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.launch
+import app.lyrify.tones.TonePlayer
 import java.math.BigDecimal
 import java.math.RoundingMode
 import kotlin.math.roundToInt
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 
-// The player's extras (milestone P2): the sleep timer (its button, chip and sheets), Speed (its sheet and chip),
-// Repeat a part (its chip and handles), bookmarks (the dialog, the progress bar's ticks, the song sheet's list), Play
-// on, Make a tone from the player, and the toasts the service sends. PlayerScreen.kt and PlayerControls.kt place them in
-// P1's slots; player/PlaybackExtras.kt and player/Sleep.kt hold the rules and the state.
+// The player's extras (milestone P2), their sheets and actions: the sleep timer's sheets, the Speed sheet, Repeat a
+// part on and off, the bookmark dialog and the song sheet's bookmarks list, Play on, Make a tone from the player, and
+// the toasts the service sends. What shows on the player itself is in PlayerChips.kt; player/PlaybackExtras.kt and
+// player/Sleep.kt hold the rules and the state.
 
 // Rules, as pure functions
-
-/** What the sleep chip says. */
-sealed interface SleepShown {
-    /** "23 min", rounded up. */
-    data class Minutes(val minutes: Int) : SleepShown
-
-    /** "0:42": under a minute; [fading] while the music fades. */
-    data class Clock(val ms: Long, val fading: Boolean = false) : SleepShown
-
-    data class Songs(val songs: Int) : SleepShown
-
-    data object EndOfSong : SleepShown
-}
-
-/** The chip for [timer] with [leftMs] to go ([sleepLeftMs]). */
-fun sleepShown(timer: SleepTimer, leftMs: Long?, playing: Boolean): SleepShown = when {
-    playing && leftMs != null && leftMs <= SLEEP_FADE_MS -> SleepShown.Clock(leftMs, fading = true)
-    timer is SleepTimer.BySongs -> if (timer.left > 1) SleepShown.Songs(timer.left) else SleepShown.EndOfSong
-    leftMs != null && leftMs >= MINUTE_MS -> SleepShown.Minutes(((leftMs + MINUTE_MS - 1) / MINUTE_MS).toInt())
-    else -> SleepShown.Clock(leftMs ?: 0)
-}
-
-private const val MINUTE_MS: Long = 60_000
 
 /** A speed as the player writes it: "1.25", "0.5", "2". */
 fun speedNumber(speed: Float): String = BigDecimal(speed.toDouble()).setScale(2, RoundingMode.HALF_UP).stripTrailingZeros().toPlainString()
@@ -212,7 +165,7 @@ class PlayerExtrasUi internal constructor(
         when (route) {
             PlayerRoute.SPEED -> open = ExtrasSheet.SPEED
             PlayerRoute.SLEEP -> open = ExtrasSheet.SLEEP
-            PlayerRoute.MAKE_TONE -> open = ExtrasSheet.TONE
+            PlayerRoute.MAKE_TONE -> if (ui.song != null) open = ExtrasSheet.TONE
             PlayerRoute.REPEAT_PART -> togglePart(ui)
             PlayerRoute.PLAY_ON -> if (!playOn(context)) say(Toast(resources.getString(R.string.play_on_none), R.drawable.ic_speaker))
             PlayerRoute.BOOKMARK -> {
@@ -323,53 +276,6 @@ private const val MEDIA_OUTPUT_PACKAGE: String = "com.android.settings.panel.ext
 
 // The sleep timer
 
-/** The secondary row's sleep button: the snooze icon while off; a chip with what is left while a timer runs. */
-@Composable
-internal fun SleepButton(ui: PlayerUi, onOpen: () -> Unit) {
-    val context = LocalContext.current
-    val extras = remember(context) { PlayerExtras.of(context) }
-    val timer = extras.sleep.collectAsStateWithLifecycle().value
-    if (timer == null) {
-        val label = stringResource(R.string.player_sleep_off)
-        Box(
-            contentAlignment = Alignment.Center,
-            modifier = Modifier.size(TOUCH).clip(CircleShape).clickable(role = Role.Button, onClick = onOpen).semantics { contentDescription = label },
-        ) { Icon(painterResource(R.drawable.ic_snooze), contentDescription = null, modifier = Modifier.size(26.dp)) }
-        return
-    }
-    val now = rememberClock(true, everyMs = 500)
-    val shown = sleepShown(timer, sleepLeftMs(timer, now, ui.positionAt(now), ui.durationMs, ui.speed), ui.playing)
-    val text = when (shown) {
-        is SleepShown.Minutes -> stringResource(R.string.sleep_minutes_chip, shown.minutes)
-        is SleepShown.Clock -> clock(shown.ms)
-        is SleepShown.Songs -> pluralStringResource(R.plurals.sleep_songs_chip, shown.songs, shown.songs)
-        SleepShown.EndOfSong -> stringResource(R.string.sleep_end_of_song)
-    }
-    val spoken = when (shown) {
-        is SleepShown.Minutes -> pluralStringResource(R.plurals.sleep_chip_minutes, shown.minutes, shown.minutes)
-        is SleepShown.Clock -> if (timer is SleepTimer.BySongs) stringResource(R.string.sleep_chip_end) else pluralStringResource(R.plurals.sleep_chip_minutes, 1, 1)
-        is SleepShown.Songs -> pluralStringResource(R.plurals.sleep_chip_songs, shown.songs, shown.songs)
-        SleepShown.EndOfSong -> stringResource(R.string.sleep_chip_end)
-    }
-    val label = if (shown is SleepShown.Clock && shown.fading) stringResource(R.string.sleep_chip_fading, spoken) else spoken
-    val brand = LocalBrandColors.current
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        modifier = Modifier
-            .minimumInteractiveComponentSize()
-            .clip(CircleShape)
-            .background(brand.highlightContainer, CircleShape)
-            .clickable(role = Role.Button, onClick = onOpen)
-            .semantics { contentDescription = label }
-            .heightIn(min = 40.dp)
-            .padding(start = 12.dp, end = 16.dp),
-    ) {
-        Icon(painterResource(R.drawable.ic_snooze), contentDescription = null, tint = brand.onHighlightContainer, modifier = Modifier.size(18.dp))
-        Text(text, style = MaterialTheme.typography.labelLarge.tabular(), color = brand.onHighlightContainer, maxLines = 1)
-    }
-}
-
 /** After a time (15 min to 1 hour, Custom) or after songs (End of song, 3, 5, Custom); the readout and Turn off while one runs. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -479,29 +385,6 @@ private fun StepButton(@DrawableRes icon: Int, label: String, enabled: Boolean, 
 }
 
 // Speed and pitch
-
-/** The chips row while something is on: the speed (not 1×, or a moved pitch) and the part repeating. */
-@Composable
-internal fun ExtrasChips(ui: PlayerUi, extras: PlayerExtrasUi) {
-    val state = extras.extras.state.collectAsStateWithLifecycle().value
-    val path = ui.path()
-    val speed = state.speedOf(path)
-    val part = partShown(state.part, path)
-    if (!speed.shows && !part) return
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally), modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
-        if (speed.shows) {
-            val number = speedNumber(speed.speed)
-            val text = chipPitch(speed)?.let { stringResource(R.string.speed_value_pitch, number, it) } ?: stringResource(R.string.speed_value, number)
-            LyrifyChip(selected = true, onClick = { extras.open = ExtrasSheet.SPEED }, role = Role.Button, icon = R.drawable.ic_speed) { Text(text, style = MaterialTheme.typography.labelLarge.tabular()) }
-        }
-        if (part) {
-            LyrifyChip(selected = true, onClick = extras::stopPart, role = Role.Button, icon = R.drawable.ic_repeat) {
-                Text(stringResource(R.string.part_chip))
-                Icon(painterResource(R.drawable.ic_close), contentDescription = null, modifier = Modifier.size(16.dp))
-            }
-        }
-    }
-}
 
 /**
  * Speed: the chips and a fine slider (0.5× to 2×), "Keep pitch" (on) with a pitch slider in semitones when off, and
@@ -622,112 +505,6 @@ private fun SheetSwitch(@DrawableRes icon: Int, title: String, detail: String, c
             Text(detail, style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant)
         }
         LyrifySwitch(checked)
-    }
-}
-
-// Repeat a part (A-B)
-
-/** How tall the handles' row is, above the progress bar's touch area; the stems reach down into the bar. */
-private val HANDLES = 44.dp
-
-/**
- * The A and B handles above the progress bar while the song's part repeats: drag one (or, with TalkBack, set it, or use
- * Earlier and Later). The part is stored when a handle is let go.
- */
-@Composable
-internal fun PartHandles(ui: PlayerUi, extras: PlayerExtrasUi) {
-    val state = extras.extras.state.collectAsStateWithLifecycle().value
-    val part = state.part?.takeIf { partShown(it, ui.path()) } ?: return
-    val duration = ui.durationMs.takeIf { it > 0 } ?: return
-    var dragging by remember(part) { mutableStateOf<AbPart?>(null) }
-    val shown = dragging ?: part
-    val commit: (AbPart) -> Unit = { moved -> extras.extras.change { it.copy(part = moved) } }
-    BoxWithConstraints(Modifier.fillMaxWidth().height(HANDLES)) {
-        val width = constraints.maxWidth.toFloat()
-        PartHandle(true, shown.startMs, duration, width, onDrag = { ms -> dragging = shown.withStart(ms) }, onDone = { dragging?.let(commit); dragging = null }, onSet = { ms -> commit(part.withStart(ms)) })
-        PartHandle(false, shown.endMs, duration, width, onDrag = { ms -> dragging = shown.withEnd(ms, duration) }, onDone = { dragging?.let(commit); dragging = null }, onSet = { ms -> commit(part.withEnd(ms, duration)) })
-    }
-}
-
-@Composable
-private fun PartHandle(start: Boolean, ms: Long, durationMs: Long, width: Float, onDrag: (Long) -> Unit, onDone: () -> Unit, onSet: (Long) -> Unit) {
-    val density = LocalDensity.current
-    val brand = LocalBrandColors.current
-    val x = width * (ms.toFloat() / durationMs).coerceIn(0f, 1f)
-    val half = with(density) { (TOUCH / 2).toPx() }
-    val label = stringResource(if (start) R.string.part_start else R.string.part_end)
-    val earlier = stringResource(R.string.part_earlier)
-    val later = stringResource(R.string.part_later)
-    val reach = with(density) { (HANDLES + TOUCH / 2).toPx() }
-    var dragX by remember { mutableFloatStateOf(x) }
-    Box(
-        contentAlignment = Alignment.TopCenter,
-        modifier = Modifier
-            .offset { IntOffset((x - half).roundToInt(), 0) }
-            .size(TOUCH, HANDLES)
-            .drawBehind {
-                // The stem, down to the middle of the progress bar.
-                drawLine(brand.highlight, Offset(size.width / 2, 22.dp.toPx()), Offset(size.width / 2, reach), strokeWidth = 2.dp.toPx())
-            }
-            .semantics {
-                contentDescription = label
-                stateDescription = clock(ms)
-                progressBarRangeInfo = ProgressBarRangeInfo(ms.toFloat() / durationMs, 0f..1f)
-                setProgress { value ->
-                    onSet((value.coerceIn(0f, 1f) * durationMs).toLong())
-                    true
-                }
-                customActions = listOf(
-                    CustomAccessibilityAction(earlier) { onSet(ms - 1_000); true },
-                    CustomAccessibilityAction(later) { onSet(ms + 1_000); true },
-                )
-            }
-            .pointerInput(width, durationMs) {
-                detectHorizontalDragGestures(
-                    onDragStart = { dragX = x },
-                    onDragEnd = onDone,
-                    onDragCancel = onDone,
-                ) { change, amount ->
-                    change.consume()
-                    dragX = (dragX + amount).coerceIn(0f, width)
-                    onDrag((dragX / width * durationMs).toLong())
-                }
-            },
-    ) {
-        Box(
-            contentAlignment = Alignment.Center,
-            modifier = Modifier
-                .offset(x = if (start) (-10).dp else 10.dp)
-                .size(28.dp, 26.dp)
-                .background(brand.highlight, RoundedCornerShape(9.dp)),
-        ) { Text(if (start) "A" else "B", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold), color = brand.onHighlight) }
-    }
-}
-
-/** On the progress bar: the bookmarks' ticks and the part repeating. Drawn under the thumb; touches go to the bar. */
-@Composable
-internal fun BarMarks(ui: PlayerUi) {
-    val context = LocalContext.current
-    val extras = remember(context) { PlayerExtras.of(context) }
-    val state = extras.state.collectAsStateWithLifecycle().value
-    val path = ui.path()
-    val duration = ui.durationMs
-    val ticks = bookmarkTicks(state.bookmarksOf(path), duration)
-    val part = state.part?.takeIf { partShown(it, path) && duration > 0 }
-    if (ticks.isEmpty() && part == null) return
-    val highlight = LocalBrandColors.current.highlight
-    val ink = MaterialTheme.colorScheme.onSurface
-    Canvas(Modifier.fillMaxWidth().height(TOUCH)) {
-        val mid = size.height / 2
-        part?.let {
-            val a = size.width * it.startMs / duration
-            val b = size.width * it.endMs / duration
-            val zone = 12.dp.toPx()
-            drawRoundRect(highlight.copy(alpha = 0.3f), Offset(a, mid - zone / 2), Size(b - a, zone), CornerRadius(5.dp.toPx()))
-            drawRoundRect(highlight, Offset(a, mid - zone / 2), Size(b - a, zone), CornerRadius(5.dp.toPx()), style = Stroke(1.5.dp.toPx()))
-        }
-        val tick = Size(3.dp.toPx(), 14.dp.toPx())
-        ticks.forEach { share -> drawRoundRect(ink.copy(alpha = 0.62f), Offset(size.width * share - tick.width / 2, mid - tick.height / 2), tick, CornerRadius(2.dp.toPx())) }
     }
 }
 
@@ -870,7 +647,7 @@ private fun startOver(context: Context, path: String) {
 /** Make a tone from the player: today's Tone editor with the song playing. */
 @Composable
 private fun PlayerTone(ui: PlayerUi, onClose: () -> Unit) {
-    val song = ui.song ?: return onClose()
+    val song = ui.song ?: return
     val context = LocalContext.current
     val toasts = LocalToasts.current
     val resources = LocalResources.current
@@ -884,12 +661,4 @@ private fun PlayerTone(ui: PlayerUi, onClose: () -> Unit) {
         onClose()
         scope.launch { toasts.say(resources, R.string.tones_saved_as, tone.name) }
     }, onClose = onClose)
-}
-
-/** Whether the song playing has its part repeating: the menu says "Stop the part" then. */
-@Composable
-internal fun rememberPartOn(ui: PlayerUi): Boolean {
-    val context = LocalContext.current
-    val extras = remember(context) { PlayerExtras.of(context) }
-    return partShown(extras.state.collectAsStateWithLifecycle().value.part, ui.path())
 }
