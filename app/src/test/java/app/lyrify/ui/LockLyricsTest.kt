@@ -74,14 +74,4 @@ class LockLyricsTest {
         assertEquals(LockSwitch.STORE_OFF, lockSwitch(on = false, overlayAllowed = false))
         assertEquals(LockSwitch.STORE_OFF, lockSwitch(on = false, overlayAllowed = true))
     }
-
-    @Test
-    fun `the lock screen shows the line before the one playing, it, and the next three`() {
-        assertEquals(0..4, lockWindow(size = 20, current = -1))
-        assertEquals(0..4, lockWindow(size = 20, current = 0))
-        assertEquals(4..8, lockWindow(size = 20, current = 5))
-        assertEquals(18..19, lockWindow(size = 20, current = 19))
-        assertEquals(0..1, lockWindow(size = 2, current = 1))
-        assertTrue(lockWindow(size = 0, current = -1).isEmpty())
-    }
 }

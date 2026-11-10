@@ -18,6 +18,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 /**
  * Lyrics on the player, as pure rules: the side the player remembers, "Aa", the lookup's plain lyrics standing in for a
@@ -103,5 +104,66 @@ class LyricsViewsTest {
         val line = LrcLine(64_250, "Over the harbour glass")
         assertEquals(LineTap(64_250, play = true), lineTap(line, playing = false))
         assertEquals(LineTap(64_250, play = false), lineTap(line, playing = true))
+    }
+
+    // Following the song (no reflow: one style for every line, colour only, a smooth scroll to a fixed anchor)
+
+    @Test
+    fun `the line playing has the same size, line height and weight as every other line, whatever the Aa choices`() {
+        val bases = listOf(PanelLine, FullLine, LockLine)
+        LyricsSize.entries.forEach { size ->
+            LyricsWeight.entries.forEach { weight ->
+                val look = lyricsLook(LyricsSettings(textSize = size, textWeight = weight))
+                bases.forEach { base -> assertEquals(look.style(base, playing = false), look.style(base, playing = true)) }
+            }
+        }
+    }
+
+    @Test
+    fun `no lyrics view keeps a bigger style for the line playing`() {
+        val views = listOf("LyricsViews.kt", "PlayerScreen.kt", "LockLyricsActivity.kt").map { File("src/main/java/app/lyrify/ui/$it").readText() }
+        views.forEach { source ->
+            assertFalse(source.contains("LineNow"))
+            assertFalse(source.contains("lerp(look.style"))
+        }
+    }
+
+    @Test
+    fun `the lines follow the song until the user scrolls, then wait 3,5 s, and a tap on a line follows again at once`() {
+        val follow = LyricsFollow()
+        assertTrue(follow.follows(now = 0))
+        assertEquals(0L, follow.waitMs(now = 0))
+        val touched = follow.touched(now = 10_000)
+        assertFalse(touched.follows(now = 10_000))
+        assertFalse(touched.follows(now = 13_499))
+        assertEquals(1_000L, touched.waitMs(now = 12_500))
+        assertTrue(touched.follows(now = 13_500))
+        assertTrue(touched.tapped().follows(now = 10_001))
+    }
+
+    @Test
+    fun `the line playing scrolls until its middle sits at the anchor, from where it is or from its row when off screen`() {
+        // A row 100 px tall in a 2000 px list, anchored at 38 percent, has its top at 710 px once in place.
+        assertEquals(-10, followDelta(itemTop = 700, itemSize = 100, viewport = 2000, anchor = 0.38f))
+        assertEquals(0, followDelta(itemTop = 710, itemSize = 100, viewport = 2000, anchor = 0.38f))
+        assertEquals(290, followDelta(itemTop = 1000, itemSize = 100, viewport = 2000, anchor = 0.38f))
+        // Off screen: the row's top lands below the top padding by the anchor, less half a row.
+        assertEquals(48 - 710, followOffset(padTop = 48, rowSize = 100, viewport = 2000, anchor = 0.38f))
+    }
+
+    @Test
+    fun `the sung words of the line playing light up as it goes, a quarter early, and never past its end`() {
+        val text = "Paper lanterns rise over harbour glass"
+        assertEquals(0, sungEnd(text, 0f))
+        assertEquals("Paper".length, sungEnd(text, 0.14f))
+        assertEquals("Paper lanterns rise".length, sungEnd(text, 0.45f))
+        assertEquals(text.length, sungEnd(text, 0.8f))
+        assertEquals(text.length, sungEnd(text, 1.5f))
+        assertEquals(0, sungEnd("", 0.5f))
+        val lines = listOf(LrcLine(1_000, "Paper lanterns rise"), LrcLine(5_000, "Over the harbour glass"))
+        assertEquals(0.5f, lineShare(lines, at = 0, positionMs = 3_000), 0.0001f)
+        // The last line runs 8 s, as the prototype's.
+        assertEquals(0.25f, lineShare(lines, at = 1, positionMs = 7_000), 0.0001f)
+        assertEquals(0f, lineShare(lines, at = -1, positionMs = 500), 0.0001f)
     }
 }

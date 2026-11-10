@@ -142,14 +142,6 @@ fun lockSwitch(on: Boolean, overlayAllowed: Boolean): LockSwitch = when {
     else -> LockSwitch.ASK
 }
 
-/** The synced lines the lock screen shows: the one before the line playing, it, and the next three (from the top before any). */
-fun lockWindow(size: Int, current: Int): IntRange {
-    val from = (current - 1).coerceAtLeast(0)
-    return from until minOf(size, from + LOCK_LINES)
-}
-
-private const val LOCK_LINES = 5
-
 /** On the activity's intent: started by [LockLyricsPart] when the screen turned on. */
 private const val EXTRA_SCREEN_ON = "app.lyrify.lock.screenOn"
 
@@ -265,30 +257,25 @@ private fun LockLyricsScreen(ledger: LedgerState, onClose: () -> Unit) {
     }
 }
 
-/** The line before the one playing, it lit, and the next three; plain lyrics still; or "No lyrics yet". */
+/**
+ * The synced lines following the song as on the player (one size for every line, the line playing lit by its colour,
+ * a smooth scroll to the anchor); plain lyrics still; or "No lyrics yet". Nothing here is tapped or scrolled.
+ */
 @Composable
 private fun LockLines(lyrics: PanelLyrics?, positionMs: Long) {
     val look = rememberLyricsLook()
     val type = MaterialTheme.typography
+    if (lyrics is PanelLyrics.Synced) {
+        SyncedLyrics(lyrics.lines, positionMs, enabled = false, LockLine, LockFrame, LineTones(now = LockText, sung = LocalBrandColors.current.highlight, past = LockMuted, next = LockMuted)) { }
+        return
+    }
     Column(verticalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.fillMaxWidth()) {
         when (lyrics) {
-            is PanelLyrics.Synced -> {
-                val at = currentLine(lyrics.lines, positionMs)
-                lockWindow(lyrics.lines.size, at).forEach { i ->
-                    Text(
-                        lyrics.lines[i].text,
-                        style = look.style(if (i == at) LockLineNow else LockLine, playing = i == at),
-                        textAlign = look.align,
-                        color = if (i == at) LockText else LockMuted,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-            }
             is PanelLyrics.Plain -> lyrics.lines.take(PLAIN_LINES).forEach {
                 Text(it, style = look.style(LockStill, playing = false, still = true), textAlign = look.align, color = LockText, modifier = Modifier.fillMaxWidth())
             }
             PanelLyrics.Finding, PanelLyrics.None -> Text(stringResource(R.string.player_no_lyrics), style = type.titleLarge, color = LockMuted, textAlign = look.align, modifier = Modifier.fillMaxWidth())
-            null -> Unit
+            is PanelLyrics.Synced, null -> Unit
         }
     }
 }
@@ -418,7 +405,9 @@ fun rememberLockSwitch(on: Boolean, onChange: ((Settings) -> Settings) -> Unit):
     }
 }
 
-/** The prototype's lock-screen lyrics (.ll-lines): the line playing at 34 sp, the others at 22, plain lyrics at 22. */
-private val LockLineNow = display(34, 41, -0.015)
-private val LockLine = display(22, 29, -0.015)
+/** The lock-screen lyrics (.ll-lines): every line at 22 sp, the one playing lit by its colour only; plain lyrics at 22. */
+internal val LockLine = display(22, 29, -0.015)
+
+/** Where the lock screen's lines sit: the line playing a little above the middle, those sung above it. */
+private val LockFrame = LyricsFrame(sides = 0.dp, top = 0.3f, anchor = 0.4f, bottom = 0.5f)
 private val LockStill = display(22, 33)
