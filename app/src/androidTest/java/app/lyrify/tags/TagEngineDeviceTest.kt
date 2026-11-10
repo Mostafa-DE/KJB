@@ -12,9 +12,11 @@ import android.os.Environment
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.ParcelFileDescriptor
 import android.os.Process
 import android.os.ResultReceiver
 import android.provider.MediaStore
+import android.system.ErrnoException
 import android.system.Os
 import android.system.OsConstants
 import android.util.Log
@@ -24,12 +26,14 @@ import app.lyrify.LOG_TAG
 import app.lyrify.Lyrify
 import app.lyrify.data.PathLocks
 import app.lyrify.data.SharedWrites
+import com.kyant.taglib.TagLib
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Before
@@ -72,6 +76,7 @@ class TagEngineDeviceTest {
         "paper-comet-messy.ogg",
         "quiet-breakwater.opus",
         "harbour-lights-ape.mp3",
+        "kelp-lighthouse-v24-ape.mp3",
     )
 
     /** What Covers & tags writes (covers-tags-spec "What is written"), with made-up names and ids. */
@@ -209,6 +214,150 @@ class TagEngineDeviceTest {
         assertArrayEquals(before.getValue("COVER ART (BACK)"), afterCover.getValue("COVER ART (BACK)"))
         assertArrayEquals(before.getValue("KJB ONLY"), afterCover.getValue("KJB ONLY"))
         assertEquals(v1, file.readBytes().takeLast(128))
+    }
+
+    // Native error paths: a clean answer to Kotlin, never a crash, and the descriptor closed
+
+    /** What `/proc/self/fd/[fd]` names now, or null when the descriptor is closed. */
+    private fun named(fd: Int): String? = try {
+        Os.readlink("/proc/self/fd/$fd")
+    } catch (_: ErrnoException) {
+        null
+    }
+
+    /** A descriptor of [file] for TagLib, which owns it from then on; what it named, to check it was closed. */
+    private fun descriptor(file: File, mode: Int = ParcelFileDescriptor.MODE_READ_ONLY): Pair<Int, String?> {
+        val fd = ParcelFileDescriptor.open(file, mode).detachFd()
+        return fd to named(fd)
+    }
+
+    @Test
+    fun nativeErrorPathsAnswerCleanlyAndCloseTheirDescriptor() {
+        // A descriptor /proc/self/fd can't resolve (readlink fails): null or false, nothing read past its buffer.
+        val nowhere = 1_000_000
+        assertNull(TagLib.getMetadata(nowhere, readPictures = true))
+        assertNull(TagLib.getAudioProperties(nowhere))
+        assertNull(TagLib.getId3v2Frames(nowhere))
+        assertFalse(TagLib.saveTags(nowhere, HashMap(), null, 3))
+
+        // Files TagLib refuses: garbage and an empty file under allowed names. Null and false, the file untouched, and
+        // each call's descriptor closed.
+        val garbage = File(songsDir, "garbage.flac").apply { writeBytes(ByteArray(4_000) { (it * 7).toByte() }) }
+        val empty = File(songsDir, "empty.m4a").apply { writeBytes(ByteArray(0)) }
+        for (file in listOf(garbage, empty)) {
+            val before = file.readBytes()
+            assertNull(tags.read(file))
+            assertFalse(tags.write(file, mapOf("TITLE" to listOf("Tin Roof")), null, Id3Version.V2_3))
+            assertArrayEquals(before, file.readBytes())
+            val (read, readName) = descriptor(file)
+            assertNull(TagLib.getMetadata(read, readPictures = true))
+            assertTrue("a read left its descriptor open", named(read) != readName)
+            val (write, writeName) = descriptor(file, ParcelFileDescriptor.MODE_READ_WRITE)
+            assertFalse(TagLib.saveTags(write, HashMap(), null, 3))
+            assertTrue("a save left its descriptor open", named(write) != writeName)
+        }
+
+        // A descriptor with no file name to tell its format (a pipe): null, and the descriptor closed.
+        val pipe = ParcelFileDescriptor.createPipe()
+        val readEnd = pipe[0].detachFd()
+        val pipeName = named(readEnd)
+        assertNull(TagLib.getMetadata(readEnd, readPictures = true))
+        assertTrue("the pipe's descriptor was left open", named(readEnd) != pipeName)
+        pipe[1].close()
+
+        // An ID3v2 version TagLib can't write: refused, the descriptor closed all the same.
+        val song = fixture("paper-comet-v23.mp3")
+        val (bad, badName) = descriptor(song, ParcelFileDescriptor.MODE_READ_WRITE)
+        assertFalse(TagLib.saveTags(bad, HashMap(), null, 2))
+        assertTrue(named(bad) != badName)
+    }
+
+    @Test
+    fun malformedUtf16AndU0000CrossJniWithoutBreakingAnything() {
+        // A lone surrogate: TagLib writes it, or refuses the save; no crash either way, and the song still reads.
+        val mp3 = fixture("paper-comet-v23.mp3")
+        val mp3Before = mp3.readBytes()
+        val tagsBefore = checkNotNull(tags.read(mp3))
+        val lone = tagsBefore.fields + ("TITLE" to listOf("Tin \uD800Roof"))
+        if (!tags.write(mp3, lone, null, Id3Version.V2_3)) assertArrayEquals(mp3Before, mp3.readBytes())
+        assertNotNull(tags.read(mp3))
+
+        // U+0000 in a value or a key, which TagLib would cut a value short at or read as a separator: the native save
+        // refuses it (KJB's writer refuses it before TagLib, too), and nothing is written.
+        val flac = fixture("salt-clock.flac")
+        val flacBefore = flac.readBytes()
+        val fields = checkNotNull(tags.read(flac)).fields
+        assertFalse(tags.write(flac, fields + ("TITLE" to listOf("Tin\u0000Roof")), null, Id3Version.V2_3))
+        assertFalse(tags.write(flac, fields + ("TITLE\u0000X" to listOf("Tin Roof")), null, Id3Version.V2_3))
+        assertArrayEquals(flacBefore, flac.readBytes())
+
+        // A value's length is its UTF-16 length: a long value outside the BMP comes back whole.
+        val long = "𝄞".repeat(300) + " Tin Roof"
+        assertTrue(tags.write(flac, fields + ("TITLE" to listOf(long)), null, Id3Version.V2_3))
+        assertEquals(listOf(long), tags.read(flac)?.fields?.get("TITLE"))
+    }
+
+    // Real TagLib under the writer's rules (the JVM tests check the rules with a fake TagFile)
+
+    @Test
+    fun theWriterOnRealTagLibKeepsEveryOtherFieldTheV24FramesAndTheApeTagAndWritesTheCover() {
+        val cases = listOf("paper-comet-v23.mp3", "kelp-lighthouse-v24-ape.mp3", "salt-clock.flac", "northbound-tide.m4a", "quiet-breakwater.opus")
+        val front = (edit.cover as CoverEdit.Replace).picture
+        for ((index, fixtureName) in cases.withIndex()) {
+            root.deleteRecursively()
+            songsDir.mkdirs()
+            val file = fixture(fixtureName)
+            val name = label(index, file)
+            val before = checkNotNull(tags.read(file))
+            val apeBefore = if (fixtureName.contains("ape")) apeItems(file.readBytes()) else null
+            val (writer, _) = writer()
+
+            val result = runBlocking { writer.write(listOf(WriteJob(SongTarget(file.path, 41), edit)), EditKind.SONG, "Tin Roof") } as BatchResult.Done
+
+            // WRITTEN: the writer's own verify passed on TagLib's real output.
+            assertEquals(name, SongOutcome.WRITTEN, result.songs.single().outcome)
+            val after = checkNotNull(tags.read(file))
+            val changed = edit.fields.keys
+            (before.fields.keys - changed).forEach { key -> assertEquals("$name $key", before.fields[key], after.fields[key]) }
+            assertEquals("$name: new keys", emptySet<String>(), after.fields.keys - before.fields.keys - changed)
+            edit.fields.forEach { (key, values) -> assertEquals("$name $key", values, after.fields[key]) }
+            // The cover written, every other picture kept (an M4A's first cover is its front cover).
+            assertTrue("$name: the cover", after.pictures.any { it.data.contentEquals(front.data) })
+            val replaced = if (fixtureName.endsWith(".m4a")) before.pictures.take(1) else before.pictures.filter { it.type == FRONT_COVER }
+            (before.pictures - replaced.toSet()).forEach { kept -> assertTrue("$name: a picture lost", after.pictures.any { it.data.contentEquals(kept.data) }) }
+            // ID3v2: the version kept; v2.4 frames v2.3 can't hold kept.
+            assertEquals(name, before.id3v2Version, after.id3v2Version)
+            if (before.id3v2Version == 4) assertTrue("$name: ${after.frames}", after.frames.containsAll(listOf("RVA2", "TMOO")))
+            // The APE tag: the changed key and the front cover updated, the back cover and its own item kept.
+            if (apeBefore != null) {
+                val ape = apeItems(file.readBytes())
+                assertEquals(name, "Tin Roof 𝄞", String(ape.getValue("TITLE"), Charsets.UTF_8))
+                assertArrayEquals(name, byteArrayOf(0) + front.data, ape.getValue("COVER ART (FRONT)"))
+                assertArrayEquals(name, apeBefore.getValue("COVER ART (BACK)"), ape.getValue("COVER ART (BACK)"))
+                assertArrayEquals(name, apeBefore.getValue("KJB ONLY"), ape.getValue("KJB ONLY"))
+            }
+            Log.i(LOG_TAG, "tags device test: ${PayloadHash.of(file.toPath())?.format} written by the writer on TagLib")
+        }
+    }
+
+    @Test
+    fun removingTheFrontCoverRemovesTheApeTagsFrontCoverAndKeepsItsBackCover() {
+        val file = fixture("kelp-lighthouse-v24-ape.mp3")
+        val apeBefore = apeItems(file.readBytes())
+        val before = checkNotNull(tags.read(file))
+        val (writer, _) = writer()
+
+        val result = runBlocking { writer.write(listOf(WriteJob(SongTarget(file.path, 41), TagEdit(cover = CoverEdit.Remove))), EditKind.SONG, "Tin Roof") } as BatchResult.Done
+
+        assertEquals(SongOutcome.WRITTEN, result.songs.single().outcome)
+        val after = checkNotNull(tags.read(file))
+        assertTrue(after.pictures.none { it.type == FRONT_COVER })
+        assertEquals(before.pictures.filter { it.type != FRONT_COVER }, after.pictures)
+        val ape = apeItems(file.readBytes())
+        assertFalse("COVER ART (FRONT)" in ape)
+        assertArrayEquals(apeBefore.getValue("COVER ART (BACK)"), ape.getValue("COVER ART (BACK)"))
+        assertEquals(before.fields, after.fields)
+        assertTrue(after.frames.containsAll(listOf("RVA2", "TMOO")))
     }
 
     // The writer, on private copies standing in for songs
@@ -430,12 +579,14 @@ class TagEngineDeviceTest {
         return (0 until count).map { headers + it * size }.filter { bytes.getInt(it) == 1 }.map { bytes.getLong(it + 0x30) }
     }
 
-    /** A file channel that fails with an IOException after [limit] bytes. */
+    /** A file channel whose first pass fails with an IOException after [limit] bytes; a put-back through it then works. */
     private class CutShort(private val inner: FileChannel, private val limit: Long) : FileChannel() {
         private var written = 0L
+        private var failed = false
 
         override fun write(src: ByteBuffer): Int {
-            if (written + src.remaining() > limit) {
+            if (!failed && written + src.remaining() > limit) {
+                failed = true
                 inner.write(src.duplicate().limit(src.position() + (limit - written).toInt()) as ByteBuffer)
                 inner.force(true)
                 written = limit

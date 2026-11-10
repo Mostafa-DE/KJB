@@ -15,6 +15,8 @@ number, a comment, lyrics, ReplayGain and a back cover, as covers-tags-spec "Wha
 - paper-comet-messy.ogg and quiet-breakwater.opus: Vorbis comments by ffmpeg, the back cover as METADATA_BLOCK_PICTURE.
 - harbour-lights-ape.mp3: ID3v2.3, then an APEv2 tag (title, an item of its own, front and back cover items), then
   an ID3v1 tag: a write changes the APE tag's changed keys and covers, and leaves the rest.
+- kelp-lighthouse-v24-ape.mp3: ID3v2.4 with frames v2.3 can't hold (RVA2, TMOO) and front and back covers, then an
+  APEv2 tag with both covers: the write keeps v2.4 and those frames, and the APE covers follow the ID3v2 ones.
 
 Made-up names only. Output: app/src/androidTest/assets/tags/.
 """
@@ -76,7 +78,7 @@ def id3_frame(version, frame_id, body):
     return frame_id.encode() + size + b"\x00\x00" + body
 
 
-def id3v2(version, fields, back):
+def id3v2(version, fields, back, front=None, extra=()):
     t = lambda text: id3_text(version, text)
     enc_text = lambda text: t(text)
     frames = [
@@ -92,8 +94,11 @@ def id3v2(version, fields, back):
     ]
     for key in ("REPLAYGAIN_TRACK_GAIN", "REPLAYGAIN_TRACK_PEAK"):
         frames.append(id3_frame(version, "TXXX", t(key) + id3_term(version) + t(fields[key])[1:]))
-    # APIC: Latin-1, MIME, type 4 (back cover), an empty description, the image.
+    # APIC: Latin-1, MIME, type 3 (front) or 4 (back cover), an empty description, the image.
+    if front is not None:
+        frames.append(id3_frame(version, "APIC", b"\x00image/jpeg\x00\x03\x00" + front))
     frames.append(id3_frame(version, "APIC", b"\x00image/jpeg\x00\x04\x00" + back))
+    frames += [id3_frame(version, frame_id, body) for frame_id, body in extra]
     body = b"".join(frames) + b"\x00" * 256
     return b"ID3" + bytes([version, 0, 0]) + syncsafe(len(body)) + body
 
@@ -134,12 +139,12 @@ def apev2(fields, front, back):
     return body + b"APETAGEX" + struct.pack("<IIII", 2000, len(body) + 32, len(items), 0) + b"\x00" * 8
 
 
-def mp3(name, version, fields, back, with_v1, ape=None):
+def mp3(name, version, fields, back, with_v1, ape=None, front=None, extra=()):
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "a.mp3")
         tone(path, "libmp3lame", 44100, "-b:a", "64k", "-id3v2_version", "0", "-write_id3v1", "0")
         audio = strip_id3(open(path, "rb").read())
-    data = id3v2(version, fields, back) + audio + (ape or b"") + (id3v1(fields) if with_v1 else b"")
+    data = id3v2(version, fields, back, front, extra) + audio + (ape or b"") + (id3v1(fields) if with_v1 else b"")
     write(name, data)
 
 
@@ -268,6 +273,12 @@ def main():
     ogg("quiet-breakwater.opus", "libopus", 48000, song("Quiet Breakwater", 6, artist="Mira Sollen"), back, "-b:a", "32k")
     lights = song("Harbour Lights", 7)
     mp3("harbour-lights-ape.mp3", 3, lights, back, with_v1=True, ape=apev2(lights, front, back))
+    kelp = song("Kelp Lighthouse", 8)
+    # RVA2: "track", master volume -2.41 dB (in 1/512 dB), a 16-bit peak. TMOO: a mood, a v2.4 text frame.
+    rva2 = b"track\x00" + bytes([1]) + struct.pack(">h", -1234) + bytes([16]) + struct.pack(">H", 0x7FFF)
+    mood = b"\x03" + "calm".encode()
+    mp3("kelp-lighthouse-v24-ape.mp3", 4, kelp, back, with_v1=False, ape=apev2(kelp, front, back), front=front,
+        extra=[("RVA2", rva2), ("TMOO", mood)])
 
 
 if __name__ == "__main__":

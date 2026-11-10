@@ -254,6 +254,7 @@ class PayloadHashTest {
         assertEquals(
             mapOf(
                 "harbour-lights-ape.mp3" to AudioFormat.MP3,
+                "kelp-lighthouse-v24-ape.mp3" to AudioFormat.MP3,
                 "lanterns-over-kelp-v24.mp3" to AudioFormat.MP3,
                 "northbound-tide.m4a" to AudioFormat.M4A,
                 "paper-comet-messy.ogg" to AudioFormat.OGG_VORBIS,
