@@ -11,6 +11,9 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import kotlin.concurrent.thread
 
 /** Search over the library's names: folding, matching and ranking, and the queue a tapped song plays. Made-up names only. */
 class SearchIndexTest {
@@ -131,6 +134,18 @@ class SearchIndexTest {
 
         assertEquals(listOf("Road Trip", "Trip Hop Nights", "Daytrip"), found.map { it.item })
         assertEquals(listOf(MatchKind.WORD_START, MatchKind.WORD_START, MatchKind.INSIDE_WORD), found.map { it.match.kind })
+    }
+
+    @Test
+    fun `the name index is built without SearchGraph's lock, which Compose takes on the main thread`() {
+        val library = library(lantern, glow, cafe)
+        val built = CountDownLatch(1)
+        // What lyrics() and recent() wait on while the main thread asks for them.
+        synchronized(SearchGraph) {
+            thread { SearchGraph.names(library, LibrarySettings()).also { built.countDown() } }
+            assertTrue(built.await(5, TimeUnit.SECONDS))
+        }
+        assertEquals(listOf(lantern), SearchGraph.names(library, LibrarySettings()).find("paper").songs.map { it.item })
     }
 
     // The queue
