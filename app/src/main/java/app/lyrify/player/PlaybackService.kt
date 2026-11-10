@@ -14,7 +14,6 @@ import android.util.Size
 import androidx.annotation.OptIn
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
-import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.util.BitmapLoader
 import androidx.media3.common.util.UnstableApi
@@ -29,10 +28,10 @@ import androidx.media3.session.SessionResult
 import app.lyrify.LOG_TAG
 import app.lyrify.Lyrify
 import app.lyrify.R
+import app.lyrify.auto.CarBrowse
 import app.lyrify.library.Library
 import app.lyrify.library.LibraryGraph
 import app.lyrify.library.LibraryState
-import app.lyrify.library.Playlist
 import app.lyrify.library.Song
 import app.lyrify.library.SongRef
 import app.lyrify.logFailures
@@ -100,7 +99,7 @@ class PlaybackService : MediaLibraryService() {
     private lateinit var bridge: QueueBridge
     private lateinit var settings: StateFlow<Settings>
     private lateinit var library: StateFlow<Library?>
-    private lateinit var playlists: StateFlow<List<Playlist>>
+    private lateinit var browse: CarBrowse
     private val playing = MutableStateFlow(false)
     private val tracker = PlayTracker({ event -> Lyrify.playEvents(this).onEvent(event) }, System::currentTimeMillis)
 
@@ -109,7 +108,6 @@ class PlaybackService : MediaLibraryService() {
         core = PlayerGraph.core(this)
         settings = Lyrify.settings(this).settings.stateIn(scope, SharingStarted.Eagerly, Settings())
         library = LibraryGraph.repository(this).state.map { (it as? LibraryState.Ready)?.library }.stateIn(scope, SharingStarted.Eagerly, null)
-        playlists = LibraryGraph.playlists(this).state.map { it.playlists }.stateIn(scope, SharingStarted.Eagerly, emptyList())
         engine = GaplessEngine(this, settings::value, Levels(), ::mediaItem)
         bridge = QueueBridge(engine)
         player = LyrifyPlayer(mainLooper, engine, core, skips = ::skips, sync = ::sync, beforeSeek = ::heardSoFar)
@@ -119,6 +117,7 @@ class PlaybackService : MediaLibraryService() {
             .setBitmapLoader(ThumbnailLoader(this))
             .build()
         session = built
+        browse = CarBrowse(this, built, core, settings, scope, ::playing)
         setMediaNotificationProvider(
             DefaultMediaNotificationProvider.Builder(this).setChannelName(R.string.player_channel).build().apply { setSmallIcon(R.drawable.ic_stat_kjb) },
         )
@@ -281,8 +280,9 @@ class PlaybackService : MediaLibraryService() {
         override fun onCustomCommand(session: MediaSession, controller: MediaSession.ControllerInfo, customCommand: SessionCommand, args: Bundle): ListenableFuture<SessionResult> =
             Futures.immediateFuture(parts.firstNotNullOfOrNull { it.onCommand(customCommand, args) } ?: SessionResult(SessionError.ERROR_NOT_SUPPORTED))
 
+        // The browse tree, search and voice play: auto/CarBrowse.kt.
         override fun onGetLibraryRoot(session: MediaLibrarySession, browser: MediaSession.ControllerInfo, params: LibraryParams?): ListenableFuture<LibraryResult<MediaItem>> =
-            Futures.immediateFuture(LibraryResult.ofItem(folder(LibraryTree.ROOT, getString(R.string.app_name)), params))
+            Futures.immediateFuture(browse.root(browser, params))
 
         override fun onGetChildren(
             session: MediaLibrarySession,
@@ -291,36 +291,32 @@ class PlaybackService : MediaLibraryService() {
             page: Int,
             pageSize: Int,
             params: LibraryParams?,
-        ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
-            val data = treeData() ?: return Futures.immediateFuture(LibraryResult.ofItemList(emptyList(), params))
-            val nodes = LibraryTree.children(parentId, data) ?: return Futures.immediateFuture(LibraryResult.ofError(SessionError.ERROR_BAD_VALUE))
-            val size = pageSize.coerceAtLeast(1)
-            val paged = nodes.drop(page.coerceAtLeast(0) * size).take(size)
-            return Futures.immediateFuture(LibraryResult.ofItemList(paged.map(::browseItem), params))
-        }
+        ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> = browse.children(parentId, page, pageSize, params)
 
         override fun onGetItem(session: MediaLibrarySession, browser: MediaSession.ControllerInfo, mediaId: String): ListenableFuture<LibraryResult<MediaItem>> =
-            Futures.immediateFuture(
-                if (mediaId == LibraryTree.ROOT) LibraryResult.ofItem(folder(LibraryTree.ROOT, getString(R.string.app_name)), null) else LibraryResult.ofError(SessionError.ERROR_NOT_SUPPORTED),
-            )
+            Futures.immediateFuture(browse.item(mediaId))
 
-        /** A song picked in the browse tree plays its list from it, as a tap in the app does; the queue's songs go to the player. */
+        override fun onSearch(session: MediaLibrarySession, browser: MediaSession.ControllerInfo, query: String, params: LibraryParams?): ListenableFuture<LibraryResult<Void>> =
+            browse.search(browser, query, params)
+
+        override fun onGetSearchResult(
+            session: MediaLibrarySession,
+            browser: MediaSession.ControllerInfo,
+            query: String,
+            page: Int,
+            pageSize: Int,
+            params: LibraryParams?,
+        ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> = browse.searchResult(query, page, pageSize, params)
+
+        /** A song picked in the browse tree plays its list from it, as a tap in the app does, and a voice request plays what it names. */
         override fun onSetMediaItems(
             mediaSession: MediaSession,
             controller: MediaSession.ControllerInfo,
             mediaItems: List<MediaItem>,
             startIndex: Int,
             startPositionMs: Long,
-        ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
-            val data = treeData()
-            val play = mediaItems.singleOrNull()?.mediaId?.let { id -> data?.let { LibraryTree.play(id, it) } }
-                ?: return super.onSetMediaItems(mediaSession, controller, mediaItems, startIndex, startPositionMs)
-            when (play) {
-                is TreePlay.FromList -> core.switch { it.play(play.songs, play.start, play.source, core.now()) }
-                is TreePlay.InQueue -> core.switch { it.jump(play.queueId, play.index, core.now()) }
-            }
-            return Futures.immediateFuture(playing())
-        }
+        ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> =
+            browse.setMediaItems(controller, mediaItems) ?: super.onSetMediaItems(mediaSession, controller, mediaItems, startIndex, startPositionMs)
 
         /** Play on a headset or Bluetooth after KJB was closed: the queue playing at its place, once the queues and the library are read. */
         override fun onPlaybackResumption(mediaSession: MediaSession, controller: MediaSession.ControllerInfo, isForPlayback: Boolean): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
@@ -343,44 +339,6 @@ class PlaybackService : MediaLibraryService() {
         val position = if (projected[start].uid == queue?.current?.uid) queue.positionMs else 0
         return MediaSession.MediaItemsWithStartPosition(projected.map(::mediaItem), start, position)
     }
-
-    private fun treeData(): TreeData? {
-        val songs = library.value ?: return null
-        return TreeData(
-            library = songs,
-            book = core.book.value,
-            playlists = playlists.value,
-            settings = settings.value.library,
-            rootName = ::rootName,
-            queueName = { queueLabel(this, it) },
-        )
-    }
-
-    private fun rootName(id: String): String = getString(
-        when (id) {
-            LibraryTree.QUEUES -> R.string.player_tree_queues
-            LibraryTree.PLAYLISTS -> R.string.player_tree_playlists
-            LibraryTree.ALBUMS -> R.string.player_tree_albums
-            LibraryTree.ARTISTS -> R.string.player_tree_artists
-            else -> R.string.player_tree_songs
-        },
-    )
-
-    private fun browseItem(node: TreeNode): MediaItem {
-        val song = node.song ?: return folder(node.id, node.title, node.subtitle)
-        return MediaItem.Builder()
-            .setMediaId(node.id)
-            .setMediaMetadata(metadataOf(song, settings.value.library).buildUpon().setIsBrowsable(false).setIsPlayable(true).build())
-            .build()
-    }
-
-    private fun folder(id: String, title: String, subtitle: String? = null): MediaItem = MediaItem.Builder()
-        .setMediaId(id)
-        .setMediaMetadata(
-            MediaMetadata.Builder().setTitle(title).setSubtitle(subtitle).setIsBrowsable(true).setIsPlayable(false)
-                .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED).build(),
-        )
-        .build()
 }
 
 /**
