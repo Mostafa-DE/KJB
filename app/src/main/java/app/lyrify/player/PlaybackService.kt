@@ -23,12 +23,15 @@ import androidx.media3.session.LibraryResult
 import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaSession
 import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionCommands
 import androidx.media3.session.SessionError
 import androidx.media3.session.SessionResult
 import app.lyrify.LOG_TAG
 import app.lyrify.Lyrify
 import app.lyrify.R
+import app.lyrify.auto.Access
 import app.lyrify.auto.CarBrowse
+import app.lyrify.auto.ControllerAccess
 import app.lyrify.library.Library
 import app.lyrify.library.LibraryGraph
 import app.lyrify.library.LibraryState
@@ -269,8 +272,17 @@ class PlaybackService : MediaLibraryService() {
     private inner class Callback : MediaLibrarySession.Callback {
         override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult {
             val base = super.onConnect(session, controller)
+            if (!base.isAccepted) return base
+            // Only KJB, the system's trusted controllers and the car see the library, search and queues; any other app
+            // gets plain transport (auto/CarBrowse.kt).
+            if (browse.connect(controller) == Access.TRANSPORT) {
+                return MediaSession.ConnectionResult.AcceptedResultBuilder(session, controller)
+                    .setAvailableSessionCommands(SessionCommands.EMPTY)
+                    .setAvailablePlayerCommands(ControllerAccess.transport(base.availablePlayerCommands))
+                    .build()
+            }
             val own = parts.flatMap { it.commands }
-            if (!base.isAccepted || own.isEmpty()) return base
+            if (own.isEmpty()) return base
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session, controller)
                 .setAvailableSessionCommands(base.availableSessionCommands.buildUpon().apply { own.forEach(::add) }.build())
                 .setAvailablePlayerCommands(base.availablePlayerCommands)
@@ -280,9 +292,11 @@ class PlaybackService : MediaLibraryService() {
         override fun onCustomCommand(session: MediaSession, controller: MediaSession.ControllerInfo, customCommand: SessionCommand, args: Bundle): ListenableFuture<SessionResult> =
             Futures.immediateFuture(parts.firstNotNullOfOrNull { it.onCommand(customCommand, args) } ?: SessionResult(SessionError.ERROR_NOT_SUPPORTED))
 
+        override fun onDisconnected(session: MediaSession, controller: MediaSession.ControllerInfo) = browse.disconnect(controller)
+
         // The browse tree, search and voice play: auto/CarBrowse.kt.
         override fun onGetLibraryRoot(session: MediaLibrarySession, browser: MediaSession.ControllerInfo, params: LibraryParams?): ListenableFuture<LibraryResult<MediaItem>> =
-            Futures.immediateFuture(browse.root(browser, params))
+            Futures.immediateFuture(browse.root(params))
 
         override fun onGetChildren(
             session: MediaLibrarySession,
@@ -291,7 +305,7 @@ class PlaybackService : MediaLibraryService() {
             page: Int,
             pageSize: Int,
             params: LibraryParams?,
-        ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> = browse.children(parentId, page, pageSize, params)
+        ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> = browse.children(browser, parentId, page, pageSize, params)
 
         override fun onGetItem(session: MediaLibrarySession, browser: MediaSession.ControllerInfo, mediaId: String): ListenableFuture<LibraryResult<MediaItem>> =
             Futures.immediateFuture(browse.item(mediaId))
@@ -306,7 +320,7 @@ class PlaybackService : MediaLibraryService() {
             page: Int,
             pageSize: Int,
             params: LibraryParams?,
-        ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> = browse.searchResult(query, page, pageSize, params)
+        ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> = browse.searchResult(browser, query, page, pageSize, params)
 
         /** A song picked in the browse tree plays its list from it, as a tap in the app does, and a voice request plays what it names. */
         override fun onSetMediaItems(

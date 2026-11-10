@@ -6,17 +6,20 @@ import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.database.Cursor
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Bundle
 import android.os.ParcelFileDescriptor
+import android.os.Process
 import android.provider.MediaStore
 import android.util.Log
 import android.util.Size
 import androidx.annotation.OptIn
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.LibraryResult
 import androidx.media3.session.MediaConstants
@@ -33,6 +36,7 @@ import app.lyrify.library.LibraryState
 import app.lyrify.library.Song
 import app.lyrify.library.mostPlayed
 import app.lyrify.library.recentlyPlayed
+import app.lyrify.logFailures
 import app.lyrify.player.Found
 import app.lyrify.player.LibraryTree
 import app.lyrify.player.NameSearch
@@ -43,6 +47,7 @@ import app.lyrify.player.TreePlay
 import app.lyrify.player.TreeSearch
 import app.lyrify.player.metadataOf
 import app.lyrify.player.queueLabel
+import app.lyrify.settings.LibrarySettings
 import app.lyrify.settings.Settings
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
@@ -51,6 +56,7 @@ import com.google.common.util.concurrent.SettableFuture
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
@@ -61,13 +67,17 @@ import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.FileNotFoundException
 import java.io.IOException
+import java.security.MessageDigest
 
 /**
- * KJB in the car, and in any other media browser (Bluetooth, the system's media controls): the playback service's
- * browse tree ([LibraryTree]) as media items, search, and voice play. The root honours Android Auto's limit on root
- * items; lists show as lists and Albums as a grid; a list a client asks for whole is capped, one it pages is not. A song
- * or Shuffle all picked in the car, or a voice request, changes KJB's own queue model, which the session then plays.
- * Main thread; lists are built once the queues and the library are read. The log gets counts and exception names.
+ * KJB in the car, and in the system's other media browsers (System UI, Bluetooth): the playback service's browse tree
+ * ([LibraryTree]) as media items, search, and voice play. Who may see the library is decided once per connection
+ * ([connect], [ControllerAccess]): KJB itself, the system's trusted controllers and the car; any other app gets plain
+ * transport only. The root honours Android Auto's limit on root items; lists show as lists and Albums as a grid; a list
+ * a client asks for whole is capped, one it pages is not. Lists are built from a snapshot off the main thread and paged
+ * before they become media items. The car's covers are granted one by one as it is shown them, and revoked when it
+ * disconnects ([CoverGrants]). A song or Shuffle all picked in the car, or a voice request, changes KJB's own queue
+ * model, which the session then plays. Called on the main thread. The log gets counts and exception names.
  */
 @OptIn(UnstableApi::class)
 class CarBrowse(
@@ -79,9 +89,22 @@ class CarBrowse(
     /** The queue playing as media items at its place: what the session hands the player after a change. */
     private val playing: () -> MediaSession.MediaItemsWithStartPosition,
     private val search: TreeSearch = NameSearch,
+    private val access: ControllerAccess = ControllerAccess.of(context),
 ) {
-    /** The car's last search, so a song picked in its results plays them. */
-    private var found: Found? = null
+    /** Each connection's access while it is connected. Main thread. */
+    private val connected = HashMap<MediaSession.ControllerInfo, Access>()
+
+    /** The car's searches, per app and words. Main thread. */
+    private val searches = Searches()
+
+    /** One thread for the cover grants, outliving the service so a revoke is never dropped. */
+    private val grantsThread = Dispatchers.IO.limitedParallelism(1)
+    private val grantsScope = CoroutineScope(SupervisorJob() + grantsThread + logFailures)
+    private val grants = CoverGrants<MediaSession.ControllerInfo>(
+        packageOf = { it.packageName },
+        grant = { packageName, id -> CarCovers.grant(context, packageName, id) },
+        revoke = { packageName, id -> CarCovers.revoke(context, packageName, id) },
+    )
 
     init {
         // Recent queues follows the queues: a car showing it hears when one comes or goes.
@@ -91,12 +114,21 @@ class CarBrowse(
         }
     }
 
-    /**
-     * The root, at once and never null: as many top lists as [params]' root hint allows (Android Auto's, usually 4), and
-     * the list style for every level. [browser] may read the covers from now on.
-     */
-    fun root(browser: MediaSession.ControllerInfo, params: LibraryParams?): LibraryResult<MediaItem> {
-        CarCovers.allow(context, browser.packageName)
+    /** What [controller] may do, decided as it connects (the session's onConnect). */
+    fun connect(controller: MediaSession.ControllerInfo): Access {
+        val granted = access.of(Caller(controller.packageName, controller.uid, controller.isTrusted))
+        connected[controller] = granted
+        if (granted == Access.CAR) grantsScope.launch { grants.connected(controller) }
+        return granted
+    }
+
+    /** [controller] left: a car's cover grants go. */
+    fun disconnect(controller: MediaSession.ControllerInfo) {
+        if (connected.remove(controller) == Access.CAR) grantsScope.launch { grants.disconnected(controller) }
+    }
+
+    /** The root, at once and never null: as many top lists as [params]' root hint allows (Android Auto's, usually 4), and the list style for every level. */
+    fun root(params: LibraryParams?): LibraryResult<MediaItem> {
         val limit = params?.extras?.getInt(MediaConstants.EXTRAS_KEY_ROOT_CHILDREN_LIMIT, 0)
         val styles = Bundle().apply {
             putInt(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_BROWSABLE, MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_LIST_ITEM)
@@ -105,19 +137,21 @@ class CarBrowse(
         return LibraryResult.ofItem(rootItem(LibraryTree.root(limit)), LibraryParams.Builder().setExtras(styles).build())
     }
 
-    fun children(parentId: String, page: Int, pageSize: Int, params: LibraryParams?): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> = future {
-        val nodes = LibraryTree.children(parentId, data(plays = needsPlays(parentId)))
-        if (nodes == null) LibraryResult.ofError(SessionError.ERROR_BAD_VALUE) else LibraryResult.ofItemList(LibraryTree.page(nodes, page, pageSize).map(::item), params)
+    fun children(browser: MediaSession.ControllerInfo, parentId: String, page: Int, pageSize: Int, params: LibraryParams?): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> = future {
+        val data = data(browser, plays = needsPlays(parentId))
+        val nodes = withContext(Dispatchers.Default) { LibraryTree.children(parentId, data)?.let { LibraryTree.page(it, page, pageSize) } }
+            ?: return@future LibraryResult.ofError(SessionError.ERROR_BAD_VALUE)
+        LibraryResult.ofItemList(items(browser, nodes), params)
     }
 
     fun item(mediaId: String): LibraryResult<MediaItem> =
         if (LibraryTree.isRoot(mediaId)) LibraryResult.ofItem(rootItem(mediaId), null) else LibraryResult.ofError(SessionError.ERROR_NOT_SUPPORTED)
 
-    /** A search typed or said in the car: the songs found, then [browser] hears how many, and asks for them. */
+    /** A search typed or said in the car: the songs found, kept for [browser]'s app; then it hears how many, and asks for them. */
     fun search(browser: MediaSession.ControllerInfo, query: String, params: LibraryParams?): ListenableFuture<LibraryResult<Void>> {
         scope.launch {
             val songs = try {
-                find(query, data().library).also { found = it }.songs.size
+                find(query, data(browser).library).also { searches.put(browser.packageName, it) }.songs.size
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
                 Log.w(LOG_TAG, "car search failed: ${e.javaClass.simpleName}")
@@ -128,10 +162,11 @@ class CarBrowse(
         return Futures.immediateFuture(LibraryResult.ofVoid(params))
     }
 
-    fun searchResult(query: String, page: Int, pageSize: Int, params: LibraryParams?): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> = future {
-        if (found?.query != query) found = find(query, data().library)
-        val nodes = LibraryTree.children(LibraryTree.searchId(query), data()).orEmpty()
-        LibraryResult.ofItemList(LibraryTree.page(nodes, page, pageSize).map(::item), params)
+    fun searchResult(browser: MediaSession.ControllerInfo, query: String, page: Int, pageSize: Int, params: LibraryParams?): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> = future {
+        if (searches.of(browser.packageName)[query] == null) searches.put(browser.packageName, find(query, data(browser).library))
+        val data = data(browser)
+        val nodes = withContext(Dispatchers.Default) { LibraryTree.page(LibraryTree.children(LibraryTree.searchId(query), data).orEmpty(), page, pageSize) }
+        LibraryResult.ofItemList(items(browser, nodes), params)
     }
 
     /**
@@ -144,8 +179,9 @@ class CarBrowse(
         val words = item.requestMetadata.searchQuery
         if (words == null && !LibraryTree.playable(item.mediaId)) return null
         return future {
-            val data = data(plays = words == null && needsPlays(item.mediaId))
-            val play = if (words == null) LibraryTree.play(item.mediaId, data) else LibraryTree.voice(words.takeIf(String::isNotBlank)?.let { find(it, data.library) }, data)
+            val data = data(controller, plays = words == null && needsPlays(item.mediaId))
+            val found = words?.takeIf(String::isNotBlank)?.let { find(it, data.library) }
+            val play = withContext(Dispatchers.Default) { if (words == null) LibraryTree.play(item.mediaId, data) else LibraryTree.voice(found, data) }
             when (play) {
                 is TreePlay.FromList -> core.switch { it.play(play.songs, play.start, play.source, core.now()) }
                 is TreePlay.InQueue -> core.switch { it.jump(play.queueId, play.index, core.now()) }
@@ -160,8 +196,11 @@ class CarBrowse(
         }
     }
 
-    /** What the tree is built from now: once the queues and the library are read; Most played and Recently played only for the lists that show them. */
-    private suspend fun data(plays: Boolean = false): TreeData {
+    /**
+     * A snapshot of what the tree is built from, once the queues and the library are read, with [controller]'s app's
+     * searches; Most played and Recently played only for the lists that show them.
+     */
+    private suspend fun data(controller: MediaSession.ControllerInfo, plays: Boolean = false): TreeData {
         core.ready.first { it }
         val settings = settings.value
         val state = LibraryGraph.repository(context).state.first { it !is LibraryState.Loading }
@@ -182,7 +221,7 @@ class CarBrowse(
             mostPlayed = most,
             recentlyPlayed = recent,
             now = System.currentTimeMillis(),
-            found = found,
+            found = searches.of(controller.packageName),
         ) { queueLabel(context, it) }
     }
 
@@ -191,19 +230,29 @@ class CarBrowse(
 
     private fun needsPlays(id: String): Boolean = id == LibraryTree.PLAYLISTS || id.startsWith(LibraryTree.MOST_PLAYED) || id.startsWith(LibraryTree.RECENTLY_PLAYED)
 
-    private fun rootItem(id: String): MediaItem = item(TreeNode(id, context.getString(R.string.app_name)))
+    /** [nodes] as media items, built off the main thread; a car is granted their covers before it gets them. */
+    private suspend fun items(controller: MediaSession.ControllerInfo, nodes: List<TreeNode>): List<MediaItem> {
+        val car = connected[controller] == Access.CAR
+        val library = settings.value.library
+        val items = withContext(Dispatchers.Default) { nodes.map { item(it, library, car) } }
+        if (car) withContext(grantsThread) { grants.give(controller, nodes.mapNotNull { it.cover?.ref?.mediaStoreId }) }
+        return items
+    }
 
-    /** [node] as a media item: a song with its tags, or a list; its cover through [CarCovers]; its heading and grid as style hints. */
-    private fun item(node: TreeNode): MediaItem {
+    private fun rootItem(id: String): MediaItem = item(TreeNode(id, context.getString(R.string.app_name)), settings.value.library, car = false)
+
+    /** [node] as a media item: a song with its tags, or a list; its cover ([CarCovers] for a car); its heading and grid as style hints. */
+    private fun item(node: TreeNode, library: LibrarySettings, car: Boolean): MediaItem {
         val song = node.song
-        val metadata = song?.let { metadataOf(it, settings.value.library).buildUpon() }
+        val metadata = song?.let { metadataOf(it, library).buildUpon() }
             ?: MediaMetadata.Builder().setTitle(node.title).setSubtitle(node.subtitle)
                 .setMediaType(if (node.playable) MediaMetadata.MEDIA_TYPE_MIXED else MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
         val extras = Bundle()
         node.group?.let { extras.putString(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_GROUP_TITLE, it) }
         if (node.grid) extras.putInt(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_BROWSABLE, MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_GRID_ITEM)
+        val cover = node.cover?.ref?.mediaStoreId
         metadata.setIsBrowsable(node.browsable).setIsPlayable(node.playable)
-            .setArtworkUri(node.cover?.ref?.mediaStoreId?.let { CarCovers.uri(context, it) })
+            .setArtworkUri(cover?.let { if (car) CarCovers.uri(context, it) else ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, it) })
         if (!extras.isEmpty) metadata.setExtras(extras)
         return MediaItem.Builder().setMediaId(node.id).setMediaMetadata(metadata.build()).build()
     }
@@ -244,11 +293,159 @@ class CarBrowse(
     }
 }
 
+/** What a media controller may do with KJB's session. */
+enum class Access {
+    /** The library, search and Recent queues, and the car's covers: Android Auto or an Automotive media centre. */
+    CAR,
+
+    /** The library, search, Recent queues and queue changes: KJB itself and the system's trusted controllers. */
+    LIBRARY,
+
+    /** Play, pause, next, previous and the song playing, as every media notification shows: any other app. */
+    TRANSPORT,
+}
+
+/** A media controller as [ControllerAccess] sees it: the session's ControllerInfo on the phone, made up in tests. */
+data class Caller(val packageName: String, val uid: Int, val trusted: Boolean)
+
+/**
+ * Who may see KJB's library through its media session. KJB itself (its package and uid); the controllers the system
+ * trusts ([Caller.trusted]: System UI, Bluetooth, apps with notification access); Android Auto signed with Google's
+ * release key, and an Automotive media centre signed with the phone's platform key, checked by signing certificate
+ * ([signedBy]), never by package name alone. Any other app gets [TRANSPORT_COMMANDS] only.
+ */
+class ControllerAccess(
+    private val ownPackage: String,
+    private val ownUid: Int,
+    /** Whether the app running as a uid is signed with the certificate of this SHA-256 digest (upper-case hex). */
+    private val signedBy: (uid: Int, sha256: String) -> Boolean,
+    /** The SHA-256 digests of the phone's platform certificate. */
+    private val platform: () -> Set<String>,
+) {
+    fun of(caller: Caller): Access = when {
+        car(caller) -> Access.CAR
+        caller.packageName == ownPackage && caller.uid == ownUid -> Access.LIBRARY
+        caller.trusted -> Access.LIBRARY
+        else -> Access.TRANSPORT
+    }
+
+    private fun car(caller: Caller): Boolean = when (caller.packageName) {
+        ANDROID_AUTO -> AUTO_CERTIFICATES.any { signedBy(caller.uid, it) }
+        in MEDIA_CENTRES -> platform().any { signedBy(caller.uid, it) }
+        else -> false
+    }
+
+    companion object {
+        const val ANDROID_AUTO: String = "com.google.android.projection.gearhead"
+
+        /** Android Automotive's media centre (a platform app). */
+        val MEDIA_CENTRES: Set<String> = setOf("com.android.car.media")
+
+        /** Android Auto's release signing certificates, the current and the rotated one (Google's UAMP allowlist). */
+        val AUTO_CERTIFICATES: Set<String> = setOf(
+            "FDB00C43DBDE8B51CB312AA81D3B5FA17713ADB94B28F598D77F8EB89DACEEDF",
+            "1CA8DCC0BED3CBD872D2CB791200C0292CA9975768A82D676B8B424FB65B5295",
+        )
+
+        /** Plain transport: play and pause, next and previous, and the song playing; never the queue or a change to it. */
+        val TRANSPORT_COMMANDS: List<Int> = listOf(
+            Player.COMMAND_PLAY_PAUSE,
+            Player.COMMAND_PREPARE,
+            Player.COMMAND_SEEK_TO_NEXT,
+            Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM,
+            Player.COMMAND_SEEK_TO_PREVIOUS,
+            Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM,
+            Player.COMMAND_GET_CURRENT_MEDIA_ITEM,
+            Player.COMMAND_GET_METADATA,
+        )
+
+        /** [base] narrowed to [TRANSPORT_COMMANDS]. */
+        @OptIn(UnstableApi::class)
+        fun transport(base: Player.Commands): Player.Commands =
+            Player.Commands.Builder().apply { TRANSPORT_COMMANDS.filter(base::contains).forEach(::add) }.build()
+
+        /** The rule on the phone: signing certificates from the package manager. */
+        fun of(context: Context): ControllerAccess {
+            val packages = context.packageManager
+            return ControllerAccess(
+                ownPackage = context.packageName,
+                ownUid = Process.myUid(),
+                signedBy = { uid, sha256 -> packages.hasSigningCertificate(uid, bytes(sha256), PackageManager.CERT_INPUT_SHA256) },
+                platform = { platformCertificates(packages) },
+            )
+        }
+
+        private fun platformCertificates(packages: PackageManager): Set<String> = try {
+            packages.getPackageInfo("android", PackageManager.GET_SIGNING_CERTIFICATES).signingInfo?.apkContentsSigners.orEmpty()
+                .map { signature -> MessageDigest.getInstance("SHA-256").digest(signature.toByteArray()).joinToString("") { "%02X".format(it) } }
+                .toSet()
+        } catch (_: PackageManager.NameNotFoundException) {
+            emptySet()
+        }
+
+        private fun bytes(hex: String): ByteArray = hex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+    }
+}
+
+/**
+ * Read grants on single covers for the cars connected: each cover a car is shown is granted to its app once, and a
+ * car's go when it disconnects, except those another connection of the same app still shows. Confined to one thread.
+ */
+class CoverGrants<C : Any>(
+    private val packageOf: (C) -> String,
+    private val grant: (packageName: String, id: Long) -> Unit,
+    private val revoke: (packageName: String, id: Long) -> Unit,
+) {
+    private val held = HashMap<C, MutableSet<Long>>()
+
+    fun connected(car: C) {
+        held.getOrPut(car) { HashSet() }
+    }
+
+    /** The covers [ids] for [car]; nothing for a controller not connected as a car. */
+    fun give(car: C, ids: Collection<Long>) {
+        val mine = held[car] ?: return
+        val app = sameApp(car)
+        ids.filter { mine.add(it) && it !in app }.distinct().forEach { grant(packageOf(car), it) }
+    }
+
+    fun disconnected(car: C) {
+        val mine = held.remove(car) ?: return
+        val kept = sameApp(car)
+        (mine - kept).forEach { revoke(packageOf(car), it) }
+    }
+
+    /** The covers other connections of [car]'s app hold. */
+    private fun sameApp(car: C): Set<Long> = held.filterKeys { it != car && packageOf(it) == packageOf(car) }.values.flatten().toSet()
+}
+
+/** The MediaStore ids of the songs in [library]: the only covers [CarCovers] serves. */
+fun coverIds(library: Library): Set<Long> = library.songs.mapNotNull { it.ref.mediaStoreId }.toSet()
+
+/** The car's searches, per app and words, so two browsers never take each other's results; the latest [KEPT] stay. Not thread-safe. */
+class Searches {
+    private val kept = object : LinkedHashMap<Pair<String, String>, Found>(KEPT, LOAD_FACTOR, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Pair<String, String>, Found>?): Boolean = size > KEPT
+    }
+
+    fun put(packageName: String, found: Found) {
+        kept[packageName to found.query] = found
+    }
+
+    /** [packageName]'s searches, by their words. */
+    fun of(packageName: String): Map<String, Found> = kept.filterKeys { it.first == packageName }.mapKeys { it.key.second }
+
+    companion object {
+        const val KEPT: Int = 8
+        private const val LOAD_FACTOR = 0.75f
+    }
+}
+
 /**
  * Covers for the car's lists: a song's cover by its MediaStore id only (no paths in the uri), as a JPEG made from
- * MediaStore's thumbnail of the file's embedded art. Android Auto cannot read MediaStore's audio uris (and Media3 hands
- * a browse item's artwork to it as a uri), so the tree's items point here. Not exported: [allow] lets each app that
- * browses the tree read every cover. Read-only.
+ * MediaStore's thumbnail of the file's embedded art, and only for a song in the library. Android Auto cannot read
+ * MediaStore's audio uris (and Media3 hands a browse item's artwork to it as a uri), so the car's items point here. Not
+ * exported: each cover is granted to a car as it is shown ([CoverGrants]). Read-only.
  */
 class CarCovers : ContentProvider() {
     override fun onCreate(): Boolean = true
@@ -258,9 +455,11 @@ class CarCovers : ContentProvider() {
     override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor {
         if (mode != "r") throw SecurityException("covers are read-only")
         val id = uri.pathSegments.singleOrNull()?.toLongOrNull() ?: throw FileNotFoundException("not a cover")
-        val resolver = context?.contentResolver ?: throw FileNotFoundException("not ready")
+        val context = context ?: throw FileNotFoundException("not ready")
+        val library = (LibraryGraph.repository(context).state.value as? LibraryState.Ready)?.library
+        if (!allowed(id, library)) throw FileNotFoundException("not a song in the library")
         val bitmap = try {
-            resolver.loadThumbnail(ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id), Size(COVER_PX, COVER_PX), null)
+            context.contentResolver.loadThumbnail(ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id), Size(COVER_PX, COVER_PX), null)
         } catch (_: IOException) {
             // No embedded cover, or the song is gone: the car shows its own.
             throw FileNotFoundException("no cover")
@@ -295,22 +494,32 @@ class CarCovers : ContentProvider() {
         /** The car shows covers at most this size; Auto's grid tiles are smaller. */
         private const val COVER_PX = 512
 
-        fun uri(context: Context, mediaStoreId: Long): Uri =
-            Uri.Builder().scheme(ContentResolver.SCHEME_CONTENT).authority(authority(context)).appendPath(mediaStoreId.toString()).build()
+        /** The ids of the library last asked about, so a screen of covers reads the library once. */
+        @Volatile
+        private var index: Pair<Library, Set<Long>>? = null
 
-        /** [packageName] may read every cover until the phone restarts: a prefix grant, one call per browser. */
-        fun allow(context: Context, packageName: String) {
-            if (packageName == context.packageName) return
-            val all = Uri.Builder().scheme(ContentResolver.SCHEME_CONTENT).authority(authority(context)).path("/").build()
+        /** Whether the cover of MediaStore item [id] may be served: a song in [library]. */
+        fun allowed(id: Long, library: Library?): Boolean {
+            library ?: return false
+            val ids = index?.takeIf { it.first === library }?.second ?: coverIds(library).also { index = library to it }
+            return id in ids
+        }
+
+        fun uri(context: Context, mediaStoreId: Long): Uri =
+            Uri.Builder().scheme(ContentResolver.SCHEME_CONTENT).authority(context.packageName + ".covers").appendPath(mediaStoreId.toString()).build()
+
+        /** [packageName] may read the cover of [id], until [revoke] or the phone restarts. */
+        fun grant(context: Context, packageName: String, id: Long) {
             try {
-                context.grantUriPermission(packageName, all, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION)
+                context.grantUriPermission(packageName, uri(context, id), Intent.FLAG_GRANT_READ_URI_PERMISSION)
             } catch (e: RuntimeException) {
-                // A browser gone, or one the phone does not know: its lists show without covers.
-                Log.w(LOG_TAG, "car covers not allowed: ${e.javaClass.simpleName}")
+                // A car app gone or unknown to the phone: its lists show without that cover.
+                Log.w(LOG_TAG, "car cover not granted: ${e.javaClass.simpleName}")
             }
         }
 
-        /** The manifest's `${applicationId}.covers`, so the debug build has its own. */
-        private fun authority(context: Context): String = context.packageName + ".covers"
+        fun revoke(context: Context, packageName: String, id: Long) {
+            context.revokeUriPermission(packageName, uri(context, id), Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
     }
 }

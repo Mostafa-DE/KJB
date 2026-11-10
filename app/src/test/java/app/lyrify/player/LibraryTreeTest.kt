@@ -8,6 +8,7 @@ import app.lyrify.library.albumKey
 import app.lyrify.library.song
 import app.lyrify.settings.LibrarySettings
 import app.lyrify.settings.Settings
+import app.lyrify.ui.BuiltInList
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -48,7 +49,7 @@ class LibraryTreeTest {
         mostPlayed = mostPlayed,
         recentlyPlayed = recentlyPlayed,
         now = now,
-        found = found,
+        found = listOfNotNull(found).associateBy { it.query },
     ) { it.name ?: it.source.name }
 
     private fun children(id: String, data: TreeData = data()): List<TreeNode> = LibraryTree.children(id, data)!!
@@ -137,7 +138,7 @@ class LibraryTreeTest {
     }
 
     @Test
-    fun `each Built for you list holds its songs in order and plays as the app's own list`() {
+    fun `each Built for you list holds its songs in order and plays as the app's own list, with L1's exact keys`() {
         val data = data(favourites = listOf(ember.ref, loose.ref), mostPlayed = listOf(harbour[1], loose), recentlyPlayed = listOf(harbour[2]))
         assertEquals(listOf(ember.path, loose.path), children(LibraryTree.FAVOURITES, data).map { it.song!!.path })
         assertEquals(listOf(harbour[1].path, loose.path), children(LibraryTree.MOST_PLAYED, data).map { it.song!!.path })
@@ -145,12 +146,14 @@ class LibraryTreeTest {
         val sources = listOf(LibraryTree.FAVOURITES, LibraryTree.MOST_PLAYED, LibraryTree.RECENTLY_PLAYED, LibraryTree.RECENTLY_ADDED).map { list ->
             (LibraryTree.play(children(list, data).first().id, data) as TreePlay.FromList).source
         }
+        // L1's pages: Favourites plays as "favourites" (ui/CollectionScreens.kt, FavouritesPage), the others by their
+        // BuiltInList name (BuiltInPage), each with no name.
         assertEquals(
             listOf(
                 QueueSource(SourceKind.FAVOURITES, "favourites", ""),
-                QueueSource(SourceKind.MOST_PLAYED, "MOST_PLAYED", ""),
-                QueueSource(SourceKind.RECENTLY_PLAYED, "RECENTLY_PLAYED", ""),
-                QueueSource(SourceKind.RECENTLY_ADDED, "RECENTLY_ADDED", ""),
+                QueueSource(SourceKind.MOST_PLAYED, BuiltInList.MOST_PLAYED.name, ""),
+                QueueSource(SourceKind.RECENTLY_PLAYED, BuiltInList.RECENTLY_PLAYED.name, ""),
+                QueueSource(SourceKind.RECENTLY_ADDED, BuiltInList.RECENTLY_ADDED.name, ""),
             ),
             sources,
         )
@@ -223,6 +226,21 @@ class LibraryTreeTest {
         assertFalse(LibraryTree.playable(LibraryTree.ALBUMS))
         assertFalse(LibraryTree.playable(children(LibraryTree.ALBUMS)[0].id))
         assertFalse(LibraryTree.playable(""))
+    }
+
+    @Test
+    fun `an id is a song only under a list that holds songs, at a place that is a number`() {
+        assertTrue(LibraryTree.playable("${LibraryTree.SONGS}|0"))
+        assertTrue(LibraryTree.playable("${LibraryTree.MOST_PLAYED}|3"))
+        assertTrue(LibraryTree.playable("album:k|2"))
+        assertFalse(LibraryTree.playable("${LibraryTree.ALBUMS}|2"))
+        assertFalse(LibraryTree.playable("${LibraryTree.ROOT}|0"))
+        assertFalse(LibraryTree.playable("nothing here|1"))
+        assertFalse(LibraryTree.playable("album:|1"))
+        assertFalse(LibraryTree.playable("album:k|-1"))
+        assertFalse(LibraryTree.playable("album:k|x"))
+        assertNull(LibraryTree.play("${LibraryTree.ALBUMS}|0", data()))
+        assertNull(LibraryTree.play("|0", data()))
     }
 
     // Search and voice

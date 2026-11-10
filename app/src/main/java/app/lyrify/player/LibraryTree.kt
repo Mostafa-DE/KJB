@@ -62,8 +62,8 @@ class TreeData(
     val recentlyPlayed: List<Song> = emptyList(),
     /** Wall-clock millis, for Recently added. */
     val now: Long = 0,
-    /** The car's last search, so a song picked in its results plays them. */
-    val found: Found? = null,
+    /** The car's latest searches by their words, so a song picked in their results plays them. */
+    val found: Map<String, Found> = emptyMap(),
     /** A queue's name as the app shows it ("Album · Harbour Glass"). */
     val queueName: (Queue) -> String,
 )
@@ -107,6 +107,10 @@ object LibraryTree {
     private const val SEARCH = "search:"
     private const val SONG = '|'
 
+    /** The lists whose children are songs: these, and those named by one of [SONG_LIST_PREFIXES]. */
+    private val SONG_LISTS = setOf(SONGS, FAVOURITES, MOST_PLAYED, RECENTLY_PLAYED, RECENTLY_ADDED)
+    private val SONG_LIST_PREFIXES = listOf(QUEUE, PLAYLIST, ALBUM, ARTIST, SEARCH)
+
     /** The Songs tab's queue key for the same songs in the same order: all of them, by title. */
     private val SONGS_KEY = "songs:${SortSongs.TITLE}:${LyricsFilter.ALL}"
 
@@ -122,7 +126,7 @@ object LibraryTree {
     fun searchId(query: String): String = SEARCH + query
 
     /** Whether [id] names something to play, a song in a list or Shuffle all; not whether it is still there. */
-    fun playable(id: String): Boolean = id == SHUFFLE_ALL || id.substringAfterLast(SONG, missingDelimiterValue = "").toIntOrNull() != null
+    fun playable(id: String): Boolean = id == SHUFFLE_ALL || songAt(id) != null
 
     /** The children of [id], every one; null when there is no such list (a song, or one gone). */
     fun children(id: String, data: TreeData): List<TreeNode>? {
@@ -156,9 +160,7 @@ object LibraryTree {
             val songs = list(SONGS, data)?.filterNotNull()?.takeIf { it.isNotEmpty() } ?: return null
             return TreePlay.Shuffle(songs.map { it.ref }, source(SONGS, data) ?: return null)
         }
-        val parent = id.substringBeforeLast(SONG, missingDelimiterValue = "")
-        val index = id.substringAfterLast(SONG).toIntOrNull() ?: return null
-        if (parent.isEmpty()) return null
+        val (parent, index) = songAt(id) ?: return null
         if (parent.startsWith(QUEUE)) {
             val queue = data.book.queue(parent.removePrefix(QUEUE)) ?: return null
             return if (index in queue.items.indices) TreePlay.InQueue(queue.id, index) else null
@@ -176,6 +178,14 @@ object LibraryTree {
         found != null -> found.songs.takeIf { it.isNotEmpty() }?.let { songs -> TreePlay.FromList(songs.map { it.ref }, 0, found.source) }
         data.book.current != null -> TreePlay.Resume
         else -> play(SHUFFLE_ALL, data)
+    }
+
+    /** A song node's list and place: only under a list that holds songs, at a place that is a whole number. */
+    private fun songAt(id: String): Pair<String, Int>? {
+        val parent = id.substringBeforeLast(SONG, missingDelimiterValue = "")
+        val index = id.substringAfterLast(SONG, missingDelimiterValue = "").toIntOrNull()?.takeIf { it >= 0 } ?: return null
+        val songs = parent in SONG_LISTS || SONG_LIST_PREFIXES.any { parent.length > it.length && parent.startsWith(it) }
+        return if (songs) parent to index else null
     }
 
     private fun rootSize(id: String): Int? =
@@ -206,7 +216,7 @@ object LibraryTree {
             id.startsWith(PLAYLIST) -> data.playlists.firstOrNull { it.id == id.removePrefix(PLAYLIST) }?.let { library.listed(it.songs) }
             id.startsWith(ALBUM) -> library.album(id.removePrefix(ALBUM))?.songs
             id.startsWith(ARTIST) -> library.artist(id.removePrefix(ARTIST))?.songs
-            id.startsWith(SEARCH) -> data.found?.takeIf { it.query == id.removePrefix(SEARCH) }?.songs
+            id.startsWith(SEARCH) -> data.found[id.removePrefix(SEARCH)]?.songs
             else -> null
         }
     }
@@ -221,7 +231,7 @@ object LibraryTree {
         id.startsWith(PLAYLIST) -> data.playlists.firstOrNull { it.id == id.removePrefix(PLAYLIST) }?.let { QueueSource(SourceKind.PLAYLIST, it.id, it.name) }
         id.startsWith(ALBUM) -> data.library.album(id.removePrefix(ALBUM))?.let { QueueSource(SourceKind.ALBUM, it.key, it.title) }
         id.startsWith(ARTIST) -> id.removePrefix(ARTIST).let { QueueSource(SourceKind.ARTIST, it, it) }
-        id.startsWith(SEARCH) -> data.found?.takeIf { it.query == id.removePrefix(SEARCH) }?.source
+        id.startsWith(SEARCH) -> data.found[id.removePrefix(SEARCH)]?.source
         else -> null
     }
 
