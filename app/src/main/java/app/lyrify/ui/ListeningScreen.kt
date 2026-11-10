@@ -197,7 +197,7 @@ private fun TopHead(title: String, count: Int, onViewAll: (() -> Unit)?) {
  * with its time heard and its plays.
  */
 @Composable
-private fun TopRow(top: Top<*>, rank: Int, settings: Settings, onOpen: (Page) -> Unit, onSong: (SongRef) -> Unit) {
+internal fun TopRow(top: Top<*>, rank: Int, settings: Settings, onOpen: (Page) -> Unit, onSong: (SongRef) -> Unit) {
     val time = listenedText(top.heardMs)
     when (val item = top.item) {
         is Song -> TopRowView(rank, displayTitle(item, settings.library), lineOf(item.artist, time), top.plays, SongArt(item.path), MaterialTheme.shapes.small, stringResource(R.string.stats_song_options)) {
