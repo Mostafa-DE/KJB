@@ -58,7 +58,7 @@ data class M3uImport(val name: String, val found: List<M3uFound>, val missing: L
  * length ([SongResolver.M3U]). KJB never writes MediaStore playlists (deprecated since API 31).
  */
 object M3u {
-    /** Files larger than this are not playlists (Gramophone's cap). */
+    /** Files larger than this are not playlists: 5 MB holds [MAX_ENTRIES] entries at about 500 bytes each. */
     const val MAX_BYTES: Int = 5 * 1024 * 1024
 
     /** Files with more entries than this are not read: a playlist that long is a mistake, and its result would not fit. */

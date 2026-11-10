@@ -175,7 +175,6 @@ everything the app is built with and shows each licence in full; `NOTICE` says t
   [Cover Art Archive](https://coverartarchive.org).
 - Tags are read and written with [TagLib](https://taglib.org) (LGPL 2.1) through
   [Kyant0/taglib](https://github.com/Kyant0/taglib) (Apache 2.0).
-- ReplayGain reading is ported from [Gramophone](https://github.com/FoedusProgramme/Gramophone) (GPL 3.0 or later).
 - Playback is [Media3](https://github.com/androidx/media); the AI uses [ONNX Runtime](https://onnxruntime.ai), Qualcomm
   AI Hub's Whisper, UVR's MDX-Net and wav2vec2 models (see `NOTICE`).
 - Icons: Material Symbols. Font: Bricolage Grotesque (SIL Open Font License 1.1).

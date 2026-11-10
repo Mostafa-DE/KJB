@@ -128,7 +128,6 @@ val THIRD_PARTY: List<Shipped> = listOf(
         "The Android NDK's C++ library, in libtaglib.so",
         "Apache 2.0 with LLVM Exceptions", "The LLVM Project", listOf(APACHE_TEXT, "llvm-exception.txt"),
     ),
-    Shipped("Gramophone", "KJB's ReplayGain reading is ported from its ReplayGainUtil.kt", "GPL 3.0 or later", "nift4", listOf("gpl-3.0.txt")),
     Shipped(
         "Whisper tokenizer",
         "openai/whisper-large-v3-turbo's vocab.json, added_tokens.json and generation_config.json",
