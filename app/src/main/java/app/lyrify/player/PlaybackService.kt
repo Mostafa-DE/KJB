@@ -100,7 +100,7 @@ private const val OPEN_PLAYER: Int = 1
 @OptIn(UnstableApi::class)
 class PlaybackService : MediaLibraryService() {
     /** The service's parts: P2, A1, A3 and A4 each add one line here, in merge order. */
-    private val parts: List<ServicePart> = listOf(SleepPart(), ExtrasPart(), ButtonsPart())
+    private val parts: List<ServicePart> = listOf(SleepPart(), ExtrasPart(), ButtonsPart(), ConnectPart())
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + logFailures)
     private val io = CoroutineScope(SupervisorJob() + Dispatchers.IO + logFailures)

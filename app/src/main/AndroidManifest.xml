@@ -38,6 +38,20 @@
          adds it too. -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
+    <!-- player: start when connected -->
+    <!-- "Start when connected" (player/StartWhenConnected.kt), Android 13 and later: the Companion Device Manager tells KJB
+         when a Bluetooth device the user picked in Android's picker connects (REQUEST_OBSERVE_COMPANION_DEVICE_PRESENCE),
+         and that pairing lets KJB start its mediaPlayback service from the background
+         (REQUEST_COMPANION_START_FOREGROUND_SERVICES_FROM_BACKGROUND, an exemption Android lists for companion apps). Both
+         are normal permissions, granted at install with no prompt. Not REQUEST_COMPANION_RUN_IN_BACKGROUND, which would
+         also lift battery limits, and not BLUETOOTH_CONNECT: the picker gives the device's name. -->
+    <uses-permission android:name="android.permission.REQUEST_OBSERVE_COMPANION_DEVICE_PRESENCE" />
+    <uses-permission android:name="android.permission.REQUEST_COMPANION_START_FOREGROUND_SERVICES_FROM_BACKGROUND" />
+    <!-- The pairing calls need this declared. Not required: a phone without it installs KJB and shows no row. -->
+    <uses-feature
+        android:name="android.software.companion_device_setup"
+        android:required="false" />
+
     <!-- lyrics lock: permissions -->
 
     <!-- androidx.core adds this one for dynamic receivers KJB never registers. -->
@@ -155,6 +169,19 @@
                 <action android:name="android.intent.action.MEDIA_BUTTON" />
             </intent-filter>
         </receiver>
+
+        <!-- Start when connected: bound by Android while a device paired with KJB is connected. Exported for the system,
+             and only the system holds BIND_COMPANION_DEVICE_SERVICE (a signature permission), so no app can bind it.
+             Android 13 and later (targetApi): before, KJB pairs with nothing, so Android never binds it. -->
+        <service
+            android:name=".player.ConnectService"
+            android:exported="true"
+            android:permission="android.permission.BIND_COMPANION_DEVICE_SERVICE"
+            tools:targetApi="33">
+            <intent-filter>
+                <action android:name="android.companion.CompanionDeviceService" />
+            </intent-filter>
+        </service>
 
         <!-- lyrics lock -->
 
