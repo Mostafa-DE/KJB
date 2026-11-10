@@ -297,7 +297,7 @@ fun ToneEditor(song: LedgerEntry, files: ToneFiles, player: TonePlayer, onSaved:
                 )
             },
             bottomBar = {
-                // The message docks above the save dock, so it never covers Save.
+                // The message floats above the save dock, so it never covers Save.
                 Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 12.dp)) {
                     ToastSlot(Modifier.padding(horizontal = ScreenPadding), padding = PaddingValues(bottom = 8.dp))
                     SaveDock(saving, enabled = window.lengthMs > 0, onSave = { ToneSaving.start(files, draft.request(song, lines)) }, onCancel = ToneSaving::cancel)

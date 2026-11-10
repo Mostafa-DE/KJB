@@ -364,7 +364,7 @@ fun LyrifySheet(
                 verticalArrangement = Arrangement.spacedBy(spacing),
                 content = content,
             )
-            ToastSlot(Modifier.padding(horizontal = 12.dp), padding = PaddingValues(top = 4.dp))
+            ToastSlot(Modifier.padding(horizontal = 12.dp), padding = PaddingValues(bottom = 8.dp))
             if (footer != null) {
                 Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp), content = footer)
             } else {

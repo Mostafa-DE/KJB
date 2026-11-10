@@ -6,13 +6,13 @@ import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.VisibilityThreshold
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
+import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -94,6 +94,7 @@ import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalAccessibilityManager
@@ -112,8 +113,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import app.lyrify.BuildConfig
@@ -122,8 +123,6 @@ import app.lyrify.settings.DockTab
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlin.math.max
 import kotlin.math.min
 
@@ -519,15 +518,16 @@ fun MenuRow(text: String, @DrawableRes icon: Int?, onClick: () -> Unit, selected
 data class Toast(val text: String, @DrawableRes val icon: Int? = null, val tone: Tone? = null, val action: String? = null)
 
 /**
- * KJB's messages, in place of SnackbarHostState: one at a time, in order. [show] waits until the message has gone
- * and says whether its action was tapped. A message shows in the newest [ToastSlot] on screen (the shell's above the
- * dock, else the open sheet's or full screen's above its buttons), so it never sits on a control.
+ * KJB's messages, in place of SnackbarHostState: one at a time, and the newest wins. [show] replaces the message on
+ * screen at once, as Android's Snackbar does: the replaced one's caller hears "no action" (its Undo goes away, its change
+ * stays done). [show] waits until its message has gone and says whether its action was tapped. A message floats at the
+ * newest [ToastSlot] on screen (the shell's above the Now bar and the dock, else the open sheet's or full screen's), over
+ * the content, never moving it.
  */
 @Stable
 class ToastState private constructor(private val live: Boolean) {
     constructor() : this(live = true)
 
-    private val mutex = Mutex()
     private val slots = mutableStateListOf<Any>()
 
     /** The message on screen; [dismiss] takes it off, [acted] when its action was tapped. */
@@ -542,13 +542,16 @@ class ToastState private constructor(private val live: Boolean) {
     var current: Shown? by mutableStateOf(null)
         private set
 
-    suspend fun show(toast: Toast): Boolean = if (!live) false else mutex.withLock {
+    suspend fun show(toast: Toast): Boolean {
+        if (!live) return false
         val shown = Shown(toast)
+        // The message on screen goes at once; its caller hears that its action was not tapped.
+        current?.dismiss()
         current = shown
-        try {
+        return try {
             shown.result.await()
         } finally {
-            current = null
+            if (current === shown) current = null
         }
     }
 
@@ -602,13 +605,23 @@ fun messageToast(message: Int, text: String): Toast = when (message) {
     else -> Toast(text)
 }
 
+/** Which way a message floats from its [ToastSlot]: up from it (above a dock or buttons), or down from it (under a top bar). */
+enum class ToastFloat { UP, DOWN }
+
 /**
- * Where the app's message shows in this window, docked above the window's bottom row. Each slot registers while it is
- * composed and only the newest shows the message, so one raised under an open sheet appears in the sheet. Takes no
- * space while empty; grows and shrinks with its message ([padding] round it while it shows).
+ * Where the app's message floats in this window. The slot takes no space: the message is drawn over the content, up
+ * from the slot ([ToastFloat.UP], its bottom edge at the slot, [padding] round it) or down from it, and nothing under it
+ * moves. Each slot registers while it is composed and only the newest shows the message, so one raised under an open
+ * sheet appears in the sheet. Put the slot after the content it floats over, so it draws on top. A newer message
+ * replaces the one shown at once: the old one fades, the new one rises in (the prototype's toastIn).
  */
 @Composable
-fun ToastSlot(modifier: Modifier = Modifier, padding: PaddingValues = PaddingValues(0.dp), state: ToastState = LocalToasts.current) {
+fun ToastSlot(
+    modifier: Modifier = Modifier,
+    padding: PaddingValues = PaddingValues(0.dp),
+    float: ToastFloat = ToastFloat.UP,
+    state: ToastState = LocalToasts.current,
+) {
     val key = remember { Any() }
     DisposableEffect(state) {
         state.register(key)
@@ -616,24 +629,31 @@ fun ToastSlot(modifier: Modifier = Modifier, padding: PaddingValues = PaddingVal
     }
     val shown = state.current?.takeIf { state.showsIn(key) }
     val reduced = LocalReducedMotion.current
+    val rise = with(LocalDensity.current) { TOAST_RISE.roundToPx() }
     AnimatedContent(
         targetState = shown,
         transitionSpec = {
-            // The slot grows up from its bottom edge and clips the pill while it does, so no frame of it lands on the
-            // control under the slot (the dock, a sheet's buttons, Save).
             val enter = if (reduced) {
-                fadeIn()
+                fadeIn(tween(TOAST_IN_MS))
             } else {
-                fadeIn(tween(TOAST_IN_MS)) + scaleIn(Motion.snappy, initialScale = 0.92f, transformOrigin = TransformOrigin(0.5f, 1f))
+                fadeIn(tween(TOAST_IN_MS, easing = ToastEasing)) +
+                    scaleIn(tween(TOAST_IN_MS, easing = ToastEasing), initialScale = TOAST_SCALE, transformOrigin = TransformOrigin(0.5f, if (float == ToastFloat.UP) 1f else 0f)) +
+                    slideInVertically(tween(TOAST_IN_MS, easing = ToastEasing)) { if (float == ToastFloat.UP) rise else -rise }
             }
-            (enter togetherWith fadeOut(tween(TOAST_OUT_MS))).using(SizeTransform(clip = true) { _, _ -> motion(TOAST_SIZE, reduced) })
+            (enter togetherWith fadeOut(tween(TOAST_OUT_MS))).using(SizeTransform(clip = false))
         },
-        contentAlignment = Alignment.BottomCenter,
+        contentAlignment = if (float == ToastFloat.UP) Alignment.BottomCenter else Alignment.TopCenter,
         label = "toast",
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth().floatOver(float),
     ) { message ->
         if (message != null) ToastPill(message, Modifier.padding(padding))
     }
+}
+
+/** Measures the message but reports no height, and draws it up or down from this point: it never pushes the layout. */
+private fun Modifier.floatOver(float: ToastFloat): Modifier = layout { measurable, constraints ->
+    val placeable = measurable.measure(constraints.copy(minHeight = 0, maxHeight = Constraints.Infinity))
+    layout(placeable.width, 0) { placeable.place(0, if (float == ToastFloat.UP) -placeable.height else 0) }
 }
 
 /** The ink pill: its icon, up to three lines, its action; hold it to keep it, swipe it away, TalkBack can dismiss it. */
@@ -708,6 +728,9 @@ private const val LONG_MS = 6_000L
 
 /** About two lines of a toast at the default font size. */
 private const val TWO_LINES = 48
-private const val TOAST_IN_MS = 160
-private const val TOAST_OUT_MS = 120
-private val TOAST_SIZE = spring(dampingRatio = 1f, stiffness = 300f, visibilityThreshold = IntSize.VisibilityThreshold)
+/** The prototype's toastIn: 0.28 s on its pop curve, from 16 dp below at 92% size and transparent. */
+private const val TOAST_IN_MS = Motion.ARRIVE_MS
+private val ToastEasing = Motion.Pop
+private const val TOAST_SCALE = 0.92f
+private val TOAST_RISE = 16.dp
+private const val TOAST_OUT_MS = Motion.QUICK_MS

@@ -299,8 +299,9 @@ fun PlayerView() {
                 MainRow(ui, settings, connection)
                 SecondaryRow(ui, connection, onQueue = { queueSheet = true }, onRoute = route)
             }
-            ToastSlot(Modifier.padding(horizontal = ScreenPadding, vertical = 4.dp))
         }
+        // The message floats down from under the top bar, over the cover, as the prototype's does; the controls stay clear.
+        ToastSlot(Modifier.statusBarsPadding().padding(top = PLAYER_BAR + 6.dp).padding(horizontal = 12.dp), float = ToastFloat.DOWN)
     }
     if (queueSheet) QueueSheet(onDismiss = { queueSheet = false })
     lyricsRoute?.let { PlayerLyricsSheet(it, ui) { lyricsRoute = null } }
@@ -328,7 +329,7 @@ private fun PlayerTopBar(ui: PlayerUi, onClose: () -> Unit, onRoute: (PlayerRout
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = 64.dp)
+            .heightIn(min = PLAYER_BAR)
             .padding(horizontal = 8.dp)
             .pointerInput(onSwipeDown) {
                 var dragged = 0f
@@ -610,6 +611,9 @@ private fun PlayerChips(ui: PlayerUi, extras: PlayerExtrasUi) = ExtrasChips(ui, 
 private const val FLIP_MS = 550
 private const val FADE_MS = 220
 private const val CAMERA = 16f
+
+/** The player's top bar: the chevron, "From ...", and "⋯". */
+private val PLAYER_BAR = 64.dp
 
 /** How far a swipe must travel to skip, and to close the player. */
 private val SWIPE_SKIP = 70.dp
