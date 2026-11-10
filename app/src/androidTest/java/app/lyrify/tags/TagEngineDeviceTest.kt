@@ -13,6 +13,7 @@ import android.os.Environment
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.Parcel
 import android.os.ParcelFileDescriptor
 import android.os.Process
 import android.os.ResultReceiver
@@ -141,7 +142,9 @@ class TagEngineDeviceTest {
             assertTrue("$name: the fixture has no second cover", before.pictures.isNotEmpty())
 
             val applied = edit.applyTo(before)
-            assertTrue("$name: TagLib could not write", tags.write(file, applied.fields, applied.pictures, Id3Version.V2_3))
+            // The writer's rule: ID3v2.3, except a v2.4 tag with frames v2.3 would drop or convert (the year's TDRC).
+            val version = SafeWriter.id3Version(before, Id3Version.V2_3)
+            assertTrue("$name: TagLib could not write", tags.write(file, applied.fields, applied.pictures, version))
             val after = checkNotNull(tags.read(file))
 
             applied.changes.forEach { assertEquals("$name ${it.key}", it.new, after.fields[it.key]) }
@@ -156,8 +159,7 @@ class TagEngineDeviceTest {
 
             val written = file.readBytes()
             if (mp3) {
-                // ID3v2.3, except a v2.4 tag with frames v2.3 would drop or convert (the year's TDRC) stays v2.4.
-                assertEquals("$name: the ID3v2 version", original[3].toInt(), written[3].toInt())
+                assertEquals("$name: the ID3v2 version", version.number, written[3].toInt())
                 val v1 = original.takeLast(128).take(3) == "TAG".toByteArray().toList()
                 if (v1) {
                     assertArrayEquals("$name: the ID3v1 tag is left as it is", original.copyOfRange(original.size - 128, original.size), written.copyOfRange(written.size - 128, written.size))
@@ -334,7 +336,8 @@ class TagEngineDeviceTest {
             val file = fixture(fixtureName)
             val name = label(index, file)
             val before = checkNotNull(tags.read(file))
-            val apeBefore = if (fixtureName.contains("ape")) apeItems(file.readBytes()) else null
+            // The fixtures with an APE tag ("paper" holds "ape" too).
+            val apeBefore = if (fixtureName.endsWith("-ape.mp3")) apeItems(file.readBytes()) else null
             val (writer, _) = writer()
 
             val result = runBlocking { writer.write(listOf(WriteJob(SongTarget(file.path, 41), edit)), EditKind.SONG, "Tin Roof") } as BatchResult.Done
@@ -440,11 +443,17 @@ class TagEngineDeviceTest {
             assertEquals(name, SongOutcome.LEFT_AS_IT_WAS, failed.songs.single().outcome)
             assertArrayEquals(name, original, file.readBytes())
 
+            // A rescan that names nothing: the song read back as written, so nothing is put back. It stays as written, and the
+            // start-up recovery settles it (keeps it, saves its History, lets its backup go).
             scanned = null
-            val unscanned = runBlocking { writer().first.write(listOf(WriteJob(song, edit)), EditKind.SONG, "Tin Roof") } as BatchResult.Done
-            assertEquals(name, SongOutcome.LEFT_AS_IT_WAS, unscanned.songs.single().outcome)
-            assertArrayEquals(name, original, file.readBytes())
+            val (unscannedWriter, recovery) = writer()
+            val unscanned = runBlocking { unscannedWriter.write(listOf(WriteJob(song, edit)), EditKind.SONG, "Tin Roof") } as BatchResult.Done
+            assertEquals(name, SongOutcome.RECOVERY_PENDING, unscanned.songs.single().outcome)
+            val written = file.readBytes()
+            assertEquals(name, "Tin Roof 𝄞", tags.read(file)?.fields?.get("TITLE")?.single())
             scanned = 41
+            assertEquals(name, Recovered(settled = 1), runBlocking { recovery.recover() })
+            assertArrayEquals(name, written, file.readBytes())
         }
     }
 
@@ -571,7 +580,7 @@ class TagEngineDeviceTest {
             .putExtra(TagKillService.EXTRA_ID, id)
             .putExtra(TagKillService.EXTRA_ROOT, killRoot)
             .putExtra(TagKillService.EXTRA_BYTES, bytes)
-            .putExtra(TagKillService.EXTRA_REPLY, reply)
+            .putExtra(TagKillService.EXTRA_REPLY, plain(reply))
         assertTrue(context.bindService(intent, connection, Context.BIND_AUTO_CREATE))
         try {
             assertTrue("the helper did not reach the middle of the write", replied.await(60, TimeUnit.SECONDS))
@@ -583,6 +592,21 @@ class TagEngineDeviceTest {
             assertFalse("the helper is still alive", File("/proc/$pid").exists())
         } finally {
             runCatching { context.unbindService(connection) }
+        }
+    }
+
+    /**
+     * [receiver] as a plain ResultReceiver, its calls still reaching [receiver]: the helper process loads only the app's
+     * classes, so a subclass from this test can't be unparcelled there (ClassNotFoundException, and the helper dies).
+     */
+    private fun plain(receiver: ResultReceiver): ResultReceiver {
+        val parcel = Parcel.obtain()
+        try {
+            receiver.writeToParcel(parcel, 0)
+            parcel.setDataPosition(0)
+            return ResultReceiver.CREATOR.createFromParcel(parcel)
+        } finally {
+            parcel.recycle()
         }
     }
 
@@ -715,8 +739,17 @@ class TagEngineDeviceTest {
                     return OpenSong(open.channel, reader = { buffer, position ->
                         open.read(buffer, position).also {
                             if (replacement == null) {
+                                val held = open.fileId()
                                 context.contentResolver.delete(ContentUris.withAppendedId(MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), id), null, null)
                                 replacement = makeProbe(foreign, name)
+                                // What this process sees right after MediaStore replaced the song: numbers only.
+                                val atPath = Os.lstat(path)
+                                Log.i(
+                                    LOG_TAG,
+                                    "tags device test: after the replacement, the path shows the held file: ${phone.fileId(path) == held}, " +
+                                        "its size ${atPath.st_size} (new file ${foreign.size}), the descriptor's size ${open.size()}, " +
+                                        "MediaStore's row changed: ${phone.idOf(path) != id}",
+                                )
                             }
                         }
                     }, sizer = open::size, identify = open::fileId)
@@ -735,7 +768,8 @@ class TagEngineDeviceTest {
                 val made = checkNotNull(replacement) { "the release never read the probe" }
                 assumeTrue("MediaStore put the new file under another name", pathOf(made) == path)
                 assertEquals(SongOutcome.SET_ASIDE, second.songs.single().outcome)
-                assertArrayEquals(foreign, File(path).readBytes())
+                // Read through MediaStore: this process's view of the path may still be the old file's for a while.
+                assertArrayEquals(foreign, context.contentResolver.openInputStream(made)!!.use { it.readBytes() })
                 assertTrue("the backup is gone", dirs.backups.listFiles().orEmpty().any { it.readBytes().contentEquals(before) })
             } finally {
                 replacement?.let { context.contentResolver.delete(it, null, null) }
