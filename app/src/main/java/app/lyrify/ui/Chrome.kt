@@ -466,7 +466,7 @@ fun LyrifySearchField(
         placeholder = placeholder,
         shape = CircleShape,
         ring = 1.5.dp,
-        leading = { Icon(painterResource(R.drawable.ic_search), contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+        leading = { Icon(painterResource(R.drawable.ic_search), contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(22.dp)) },
         trailing = trailing,
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
         keyboardActions = KeyboardActions(onSearch = { onSearch() }),
@@ -502,7 +502,7 @@ fun MenuRow(text: String, @DrawableRes icon: Int?, onClick: () -> Unit, selected
     }
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
         modifier = Modifier
             .padding(horizontal = 6.dp)
             .fillMaxWidth()
@@ -513,7 +513,7 @@ fun MenuRow(text: String, @DrawableRes icon: Int?, onClick: () -> Unit, selected
             .then(if (selected) Modifier.semantics { this.selected = true } else Modifier)
             .padding(horizontal = 12.dp),
     ) {
-        if (icon != null) Icon(painterResource(icon), contentDescription = null, tint = content, modifier = Modifier.size(20.dp))
+        if (icon != null) Icon(painterResource(icon), contentDescription = null, tint = if (destructive || selected) content else colors.onSurfaceVariant, modifier = Modifier.size(20.dp))
         Text(text, style = MaterialTheme.typography.bodyLarge, color = content, modifier = Modifier.weight(1f))
         if (selected) Icon(painterResource(R.drawable.ic_check), contentDescription = null, tint = content, modifier = Modifier.size(20.dp))
     }

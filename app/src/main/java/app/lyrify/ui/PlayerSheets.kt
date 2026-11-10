@@ -294,7 +294,7 @@ private fun SleepSheet(extras: PlayerExtrasUi, ui: PlayerUi) {
     LyrifySheet(onDismiss = extras::close, footer = footer) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Icon(painterResource(R.drawable.ic_snooze), contentDescription = null, tint = LocalBrandColors.current.highlight, modifier = Modifier.size(26.dp))
-            Text(stringResource(R.string.sleep_title), style = MaterialTheme.typography.headlineSmall, modifier = Modifier.semantics { heading() })
+            Text(stringResource(R.string.sleep_title), style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { heading() })
         }
         if (timer != null) SleepReadout(timer, ui)
         Text(stringResource(R.string.sleep_sentence), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -358,7 +358,7 @@ private fun CustomSleepSheet(extras: PlayerExtrasUi, ui: PlayerUi, songs: Boolea
         onDismiss = extras::close,
         footer = { LyrifyButton(stringResource(R.string.sleep_start), start, Modifier.fillMaxWidth(), icon = R.drawable.ic_snooze) },
     ) {
-        Text(stringResource(if (songs) R.string.sleep_custom_songs else R.string.sleep_custom_time), style = MaterialTheme.typography.headlineSmall, modifier = Modifier.semantics { heading() })
+        Text(stringResource(if (songs) R.string.sleep_custom_songs else R.string.sleep_custom_time), style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { heading() })
         Text(
             stringResource(if (songs) R.string.sleep_custom_songs_sentence else R.string.sleep_custom_time_sentence),
             style = MaterialTheme.typography.bodyMedium,
@@ -420,7 +420,7 @@ private fun SpeedSheet(extras: PlayerExtrasUi, ui: PlayerUi) {
             }
         },
     ) {
-        Text(stringResource(R.string.speed_title), style = MaterialTheme.typography.headlineSmall, modifier = Modifier.semantics { heading() })
+        Text(stringResource(R.string.speed_title), style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { heading() })
         Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(stringResource(R.string.speed_value, speedNumber(shown.speed)), style = MaterialTheme.typography.displaySmall.tabular().copy(fontWeight = FontWeight.SemiBold))
             val pitch = when {

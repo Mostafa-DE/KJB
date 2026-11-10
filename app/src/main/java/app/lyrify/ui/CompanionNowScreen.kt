@@ -261,10 +261,10 @@ private fun NowHero(
                     val live = Modifier.semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite }
                     when (shown) {
                         NowPill.Idle -> Unit
-                        is NowPill.Busy -> StatusPill(stringResource(shown.label), tone = null, modifier = live, leading = { BrandGlyph(width = 20.dp, sweeping = true) })
-                        NowPill.NoFile -> StatusPill(stringResource(NowPill.NoFile.label), tone = null, modifier = live, icon = NowPill.NoFile.icon, onClick = { why = true })
-                        NowPill.Unreadable -> StatusPill(stringResource(NowPill.Unreadable.label), tone = null, modifier = live, icon = NowPill.Unreadable.icon)
-                        is NowPill.Done -> StatusPill(shown.style.status, live, onClick = onPill)
+                        is NowPill.Busy -> StatusPill(stringResource(shown.label), tone = null, modifier = live, large = true, leading = { BrandGlyph(width = 20.dp, sweeping = true) })
+                        NowPill.NoFile -> StatusPill(stringResource(NowPill.NoFile.label), tone = null, modifier = live, large = true, icon = NowPill.NoFile.icon, onClick = { why = true })
+                        NowPill.Unreadable -> StatusPill(stringResource(NowPill.Unreadable.label), tone = null, modifier = live, large = true, icon = NowPill.Unreadable.icon)
+                        is NowPill.Done -> StatusPill(shown.style.status, live, onClick = onPill, large = true)
                     }
                 }
                 if (canRemove) {

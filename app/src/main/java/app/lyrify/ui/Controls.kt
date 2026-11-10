@@ -135,7 +135,7 @@ fun LyrifyButton(
             .indication(source, PressIndication(CircleShape, 0.96f))
             .background(fill, CircleShape)
             .heightIn(min = if (compact) 40.dp else 52.dp)
-            .padding(horizontal = if (compact && kind == ButtonKind.GHOST) 12.dp else 20.dp, vertical = 6.dp),
+            .padding(horizontal = if (kind == ButtonKind.GHOST) 12.dp else 16.dp, vertical = 6.dp),
     ) {
         if (icon != null) Icon(painterResource(icon), contentDescription = null, tint = content, modifier = Modifier.padding(end = 8.dp).size(18.dp))
         Text(
@@ -200,7 +200,7 @@ fun LyrifyChip(
     }
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
         modifier = modifier
             .then(action)
             .minimumInteractiveComponentSize()
@@ -208,7 +208,7 @@ fun LyrifyChip(
             .background(fill, CircleShape)
             .then(if (selected) Modifier.border(1.5.dp, toneColors?.accent ?: brand.highlight, CircleShape) else Modifier)
             .heightIn(min = 36.dp)
-            .padding(start = if (icon != null) 10.dp else 14.dp, end = if (count != null || chevron) 6.dp else 14.dp),
+            .padding(start = if (icon != null) 11.dp else 14.dp, end = if (count != null || chevron) 6.dp else 14.dp),
     ) {
         CompositionLocalProvider(LocalContentColor provides contentColor, LocalTextStyle provides MaterialTheme.typography.labelLarge) {
             if (icon != null) Icon(painterResource(icon), contentDescription = null, tint = iconTint.takeOrElse { contentColor }, modifier = Modifier.size(18.dp))
