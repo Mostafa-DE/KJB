@@ -39,10 +39,12 @@ class ReplayGainTest {
     }
 
     @Test
-    fun `FLAC and Ogg Vorbis comments give gains and peaks, also with a comma for the decimal point`() {
+    fun `FLAC and Ogg Vorbis comments give gains and peaks`() {
+        // ReplayGain 2.0 writes a point for the decimal mark and has a robust player drop any other formatting error, so a
+        // comma ("+2,40 dB") counts as no tag: LevellingTagsTest checks that.
         val read = tags(
-            VorbisComment("REPLAYGAIN_TRACK_GAIN", "+2,40 dB"),
-            VorbisComment("REPLAYGAIN_TRACK_PEAK", "0,5"),
+            VorbisComment("REPLAYGAIN_TRACK_GAIN", "+2.40 dB"),
+            VorbisComment("REPLAYGAIN_TRACK_PEAK", "0.5"),
             VorbisComment("REPLAYGAIN_ALBUM_GAIN", "-1.10 dB"),
         )
         assertEquals(ReplayGainTags(trackGainDb = 2.4f, trackPeak = 0.5f, albumGainDb = -1.1f), read)
