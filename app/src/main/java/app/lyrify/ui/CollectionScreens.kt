@@ -389,7 +389,7 @@ private fun PlaylistPage(ui: LibraryUi, library: Library, id: String) {
             ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll, sort = stringResource(if (byTitle) R.string.lib_sort_title else R.string.lib_your_order), onSort = { sorting = true })
         }
         if (songs.isEmpty()) item(key = "empty") { EmptyState(EmptyArt.Glyph, stringResource(R.string.songs_empty_title), text = stringResource(R.string.lib_playlist_empty)) }
-        songRows(list, place = { at -> SheetPlace.Playlist(id, entries[at].first) })
+        songRows(list, place = { at -> SheetPlace.Playlist(id, entries[at].first) }, repeats = true)
     }
     if (sorting) OrderSheet(R.string.lib_your_order, byTitle, { byTitle = it }) { sorting = false }
     if (renaming) {

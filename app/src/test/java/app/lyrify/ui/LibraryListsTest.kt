@@ -7,6 +7,7 @@ import app.lyrify.settings.LibrarySettings
 import app.lyrify.settings.LyricsFilter
 import app.lyrify.settings.SortSongs
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.LocalDateTime
 import java.time.ZoneId
@@ -97,6 +98,18 @@ class LibraryListsTest {
         assertEquals(HeaderFit(true, true, ChipFit.NONE), fit(290, sort = null))
         assertEquals(HeaderFit(false, true, ChipFit.NONE), fit(238, sort = null))
         assertEquals(HeaderFit(false, false, ChipFit.NONE), fit(237, sort = null))
+    }
+
+    @Test
+    fun `song rows are keyed by path, with their place only where a song can be there twice`() {
+        fun keys(list: List<Song>, repeats: Boolean = false) = list.mapIndexed { at, song -> songRowKey(song, at, repeats) }
+
+        // Another sort, or a song added at the top, leaves every row's key as it was.
+        assertEquals(keys(songs).toSet(), keys(songs.reversed()).toSet())
+        assertTrue(keys(listOf(song("Music/Loose/New.mp3")) + songs).containsAll(keys(songs)))
+        // A playlist with a song twice: every key is still its own.
+        val twice = listOf(lantern, bell, lantern)
+        assertEquals(3, keys(twice, repeats = true).toSet().size)
     }
 
     private companion object {

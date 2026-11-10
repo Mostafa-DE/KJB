@@ -190,7 +190,8 @@ fun SongListFrame(
 /**
  * The rows of [shown], the page's songs from [offset] on (all of them, a heading's, or a folder's own songs, which come
  * first), each playing [PageSongs.songs] from where it is in them. [place] says where the song sheet opens (a playlist:
- * the song's place in it); [note] adds a word after the artist ("12 plays").
+ * the song's place in it); [note] adds a word after the artist ("12 plays"); [repeats]: the list may hold a song twice
+ * (a playlist).
  */
 fun LazyListScope.songRows(
     list: PageSongs,
@@ -198,8 +199,9 @@ fun LazyListScope.songRows(
     offset: Int = 0,
     place: (Int) -> SheetPlace = { SheetPlace.List },
     note: ((Song) -> String?)? = null,
+    repeats: Boolean = false,
 ) {
-    itemsIndexed(shown, key = { at, song -> "song ${offset + at} ${song.path}" }) { at, song ->
+    itemsIndexed(shown, key = { at, song -> songRowKey(song, offset + at, repeats) }) { at, song ->
         val index = offset + at
         SongRow(
             song = song,
@@ -214,6 +216,12 @@ fun LazyListScope.songRows(
         )
     }
 }
+
+/**
+ * A song row's key: its path, so a sort or a song added at the top moves rows instead of making each one new; with its
+ * place [at] too in a list that may hold a song twice ([repeats]).
+ */
+fun songRowKey(song: Song, at: Int, repeats: Boolean): String = if (repeats) "song ${song.path}#$at" else "song ${song.path}"
 
 // The list header
 
