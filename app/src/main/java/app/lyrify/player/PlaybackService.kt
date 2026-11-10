@@ -109,6 +109,7 @@ class PlaybackService : MediaLibraryService() {
     private lateinit var library: StateFlow<Library?>
     private lateinit var playlists: StateFlow<List<Playlist>>
     private val playing = MutableStateFlow(false)
+    private lateinit var thumbnails: ThumbnailLoader
 
     /** Songs that could not be played since one last played: the whole queue failing stops the player. */
     private var failedInARow = 0
@@ -125,10 +126,11 @@ class PlaybackService : MediaLibraryService() {
         player = LyrifyPlayer(mainLooper, engine, core, skips = ::skips, sync = ::sync, beforeSeek = ::heardSoFar)
         engine.addListener(Follower())
         core.follow { engine.loaded.getOrNull(engine.index)?.let { PlayerAt(it, engine.positionMs) } }
+        thumbnails = ThumbnailLoader(this)
         val built = MediaLibrarySession.Builder(this, player, Callback())
             // A tap on the notification or the lock screen's card opens the player, over the tab the app was on.
             .setSessionActivity(PendingIntent.getActivity(this, OPEN_PLAYER, openPlayer(), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
-            .setBitmapLoader(ThumbnailLoader(this))
+            .setBitmapLoader(thumbnails)
             .build()
         session = built
         setMediaNotificationProvider(
@@ -175,6 +177,8 @@ class PlaybackService : MediaLibraryService() {
         parts.forEach { it.stop() }
         session?.release()
         session = null
+        // Its thread would outlive the service; a cover still loading fails, and the notification is going anyway.
+        thumbnails.shutdown()
         engine.release()
         player.release()
         scope.cancel()
@@ -430,6 +434,9 @@ private class ThumbnailLoader(private val context: Context) : BitmapLoader {
         // No embedded cover: loadThumbnail throws, and the future fails.
         return io.submit<Bitmap> { context.contentResolver.loadThumbnail(uri, Size(COVER_PX, COVER_PX), null) }
     }
+
+    /** Lets the loading thread go, with the service. */
+    fun shutdown() = io.shutdown()
 
     private companion object {
         /** The notification and the lock screen show covers at most this size. */
