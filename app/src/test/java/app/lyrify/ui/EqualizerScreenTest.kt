@@ -1,5 +1,8 @@
 package app.lyrify.ui
 
+import androidx.compose.animation.core.SnapSpec
+import androidx.compose.animation.core.TweenSpec
+import androidx.compose.ui.geometry.Offset
 import app.lyrify.audio.BuiltInPreset
 import app.lyrify.audio.EqProfile
 import app.lyrify.audio.EqProfiles
@@ -170,5 +173,150 @@ class EqualizerScreenTest {
         assertFalse(profiles.on(buds, EqAction.Mono(false)).profile(buds).sound.mono)
         assertTrue(profiles.on(OutputKey.SPEAKER, EqAction.Mono(true)).profile(OutputKey.SPEAKER).sound.mono)
         assertEquals(FLAT_BANDS.size, profiles.on(buds, EqAction.Mono(false)).profile(buds).sound.bandsDb.size)
+    }
+
+    // The look (D1): the chips, the Outputs sheet, the bands panel and its curve
+
+    @Test
+    fun `the chips are the 11 presets, the user's own, then Save preset, with the one in use selected`() {
+        val chips = eqChips(eqScreenState(profiles, buds))
+        val presets = BuiltInPreset.entries.map { EqChip.Preset(PresetChoice.BuiltIn(it)) } +
+            EqChip.Preset(PresetChoice.Own("Late Night")) + EqChip.Preset(PresetChoice.Own("Bright Morning"))
+        assertEquals(presets + EqChip.Save, chips)
+        assertEquals(11, selectedChip(eqScreenState(profiles, buds)))
+        assertEquals(0, selectedChip(eqScreenState(profiles, OutputKey(OutputKind.WIRED))))
+    }
+
+    @Test
+    fun `bands moved by hand add Custom first, selected`() {
+        val moved = eqScreenState(profiles.on(buds, EqAction.Band(4, 2f)), buds)
+        val chips = eqChips(moved)
+        assertEquals(EqChip.Custom, chips.first())
+        assertEquals(EqChip.Save, chips.last())
+        assertEquals(1 + 13 + 1, chips.size)
+        assertEquals(0, selectedChip(moved))
+    }
+
+    @Test
+    fun `the selected chip scrolls just into view, 16 from the row's edges`() {
+        assertEquals(0, intoView(start = 20, end = 100, viewStart = -16, viewEnd = 344, margin = 16))
+        assertEquals(0, intoView(start = 0, end = 328, viewStart = -16, viewEnd = 344, margin = 16))
+        assertEquals(-30, intoView(start = -30, end = 50, viewStart = -16, viewEnd = 344, margin = 16))
+        assertEquals(72, intoView(start = 300, end = 400, viewStart = -16, viewEnd = 344, margin = 16))
+        // Wider than the row: its start shows.
+        assertEquals(-10, intoView(start = -10, end = 600, viewStart = -16, viewEnd = 344, margin = 16))
+    }
+
+    @Test
+    fun `the Outputs sheet lists the speaker, every output with a profile and the one playing, by kind then name`() {
+        val rows = eqOutputRows(profiles, buds)
+        assertEquals(listOf(EqOutputRow(OutputKey.SPEAKER, speakerOn, playing = false), EqOutputRow(buds, tuned, playing = true)), rows)
+        val wired = OutputKey(OutputKind.WIRED)
+        assertEquals(
+            listOf(EqOutputRow(OutputKey.SPEAKER, speakerOn, false), EqOutputRow(wired, EqProfile(), true), EqOutputRow(buds, tuned, false)),
+            eqOutputRows(profiles, wired),
+        )
+        val car = OutputKey(OutputKind.BLUETOOTH, "car stereo")
+        val budsOnly = EqProfiles(profiles = mapOf(buds to tuned, car to speakerOn))
+        assertEquals(
+            listOf(EqOutputRow(OutputKey.SPEAKER, null, false), EqOutputRow(car, speakerOn, false), EqOutputRow(buds, tuned, true)),
+            eqOutputRows(budsOnly, buds),
+        )
+        assertEquals(listOf(EqOutputRow(OutputKey.SPEAKER, EqProfile(), true)), eqOutputRows(EqProfiles(), OutputKey.SPEAKER))
+    }
+
+    @Test
+    fun `More's line shows the balance and mono while it is closed, nothing when both are as new`() {
+        val balance = { value: Float -> if (value < 0) "Left" else "Right" }
+        assertEquals("Left · Mono", moreLine(tuned.sound, balance, "Mono"))
+        assertEquals("Mono", moreLine(EqSound(mono = true), balance, "Mono"))
+        assertEquals("Right", moreLine(EqSound(balance = 0.5f), balance, "Mono"))
+        assertNull(moreLine(EqSound(), balance, "Mono"))
+    }
+
+    @Test
+    fun `bass boost reads as a share of its 12 dB, the balance's centre step holds under a finger`() {
+        assertEquals(0, bassPercent(0f))
+        assertEquals(50, bassPercent(6f))
+        assertEquals(21, bassPercent(2.5f))
+        assertEquals(100, bassPercent(12f))
+        assertEquals(0f, balanceHeld(0.07f))
+        assertEquals(0f, balanceHeld(-0.05f))
+        assertEquals(0.08f, balanceHeld(0.08f))
+        assertEquals(-1f, balanceHeld(-1f))
+    }
+
+    @Test
+    fun `a gain's height in the plot, 44 under its top for +12, 1 dB every 8, and back`() {
+        val plot = EqPlot(width = 330f)
+        assertEquals(252f, plot.height)
+        assertEquals(44f, plot.y(12f))
+        assertEquals(140f, plot.y(0f))
+        assertEquals(236f, plot.y(-12f))
+        assertEquals(92f, plot.y(6f))
+        assertEquals(6f, plot.db(92f))
+        assertEquals(12f, plot.db(0f))
+        assertEquals(-12f, plot.db(250f))
+        assertEquals(16.5f, plot.x(0))
+        assertEquals(313.5f, plot.x(9))
+        // In px on a 2.5x screen.
+        assertEquals(350f, EqPlot(width = 825f, unit = 2.5f).y(0f))
+    }
+
+    @Test
+    fun `the scale's labels sit level with dB, +12, 0 and -12`() {
+        assertEquals(listOf(16f, 44f, 140f, 236f), EqPlot(width = 330f).scale)
+    }
+
+    @Test
+    fun `the curve runs flat from the plot's start through every knob's centre to its end`() {
+        val plot = EqPlot(width = 1000f)
+        val bands = listOf(6f, 5f, 4f, 2f, 0f, 0f, 0f, 0f, 0f, 0f)
+        val curve = eqCurve(bands, plot)
+        assertEquals(Offset(0f, 92f), curve.start)
+        assertEquals(bands.indices.map { Offset(plot.x(it), plot.y(bands[it])) }, curve.knots)
+        assertEquals(9, curve.steps.size)
+        assertEquals(curve.knots.drop(1), curve.steps.map { it.to })
+        assertEquals(Offset(1000f, 140f), curve.end)
+    }
+
+    @Test
+    fun `the curve's handles are the prototype's monotone ones`() {
+        val curve = eqCurve(listOf(6f, 5f, 4f, 2f, 0f, 0f, 0f, 0f, 0f, 0f), EqPlot(width = 1000f))
+        assertClose(Offset(83.333f, 94.667f), curve.steps[0].c1)
+        assertClose(Offset(116.667f, 97.333f), curve.steps[0].c2)
+        assertClose(Offset(250f - 33.333f, 108f - 4f), curve.steps[1].c2)
+        assertClose(Offset(383.333f, 129.333f), curve.steps[3].c1)
+        assertClose(Offset(416.667f, 140f), curve.steps[3].c2)
+        // Flat stays flat.
+        assertTrue(eqCurve(List(10) { 0f }, EqPlot(width = 400f)).steps.all { it.c1.y == 140f && it.c2.y == 140f && it.to.y == 140f })
+    }
+
+    @Test
+    fun `the curve never bulges past a knob, however steep`() {
+        val plot = EqPlot(width = 330f)
+        listOf(BuiltInPreset.SMALL_SPEAKERS.bandsDb, listOf(12f, -12f, 12f, -12f, 12f, 12f, 0f, -12f, -11.5f, 12f)).forEach { bands ->
+            val curve = eqCurve(bands, plot)
+            assertEquals(9, curve.steps.size)
+            curve.steps.forEachIndexed { i, step ->
+                val low = minOf(curve.knots[i].y, step.to.y) - 1e-3f
+                val high = maxOf(curve.knots[i].y, step.to.y) + 1e-3f
+                assertTrue("step $i of $bands", step.c1.y in low..high && step.c2.y in low..high)
+            }
+        }
+    }
+
+    @Test
+    fun `knobs glide 240 ms, ease-out cubic, to a preset, and land at once under a finger or with reduced motion`() {
+        val glide = glideSpec(dragging = false, reduced = false) as TweenSpec<Float>
+        assertEquals(240, glide.durationMillis)
+        assertEquals(Motion.Glide, glide.easing)
+        assertTrue(glideSpec(dragging = true, reduced = false) is SnapSpec<Float>)
+        assertTrue(glideSpec(dragging = false, reduced = true) is SnapSpec<Float>)
+    }
+
+    private fun assertClose(expected: Offset, actual: Offset) {
+        assertEquals("x of $actual", expected.x, actual.x, 1e-2f)
+        assertEquals("y of $actual", expected.y, actual.y, 1e-2f)
     }
 }

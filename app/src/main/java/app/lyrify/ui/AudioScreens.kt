@@ -6,6 +6,9 @@ import android.media.AudioManager
 import android.media.audiofx.AudioEffect
 import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
+import androidx.compose.animation.core.AnimationSpec
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -50,6 +53,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
@@ -82,6 +86,7 @@ import app.lyrify.player.PlayerGraph
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.roundToInt
+import kotlin.math.sqrt
 
 // The equalizer (A1): from the top, its switch with the output playing ("Now: Galaxy Buds"), the 10 bands, the presets
 // and the user's own, Bass boost and Pre-amp, "More" with Balance and Mono, and the phone's own sound effects. It shows
@@ -232,6 +237,144 @@ private const val MINUS: String = "−"
  * session 0 would be every app's output.
  */
 fun effectsSession(audioSessionId: Int): Int? = audioSessionId.takeIf { it > 0 }
+
+// The look (D1, the prototype's equalizer page): the chips, the Outputs sheet, the bands panel and its curve. Pure too.
+
+/** A chip of the presets row: "Custom" while the bands were moved by hand, a preset, or "Save preset". */
+sealed interface EqChip {
+    data object Custom : EqChip
+
+    data class Preset(val choice: PresetChoice) : EqChip
+
+    data object Save : EqChip
+}
+
+/** The presets row, in its order: Custom (only while no preset is in use), the 11 built-in presets, the user's own, Save preset. */
+fun eqChips(state: EqScreenState): List<EqChip> =
+    listOfNotNull<EqChip>(EqChip.Custom.takeIf { state.selected == null }) + state.presets.map(EqChip::Preset) + EqChip.Save
+
+/** Where the selected chip is in [eqChips]: the preset in use, else Custom. */
+fun selectedChip(state: EqScreenState): Int = eqChips(state).indexOf(state.selected?.let(EqChip::Preset) ?: EqChip.Custom)
+
+/**
+ * How far to scroll a row so the item from [start] to [end] shows whole, [margin] in from the visible part's edges
+ * ([viewStart] to [viewEnd]): as little as it takes, its start first when it is too wide. 0 when it already shows.
+ */
+fun intoView(start: Int, end: Int, viewStart: Int, viewEnd: Int, margin: Int): Int = when {
+    start - margin < viewStart -> start - margin - viewStart
+    end + margin > viewEnd -> end + margin - viewEnd
+    else -> 0
+}
+
+/** A row of the Outputs sheet: an output, its profile (null: never used yet), and whether music plays on it now. */
+@Immutable
+data class EqOutputRow(val output: OutputKey, val profile: EqProfile?, val playing: Boolean)
+
+/**
+ * The Outputs sheet: the phone's speaker, every output with a profile and the one playing, by kind then by name. The one
+ * playing shows the profile the screen shows, a new one (off) until it is changed.
+ */
+fun eqOutputRows(profiles: EqProfiles, playing: OutputKey): List<EqOutputRow> =
+    (profiles.profiles.keys + OutputKey.SPEAKER + playing)
+        .sortedWith(compareBy<OutputKey> { it.kind.ordinal }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.name.orEmpty() })
+        .map { output -> EqOutputRow(output, profiles.profiles[output] ?: EqProfile().takeIf { output == playing }, output == playing) }
+
+/** "More"'s line while it is closed: the balance ([balance] writes it) and [mono], those not as new; null when both are. */
+fun moreLine(sound: EqSound, balance: (Float) -> String, mono: String): String? =
+    listOfNotNull(sound.balance.takeIf { it != 0f }?.let(balance), mono.takeIf { sound.mono }).joinToString(" · ").ifEmpty { null }
+
+/** Bass boost as the screen writes it: its share of the most it can add, in percent. */
+fun bassPercent(db: Float): Int = (db / EqSound.BASS_BOOST_DB * 100).roundToInt()
+
+/** Balance under a finger: the step either side of centre lands on centre (the prototype's detent). */
+fun balanceHeld(value: Float): Float = if (abs(value) < BALANCE_DETENT) 0f else value
+
+private const val BALANCE_DETENT: Float = 1.5f / BALANCE_STEPS
+
+/**
+ * The bands panel's plot (.eqplot), [width] wide, in px where [unit] is one dp: 252 dp tall, +12 dB 44 dp under its top
+ * (room for a knob's gain above it), then 1 dB every 8 dp down to −12 dB. Each band is the middle of its tenth.
+ */
+@Immutable
+data class EqPlot(val width: Float, val unit: Float = 1f) {
+    val height: Float get() = PLOT_DP * unit
+
+    /** Where +12 dB is. */
+    val top: Float get() = PLOT_TOP_DP * unit
+
+    /** From +12 dB down to −12 dB. */
+    val track: Float get() = TRACK_DP * unit
+
+    fun x(band: Int, bands: Int = EQ_BANDS_HZ.size): Float = (band + 0.5f) * width / bands
+
+    fun y(db: Float): Float = top + (EqSound.BAND_DB - db) / (2 * EqSound.BAND_DB) * track
+
+    /** The gain at the height [y], held to ±12 dB. */
+    fun db(y: Float): Float = (EqSound.BAND_DB - (y - top) / track * 2 * EqSound.BAND_DB).coerceIn(-EqSound.BAND_DB, EqSound.BAND_DB)
+
+    /** The middles of the scale's labels: "dB", then +12, 0 and −12 level with their gains. */
+    val scale: List<Float> get() = listOf(UNIT_LABEL_DP * unit, y(EqSound.BAND_DB), y(0f), y(-EqSound.BAND_DB))
+}
+
+/** A cubic from the point before it, pulled toward [c1] then [c2], to [to]. */
+@Immutable
+data class CurveStep(val c1: Offset, val c2: Offset, val to: Offset)
+
+/** The response curve: from [start] (the plot's left edge) straight to the first of the [knots], [steps] through the rest, straight on to [end]. */
+@Immutable
+data class EqCurve(val start: Offset, val knots: List<Offset>, val steps: List<CurveStep>, val end: Offset)
+
+/**
+ * The curve through the knobs' centres of [bandsDb] in [plot], level from the plot's edges to the first and the last:
+ * monotone cubics (Fritsch and Carlson, the prototype's eqPath), so it never bulges past a knob.
+ */
+fun eqCurve(bandsDb: List<Float>, plot: EqPlot): EqCurve {
+    val n = bandsDb.size
+    val h = plot.width / n
+    val knots = bandsDb.mapIndexed { i, db -> Offset(plot.x(i, n), plot.y(db)) }
+    val slopes = List(n - 1) { (knots[it + 1].y - knots[it].y) / h }
+    val tangents = FloatArray(n) { i ->
+        when {
+            n == 1 -> 0f
+            i == 0 -> slopes[0]
+            i == n - 1 -> slopes[n - 2]
+            slopes[i - 1] * slopes[i] <= 0f -> 0f
+            else -> (slopes[i - 1] + slopes[i]) / 2
+        }
+    }
+    slopes.forEachIndexed { i, d ->
+        if (d == 0f) {
+            tangents[i] = 0f
+            tangents[i + 1] = 0f
+        } else {
+            val a = tangents[i] / d
+            val b = tangents[i + 1] / d
+            val s = a * a + b * b
+            if (s > 9f) {
+                val t = 3f / sqrt(s)
+                tangents[i] = t * a * d
+                tangents[i + 1] = t * b * d
+            }
+        }
+    }
+    val steps = List(n - 1) { i ->
+        CurveStep(
+            Offset(knots[i].x + h / 3, knots[i].y + tangents[i] * h / 3),
+            Offset(knots[i + 1].x - h / 3, knots[i + 1].y - tangents[i + 1] * h / 3),
+            knots[i + 1],
+        )
+    }
+    return EqCurve(Offset(0f, knots.first().y), knots, steps, Offset(plot.width, knots.last().y))
+}
+
+/** How the knobs and the curve reach new gains: a 240 ms ease-out glide (a preset picked); at once under a finger or with reduced motion. */
+fun glideSpec(dragging: Boolean, reduced: Boolean): AnimationSpec<Float> = if (dragging || reduced) snap() else tween(GLIDE_MS, easing = Motion.Glide)
+
+private const val GLIDE_MS = 240
+private const val PLOT_DP = 252f
+private const val PLOT_TOP_DP = 44f
+private const val TRACK_DP = 192f
+private const val UNIT_LABEL_DP = 16f
 
 // The screen
 
