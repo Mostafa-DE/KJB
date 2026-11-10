@@ -754,7 +754,8 @@ class LyricsPipeline(
     /**
      * [marker] began a whole-file write of the user's lyrics ([placeMine]) whose end was never recorded. The rename is
      * one step, so the `.lrc` is the new file or the one before: the new one is the user's lyrics as meant; the one
-     * before (or none, where there was none) brings its entry back; anything else is left as it is, kept as the user's.
+     * before (or none, where there was none) brings its entry back; anything else is left as it is, kept as the user's
+     * (Synced or Lyrics by what it holds).
      * Never a delete of the `.lrc`, never a lookup; only the temporary file the marker names goes. Should the entry not
      * be stored, the next look tries again.
      */
@@ -772,7 +773,8 @@ class LyricsPipeline(
         val settled = when {
             there && onDisk != null && onDisk == marker.sha256 -> marker.copy(status = LyricsStatus.SYNCED, whole = null)
             asBefore -> whole?.before
-            else -> recorded(marker, track, LyricsStatus.EXISTING, marker.lrclibId, clock()).copy(mine = true)
+            // Synced or Lyrics by what the file holds, as any lyrics file KJB did not write.
+            else -> recorded(marker, track, foreignStatus(track), marker.lrclibId, clock()).copy(mine = true)
         }
         // The song had no entry before: it has none again.
         if (settled == null) return if (ledger.drop(marker.path)) null else Processed(LyricsStatus.WRITING)

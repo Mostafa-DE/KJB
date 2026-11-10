@@ -373,6 +373,29 @@ class LyricsPipelineRetagTest {
     }
 
     @Test
+    fun `a pick killed mid-write whose lrc is then plain lyrics from elsewhere reads Lyrics, kept as the user's`() = runTest {
+        val pipeline = pipeline()
+        val track = audio()
+        pipeline.withLyrics(track)
+        pipeline.retagged(track.copy(title = "Salt Roads"), namesChanged = true)
+        client.onId = { LrclibResult.Found(listOf(record(77, track = "Salt Roads", synced = otherSynced))) }
+        killWrites = true
+        assertTrue(runCatching { pipeline.choose(track.path, 77) }.exceptionOrNull() is Killed)
+        killWrites = false
+        // Before the next start, something else put plain lyrics in its place.
+        sidecar(track).writeText("w0201\nw0202\n")
+        val asked = client.requests
+
+        pipeline().finishInterrupted()
+
+        val entry = ledger[track.path]
+        assertEquals(LyricsStatus.EXISTING_PLAIN, entry?.status)
+        assertTrue(entry?.mine == true)
+        assertEquals(asked, client.requests)
+        assertEquals("w0201\nw0202\n", sidecar(track).readText())
+    }
+
+    @Test
     fun `a pick killed before the rename on a song with no lrc waits for its check again, with nothing looked up`() = runTest {
         val pipeline = pipeline()
         val track = audio()
