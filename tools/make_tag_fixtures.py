@@ -13,6 +13,8 @@ number, a comment, lyrics, ReplayGain and a back cover, as covers-tags-spec "Wha
 - northbound-tide.m4a: ffmpeg's ilst (two covr images, front then back: M4A has no picture types) plus ReplayGain as
   iTunes freeform atoms, added here (moov is at the end, so no chunk offset moves).
 - paper-comet-messy.ogg and quiet-breakwater.opus: Vorbis comments by ffmpeg, the back cover as METADATA_BLOCK_PICTURE.
+- harbour-lights-ape.mp3: ID3v2.3, then an APEv2 tag (title, an item of its own, front and back cover items), then
+  an ID3v1 tag: a write changes the APE tag's changed keys and covers, and leaves the rest.
 
 Made-up names only. Output: app/src/androidTest/assets/tags/.
 """
@@ -115,12 +117,29 @@ def strip_id3(data):
     return data
 
 
-def mp3(name, version, fields, back, with_v1):
+def ape_item(key, value, binary=False):
+    return struct.pack("<II", len(value), 2 if binary else 0) + key.encode("ascii") + b"\x00" + value
+
+
+def apev2(fields, front, back):
+    """An APEv2 tag, footer only: text items, one of its own, and the covers as binary items (no description)."""
+    items = [
+        ape_item("Title", fields["TITLE"].encode()),
+        ape_item("Artist", fields["ARTIST"].encode()),
+        ape_item("KJB Only", b"kept as it is"),
+        ape_item("Cover Art (Front)", b"\x00" + front, binary=True),
+        ape_item("Cover Art (Back)", b"\x00" + back, binary=True),
+    ]
+    body = b"".join(items)
+    return body + b"APETAGEX" + struct.pack("<IIII", 2000, len(body) + 32, len(items), 0) + b"\x00" * 8
+
+
+def mp3(name, version, fields, back, with_v1, ape=None):
     with tempfile.TemporaryDirectory() as tmp:
         path = os.path.join(tmp, "a.mp3")
         tone(path, "libmp3lame", 44100, "-b:a", "64k", "-id3v2_version", "0", "-write_id3v1", "0")
         audio = strip_id3(open(path, "rb").read())
-    data = id3v2(version, fields, back) + audio + (id3v1(fields) if with_v1 else b"")
+    data = id3v2(version, fields, back) + audio + (ape or b"") + (id3v1(fields) if with_v1 else b"")
     write(name, data)
 
 
@@ -247,6 +266,8 @@ def main():
     flac("salt-clock.flac", song("Salt Clock", 4), back)
     m4a("northbound-tide.m4a", song("Northbound Tide", 5), front, back)
     ogg("quiet-breakwater.opus", "libopus", 48000, song("Quiet Breakwater", 6, artist="Mira Sollen"), back, "-b:a", "32k")
+    lights = song("Harbour Lights", 7)
+    mp3("harbour-lights-ape.mp3", 3, lights, back, with_v1=True, ape=apev2(lights, front, back))
 
 
 if __name__ == "__main__":

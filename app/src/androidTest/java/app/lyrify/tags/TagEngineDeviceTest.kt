@@ -71,6 +71,7 @@ class TagEngineDeviceTest {
         "northbound-tide.m4a",
         "paper-comet-messy.ogg",
         "quiet-breakwater.opus",
+        "harbour-lights-ape.mp3",
     )
 
     /** What Covers & tags writes (covers-tags-spec "What is written"), with made-up names and ids. */
@@ -147,7 +148,8 @@ class TagEngineDeviceTest {
 
             val written = file.readBytes()
             if (mp3) {
-                assertEquals("$name: written as ID3v2.3", 3, written[3].toInt())
+                // ID3v2.3, except a v2.4 tag with frames v2.3 would drop or convert (the year's TDRC) stays v2.4.
+                assertEquals("$name: the ID3v2 version", original[3].toInt(), written[3].toInt())
                 val v1 = original.takeLast(128).take(3) == "TAG".toByteArray().toList()
                 if (v1) {
                     assertArrayEquals("$name: the ID3v1 tag is left as it is", original.copyOfRange(original.size - 128, original.size), written.copyOfRange(written.size - 128, written.size))
@@ -157,6 +159,56 @@ class TagEngineDeviceTest {
             }
             Log.i(LOG_TAG, "tags device test: ${payload.format} ${original.size} -> ${written.size} bytes, ${before.fields.size} fields")
         }
+    }
+
+    // An MP3's APE tag
+
+    /** The items of the APE tag before an MP3's ID3v1 tag (or at its end), by upper-case key: each value's bytes. */
+    private fun apeItems(bytes: ByteArray): Map<String, ByteArray> {
+        val end = if (bytes.size >= 128 && String(bytes, bytes.size - 128, 3, Charsets.ISO_8859_1) == "TAG") bytes.size - 128 else bytes.size
+        val footer = ByteBuffer.wrap(bytes, end - 32, 32).order(ByteOrder.LITTLE_ENDIAN)
+        assertEquals("APETAGEX", String(bytes, end - 32, 8, Charsets.ISO_8859_1))
+        val size = footer.getInt(end - 32 + 12)
+        val count = footer.getInt(end - 32 + 16)
+        var at = end - size
+        return (0 until count).associate {
+            val item = ByteBuffer.wrap(bytes, at, 8).order(ByteOrder.LITTLE_ENDIAN)
+            val length = item.getInt(at)
+            var keyEnd = at + 8
+            while (bytes[keyEnd] != 0.toByte()) keyEnd++
+            val key = String(bytes, at + 8, keyEnd - at - 8, Charsets.ISO_8859_1).uppercase()
+            val value = bytes.copyOfRange(keyEnd + 1, keyEnd + 1 + length)
+            at = keyEnd + 1 + length
+            key to value
+        }
+    }
+
+    @Test
+    fun anMp3sApeTagGetsTheChangedKeysAndCoversAndKeepsTheRest() {
+        val file = fixture("harbour-lights-ape.mp3")
+        val before = apeItems(file.readBytes())
+        val v1 = file.readBytes().takeLast(128)
+
+        // Fields only: the APE covers stay byte for byte.
+        val fieldsOnly = TagEdit(fields = mapOf("TITLE" to listOf("Tin Roof 𝄞")))
+        val tagsBefore = checkNotNull(tags.read(file))
+        val applied = fieldsOnly.applyTo(tagsBefore)
+        assertTrue(tags.write(file, applied.fields, null, Id3Version.V2_3))
+        val afterFields = apeItems(file.readBytes())
+        assertEquals("Tin Roof 𝄞", String(afterFields.getValue("TITLE"), Charsets.UTF_8))
+        assertArrayEquals(before.getValue("KJB ONLY"), afterFields.getValue("KJB ONLY"))
+        assertArrayEquals(before.getValue("COVER ART (FRONT)"), afterFields.getValue("COVER ART (FRONT)"))
+        assertArrayEquals(before.getValue("COVER ART (BACK)"), afterFields.getValue("COVER ART (BACK)"))
+
+        // A new front cover: the APE front cover follows, the back cover and the item of its own stay.
+        val newFront = (edit.cover as CoverEdit.Replace).picture
+        val withCover = TagEdit(cover = edit.cover).applyTo(checkNotNull(tags.read(file)))
+        assertTrue(tags.write(file, withCover.fields, withCover.pictures, Id3Version.V2_3))
+        val afterCover = apeItems(file.readBytes())
+        assertArrayEquals(byteArrayOf(0) + newFront.data, afterCover.getValue("COVER ART (FRONT)"))
+        assertArrayEquals(before.getValue("COVER ART (BACK)"), afterCover.getValue("COVER ART (BACK)"))
+        assertArrayEquals(before.getValue("KJB ONLY"), afterCover.getValue("KJB ONLY"))
+        assertEquals(v1, file.readBytes().takeLast(128))
     }
 
     // The writer, on private copies standing in for songs

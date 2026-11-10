@@ -157,9 +157,16 @@ TagLib::String JniStringToString(JNIEnv *env, jstring string) {
     if (chars == nullptr) {
         return {};
     }
-    const TagLib::ByteVector utf16(reinterpret_cast<const char *>(chars), static_cast<unsigned int>(length) * 2);
+    // Built from the jchar count, as UTF-16 code units: TagLib's String(ByteVector, ...) cuts at the first U+0000
+    // (wcslen); this keeps it, and saveTags refuses such a value instead of writing it shortened.
+    const std::wstring units(chars, chars + length);
     env->ReleaseStringChars(string, chars);
-    return {utf16, TagLib::String::UTF16LE};
+    return TagLib::String(units);
+}
+
+// KJB patch: whether a string holds U+0000, which no tag value may (ID3v2 reads it as a value separator).
+bool HoldsNull(const TagLib::String &string) {
+    return string.toWString().find(L'\0') != std::wstring::npos;
 }
 
 // Helper function to convert C++ StringList to JNI String array

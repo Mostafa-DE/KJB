@@ -39,7 +39,8 @@ data class PayloadSlice(val format: AudioFormat, val sha256: String, val whole: 
 /**
  * The one audio payload hash, used by the writer's checks, by Undo and by Duplicates. It covers the audio data only,
  * so a retag never changes it:
- * - MP3: the bytes between the ID3v2 tag (at the start, if any) and an ID3v1 tag (the last 128 bytes, if any);
+ * - MP3: the bytes between the ID3v2 tag (at the start, if any) and an APE tag (if any) or an ID3v1 tag (the last 128
+ *   bytes, if any), whichever comes first: the tag writer updates an APE tag an MP3 already has;
  * - FLAC: the bytes after the metadata blocks (and after an ID3v2 tag before them), up to an ID3v1 tag;
  * - M4A: the contents of every `mdat` box, in order. [Payload.layout] records where each `stco`/`co64` chunk offset
  *   points inside them, so a write that left the offsets wrong is caught;
@@ -100,7 +101,7 @@ object PayloadHash {
 
     private fun mp3(file: Reader, limit: Long): Read {
         val start = id3v2End(file, 0)
-        val end = id3v1Start(file, start)
+        val end = apeStart(file, start, id3v1Start(file, start))
         // Real MPEG audio starts with a frame header within the first bytes after the tag.
         val head = file.read(start, minOf(SYNC_WINDOW, end - start).toInt())
         val synced = (0 until head.size - 3).any { mpegFrameHeader(head, it) }
@@ -271,6 +272,17 @@ object PayloadHash {
         return if (start >= after && file.read(start, 3).contentEquals(ID3V1_MAGIC)) start else file.size
     }
 
+    /** Where an APE tag ending at [end] starts (with its header, if it has one), or [end] when none ends there. */
+    private fun apeStart(file: Reader, after: Long, end: Long): Long {
+        if (end - after < APE_FOOTER_BYTES) return end
+        val footer = ByteBuffer.wrap(file.read(end - APE_FOOTER_BYTES, APE_FOOTER_BYTES.toInt())).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        if (!ByteArray(8).also { footer.get(it) }.contentEquals(APE_MAGIC)) return end
+        val size = footer.getInt(12).toLong() and 0xFFFFFFFFL
+        val header = if (footer.getInt(20) and (1 shl 31) != 0) APE_FOOTER_BYTES else 0
+        val start = end - size - header
+        return if (size < APE_FOOTER_BYTES || start < after) end else start
+    }
+
     /** An MPEG audio frame header at [at]: the sync, and no reserved version, layer, bitrate or sample rate. */
     private fun mpegFrameHeader(bytes: ByteArray, at: Int): Boolean {
         val b1 = bytes[at + 1].toInt() and 0xFF
@@ -324,6 +336,8 @@ object PayloadHash {
     private val OGG_MAGIC = "OggS".encodeToByteArray()
     private val VORBIS_ID = byteArrayOf(1) + "vorbis".encodeToByteArray()
     private val OPUS_ID = "OpusHead".encodeToByteArray()
+    private val APE_MAGIC = "APETAGEX".encodeToByteArray()
+    private const val APE_FOOTER_BYTES: Long = 32
     private const val ID3V1_BYTES: Long = 128
     private const val STREAMINFO: Int = 0
 
