@@ -61,20 +61,20 @@ class CoversTagsScreenTest {
         problems = List(problems) { SongProblem("/m/p$it.mp3", SongOutcome.BUSY) },
     )
 
-    // The row on Tools and Songs
+    // The row on Tools
 
     @Test
-    fun `the row reads Find covers and tags before the first check, then counts what waits`() {
-        assertEquals(EntryRow(R.string.tags_find, ToolLine.Text(R.string.tags_line_start), null), coversTagsEntry(CoversTagsState(loaded = true)))
+    fun `the row reads where names and covers come from before the first check, then counts what waits`() {
+        assertEquals(EntryRow(ToolLine.Text(R.string.tags_line_start), null), coversTagsEntry(CoversTagsState(loaded = true)))
         assertEquals(ToolLine.Text(R.string.tags_line_checking), coversTagsEntry(CoversTagsState(checking = Checking(3, 84))).line)
 
         val checked = CoversTagsState(loaded = true, memory = CoversTagsMemory(checkedOnce = true))
         val waiting = coversTagsEntry(checked.copy(waiting = listOf(waiting("Lanterns", true), waiting("Harbour", false), waiting("Kelp", false))))
-        assertEquals(EntryRow(R.string.tools_covers, ToolLine.Count(R.plurals.tags_to_review, 3), 3), waiting)
+        assertEquals(EntryRow(ToolLine.Count(R.plurals.tags_to_review, 3), 3), waiting)
 
         val done = checked.copy(memory = checked.memory.copy(albums = listOf(record(Settled.DONE, 2), record(Settled.DONE, 3).copy(id = "b"))))
-        assertEquals(EntryRow(R.string.tools_covers, ToolLine.Count(R.plurals.tags_albums_changed, 2), null), coversTagsEntry(done))
-        assertEquals(EntryRow(R.string.tools_covers, ToolLine.Text(R.string.tags_line_none), null), coversTagsEntry(checked))
+        assertEquals(EntryRow(ToolLine.Count(R.plurals.tags_albums_changed, 2), null), coversTagsEntry(done))
+        assertEquals(EntryRow(ToolLine.Text(R.string.tags_line_none), null), coversTagsEntry(checked))
     }
 
     @Test

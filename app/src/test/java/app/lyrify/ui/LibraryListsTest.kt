@@ -1,14 +1,18 @@
 package app.lyrify.ui
 
+import app.lyrify.R
 import app.lyrify.data.LyricsStatus
 import app.lyrify.library.Song
 import app.lyrify.library.song
+import app.lyrify.settings.DockTab
 import app.lyrify.settings.LibrarySettings
 import app.lyrify.settings.LyricsFilter
 import app.lyrify.settings.SortSongs
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.ZoneOffset
@@ -123,6 +127,28 @@ class LibraryListsTest {
             listOf("Music" to 3, "Music/Rips" to 2, "Music/Rips/Live" to 1, "Old/Tapes" to 0, "Podcasts" to 1, "Podcasts/Talk" to 1),
             skipChoices(listOf(live, rip, talk, loose), skipped = listOf("/Old/Tapes/", "music/rips")),
         )
+    }
+
+    @Test
+    fun `the Songs tab's Favourites row counts the favourite songs, or says None yet, and opens Favourites inside Library`() {
+        assertEquals(FavouritesRow(ToolLine.Count(R.plurals.lib_songs, 120), Page.BuiltIn(BuiltInList.FAVOURITES)), favouritesRow(120))
+        assertEquals(ToolLine.Count(R.plurals.lib_songs, 1), favouritesRow(1).line)
+        assertEquals(ToolLine.Text(R.string.lib_none_yet), favouritesRow(0).line)
+        val opened = NavState.start(DockTab.LIBRARY).open(favouritesRow(3).page)
+        assertEquals(DockTab.LIBRARY, opened.tab)
+        assertEquals(listOf<Page>(Page.BuiltIn(BuiltInList.FAVOURITES)), opened.pages)
+        // Unit tests run in the module's folder.
+        assertTrue("""<string name="lib_none_yet">None yet</string>""" in File("src/main/res/values/strings_library.xml").readText())
+    }
+
+    @Test
+    fun `the Songs tab starts with the Favourites row, and Covers and tags is no longer there`() {
+        val screen = File("src/main/java/app/lyrify/ui/LibraryScreen.kt").readText()
+        val songsTab = screen.substringAfter("private fun SongsTab(").substringBefore("\n}\n")
+        val firstItem = Regex("""item\(key = "([^"]+)"\)""").find(songsTab)?.groupValues?.get(1)
+        assertEquals("favourites", firstItem)
+        assertFalse("CoversTagsEntry" in screen)
+        assertFalse("CoversTagsEntry" in File("src/main/java/app/lyrify/ui/CoversTagsScreen.kt").readText())
     }
 
     private companion object {

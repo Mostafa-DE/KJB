@@ -226,7 +226,7 @@ private fun SongsTab(ui: LibraryUi, library: Library, reselect: Int, topBar: @Co
     ReselectToTop(reselect) { state.animateScrollToItem(0) }
     val source = QueueSource(SourceKind.SONGS, "songs:${settings.songSort}:${settings.songFilter}", "")
     SongListFrame(ui, songs, source, topBar, state, loaded = listed != null) { list ->
-        item(key = "coversTags") { CoversTagsEntry() }
+        item(key = "favourites") { FavouritesRowView(ui, library) }
         item(key = "header") {
             ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, sort = songsOrder(settings), onSort = { sorting = true })
         }
@@ -274,6 +274,14 @@ private fun SongsTab(ui: LibraryUi, library: Library, reselect: Int, topBar: @Co
             }
         }
     }
+}
+
+/** Favourites, pinned at the top of Songs as the Queues row is on Playlists, scrolling with the list: its heart and songs. */
+@Composable
+private fun FavouritesRowView(ui: LibraryUi, library: Library) {
+    val nav = LocalNavigator.current
+    val row = favouritesRow(remember(library, ui.playlists) { library.listed(ui.playlists.favouriteSongs).size })
+    NavRow(stringResource(R.string.lib_favourites), row.line.text(), lead = { BuiltInTile(BuiltInList.FAVOURITES) }) { nav.open(row.page) }
 }
 
 /** The Songs tab's rows by heading: each heading, where its songs start in [songs], and its songs. */
@@ -711,6 +719,14 @@ internal fun LedgerSongs(query: SongQuery, onQuery: (SongQuery) -> Unit, reselec
 }
 
 // The lists, as pure functions
+
+/** The row pinned at the top of Songs: how many favourite songs ("120 songs", or "None yet"), and the page it opens. */
+data class FavouritesRow(val line: ToolLine, val page: Page)
+
+fun favouritesRow(songs: Int): FavouritesRow = FavouritesRow(
+    if (songs > 0) ToolLine.Count(R.plurals.lib_songs, songs) else ToolLine.Text(R.string.lib_none_yet),
+    Page.BuiltIn(BuiltInList.FAVOURITES),
+)
 
 /** A song row's lyrics mark, which never relies on colour alone: a filled dot for synced lyrics, a ring for plain, nothing for none. */
 enum class LyricsMark { SYNCED, PLAIN, NONE }

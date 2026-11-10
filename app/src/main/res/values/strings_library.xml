@@ -94,6 +94,8 @@
     <string name="lib_unreadable_title">Can\'t read your songs</string>
     <string name="lib_unreadable">Turn on All files access in Settings.</string>
     <string name="lib_unknown_album">Unknown album</string>
+    <!-- The Favourites row at the top of Songs, with no favourite songs. -->
+    <string name="lib_none_yet">None yet</string>
     <string name="lib_queues">Queues</string>
     <plurals name="lib_saved">
         <item quantity="one">%d saved</item>
