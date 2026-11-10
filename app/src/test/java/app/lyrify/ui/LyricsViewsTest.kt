@@ -40,7 +40,7 @@ class LyricsViewsTest {
     // "Aa"
 
     @Test
-    fun `Aa sizes grow from S to XL around M, bold lights the line playing more, and centre centres`() {
+    fun `Aa sizes grow from S to XL around M, weights are the prototype's, and centre centres`() {
         val looks = LyricsSize.entries.map { lyricsLook(LyricsSettings(textSize = it)).scale }
         assertEquals(looks.sorted(), looks)
         assertEquals(looks.size, looks.distinct().size)
@@ -48,11 +48,14 @@ class LyricsViewsTest {
 
         val bold = lyricsLook(LyricsSettings(textWeight = LyricsWeight.BOLD))
         val regular = lyricsLook(LyricsSettings(textWeight = LyricsWeight.REGULAR))
-        assertTrue(bold.current > bold.other)
-        assertTrue(regular.current > regular.other)
-        assertTrue(bold.current > regular.current)
-        assertTrue(bold.other > regular.other)
-        assertEquals(FontWeight.Normal, regular.other)
+        // The line playing stands out by its size and colour; every timed line has one weight (the prototype's --lw),
+        // plain lyrics a lighter one (--lw2): 650 and 560 bold, 440 and 400 regular.
+        assertEquals(FontWeight(650), bold.current)
+        assertEquals(FontWeight(650), bold.other)
+        assertEquals(FontWeight(560), bold.plain)
+        assertEquals(FontWeight(440), regular.current)
+        assertEquals(FontWeight(440), regular.other)
+        assertEquals(FontWeight.Normal, regular.plain)
 
         assertEquals(TextAlign.Start, lyricsLook(LyricsSettings(textAlign = LyricsAlign.LEFT)).align)
         assertEquals(TextAlign.Center, lyricsLook(LyricsSettings(textAlign = LyricsAlign.CENTRE)).align)

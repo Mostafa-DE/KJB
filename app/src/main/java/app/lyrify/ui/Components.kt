@@ -765,3 +765,15 @@ internal const val RESTING_FILL = 0.65f
 
 /** One sweep of the sung line. */
 private const val SWEEP_MS = 1_400
+
+/**
+ * The prototype's link (.lnk): a 2 dp [color] underline. CSS puts it 4 dp under the baseline; at the body sizes that is
+ * the bottom of the text's line box, where it is drawn.
+ */
+fun Modifier.linkUnderline(color: Color): Modifier = drawBehind {
+    val thickness = LINK_LINE.toPx()
+    val y = size.height - thickness / 2
+    drawLine(color, Offset(0f, y), Offset(size.width, y), thickness)
+}
+
+private val LINK_LINE = 2.dp

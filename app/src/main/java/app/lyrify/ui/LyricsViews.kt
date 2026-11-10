@@ -1,5 +1,9 @@
 package app.lyrify.ui
 
+import androidx.compose.ui.text.lerp
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.animateColorAsState
 import android.content.Context
 import android.os.SystemClock
 import androidx.compose.foundation.background
@@ -93,7 +97,7 @@ import java.io.IOException
 // Rules, as pure functions
 
 /** The "Aa" choices as lyrics are drawn: [scale] on each view's sizes, the weights of the line playing and the others, the alignment. */
-data class LyricsLook(val scale: Float, val current: FontWeight, val other: FontWeight, val align: TextAlign)
+data class LyricsLook(val scale: Float, val current: FontWeight, val other: FontWeight, val align: TextAlign, val plain: FontWeight = other)
 
 fun lyricsLook(settings: LyricsSettings): LyricsLook {
     val bold = settings.textWeight == LyricsWeight.BOLD
@@ -104,17 +108,23 @@ fun lyricsLook(settings: LyricsSettings): LyricsLook {
             LyricsSize.L -> 1.18f
             LyricsSize.XL -> 1.36f
         },
-        current = if (bold) FontWeight.Bold else FontWeight.Medium,
-        other = if (bold) FontWeight.SemiBold else FontWeight.Normal,
+        // The prototype's --lw and --lw2: the line playing stands out by its size and colour, not its weight.
+        current = if (bold) FontWeight(650) else FontWeight(440),
+        other = if (bold) FontWeight(650) else FontWeight(440),
         align = if (settings.textAlign == LyricsAlign.CENTRE) TextAlign.Center else TextAlign.Start,
+        plain = if (bold) FontWeight(560) else FontWeight.Normal,
     )
 }
 
-/** [base] (a view's style for the line playing, or for the others) with the size and weight chosen. */
-fun LyricsLook.style(base: TextStyle, playing: Boolean): TextStyle = base.copy(
+/** [base] (a view's style for the line playing, or for the others, or for [still] plain lyrics) with the size and weight chosen. */
+fun LyricsLook.style(base: TextStyle, playing: Boolean, still: Boolean = false): TextStyle = base.copy(
     fontSize = base.fontSize * scale,
     lineHeight = if (base.lineHeight.isSpecified) base.lineHeight * scale else base.lineHeight,
-    fontWeight = if (playing) current else other,
+    fontWeight = when {
+        still -> plain
+        playing -> current
+        else -> other
+    },
 )
 
 /**
@@ -237,15 +247,22 @@ fun SyncedLyrics(
     LazyColumn(state = list, modifier = Modifier.fillMaxSize(), contentPadding = padding) {
         itemsIndexed(lines) { i, line ->
             val label = stringResource(R.string.player_line_at, clock(line.timeMs), line.text)
-            Text(
-                line.text,
-                style = look.style(if (i == at) current else other, playing = i == at),
-                textAlign = look.align,
-                color = when {
+            // A line takes its colour and size over the prototype's 0.3 s, so the lit line moves on smoothly.
+            val lit by animateFloatAsState(if (i == at) 1f else 0f, motion(tween(Motion.OPEN_MS, easing = Motion.Ease), reduced), label = "lit")
+            val tone by animateColorAsState(
+                when {
                     i == at -> colors.onSurface
                     i < at -> colors.outline
                     else -> colors.onSurfaceVariant
                 },
+                motion(tween(Motion.OPEN_MS, easing = Motion.Ease), reduced),
+                label = "line colour",
+            )
+            Text(
+                line.text,
+                style = lerp(look.style(other, playing = false), look.style(current, playing = true), lit),
+                textAlign = look.align,
+                color = tone,
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(14.dp))
@@ -262,9 +279,21 @@ fun SyncedLyrics(
 fun StillLyrics(lines: List<String>, style: TextStyle, padding: PaddingValues) {
     val look = rememberLyricsLook()
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(padding)) {
-        lines.forEach { Text(it, style = look.style(style, playing = false), textAlign = look.align, modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp)) }
+        lines.forEach { Text(it, style = look.style(style, playing = false, still = true), textAlign = look.align, modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp)) }
     }
 }
+
+/** The prototype's lyrics text: full screen (.flines: 29 and 25 sp lines, 21 sp plain), the cover's back (.lplines: 22 and 19, 17 plain). */
+internal val FullLineNow = display(29, 37, -0.015)
+internal val FullLine = display(25, 33, -0.015)
+internal val FullStill = display(21, 31, weight = 560)
+internal val PanelLineNow = display(22, 29, -0.01)
+internal val PanelLine = display(19, 25, -0.01)
+internal val PanelStill = display(17, 26, weight = 560)
+
+/** "Finding lyrics", "No lyrics yet" (.lpstate b), and the "Aa" button's letters. */
+internal val LyricsStateTitle = display(19, 24, -0.01)
+internal val AaLetters = display(16, 16, -0.02, weight = 650)
 
 /** After the user scrolls the lyrics, the list is left alone this long. */
 private const val LEAVE_ALONE_MS = 3_500L
@@ -300,7 +329,7 @@ fun FullLyricsView() {
                 ChromeIconButton(R.drawable.ic_keyboard_arrow_down, stringResource(R.string.lyrics_close), close)
                 SongCover(SongArt(path), size = 40.dp, shape = RoundedCornerShape(10.dp))
                 Column(Modifier.weight(1f)) {
-                    Text(ui.song?.let { displayTitle(it, library) } ?: path.substringAfterLast('/'), style = type.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(ui.song?.let { displayTitle(it, library) } ?: path.substringAfterLast('/'), style = type.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     ui.song?.artist?.takeIf(String::isNotBlank)?.let { Text(it, style = type.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                 }
                 AaButton { sheet = PlayerRoute.LYRICS_TEXT }
@@ -309,15 +338,15 @@ fun FullLyricsView() {
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 val padding = PaddingValues(start = 16.dp, end = 16.dp, top = 24.dp, bottom = 120.dp)
                 when (lyrics) {
-                    is PanelLyrics.Synced -> SyncedLyrics(lyrics.lines, ui.positionAt(now), enabled = true, type.headlineMedium, type.headlineSmall, padding, lead = 160.dp) { line ->
+                    is PanelLyrics.Synced -> SyncedLyrics(lyrics.lines, ui.positionAt(now), enabled = true, FullLineNow, FullLine, padding, lead = 160.dp) { line ->
                         val tap = lineTap(line, ui.playing)
                         connection.seekTo(tap.seekMs)
                         if (tap.play) connection.play()
                     }
-                    is PanelLyrics.Plain -> StillLyrics(lyrics.lines, type.headlineSmall, padding)
+                    is PanelLyrics.Plain -> StillLyrics(lyrics.lines, FullStill, padding)
                     PanelLyrics.Finding -> Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterVertically)) {
                         BrandGlyph(width = 28.dp, sweeping = true)
-                        Text(stringResource(R.string.player_finding_lyrics), style = type.titleMedium)
+                        Text(stringResource(R.string.player_finding_lyrics), style = LyricsStateTitle)
                     }
                     PanelLyrics.None -> EmptyState(
                         EmptyArt.Glyph,
@@ -357,7 +386,7 @@ fun AaButton(enabled: Boolean = true, onClick: () -> Unit) {
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier.size(48.dp).clip(CircleShape).clickable(enabled = enabled, role = Role.Button, onClick = onClick).semantics { contentDescription = label },
-    ) { Text("Aa", style = MaterialTheme.typography.titleMedium) }
+    ) { Text("Aa", style = AaLetters) }
 }
 
 /** "⋯" with the one editor these lyrics have: Edit timing or Make synced. */
