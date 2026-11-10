@@ -237,6 +237,13 @@ class AlbumMatchTest {
     // Rule 4: a clear winner
 
     @Test
+    fun `releases the search found but did not list are rivals, so nothing is sure`() {
+        val proposal = AlbumMatch.propose(album(lanternSongs()), listOf(release()), unseenRivals = true)
+        assertEquals(setOf(Doubt.GAP), (proposal as Proposal.PickOne).doubts)
+        assertEquals(listOf(ID_A), proposal.candidates.map { it.release.id })
+    }
+
+    @Test
     fun `the distance and the gap are pinned`() {
         assertEquals(0.04, AlbumMatch.SURE_DISTANCE, 0.0)
         assertEquals(0.02, AlbumMatch.MIN_GAP, 0.0)

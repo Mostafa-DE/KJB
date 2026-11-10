@@ -148,7 +148,10 @@ enum class Doubt {
     /** Rule 4: the distance is over [AlbumMatch.SURE_DISTANCE]. */
     DISTANCE,
 
-    /** Rule 4: another release is within [AlbumMatch.MIN_GAP] (and is not the same edition). */
+    /**
+     * Rule 4: another release is within [AlbumMatch.MIN_GAP] (and is not the same edition), or the search found more
+     * releases with the album's track count than it listed, so a rival may be among those unseen.
+     */
     GAP,
 
     /** Rule 4: the only candidate, and a title pairs below [AlbumMatch.LONE_SIMILARITY]. */
@@ -215,10 +218,13 @@ object AlbumMatch {
     /** Thresholds compare with this much room, so 0.06 - 0.04 counts as the 0.02 it is. */
     private const val EPSILON = 1e-9
 
-    /** Ready when the best of [releases] holds every "sure" rule; Pick one with the best [MAX_SHOWN] otherwise. */
-    fun propose(album: PhoneAlbum, releases: List<MbRelease>, searched: Boolean = false): Proposal {
+    /**
+     * Ready when the best of [releases] holds every "sure" rule; Pick one with the best [MAX_SHOWN] otherwise.
+     * [unseenRivals]: the search found releases it did not list, any of which could be a rival.
+     */
+    fun propose(album: PhoneAlbum, releases: List<MbRelease>, searched: Boolean = false, unseenRivals: Boolean = false): Proposal {
         val matches = releases.distinctBy { it.id }.map { match(album, it) }.sortedBy { it.distance }
-        val extra = setOfNotNull(Doubt.SEARCHED.takeIf { searched }, Doubt.SINGLE.takeIf { album.isSingle })
+        val extra = setOfNotNull(Doubt.SEARCHED.takeIf { searched }, Doubt.SINGLE.takeIf { album.isSingle }, Doubt.GAP.takeIf { unseenRivals })
         val best = matches.firstOrNull() ?: return Proposal.PickOne(emptyList(), extra + Doubt.NO_CANDIDATE)
         val doubts = doubts(album, best, matches.drop(1)) + extra
         return if (doubts.isEmpty()) Proposal.Ready(best) else Proposal.PickOne(matches.take(MAX_SHOWN), doubts)

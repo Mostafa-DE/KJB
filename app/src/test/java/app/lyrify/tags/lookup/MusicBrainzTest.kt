@@ -127,6 +127,17 @@ class MusicBrainzTest {
     }
 
     @Test
+    fun `a release search says how many releases it found in all, beyond those it lists`() {
+        val all = MusicBrainzJson.releaseHits(fixture("release-search-all.json"))
+        assertEquals(listOf(ID_A, ID_B), all.releases.map { it.id })
+        assertEquals(2, all.total)
+
+        val more = MusicBrainzJson.releaseHits(fixture("release-search-more.json"))
+        assertEquals(listOf(ID_A, ID_B), more.releases.map { it.id })
+        assertEquals(54, more.total)
+    }
+
+    @Test
     fun `a release lists its discs, tracks, recordings, lengths and credits`() {
         val release = MusicBrainzJson.release(fixture("release.json"))
 

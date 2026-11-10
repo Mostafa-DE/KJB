@@ -86,6 +86,9 @@ data class ReleaseTrack(val disc: Int, val index: Int, val track: MbTrack, val d
 /** A recording found by a recording search, with the releases it is on (each listing only this track). */
 data class MbRecording(val id: String, val title: String, val lengthMs: Long?, val artist: Credit, val releases: List<MbRelease>)
 
+/** A page of a release search: the [releases] it lists, and how many it found in all ([total], its `count`). */
+data class ReleaseHits(val releases: List<MbRelease>, val total: Int)
+
 /** The year a MusicBrainz date ("1998", "1998-04", "1998-04-17") starts with. */
 internal fun yearOf(date: String?): Int? = date?.let { YEAR.find(it) }?.value?.toInt()?.takeIf { it > 0 }
 
@@ -159,6 +162,12 @@ internal object MusicBrainzJson {
     }
 
     fun releases(body: ByteArray): List<MbRelease> = decode<ReleaseSearchJson>(body).releases.mapNotNull { it.toRelease() }
+
+    fun releaseHits(body: ByteArray): ReleaseHits {
+        val search = decode<ReleaseSearchJson>(body)
+        val releases = search.releases.mapNotNull { it.toRelease() }
+        return ReleaseHits(releases, search.count ?: releases.size)
+    }
 
     fun release(body: ByteArray): MbRelease = requireNotNull(decode<ReleaseJson>(body).toRelease()) { "not a MusicBrainz id" }
 
@@ -283,7 +292,7 @@ private class ReleaseJson(
 )
 
 @Serializable
-private class ReleaseSearchJson(val releases: List<ReleaseJson> = emptyList())
+private class ReleaseSearchJson(val count: Int? = null, val releases: List<ReleaseJson> = emptyList())
 
 @Serializable
 private class RecordingSearchJson(val recordings: List<RecordingJson> = emptyList())
@@ -293,6 +302,10 @@ class MusicBrainz(private val client: MetaClient) {
     /** Empty results are never cached. */
     suspend fun searchReleases(album: String, artist: String?, tracks: Int?, fresh: Boolean = false): MetaAnswer<List<MbRelease>> =
         client.get(MusicBrainzUrls.releaseSearch(album, artist, tracks), Body.JSON, fresh, keep = { it.isNotEmpty() }, read = MusicBrainzJson::releases)
+
+    /** [searchReleases] with the number of releases found in all, beyond the [MusicBrainzUrls.SEARCH_LIMIT] listed. */
+    suspend fun releaseHits(album: String, artist: String?, tracks: Int?, fresh: Boolean = false): MetaAnswer<ReleaseHits> =
+        client.get(MusicBrainzUrls.releaseSearch(album, artist, tracks), Body.JSON, fresh, keep = { it.releases.isNotEmpty() }, read = MusicBrainzJson::releaseHits)
 
     suspend fun release(id: String, fresh: Boolean = false): MetaAnswer<MbRelease> =
         ifId(id) { client.get(MusicBrainzUrls.release(id), Body.JSON, fresh, read = MusicBrainzJson::release) }

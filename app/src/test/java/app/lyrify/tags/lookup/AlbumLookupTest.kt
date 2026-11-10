@@ -113,6 +113,30 @@ class AlbumLookupTest {
     }
 
     @Test
+    fun `a search that lists every release with the album's track count can end Ready`() = runTest {
+        val web = web()
+        web.on(search, ok(fixture("release-search-all.json")))
+        web.on(MusicBrainzUrls.release(ID_A), ok(releaseJson(ID_A, discs = tracks)))
+        web.on(MusicBrainzUrls.release(ID_B), ok(releaseJson(ID_B, discs = tracks)))
+
+        assertTrue(lookup(web).check(album).proposal() is Proposal.Ready)
+    }
+
+    @Test
+    fun `more releases with the album's track count than the search lists is Pick one`() = runTest {
+        val web = web()
+        web.on(search, ok(fixture("release-search-more.json")))
+        web.on(MusicBrainzUrls.release(ID_A), ok(releaseJson(ID_A, discs = tracks)))
+        web.on(MusicBrainzUrls.release(ID_B), ok(releaseJson(ID_B, discs = tracks)))
+
+        val proposal = lookup(web).check(album).proposal() as Proposal.PickOne
+
+        assertTrue(Doubt.GAP in proposal.doubts)
+        assertEquals(ID_A, proposal.candidates.first().release.id)
+        assertEquals(listOf(search, MusicBrainzUrls.release(ID_A), MusicBrainzUrls.release(ID_B)).map { it.toString() }, web.requests.map { it.uri })
+    }
+
+    @Test
     fun `hits with another track count are asked for up to 5`() = runTest {
         val web = web()
         val anyCount = MusicBrainzUrls.releaseSearch("Lanterns of Ulso", "Mira Solen", null)

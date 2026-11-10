@@ -71,19 +71,23 @@ class AlbumLookup(
     private suspend fun releases(album: PhoneAlbum, title: String, artist: String?, fresh: Boolean, searched: Boolean): Lookup {
         if (title.isBlank()) return Lookup.Done(AlbumMatch.propose(album, emptyList(), searched))
         val count = album.songs.size.takeUnless { album.isSingle }
-        var found = when (val answer = musicBrainz.searchReleases(title, artist, count, fresh)) {
+        var hits = when (val answer = musicBrainz.releaseHits(title, artist, count, fresh)) {
             is MetaAnswer.Ok -> answer.value
-            MetaAnswer.NotFound -> emptyList()
+            MetaAnswer.NotFound -> ReleaseHits(emptyList(), 0)
             else -> return stopped(answer)
         }
+        // The search is narrowed to the album's track count (MusicBrainz's `tracks` field): when it found more than it
+        // lists, a rival may be among those unseen, so nothing can be sure.
+        val unseenRivals = count != null && hits.total > hits.releases.size
         // No edition with that many tracks: the editions that have another number can still be picked.
-        if (found.isEmpty() && count != null) {
-            found = when (val answer = musicBrainz.searchReleases(title, artist, null, fresh)) {
+        if (hits.releases.isEmpty() && count != null) {
+            hits = when (val answer = musicBrainz.releaseHits(title, artist, null, fresh)) {
                 is MetaAnswer.Ok -> answer.value
-                MetaAnswer.NotFound -> emptyList()
+                MetaAnswer.NotFound -> ReleaseHits(emptyList(), 0)
                 else -> return stopped(answer)
             }
         }
+        val found = hits.releases
         // Every hit with the album's track count could be a rival, so each is asked for; the others fill up to MAX_DETAILED.
         val (exact, other) = found.sortedByDescending { it.score ?: 0 }.partition { it.trackCount == album.songs.size }
         val best = exact + other.take((MAX_DETAILED - exact.size).coerceAtLeast(0))
@@ -98,7 +102,7 @@ class AlbumLookup(
                 else -> return stopped(answer)
             }
         }
-        val proposal = withContext(compute) { AlbumMatch.propose(album, releases, searched) }
+        val proposal = withContext(compute) { AlbumMatch.propose(album, releases, searched, unseenRivals) }
         if (proposal !is Proposal.Ready) return Lookup.Done(proposal)
         // Without the release group, the album stays Ready and no year is written (as when MusicBrainz has none).
         val dated = (withOriginalYear(proposal.match, fresh) as? MetaAnswer.Ok)?.value ?: proposal.match

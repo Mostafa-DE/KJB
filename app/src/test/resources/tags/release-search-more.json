@@ -1,0 +1,117 @@
+{
+  "created": "2026-11-10T09:12:44.000Z",
+  "count": 54,
+  "offset": 0,
+  "releases": [
+    {
+      "id": "0b7c1f4e-5a2d-4c3b-9e8f-1a2b3c4d5e01",
+      "score": 100,
+      "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+      "packaging-id": "ec27701a-4a22-37f4-bfac-6616e0f9750a",
+      "artist-credit-id": "11111111-2222-4333-8444-555555555501",
+      "count": 1,
+      "title": "Lanterns of Ulso",
+      "status": "Official",
+      "packaging": "Jewel Case",
+      "text-representation": {
+        "language": "eng",
+        "script": "Latn"
+      },
+      "artist-credit": [
+        {
+          "name": "Mira Solen",
+          "artist": {
+            "id": "a1b2c3d4-0000-4000-8000-00000000aa01",
+            "name": "Mira Solen",
+            "sort-name": "Solen, Mira",
+            "disambiguation": "made-up singer"
+          }
+        }
+      ],
+      "release-group": {
+        "id": "6f1e2d3c-4b5a-4968-8776-5a4b3c2d1e02",
+        "type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+        "primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+        "title": "Lanterns of Ulso",
+        "primary-type": "Album"
+      },
+      "date": "2011-09-02",
+      "country": "XE",
+      "release-events": [
+        {
+          "date": "2011-09-02",
+          "area": {
+            "id": "89a675c2-3e37-3518-b83c-418bad59a85a",
+            "name": "Europe",
+            "sort-name": "Europe",
+            "iso-3166-1-codes": [
+              "XE"
+            ]
+          }
+        }
+      ],
+      "barcode": "0000000000017",
+      "label-info": [
+        {
+          "catalog-number": "ULSO 1",
+          "label": {
+            "id": "c0c0c0c0-1111-4222-8333-444444444401",
+            "name": "Brennmoor Records"
+          }
+        }
+      ],
+      "track-count": 5,
+      "media": [
+        {
+          "id": "d1d1d1d1-0000-4000-8000-000000000001",
+          "format": "CD",
+          "disc-count": 1,
+          "track-count": 3
+        },
+        {
+          "id": "d1d1d1d1-0000-4000-8000-000000000002",
+          "format": "CD",
+          "disc-count": 1,
+          "track-count": 2
+        }
+      ]
+    },
+    {
+      "id": "0b7c1f4e-5a2d-4c3b-9e8f-1a2b3c4d5e03",
+      "score": 96,
+      "count": 1,
+      "title": "Lanterns of Ulso",
+      "status": "Official",
+      "artist-credit": [
+        {
+          "name": "Mira Solen",
+          "artist": {
+            "id": "a1b2c3d4-0000-4000-8000-00000000aa01",
+            "name": "Mira Solen",
+            "sort-name": "Solen, Mira"
+          }
+        }
+      ],
+      "release-group": {
+        "id": "6f1e2d3c-4b5a-4968-8776-5a4b3c2d1e02",
+        "title": "Lanterns of Ulso",
+        "primary-type": "Album"
+      },
+      "date": "1998",
+      "country": "GB",
+      "track-count": 5,
+      "media": [
+        {
+          "format": "CD",
+          "disc-count": 0,
+          "track-count": 3
+        },
+        {
+          "format": "CD",
+          "disc-count": 0,
+          "track-count": 2
+        }
+      ]
+    }
+  ]
+}
