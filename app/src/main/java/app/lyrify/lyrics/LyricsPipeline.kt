@@ -171,7 +171,7 @@ class LyricsPipeline(
     private val warn: (String) -> Unit = log,
     /** How the bytes go into a new `.lrc`; tests make it fail. */
     private val writeBytes: (FileChannel, ByteBuffer) -> Unit = SidecarFile::writeFully,
-) {
+) : PathHold {
     /** Audio paths being handled right now. */
     private val inProgress = MutableStateFlow<Set<String>>(emptySet())
 
@@ -200,6 +200,8 @@ class LyricsPipeline(
         }
         val previous = state.entries[track.path]
         when {
+            // Lyrics the user made or edited: nothing replaces them by itself, not even once their file is gone.
+            previous?.mine == true -> Processed(previous.status)
             previous?.status == LyricsStatus.REMOVED -> Processed(LyricsStatus.REMOVED)
             previous != null && previous.status == LyricsStatus.WRITING -> reconcile(track, sidecar, previous, lane)
             Files.exists(sidecar, LinkOption.NOFOLLOW_LINKS) ->
@@ -223,7 +225,7 @@ class LyricsPipeline(
         val sidecar = File(sidecarPath).toPath()
         val previous = ledger.entry(track.path) ?: return@exclusive null
         when {
-            !previous.status.waitsForAi || previous.lookupStale -> previous.status
+            previous.mine || !previous.status.waitsForAi || previous.lookupStale -> previous.status
             Files.exists(sidecar, LinkOption.NOFOLLOW_LINKS) -> outcome(previous, track, LyricsStatus.EXISTING)
             // The file and its ledger entries go together, even if the run is stopped.
             else -> withContext(NonCancellable) { recordAiResult(track, sidecar, previous, result) }
@@ -316,13 +318,18 @@ class LyricsPipeline(
      * "This one" on the check list: record [id] for the song at [audioPath], which waits for a check. LRCLIB is asked
      * once for the record (the user is waiting, and can tap again), which must still fit the song as a candidate
      * ([Candidates.searched]). Synced lyrics are written through the same marker and exclusive create as any; plain
-     * lyrics are kept as PLAIN_ONLY with that record, for the AI to time.
+     * lyrics are kept as PLAIN_ONLY with that record, for the AI to time. With [song] (the player's Search, its tags
+     * from the library), the song need not wait for a check; a write under way and lyrics the user made (unless they
+     * removed them) still win.
      */
-    suspend fun choose(audioPath: String, id: Long): Checked = exclusive(audioPath) {
-        val previous = ledger.entry(audioPath)?.takeIf { it.status == LyricsStatus.NEEDS_CHECK }
+    suspend fun choose(audioPath: String, id: Long, song: LocalTrack? = null): Checked = exclusive(audioPath) {
+        val stored = ledger.entry(audioPath)
+        val theirs = stored?.mine == true && stored.status != LyricsStatus.REMOVED
+        val searched = song != null && stored?.status != LyricsStatus.WRITING && !theirs
+        val previous = stored?.takeIf { it.status == LyricsStatus.NEEDS_CHECK || searched }
         val sidecar = LrcFormat.sidecarPath(audioPath)?.let { File(it).toPath() }
-        if (previous == null || sidecar == null) return@exclusive Checked.Changed
-        val track = previous.track
+        val track = song ?: previous?.track
+        if ((previous == null && !searched) || track == null || sidecar == null) return@exclusive Checked.Changed
         if (Files.exists(sidecar, LinkOption.NOFOLLOW_LINKS)) return@exclusive Checked.Done(outcome(previous, track, LyricsStatus.EXISTING))
         val found = when (val result = client.byId(id, Lane.HIGH)) {
             is LrclibResult.Found -> result.records.firstOrNull { it.id == id }
@@ -491,6 +498,9 @@ class LyricsPipeline(
         if (stamp == null || abs(stamp.modifiedAt - entry.updatedAt) > ADOPT_WINDOW_MS) return@exclusive false
         ledger.put(entry.copy(sha256 = stamp.sha256, writtenAt = stamp.modifiedAt)).also { if (it) log("${entry.title}: v1 lyrics adopted") }
     }
+
+    /** The sync editor's save and undo (LrcEdits) hold the song as a lookup does: never at the same time as one. */
+    override suspend fun <T> holding(path: String, block: suspend () -> T): T = exclusive(path, block)
 
     /** Runs [block] once no other call is handling [path], keeping others off it meanwhile. */
     private suspend fun <T> exclusive(path: String, block: suspend () -> T): T {
