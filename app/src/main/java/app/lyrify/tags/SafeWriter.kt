@@ -489,11 +489,18 @@ class SafeWriter(
 
             val open = songs.openInPlace(song)
             val openId = open?.fileId()
+            // A read that fails decides nothing: nothing is written.
+            val holdsSong = try {
+                open?.holds(original) == true
+            } catch (e: IOException) {
+                log("tags: the song could not be read (${e.javaClass.simpleName})")
+                false
+            }
             // Once more with the descriptor open, right before the first byte: the same file at the path, still the song
             // backed up, still its row, and the descriptor reading exactly the song's bytes, so the row and the path
             // name the same file.
             if (open == null || openId == null || songs.fileId(path) != pathId || fileState(file) != original ||
-                !songs.sameFile(song.mediaStoreId, path) || !open.holds(original)
+                !songs.sameFile(song.mediaStoreId, path) || !holdsSong
             ) {
                 // Nothing was written: the song is as it was.
                 open?.close()
@@ -501,8 +508,8 @@ class SafeWriter(
                 dropCopies()
                 return couldNot(if (open == null) "open" else "changed")
             }
-            // One descriptor from the first byte to the last, a put-back included: it names the file written, never
-            // whatever another app may have put at the path meanwhile.
+            // One descriptor from the first byte to the last, a put-back included, held until the backup is dropped: it
+            // names the file written, never whatever another app may have put at the path meanwhile.
             val putBack = open.use {
                 val done = try {
                     writeInPlace(open.channel, made.source, made.state.length)
@@ -511,42 +518,50 @@ class SafeWriter(
                     log("tags: write failed (${e.javaClass.simpleName})")
                     false
                 }
-                if (done) null else putBack(open, openId, pathId, song, intent, backup)
+                if (!done) return@use putBack(open, openId, pathId, song, intent, backup)
+
+                // Written and verified: committed, so its backup is never written back over it, then Undo is saved.
+                work.delete()
+                if (!journal.commit(intent)) log("tags: intent not committed")
+                if (!undo.save(undoRecord, song.mediaStoreId)) {
+                    // Written, but no Undo yet: the intent and the backup stay, and the start-up recovery saves the
+                    // record.
+                    log("tags: Undo not saved, left for the start-up recovery")
+                    pin = true
+                    return SongOutcome.UNDO_NOT_SAVED
+                }
+                // The backup is dropped only while the path still names the file written: if another file is there now,
+                // the backup may be the only copy of the song left.
+                if (open.fileId() != openId || songs.fileId(path) != pathId) {
+                    journal.setAside(id)
+                    log("tags: the song was replaced after its write, set aside")
+                    return SongOutcome.SET_ASIDE
+                }
+                journal.close(id)
+                if (backup.name !in undo.keptBackups()) backup.delete()
+                return SongOutcome.WRITTEN
             }
-            when (putBack) {
-                null -> Unit
+            return when (putBack) {
                 PutBack.RESTORED -> {
                     songs.scan(path)
                     journal.close(id)
                     dropCopies()
-                    return SongOutcome.LEFT_AS_IT_WAS
+                    SongOutcome.LEFT_AS_IT_WAS
                 }
                 PutBack.REPLACED -> {
-                    // Not this song any more: nothing written over it, the write (and its backup) set aside.
+                    // Not this song any more: nothing written over the file at the path, the write (and its backup) set
+                    // aside.
                     journal.setAside(id)
                     work.delete()
                     log("tags: the song was replaced during its write, set aside")
-                    return SongOutcome.SET_ASIDE
+                    SongOutcome.SET_ASIDE
                 }
                 PutBack.FAILED -> {
                     log("tags: backup left for the start-up recovery")
                     pin = true
-                    return SongOutcome.RECOVERY_PENDING
+                    SongOutcome.RECOVERY_PENDING
                 }
             }
-
-            // Written and verified: committed, so its backup is never written back over it, then Undo is saved.
-            work.delete()
-            if (!journal.commit(intent)) log("tags: intent not committed")
-            if (!undo.save(undoRecord, song.mediaStoreId)) {
-                // Written, but no Undo yet: the intent and the backup stay, and the start-up recovery saves the record.
-                log("tags: Undo not saved, left for the start-up recovery")
-                pin = true
-                return SongOutcome.UNDO_NOT_SAVED
-            }
-            journal.close(id)
-            if (backup.name !in undo.keptBackups()) backup.delete()
-            return SongOutcome.WRITTEN
         } finally {
             // The intent stays open: the song is held for good in this process (pinned before its lock is let go, so
             // nothing can take it in between), and the start-up recovery settles it.
@@ -598,14 +613,19 @@ class SafeWriter(
      * Writes the backup back after a failure, through [open], the descriptor the write went through, only while it is
      * still the file written: [open] still names the file it named at the first byte ([openId], `fstat`) and the path
      * still names the file it named then ([pathId], `lstat`, a link never followed). Otherwise the song was replaced
-     * and nothing is written. The caller closes [open], then rescans.
+     * and nothing is written; replaced while it was written back, the backup is kept. The caller closes [open], then
+     * rescans.
      */
     private fun putBack(open: OpenSong, openId: FileId, pathId: FileId, song: SongTarget, intent: WriteIntent, backup: File): PutBack {
         if (open.fileId() != openId || songs.fileId(song.path) != pathId) return PutBack.REPLACED
         if (!writes.allows(SharedWrite.TAG_RESTORE, song.path)) return PutBack.FAILED
         return try {
             writeInPlace(open.channel, backup, intent.original.length)
-            if (fileState(File(song.path)) == intent.original) PutBack.RESTORED else PutBack.FAILED
+            when {
+                open.fileId() != openId || songs.fileId(song.path) != pathId -> PutBack.REPLACED
+                fileState(File(song.path)) == intent.original -> PutBack.RESTORED
+                else -> PutBack.FAILED
+            }
         } catch (e: IOException) {
             log("tags: backup not written back (${e.javaClass.simpleName})")
             PutBack.FAILED

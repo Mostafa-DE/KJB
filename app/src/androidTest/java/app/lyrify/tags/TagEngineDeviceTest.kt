@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.graphics.Bitmap
+import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
 import android.os.Handler
@@ -448,6 +449,18 @@ class TagEngineDeviceTest {
     /** A probe song [name]d in the test folder holding [bytes], with its MediaStore id and path; deleted after [block]. */
     private fun withProbe(bytes: ByteArray, name: String = "kjb-t1-probe-${System.currentTimeMillis()}.mp3", block: (id: Long, path: String) -> Unit) {
         assumeTrue("shared storage is not mounted", Environment.getExternalStorageState() == Environment.MEDIA_MOUNTED)
+        val uri = makeProbe(bytes, name)
+        try {
+            val path = pathOf(uri)
+            assertTrue(SharedWrites.inTestFolder(path))
+            block(ContentUris.parseId(uri), path)
+        } finally {
+            context.contentResolver.delete(uri, null, null)
+        }
+    }
+
+    /** Makes a probe song [name]d in the test folder holding [bytes], through MediaStore; the caller deletes it. */
+    private fun makeProbe(bytes: ByteArray, name: String): Uri {
         val resolver = context.contentResolver
         val values = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, name)
@@ -458,13 +471,15 @@ class TagEngineDeviceTest {
         try {
             resolver.openOutputStream(uri)!!.use { it.write(bytes) }
             resolver.update(uri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
-            val path = resolver.query(uri, arrayOf(MediaStore.MediaColumns.DATA), null, null, null)!!.use { it.moveToFirst(); it.getString(0) }
-            assertTrue(SharedWrites.inTestFolder(path))
-            block(ContentUris.parseId(uri), path)
-        } finally {
+        } catch (e: Exception) {
             resolver.delete(uri, null, null)
+            throw e
         }
+        return uri
     }
+
+    private fun pathOf(uri: Uri): String =
+        context.contentResolver.query(uri, arrayOf(MediaStore.MediaColumns.DATA), null, null, null)!!.use { it.moveToFirst(); it.getString(0) }
 
     @Test
     fun theInPlaceWriteThroughMediaStoreKeepsTheSongsIdAndDateAdded() {
@@ -545,11 +560,11 @@ class TagEngineDeviceTest {
         }
     }
 
-    /** The start-up recovery over the folders in [killRoot], as the next process runs it. */
-    private fun recoverAfterKill(killRoot: String): Pair<Recovered, WriteJournal> {
+    /** The start-up recovery over the folders in [killRoot], as the next process runs it, on [songs]. */
+    private fun recoverAfterKill(killRoot: String, songs: SongFiles = PhoneSongFiles(context)): Pair<Recovered, WriteJournal> {
         val dirs = TagDirs(File(context.filesDir, killRoot), ::fsyncDirectory)
         val journal = WriteJournal(dirs.journal, dirs.syncDir)
-        val recovery = JournalRecovery(dirs, journal, UndoStore(dirs), PhoneSongFiles(context), PathLocks(), Lyrify.writes)
+        val recovery = JournalRecovery(dirs, journal, UndoStore(dirs), songs, PathLocks(), Lyrify.writes)
         return runBlocking { recovery.recover(recovery.holdPending()) } to journal
     }
 
@@ -601,6 +616,52 @@ class TagEngineDeviceTest {
 
                 assertEquals(Recovered(setAside = 1), recovered)
                 assertArrayEquals(foreign, File(path).readBytes())
+            }
+        }
+        File(context.filesDir, killRoot).deleteRecursively()
+    }
+
+    /**
+     * After the kill, the recovery opens the torn probe and reads it; right after its first read, the probe is deleted
+     * and another file made under its name, through MediaStore, as another app would. The recovery's descriptor still
+     * reads the torn song, but the path names another file now: nothing is written, the new file is left as it is, and
+     * the backup, the only whole copy of the song, is kept with the intent set aside.
+     */
+    @Test
+    fun aSongReplacedWhileTheRecoveryHoldsItIsNotWrittenAndItsBackupIsKept() {
+        val original = assets.open("tags/paper-comet-v23.mp3").use { it.readBytes() }
+        val foreign = assets.open("tags/lanterns-over-kelp-v24.mp3").use { it.readBytes() }
+        val killRoot = "tag-kill-test"
+        val name = "kjb-t1-probe-${System.currentTimeMillis()}.mp3"
+        File(context.filesDir, killRoot).deleteRecursively()
+        withProbe(original, name) { id, path ->
+            killMidWrite(id, path, original.size / 2L, killRoot)
+            val dirs = TagDirs(File(context.filesDir, killRoot), ::fsyncDirectory)
+            val backup = File(dirs.backups, WriteJournal(dirs.journal, dirs.syncDir).pending().single().backup)
+            val phone = PhoneSongFiles(context)
+            var replacement: Uri? = null
+            val replacing = object : SongFiles by phone {
+                override fun openInPlace(song: SongTarget): OpenSong? = phone.openInPlace(song)?.let { open ->
+                    OpenSong(open.channel, reader = { buffer, position ->
+                        open.read(buffer, position).also {
+                            if (replacement == null) {
+                                context.contentResolver.delete(ContentUris.withAppendedId(MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), id), null, null)
+                                replacement = makeProbe(foreign, name)
+                            }
+                        }
+                    }, sizer = open::size, identify = open::fileId)
+                }
+            }
+            try {
+                val (recovered, _) = recoverAfterKill(killRoot, replacing)
+
+                val made = checkNotNull(replacement) { "the recovery never read the probe" }
+                assumeTrue("MediaStore put the new file under another name", pathOf(made) == path)
+                assertEquals(Recovered(setAside = 1), recovered)
+                assertArrayEquals(foreign, File(path).readBytes())
+                assertArrayEquals(original, backup.readBytes())
+            } finally {
+                replacement?.let { context.contentResolver.delete(it, null, null) }
             }
         }
         File(context.filesDir, killRoot).deleteRecursively()

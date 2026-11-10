@@ -195,6 +195,13 @@ class FakeSongFiles(private val events: MutableList<String> = Collections.synchr
 
     /** Asked on each open, to see what is held then (the recovery must hold the song). */
     var onOpen: () -> Unit = {}
+
+    /** Asked after each read through a descriptor, and before each write through one. */
+    var onRead: () -> Unit = {}
+    var onWrite: () -> Unit = {}
+
+    /** The next [failReads] reads through a descriptor fail, as an I/O error from the card or from FUSE would. */
+    var failReads = 0
     var running = 0
     var mostAtOnce = 0
 
@@ -218,15 +225,23 @@ class FakeSongFiles(private val events: MutableList<String> = Collections.synchr
         val target = redirect[song.path] ?: File(song.path)
         if (!target.isFile) return null
         synchronized(this) { running++; mostAtOnce = maxOf(mostAtOnce, running) }
-        // The descriptor names the file at the path when it was opened, whatever is put at the path later.
-        val opened = fileId(song.path)
+        // The descriptor names the file at the path when it was opened, whatever is put at the path later. MediaStore
+        // mostly opens it on the file system under the path's (MediaProvider's "lower FS"), so its device number is
+        // not the one the path reports.
+        val opened = fileId(song.path)?.let { it.copy(dev = it.dev + LOWER_FS) }
         val channel = FileChannel.open(target.toPath(), StandardOpenOption.READ, StandardOpenOption.WRITE)
         return OpenSong(
-            PlannedChannel(channel, plans) {
+            PlannedChannel(channel, plans, { onWrite() }) {
                 synchronized(this) { running-- }
                 events += "closed"
             },
-            reader = { buffer, position -> channel.read(buffer, position) },
+            reader = { buffer, position ->
+                if (failReads > 0) {
+                    failReads--
+                    throw IOException("read failed")
+                }
+                channel.read(buffer, position).also { onRead() }
+            },
             sizer = { channel.size() },
         ) { opened }
     }
@@ -249,15 +264,25 @@ class FakeSongFiles(private val events: MutableList<String> = Collections.synchr
         }
         return scanned(path)
     }
+
+    private companion object {
+        const val LOWER_FS = 1_000L
+    }
 }
 
 /** A file channel that writes through to [inner], failing, dying or damaging as each pass's plan from [plans] says. */
-private class PlannedChannel(private val inner: FileChannel, private val plans: ArrayDeque<WritePlan>, private val onClose: () -> Unit) : FileChannel() {
+private class PlannedChannel(
+    private val inner: FileChannel,
+    private val plans: ArrayDeque<WritePlan>,
+    private val onWrite: () -> Unit,
+    private val onClose: () -> Unit,
+) : FileChannel() {
     private var plan: WritePlan? = null
     private var written = 0L
     private var damage = false
 
     override fun write(src: ByteBuffer): Int {
+        onWrite()
         val plan = plan
         val limit = when (plan) {
             is WritePlan.FailAfter -> plan.bytes
