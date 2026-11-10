@@ -196,6 +196,11 @@ class LyricsIndex(
      * such line and that line's time, titles as [settings] shows them. By path (folder, then file name), the store's
      * page: from the [from]th song found, at most [limit], so a one-letter search reads what shows rather than every
      * match. Empty when the index cannot be read.
+     *
+     * Lyrics match at the start of a word only, by design: FTS4 finds a word by its start, never inside it (nor inside a
+     * run of CJK text without spaces), so the spec's rule that a match inside a word ranks below one at a word's start
+     * applies to names ([SearchIndex]), not to lyrics, which have no inside-a-word matches at all ("anterns" finds no
+     * "Lanterns"; the tests hold this).
      */
     suspend fun find(query: String, library: Library, settings: LibrarySettings, from: Int = 0, limit: Int = Int.MAX_VALUE): List<LyricHit> {
         val folded = fold(query)
