@@ -311,21 +311,13 @@ class PlaybackService : MediaLibraryService() {
         override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult {
             val base = super.onConnect(session, controller)
             if (!base.isAccepted) return base
-            // Only KJB, the system's trusted controllers and the car see the library, search and queues; any other app
-            // gets plain transport (auto/CarBrowse.kt).
-            if (browse.connect(controller) == Access.TRANSPORT) {
-                return MediaSession.ConnectionResult.AcceptedResultBuilder(session, controller)
-                    .setAvailableSessionCommands(SessionCommands.EMPTY)
-                    .setAvailablePlayerCommands(ControllerAccess.transport(base.availablePlayerCommands))
-                    .build()
-            }
-            // TODO(integration): offer the parts' commands (Favourite, Shuffle, Repeat) to trusted controllers only, through
-            // A4's controller access check (CarAccess), once both are merged.
-            val own = parts.flatMap { it.commands }
-            if (own.isEmpty()) return base
+            // Only KJB, the system's trusted controllers and the car see the library, search and queues, and get the
+            // parts' commands (Favourite, Shuffle, Repeat); any other app gets plain transport (auto/CarBrowse.kt).
+            val access = browse.connect(controller)
+            val offered = ControllerAccess.sessionCommands(access, base.availableSessionCommands.commands, parts.flatMap { it.commands })
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session, controller)
-                .setAvailableSessionCommands(base.availableSessionCommands.buildUpon().apply { own.forEach(::add) }.build())
-                .setAvailablePlayerCommands(base.availablePlayerCommands)
+                .setAvailableSessionCommands(SessionCommands.Builder().apply { offered.forEach(::add) }.build())
+                .setAvailablePlayerCommands(if (access == Access.TRANSPORT) ControllerAccess.transport(base.availablePlayerCommands) else base.availablePlayerCommands)
                 .build()
         }
 

@@ -359,6 +359,12 @@ class ControllerAccess(
             Player.COMMAND_GET_METADATA,
         )
 
+        /**
+         * The session commands a controller with [access] is offered: none for plain transport; else the session's own
+         * ([base]) and the service parts' custom ones ([own]: Favourite, Shuffle, Repeat).
+         */
+        fun <T> sessionCommands(access: Access, base: Set<T>, own: List<T>): Set<T> = if (access == Access.TRANSPORT) emptySet() else base + own
+
         /** [base] narrowed to [TRANSPORT_COMMANDS]. */
         @OptIn(UnstableApi::class)
         fun transport(base: Player.Commands): Player.Commands =

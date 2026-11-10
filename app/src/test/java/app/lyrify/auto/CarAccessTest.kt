@@ -65,6 +65,19 @@ class CarAccessTest {
     }
 
     @Test
+    fun `the player's own buttons (Favourite, Shuffle, Repeat) are offered to KJB, the system and the car, never another app`() {
+        val base = setOf("browse", "search")
+        val own = listOf("favourite", "shuffle", "repeat")
+        fun offered(caller: Caller) = ControllerAccess.sessionCommands(access.of(caller), base, own)
+
+        assertEquals(base + own, offered(Caller("app.lyrify.debug", ownUid, trusted = false)))
+        assertEquals(base + own, offered(Caller("com.android.systemui", 10_050, trusted = true)))
+        assertEquals(base + own, offered(Caller(ControllerAccess.ANDROID_AUTO, autoUid, trusted = false)))
+        assertEquals(emptySet<String>(), offered(Caller("com.example.player", 10_400, trusted = false)))
+        assertEquals(emptySet<String>(), offered(Caller(ControllerAccess.ANDROID_AUTO, 10_300, trusted = false)))
+    }
+
+    @Test
     fun `plain transport is play, pause, next, previous and the song playing, never the queue or a change to it`() {
         val transport = ControllerAccess.TRANSPORT_COMMANDS
         listOf(Player.COMMAND_PLAY_PAUSE, Player.COMMAND_SEEK_TO_NEXT, Player.COMMAND_SEEK_TO_PREVIOUS, Player.COMMAND_GET_CURRENT_MEDIA_ITEM, Player.COMMAND_GET_METADATA)
