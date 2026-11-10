@@ -330,7 +330,9 @@ class NavTest {
     fun `a page's own Back button is the phone's Back`() {
         // Unit tests run in the module's folder.
         val shell = java.io.File("src/main/java/app/lyrify/ui/AppShell.kt").readText()
-        assertTrue(Regex("""BackHandler\(enabled = .*state\.pages\.isNotEmpty\(\).*\{ nav\.back\(\) }""").containsMatchIn(shell))
+        // The shell's back for pages follows the finger (predictive back) and ends in nav.back().
+        assertTrue(Regex("""PredictiveBackHandler\(enabled = .*state\.pages\.isNotEmpty\(\).*\{ events ->\s*backFromPages\(events, nav""").containsMatchIn(shell))
+        assertTrue(shell.substringAfter("private suspend fun backFromPages(").substringBefore("\n}\n").contains("nav.back()"))
         val collections = java.io.File("src/main/java/app/lyrify/ui/CollectionScreens.kt").readText()
         assertTrue(Regex("""ic_arrow_back[^\n]*\{ nav\.back\(\) }""").containsMatchIn(collections))
         val library = java.io.File("src/main/java/app/lyrify/ui/LibraryScreen.kt").readText()
@@ -499,4 +501,26 @@ class NavTest {
 
     /** Stands in for the 2.x shell's saved tab. */
     private enum class Tab2x { NOW }
+
+    // The page already on top, opened again from the player or a song's sheet (review finding D)
+
+    @Test
+    fun `opening from the player the page already on top keeps the way back to the player`() {
+        val onAlbum = NavState.start(DockTab.LIBRARY).open(album)
+        val fromPlayer = onAlbum.show(FullScreen.Player).open(album)
+        // Not opened twice, and the player gives way to it.
+        assertEquals(listOf<Page>(album), fromPlayer.pages)
+        assertEquals(emptyList<FullScreen>(), fromPlayer.views)
+        assertEquals(listOf<FullScreen>(FullScreen.Player), fromPlayer.back()!!.views)
+    }
+
+    @Test
+    fun `Go to album from a song's sheet on that album keeps the sheet to come back to`() {
+        val sheet = SheetReturn("host", OpenSheet.Menu(SongRef("/Music/Harbour Glass/01 Paper Lantern.mp3")))
+        val again = NavState.start(DockTab.LIBRARY).open(album).open(album, sheet)
+        assertEquals(listOf<Page>(album), again.pages)
+        assertEquals(sheet, again.back()!!.reopen)
+        // Opened again plainly, the page keeps the origin it has.
+        assertEquals(sheet, again.open(album).back()!!.reopen)
+    }
 }
