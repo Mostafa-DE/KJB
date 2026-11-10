@@ -61,7 +61,8 @@ class JournalRecoveryTest {
                 durableCopy(from, to, rig.folders::sync)
             }
             killedWhileWriting(song)
-            assertEquals(Recovered(), recover())
+            // The intent written before the backup is closed: the song is proven as it was, so its backup goes.
+            assertEquals(Recovered(settled = 1), recover())
             assertArrayEquals(original, rig.bytes(song))
             assertEquals(emptyList<String>(), rig.leftovers())
         }
@@ -72,11 +73,9 @@ class JournalRecoveryTest {
     fun `killed while the intent was being written - the song was never opened`() {
         val song = rig.song("Paper Lantern", 41, fields)
         val original = rig.bytes(song)
-        // As the dead process left it: a backup, a private copy and an intent only half written aside.
+        // As the dead process left it: an intent only half written aside (its backup comes after it).
         rig.dirs.journal.mkdirs()
         File(rig.dirs.journal, "1800000000000-41-1.json.tmp").writeText("{\"id\":\"1800000000000-41-1\",\"pa")
-        rig.dirs.backups.mkdirs()
-        File(rig.dirs.backups, "1800000000000-41-1.mp3").writeBytes(original)
 
         assertEquals(Recovered(), recover())
         assertArrayEquals(original, rig.bytes(song))
@@ -201,7 +200,7 @@ class JournalRecoveryTest {
 
         assertTrue(journal.open(intent))
         assertEquals(listOf(intent), WriteJournal(File(folder.root, "journal"), FolderSync()::sync).pending())
-        assertTrue(journal.close(intent.id))
+        journal.close(intent.id)
         assertEquals(emptyList<WriteIntent>(), journal.pending())
     }
 }

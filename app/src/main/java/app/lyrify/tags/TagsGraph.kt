@@ -23,6 +23,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
 
@@ -115,6 +116,23 @@ object TagsGraph {
     @Synchronized
     fun lookup(context: Context): AlbumLookup = lookup ?: AlbumLookup(MusicBrainz(client(context)), ::log).also { lookup = it }
 
+    /**
+     * The writes the start-up recovery set aside because their song could not be read at [JournalRecovery.READ_TRIES]
+     * starts in a row (their originals kept), once it is done: Covers & tags says how many.
+     */
+    suspend fun uncheckable(context: Context): Int {
+        recovered.await()
+        val journal = parts(context.applicationContext).journal
+        return withContext(Dispatchers.IO) {
+            try {
+                journal.uncheckable()
+            } catch (e: IOException) {
+                log("tags: the writes set aside could not be counted (${e.javaClass.simpleName})")
+                0 // safe: Covers & tags' words only; the line is left out
+            }
+        }
+    }
+
     /** History and Undo's records, for the History list. */
     fun undo(context: Context): UndoStore = parts(context.applicationContext).undo
 
@@ -154,7 +172,7 @@ object TagsGraph {
         val storage = context.getSystemService(StorageManager::class.java)
         storage.getAllocatableBytes(storage.getUuidForPath(context.filesDir))
     } catch (_: IOException) {
-        0
+        0 // safe: no room known is none: the batch writes nothing (NotEnoughSpace)
     }
 
     private fun log(line: String) {

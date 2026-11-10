@@ -47,12 +47,13 @@ enum class Id3Version(val number: Int) {
  * song, never the user's file (the real one refuses any other). Blocking.
  */
 interface TagFile {
-    /** The tags of [file], or null when TagLib cannot open it. */
+    /** The tags of [file], or null when TagLib cannot read it as a song. Throws when the file can't be opened. */
     fun read(file: File): SongTags?
 
     /**
      * Writes [fields] and [pictures] into [file] as its whole tag: a field or picture left out is removed, and null
      * pictures are left as they are. An MP3 is written as [id3], adding no ID3v1 tag. False when TagLib could not.
+     * Throws when the file can't be opened.
      */
     fun write(file: File, fields: Map<String, List<String>>, pictures: List<TagPicture>?, id3: Id3Version): Boolean
 }
@@ -76,8 +77,6 @@ class TagLibFile(private val privateRoot: File) : TagFile {
                 id3v2Version = id3?.firstOrNull()?.toIntOrNull() ?: 0,
                 frames = id3?.drop(1).orEmpty(),
             )
-        } catch (_: IOException) {
-            null
         } catch (_: RuntimeException) {
             // A Java exception TagLib's JNI left pending (out of memory for a picture, a bad string).
             null
@@ -90,8 +89,6 @@ class TagLibFile(private val privateRoot: File) : TagFile {
         val set = pictures?.map { Picture(it.data, it.description, it.type, it.mime) }?.toTypedArray()
         return try {
             open(file, ParcelFileDescriptor.MODE_READ_WRITE) { TagLib.saveTags(it, map, set, id3.number) }
-        } catch (_: IOException) {
-            false
         } catch (_: RuntimeException) {
             false
         }

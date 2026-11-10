@@ -381,7 +381,9 @@ class TagEngineDeviceTest {
             return OpenSong(if (fail == null) channel else CutShort(channel, fail), { buffer, at -> channel.read(buffer, at) }, { channel.size() }) { opened }
         }
 
-        override fun fileId(path: String): FileId? = PhoneSongFiles(context).fileId(path)
+        override fun openToRead(path: String): OpenSong = PhoneSongFiles(context).openToRead(path)
+
+        override fun fileId(path: String): FileId = PhoneSongFiles(context).fileId(path)
 
         override suspend fun scan(path: String): Long? = scanned
     }
@@ -665,6 +667,56 @@ class TagEngineDeviceTest {
             }
         }
         File(context.filesDir, killRoot).deleteRecursively()
+    }
+
+    /**
+     * The writer writes a probe through MediaStore twice. On the second write, the release of its backup opens the probe
+     * anew and reads it; right after that read, the probe is deleted and another file made under its name, through
+     * MediaStore, as another app would. The release read the written song, but the path names another file now: the
+     * backup, the only copy of the song as it was before, is kept, and the write is set aside.
+     */
+    @Test
+    fun aSongReplacedWhileItsBackupIsReleasedKeepsItsBackup() {
+        val original = assets.open("tags/paper-comet-v23.mp3").use { it.readBytes() }
+        val foreign = assets.open("tags/lanterns-over-kelp-v24.mp3").use { it.readBytes() }
+        val name = "kjb-t1-probe-${System.currentTimeMillis()}.mp3"
+        withProbe(original, name) { id, path ->
+            val phone = PhoneSongFiles(context)
+            var replacing = false
+            var replacement: Uri? = null
+            val replaced = object : SongFiles by phone {
+                override fun openToRead(path: String): OpenSong {
+                    val open = phone.openToRead(path)
+                    if (!replacing) return open
+                    return OpenSong(open.channel, reader = { buffer, position ->
+                        open.read(buffer, position).also {
+                            if (replacement == null) {
+                                context.contentResolver.delete(ContentUris.withAppendedId(MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), id), null, null)
+                                replacement = makeProbe(foreign, name)
+                            }
+                        }
+                    }, sizer = open::size, identify = open::fileId)
+                }
+            }
+            val (writer, _) = writer(replaced, Lyrify.writes)
+            val song = SongTarget(path, id)
+            try {
+                val first = runBlocking { writer.write(listOf(WriteJob(song, edit)), EditKind.SONG, "Tin Roof") } as BatchResult.Done
+                assertEquals(SongOutcome.WRITTEN, first.songs.single().outcome)
+                val before = File(path).readBytes()
+                replacing = true
+                val again = TagEdit(fields = mapOf("TITLE" to listOf("Salt Clock")))
+                val second = runBlocking { writer.write(listOf(WriteJob(song, again)), EditKind.SONG, "Salt Clock") } as BatchResult.Done
+
+                val made = checkNotNull(replacement) { "the release never read the probe" }
+                assumeTrue("MediaStore put the new file under another name", pathOf(made) == path)
+                assertEquals(SongOutcome.SET_ASIDE, second.songs.single().outcome)
+                assertArrayEquals(foreign, File(path).readBytes())
+                assertTrue("the backup is gone", dirs.backups.listFiles().orEmpty().any { it.readBytes().contentEquals(before) })
+            } finally {
+                replacement?.let { context.contentResolver.delete(it, null, null) }
+            }
+        }
     }
 
     // 16 KB pages

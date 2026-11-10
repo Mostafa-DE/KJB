@@ -123,7 +123,11 @@ class FakeTagFile(private val events: MutableList<String> = Collections.synchron
 class FolderSync {
     val failing = Collections.synchronizedSet(mutableSetOf<File>())
 
+    /** Asked at each fsync of a folder, so a test can act while the writer or the recovery waits on one. */
+    var onSync: (File) -> Unit = {}
+
     fun sync(dir: File) {
+        onSync(dir)
         if (dir.canonicalFile in failing.map { it.canonicalFile }) throw IOException("fsync failed")
         FileChannel.open(dir.toPath(), StandardOpenOption.READ).use { it.force(true) }
     }
@@ -202,6 +206,15 @@ class FakeSongFiles(private val events: MutableList<String> = Collections.synchr
 
     /** The next [failReads] reads through a descriptor fail, as an I/O error from the card or from FUSE would. */
     var failReads = 0
+
+    /** The next [endReads] reads through a descriptor find the file ended, early. */
+    var endReads = 0
+
+    /** The next [failFileIds] looks at a path (`lstat`) fail. */
+    var failFileIds = 0
+
+    /** MediaStore's queries fail (a SecurityException, a bad argument) while this is set. */
+    var failIdOf = false
     var running = 0
     var mostAtOnce = 0
 
@@ -213,7 +226,7 @@ class FakeSongFiles(private val events: MutableList<String> = Collections.synchr
 
     override fun sameFile(mediaStoreId: Long, path: String): Boolean = (ids[path] == mediaStoreId).also { events += "same file" }
 
-    override fun idOf(path: String): Long? = ids[path]
+    override fun idOf(path: String): Long? = if (failIdOf) throw IOException("MediaStore refused") else ids[path]
 
     override fun openInPlace(song: SongTarget): OpenSong? {
         events += "open rw"
@@ -228,32 +241,53 @@ class FakeSongFiles(private val events: MutableList<String> = Collections.synchr
         // The descriptor names the file at the path when it was opened, whatever is put at the path later. MediaStore
         // mostly opens it on the file system under the path's (MediaProvider's "lower FS"), so its device number is
         // not the one the path reports.
-        val opened = fileId(song.path)?.let { it.copy(dev = it.dev + LOWER_FS) }
+        val opened = (fileIds[song.path] ?: lstat(song.path)).let { it.copy(dev = it.dev + LOWER_FS) }
         val channel = FileChannel.open(target.toPath(), StandardOpenOption.READ, StandardOpenOption.WRITE)
         return OpenSong(
             PlannedChannel(channel, plans, { onWrite() }) {
                 synchronized(this) { running-- }
                 events += "closed"
             },
-            reader = { buffer, position ->
-                if (failReads > 0) {
-                    failReads--
-                    throw IOException("read failed")
-                }
-                channel.read(buffer, position).also { onRead() }
-            },
+            reader = { buffer, position -> read(channel, buffer, position) },
             sizer = { channel.size() },
         ) { opened }
     }
 
-    override fun fileId(path: String): FileId? = fileIds[path] ?: try {
+    override fun openToRead(path: String): OpenSong {
+        events += "open r"
+        if (!regularFile(File(path))) throw IOException("no song at the path")
+        // Opened on the path itself, so its identity is the path's own.
+        val opened = fileIds[path] ?: lstat(path)
+        val channel = FileChannel.open(File(path).toPath(), StandardOpenOption.READ, java.nio.file.LinkOption.NOFOLLOW_LINKS)
+        return OpenSong(channel, reader = { buffer, position -> read(channel, buffer, position) }, sizer = { channel.size() }) { opened }
+    }
+
+    private fun read(channel: FileChannel, buffer: ByteBuffer, position: Long): Int {
+        if (failReads > 0) {
+            failReads--
+            throw IOException("read failed")
+        }
+        if (endReads > 0) {
+            endReads--
+            return -1
+        }
+        return channel.read(buffer, position).also { onRead() }
+    }
+
+    override fun fileId(path: String): FileId {
+        if (failFileIds > 0) {
+            failFileIds--
+            throw IOException("lstat failed")
+        }
+        return fileIds[path] ?: lstat(path)
+    }
+
+    private fun lstat(path: String): FileId {
         val file = File(path).toPath()
-        FileId(
+        return FileId(
             (java.nio.file.Files.getAttribute(file, "unix:dev", java.nio.file.LinkOption.NOFOLLOW_LINKS) as Number).toLong(),
             (java.nio.file.Files.getAttribute(file, "unix:ino", java.nio.file.LinkOption.NOFOLLOW_LINKS) as Number).toLong(),
         )
-    } catch (_: IOException) {
-        null
     }
 
     override suspend fun scan(path: String): Long? {

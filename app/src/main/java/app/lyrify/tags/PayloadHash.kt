@@ -52,8 +52,11 @@ data class PayloadSlice(val format: AudioFormat, val sha256: String, val whole: 
  * only.
  */
 object PayloadHash {
-    /** [path]'s payload, or null when its format is not allowed or the file is not well formed. */
-    fun of(path: Path): Payload? = read(path, Long.MAX_VALUE)?.payload
+    /**
+     * [path]'s payload, or null when its format is not allowed or the file is not well formed. A read that fails is null
+     * too, or, when [strict], throws (for the tag writer, where an error decides nothing).
+     */
+    fun of(path: Path, strict: Boolean = false): Payload? = read(path, Long.MAX_VALUE, strict)?.payload
 
     /**
      * The first [bytes] of [path]'s audio payload (all of it when shorter), hashed as [of] hashes it, without M4A's
@@ -65,7 +68,7 @@ object PayloadHash {
     /** A payload hashed up to a limit: [whole] when the limit left nothing out. */
     private class Read(val payload: Payload, val whole: Boolean)
 
-    private fun read(path: Path, limit: Long): Read? {
+    private fun read(path: Path, limit: Long, strict: Boolean = false): Read? {
         val extension = path.fileName?.toString()?.substringAfterLast('.', "")?.lowercase() ?: return null
         if (extension !in AudioFormat.EXTENSIONS) return null
         return try {
@@ -78,8 +81,9 @@ object PayloadHash {
                     else -> ogg(file, limit)
                 }
             }
-        } catch (_: IOException) {
-            null
+        } catch (e: IOException) {
+            if (strict) throw e
+            null // safe: the lenient read, DuplicateScan's; the tag engine reads strict
         } catch (_: Malformed) {
             null
         }
@@ -92,11 +96,21 @@ object PayloadHash {
     }
 
     /** SHA-256 (hex) of every byte of the file at [path]. */
-    fun fileSha256(path: Path): String = FileInputStream(path.toFile()).use { input ->
+    fun fileSha256(path: Path): String = fileHash(path).second
+
+    /**
+     * The length of the file at [path] and the SHA-256 (hex) of all its bytes, both from one descriptor (its `fstat`, and
+     * reads through it). Throws when it can't be read, or ends before that length.
+     */
+    fun fileHash(path: Path): Pair<Long, String> = FileInputStream(path.toFile()).use { input ->
         val file = Reader(input.channel)
         val digest = sha256()
-        file.digest(digest, 0, file.size)
-        digest.hex()
+        try {
+            file.digest(digest, 0, file.size)
+        } catch (_: Malformed) {
+            throw IOException("file ended early")
+        }
+        file.size to digest.hex()
     }
 
     private fun mp3(file: Reader, limit: Long): Read {
