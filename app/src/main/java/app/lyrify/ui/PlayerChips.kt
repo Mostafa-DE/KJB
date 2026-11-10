@@ -1,5 +1,8 @@
 package app.lyrify.ui
 
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -102,14 +105,27 @@ internal fun SleepButton(ui: PlayerUi, onOpen: () -> Unit) {
     val context = LocalContext.current
     val extras = remember(context) { PlayerExtras.of(context) }
     val timer = extras.sleep.collectAsStateWithLifecycle().value
-    if (timer == null) {
-        val label = stringResource(R.string.player_sleep_off)
-        Box(
-            contentAlignment = Alignment.Center,
-            modifier = Modifier.size(TOUCH).clip(CircleShape).clickable(role = Role.Button, onClick = onOpen).semantics { contentDescription = label },
-        ) { Icon(painterResource(R.drawable.ic_snooze), contentDescription = null, modifier = Modifier.size(26.dp)) }
-        return
+    val reduced = LocalReducedMotion.current
+    // The icon and the chip fade through each other, the room between them following, never swapped at once.
+    val kept = remember { Kept(timer) }
+    if (timer != null) kept.value = timer
+    AnimatedContent(timer != null, transitionSpec = { fadeThrough(reduced) using SizeTransform(clip = false) }, contentAlignment = Alignment.Center, label = "sleep") { on ->
+        val running = kept.value
+        if (on && running != null) SleepChip(ui, running, onOpen) else SleepIcon(onOpen)
     }
+}
+
+@Composable
+private fun SleepIcon(onOpen: () -> Unit) {
+    val label = stringResource(R.string.player_sleep_off)
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = Modifier.size(TOUCH).clip(CircleShape).clickable(role = Role.Button, onClick = onOpen).semantics { contentDescription = label },
+    ) { Icon(painterResource(R.drawable.ic_snooze), contentDescription = null, modifier = Modifier.size(26.dp)) }
+}
+
+@Composable
+private fun SleepChip(ui: PlayerUi, timer: SleepTimer, onOpen: () -> Unit) {
     val now = rememberClock(true, everyMs = 500)
     val shown = sleepShown(timer, sleepLeftMs(timer, now, ui.positionAt(now), ui.durationMs, ui.speed), ui.playing)
     val text = when (shown) {
@@ -152,17 +168,20 @@ internal fun ExtrasChips(ui: PlayerUi, extras: PlayerExtrasUi) {
     val path = ui.path()
     val speed = state.speedOf(path)
     val part = partShown(state.part, path)
-    if (!speed.shows && !part) return
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally), modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
-        if (speed.shows) {
-            val number = speedNumber(speed.speed)
-            val text = chipPitch(speed)?.let { stringResource(R.string.speed_value_pitch, number, it) } ?: stringResource(R.string.speed_value, number)
-            LyrifyChip(selected = true, onClick = { extras.open = ExtrasSheet.SPEED }, role = Role.Button, icon = R.drawable.ic_speed) { Text(text, style = MaterialTheme.typography.labelLarge.tabular()) }
-        }
-        if (part) {
-            LyrifyChip(selected = true, onClick = extras::stopPart, role = Role.Button, icon = R.drawable.ic_repeat) {
-                Text(stringResource(R.string.part_chip))
-                Icon(painterResource(R.drawable.ic_close), contentDescription = null, modifier = Modifier.size(16.dp))
+    val reduced = LocalReducedMotion.current
+    // The row opens its room and each chip pops in and out on its own, so the title and the bar never jump.
+    AnimatedVisibility(speed.shows || part, enter = expandIn(reduced), exit = shrinkOut(reduced)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally), modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
+            AnimatedVisibility(speed.shows, enter = chipIn(reduced), exit = chipOut(reduced)) {
+                val number = speedNumber(speed.speed)
+                val text = chipPitch(speed)?.let { stringResource(R.string.speed_value_pitch, number, it) } ?: stringResource(R.string.speed_value, number)
+                LyrifyChip(selected = true, onClick = { extras.open = ExtrasSheet.SPEED }, role = Role.Button, icon = R.drawable.ic_speed) { Text(text, style = MaterialTheme.typography.labelLarge.tabular()) }
+            }
+            AnimatedVisibility(part, enter = chipIn(reduced), exit = chipOut(reduced)) {
+                LyrifyChip(selected = true, onClick = extras::stopPart, role = Role.Button, icon = R.drawable.ic_repeat) {
+                    Text(stringResource(R.string.part_chip))
+                    Icon(painterResource(R.drawable.ic_close), contentDescription = null, modifier = Modifier.size(16.dp))
+                }
             }
         }
     }

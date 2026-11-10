@@ -1,12 +1,26 @@
 package app.lyrify.ui
 
+import kotlinx.coroutines.CoroutineScope
+import androidx.compose.runtime.Stable
+import coil3.request.ImageRequest
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.draw.BlurredEdgeTreatment
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.input.pointer.util.addPointerInputChange
+import androidx.compose.ui.input.pointer.util.VelocityTracker
+import androidx.compose.ui.input.pointer.PointerInputChange
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.Crossfade
 import android.os.SystemClock
 import androidx.annotation.DrawableRes
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.runtime.derivedStateOf
@@ -198,12 +212,37 @@ fun settleShift(outcome: SwipeOutcome, slides: Boolean, travel: Float): Float = 
     else -> 0f
 }
 
+/** What a finished swipe does once its cover has settled: skip, land on the song already playing, or spring back. */
+enum class Settled { SKIP, LANDED, RETURN }
+
+/**
+ * A swipe that started on the queue item [startedOn] and has settled while [playingNow] plays: it skips only when
+ * nothing moved meanwhile. A skip from elsewhere (a headset, the notification) that reached the song sliding in
+ * ([coming]) lands it without a second skip; one that went anywhere else sends the cover back.
+ */
+fun settledSwipe(startedOn: Long, playingNow: Long, coming: Long?): Settled = when (playingNow) {
+    startedOn -> Settled.SKIP
+    coming -> Settled.LANDED
+    else -> Settled.RETURN
+}
+
 /** Which song's cover shows beside the moving one: the next one when the cover moves left, the previous one when right. */
 fun comingFrom(shift: Float): SkipWay? = when {
     shift < 0f -> SkipWay.NEXT
     shift > 0f -> SkipWay.PREVIOUS
     else -> null
 }
+
+/** One name on the line under a song's title: the tag's [text], or null for a missing tag, shown as its placeholder. */
+data class MetaName(val text: String?) {
+    /** A tag opens its page; a placeholder ("No artist", "No album") does nothing. */
+    val tappable: Boolean get() = text != null
+}
+
+/** The line under a song's title: "Artist · Album", each as tagged (the same name twice included), or its placeholder. */
+data class MetaLine(val artist: MetaName, val album: MetaName)
+
+fun metaLine(artist: String?, album: String?): MetaLine = MetaLine(MetaName(artist?.trim()?.takeIf(String::isNotEmpty)), MetaName(album?.trim()?.takeIf(String::isNotEmpty)))
 
 /** "Tap the cover for lyrics": once, when the player opens on the cover. */
 fun flipHintOnOpen(ui: PlayerUiSettings): Boolean = !ui.flipHintShown && !ui.showLyrics
@@ -261,6 +300,7 @@ fun ownNow(ui: PlayerUi?, settings: LibrarySettings, now: Long): OwnNow? {
     return OwnNow(
         title = ui.song?.let { displayTitle(it, settings) } ?: path.substringAfterLast('/'),
         artist = ui.song?.artist,
+        album = ui.song?.album,
         cover = SongArt(path),
         playing = ui.playing,
         progress = ringShare(ui.positionAt(now), ui.durationMs),
@@ -353,6 +393,11 @@ fun PlayerView() {
     val toasts = LocalToasts.current
     val resources = LocalResources.current
     val close = { nav.close(FullScreen.Player) }
+    val reduced = LocalReducedMotion.current
+    val drag = remember(scope) { PlayerDrag(scope) }
+    val fling = with(LocalDensity.current) { DRAG_FLING_DP.dp.toPx() }
+    val intoBar = LocalContainer.current != null
+    val letGo = { drag.release(fling, intoBar, close) }
     var lyricsRoute by remember { mutableStateOf<PlayerRoute?>(null) }
     val extras = rememberPlayerExtras()
     val route: (PlayerRoute) -> Unit = { route ->
@@ -373,10 +418,25 @@ fun PlayerView() {
         }
     }
 
-    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+    Box(
+        Modifier
+            .fillMaxSize()
+            .onSizeChanged { drag.height = it.height.toFloat() }
+            .graphicsLayer {
+                // Dragged down, the player follows the finger, shrinking and rounding as it goes ([dragPeek]).
+                if (reduced) return@graphicsLayer
+                val peek = dragPeek(drag.offset.value, size.height)
+                translationY = peek.shiftY
+                scaleX = peek.scale
+                scaleY = peek.scale
+                shape = RoundedCornerShape(PEEK_CORNER * peek.corner)
+                clip = peek.corner > 0f
+            }
+            .background(MaterialTheme.colorScheme.background),
+    ) {
         Backdrop(ui.item.song.path)
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
-            PlayerTopBar(ui, onClose = close, onRoute = route, onSwipeDown = close)
+            PlayerTopBar(ui, onClose = close, onRoute = route, onDrag = drag::follow, onDragEnd = letGo)
             Column(Modifier.weight(1f).padding(horizontal = 24.dp, vertical = 4.dp)) {
                 FlipArea(
                     ui = ui,
@@ -386,7 +446,8 @@ fun PlayerView() {
                     onPlay = connection::play,
                     onNext = connection::next,
                     onPrevious = connection::previous,
-                    onClose = close,
+                    onDownDrag = drag::follow,
+                    onDownEnd = letGo,
                     onRoute = route,
                     modifier = Modifier.weight(1f),
                 )
@@ -407,42 +468,93 @@ fun PlayerView() {
     PlayerExtrasHost(extras, ui)
 }
 
-/** The cover, blurred and faded, behind the top of the player. */
-@Composable
-private fun Backdrop(path: String) {
-    val surface = MaterialTheme.colorScheme.background
-    Box(Modifier.fillMaxWidth().height(420.dp)) {
-        // The prototype's .pbg: the cover at 150%, blurred 46 dp, at 70%, faded into the page with its four stops.
-        AsyncImage(
-            model = SongArt(path),
-            contentDescription = null,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier.fillMaxSize().graphicsLayer {
-                scaleX = 1.5f
-                scaleY = 1.5f
-            }.blur(46.dp).alpha(0.7f),
-        )
-        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0f to surface.copy(alpha = 0.72f), 0.3f to surface.copy(alpha = 0.24f), 0.66f to surface.copy(alpha = 0.34f), 1f to surface)))
+/**
+ * The player dragged down by its top bar or its cover: it follows the finger ([dragPeek]); let go, it closes past a
+ * quarter of its [height] or on a fling down ([dragCloses]), else springs back ([Motion.release]). Closing into the Now
+ * bar, it lets go of the drag as the container shrinks, so the whole player lands in the bar.
+ */
+@Stable
+private class PlayerDrag(private val scope: CoroutineScope) {
+    val offset = Animatable(0f)
+    var height = 0f
+    private val tracker = VelocityTracker()
+
+    fun follow(change: PointerInputChange, dy: Float) {
+        tracker.addPointerInputChange(change)
+        change.consume()
+        scope.launch { offset.snapTo((offset.value + dy).coerceAtLeast(0f)) }
+    }
+
+    fun release(fling: Float, intoBar: Boolean, close: () -> Unit) {
+        val velocity = tracker.calculateVelocity().y
+        tracker.resetTracking()
+        if (dragCloses(offset.value, velocity, height, fling)) {
+            close()
+            if (intoBar) scope.launch { offset.animateTo(0f, tween(Motion.OPEN_MS, easing = Motion.Rise)) }
+        } else {
+            scope.launch { offset.animateTo(0f, Motion.release) }
+        }
     }
 }
 
-/** The chevron, "From Album · Name", and "⋯" with every item of the menu. A swipe down closes the player. */
+/**
+ * Behind the top of the player: the cover blurred into a glow that fades into the page by 60% of the height, one
+ * seamless gradient with no edge anywhere (the glow and its tint are masked to nothing, never cut at a box's edge), light
+ * or dark. It cross-fades from song to song; it is drawn from a small image (the blur hides it), and only once the player
+ * has finished growing out of the Now bar, so the transform never re-blurs on every frame.
+ */
 @Composable
-private fun PlayerTopBar(ui: PlayerUi, onClose: () -> Unit, onRoute: (PlayerRoute) -> Unit, onSwipeDown: () -> Unit) {
+private fun Backdrop(path: String) {
+    val context = LocalContext.current
+    val surface = MaterialTheme.colorScheme.background
+    val reduced = LocalReducedMotion.current
+    val container = LocalContainer.current
+    val arriving = container != null && container.visibility.transition.run { currentState != targetState }
+    val shown by animateFloatAsState(if (arriving) 0f else 1f, motion(tween(Motion.FADE_IN_MS * 2), reduced), label = "backdrop")
+    Crossfade(path, Modifier.fillMaxWidth().fillMaxHeight(BACKDROP_SHARE).graphicsLayer { alpha = shown }, animationSpec = tween(if (reduced) Motion.REDUCED_MS else Motion.OPEN_MS), label = "backdrop") { song ->
+        val request = remember(song) { ImageRequest.Builder(context).data(SongArt(song)).size(BACKDROP_PX).build() }
+        Box(
+            Modifier
+                .fillMaxSize()
+                .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                .drawWithContent {
+                    drawContent()
+                    // The prototype's tint keeps the top bar readable over any cover.
+                    drawRect(Brush.verticalGradient(0f to surface.copy(alpha = 0.72f), 0.3f to surface.copy(alpha = 0.24f), 0.66f to surface.copy(alpha = 0.34f), 1f to surface.copy(alpha = 0.6f)))
+                    // Then all of it fades to nothing, smoothly, so the page shows through with no line.
+                    drawRect(Brush.verticalGradient(0f to Color.Black, 0.4f to Color.Black, 0.7f to Color.Black.copy(alpha = 0.55f), 0.88f to Color.Black.copy(alpha = 0.15f), 1f to Color.Transparent), blendMode = BlendMode.DstIn)
+                },
+        ) {
+            AsyncImage(
+                model = request,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        scaleX = 1.5f
+                        scaleY = 1.5f
+                    }
+                    .blur(46.dp, BlurredEdgeTreatment.Unbounded)
+                    .alpha(0.7f),
+            )
+        }
+    }
+}
+
+/** The chevron, "From Album · Name", and "⋯" with every item of the menu. Dragged down, the player follows ([onDrag]). */
+@Composable
+private fun PlayerTopBar(ui: PlayerUi, onClose: () -> Unit, onRoute: (PlayerRoute) -> Unit, onDrag: (PointerInputChange, Float) -> Unit, onDragEnd: () -> Unit) {
     val context = LocalContext.current
     val nav = LocalNavigator.current
     var menu by remember { mutableStateOf(false) }
-    val swipe = with(LocalDensity.current) { SWIPE_DOWN.toPx() }
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = PLAYER_BAR)
             .padding(horizontal = 8.dp)
-            .pointerInput(onSwipeDown) {
-                var dragged = 0f
-                detectDragGestures(onDragStart = { dragged = 0f }, onDragEnd = { if (dragged > swipe) onSwipeDown() }) { _, drag -> dragged += drag.y }
-            },
+            .pointerInput(Unit) { detectVerticalDragGestures(onDragEnd = onDragEnd, onDragCancel = onDragEnd) { change, dy -> onDrag(change, dy) } },
     ) {
         ChromeIconButton(R.drawable.ic_keyboard_arrow_down, stringResource(R.string.player_close), onClose)
         val name = queueLabel(context, ui.queue)
@@ -490,7 +602,8 @@ private fun FlipArea(
     onPlay: () -> Unit,
     onNext: () -> Unit,
     onPrevious: () -> Unit,
-    onClose: () -> Unit,
+    onDownDrag: (PointerInputChange, Float) -> Unit,
+    onDownEnd: () -> Unit,
     onRoute: (PlayerRoute) -> Unit,
     modifier: Modifier,
 ) {
@@ -516,7 +629,7 @@ private fun FlipArea(
                     cameraDistance = CAMERA * density
                     alpha = frontAlpha
                 },
-            ) { CoverFace(ui, side, area, enabled = !lyricsShown, onFlip = { onFlip(true) }, onNext, onPrevious, onClose) }
+            ) { CoverFace(ui, side, area, enabled = !lyricsShown, onFlip = { onFlip(true) }, onNext, onPrevious, onDownDrag, onDownEnd) }
         }
         if (lyricsShown || (reduced && fade.value > 0f)) {
             Box(
@@ -549,7 +662,8 @@ private fun CoverFace(
     onFlip: () -> Unit,
     onNext: () -> Unit,
     onPrevious: () -> Unit,
-    onClose: () -> Unit,
+    onDownDrag: (PointerInputChange, Float) -> Unit,
+    onDownEnd: () -> Unit,
 ) {
     val density = LocalDensity.current
     val reduced = LocalReducedMotion.current
@@ -578,7 +692,7 @@ private fun CoverFace(
         shift.animateTo(0f, settle)
     }
     val latest by rememberUpdatedState(ui)
-    val actions by rememberUpdatedState(listOf(onNext, onPrevious, onClose))
+    val actions by rememberUpdatedState(listOf(onNext, onPrevious))
     val place = { if (arrived) 0f else dragging ?: shift.value }
     // Which side the cover is moving to changes rarely; reading it so does not recompose on every pixel.
     val moving by remember { derivedStateOf { comingFrom(dragging ?: shift.value) } }
@@ -620,6 +734,7 @@ private fun CoverFace(
                     if (!enabled) return@pointerInput
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed = false)
+                        val startedOn = latest.item.uid
                         val start = shift.value
                         scope.launch { shift.stop() }
                         var axis: SwipeAxis? = null
@@ -635,22 +750,31 @@ private fun CoverFace(
                             if (axis == null) axis = swipeAxis(moved.x / density.density, moved.y / density.density)
                             if (axis != null) change.consume()
                             if (axis == SwipeAxis.SIDEWAYS) dragging = start + coverShift(moved.x)
+                            // Down: the whole player follows the finger.
+                            if (axis == SwipeAxis.DOWN) onDownDrag(change, change.positionChange().y)
+                        }
+                        if (axis == SwipeAxis.DOWN) {
+                            onDownEnd()
+                            return@awaitEachGesture
                         }
                         val outcome = if (lifted) swipeOutcome(axis, moved.x / density.density, moved.y / density.density) else SwipeOutcome.Return
                         val from = dragging ?: shift.value
                         val now = latest
                         val coming = (outcome as? SwipeOutcome.Skip)?.let { incoming(now.queue, it.way, now.repeat, now.positionAt(SystemClock.elapsedRealtime())) }
-                        val (next, previous, close) = actions
+                        val (next, previous) = actions
                         scope.launch {
                             shift.snapTo(from)
                             dragging = null
                             shift.animateTo(settleShift(outcome, slides = coming != null, travel = travel), settle)
-                            // The song changes only now, with its cover in place.
-                            if (outcome is SwipeOutcome.Skip && coming != null) landing = Landing(outcome.way, coming)
-                            when (outcome) {
-                                is SwipeOutcome.Skip -> if (outcome.way == SkipWay.NEXT) next() else previous()
-                                SwipeOutcome.Close -> close()
-                                SwipeOutcome.Return -> Unit
+                            if (outcome !is SwipeOutcome.Skip) return@launch
+                            // The song changes only now, with its cover in place, and only if nothing else moved it meanwhile.
+                            when (settledSwipe(startedOn, latest.item.uid, coming?.uid)) {
+                                Settled.SKIP -> {
+                                    if (coming != null) landing = Landing(outcome.way, coming)
+                                    if (outcome.way == SkipWay.NEXT) next() else previous()
+                                }
+                                Settled.LANDED -> landing = coming?.let { Landing(outcome.way, it) }
+                                Settled.RETURN -> shift.animateTo(0f, settle)
                             }
                         }
                     }
@@ -658,7 +782,7 @@ private fun CoverFace(
                 .clickable(enabled = enabled, role = Role.Button, onClick = onFlip)
                 .semantics { contentDescription = label },
         ) {
-            SongCover(SongArt(ui.item.song.path), size = side, shape = shape)
+            SongCover(SongArt(ui.item.song.path), containerCover(LocalContainer.current), size = side, shape = shape)
         }
         FlipChip(Modifier.align(Alignment.BottomEnd).padding(12.dp), enabled, onFlip)
     }
@@ -728,14 +852,7 @@ private fun LyricsPanel(ui: PlayerUi, enabled: Boolean, onFlipBack: () -> Unit, 
         }
         Box(Modifier.weight(1f).fillMaxWidth()) {
             when (val shown = lyrics) {
-                is PanelLyrics.Synced -> SyncedLyrics(
-                    shown.lines,
-                    ui.positionAt(now),
-                    enabled,
-                    PanelLineNow,
-                    PanelLine,
-                    PaddingValues(start = 12.dp, end = 12.dp, top = 24.dp, bottom = 160.dp),
-                ) { line ->
+                is PanelLyrics.Synced -> SyncedLyrics(shown.lines, ui.positionAt(now), enabled, PanelLine, PanelFrame) { line ->
                     val tap = lineTap(line, ui.playing)
                     onSeek(tap.seekMs)
                     if (tap.play) onPlay()
@@ -775,7 +892,11 @@ private fun CoverChip(ui: PlayerUi, modifier: Modifier, enabled: Boolean, onFlip
     ) { SongCover(SongArt(ui.item.song.path), size = 36.dp, shape = CircleShape) }
 }
 
-/** The title, then the artist and album as links on one line, 48 dp tall to touch. */
+/**
+ * The title, then "Artist · Album" on one line, 48 dp tall to touch: each tag opens its page with a press tint, in the
+ * secondary ink and without an underline; a missing tag shows its placeholder ("No artist", "No album") in the quieter
+ * ink and does nothing ([metaLine]). A song that is not on the phone says so.
+ */
 @Composable
 private fun TitleAndLinks(ui: PlayerUi, settings: LibrarySettings) {
     val nav = LocalNavigator.current
@@ -789,14 +910,20 @@ private fun TitleAndLinks(ui: PlayerUi, settings: LibrarySettings) {
         modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
     )
     Row(horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().height(TOUCH)) {
-        val artist = song?.artist?.takeIf(String::isNotBlank)
-        PlayerLink(artist ?: stringResource(if (song == null) R.string.player_not_on_phone else R.string.player_no_artist), artist?.let { { nav.open(Page.Artist(it)) } }, Modifier.weight(1f, fill = false))
+        if (song == null) {
+            PlayerLink(stringResource(R.string.player_not_on_phone), onClick = null, Modifier)
+            return@Row
+        }
+        val meta = metaLine(song.artist, song.album)
+        val artist = song.artist
+        PlayerLink(meta.artist.text ?: stringResource(R.string.player_no_artist), artist?.takeIf { meta.artist.tappable }?.let { { nav.open(Page.Artist(it)) } }, Modifier.weight(1f, fill = false))
         Text("·", style = MetaStyle, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 8.dp))
-        val key = song?.let(::albumKey)
-        PlayerLink(song?.album?.takeIf { key != null } ?: stringResource(R.string.player_unknown_album), key?.let { { nav.open(Page.Album(it)) } }, Modifier.weight(1f, fill = false))
+        val key = albumKey(song)
+        PlayerLink(meta.album.text ?: stringResource(R.string.player_no_album), key?.takeIf { meta.album.tappable }?.let { { nav.open(Page.Album(it)) } }, Modifier.weight(1f, fill = false))
     }
 }
 
+/** One name of the line under the title: a tappable tag in the secondary ink, or a placeholder in the quieter one. */
 @Composable
 private fun PlayerLink(text: String, onClick: (() -> Unit)?, modifier: Modifier) {
     val colors = MaterialTheme.colorScheme
@@ -808,14 +935,12 @@ private fun PlayerLink(text: String, onClick: (() -> Unit)?, modifier: Modifier)
             .then(if (onClick != null) Modifier.clickable(role = Role.Button, onClick = onClick) else Modifier)
             .padding(horizontal = 4.dp),
     ) {
-        val highlight = LocalBrandColors.current.highlight
         Text(
             text,
             style = if (onClick != null) MetaStyle.copy(fontWeight = FontWeight.Medium) else MetaStyle,
-            color = if (onClick != null) colors.onSurface else colors.onSurfaceVariant,
+            color = if (onClick != null) colors.onSurfaceVariant else colors.outline,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = if (onClick != null) Modifier.linkUnderline(highlight) else Modifier,
         )
     }
 }
@@ -834,8 +959,11 @@ private val MetaStyle = body(15f, 22)
 /** The player's top bar: the chevron, "From ...", and "⋯". */
 private val PLAYER_BAR = 64.dp
 
-/** How far down the top bar a swipe must travel to close the player. */
-private val SWIPE_DOWN = SWIPE_CLOSE_DP.dp
+/** The backdrop's height, as a share of the player's: by there the glow has faded into the page. */
+private const val BACKDROP_SHARE = 0.6f
+
+/** A blurred backdrop's cover, in px: blurred some 50 dp, a larger one would only cost decoding and upload time. */
+internal const val BACKDROP_PX = 192
 
 /** The player's side margin, past which the next cover waits. */
 private val PLAYER_EDGE = 24.dp
