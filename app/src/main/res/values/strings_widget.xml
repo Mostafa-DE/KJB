@@ -5,7 +5,6 @@
     <string name="widget_large">KJB large</string>
     <string name="widget_small_description">The song playing, with Play and Next.</string>
     <string name="widget_large_description">The song playing, its controls and the heart.</string>
-    <!-- The cover: opens the player, or KJB when nothing is loaded. -->
+    <!-- The cover: opens the player. -->
     <string name="widget_open_player">Open the player</string>
-    <string name="widget_open_app">Open KJB</string>
 </resources>

@@ -177,9 +177,53 @@ class WidgetTest {
     }
 
     @Test
-    fun `the cover opens the player`() {
+    fun `the command was taken once the player shows it, Play only once it plays`() {
+        val none: (Int) -> Boolean = { false }
+        assertEquals(true, WidgetCommand.PLAY.took(playing = true, happened = none))
+        assertEquals(false, WidgetCommand.PLAY.took(playing = false, happened = { it == Player.EVENT_PLAY_WHEN_READY_CHANGED }))
+        assertEquals(true, WidgetCommand.PAUSE.took(playing = false, happened = { it == Player.EVENT_PLAY_WHEN_READY_CHANGED }))
+        assertEquals(false, WidgetCommand.PAUSE.took(playing = false, happened = none))
+        for (skip in listOf(WidgetCommand.NEXT, WidgetCommand.PREVIOUS)) {
+            assertEquals(true, skip.took(playing = true, happened = { it == Player.EVENT_MEDIA_ITEM_TRANSITION }))
+            assertEquals(true, skip.took(playing = true, happened = { it == Player.EVENT_POSITION_DISCONTINUITY }))
+            assertEquals(false, skip.took(playing = true, happened = { it == Player.EVENT_IS_PLAYING_CHANGED }))
+        }
+    }
+
+    // The cover
+
+    @Test
+    fun `the cover opens the player, in the empty state too`() {
+        assertEquals(DESTINATION_PLAYER, coverDestination(loaded(0, playing = true)))
+        assertEquals(DESTINATION_PLAYER, coverDestination(WidgetState.Empty))
         assertEquals(FullScreen.Player, destinationView(DESTINATION_PLAYER))
         assertNull(destinationView(DESTINATION_AI))
         assertNull(destinationView(null))
+    }
+
+    @Test
+    fun `a cover is read once per song, and again after a read that failed`() {
+        assertEquals(42L, coverToRead(loaded(1, playing = true), readFor = null))
+        assertEquals(42L, coverToRead(loaded(1, playing = true), readFor = 41L))
+        assertNull(coverToRead(loaded(1, playing = false), readFor = 42L))
+        assertNull(coverToRead(WidgetState.Empty, readFor = 42L))
+        assertNull(coverToRead(loaded(1, playing = true).copy(cover = null), readFor = null))
+    }
+
+    @Test
+    fun `covers are read at the size of their slot on the phone's screen`() {
+        assertEquals(154, coverPx(WidgetSize.SMALL, density = 3.5f))
+        assertEquals(308, coverPx(WidgetSize.LARGE, density = 3.5f))
+        assertEquals(44, coverPx(WidgetSize.SMALL, density = 1f))
+        assertEquals(132, coverPx(WidgetSize.LARGE, density = 1.5f))
+    }
+
+    // After the player is gone
+
+    @Test
+    fun `without a live player the widgets show the empty state, whatever they last showed`() {
+        assertEquals(loaded(1, playing = true), onScreen(loaded(1, playing = true), playerAlive = true))
+        assertEquals(WidgetState.Empty, onScreen(loaded(1, playing = true), playerAlive = false))
+        assertEquals(WidgetState.Empty, onScreen(WidgetState.Empty, playerAlive = true))
     }
 }

@@ -51,9 +51,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        // A turn of the phone or a restore after process death delivers the same intent again: it was handled then.
-        if (savedInstanceState == null) destination.value = destinationPage(intent.getStringExtra(EXTRA_DESTINATION))
-        if (savedInstanceState == null) view.value = destinationView(intent.getStringExtra(EXTRA_DESTINATION))
+        open(intent)
         // The stored AI switch is the truth: a schedule that got lost is made again.
         lifecycleScope.launch(logFailures) { AiLyrics.reconcile(applicationContext) }
         val ledger = LedgerRepository(this)
@@ -69,8 +67,20 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        destinationPage(intent.getStringExtra(EXTRA_DESTINATION))?.let { destination.value = it }
-        destinationView(intent.getStringExtra(EXTRA_DESTINATION))?.let { view.value = it }
+        setIntent(intent)
+        open(intent)
+    }
+
+    /**
+     * Where [intent] asks KJB to open, also after the activity was made again. Read once: the extra is taken out, so a
+     * turn of the phone does not open it again; a relaunch from Recents opens where the user left instead.
+     */
+    private fun open(intent: Intent) {
+        val name = intent.getStringExtra(EXTRA_DESTINATION) ?: return
+        intent.removeExtra(EXTRA_DESTINATION)
+        if (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0) return
+        destinationPage(name)?.let { destination.value = it }
+        destinationView(name)?.let { view.value = it }
     }
 }
 

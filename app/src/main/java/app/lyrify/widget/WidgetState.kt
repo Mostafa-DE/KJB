@@ -9,9 +9,11 @@ import app.lyrify.library.SongRef
 import app.lyrify.library.displayTitle
 import app.lyrify.player.QueueBook
 import app.lyrify.settings.LibrarySettings
+import app.lyrify.ui.DESTINATION_PLAYER
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlin.math.roundToInt
 
 /**
  * What the home-screen widgets show. The playback service pushes it while it runs ([WidgetPart]), and it is kept in
@@ -66,8 +68,11 @@ fun widgetStates(
     settings: Flow<LibrarySettings>,
 ): Flow<WidgetState> = combine(book, library, playing, favourites, settings, ::widgetState).distinctUntilChanged()
 
-/** The two widgets: "KJB", 4×1, and "KJB large", 4×2. */
-enum class WidgetSize { SMALL, LARGE }
+/** The two widgets: "KJB", 4×1, and "KJB large", 4×2, with the width of their cover's slot. */
+enum class WidgetSize(val coverDp: Int) {
+    SMALL(44),
+    LARGE(88),
+}
 
 /** What a widget button asks of the session, sent through a MediaController (never a broadcast). */
 enum class WidgetCommand {
@@ -82,6 +87,17 @@ enum class WidgetCommand {
         PAUSE -> player.pause()
         NEXT -> player.seekToNext()
         PREVIOUS -> player.seekToPrevious()
+    }
+
+    /**
+     * Whether the session's player shows it took this command: Play once it plays (the service is in the foreground by
+     * then), Pause by its play-when-ready change, Next and Previous by a new song or a jump. [happened] tells whether an
+     * event of the player's (Player.EVENT_*) just happened.
+     */
+    fun took(playing: Boolean, happened: (Int) -> Boolean): Boolean = when (this) {
+        PLAY -> playing
+        PAUSE -> happened(Player.EVENT_PLAY_WHEN_READY_CHANGED)
+        NEXT, PREVIOUS -> happened(Player.EVENT_MEDIA_ITEM_TRANSITION) || happened(Player.EVENT_POSITION_DISCONTINUITY)
     }
 
     companion object {
@@ -107,3 +123,22 @@ fun widgetButtons(state: WidgetState, size: WidgetSize): List<WidgetButton> {
         WidgetSize.LARGE -> listOf(WidgetButton(WidgetCommand.PREVIOUS, R.drawable.ic_skip_previous_fill, R.string.player_previous), toggle, next)
     }
 }
+
+/** Where a tap on the cover opens KJB: the player, also from the empty state (it closes when nothing is loaded). */
+@Suppress("UNUSED_PARAMETER")
+fun coverDestination(state: WidgetState): String = DESTINATION_PLAYER
+
+/**
+ * The MediaStore id of [state]'s cover to read now, given the id a cover was last read for ([readFor]); null when there
+ * is nothing to read. A read that failed records no id, so the next update tries again.
+ */
+fun coverToRead(state: WidgetState, readFor: Long?): Long? = (state as? WidgetState.Loaded)?.cover?.takeIf { it != readFor }
+
+/** The cover's size in pixels for [size]'s slot on a screen of [density]. */
+fun coverPx(size: WidgetSize, density: Float): Int = (size.coverDp * density).roundToInt()
+
+/**
+ * What the widgets draw: [state] while the player's session lives in this process, else the empty state. A process
+ * that was killed and started again (for a widget update) has no player, whatever the widgets showed before.
+ */
+fun onScreen(state: WidgetState, playerAlive: Boolean): WidgetState = if (playerAlive) state else WidgetState.Empty

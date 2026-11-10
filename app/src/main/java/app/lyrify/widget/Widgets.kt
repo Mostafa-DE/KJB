@@ -13,7 +13,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -70,7 +69,6 @@ import app.lyrify.logFailures
 import app.lyrify.player.PlaybackService
 import app.lyrify.player.PlayerGraph
 import app.lyrify.player.ServicePart
-import app.lyrify.ui.DESTINATION_PLAYER
 import app.lyrify.ui.EXTRA_DESTINATION
 import app.lyrify.ui.MainActivity
 import kotlinx.coroutines.CoroutineScope
@@ -83,6 +81,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -90,42 +89,71 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.IOException
 import java.util.concurrent.ExecutionException
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.coroutines.resume
+import kotlin.math.roundToInt
 
 /**
- * What the widgets draw: [state], and its cover decoded once and downsampled, null without one. [coverOf] is the
- * MediaStore id the cover was read for; null while no widget is placed, so none was read.
+ * What the widgets draw: [state], and its cover read once and sized to each widget's slot ([small], [large]), null
+ * without one. [coverOf] is the MediaStore id the cover was read for: null while no widget is placed, or after a read
+ * that failed, so the next update reads it again.
  */
-internal class Shown(val state: WidgetState, val cover: Bitmap? = null, val coverOf: Long? = null)
+internal class Shown(val state: WidgetState, val small: Bitmap? = null, val large: Bitmap? = null, val coverOf: Long? = null)
 
 /**
  * The widgets' state in this process, and the updates pushed to them. In memory only: a fresh process (after a restart
- * of the phone, or once KJB was closed) shows the empty state until the playback service runs again.
+ * of the phone, or once KJB was killed) has no player, so the widgets show the empty state until the service runs again.
  */
 internal object Widgets {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + logFailures)
+    // Guards the state and its cover only, never an update: provideGlance takes it too ([reconcile]).
     private val lock = Mutex()
     private val current = MutableStateFlow(Shown(WidgetState.Empty))
     val shown: StateFlow<Shown> = current.asStateFlow()
 
+    /** The player's session lives in this process: the playback service's widget part runs. */
+    @Volatile
+    var playerAlive: Boolean = false
+        private set
+
+    fun started() {
+        playerAlive = true
+    }
+
     /** [state] to every KJB widget on the home screen. While none is placed, nothing is drawn and no cover read. */
-    suspend fun show(context: Context, state: WidgetState) = lock.withLock {
+    suspend fun show(context: Context, state: WidgetState) {
         val placed = placed(context)
-        current.value = if (placed) withCover(context, state, current.value) else Shown(state)
-        if (placed) {
-            SmallWidget().updateAll(context)
-            LargeWidget().updateAll(context)
-        }
+        lock.withLock { current.value = if (placed) withCover(context, state, current.value) else Shown(state) }
+        if (placed) update(context)
     }
 
-    /** The playback service stopped: nothing is loaded. */
+    /**
+     * The playback service stops: nothing is loaded. The update is handed to Glance before this returns (it waits at
+     * most [STOP_WAIT_MS]), as the process may go soon after; a widget session still running redraws from [shown].
+     */
     fun stopped(context: Context) {
-        scope.launch { show(context, WidgetState.Empty) }
+        playerAlive = false
+        current.value = Shown(WidgetState.Empty)
+        runBlocking(Dispatchers.Default) { withTimeoutOrNull(STOP_WAIT_MS) { if (placed(context)) update(context) } }
     }
 
-    /** A widget is drawn: the cover of the song shown is read if it was not yet (the widget was placed after the song started). */
-    suspend fun readCover(context: Context) = lock.withLock {
-        current.value = withCover(context, current.value.state, current.value)
+    /**
+     * A widget is drawn: without a live player (the process was killed and started again since) the empty state, else
+     * the song with its cover, read now if it was not yet (the widget was placed after the song started).
+     */
+    suspend fun reconcile(context: Context) = lock.withLock {
+        val state = onScreen(current.value.state, playerAlive)
+        current.value = if (state == WidgetState.Empty) Shown(state) else withCover(context, state, current.value)
+    }
+
+    /** The widgets drawn again, after a tap that no player answers (the heart on a widget left from before a kill). */
+    suspend fun refresh(context: Context) {
+        reconcile(context)
+        if (placed(context)) update(context)
+    }
+
+    private suspend fun update(context: Context) {
+        SmallWidget().updateAll(context)
+        LargeWidget().updateAll(context)
     }
 
     private suspend fun placed(context: Context): Boolean {
@@ -136,32 +164,45 @@ internal object Widgets {
     /** [state] with its cover: [before]'s when it was read for the same song, else MediaStore's thumbnail of its embedded art. */
     private suspend fun withCover(context: Context, state: WidgetState, before: Shown): Shown {
         val id = (state as? WidgetState.Loaded)?.cover ?: return Shown(state)
-        if (before.coverOf == id) return Shown(state, before.cover, id)
-        return Shown(state, thumbnail(context, id), id)
+        if (coverToRead(state, before.coverOf) == null) return Shown(state, before.small, before.large, id)
+        val (small, large) = thumbnails(context, id) ?: return Shown(state)
+        return Shown(state, small, large, id)
     }
 
-    /** The thumbnail of song [id]'s embedded cover, at most [COVER_PX] square; null without one. */
-    private suspend fun thumbnail(context: Context, id: Long): Bitmap? = withContext(Dispatchers.IO) {
+    /**
+     * Song [id]'s embedded cover, read once from MediaStore's thumbnail and sized to the small and the large slot on
+     * this screen; null without one, or when it could not be read.
+     */
+    private suspend fun thumbnails(context: Context, id: Long): Pair<Bitmap, Bitmap>? = withContext(Dispatchers.IO) {
+        val density = context.resources.displayMetrics.density
+        val large = coverPx(WidgetSize.LARGE, density)
         val uri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id)
         try {
-            // MediaStore decodes by a whole sample size, so the thumbnail can come back up to twice as large.
-            val thumbnail = context.contentResolver.loadThumbnail(uri, Size(COVER_PX, COVER_PX), null)
-            val scale = COVER_PX.toFloat() / maxOf(thumbnail.width, thumbnail.height)
-            if (scale >= 1f) thumbnail else thumbnail.scale((thumbnail.width * scale).toInt(), (thumbnail.height * scale).toInt())
+            val read = context.contentResolver.loadThumbnail(uri, Size(large, large), null)
+            fitted(read, coverPx(WidgetSize.SMALL, density)) to fitted(read, large)
         } catch (_: IOException) {
-            // No embedded cover: the widget shows the K.
+            // No embedded cover, or it could not be read: the widget shows the K.
+            null
+        } catch (_: SecurityException) {
             null
         }
     }
 
-    /** The covers are drawn at most 88 dp across; the bitmap goes to the home screen with every update. */
-    private const val COVER_PX: Int = 256
+    /** [bitmap] scaled down to fit [px] square; MediaStore decodes by a whole sample size, so it can come back up to twice as large. */
+    private fun fitted(bitmap: Bitmap, px: Int): Bitmap {
+        val scale = px.toFloat() / maxOf(bitmap.width, bitmap.height)
+        return if (scale >= 1f) bitmap else bitmap.scale((bitmap.width * scale).roundToInt(), (bitmap.height * scale).roundToInt())
+    }
+
+    /** Long enough for Glance to take the update, short enough for the service's onDestroy on the main thread. */
+    private const val STOP_WAIT_MS: Long = 1_000
 }
 
 /**
  * The widgets' part of the playback service: while the service runs, the widgets show the song the player holds,
  * pushed only when the song, the play state or the favourite changes ([widgetStates]); when it stops, the empty state.
- * Playing is what the notification shows: Pause while the player means to play, buffering included.
+ * Playing is what the notification shows: Pause while the player means to play, buffering included. An update that
+ * fails is logged by its exception's name, and the next one goes on.
  */
 @OptIn(UnstableApi::class)
 class WidgetPart : ServicePart {
@@ -177,6 +218,7 @@ class WidgetPart : ServicePart {
             }
         }
         player.addListener(listener)
+        Widgets.started()
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + logFailures)
         scope.launch {
             widgetStates(
@@ -185,7 +227,15 @@ class WidgetPart : ServicePart {
                 playing = playing,
                 favourites = LibraryGraph.favourites(context).songs,
                 settings = Lyrify.settings(context).settings.map { it.library },
-            ).collect { Widgets.show(context, it) }
+            ).collect { state ->
+                try {
+                    Widgets.show(context, state)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: RuntimeException) {
+                    Log.w(LOG_TAG, "widget: an update failed (${e.javaClass.simpleName})")
+                }
+            }
         }
         onStop = {
             player.removeListener(listener)
@@ -227,7 +277,7 @@ class LargeWidgetReceiver : GlanceAppWidgetReceiver() {
  * colours come from the wallpaper (Android 12 and later).
  */
 private suspend fun GlanceAppWidget.provideWidget(context: Context, size: WidgetSize): Nothing {
-    Widgets.readCover(context)
+    Widgets.reconcile(context)
     provideContent {
         val shown by Widgets.shown.collectAsState()
         GlanceTheme {
@@ -246,7 +296,7 @@ private fun Small(shown: Shown) {
         modifier = GlanceModifier.fillMaxSize().appWidgetBackground().background(GlanceTheme.colors.widgetBackground).padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Cover(shown, 44.dp)
+        Cover(shown, WidgetSize.SMALL)
         Text(
             text = title(state),
             modifier = GlanceModifier.defaultWeight().padding(horizontal = 12.dp),
@@ -264,7 +314,7 @@ private fun Large(shown: Shown) {
         modifier = GlanceModifier.fillMaxSize().appWidgetBackground().background(GlanceTheme.colors.widgetBackground).padding(12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Cover(shown, 88.dp)
+        Cover(shown, WidgetSize.LARGE)
         Column(modifier = GlanceModifier.defaultWeight().padding(start = 12.dp)) {
             Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(modifier = GlanceModifier.defaultWeight()) {
@@ -291,17 +341,17 @@ private fun title(state: WidgetState): String = when (state) {
     WidgetState.Empty -> LocalContext.current.getString(R.string.app_name)
 }
 
-/** The song's cover, or the K on its black tile; a tap opens the player, or KJB when nothing is loaded. */
+/** The song's cover, or the K on its black tile; a tap opens the player. */
 @Composable
-private fun Cover(shown: Shown, size: Dp) {
+private fun Cover(shown: Shown, slot: WidgetSize) {
     val context = LocalContext.current
-    val loaded = shown.state is WidgetState.Loaded
-    val label = context.getString(if (loaded) R.string.widget_open_player else R.string.widget_open_app)
+    val label = context.getString(R.string.widget_open_player)
     val open = Intent(context, MainActivity::class.java)
         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-        .apply { if (loaded) putExtra(EXTRA_DESTINATION, DESTINATION_PLAYER) }
+        .putExtra(EXTRA_DESTINATION, coverDestination(shown.state))
+    val size = slot.coverDp.dp
     val modifier = GlanceModifier.size(size).cornerRadius(12.dp).clickable(actionStartActivity(open))
-    val cover = shown.cover
+    val cover = if (slot == WidgetSize.SMALL) shown.small else shown.large
     if (cover != null) {
         Image(ImageProvider(cover), label, modifier, contentScale = ContentScale.Crop)
     } else {
@@ -348,8 +398,9 @@ private val FAVOURITE = ActionParameters.Key<Boolean>("favourite")
 
 /**
  * A transport button: its command to the session through a MediaController, which starts the playback service when it
- * does not run (a tap on a widget may start a foreground service). Play keeps the controller until the player plays,
- * so the service is in the foreground before it is unbound; on nothing loaded, Play resumes the last queue.
+ * does not run (a tap on a widget may start a foreground service). The controller is let go only once the player
+ * shows it took the command, or after a short wait: Play keeps it until the player plays, so on a cold start the
+ * service is in the foreground before it is unbound (and on nothing loaded, Play resumes the last queue).
  */
 class WidgetTransport : ActionCallback {
     override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
@@ -358,8 +409,8 @@ class WidgetTransport : ActionCallback {
             // A receiver's context may not bind a service; the app's may.
             val controller = connect(context.applicationContext) ?: return@withContext
             try {
-                command.sendTo(controller)
-                if (command == WidgetCommand.PLAY && withTimeoutOrNull(START_MS) { started(controller) } != null) delay(SETTLE_MS)
+                val took = withTimeoutOrNull(if (command == WidgetCommand.PLAY) START_MS else DELIVERED_MS) { send(controller, command) } != null
+                if (command == WidgetCommand.PLAY && took) delay(SETTLE_MS)
             } finally {
                 controller.release()
             }
@@ -383,27 +434,31 @@ class WidgetTransport : ActionCallback {
         }
     }
 
-    /** Until the player means to play a song it holds: what Media3 waits for before it puts the service in the foreground. */
-    private suspend fun started(controller: MediaController) {
-        if (playing(controller)) return
-        suspendCancellableCoroutine<Unit> { done ->
-            controller.addListener(object : Player.Listener {
-                override fun onEvents(player: Player, events: Player.Events) {
-                    if (playing(player) && done.isActive) {
-                        player.removeListener(this)
-                        done.resume(Unit)
-                    }
+    /** [command] sent, until the player shows it took it ([WidgetCommand.took]); the listener is in place before it is sent. */
+    private suspend fun send(controller: MediaController, command: WidgetCommand) = suspendCancellableCoroutine<Unit> { done ->
+        val listener = object : Player.Listener {
+            override fun onEvents(player: Player, events: Player.Events) {
+                if (command.took(player.isPlaying, events::contains) && done.isActive) {
+                    player.removeListener(this)
+                    done.resume(Unit)
                 }
-            })
+            }
+        }
+        controller.addListener(listener)
+        command.sendTo(controller)
+        // Play on a player that plays already.
+        if (command == WidgetCommand.PLAY && controller.isPlaying) {
+            controller.removeListener(listener)
+            done.resume(Unit)
         }
     }
-
-    private fun playing(player: Player): Boolean =
-        player.playWhenReady && (player.playbackState == Player.STATE_READY || player.playbackState == Player.STATE_BUFFERING)
 
     private companion object {
         /** Long enough for a cold start: the queues and the library read before the last queue resumes. */
         const val START_MS: Long = 5_000
+
+        /** Pause, Next and Previous: the session answers within this, or there was nothing to do (Pause while paused). */
+        const val DELIVERED_MS: Long = 1_000
 
         /** Media3 puts the service in the foreground just after the player starts, on the main thread: a moment to let it. */
         const val SETTLE_MS: Long = 500
@@ -417,5 +472,7 @@ class WidgetHeart : ActionCallback {
         val favourite = parameters[FAVOURITE] ?: return
         val stored = LibraryGraph.favourites(context.applicationContext).setSongs(listOf(SongRef(path, parameters[SONG_ID])), !favourite)
         if (!stored) Log.w(LOG_TAG, "widget: the heart could not be stored")
+        // A widget left from before a kill: no player pushes, so it is drawn again (the empty state).
+        if (!Widgets.playerAlive) Widgets.refresh(context.applicationContext)
     }
 }
