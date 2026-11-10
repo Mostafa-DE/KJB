@@ -31,11 +31,7 @@ import app.lyrify.library.LibraryState
 import app.lyrify.library.Playlist
 import app.lyrify.library.PlaylistsState
 import app.lyrify.settings.DockTab
-import app.lyrify.settings.LibrarySettings
-import app.lyrify.settings.LibraryTab
 import app.lyrify.settings.Settings
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -57,29 +53,21 @@ class M3uScreensDeviceTest {
 
     @Test
     fun thePlaylistsTabsMenuHasExportAllAndImportAndTheTabShowsWhatWasPicked() {
-        // The Library page opens on the tab its settings name; the debug app's own settings are put back after.
-        val settings = Lyrify.settings(context)
-        val before = runBlocking { settings.settings.first() }
-        assertTrue(runBlocking { settings.update { it.copy(library = it.library.copy(tabs = LibrarySettings.DEFAULT_TABS), nav = it.nav.copy(libraryTab = LibraryTab.PLAYLISTS)) } })
-        try {
-            val pickers = FakePickers(picked = listOf(ROAD_TRIP))
-            compose.setContent { Shell(pickers) { LibraryPage() } }
-            val more = context.getString(R.string.menu_more)
-            compose.waitUntil("the Playlists tab's top bar", TIMEOUT_MS) { compose.onAllNodesWithContentDescription(more).fetchSemanticsNodes().isNotEmpty() }
+        val pickers = FakePickers(picked = listOf(ROAD_TRIP))
+        compose.setContent { Shell(pickers) { PlaylistsPage() } }
+        val more = context.getString(R.string.menu_more)
+        compose.waitUntil("the Playlists tab's top bar", TIMEOUT_MS) { compose.onAllNodesWithContentDescription(more).fetchSemanticsNodes().isNotEmpty() }
 
-            compose.onNodeWithContentDescription(more).performClick()
-            compose.onNodeWithText(context.getString(R.string.m3u_export_all)).assertIsDisplayed()
-            compose.onNodeWithText(context.getString(R.string.m3u_import)).performClick()
+        compose.onNodeWithContentDescription(more).performClick()
+        compose.onNodeWithText(context.getString(R.string.m3u_export_all)).assertIsDisplayed()
+        compose.onNodeWithText(context.getString(R.string.m3u_import)).performClick()
 
-            compose.waitUntil("the import sheet on the Playlists tab", TIMEOUT_MS) {
-                compose.onAllNodesWithText(context.getString(R.string.m3u_untitled)).fetchSemanticsNodes().isNotEmpty()
-            }
-            val (contract, input) = pickers.launched.single()
-            assertTrue(contract is ActivityResultContracts.OpenMultipleDocuments)
-            assertArrayEquals(M3u.MIME_TYPES, input as Array<*>)
-        } finally {
-            runBlocking { settings.update { before } }
+        compose.waitUntil("the import sheet on the Playlists tab", TIMEOUT_MS) {
+            compose.onAllNodesWithText(context.getString(R.string.m3u_untitled)).fetchSemanticsNodes().isNotEmpty()
         }
+        val (contract, input) = pickers.launched.single()
+        assertTrue(contract is ActivityResultContracts.OpenMultipleDocuments)
+        assertArrayEquals(M3u.MIME_TYPES, input as Array<*>)
     }
 
     @Test

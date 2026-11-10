@@ -72,7 +72,7 @@ class SettingsStoreTest {
             levellingBoostDb = -4,
             keepAlbumsGapless = false,
         ),
-        nav = NavSettings(lastTab = DockTab.TOOLS, libraryTab = LibraryTab.ALBUMS),
+        nav = NavSettings(lastTab = DockTab.PLAYLISTS, favouritesTab = FavouritesTab.ARTISTS),
     )
 
     // Defaults
@@ -83,8 +83,9 @@ class SettingsStoreTest {
         assertEquals(PlaybackSettings(RememberPlace.LONG_SONGS, true, true, 50, 30, 10), s.playback)
         assertEquals(emptyList<ConnectDevice>(), s.playback.connectDevices)
         assertEquals(AudioSettings(Levelling.AUTO, crossfadeSeconds = 0), s.audio)
+        // What Settings > Library tabs lists: Playlists right after Songs.
         assertEquals(
-            listOf(LibraryTab.SONGS, LibraryTab.ALBUMS, LibraryTab.ARTISTS, LibraryTab.FOLDERS, LibraryTab.PLAYLISTS, LibraryTab.GENRES),
+            listOf(LibraryTab.SONGS, LibraryTab.PLAYLISTS, LibraryTab.ALBUMS, LibraryTab.ARTISTS, LibraryTab.FOLDERS, LibraryTab.GENRES),
             s.library.tabs.map { it.tab },
         )
         assertEquals(listOf(LibraryTab.GENRES), s.library.tabs.filterNot { it.shown }.map { it.tab })
@@ -94,7 +95,7 @@ class SettingsStoreTest {
         assertEquals(PlayerUiSettings(showLyrics = false, flipHintShown = false, recentQueueHintShown = false), s.playerUi)
         assertEquals(BackupSettings(automatic = false, folderUri = null), s.backup)
         assertEquals(AdvancedSettings(true, false, NotificationButtons.FAVOURITE, levellingBoostDb = 0, keepAlbumsGapless = true), s.advanced)
-        assertEquals(NavSettings(DockTab.LIBRARY, LibraryTab.SONGS), s.nav)
+        assertEquals(NavSettings(DockTab.LIBRARY, FavouritesTab.SONGS, setupDone = false), s.nav)
         assertEquals((10..100 step 10).toList(), PlaybackSettings.PLAY_SHARES)
         assertEquals(listOf(5, 10, 15, 30), PlaybackSettings.SKIP_SECONDS)
     }
@@ -132,7 +133,7 @@ class SettingsStoreTest {
 
         assertEquals(PlaybackSettings(headsetButtons = false), s?.playback)
         assertEquals(AudioSettings(Levelling.SONG, 4), s?.audio)
-        assertEquals(NavSettings(DockTab.LIBRARY, LibraryTab.GENRES), s?.nav)
+        assertEquals(NavSettings(), s?.nav)
     }
 
     @Test
@@ -194,6 +195,47 @@ class SettingsStoreTest {
         // At least one tab is shown: otherwise the defaults.
         assertEquals(LibrarySettings.DEFAULT_TABS, tabs(LibraryTab.entries.joinToString(",", "[", "]") { """{"tab":"$it","shown":false}""" }))
         assertEquals(LibrarySettings.DEFAULT_TABS, tabs("""{"tab":"SONGS"}"""))
+    }
+
+    @Test
+    fun `a version 1 file's Library tabs take Playlists right after Songs, each shown or hidden as stored`() {
+        fun tabs(version: Int, order: String) = SettingsJson.decode("""{"version":$version,"library":{"tabs":[$order]}}""")?.library?.tabs
+        fun tab(name: LibraryTab, shown: Boolean) = """{"tab":"$name","shown":$shown}"""
+
+        // 3.0's first order, Playlists last: now the new order.
+        val first = listOf(LibraryTab.SONGS, LibraryTab.ALBUMS, LibraryTab.ARTISTS, LibraryTab.FOLDERS, LibraryTab.PLAYLISTS, LibraryTab.GENRES)
+        assertEquals(LibrarySettings.DEFAULT_TABS, tabs(1, first.joinToString(",") { tab(it, it != LibraryTab.GENRES) }))
+        // An order of the user's own, with tabs hidden: the others keep their order, Playlists follows Songs and stays hidden.
+        val own = listOf(
+            tab(LibraryTab.ALBUMS, true), tab(LibraryTab.SONGS, false), tab(LibraryTab.GENRES, true),
+            tab(LibraryTab.ARTISTS, false), tab(LibraryTab.FOLDERS, true), tab(LibraryTab.PLAYLISTS, false),
+        ).joinToString(",")
+        assertEquals(
+            listOf(
+                LibraryTabSetting(LibraryTab.ALBUMS, true),
+                LibraryTabSetting(LibraryTab.SONGS, false),
+                LibraryTabSetting(LibraryTab.PLAYLISTS, false),
+                LibraryTabSetting(LibraryTab.GENRES, true),
+                LibraryTabSetting(LibraryTab.ARTISTS, false),
+                LibraryTabSetting(LibraryTab.FOLDERS, true),
+            ),
+            tabs(1, own),
+        )
+        // From version 2 on, Playlists stays where the user put it.
+        val last = first.joinToString(",") { tab(it, true) }
+        assertEquals(first, tabs(SettingsJson.VERSION, last)?.map { it.tab })
+        assertTrue(""""version":2""" in SettingsJson.encode(Settings()))
+    }
+
+    @Test
+    fun `the last dock tab reads back, Playlists too, and the old Library tab is not kept`() {
+        fun nav(json: String) = SettingsJson.decode("""{"version":1,"nav":$json}""")?.nav
+
+        assertEquals(NavSettings(DockTab.PLAYLISTS, FavouritesTab.FOLDERS), nav("""{"lastTab":"PLAYLISTS","libraryTab":"PLAYLISTS","favouritesTab":"FOLDERS"}"""))
+        assertEquals(DockTab.SEARCH, nav("""{"lastTab":"SEARCH","libraryTab":"ALBUMS"}""")?.lastTab)
+        assertEquals(DockTab.TOOLS, nav("""{"lastTab":"TOOLS"}""")?.lastTab)
+        assertEquals(NavSettings(), nav("""{"lastTab":"NOW","favouritesTab":"GENRES"}"""))
+        assertFalse("libraryTab" in SettingsJson.encode(changed))
     }
 
     @Test

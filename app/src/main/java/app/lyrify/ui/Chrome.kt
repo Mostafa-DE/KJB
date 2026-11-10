@@ -202,13 +202,14 @@ fun GlassSurface(
 
 // The dock
 
-/** The dock's three destinations, in order. */
-val DOCK_TABS: List<DockTab> = listOf(DockTab.LIBRARY, DockTab.SEARCH, DockTab.TOOLS)
+/** The dock's four destinations, in order. */
+val DOCK_TABS: List<DockTab> = listOf(DockTab.LIBRARY, DockTab.PLAYLISTS, DockTab.SEARCH, DockTab.TOOLS)
 
 @get:StringRes
 val DockTab.label: Int
     get() = when (this) {
         DockTab.LIBRARY -> R.string.nav_library
+        DockTab.PLAYLISTS -> R.string.nav_playlists
         DockTab.SEARCH -> R.string.nav_search
         DockTab.TOOLS -> R.string.nav_tools
     }
@@ -217,6 +218,7 @@ val DockTab.label: Int
 private val DockTab.icon: Int
     get() = when (this) {
         DockTab.LIBRARY -> R.drawable.ic_library_music
+        DockTab.PLAYLISTS -> R.drawable.ic_queue_music
         DockTab.SEARCH -> R.drawable.ic_search
         DockTab.TOOLS -> R.drawable.ic_handyman
     }
@@ -225,6 +227,8 @@ private val DockTab.icon: Int
 private val DockTab.selectedIcon: Int
     get() = when (this) {
         DockTab.LIBRARY -> R.drawable.ic_library_music_fill
+        // Material Symbols' filled queue_music is the same shape as the outlined one.
+        DockTab.PLAYLISTS -> R.drawable.ic_queue_music
         DockTab.SEARCH -> R.drawable.ic_search
         DockTab.TOOLS -> R.drawable.ic_handyman_fill
     }
@@ -239,8 +243,8 @@ fun tabSlide(from: DockTab, to: DockTab): Int = DOCK_TABS.indexOf(to).compareTo(
 fun dockItemName(vararg parts: String?): String = parts.filterNotNull().joinToString(", ")
 
 /**
- * The dock: a glass capsule with Library, Search and Tools, each an icon over its label, the selected one marked by the
- * sung line; a dot on Tools when something there needs the user.
+ * The dock: a glass capsule with Library, Playlists, Search and Tools, each an icon over its label, the selected one
+ * marked by the sung line; a dot on Tools when something there needs the user.
  */
 @Composable
 fun Dock(selected: DockTab, dot: Boolean, backdrop: GlassBackdrop?, onSelect: (DockTab) -> Unit, modifier: Modifier = Modifier) {
@@ -249,7 +253,7 @@ fun Dock(selected: DockTab, dot: Boolean, backdrop: GlassBackdrop?, onSelect: (D
     }
 }
 
-/** The three items at equal widths, and the sung line under the selected one; its leading end travels faster, so it stretches on the way. */
+/** The items at equal widths, and the sung line under the selected one; its leading end travels faster, so it stretches on the way. */
 @Composable
 private fun DockItems(selected: DockTab, dot: Boolean, onSelect: (DockTab) -> Unit) {
     val highlight = LocalBrandColors.current.highlight

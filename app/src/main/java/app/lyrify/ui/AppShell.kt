@@ -85,8 +85,8 @@ val LocalLyrics = compositionLocalOf<LyricsUi> { error("No LyricsUi: AppShell pr
 
 /**
  * The app once set up: each dock tab with its own page stack ([Navigator], kept across a turn of the phone), the Now bar
- * and the dock over Library and Search and Tools' root, Tools pages as full screens, and the full-screen views over
- * everything. Every page and view is drawn by its entry composable in its owner's file; this file only routes. Back
+ * and the dock over Library, Playlists, Search and Tools' root, Tools pages as full screens, and the full-screen views
+ * over everything. Every page and view is drawn by its entry composable in its owner's file; this file only routes. Back
  * closes a sheet, dialog or menu first (their own windows), then a view, then a page, then walks back through the tab
  * history. The app reopens on the last tab ([Settings.nav]), or on the page a notification names ([destination]). What
  * [checkAnswers] say shows here, also once Check these has closed or the phone has turned.
@@ -143,7 +143,7 @@ fun AppShell(
     )
     val dupes by rememberDuplicates().state.collectAsStateWithLifecycle()
     val tones by remember(context) { ToneListStore.of(context).state }.collectAsStateWithLifecycle(TonesState())
-    val rows = toolRows(checks, dupesView(dupes), dupes.badge, tones.tones.size, coversTagsLine(), ai, aiWaiting)
+    val rows = toolRows(checks, dupesView(dupes), dupes.badge, tones.tones.size, coversTagsRow(), ai, aiWaiting)
     val own = rememberOwnNow()
     val followed by NowPlaying.followed.collectAsStateWithLifecycle()
     val other = rememberOtherSession(followed?.takeIf { grants.access.notifications })
@@ -193,12 +193,13 @@ fun AppShell(
                     },
                     label = "tab",
                 ) { tab ->
-                    val stack = nav.state.stacks[tab].orEmpty()
+                    val stack = nav.state.pagesOf(tab)
                     // Each page keeps its scroll and its fields while pages are pushed over it, and across a turn of the phone.
                     holder.SaveableStateProvider(pageKey(tab, stack)) {
                         when (val page = stack.lastOrNull()) {
                             null -> when (tab) {
                                 DockTab.LIBRARY -> LibraryPage()
+                                DockTab.PLAYLISTS -> PlaylistsPage()
                                 DockTab.SEARCH -> SearchPage()
                                 DockTab.TOOLS -> ToolsScreen(rows, nav::open)
                             }
@@ -259,10 +260,10 @@ fun AppShell(
         LyricsUndoOffers()
     }
     // A page that left its stack forgets its saved scroll and fields.
-    var keptStacks by remember { mutableStateOf(state.stacks) }
+    var kept by remember { mutableStateOf(state) }
     LaunchedEffect(state.stacks) {
-        (pageKeys(keptStacks) - pageKeys(state.stacks)).forEach(holder::removeState)
-        keptStacks = state.stacks
+        (pageKeys(kept) - pageKeys(state)).forEach(holder::removeState)
+        kept = state
     }
 }
 

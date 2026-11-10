@@ -26,7 +26,7 @@ class ToolsRowsTest {
         dupes: DupesView = DupesView.FirstScan,
         dupesBadge: Int = 0,
         tones: Int = 0,
-        coversTags: ToolLine? = null,
+        coversTags: EntryRow? = null,
         ai: AiState = ai(enabled = false),
         aiWaiting: Int = 0,
     ): Map<Tool, ToolRow> = toolRows(checks, dupes, dupesBadge, tones, coversTags, ai, aiWaiting).associateBy { it.tool }
@@ -61,9 +61,16 @@ class ToolsRowsTest {
     }
 
     @Test
-    fun `Covers and tags shows the line its milestone gives it`() {
+    fun `Covers and tags shows the line its milestone gives it, and the albums waiting as its badge`() {
         assertNull(rows().getValue(Tool.COVERS_TAGS).line)
-        assertEquals(ToolLine.Text(R.string.tools_dupes_none), rows(coversTags = ToolLine.Text(R.string.tools_dupes_none)).getValue(Tool.COVERS_TAGS).line)
+        assertEquals(
+            ToolRow(Tool.COVERS_TAGS, ToolLine.Text(R.string.tags_line_none)),
+            rows(coversTags = EntryRow(ToolLine.Text(R.string.tags_line_none), badge = null)).getValue(Tool.COVERS_TAGS),
+        )
+        assertEquals(
+            ToolRow(Tool.COVERS_TAGS, ToolLine.Count(R.plurals.tags_to_review, 3), badge = 3),
+            rows(coversTags = EntryRow(ToolLine.Count(R.plurals.tags_to_review, 3), badge = 3)).getValue(Tool.COVERS_TAGS),
+        )
     }
 
     @Test
