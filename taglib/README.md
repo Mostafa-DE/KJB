@@ -23,7 +23,8 @@ KJB's patches, each marked "KJB patch" in the code:
   drop frames and checks that no frame the property map can't show went missing.
 - Every JNI call: the descriptor is closed on every path (also when `/proc/self/fd` can't be read or no stream opens),
   TagLib's work runs in `try`/`catch (...)` so no C++ exception crosses into Java, and a pending Java exception is
-  checked after each JNI call.
+  checked after each JNI call. Only a regular file is read (`fstat`, `S_ISREG`): a pipe, socket or device is refused
+  at once, unread, since a read of a pipe whose write end is still open never returns.
 - `utils.h`: strings cross JNI as UTF-16 (`NewString`, `GetStringChars`), not modified UTF-8, which broke characters
   outside the BMP, and a Java string becomes a TagLib string by its length (never cut at a U+0000); `readlink` failing (-1) is no longer used as an index; a picture without data no longer leaves a
   null at the end of the picture array; local references are freed in the loops.

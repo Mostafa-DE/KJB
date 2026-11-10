@@ -1,3 +1,5 @@
+#include <sys/stat.h>
+
 #include "tfilestream.h"
 #include "apetag.h"
 #include "id3v2frame.h"
@@ -8,9 +10,16 @@
 
 // KJB patch: every call goes through withFile. The descriptor is the call's own and is closed on every path (also when
 // its path can't be read or no stream opens on it), a C++ exception never crosses into Java (the call returns its
-// fallback), and a Java exception raised meanwhile is left pending for the caller, with the fallback returned.
+// fallback), and a Java exception raised meanwhile is left pending for the caller, with the fallback returned. Only a
+// regular file is read: a pipe, socket or device is refused at once, unread, since a read of a pipe whose write end is
+// still open never returns.
 template<typename T, typename Body>
 static T withFile(JNIEnv *env, jint fd, bool readOnly, T fallback, Body body) {
+    struct stat st{};
+    if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
+        close(fd);
+        return fallback;
+    }
     char *path = getRealPathFromFd(fd);
     if (path == nullptr) {
         close(fd);
