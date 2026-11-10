@@ -5,11 +5,13 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
+import java.io.IOException
 
 /**
  * Undo: the full copy writes the original bytes back while nothing changed since; otherwise each field goes back only
@@ -158,14 +160,17 @@ class UndoTest {
     }
 
     @Test
-    fun `a store that can't be read at all starts over, and its file is kept aside`() {
+    fun `a store that can't be read at all is left as it is, never saved over, and lets no backup go`() {
         rig.dirs.undo.parentFile.mkdirs()
         rig.dirs.undo.writeText("{ not json")
-        val logs = mutableListOf<String>()
+        val store = UndoStore(rig.dirs)
 
-        assertEquals(UndoMemory(), UndoStore(rig.dirs, logs::add).memory())
-        assertTrue(File(rig.dirs.undo.path + UndoStore.ASIDE).isFile)
-        assertEquals(1, logs.size)
+        // History shows nothing for now; the snapshots are not taken for none.
+        assertEquals(UndoMemory(), store.memory())
+        assertThrows(IOException::class.java) { store.keptBackups() }
+        assertFalse(store.markUndone(1, 41))
+        assertEquals("{ not json", rig.dirs.undo.readText())
+        assertFalse(File(rig.dirs.undo.path + UndoStore.ASIDE).exists())
     }
 
     @Test

@@ -414,8 +414,9 @@ class Backups(
  *   through the held descriptor, if the backup is whole (a regular file with the original's length and SHA-256) and the
  *   path still names the file held; then the backup is released on a fresh proof. Anything else (another file at the
  *   path, a backup that is not whole) has its intent set aside, with its backup, and is left alone;
- * - a read, an `lstat` or a write that fails decides nothing: the intent waits for the next start, and after
- *   [READ_TRIES] starts in a row that failed so it is set aside with its backup ([Recovered.unreadable]).
+ * - a read, an `lstat`, a write or a History record's save that fails (Undo's own list included: one that can't be
+ *   read never lets a backup go) decides nothing: the intent waits for the next start, and after [READ_TRIES] starts
+ *   in a row that failed so it is set aside with its backup ([Recovered.unreadable]).
  * An intent left waiting keeps its song [PathLocks.pin]ned for the rest of the process. Then the private copies no
  * open intent needs are deleted. Backups are never deleted here but through [Backups.releaseBackup]. Logs counts only.
  */
@@ -507,12 +508,9 @@ class JournalRecovery(
     /** [settle] with the song held open: decided on what [open] reads, written through [open] only. */
     private fun settleThrough(intent: WriteIntent, expected: FileState, open: OpenSong, atOpen: FileId): Settled {
         if (open.holds(expected)) {
-            // The write finished; its History record may not have been saved.
-            if (intent.record != null && !undo.save(intent.record, intent.mediaStoreId)) {
-                // The song was read: this start does not count as one that could not read it.
-                if (intent.readFailures > 0) journal.update(intent.copy(readFailures = 0))
-                return Settled.WAITING
-            }
+            // The write finished; its History record may not have been saved. A record that can't be saved now (Undo's
+            // list unreadable, a folder not fsynced) waits, and counts, as a read that fails.
+            if (intent.record != null && !undo.save(intent.record, intent.mediaStoreId)) throw IOException("History record not saved")
             return released(intent, expected, Settled.AS_IT_WAS)
         }
         // Written and verified, then changed by someone else: old bytes are never written over it.

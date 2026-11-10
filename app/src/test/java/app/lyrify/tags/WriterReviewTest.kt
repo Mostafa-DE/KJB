@@ -846,6 +846,53 @@ class WriterReviewTest {
         assertTrue(backupKept(before))
     }
 
+    @Test
+    fun `an Undo list that can't be read keeps every backup, and nothing is pruned`() {
+        // Unreadable (a read that fails), not Undo's list at all (a parse that fails), or holding a snapshot this version
+        // can't read (the rest of the list read, its expired snapshot would be pruned).
+        val breaks = listOf<Pair<String, (File) -> Unit>>(
+            "read" to { it.setReadable(false) },
+            "parse" to { it.writeText("{ not json") },
+            "item" to { it.writeText(it.readText().replace("\"snapshots\":[", "\"snapshots\":[{\"file\":5},")) },
+        )
+        for ((how, breakIt) in breaks) {
+            val rig = WriterRig(folder.newFolder(how))
+            val song = rig.song("Paper Lantern", 41, fields)
+            fun write(change: TagEdit) = (runBlocking { rig.writer.write(listOf(WriteJob(song, change)), EditKind.SONG, "Paper Lantern") } as BatchResult.Done).songs.single().outcome
+            assertEquals(SongOutcome.WRITTEN, write(titleOnly))
+            // A second write, killed after its last byte: its History record and its backup's release are left.
+            rig.songs.killOnScan = true
+            try {
+                write(edit)
+            } catch (_: SimulatedKill) {
+            }
+            val backups = rig.dirs.backups.listFiles()!!.associate { it.name to it.readBytes() }
+            assertEquals(2, backups.size)
+            breakIt(rig.dirs.undo)
+            val stored = if (how == "read") null else rig.dirs.undo.readBytes()
+            rig.restart()
+
+            val recovered = try {
+                runBlocking { rig.recovery().recover() }.also { rig.undo.prune(rig.now + 365L * 24 * 60 * 60 * 1000) }
+            } finally {
+                rig.dirs.undo.setReadable(true)
+            }
+
+            assertEquals(how, Recovered(waiting = 1), recovered)
+            assertEquals(how, 1, rig.journal.pending().size)
+            assertEquals(how, backups.keys, rig.dirs.backups.listFiles()!!.map { it.name }.toSet())
+            backups.forEach { (name, bytes) -> assertArrayEquals(how, bytes, File(rig.dirs.backups, name).readBytes()) }
+            stored?.let { assertArrayEquals(how, it, rig.dirs.undo.readBytes()) }
+            if (how == "read") {
+                // Readable again: the next start saves the record, and both edits are in History.
+                rig.restart()
+                assertEquals(how, Recovered(settled = 1), runBlocking { rig.recovery().recover() })
+                assertEquals(how, 2, rig.undo.memory().entries.size)
+                assertEquals(how, 1, rig.undo.memory().snapshots.size)
+            }
+        }
+    }
+
     /**
      * Every line of the app's sources that deletes something named a backup (`.delete()`, `deleteIfExists`,
      * `deleteRecursively`, `Files.delete`) is in [Backups.releaseBackup], or is Undo's own expiry of a song's snapshot.

@@ -12,6 +12,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 import java.nio.file.Files
+import java.nio.file.NoSuchFileException
 import java.nio.file.StandardCopyOption
 
 /** One field an edit changed, by TagLib property name: its values before and after (empty: no field). */
@@ -119,9 +120,11 @@ fun SongEdit.revert(current: SongTags, oldCover: (PictureRef) -> TagPicture?): R
  * History and Undo's stored half (the writer does the undoing): `tag-undo.json` with every entry's field-level record
  * and the snapshots, the snapshot files in `tag-backups/`, and the old covers in `tag-pictures/`. Snapshots are kept
  * [keepMs] (30 days) within [budgetBytes] (2 GB), the oldest entries' dropped first; the field-level record stays.
- * Read leniently, as the ledger is: unknown keys ignored, an entry or snapshot this version can't read left out, a file
- * that can't be read at all kept aside and started over. Logs counts and exception class names only. Blocking;
- * the writer is its only user, one call at a time.
+ * History is read leniently, as the ledger is: unknown keys ignored, an entry this version can't read left out. The
+ * snapshots are not: a file that can't be read or parsed, or a snapshot this version can't read, makes [keptBackups]
+ * throw, and nothing is pruned or saved over the file ([record] and [markUndone] answer false) until it reads whole
+ * again; [memory] then shows nothing. Logs counts and exception class names only. Blocking; the writer is its only
+ * user, one call at a time.
  */
 class UndoStore(
     private val dirs: TagDirs,
@@ -131,8 +134,23 @@ class UndoStore(
 ) {
     private var loaded: UndoMemory? = null
 
+    /** Why the stored file could not be read whole at the last try, or null when it could. */
+    private var unreadable: IOException? = null
+
+    /** History and the snapshots, as far as they can be read: nothing, for now, when the stored file can't be. */
     @Synchronized
-    fun memory(): UndoMemory = loaded ?: load().also { loaded = it }
+    fun memory(): UndoMemory = loaded ?: load().also { if (unreadable == null) loaded = it }
+
+    /**
+     * [memory], read whole, or a throw when the stored file can't be read or parsed: what lists, prunes or saves over
+     * the snapshots works from this, never from an empty stand-in.
+     */
+    @Synchronized
+    private fun whole(): UndoMemory {
+        val memory = memory()
+        unreadable?.let { throw IOException("Undo's list could not be read", it) }
+        return memory
+    }
 
     /** The song's snapshot, while it is kept and its file is there. */
     fun snapshot(mediaStoreId: Long): Snapshot? =
@@ -153,7 +171,7 @@ class UndoStore(
      */
     @Synchronized
     fun record(entry: EntryInfo, song: SongEdit, snapshot: Snapshot?): Boolean {
-        val now = memory()
+        val now = wholeOrNull() ?: return false
         val existing = now.entries.firstOrNull { it.id == entry.id }
         val entries = if (existing == null) {
             now.entries + HistoryEntry(entry.id, entry.kind, entry.label, entry.at, listOf(song))
@@ -173,7 +191,7 @@ class UndoStore(
 
     @Synchronized
     fun markUndone(entryId: Long, mediaStoreId: Long): Boolean {
-        val now = memory()
+        val now = wholeOrNull() ?: return false
         val entries = now.entries.map { entry ->
             if (entry.id != entryId) entry else entry.copy(songs = entry.songs.map { if (it.mediaStoreId == mediaStoreId) it.copy(undone = true) else it })
         }
@@ -211,11 +229,11 @@ class UndoStore(
     /**
      * Drops the snapshots older than [keepMs] at [now], then the oldest entries' snapshots (all of an entry's together)
      * until the rest fit [budgetBytes]; entry [keep]'s stay. The entries stay too, for the field-level undo. Covers no
-     * entry needs any more are deleted.
+     * entry needs any more are deleted. Nothing is pruned while the stored file can't be read whole.
      */
     @Synchronized
     fun prune(now: Long, keep: Long? = null) {
-        val memory = memory()
+        val memory = wholeOrNull() ?: return
         val fresh = memory.snapshots.filter { now - it.at <= keepMs || it.entryId == keep }.toMutableList()
         val byAge = fresh.map { it.entryId }.distinct().filter { it != keep }.sorted().toMutableList()
         while (fresh.sumOf { it.length } > budgetBytes && byAge.isNotEmpty()) {
@@ -229,16 +247,31 @@ class UndoStore(
         log("undo: ${dropped.size} full copies dropped")
     }
 
-    /** The files in `tag-backups/` the snapshots keep: start-up recovery deletes the others. */
-    fun keptBackups(): Set<String> = memory().snapshots.map { it.file }.toSet()
+    /**
+     * The files in `tag-backups/` the snapshots keep: [Backups.releaseBackup] never deletes one. Throws when the stored
+     * file can't be read whole, so a backup is never taken for one no snapshot keeps.
+     */
+    fun keptBackups(): Set<String> = whole().snapshots.map { it.file }.toSet()
 
+    /** [whole], or null (logged) when the stored file can't be read whole. */
+    private fun wholeOrNull(): UndoMemory? = try {
+        whole()
+    } catch (e: IOException) {
+        log("undo: not changed, its list can't be read (${e.javaClass.simpleName})")
+        null
+    }
+
+    /** The stored file, read; [unreadable] says whether it was read whole. */
     private fun load(): UndoMemory {
-        val file = dirs.undo
-        if (!file.isFile) return UndoMemory()
+        unreadable = null
         val text = try {
-            file.readText()
+            Files.readAllBytes(dirs.undo.toPath()).decodeToString()
+        } catch (_: NoSuchFileException) {
+            // Nothing stored yet.
+            return UndoMemory()
         } catch (e: IOException) {
             log("undo: not readable (${e.javaClass.simpleName})")
+            unreadable = e
             return UndoMemory()
         }
         val root = try {
@@ -247,13 +280,15 @@ class UndoStore(
             null
         }
         if (root == null) {
-            // Kept aside for a person to look at, never read again; History starts over.
-            file.renameTo(File(file.path + ASIDE))
-            log("undo: stored file unreadable (${text.length} chars), kept aside")
+            // Left as it is, for a person to look at: never saved over, and no backup taken for one no snapshot keeps.
+            log("undo: stored file unreadable (${text.length} chars), left as it is")
+            unreadable = IOException("not Undo's list")
             return UndoMemory()
         }
         val entries = items(root[ENTRIES_KEY], HistoryEntry.serializer())
         val snapshots = items(root[SNAPSHOTS_KEY], Snapshot.serializer())
+        // A snapshot this version can't read may name a backup: the list is not whole.
+        if (snapshots.size != (root[SNAPSHOTS_KEY] as? JsonArray).orEmpty().size) unreadable = IOException("a snapshot can't be read")
         val dropped = (root[ENTRIES_KEY] as? JsonArray).orEmpty().size - entries.size + (root[SNAPSHOTS_KEY] as? JsonArray).orEmpty().size - snapshots.size
         if (dropped > 0) log("undo: $dropped stored items unreadable, left out")
         return UndoMemory(entries, snapshots)
