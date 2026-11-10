@@ -79,6 +79,26 @@ class LibraryListsTest {
         assertEquals(ListSection.Added(AddedWhen.EARLIER), listSection(clock, SortSongs.RECENTLY_ADDED, settings, now, zone))
     }
 
+    @Test
+    fun `the list header drops the chip's word, then Shuffle's, then Play's, then the chip, before anything overlaps`() {
+        val shuffle = PartWidth(label = 100, icon = 48)
+        val play = PartWidth(label = 90, icon = 48)
+        val chip = PartWidth(label = 120, icon = 56)
+        fun fit(width: Int, sort: PartWidth? = chip) = headerFit(width, fixed = 100, shuffle, play, sort)
+
+        assertEquals(HeaderFit(true, true, ChipFit.LABEL), fit(410))
+        assertEquals(HeaderFit(true, true, ChipFit.ICON), fit(346))
+        assertEquals(HeaderFit(false, true, ChipFit.ICON), fit(294))
+        assertEquals(HeaderFit(false, false, ChipFit.ICON), fit(252))
+        assertEquals(HeaderFit(false, false, ChipFit.NONE), fit(251))
+        // Narrower than even that: the fewest parts, never a chip over Play.
+        assertEquals(HeaderFit(false, false, ChipFit.NONE), fit(100))
+        // No chip: Shuffle, then Play.
+        assertEquals(HeaderFit(true, true, ChipFit.NONE), fit(290, sort = null))
+        assertEquals(HeaderFit(false, true, ChipFit.NONE), fit(238, sort = null))
+        assertEquals(HeaderFit(false, false, ChipFit.NONE), fit(237, sort = null))
+    }
+
     private companion object {
         const val DAY: Long = 24 * 60 * 60_000L
     }

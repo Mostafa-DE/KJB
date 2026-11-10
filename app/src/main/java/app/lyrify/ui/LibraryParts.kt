@@ -219,7 +219,8 @@ fun LazyListScope.songRows(
 
 /**
  * Every list's header: the count, Shuffle and Play, then Add all on collection pages ([onAddAll]) and the sort chip
- * ([sort], the order shown). On a narrow screen the chip drops its word first, then Shuffle, so nothing scrolls sideways.
+ * ([sort], the order shown). On a narrow screen the chip drops its word first, then Shuffle, then Play, then the chip
+ * goes ([headerFit]), so nothing overlaps or scrolls sideways.
  */
 @Composable
 fun ListHeader(
@@ -239,18 +240,22 @@ fun ListHeader(
         fun measure(slot: String, content: @Composable () -> Unit) = subcompose(slot, content).map { it.measure(loose) }
         val gap = 8.dp.roundToPx()
         val countPart = measure("count") { CountLabel(count, noun) }
-        val play = measure("play") { HeaderButton(R.drawable.ic_play_arrow_fill, stringResource(R.string.lib_play), any, primary = true, label = true, onPlay) }
-        val shuffles = listOf(true, false).map { label ->
+        val plays = listOf(true, false).associateWith { label ->
+            measure("play $label") { HeaderButton(R.drawable.ic_play_arrow_fill, stringResource(R.string.lib_play), any, primary = true, label = label, onPlay) }
+        }
+        val shuffles = listOf(true, false).associateWith { label ->
             measure("shuffle $label") { HeaderButton(R.drawable.ic_shuffle, stringResource(R.string.lib_shuffle), any, primary = false, label = label, onShuffle) }
         }
         val add = onAddAll?.let { onClick -> measure("add") { AddAllButton(songs, any, onClick) } }.orEmpty()
-        val chips = sort?.let { order -> listOf(true, false).map { label -> measure("sort $label") { SortChip(order, label, onSort) } } }
+        val chips = sort?.let { order -> listOf(true, false).associateWith { label -> measure("sort $label") { SortChip(order, label, onSort) } } }
         fun width(parts: List<androidx.compose.ui.layout.Placeable>) = parts.sumOf { it.width }
-        val fixed = width(countPart) + width(play) + width(add) + gap * (2 + (if (add.isEmpty()) 0 else 1) + (if (chips == null) 0 else 1))
-        val choices = listOf(0 to 0, 0 to 1, 1 to 1)
-        val (shuffleAt, chipAt) = choices.firstOrNull { (s, c) -> fixed + width(shuffles[s]) + (chips?.let { width(it[c]) } ?: 0) <= constraints.maxWidth } ?: choices.last()
-        val shuffle = shuffles[shuffleAt]
-        val chip = chips?.get(chipAt).orEmpty()
+        fun widths(parts: Map<Boolean, List<androidx.compose.ui.layout.Placeable>>, before: Int = 0) =
+            PartWidth(width(parts.getValue(true)) + before, width(parts.getValue(false)) + before)
+        val fixed = width(countPart) + width(add) + gap * (2 + (if (add.isEmpty()) 0 else 1))
+        val fit = headerFit(constraints.maxWidth, fixed, widths(shuffles), widths(plays), chips?.let { widths(it, before = gap) })
+        val shuffle = shuffles.getValue(fit.shuffleLabel)
+        val play = plays.getValue(fit.playLabel)
+        val chip = chips?.takeIf { fit.chip != ChipFit.NONE }?.getValue(fit.chip == ChipFit.LABEL).orEmpty()
         val start = listOf(countPart, shuffle, play, add).filter { it.isNotEmpty() }
         val height = (start + listOf(chip)).flatten().maxOfOrNull { it.height } ?: 0
         val rowHeight = maxOf(height, constraints.minHeight)
@@ -263,6 +268,38 @@ fun ListHeader(
             chip.forEach { it.placeRelative(constraints.maxWidth - it.width, (rowHeight - it.height) / 2) }
         }
     }
+}
+
+/** A list header part's width in pixels: with its word, and as its icon alone. */
+data class PartWidth(val label: Int, val icon: Int) {
+    fun of(withLabel: Boolean): Int = if (withLabel) label else icon
+}
+
+/** How the sort chip fits: with its word, as its icon, or left out. */
+enum class ChipFit { LABEL, ICON, NONE }
+
+/** How the list header fits its width: Shuffle's and Play's words, and the sort chip. */
+data class HeaderFit(val shuffleLabel: Boolean, val playLabel: Boolean, val chip: ChipFit)
+
+/**
+ * The first way the list header fits [maxWidth]: the sort chip drops its word, then Shuffle, then Play, then the chip
+ * goes, so nothing overlaps at 360 dp. [fixed] is what never shrinks (the count, Add all, the gaps between the parts on
+ * the left); [chip] holds the gap before it, null when the header has no chip.
+ */
+fun headerFit(maxWidth: Int, fixed: Int, shuffle: PartWidth, play: PartWidth, chip: PartWidth?): HeaderFit {
+    val fits = listOf(
+        HeaderFit(shuffleLabel = true, playLabel = true, ChipFit.LABEL),
+        HeaderFit(shuffleLabel = true, playLabel = true, ChipFit.ICON),
+        HeaderFit(shuffleLabel = false, playLabel = true, ChipFit.ICON),
+        HeaderFit(shuffleLabel = false, playLabel = false, ChipFit.ICON),
+        HeaderFit(shuffleLabel = false, playLabel = false, ChipFit.NONE),
+    ).map { if (chip == null) it.copy(chip = ChipFit.NONE) else it }
+    fun width(fit: HeaderFit) = fixed + shuffle.of(fit.shuffleLabel) + play.of(fit.playLabel) + when (fit.chip) {
+        ChipFit.LABEL -> chip?.label ?: 0
+        ChipFit.ICON -> chip?.icon ?: 0
+        ChipFit.NONE -> 0
+    }
+    return fits.firstOrNull { width(it) <= maxWidth } ?: fits.last()
 }
 
 /** "1,234" over "songs", one TalkBack stop. */
