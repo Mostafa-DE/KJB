@@ -391,8 +391,9 @@ class NavTest {
         // Unit tests run in the module's folder.
         val shell = java.io.File("src/main/java/app/lyrify/ui/AppShell.kt").readText()
         // The shell's back for pages follows the finger (predictive back) and ends in nav.back().
-        assertTrue(Regex("""PredictiveBackHandler\(enabled = .*state\.pages\.isNotEmpty\(\).*\{ events ->\s*backFromPages\(events, nav""").containsMatchIn(shell))
-        assertTrue(shell.substringAfter("private suspend fun backFromPages(").substringBefore("\n}\n").contains("nav.back()"))
+        assertTrue(Regex("""PredictiveBackHandler\(enabled = .*state\.pages\.isNotEmpty\(\).*\{ events ->\s*val back = backFromPages\(nav""").containsMatchIn(shell))
+        assertTrue(shell.substringAfter("private class PlainBack(").substringBefore("\n}\n").contains("nav.back()"))
+        assertTrue(shell.substringAfter("private fun backFromPages(").substringBefore("\n}\n").contains("nav.back()"))
         val collections = java.io.File("src/main/java/app/lyrify/ui/CollectionScreens.kt").readText()
         assertTrue(Regex("""ic_arrow_back[^\n]*\{ nav\.back\(\) }""").containsMatchIn(collections))
         val library = java.io.File("src/main/java/app/lyrify/ui/LibraryScreen.kt").readText()

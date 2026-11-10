@@ -71,7 +71,6 @@ import app.lyrify.tones.ToneListStore
 import app.lyrify.tones.TonesState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
 
 /**
@@ -195,7 +194,14 @@ fun AppShell(
     LaunchedEffect(layer) { if (swipe.taking !is BackTaking.Page) pages.animateTo(layer) }
     // Pages and the tab history; a page's own back (selection, a page's sheet) is composed later and comes first.
     PredictiveBackHandler(enabled = state.views.isEmpty() && (state.pages.isNotEmpty() || state.history.isNotEmpty())) { events ->
-        backFromPages(events, nav, pages, swipe, scope, reduced)
+        val back = backFromPages(nav, pages, swipe, scope, reduced)
+        try {
+            events.collect { back.follow(it) }
+        } catch (e: CancellationException) {
+            back.cancel()
+            throw e
+        }
+        back.commit()
     }
 
     // The song KJB plays shows as playing in the lists, while the Now bar shows KJB's own song (not another app's).
@@ -244,7 +250,16 @@ fun AppShell(
             // The views over everything, the newest on top. Their back comes before the pages' and after their own.
             if (state.views.isNotEmpty()) {
                 key(state.views.size) {
-                    PredictiveBackHandler { events -> backFromView(events, nav, swipe, scope, reduced) }
+                    PredictiveBackHandler { events ->
+                        val back = backFromView(nav, swipe, scope, reduced)
+                        try {
+                            events.collect { back.follow(it) }
+                        } catch (e: CancellationException) {
+                            back.cancel()
+                            throw e
+                        }
+                        back.commit()
+                    }
                 }
             }
             val preview = (swipe.taking as? BackTaking.Pages)?.views.orEmpty()
@@ -468,68 +483,88 @@ private fun SharedTransitionScope.ViewLayers(
     }
 }
 
+/** One back swipe of the shell: each move of the finger it [follow]s, then it [commit]s when let go or [cancel]s when given up. */
+private interface ShellBack {
+    suspend fun follow(event: BackEventCompat)
+
+    fun commit()
+
+    fun cancel()
+}
+
+/** Back with nothing following the finger (reduced motion): it just goes back, with the move's own fade. */
+private class PlainBack(private val nav: Navigator) : ShellBack {
+    override suspend fun follow(event: BackEventCompat) = Unit
+
+    override fun commit() {
+        nav.back()
+    }
+
+    override fun cancel() = Unit
+}
+
 /**
  * Back from a page or across the tab history, following the finger: the page it goes back to (or the tab) is drawn
  * under the one leaving, which shrinks; let go, the page leaves as a pop does; given up, everything comes back. Back to
  * the player (or another view) a page was opened from draws that view under the page, its bar and dock, which shrink
  * over it and fade away when let go. With reduced motion nothing follows the finger: Back just fades.
  */
-private suspend fun backFromPages(events: Flow<BackEventCompat>, nav: Navigator, pages: SeekableTransitionState<PageLayer>, swipe: BackSwipe, scope: CoroutineScope, reduced: Boolean) {
+private fun backFromPages(nav: Navigator, pages: SeekableTransitionState<PageLayer>, swipe: BackSwipe, scope: CoroutineScope, reduced: Boolean): ShellBack {
     val from = nav.state
     val to = from.back()
-    if (to == null || reduced) {
-        events.collect { }
-        nav.back()
-        return
-    }
+    if (to == null || reduced) return PlainBack(nav)
     val origin = pageLayerOf(from)
     val dest = pageLayerOf(to)
     val intoViews = to.views.isNotEmpty()
     swipe.start(if (intoViews) BackTaking.Pages(to.views) else BackTaking.Page(origin.key))
-    try {
-        events.collect { event ->
+    return object : ShellBack {
+        override suspend fun follow(event: BackEventCompat) {
             swipe.follow(event)
             if (!intoViews) pages.seekTo(event.progress, dest)
         }
-    } catch (e: CancellationException) {
-        scope.launch {
-            if (!intoViews) launch { pages.seekBack(origin) }
-            swipe.cancel()
+
+        override fun commit() {
+            scope.launch {
+                if (intoViews) {
+                    swipe.leave()
+                    nav.back()
+                } else {
+                    nav.back()
+                    pages.animateTo(dest)
+                }
+                swipe.clear()
+            }
         }
-        throw e
-    }
-    scope.launch {
-        if (intoViews) {
-            swipe.leave()
-            nav.back()
-        } else {
-            nav.back()
-            pages.animateTo(dest)
+
+        override fun cancel() {
+            scope.launch {
+                if (!intoViews) launch { pages.seekBack(origin) }
+                swipe.cancel()
+            }
         }
-        swipe.clear()
     }
 }
 
 /**
  * Back from the top view, following the finger: it shrinks over the layer under it, which lights up; let go, it leaves
- * from there (into the Now bar for the player); given up, it comes back. With reduced motion it just fades.
+ * from there (into the Now bar for the player), and its layer lets go of the swipe once it has left; given up, it comes
+ * back. With reduced motion it just fades.
  */
-private suspend fun backFromView(events: Flow<BackEventCompat>, nav: Navigator, swipe: BackSwipe, scope: CoroutineScope, reduced: Boolean) {
+private fun backFromView(nav: Navigator, swipe: BackSwipe, scope: CoroutineScope, reduced: Boolean): ShellBack {
     val view = nav.state.views.lastOrNull()
-    if (view == null || reduced) {
-        events.collect { }
-        nav.back()
-        return
-    }
+    if (view == null || reduced) return PlainBack(nav)
     swipe.start(BackTaking.View(view))
-    try {
-        events.collect(swipe::follow)
-    } catch (e: CancellationException) {
-        scope.launch { swipe.cancel() }
-        throw e
+    return object : ShellBack {
+        override suspend fun follow(event: BackEventCompat) = swipe.follow(event)
+
+        override fun commit() {
+            nav.back()
+        }
+
+        override fun cancel() {
+            scope.launch { swipe.cancel() }
+        }
     }
-    // Its layer lets go of the swipe once it has left.
-    nav.back()
 }
 
 /** Seeks the page layer back to where a given-up swipe began ([origin]), then settles there. */

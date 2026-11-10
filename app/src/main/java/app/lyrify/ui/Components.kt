@@ -463,8 +463,12 @@ fun ConfirmDialog(
     val reduced = LocalReducedMotion.current
     val exit = remember { DialogExit() }
     val shown = remember { MutableTransitionState(false) }.apply { targetState = !exit.leaving }
-    // The action runs only once the card and the scrim are gone.
-    if (exit.leaving && shown.isIdle && !shown.currentState) LaunchedEffect(Unit) { exit.ended() }
+    // The action runs only once the card and the scrim are gone; the empty window goes with them, so nothing is left
+    // over the screen even while the caller has not closed the dialog yet.
+    if (exit.leaving && shown.isIdle && !shown.currentState) {
+        LaunchedEffect(Unit) { exit.ended() }
+        return
+    }
     val cancel = { exit.leave(onDismiss) }
     Dialog(onDismissRequest = { cancel() }, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
         PlainDialogWindow()
