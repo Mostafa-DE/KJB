@@ -21,6 +21,7 @@ import app.lyrify.LOG_TAG
 import app.lyrify.R
 import app.lyrify.logFailures
 import app.lyrify.lyrics.LocalTrack
+import app.lyrify.verbose
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -80,7 +81,7 @@ class AiDebugReceiver : BroadcastReceiver() {
         try {
             context.startForegroundService(Intent(context, AiDebugService::class.java).putExtras(intent))
         } catch (e: ForegroundServiceStartNotAllowedException) {
-            Log.w(LOG_TAG, "AI debug: Android refused to start the run in the background ($e). $USAGE")
+            Log.w(LOG_TAG, "AI debug: Android refused to start the run in the background (${e.javaClass.simpleName}). $USAGE")
         }
     }
 }
@@ -158,14 +159,15 @@ class AiDebugService : Service() {
             retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
         }
         if (durationMs == null) {
-            Log.w(LOG_TAG, "AI debug: no duration for ${song.path}")
+            Log.w(LOG_TAG, "AI debug: no duration for the song")
             return
         }
         val lyrics = request.lyrics?.readText()
+        val mode = if (lyrics == null) "transcribe" else "align"
         Log.i(
             LOG_TAG,
-            "AI debug: ${song.path} (${durationMs / 1000} s), ${if (lyrics == null) "transcribe" else "align"}, ${request.threads} threads, " +
-                "models in ${request.models.path}; ONNX Runtime ${BuildConfig.ORT_VERSION}, QNN EP ${BuildConfig.QNN_EP_VERSION}, " +
+            "AI debug: a song of ${durationMs / 1000} s, $mode, ${request.threads} threads, " +
+                "ONNX Runtime ${BuildConfig.ORT_VERSION}, QNN EP ${BuildConfig.QNN_EP_VERSION}, " +
                 "QNN ${BuildConfig.QNN_RUNTIME_VERSION}",
         )
         val assets = WhisperAssets(asset("vocab.json"), asset("added_tokens.json"), asset("generation_config.json"))
@@ -180,6 +182,8 @@ class AiDebugService : Service() {
             stages.close()
         }
         Log.i(LOG_TAG, "AI debug: done in ${(SystemClock.elapsedRealtime() - start) / 1000} s: ${describe(result)}")
+        // A failure's message can name the song's file: only under VERBOSE.
+        if (verbose() && result is AiResult.Failed) Log.v(LOG_TAG, "AI debug: ${result.message}")
         val lrc = when (result) {
             is AiResult.Transcribed -> result.lrc
             is AiResult.Aligned -> result.lrc
@@ -199,7 +203,7 @@ class AiDebugService : Service() {
         is AiResult.Instrumental -> "instrumental, %.1f words per minute".format(Locale.ROOT, result.wordsPerMinute)
         is AiResult.Rejected -> "rejected: ${result.reason}" + (result.agreement?.let { " (agreement %.2f)".format(Locale.ROOT, it) } ?: "") +
             (result.problem?.let { " ($it)" } ?: "")
-        is AiResult.Failed -> "failed: ${result.reason}"
+        is AiResult.Failed -> "failed: ${result.kind}"
     }
 
     private fun stats(s: AiStats): String =

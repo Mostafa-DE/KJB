@@ -197,8 +197,10 @@ class QueueSweepTest {
         advanceTimeBy(60_000)
 
         assertEquals(listOf("T0", "T1", "T2", "T4", "T5", "T6", "T7"), titles())
-        assertTrue(logs.any { "MediaStore went away" in it })
-        assertTrue(logs.any { "disk gone" in it })
+        // Logged by kind, without the song or the exception's words.
+        assertEquals(2, logs.count { "failed, skipped" in it })
+        assertTrue(logs.toString(), logs.any { "IllegalStateException" in it } && logs.any { "IOException" in it })
+        assertTrue(logs.toString(), logs.none { "T3" in it || "T6" in it || "went away" in it || "disk gone" in it })
     }
 
     // A player without a queue
@@ -711,6 +713,7 @@ class QueueSweepTest {
         assertEquals(listOf("T0", "T2"), titles())
         assertEquals(listOf(0L, 1_000L), started.map { it.at })
         assertEquals(SweepProgress(checked = 3, total = 3, paused = false), sweep.progress.first())
+        assertTrue(logs.toString(), logs.any { "AI" in it } && logs.none { "T1" in it })
     }
 
     @Test

@@ -29,12 +29,16 @@ sealed interface AiResult {
     data class Rejected(val reason: RejectReason, val agreement: Double?, val problem: LrcProblem? = null) : AiResult
 
     /**
-     * The engine could not run: an unreadable file, a native error, no memory, a model that did not load. [reason] is
-     * short: the exception's class and message, every absolute path cut to its file name (the log has the whole error).
+     * The engine could not run: an unreadable file, a native error, no memory, a model that did not load. [message] is
+     * short: the exception's class and message, every absolute path cut to its file name. It can name the song's file, so
+     * it goes to the AI's run log, never to logcat (which has the exception's class only).
      * [model] is the model that did not load, when that was the failure; [npu] is set when the phone's NPU could not be
      * used at all (no QNN execution provider or NPU device). Neither is the song's fault.
      */
-    data class Failed(val reason: String, val model: File? = null, val npu: Boolean = false) : AiResult
+    data class Failed(val message: String, val model: File? = null, val npu: Boolean = false) : AiResult {
+        /** The exception's class alone: all logcat may say of the failure. */
+        val kind: String get() = message.substringBefore(':')
+    }
 }
 
 /** [model] is there but ONNX Runtime could not load it ([cause]): a damaged file, not the expected model, or the NPU refused it. */
@@ -213,14 +217,14 @@ class LyricsFromAudio(
     /** Monotonic milliseconds, for the stage timings. */
     private val clock: () -> Long,
     private val log: (String) -> Unit = {},
-    /** One-line notes for the AI's run log: stages, times, counts. Never lyrics, nor error messages. */
+    /** One-line notes for the AI's run log: stages, times, counts. Never lyrics, nor error messages but the numbers of unfit audio. */
     private val notes: (String) -> Unit = {},
     /** The timing method's numbers ([PlainLyricsTiming.PARAMS]) and the transcribe job's offset. */
     private val timing: TimingParams = PlainLyricsTiming.PARAMS,
     /** The heap the app may use (`Runtime.maxMemory()`): a song that would not fit is not started ([AiMemory]). */
     private val maxHeapBytes: Long = Runtime.getRuntime().maxMemory(),
-    /** Whole stack traces in [log]: debug builds only (a trace's messages can hold paths). */
-    private val traces: Boolean = false,
+    /** VERBOSE (`setprop log.tag.KJB VERBOSE`): [log] also gets a failure's whole stack trace (its messages can hold paths). */
+    private val verbose: Boolean = false,
 ) {
     /**
      * [knownPlainLyrics]: LRCLIB's plain lyrics of this recording (duration matched), or null to transcribe. Lyrics with
@@ -241,34 +245,40 @@ class LyricsFromAudio(
             note("too long for the AI: %.0f s, about %d MB of a %d MB heap".format(Locale.ROOT, seconds, AiMemory.peakBytes(seconds) shr 20, maxHeapBytes shr 20))
             return AiResult.Rejected(RejectReason.TOO_LONG, agreement = null)
         }
-        val name = File(track.path).name
         return try {
             Run(track, lyrics, job, onStage, beforeChunk).result()
         } catch (e: CancellationException) {
             throw e
         } catch (e: UnfitAudioException) {
-            note("not for the AI (${e.reason}): ${e.message}")
+            // Its message holds numbers only (UnfitAudioException); still, logcat gets the reason alone.
+            log("not for the AI (${e.reason})")
+            notes("not for the AI (${e.reason}): ${e.message}")
             AiResult.Rejected(e.reason, agreement = null)
         } catch (e: ModelLoadException) {
-            log("${e.model.name}: model did not load: ${detail(e, track)}")
+            log("${e.model.name}: model did not load: ${e.javaClass.simpleName}")
+            trace(e)
             failed(e, track).copy(model = e.model)
         } catch (e: NpuUnavailableException) {
-            log("the NPU is not available: ${detail(e, track)}")
+            log("the NPU is not available: ${e.javaClass.simpleName}")
+            trace(e)
             failed(e, track).copy(npu = true)
         } catch (e: Exception) {
-            log("$name: AI failed: ${detail(e, track)}")
+            log("AI failed: ${e.javaClass.simpleName}")
+            trace(e)
             failed(e, track)
         } catch (e: OutOfMemoryError) {
-            log("$name: AI ran out of memory")
+            log("AI ran out of memory")
             failed(e, track)
         }
     }
 
-    /** What [log] says of [e]: the whole trace in debug builds ([traces]), else the short reason, paths cut to file names. */
-    private fun detail(e: Throwable, track: LocalTrack): String = if (traces) e.stackTraceToString() else failed(e, track).reason
+    /** Under VERBOSE ([verbose]), [e]'s whole stack trace after the line that names its class. The run log gets its message ([failed]). */
+    private fun trace(e: Throwable) {
+        if (verbose) log(e.stackTraceToString())
+    }
 
     /**
-     * [e] as a short [AiResult.Failed.reason]: its class and message with each absolute path cut to its file name. The
+     * [e] as a short [AiResult.Failed.message]: its class and message with each absolute path cut to its file name. The
      * song's path (it can hold spaces) is cut first, then anything else from a "/" to a space, quote or colon (a model's
      * or a native library's path, say).
      */
@@ -280,9 +290,9 @@ class LyricsFromAudio(
     }
 
     /** A line for logcat and the run log alike: nothing in it may come from the lyrics or an error message. */
-    private fun note(message: String) {
-        log(message)
-        notes(message)
+    private fun note(line: String) {
+        log(line)
+        notes(line)
     }
 
     /** One run: its stage timings are its only state. */

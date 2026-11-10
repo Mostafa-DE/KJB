@@ -158,7 +158,7 @@
         <!-- player -->
         <!-- KJB's own player: the media library service that holds the session (notification, lock screen, Bluetooth,
              headset buttons, Assistant) and the browse tree. Exported, as media controllers in other apps (Bluetooth,
-             the system's media controls, Android Auto later) bind it through these two actions. -->
+             the system's media controls, Android Auto) bind it through these two actions. -->
         <service
             android:name=".player.PlaybackService"
             android:exported="true"

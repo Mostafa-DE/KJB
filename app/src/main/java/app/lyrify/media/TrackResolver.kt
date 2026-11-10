@@ -50,10 +50,10 @@ class TrackResolver(private val resolver: ContentResolver) : AudioLibrary {
             }
         }.orEmpty()
     } catch (e: SecurityException) {
-        Log.w(LOG_TAG, "MediaStore refused the query (All files access off?): ${e.message}")
+        Log.w(LOG_TAG, "MediaStore refused the query (All files access off?): ${e.javaClass.simpleName}")
         emptyList()
     } catch (e: IllegalArgumentException) {
-        Log.w(LOG_TAG, "MediaStore rejected the query: ${e.message}")
+        Log.w(LOG_TAG, "MediaStore rejected the query: ${e.javaClass.simpleName}")
         emptyList()
     }
 

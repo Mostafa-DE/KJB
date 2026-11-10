@@ -16,6 +16,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.ByteArrayInputStream
+import java.io.IOException
 import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.InetAddress
@@ -265,6 +266,35 @@ class LrclibClientTest {
         } finally {
             server.stop(0)
         }
+    }
+
+    // What a failure says
+
+    /** A connection whose answer fails with a message that quotes the address, as HttpURLConnection's often do. */
+    private class FailingConnection(private val address: String) : HttpURLConnection(URI("http://127.0.0.1/").toURL()) {
+        override fun getResponseCode(): Int = throw SocketException("Connection reset by peer: $address")
+
+        override fun disconnect() = Unit
+
+        override fun usingProxy(): Boolean = false
+
+        override fun connect() = Unit
+    }
+
+    @Test
+    fun `a failed request says only the exception's kind, never the address with the song in it`() = runTest {
+        val unopened = HttpLrclibClient(
+            userAgent = "KJB/test",
+            gate = RequestGate(now = { testScheduler.currentTime }),
+            open = { url -> throw IOException("no route to $url") },
+        )
+        assertEquals(LrclibResult.Transient("IOException"), unopened.get("Quillmere", "Vael", "Ulso", 276, Lane.HIGH))
+        val unanswered = HttpLrclibClient(
+            userAgent = "KJB/test",
+            gate = RequestGate(now = { testScheduler.currentTime }),
+            open = { url -> FailingConnection(url) },
+        )
+        assertEquals(LrclibResult.Transient("SocketException"), unanswered.search("Vael", "Quillmere", Lane.HIGH))
     }
 
     // Cancelling a request

@@ -131,7 +131,7 @@ class QueueSweep(
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
-        log("$work failed, skipped: ${e.javaClass.simpleName}: ${e.message}")
+        log("queue sweep: ${work.javaClass.simpleName} failed, skipped: ${e.javaClass.simpleName}")
         null
     }
 
@@ -145,7 +145,7 @@ class QueueSweep(
     /** [process], except for a file the AI is working on: skipped at once (null), its lyrics or verdict come from the AI. */
     private suspend fun processUnlessAi(track: LocalTrack, lane: Lane, force: Boolean): Processed? {
         if (!heldByAi(track.path)) return process(track, lane, force)
-        log("${track.title}: the AI is on it, skipped")
+        log("queue sweep: a song the AI is on skipped")
         return null
     }
 

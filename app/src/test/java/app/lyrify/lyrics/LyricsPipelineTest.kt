@@ -54,7 +54,10 @@ class LyricsPipelineTest {
     private fun record(id: Long = 42, duration: Double = 276.0, synced: String? = this.synced, plain: String? = "Low tide\nVael") =
         LrclibRecord(id, "Vael", "Quillmere", "Ulso", duration, instrumental = false, plainLyrics = plain, syncedLyrics = synced)
 
-    private fun TestScope.pipeline(writeBytes: (FileChannel, ByteBuffer) -> Unit = SidecarFile::writeFully) = LyricsPipeline(
+    private fun TestScope.pipeline(
+        detail: (String) -> Unit = {},
+        writeBytes: (FileChannel, ByteBuffer) -> Unit = SidecarFile::writeFully,
+    ) = LyricsPipeline(
         client = client,
         ledger = ledger,
         clock = { BASE + testScheduler.currentTime },
@@ -62,6 +65,7 @@ class LyricsPipelineTest {
         random = MiddleRandom,
         log = { logs += it },
         warn = { warnings += it },
+        detail = detail,
         writeBytes = writeBytes,
     )
 
@@ -397,8 +401,30 @@ class LyricsPipelineTest {
 
         assertEquals(LyricsStatus.EXISTING, pipeline().status(track))
 
-        assertTrue(warnings.any { "Vael" in it })
+        assertTrue(warnings.isNotEmpty())
+        assertTrue(warnings.toString(), warnings.none { "Vael" in it || folder.root.path in it })
         assertTrue(sidecar(track).exists())
+    }
+
+    // The log
+
+    @Test
+    fun `no log or warning line names the song or its files, and the song line goes to detail only`() = runTest {
+        val details = mutableListOf<String>()
+        val pipeline = pipeline(detail = { details += it })
+        val track = audio()
+        client.onGet = { LrclibResult.Found(listOf(record())) }
+        assertEquals(LyricsStatus.SYNCED, pipeline.status(track))
+        assertEquals(Removal.REMOVED, pipeline.remove(track.path))
+        val busy = audio("Ulso Rain.mp3", title = "Ulso Rain")
+        client.onGet = { LrclibResult.Transient("HTTP 503") }
+        assertEquals(LyricsStatus.ERROR, pipeline.status(busy))
+        assertNull(pipeline.process(LocalTrack(File(folder.root, "Quillmere").path, "Quillmere", "Quillmere", null, 276_000)))
+
+        assertTrue(logs.isNotEmpty())
+        val names = listOf("Vael", "Quillmere", "Ulso", folder.root.path, ".lrc", ".mp3", "LRCLIB 42")
+        (logs + warnings).forEach { line -> names.forEach { assertFalse("\"$line\" holds \"$it\"", it in line) } }
+        assertTrue(details.toString(), details.any { "Vael" in it && "SYNCED" in it && "LRCLIB 42" in it })
     }
 
     @Test

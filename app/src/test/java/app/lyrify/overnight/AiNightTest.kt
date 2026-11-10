@@ -282,7 +282,7 @@ class AiNightTest {
                 discard()
             },
             onProgress = { progress += it },
-            log = { logs += it },
+            runLog = { logs += it },
         )
     }
 

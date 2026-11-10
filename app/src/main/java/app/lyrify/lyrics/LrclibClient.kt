@@ -39,7 +39,10 @@ sealed interface LrclibResult {
     /** `/api/get` has no such track. */
     data object NotFound : LrclibResult
 
-    /** Overloaded, offline or garbled: worth asking again later. [cause] is for the log. */
+    /**
+     * Overloaded, offline or garbled: worth asking again later. [cause] is for the log: a status code or an exception
+     * class name, never an exception's message (it can quote the address, which holds the song).
+     */
     data class Transient(val cause: String) : LrclibResult
 }
 
@@ -95,7 +98,7 @@ class HttpLrclibClient(
         val connection = try {
             open(url)
         } catch (e: IOException) {
-            return LrclibResult.Transient("${e.javaClass.simpleName}: ${e.message}")
+            return LrclibResult.Transient(e.javaClass.simpleName)
         }
         return coroutineScope {
             val response = async(Dispatchers.IO) { exchange(connection, interpret) }
@@ -129,7 +132,7 @@ class HttpLrclibClient(
             }
         }
     } catch (e: IOException) {
-        LrclibResult.Transient("${e.javaClass.simpleName}: ${e.message}")
+        LrclibResult.Transient(e.javaClass.simpleName)
     }
 
     companion object {

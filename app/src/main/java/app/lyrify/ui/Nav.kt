@@ -4,11 +4,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.runtime.Composable
@@ -20,15 +18,10 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import app.lyrify.BuildConfig
-import app.lyrify.R
 import app.lyrify.data.LyricsStatus
 import app.lyrify.library.SongRef
 import app.lyrify.settings.DockTab
@@ -142,6 +135,14 @@ sealed interface Page {
     /** Settings > Library tabs. */
     @Serializable @SerialName("libraryTabs")
     data object LibraryTabs : Page
+
+    /** Settings > About > Licences (LicencesScreen.kt, R1). */
+    @Serializable @SerialName("licences")
+    data object Licences : Page
+
+    /** One row of Licences, by its name: what it is and its licence's full text. */
+    @Serializable @SerialName("licence")
+    data class Licence(val name: String) : Page
 }
 
 enum class BuiltInList { FAVOURITES, MOST_PLAYED, RECENTLY_PLAYED, RECENTLY_ADDED }
@@ -340,7 +341,8 @@ fun homeOf(page: Page, from: DockTab, viewOpen: Boolean): DockTab = when (page) 
     is Page.CollectionPages -> if (from == DockTab.SEARCH && !viewOpen) DockTab.SEARCH else DockTab.LIBRARY
     is Page.SearchAll -> DockTab.SEARCH
     is Page.Songs, is Page.QueuePages, is Page.ListeningPages -> DockTab.LIBRARY
-    is Page.Check, Page.Duplicates, Page.Tones, Page.Ai, Page.CoversTags, Page.TagHistory, Page.Settings, Page.LibraryTabs, Page.FoldersToSkip -> DockTab.TOOLS
+    is Page.Check, Page.Duplicates, Page.Tones, Page.Ai, Page.CoversTags, Page.TagHistory, Page.Settings, Page.LibraryTabs, Page.FoldersToSkip,
+    Page.Licences, is Page.Licence -> DockTab.TOOLS
 }
 
 private val JSON = Json { ignoreUnknownKeys = true }
@@ -412,25 +414,5 @@ fun PageFrame(topBar: @Composable (under: Boolean, backdrop: GlassBackdrop) -> U
         Box(Modifier.fillMaxSize().glassSource(own, blur).then(chrome.backdrop?.let { Modifier.glassSource(it, blur) } ?: Modifier)) {
             content(PaddingValues(top = padding.calculateTopPadding(), bottom = chrome.bottom))
         }
-    }
-}
-
-/**
- * A page or view whose milestone has not landed: a back arrow, and in debug builds the milestone that fills it. R1
- * fails the build while one is left.
- */
-@Composable
-fun PageStub(milestone: String, onBack: () -> Unit) {
-    PageFrame(
-        topBar = { under, backdrop ->
-            LyrifyTopBar(
-                title = { Text(if (BuildConfig.DEBUG) "Coming in $milestone" else "", maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                under = under,
-                backdrop = backdrop,
-                navigation = { ChromeIconButton(R.drawable.ic_arrow_back, stringResource(R.string.check_back), onBack) },
-            )
-        },
-    ) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {}
     }
 }

@@ -300,6 +300,8 @@ private fun PageContent(
         Page.TagHistory -> TagHistoryPage()
         Page.Settings -> SettingsScreen(settings, onSettings, grants, ai, aiActions, backup, versionName, onOpen = nav::open) { back() }
         Page.LibraryTabs -> LibraryTabsScreen(settings, onSettings) { back() }
+        Page.Licences -> LicencesPage()
+        is Page.Licence -> LicencePage(page)
     }
 }
 

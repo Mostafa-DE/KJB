@@ -470,7 +470,7 @@ class ModelDownloader(
             val connection = try {
                 open(uri).also(current::set)
             } catch (e: IOException) {
-                return Fetch.Stop(Download.Interrupted("${spec.name}: ${e.javaClass.simpleName}: ${e.message}"))
+                return Fetch.Stop(Download.Interrupted("${spec.name}: ${e.javaClass.simpleName}"))
             }
             try {
                 connection.connectTimeout = CONNECT_TIMEOUT_MS
@@ -500,7 +500,7 @@ class ModelDownloader(
                     is Reply.Busy -> return Fetch.Stop(Download.Interrupted("${spec.name}: ${reply.reason}"))
                 }
             } catch (e: IOException) {
-                return Fetch.Stop(Download.Interrupted("${spec.name}: ${e.javaClass.simpleName}: ${e.message}"))
+                return Fetch.Stop(Download.Interrupted("${spec.name}: ${e.javaClass.simpleName}"))
             } finally {
                 connection.disconnect()
             }
@@ -615,7 +615,7 @@ class ModelDownloader(
             // The zip matched its SHA-256, so this is not a damaged download: the archive is not what was pinned.
             folder.deleteRecursively()
             zip.delete()
-            return Download.Failed("${spec.name}: not a usable archive: ${e.message}")
+            return Download.Failed("${spec.name}: not a usable archive: ${e.javaClass.simpleName}")
         } catch (e: IOException) {
             return Download.Interrupted("${spec.name}: not unpacked: ${e.javaClass.simpleName}")
         }

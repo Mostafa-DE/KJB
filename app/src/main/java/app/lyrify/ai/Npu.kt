@@ -36,7 +36,7 @@ object Ort {
         OrtEnvironment.getEnvironment(OrtLoggingLevel.ORT_LOGGING_LEVEL_WARNING, "KJB").also {
             // onnxruntime-android ships 1DS telemetry. The manifest removes its initializer; this switches the native
             // events off as well. Never worth failing a run over.
-            runCatching { it.setTelemetry(false) }.onFailure { e -> Log.w(LOG_TAG, "could not disable ONNX Runtime telemetry", e) }
+            runCatching { it.setTelemetry(false) }.onFailure { e -> Log.w(LOG_TAG, "could not disable ONNX Runtime telemetry: ${e.javaClass.simpleName}") }
         }
     }
 
