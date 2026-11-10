@@ -68,8 +68,19 @@ class SharedWrites(
     private val root: Path = Paths.get("/"),
     private val log: (String) -> Unit = {},
 ) {
-    /** Whether [write] may change the file at the absolute [path]. */
-    fun allows(write: SharedWrite, path: String): Boolean {
+    /** Whether [write] may change the file at the absolute [path]. Refused when the disk can't say. */
+    fun allows(write: SharedWrite, path: String): Boolean = try {
+        allowsOrThrow(write, path)
+    } catch (e: IOException) {
+        log("shared storage: $write refused, the disk could not say where the file is (${e.javaClass.simpleName})")
+        false // safe: a refusal writes nothing; the tag engine asks allowsOrThrow, where a refusal is for good
+    }
+
+    /**
+     * [allows], except that a disk that can't say throws instead of refusing: for the tag engine's put-back, where a
+     * refusal sets a write aside for good and an error must decide nothing.
+     */
+    fun allowsOrThrow(write: SharedWrite, path: String): Boolean {
         if (!testFolderOnly || onDisk(path)) return true
         log("shared storage: $write refused, this build changes only the test folder")
         return false
@@ -82,18 +93,25 @@ class SharedWrites(
     fun allowsIds(write: SharedWrite, ids: Collection<Long>, paths: (Collection<Long>) -> Map<Long, String>?): Boolean {
         if (!testFolderOnly) return true
         val found = paths(ids)
-        if (found != null && ids.all { id -> found[id]?.let(::onDisk) == true }) return true
+        if (found != null && ids.all { id -> found[id]?.let(::onDiskOrRefused) == true }) return true
         log("shared storage: $write refused, this build changes only the test folder")
         return false
     }
 
     /** Whether a library reader lists the song at the absolute [path]: a debug build lists only [TEST_FOLDER]. */
-    fun lists(path: String): Boolean = !testFolderOnly || onDisk(path)
+    fun lists(path: String): Boolean = !testFolderOnly || onDiskOrRefused(path)
+
+    /** [onDisk], false when the disk can't say: for what a refusal keeps safe (a write not made, a song not listed). */
+    private fun onDiskOrRefused(path: String): Boolean = try {
+        onDisk(path)
+    } catch (_: IOException) {
+        false // safe: a refusal: nothing is written or listed
+    }
 
     /**
      * Whether [path] is in [TEST_FOLDER] by its text ([inTestFolder]) and on disk: every folder on the way that exists is
      * a real folder, not a link, and the path with links resolved stays in [TEST_FOLDER] (so the file itself may be a
-     * link only to a file there). A link would let a create or a delete reach a file elsewhere. Refused when the disk
+     * link only to a file there). A link would let a create or a delete reach a file elsewhere. Throws when the disk
      * cannot say.
      */
     private fun onDisk(path: String): Boolean {
@@ -111,16 +129,14 @@ class SharedWrites(
                 } catch (_: NoSuchFileException) {
                     break
                 }
-                if (index < names.lastIndex && !attributes.isDirectory) return false
+                if (index < names.lastIndex && !attributes.isDirectory) return false // safe: BasicFileAttributes, read with NOFOLLOW_LINKS, which throws
                 found = next
                 below = names.drop(index + 1)
             }
             val real = below.fold(found.toRealPath()) { at, name -> at.resolve(name) }
             real.startsWith(base) && inTestFolder("/" + base.relativize(real).joinToString("/"))
-        } catch (_: IOException) {
-            false
-        } catch (_: SecurityException) {
-            false
+        } catch (e: SecurityException) {
+            throw IOException("the disk could not be asked", e)
         }
     }
 

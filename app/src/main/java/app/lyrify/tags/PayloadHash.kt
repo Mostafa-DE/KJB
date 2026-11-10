@@ -83,7 +83,7 @@ object PayloadHash {
             }
         } catch (e: IOException) {
             if (strict) throw e
-            null
+            null // safe: the lenient read, DuplicateScan's; the tag engine reads strict
         } catch (_: Malformed) {
             null
         }
@@ -96,11 +96,21 @@ object PayloadHash {
     }
 
     /** SHA-256 (hex) of every byte of the file at [path]. */
-    fun fileSha256(path: Path): String = FileInputStream(path.toFile()).use { input ->
+    fun fileSha256(path: Path): String = fileHash(path).second
+
+    /**
+     * The length of the file at [path] and the SHA-256 (hex) of all its bytes, both from one descriptor (its `fstat`, and
+     * reads through it). Throws when it can't be read, or ends before that length.
+     */
+    fun fileHash(path: Path): Pair<Long, String> = FileInputStream(path.toFile()).use { input ->
         val file = Reader(input.channel)
         val digest = sha256()
-        file.digest(digest, 0, file.size)
-        digest.hex()
+        try {
+            file.digest(digest, 0, file.size)
+        } catch (_: Malformed) {
+            throw IOException("file ended early")
+        }
+        file.size to digest.hex()
     }
 
     private fun mp3(file: Reader, limit: Long): Read {

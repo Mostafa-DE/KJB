@@ -152,14 +152,22 @@ class UndoStore(
         return memory
     }
 
-    /** The song's snapshot, while it is kept and its file is there. */
+    /**
+     * The song's snapshot, while it is kept and its file is there. Throws when Undo's list can't be read whole, or the
+     * snapshot's file looked at: an error is never taken for no snapshot.
+     */
     fun snapshot(mediaStoreId: Long): Snapshot? =
-        memory().snapshots.firstOrNull { it.mediaStoreId == mediaStoreId }?.takeIf { File(dirs.backups, it.file).isFile }
+        whole().snapshots.firstOrNull { it.mediaStoreId == mediaStoreId }?.takeIf { regularFile(File(dirs.backups, it.file)) }
 
     /** Whether entry [entryId] can still be undone from full copies; otherwise its row says "Undo has expired". */
     fun hasFullCopy(entryId: Long): Boolean {
         val entry = memory().entries.firstOrNull { it.id == entryId } ?: return false
-        return entry.songs.any { song -> snapshot(song.mediaStoreId)?.sha256 == song.before }
+        return try {
+            entry.songs.any { song -> snapshot(song.mediaStoreId)?.sha256 == song.before }
+        } catch (e: IOException) {
+            log("undo: full copies could not be looked at (${e.javaClass.simpleName})")
+            false // safe: History's words only; the Undo itself asks again, and writes nothing when it can't tell
+        }
     }
 
     /** A new entry's id: [now], or one more than the last when the clock has not moved on. */
@@ -198,31 +206,35 @@ class UndoStore(
         return save(now.copy(entries = entries))
     }
 
-    /** Keeps [picture]'s bytes for Undo, once per content, durably. Null when they could not be kept. */
-    fun savePicture(picture: TagPicture): PictureRef? {
+    /** Keeps [picture]'s bytes for Undo, once per content, durably. Throws when they could not be kept. */
+    fun savePicture(picture: TagPicture): PictureRef {
         val ref = PictureRef(picture.sha256, picture.description, picture.type, picture.mime)
         val file = File(dirs.pictures, ref.sha256)
         if (picture(ref) != null) return ref
-        return try {
+        val aside = File(dirs.pictures, ref.sha256 + TMP)
+        try {
             dirs.pictures.mkdirs()
-            val aside = File(dirs.pictures, ref.sha256 + TMP)
             FileOutputStream(aside).use { out ->
                 out.write(picture.data)
                 out.fd.sync()
             }
             Files.move(aside.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
             dirs.syncDir(dirs.pictures)
-            ref
+            return ref
         } catch (e: IOException) {
+            aside.delete()
             log("undo: cover not kept (${e.javaClass.simpleName})")
-            null
+            throw e
         }
     }
 
-    /** The picture kept as [ref], if its bytes are there and whole. */
+    /**
+     * The picture kept as [ref], or null when its bytes are not there or not whole (Undo's own file, damaged). Throws
+     * when they can't be read.
+     */
     fun picture(ref: PictureRef): TagPicture? = try {
-        TagPicture(File(dirs.pictures, ref.sha256).readBytes(), ref.description, ref.type, ref.mime).takeIf { it.sha256 == ref.sha256 }
-    } catch (_: IOException) {
+        TagPicture(Files.readAllBytes(File(dirs.pictures, ref.sha256).toPath()), ref.description, ref.type, ref.mime).takeIf { it.sha256 == ref.sha256 }
+    } catch (_: NoSuchFileException) {
         null
     }
 
@@ -258,7 +270,7 @@ class UndoStore(
         whole()
     } catch (e: IOException) {
         log("undo: not changed, its list can't be read (${e.javaClass.simpleName})")
-        null
+        null // safe: a failure report: record and markUndone answer false (not saved), prune does nothing
     }
 
     /** The stored file, read; [unreadable] says whether it was read whole. */
@@ -272,7 +284,7 @@ class UndoStore(
         } catch (e: IOException) {
             log("undo: not readable (${e.javaClass.simpleName})")
             unreadable = e
-            return UndoMemory()
+            return UndoMemory() // safe: shown as nothing while unreadable is set; whole() throws, and nothing is saved
         }
         val root = try {
             json.parseToJsonElement(text) as? JsonObject
@@ -318,7 +330,7 @@ class UndoStore(
         } catch (e: IOException) {
             aside.delete()
             log("undo: not saved durably (${e.javaClass.simpleName})")
-            false
+            false // safe: a failure report: the caller keeps the intent and its backup, and says Undo was not saved
         }
     }
 

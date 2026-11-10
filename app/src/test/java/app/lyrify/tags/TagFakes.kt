@@ -212,6 +212,9 @@ class FakeSongFiles(private val events: MutableList<String> = Collections.synchr
 
     /** The next [failFileIds] looks at a path (`lstat`) fail. */
     var failFileIds = 0
+
+    /** MediaStore's queries fail (a SecurityException, a bad argument) while this is set. */
+    var failIdOf = false
     var running = 0
     var mostAtOnce = 0
 
@@ -223,7 +226,7 @@ class FakeSongFiles(private val events: MutableList<String> = Collections.synchr
 
     override fun sameFile(mediaStoreId: Long, path: String): Boolean = (ids[path] == mediaStoreId).also { events += "same file" }
 
-    override fun idOf(path: String): Long? = ids[path]
+    override fun idOf(path: String): Long? = if (failIdOf) throw IOException("MediaStore refused") else ids[path]
 
     override fun openInPlace(song: SongTarget): OpenSong? {
         events += "open rw"

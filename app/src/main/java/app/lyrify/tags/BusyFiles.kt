@@ -71,7 +71,7 @@ fun sessionFiles(context: Context, resolver: TrackResolver): Set<String>? {
     val controllers = try {
         manager.getActiveSessions(ComponentName(context, NowPlayingListener::class.java))
     } catch (_: SecurityException) {
-        return null
+        return null // safe: null is "unknown" here, never "none": the writer then writes nothing (NOT_TRIED)
     }
     return controllers.flatMapTo(mutableSetOf()) { controller ->
         val metadata = controller.metadata ?: return@flatMapTo emptyList()

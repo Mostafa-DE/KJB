@@ -348,7 +348,7 @@ class SharedWritesTest {
         )
         SHARED.forEach { writer ->
             val text = roots.map { File(it, writer) }.first { it.isFile }.readText()
-            assertTrue("$writer does not ask SharedWrites", ".allows(" in text || ".allowsIds(" in text)
+            assertTrue("$writer does not ask SharedWrites", ".allows(" in text || ".allowsIds(" in text || ".allowsOrThrow(" in text)
             assertTrue("$writer names no kind of write", Regex("""SharedWrite\.[A-Z]""").containsMatchIn(text))
         }
     }

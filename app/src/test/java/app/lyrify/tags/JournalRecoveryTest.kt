@@ -200,7 +200,7 @@ class JournalRecoveryTest {
 
         assertTrue(journal.open(intent))
         assertEquals(listOf(intent), WriteJournal(File(folder.root, "journal"), FolderSync()::sync).pending())
-        assertTrue(journal.close(intent.id))
+        journal.close(intent.id)
         assertEquals(emptyList<WriteIntent>(), journal.pending())
     }
 }

@@ -5,6 +5,7 @@ import app.lyrify.lyrics.FakeLrclib
 import app.lyrify.lyrics.LocalTrack
 import app.lyrify.lyrics.LyricsPipeline
 import app.lyrify.lyrics.MemoryLedger
+import app.lyrify.data.SharedWrite
 import app.lyrify.data.SharedWrites
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
@@ -14,6 +15,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -893,6 +895,213 @@ class WriterReviewTest {
         }
     }
 
+    // Seventh review: an error stays an error down to the stat and the listing
+
+    /** The open intent's file. */
+    private fun intentFile(): File = rig.dirs.journal.listFiles()!!.single { it.isFile && it.name.endsWith(".json") }
+
+    @Test
+    fun `an intent that can't be read now is left in place and retried`() {
+        val song = rig.song("Paper Lantern", 41, fields)
+        val original = rig.bytes(song)
+        killedMidWrite(song)
+        val intent = intentFile()
+        intent.setReadable(false)
+        val recovered = try {
+            runBlocking { rig.recovery().recover() }
+        } finally {
+            intent.setReadable(true)
+        }
+
+        assertEquals(Recovered(waiting = 1), recovered)
+        assertTrue(intent.isFile)
+        rig.restart()
+        assertEquals(Recovered(settled = 1, restored = 1), runBlocking { rig.recovery().recover() })
+        assertArrayEquals(original, rig.bytes(song))
+    }
+
+    @Test
+    fun `an intent that can't be read at three starts in a row is set aside, and counted`() {
+        val song = rig.song("Paper Lantern", 41, fields)
+        killedMidWrite(song)
+        val intent = intentFile()
+        intent.setReadable(false)
+        val starts = (1..3).map {
+            rig.restart()
+            runBlocking { rig.recovery().recover() }
+        }
+
+        assertEquals(listOf(Recovered(waiting = 1), Recovered(waiting = 1), Recovered(setAside = 1, unreadable = 1)), starts)
+        assertEquals(1, rig.journal.uncheckable())
+        assertEquals(0, rig.journal.pending().size)
+    }
+
+    @Test
+    fun `the writer leaves a song alone while an open intent can't be read`() {
+        val song = rig.song("Paper Lantern", 41, fields)
+        killedMidWrite(song)
+        val torn = rig.bytes(song)
+        val intent = intentFile()
+        intent.setReadable(false)
+        val outcome = try {
+            write(song)
+        } finally {
+            intent.setReadable(true)
+        }
+
+        assertEquals(SongOutcome.RECOVERY_PENDING, outcome)
+        assertArrayEquals(torn, rig.bytes(song))
+    }
+
+    @Test
+    fun `a journal that can't be listed settles nothing that start, and its private copies stay`() {
+        val song = rig.song("Paper Lantern", 41, fields)
+        val original = rig.bytes(song)
+        killedMidWrite(song)
+        val copies = rig.dirs.work.listFiles()!!.map { it.name }
+        assertEquals(1, copies.size)
+        rig.dirs.journal.setReadable(false)
+        val recovered = try {
+            runBlocking { rig.recovery().recover() }
+        } finally {
+            rig.dirs.journal.setReadable(true)
+        }
+
+        assertEquals(Recovered(), recovered)
+        assertEquals(copies, rig.dirs.work.listFiles()!!.map { it.name })
+        rig.restart()
+        assertEquals(Recovered(settled = 1, restored = 1), runBlocking { rig.recovery().recover() })
+        assertArrayEquals(original, rig.bytes(song))
+    }
+
+    @Test
+    fun `a write whose History can't be saved at three starts is settled as written, Undo not saved, its backup kept`() {
+        val song = rig.song("Paper Lantern", 41, fields)
+        val backup = secondWriteKilledOnScan(song)
+        val written = rig.bytes(song)
+        // Undo's file is in the app's folder: its fsync fails, so no History record is saved.
+        rig.folders.failing += rig.dirs.root
+        val starts = (1..3).map {
+            rig.restart()
+            runBlocking { rig.recovery().recover() }
+        }
+        rig.folders.failing.clear()
+
+        assertEquals(listOf(Recovered(waiting = 1), Recovered(waiting = 1), Recovered(settled = 1, setAside = 1, undoNotSaved = 1)), starts)
+        assertArrayEquals(written, rig.bytes(song))
+        assertTrue(backup.isFile)
+        assertEquals(0, rig.journal.uncheckable())
+        assertEquals(0, rig.journal.pending().size)
+    }
+
+    @Test
+    fun `a song that can't be read is set aside at the third start even when its count can't be rewritten`() {
+        val song = rig.song("Paper Lantern", 41, fields)
+        killedMidWrite(song)
+        rig.songs.failReads = Int.MAX_VALUE
+        repeat(2) {
+            rig.restart()
+            runBlocking { rig.recovery().recover() }
+        }
+        rig.folders.failing += rig.dirs.journal
+        rig.restart()
+        val third = runBlocking { rig.recovery().recover() }
+        rig.folders.failing.clear()
+        rig.songs.failReads = 0
+
+        assertEquals(Recovered(setAside = 1, unreadable = 1), third)
+        assertEquals(0, rig.journal.pending().size)
+    }
+
+    @Test
+    fun `a MediaStore query that fails is counted, and its song set aside after three starts`() {
+        val song = rig.song("Paper Lantern", 41, fields)
+        killedMidWrite(song)
+        rig.songs.failIdOf = true
+        val starts = (1..3).map {
+            rig.restart()
+            runBlocking { rig.recovery().recover() }
+        }
+        rig.songs.failIdOf = false
+
+        assertEquals(listOf(Recovered(waiting = 1), Recovered(waiting = 1), Recovered(setAside = 1, unreadable = 1)), starts)
+    }
+
+    @Test
+    fun `a song written over in place while its backup's release reads it keeps its backup`() {
+        val song = rig.song("Paper Lantern", 41, fields)
+        assertEquals(SongOutcome.WRITTEN, write(song, titleOnly))
+        val before = rig.bytes(song)
+        // Right after the release's first read, another app writes into the same file: the same inode, other bytes.
+        rig.songs.onRead = {
+            if (rig.events.last() == "open r") {
+                rig.songs.onRead = {}
+                java.io.RandomAccessFile(song.path, "rw").use {
+                    it.seek(20)
+                    it.write(byteArrayOf(1, 2, 3))
+                }
+            }
+        }
+
+        assertEquals(SongOutcome.SET_ASIDE, write(song))
+        assertTrue(backupKept(before))
+    }
+
+    @Test
+    fun `a backup name already taken is never written over, and the write takes another`() {
+        val song = rig.song("Paper Lantern", 41, fields)
+        val foreign = byteArrayOf(9, 9, 9)
+        val taken = File(rig.dirs.backups, "1800000000000-41-1.mp3")
+        // Right as the intent is recorded, a file appears under the name its backup was to have.
+        rig.folders.onSync = { dir ->
+            if (dir == rig.dirs.journal) {
+                rig.folders.onSync = {}
+                taken.parentFile.mkdirs()
+                taken.writeBytes(foreign)
+            }
+        }
+
+        assertEquals(SongOutcome.WRITTEN, write(song))
+        assertArrayEquals(foreign, taken.readBytes())
+    }
+
+    @Test
+    fun `an Undo whose song can't be hashed now writes nothing, never a field-level Undo`() {
+        val song = rig.song("Paper Lantern", 41, fields)
+        val result = runBlocking { rig.writer.write(listOf(WriteJob(song, edit)), EditKind.SONG, "Paper Lantern") } as BatchResult.Done
+        val written = rig.bytes(song)
+        val file = File(song.path)
+        var checks = 0
+        // The batch's own busy check comes first: from it until the song's own check, the song can't be read.
+        rig.busy.onCheck = { file.setReadable(++checks != 1) }
+        val undone = try {
+            runBlocking { rig.writer.undo(checkNotNull(result.entryId)) } as BatchResult.Done
+        } finally {
+            file.setReadable(true)
+            rig.busy.onCheck = {}
+        }
+
+        assertEquals(SongOutcome.COULD_NOT_CHANGE, undone.songs.single().outcome)
+        assertArrayEquals(written, rig.bytes(song))
+    }
+
+    @Test
+    fun `a debug build's checkpoint that can't tell throws for the tag engine, and refuses for the rest`() {
+        val root = folder.newFolder("disk")
+        val music = File(root, "storage/emulated/0/Music").apply { mkdirs() }
+        File(music, "KJB test").mkdirs()
+        val path = "/storage/emulated/0/Music/KJB test/Paper Lantern.mp3"
+        val writes = SharedWrites(testFolderOnly = true, root = root.toPath())
+        assertTrue(writes.allowsOrThrow(SharedWrite.TAG_RESTORE, path))
+        music.setExecutable(false)
+        try {
+            assertFalse(writes.allows(SharedWrite.TAG_RESTORE, path))
+            assertThrows(java.io.IOException::class.java) { writes.allowsOrThrow(SharedWrite.TAG_RESTORE, path) }
+        } finally {
+            music.setExecutable(true)
+        }
+    }
+
     /**
      * Every line of the app's sources that deletes something named a backup (`.delete()`, `deleteIfExists`,
      * `deleteRecursively`, `Files.delete`) is in [Backups.releaseBackup], or is Undo's own expiry of a song's snapshot.
@@ -916,6 +1125,42 @@ class WriterReviewTest {
 
         assertEquals(listOf("tags/UndoStore.kt: dropped.forEach { File(dirs.backups, it.file).delete() }"), found)
         assertTrue(roots.any { File(it, "tags/WriteJournal.kt").readText().contains("fun releaseBackup(") })
+    }
+
+    /**
+     * The tag engine's files and the shared-storage checkpoint use only calls that throw when they can't tell: no
+     * `File.length()`, `exists()`, `isFile`, `isDirectory` or `listFiles()` (each answers 0, false or null on an error),
+     * and no catch of an IOException, ErrnoException, SecurityException or FileNotFoundException that answers null,
+     * false, 0 or an empty stand-in. A line marked `// safe:` says why it is one, and is allowed.
+     */
+    @Test
+    fun `the tag engine never turns an error into an answer`() {
+        val files = listOf("SafeWriter", "WriteJournal", "UndoStore", "PayloadHash", "TagFile", "BusyFiles", "TagsGraph")
+            .map { File("src/main/java/app/lyrify/tags/$it.kt") } +
+            File("src/main/java/app/lyrify/data/SharedWrites.kt") + File("src/debug/java/app/lyrify/tags/TagKillService.kt")
+        assertTrue("run from the app module: ${File("").absolutePath}", files.all { it.isFile })
+        val calls = Regex("""\.length\(\)|\.exists\(\)|\.isFile\b|\.isDirectory\b|\.listFiles\(""")
+        val caught = Regex("""catch \(\w+: (IOException|ErrnoException|SecurityException|FileNotFoundException)\)""")
+        val answer = Regex("""(return\s+)?(null|false|0L?|emptyList\(\)|emptySet\(\)|emptyMap\(\)|\w+Memory\(\))(\.also\b.*)?""")
+        val found = files.flatMap { file ->
+            val lines = file.readLines()
+            lines.withIndex().flatMap { (index, line) ->
+                val code = line.substringBefore("//").trim()
+                if (code.startsWith("*") || "// safe:" in line) return@flatMap emptyList<String>()
+                val hits = mutableListOf<String>()
+                if (calls.containsMatchIn(code)) hits += "${file.name}:${index + 1}: $code"
+                if (caught.containsMatchIn(code)) {
+                    // The catch block's lines, on its own line or up to its closing brace.
+                    val inline = code.substringAfter("{", "").substringBefore("}").trim()
+                    val block = listOf(inline) + lines.drop(index + 1).takeWhile { !it.trim().startsWith("}") }
+                    block.filter { "// safe:" !in it }.map { it.substringBefore("//").trim() }.filter(answer::matches)
+                        .forEach { hits += "${file.name}:${index + 1}: $code $it" }
+                }
+                hits
+            }
+        }
+
+        assertEquals(emptyList<String>(), found)
     }
 
     /** The line numbers of the body of the function [signature] opens in [lines] (none when it isn't there). */
