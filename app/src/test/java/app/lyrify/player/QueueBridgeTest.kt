@@ -279,4 +279,26 @@ class QueueBridgeTest {
         assertEquals(listOf(10_000L, 20_000L, 25_000L, 95_000L), saved)
         job.cancel()
     }
+
+    // A song that cannot be played
+
+    @Test
+    fun `after a song fails the player goes on with the song it would play next, wrapping under Repeat all`() {
+        assertEquals(AfterError.Skip(2), afterError(next = 2, failedInARow = 1, size = 4))
+        // The last song failed with Repeat all: back to the first, never a stall past the end.
+        assertEquals(AfterError.Skip(0), afterError(next = 0, failedInARow = 1, size = 4))
+        // The last song failed with Repeat off: nothing follows.
+        assertEquals(AfterError.Stop, afterError(next = -1, failedInARow = 1, size = 4))
+    }
+
+    @Test
+    fun `when every song fails in a row the player stops with the error, instead of going round for ever`() {
+        val size = 3
+        var at = 0
+        val steps = (1..size).map { failed ->
+            afterError(next = (at + 1) % size, failedInARow = failed, size = size).also { if (it is AfterError.Skip) at = it.index }
+        }
+        assertEquals(listOf(AfterError.Skip(1), AfterError.Skip(2), AfterError.Stop), steps)
+        assertEquals(AfterError.Stop, afterError(next = 0, failedInARow = 1, size = 1))
+    }
 }

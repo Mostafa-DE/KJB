@@ -53,8 +53,11 @@ interface EngineListener {
     /** The last song ended with Repeat off. */
     fun onEnded() {}
 
-    /** The song could not be played (a file gone or unreadable); [hasNext] when another one follows. */
-    fun onError(error: PlaybackException, hasNext: Boolean) {}
+    /**
+     * The song could not be played (a file gone or unreadable); [next] is the song the player would play after it for
+     * its repeat mode, C.INDEX_UNSET when none follows.
+     */
+    fun onError(error: PlaybackException, next: Int) {}
 }
 
 /**
@@ -142,7 +145,7 @@ class GaplessEngine(context: Context, settings: () -> Settings, levels: SongLeve
             }
 
             override fun onPlayerError(error: PlaybackException) {
-                val next = player.hasNextMediaItem()
+                val next = player.nextMediaItemIndex
                 listeners.forEach { it.onError(error, next) }
             }
         })

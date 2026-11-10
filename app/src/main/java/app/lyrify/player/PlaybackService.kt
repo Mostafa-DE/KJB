@@ -110,6 +110,9 @@ class PlaybackService : MediaLibraryService() {
     private lateinit var library: StateFlow<Library?>
     private lateinit var playlists: StateFlow<List<Playlist>>
     private val playing = MutableStateFlow(false)
+
+    /** Songs that could not be played since one last played: the whole queue failing stops the player. */
+    private var failedInARow = 0
     private val tracker = PlayTracker({ event -> Lyrify.playEvents(this).onEvent(event) }, System::currentTimeMillis)
 
     override fun onCreate() {
@@ -140,6 +143,7 @@ class PlaybackService : MediaLibraryService() {
             combine(core.ready.filter { it }, core.book, library) { _, book, songs -> book to songs }.collect { (book, songs) ->
                 // Another queue or a jump moves the player: the play counter hears where the song playing was.
                 if (book.currentId != queueId || book.jumps != jumps) heardSoFar()
+                if (book.currentId != queueId) failedInARow = 0
                 queueId = book.currentId
                 jumps = book.jumps
                 if (songs != null) bridge.sync(book, ::find)
@@ -248,6 +252,7 @@ class PlaybackService : MediaLibraryService() {
         }
 
         override fun onPlayingChanged(playing: Boolean) {
+            if (playing) failedInARow = 0
             PlayerGraph.audioSessionId = engine.audioSessionId
             tracker.position(engine.positionMs, playing)
             this@PlaybackService.playing.value = playing
@@ -264,10 +269,18 @@ class PlaybackService : MediaLibraryService() {
             engine.seek(0, 0)
         }
 
-        /** A song that cannot be played is skipped quietly; the last one stops. */
-        override fun onError(error: PlaybackException, hasNext: Boolean) {
-            Log.w(LOG_TAG, "player: a song could not be played (${error.errorCodeName}), ${if (hasNext) "skipped" else "stopped"}")
-            if (hasNext) engine.seek(engine.index + 1, 0) else engine.setPlayWhenReady(false)
+        /**
+         * A song that cannot be played is skipped quietly, to the song the player would play next (round to the first
+         * under Repeat all); with nothing after it, or every song failed in a row, the player stops, the error showing.
+         */
+        override fun onError(error: PlaybackException, next: Int) {
+            failedInARow++
+            val step = afterError(next, failedInARow, engine.loaded.size)
+            Log.w(LOG_TAG, "player: a song could not be played (${error.errorCodeName}), ${if (step is AfterError.Skip) "skipped" else "stopped after $failedInARow"}")
+            when (step) {
+                is AfterError.Skip -> engine.seek(step.index, 0)
+                AfterError.Stop -> engine.setPlayWhenReady(false)
+            }
         }
     }
 

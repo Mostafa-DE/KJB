@@ -139,6 +139,22 @@ class QueueBridge(private val port: PlayerPort) {
     }
 }
 
+/** What the player does after a song could not be played. */
+sealed interface AfterError {
+    /** On to the song at [index]. */
+    data class Skip(val index: Int) : AfterError
+
+    /** Stop where it is, the error showing. */
+    data object Stop : AfterError
+}
+
+/**
+ * After a song failed: on to [next], the song the player would play next for its repeat mode (the first one after the
+ * last under Repeat all; -1 for none), unless [failedInARow] reached the [size] of the queue: then every song failed,
+ * and the player stops instead of going round for ever.
+ */
+fun afterError(next: Int, failedInARow: Int, size: Int): AfterError = if (next < 0 || failedInARow >= size) AfterError.Stop else AfterError.Skip(next)
+
 /**
  * Tells the play counter ([PlayEvents], stats/) about KJB's own plays, raw, one play at a time: [start] (a song starts,
  * or starts again: each lap of Repeat one is a new play) with its position, the position whenever playing starts or
