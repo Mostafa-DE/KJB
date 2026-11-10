@@ -3,10 +3,12 @@ package app.lyrify.player
 import android.content.ContentUris
 import android.content.Context
 import android.net.Uri
+import android.os.Handler
 import android.provider.MediaStore
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
+import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
@@ -15,9 +17,15 @@ import androidx.media3.common.TrackSelectionParameters.AudioOffloadPreferences
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.Renderer
+import androidx.media3.exoplayer.audio.AudioRendererEventListener
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
+import androidx.media3.exoplayer.audio.MediaCodecAudioRenderer
+import androidx.media3.exoplayer.mediacodec.MediaCodecAdapter
+import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.extractor.mp4.Mp4Extractor
 import app.lyrify.library.Song
@@ -92,7 +100,7 @@ interface PlaybackEngine : PlayerPort {
  * One ExoPlayer holding the queue playing: media audio attributes with audio focus (it pauses when another app takes
  * focus and comes back after a short loss), pause on becoming noisy (headphones out), a local wake lock, and gapless
  * playback as ExoPlayer does it (MP3 with LAME or iTunes gapless info, FLAC, M4A with an edit list). Its audio sink runs
- * the audio chain ([AudioChain]; empty until A1) with float output off, so the chain always runs.
+ * the audio chain ([AudioChain]) with float output off, so the chain always runs.
  */
 @OptIn(UnstableApi::class)
 class GaplessEngine(context: Context, settings: () -> Settings, levels: SongLevels, private val itemOf: (Projected) -> MediaItem) : PlaybackEngine {
@@ -220,15 +228,51 @@ class GaplessEngine(context: Context, settings: () -> Settings, levels: SongLeve
         listeners += listener
     }
 
-    /** The renderers, with an audio sink that runs the audio chain (A1's hook). */
+    /**
+     * The renderers, with an audio sink that runs the audio chain ([AudioChain]) and an audio renderer that hands the
+     * chain each song's ReplayGain tags as it takes the song on.
+     */
     private class ChainRenderers(context: Context, private val settings: () -> Settings, private val levels: SongLevels) : DefaultRenderersFactory(context) {
+        private val streams = StreamTags()
+
         override fun buildAudioSink(context: Context, enableFloatOutput: Boolean, enableAudioOutputPlaybackParams: Boolean): AudioSink =
             DefaultAudioSink.Builder(context)
-                .setAudioProcessors(AudioChain.processors(settings(), levels).toTypedArray())
+                .setAudioProcessors(AudioChain.processors(settings, levels, streams).toTypedArray())
                 // Float output stays off: with it, Media3 bypasses the processors.
                 .setEnableFloatOutput(false)
                 .setEnableAudioOutputPlaybackParameters(enableAudioOutputPlaybackParams)
                 .build()
+
+        /** Media3's own audio renderer (no extension decoders are bundled), telling [streams] each song's tags. */
+        override fun buildAudioRenderers(
+            context: Context,
+            extensionRendererMode: Int,
+            mediaCodecSelector: MediaCodecSelector,
+            enableDecoderFallback: Boolean,
+            audioSink: AudioSink,
+            eventHandler: Handler,
+            eventListener: AudioRendererEventListener,
+            out: ArrayList<Renderer>,
+        ) {
+            out += TaggingAudioRenderer(context, codecAdapterFactory, mediaCodecSelector, enableDecoderFallback, eventHandler, eventListener, audioSink, streams)
+        }
+    }
+
+    /** The audio renderer: as it takes on a song's stream, ahead of the chain playing it, the track's tags go to [streams]. */
+    private class TaggingAudioRenderer(
+        context: Context,
+        codecAdapterFactory: MediaCodecAdapter.Factory,
+        mediaCodecSelector: MediaCodecSelector,
+        enableDecoderFallback: Boolean,
+        eventHandler: Handler,
+        eventListener: AudioRendererEventListener,
+        audioSink: AudioSink,
+        private val streams: StreamTags,
+    ) : MediaCodecAudioRenderer(context, codecAdapterFactory, mediaCodecSelector, enableDecoderFallback, eventHandler, eventListener, audioSink) {
+        override fun onStreamChanged(formats: Array<Format>, startPositionUs: Long, offsetUs: Long, mediaPeriodId: MediaSource.MediaPeriodId) {
+            super.onStreamChanged(formats, startPositionUs, offsetUs, mediaPeriodId)
+            streams.record(mediaPeriodId.periodUid, formats.firstOrNull()?.metadata)
+        }
     }
 }
 

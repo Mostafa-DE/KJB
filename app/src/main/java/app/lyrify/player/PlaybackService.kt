@@ -256,15 +256,11 @@ class PlaybackService : MediaLibraryService() {
 
     /** What the audio chain asks about the stream playing (A1). */
     private inner class Levels : SongLevels {
-        override fun song(mediaId: String): SongRef? = item(mediaId)?.song
-
         override fun albumInOrder(mediaId: String): Boolean {
             val queue = core.book.value.current ?: return false
             val uid = mediaId.toLongOrNull() ?: return false
             return albumInOrder(queue, queue.items.indexOfFirst { it.uid == uid })
         }
-
-        private fun item(mediaId: String): QueueItem? = mediaId.toLongOrNull()?.let { uid -> core.book.value.current?.items?.firstOrNull { it.uid == uid } }
     }
 
     private inner class Callback : MediaLibrarySession.Callback {
