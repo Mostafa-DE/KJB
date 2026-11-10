@@ -99,7 +99,7 @@
         <item quantity="one">%d song matches no track and stays as it is.</item>
         <item quantity="other">%d songs match no track and stay as they are.</item>
     </plurals>
-    <string name="tags_opus_note">Opus songs keep their own cover: the new one is too big for them.</string>
+    <string name="tags_opus_note">Opus songs keep their own cover: even a small one is too big for them.</string>
     <string name="tags_what_changed">What changed</string>
 
     <!-- Confirming -->

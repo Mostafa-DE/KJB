@@ -106,8 +106,10 @@ internal fun AlbumSheet(
         if (changes.unpaired.isNotEmpty()) {
             Text(pluralStringResource(R.plurals.tags_unpaired, changes.unpaired.size, changes.unpaired.size), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        val shown = cover
-        if (shown != null && changes.songs.any { !coverFits(it.song.path, shown.jpeg.size) }) {
+        // Opus songs get a smaller cover; only when even that won't fit do they keep their own, and the sheet says so.
+        val needsSmall = cover?.let { big -> changes.songs.any { !coverFits(it.song.path, big.jpeg.size) } } == true
+        val opusLeftOut by produceState(false, release.id, needsSmall) { value = needsSmall && tags.opusCover(release) == null }
+        if (opusLeftOut) {
             Text(stringResource(R.string.tags_opus_note), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         KeepYearRow(waiting.keepMyYear) { tags.keepMyYear(waiting.album.id, it) }

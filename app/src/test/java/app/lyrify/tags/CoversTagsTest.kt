@@ -502,6 +502,35 @@ class CoversTagsTest {
         )
     }
 
+    @Test
+    fun `an Opus song gets the small cover, and keeps its own only when even that won't fit`() {
+        val main = Cover(ByteArray(300 * 1024) { 7 }, ImageSize(1000, 1000))
+        val small = Cover(ByteArray(30 * 1024) { 5 }, ImageSize(400, 400))
+
+        assertEquals(CoverEdit.Replace(TagPicture(main.jpeg, "", FRONT_COVER, "image/jpeg")), coverFor("/m/Salt Road.mp3", main, small))
+        assertEquals(CoverEdit.Replace(TagPicture(small.jpeg, "", FRONT_COVER, "image/jpeg")), coverFor("/m/Salt Road.opus", main, small))
+        assertEquals(CoverEdit.Keep, coverFor("/m/Salt Road.opus", main, null))
+        assertEquals(CoverEdit.Keep, coverFor("/m/Salt Road.mp3", null, small))
+    }
+
+    @Test
+    fun `the small Opus cover is fetched once for an album with Opus songs, and never for one without`() = runTest {
+        val opus = File(rig.music, "Brennmoor.opus").apply { writeBytes(byteArrayOf(0x4F, 0x67, 0x67, 0x53)) }
+        rig.songs.ids[opus.path] = 43
+        val songs = lanternsSongs() + Song(SongRef(opus.path, 43), "Brennmoor", "Mira Solen", "Lanterns", null, 200_000, 3, 1, null, null, "Music/KJB test/", null, null, 0, "audio/ogg")
+        library = songs + harbourSongs()
+        answers("Lanterns" to release(ID_A, "Lanterns of Ulso", listOf("Quiet Ember", "Salt Road", "Brennmoor")), "Harbour" to harbour)
+        val big = ByteArray(100 * 1024) { 7 }
+        source.cover = MetaAnswer.Ok(Cover(big, ImageSize(1000, 1000)))
+        val flow = flow()
+        checked(flow)
+
+        flow.applyAll()
+
+        assertEquals(listOf(ID_A), source.opusCovers)
+        assertArrayEquals(big, FakeTagFile().read(File(songs[0].path))!!.pictures.single().data)
+    }
+
     // The song sheet
 
     @Test
@@ -619,6 +648,7 @@ class FakeAlbumSource : AlbumSource {
     var cover: MetaAnswer<Cover> = MetaAnswer.Ok(Cover(JPEG_BYTES, ImageSize(1, 1)))
     val checked = mutableListOf<Pair<String?, Boolean>>()
     val searched = mutableListOf<Pair<String, String?>>()
+    val opusCovers = mutableListOf<String>()
 
     override suspend fun check(album: PhoneAlbum, fresh: Boolean): Lookup {
         checked += album.title to fresh
@@ -633,4 +663,9 @@ class FakeAlbumSource : AlbumSource {
     override suspend fun dated(match: ReleaseMatch): MetaAnswer<ReleaseMatch> = MetaAnswer.Ok(match)
 
     override suspend fun cover(release: MbRelease): MetaAnswer<Cover> = cover.also { assertNotNull(release.id) }
+
+    override suspend fun opusCover(release: MbRelease): MetaAnswer<Cover> {
+        opusCovers += release.id
+        return MetaAnswer.Ok(Cover(JPEG_BYTES, ImageSize(1, 1)))
+    }
 }

@@ -145,7 +145,37 @@ class CoverPipelineTest {
     // Opus
 
     @Test
+    fun `an Opus cover steps down from 600 px until it fits beside the song's other comments`() = runTest {
+        val codec = FakeCodec(ImageSize(1200, 1200)) { side, _ -> if (side > 400) 40 * kib else 30 * kib }
+
+        val cover = CoverPipeline(codec).prepareOpus(JPEG_BYTES)!!
+
+        assertEquals(CoverPipeline.QUALITIES.map { 600 to it } + CoverPipeline.QUALITIES.map { 500 to it } + (400 to 90), codec.calls)
+        assertEquals(ImageSize(400, 400), cover.size)
+        assertTrue(OpusCover.fitsBesideOthers(cover.jpeg.size))
+        assertEquals(listOf(600, 500, 400, 300), CoverPipeline.OPUS_SIDES)
+    }
+
+    @Test
+    fun `an Opus cover too large even at 300 px is left out`() = runTest {
+        val codec = FakeCodec(ImageSize(1200, 1200)) { _, _ -> 40 * kib }
+        assertNull(CoverPipeline(codec).prepareOpus(JPEG_BYTES))
+        assertEquals(CoverPipeline.OPUS_SIDES.size * CoverPipeline.QUALITIES.size, codec.calls.size)
+    }
+
+    @Test
+    fun `a small image is never enlarged for Opus`() = runTest {
+        val codec = FakeCodec(ImageSize(350, 350)) { side, _ -> if (side > 300) 40 * kib else 20 * kib }
+        CoverPipeline(codec).prepareOpus(JPEG_BYTES)
+        assertEquals(listOf(350, 300), codec.calls.map { it.first }.distinct())
+    }
+
+    @Test
     fun `an Opus comment header stays within 61,440 bytes or the cover is left out`() {
+        // Room is kept for the song's other comments (lyrics take a few KB).
+        assertEquals(16 * kib, OpusCover.OTHER_COMMENTS_BYTES)
+        assertTrue(OpusCover.fitsBesideOthers(33_000))
+        assertFalse(OpusCover.fitsBesideOthers(34_000))
         // 4 (length) + 23 ("METADATA_BLOCK_PICTURE=") + base64 of the picture block (32 + "image/jpeg" + the JPEG).
         assertEquals(4 + 23 + 4 * ((32 + 10 + 45_000 + 2) / 3), OpusCover.commentBytes(45_000))
         assertEquals(60_083, OpusCover.commentBytes(45_000))

@@ -67,6 +67,9 @@ interface AlbumSource {
 
     /** [release]'s front cover, ready to embed and to show. */
     suspend fun cover(release: MbRelease): MetaAnswer<Cover>
+
+    /** [release]'s smaller front cover for Opus songs; [MetaAnswer.NotFound] when even the smallest won't fit. */
+    suspend fun opusCover(release: MbRelease): MetaAnswer<Cover>
 }
 
 /** [AlbumSource] over the one [AlbumLookup] and the cover pipeline. */
@@ -79,6 +82,13 @@ class PhoneAlbumSource(private val lookup: AlbumLookup, private val pipeline: Co
 
     override suspend fun cover(release: MbRelease): MetaAnswer<Cover> = when (val answer = lookup.cover(release)) {
         is MetaAnswer.Ok -> pipeline.prepare(answer.value)?.let { MetaAnswer.Ok(it, answer.fromCache) } ?: MetaAnswer.Failed("not a usable image")
+        MetaAnswer.NotFound -> MetaAnswer.NotFound
+        MetaAnswer.Busy -> MetaAnswer.Busy
+        is MetaAnswer.Failed -> answer
+    }
+
+    override suspend fun opusCover(release: MbRelease): MetaAnswer<Cover> = when (val answer = lookup.cover(release)) {
+        is MetaAnswer.Ok -> pipeline.prepareOpus(answer.value)?.let { MetaAnswer.Ok(it, answer.fromCache) } ?: MetaAnswer.NotFound
         MetaAnswer.NotFound -> MetaAnswer.NotFound
         MetaAnswer.Busy -> MetaAnswer.Busy
         is MetaAnswer.Failed -> answer
@@ -260,15 +270,22 @@ fun coversTagsEdit(fields: SongFields, originalYear: Int?, keepMyYear: Boolean, 
 
 /**
  * Whether a cover of [jpegBytes] goes into the song at [path]: always, except into Opus, whose comment header must stay
- * within [OpusCover.COMMENT_LIMIT_BYTES] beside the song's other comments (allowed [OPUS_OTHER_BYTES]).
+ * within [OpusCover.COMMENT_LIMIT_BYTES] beside the song's other comments ([OpusCover.fitsBesideOthers]).
  */
-fun coverFits(path: String, jpegBytes: Int): Boolean =
-    !path.endsWith(".opus", ignoreCase = true) || OpusCover.fits(jpegBytes, OPUS_OTHER_BYTES)
+fun coverFits(path: String, jpegBytes: Int): Boolean = !path.endsWith(".opus", ignoreCase = true) || OpusCover.fitsBesideOthers(jpegBytes)
+
+/** The cover the song at [path] gets: the album's [main] one, or for Opus the smaller [opus] one; its own when neither fits. */
+fun coverFor(path: String, main: Cover?, opus: Cover?): CoverEdit {
+    val cover = when {
+        main == null -> null
+        coverFits(path, main.jpeg.size) -> main
+        else -> opus?.takeIf { coverFits(path, it.jpeg.size) }
+    }
+    return cover?.let { CoverEdit.Replace(TagPicture(it.jpeg, "", FRONT_COVER, JPEG_MIME)) } ?: CoverEdit.Keep
+}
 
 private const val YEAR = "DATE"
 
-/** Room left in an Opus comment header for its other comments (lyrics are often a few KB). */
-private const val OPUS_OTHER_BYTES = 16 * 1024
 private const val JPEG_MIME = "image/jpeg"
 
 /** At most this many covers stay in memory for the cards and the sheets. */
@@ -462,6 +479,13 @@ class CoversTags(
     /** [release]'s cover for a card or a sheet, or null when it has none or it can't be fetched now. */
     suspend fun cover(release: MbRelease): Cover? = (coverOf(release) as? MetaAnswer.Ok)?.value
 
+    /** [release]'s smaller cover for Opus songs, or null when even the smallest won't fit (or it can't be fetched now). */
+    suspend fun opusCover(release: MbRelease): Cover? {
+        val key = OPUS_KEY + release.id
+        synchronized(shown) { shown[key] }?.let { return it }
+        return (source.opusCover(release) as? MetaAnswer.Ok)?.value?.also { synchronized(shown) { shown[key] = it } }
+    }
+
     private suspend fun coverOf(release: MbRelease): MetaAnswer<Cover> {
         synchronized(shown) { shown[release.id] }?.let { return MetaAnswer.Ok(it) }
         return source.cover(release).also { answer -> if (answer is MetaAnswer.Ok) synchronized(shown) { shown[release.id] = answer.value } }
@@ -572,10 +596,11 @@ class CoversTags(
         val changes = TagChanges.of(album.album, dated, waiting.keepMyYear)
         val original = dated.release.releaseGroup?.originalYear
         val (known, unknown) = changes.songs.partition { it.song.path in album.ids }
+        // Opus songs the album's cover is too big for get a smaller one, fetched only for them.
+        val opus = if (cover != null && known.any { !coverFits(it.song.path, cover.jpeg.size) }) opusCover(dated.release) else null
         val jobs = known.map { change ->
             val path = change.song.path
-            val edit = if (cover != null && coverFits(path, cover.jpeg.size)) CoverEdit.Replace(TagPicture(cover.jpeg, "", FRONT_COVER, JPEG_MIME)) else CoverEdit.Keep
-            WriteJob(SongTarget(path, album.ids.getValue(path)), coversTagsEdit(change.fields, original, waiting.keepMyYear, edit))
+            WriteJob(SongTarget(path, album.ids.getValue(path)), coversTagsEdit(change.fields, original, waiting.keepMyYear, coverFor(path, cover, opus)))
         }
         return when (val result = writer.write(jobs, EditKind.COVERS_TAGS, dated.release.title)) {
             BatchResult.SessionsUnknown -> Applied.NoAccess
@@ -694,6 +719,7 @@ class CoversTags(
 
     private companion object {
         const val LOAD_FACTOR = 0.75f
+        const val OPUS_KEY = "opus:"
     }
 }
 
