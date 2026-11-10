@@ -279,7 +279,7 @@ internal object SongSheetSlots {
     val bookmarks: (@Composable (song: SongRef, close: () -> Unit) -> Unit)? = null
 
     /** T2: "Covers & tags", which opens the review of the song's album. */
-    val coversTags: ((song: Song, nav: Navigator) -> Unit)? = null
+    val coversTags: ((song: Song, nav: Navigator) -> Unit)? = ::openCoversTags
 }
 
 // The sheets a page opens

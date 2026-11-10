@@ -54,6 +54,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -95,6 +96,7 @@ import androidx.compose.ui.window.DialogWindowProvider
 import androidx.core.view.WindowCompat
 import app.lyrify.R
 import app.lyrify.data.LyricsStatus
+import app.lyrify.tags.CoverVersions
 import coil3.ImageLoader
 import coil3.asImage
 import coil3.compose.AsyncImage
@@ -651,9 +653,10 @@ fun Fact(@DrawableRes icon: Int, text: String, modifier: Modifier = Modifier, st
 
 /**
  * A song file's cover, by its path: MediaStore's thumbnail of the audio file (its embedded art). [mediaStoreId] is the
- * library's id for it, from the same MediaStore read: with it, a row's cover skips the lookup by path.
+ * library's id for it, from the same MediaStore read: with it, a row's cover skips the lookup by path. [version] is the
+ * cover's version in this process ([CoverVersions]): [SongCover] fills it in.
  */
-data class SongArt(val path: String, val mediaStoreId: Long? = null)
+data class SongArt(val path: String, val mediaStoreId: Long? = null, val version: Int = 0)
 
 /** Loads a [SongArt] through MediaStore; a song without a cover fails, and the glyph under it shows. */
 class SongArtFetcher(private val art: SongArt, private val options: Options) : Fetcher {
@@ -680,8 +683,11 @@ class SongArtFetcher(private val art: SongArt, private val options: Options) : F
 }
 
 class SongArtKeyer : Keyer<SongArt> {
-    override fun key(data: SongArt, options: Options): String = data.path
+    override fun key(data: SongArt, options: Options): String = coverKey(data)
 }
+
+/** A cover's key in the image loader: its path, and its version once Covers & tags changed the song (apply or Undo). */
+fun coverKey(art: SongArt): String = if (art.version == 0) art.path else "${art.path}#${art.version}"
 
 /** The image loader of the whole app: song covers from MediaStore, cross-fading in. No network. */
 fun songImageLoader(context: Context): ImageLoader =
@@ -712,11 +718,14 @@ private fun audioUri(context: Context, path: String): android.net.Uri? {
  */
 @Composable
 fun SongCover(model: Any?, modifier: Modifier = Modifier, size: Dp = 48.dp, shape: Shape = MaterialTheme.shapes.small, status: LyricsStatus? = null) {
+    // A song Covers & tags changed gets its new cover at once: its version is part of the key.
+    val versions by CoverVersions.versions.collectAsState()
+    val shown = (model as? SongArt)?.let { it.copy(version = versions[it.path] ?: 0) } ?: model
     Box(modifier.size(size)) {
         Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize().clip(shape).background(MaterialTheme.colorScheme.surfaceContainerHighest)) {
             BrandGlyph(width = size * 0.45f)
-            if (model != null) {
-                AsyncImage(model = model, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+            if (shown != null) {
+                AsyncImage(model = shown, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
             }
         }
         if (status != null) StatusBadge(status, Modifier.align(Alignment.BottomEnd).padding(1.dp))

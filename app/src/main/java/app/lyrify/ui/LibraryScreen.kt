@@ -199,6 +199,7 @@ private fun SongsTab(ui: LibraryUi, library: Library, reselect: Int, topBar: @Co
     ReselectToTop(reselect) { state.animateScrollToItem(0) }
     val source = QueueSource(SourceKind.SONGS, "songs:${settings.songSort}:${settings.songFilter}", "")
     SongListFrame(ui, songs, source, topBar, state) { list ->
+        item(key = "coversTags") { CoversTagsEntry() }
         item(key = "header") {
             ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, sort = songsOrder(settings), onSort = { sorting = true })
         }
