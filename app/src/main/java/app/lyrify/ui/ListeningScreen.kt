@@ -59,7 +59,11 @@ import app.lyrify.stats.StatsGraph
 import app.lyrify.stats.Top
 import app.lyrify.stats.WhenPlayed
 import app.lyrify.stats.whenPlayed
+import kotlinx.coroutines.delay
+import java.time.Duration
+import java.time.LocalDate
 import java.time.ZoneId
+import java.time.ZonedDateTime
 import java.time.temporal.WeekFields
 import java.util.Date
 import java.util.Locale
@@ -315,16 +319,34 @@ fun listenedText(ms: Long): String {
 
 // The data behind them
 
-/** [period]'s listening as of now, read again whenever a play is written or the library changes; null until first read. */
+/**
+ * [period]'s listening as of now, read again whenever a play is written, the library changes, or the day turns (a period
+ * may end at midnight while the page is open); null until first read.
+ */
 @Composable
 private fun rememberListening(period: ListeningPeriod): Listening? {
     val context = LocalContext.current
     val written by remember(context) { StatsGraph.counter(context).written }.collectAsState()
     val library by remember(context) { LibraryGraph.repository(context).state }.collectAsState()
-    val listening by produceState<Listening?>(null, period, written, library) {
+    val today = rememberToday()
+    val listening by produceState<Listening?>(null, period, written, library, today) {
         value = StatsGraph.stats(context).listening(period, System.currentTimeMillis(), ZoneId.systemDefault(), WeekFields.of(Locale.getDefault()).firstDayOfWeek)
     }
     return listening
+}
+
+/** The phone's date, turning just after its midnight. */
+@Composable
+private fun rememberToday(): LocalDate {
+    val today by produceState(LocalDate.now()) {
+        while (true) {
+            val zone = ZoneId.systemDefault()
+            val midnight = LocalDate.now(zone).plusDays(1).atStartOfDay(zone)
+            delay(Duration.between(ZonedDateTime.now(zone), midnight).toMillis().coerceAtLeast(0) + MIDNIGHT_MARGIN_MS)
+            value = LocalDate.now()
+        }
+    }
+    return today
 }
 
 @Composable
@@ -379,3 +401,6 @@ const val TOP_SHOWN: Int = 5
 fun <T> topPreview(list: List<T>): Pair<List<T>, Boolean> = list.take(TOP_SHOWN) to (list.size > TOP_SHOWN)
 
 private const val MINUTE_MS: Long = 60_000
+
+/** A moment past midnight, so the new day is surely there. */
+private const val MIDNIGHT_MARGIN_MS: Long = 1_000
