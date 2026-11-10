@@ -26,7 +26,8 @@ android {
         applicationId = "app.lyrify"
         minSdk = 30
         targetSdk = 36
-        versionCode = 9
+        // 10, not 9: a private 2.0.2 used 9 on the user's phone, and 3.0.0 installs over it as an update.
+        versionCode = 10
         versionName = "3.0.0"
 
         ndk {
