@@ -35,6 +35,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import androidx.core.net.toUri
 import app.lyrify.LOG_TAG
 import app.lyrify.Lyrify
 import app.lyrify.R
@@ -134,7 +135,7 @@ fun rememberM3uActions(): M3uActions {
     val say = { text: String, failed: Boolean -> scope.launch { toasts.show(if (failed) Toast(text, R.drawable.ic_error, Tone.ERROR) else Toast(text)) } }
     val load = { documents: List<String> ->
         scope.launch {
-            val read = withContext(Dispatchers.IO) { documents.map { it to files.read(Uri.parse(it)) } }
+            val read = withContext(Dispatchers.IO) { documents.map { it to files.read(it.toUri()) } }
             val resolver = library.resolver()
             val fresh = withContext(Dispatchers.Default) { read.map { (document, file) -> importResult(document, file, resolver, untitled()) } }
             val imports = fresh.filterIsInstance<ImportResult.Found>().map { it.import }
