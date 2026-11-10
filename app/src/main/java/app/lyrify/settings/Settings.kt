@@ -37,8 +37,6 @@ data class PlaybackSettings(
     val rememberPlace: RememberPlace = RememberPlace.LONG_SONGS,
     /** "Headset buttons": one press plays or pauses, two skip, three go back. "Pause when disconnected" is always on. */
     val headsetButtons: Boolean = true,
-    /** "Start when connected": playback starts when a headset, Bluetooth or a car connects. */
-    val startWhenConnected: Boolean = false,
     /** "Skip short clips": songs under 30 s leave the library. */
     val skipShortClips: Boolean = true,
     /** "Count a play after": the share of a song heard, in percent, before it counts as played. One of [PLAY_SHARES]. */
@@ -198,7 +196,6 @@ object SettingsJson {
                     obj(
                         "rememberPlace" to it.rememberPlace.name,
                         "headsetButtons" to it.headsetButtons,
-                        "startWhenConnected" to it.startWhenConnected,
                         "skipShortClips" to it.skipShortClips,
                         "countPlayAfterPercent" to it.countPlayAfterPercent,
                         "skipBackSeconds" to it.skipBackSeconds,
@@ -258,7 +255,6 @@ object SettingsJson {
                 PlaybackSettings(
                     rememberPlace = it.choice("rememberPlace", d.playback.rememberPlace),
                     headsetButtons = it.flag("headsetButtons", d.playback.headsetButtons),
-                    startWhenConnected = it.flag("startWhenConnected", d.playback.startWhenConnected),
                     skipShortClips = it.flag("skipShortClips", d.playback.skipShortClips),
                     countPlayAfterPercent = it.number("countPlayAfterPercent", d.playback.countPlayAfterPercent, PlaybackSettings.PLAY_SHARES::contains),
                     skipBackSeconds = it.number("skipBackSeconds", d.playback.skipBackSeconds, PlaybackSettings.SKIP_SECONDS::contains),

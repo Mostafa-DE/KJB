@@ -39,7 +39,6 @@ class SettingsStoreTest {
         playback = PlaybackSettings(
             rememberPlace = RememberPlace.ALL_SONGS,
             headsetButtons = false,
-            startWhenConnected = true,
             skipShortClips = false,
             countPlayAfterPercent = 70,
             skipBackSeconds = 15,
@@ -80,7 +79,7 @@ class SettingsStoreTest {
     @Test
     fun `every setting starts at the default the specs give`() {
         val s = Settings()
-        assertEquals(PlaybackSettings(RememberPlace.LONG_SONGS, true, false, true, 50, 30, 10), s.playback)
+        assertEquals(PlaybackSettings(RememberPlace.LONG_SONGS, true, true, 50, 30, 10), s.playback)
         assertEquals(AudioSettings(Levelling.AUTO, crossfadeSeconds = 0), s.audio)
         assertEquals(
             listOf(LibraryTab.SONGS, LibraryTab.ALBUMS, LibraryTab.ARTISTS, LibraryTab.FOLDERS, LibraryTab.PLAYLISTS, LibraryTab.GENRES),
