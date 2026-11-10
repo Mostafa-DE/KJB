@@ -12,10 +12,13 @@ import app.lyrify.lyrics.LrclibResult
 import app.lyrify.lyrics.LyricsPipeline
 import app.lyrify.lyrics.MemoryLedger
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -116,7 +119,7 @@ class SongTrashTest {
 
         assertTrue(trash.ask(listOf(file)))
         assertEquals(TrashStep.Confirm(listOf(file)), trash.step)
-        assertEquals(Confirmation.Ask(listOf(11L)), trash.confirm())
+        assertEquals(Confirmation.Ask(listOf(11L)), trash.confirm(listOf(file)))
         assertEquals(TrashStep.System(listOf(file)), trash.step)
         trashOnDisk(lantern.path, 11)
         // Nothing is cleaned up before the phone's answer.
@@ -141,10 +144,10 @@ class SongTrashTest {
 
         trash.ask(listOf(file))
         trash.cancel()
-        assertEquals(Confirmation.NotAsked, trash.confirm())
+        assertEquals(Confirmation.NotAsked, trash.confirm(listOf(file)))
 
         trash.ask(listOf(file))
-        trash.confirm()
+        trash.confirm(listOf(file))
         assertEquals(Trashed.Unchanged, trash.answered(approved = false))
         assertTrue(lrc(lantern.path).isFile)
         assertEquals(LyricsStatus.SYNCED, ledger[lantern.path]?.status)
@@ -160,7 +163,7 @@ class SongTrashTest {
         advanceUntilIdle()
 
         trash.ask(listOf(listed))
-        assertEquals(Confirmation.Changed, trash.confirm())
+        assertEquals(Confirmation.Changed, trash.confirm(listOf(listed)))
         assertEquals(TrashStep.None, trash.step)
     }
 
@@ -173,7 +176,7 @@ class SongTrashTest {
         advanceUntilIdle()
 
         trash.ask(files.take(1))
-        trash.confirm()
+        trash.confirm(files.take(1))
         assertFalse(trash.ask(files.drop(1)))
         assertFalse(trash.ask(emptyList()))
     }
@@ -187,7 +190,7 @@ class SongTrashTest {
         val trash = engine(listOf(file), pipeline).trash
         advanceUntilIdle()
         trash.ask(listOf(file))
-        trash.confirm()
+        trash.confirm(listOf(file))
         trashOnDisk(lantern.path, 11)
         trash.answered(approved = true)
 
@@ -200,6 +203,77 @@ class SongTrashTest {
         assertEquals(emptyList<TrashedSong>(), trash.trashed)
         // KJB sees it as a new song: its lyrics come back with the next lookup.
         assertEquals(LyricsStatus.SYNCED, pipeline.process(LocalTrack(lantern.path, lantern.title, lantern.artist, lantern.album, lantern.durationMs))?.status)
+    }
+
+    @Test
+    fun `nothing else is asked while KJB's dialog or a restore is open, and the dialog confirms only its own files`() = runTest {
+        val files = listOfNotNull(trashFile(song(11, "Paper Lantern")), trashFile(song(12, "Tide Bell")))
+        val host = FakeTrashHost()
+        val trash = trash(host, files)
+
+        assertTrue(trash.ask(files.take(1)))
+        assertFalse(trash.ask(files.drop(1)))
+        assertEquals(TrashStep.Confirm(files.take(1)), trash.step)
+        assertEquals(Confirmation.NotAsked, trash.confirm(files.drop(1)))
+        assertEquals(TrashStep.Confirm(files.take(1)), trash.step)
+        assertEquals(TrashMemory(), host.memory)
+
+        host.step = TrashStep.Restoring(TrashedSong(files[1], BASE, BASE + DAY))
+        assertFalse(trash.ask(files.take(1)))
+    }
+
+    @Test
+    fun `a confirm cancelled before the phone's dialog opens leaves nothing waiting, so a later trash can ask`() = runTest {
+        val files = listOfNotNull(trashFile(song(11, "Paper Lantern")))
+        for (cancelIn in listOf("rows", "commit")) {
+            val host = FakeTrashHost()
+            lateinit var confirming: Job
+            val trash = trash(host, files) { if (cancelIn == "rows") confirming.cancel() }
+            if (cancelIn == "commit") host.onCommit = { confirming.cancel() }
+            assertTrue(trash.ask(files))
+            confirming = launch { trash.confirm(files) }
+            advanceUntilIdle()
+
+            assertTrue(cancelIn, confirming.isCancelled)
+            assertEquals(cancelIn, TrashMemory(), host.memory)
+            assertEquals(cancelIn, TrashStep.None, trash.step)
+            assertTrue(cancelIn, trash.ask(files))
+        }
+    }
+
+    /** The flow over [host], with MediaStore's rows as [files] say (each read first runs [onRows]) and an empty phone trash. */
+    private fun TestScope.trash(host: TrashHost, files: List<AudioFile>, onRows: () -> Unit = {}) = SongTrash(
+        host = host,
+        rows = { ids ->
+            onRows()
+            files.filter { it.id in ids }.associateBy { it.id }
+        },
+        cleanup = {},
+        phoneTrash = { emptyMap() },
+        io = StandardTestDispatcher(testScheduler),
+        clock = { BASE },
+    )
+
+    /** The Duplicates engine's part made up: the step and the memory in fields, each commit first running [onCommit]. */
+    private class FakeTrashHost : TrashHost {
+        override var step: TrashStep = TrashStep.None
+        override var memory: TrashMemory = TrashMemory()
+        var onCommit: () -> Unit = {}
+
+        override fun step(change: (TrashStep) -> TrashStep) {
+            step = change(step)
+        }
+
+        override suspend fun loaded() = Unit
+
+        override suspend fun commit(moved: Set<Long>, change: (TrashMemory) -> TrashMemory) {
+            onCommit()
+            // Stored on disk: a suspension, during which the page may go.
+            yield()
+            memory = change(memory)
+        }
+
+        override fun changed(ids: Set<Long>) = Unit
     }
 
     private companion object {

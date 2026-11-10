@@ -26,7 +26,6 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
-import java.text.Collator
 import kotlin.time.TimeSource
 
 /**
@@ -57,9 +56,13 @@ interface LyricsIndexStore {
 
     /**
      * Per song, its first line in [IndexedSong.lines]' order whose folded text has [words] one after another, each a
-     * whole word but the last, which may be a word's start. Stops when the caller is cancelled.
+     * whole word but the last, which may be a word's start: the songs by path, from the [from]th on, at most [limit] of
+     * them, so a search reads one page rather than every match. Stops when the caller is cancelled.
      */
-    suspend fun find(words: List<String>): List<StoredLine>
+    suspend fun find(words: List<String>, from: Int = 0, limit: Int = Int.MAX_VALUE): List<StoredLine>
+
+    /** How many songs [find] has for [words] in all, without reading their lines. Stops when the caller is cancelled. */
+    suspend fun count(words: List<String>): Int
 }
 
 /** The `.lrc` files beside the songs. Blocking. */
@@ -69,6 +72,9 @@ interface LrcFiles {
 
     /** The text of the file at [path]; null when it cannot be read or is too large to be lyrics. */
     fun read(path: String): String?
+
+    /** The modified time of the file at [path] now; null when it is gone. */
+    fun modified(path: String): Long?
 }
 
 /**
@@ -144,8 +150,8 @@ class LyricsIndex(
      * Brings the index up to [songs]: reads the `.lrc` of each song that is new or whose `.lrc` changed since it was
      * read (by its modified time), and forgets songs that left [songs] or lost their `.lrc`. Each folder is listed
      * once; files are read on [io] and stored [BATCH] songs at a time, so a sync cancelled midway keeps what it did.
-     * A folder that cannot be listed keeps its songs as they were, and a file that cannot be read is tried again next
-     * time. One sync at a time; a failing store ends it.
+     * A folder that cannot be listed keeps its songs as they were, and a file that cannot be read, or that changes while
+     * it is read, is tried again next time. One sync at a time; a failing store ends it.
      */
     suspend fun sync(songs: List<Song>) = syncing.withLock {
         val started = TimeSource.Monotonic.markNow()
@@ -160,7 +166,13 @@ class LyricsIndex(
             if (changed.isNotEmpty()) _building.value = true
             changed.chunked(BATCH).forEach { batch ->
                 val lyrics = withContext(io) {
-                    batch.mapNotNull { file -> files.read(file.lrc)?.let { IndexedSong(file.song, file.modifiedAt, lrcLines(it)) } }
+                    batch.mapNotNull { file ->
+                        val text = files.read(file.lrc) ?: return@mapNotNull null
+                        // Written to while it was read, so it may be half read: stored under its old time, the next sync
+                        // would take it as unchanged.
+                        if (files.modified(file.lrc) != file.modifiedAt) return@mapNotNull null
+                        IndexedSong(file.song, file.modifiedAt, lrcLines(text))
+                    }
                 }
                 read += lyrics.size
                 unreadable += batch.size - lyrics.size
@@ -181,23 +193,44 @@ class LyricsIndex(
 
     /**
      * The songs of [library] with a line where [query]'s words start a word, one after another: each with its first
-     * such line and that line's time, by title as [settings] shows it. Empty when the index cannot be read.
+     * such line and that line's time, titles as [settings] shows them. By path (folder, then file name), the store's
+     * page: from the [from]th song found, at most [limit], so a one-letter search reads what shows rather than every
+     * match. Empty when the index cannot be read.
+     *
+     * Lyrics match at the start of a word only, by design: FTS4 finds a word by its start, never inside it (nor inside a
+     * run of CJK text without spaces), so the spec's rule that a match inside a word ranks below one at a word's start
+     * applies to names ([SearchIndex]), not to lyrics, which have no inside-a-word matches at all ("anterns" finds no
+     * "Lanterns"; the tests hold this).
      */
-    suspend fun find(query: String, library: Library, settings: LibrarySettings): List<LyricHit> {
+    suspend fun find(query: String, library: Library, settings: LibrarySettings, from: Int = 0, limit: Int = Int.MAX_VALUE): List<LyricHit> {
         val folded = fold(query)
         if (folded.isEmpty()) return emptyList()
         val lines = try {
-            store.find(folded.split(' '))
+            store.find(folded.split(' '), from, limit)
         } catch (e: IOException) {
             log("search: lyrics not searched (${(e.cause ?: e).javaClass.simpleName})")
             return emptyList()
         }
-        val collator = Collator.getInstance()
         return lines.mapNotNull { line ->
             val song = library.song(line.song) ?: return@mapNotNull null
             val match = match(line.text, folded)?.takeIf { it.kind == MatchKind.WORD_START } ?: return@mapNotNull null
             LyricHit(song, displayTitle(song, settings), line.text, line.timeMs, match)
-        }.sortedWith(compareBy<LyricHit, String>(collator) { it.title }.thenBy { it.song.path })
+        }
+    }
+
+    /**
+     * How many songs [find] has for [query] in all, without reading their lines; songs the library left count until the
+     * next sync. 0 when the index cannot be read.
+     */
+    suspend fun count(query: String): Int {
+        val folded = fold(query)
+        if (folded.isEmpty()) return 0
+        return try {
+            store.count(folded.split(' '))
+        } catch (e: IOException) {
+            log("search: lyrics not counted (${(e.cause ?: e).javaClass.simpleName})")
+            0
+        }
     }
 
     /** A song's `.lrc` as it is now. */
@@ -246,13 +279,16 @@ object FileLrcFiles : LrcFiles {
         null
     }
 
+    override fun modified(path: String): Long? = File(path).lastModified().takeIf { it != 0L }
+
     private const val LRC: String = ".lrc"
 }
 
 /**
  * [LyricsIndexStore] in app-private `databases/search.db`: a `songs` table (path, the `.lrc`'s modified time, how many
- * lines) and an FTS4 table of lines (the folded text indexed, the text and time kept beside it). The simple tokenizer
- * only splits on spaces and folds ASCII case here, since every line is stored [fold]ed. A line's docid is its song's id
+ * lines) and an FTS4 table of lines (the folded text indexed, the text and time kept beside it). Every line is stored
+ * [fold]ed, so the unicode61 tokenizer only splits it on its spaces into words of any script; it takes no accents off
+ * (`remove_diacritics=0`), as [fold] already did, so the index and [match] agree. A line's docid is its song's id
  * shifted left 16 bits plus its place, so a song's first match is its lowest docid. Disposable: a new [SCHEMA] drops it
  * and it is read again from the `.lrc` files; never backed up.
  */
@@ -268,7 +304,7 @@ class SqliteLyricsIndexStore(
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE songs (id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE, modified INTEGER NOT NULL, lines INTEGER NOT NULL)")
-        db.execSQL("CREATE VIRTUAL TABLE lines USING fts4(folded, text, time, notindexed=text, notindexed=time)")
+        db.execSQL("CREATE VIRTUAL TABLE lines USING fts4(folded, text, time, notindexed=text, notindexed=time, tokenize=unicode61 \"remove_diacritics=0\")")
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = recreate(db)
@@ -313,30 +349,42 @@ class SqliteLyricsIndexStore(
         songs.forEach { path -> forgetLines(db, path)?.let { db.delete("songs", "id = ?", arrayOf(it.toString())) } }
     }
 
-    override suspend fun find(words: List<String>): List<StoredLine> = coroutineScope {
+    override suspend fun find(words: List<String>, from: Int, limit: Int): List<StoredLine> = cancellable { signal ->
+        val phrase = phrase(words) ?: return@cancellable emptyList()
+        readableDatabase.rawQuery(FIND, arrayOf(phrase, limit.toString(), from.toString()), signal).use { row ->
+            buildList { while (row.moveToNext()) add(StoredLine(row.getString(0), if (row.isNull(1)) null else row.getLong(1), row.getString(2))) }
+        }
+    }
+
+    override suspend fun count(words: List<String>): Int = cancellable { signal ->
+        val phrase = phrase(words) ?: return@cancellable 0
+        readableDatabase.rawQuery(COUNT, arrayOf(phrase), signal).use { row -> if (row.moveToFirst()) row.getInt(0) else 0 }
+    }
+
+    /** [query] on [io], stopped through its CancellationSignal when the caller is cancelled. */
+    private suspend fun <T> cancellable(query: (CancellationSignal) -> T): T = coroutineScope {
         val signal = CancellationSignal()
-        val query = async(io) {
+        val running = async(io) {
             try {
-                guarded { query(words, signal) }
+                guarded { query(signal) }
             } catch (e: OperationCanceledException) {
                 throw CancellationException("search cancelled")
             }
         }
         try {
-            query.await()
+            running.await()
         } catch (e: CancellationException) {
             signal.cancel()
             throw e
         }
     }
 
-    /** One FTS phrase: the words in a row, the last as a prefix. Folded words hold only letters, digits and no quotes. */
-    private fun query(words: List<String>, signal: CancellationSignal): List<StoredLine> {
-        val phrase = "\"" + words.joinToString(" ") + "*\""
-        return readableDatabase.rawQuery(FIND, arrayOf(phrase), signal).use { row ->
-            buildList { while (row.moveToNext()) add(StoredLine(row.getString(0), if (row.isNull(1)) null else row.getLong(1), row.getString(2))) }
-        }
-    }
+    /**
+     * One FTS phrase: the words in a row, the last as a prefix; null when nothing is left to look for. They are [fold]ed
+     * here again, so they hold only letters, digits and single spaces: a quote, a star, a bracket or a minus never reaches
+     * MATCH as its syntax, and OR or NEAR inside the quotes are words.
+     */
+    private fun phrase(words: List<String>): String? = fold(words.joinToString(" ")).takeIf { it.isNotEmpty() }?.let { "\"$it*\"" }
 
     /** Deletes the lines of the song at [path]; its id, or null when it is not indexed. */
     private fun forgetLines(db: SQLiteDatabase, path: String): Long? {
@@ -373,18 +421,31 @@ class SqliteLyricsIndexStore(
     companion object {
         const val NAME: String = "search.db"
 
-        /** Bump on any change to the tables or to [fold]: the index is then read again from the `.lrc` files. */
-        const val SCHEMA: Int = 1
+        /**
+         * Bump on any change to the tables or to [fold]: the index is then read again from the `.lrc` files. 2: the
+         * unicode61 tokenizer in place of simple.
+         */
+        const val SCHEMA: Int = 2
 
         /** Lines a song may have in the index: its place takes the docid's low 16 bits. */
         const val MAX_LINES: Int = 2_000
 
         private fun docid(song: Long, line: Int): Long = (song shl 16) or line.toLong()
 
-        /** Per song, the line with the lowest docid among those that match, with the song's path. */
+        /** The songs that match, each by the id of its line with the lowest docid among those that match. */
+        private const val MATCHED: String = "SELECT MIN(docid) AS first FROM lines WHERE lines MATCH ? GROUP BY docid >> 16"
+
+        /**
+         * A page of the songs that match, by path, each with its path and that line: the page is cut before any line's
+         * text is read, so only the page's lines are.
+         */
         private const val FIND: String =
-            "SELECT s.path, l.time, l.text FROM lines AS l " +
-                "JOIN (SELECT MIN(docid) AS first FROM lines WHERE lines MATCH ? GROUP BY docid >> 16) AS m ON l.docid = m.first " +
-                "JOIN songs AS s ON s.id = l.docid >> 16"
+            "SELECT p.path, l.time, l.text FROM (" +
+                "SELECT s.path AS path, m.first AS first FROM ($MATCHED) AS m JOIN songs AS s ON s.id = m.first >> 16 " +
+                "ORDER BY s.path COLLATE NOCASE, s.path LIMIT ? OFFSET ?" +
+                ") AS p JOIN lines AS l ON l.docid = p.first ORDER BY p.path COLLATE NOCASE, p.path"
+
+        /** How many songs match. */
+        private const val COUNT: String = "SELECT COUNT(*) FROM ($MATCHED)"
     }
 }

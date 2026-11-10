@@ -390,7 +390,7 @@ private fun PlaylistPage(ui: LibraryUi, library: Library, id: String) {
             ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll, sort = stringResource(if (byTitle) R.string.lib_sort_title else R.string.lib_your_order), onSort = { sorting = true })
         }
         if (songs.isEmpty()) item(key = "empty") { EmptyState(EmptyArt.Glyph, stringResource(R.string.songs_empty_title), text = stringResource(R.string.lib_playlist_empty)) }
-        songRows(list, place = { at -> SheetPlace.Playlist(id, entries[at].first) })
+        songRows(list, place = { at -> SheetPlace.Playlist(id, entries[at].first) }, repeats = true)
     }
     if (sorting) OrderSheet(R.string.lib_your_order, byTitle, { byTitle = it }) { sorting = false }
     if (renaming) {
@@ -453,7 +453,7 @@ private fun BuiltInPage(ui: LibraryUi, library: Library, list: BuiltInList) {
             else -> lastPlayedText(p.lastPlayedAt)
         }
     }
-    SongListFrame(ui, songs, QueueSource(kind, list.name, ""), topBar = { under, backdrop -> CollectionTopBar(title, under, backdrop, ui) }) { songList ->
+    SongListFrame(ui, songs, QueueSource(kind, list.name, ""), topBar = { under, backdrop -> CollectionTopBar(title, under, backdrop, ui) }, loaded = rows != null) { songList ->
         item(key = "hero") { Hero(title, songsMeta(songs), art = { BuiltInTile(list, HERO) }) }
         if (list == BuiltInList.MOST_PLAYED) {
             item(key = "listening") { ListeningCard(Modifier.padding(start = ScreenPadding, end = ScreenPadding, top = 8.dp, bottom = 4.dp)) }

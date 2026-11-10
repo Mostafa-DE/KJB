@@ -114,16 +114,48 @@ class LyricsIndexTest {
     }
 
     @Test
-    fun `only songs the library shows are found, by their titles as shown`() = runTest {
+    fun `only songs the library shows are found, by path, with their titles as shown`() = runTest {
         files.put(lrc(lantern), 100, lanternLyrics)
         files.put(lrc(ember), 100, emberLyrics)
         val index = index()
         index.sync(listOf(lantern, ember))
 
-        assertEquals(listOf(ember, lantern), index.find("paper", library(lantern, ember), settings).map { it.song })
+        assertEquals(listOf(lantern, ember), index.find("paper", library(lantern, ember), settings).map { it.song })
         assertEquals(listOf(lantern), index.find("paper", library(lantern), settings).map { it.song })
         val names = index.find("paper", library(lantern, ember), LibrarySettings(showFileNames = true))
         assertEquals(listOf("01 Paper Lantern.mp3", "Ember Road.flac"), names.map { it.title })
+    }
+
+    @Test
+    fun `lines in other scripts are found, and words MATCH reads as its syntax find a line or nothing`() = runTest {
+        files.put(lrc(lantern), 100, "[00:01.00]Ο φάρος μετρά τα κύματα\n[00:02.00]灯台が波を数える\n[00:03.00]Near the harbour or the hill\n")
+        val index = index()
+        index.sync(listOf(lantern))
+        val library = library(lantern)
+
+        assertEquals("Ο φάρος μετρά τα κύματα", index.find("φαρος μετ", library, settings).single().line)
+        assertEquals("灯台が波を数える", index.find("灯台", library, settings).single().line)
+        assertEquals("Near the harbour or the hill", index.find("OR", library, settings).single().line)
+        assertEquals("Near the harbour or the hill", index.find("NEAR", library, settings).single().line)
+        for (syntax in listOf("\"", "*", "(", ")", "'", "-", "\"hold", "NEAR/2", "\"\"")) {
+            assertEquals(syntax, emptyList<LyricHit>(), index.find(syntax, library, settings))
+        }
+    }
+
+    @Test
+    fun `a search reads one page of songs, by path, and counts them all apart`() = runTest {
+        val songs = (1..9).map { song("Music/Made Up/Song $it.mp3", title = "Song $it") }
+        songs.reversed().forEach { files.put(lrc(it), 100, "[00:01.00]Paper boats on the river\n") }
+        val index = index()
+        index.sync(songs.reversed())
+        val library = library(*songs.toTypedArray())
+
+        assertEquals(9, index.count("p"))
+        assertEquals(songs.take(4), index.find("p", library, settings, limit = 4).map { it.song })
+        assertEquals(4, store.read)
+        assertEquals(songs.drop(8), index.find("p", library, settings, from = 8, limit = 4).map { it.song })
+        assertEquals(0, index.count("harbour"))
+        assertEquals(0, index.count("\""))
     }
 
     // Keeping up to date
@@ -198,6 +230,21 @@ class LyricsIndexTest {
         files.unreadable.clear()
         index.sync(listOf(lantern))
         assertEquals(mapOf(lantern.path to 100L), store.indexed())
+    }
+
+    @Test
+    fun `an lrc that changes while it is read waits for the next sync`() = runTest {
+        files.put(lrc(lantern), 100, lanternLyrics)
+        // Written again while it is read: what was read may be half of either.
+        files.onRead = { files.put(lrc(lantern), 200, "[00:03.00]Harbour lights are calling\n") }
+        val index = index()
+        index.sync(listOf(lantern))
+        assertEquals(emptyMap<String, Long>(), store.indexed())
+
+        files.onRead = {}
+        index.sync(listOf(lantern))
+        assertEquals(mapOf(lantern.path to 200L), store.indexed())
+        assertEquals(3_000L, index.find("harbour lights", library(lantern), settings).single().timeMs)
     }
 
     @Test
@@ -276,12 +323,20 @@ private class FakeLrcFiles : LrcFiles {
         onRead()
         return if (path in unreadable) null else texts[path]?.second
     }
+
+    override fun modified(path: String): Long? = texts[path]?.first
 }
 
-/** The index in memory: a line matches as FTS4's phrase query does, whole words in a row with the last as a prefix. */
+/**
+ * The index in memory: a line matches as FTS4's phrase query does, whole words in a row with the last as a prefix, and
+ * the words are folded again first, as the SQLite store does.
+ */
 private class FakeLyricsIndexStore : LyricsIndexStore {
     private val songs = linkedMapOf<String, IndexedSong>()
     var failing = false
+
+    /** How many lines the last [find] gave. */
+    var read = 0
 
     override fun indexed(): Map<String, Long> = checked { songs.mapValues { it.value.modifiedAt } }
 
@@ -289,9 +344,17 @@ private class FakeLyricsIndexStore : LyricsIndexStore {
 
     override fun remove(songs: Collection<String>) = checked { songs.forEach { this.songs.remove(it) } }
 
-    override suspend fun find(words: List<String>): List<StoredLine> = checked {
-        val phrase = " " + words.joinToString(" ")
-        songs.values.mapNotNull { song ->
+    override suspend fun find(words: List<String>, from: Int, limit: Int): List<StoredLine> = checked {
+        matching(words).drop(from).take(limit).also { read = it.size }
+    }
+
+    override suspend fun count(words: List<String>): Int = checked { matching(words).size }
+
+    /** By path, as SQLite's NOCASE has it for these ASCII paths. */
+    private fun matching(words: List<String>): List<StoredLine> {
+        val phrase = " " + fold(words.joinToString(" "))
+        if (phrase.isBlank()) return emptyList()
+        return songs.values.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.path }).mapNotNull { song ->
             song.lines.firstOrNull { (" " + it.folded).contains(phrase) }?.let { StoredLine(song.path, it.timeMs, it.text) }
         }
     }

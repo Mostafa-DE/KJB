@@ -231,14 +231,17 @@ object SearchGraph {
     private val asks = MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     private var lyrics: LyricsIndex? = null
     private var recent: RecentSearches? = null
+
+    /** Read and replaced whole, without the lock: see [names]. */
+    @Volatile
     private var names: Triple<Library, Boolean, SearchIndex>? = null
 
     /**
      * The index of [library]'s names, titles as [settings] shows them: the last one built while it is for the same
      * library and the same "Show file names", so opening Search again or a "View all" does not build it again. On
-     * Dispatchers.Default.
+     * Dispatchers.Default, and without the lock [lyrics] and [recent] take, as Compose asks for those on the main thread:
+     * a library's index is built first, then put in place whole. Two built at once both serve; the last one is kept.
      */
-    @Synchronized
     fun names(library: Library, settings: LibrarySettings): SearchIndex {
         names?.let { (built, fileNames, index) -> if (built === library && fileNames == settings.showFileNames) return index }
         return SearchIndex.of(library, settings).also { names = Triple(library, settings.showFileNames, it) }

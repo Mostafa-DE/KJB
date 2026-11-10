@@ -7,6 +7,7 @@ import app.lyrify.settings.LibrarySettings
 import app.lyrify.settings.LyricsFilter
 import app.lyrify.settings.SortSongs
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.LocalDateTime
 import java.time.ZoneId
@@ -77,6 +78,51 @@ class LibraryListsTest {
         assertEquals(ListSection.Added(AddedWhen.THIS_MONTH), added(29))
         assertEquals(ListSection.Added(AddedWhen.EARLIER), added(31))
         assertEquals(ListSection.Added(AddedWhen.EARLIER), listSection(clock, SortSongs.RECENTLY_ADDED, settings, now, zone))
+    }
+
+    @Test
+    fun `the list header drops the chip's word, then Shuffle's, then Play's, then the chip, before anything overlaps`() {
+        val shuffle = PartWidth(label = 100, icon = 48)
+        val play = PartWidth(label = 90, icon = 48)
+        val chip = PartWidth(label = 120, icon = 56)
+        fun fit(width: Int, sort: PartWidth? = chip) = headerFit(width, fixed = 100, shuffle, play, sort)
+
+        assertEquals(HeaderFit(true, true, ChipFit.LABEL), fit(410))
+        assertEquals(HeaderFit(true, true, ChipFit.ICON), fit(346))
+        assertEquals(HeaderFit(false, true, ChipFit.ICON), fit(294))
+        assertEquals(HeaderFit(false, false, ChipFit.ICON), fit(252))
+        assertEquals(HeaderFit(false, false, ChipFit.NONE), fit(251))
+        // Narrower than even that: the fewest parts, never a chip over Play.
+        assertEquals(HeaderFit(false, false, ChipFit.NONE), fit(100))
+        // No chip: Shuffle, then Play.
+        assertEquals(HeaderFit(true, true, ChipFit.NONE), fit(290, sort = null))
+        assertEquals(HeaderFit(false, true, ChipFit.NONE), fit(238, sort = null))
+        assertEquals(HeaderFit(false, false, ChipFit.NONE), fit(237, sort = null))
+    }
+
+    @Test
+    fun `song rows are keyed by path, with their place only where a song can be there twice`() {
+        fun keys(list: List<Song>, repeats: Boolean = false) = list.mapIndexed { at, song -> songRowKey(song, at, repeats) }
+
+        // Another sort, or a song added at the top, leaves every row's key as it was.
+        assertEquals(keys(songs).toSet(), keys(songs.reversed()).toSet())
+        assertTrue(keys(listOf(song("Music/Loose/New.mp3")) + songs).containsAll(keys(songs)))
+        // A playlist with a song twice: every key is still its own.
+        val twice = listOf(lantern, bell, lantern)
+        assertEquals(3, keys(twice, repeats = true).toSet().size)
+    }
+
+    @Test
+    fun `Folders to skip offers every folder of the tree, with the songs in it or below, and any other folder skipped`() {
+        val live = song("Music/Rips/Live/Harbour Night.mp3")
+        val rip = song("Music/Rips/Low Tide.mp3")
+        val talk = song("Podcasts/Talk/Episode 1.mp3")
+        val loose = song("Music/Loose.mp3")
+
+        assertEquals(
+            listOf("Music" to 3, "Music/Rips" to 2, "Music/Rips/Live" to 1, "Old/Tapes" to 0, "Podcasts" to 1, "Podcasts/Talk" to 1),
+            skipChoices(listOf(live, rip, talk, loose), skipped = listOf("/Old/Tapes/", "music/rips")),
+        )
     }
 
     private companion object {

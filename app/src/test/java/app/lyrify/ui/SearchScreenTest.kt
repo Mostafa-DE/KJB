@@ -5,12 +5,14 @@ import app.lyrify.library.Artist
 import app.lyrify.library.Folder
 import app.lyrify.library.Song
 import app.lyrify.library.search.Hit
+import app.lyrify.library.search.LibraryHits
 import app.lyrify.library.search.LyricHit
 import app.lyrify.library.search.Match
 import app.lyrify.library.search.MatchKind
 import app.lyrify.library.song
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -83,5 +85,29 @@ class SearchScreenTest {
         listOf("SongRow(", "sheets::openSong", "SongSheetsHost(sheets", "stringResource(it.words)").forEach { assertTrue(it, screen.contains(it)) }
         assertFalse(screen.contains("private fun SongResult("))
         assertFalse(strings.contains("search_list_"))
+    }
+
+    @Test
+    fun `In lyrics counts every song found while it holds only the first page`() {
+        val page = results.copy(lyrics = lyricHits(songs.take(4)), lyricsCount = 9)
+
+        assertEquals(9, page.count(SearchGroup.LYRICS))
+        assertTrue(resultGroups(page).single { it.group == SearchGroup.LYRICS }.viewAll)
+        assertEquals(4, shownCount(page, SearchGroup.LYRICS, all = false))
+        assertEquals(0, page.copy(lyrics = null).count(SearchGroup.LYRICS))
+        assertEquals(9, namedResults("lantern", LibraryHits(), emptyList(), page).lyricsCount)
+    }
+
+    @Test
+    fun `new words never keep the last words' lyric rows, while the same words keep theirs until new ones are in`() {
+        val found = LibraryHits(songs = songHits(songs.take(2)))
+
+        val typed = namedResults("lanterns", found, emptyList(), results)
+        assertNull(typed.lyrics)
+        assertFalse(resultGroups(typed).any { it.group == SearchGroup.LYRICS })
+        assertEquals(songs.take(2), typed.queue)
+
+        val again = namedResults("lantern", found, emptyList(), results)
+        assertEquals(results.lyrics, again.lyrics)
     }
 }

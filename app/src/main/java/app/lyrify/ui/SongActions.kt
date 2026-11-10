@@ -29,7 +29,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.Saver
-import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -158,12 +157,38 @@ data class SongSelection(val paths: Set<String> = emptySet()) {
     /** The selected songs in [list]'s order, each once: what the four verbs act on. */
     fun picked(list: List<Song>): List<Song> = list.filter { it.path in paths }.distinctBy { it.path }
 
-    /** Songs that left [list] (trashed, the list changed) leave the selection. */
-    fun within(list: List<Song>): SongSelection = list.mapTo(HashSet()) { it.path }.let { listed -> if (paths.all(listed::contains)) this else SongSelection(paths intersect listed) }
+    /** Songs that left [list] (trashed, the list changed) leave the selection; a list still loading (null) keeps it as it is. */
+    fun within(list: List<Song>?): SongSelection =
+        list?.mapTo(HashSet()) { it.path }?.let { listed -> if (paths.all(listed::contains)) this else SongSelection(paths intersect listed) } ?: this
 
     companion object {
-        val Saver: Saver<SongSelection, Any> = listSaver(save = { it.paths.toList() }, restore = { SongSelection(it.toSet()) })
+        private val large = InMemory<SongSelection>()
+
+        /** Its paths in the saved state, up to [SAVED_SONGS_MAX]; a larger one (a select-all) stays in memory only. */
+        val Saver: Saver<SongSelection, Any> = Saver(
+            save = { if (it.paths.size <= SAVED_SONGS_MAX) ArrayList(it.paths) else large.keep(it) },
+            restore = { saved -> if (saved is Long) large.find(saved) ?: SongSelection() else SongSelection((saved as List<*>).filterIsInstance<String>().toSet()) },
+        )
     }
+}
+
+/**
+ * Songs a page keeps in its saved state, in a selection or an open sheet: that state has a size limit (about 1 MB for
+ * the whole app), so a select-all or Add all of a large library stays in memory ([InMemory]).
+ */
+const val SAVED_SONGS_MAX: Int = 500
+
+/**
+ * A page's state too large for the saved state, held in memory under a key the saved state keeps instead, so a turn of
+ * the phone finds it again. Only the latest one of each kind is held, and none after the process dies. Main thread only.
+ */
+private class InMemory<T : Any> {
+    private var held: Pair<Long, T>? = null
+    private var keys = 0L
+
+    fun keep(value: T): Long = (++keys).also { held = it to value }
+
+    fun find(key: Long): T? = held?.takeIf { it.first == key }?.second
 }
 
 /** What a song action did, as its toast says it. */
@@ -232,10 +257,13 @@ class SongActions(private val playback: PlaybackCommands, private val playlists:
         return Outcome(Said.Favourites(on)) { favourites.setCollection(collection, !on) }
     }
 
-    /** [songs] at the end of [playlist], even those already in it. */
+    // A playlist's Undo changes the playlist as it is then, never putting back a copy from before: a change made while the
+    // toast was up (another page, an import, songs moved to the trash) stays.
+
+    /** [songs] at the end of [playlist], even those already in it. Undo takes out what this appended. */
     suspend fun addToPlaylist(playlist: Playlist, songs: List<SongRef>): Outcome {
         if (!playlists.add(playlist.id, songs)) return Outcome(Said.NotSaved)
-        return Outcome(Said.AddedTo(playlist.name, songs.size)) { playlists.put(playlist) }
+        return Outcome(Said.AddedTo(playlist.name, songs.size)) { playlists.edit(playlist.id) { it.copy(songs = withoutAppended(it.songs, songs)) } }
     }
 
     /** "New playlist" named [name] holding [songs] (none from the Playlists tab). */
@@ -245,14 +273,22 @@ class SongActions(private val playback: PlaybackCommands, private val playlists:
         return Outcome(said) { playlists.delete(made.id) }
     }
 
-    /** "Remove from playlist": the song at [position] in [playlist]. */
+    /** "Remove from playlist": the song at [position] in [playlist]. Undo puts it back at [position]. */
     suspend fun removeFromPlaylist(playlist: Playlist, position: Int): Outcome {
         if (!playlists.removeAt(playlist.id, setOf(position))) return Outcome(Said.NotSaved)
-        return Outcome(Said.RemovedFrom(playlist.name)) { playlists.put(playlist) }
+        val removed = playlist.songs.getOrNull(position) ?: return Outcome(Said.RemovedFrom(playlist.name))
+        return Outcome(Said.RemovedFrom(playlist.name)) {
+            playlists.edit(playlist.id) { it.copy(songs = it.songs.take(position) + removed + it.songs.drop(position)) }
+        }
     }
 
+    /** Undo gives the old name back while the playlist still has [name]. */
     suspend fun rename(playlist: Playlist, name: String): Outcome =
-        if (playlists.rename(playlist.id, name)) Outcome(Said.Renamed) { playlists.put(playlist) } else Outcome(Said.NotSaved)
+        if (playlists.rename(playlist.id, name)) {
+            Outcome(Said.Renamed) { playlists.edit(playlist.id) { if (it.name == name.trim()) it.copy(name = playlist.name) else it } }
+        } else {
+            Outcome(Said.NotSaved)
+        }
 
     /** Only the playlist goes; the songs stay on the phone. */
     suspend fun delete(playlist: Playlist): Outcome =
@@ -262,6 +298,22 @@ class SongActions(private val playback: PlaybackCommands, private val playlists:
         undo()
         true
     }
+}
+
+/**
+ * [songs] without the [appended] ones: from the end, the last copy of each in turn, so copies from before stay, songs
+ * added since stay, and one already taken out is not looked for.
+ */
+private fun withoutAppended(songs: List<SongRef>, appended: List<SongRef>): List<SongRef> {
+    val kept = songs.toMutableList()
+    var end = kept.size
+    for (song in appended.asReversed()) {
+        val at = kept.subList(0, end).lastIndexOf(song)
+        if (at < 0) continue
+        kept.removeAt(at)
+        end = at
+    }
+    return kept
 }
 
 // Slots other milestones fill
@@ -340,24 +392,40 @@ class SongSheets(open: OpenSheet? = null) {
 
 private val SHEETS_JSON = Json { ignoreUnknownKeys = true }
 
-/** A page's [SongSheets], kept across a turn of the phone; one this version cannot read is closed. */
+private val largeSheets = InMemory<OpenSheet>()
+
+/** How many songs [sheet] holds, as the saved state would. */
+private fun songsIn(sheet: OpenSheet): Int = when (sheet) {
+    is OpenSheet.AddTo -> sheet.songs.size
+    is OpenSheet.More -> sheet.songs.size
+    is OpenSheet.NewQueue -> sheet.songs.size
+    is OpenSheet.NewPlaylist -> sheet.songs.size
+    is OpenSheet.Trash -> sheet.songs.size
+    else -> 1
+}
+
+/**
+ * A page's open sheet across a turn of the phone: by its type name and fields, or in memory only when it holds more than
+ * [SAVED_SONGS_MAX] songs (Add all of a large list). One this version cannot read is closed.
+ */
+internal val SongSheetsSaver: Saver<SongSheets, Any> = Saver(
+    save = { sheets -> sheets.open?.let { if (songsIn(it) <= SAVED_SONGS_MAX) SHEETS_JSON.encodeToString(OpenSheet.serializer(), it) else largeSheets.keep(it) } },
+    restore = { saved ->
+        SongSheets(
+            try {
+                if (saved is Long) largeSheets.find(saved) else SHEETS_JSON.decodeFromString(OpenSheet.serializer(), saved as String)
+            } catch (_: SerializationException) {
+                null
+            } catch (_: IllegalArgumentException) {
+                null
+            },
+        )
+    },
+)
+
+/** A page's [SongSheets], kept across a turn of the phone ([SongSheetsSaver]). */
 @Composable
-fun rememberSongSheets(): SongSheets = rememberSaveable(
-    saver = Saver<SongSheets, String>(
-        save = { sheets -> sheets.open?.let { SHEETS_JSON.encodeToString(OpenSheet.serializer(), it) } },
-        restore = { text ->
-            SongSheets(
-                try {
-                    SHEETS_JSON.decodeFromString(OpenSheet.serializer(), text)
-                } catch (_: SerializationException) {
-                    null
-                } catch (_: IllegalArgumentException) {
-                    null
-                },
-            )
-        },
-    ),
-) { SongSheets() }
+fun rememberSongSheets(): SongSheets = rememberSaveable(saver = SongSheetsSaver) { SongSheets() }
 
 /** The app's [SongActions]: KJB's own player and `playlists.json`. */
 @Composable
@@ -547,7 +615,7 @@ fun SongSheetsHost(sheets: SongSheets, ui: LibraryUi, onActed: () -> Unit = {}) 
                     toasts.say(resources, R.string.dupes_trash_failed)
                     return@launch
                 }
-                when (val confirmation = trash.confirm()) {
+                when (val confirmation = trash.confirm(files)) {
                     is Confirmation.Ask -> {
                         onActed()
                         phoneTrash(confirmation.ids, true)
@@ -622,11 +690,12 @@ fun SelectionTopBar(selection: SongSelection, list: List<Song>, under: Boolean, 
 }
 
 /**
- * A page's selection: back leaves it, songs that leave [list] leave it, and while it is on, its bar of four verbs (Play,
- * Add, Favourite, More) stands in for the Now bar and the dock.
+ * A page's selection: back leaves it, songs that leave [list] leave it once the list is [loaded] (a selection kept across
+ * a turn of the phone is not cleared by the empty list before), and while it is on, its bar of four verbs (Play, Add,
+ * Favourite, More) stands in for the Now bar and the dock.
  */
 @Composable
-fun SelectionHost(selection: SongSelection, list: List<Song>, ui: LibraryUi, sheets: SongSheets, onChange: (SongSelection) -> Unit) {
+fun SelectionHost(selection: SongSelection, list: List<Song>, loaded: Boolean, ui: LibraryUi, sheets: SongSheets, onChange: (SongSelection) -> Unit) {
     val nav = LocalNavigator.current
     val context = LocalContext.current
     val toasts = LocalToasts.current
@@ -634,7 +703,7 @@ fun SelectionHost(selection: SongSelection, list: List<Song>, ui: LibraryUi, she
     val scope = rememberCoroutineScope()
     val actions = rememberSongActions()
     BackHandler(enabled = selection.active) { onChange(SongSelection()) }
-    LaunchedEffect(list) { selection.within(list).let { if (it != selection) onChange(it) } }
+    LaunchedEffect(list, loaded) { selection.within(list.takeIf { loaded }).let { if (it != selection) onChange(it) } }
     val bar: @Composable () -> Unit = {
         val picked = selection.picked(list)
         val refs = picked.map { it.ref }

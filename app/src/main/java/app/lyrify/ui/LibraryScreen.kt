@@ -198,7 +198,7 @@ private fun SongsTab(ui: LibraryUi, library: Library, reselect: Int, topBar: @Co
     var sorting by rememberSaveable { mutableStateOf(false) }
     ReselectToTop(reselect) { state.animateScrollToItem(0) }
     val source = QueueSource(SourceKind.SONGS, "songs:${settings.songSort}:${settings.songFilter}", "")
-    SongListFrame(ui, songs, source, topBar, state) { list ->
+    SongListFrame(ui, songs, source, topBar, state, loaded = listed != null) { list ->
         item(key = "header") {
             ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, sort = songsOrder(settings), onSort = { sorting = true })
         }
@@ -578,7 +578,7 @@ fun SongsPage(page: Page.Songs) {
         sortSongs(matching, SortSongs.TITLE, ui.settings.library)
     }
     val source = QueueSource(SourceKind.SONGS, "status:${page.group}:${page.status}", title)
-    SongListFrame(ui, songs, source, topBar = { under, backdrop -> BackTopBar(title, under, backdrop) { nav.back() } }) { list ->
+    SongListFrame(ui, songs, source, topBar = { under, backdrop -> BackTopBar(title, under, backdrop) { nav.back() } }, loaded = library != null) { list ->
         item(key = "header") { ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll) }
         if (library != null && songs.isEmpty()) item(key = "empty") { EmptyState(EmptyArt.Icon(R.drawable.ic_search_off), stringResource(R.string.songs_no_match)) }
         songRows(list)
@@ -598,8 +598,9 @@ internal fun BackTopBar(title: String, under: Boolean, backdrop: GlassBackdrop, 
 }
 
 /**
- * Settings > Folders to skip: the top folders of every song on the phone (skipped ones too, so they can come back), and
- * any other folder skipped, each with a switch. Songs in a skipped folder stay on the phone but leave the library.
+ * Settings > Folders to skip: every folder of the Folders tree for every song on the phone (skipped ones too, so they
+ * can come back), and any other folder skipped, each with a switch ([skipChoices]). Songs in a skipped folder or below
+ * it stay on the phone but leave the library.
  */
 @Composable
 fun FoldersToSkipPage() {
@@ -607,10 +608,7 @@ fun FoldersToSkipPage() {
     val ui = rememberLibraryUi() ?: return
     val change = rememberSettingsChange()
     val skipped = ui.settings.library.foldersToSkip
-    val folders = remember(ui.library, skipped) {
-        val counts = ui.library?.all.orEmpty().groupingBy { it.folder.trim('/').substringBefore('/') }.eachCount().filterKeys(String::isNotEmpty)
-        (counts.keys + skipped.map { it.trim('/') }).distinctBy { it.lowercase() }.sortedWith(compareBy(Collator.getInstance()) { it }).map { it to (counts[it] ?: 0) }
-    }
+    val folders = remember(ui.library, skipped) { skipChoices(ui.library?.all.orEmpty(), skipped) }
     PageFrame(topBar = { under, backdrop -> BackTopBar(stringResource(R.string.set_skip), under, backdrop) { nav.back() } }) { padding ->
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = padding.calculateBottomPadding() + 24.dp)) {
             item(key = "sentence") {
@@ -645,6 +643,19 @@ fun FoldersToSkipPage() {
             }
         }
     }
+}
+
+/**
+ * The folders "Folders to skip" offers, each with how many of [all] songs are in it or below: every folder of the
+ * Folders tree, by path, skipped ones too (so they can come back), and any other folder [skipped].
+ */
+internal fun skipChoices(all: List<Song>, skipped: List<String>): List<Pair<String, Int>> {
+    // A song counts in its folder and in each folder above it.
+    val counts = all.flatMap { song ->
+        val names = song.folder.split('/').filter(String::isNotEmpty)
+        names.indices.map { last -> names.subList(0, last + 1).joinToString("/") }
+    }.groupingBy { it }.eachCount()
+    return (counts.keys + skipped.map { it.trim('/') }).distinctBy { it.lowercase() }.sortedWith(compareBy(Collator.getInstance()) { it }).map { it to (counts[it] ?: 0) }
 }
 
 /** 2.0's song list over the ledger, with its status bar and chips, for Library and Search until L1 and L2. */

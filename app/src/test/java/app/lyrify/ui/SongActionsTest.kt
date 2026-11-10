@@ -1,5 +1,7 @@
 package app.lyrify.ui
 
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.SaverScope
 import app.lyrify.library.CollectionKind
 import app.lyrify.library.FavouriteCollection
 import app.lyrify.library.Playlist
@@ -60,6 +62,8 @@ class SongActionsTest {
         override suspend fun delete(id: String) = write { it.delete(id) }
 
         override suspend fun put(playlist: Playlist) = write { it.put(playlist) }
+
+        override suspend fun edit(id: String, change: (Playlist) -> Playlist) = write { state -> state.playlist(id)?.let { state.put(change(it)) } ?: state }
 
         override suspend fun forget(paths: Set<String>) = write { it.forget(paths) }
     }
@@ -161,6 +165,42 @@ class SongActionsTest {
         assertEquals(listOf(lantern), SongSelection(setOf(lantern.path)).picked(listOf(lantern, bell, lantern)))
     }
 
+    @Test
+    fun `a list still loading keeps the selection, and the list once loaded trims it`() {
+        val picked = SongSelection(setOf(lantern.path, bell.path))
+
+        assertEquals(picked, picked.within(null))
+        assertEquals(SongSelection(setOf(lantern.path)), picked.within(listOf(lantern, water)))
+        assertEquals(SongSelection(), picked.within(emptyList()))
+    }
+
+    @Test
+    fun `a large selection or sheet stays out of the saved state, and a turn of the phone still finds it`() {
+        fun <T : Any> roundTrip(saver: Saver<T, Any>, value: T): Pair<Any?, T?> {
+            val saved = with(saver) { SaverScope { true }.save(value) }
+            return saved to saved?.let(saver::restore)
+        }
+        val paths = (1..10_000).map { "Music/Made Up/Song $it.mp3" }
+
+        val some = SongSelection(paths.take(SAVED_SONGS_MAX).toSet())
+        val (savedSome, someBack) = roundTrip(SongSelection.Saver, some)
+        assertEquals(SAVED_SONGS_MAX, (savedSome as List<*>).size)
+        assertEquals(some, someBack)
+        val all = SongSelection(paths.toSet())
+        val (savedAll, allBack) = roundTrip(SongSelection.Saver, all)
+        assertFalse(savedAll is Collection<*>)
+        assertEquals(all, allBack)
+
+        val menu = OpenSheet.Menu(lantern.ref)
+        val (savedMenu, menuBack) = roundTrip(SongSheetsSaver, SongSheets(menu))
+        assertTrue(savedMenu is String)
+        assertEquals(menu, menuBack?.open)
+        val addAll = OpenSheet.AddTo(paths.map { SongRef(it) }, null, "Songs")
+        val (savedAddAll, addAllBack) = roundTrip(SongSheetsSaver, SongSheets(addAll))
+        assertFalse(savedAddAll is String)
+        assertEquals(addAll, addAllBack?.open)
+    }
+
     // Toasts and Undo
 
     @Test
@@ -206,6 +246,37 @@ class SongActionsTest {
         assertEquals(listOf(lantern.ref, lantern.ref, bell.ref), store.now.playlist("p1")?.songs)
         assertTrue(outcome.undo?.invoke() == true)
         assertEquals(roadTrip, store.now.playlist("p1"))
+    }
+
+    @Test
+    fun `playlist Undo takes back only its own change, on the playlist as it is now`() = runBlocking {
+        val trip = Playlist("p1", "Road trip", listOf(lantern.ref, bell.ref), createdAt = 1)
+        val store = MemoryPlaylists(PlaylistsState(listOf(trip)))
+        val actions = SongActions(NoPlayback, store)
+        fun now() = checkNotNull(store.now.playlist("p1"))
+
+        // Add: only the songs it appended go; a song added and a name given since stay.
+        val added = actions.addToPlaylist(trip, listOf(water.ref, lantern.ref))
+        store.add("p1", listOf(bell.ref))
+        store.rename("p1", "Long road")
+        assertTrue(added.undo?.invoke() == true)
+        assertEquals(Playlist("p1", "Long road", listOf(lantern.ref, bell.ref, bell.ref), createdAt = 1), now())
+
+        // Remove: the song goes back to its place, with a song added since.
+        val removed = actions.removeFromPlaylist(now(), 0)
+        store.add("p1", listOf(water.ref))
+        assertTrue(removed.undo?.invoke() == true)
+        assertEquals(listOf(lantern.ref, bell.ref, bell.ref, water.ref), now().songs)
+
+        // Rename: the old name comes back while the new one stands, and nothing else changes.
+        val renamed = actions.rename(now(), "Night drive")
+        store.add("p1", listOf(lantern.ref))
+        assertTrue(renamed.undo?.invoke() == true)
+        assertEquals(Playlist("p1", "Long road", listOf(lantern.ref, bell.ref, bell.ref, water.ref, lantern.ref), createdAt = 1), now())
+        val again = actions.rename(now(), "Night drive")
+        store.rename("p1", "Dawn drive")
+        again.undo?.invoke()
+        assertEquals("Dawn drive", now().name)
     }
 
     @Test
