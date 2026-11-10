@@ -154,4 +154,17 @@ class LibraryListsTest {
     private companion object {
         const val DAY: Long = 24 * 60 * 60_000L
     }
+
+    @Test
+    fun `a playlist's mosaic takes one cover per folder, the first four, filling four places when it has two or three`() {
+        fun ref(path: String) = app.lyrify.library.SongRef("/Music/KJB test/$path")
+        assertEquals(emptyList<app.lyrify.library.SongRef>(), mosaicCovers(emptyList()))
+        // One folder (an album, mostly): one cover, shown alone rather than four times.
+        assertEquals(listOf(ref("Paper Harbour/01.mp3")), mosaicCovers(listOf(ref("Paper Harbour/01.mp3"), ref("Paper Harbour/02.mp3"))))
+        // Two folders: four places, taken in turn.
+        val two = mosaicCovers(listOf(ref("Paper Harbour/01.mp3"), ref("Paper Harbour/02.mp3"), ref("Glass Kites/01.mp3")))
+        assertEquals(listOf("Paper Harbour/01.mp3", "Glass Kites/01.mp3", "Paper Harbour/01.mp3", "Glass Kites/01.mp3"), two.map { it.path.removePrefix("/Music/KJB test/") })
+        val many = mosaicCovers((1..6).map { ref("Folder $it/01.mp3") })
+        assertEquals((1..4).map { "/Music/KJB test/Folder $it/01.mp3" }, many.map { it.path })
+    }
 }

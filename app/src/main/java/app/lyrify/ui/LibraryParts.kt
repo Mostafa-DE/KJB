@@ -1,5 +1,7 @@
 package app.lyrify.ui
 
+import androidx.compose.ui.graphics.RectangleShape
+import app.lyrify.library.SongRef
 import androidx.compose.ui.text.font.lerp
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.graphicsLayer
@@ -578,11 +580,34 @@ fun Tile(
     }
 }
 
-/** A playlist's tile: its first song's cover, or the playlist icon when it is empty. */
+/**
+ * The covers of a list's mosaic (the prototype's .mosaic): the first song of each folder (an album, mostly), the first
+ * four; two or three fill the four places in turn; one stays a single cover.
+ */
+fun mosaicCovers(songs: List<SongRef>): List<SongRef> {
+    val firsts = songs.distinctBy { it.path.substringBeforeLast('/') }.take(MOSAIC)
+    return if (firsts.size in 2 until MOSAIC) List(MOSAIC) { firsts[it % firsts.size] } else firsts
+}
+
+private const val MOSAIC = 4
+
+/** A playlist's tile: a 2x2 mosaic of its covers ([mosaicCovers]), one cover, or the playlist icon when it is empty. */
 @Composable
 fun PlaylistTile(playlist: Playlist, size: Dp = 48.dp) {
-    val first = playlist.songs.firstOrNull()
-    if (first == null) Tile(R.drawable.ic_queue_music, size = size) else SongCover(SongArt(first.path, first.mediaStoreId), size = size)
+    val covers = remember(playlist.songs) { mosaicCovers(playlist.songs) }
+    // The prototype's corners: 14 dp at 48 dp (.mosaic), 28 dp on a page's hero (.mosaic.big).
+    val shape = RoundedCornerShape(if (size > 64.dp) 28.dp else 14.dp)
+    when (covers.size) {
+        0 -> Tile(R.drawable.ic_queue_music, size = size)
+        1 -> covers.single().let { SongCover(SongArt(it.path, it.mediaStoreId), size = size, shape = shape) }
+        else -> Column(Modifier.size(size).clip(shape).background(MaterialTheme.colorScheme.surfaceContainerHighest)) {
+            covers.chunked(2).forEach { pair ->
+                Row {
+                    pair.forEach { SongCover(SongArt(it.path, it.mediaStoreId), size = size / 2, shape = RectangleShape) }
+                }
+            }
+        }
+    }
 }
 
 /** An artist's round image: the cover of their newest album, or their initials. */
