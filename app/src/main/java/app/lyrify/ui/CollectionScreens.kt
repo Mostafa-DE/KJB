@@ -607,24 +607,25 @@ private fun LazyListScope.favouriteRows(tab: FavouritesTab, favourites: Favourit
         FavouritesTab.SONGS -> Unit
         FavouritesTab.ALBUMS -> items(favourites.albums.chunked(2), key = { "albums ${it.first().key}" }) { pair ->
             val nav = LocalNavigator.current
-            Row(Modifier.fillMaxWidth().padding(horizontal = ScreenPadding, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            // Rows fade and move into place when the tab changes or a favourite comes or goes.
+            Row(Modifier.animateItem().fillMaxWidth().padding(horizontal = ScreenPadding, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                 pair.forEach { album -> AlbumCard(album.title, album.artist, album.songs.firstOrNull(), Modifier.weight(1f)) { nav.open(Page.Album(album.key)) } }
                 if (pair.size == 1) Spacer(Modifier.weight(1f))
             }
         }
         FavouritesTab.ARTISTS -> items(favourites.artists, key = { "artist ${it.name}" }) { artist ->
             val nav = LocalNavigator.current
-            NavRow(artist.name, artistLine(artist), lead = { ArtistAvatar(artist) }) { nav.open(Page.Artist(artist.name)) }
+            NavRow(artist.name, artistLine(artist), Modifier.animateItem(), lead = { ArtistAvatar(artist) }) { nav.open(Page.Artist(artist.name)) }
         }
         FavouritesTab.FOLDERS -> items(favourites.folders, key = { "folder ${it.path}" }) { folder ->
             val nav = LocalNavigator.current
             val sub = stringResource(R.string.lib_after, pluralStringResource(R.plurals.lib_songs, folder.allSongs.size, folder.allSongs.size), folder.path)
-            NavRow(folder.name, sub, lead = { Tile(R.drawable.ic_folder_fill) }) { nav.open(Page.Folder(folder.path)) }
+            NavRow(folder.name, sub, Modifier.animateItem(), lead = { Tile(R.drawable.ic_folder_fill) }) { nav.open(Page.Folder(folder.path)) }
         }
         FavouritesTab.PLAYLISTS -> items(favourites.playlists, key = { "playlist ${it.id}" }) { playlist ->
             val nav = LocalNavigator.current
             val count = library.listed(playlist.songs).size
-            NavRow(playlist.name, pluralStringResource(R.plurals.lib_songs, count, count), lead = { PlaylistTile(playlist) }) { nav.open(Page.Playlist(playlist.id)) }
+            NavRow(playlist.name, pluralStringResource(R.plurals.lib_songs, count, count), Modifier.animateItem(), lead = { PlaylistTile(playlist) }) { nav.open(Page.Playlist(playlist.id)) }
         }
     }
 }

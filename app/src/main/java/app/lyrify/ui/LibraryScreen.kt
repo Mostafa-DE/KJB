@@ -1,5 +1,8 @@
 package app.lyrify.ui
 
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.animation.AnimatedContent
 import androidx.annotation.StringRes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -114,17 +117,30 @@ fun LibraryPage() {
         }
     }
     val library = ui.library
-    when {
-        library == null -> PageFrame(topBar = topBar) { padding -> LibraryUnavailable(ui.state, Modifier.padding(padding)) }
-        tab == LibraryTab.SONGS -> SongsTab(ui, library, reselect, topBar)
-        else -> PageFrame(topBar = topBar) { padding ->
-            when (tab) {
-                LibraryTab.PLAYLISTS -> PlaylistsTab(ui, library, padding, reselect, sheets)
-                LibraryTab.ALBUMS -> AlbumsTab(ui, library, padding, reselect)
-                LibraryTab.ARTISTS -> ArtistsTab(ui, library, padding, reselect)
-                LibraryTab.FOLDERS -> FoldersTab(library, padding, reselect)
-                LibraryTab.GENRES -> GenresTab(library, padding, reselect)
-                LibraryTab.SONGS -> Unit
+    val reduced = LocalReducedMotion.current
+    val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+    if (library == null) {
+        PageFrame(topBar = topBar) { padding -> LibraryUnavailable(ui.state, Modifier.padding(padding)) }
+    } else {
+        // A top tab's page slides in from its side as the dock's tabs do, never swapped at once.
+        AnimatedContent(
+            targetState = tab,
+            transitionSpec = { tabSwitch(tabs.indexOf(targetState).compareTo(tabs.indexOf(initialState)).coerceIn(-1, 1) * if (rtl) -1 else 1, reduced) },
+            label = "library tab",
+        ) { shown ->
+            if (shown == LibraryTab.SONGS) {
+                SongsTab(ui, library, reselect, topBar)
+            } else {
+                PageFrame(topBar = topBar) { padding ->
+                    when (shown) {
+                        LibraryTab.PLAYLISTS -> PlaylistsTab(ui, library, padding, reselect, sheets)
+                        LibraryTab.ALBUMS -> AlbumsTab(ui, library, padding, reselect)
+                        LibraryTab.ARTISTS -> ArtistsTab(ui, library, padding, reselect)
+                        LibraryTab.FOLDERS -> FoldersTab(library, padding, reselect)
+                        LibraryTab.GENRES -> GenresTab(library, padding, reselect)
+                        LibraryTab.SONGS -> Unit
+                    }
+                }
             }
         }
     }

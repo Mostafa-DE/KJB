@@ -1,5 +1,9 @@
 package app.lyrify.ui
 
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.animation.core.VisibilityThreshold
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.ContentTransform
 import androidx.compose.ui.text.font.lerp
 import androidx.compose.ui.graphics.lerp
 import android.content.res.Resources
@@ -238,6 +242,24 @@ fun toolsDot(checks: Int, duplicates: Int, aiAttention: Boolean): Boolean = chec
 
 /** Which side a new tab comes from: 1 from the end (a tab after the one shown), -1 from the start, 0 for the same tab. */
 fun tabSlide(from: DockTab, to: DockTab): Int = DOCK_TABS.indexOf(to).compareTo(DOCK_TABS.indexOf(from)).coerceIn(-1, 1)
+
+/**
+ * How a tab's page replaces another (the dock's and Library's top tabs): it slides in a tenth of the width from the
+ * [side] of the tab tapped while it fades in, the old one fades out; with [reduced] motion it only fades.
+ */
+fun tabSwitch(side: Int, reduced: Boolean): ContentTransform {
+    val enter = if (reduced) {
+        fadeIn(tween(Motion.SHORT_MS))
+    } else {
+        slideInHorizontally(TabSlide) { it / TAB_SLIDE_SHARE * side } + fadeIn(tween(Motion.SHORT_MS, delayMillis = TAB_FADE_DELAY_MS))
+    }
+    return enter togetherWith fadeOut(tween(TAB_FADE_OUT_MS))
+}
+
+private const val TAB_SLIDE_SHARE = 10
+private const val TAB_FADE_DELAY_MS = 40
+private const val TAB_FADE_OUT_MS = 90
+private val TabSlide = spring(dampingRatio = 1f, stiffness = 300f, visibilityThreshold = IntOffset.VisibilityThreshold)
 
 /** A dock item's name for TalkBack: its label, then its dot when it has one. */
 fun dockItemName(vararg parts: String?): String = parts.filterNotNull().joinToString(", ")

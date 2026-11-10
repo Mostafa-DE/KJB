@@ -3,15 +3,10 @@ package app.lyrify.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.VisibilityThreshold
-import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -47,7 +42,6 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -183,13 +177,7 @@ fun AppShell(
                     targetState = state.tab,
                     transitionSpec = {
                         // The new tab comes from the side of the tab tapped; with reduced motion it only fades.
-                        val side = tabSlide(initialState, targetState) * if (rtl) -1 else 1
-                        val enter = if (reduced) {
-                            fadeIn(tween(FADE_IN_MS))
-                        } else {
-                            slideInHorizontally(TAB_SLIDE) { it / SLIDE_SHARE * side } + fadeIn(tween(FADE_IN_MS, delayMillis = FADE_DELAY_MS))
-                        }
-                        enter togetherWith fadeOut(tween(FADE_OUT_MS))
+                        tabSwitch(tabSlide(initialState, targetState) * if (rtl) -1 else 1, reduced)
                     },
                     label = "tab",
                 ) { tab ->
@@ -363,12 +351,5 @@ fun LyricsBanners(lyrics: LyricsUi, modifier: Modifier = Modifier, listener: Boo
     }
 }
 
-private const val FADE_IN_MS = 180
-private const val FADE_DELAY_MS = 40
-private const val FADE_OUT_MS = 90
-
-/** A new tab slides in from a tenth of the width, on the settle spring (Motion.settle). */
-private const val SLIDE_SHARE = 10
-private val TAB_SLIDE = spring(dampingRatio = 1f, stiffness = 300f, visibilityThreshold = IntOffset.VisibilityThreshold)
 private const val WHY = "why"
 private const val FIX = "fix"
