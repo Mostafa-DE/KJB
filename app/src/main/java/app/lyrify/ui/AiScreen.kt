@@ -362,6 +362,7 @@ fun AiScreen(
     var howItWorks by remember { mutableStateOf(false) }
     var confirmDelete by remember { mutableStateOf(false) }
     val results = aiResults(counts)
+    val reduced = LocalReducedMotion.current
     LazyColumn(
         state = rememberLazyListState(),
         modifier = Modifier.fillMaxSize(),
@@ -369,29 +370,33 @@ fun AiScreen(
         verticalArrangement = Arrangement.spacedBy(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        item(key = "switch") {
-            Column {
+        item(key = "switch", contentType = "switch") {
+            Column(rowMotion(reduced)) {
                 banner()
                 if (state.supported) AiSwitchBar(state.enabled, enabled = !state.stopping, actions.onSwitch)
             }
         }
-        item(key = "glance") {
-            AiGlanceView(glance, onLine = { sheet = glance.sheet }) {
-                when (it) {
-                    AiActionKind.DOWNLOAD, AiActionKind.RESUME, AiActionKind.TRY_AGAIN -> actions.onDownload()
-                    AiActionKind.OPEN_APP_INFO -> actions.onOpenAppInfo()
+        item(key = "glance", contentType = "glance") {
+            Box(rowMotion(reduced)) {
+                AiGlanceView(glance, onLine = { sheet = glance.sheet }) {
+                    when (it) {
+                        AiActionKind.DOWNLOAD, AiActionKind.RESUME, AiActionKind.TRY_AGAIN -> actions.onDownload()
+                        AiActionKind.OPEN_APP_INFO -> actions.onOpenAppInfo()
+                    }
                 }
             }
         }
         if (state.supported) {
-            if (results.isNotEmpty()) item(key = "results") { AiResults(results, doneToday, onOpenStatus) }
-            item(key = "rows") {
-                AiRows(
-                    state = state,
-                    onDownload = { downloadSheet = true },
-                    onBattery = actions.onOpenAppInfo,
-                    onHowItWorks = { howItWorks = true },
-                )
+            if (results.isNotEmpty()) item(key = "results", contentType = "results") { Box(rowMotion(reduced)) { AiResults(results, doneToday, onOpenStatus) } }
+            item(key = "rows", contentType = "rows") {
+                Box(rowMotion(reduced)) {
+                    AiRows(
+                        state = state,
+                        onDownload = { downloadSheet = true },
+                        onBattery = actions.onOpenAppInfo,
+                        onHowItWorks = { howItWorks = true },
+                    )
+                }
             }
         }
     }

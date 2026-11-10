@@ -118,6 +118,7 @@ fun SettingsScreen(
         // Messages dock at the bottom, above the gesture area.
         bottomBar = { ToastSlot(Modifier.navigationBarsPadding().padding(horizontal = ScreenPadding), padding = PaddingValues(bottom = 12.dp)) },
     ) { padding ->
+        val reduced = LocalReducedMotion.current
         LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = padding.calculateBottomPadding() + 24.dp)) {
             section(R.string.settings_playback, first = true) {
                 ValueRow(R.drawable.ic_resume, R.string.set_remember, stringResource(playback.rememberPlace.label), first = true) { sheet = SettingsSheet.REMEMBER }
@@ -175,8 +176,8 @@ fun SettingsScreen(
                 ActionRow(R.drawable.ic_directions_car, stringResource(R.string.set_auto)) { sheet = SettingsSheet.ANDROID_AUTO }
                 ActionRow(R.drawable.ic_description, R.string.set_licences) { onOpen(Page.Licences) }
             }
-            item(key = "advanced") {
-                GroupedRows(Modifier.padding(top = 16.dp)) {
+            item(key = "advanced", contentType = "advanced") {
+                GroupedRows(rowMotion(reduced).padding(top = 16.dp)) {
                     GroupedRow(
                         R.drawable.ic_tune,
                         stringResource(R.string.settings_advanced),
@@ -261,7 +262,7 @@ fun LibraryTabsScreen(settings: Settings, onChange: ((Settings) -> Settings) -> 
         },
     ) { padding ->
         LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = padding.calculateBottomPadding() + 24.dp)) {
-            item {
+            item(contentType = "sentence") {
                 Text(
                     stringResource(R.string.set_tabs_sheet),
                     style = MaterialTheme.typography.bodyMedium,
@@ -269,7 +270,7 @@ fun LibraryTabsScreen(settings: Settings, onChange: ((Settings) -> Settings) -> 
                     modifier = Modifier.padding(start = ScreenPadding + 4.dp, end = ScreenPadding, top = 4.dp, bottom = 12.dp),
                 )
             }
-            item {
+            item(contentType = "group") {
                 GroupedRows {
                     tabs.forEachIndexed { index, setting ->
                         val name = stringResource(setting.tab.label)
@@ -304,8 +305,8 @@ fun LibraryTabsScreen(settings: Settings, onChange: ((Settings) -> Settings) -> 
 
 /** A section's title and its rows on one card. */
 private fun androidx.compose.foundation.lazy.LazyListScope.section(@StringRes title: Int, first: Boolean = false, rows: @Composable () -> Unit) {
-    item(key = title) {
-        Column {
+    item(key = title, contentType = "section") {
+        Column(rowMotion(LocalReducedMotion.current)) {
             SectionTitle(stringResource(title), Modifier.padding(start = ScreenPadding + 4.dp, end = ScreenPadding, top = if (first) 4.dp else 18.dp, bottom = 8.dp))
             GroupedRows { rows() }
         }

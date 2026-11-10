@@ -160,23 +160,24 @@ private val BLANK_LINES = Regex("""\n[ \t]*\n""")
 fun LicencesPage() {
     val nav = LocalNavigator.current
     PageFrame(topBar = { under, backdrop -> BackTopBar(stringResource(R.string.set_licences), under, backdrop) { nav.back() } }) { padding ->
+        val reduced = LocalReducedMotion.current
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = padding.calculateBottomPadding() + 24.dp)) {
-            item(key = "sentence") {
+            item(key = "sentence", contentType = "sentence") {
                 Text(
                     stringResource(R.string.lic_sentence),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(start = ScreenPadding + 4.dp, end = ScreenPadding, top = 4.dp, bottom = 12.dp),
+                    modifier = rowMotion(reduced).padding(start = ScreenPadding + 4.dp, end = ScreenPadding, top = 4.dp, bottom = 12.dp),
                 )
             }
-            item(key = "kjb") {
-                GroupedRows {
+            item(key = "kjb", contentType = "group") {
+                GroupedRows(rowMotion(reduced)) {
                     LicenceRow(KJB_LICENCE, first = true)
                     LicenceRow(NOTICES)
                 }
             }
-            item(key = "built") {
-                Column {
+            item(key = "built", contentType = "section") {
+                Column(rowMotion(reduced)) {
                     SectionTitle(stringResource(R.string.lic_built_with), Modifier.padding(start = ScreenPadding + 4.dp, end = ScreenPadding, top = 24.dp, bottom = 8.dp))
                     GroupedRows { THIRD_PARTY.forEachIndexed { at, shipped -> LicenceRow(shipped, first = at == 0) } }
                 }
@@ -218,14 +219,15 @@ fun LicencePage(page: Page.Licence) {
         }
     }
     PageFrame(topBar = { under, backdrop -> BackTopBar(page.name, under, backdrop) { nav.back() } }) { padding ->
+        val reduced = LocalReducedMotion.current
         LazyColumn(
             Modifier.fillMaxSize(),
             contentPadding = PaddingValues(start = ScreenPadding + 4.dp, end = ScreenPadding, top = padding.calculateTopPadding() + 4.dp, bottom = padding.calculateBottomPadding() + 24.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             if (shipped != null) {
-                item(key = "about") {
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                item(key = "about", contentType = "about") {
+                    Column(rowMotion(reduced), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text(shipped.parts, style = MaterialTheme.typography.bodyMedium)
                         Text(stringResource(R.string.lic_copyright, shipped.copyright), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
@@ -233,9 +235,9 @@ fun LicencePage(page: Page.Licence) {
             }
             val paragraphs = text
             if (paragraphs != null && paragraphs.isEmpty()) {
-                item(key = "unreadable") { Text(stringResource(R.string.lic_unreadable), style = MaterialTheme.typography.bodyMedium) }
+                item(key = "unreadable", contentType = "unreadable") { Text(stringResource(R.string.lic_unreadable), rowMotion(reduced), style = MaterialTheme.typography.bodyMedium) }
             }
-            items(paragraphs.orEmpty()) { paragraph ->
+            items(paragraphs.orEmpty(), contentType = { "paragraph" }) { paragraph ->
                 Text(paragraph, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }

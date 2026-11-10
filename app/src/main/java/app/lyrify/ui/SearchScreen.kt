@@ -192,31 +192,36 @@ fun SearchPage() {
         },
     ) { padding ->
         val modifier = Modifier.padding(padding).consumeWindowInsets(padding).fillMaxSize().imePadding()
-        if (query.isBlank()) {
-            RecentSearches(searches, recentList, onPick = { query = it }, onRemove = recent::remove, modifier)
-        } else {
-            val play = rememberPlay(commit)
-            val reading by remember(context) { SearchGraph.lyrics(context).building }.collectAsStateWithLifecycle()
-            LazyColumn(state = resultList, modifier = modifier, contentPadding = PaddingValues(bottom = 16.dp)) {
-                if (results == null || ui == null) return@LazyColumn
-                val groups = resultGroups(results)
-                item(key = "count") { ResultCount(groups.sumOf { it.count }) }
-                if (groups.isEmpty() && results.lyrics != null) {
-                    item(key = "none") { EmptyState(EmptyArt.Icon(R.drawable.ic_search_off), stringResource(R.string.search_no_matches)) }
-                }
-                groups.forEach { group ->
-                    item(key = "group ${group.group}") {
-                        GroupHeader(group) {
+        FadeThrough(query.isBlank()) { blank ->
+            if (blank) {
+                RecentSearches(searches, recentList, onPick = { query = it }, onRemove = recent::remove, modifier)
+            } else {
+                val play = rememberPlay(commit)
+                val reading by remember(context) { SearchGraph.lyrics(context).building }.collectAsStateWithLifecycle()
+                val reduced = LocalReducedMotion.current
+                LazyColumn(state = resultList, modifier = modifier, contentPadding = PaddingValues(bottom = 16.dp)) {
+                    if (results == null || ui == null) return@LazyColumn
+                    val groups = resultGroups(results)
+                    item(key = "count", contentType = "count") { Box(rowMotion(reduced)) { ResultCount(groups.sumOf { it.count }) } }
+                    if (groups.isEmpty() && results.lyrics != null) {
+                        item(key = "none", contentType = "empty") { EmptyState(EmptyArt.Icon(R.drawable.ic_search_off), stringResource(R.string.search_no_matches), rowMotion(reduced)) }
+                    }
+                    groups.forEach { group ->
+                        item(key = "group ${group.group}", contentType = "group") {
+                            Box(rowMotion(reduced)) {
+                                GroupHeader(group) {
+                                    commit()
+                                    nav.open(Page.SearchAll(group.group, results.query))
+                                }
+                            }
+                        }
+                        resultRows(results, group.group, all = false, ui, reduced, onSong = { play(results, it) }, onMore = sheets::openSong) {
                             commit()
-                            nav.open(Page.SearchAll(group.group, results.query))
+                            nav.open(it)
                         }
                     }
-                    resultRows(results, group.group, all = false, ui, onSong = { play(results, it) }, onMore = sheets::openSong) {
-                        commit()
-                        nav.open(it)
-                    }
+                    if (reading) item(key = "reading", contentType = "reading") { Box(rowMotion(reduced)) { ReadingLyrics() } }
                 }
-                if (reading) item(key = "reading") { ReadingLyrics() }
             }
         }
     }
@@ -247,6 +252,7 @@ fun SearchAllPage(page: Page.SearchAll) {
             )
         },
     ) { padding ->
+        val reduced = LocalReducedMotion.current
         LazyColumn(Modifier.padding(padding).consumeWindowInsets(padding).fillMaxSize(), state = list, contentPadding = PaddingValues(bottom = 16.dp)) {
             if (results == null || ui == null) return@LazyColumn
             val songs = when (page.group) {
@@ -254,23 +260,25 @@ fun SearchAllPage(page: Page.SearchAll) {
                 SearchGroup.LYRICS -> results.lyrics.orEmpty().map { it.song }
                 else -> null
             }
-            item(key = "head") {
-                if (songs == null) {
-                    GroupHeader(ResultGroup(page.group, results.count(page.group)), onViewAll = null)
-                } else {
-                    val source = searchSource(page.query)
-                    // In lyrics has read only the pages shown: Shuffle and Play read every song found.
-                    fun every(start: (List<SongRef>) -> Unit) {
-                        if (page.group == SearchGroup.LYRICS) scope.launch { start(lyricSongs(context, page.query).map { it.ref }) } else start(songs.map { it.ref })
+            item(key = "head", contentType = "head") {
+                Box(rowMotion(reduced)) {
+                    if (songs == null) {
+                        GroupHeader(ResultGroup(page.group, results.count(page.group)), onViewAll = null)
+                    } else {
+                        val source = searchSource(page.query)
+                        // In lyrics has read only the pages shown: Shuffle and Play read every song found.
+                        fun every(start: (List<SongRef>) -> Unit) {
+                            if (page.group == SearchGroup.LYRICS) scope.launch { start(lyricSongs(context, page.query).map { it.ref }) } else start(songs.map { it.ref })
+                        }
+                        SongsHeader(
+                            count = results.count(page.group),
+                            onShuffle = { every { commands.shuffle(it, source) } },
+                            onPlay = { every { commands.play(it, 0, source) } },
+                        )
                     }
-                    SongsHeader(
-                        count = results.count(page.group),
-                        onShuffle = { every { commands.shuffle(it, source) } },
-                        onPlay = { every { commands.play(it, 0, source) } },
-                    )
                 }
             }
-            resultRows(results, page.group, all = true, ui, onSong = { play(results, it) }, onMore = sheets::openSong, onOpen = nav::open)
+            resultRows(results, page.group, all = true, ui, reduced, onSong = { play(results, it) }, onMore = sheets::openSong, onOpen = nav::open)
         }
     }
     ui?.let { SongSheetsHost(sheets, it) }
@@ -388,41 +396,48 @@ private fun LazyListScope.resultRows(
     group: SearchGroup,
     all: Boolean,
     ui: LibraryUi,
+    reduced: Boolean,
     onSong: (Song) -> Unit,
     onMore: (SongRef) -> Unit,
     onOpen: (Page) -> Unit,
 ) {
     val count = shownCount(results, group, all)
     when (group) {
-        SearchGroup.SONGS -> items(results.songs.take(count), key = { "song ${it.item.path}" }) { hit ->
+        SearchGroup.SONGS -> items(results.songs.take(count), key = { "song ${it.item.path}" }, contentType = { "song" }) { hit ->
             val song = hit.item
-            SongRow(song, ui, selecting = false, selected = false, onTap = { onSong(song) }, onLongPress = null, onMore = { onMore(song.ref) }, shownTitle = highlighted(hit.text, hit.match))
+            SongRow(song, ui, selecting = false, selected = false, onTap = { onSong(song) }, onLongPress = null, onMore = { onMore(song.ref) }, modifier = rowMotion(reduced), shownTitle = highlighted(hit.text, hit.match))
         }
-        SearchGroup.ARTISTS -> items(results.artists.take(count), key = { "artist ${it.item.name}" }) { hit ->
+        SearchGroup.ARTISTS -> items(results.artists.take(count), key = { "artist ${it.item.name}" }, contentType = { "result" }) { hit ->
             val songs = hit.item.songs.size
-            NavResult(highlighted(hit.text, hit.match), pluralStringResource(R.plurals.search_songs, songs, formatCount(songs)), { onOpen(Page.Artist(hit.item.name)) }) {
-                SongCover(SongArt(hit.item.songs.first().path), shape = CircleShape)
+            Box(rowMotion(reduced)) {
+                NavResult(highlighted(hit.text, hit.match), pluralStringResource(R.plurals.search_songs, songs, formatCount(songs)), { onOpen(Page.Artist(hit.item.name)) }) {
+                    SongCover(SongArt(hit.item.songs.first().path), shape = CircleShape)
+                }
             }
         }
-        SearchGroup.ALBUMS -> items(results.albums.take(count), key = { "album ${it.item.key}" }) { hit ->
-            NavResult(highlighted(hit.text, hit.match), hit.item.artist, { onOpen(Page.Album(hit.item.key)) }) {
-                SongCover(SongArt(hit.item.songs.first().path))
+        SearchGroup.ALBUMS -> items(results.albums.take(count), key = { "album ${it.item.key}" }, contentType = { "result" }) { hit ->
+            Box(rowMotion(reduced)) {
+                NavResult(highlighted(hit.text, hit.match), hit.item.artist, { onOpen(Page.Album(hit.item.key)) }) {
+                    SongCover(SongArt(hit.item.songs.first().path))
+                }
             }
         }
-        SearchGroup.FOLDERS -> items(results.folders.take(count), key = { "folder ${it.item.path}" }) { hit ->
+        SearchGroup.FOLDERS -> items(results.folders.take(count), key = { "folder ${it.item.path}" }, contentType = { "result" }) { hit ->
             val songs = hit.item.allSongs.size
             val line = stringResource(R.string.search_folder_line, pluralStringResource(R.plurals.search_songs, songs, formatCount(songs)), hit.item.path)
-            NavResult(highlighted(hit.text, hit.match), line, { onOpen(Page.Folder(hit.item.path)) }) { IconTile(R.drawable.ic_folder_open) }
+            Box(rowMotion(reduced)) { NavResult(highlighted(hit.text, hit.match), line, { onOpen(Page.Folder(hit.item.path)) }) { IconTile(R.drawable.ic_folder_open) } }
         }
-        SearchGroup.PLAYLISTS -> items(results.lists.take(count), key = { "list ${it.item.page}" }) { hit ->
+        SearchGroup.PLAYLISTS -> items(results.lists.take(count), key = { "list ${it.item.page}" }, contentType = { "result" }) { hit ->
             val songs = hit.item.songs
-            NavResult(highlighted(hit.text, hit.match), pluralStringResource(R.plurals.search_songs, songs, formatCount(songs)), { onOpen(hit.item.page) }) {
-                IconTile(hit.item.icon)
+            Box(rowMotion(reduced)) {
+                NavResult(highlighted(hit.text, hit.match), pluralStringResource(R.plurals.search_songs, songs, formatCount(songs)), { onOpen(hit.item.page) }) {
+                    IconTile(hit.item.icon)
+                }
             }
         }
-        SearchGroup.LYRICS -> items(results.lyrics.orEmpty().take(count), key = { "lyrics ${it.song.path}" }) { hit ->
+        SearchGroup.LYRICS -> items(results.lyrics.orEmpty().take(count), key = { "lyrics ${it.song.path}" }, contentType = { "song" }) { hit ->
             val song = hit.song
-            SongRow(song, ui, selecting = false, selected = false, onTap = { onSong(song) }, onLongPress = null, onMore = { onMore(song.ref) }, line = highlighted(hit.line, hit.match))
+            SongRow(song, ui, selecting = false, selected = false, onTap = { onSong(song) }, onLongPress = null, onMore = { onMore(song.ref) }, modifier = rowMotion(reduced), line = highlighted(hit.line, hit.match))
         }
     }
 }
@@ -493,23 +508,24 @@ private fun SearchBar(query: String, onQuery: (String) -> Unit, focus: FocusRequ
 /** "Recent", then the recent searches (a tap puts one in the field, its "×" removes it), or "Nothing yet". */
 @Composable
 private fun RecentSearches(searches: List<String>?, state: LazyListState, onPick: (String) -> Unit, onRemove: (String) -> Unit, modifier: Modifier) {
+    val reduced = LocalReducedMotion.current
     LazyColumn(state = state, modifier = modifier, contentPadding = PaddingValues(bottom = 16.dp)) {
-        item(key = "title") {
-            SectionTitle(stringResource(R.string.search_recent), Modifier.padding(start = ScreenPadding + 4.dp, end = ScreenPadding, top = 8.dp, bottom = 8.dp))
+        item(key = "title", contentType = "title") {
+            SectionTitle(stringResource(R.string.search_recent), rowMotion(reduced).padding(start = ScreenPadding + 4.dp, end = ScreenPadding, top = 8.dp, bottom = 8.dp))
         }
         when {
             // Still being read: nothing rather than "Nothing yet".
             searches == null -> Unit
-            searches.isEmpty() -> item(key = "none") {
+            searches.isEmpty() -> item(key = "none", contentType = "empty") {
                 Text(
                     stringResource(R.string.search_recent_none),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = ScreenPadding, vertical = 8.dp),
+                    modifier = rowMotion(reduced).padding(horizontal = ScreenPadding, vertical = 8.dp),
                 )
             }
-            else -> items(searches, key = { "recent $it" }) { search ->
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.animateItem().fillMaxWidth().padding(start = 8.dp, end = 4.dp)) {
+            else -> items(searches, key = { "recent $it" }, contentType = { "recent" }) { search ->
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = rowMotion(reduced).fillMaxWidth().padding(start = 8.dp, end = 4.dp)) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(16.dp),

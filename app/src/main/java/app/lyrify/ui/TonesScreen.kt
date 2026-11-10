@@ -268,23 +268,24 @@ fun TonesScreen(ledger: LedgerState, contentPadding: PaddingValues, toasts: Toas
         }
     }
 
+    val reduced = LocalReducedMotion.current
     LazyColumn(
         contentPadding = PaddingValues(top = contentPadding.calculateTopPadding() + 8.dp, bottom = contentPadding.calculateBottomPadding() + 24.dp),
         modifier = Modifier.fillMaxSize(),
     ) {
-        item(key = "pick") {
+        item(key = "pick", contentType = "pick") {
             LyrifyButton(
                 stringResource(R.string.tones_pick_song),
                 onClick = { picking = true },
-                modifier = Modifier.fillMaxWidth().padding(horizontal = ScreenPadding),
+                modifier = rowMotion(reduced).fillMaxWidth().padding(horizontal = ScreenPadding),
                 icon = R.drawable.ic_library_music,
             )
         }
         if (tones.isEmpty()) {
-            item(key = "empty") { EmptyState(EmptyArt.Glyph, stringResource(R.string.tones_empty_title), text = stringResource(R.string.tones_empty)) }
+            item(key = "empty", contentType = "empty") { EmptyState(EmptyArt.Glyph, stringResource(R.string.tones_empty_title), rowMotion(reduced), text = stringResource(R.string.tones_empty)) }
         } else {
-            item(key = "title") { SectionTitle(stringResource(R.string.tones_yours), Modifier.padding(start = ScreenPadding, end = ScreenPadding, top = 24.dp, bottom = 8.dp)) }
-            items(tones, key = { it.id }) { tone ->
+            item(key = "title", contentType = "title") { SectionTitle(stringResource(R.string.tones_yours), rowMotion(reduced).padding(start = ScreenPadding, end = ScreenPadding, top = 24.dp, bottom = 8.dp)) }
+            items(tones, key = { it.id }, contentType = { "tone" }) { tone ->
                 val preview = PreviewSource.Tone(tone.id)
                 ToneRow(
                     tone = tone,
@@ -297,7 +298,7 @@ fun TonesScreen(ledger: LedgerState, contentPadding: PaddingValues, toasts: Toas
                     },
                     onRename = { renaming = tone.id },
                     onDelete = { deleting = tone.id },
-                    modifier = Modifier.animateItem(),
+                    modifier = rowMotion(reduced),
                 )
             }
         }

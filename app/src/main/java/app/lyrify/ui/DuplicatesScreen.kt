@@ -284,31 +284,34 @@ fun DuplicatesScreen(contentPadding: PaddingValues, toasts: ToastState) {
     LaunchedEffect(engine) { engine.refreshTrashed() }
 
     Box(Modifier.fillMaxSize()) {
-        when (val view = dupesView(state)) {
-            DupesView.Loading -> Unit
-            DupesView.FirstScan -> CenteredState(contentPadding) {
-                EmptyState(EmptyArt.Glyph, stringResource(R.string.dupes_empty_title), text = stringResource(R.string.dupes_empty), action = stringResource(R.string.dupes_scan), onAction = engine::scan)
-            }
-            is DupesView.Scanning -> CenteredState(contentPadding) { ScanningView(view, engine::cancelScan) }
-            DupesView.Failed -> CenteredState(contentPadding) {
-                EmptyState(
-                    EmptyArt.Icon(R.drawable.ic_error, Tone.ERROR),
-                    stringResource(R.string.dupes_failed_title),
-                    text = stringResource(R.string.dupes_failed),
-                    action = stringResource(R.string.dupes_try_again),
-                    onAction = engine::scan,
+        // Each kind of view fades through to the next; a scan's progress or new results stay in place.
+        FadeThrough(dupesView(state), Modifier.fillMaxSize(), kind = { it::class }) { view ->
+            when (view) {
+                DupesView.Loading -> Unit
+                DupesView.FirstScan -> CenteredState(contentPadding) {
+                    EmptyState(EmptyArt.Glyph, stringResource(R.string.dupes_empty_title), text = stringResource(R.string.dupes_empty), action = stringResource(R.string.dupes_scan), onAction = engine::scan)
+                }
+                is DupesView.Scanning -> CenteredState(contentPadding) { ScanningView(view, engine::cancelScan) }
+                DupesView.Failed -> CenteredState(contentPadding) {
+                    EmptyState(
+                        EmptyArt.Icon(R.drawable.ic_error, Tone.ERROR),
+                        stringResource(R.string.dupes_failed_title),
+                        text = stringResource(R.string.dupes_failed),
+                        action = stringResource(R.string.dupes_try_again),
+                        onAction = engine::scan,
+                    )
+                }
+                is DupesView.Results -> ResultsList(
+                    view = view,
+                    contentPadding = contentPadding,
+                    onScan = engine::scan,
+                    onOpen = { group ->
+                        engine.opened(group)
+                        open = group.key
+                    },
+                    onRestore = { song -> engine.restore(song).takeIf { it.isNotEmpty() }?.let { phoneTrash(it, false) } },
                 )
             }
-            is DupesView.Results -> ResultsList(
-                view = view,
-                contentPadding = contentPadding,
-                onScan = engine::scan,
-                onOpen = { group ->
-                    engine.opened(group)
-                    open = group.key
-                },
-                onRestore = { song -> engine.restore(song).takeIf { it.isNotEmpty() }?.let { phoneTrash(it, false) } },
-            )
         }
         ScanAnnouncer(state)
     }
@@ -406,13 +409,15 @@ private fun ResultsList(
     onRestore: (TrashedSong) -> Unit,
 ) {
     val results = view.results
+    val reduced = LocalReducedMotion.current
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = contentPadding.calculateTopPadding(), bottom = contentPadding.calculateBottomPadding() + 16.dp)) {
-        item(key = "summary") { Summary(results, view.failed, onScan) }
+        item(key = "summary", contentType = "summary") { Box(rowMotion(reduced)) { Summary(results, view.failed, onScan) } }
         if (results.groups.isEmpty()) {
-            item(key = "none") {
+            item(key = "none", contentType = "empty") {
                 EmptyState(
                     EmptyArt.Icon(R.drawable.ic_check_circle, Tone.SYNCED),
                     stringResource(R.string.dupes_none_title),
+                    rowMotion(reduced),
                     text = stringResource(R.string.dupes_none),
                     action = stringResource(R.string.dupes_scan_again),
                     onAction = onScan,
@@ -422,13 +427,13 @@ private fun ResultsList(
         Confidence.entries.forEach { confidence ->
             val groups = results.section(confidence)
             if (groups.isNotEmpty()) {
-                item(key = "section $confidence") { SectionHeader(stringResource(sectionTitle(confidence)), groups.size) }
-                items(groups, key = { it.key }) { group -> GroupCard(group, Modifier.animateItem()) { onOpen(group) } }
+                item(key = "section $confidence", contentType = "section") { Box(rowMotion(reduced)) { SectionHeader(stringResource(sectionTitle(confidence)), groups.size) } }
+                items(groups, key = { it.key }, contentType = { "group" }) { group -> GroupCard(group, rowMotion(reduced)) { onOpen(group) } }
             }
         }
         if (view.trashed.isNotEmpty()) {
-            item(key = "section trashed") { SectionHeader(stringResource(R.string.dupes_section_trashed), view.trashed.size) }
-            items(view.trashed, key = { "trashed ${it.file.id}" }) { song -> TrashedRow(song, Modifier.animateItem()) { onRestore(song) } }
+            item(key = "section trashed", contentType = "section") { Box(rowMotion(reduced)) { SectionHeader(stringResource(R.string.dupes_section_trashed), view.trashed.size) } }
+            items(view.trashed, key = { "trashed ${it.file.id}" }, contentType = { "trashed" }) { song -> TrashedRow(song, rowMotion(reduced)) { onRestore(song) } }
         }
     }
 }

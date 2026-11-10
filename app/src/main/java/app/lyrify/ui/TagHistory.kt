@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -77,23 +78,28 @@ fun TagHistoryPage() {
     var undoing by remember { mutableStateOf<Long?>(null) }
     val rows by produceState<List<HistoryRow>?>(null, version) { value = withContext(Dispatchers.IO) { historyRows(TagsGraph.undo(context).memory()) } }
     PageFrame(topBar = { under, backdrop -> BackTopBar(stringResource(R.string.edit_history), under, backdrop) { nav.back() } }) { padding ->
-        val shown = rows ?: return@PageFrame
-        LazyColumn(contentPadding = PaddingValues(top = padding.calculateTopPadding() + 8.dp, bottom = padding.calculateBottomPadding() + 16.dp)) {
-            if (!access) item(key = "access") { AccessLine(Modifier.padding(horizontal = ScreenPadding, vertical = 8.dp)) }
-            if (shown.isEmpty()) {
-                item(key = "empty") {
-                    EmptyState(EmptyArt.Icon(R.drawable.ic_history), stringResource(R.string.edit_no_edits), Modifier.padding(top = 48.dp), text = stringResource(R.string.edit_history_empty))
+        FadeThrough(rows, Modifier.fillMaxSize(), kind = { it == null }) { read ->
+            val shown = read ?: return@FadeThrough
+            val reduced = LocalReducedMotion.current
+            LazyColumn(contentPadding = PaddingValues(top = padding.calculateTopPadding() + 8.dp, bottom = padding.calculateBottomPadding() + 16.dp)) {
+                if (!access) item(key = "access", contentType = "access") { AccessLine(rowMotion(reduced).padding(horizontal = ScreenPadding, vertical = 8.dp)) }
+                if (shown.isEmpty()) {
+                    item(key = "empty", contentType = "empty") {
+                        EmptyState(EmptyArt.Icon(R.drawable.ic_history), stringResource(R.string.edit_no_edits), rowMotion(reduced).padding(top = 48.dp), text = stringResource(R.string.edit_history_empty))
+                    }
                 }
-            }
-            items(shown, key = { it.id }) { row ->
-                HistoryLine(row, enabled = access && undoing == null) {
-                    undoing = row.id
-                    val app = context.applicationContext
-                    edits.launch {
-                        val result = undoEdit(app, row.id)
-                        undoing = null
-                        version++
-                        toasts.show(undoneToast(resources, result))
+                items(shown, key = { it.id }, contentType = { "edit" }) { row ->
+                    Box(rowMotion(reduced)) {
+                        HistoryLine(row, enabled = access && undoing == null) {
+                            undoing = row.id
+                            val app = context.applicationContext
+                            edits.launch {
+                                val result = undoEdit(app, row.id)
+                                undoing = null
+                                version++
+                                toasts.show(undoneToast(resources, result))
+                            }
+                        }
                     }
                 }
             }

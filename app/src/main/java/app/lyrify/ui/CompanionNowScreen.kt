@@ -163,36 +163,39 @@ fun CompanionNowScreen(
         // Messages dock at the bottom, above the gesture area.
         bottomBar = { ToastSlot(Modifier.navigationBarsPadding().padding(horizontal = ScreenPadding), padding = PaddingValues(bottom = 12.dp)) },
     ) { contentPadding ->
+        val reduced = LocalReducedMotion.current
         LazyColumn(
             state = rememberLazyListState(),
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(bottom = contentPadding.calculateBottomPadding() + 24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            item(key = "hero") {
-                NowHero(
-                    track = track,
-                    pill = nowPill(status),
-                    sweep = sweep,
-                    canRemove = removableNow.isNotEmpty(),
-                    top = contentPadding.calculateTopPadding(),
-                    banner = banner,
-                    onPill = { playingEntry?.let { sheet = it } },
-                    onWrongLyrics = { removal.ask(removableNow) },
-                )
+            item(key = "hero", contentType = "hero") {
+                Box(rowMotion(reduced)) {
+                    NowHero(
+                        track = track,
+                        pill = nowPill(status),
+                        sweep = sweep,
+                        canRemove = removableNow.isNotEmpty(),
+                        top = contentPadding.calculateTopPadding(),
+                        banner = banner,
+                        onPill = { playingEntry?.let { sheet = it } },
+                        onWrongLyrics = { removal.ask(removableNow) },
+                    )
+                }
             }
             val ai = aiTile
             if (checks > 0 || ai != null) {
-                item(key = "tiles") {
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(horizontal = ScreenPadding)) {
+                item(key = "tiles", contentType = "tiles") {
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = rowMotion(reduced).padding(horizontal = ScreenPadding)) {
                         if (checks > 0) CheckTile(checks, Modifier.weight(1f)) { onOpenChecks(null) }
                         if (ai != null) AiTileCard(ai, Modifier.weight(1f), onOpenAi)
                     }
                 }
             }
             if (failed > 0) {
-                item(key = "retry") {
-                    LyrifyCard(Modifier.fillMaxWidth().padding(horizontal = ScreenPadding)) {
+                item(key = "retry", contentType = "retry") {
+                    LyrifyCard(rowMotion(reduced).fillMaxWidth().padding(horizontal = ScreenPadding)) {
                         Box(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) { RetryRow(failed, retrying, canRetry = connected, onRetryFailed) }
                     }
                 }

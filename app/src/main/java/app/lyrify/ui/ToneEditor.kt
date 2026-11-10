@@ -502,11 +502,12 @@ private fun PreviewButton(playing: Boolean, onClick: () -> Unit) {
 /** "Start at a lyric": the song's lines with their times; tapping one starts the tone there. */
 @Composable
 private fun LyricStrip(starts: List<LrcLine>, draft: ToneDraft, onStart: (Long) -> Unit) {
+    val reduced = LocalReducedMotion.current
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         SectionTitle(stringResource(R.string.tones_start_at_lyric), Modifier.padding(horizontal = ScreenPadding))
         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(horizontal = ScreenPadding), modifier = Modifier.selectableGroup()) {
-            items(starts, key = { it.timeMs }) { line ->
-                LyrifyChip(selected = draft.fromLyric && draft.startMs == line.timeMs, onClick = { onStart(line.timeMs) }, role = Role.RadioButton) {
+            items(starts, key = { it.timeMs }, contentType = { "chip" }) { line ->
+                LyrifyChip(selected = draft.fromLyric && draft.startMs == line.timeMs, onClick = { onStart(line.timeMs) }, role = Role.RadioButton, modifier = rowMotion(reduced)) {
                     Text(toneTime(line.timeMs), style = MaterialTheme.typography.labelLarge.tabular())
                     Text(line.text, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 220.dp))
                 }
@@ -518,17 +519,18 @@ private fun LyricStrip(starts: List<LrcLine>, draft: ToneDraft, onStart: (Long) 
 /** 15, 30, 45 and 60 seconds, and "End of line" once a lyric set the start and a line ends in reach. */
 @Composable
 private fun LengthChips(draft: ToneDraft, lines: List<LrcLine>, onDraft: (ToneDraft) -> Unit) {
+    val reduced = LocalReducedMotion.current
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         SectionTitle(stringResource(R.string.tones_length), Modifier.padding(horizontal = ScreenPadding))
         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(horizontal = ScreenPadding), modifier = Modifier.selectableGroup()) {
-            items(ToneWindow.LENGTHS_MS, key = { it }) { ms ->
-                LyrifyChip(selected = !draft.lineEnd && draft.lengthMs == ms, onClick = { onDraft(draft.withLength(ms)) }, role = Role.RadioButton) {
+            items(ToneWindow.LENGTHS_MS, key = { it }, contentType = { "chip" }) { ms ->
+                LyrifyChip(selected = !draft.lineEnd && draft.lengthMs == ms, onClick = { onDraft(draft.withLength(ms)) }, role = Role.RadioButton, modifier = rowMotion(reduced)) {
                     Text(stringResource(R.string.tones_length_s, (ms / 1_000).toInt()))
                 }
             }
             if (draft.lineEndOffered(lines)) {
-                item(key = "line end") {
-                    LyrifyChip(selected = draft.lineEnd, onClick = { onDraft(draft.withLineEnd()) }, role = Role.RadioButton, icon = R.drawable.ic_lyrics) {
+                item(key = "line end", contentType = "chip") {
+                    LyrifyChip(selected = draft.lineEnd, onClick = { onDraft(draft.withLineEnd()) }, role = Role.RadioButton, modifier = rowMotion(reduced), icon = R.drawable.ic_lyrics) {
                         Text(stringResource(R.string.tones_length_line_end))
                     }
                 }
