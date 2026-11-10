@@ -263,10 +263,15 @@ private const val JPEG_MIME = "image/jpeg"
 /** At most this many covers stay in memory for the cards and the sheets. */
 private const val COVERS_KEPT = 24
 
+/** [this] song as the library will read it once Covers & tags wrote [fields]: a song's own year stays when none is written. */
+private fun Song.written(fields: SongFields): Song =
+    copy(title = fields.title, artist = fields.artist, album = fields.album, albumArtist = fields.albumArtist, track = fields.track, disc = fields.disc, year = fields.year ?: year)
+
 /**
  * Covers & tags: checks the library's albums against MusicBrainz ([source]) one at a time in [scope] while the app is
- * open, never by itself; keeps what waits for the user; applies an album through the one safe [writer] (one file at a
- * time, busy and recovering songs left as they are and listed); and takes edits back through it ([undo] holds History).
+ * open, never by itself; keeps what waits for the user; applies an album through the one safe writer ([write], T3's
+ * [writeEdit], one file at a time, busy and recovering songs left as they are and listed, favourite hearts following the
+ * album's new name); and takes edits back through it ([undoEntry], [undo] holds History).
  * Writing needs notification [access]. After an apply, each song written goes to the [lyrics] with its new names, and
  * every song written or taken back gets a new cover version ([coversChanged]). Done and Skipped albums are kept in
  * [store]; they are left out of a check until one of their files changes. Logs counts only.
@@ -274,7 +279,10 @@ private const val COVERS_KEPT = 24
 class CoversTags(
     private val songs: suspend () -> List<Song>?,
     private val source: AlbumSource,
-    private val writer: SafeWriter,
+    /** The one tag writer's write, the hearts it renames moving with it ([writeEdit]): jobs, each song before and after, kind, label. */
+    private val write: suspend (List<WriteJob>, List<Pair<Song, Song>>, EditKind, String) -> BatchResult,
+    /** Its Undo of a History entry, the hearts moving back ([undoEdit]). */
+    private val undoEntry: suspend (Long) -> BatchResult,
     private val undo: UndoStore,
     private val store: CoversTagsStore,
     private val lyrics: suspend (LocalTrack, Boolean) -> Unit,
@@ -611,8 +619,10 @@ class CoversTags(
             val path = change.song.path
             WriteJob(SongTarget(path, album.ids.getValue(path)), coversTagsEdit(change.fields, original, waiting.keepMyYear, coverFor(path, cover, opus)))
         }
-        // TODO(integration): write through T3's writeEdit (tags/TagEdits.kt, 072e137 on v3/t3-edit) once both merge.
-        return when (val result = writer.write(jobs, EditKind.COVERS_TAGS, dated.release.title)) {
+        // Each song as the library reads it now and as it will once written: a favourite album follows its new name.
+        val before = songs().orEmpty().associateBy { it.path }
+        val changed = known.mapNotNull { change -> before[change.song.path]?.let { it to it.written(change.fields) } }
+        return when (val result = write(jobs, changed, EditKind.COVERS_TAGS, dated.release.title)) {
             BatchResult.SessionsUnknown -> Applied.NoAccess
             BatchResult.NotEnoughSpace -> Applied.NotEnoughSpace
             is BatchResult.Done -> settled(waiting, dated.release, changes, result, unknown.map { SongProblem(it.song.path, SongOutcome.COULD_NOT_CHANGE) })
@@ -685,9 +695,7 @@ class CoversTags(
     }
 
     private suspend fun undoing(entryId: Long): Undone {
-        // TODO(integration): undo through T3's undoEdit(context, entryId) (tags/TagEdits.kt, 072e137 on v3/t3-edit) once
-        // both merge, so favourite hearts move back too.
-        val result = when (val batch = writer.undo(entryId)) {
+        val result = when (val batch = undoEntry(entryId)) {
             BatchResult.SessionsUnknown -> return Undone.NoAccess
             BatchResult.NotEnoughSpace -> return Undone.NotEnoughSpace
             is BatchResult.Done -> batch

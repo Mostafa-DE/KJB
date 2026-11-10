@@ -520,29 +520,55 @@ object FavouriteMoves {
  * Writes [plans] as one History entry of [kind] shown as [label], through the one tag writer, then moves the hearts
  * of the favourite albums and artists the edit renamed ([FavouriteMoves]).
  */
-suspend fun writeEdit(context: Context, plans: List<SongPlan>, kind: EditKind, label: String): BatchResult {
+suspend fun writeEdit(context: Context, plans: List<SongPlan>, kind: EditKind, label: String): BatchResult =
+    writeEdit(context, plans.mapNotNull { it.job }, plans.map { it.song to it.after }, kind, label)
+
+/**
+ * Writes [jobs] as one History entry, as [writeEdit] does plans; [changed] is each song as the library reads it now and
+ * as it will once written, for the hearts. Covers & tags writes through here, its fields being its own.
+ */
+suspend fun writeEdit(context: Context, jobs: List<WriteJob>, changed: List<Pair<Song, Song>>, kind: EditKind, label: String): BatchResult {
     val app = context.applicationContext
     val library = (LibraryGraph.repository(app).state.value as? LibraryState.Ready)?.library
-    val result = withContext(Dispatchers.IO) { TagsGraph.writer(app) }.write(plans.mapNotNull { it.job }, kind, label)
+    return writeEdit(withContext(Dispatchers.IO) { TagsGraph.writer(app) }, LibraryGraph.favourites(app), library, jobs, changed, kind, label)
+}
+
+/** [writeEdit] over its parts: [library] as it read the songs before the write. */
+internal suspend fun writeEdit(
+    writer: SafeWriter,
+    favourites: FavouritesPort,
+    library: Library?,
+    jobs: List<WriteJob>,
+    changed: List<Pair<Song, Song>>,
+    kind: EditKind,
+    label: String,
+): BatchResult {
+    val result = writer.write(jobs, kind, label)
     if (library != null && result is BatchResult.Done) {
         val written = result.writtenPaths()
-        moveHearts(app) { FavouriteMoves.of(plans.filter { it.song.path in written }.map { it.song to it.after }, library, it) }
+        moveHearts(favourites) { FavouriteMoves.of(changed.filter { it.first.path in written }, library, it) }
     }
     return result
 }
 
 /**
  * Undoes History entry [entryId], and moves back the hearts its edit moved. Every Undo of a tag edit comes here: the
- * message's Undo and History's.
+ * message's Undo, History's and Covers & tags'.
  */
 suspend fun undoEdit(context: Context, entryId: Long): BatchResult {
     val app = context.applicationContext
     // Read again first: an Undo right after its edit must see the names the edit wrote.
     val library = freshLibrary(app)
-    val entry = withContext(Dispatchers.IO) { TagsGraph.undo(app).memory() }.entries.firstOrNull { it.id == entryId }
-    val result = withContext(Dispatchers.IO) { TagsGraph.writer(app) }.undo(entryId)
+    val (writer, undo) = withContext(Dispatchers.IO) { TagsGraph.writer(app) to TagsGraph.undo(app) }
+    return undoEdit(writer, undo, LibraryGraph.favourites(app), library, entryId)
+}
+
+/** [undoEdit] over its parts: [library] as it reads the songs the edit wrote. */
+internal suspend fun undoEdit(writer: SafeWriter, undo: UndoStore, favourites: FavouritesPort, library: Library?, entryId: Long): BatchResult {
+    val entry = withContext(Dispatchers.IO) { undo.memory() }.entries.firstOrNull { it.id == entryId }
+    val result = writer.undo(entryId)
     if (library != null && entry != null && result is BatchResult.Done) {
-        moveHearts(app) { FavouriteMoves.of(FavouriteMoves.undone(entry, result.writtenPaths(), library), library, it) }
+        moveHearts(favourites) { FavouriteMoves.of(FavouriteMoves.undone(entry, result.writtenPaths(), library), library, it) }
     }
     return result
 }
@@ -550,8 +576,7 @@ suspend fun undoEdit(context: Context, entryId: Long): BatchResult {
 private fun BatchResult.Done.writtenPaths(): Set<String> =
     songs.filter { it.outcome == SongOutcome.WRITTEN || it.outcome == SongOutcome.UNDO_NOT_SAVED }.mapTo(HashSet()) { it.song.path }
 
-private suspend fun moveHearts(app: Context, moves: (List<FavouriteCollection>) -> List<FavouriteMove>) {
-    val favourites = LibraryGraph.favourites(app)
+private suspend fun moveHearts(favourites: FavouritesPort, moves: (List<FavouriteCollection>) -> List<FavouriteMove>) {
     val planned = moves(favourites.collections.first())
     if (planned.isNotEmpty() && !FavouriteMoves.apply(planned, favourites)) Log.w(LOG_TAG, "tags: ${planned.size} favourites not all moved")
 }

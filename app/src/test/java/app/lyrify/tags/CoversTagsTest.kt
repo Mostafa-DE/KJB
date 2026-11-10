@@ -1,8 +1,13 @@
 package app.lyrify.tags
 
+import app.lyrify.library.CollectionKind
+import app.lyrify.library.FavouriteCollection
+import app.lyrify.library.Library
 import app.lyrify.library.Song
 import app.lyrify.library.SongRef
+import app.lyrify.library.albumKey
 import app.lyrify.lyrics.LocalTrack
+import app.lyrify.settings.Settings
 import app.lyrify.tags.lookup.AlbumMatch
 import app.lyrify.tags.lookup.Cover
 import app.lyrify.tags.lookup.Credit
@@ -20,10 +25,10 @@ import app.lyrify.tags.lookup.Proposal
 import app.lyrify.tags.lookup.ReleaseMatch
 import app.lyrify.tags.lookup.SongFields
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
@@ -55,10 +60,16 @@ class CoversTagsTest {
     private var library: List<Song>? = emptyList()
     private val storeFile by lazy { File(folder.root, "files/covers-tags.json") }
 
+    private val favourites = FakeFavourites(emptyList())
+
+    /** The library as the app reads [library]; null while it is not read. */
+    private fun read(): Library? = library?.let { Library.of(it, Settings()) }
+
     private fun TestScope.flow(): CoversTags = CoversTags(
         songs = { library },
         source = source,
-        writer = rig.writer,
+        write = { jobs, changed, kind, label -> writeEdit(rig.writer, favourites, read(), jobs, changed, kind, label) },
+        undoEntry = { undoEdit(rig.writer, rig.undo, favourites, read(), it) },
         undo = rig.undo,
         store = CoversTagsStore(storeFile),
         lyrics = { track, changed -> handedToLyrics += track to changed },
@@ -451,6 +462,32 @@ class CoversTagsTest {
     }
 
     @Test
+    fun `a favourited album keeps its heart after a Covers & tags write and gets it back after Undo through History`() = runTest {
+        val songs = lanternsSongs()
+        library = songs
+        val heart = FavouriteCollection(CollectionKind.ALBUM, checkNotNull(albumKey(songs[0])))
+        favourites.now.value = listOf(heart)
+        answers("Lanterns" to lanterns)
+        val flow = flow()
+        val waiting = checked(flow).waiting("Lanterns")
+
+        flow.apply(waiting.album.id, waiting.match())
+
+        // The album is "Lanterns of Ulso" by Mira Solen now: its heart moved there.
+        val written = songs.map { it.copy(album = "Lanterns of Ulso", albumArtist = "Mira Solen") }
+        val moved = FavouriteCollection(CollectionKind.ALBUM, checkNotNull(albumKey(written[0])))
+        assertEquals(listOf(moved), favourites.now.value)
+
+        // History's Undo, the library reading the names the write left.
+        library = written
+        val entry = flow.state.value.history.single().id
+        undoEdit(rig.writer, rig.undo, favourites, read(), entry)
+
+        assertEquals(listOf(heart), favourites.now.value)
+        assertEquals(listOf("Lanterns"), rig.fields(songs[0].target())["ALBUM"])
+    }
+
+    @Test
     fun `undo without notification access writes nothing`() = runTest {
         library = lanternsSongs()
         answers("Lanterns" to lanterns)
@@ -636,7 +673,8 @@ class CoversTagsTest {
         // covers-tags.json can't be written: as if the app died right after the write.
         val blocked = File(folder.root, "not a folder").apply { writeText("") }
         val dying = CoversTags(
-            songs = { library }, source = source, writer = rig.writer, undo = rig.undo, store = CoversTagsStore(File(blocked, "covers-tags.json")),
+            songs = { library }, source = source, write = { jobs, _, kind, label -> rig.writer.write(jobs, kind, label) }, undoEntry = rig.writer::undo,
+            undo = rig.undo, store = CoversTagsStore(File(blocked, "covers-tags.json")),
             lyrics = { _, _ -> }, coversChanged = {}, access = { true }, scope = this,
             io = StandardTestDispatcher(testScheduler), compute = StandardTestDispatcher(testScheduler), clock = { BASE },
         )

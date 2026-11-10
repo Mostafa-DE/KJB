@@ -721,20 +721,6 @@ class TagEditsTest {
         assertEquals(emptyList<Pair<Song, Song>>(), FavouriteMoves.undone(entry, emptySet(), renamed))
     }
 
-    /** Favourites in memory, the latest first. */
-    private class FakeFavourites(start: List<FavouriteCollection>) : FavouritesPort {
-        val now = MutableStateFlow(start)
-        override val songs: Flow<List<SongRef>> = flowOf(emptyList())
-        override val collections: Flow<List<FavouriteCollection>> = now
-
-        override suspend fun setSongs(songs: List<SongRef>, favourite: Boolean): Boolean = true
-
-        override suspend fun setCollection(collection: FavouriteCollection, favourite: Boolean): Boolean {
-            now.value = if (favourite) listOf(collection) + (now.value - collection) else now.value - collection
-            return true
-        }
-    }
-
     @Test
     fun `a heart moves on at the new key and off at the old one`() {
         val favourites = FakeFavourites(listOf(artist("Mira Okafor"), artist("Kit Caloway"), artist("Kit Calloway")))
@@ -748,5 +734,19 @@ class TagEditsTest {
     private companion object {
         /** A baseline JPEG's first bytes (SOF0). */
         val JPEG: ByteArray = byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0xFF.toByte(), 0xC0.toByte(), 0, 11, 8, 0, 1, 0, 1, 1, 1, 0x11, 0)
+    }
+}
+
+/** Favourites in memory, the latest first. */
+class FakeFavourites(start: List<FavouriteCollection>) : FavouritesPort {
+    val now = MutableStateFlow(start)
+    override val songs: Flow<List<SongRef>> = flowOf(emptyList())
+    override val collections: Flow<List<FavouriteCollection>> = now
+
+    override suspend fun setSongs(songs: List<SongRef>, favourite: Boolean): Boolean = true
+
+    override suspend fun setCollection(collection: FavouriteCollection, favourite: Boolean): Boolean {
+        now.value = if (favourite) listOf(collection) + (now.value - collection) else now.value - collection
+        return true
     }
 }
