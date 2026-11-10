@@ -114,13 +114,13 @@ class LyricsIndexTest {
     }
 
     @Test
-    fun `only songs the library shows are found, by their titles as shown`() = runTest {
+    fun `only songs the library shows are found, by path, with their titles as shown`() = runTest {
         files.put(lrc(lantern), 100, lanternLyrics)
         files.put(lrc(ember), 100, emberLyrics)
         val index = index()
         index.sync(listOf(lantern, ember))
 
-        assertEquals(listOf(ember, lantern), index.find("paper", library(lantern, ember), settings).map { it.song })
+        assertEquals(listOf(lantern, ember), index.find("paper", library(lantern, ember), settings).map { it.song })
         assertEquals(listOf(lantern), index.find("paper", library(lantern), settings).map { it.song })
         val names = index.find("paper", library(lantern, ember), LibrarySettings(showFileNames = true))
         assertEquals(listOf("01 Paper Lantern.mp3", "Ember Road.flac"), names.map { it.title })
@@ -140,6 +140,22 @@ class LyricsIndexTest {
         for (syntax in listOf("\"", "*", "(", ")", "'", "-", "\"hold", "NEAR/2", "\"\"")) {
             assertEquals(syntax, emptyList<LyricHit>(), index.find(syntax, library, settings))
         }
+    }
+
+    @Test
+    fun `a search reads one page of songs, by path, and counts them all apart`() = runTest {
+        val songs = (1..9).map { song("Music/Made Up/Song $it.mp3", title = "Song $it") }
+        songs.reversed().forEach { files.put(lrc(it), 100, "[00:01.00]Paper boats on the river\n") }
+        val index = index()
+        index.sync(songs.reversed())
+        val library = library(*songs.toTypedArray())
+
+        assertEquals(9, index.count("p"))
+        assertEquals(songs.take(4), index.find("p", library, settings, limit = 4).map { it.song })
+        assertEquals(4, store.read)
+        assertEquals(songs.drop(8), index.find("p", library, settings, from = 8, limit = 4).map { it.song })
+        assertEquals(0, index.count("harbour"))
+        assertEquals(0, index.count("\""))
     }
 
     // Keeping up to date
@@ -319,16 +335,26 @@ private class FakeLyricsIndexStore : LyricsIndexStore {
     private val songs = linkedMapOf<String, IndexedSong>()
     var failing = false
 
+    /** How many lines the last [find] gave. */
+    var read = 0
+
     override fun indexed(): Map<String, Long> = checked { songs.mapValues { it.value.modifiedAt } }
 
     override fun put(songs: List<IndexedSong>) = checked { songs.forEach { this.songs[it.path] = it } }
 
     override fun remove(songs: Collection<String>) = checked { songs.forEach { this.songs.remove(it) } }
 
-    override suspend fun find(words: List<String>): List<StoredLine> = checked {
+    override suspend fun find(words: List<String>, from: Int, limit: Int): List<StoredLine> = checked {
+        matching(words).drop(from).take(limit).also { read = it.size }
+    }
+
+    override suspend fun count(words: List<String>): Int = checked { matching(words).size }
+
+    /** By path, as SQLite's NOCASE has it for these ASCII paths. */
+    private fun matching(words: List<String>): List<StoredLine> {
         val phrase = " " + fold(words.joinToString(" "))
-        if (phrase.isBlank()) return@checked emptyList()
-        songs.values.mapNotNull { song ->
+        if (phrase.isBlank()) return emptyList()
+        return songs.values.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.path }).mapNotNull { song ->
             song.lines.firstOrNull { (" " + it.folded).contains(phrase) }?.let { StoredLine(song.path, it.timeMs, it.text) }
         }
     }

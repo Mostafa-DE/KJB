@@ -1,5 +1,6 @@
 package app.lyrify.ui
 
+import android.content.Context
 import androidx.annotation.DrawableRes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -36,8 +37,10 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -69,6 +72,7 @@ import app.lyrify.library.LibraryGraph
 import app.lyrify.library.LibraryState
 import app.lyrify.library.PlaylistsState
 import app.lyrify.library.Song
+import app.lyrify.library.SongRef
 import app.lyrify.library.mostPlayed
 import app.lyrify.library.recentlyAdded
 import app.lyrify.library.recentlyPlayed
@@ -86,6 +90,8 @@ import app.lyrify.settings.LibrarySettings
 import app.lyrify.stats.PlaysQuery
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 // Search's pages: the field with recent searches or results, and "View all" of one group.
@@ -93,7 +99,10 @@ import kotlinx.coroutines.withContext
 /** A list Search finds by its name: a built-in list or one of the user's playlists, the [page] it opens, how many [songs]. */
 data class ListRow(val page: Page, val name: String, val songs: Int, @DrawableRes val icon: Int)
 
-/** What a search for [query] found, each group ranked; [lyrics] is null while the lyrics are still being searched. */
+/**
+ * What a search for [query] found, each group ranked. [lyrics] is null while the lyrics are still being searched, else
+ * the songs read so far (the first [SEARCH_PREVIEW], or the pages "View all" read), and [lyricsCount] how many there are.
+ */
 data class SearchResults(
     val query: String,
     val songs: List<Hit<Song>> = emptyList(),
@@ -102,8 +111,9 @@ data class SearchResults(
     val folders: List<Hit<Folder>> = emptyList(),
     val lists: List<Hit<ListRow>> = emptyList(),
     val lyrics: List<LyricHit>? = null,
+    val lyricsCount: Int = lyrics?.size ?: 0,
 ) {
-    /** What a song tapped in the results plays ("Search · words"): the song results, then the songs found only by their lyrics. */
+    /** What a song tapped in the results plays ("Search · words"): the song results, then the [lyrics] read, if not among them. */
     val queue: List<Song> get() = searchQueue(songs.map { it.item }, lyrics.orEmpty().map { it.song })
 
     fun count(group: SearchGroup): Int = when (group) {
@@ -112,7 +122,7 @@ data class SearchResults(
         SearchGroup.ALBUMS -> albums.size
         SearchGroup.FOLDERS -> folders.size
         SearchGroup.PLAYLISTS -> lists.size
-        SearchGroup.LYRICS -> lyrics.orEmpty().size
+        SearchGroup.LYRICS -> if (lyrics == null) 0 else lyricsCount
     }
 }
 
@@ -223,7 +233,9 @@ fun SearchPage() {
 fun SearchAllPage(page: Page.SearchAll) {
     val nav = LocalNavigator.current
     val context = LocalContext.current
-    val results = rememberSearchResults(page.query)
+    val scope = rememberCoroutineScope()
+    val list = rememberLazyListState()
+    val results = rememberSearchResults(page.query, lyricPages = list.takeIf { page.group == SearchGroup.LYRICS })
     val recent = remember(context) { SearchGraph.recent(context) }
     val commands = remember(context) { Lyrify.playback(context) }
     val play = rememberPlay { recent.add(page.query) }
@@ -238,7 +250,7 @@ fun SearchAllPage(page: Page.SearchAll) {
             )
         },
     ) { padding ->
-        LazyColumn(Modifier.padding(padding).consumeWindowInsets(padding).fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+        LazyColumn(Modifier.padding(padding).consumeWindowInsets(padding).fillMaxSize(), state = list, contentPadding = PaddingValues(bottom = 16.dp)) {
             if (results == null) return@LazyColumn
             val songs = when (page.group) {
                 SearchGroup.SONGS -> results.songs.map { it.item }
@@ -250,10 +262,14 @@ fun SearchAllPage(page: Page.SearchAll) {
                     GroupHeader(ResultGroup(page.group, results.count(page.group)), onViewAll = null)
                 } else {
                     val source = searchSource(page.query)
+                    // In lyrics has read only the pages shown: Shuffle and Play read every song found.
+                    fun every(start: (List<SongRef>) -> Unit) {
+                        if (page.group == SearchGroup.LYRICS) scope.launch { start(lyricSongs(context, page.query).map { it.ref }) } else start(songs.map { it.ref })
+                    }
                     SongsHeader(
-                        count = songs.size,
-                        onShuffle = { commands.shuffle(songs.map { it.ref }, source) },
-                        onPlay = { commands.play(songs.map { it.ref }, 0, source) },
+                        count = results.count(page.group),
+                        onShuffle = { every { commands.shuffle(it, source) } },
+                        onPlay = { every { commands.play(it, 0, source) } },
                     )
                 }
             }
@@ -264,11 +280,12 @@ fun SearchAllPage(page: Page.SearchAll) {
 
 /**
  * Search's results for [query] as it is typed: the library's names at once, the lyrics a moment later (each key press
- * starts over), again when the library, the playlists or the lyrics index change. Null while [query] is blank or the
- * library is not read yet.
+ * starts over), again when the library, the playlists or the lyrics index change. In lyrics reads its first
+ * [SEARCH_PREVIEW] songs, or with [lyricPages] ("View all" of In lyrics) a page at a time as that list nears the end of
+ * those read. Null while [query] is blank or the library is not read yet.
  */
 @Composable
-private fun rememberSearchResults(query: String): SearchResults? {
+private fun rememberSearchResults(query: String, lyricPages: LazyListState? = null): SearchResults? {
     val context = LocalContext.current
     val state by remember(context) { LibraryGraph.repository(context).state }.collectAsStateWithLifecycle()
     val playlists by remember(context) { LibraryGraph.playlists(context).state }.collectAsStateWithLifecycle(null)
@@ -293,8 +310,22 @@ private fun rememberSearchResults(query: String): SearchResults? {
         value = withContext(Dispatchers.Default) { namedResults(query, byName.find(query), ranked(lists, query) { it.name }, before) }
         // New words: the lyrics are searched once typing pauses (each key press starts over).
         if (before?.query != query) delay(LYRICS_DELAY_MS)
-        val inLyrics = withContext(Dispatchers.Default) { lyrics.find(query, searched, shown) }
-        value = value?.copy(lyrics = inLyrics)
+        val total = lyrics.count(query)
+        if (lyricPages == null) {
+            val first = withContext(Dispatchers.Default) { lyrics.find(query, searched, shown, limit = SEARCH_PREVIEW) }
+            value = value?.copy(lyrics = first, lyricsCount = total)
+            return@produceState
+        }
+        var read = emptyList<LyricHit>()
+        var from = 0
+        do {
+            read = read + withContext(Dispatchers.Default) { lyrics.find(query, searched, shown, from, LYRICS_PAGE) }
+            from += LYRICS_PAGE
+            value = value?.copy(lyrics = read, lyricsCount = total)
+            // The next page once the list comes within half a page of the rows read (its first item is the header).
+            val rows = read.size
+            snapshotFlow { lyricPages.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0 }.first { it >= rows - LYRICS_PAGE / 2 }
+        } while (from < total)
     }
     return results
 }
@@ -304,8 +335,17 @@ private fun rememberSearchResults(query: String): SearchResults? {
  * library or the playlists changed), so it does not blink. New words wait for their own: the last words' lyric rows never
  * show under them or join their queue.
  */
-fun namedResults(query: String, found: LibraryHits, lists: List<Hit<ListRow>>, before: SearchResults?): SearchResults =
-    SearchResults(query, found.songs, found.artists, found.albums, found.folders, lists, before?.takeIf { it.query == query }?.lyrics)
+fun namedResults(query: String, found: LibraryHits, lists: List<Hit<ListRow>>, before: SearchResults?): SearchResults {
+    val kept = before?.takeIf { it.query == query }
+    return SearchResults(query, found.songs, found.artists, found.albums, found.folders, lists, kept?.lyrics, kept?.lyricsCount ?: 0)
+}
+
+/** Every song In lyrics finds for [query], for Shuffle and Play in its "View all", whose list reads only the pages shown. */
+private suspend fun lyricSongs(context: Context, query: String): List<Song> {
+    val library = (LibraryGraph.repository(context).state.value as? LibraryState.Ready)?.library ?: return emptyList()
+    val settings = Lyrify.settings(context).settings.first().library
+    return withContext(Dispatchers.Default) { SearchGraph.lyrics(context).find(query, library, settings).map { it.song } }
+}
 
 /** The built-in lists, then the user's playlists, each with how many of its songs the library shows. Off the main thread. */
 private suspend fun listRows(library: Library, playlists: PlaylistsState, names: Map<BuiltInList, String>, plays: PlaysQuery): List<ListRow> =
@@ -585,3 +625,6 @@ private fun groupLabel(group: SearchGroup): String = stringResource(
 
 /** After the last key press, before the lyrics are searched: the names show at once, the lyrics once typing pauses. */
 private const val LYRICS_DELAY_MS: Long = 150
+
+/** Songs "View all" of In lyrics reads at a time. */
+private const val LYRICS_PAGE: Int = 50

@@ -77,6 +77,17 @@ class SearchScreenTest {
     }
 
     @Test
+    fun `In lyrics counts every song found while it holds only the first page`() {
+        val page = results.copy(lyrics = lyricHits(songs.take(4)), lyricsCount = 9)
+
+        assertEquals(9, page.count(SearchGroup.LYRICS))
+        assertTrue(resultGroups(page).single { it.group == SearchGroup.LYRICS }.viewAll)
+        assertEquals(4, shownCount(page, SearchGroup.LYRICS, all = false))
+        assertEquals(0, page.copy(lyrics = null).count(SearchGroup.LYRICS))
+        assertEquals(9, namedResults("lantern", LibraryHits(), emptyList(), page).lyricsCount)
+    }
+
+    @Test
     fun `new words never keep the last words' lyric rows, while the same words keep theirs until new ones are in`() {
         val found = LibraryHits(songs = songHits(songs.take(2)))
 

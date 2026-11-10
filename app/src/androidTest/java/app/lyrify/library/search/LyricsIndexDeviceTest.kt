@@ -73,6 +73,18 @@ class LyricsIndexDeviceTest {
         assertEquals(emptyMap<String, Long>(), store.indexed())
     }
 
+    /** A search reads one page of songs, by path, and counts them all with a query of its own. */
+    @Test
+    fun aSearchReadsOnePageByPathAndCountsApart() = runBlocking {
+        (9 downTo 1).forEach { n -> store.put(listOf(song("/made/up/Song $n.mp3", 1, "[00:01.00]Paper boats on the river\n"))) }
+
+        assertEquals(9, store.count(listOf("p")))
+        assertEquals((1..4).map { "/made/up/Song $it.mp3" }, store.find(listOf("p"), 0, 4).map { it.song })
+        assertEquals(listOf("/made/up/Song 9.mp3"), store.find(listOf("p"), 8, 4).map { it.song })
+        assertEquals(0, store.count(listOf("harbour")))
+        assertEquals(0, store.count(listOf("\"")))
+    }
+
     /** Other scripts are words to the unicode61 tokenizer, and nothing typed reaches MATCH as its syntax. */
     @Test
     fun otherScriptsAreFoundAndQuerySyntaxNeverFails() = runBlocking {
@@ -93,7 +105,8 @@ class LyricsIndexDeviceTest {
 
     /**
      * The cost of the index: [SONGS] made-up songs of about 40 lines (a chorus repeated), built in batches as a sync
-     * does, then a one-letter search (the worst case). The log gets the time, the size and the counts.
+     * does, then a one-letter search (the worst case): its count and its first page, as Search reads them. The log gets
+     * the time, the size and the counts.
      */
     @Test
     fun buildTimeAndSize() = runBlocking {
@@ -110,9 +123,11 @@ class LyricsIndexDeviceTest {
         val built = SystemClock.elapsedRealtime() - started
         val size = context.getDatabasePath(NAME).length() + context.getDatabasePath("$NAME-wal").length()
         val searched = SystemClock.elapsedRealtime()
-        val found = store.find(listOf(words.first().take(1)))
+        val letter = listOf(words.first().take(1))
+        val found = store.count(letter)
+        val page = store.find(letter, 0, 4)
         val took = SystemClock.elapsedRealtime() - searched
-        Log.i(LOG_TAG, "search device test: $SONGS songs, ${songs.sumOf { it.lines.size }} lines, built in $built ms, ${size / 1024} KB; one letter found ${found.size} songs in $took ms")
+        Log.i(LOG_TAG, "search device test: $SONGS songs, ${songs.sumOf { it.lines.size }} lines, built in $built ms, ${size / 1024} KB; one letter found $found songs, ${page.size} read, in $took ms")
 
         assertEquals(SONGS, store.indexed().size)
         assertTrue("built in $built ms", built < MAX_BUILD_MS)
