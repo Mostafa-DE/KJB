@@ -58,7 +58,7 @@
     <string name="setup_notifications_detail">Only for music you play in other apps.</string>
     <string name="setup_notifications_action">Open notification access</string>
     <string name="setup_files_title">Save lyrics files</string>
-    <string name="setup_files_detail">Next to your songs. KJB never changes your music on its own.</string>
+    <string name="setup_files_detail">Next to your songs. KJB changes a song file only when you confirm, and only its tags and cover, never the music. You can undo every change.</string>
     <string name="setup_allow">Allow</string>
     <string name="setup_not_now">Not now</string>
     <string name="setup_continue">Continue</string>
@@ -71,7 +71,7 @@
     <!-- TalkBack name of the help button on the Keep running card. -->
     <string name="setup_battery_help">How to keep KJB running</string>
     <string name="setup_battery_sheet">In App info, open Battery and choose Unrestricted. If your phone has a list of apps that never sleep, add KJB.</string>
-    <string name="setup_privacy">Only title, artist, album and length leave your phone.</string>
+    <string name="setup_privacy">Only names and lengths leave your phone. Lyrics lookups send the title, artist, album and length to LRCLIB. Covers &amp; tags sends album titles, artists, song titles, track counts and lengths to MusicBrainz, and gets covers from the Cover Art Archive and archive.org.</string>
     <string name="open_app_info">Open App info</string>
 
     <!-- Now -->

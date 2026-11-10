@@ -1,4 +1,175 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Covers and tags, Edit tags (milestones T2 and T3). -->
 <resources>
+    <!-- The row on Tools and at the top of Songs -->
+    <string name="tags_find">Find covers &amp; tags</string>
+    <string name="tags_line_start">Names and covers from MusicBrainz</string>
+    <string name="tags_line_checking">Checking your albums</string>
+    <string name="tags_line_none">Nothing to review</string>
+    <plurals name="tags_to_review">
+        <item quantity="one">%d album to review</item>
+        <item quantity="other">%d albums to review</item>
+    </plurals>
+    <plurals name="tags_albums_changed">
+        <item quantity="one">%d album changed</item>
+        <item quantity="other">%d albums changed</item>
+    </plurals>
+
+    <!-- The page -->
+    <string name="tags_intro">KJB looks your albums up on MusicBrainz and shows what would change. Nothing changes until you confirm.</string>
+    <string name="tags_check">Check my albums</string>
+    <string name="tags_checking">Checking %1$s/%2$s</string>
+    <string name="tags_checking_start">Reading your albums</string>
+    <plurals name="tags_checking_albums">
+        <item quantity="one">Checking %d album</item>
+        <item quantity="other">Checking %d albums</item>
+    </plurals>
+    <string name="tags_cancel">Cancel</string>
+    <string name="tags_busy">MusicBrainz is busy</string>
+    <string name="tags_unreadable">KJB can\'t read your songs right now.</string>
+    <plurals name="tags_not_checked">
+        <item quantity="one">Couldn\'t check %d album</item>
+        <item quantity="other">Couldn\'t check %d albums</item>
+    </plurals>
+    <string name="tags_no_access">Changes need notification access</string>
+    <string name="tags_turn_on">Turn on</string>
+    <string name="tags_history">History</string>
+    <plurals name="tags_edits">
+        <item quantity="one">%d edit</item>
+        <item quantity="other">%d edits</item>
+    </plurals>
+    <string name="tags_no_edits">No edits yet</string>
+
+    <!-- Sections -->
+    <string name="tags_ready">Ready</string>
+    <string name="tags_pick_one">Pick one</string>
+    <string name="tags_done">Done</string>
+    <string name="tags_skipped">Skipped</string>
+    <string name="tags_apply_all">Apply all</string>
+    <string name="tags_use">Use</string>
+    <string name="tags_search_myself">Search myself</string>
+    <string name="tags_skip">Skip</string>
+    <string name="tags_undo">Undo</string>
+    <string name="tags_undo_fields">Undo fields</string>
+    <string name="tags_check_again">Check again</string>
+    <string name="tags_no_match">No match found</string>
+    <string name="tags_samsung_note">If your music app still shows old names, give it a minute, or clear its cache.</string>
+    <plurals name="tags_changes">
+        <item quantity="one">%d change</item>
+        <item quantity="other">%d changes</item>
+    </plurals>
+    <string name="tags_cover_only">Cover only</string>
+    <plurals name="tags_fit">
+        <item quantity="one">%1$d of %2$d song fits</item>
+        <item quantity="other">%1$d of %2$d songs fit</item>
+    </plurals>
+    <plurals name="tags_songs">
+        <item quantity="one">%d song</item>
+        <item quantity="other">%d songs</item>
+    </plurals>
+    <plurals name="tags_songs_changed">
+        <item quantity="one">%d song changed</item>
+        <item quantity="other">%d songs changed</item>
+    </plurals>
+    <plurals name="tags_songs_left">
+        <item quantity="one">%d song couldn\'t change</item>
+        <item quantity="other">%d songs couldn\'t change</item>
+    </plurals>
+    <string name="tags_nothing_to_change">Nothing to change</string>
+    <string name="tags_undo_expired">Undo has expired</string>
+    <string name="tags_two_parts">%1$s · %2$s</string>
+
+    <!-- The album sheet -->
+    <string name="tags_old_cover">Now</string>
+    <string name="tags_new_cover">New</string>
+    <string name="tags_old_new">%1$s → %2$s</string>
+    <string name="tags_empty_value">None</string>
+    <string name="tags_field_title">Title</string>
+    <string name="tags_field_artist">Artist</string>
+    <string name="tags_field_album">Album</string>
+    <string name="tags_field_album_artist">Album artist</string>
+    <string name="tags_field_track">Track</string>
+    <string name="tags_field_disc">Disc</string>
+    <string name="tags_field_year">Year</string>
+    <string name="tags_keep_year">Keep my year</string>
+    <string name="tags_keep_year_text">Songs that have a year keep it. Off, every song gets the album\'s first year.</string>
+    <string name="tags_apply">Apply</string>
+    <string name="tags_not_this_one">Not this one</string>
+    <plurals name="tags_unpaired">
+        <item quantity="one">%d song matches no track and stays as it is.</item>
+        <item quantity="other">%d songs match no track and stay as they are.</item>
+    </plurals>
+    <string name="tags_opus_note">Opus songs keep their own cover: even a small one is too big for them.</string>
+    <string name="tags_what_changed">What changed</string>
+
+    <!-- Confirming -->
+    <plurals name="tags_apply_all_title">
+        <item quantity="one">Change %d album?</item>
+        <item quantity="other">Change %d albums?</item>
+    </plurals>
+    <plurals name="tags_apply_all_text">
+        <item quantity="one">KJB writes the new names and covers into %d song. You can undo each album.</item>
+        <item quantity="other">KJB writes the new names and covers into %d songs. You can undo each album.</item>
+    </plurals>
+    <string name="tags_apply_one_title">Change this album?</string>
+    <plurals name="tags_apply_one_text">
+        <item quantity="one">KJB writes the new names and cover into %d song. You can undo it.</item>
+        <item quantity="other">KJB writes the new names and cover into %d songs. You can undo it.</item>
+    </plurals>
+    <string name="tags_sync_note">Changed songs get a new date, so backup or sync apps may upload them again.</string>
+
+    <!-- Search myself -->
+    <string name="tags_search">Search</string>
+    <string name="tags_search_none">Nothing found. Try other words.</string>
+
+    <!-- What happened to a song -->
+    <string name="tags_outcome_written">Changed</string>
+    <string name="tags_outcome_unchanged">Nothing to change</string>
+    <string name="tags_outcome_changed_since">Changed again since, kept</string>
+    <string name="tags_outcome_different">A different file now, skipped</string>
+    <string name="tags_outcome_busy">In use, left as it was</string>
+    <string name="tags_outcome_not_allowed">Outside the test folder</string>
+    <string name="tags_outcome_could_not">Couldn\'t change</string>
+    <string name="tags_outcome_left">Couldn\'t change, left as it was</string>
+    <string name="tags_outcome_recovery">Left until KJB restarts</string>
+    <string name="tags_outcome_undo_not_saved">Changed, Undo not saved</string>
+    <string name="tags_outcome_not_tried">Not tried</string>
+
+    <!-- Messages -->
+    <plurals name="tags_applied">
+        <item quantity="one">Changed %d album</item>
+        <item quantity="other">Changed %d albums</item>
+    </plurals>
+    <plurals name="tags_not_applied">
+        <item quantity="one">%d album wasn\'t changed</item>
+        <item quantity="other">%d albums weren\'t changed</item>
+    </plurals>
+    <string name="tags_need_access">Turn on notification access first</string>
+    <string name="tags_no_space">Not enough space on your phone</string>
+    <string name="tags_failed">Couldn\'t reach MusicBrainz</string>
+    <string name="tags_gone">That album changed meanwhile</string>
+    <string name="tags_in_progress">KJB is still changing your songs</string>
+    <string name="tags_changed_since">This album changed since the check. Check it again.</string>
+    <plurals name="tags_applied_then_busy">
+        <item quantity="one">Changed %d album, then MusicBrainz was busy</item>
+        <item quantity="other">Changed %d albums, then MusicBrainz was busy</item>
+    </plurals>
+    <plurals name="tags_applied_then_space">
+        <item quantity="one">Changed %d album, then your phone ran out of space</item>
+        <item quantity="other">Changed %d albums, then your phone ran out of space</item>
+    </plurals>
+    <plurals name="tags_applied_then_access">
+        <item quantity="one">Changed %d album, then notification access went off</item>
+        <item quantity="other">Changed %d albums, then notification access went off</item>
+    </plurals>
+    <string name="tags_undone">Undone</string>
+    <plurals name="tags_undone_kept">
+        <item quantity="one">Undone. %d field changed since was kept</item>
+        <item quantity="other">Undone. %d fields changed since were kept</item>
+    </plurals>
+    <plurals name="tags_undone_skipped">
+        <item quantity="one">Undone. %d song changed since was skipped</item>
+        <item quantity="other">Undone. %d songs changed since were skipped</item>
+    </plurals>
+
 </resources>

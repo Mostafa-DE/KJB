@@ -33,6 +33,9 @@ data class Payload(
     val layout: String? = null,
 )
 
+/** The start of a song's audio payload, hashed ([PayloadHash.slice]); [whole] when that was all of it. */
+data class PayloadSlice(val format: AudioFormat, val sha256: String, val whole: Boolean)
+
 /**
  * The one audio payload hash, used by the writer's checks, by Undo and by Duplicates. It covers the audio data only,
  * so a retag never changes it:
@@ -49,17 +52,29 @@ data class Payload(
  */
 object PayloadHash {
     /** [path]'s payload, or null when its format is not allowed or the file is not well formed. */
-    fun of(path: Path): Payload? {
+    fun of(path: Path): Payload? = read(path, Long.MAX_VALUE)?.payload
+
+    /**
+     * The first [bytes] of [path]'s audio payload (all of it when shorter), hashed as [of] hashes it, without M4A's
+     * chunk layout: equal for two copies of one song whatever their tags, and cheap, since it reads only the start of
+     * the audio. Duplicates' prefilter. Null as for [of].
+     */
+    fun slice(path: Path, bytes: Long): PayloadSlice? = read(path, bytes)?.let { PayloadSlice(it.payload.format, it.payload.sha256, it.whole) }
+
+    /** A payload hashed up to a limit: [whole] when the limit left nothing out. */
+    private class Read(val payload: Payload, val whole: Boolean)
+
+    private fun read(path: Path, limit: Long): Read? {
         val extension = path.fileName?.toString()?.substringAfterLast('.', "")?.lowercase() ?: return null
         if (extension !in AudioFormat.EXTENSIONS) return null
         return try {
             FileInputStream(path.toFile()).use { input ->
                 val file = Reader(input.channel)
                 when (extension) {
-                    "mp3" -> mp3(file)
-                    "flac" -> flac(file)
-                    "m4a" -> m4a(file)
-                    else -> ogg(file)
+                    "mp3" -> mp3(file, limit)
+                    "flac" -> flac(file, limit)
+                    "m4a" -> m4a(file, limit)
+                    else -> ogg(file, limit)
                 }
             }
         } catch (_: IOException) {
@@ -67,6 +82,12 @@ object PayloadHash {
         } catch (_: Malformed) {
             null
         }
+    }
+
+    /** [from] to [to] of [file], or its first [limit] bytes. */
+    private fun range(file: Reader, format: AudioFormat, from: Long, to: Long, limit: Long): Read {
+        val stop = if (to - from > limit) from + limit else to
+        return Read(Payload(format, file.hash(from, stop)), stop == to)
     }
 
     /** SHA-256 (hex) of every byte of the file at [path]. */
@@ -77,17 +98,17 @@ object PayloadHash {
         digest.hex()
     }
 
-    private fun mp3(file: Reader): Payload {
+    private fun mp3(file: Reader, limit: Long): Read {
         val start = id3v2End(file, 0)
         val end = id3v1Start(file, start)
         // Real MPEG audio starts with a frame header within the first bytes after the tag.
         val head = file.read(start, minOf(SYNC_WINDOW, end - start).toInt())
         val synced = (0 until head.size - 3).any { mpegFrameHeader(head, it) }
         if (!synced) throw Malformed()
-        return Payload(AudioFormat.MP3, file.hash(start, end))
+        return range(file, AudioFormat.MP3, start, end, limit)
     }
 
-    private fun flac(file: Reader): Payload {
+    private fun flac(file: Reader, limit: Long): Read {
         var at = id3v2End(file, 0)
         if (!file.read(at, 4).contentEquals(FLAC_MAGIC)) throw Malformed()
         at += 4
@@ -104,7 +125,7 @@ object PayloadHash {
         val end = id3v1Start(file, at)
         val sync = file.read(at, 2)
         if (sync[0] != 0xFF.toByte() || sync[1].toInt() and 0xFE != 0xF8) throw Malformed()
-        return Payload(AudioFormat.FLAC, file.hash(at, end))
+        return range(file, AudioFormat.FLAC, at, end, limit)
     }
 
     private class Box(val type: String, val start: Long, val bodyStart: Long, val end: Long)
@@ -128,7 +149,7 @@ object PayloadHash {
         }
     }
 
-    private fun m4a(file: Reader): Payload {
+    private fun m4a(file: Reader, limit: Long): Read {
         val top = boxes(file, 0, file.size)
         if (top.firstOrNull()?.type != "ftyp" || top.any { it.type == "moof" }) throw Malformed()
         val moov = top.singleOrNull { it.type == "moov" } ?: throw Malformed()
@@ -136,7 +157,14 @@ object PayloadHash {
         if (mdats.isEmpty()) throw Malformed()
 
         val audio = sha256()
-        mdats.forEach { file.digest(audio, it.bodyStart, it.end) }
+        var left = limit
+        for (mdat in mdats) {
+            val take = minOf(mdat.end - mdat.bodyStart, left)
+            file.digest(audio, mdat.bodyStart, mdat.bodyStart + take)
+            left -= take
+        }
+        // A slice: the start of the audio, without the chunk layout.
+        if (mdats.sumOf { it.end - it.bodyStart } > limit) return Read(Payload(AudioFormat.M4A, audio.hex()), whole = false)
 
         // Each chunk offset as a place in the audio data: the mdat bodies one after another.
         val layout = sha256()
@@ -165,11 +193,12 @@ object PayloadHash {
                 layout.update(ByteBuffer.allocate(8).putLong(place).array())
             }
         }
-        return Payload(AudioFormat.M4A, audio.hex(), layout.hex())
+        return Read(Payload(AudioFormat.M4A, audio.hex(), layout.hex()), whole = true)
     }
 
-    private fun ogg(file: Reader): Payload {
+    private fun ogg(file: Reader, limit: Long): Read {
         val digest = sha256()
+        var digested = 0L
         var format: AudioFormat? = null
         var headers = Int.MAX_VALUE
         var serial: Int? = null
@@ -198,7 +227,15 @@ object PayloadHash {
                         else -> throw Malformed()
                     }
                 }
-                if (packet >= headers) digest.update(body, offset, length)
+                if (packet >= headers) {
+                    // A slice ends inside the audio: what was read so far.
+                    if (length > limit - digested) {
+                        digest.update(body, offset, (limit - digested).toInt())
+                        return Read(Payload(checkNotNull(format), digest.hex()), whole = false)
+                    }
+                    digest.update(body, offset, length)
+                    digested += length
+                }
                 packetLength += length
                 offset += length
                 if (length < 255) {
@@ -210,7 +247,7 @@ object PayloadHash {
             at += 27 + lacing.size + body.size
         }
         if (format == null || packet <= headers || packetLength != 0L) throw Malformed()
-        return Payload(format, digest.hex())
+        return Read(Payload(format, digest.hex()), whole = true)
     }
 
     /** Where the ID3v2 tag at [at] ends (with its footer), or [at] when there is none. */

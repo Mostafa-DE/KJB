@@ -4,11 +4,16 @@ import android.content.Context
 import android.os.StrictMode
 import android.os.storage.StorageManager
 import android.util.Log
+import androidx.core.app.NotificationManagerCompat
 import app.lyrify.LOG_TAG
 import app.lyrify.Lyrify
+import app.lyrify.library.LibraryGraph
+import app.lyrify.library.LibraryState
 import app.lyrify.logFailures
 import app.lyrify.media.TrackResolver
 import app.lyrify.tags.lookup.AlbumLookup
+import app.lyrify.tags.lookup.AndroidImageCodec
+import app.lyrify.tags.lookup.CoverPipeline
 import app.lyrify.tags.lookup.MetaCache
 import app.lyrify.tags.lookup.MetaClient
 import app.lyrify.tags.lookup.MusicBrainz
@@ -16,6 +21,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.io.File
 import java.io.IOException
@@ -33,8 +39,10 @@ object TagsGraph {
     private val recovered = CompletableDeferred<Unit>()
     private var parts: Parts? = null
     private var writer: SafeWriter? = null
+    private var client: MetaClient? = null
     private var lookup: AlbumLookup? = null
     private var keptApart: KeptApart? = null
+    private var coversTags: CoversTags? = null
     private var recovering = false
 
     private class Parts(context: Context) {
@@ -105,10 +113,7 @@ object TagsGraph {
      * checks and Edit tags' Find online take turns.
      */
     @Synchronized
-    fun lookup(context: Context): AlbumLookup = lookup ?: run {
-        val app = context.applicationContext
-        AlbumLookup(MusicBrainz(MetaClient(MetaCache(File(app.cacheDir, "tag-cache")), log = ::log)), ::log)
-    }.also { lookup = it }
+    fun lookup(context: Context): AlbumLookup = lookup ?: AlbumLookup(MusicBrainz(client(context)), ::log).also { lookup = it }
 
     /** History and Undo's records, for the History list. */
     fun undo(context: Context): UndoStore = parts(context.applicationContext).undo
@@ -117,6 +122,28 @@ object TagsGraph {
     @Synchronized
     fun keptApart(context: Context): KeptApart =
         keptApart ?: KeptApart(File(context.applicationContext.filesDir, "same-names.json"), ::log).also { keptApart = it }
+
+    /** Covers & tags: its check, review, apply and Undo, over the library, the one lookup and the one writer. */
+    @Synchronized
+    fun coversTags(context: Context): CoversTags = coversTags ?: run {
+        val app = context.applicationContext
+        CoversTags(
+            songs = { (LibraryGraph.repository(app).state.first { it !is LibraryState.Loading } as? LibraryState.Ready)?.library?.all },
+            source = PhoneAlbumSource(lookup(app), CoverPipeline(AndroidImageCodec), client(app).busy),
+            writer = writer(app),
+            undo = parts(app).undo,
+            store = CoversTagsStore(File(app.filesDir, "covers-tags.json"), ::log),
+            lyrics = { track, changed -> Lyrify.pipeline(app).retagged(track, changed) },
+            coversChanged = CoverVersions::bump,
+            access = { app.packageName in NotificationManagerCompat.getEnabledListenerPackages(app) },
+            scope = background,
+            log = ::log,
+        )
+    }.also { coversTags = it }
+
+    @Synchronized
+    private fun client(context: Context): MetaClient =
+        client ?: MetaClient(MetaCache(File(context.applicationContext.cacheDir, "tag-cache")), log = ::log).also { client = it }
 
     @Synchronized
     private fun parts(context: Context): Parts = parts ?: Parts(context).also { parts = it }

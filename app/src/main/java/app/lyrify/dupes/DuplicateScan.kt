@@ -4,6 +4,7 @@ import android.content.ContentResolver
 import android.database.Cursor
 import android.provider.MediaStore
 import app.lyrify.data.SharedWrites
+import app.lyrify.tags.PayloadHash
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import java.io.File
@@ -17,33 +18,44 @@ import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 
 /**
- * Content hashes of audio files, read-only: SHA-256 over the first and last [sliceBytes] ([partial]), or over every
- * byte ([full]) for a file under [fullLimit]. A file is only ever opened for reading, and never read past those
- * slices except for the full hash.
+ * Content hashes of audio files, read-only. A song in a format the tag engine knows is hashed by its audio payload
+ * alone ([PayloadHash]), so two copies with other tags hash the same: [partial] covers the payload's first [sliceBytes],
+ * [full] all of it. Any other file by its bytes: the first and last [sliceBytes] ([partial]), or every byte ([full]) for
+ * a file under [fullLimit]. A file is only ever opened for reading.
  */
 class ContentHasher(
     private val sliceBytes: Int = SLICE_BYTES,
     private val fullLimit: Long = FULL_LIMIT,
     private val open: (Path) -> SeekableByteChannel = { Files.newByteChannel(it, StandardOpenOption.READ) },
 ) {
+    /** A first look at a file: its [key], and [final] when a full hash would add nothing (it read everything) or is not taken. */
+    data class Slice(val key: String, val final: Boolean)
+
     /** The two slices hold every byte of a file of [size]: its partial hash is its full one. */
     fun partialIsWhole(size: Long): Boolean = size <= 2L * sliceBytes
 
     /** Equal partial hashes of two files of [size] still leave their middles unknown, and the file is small enough to read whole. */
     fun needsFull(size: Long): Boolean = !partialIsWhole(size) && size < fullLimit
 
-    /** The hash of [file]'s first and last slices (all of it, when that is no more); null when it cannot be read or is not [AudioFile.size] long. */
-    suspend fun partial(file: AudioFile): String? = hash(file) { channel, digest, buffer ->
-        if (partialIsWhole(file.size)) {
-            digestRange(channel, 0, file.size, digest, buffer)
-        } else {
-            digestRange(channel, 0, sliceBytes.toLong(), digest, buffer)
-            digestRange(channel, file.size - sliceBytes, sliceBytes.toLong(), digest, buffer)
-        }
+    /** The start of [file]'s audio, or else its first and last slices (all of it, when that is no more); null when it cannot be read. */
+    suspend fun partial(file: AudioFile): Slice? {
+        PayloadHash.slice(File(file.path).toPath(), sliceBytes.toLong())?.let { return Slice("$AUDIO${it.format}:${it.sha256}", it.whole) }
+        val hash = hash(file) { channel, digest, buffer ->
+            if (partialIsWhole(file.size)) {
+                digestRange(channel, 0, file.size, digest, buffer)
+            } else {
+                digestRange(channel, 0, sliceBytes.toLong(), digest, buffer)
+                digestRange(channel, file.size - sliceBytes, sliceBytes.toLong(), digest, buffer)
+            }
+        } ?: return null
+        return Slice("$BYTES${file.size}:$hash", !needsFull(file.size))
     }
 
-    /** The hash of every byte of [file]; null when it cannot be read or is not [AudioFile.size] long. */
-    suspend fun full(file: AudioFile): String? = hash(file) { channel, digest, buffer -> digestRange(channel, 0, file.size, digest, buffer) }
+    /** All of [file]'s audio, or else every byte of it; null when it cannot be read or is not [AudioFile.size] long. */
+    suspend fun full(file: AudioFile): String? {
+        PayloadHash.of(File(file.path).toPath())?.let { return "$AUDIO${it.format}:${it.sha256}" }
+        return hash(file) { channel, digest, buffer -> digestRange(channel, 0, file.size, digest, buffer) }?.let { "$BYTES${file.size}:$it" }
+    }
 
     private suspend fun hash(file: AudioFile, read: suspend (SeekableByteChannel, MessageDigest, ByteBuffer) -> Boolean): String? = try {
         open(File(file.path).toPath()).use { channel ->
@@ -77,27 +89,30 @@ class ContentHasher(
         const val SLICE_BYTES: Int = 1024 * 1024
         const val FULL_LIMIT: Long = 64L * 1024 * 1024
         private const val BUFFER_BYTES: Int = 64 * 1024
+        private const val AUDIO = "audio:"
+        private const val BYTES = "bytes:"
     }
 }
 
 /**
- * Content keys of the [files] that share a size with another: equal keys are identical files. A file is hashed only
- * when another one has its size; its full hash is taken only when another file of that size has its partial hash and
- * the slices leave the middle unknown ([ContentHasher.needsFull]). A file that cannot be read gets no key. [onFile]
- * hears how many files are done, after each one, in order.
+ * Content keys of the [files] that share a length with another: equal keys are identical audio, whatever the tags. A file
+ * is hashed only when another one has its exact length (MediaStore's, which a retag keeps), first by the start of its
+ * audio ([ContentHasher.partial]); the full hash is taken only when another file of that length starts the same and
+ * the start leaves the rest unknown. A file that cannot be read gets no key. [onFile] hears how many files are done,
+ * after each one, in order.
  */
 suspend fun identicalKeys(files: List<AudioFile>, hasher: ContentHasher, onFile: (Int) -> Unit = {}): Map<Long, String> {
-    val shared = files.filter { it.size > 0 }.groupingBy { it.size }.eachCount().filterValues { it > 1 }.keys
-    val partials = HashMap<Long, String>()
+    val shared = files.filter { it.size > 0 && it.durationMs > 0 }.groupingBy { it.durationMs }.eachCount().filterValues { it > 1 }.keys
+    val slices = HashMap<Long, ContentHasher.Slice>()
     val fulls = HashMap<Long, String?>()
     val seen = HashMap<Pair<Long, String>, MutableList<AudioFile>>()
     files.forEachIndexed { index, file ->
         currentCoroutineContext().ensureActive()
-        val partial = if (file.size in shared) hasher.partial(file) else null
-        if (partial != null) {
-            partials[file.id] = partial
-            val peers = seen.getOrPut(file.size to partial) { ArrayList() }
-            if (peers.isNotEmpty() && hasher.needsFull(file.size)) {
+        val slice = if (file.size > 0 && file.durationMs in shared) hasher.partial(file) else null
+        if (slice != null) {
+            slices[file.id] = slice
+            val peers = seen.getOrPut(file.durationMs to slice.key) { ArrayList() }
+            if (peers.isNotEmpty() && !slice.final) {
                 for (peer in peers + file) if (peer.id !in fulls) fulls[peer.id] = hasher.full(peer)
             }
             peers += file
@@ -105,11 +120,8 @@ suspend fun identicalKeys(files: List<AudioFile>, hasher: ContentHasher, onFile:
         onFile(index + 1)
     }
     return files.mapNotNull { file ->
-        val partial = partials[file.id] ?: return@mapNotNull null
-        when {
-            file.id !in fulls -> file.id to "${file.size}/$partial"
-            else -> fulls[file.id]?.let { file.id to "${file.size}/$partial/$it" }
-        }
+        val slice = slices[file.id] ?: return@mapNotNull null
+        if (file.id !in fulls) file.id to slice.key else fulls[file.id]?.let { file.id to it }
     }.toMap()
 }
 

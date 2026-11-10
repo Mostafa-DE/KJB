@@ -31,8 +31,8 @@ class DuplicatesStoreTest {
                 DuplicateGroup(Confidence.MAYBE, listOf(file(3), file(4).copy(artist = null, bitrate = null, mimeType = null, relativePath = null))),
             ),
         ),
-        notDuplicates = setOf("5:100,6:100"),
-        reviewed = setOf("1:7000,2:7000"),
+        notDuplicates = setOf("5,6"),
+        reviewed = setOf("1,2"),
         pendingTrash = listOf(file(2, 7_000)),
         trashed = listOf(TrashedSong(file(9), trashedAt = 1_762_450_000_000, expiresAt = 1_765_042_000_000)),
     )
@@ -77,7 +77,7 @@ class DuplicatesStoreTest {
     @Test
     fun `this version's stored form loads unchanged`() {
         val stored = """
-            {"version":1,
+            {"version":2,
              "results":{"scannedAt":1762450000000,"scanned":12,"groups":[
                {"confidence":"SAME_SONG","files":[
                  {"id":7,"path":"/storage/emulated/0/Music/a/Paper Comet.flac","relativePath":"Music/a/","displayName":"Paper Comet.flac",
@@ -85,7 +85,7 @@ class DuplicatesStoreTest {
                   "mimeType":"audio/flac","bitrate":1100000,"addedAt":1760000000000,"hasLyrics":true},
                  {"id":8,"path":"/storage/emulated/0/Music/b/Paper Comet.mp3","displayName":"Paper Comet.mp3",
                   "title":"Paper Comet","durationMs":214500,"size":5000000,"addedAt":1760000001000}]}]},
-             "notDuplicates":["1:10,2:10"],"reviewed":["7:30000000,8:5000000"],"pendingTrash":[]}
+             "notDuplicates":["1,2"],"reviewed":["7,8"],"pendingTrash":[]}
         """.trimIndent()
         val loaded = DuplicatesJson.decode(stored)
         val group = loaded?.results?.groups?.single()
@@ -94,9 +94,30 @@ class DuplicatesStoreTest {
         assertEquals(true, group?.keep?.hasLyrics)
         assertNull(group?.files?.get(1)?.artist)
         assertEquals(5_000_000L, group?.extraBytes)
-        assertEquals(setOf("1:10,2:10"), loaded?.notDuplicates)
+        assertEquals(setOf("1,2"), loaded?.notDuplicates)
         assertEquals(group?.key, loaded?.reviewed?.single())
         assertEquals(12, loaded?.results?.scanned)
+        assertEquals(2, DuplicatesJson.VERSION)
+    }
+
+    @Test
+    fun `a version 1 file drops its groups, to be found again by the audio, and keeps the choices by their files`() {
+        val stored = """
+            {"version":1,
+             "results":{"scannedAt":1762450000000,"scanned":12,"groups":[
+               {"confidence":"IDENTICAL","files":[
+                 {"id":7,"path":"/m/7.mp3","displayName":"7.mp3","title":"Paper Comet","durationMs":214000,"size":5000000,"addedAt":0},
+                 {"id":8,"path":"/m/8.mp3","displayName":"8.mp3","title":"Paper Comet","durationMs":214000,"size":5000000,"addedAt":0}]}]},
+             "notDuplicates":["1:10,2:10","3:7,4:9,5:2"],"reviewed":["7:5000000,8:5000000"],
+             "trashed":[{"file":{"id":9,"path":"/m/9.mp3","displayName":"9.mp3","title":"Harbor","durationMs":1,"size":5,"addedAt":0},"trashedAt":1,"expiresAt":2}]}
+        """.trimIndent()
+
+        val loaded = DuplicatesJson.decode(stored)
+
+        assertNull(loaded?.results)
+        assertEquals(setOf("1,2", "3,4,5"), loaded?.notDuplicates)
+        assertEquals(setOf("7,8"), loaded?.reviewed)
+        assertEquals(listOf(9L), loaded?.trashed?.map { it.file.id })
     }
 
     @Test
@@ -119,16 +140,16 @@ class DuplicatesStoreTest {
         val loaded = DuplicatesJson.decode(stored)
         assertEquals(listOf(listOf(3L, 4L)), loaded?.results?.groups?.map { group -> group.files.map { it.id } })
         assertEquals(0, loaded?.results?.scanned)
-        assertEquals(setOf("1:10,2:10"), loaded?.notDuplicates)
+        assertEquals(setOf("1,2"), loaded?.notDuplicates)
         assertEquals(emptySet<String>(), loaded?.reviewed)
         assertEquals(listOf(6L), loaded?.pendingTrash?.map { it.id })
     }
 
     @Test
     fun `results without a scan time are no results, and the decisions still load`() {
-        val loaded = DuplicatesJson.decode("""{"results":{"groups":[]},"notDuplicates":["1:10,2:10"]}""")
+        val loaded = DuplicatesJson.decode("""{"version":2,"results":{"groups":[]},"notDuplicates":["1,2"]}""")
         assertNull(loaded?.results)
-        assertEquals(setOf("1:10,2:10"), loaded?.notDuplicates)
+        assertEquals(setOf("1,2"), loaded?.notDuplicates)
     }
 
     // Trashed songs

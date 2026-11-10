@@ -13,6 +13,7 @@ import app.lyrify.tags.TagFixtures.oggPages
 import app.lyrify.tags.TagFixtures.opusPackets
 import app.lyrify.tags.TagFixtures.vorbisPackets
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -157,6 +158,35 @@ class PayloadHashTest {
         // The same bytes cut into other packets: other audio.
         val joined = listOf(audio[0] + audio[1]) + audio.drop(2)
         assertNotEquals(before, payload("joined.opus", ogg(opusPackets(audio = joined), headers = 2)))
+    }
+
+    // Slices, for Duplicates' prefilter
+
+    @Test
+    fun `a payload slice hashes the start of the audio only, the same through a retag, in every format`() {
+        val mp3Audio = mp3Audio(frames = 40)
+        val audio = audioPackets()
+        val copies = listOf(
+            "a.mp3" to mp3(id3v2("TIT2 Paper Lantern".encodeToByteArray()), mp3Audio) to ("b.mp3" to mp3(id3v2(bigTag(9_000), version = 4), mp3Audio, v1 = id3v1())),
+            "a.flac" to flac() to ("b.flac" to flac(comment = bigTag(5_000), padding = 900)),
+            "a.m4a" to m4a() to ("b.m4a" to m4a(tags = bigTag(4_000), moovFirst = false)),
+            "a.ogg" to ogg(vorbisPackets(audio = audio), headers = 3) to ("b.ogg" to ogg(vorbisPackets(comment = bigTag(150_000), audio = audio), headers = 3)),
+            "a.opus" to ogg(opusPackets(audio = audio), headers = 2) to ("b.opus" to ogg(opusPackets(comment = bigTag(70_000), audio = audio), headers = 2)),
+        )
+        for ((first, second) in copies) {
+            val a = file(first.first, first.second).toPath()
+            val b = file(second.first, second.second).toPath()
+            val sliceA = PayloadHash.slice(a, 100)!!
+            assertEquals(first.first, sliceA, PayloadHash.slice(b, 100))
+            assertFalse(first.first, sliceA.whole)
+            assertEquals(first.first, PayloadHash.of(a)!!.format, sliceA.format)
+            assertNotEquals(first.first, PayloadHash.of(a)!!.sha256, sliceA.sha256)
+            // A slice as long as the audio is the whole payload hash.
+            val whole = PayloadHash.slice(a, Long.MAX_VALUE)!!
+            assertTrue(first.first, whole.whole)
+            assertEquals(first.first, PayloadHash.of(a)!!.sha256, whole.sha256)
+        }
+        assertNull(PayloadHash.slice(file("text.mp3", "not audio".encodeToByteArray()).toPath(), 100))
     }
 
     @Test

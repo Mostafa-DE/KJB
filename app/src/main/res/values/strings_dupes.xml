@@ -54,7 +54,7 @@
     <string name="dupes_open_group">Open group</string>
 
     <!-- Group sheet -->
-    <string name="dupes_sheet_identical">These files are the same, byte for byte.</string>
+    <string name="dupes_sheet_identical">These files hold the same audio. Only their tags may differ.</string>
     <string name="dupes_sheet_same">Same title, artist and length, in different files.</string>
     <string name="dupes_sheet_maybe">Same title and length, but the artist differs or is missing. Check before you move any.</string>
     <string name="dupes_keep">Suggested keep</string>
