@@ -37,12 +37,18 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
+import java.io.InputStream
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.text.Collator
+import java.util.Base64
 
 // Edit tags (manual), milestone T3: what Edit tags, Edit album, Rename artist and Merge plan to write, the favourites
 // that follow a renamed album or artist, the names that may be the same, and what a write or an Undo says. Pure, apart
@@ -140,6 +146,9 @@ data class SongPlan(val song: Song, val fields: Map<TagField, String>, val cover
 
     val changesSomething: Boolean get() = fields.isNotEmpty() || cover != CoverEdit.Keep
 
+    /** Each field this changes, old and new, in the fields' order: what a merge's preview lists. */
+    val changes: List<PreviewLine> get() = fields.map { (field, value) -> PreviewLine(field, field.of(song), value, song) }
+
     /** The song as the library will read it once this is written: where its album or artist page moves to. */
     val after: Song
         get() = fields.entries.fold(song) { at, (field, value) ->
@@ -157,21 +166,33 @@ data class SongPlan(val song: Song, val fields: Map<TagField, String>, val cover
         }
 }
 
+/** One line of what an edit changes: [field] from [old] to [new] (empty: none); [song] when it is that song's own line. */
+data class PreviewLine(val field: TagField, val old: String, val new: String, val song: Song? = null)
+
 /** The plans of Edit tags, Edit album, Rename artist and Merge (player-spec "Edit tags (manual)"). */
 object TagEdits {
+    /**
+     * What an editor shows before Save: each field the [plans] change, once, as its first song has it; then the
+     * [perSong] fields song by song, at most [perSongMax] lines (Number in this order's tracks).
+     */
+    fun preview(plans: List<SongPlan>, perSong: Set<TagField> = emptySet(), perSongMax: Int = 3): List<PreviewLine> {
+        val shared = TagField.entries.filter { it !in perSong }.mapNotNull { field ->
+            plans.firstOrNull { field in it.fields }?.let { PreviewLine(field, field.of(it.song), it.fields.getValue(field)) }
+        }
+        return shared + plans.flatMap { plan -> plan.changes.filter { it.field in perSong } }.take(perSongMax)
+    }
+
     /** The fields Edit album edits for every song of the album at once. */
     val ALBUM_FIELDS: List<TagField> = listOf(TagField.ALBUM, TagField.ALBUM_ARTIST, TagField.YEAR, TagField.GENRE)
 
     /**
-     * Edit tags for [songs]. One song gets each field that differs from where the form began (an emptied one is
-     * removed). Several get each field typed into, in every song that differs; a field left empty keeps each song's own.
+     * Edit tags for [songs]: each field that differs from where the form began goes to every song that differs; an
+     * emptied one is removed. A field the songs do not share starts empty ("Keep as is"), so left empty it keeps each
+     * song's own. [opus]: the comment header of each Opus song ([OpusHeader]), for its cover.
      */
-    fun songs(songs: List<Song>, form: TagForm, cover: CoverEdit): List<SongPlan> {
-        val one = songs.size == 1
-        val typed = form.values.filter { (field, value) -> form.changed(field, value) }
-            .mapValues { (field, value) -> field.clean(value) }
-            .filter { (_, value) -> one || value.isNotEmpty() }
-        return plans(songs, cover) { song, _ -> typed.filter { (field, value) -> field.of(song) != value } }
+    fun songs(songs: List<Song>, form: TagForm, cover: CoverEdit, opus: Map<String, Int> = emptyMap()): List<SongPlan> {
+        val typed = form.values.filter { (field, value) -> form.changed(field, value) }.mapValues { (field, value) -> field.clean(value) }
+        return plans(songs, cover, opus) { song, _ -> typed.filter { (field, value) -> field.of(song) != value } }
     }
 
     /**
@@ -179,10 +200,10 @@ object TagEdits {
      * left empty kept) in every song that differs; with [numberInOrder], the tracks numbered 1, 2, 3 in that order on
      * disc 1 (a song without a disc number keeps none).
      */
-    fun album(songs: List<Song>, form: TagForm, cover: CoverEdit, numberInOrder: Boolean): List<SongPlan> {
+    fun album(songs: List<Song>, form: TagForm, cover: CoverEdit, numberInOrder: Boolean, opus: Map<String, Int> = emptyMap()): List<SongPlan> {
         val shared = ALBUM_FIELDS.filter { form.changed(it) }.associateWith { form.value(it).trim() }
             .filterNot { (field, value) -> value.isEmpty() && field in form.mixed }
-        return plans(songs, cover) { song, at ->
+        return plans(songs, cover, opus) { song, at ->
             val fields = shared.filter { (field, value) -> field.of(song) != value }.toMutableMap()
             if (numberInOrder) {
                 if (song.track != at + 1) fields[TagField.TRACK] = (at + 1).toString()
@@ -193,14 +214,15 @@ object TagEdits {
     }
 
     /**
-     * Rename artist ([names] one name) and Merge artists ([names] both): each of [names] becomes [to] as a whole word in
-     * the artist and album artist of [songs], inside credits too ("Kit Calloway feat. Mira Okafor"). Case counts: a
-     * spelling in other letters is another artist, for Merge.
+     * Rename artist ([names] one name) and Merge artists ([names] both): each of [names] becomes [to] in the artist and
+     * album artist of [songs] where it is the whole value or one whole credited name ("Kit Calloway feat. Mira Okafor"),
+     * never a word inside another name ([replaceNames]). Case counts: a spelling in other letters is another artist,
+     * for Merge.
      */
     fun rename(songs: List<Song>, names: Collection<String>, to: String): List<SongPlan> {
         val name = to.trim()
         if (name.isEmpty()) return emptyList()
-        return plans(songs, CoverEdit.Keep) { song, _ ->
+        return plans(songs, CoverEdit.Keep, emptyMap()) { song, _ ->
             listOfNotNull(
                 song.artist?.let { TagField.ARTIST to replaceNames(it, names, name) }?.takeIf { (_, new) -> new != song.artist },
                 song.albumArtist?.let { TagField.ALBUM_ARTIST to replaceNames(it, names, name) }?.takeIf { (_, new) -> new != song.albumArtist },
@@ -212,28 +234,51 @@ object TagEdits {
     fun mergeAlbums(albums: List<Album>, keep: String): List<SongPlan> {
         val name = keep.trim()
         if (name.isEmpty()) return emptyList()
-        return plans(albums.flatMap { it.songs }, CoverEdit.Keep) { song, _ ->
+        return plans(albums.flatMap { it.songs }, CoverEdit.Keep, emptyMap()) { song, _ ->
             if (song.album?.trim() == name) emptyMap() else mapOf(TagField.ALBUM to name)
         }
     }
 
     /**
-     * [text] with each of [names] replaced by [to] where it stands as a whole word (no letter or digit touching it), in
-     * one pass, so [to] is never replaced again. Blank names and [to] itself are left out.
+     * [text], a credit, with each part that is exactly one of [names] replaced by [to], in one pass so [to] is never
+     * replaced again: the whole value, or a name between the joins a credit uses ("feat.", "ft.", "featuring", "(with
+     * ...)", "&", ",", ";"). A word inside another name ("Glass" in "Glass Harbour") is never one. Blank names and [to]
+     * itself are left out.
      */
     fun replaceNames(text: String, names: Collection<String>, to: String): String {
-        val replaced = names.filter { it.isNotBlank() && it != to }.distinct().sortedByDescending { it.length }
+        val replaced = names.filter { it.isNotBlank() && it != to }.toSet()
         if (replaced.isEmpty()) return text
-        val pattern = Regex("(?<![\\p{L}\\p{N}])(?:" + replaced.joinToString("|") { Regex.escape(it) } + ")(?![\\p{L}\\p{N}])")
-        return pattern.replace(text, Regex.escapeReplacement(to))
+        val out = StringBuilder()
+        var at = 0
+        fun part(end: Int) {
+            val raw = text.substring(at, end)
+            val name = raw.trim()
+            if (name !in replaced) {
+                out.append(raw)
+            } else {
+                val start = raw.indexOf(name)
+                out.append(raw, 0, start).append(to).append(raw, start + name.length, raw.length)
+            }
+        }
+        for (join in CREDIT_JOIN.findAll(text)) {
+            part(join.range.first)
+            out.append(join.value)
+            at = join.range.last + 1
+        }
+        part(text.length)
+        return out.toString()
     }
 
+    /** What joins the names of a credit, after TrackNames' "feat." forms; "and", "x" and "/" are left to names ("AC/DC"). */
+    private val CREDIT_JOIN = Regex("""\s*[(\[]\s*(?:feat\.?|ft\.?|featuring|with)\s+|\s*[)\]]\s*|\s+(?:feat\.?|ft\.?|featuring)\s+|\s*[&,;]\s*""", RegexOption.IGNORE_CASE)
+
     /**
-     * The cover change [song] gets: an Opus song keeps its cover when the new one would pass what readers take of its
-     * comment header even alone (covers-tags-spec "What is written").
+     * The cover change [song] gets: an Opus song ([opusOther]: the rest of its comment header, from [OpusHeader]) keeps
+     * its cover when the new one would take that header past what readers read of it (covers-tags-spec "What is
+     * written"). Null [opusOther]: not Opus.
      */
-    fun coverFor(song: Song, cover: CoverEdit): CoverEdit = when {
-        cover is CoverEdit.Replace && song.path.endsWith(".opus", ignoreCase = true) && !OpusCover.fits(cover.picture.data.size, 0) -> CoverEdit.Keep
+    fun coverFor(song: Song, cover: CoverEdit, opusOther: Int? = null): CoverEdit = when {
+        cover is CoverEdit.Replace && opusOther != null && !OpusCover.fits(cover.picture.data.size, opusOther) -> CoverEdit.Keep
         else -> cover
     }
 
@@ -243,26 +288,147 @@ object TagEdits {
     )
 
     /** Each song's plan from [fields] (given the song and its place), with the cover; songs with nothing to change left out. */
-    private fun plans(songs: List<Song>, cover: CoverEdit, fields: (Song, Int) -> Map<TagField, String>): List<SongPlan> =
+    private fun plans(songs: List<Song>, cover: CoverEdit, opus: Map<String, Int>, fields: (Song, Int) -> Map<TagField, String>): List<SongPlan> =
         songs.mapIndexed { at, song ->
             // In the fields' own order, as History lists them.
             val changed = fields(song, at).entries.sortedBy { it.key.ordinal }.associate { it.key to it.value }
-            SongPlan(song, changed, coverFor(song, cover))
+            SongPlan(song, changed, coverFor(song, cover, opus[song.path]))
         }.filter { it.changesSomething }
 }
 
 /**
  * A photo from the phone's photo picker as a front cover: one too large for the cover pipeline, or in a format it does
- * not take (HEIC), is first made a JPEG of at most [CoverPipeline.MAX_SIDE] px; then the pipeline makes it what every
- * cover is. Null when it is not an image.
+ * not take (HEIC), is first made a JPEG of at most [CoverPipeline.MAX_SIDE] px, its quality and then its size stepped
+ * down until the pipeline takes it; then the pipeline makes it what every cover is. Null when it is not an image.
  */
 fun pickedCover(image: ByteArray, codec: ImageCodec, pipeline: CoverPipeline = CoverPipeline(codec)): TagPicture? {
-    val taken = if (image.size <= Body.IMAGE.maxBytes && Images.isImage(image)) image else codec.jpeg(image, CoverPipeline.MAX_SIDE, BEST_QUALITY) ?: return null
+    val taken = if (image.size <= Body.IMAGE.maxBytes && Images.isImage(image)) image else takenJpeg(image, codec) ?: return null
     val cover = pipeline.prepare(taken) ?: return null
     return TagPicture(cover.jpeg, "", FRONT_COVER, "image/jpeg")
 }
 
-private const val BEST_QUALITY = 100
+/** [image] as the first JPEG on the ladder of sides and qualities that is within the pipeline's cap. */
+private fun takenJpeg(image: ByteArray, codec: ImageCodec): ByteArray? {
+    for (side in CoverPipeline.SIDES) {
+        for (quality in PICKED_QUALITIES) {
+            val jpeg = codec.jpeg(image, side, quality) ?: return null
+            if (jpeg.size <= Body.IMAGE.maxBytes) return jpeg
+        }
+    }
+    return null
+}
+
+/** Tried in order at each side: the photo is re-encoded once more by the pipeline, so it starts at the best. */
+private val PICKED_QUALITIES = listOf(100, 90, 80, 70)
+
+/**
+ * The comment header of an Ogg Opus song, which a cover goes into: known by its content (an "OpusHead" first packet),
+ * whatever the file's name, as the payload hash knows it ([PayloadHash]).
+ */
+object OpusHeader {
+    private val OGG = "OggS".encodeToByteArray()
+    private val HEAD = "OpusHead".encodeToByteArray()
+    private val TAGS = "OpusTags".encodeToByteArray()
+    private const val PICTURE = "METADATA_BLOCK_PICTURE="
+    private const val FRONT = 3
+
+    /**
+     * The bytes of [file]'s comment header besides its front cover: "OpusTags", the vendor, the count and every other
+     * comment, what [OpusCover.fits] weighs a new cover against. Null when [file] is not Ogg Opus or can't be read.
+     */
+    fun otherBytes(file: File): Int? = try {
+        FileInputStream(file).buffered().use(::comments)
+    } catch (_: IOException) {
+        null
+    }
+
+    /** Reads [input]'s pages up to the second packet: the first must be "OpusHead", the second "OpusTags". */
+    private fun comments(input: InputStream): Int? {
+        val packet = ByteArrayOutputStream()
+        var index = 0
+        while (true) {
+            val page = input.upTo(PAGE_HEADER)
+            if (page.size < PAGE_HEADER || !page.copyOf(OGG.size).contentEquals(OGG)) return null
+            val lacing = input.upTo(page[PAGE_HEADER - 1].toInt() and BYTE)
+            val body = input.upTo(lacing.sumOf { it.toInt() and BYTE })
+            var offset = 0
+            for (value in lacing) {
+                val length = value.toInt() and BYTE
+                packet.write(body, offset, minOf(length, body.size - offset).coerceAtLeast(0))
+                offset += length
+                if (length == SEGMENT) continue
+                val done = packet.toByteArray()
+                if (index == 1) return if (done.copyOf(TAGS.size).contentEquals(TAGS)) withoutFront(done) else null
+                if (!done.copyOf(HEAD.size).contentEquals(HEAD)) return null
+                index++
+                packet.reset()
+            }
+        }
+    }
+
+    /** The next [count] bytes of this stream, fewer only at its end (InputStream.readNBytes needs API 33). */
+    private fun InputStream.upTo(count: Int): ByteArray {
+        val bytes = ByteArray(count)
+        var read = 0
+        while (read < count) {
+            val got = read(bytes, read, count - read)
+            if (got < 0) return bytes.copyOf(read)
+            read += got
+        }
+        return bytes
+    }
+
+    /** [packet]'s size less each front cover comment and its length; all of it when it can't be walked. */
+    private fun withoutFront(packet: ByteArray): Int {
+        val buffer = ByteBuffer.wrap(packet).order(ByteOrder.LITTLE_ENDIAN)
+        return try {
+            buffer.position(TAGS.size)
+            val vendor = buffer.int
+            buffer.position(buffer.position() + vendor)
+            var front = 0
+            repeat(buffer.int) {
+                val length = buffer.int
+                require(length in 0..buffer.remaining())
+                val comment = ByteArray(length).also(buffer::get).decodeToString()
+                if (isFront(comment)) front += Int.SIZE_BYTES + length
+            }
+            packet.size - front
+        } catch (_: RuntimeException) {
+            // Past the end, or a length that does not fit: counted whole.
+            packet.size
+        }
+    }
+
+    /** A METADATA_BLOCK_PICTURE whose picture type (the block's first 4 bytes) is the front cover. */
+    private fun isFront(comment: String): Boolean {
+        if (!comment.startsWith(PICTURE, ignoreCase = true)) return false
+        val head = try {
+            Base64.getDecoder().decode(comment.substring(PICTURE.length).take(BASE64_HEAD))
+        } catch (_: IllegalArgumentException) {
+            return false
+        }
+        return head.size >= Int.SIZE_BYTES && ByteBuffer.wrap(head).int == FRONT
+    }
+
+    private const val PAGE_HEADER = 27
+    private const val SEGMENT = 255
+    private const val BYTE = 0xFF
+
+    /** Base64 of the picture block's first 6 bytes: its type and more. */
+    private const val BASE64_HEAD = 8
+}
+
+/** Whether a write or an Undo changed any song: only then does a page follow its album or artist to the new name. */
+fun BatchResult.wroteAny(): Boolean = this is BatchResult.Done && report().written > 0
+
+/** One edit in History: what it was, how many songs, and whether every one of them is undone. */
+data class HistoryRow(val id: Long, val kind: EditKind, val label: String, val at: Long, val songs: Int, val undone: Boolean)
+
+/** History's rows, the newest edit first. */
+fun historyRows(memory: UndoMemory): List<HistoryRow> =
+    memory.entries.sortedWith(compareByDescending<HistoryEntry> { it.at }.thenByDescending { it.id }).map { entry ->
+        HistoryRow(entry.id, entry.kind, entry.label, entry.at, entry.songs.size, entry.songs.isNotEmpty() && entry.songs.all { it.undone })
+    }
 
 /**
  * How a write or an Undo went, for its message: songs [written] (an Undo: taken back), left alone while in use

@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -137,10 +138,9 @@ class TagEditsTest {
     }
 
     @Test
-    fun `several songs - an empty field keeps each song's own, a typed one goes to every song that differs`() {
+    fun `several songs - a mixed field left empty keeps each song's own, a typed one goes to every song that differs`() {
         val form = TagForm.of(listOf(lantern, tide))
             .with(TagField.ARTIST, "Kit Calloway")
-            .with(TagField.ALBUM, "")
             .with(TagField.GENRE, "Chamber Folk")
 
         val plans = TagEdits.songs(listOf(lantern, tide), form, CoverEdit.Keep)
@@ -155,6 +155,17 @@ class TagEditsTest {
     }
 
     @Test
+    fun `several songs - a shared field emptied is removed from every song, and the preview shows it`() {
+        val form = TagForm.of(listOf(lantern, tide)).with(TagField.GENRE, "").with(TagField.TRACK, "")
+
+        val plans = TagEdits.songs(listOf(lantern, tide), form, CoverEdit.Keep)
+
+        // The track is mixed: left empty, each song keeps its own.
+        assertEquals(listOf(mapOf(TagField.GENRE to ""), mapOf(TagField.GENRE to "")), plans.map { it.fields })
+        assertEquals(listOf(PreviewLine(TagField.GENRE, "Folk", "")), TagEdits.preview(plans))
+    }
+
+    @Test
     fun `a new cover goes to every song, even one whose fields stay`() {
         val front = TagPicture(byteArrayOf(1, 2, 3), "", FRONT_COVER, "image/jpeg")
 
@@ -166,17 +177,58 @@ class TagEditsTest {
     }
 
     @Test
-    fun `an Opus song keeps its cover when the new one would not fit its comment header`() {
-        val opus = song("Music/Quiet Breakwater/01 Salt Clock.opus", title = "Salt Clock", id = 7)
+    fun `an Opus song keeps its cover when the new one would not fit its comment header with everything else in it`() {
+        val opus = song("Music/Quiet Breakwater/01 Salt Clock.ogg", title = "Salt Clock", id = 7)
         val big = TagPicture(ByteArray(300 * 1024), "", FRONT_COVER, "image/jpeg")
         val small = TagPicture(ByteArray(2 * 1024), "", FRONT_COVER, "image/jpeg")
 
-        assertEquals(CoverEdit.Keep, TagEdits.coverFor(opus, CoverEdit.Replace(big)))
-        assertEquals(CoverEdit.Replace(small), TagEdits.coverFor(opus, CoverEdit.Replace(small)))
-        assertEquals(CoverEdit.Remove, TagEdits.coverFor(opus, CoverEdit.Remove))
+        assertEquals(CoverEdit.Keep, TagEdits.coverFor(opus, CoverEdit.Replace(big), opusOther = 100))
+        assertEquals(CoverEdit.Replace(small), TagEdits.coverFor(opus, CoverEdit.Replace(small), opusOther = 100))
+        // A small cover that fits alone does not fit beside 60 KB of lyrics and other comments.
+        assertEquals(CoverEdit.Keep, TagEdits.coverFor(opus, CoverEdit.Replace(small), opusOther = 60_000))
+        assertEquals(CoverEdit.Remove, TagEdits.coverFor(opus, CoverEdit.Remove, opusOther = 60_000))
+        // Not Opus (no comment header measured): every cover goes in.
         assertEquals(CoverEdit.Replace(big), TagEdits.coverFor(lantern, CoverEdit.Replace(big)))
         // Nothing else to change: the Opus song is left out.
-        assertEquals(listOf(lantern.path), TagEdits.songs(listOf(lantern, opus), TagForm.of(listOf(lantern, opus)), CoverEdit.Replace(big)).map { it.song.path })
+        assertEquals(
+            listOf(lantern.path),
+            TagEdits.songs(listOf(lantern, opus), TagForm.of(listOf(lantern, opus)), CoverEdit.Replace(small), opus = mapOf(opus.path to 60_000)).map { it.song.path },
+        )
+    }
+
+    /** An Opus comment header (after "OpusTags"): vendor, then [comments] in order. */
+    private fun opusComments(vararg comments: String): ByteArray {
+        val out = java.io.ByteArrayOutputStream()
+        fun int(value: Int) = out.write(java.nio.ByteBuffer.allocate(4).order(java.nio.ByteOrder.LITTLE_ENDIAN).putInt(value).array())
+        val vendor = "made-up encoder".encodeToByteArray()
+        int(vendor.size)
+        out.write(vendor)
+        int(comments.size)
+        comments.forEach { comment -> comment.encodeToByteArray().let { int(it.size); out.write(it) } }
+        return out.toByteArray()
+    }
+
+    /** A FLAC picture block of [type] with [bytes] of image, as METADATA_BLOCK_PICTURE holds it in base64. */
+    private fun pictureComment(type: Int, bytes: Int): String {
+        val mime = "image/jpeg".encodeToByteArray()
+        val block = java.nio.ByteBuffer.allocate(32 + mime.size + bytes).putInt(type).putInt(mime.size).put(mime).putInt(0).putInt(1).putInt(1).putInt(24).putInt(0).putInt(bytes)
+        return "METADATA_BLOCK_PICTURE=" + java.util.Base64.getEncoder().encodeToString(block.array())
+    }
+
+    @Test
+    fun `an Opus song is known by its content, and its comment header is measured without its front cover`() {
+        val lyrics = "LYRICS=" + "la ".repeat(5_000)
+        val back = pictureComment(type = 4, bytes = 900)
+        val comments = opusComments("TITLE=Salt Clock", lyrics, pictureComment(type = 3, bytes = 20_000), back)
+        val ogg = folder.newFile("Salt Clock.ogg").apply { writeBytes(TagFixtures.ogg(TagFixtures.opusPackets(comments), headers = 2)) }
+        val vorbis = folder.newFile("Lamp Oil.ogg").apply { writeBytes(TagFixtures.ogg(TagFixtures.vorbisPackets(), headers = 3)) }
+        val mp3 = folder.newFile("Porch Wire.opus").apply { writeBytes(TagFixtures.mp3()) }
+
+        // "OpusTags", the vendor and count, and each comment but the front cover with its length.
+        val expected = 8 + 4 + "made-up encoder".length + 4 + listOf("TITLE=Salt Clock", lyrics, back).sumOf { 4 + it.length }
+        assertEquals(expected, OpusHeader.otherBytes(ogg))
+        assertNull(OpusHeader.otherBytes(vorbis))
+        assertNull(OpusHeader.otherBytes(mp3))
     }
 
     // Edit album
@@ -203,6 +255,22 @@ class TagEditsTest {
         )
         // Keep leaves every number as it is.
         assertEquals(emptyList<SongPlan>(), TagEdits.album(songs, form, CoverEdit.Keep, numberInOrder = false))
+    }
+
+    @Test
+    fun `Number in this order's preview shows the disc it puts every song on, and the first new numbers`() {
+        val songs = albumSongs()
+
+        val preview = TagEdits.preview(TagEdits.album(songs, TagForm.of(songs, TagEdits.ALBUM_FIELDS), CoverEdit.Keep, numberInOrder = true), perSong = setOf(TagField.TRACK))
+
+        assertEquals(
+            listOf(
+                PreviewLine(TagField.DISC, "2", "1"),
+                PreviewLine(TagField.TRACK, "2", "1", songs[0]),
+                PreviewLine(TagField.TRACK, "1", "2", songs[1]),
+            ),
+            preview,
+        )
     }
 
     @Test
@@ -273,6 +341,31 @@ class TagEditsTest {
     }
 
     @Test
+    fun `a rename matches the whole artist or a whole credited name, never a word inside another name`() {
+        val songs = listOf(
+            song("Music/a.mp3", title = "Lamp Oil", artist = "Glass", albumArtist = "Glass", id = 1),
+            song("Music/b.mp3", title = "Porch Wire", artist = "Glass Harbour", albumArtist = "Glass Harbour", id = 2),
+            song("Music/c.mp3", title = "Tin Roof", artist = "Mira Okafor feat. Glass", id = 3),
+            song("Music/d.mp3", title = "Low Tide", artist = "Ann Wilson & Glass", id = 4),
+            song("Music/e.mp3", title = "Ferry Bell", artist = "Kit Calloway (with Glass)", id = 5),
+            song("Music/f.mp3", title = "Moth Signal", artist = "Glass, Mira Okafor", id = 6),
+        )
+
+        assertEquals(
+            listOf(
+                "Lamp Oil" to mapOf(TagField.ARTIST to "Pane", TagField.ALBUM_ARTIST to "Pane"),
+                "Tin Roof" to mapOf(TagField.ARTIST to "Mira Okafor feat. Pane"),
+                "Low Tide" to mapOf(TagField.ARTIST to "Ann Wilson & Pane"),
+                "Ferry Bell" to mapOf(TagField.ARTIST to "Kit Calloway (with Pane)"),
+                "Moth Signal" to mapOf(TagField.ARTIST to "Pane, Mira Okafor"),
+            ),
+            TagEdits.rename(songs, listOf("Glass"), "Pane").map { it.song.title to it.fields },
+        )
+        assertEquals("Ann Wilson & Glass", TagEdits.replaceNames("Ann Wilson & Glass", listOf("Ann"), "Anna"))
+        assertEquals("Glass Harbour", TagEdits.replaceNames("Glass Harbour", listOf("Glass"), "Pane"))
+    }
+
+    @Test
     fun `Rename to the same name, or to nothing, changes nothing`() {
         assertEquals(emptyList<SongPlan>(), TagEdits.rename(credits, listOf("Kit Calloway"), "Kit Calloway"))
         assertEquals(emptyList<SongPlan>(), TagEdits.rename(credits, listOf("Kit Calloway"), "  "))
@@ -295,6 +388,19 @@ class TagEditsTest {
             TagEdits.rename(songs, listOf("Kit Calloway", "Kit Caloway"), "K. Calloway").map { it.fields.getValue(TagField.ARTIST) },
         )
         assertEquals("Kit Calloway & Kit Calloway", TagEdits.replaceNames("Kit & Calloway", listOf("Kit", "Calloway"), "Kit Calloway"))
+    }
+
+    @Test
+    fun `a merge's preview shows every field each song changes`() {
+        val plan = TagEdits.rename(listOf(song("Music/b.mp3", title = "Porch Wire", artist = "Kit Caloway feat. Mira Okafor", albumArtist = "Kit Caloway", id = 2)), listOf("Kit Caloway"), "Kit Calloway").single()
+
+        assertEquals(
+            listOf(
+                PreviewLine(TagField.ARTIST, "Kit Caloway feat. Mira Okafor", "Kit Calloway feat. Mira Okafor", plan.song),
+                PreviewLine(TagField.ALBUM_ARTIST, "Kit Caloway", "Kit Calloway", plan.song),
+            ),
+            plan.changes,
+        )
     }
 
     @Test
@@ -353,7 +459,56 @@ class TagEditsTest {
         assertEquals(listOf(1000, 800), codec.asked)
     }
 
+    @Test
+    fun `a large or HEIC photo steps its quality and size down until the cover pipeline takes it`() {
+        // Too large for the pipeline at quality 100 and 90; a 1000 px JPEG at 80 fits.
+        val codec = object : ImageCodec {
+            val asked = mutableListOf<Pair<Int, Int>>()
+
+            override fun size(image: ByteArray): ImageSize = ImageSize(1000, 1000)
+
+            override fun jpeg(image: ByteArray, maxSide: Int, quality: Int): ByteArray {
+                asked += maxSide to quality
+                return JPEG + ByteArray(if (quality > 80) 3 * 1024 * 1024 else 200 * 1024)
+            }
+        }
+
+        assertNotNull(pickedCover("ftypheic".encodeToByteArray() + ByteArray(50), codec))
+        assertEquals(listOf(1000 to 100, 1000 to 90, 1000 to 80), codec.asked.take(3))
+    }
+
     // What a write or an Undo says
+
+    @Test
+    fun `a page follows a renamed album or artist only when a song was written`() {
+        val target = SongTarget("/storage/emulated/0/Music/a.mp3", 1)
+
+        assertFalse(BatchResult.SessionsUnknown.wroteAny())
+        assertFalse(BatchResult.NotEnoughSpace.wroteAny())
+        assertFalse(BatchResult.Done(listOf(SongResult(target, SongOutcome.BUSY), SongResult(target, SongOutcome.UNCHANGED)), null).wroteAny())
+        assertTrue(BatchResult.Done(listOf(SongResult(target, SongOutcome.BUSY), SongResult(target, SongOutcome.WRITTEN)), 4).wroteAny())
+    }
+
+    @Test
+    fun `History lists every edit newest first, undone once all its songs are`() {
+        fun edit(path: String, undone: Boolean) = SongEdit(1, path, Payload(AudioFormat.MP3, "aa"), "before", "after", emptyList(), undone = undone)
+        val memory = UndoMemory(
+            listOf(
+                HistoryEntry(1, EditKind.SONG, "Tags · Lamp Oil", 100, listOf(edit("/a.mp3", undone = true))),
+                HistoryEntry(2, EditKind.MERGE, "Merged Kit Calloway and Kit Caloway", 300, listOf(edit("/a.mp3", undone = true), edit("/b.mp3", undone = false))),
+                HistoryEntry(3, EditKind.COVERS_TAGS, "Harbour Glass", 200, listOf(edit("/c.mp3", undone = false))),
+            ),
+        )
+
+        assertEquals(
+            listOf(
+                HistoryRow(2, EditKind.MERGE, "Merged Kit Calloway and Kit Caloway", 300, songs = 2, undone = false),
+                HistoryRow(3, EditKind.COVERS_TAGS, "Harbour Glass", 200, songs = 1, undone = false),
+                HistoryRow(1, EditKind.SONG, "Tags · Lamp Oil", 100, songs = 1, undone = true),
+            ),
+            historyRows(memory),
+        )
+    }
 
     @Test
     fun `a write's report counts what was written, in use, failed and changed since`() {
