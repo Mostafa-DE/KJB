@@ -353,9 +353,10 @@ fun LyrifyTheme(content: @Composable () -> Unit) {
 
 /**
  * KJB's chrome on either scheme: ink [action] for primary buttons, the ink [toast] with a coral [toastAction], the
- * frosted [glass] of the dock and top bar (as opaque as it must be for its text over any content, [glassAlpha];
- * [glassSolid] when nothing blurs under it), the soft [shadow] of floating chrome, the deeper [shadowStrong] under covers
- * and the Play button, the brand-tinted [scrim] behind sheets and dialogs, and their [sheet] card.
+ * frosted [glass] of the top bar and the other floating bars (as opaque as it must be for its text over any content,
+ * [glassAlpha]; [glassSolid] when nothing blurs under it), the opaque [bar] of the Now bar and the dock (a list scrolling
+ * behind never shows through), the soft [shadow] of floating chrome, the deeper [shadowStrong] under covers and the Play
+ * button, the brand-tinted [scrim] behind sheets and dialogs, and their [sheet] card.
  */
 @Immutable
 data class ChromeColors(
@@ -390,7 +391,8 @@ internal fun chromeColors(scheme: ColorScheme, brand: BrandColors, dark: Boolean
     shadowStrong = if (dark) Color.Black.copy(alpha = 0.65f) else ShadowInk.copy(alpha = 0.38f),
     scrim = if (dark) Color.Black.copy(alpha = 0.56f) else ShadowInk.copy(alpha = 0.36f),
     sheet = if (dark) scheme.surfaceContainer else scheme.surfaceContainerLowest,
-    bar = scheme.surfaceContainerHigh.copy(alpha = BAR_ALPHA),
+    // Opaque: at 94% a list's text read through the Now bar and the dock as it scrolled behind them.
+    bar = scheme.surfaceContainerHigh,
 )
 
 /** The words on the Now bar and the dock: the title in the theme's ink, the second line in its secondary ink, light or dark. */
@@ -580,7 +582,5 @@ private const val MIN_TEXT_CONTRAST = 4.5f
 private const val MIN_MARK_CONTRAST = 3f
 private const val GLASS_SOLID_ALPHA = 0.97f
 
-/** The Now bar and the dock: an elevated surface nearly opaque, so a list scrolling behind never reads through. */
-private const val BAR_ALPHA = 0.94f
 private const val PRESS_TINT = 0.10f
 private const val PRESS_MIN_MS = 60
