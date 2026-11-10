@@ -412,8 +412,17 @@ fun PlayerView() {
 private fun Backdrop(path: String) {
     val surface = MaterialTheme.colorScheme.background
     Box(Modifier.fillMaxWidth().height(420.dp)) {
-        AsyncImage(model = SongArt(path), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize().blur(46.dp).alpha(0.6f))
-        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(surface.copy(alpha = 0.72f), surface.copy(alpha = 0.3f), surface))))
+        // The prototype's .pbg: the cover at 150%, blurred 46 dp, at 70%, faded into the page with its four stops.
+        AsyncImage(
+            model = SongArt(path),
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxSize().graphicsLayer {
+                scaleX = 1.5f
+                scaleY = 1.5f
+            }.blur(46.dp).alpha(0.7f),
+        )
+        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0f to surface.copy(alpha = 0.72f), 0.3f to surface.copy(alpha = 0.24f), 0.66f to surface.copy(alpha = 0.34f), 1f to surface)))
     }
 }
 

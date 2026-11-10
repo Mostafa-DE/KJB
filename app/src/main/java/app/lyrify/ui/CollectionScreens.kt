@@ -1,5 +1,17 @@
 package app.lyrify.ui
 
+import coil3.compose.AsyncImage
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.shadow
 import androidx.annotation.StringRes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -177,18 +189,49 @@ private fun HeartButton(collection: FavouriteCollection, ui: LibraryUi) {
     }
 }
 
-/** The head of a collection page: its art, its title, maybe a link (the album's artist), and a line of facts. */
+/**
+ * The head of a collection page: its art (with the strong shadow), its title, maybe a link (the album's artist), and a
+ * line of facts; behind it, [glow]'s cover blurred and faded into the page (the prototype's .abg), from under the top bar.
+ */
 @Composable
-private fun Hero(title: String, meta: String, art: @Composable () -> Unit, link: (@Composable () -> Unit)? = null) {
+private fun Hero(title: String, meta: String, art: @Composable () -> Unit, link: (@Composable () -> Unit)? = null, glow: Any? = null) {
+    val chrome = LocalChromeColors.current
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-        modifier = Modifier.fillMaxWidth().padding(horizontal = ScreenPadding, vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = ScreenPadding),
     ) {
-        Box(Modifier.padding(bottom = 8.dp)) { art() }
+        if (glow != null) HeroGlow(glow)
+        Box(Modifier.padding(bottom = 12.dp).shadow(22.dp, RoundedCornerShape(28.dp), ambientColor = chrome.shadowStrong, spotColor = chrome.shadowStrong)) { art() }
         Text(title, style = MaterialTheme.typography.headlineSmall, textAlign = TextAlign.Center, maxLines = 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.semantics { heading() })
         link?.invoke()
-        Text(meta, style = MaterialTheme.typography.bodyMedium.tabular(), color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
+        Text(meta, style = HeroMeta.tabular(), color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
+    }
+}
+
+/** The blurred cover behind a hero: 312 dp from the page's top, wider than the page so its blur has no edge; takes no space. */
+@Composable
+private fun HeroGlow(model: Any) {
+    val surface = MaterialTheme.colorScheme.background
+    val density = LocalDensity.current
+    val above = WindowInsets.statusBars.getTop(density) + with(density) { HERO_BAR.roundToPx() }
+    Box(
+        Modifier.layout { measurable, constraints ->
+            val side = ScreenPadding.roundToPx()
+            val placeable = measurable.measure(Constraints.fixed(constraints.maxWidth + 2 * side, GLOW_HEIGHT.roundToPx()))
+            layout(constraints.maxWidth, 0) { placeable.place(-side, -above) }
+        },
+    ) {
+        AsyncImage(
+            model = model,
+            contentDescription = null,
+            contentScale = ContentScale.Crop,
+            modifier = Modifier.fillMaxSize().graphicsLayer {
+                scaleX = GLOW_SCALE
+                scaleY = GLOW_SCALE
+            }.blur(44.dp).alpha(GLOW_ALPHA),
+        )
+        Box(Modifier.fillMaxSize().background(Brush.verticalGradient(0f to surface.copy(alpha = 0.72f), 0.34f to surface.copy(alpha = 0.28f), 0.66f to surface.copy(alpha = 0.4f), 1f to surface)))
     }
 }
 
@@ -241,6 +284,7 @@ private fun AlbumPage(ui: LibraryUi, library: Library, key: String) {
                 songsMeta(songs, album.year?.toString()),
                 art = { BigCover(album.songs.firstOrNull()) },
                 link = album.artist?.let { name -> { LinkText(name, library.artist(name)?.let { { nav.open(Page.Artist(name)) } }) } },
+                glow = album.songs.firstOrNull()?.let { SongArt(it.path, it.ref.mediaStoreId) },
             )
         }
         item(key = "header") {
@@ -271,7 +315,10 @@ private fun ArtistPage(ui: LibraryUi, library: Library, name: String) {
             }
         }
     }) { list ->
-        item(key = "hero") { Hero(name, artistLine(artist), art = { ArtistAvatar(artist, size = AVATAR) }) }
+        item(key = "hero") {
+            val face = artist.albums.firstOrNull()?.songs?.firstOrNull()
+            Hero(name, artistLine(artist), art = { ArtistAvatar(artist, size = AVATAR) }, glow = face?.let { SongArt(it.path, it.ref.mediaStoreId) })
+        }
         if (artist.albums.isNotEmpty()) {
             item(key = "albums heading") { ListHeading(stringResource(R.string.library_tab_albums), artist.albums.size) }
             item(key = "albums") { AlbumsRow(artist.albums) }
@@ -386,7 +433,7 @@ internal fun PlaylistPage(ui: LibraryUi, library: Library, id: String) {
             }
         }
     }) { list ->
-        item(key = "hero") { Hero(playlist.name, songsMeta(songs), art = { PlaylistTile(playlist, HERO) }) }
+        item(key = "hero") { Hero(playlist.name, songsMeta(songs), art = { PlaylistTile(playlist, HERO) }, glow = songs.firstOrNull()?.let { SongArt(it.path, it.ref.mediaStoreId) }) }
         item(key = "header") {
             ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll, sort = stringResource(if (byTitle) R.string.lib_sort_title else R.string.lib_your_order), onSort = { sorting = true })
         }
@@ -608,6 +655,15 @@ private val FavouriteSection.hint: Int
     }
 
 private val HERO = 200.dp
+
+/** The hero's glow (.abg): 312 dp tall, its blurred cover at 150% and 62%; the page's top bar it starts under. */
+private val GLOW_HEIGHT = 312.dp
+private const val GLOW_SCALE = 1.5f
+private const val GLOW_ALPHA = 0.62f
+private val HERO_BAR = 64.dp
+
+/** A hero's line of facts (.hmeta): 13.5/19. */
+private val HeroMeta = body(13.5f, 19)
 private val AVATAR = 104.dp
 private val ALBUM_CARD = 112.dp
 
