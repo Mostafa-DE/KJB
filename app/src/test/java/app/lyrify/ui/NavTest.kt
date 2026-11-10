@@ -163,6 +163,66 @@ class NavTest {
     }
 
     @Test
+    fun `the Playlists icon opens Playlists, from Library on any top tab and from every other tab`() {
+        LibraryTab.entries.forEach { top ->
+            val playlists = NavState.start(DockTab.LIBRARY).pickLibraryTab(top).select(DockTab.PLAYLISTS)
+            assertEquals(DockTab.PLAYLISTS, playlists.tab)
+            assertEquals(emptyList<Page>(), playlists.pages)
+            assertEquals(top, playlists.libraryTab)
+        }
+        assertEquals(DockTab.PLAYLISTS, NavState.start(DockTab.LIBRARY).open(album).select(DockTab.PLAYLISTS).tab)
+        DockTab.entries.forEach { from -> assertEquals(DockTab.PLAYLISTS, NavState.start(from).select(DockTab.PLAYLISTS).tab) }
+    }
+
+    @Test
+    fun `each of Library's top tabs tapped is the one shown, Playlists among them`() {
+        LibraryTab.entries.forEach { from ->
+            LibraryTab.entries.forEach { top -> assertEquals(top, NavState.start(DockTab.LIBRARY).pickLibraryTab(from).pickLibraryTab(top).libraryTab) }
+        }
+        assertEquals(LibraryTab.PLAYLISTS, NavState.start(DockTab.LIBRARY).select(DockTab.LIBRARY).pickLibraryTab(LibraryTab.PLAYLISTS).libraryTab)
+    }
+
+    @Test
+    fun `only the Library icon takes Library back to Songs`() {
+        val playlists = NavState.start(DockTab.LIBRARY).pickLibraryTab(LibraryTab.PLAYLISTS)
+        val others: List<(NavState) -> NavState> = listOf(
+            { it.select(DockTab.PLAYLISTS) },
+            { it.select(DockTab.PLAYLISTS).select(DockTab.PLAYLISTS) },
+            { it.select(DockTab.SEARCH) },
+            { it.select(DockTab.TOOLS) },
+            { it.select(DockTab.PLAYLISTS).back()!! },
+            { it.select(DockTab.SEARCH).back()!! },
+            { it.open(Page.Playlist("p3")).back()!! },
+            { it.open(Page.Queues) },
+            { it.show(FullScreen.Player).back()!! },
+            { it.show(FullScreen.Player).open(album).back()!!.back()!! },
+        )
+        others.forEach { move -> assertEquals(LibraryTab.PLAYLISTS, move(playlists).libraryTab) }
+        assertEquals(LibraryTab.SONGS, playlists.select(DockTab.LIBRARY).libraryTab)
+        assertEquals(LibraryTab.SONGS, playlists.select(DockTab.PLAYLISTS).select(DockTab.LIBRARY).libraryTab)
+    }
+
+    @Test
+    fun `from the Playlists icon to Search and back stays on Playlists`() {
+        val playlists = NavState.start(DockTab.LIBRARY).select(DockTab.PLAYLISTS)
+        assertEquals(DockTab.PLAYLISTS, playlists.select(DockTab.SEARCH).select(DockTab.PLAYLISTS).tab)
+        assertEquals(DockTab.PLAYLISTS, playlists.select(DockTab.SEARCH).back()!!.tab)
+        val page = playlists.open(Page.Queues).select(DockTab.SEARCH).select(DockTab.PLAYLISTS)
+        assertEquals(DockTab.PLAYLISTS, page.tab)
+        assertEquals(listOf<Page>(Page.Queues), page.pages)
+    }
+
+    @Test
+    fun `a turn of the phone or process death keeps Playlists, and Library's Playlists top tab`() {
+        val top = NavState.start(DockTab.LIBRARY).pickLibraryTab(LibraryTab.PLAYLISTS)
+        assertEquals(top, NavState.decode(top.encode()))
+        assertEquals(top, restoreNav(top.encode(), DockTab.LIBRARY))
+        val dock = top.select(DockTab.PLAYLISTS)
+        assertEquals(dock, restoreNav(dock.encode(), DockTab.LIBRARY))
+        assertEquals(DockTab.PLAYLISTS, restoreNav(dock.encode(), DockTab.LIBRARY).tab)
+    }
+
+    @Test
     fun `Back to Library keeps its top tab, and so does a page left open on it`() {
         val albums = NavState.start(DockTab.LIBRARY).pickLibraryTab(LibraryTab.ALBUMS)
         assertEquals(LibraryTab.ALBUMS, albums.select(DockTab.SEARCH).back()!!.libraryTab)

@@ -181,6 +181,11 @@
     <!-- Add to -->
     <string name="lib_add_to_title">Add to</string>
     <string name="lib_add_to_queue">Add to queue</string>
+    <string name="lib_add_to_end">Add to end</string>
+    <plurals name="lib_queue_playing">
+        <item quantity="one">Playing · %d song</item>
+        <item quantity="other">Playing · %d songs</item>
+    </plurals>
     <plurals name="lib_queue_saved">
         <item quantity="one">Saved · %d song</item>
         <item quantity="other">Saved · %d songs</item>

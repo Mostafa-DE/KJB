@@ -111,7 +111,8 @@ fun sheetRows(place: SheetPlace, coversTags: Boolean, removeFromQueue: Boolean):
 sealed interface AddTarget {
     data object PlayNext : AddTarget
 
-    data object AddToQueue : AddTarget
+    /** "Add to end" of the queue [playing]; with none playing, "Add to queue" makes one of the songs. */
+    data class AddToQueue(val playing: QueueTarget?) : AddTarget
 
     data class Queue(val queue: QueueTarget) : AddTarget
 
@@ -125,13 +126,14 @@ sealed interface AddTarget {
 }
 
 /**
- * The Add to sheet's places: Play next and Add to queue, then the queues (saved, then recent; not the one playing,
- * which Add to queue is) and New queue, then Favourites, then the user's [playlists] by name and New playlist.
+ * The Add to sheet's places, the queues first: the queue playing, by name, with Play next and Add to end (without one
+ * they make a queue of the songs), then the other queues (saved, then recent) and New queue, then Favourites, then the
+ * user's [playlists] by name and New playlist.
  */
 fun addTargets(queues: List<QueueTarget>, playlists: List<Playlist>): List<AddTarget> {
     val others = queues.filterNot { it.playing }
     val collator = Collator.getInstance()
-    return listOf(AddTarget.PlayNext, AddTarget.AddToQueue) +
+    return listOf(AddTarget.PlayNext, AddTarget.AddToQueue(queues.firstOrNull { it.playing })) +
         (others.filter { it.saved } + others.filterNot { it.saved }).map(AddTarget::Queue) +
         listOf(AddTarget.NewQueue, AddTarget.Favourites) +
         playlists.sortedWith(compareBy(collator) { it.name }).map(AddTarget::ToPlaylist) +
@@ -234,6 +236,9 @@ class SongActions(private val playback: PlaybackCommands, private val playlists:
     fun playNext(songs: List<SongRef>): Outcome? = playback.playNext(songs)?.let { Outcome(Said.PlaysNext, it.asUndo()) }
 
     fun addToQueue(songs: List<SongRef>): Outcome? = playback.addToQueue(songs)?.let { Outcome(Said.AddedToQueue, it.asUndo()) }
+
+    /** Add to end of the queue [playing], as for any queue by name; with none playing, Add to queue makes one of [songs]. */
+    fun addToEnd(playing: QueueTarget?, songs: List<SongRef>): Outcome? = playing?.let { addToQueue(it, songs) } ?: addToQueue(songs)
 
     fun addToQueue(queue: QueueTarget, songs: List<SongRef>): Outcome? {
         val added = playback.addToQueue(queue.id, songs) ?: return null
@@ -583,7 +588,7 @@ fun SongSheetsHost(sheets: SongSheets, ui: LibraryUi, onActed: () -> Unit = {}) 
             is OpenSheet.AddTo -> AddToSheet(step.songs, addToTitle(step.songs, ui, library), ui, onDismiss = sheets::close) { target ->
                 when (target) {
                     AddTarget.PlayNext -> done(actions.playNext(step.songs))
-                    AddTarget.AddToQueue -> done(actions.addToQueue(step.songs))
+                    is AddTarget.AddToQueue -> done(actions.addToEnd(target.playing, step.songs))
                     is AddTarget.Queue -> done(actions.addToQueue(target.queue, step.songs))
                     AddTarget.NewQueue -> sheets.show(OpenSheet.NewQueue(step.songs, step.source, step.name))
                     AddTarget.Favourites -> doneLater { actions.favourite(step.songs, ui.playlists.favouriteSongs) }

@@ -1,6 +1,7 @@
 package app.lyrify.player
 
 import android.content.ComponentName
+import android.os.Environment
 import android.os.Looper
 import android.os.SystemClock
 import androidx.annotation.OptIn
@@ -26,19 +27,22 @@ import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.DataOutputStream
 import java.io.File
 import java.util.concurrent.TimeUnit
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.sin
 
 /**
  * KJB's own player on the phone (debug build): made-up test tones written to the app's cache, never to shared storage.
  * The facade, the bridge and the engine together through a MediaController; two songs back to back with no gap, in WAV,
  * MP3, FLAC and M4A; a song that cannot be played skipped, under Repeat all too; the queues and the place read back by
- * a player built again over the same files, as after the service stopped; the browse tree of the real service.
+ * a player built again over the same files, as after the service stopped; a saved queue left and resumed at its place,
+ * on the real songs of `Music/KJB test/` (read only); the browse tree of the real service.
  */
 @OptIn(UnstableApi::class)
 @RunWith(AndroidJUnit4::class)
@@ -337,6 +341,63 @@ class PlayerDeviceTest {
         assertEquals(1, onMain { again.engine.index })
         val position = onMain { again.engine.positionMs }
         assertTrue("opened at $position ms", position in 1_400L..1_600L)
+    }
+
+    /**
+     * The user's case on real files: the songs in `Music/KJB test/` (read only, never named), a saved queue paused in its
+     * second song, left for a song tapped in the Songs tab, then Resume: the same song, at the same second. The player is
+     * wired as the service wires it (the core follows its place and its song starts). Skipped without 3 readable songs.
+     */
+    @Test
+    fun aSavedQueueLeftForATappedSongResumesAtItsSongAndSecondOnRealFiles() {
+        val files = File(Environment.getExternalStorageDirectory(), "Music/KJB test").listFiles().orEmpty()
+            .filter { it.isFile && it.canRead() && it.extension.lowercase() in setOf("mp3", "flac", "m4a", "ogg", "opus", "wav") }
+            .sortedBy { it.name }
+        assumeTrue("Music/KJB test needs 3 readable songs", files.size >= 3)
+        val songs = files.mapIndexed { i, file -> song(file, "Test song ${i + 1}") }
+        val refs = songs.map(Song::ref)
+        val find: (SongRef) -> Song? = { ref -> songs.firstOrNull { it.path == ref.path } }
+        val built = build(songs)
+        assertTrue(waitFor(5_000) { built.core.ready.value })
+        val core = built.core
+        val engine = built.engine
+        onMain {
+            core.follow { engine.loaded.getOrNull(engine.index)?.let { PlayerAt(it, engine.positionMs) } }
+            engine.addListener(object : EngineListener {
+                override fun onSongStarted(uid: Long, lap: Boolean, natural: Boolean) {
+                    if (!lap) core.change { it.at(uid, System.currentTimeMillis()) }
+                }
+            })
+        }
+        cleanups += { core.follow(null) }
+        /** A change the screens send, applied to the player as the service does, then played. */
+        fun act(change: () -> Unit) = onMain {
+            change()
+            built.bridge.sync(core.book.value, find)
+            engine.setPlayWhenReady(true)
+        }
+
+        val trip = onMain { core.edit { book -> book.newQueue("Road trip", refs.take(3), QueueSource(SourceKind.PICKED, "picked:1", ""), System.currentTimeMillis())?.let { it.book to it.book.saved.first() } } }!!
+        act { core.switch { it.resume(trip, System.currentTimeMillis()) } }
+        act { core.switch { it.jump(trip, 1, System.currentTimeMillis()) } }
+        assertTrue("the queue never played", waitFor(5_000) { engine.isPlaying && engine.positionMs > 1_000 })
+        onMain { engine.setPlayWhenReady(false) }
+        assertTrue("never paused", waitFor(2_000) { !engine.isPlaying })
+        SystemClock.sleep(200)
+        val (left, at) = onMain { engine.loaded[engine.index] to engine.positionMs }
+
+        act { core.switch { it.play(refs, 2, QueueSource(SourceKind.SONGS, "songs", ""), System.currentTimeMillis()) } }
+        assertTrue("the tapped song never played", waitFor(5_000) { engine.isPlaying && core.book.value.currentId != trip })
+        SystemClock.sleep(1_000)
+        val kept = onMain { core.book.value.queue(trip)!! }
+        assertEquals(left, kept.current!!.uid)
+        assertTrue("kept at ${kept.positionMs} ms, left at $at ms", abs(kept.positionMs - at) < 1_000)
+
+        act { core.switch { it.resume(trip, System.currentTimeMillis()) } }
+        val (song, position) = onMain { engine.loaded[engine.index] to engine.positionMs }
+        assertEquals(left, song)
+        assertTrue("resumed at $position ms, left at $at ms", abs(position - at) < 1_000)
+        assertTrue("never played on", waitFor(5_000) { engine.isPlaying })
     }
 
     @Test

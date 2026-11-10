@@ -2,6 +2,7 @@ package app.lyrify.data
 
 import android.database.Cursor
 import android.provider.MediaStore
+import app.lyrify.BuildConfig
 import app.lyrify.ai.ArrayMix
 import app.lyrify.dupes.LibraryRead
 import app.lyrify.dupes.MediaStoreLibrary
@@ -112,6 +113,22 @@ class SharedWritesTest {
         }
         assertFalse(SharedWrites.ANYWHERE.testFolderOnly)
         assertEquals(emptyList<String>(), logs)
+    }
+
+    @Test
+    fun `every build but release is fenced like the debug build, by its TEST_FOLDER_ONLY flag`() {
+        // Unit tests run on the debug build. The Baseline Profile's bench builds (app.lyrify.bench) are release builds in
+        // every other way, so the fence keys on this flag, never on BuildConfig.DEBUG; app/build.gradle.kts fails the
+        // build for any build type but release without it on.
+        assertTrue(BuildConfig.TEST_FOLDER_ONLY)
+        val writes = SharedWrites.forThisBuild { logs += it }
+        assertTrue(writes.testFolderOnly)
+        assertFalse(writes.allows(SharedWrite.LRC_CREATE, elsewhere[0]))
+        assertFalse(writes.lists(elsewhere[0]))
+        val source = File("src/main/java/app/lyrify/data/SharedWrites.kt").readText()
+        assertTrue("run from the app module", "fun forThisBuild" in source)
+        assertTrue("the fence must read BuildConfig.TEST_FOLDER_ONLY", "BuildConfig.TEST_FOLDER_ONLY" in source)
+        assertFalse("the fence must not read BuildConfig.DEBUG", "BuildConfig.DEBUG" in source)
     }
 
     @Test
