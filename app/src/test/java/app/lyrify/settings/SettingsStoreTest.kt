@@ -43,6 +43,7 @@ class SettingsStoreTest {
             countPlayAfterPercent = 70,
             skipBackSeconds = 15,
             skipForwardSeconds = 5,
+            connectDevices = listOf(ConnectDevice(4, "Example Buds"), ConnectDevice(9, "Car Kit Demo")),
         ),
         audio = AudioSettings(levelling = Levelling.ALBUM, crossfadeSeconds = 6),
         library = LibrarySettings(
@@ -80,6 +81,7 @@ class SettingsStoreTest {
     fun `every setting starts at the default the specs give`() {
         val s = Settings()
         assertEquals(PlaybackSettings(RememberPlace.LONG_SONGS, true, true, 50, 30, 10), s.playback)
+        assertEquals(emptyList<ConnectDevice>(), s.playback.connectDevices)
         assertEquals(AudioSettings(Levelling.AUTO, crossfadeSeconds = 0), s.audio)
         assertEquals(
             listOf(LibraryTab.SONGS, LibraryTab.ALBUMS, LibraryTab.ARTISTS, LibraryTab.FOLDERS, LibraryTab.PLAYLISTS, LibraryTab.GENRES),
@@ -199,6 +201,35 @@ class SettingsStoreTest {
         val s = SettingsJson.decode("""{"library":{"foldersToSkip":["Recordings/Calls",5,"","  ","Recordings/Calls",null,"Music/Voice Notes"]}}""")
 
         assertEquals(listOf("Recordings/Calls", "Music/Voice Notes"), s?.library?.foldersToSkip)
+    }
+
+    @Test
+    fun `picked devices for Start when connected keep one entry per association, and only whole entries`() {
+        val text = """{"playback":{"connectDevices":[{"id":4,"name":"Example Buds"},{"id":"9","name":"Car Kit Demo"},{"id":7},""" +
+            """{"id":8,"name":"  "},{"id":0,"name":"Zero Demo"},{"id":2.5,"name":"Half Demo"},5,{"id":4,"name":"Example Buds Again"},""" +
+            """{"id":11,"name":" Desk Speaker Demo "}]}}"""
+
+        assertEquals(
+            listOf(ConnectDevice(4, "Example Buds"), ConnectDevice(11, "Desk Speaker Demo")),
+            SettingsJson.decode(text)?.playback?.connectDevices,
+        )
+        assertEquals(emptyList<ConnectDevice>(), SettingsJson.decode("""{"playback":{"connectDevices":{"id":4}}}""")?.playback?.connectDevices)
+    }
+
+    @Test
+    fun `a settings file from before Start when connected came back still reads`() {
+        // 3.0's first settings had a switch here; P2 dropped it. Neither carries a device.
+        val switched = """{"version":1,"playback":{"rememberPlace":"ALL_SONGS","headsetButtons":false,"startWhenConnected":true,""" +
+            """"skipShortClips":false,"countPlayAfterPercent":70,"skipBackSeconds":15,"skipForwardSeconds":5},"nav":{"lastTab":"TOOLS"}}"""
+        val dropped = """{"version":1,"playback":{"rememberPlace":"ALL_SONGS","headsetButtons":false,""" +
+            """"skipShortClips":false,"countPlayAfterPercent":70,"skipBackSeconds":15,"skipForwardSeconds":5},"nav":{"lastTab":"TOOLS"}}"""
+        val expected = Settings(playback = changed.playback.copy(connectDevices = emptyList()), nav = NavSettings(lastTab = DockTab.TOOLS))
+
+        assertEquals(expected, SettingsJson.decode(switched))
+        assertEquals(expected, SettingsJson.decode(dropped))
+        // Written back, the old switch is gone and the devices are stored.
+        assertFalse("startWhenConnected" in SettingsJson.encode(expected))
+        assertTrue("connectDevices" in SettingsJson.encode(expected))
     }
 
     // A file that is not settings at all

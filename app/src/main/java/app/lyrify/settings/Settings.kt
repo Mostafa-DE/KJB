@@ -45,6 +45,8 @@ data class PlaybackSettings(
     val skipBackSeconds: Int = 30,
     /** "Skip amounts", Forward: the jump of the seek button beside Next, in seconds. One of [SKIP_SECONDS]. */
     val skipForwardSeconds: Int = 10,
+    /** "Start when connected": the Bluetooth devices picked for it, in the order added; Off with none. */
+    val connectDevices: List<ConnectDevice> = emptyList(),
 ) {
     companion object {
         /** 10% to 100% in 10% steps. */
@@ -52,6 +54,12 @@ data class PlaybackSettings(
         val SKIP_SECONDS: List<Int> = listOf(5, 10, 15, 30)
     }
 }
+
+/**
+ * A device picked for "Start when connected": Android's association with KJB ([associationId], from the Companion
+ * Device Manager) and the name Android's picker showed. Never its Bluetooth address.
+ */
+data class ConnectDevice(val associationId: Int, val name: String)
 
 /** "Remember my place": Long songs (10 minutes or longer, the default), All songs, or Off. */
 enum class RememberPlace { LONG_SONGS, ALL_SONGS, OFF }
@@ -200,6 +208,7 @@ object SettingsJson {
                         "countPlayAfterPercent" to it.countPlayAfterPercent,
                         "skipBackSeconds" to it.skipBackSeconds,
                         "skipForwardSeconds" to it.skipForwardSeconds,
+                        "connectDevices" to JsonArray(it.connectDevices.map { device -> obj("id" to device.associationId, "name" to device.name) }),
                     )
                 },
                 "audio" to settings.audio.let { obj("levelling" to it.levelling.name, "crossfadeSeconds" to it.crossfadeSeconds) },
@@ -259,6 +268,7 @@ object SettingsJson {
                     countPlayAfterPercent = it.number("countPlayAfterPercent", d.playback.countPlayAfterPercent, PlaybackSettings.PLAY_SHARES::contains),
                     skipBackSeconds = it.number("skipBackSeconds", d.playback.skipBackSeconds, PlaybackSettings.SKIP_SECONDS::contains),
                     skipForwardSeconds = it.number("skipForwardSeconds", d.playback.skipForwardSeconds, PlaybackSettings.SKIP_SECONDS::contains),
+                    connectDevices = connectDevices(it["connectDevices"]),
                 )
             } ?: d.playback,
             audio = root.section("audio")?.let {
@@ -326,6 +336,14 @@ object SettingsJson {
         return if (all.any { it.shown }) all else LibrarySettings.DEFAULT_TABS
     }
 
+    /** The picked devices: entries with a whole positive id and a name, the first one of each id. */
+    private fun connectDevices(element: JsonElement?): List<ConnectDevice> = (element as? JsonArray).orEmpty().mapNotNull { item ->
+        val device = item as? JsonObject ?: return@mapNotNull null
+        val id = device.number("id", 0) { it > 0 }.takeIf { it > 0 } ?: return@mapNotNull null
+        val name = device["name"]?.text()?.trim()?.takeIf(String::isNotEmpty) ?: return@mapNotNull null
+        ConnectDevice(id, name)
+    }.distinctBy { it.associationId }
+
     private fun JsonObject.section(key: String): JsonObject? = this[key] as? JsonObject
 
     private fun JsonObject.flag(key: String, default: Boolean): Boolean = (this[key] as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull ?: default
@@ -351,6 +369,7 @@ object SettingsJson {
                 is Boolean -> JsonPrimitive(value)
                 is Int -> JsonPrimitive(value)
                 is String -> JsonPrimitive(value)
+                is JsonElement -> value
                 else -> throw IllegalArgumentException("unsupported value for $key")
             }
         },
