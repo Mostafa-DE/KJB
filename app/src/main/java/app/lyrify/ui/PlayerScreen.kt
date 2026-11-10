@@ -10,11 +10,11 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -26,20 +26,14 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -87,13 +81,9 @@ import app.lyrify.settings.LibrarySettings
 import app.lyrify.settings.PlayerUiSettings
 import app.lyrify.settings.Settings
 import coil3.compose.AsyncImage
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.io.File
-import java.io.IOException
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -267,9 +257,14 @@ fun PlayerView() {
     val toasts = LocalToasts.current
     val resources = LocalResources.current
     val close = { nav.close(FullScreen.Player) }
+    var lyricsRoute by remember { mutableStateOf<PlayerRoute?>(null) }
     val route: (PlayerRoute) -> Unit = { route ->
-        // Declared now, filled by its milestone; a debug build says which.
-        if (BuildConfig.DEBUG) scope.launch { toasts.show(Toast("Coming in ${route.milestone}")) }
+        when (route) {
+            // The lyrics panel's Search and "Aa" (LyricsViews.kt).
+            PlayerRoute.SEARCH_LYRICS, PlayerRoute.LYRICS_TEXT -> lyricsRoute = route
+            // Declared now, filled by its milestone; a debug build says which.
+            else -> if (BuildConfig.DEBUG) scope.launch { toasts.show(Toast("Coming in ${route.milestone}")) }
+        }
     }
     var queueSheet by remember { mutableStateOf(false) }
 
@@ -310,6 +305,7 @@ fun PlayerView() {
         }
     }
     if (queueSheet) QueueSheet(onDismiss = { queueSheet = false })
+    lyricsRoute?.let { PlayerLyricsSheet(it, ui) { lyricsRoute = null } }
 }
 
 /** The cover, blurred and faded, behind the top of the player. */
@@ -514,16 +510,7 @@ private fun LyricsPanel(ui: PlayerUi, enabled: Boolean, onFlipBack: () -> Unit, 
     val nav = LocalNavigator.current
     val path = ui.item.song.path
     val entry = LocalLyrics.current.ledger.entries[path]
-    val lyrics by produceState<PanelLyrics?>(null, path, entry?.status, entry?.updatedAt) {
-        value = withContext(Dispatchers.IO) {
-            val text = try {
-                LrcFormat.sidecarPath(path)?.let(::File)?.takeIf(File::isFile)?.readText()
-            } catch (_: IOException) {
-                null
-            }
-            panelLyrics(text, entry?.status)
-        }
-    }
+    val lyrics = rememberSongLyrics(path, entry)
     val now = rememberClock(ui.playing)
     Column(
         Modifier
@@ -546,55 +533,24 @@ private fun LyricsPanel(ui: PlayerUi, enabled: Boolean, onFlipBack: () -> Unit, 
         }
         Box(Modifier.weight(1f).fillMaxWidth()) {
             when (val shown = lyrics) {
-                is PanelLyrics.Synced -> SyncedLines(shown.lines, ui.positionAt(now), enabled) { line ->
-                    onSeek(line.timeMs)
-                    if (!ui.playing) onPlay()
+                is PanelLyrics.Synced -> SyncedLyrics(
+                    shown.lines,
+                    ui.positionAt(now),
+                    enabled,
+                    MaterialTheme.typography.titleLarge,
+                    MaterialTheme.typography.titleMedium,
+                    PaddingValues(start = 12.dp, end = 12.dp, top = 24.dp, bottom = 160.dp),
+                ) { line ->
+                    val tap = lineTap(line, ui.playing)
+                    onSeek(tap.seekMs)
+                    if (tap.play) onPlay()
                 }
-                is PanelLyrics.Plain -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(start = 22.dp, end = 22.dp, bottom = 64.dp)) {
-                    shown.lines.forEach { Text(it, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(bottom = 4.dp)) }
-                }
+                is PanelLyrics.Plain -> StillLyrics(shown.lines, MaterialTheme.typography.titleMedium, PaddingValues(start = 22.dp, end = 22.dp, bottom = 64.dp))
                 PanelLyrics.Finding -> PanelState(stringResource(R.string.player_finding_lyrics), action = null)
                 PanelLyrics.None -> PanelState(stringResource(R.string.player_no_lyrics)) { onRoute(PlayerRoute.SEARCH_LYRICS) }
                 null -> Unit
             }
             CoverChip(ui, Modifier.align(Alignment.BottomEnd).padding(10.dp), enabled, onFlipBack)
-        }
-    }
-}
-
-/** Synced lines, the current one lit and kept in view; after the user scrolls, the panel leaves the list alone for a moment. */
-@Composable
-private fun SyncedLines(lines: List<LrcLine>, positionMs: Long, enabled: Boolean, onLine: (LrcLine) -> Unit) {
-    val list = rememberLazyListState()
-    val current = currentLine(lines, positionMs)
-    val dragged by list.interactionSource.collectIsDraggedAsState()
-    var touchedAt by remember { mutableLongStateOf(0L) }
-    LaunchedEffect(dragged) { if (dragged) touchedAt = SystemClock.elapsedRealtime() }
-    val reduced = LocalReducedMotion.current
-    val viewport = with(LocalDensity.current) { 120.dp.roundToPx() }
-    LaunchedEffect(current) {
-        if (current < 0 || SystemClock.elapsedRealtime() - touchedAt < LEAVE_ALONE_MS) return@LaunchedEffect
-        if (reduced) list.scrollToItem(current, -viewport) else list.animateScrollToItem(current, -viewport)
-    }
-    val colors = MaterialTheme.colorScheme
-    LazyColumn(state = list, modifier = Modifier.fillMaxSize(), contentPadding = androidx.compose.foundation.layout.PaddingValues(start = 12.dp, end = 12.dp, top = 24.dp, bottom = 160.dp)) {
-        itemsIndexed(lines) { i, line ->
-            val label = stringResource(R.string.player_line_at, clock(line.timeMs), line.text)
-            Text(
-                line.text,
-                style = if (i == current) MaterialTheme.typography.titleLarge else MaterialTheme.typography.titleMedium,
-                color = when {
-                    i == current -> colors.onSurface
-                    i < current -> colors.outline
-                    else -> colors.onSurfaceVariant
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(14.dp))
-                    .clickable(enabled = enabled, role = Role.Button) { onLine(line) }
-                    .semantics { contentDescription = label }
-                    .padding(horizontal = 8.dp, vertical = 6.dp),
-            )
         }
     }
 }
@@ -669,9 +625,6 @@ private fun PlayerChips(ui: PlayerUi) = Unit
 private const val FLIP_MS = 550
 private const val FADE_MS = 220
 private const val CAMERA = 16f
-
-/** After the user scrolls the lyrics, the panel leaves them alone this long. */
-private const val LEAVE_ALONE_MS = 3_500L
 
 /** How far a swipe must travel to skip, and to close the player. */
 private val SWIPE_SKIP = 70.dp

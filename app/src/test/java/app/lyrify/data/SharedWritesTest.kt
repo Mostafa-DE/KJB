@@ -368,6 +368,7 @@ class SharedWritesTest {
         val SHARED: Set<String> = setOf(
             "backup/M3u.kt",
             "dupes/SongTrash.kt",
+            "lyrics/LrcEdits.kt",
             "lyrics/LyricsPipeline.kt",
             "tags/SafeWriter.kt",
             "tags/WriteJournal.kt",

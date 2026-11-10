@@ -43,6 +43,8 @@ import app.lyrify.media.QueueSweep
 import app.lyrify.settings.Settings
 import app.lyrify.ui.DESTINATION_PLAYER
 import app.lyrify.ui.EXTRA_DESTINATION
+import app.lyrify.ui.LockLyricsActivity
+import app.lyrify.ui.LockLyricsPart
 import app.lyrify.ui.MainActivity
 import app.lyrify.widget.WidgetPart
 import com.google.common.collect.ImmutableList
@@ -99,7 +101,7 @@ private const val OPEN_PLAYER: Int = 1
 @OptIn(UnstableApi::class)
 class PlaybackService : MediaLibraryService() {
     /** The service's parts: P2, A1, A3 and A4 each add one line here, in merge order. */
-    private val parts: List<ServicePart> = listOf(WidgetPart())
+    private val parts: List<ServicePart> = listOf(WidgetPart(), LockLyricsPart())
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + logFailures)
     private val io = CoroutineScope(SupervisorJob() + Dispatchers.IO + logFailures)
@@ -130,8 +132,11 @@ class PlaybackService : MediaLibraryService() {
         core.follow { engine.loaded.getOrNull(engine.index)?.let { PlayerAt(it, engine.positionMs) } }
         thumbnails = ThumbnailLoader(this)
         val built = MediaLibrarySession.Builder(this, player, Callback())
-            // A tap on the notification or the lock screen's card opens the player, over the tab the app was on.
-            .setSessionActivity(PendingIntent.getActivity(this, OPEN_PLAYER, openPlayer(), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
+            // A tap on the notification or the lock screen's card opens the player, over the tab the app was on, and the
+            // lyrics on top of it: over the lock screen they show without unlocking; on an unlocked phone they close at once (P3).
+            .setSessionActivity(
+                PendingIntent.getActivities(this, OPEN_PLAYER, arrayOf(openPlayer(), Intent(this, LockLyricsActivity::class.java)), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT),
+            )
             .setBitmapLoader(thumbnails)
             .build()
         session = built
