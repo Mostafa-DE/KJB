@@ -76,6 +76,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.border
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
@@ -910,7 +911,7 @@ private fun TitleAndLinks(ui: PlayerUi, settings: LibrarySettings) {
         overflow = TextOverflow.Ellipsis,
         modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
     )
-    Row(horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().height(TOUCH)) {
+    Row(horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().heightIn(min = TOUCH)) {
         if (song == null) {
             PlayerLink(stringResource(R.string.player_not_on_phone), onClick = null, Modifier)
             return@Row
@@ -930,8 +931,10 @@ private fun PlayerLink(text: String, onClick: (() -> Unit)?, modifier: Modifier)
     val colors = MaterialTheme.colorScheme
     Box(
         contentAlignment = Alignment.Center,
+        // At least 48 dp to touch whatever room the line is given; the words look the same.
         modifier = modifier
-            .height(TOUCH)
+            .minimumInteractiveComponentSize()
+            .heightIn(min = TOUCH)
             .clip(RoundedCornerShape(12.dp))
             .then(if (onClick != null) Modifier.clickable(role = Role.Button, onClick = onClick) else Modifier)
             .padding(horizontal = 4.dp),
