@@ -128,6 +128,7 @@ dependencies {
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.session)
     implementation(libs.media3.common)
+    implementation(project(":taglib"))
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)

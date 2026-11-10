@@ -7,6 +7,7 @@ import app.lyrify.data.LedgerState
 import app.lyrify.data.LedgerStore
 import app.lyrify.data.LyricsSource
 import app.lyrify.data.LyricsStatus
+import app.lyrify.data.PathLocks
 import app.lyrify.data.Retry
 import app.lyrify.data.SharedWrite
 import app.lyrify.data.SharedWrites
@@ -171,9 +172,9 @@ class LyricsPipeline(
     private val warn: (String) -> Unit = log,
     /** How the bytes go into a new `.lrc`; tests make it fail. */
     private val writeBytes: (FileChannel, ByteBuffer) -> Unit = SidecarFile::writeFully,
+    /** The per-path lock shared with the tag writer ([app.lyrify.Lyrify.locks]): one file is never handled twice at once. */
+    private val locks: PathLocks = PathLocks(),
 ) {
-    /** Audio paths being handled right now. */
-    private val inProgress = MutableStateFlow<Set<String>>(emptySet())
 
     /** Songs the AI is working on, for the queue sweep to skip (one set with the pipeline, so one per process). */
     val aiPaths: AiPaths = AiPaths()
@@ -492,18 +493,8 @@ class LyricsPipeline(
         ledger.put(entry.copy(sha256 = stamp.sha256, writtenAt = stamp.modifiedAt)).also { if (it) log("${entry.title}: v1 lyrics adopted") }
     }
 
-    /** Runs [block] once no other call is handling [path], keeping others off it meanwhile. */
-    private suspend fun <T> exclusive(path: String, block: suspend () -> T): T {
-        while (true) {
-            val busy = inProgress.first { path !in it }
-            if (inProgress.compareAndSet(busy, busy + path)) break
-        }
-        try {
-            return block()
-        } finally {
-            inProgress.update { it - path }
-        }
-    }
+    /** Runs [block] once no other call (nor the tag writer) is handling [path], keeping others off it meanwhile. */
+    private suspend fun <T> exclusive(path: String, block: suspend () -> T): T = locks.exclusive(path, block)
 
     /**
      * At most [TrackNames.MAX_REQUESTS] requests: the [TrackNames.queries] (from the tags, and the file name when they

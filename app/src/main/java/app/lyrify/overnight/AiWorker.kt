@@ -143,6 +143,8 @@ class AiWorker(context: Context, params: WorkerParameters) : CoroutineWorker(con
             loadFailures = loadFailures,
             engineContext = Dispatchers.Default,
             aiPaths = pipeline.aiPaths,
+            // A song the tag writer or its start-up recovery holds is left for the next run.
+            canTake = { path -> path !in Lyrify.locks && audioWithoutLyrics(path) },
             inUse = AiLyrics.inUse,
             badModel = { model ->
                 ModelDownloads.discard(context, model)

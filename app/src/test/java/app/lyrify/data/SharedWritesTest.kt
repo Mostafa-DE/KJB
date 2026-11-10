@@ -369,6 +369,8 @@ class SharedWritesTest {
             "backup/M3u.kt",
             "dupes/SongTrash.kt",
             "lyrics/LyricsPipeline.kt",
+            "tags/SafeWriter.kt",
+            "tags/WriteJournal.kt",
             "tones/ToneFiles.kt",
         )
 
@@ -386,6 +388,7 @@ class SharedWritesTest {
             "overnight/CrashGuard.kt",
             "settings/SettingsStore.kt",
             "stats/PlayLog.kt",
+            "tags/UndoStore.kt",
             "tags/lookup/MetaClient.kt",
             "tones/ToneAudio.kt",
         )
