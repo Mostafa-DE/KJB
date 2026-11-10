@@ -101,14 +101,21 @@ class WriterReviewTest {
     @Test
     fun `a song that changed or moved after its private copy was made is not written`() {
         val song = rig.song("Paper Lantern", 41, fields)
+        val original = rig.bytes(song)
         var checks = 0
-        // The second busy check comes right before the intent: the song changes in between.
+        // The second busy check comes right before the intent: the song changes in between. Not proven as it was, so
+        // its backup stays, set aside.
         rig.busy.onCheck = { if (++checks == 3) File(song.path).appendBytes(byteArrayOf(0)) }
-        assertEquals(SongOutcome.COULD_NOT_CHANGE, write(song))
+        assertEquals(SongOutcome.SET_ASIDE, write(song))
         val changed = rig.bytes(song)
-        unopened(song, changed)
+        assertArrayEquals(original + byteArrayOf(0), changed)
+        assertFalse("open rw" in rig.events)
         assertEquals(0, rig.journal.pending().size)
+        assertTrue(backupKept(original))
 
+        // MediaStore's row moved off the path: the song itself is as it was, so its backup goes.
+        File(rig.dirs.journal, WriteJournal.SET_ASIDE).deleteRecursively()
+        rig.dirs.backups.listFiles()!!.forEach { it.delete() }
         checks = 0
         rig.busy.onCheck = { if (++checks == 3) rig.songs.ids[song.path] = 99 }
         assertEquals(SongOutcome.COULD_NOT_CHANGE, write(song))
@@ -120,12 +127,15 @@ class WriterReviewTest {
     @Test
     fun `a new MediaStore id for the same path is the same song - its backup goes back, now and at the next start`() {
         val song = rig.song("Paper Lantern", 41, fields)
-        val original = rig.bytes(song)
-        // Closing the rw descriptor made MediaStore drop row 41 and index the path again as 77: a failed write.
+        // Closing the rw descriptor made MediaStore drop row 41 and index the path again as 77. The song reads back as
+        // written, so nothing is put back: the start-up recovery settles it under its new id.
         rig.songs.scanned = { rig.songs.ids[song.path] = 77; 77 }
-        assertEquals(SongOutcome.LEFT_AS_IT_WAS, write(song))
-        assertArrayEquals(original, rig.bytes(song))
-        assertEquals(0, rig.journal.pending().size)
+        assertEquals(SongOutcome.RECOVERY_PENDING, write(song))
+        val written = rig.bytes(song)
+        assertEquals(1, rig.journal.pending().size)
+        rig.restart()
+        assertEquals(Recovered(settled = 1), runBlocking { rig.recovery().recover() })
+        assertArrayEquals(written, rig.bytes(song))
 
         // Killed mid-write; at the next start the path has a new id.
         rig.songs.scanned = { rig.songs.ids[it] }
@@ -284,15 +294,16 @@ class WriterReviewTest {
     // 3. The last look, after the intent and right before the first byte
 
     @Test
-    fun `a song that changes after the intent was written is not written, and the intent is closed`() {
+    fun `a song that changes after the intent was written is not written, and its intent is set aside with its backup`() {
         val song = rig.song("Paper Lantern", 41, fields)
+        val original = rig.bytes(song)
         rig.songs.onOpen = { File(song.path).appendBytes(byteArrayOf(0)) }
-        assertEquals(SongOutcome.COULD_NOT_CHANGE, write(song))
+        assertEquals(SongOutcome.SET_ASIDE, write(song))
         rig.songs.onOpen = {}
-        val changed = rig.bytes(song)
+        assertArrayEquals(original + byteArrayOf(0), rig.bytes(song))
         assertEquals(0, rig.journal.pending().size)
-        assertEquals(emptyList<String>(), rig.leftovers())
-        assertTrue(changed.last() == 0.toByte())
+        assertEquals(1, File(rig.dirs.journal, WriteJournal.SET_ASIDE).listFiles()!!.size)
+        assertTrue(backupKept(original))
     }
 
     // 4. The writer's folders
@@ -335,7 +346,7 @@ class WriterReviewTest {
     fun `a failed write is put back through its own descriptor`() {
         val song = rig.song("Paper Lantern", 41, fields)
         val original = rig.bytes(song)
-        rig.songs.scanned = { null }
+        rig.songs.plans += WritePlan.FailAfter(3_000)
         assertEquals(SongOutcome.LEFT_AS_IT_WAS, write(song))
         assertArrayEquals(original, rig.bytes(song))
         assertEquals(1, rig.events.count { it == "open rw" })
@@ -344,8 +355,10 @@ class WriterReviewTest {
     @Test
     fun `another file put at the song's path during its write is never written over - the write is set aside`() {
         val song = rig.song("Paper Lantern", 41, fields)
+        val original = rig.bytes(song)
         val other = FakeTagFile.song(mapOf("TITLE" to listOf("Salt Clock")), audio = TagFixtures.mp3Audio(seed = 77))
-        // The rescan fails; meanwhile another app replaced the file at the path (a new inode).
+        // The rescan fails; meanwhile another app replaced the file at the path (a new inode). The write read back
+        // right, so it is left for the start-up recovery, which sets it aside.
         rig.songs.scanned = {
             // Moved away, not deleted, so the new file can't be given the same inode number.
             File(song.path).renameTo(File(folder.root, "moved.mp3"))
@@ -353,10 +366,14 @@ class WriterReviewTest {
             null
         }
 
-        assertEquals(SongOutcome.SET_ASIDE, write(song))
+        assertEquals(SongOutcome.RECOVERY_PENDING, write(song))
+        rig.songs.scanned = { rig.songs.ids[it] }
+        rig.restart()
+        assertEquals(Recovered(setAside = 1), runBlocking { rig.recovery().recover() })
         assertArrayEquals(other, rig.bytes(song))
         assertEquals(0, rig.journal.pending().size)
         assertEquals(1, File(rig.dirs.journal, WriteJournal.SET_ASIDE).listFiles()!!.size)
+        assertTrue(backupKept(original))
     }
 
     @Test
@@ -416,7 +433,7 @@ class WriterReviewTest {
     fun `a file made at the song's path in its place, even reusing its inode, is never written over by the recovery`() {
         val song = rig.song("Paper Lantern", 41, fields)
         killedMidWrite(song)
-        val songId = checkNotNull(rig.songs.fileId(song.path))
+        val songId = rig.songs.fileId(song.path)
         val foreign = FakeTagFile.song(mapOf("TITLE" to listOf("Salt Clock")), audio = TagFixtures.mp3Audio(seed = 77))
         // Right as the recovery opens it: the song deleted, a new file made at its path, given the song's inode.
         rig.songs.onOpen = {
@@ -434,7 +451,7 @@ class WriterReviewTest {
         val song = rig.song("Paper Lantern", 41, fields)
         val original = rig.bytes(song)
         killedMidWrite(song)
-        val now = checkNotNull(rig.songs.fileId(song.path))
+        val now = rig.songs.fileId(song.path)
         rig.songs.fileIds[song.path] = now.copy(dev = now.dev + 1)
 
         assertEquals(Recovered(settled = 1, restored = 1), runBlocking { rig.recovery().recover() })
@@ -510,7 +527,7 @@ class WriterReviewTest {
         }
         rig.restart()
         val torn = rig.bytes(song)
-        assertTrue(torn.size > original.size && torn.size < rig.journal.pending().single().expected.length)
+        assertTrue(torn.size > original.size && torn.size < checkNotNull(rig.journal.pending().single().expected).length)
         rig.songs.failReads = 1
 
         assertEquals(Recovered(waiting = 1), runBlocking { rig.recovery().recover() })
@@ -595,6 +612,283 @@ class WriterReviewTest {
         val kept = rig.dirs.backups.listFiles()!!.toSet() - snapshots
         assertEquals(1, kept.size)
         assertArrayEquals(before, kept.single().readBytes())
+    }
+
+    // Sixth review: a backup goes only on a fresh proof that the song is at its path; an error is never a decision
+
+    private val titleOnly = TagEdit(fields = mapOf("TITLE" to listOf("Paper Lantern")))
+
+    /** Whether a backup holding [bytes] is still kept. */
+    private fun backupKept(bytes: ByteArray): Boolean = rig.dirs.backups.listFiles().orEmpty().any { it.readBytes().contentEquals(bytes) }
+
+    /**
+     * A second write of [song] (the first made its snapshot, so this one's backup is not kept by Undo), killed in the
+     * rescan after its last byte; then a new process. Its backup.
+     */
+    private fun secondWriteKilledOnScan(song: SongTarget): File {
+        assertEquals(SongOutcome.WRITTEN, write(song, titleOnly))
+        rig.songs.killOnScan = true
+        try {
+            write(song)
+        } catch (_: SimulatedKill) {
+        }
+        rig.restart()
+        return File(rig.dirs.backups, rig.journal.pending().single().backup)
+    }
+
+    @Test
+    fun `a song replaced while its new content is made keeps its backup, whichever check then stops the write`() {
+        for (unknown in listOf(true, false)) {
+            val song = rig.song(if (unknown) "Paper Lantern" else "Tin Roof", if (unknown) 41 else 42, fields)
+            val before = rig.bytes(song)
+            val copy = rig.copy
+            // While the private copy is made: the song replaced, and (once) the media sessions no longer listed.
+            rig.copy = { from, to ->
+                copy(from, to)
+                if (to.parentFile == rig.dirs.work) {
+                    replace(song)
+                    rig.busy.unknown = unknown
+                }
+            }
+            val outcome = write(song)
+            rig.copy = copy
+            rig.busy.unknown = false
+
+            assertEquals("sessions unknown: $unknown", SongOutcome.SET_ASIDE, outcome)
+            assertArrayEquals(saltClock, rig.bytes(song))
+            assertTrue(backupKept(before))
+        }
+    }
+
+    @Test
+    fun `a song replaced while it is read before the first byte keeps its backup, and nothing is written`() {
+        val song = rig.song("Paper Lantern", 41, fields)
+        val before = rig.bytes(song)
+        rig.songs.onRead = {
+            rig.songs.onRead = {}
+            replace(song)
+        }
+
+        assertEquals(SongOutcome.SET_ASIDE, write(song))
+        assertArrayEquals(saltClock, rig.bytes(song))
+        assertTrue(backupKept(before))
+    }
+
+    @Test
+    fun `a song replaced while a put-back is rescanned keeps its backup`() {
+        val song = rig.song("Paper Lantern", 41, fields)
+        assertEquals(SongOutcome.WRITTEN, write(song, titleOnly))
+        val before = rig.bytes(song)
+        rig.songs.plans += WritePlan.FailAfter(3_000)
+        rig.songs.scanned = { path ->
+            rig.songs.scanned = { rig.songs.ids[it] }
+            replace(song)
+            rig.songs.ids[path]
+        }
+
+        assertEquals(SongOutcome.SET_ASIDE, write(song))
+        assertArrayEquals(saltClock, rig.bytes(song))
+        assertTrue(backupKept(before))
+    }
+
+    @Test
+    fun `a song replaced while the recovery saves its History keeps its backup`() {
+        val song = rig.song("Paper Lantern", 41, fields)
+        val backup = secondWriteKilledOnScan(song)
+        val before = backup.readBytes()
+        // The first fsync of the recovery is the one saving the History record.
+        rig.folders.onSync = {
+            rig.folders.onSync = {}
+            replace(song)
+        }
+
+        assertEquals(Recovered(setAside = 1), runBlocking { rig.recovery().recover() })
+        assertArrayEquals(saltClock, rig.bytes(song))
+        assertArrayEquals(before, backup.readBytes())
+    }
+
+    @Test
+    fun `a read that fails in the verify after a write leaves the song as written, for the recovery`() {
+        val song = rig.song("Paper Lantern", 41, fields)
+        val before = rig.bytes(song)
+        val file = File(song.path)
+        // Right before the write: the reads after it fail, through the descriptor and by the path.
+        rig.songs.onWrite = {
+            rig.songs.onWrite = {}
+            rig.songs.failReads = 1
+            file.setReadable(false)
+        }
+        val outcome = try {
+            write(song)
+        } finally {
+            file.setReadable(true)
+        }
+
+        assertEquals(SongOutcome.RECOVERY_PENDING, outcome)
+        assertFalse(before.contentEquals(rig.bytes(song)))
+        assertEquals(listOf("Paper Lantern"), rig.fields(song)["TITLE"])
+        rig.restart()
+        assertEquals(Recovered(settled = 1), runBlocking { rig.recovery().recover() })
+        assertEquals(listOf("Paper Lantern"), rig.fields(song)["TITLE"])
+    }
+
+    @Test
+    fun `a backup that can't be read now decides nothing, the torn song waits and is then put back`() {
+        val song = rig.song("Paper Lantern", 41, fields)
+        val original = rig.bytes(song)
+        killedMidWrite(song)
+        val backup = File(rig.dirs.backups, rig.journal.pending().single().backup)
+        backup.setReadable(false)
+        val first = try {
+            runBlocking { rig.recovery().recover() }
+        } finally {
+            backup.setReadable(true)
+        }
+
+        assertEquals(Recovered(waiting = 1), first)
+        assertEquals(1, rig.journal.pending().size)
+        rig.restart()
+        assertEquals(Recovered(settled = 1, restored = 1), runBlocking { rig.recovery().recover() })
+        assertArrayEquals(original, rig.bytes(song))
+    }
+
+    @Test
+    fun `a song that can't be read at three starts in a row is set aside with its backup, and counted`() {
+        val song = rig.song("Paper Lantern", 41, fields)
+        killedMidWrite(song)
+        val torn = rig.bytes(song)
+        val backup = File(rig.dirs.backups, rig.journal.pending().single().backup)
+        rig.songs.failReads = Int.MAX_VALUE
+        val starts = (1..3).map {
+            rig.restart()
+            runBlocking { rig.recovery().recover() }
+        }
+        rig.songs.failReads = 0
+
+        assertEquals(listOf(Recovered(waiting = 1), Recovered(waiting = 1), Recovered(setAside = 1, unreadable = 1)), starts)
+        assertArrayEquals(torn, rig.bytes(song))
+        assertTrue(backup.isFile)
+        assertEquals(0, rig.journal.pending().size)
+        // What Covers & tags counts in its line.
+        assertEquals(1, rig.journal.uncheckable())
+    }
+
+    @Test
+    fun `a torn song that ends early while it is compared waits for the next start`() {
+        val song = rig.song("Paper Lantern", 41, fields)
+        val original = rig.bytes(song)
+        // Cut past the song's old end: its length is neither the old nor the new content's, so the comparison reads first.
+        rig.songs.plans += WritePlan.KillAfter(original.size + 100L)
+        try {
+            runBlocking { rig.writer.write(listOf(WriteJob(song, edit)), EditKind.SONG, "Paper Lantern") }
+        } catch (_: SimulatedKill) {
+        }
+        rig.restart()
+        rig.songs.endReads = 1
+
+        assertEquals(Recovered(waiting = 1), runBlocking { rig.recovery().recover() })
+        assertEquals(1, rig.journal.pending().size)
+        rig.restart()
+        assertEquals(Recovered(settled = 1, restored = 1), runBlocking { rig.recovery().recover() })
+        assertArrayEquals(original, rig.bytes(song))
+    }
+
+    @Test
+    fun `a song replaced by a file on its recycled inode while the recovery holds it keeps its backup`() {
+        val song = rig.song("Paper Lantern", 41, fields)
+        val backup = secondWriteKilledOnScan(song)
+        val before = backup.readBytes()
+        val songId = rig.songs.fileId(song.path)
+        // The path's new file is given the song's inode number, as a file system that recycles it would.
+        rig.songs.onRead = {
+            rig.songs.onRead = {}
+            replace(song)
+            rig.songs.fileIds[song.path] = songId
+        }
+
+        assertEquals(Recovered(setAside = 1), runBlocking { rig.recovery().recover() })
+        assertArrayEquals(saltClock, rig.bytes(song))
+        assertArrayEquals(before, backup.readBytes())
+    }
+
+    @Test
+    fun `a look at the path that fails while a torn song is put back decides nothing`() {
+        val song = rig.song("Paper Lantern", 41, fields)
+        val original = rig.bytes(song)
+        killedMidWrite(song)
+        // After the recovery's first read, the next lstat of the path fails.
+        rig.songs.onRead = {
+            rig.songs.onRead = {}
+            rig.songs.failFileIds = 1
+        }
+
+        assertEquals(Recovered(waiting = 1), runBlocking { rig.recovery().recover() })
+        rig.restart()
+        assertEquals(Recovered(settled = 1, restored = 1), runBlocking { rig.recovery().recover() })
+        assertArrayEquals(original, rig.bytes(song))
+    }
+
+    @Test
+    fun `a song replaced while the backup's release reads it keeps its backup`() {
+        val song = rig.song("Paper Lantern", 41, fields)
+        assertEquals(SongOutcome.WRITTEN, write(song, titleOnly))
+        val before = rig.bytes(song)
+        // The release opens the song anew ("open r") and reads it: the song is replaced right after that read.
+        rig.songs.onRead = {
+            if (rig.events.last() == "open r") {
+                rig.songs.onRead = {}
+                replace(song)
+            }
+        }
+
+        assertEquals(SongOutcome.SET_ASIDE, write(song))
+        assertArrayEquals(saltClock, rig.bytes(song))
+        assertTrue(backupKept(before))
+    }
+
+    /**
+     * Every line of the app's sources that deletes something named a backup (`.delete()`, `deleteIfExists`,
+     * `deleteRecursively`, `Files.delete`) is in [Backups.releaseBackup], or is Undo's own expiry of a song's snapshot.
+     * A line-by-line scan: a deletion of a backup must name it on its line.
+     */
+    @Test
+    fun `a backup is deleted only through releaseBackup`() {
+        val roots = listOf("src/main/java/app/lyrify", "src/debug/java/app/lyrify").map(::File)
+        assertTrue("run from the app module: ${File("").absolutePath}", roots[0].isDirectory)
+        val deletes = Regex("""\.delete\(\)|deleteIfExists\(|deleteRecursively\(|Files\.delete\(""")
+        val found = roots.flatMap { root ->
+            root.walkTopDown().filter { it.isFile && it.extension == "kt" }.flatMap { file ->
+                val lines = file.readLines()
+                val door = body(lines, "fun releaseBackup(")
+                lines.withIndex().filter { (index, line) ->
+                    val code = line.substringBefore("//").trim()
+                    index !in door && !code.startsWith("*") && deletes.containsMatchIn(code) && code.contains("backup", ignoreCase = true)
+                }.map { (_, line) -> "${file.relativeTo(root).invariantSeparatorsPath}: ${line.trim()}" }
+            }.toList()
+        }
+
+        assertEquals(listOf("tags/UndoStore.kt: dropped.forEach { File(dirs.backups, it.file).delete() }"), found)
+        assertTrue(roots.any { File(it, "tags/WriteJournal.kt").readText().contains("fun releaseBackup(") })
+    }
+
+    /** The line numbers of the body of the function [signature] opens in [lines] (none when it isn't there). */
+    private fun body(lines: List<String>, signature: String): IntRange {
+        val start = lines.indexOfFirst { signature in it }
+        if (start < 0) return IntRange.EMPTY
+        var depth = 0
+        var opened = false
+        for (index in start until lines.size) {
+            for (char in lines[index]) {
+                if (char == '{') {
+                    depth++
+                    opened = true
+                } else if (char == '}') {
+                    depth--
+                }
+            }
+            if (opened && depth == 0) return start..index
+        }
+        return start until lines.size
     }
 
     // 7. Pending songs

@@ -224,8 +224,6 @@ class SafeWriterTest {
             "write fails" to { rig.songs.plans += WritePlan.FailAfter(700) },
             "write comes out wrong" to { rig.songs.plans += WritePlan.Damage },
             "MediaStore refuses" to { rig.songs.plans += WritePlan.Refuse },
-            "scan answers nothing" to { rig.songs.scanned = { null } },
-            "scan gives a new id" to { rig.songs.scanned = { 77 } },
         )
         failures.forEachIndexed { index, (name, setUp) ->
             val song = rig.song("Song $index", 50L + index, fields)
@@ -239,6 +237,20 @@ class SafeWriterTest {
         }
         assertEquals(emptyList<HistoryEntry>(), rig.undo.memory().entries)
         assertEquals(emptyList<Snapshot>(), rig.undo.memory().snapshots)
+    }
+
+    @Test
+    fun `a rescan that does not name the song leaves it as written, for the start-up recovery`() {
+        listOf<Long?>(null, 77).forEachIndexed { index, answer ->
+            val song = rig.song("Song $index", 60L + index, fields)
+            val before = rig.bytes(song)
+            rig.songs.scanned = { answer }
+
+            assertEquals("$answer", listOf(SongOutcome.RECOVERY_PENDING), outcomes(write(WriteJob(song, edit))))
+            rig.songs.scanned = { rig.songs.ids[it] }
+            assertFalse("$answer", before.contentEquals(rig.bytes(song)))
+            assertTrue("$answer", rig.journal.pending().single { it.path == song.path }.committed)
+        }
     }
 
     @Test

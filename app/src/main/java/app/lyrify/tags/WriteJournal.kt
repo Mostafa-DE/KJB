@@ -17,8 +17,10 @@ import java.nio.ByteBuffer
 import java.nio.channels.FileChannel
 import java.nio.file.Files
 import java.nio.file.LinkOption
+import java.nio.file.NoSuchFileException
 import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
+import java.nio.file.attribute.BasicFileAttributes
 
 /**
  * Where the tag writer keeps its files, all in the app's own storage (never backed up: allowBackup is off), and how a
@@ -72,28 +74,37 @@ fun fsyncDirectory(dir: File) {
     }
 }
 
-/** Whether [file] is a regular file itself, never one reached through a symbolic link. */
-fun regularFile(file: File): Boolean = Files.isRegularFile(file.toPath(), LinkOption.NOFOLLOW_LINKS)
+/**
+ * Whether [file] is a regular file itself, never one reached through a symbolic link; false when nothing is there.
+ * Throws when it can't be told (`lstat` failed): that decides nothing.
+ */
+fun regularFile(file: File): Boolean = try {
+    Files.readAttributes(file.toPath(), BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS).isRegularFile
+} catch (_: NoSuchFileException) {
+    false
+}
 
 /** A file as the writer checks it: its length, the SHA-256 of all its bytes, and its audio payload. */
 @Serializable
 data class FileState(val length: Long, val sha256: String, val payload: Payload)
 
 /**
- * The state of the file at [file], or null when it is not a regular file (a link is never followed), not a well-formed
- * file of an allowed format ([PayloadHash]), or can't be read. Blocking.
+ * The state of the file at [file], or null when it is not a regular file (a link is never followed; or none is there)
+ * or not a well-formed file of an allowed format ([PayloadHash]). Throws when it can't be read: that decides nothing.
+ * Blocking.
  */
-fun fileState(file: File): FileState? = try {
-    val payload = if (regularFile(file)) PayloadHash.of(file.toPath()) else null
-    payload?.let { FileState(file.length(), PayloadHash.fileSha256(file.toPath()), it) }
-} catch (_: IOException) {
-    null
+fun fileState(file: File): FileState? {
+    if (!regularFile(file)) return null
+    val payload = PayloadHash.of(file.toPath(), strict = true) ?: return null
+    return FileState(file.length(), PayloadHash.fileSha256(file.toPath()), payload)
 }
 
 /**
- * One write in progress, recorded before any byte of the song changes: the song, its backup in `tag-backups/`, the
- * song's state before ([original]) and as it will be once written ([expected]), and the History record the write makes
- * ([record]), which the start-up recovery saves if the app died, or Undo could not be saved, after the write.
+ * One write in progress, recorded before its backup is made (so no backup is ever left that nothing names) and again,
+ * complete, before any byte of the song changes: the song, its backup in `tag-backups/`, the song's state before
+ * ([original]) and as it will be once written ([expected]: null until then, so a write never began while it is), and
+ * the History record the write makes ([record]), which the start-up recovery saves if the app died, or Undo could not
+ * be saved, after the write.
  */
 @Serializable
 data class WriteIntent(
@@ -102,7 +113,7 @@ data class WriteIntent(
     val mediaStoreId: Long,
     val backup: String,
     val original: FileState,
-    val expected: FileState,
+    val expected: FileState? = null,
     val record: UndoRecord? = null,
     /** The file the new content was written from (the private copy, or a snapshot for a full-copy Undo). */
     val source: String? = null,
@@ -113,6 +124,8 @@ data class WriteIntent(
      * changed after the write (while its Undo record still waits to be saved) is never overwritten with old bytes.
      */
     val committed: Boolean = false,
+    /** The starts in a row at which the song could not be read: at [JournalRecovery.READ_TRIES] the intent is set aside. */
+    val readFailures: Int = 0,
 )
 
 /** Reads up to [count] bytes into [buffer], fewer only at the end of the stream (API 30 has no readNBytes). */
@@ -130,7 +143,7 @@ private fun FileInputStream.readUpTo(buffer: ByteArray, count: Int): Int {
  * Whether [file] could be what writes of [a] and [b] over each other left, cut short: KJB writes a song's new or old
  * content from its first byte on, so every byte of [file] is [a]'s or [b]'s at that place, and its length is between
  * theirs. A song torn by a write, or by putting its backup back after one, is this; another file is not. A read that
- * fails throws: it decides nothing.
+ * fails, or finds the file ended before [file]'s length, throws: it decides nothing.
  */
 fun tornFrom(file: File, a: File, b: File): Boolean {
     if (!regularFile(file)) return false
@@ -151,7 +164,7 @@ fun tornFrom(read: (ByteBuffer, Long) -> Int, length: Long, a: File, b: File): B
             while (at < length) {
                 bf.clear().limit(minOf(chunk.toLong(), length - at).toInt())
                 val n = readFully(read, bf, at)
-                if (n <= 0) return false
+                if (n <= 0) throw IOException("song ended early")
                 val na = fa.readUpTo(ba, n)
                 val nb = fb.readUpTo(bb, n)
                 for (i in 0 until n) {
@@ -236,6 +249,9 @@ class WriteJournal(private val dir: File, private val syncDir: (File) -> Unit, p
     /** Records [intent] durably. False when it could not be: then no intent is left, and the song must not be opened. */
     fun open(intent: WriteIntent): Boolean = store(intent) || false.also { File(dir, intent.id + SUFFIX).delete() }
 
+    /** Records [intent] again, durably, over the open one of its id. False when it could not be; then that one stays. */
+    fun update(intent: WriteIntent): Boolean = store(intent)
+
     /**
      * Marks [intent] committed, durably: the song was written and verified. False when it could not be; the intent
      * stays as it was.
@@ -296,6 +312,12 @@ class WriteJournal(private val dir: File, private val syncDir: (File) -> Unit, p
     /** Whether an intent named [id] is open or set aside. */
     fun has(id: String): Boolean = File(dir, id + SUFFIX).exists() || File(File(dir, SET_ASIDE), id + SUFFIX).exists()
 
+    /** The intents set aside, with their backups, for a person to look at. */
+    fun setAsideIntents(): List<WriteIntent> = File(dir, SET_ASIDE).listFiles().orEmpty().filter { it.isFile && it.name.endsWith(SUFFIX) }.mapNotNull(::read)
+
+    /** The writes set aside because their song could not be read at [JournalRecovery.READ_TRIES] starts in a row. */
+    fun uncheckable(): Int = setAsideIntents().count { it.readFailures >= JournalRecovery.READ_TRIES }
+
     /** Moves intent [id] to [SET_ASIDE], for a person to look at; it is never acted on again. */
     fun setAside(id: String) {
         val aside = File(dir, SET_ASIDE).apply { mkdirs() }
@@ -326,33 +348,76 @@ class WriteJournal(private val dir: File, private val syncDir: (File) -> Unit, p
     }
 }
 
-/** What the start-up recovery did: intents closed ([restored] of them by writing the backup back), set aside, left. */
-data class Recovered(val settled: Int = 0, val restored: Int = 0, val setAside: Int = 0, val waiting: Int = 0)
+/**
+ * What the start-up recovery did: intents closed ([restored] of them by writing the backup back), set aside (with
+ * [unreadable] of them because their song could not be read at [JournalRecovery.READ_TRIES] starts in a row), left.
+ */
+data class Recovered(val settled: Int = 0, val restored: Int = 0, val setAside: Int = 0, val waiting: Int = 0, val unreadable: Int = 0)
+
+/**
+ * The one door through which a write's backup is deleted: [releaseBackup]. A test scans the sources for any other
+ * (Undo's own expiry of a song's snapshot aside).
+ */
+class Backups(
+    private val dirs: TagDirs,
+    private val journal: WriteJournal,
+    private val undo: UndoStore,
+    private val songs: SongFiles,
+    private val log: (String) -> Unit = {},
+) {
+    /**
+     * Closes [intent], deleting its backup, only on proof that the backup is no longer needed: the file at the song's
+     * path, opened anew here and read whole, holds exactly [proof] (the written state after a write; the original when
+     * nothing was written, or the backup was put back), and that descriptor is still the file at the path (`fstat`
+     * against `lstat`) right before the delete. No fsync, scan or Undo save runs between that proof and the delete; the
+     * intent is closed after it. A backup Undo keeps as the song's snapshot is never deleted here.
+     *
+     * True: released. False: the read proved otherwise (other bytes, or another file at the path), so the backup is
+     * kept and the intent set aside. A read or `lstat` that fails throws, and leaves the backup and the intent as they
+     * are: an error decides nothing.
+     */
+    fun releaseBackup(intent: WriteIntent, proof: FileState): Boolean {
+        val snapshot = intent.backup in undo.keptBackups()
+        val proven = songs.openToRead(intent.path).use { song ->
+            val proven = song.holds(proof) && song.fileId() == songs.fileId(intent.path)
+            if (proven && !snapshot) Files.deleteIfExists(File(dirs.backups, intent.backup).toPath())
+            proven
+        }
+        if (!proven) {
+            journal.setAside(intent.id)
+            log("tags: the song is not as proven at its path, its backup kept and its write set aside")
+            return false
+        }
+        journal.close(intent.id)
+        return true
+    }
+}
 
 /**
  * The start-up recovery. [holdPending] runs first, at process start (TagsGraph), and holds the song of every intent
  * still open in [locks], so the lyrics pipeline, the AI and the tone preview stay off them; then [recover] settles each
  * one and lets it go:
- * - a song that is not a regular file at its path (a link is never followed), not mounted, or in no MediaStore row
- *   waits for the next start, untouched. Otherwise the song is opened, read and write, and held to the end: every
- *   decision below is made on the bytes read through that descriptor, and any write goes through it, so nothing put at
- *   the path meanwhile (even reusing the song's inode) is written over. Its MediaStore id is found by its path (closing
- *   the "rw" descriptor may have made MediaStore index the path again under a new one), and the file identity stored in
- *   the intent is only a hint (a remount changes the device number; an inode can be reused);
- * - a read that fails decides nothing: the intent waits for the next start;
- * - nothing is written, and no backup dropped, once the path names another file than the one held (it was replaced
- *   meanwhile): the intent is set aside, with its backup;
- * - a song exactly as written keeps its new tags, and the write's History record is saved (if that still fails, the
- *   intent waits);
+ * - a song that is not mounted, not a regular file at its path (a link is never followed), or in no MediaStore row
+ *   waits for the next start, untouched;
+ * - a write that never began (no [WriteIntent.expected]) has its backup released ([Backups.releaseBackup]) once the
+ *   song is proven at its path as it was;
+ * - otherwise the song is opened, read and write, and held to the end: every decision below is made on the bytes read
+ *   through that descriptor, and any write goes through it, so nothing put at the path meanwhile is written over. Its
+ *   MediaStore id is found by its path (closing the "rw" descriptor may have made MediaStore index the path again under
+ *   a new one), and the file identity stored in the intent is only a hint (a remount changes the device number);
+ * - a song exactly as written keeps its new tags, the write's History record is saved (if that still fails, the intent
+ *   waits), and the backup is released on a fresh proof;
  * - a committed intent (the write was finished and verified) never has its backup written back: a song changed since
  *   is set aside, untouched;
- * - a song exactly as before is left so;
+ * - a song exactly as before has its backup released on a fresh proof;
  * - a song torn by the write ([tornFrom]: every byte is the old or the new content's) gets its backup written back
- *   through the held descriptor, if the backup is whole (a regular file with the original's length and SHA-256);
- *   anything else (another file at the path, a backup that is not whole) has its intent set aside, with its backup,
- *   and is left alone.
- * An intent left waiting keeps its song [PathLocks.pin]ned for the rest of the process. Then the private copies and
- * the backups nothing needs are deleted. Logs counts only.
+ *   through the held descriptor, if the backup is whole (a regular file with the original's length and SHA-256) and the
+ *   path still names the file held; then the backup is released on a fresh proof. Anything else (another file at the
+ *   path, a backup that is not whole) has its intent set aside, with its backup, and is left alone;
+ * - a read, an `lstat` or a write that fails decides nothing: the intent waits for the next start, and after
+ *   [READ_TRIES] starts in a row that failed so it is set aside with its backup ([Recovered.unreadable]).
+ * An intent left waiting keeps its song [PathLocks.pin]ned for the rest of the process. Then the private copies no
+ * open intent needs are deleted. Backups are never deleted here but through [Backups.releaseBackup]. Logs counts only.
  */
 class JournalRecovery(
     private val dirs: TagDirs,
@@ -363,6 +428,8 @@ class JournalRecovery(
     private val writes: SharedWrites,
     private val log: (String) -> Unit = {},
 ) {
+    private val backups = Backups(dirs, journal, undo, songs, log)
+
     /** The intents still open, with their songs held now. Not suspending: called before anything else can take them. */
     fun holdPending(): List<WriteIntent> {
         val intents = journal.pending()
@@ -377,7 +444,7 @@ class JournalRecovery(
      * still open, holding each song first.
      */
     suspend fun recover(held: List<WriteIntent>? = null): Recovered {
-        val asideBefore = setAside().size
+        val asideBefore = asideCount()
         val intents = held ?: journal.pending().also { pending -> pending.map { it.path }.distinct().forEach { locks.hold(it) } }
         val last = intents.withIndex().associate { (index, intent) -> intent.path to index }
         var result = Recovered()
@@ -387,6 +454,7 @@ class JournalRecovery(
                     Settled.AS_IT_WAS -> result.copy(settled = result.settled + 1)
                     Settled.RESTORED -> result.copy(settled = result.settled + 1, restored = result.restored + 1)
                     Settled.SET_ASIDE -> result
+                    Settled.UNREADABLE -> result.copy(unreadable = result.unreadable + 1)
                     Settled.WAITING -> result.copy(waiting = result.waiting + 1)
                 }
             } finally {
@@ -398,72 +466,83 @@ class JournalRecovery(
             }
         }
         cleanUp()
-        result = result.copy(setAside = setAside().size - asideBefore)
-        if (result != Recovered()) log("journal: ${result.settled} unfinished writes settled (${result.restored} put back), ${result.setAside} set aside, ${result.waiting} waiting")
+        result = result.copy(setAside = asideCount() - asideBefore)
+        if (result != Recovered()) {
+            log("journal: ${result.settled} unfinished writes settled (${result.restored} put back), ${result.setAside} set aside (${result.unreadable} unreadable), ${result.waiting} waiting")
+        }
         return result
     }
 
-    private enum class Settled { AS_IT_WAS, RESTORED, SET_ASIDE, WAITING }
+    private enum class Settled { AS_IT_WAS, RESTORED, SET_ASIDE, UNREADABLE, WAITING }
+
+    /** The intents set aside so far, those that can't be read included. */
+    private fun asideCount(): Int = File(dirs.journal, WriteJournal.SET_ASIDE).listFiles().orEmpty().size
 
     private suspend fun settle(intent: WriteIntent): Settled {
-        val song = File(intent.path)
-        if (!songs.mounted(intent.path) || !regularFile(song)) return Settled.WAITING
+        if (!songs.mounted(intent.path)) return Settled.WAITING
+        return try {
+            settleRead(intent)
+        } catch (e: IOException) {
+            failed(intent, e)
+        }
+    }
+
+    /** [settle] on a mounted volume: any read, `lstat` or write that fails throws. */
+    private suspend fun settleRead(intent: WriteIntent): Settled {
+        if (!regularFile(File(intent.path))) return Settled.WAITING
+        // The write never began: nothing was written, so the song must be at its path as it was.
+        val expected = intent.expected ?: return released(intent, intent.original, Settled.AS_IT_WAS)
         val id = songs.idOf(intent.path) ?: return Settled.WAITING
-        // The file at the path right before it is opened, compared with the path's again later (path against path:
-        // MediaStore's descriptor is mostly on the file system under the path's, with another device number), while the
-        // descriptor is held, so its inode can't be reused by another file meanwhile.
-        val atOpen = songs.fileId(intent.path) ?: return Settled.WAITING
+        // The file at the path right before it is opened, compared with the path's again before anything is written
+        // (path against path: MediaStore's descriptor is mostly on the file system under the path's, with another device
+        // number), while the descriptor is held, so its inode can't be reused by another file meanwhile.
+        val atOpen = songs.fileId(intent.path)
         if (intent.fileId != null && atOpen != intent.fileId) log("journal: the song's file identity changed since its write; its bytes decide")
-        val open = songs.openInPlace(SongTarget(intent.path, id)) ?: return Settled.WAITING
-        val settled = open.use { settleThrough(intent, it, atOpen) }
+        val open = songs.openInPlace(SongTarget(intent.path, id)) ?: throw IOException("song not opened")
+        val settled = open.use { settleThrough(intent, expected, it, atOpen) }
         if (settled == Settled.RESTORED) songs.scan(intent.path)
         return settled
     }
 
-    /**
-     * [settle] with the song held open: decided on what [open] reads, written through [open] only, and settled only
-     * while the path still names the file [atOpen] (path against path).
-     */
-    private fun settleThrough(intent: WriteIntent, open: OpenSong, atOpen: FileId): Settled {
-        fun replaced() = songs.fileId(intent.path) != atOpen
-        val why = "the song was replaced during recovery"
-        try {
-            if (open.holds(intent.expected)) {
-                if (replaced()) return setAside(intent, why)
-                // The write finished; its History record may not have been saved.
-                if (intent.record != null && !undo.save(intent.record, intent.mediaStoreId)) return Settled.WAITING
-                closeAndDrop(intent)
-                return Settled.AS_IT_WAS
-            }
-            // Written and verified, then changed by someone else: old bytes are never written over it.
-            if (intent.committed) return setAside(intent, "the song changed after its write was committed")
-            if (open.holds(intent.original)) {
-                if (replaced()) return setAside(intent, why)
-                closeAndDrop(intent)
-                return Settled.AS_IT_WAS
-            }
-            // Neither: the write was cut short. Written back only from a whole backup, and only over this song torn.
-            val backup = File(dirs.backups, intent.backup)
-            val saved = if (regularFile(backup) && backup.length() == intent.original.length) fileState(backup) else null
-            val source = intent.source?.let(::File)
-            val torn = saved == intent.original && source != null && tornFrom(open::read, open.size(), source, backup)
-            if (!torn || !writes.allows(SharedWrite.TAG_RESTORE, intent.path)) return setAside(intent, "the song is not as the write left it")
-            if (replaced()) return setAside(intent, why)
-            try {
-                writeInPlace(open.channel, backup, intent.original.length)
-            } catch (e: IOException) {
-                log("journal: backup not written back yet (${e.javaClass.simpleName})")
+    /** [settle] with the song held open: decided on what [open] reads, written through [open] only. */
+    private fun settleThrough(intent: WriteIntent, expected: FileState, open: OpenSong, atOpen: FileId): Settled {
+        if (open.holds(expected)) {
+            // The write finished; its History record may not have been saved.
+            if (intent.record != null && !undo.save(intent.record, intent.mediaStoreId)) {
+                // The song was read: this start does not count as one that could not read it.
+                if (intent.readFailures > 0) journal.update(intent.copy(readFailures = 0))
                 return Settled.WAITING
             }
-            if (!open.holds(intent.original)) return Settled.WAITING
-            // Written back into the file held; if another file is at the path now, the backup is still the song.
-            if (replaced()) return setAside(intent, why)
-            closeAndDrop(intent)
-            return Settled.RESTORED
-        } catch (e: IOException) {
-            log("journal: the song could not be read (${e.javaClass.simpleName}), left for the next start")
-            return Settled.WAITING
+            return released(intent, expected, Settled.AS_IT_WAS)
         }
+        // Written and verified, then changed by someone else: old bytes are never written over it.
+        if (intent.committed) return setAside(intent, "the song changed after its write was committed")
+        if (open.holds(intent.original)) return released(intent, intent.original, Settled.AS_IT_WAS)
+        // Neither: the write was cut short. Written back only from a whole backup, and only over this song torn.
+        val backup = File(dirs.backups, intent.backup)
+        val saved = if (regularFile(backup) && backup.length() == intent.original.length) fileState(backup) else null
+        val source = intent.source?.let(::File)
+        val torn = saved == intent.original && source != null && tornFrom(open::read, open.size(), source, backup)
+        if (!torn || !writes.allows(SharedWrite.TAG_RESTORE, intent.path)) return setAside(intent, "the song is not as the write left it")
+        // Never written into a file the path no longer names.
+        if (songs.fileId(intent.path) != atOpen) return setAside(intent, "the song was replaced during recovery")
+        writeInPlace(open.channel, backup, intent.original.length)
+        if (!open.holds(intent.original)) throw IOException("the backup did not read back as written")
+        return released(intent, intent.original, Settled.RESTORED)
+    }
+
+    /** [settled] once [intent]'s backup is released on proof that the song is at its path as [proof]; else set aside. */
+    private fun released(intent: WriteIntent, proof: FileState, settled: Settled): Settled =
+        if (backups.releaseBackup(intent, proof)) settled else Settled.SET_ASIDE
+
+    /** A start that could not read [intent]'s song: it waits, until [READ_TRIES] starts in a row could not. */
+    private fun failed(intent: WriteIntent, e: IOException): Settled {
+        val tries = intent.readFailures + 1
+        log("journal: a song could not be read (${e.javaClass.simpleName}), $tries of $READ_TRIES starts")
+        if (!journal.update(intent.copy(readFailures = tries))) return Settled.WAITING
+        if (tries < READ_TRIES) return Settled.WAITING
+        setAside(intent, "its song could not be read at $READ_TRIES starts in a row")
+        return Settled.UNREADABLE
     }
 
     private fun setAside(intent: WriteIntent, why: String): Settled {
@@ -472,21 +551,14 @@ class JournalRecovery(
         return Settled.SET_ASIDE
     }
 
-    /** Closes [intent], and deletes its backup unless it is a song's snapshot. */
-    private fun closeAndDrop(intent: WriteIntent) {
-        journal.close(intent.id)
-        if (intent.backup !in undo.keptBackups()) File(dirs.backups, intent.backup).delete()
-    }
-
-    /** Deletes the private copies, and the backups no snapshot, open intent or intent set aside needs. */
+    /** Deletes the private copies no open intent needs. Backups are left alone: only [Backups.releaseBackup] deletes one. */
     private fun cleanUp() {
-        val open = journal.pending()
-        val sources = open.mapNotNull { it.source }.toSet()
+        val sources = journal.pending().mapNotNull { it.source }.toSet()
         dirs.work.listFiles().orEmpty().filter { it.path !in sources }.forEach { it.delete() }
-        val needed = undo.keptBackups() + open.map { it.backup }
-        val asideIds = setAside().map { it.nameWithoutExtension }.toSet()
-        dirs.backups.listFiles().orEmpty().filter { it.name !in needed && it.nameWithoutExtension !in asideIds }.forEach { it.delete() }
     }
 
-    private fun setAside(): List<File> = File(dirs.journal, WriteJournal.SET_ASIDE).listFiles().orEmpty().toList()
+    companion object {
+        /** The starts in a row that may fail to read a song before its intent is set aside. */
+        const val READ_TRIES: Int = 3
+    }
 }

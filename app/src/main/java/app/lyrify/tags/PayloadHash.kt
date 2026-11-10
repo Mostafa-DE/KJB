@@ -52,8 +52,11 @@ data class PayloadSlice(val format: AudioFormat, val sha256: String, val whole: 
  * only.
  */
 object PayloadHash {
-    /** [path]'s payload, or null when its format is not allowed or the file is not well formed. */
-    fun of(path: Path): Payload? = read(path, Long.MAX_VALUE)?.payload
+    /**
+     * [path]'s payload, or null when its format is not allowed or the file is not well formed. A read that fails is null
+     * too, or, when [strict], throws (for the tag writer, where an error decides nothing).
+     */
+    fun of(path: Path, strict: Boolean = false): Payload? = read(path, Long.MAX_VALUE, strict)?.payload
 
     /**
      * The first [bytes] of [path]'s audio payload (all of it when shorter), hashed as [of] hashes it, without M4A's
@@ -65,7 +68,7 @@ object PayloadHash {
     /** A payload hashed up to a limit: [whole] when the limit left nothing out. */
     private class Read(val payload: Payload, val whole: Boolean)
 
-    private fun read(path: Path, limit: Long): Read? {
+    private fun read(path: Path, limit: Long, strict: Boolean = false): Read? {
         val extension = path.fileName?.toString()?.substringAfterLast('.', "")?.lowercase() ?: return null
         if (extension !in AudioFormat.EXTENSIONS) return null
         return try {
@@ -78,7 +81,8 @@ object PayloadHash {
                     else -> ogg(file, limit)
                 }
             }
-        } catch (_: IOException) {
+        } catch (e: IOException) {
+            if (strict) throw e
             null
         } catch (_: Malformed) {
             null
