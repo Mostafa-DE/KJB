@@ -46,6 +46,11 @@ class QueueBridgeTest {
                 is Edit.Remove -> list.removeAt(edit.at)
                 is Edit.Insert -> list.addAll(edit.at, edit.items.map { it.uid })
                 is Edit.Move -> list.add(edit.to, list.removeAt(edit.from))
+                is Edit.Replace -> {
+                    list[edit.at] = edit.item.uid
+                    calls += "replace ${edit.at} ${edit.item.song.path}"
+                    return
+                }
             }
             loaded = list
             index = if (current != null && current in list) list.indexOf(current) else index.coerceAtMost(list.lastIndex)
@@ -278,6 +283,26 @@ class QueueBridgeTest {
         advanceTimeBy(10_001)
         assertEquals(listOf(10_000L, 20_000L, 25_000L, 95_000L), saved)
         job.cancel()
+    }
+
+    @Test
+    fun `a song moved on the phone reaches the player at its new path, and only that song is replaced`() {
+        val elsewhere = songs[2].copy(ref = SongRef("Music/Moved/03 Paper Lantern 3.mp3", songs[2].ref.mediaStoreId))
+        var moved = false
+        val findMoved: (SongRef) -> Song? = { ref -> if (moved && ref.path in setOf(songs[2].path, elsewhere.path)) elsewhere else find(ref) }
+        val book = QueueBook().play(refs, 0, albumSource, now = 1).book
+        bridge.sync(book, findMoved)
+        val uids = port.loaded
+        port.calls.clear()
+
+        moved = true
+        bridge.sync(book, findMoved)
+        assertEquals(listOf("replace 2 ${elsewhere.path}"), port.calls)
+        assertEquals(uids, port.loaded)
+        // The queue taking the new path too (the next library read) changes nothing more.
+        port.calls.clear()
+        bridge.sync(book.refresh { ref -> if (ref.path == songs[2].path) elsewhere.ref else ref }, findMoved)
+        assertEquals(emptyList<String>(), port.calls)
     }
 
     // A song that cannot be played

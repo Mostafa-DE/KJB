@@ -179,6 +179,13 @@ class GaplessEngine(context: Context, settings: () -> Settings, levels: SongLeve
             is Edit.Remove -> player.removeMediaItem(edit.at)
             is Edit.Insert -> player.addMediaItems(edit.at, edit.items.map(itemOf))
             is Edit.Move -> player.moveMediaItem(edit.from, edit.to)
+            is Edit.Replace -> {
+                // The song playing goes on from where it was, read from its new path.
+                val current = edit.at == player.currentMediaItemIndex
+                val position = player.currentPosition
+                player.replaceMediaItem(edit.at, itemOf(edit.item))
+                if (current) player.seekTo(edit.at, position)
+            }
         }
     }
 

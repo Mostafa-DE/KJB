@@ -40,6 +40,9 @@ sealed interface Edit {
 
     /** The song at [from] moves to [to] (its place once taken out), as `Player.moveMediaItem` does. */
     data class Move(val from: Int, val to: Int) : Edit
+
+    /** The song at [at] is [item] at another path (its file moved): the player reads it from there, at the same place. */
+    data class Replace(val at: Int, val item: Projected) : Edit
 }
 
 /**
@@ -105,19 +108,24 @@ interface PlayerPort {
 
 /**
  * Applies the queue model to the player ([sync] on every change of the book or the library): another queue is loaded at
- * its place; edits to the queue playing are applied as [edits], so the song playing never stops; a jump in the book
- * ([QueueBook.jumps]) moves the player to the current song at its position. The player moving on by itself comes back
- * through [QueueBook.at], which leaves the player as it is.
+ * its place; edits to the queue playing are applied as [edits], so the song playing never stops; a song whose file
+ * moved is replaced with its new path ([Edit.Replace]); a jump in the book ([QueueBook.jumps]) moves the player to the
+ * current song at its position. The player moving on by itself comes back through [QueueBook.at], which leaves the
+ * player as it is.
  */
 class QueueBridge(private val port: PlayerPort) {
     private var loadedId: String? = null
     private var jumps: Long = 0
+
+    /** The path the player was handed for each song it holds, by uid. */
+    private var paths: Map<Long, String> = emptyMap()
 
     fun sync(book: QueueBook, find: (SongRef) -> Song?) {
         val queue = book.current
         if (queue == null) {
             if (loadedId != null || port.loaded.isNotEmpty()) port.load(emptyList(), -1, 0)
             loadedId = null
+            paths = emptyMap()
             return
         }
         val projected = projection(queue, find)
@@ -127,10 +135,14 @@ class QueueBridge(private val port: PlayerPort) {
             port.load(projected, start, position)
             loadedId = queue.id
             jumps = book.jumps
+            paths = projected.associate { it.uid to it.song.path }
             return
         }
         val playing = port.loaded.getOrNull(port.index)
         edits(port.loaded, projected).forEach(port::apply)
+        // The player now holds projected's songs in its order: a song at another path than it was handed is replaced.
+        projected.forEachIndexed { at, item -> if (paths[item.uid].let { it != null && it != item.song.path }) port.apply(Edit.Replace(at, item)) }
+        paths = projected.associate { it.uid to it.song.path }
         val lost = playing != null && projected.none { it.uid == playing }
         if (book.jumps != jumps || lost) {
             jumps = book.jumps
