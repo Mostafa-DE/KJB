@@ -170,6 +170,8 @@ class TagEngineDeviceTest {
 
         override fun sameFile(mediaStoreId: Long, path: String): Boolean = mediaStoreId == 41L
 
+        override fun idOf(path: String): Long = 41
+
         override fun openInPlace(song: SongTarget): FileChannel {
             val channel = FileChannel.open(File(song.path).toPath(), StandardOpenOption.WRITE)
             val fail = failAfter.also { failAfter = null } ?: return channel

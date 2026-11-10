@@ -189,6 +189,8 @@ class FakeSongFiles(private val events: MutableList<String> = Collections.synchr
 
     override fun sameFile(mediaStoreId: Long, path: String): Boolean = (ids[path] == mediaStoreId).also { events += "same file" }
 
+    override fun idOf(path: String): Long? = ids[path]
+
     override fun openInPlace(song: SongTarget): FileChannel? {
         events += "open rw"
         onOpen()
@@ -302,6 +304,8 @@ class WriterRig(root: File, var writes: app.lyrify.data.SharedWrites = app.lyrif
     }
 
     fun restart() {
+        // A new process: nothing held, nothing pinned.
+        locks = app.lyrify.data.PathLocks()
         journal = WriteJournal(dirs.journal, folders::sync, logs::add)
         undo = UndoStore(dirs, logs::add)
         writer = SafeWriter(
