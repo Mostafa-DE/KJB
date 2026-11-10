@@ -278,12 +278,8 @@ class PlaybackService : MediaLibraryService() {
          */
         override fun onError(error: PlaybackException, next: Int) {
             failedInARow++
-            val step = afterError(next, failedInARow, engine.loaded.size)
+            val step = skipAfterError(engine, next, failedInARow)
             Log.w(LOG_TAG, "player: a song could not be played (${error.errorCodeName}), ${if (step is AfterError.Skip) "skipped" else "stopped after $failedInARow"}")
-            when (step) {
-                is AfterError.Skip -> engine.seek(step.index, 0)
-                AfterError.Stop -> engine.setPlayWhenReady(false)
-            }
         }
     }
 

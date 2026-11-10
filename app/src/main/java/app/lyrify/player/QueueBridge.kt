@@ -188,6 +188,15 @@ sealed interface AfterError {
  */
 fun afterError(next: Int, failedInARow: Int, size: Int): AfterError = if (next < 0 || failedInARow >= size) AfterError.Stop else AfterError.Skip(next)
 
+/** [afterError] done on [engine]: on to the next song from its start, or stopped where it is. */
+fun skipAfterError(engine: PlaybackEngine, next: Int, failedInARow: Int): AfterError =
+    afterError(next, failedInARow, engine.loaded.size).also { step ->
+        when (step) {
+            is AfterError.Skip -> engine.seek(step.index, 0)
+            AfterError.Stop -> engine.setPlayWhenReady(false)
+        }
+    }
+
 /**
  * Tells the play counter ([PlayEvents], stats/) about KJB's own plays, raw, one play at a time: [start] (a song starts,
  * or starts again: each lap of Repeat one is a new play) with its position, the position whenever playing starts or
