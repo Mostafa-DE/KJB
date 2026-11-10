@@ -51,6 +51,52 @@ class PlayLogTest {
         assertEquals(listOf(SongPlays(SongRef(path, 14), 0, null, 20_000)), store.totals(T0 + 1_000, T0 + 2_000))
     }
 
+    @Test
+    fun `a play written again never loses its count or the time it heard`() = runBlocking {
+        val store = FakePlayLog()
+        store.put(LoggedPlay(SongRef(path, 12), T0, 120_000, counted = true))
+        // The same song and start told again, from scratch: a player that started one play twice.
+        store.put(LoggedPlay(SongRef(path), T0, 5_000, counted = false))
+
+        assertEquals(listOf(LoggedPlay(SongRef(path, 12), T0, 120_000, counted = true)), store.plays)
+    }
+
+    @Test
+    fun `a play still going is kept with where it stood, and a closed one is not`() = runBlocking {
+        val store = FakePlayLog()
+        val open = OpenState(200_000, 60_000, listOf(HeardSpan(0, 60_000)))
+        store.put(LoggedPlay(SongRef(path), T0, 60_000, counted = false), open)
+        assertEquals(listOf(StoredPlay(LoggedPlay(SongRef(path), T0, 60_000, counted = false), open)), store.openPlays())
+
+        store.put(LoggedPlay(SongRef(path), T0, 70_000, counted = false))
+        assertEquals(emptyList<StoredPlay>(), store.openPlays())
+        assertEquals(listOf(LoggedPlay(SongRef(path), T0, 70_000, counted = false)), store.plays)
+    }
+
+    @Test
+    fun `the parts heard are kept as text and read back leniently`() {
+        val spans = listOf(HeardSpan(0, 5_000), HeardSpan(8_000, 12_000))
+        assertEquals("0-5000,8000-12000", spansText(spans))
+        assertEquals(spans, spansOf("0-5000,8000-12000"))
+        // Damaged parts are dropped: not numbers, backwards, empty, negative.
+        assertEquals(spans, spansOf("0-5000,junk,9-3,4-4,-4-7,,8000-12000, "))
+        assertEquals(emptyList<HeardSpan>(), spansOf(null))
+        assertEquals(emptyList<HeardSpan>(), spansOf(""))
+    }
+
+    @Test
+    fun `a kept play reads leniently, and one without a song or a start is dropped`() {
+        val open = OpenState(200_000, 60_000, listOf(HeardSpan(0, 60_000)))
+        assertEquals(StoredPlay(LoggedPlay(SongRef(path, 12), T0, 60_000, counted = true), open), storedPlayOf(path, T0, 12, 60_000, 1, 200_000, 60_000, "0-60000"))
+        assertEquals(
+            StoredPlay(LoggedPlay(SongRef(path), T0, 0, counted = false), OpenState(0, 0, emptyList())),
+            storedPlayOf(path, T0, -1, -5, null, null, -3, "junk"),
+        )
+        assertNull(storedPlayOf(" ", T0, 12, 60_000, 1, 200_000, 60_000, "0-60000"))
+        assertNull(storedPlayOf(path, null, 12, 60_000, 1, 200_000, 60_000, "0-60000"))
+        assertNull(storedPlayOf(path, 0, 12, 60_000, 1, 200_000, 60_000, "0-60000"))
+    }
+
     // plays.db's versions (the SQL itself runs in PlaysDbDeviceTest)
 
     @Test
