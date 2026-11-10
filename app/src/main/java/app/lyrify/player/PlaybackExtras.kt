@@ -77,8 +77,10 @@ data class Bookmark(val id: Long, val positionMs: Long, val note: String)
 data class AbPart(val path: String, val startMs: Long, val endMs: Long)
 
 /**
- * What KJB keeps per song, by path: its own speed ("This song only"), its place (Remember my place, the oldest first)
- * and its bookmarks (in time order); the [usual] speed of every other song; and the part repeating, if any.
+ * What KJB keeps per song: its own speed ("This song only"), its place (Remember my place, the oldest first) and its
+ * bookmarks (in time order); the [usual] speed of every other song; and the part repeating, if any. Songs are known as
+ * queues, Favourites and the play log know them ([SongRef]): by path, with MediaStore's id as a hint ([ids]), so a moved
+ * file is found again when the library next loads ([refresh]) and its state follows it.
  */
 data class SongState(
     val usual: Speed = Speed(),
@@ -87,6 +89,8 @@ data class SongState(
     val bookmarks: Map<String, List<Bookmark>> = emptyMap(),
     val part: AbPart? = null,
     val nextBookmarkId: Long = 1,
+    /** MediaStore's id of each song kept here, by path: a hint only, as in [SongRef]. */
+    val ids: Map<String, Long> = emptyMap(),
 ) {
     /** The speed the song at [path] plays at: its own, else the usual one. */
     fun speedOf(path: String?): Speed = path?.let(speeds::get) ?: usual
@@ -94,48 +98,104 @@ data class SongState(
     /** The bookmarks of the song at [path], in time order. */
     fun bookmarksOf(path: String?): List<Bookmark> = path?.let(bookmarks::get).orEmpty()
 
-    /** [change] applied to the speed the song at [path] plays at: its own when it has one, else the usual one. */
-    fun withSpeed(path: String?, change: (Speed) -> Speed): SongState {
-        val own = path?.let(speeds::get)
-        return if (path != null && own != null) copy(speeds = speeds + (path to change(own).normalised())) else copy(usual = change(usual).normalised())
+    /** [change] applied to the speed [song] plays at: its own when it has one, else the usual one. */
+    fun withSpeed(song: SongRef?, change: (Speed) -> Speed): SongState {
+        val own = song?.path?.let(speeds::get)
+        if (song == null || own == null) return copy(usual = change(usual).normalised())
+        return copy(speeds = speeds + (song.path to change(own).normalised())).known(song)
     }
 
     /**
-     * "This song only" switched [on] for the song at [path]: the speed set now becomes the song's own, and the usual
-     * speed goes back to [usualBefore] (what it was when the sheet opened); off, the song plays at the usual speed again.
+     * "This song only" switched [on] for [song]: the speed set now becomes the song's own, and the usual speed goes back
+     * to [usualBefore] (what it was when the sheet opened); off, the song plays at the usual speed again. At most
+     * [MAX_SPEEDS] songs keep their own speed; the oldest go first.
      */
-    fun thisSongOnly(path: String, on: Boolean, usualBefore: Speed): SongState = when {
-        !on -> copy(speeds = speeds - path)
-        path in speeds -> this
-        else -> copy(speeds = speeds + (path to usual), usual = usualBefore.normalised())
+    fun thisSongOnly(song: SongRef, on: Boolean, usualBefore: Speed): SongState = when {
+        !on -> copy(speeds = speeds - song.path).known(song)
+        song.path in speeds -> this
+        else -> copy(speeds = (speeds + (song.path to usual)).entries.toList().takeLast(MAX_SPEEDS).associate { it.key to it.value }, usual = usualBefore.normalised()).known(song)
     }
 
-    /** A bookmark at [positionMs] (to the second) in the song at [path], with [note] trimmed; the new bookmark too. */
-    fun withBookmark(path: String, positionMs: Long, note: String): Pair<SongState, Bookmark> {
+    /**
+     * A bookmark at [positionMs] (to the second) in [song], with [note] trimmed; the new bookmark too. Null when the song
+     * has [MAX_BOOKMARKS_PER_SONG] already, or all songs together [MAX_BOOKMARKS].
+     */
+    fun withBookmark(song: SongRef, positionMs: Long, note: String): Pair<SongState, Bookmark>? {
+        if (bookmarksOf(song.path).size >= MAX_BOOKMARKS_PER_SONG || bookmarks.values.sumOf { it.size } >= MAX_BOOKMARKS) return null
         val mark = Bookmark(nextBookmarkId, wholeSeconds(positionMs.coerceAtLeast(0)), note.trim().take(MAX_NOTE))
-        val list = (bookmarksOf(path) + mark).sortedWith(compareBy(Bookmark::positionMs, Bookmark::id))
-        return copy(bookmarks = bookmarks + (path to list), nextBookmarkId = nextBookmarkId + 1) to mark
+        val list = (bookmarksOf(song.path) + mark).sortedWith(compareBy(Bookmark::positionMs, Bookmark::id))
+        return copy(bookmarks = bookmarks + (song.path to list), nextBookmarkId = nextBookmarkId + 1).known(song) to mark
     }
 
     fun withoutBookmark(path: String, id: Long): SongState {
         val list = bookmarksOf(path)
         if (list.none { it.id == id }) return this
         val left = list.filterNot { it.id == id }
-        return copy(bookmarks = if (left.isEmpty()) bookmarks - path else bookmarks + (path to left))
+        return copy(bookmarks = if (left.isEmpty()) bookmarks - path else bookmarks + (path to left)).known(SongRef(path, ids[path]))
     }
 
-    /** The place kept for the song at [path]: [positionMs], or none when null; at most [MAX_PLACES], the oldest go first. */
-    fun withPlace(path: String, positionMs: Long?): SongState {
-        val others = places - path
-        if (positionMs == null) return if (path in places) copy(places = others) else this
+    /** The place kept for [song]: [positionMs], or none when null; at most [MAX_PLACES], the oldest go first. */
+    fun withPlace(song: SongRef, positionMs: Long?): SongState {
+        val others = places - song.path
+        if (positionMs == null) return if (song.path in places) copy(places = others).known(song) else this
         // A map keeps its order: the place kept now goes last, and the oldest go once there are too many.
-        return copy(places = (others + (path to positionMs)).entries.toList().takeLast(MAX_PLACES).associate { it.key to it.value })
+        return copy(places = (others + (song.path to positionMs)).entries.toList().takeLast(MAX_PLACES).associate { it.key to it.value }).known(song)
+    }
+
+    /**
+     * After a library read: each song kept here found again by [find] (its path, then its id hint, as queues and
+     * Favourites do). A song at a new path takes its state there; a song no longer on the phone leaves.
+     */
+    fun refresh(find: (SongRef) -> SongRef?): SongState {
+        val kept = (places.keys + speeds.keys + bookmarks.keys + listOfNotNull(part?.path)).distinct()
+        val now = kept.associateWith { path -> find(SongRef(path, ids[path])) }
+        if (now.all { (path, found) -> found?.path == path && found.mediaStoreId == ids[path] }) return this
+        val to: (String) -> String? = { path -> now[path]?.path }
+
+        // In order; a song moved onto one that keeps a value of its own leaves that value as it is.
+        fun <V> moved(map: Map<String, V>): Map<String, V> = buildMap {
+            map.forEach { (path, value) ->
+                val at = to(path) ?: return@forEach
+                if (at != path && at in map && to(at) == at) return@forEach
+                if (at !in this) put(at, value)
+            }
+        }
+        val marks = buildMap<String, List<Bookmark>> {
+            bookmarks.forEach { (path, list) ->
+                val at = to(path) ?: return@forEach
+                put(at, (get(at).orEmpty() + list).distinctBy(Bookmark::id).sortedWith(compareBy(Bookmark::positionMs, Bookmark::id)))
+            }
+        }
+        val hints = now.values.filterNotNull().mapNotNull { found -> found.mediaStoreId?.let { found.path to it } }.toMap()
+        val moved = copy(places = moved(places), speeds = moved(speeds), bookmarks = marks, part = part?.let { p -> to(p.path)?.let { p.copy(path = it) } })
+        return moved.copy(ids = hints.filterKeys(moved::keeps))
+    }
+
+    /** Whether the song at [path] has anything kept here. */
+    private fun keeps(path: String): Boolean = path in places || path in speeds || path in bookmarks || part?.path == path
+
+    /** [song]'s id hint noted; only songs that keep anything keep a hint, so one left with nothing (or capped) lets it go. */
+    private fun known(song: SongRef): SongState {
+        val noted = song.mediaStoreId?.let { ids + (song.path to it) } ?: ids
+        return copy(ids = noted.filterKeys(::keeps))
     }
 
     companion object {
         const val MAX_PLACES: Int = 300
+        const val MAX_SPEEDS: Int = 300
+        const val MAX_BOOKMARKS_PER_SONG: Int = 100
+        const val MAX_BOOKMARKS: Int = 1_000
         const val MAX_NOTE: Int = 200
     }
+}
+
+/**
+ * The state after a library read ([LibraryState]): songs found again ([SongState.refresh]). Not before the library is
+ * read, and never on an empty or unreadable library, which would drop every song's state.
+ */
+fun SongState.followLibrary(library: LibraryState): SongState {
+    val read = (library as? LibraryState.Ready)?.library?.takeIf { it.all.isNotEmpty() } ?: return this
+    return refresh { read.resolver.find(it)?.ref }
 }
 
 /** Where the progress bar shows the bookmarks of a song [durationMs] long: shares of its length, once each. */
@@ -280,6 +340,12 @@ class PlayerExtras(private val storage: SongStateStorage, private val scope: Cor
     /** A song about to start at a bookmark: it does not also resume at its kept place. */
     var jumpingTo: String? = null
 
+    /**
+     * The song the player was just parked at, paused at its start (the queue played to its end, the sleep timer after
+     * its last song), by uid: it does not resume at a kept place either.
+     */
+    var parked: Long? = null
+
     init {
         scope.launch {
             _state.value = storage.load()
@@ -301,10 +367,10 @@ class PlayerExtras(private val storage: SongStateStorage, private val scope: Cor
         }
     }
 
-    /** [change] applied now, for a result the caller shows; null and nothing changed before the state is read. */
-    fun <T> edit(change: (SongState) -> Pair<SongState, T>): T? {
+    /** [change] applied now, for a result the caller shows; null and nothing changed before the state is read, or when [change] says null. */
+    fun <T> edit(change: (SongState) -> Pair<SongState, T>?): T? {
         if (!_ready.value) return null
-        val (state, result) = change(_state.value)
+        val (state, result) = change(_state.value) ?: return null
         _state.value = state
         return result
     }
@@ -322,13 +388,22 @@ class PlayerExtras(private val storage: SongStateStorage, private val scope: Cor
             val app = context.applicationContext
             val log: (String) -> Unit = { Log.w(LOG_TAG, it) }
             val store = songStateStore(app.dataStoreFile("song-state.json"), app.filesDir, CoroutineScope(Dispatchers.IO + SupervisorJob()), System::currentTimeMillis, log)
-            PlayerExtras(SongStateFiles(store, Dispatchers.IO, log), CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + logFailures))
+            val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + logFailures)
+            PlayerExtras(SongStateFiles(store, Dispatchers.IO, log), scope).also { created ->
+                // Each library read: a moved song's state follows it, and songs gone leave (never on an empty read).
+                scope.launch {
+                    created.ready.first { it }
+                    LibraryGraph.repository(app).state.collect { library -> created.change { it.followLibrary(library) } }
+                }
+            }
         }.also { made = it }
     }
 }
 
-/** A song the player holds: its queue item's [uid], its file and its length (0 when unknown). */
-data class Playing(val uid: Long, val path: String, val durationMs: Long)
+/** A song the player holds: its queue item's [uid], the song as the library has it now, and its length (0 when unknown). */
+data class Playing(val uid: Long, val song: SongRef, val durationMs: Long) {
+    val path: String get() = song.path
+}
 
 /**
  * The extras on the player ([port]), in the service: each song plays at its speed, the part repeating loops between A
@@ -380,6 +455,18 @@ class ExtrasDriver(
 
     /** The song [uid] started ([EngineListener.onSongStarted]). */
     fun songStarted(uid: Long, lap: Boolean, natural: Boolean) {
+        val looping = extras.state.value.part
+        val parked = extras.parked == uid
+        extras.parked = null
+        // A part repeating keeps its song: one that played to its end (past the loop) goes back to A, not on.
+        current?.takeIf { natural && looping?.path == it.path }?.let { left ->
+            val at = port.loaded.indexOf(left.uid)
+            if (at >= 0) {
+                port.seek(at, looping!!.startMs)
+                lastMs = looping.startMs
+                return
+            }
+        }
         current?.let { left ->
             // Played to its end (or round again for Repeat one): its place goes.
             if (left.uid != uid || lap) keep(left, if (natural) left.durationMs else lastMs)
@@ -392,7 +479,8 @@ class ExtrasDriver(
         if (extras.state.value.part?.let { it.path != song.path } == true) extras.change { it.copy(part = null) }
         val jump = extras.jumpingTo == song.path
         extras.jumpingTo = null
-        if (lap || jump) return
+        // Not a new play: a lap, a bookmark's jump, a park at the start, or a song held by its part.
+        if (lap || jump || parked || extras.state.value.part?.path == song.path) return
         val at = resumeAt(mode(), song.durationMs, extras.state.value.places[song.path], port.positionMs) ?: return
         port.seek(port.index, at)
         lastMs = at
@@ -401,12 +489,24 @@ class ExtrasDriver(
 
     fun playingChanged(playing: Boolean) {
         this.playing.value = playing
+        if (playing) extras.parked = null
         lastMs = port.positionMs
         if (!playing) current?.let { keep(it, lastMs) }
     }
 
+    /** A seek inside the song playing: past B of its part, it goes back to A at once (before A, it plays on into the part). */
     fun seeked(toMs: Long) {
         lastMs = toMs
+        val part = extras.state.value.part?.takeIf { it.path == current?.path } ?: return
+        loopTo(part, toMs)?.let {
+            port.seek(port.index, it)
+            lastMs = it
+        }
+    }
+
+    /** The queue played to its end with Repeat off: the player waits at its first song, which is parked there. */
+    fun ended() {
+        extras.parked = port.loaded.getOrNull(port.index)
     }
 
     /** The service stops: the place of the song playing is kept. */
@@ -417,7 +517,7 @@ class ExtrasDriver(
     /** The place of [song] left at [positionMs], or none, when that changes anything. */
     private fun keep(song: Playing, positionMs: Long) {
         val place = placeToKeep(mode(), song.durationMs, positionMs)
-        if (extras.state.value.places[song.path] != place) extras.change { it.withPlace(song.path, place) }
+        if (extras.state.value.places[song.path] != place) extras.change { it.withPlace(song.song, place) }
     }
 
     private companion object {
@@ -461,7 +561,7 @@ internal fun playingOf(uid: Long, core: PlayerCore, library: StateFlow<LibrarySt
     val ref = core.book.value.current?.items?.firstOrNull { it.uid == uid }?.song ?: return null
     val song = (library.value as? LibraryState.Ready)?.library?.resolver?.find(ref)
     val decoded = engine.durationMs.takeIf { it != C.TIME_UNSET && engine.loaded.getOrNull(engine.index) == uid } ?: 0
-    return Playing(uid, song?.path ?: ref.path, song?.durationMs?.takeIf { it > 0 } ?: decoded)
+    return Playing(uid, song?.ref ?: ref, song?.durationMs?.takeIf { it > 0 } ?: decoded)
 }
 
 /** Speeds, the part repeating and Remember my place in the service ([ExtrasDriver] on the engine). */
@@ -483,6 +583,9 @@ class ExtrasPart : ServicePart {
             override fun onPlayingChanged(playing: Boolean) = made.playingChanged(playing)
 
             override fun onSeeked(fromMs: Long, toMs: Long) = made.seeked(toMs)
+
+            // The service parks the queue at its first song (PlaybackService's Follower, which hears this first).
+            override fun onEnded() = made.ended()
         })
         // The queue may have been loaded before the parts started.
         engine.loaded.getOrNull(engine.index)?.let { made.songStarted(it, lap = false, natural = false) }

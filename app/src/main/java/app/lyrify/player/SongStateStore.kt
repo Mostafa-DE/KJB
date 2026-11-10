@@ -31,7 +31,8 @@ import java.nio.file.StandardOpenOption
 /**
  * The stored form of [SongState] (`song-state.json`): a schema version, the usual speed, the next bookmark id, the part
  * repeating, and one entry per song with its own speed, place and bookmarks (songs with a place first, the oldest first,
- * so the places keep their order). Read leniently: unknown keys are ignored, a speed's fields read as their defaults when
+ * so the places keep their order). A song is named as queues.json names it: `path`, and `mediaStoreId` as a hint when
+ * known (files written before the hint read without it). The caps hold on reading too. Read leniently: unknown keys are ignored, a speed's fields read as their defaults when
  * they cannot be used, and each song, place, bookmark and the part is read on its own, so one this version cannot read
  * is left out and counted. Only text that is not a JSON object at all is not song state.
  */
@@ -41,11 +42,12 @@ object SongStateJson {
     private val json = Json { ignoreUnknownKeys = true }
 
     fun encode(state: SongState): String {
-        val paths = (state.places.keys + state.speeds.keys + state.bookmarks.keys).distinct()
+        val paths = (state.places.keys + state.speeds.keys + state.bookmarks.keys + listOfNotNull(state.part?.path)).distinct()
         val songs = paths.map { path ->
             JsonObject(
                 buildMap {
                     put(PATH_KEY, JsonPrimitive(path))
+                    state.ids[path]?.let { put(MEDIA_STORE_ID_KEY, JsonPrimitive(it)) }
                     state.speeds[path]?.let { put(SPEED_KEY, speed(it)) }
                     state.places[path]?.let { put(PLACE_KEY, JsonPrimitive(it)) }
                     state.bookmarks[path]?.takeIf { it.isNotEmpty() }?.let { marks -> put(BOOKMARKS_KEY, JsonArray(marks.map(::bookmark))) }
@@ -77,6 +79,7 @@ object SongStateJson {
         val speeds = mutableMapOf<String, Speed>()
         val places = linkedMapOf<String, Long>()
         val bookmarks = mutableMapOf<String, List<Bookmark>>()
+        val ids = mutableMapOf<String, Long>()
         val seen = mutableSetOf<String>()
         (root[SONGS_KEY] as? JsonArray).orEmpty().forEach { element ->
             val song = element as? JsonObject
@@ -85,21 +88,26 @@ object SongStateJson {
                 dropped++
                 return@forEach
             }
+            song[MEDIA_STORE_ID_KEY]?.long()?.let { ids[path] = it }
             song[SPEED_KEY]?.let { stored -> speed(stored)?.let { speeds[path] = it } ?: dropped++ }
             song[PLACE_KEY]?.let { stored -> stored.long()?.takeIf { it >= 0 }?.let { places[path] = it } ?: dropped++ }
             val marks = (song[BOOKMARKS_KEY] as? JsonArray).orEmpty().mapNotNull { stored -> bookmark(stored) ?: null.also { dropped++ } }
-            if (marks.isNotEmpty()) bookmarks[path] = marks.distinctBy { it.id }.sortedWith(compareBy(Bookmark::positionMs, Bookmark::id))
+            if (marks.isNotEmpty()) bookmarks[path] = marks.distinctBy { it.id }.sortedWith(compareBy(Bookmark::positionMs, Bookmark::id)).take(SongState.MAX_BOOKMARKS_PER_SONG)
         }
         val part = root[PART_KEY]?.let { stored -> part(stored) ?: null.also { dropped++ } }
         if (dropped > 0) onDropped(dropped)
         val usedId = bookmarks.values.flatten().maxOfOrNull { it.id } ?: 0
+        val kept = speeds.entries.toList().takeLast(SongState.MAX_SPEEDS).associate { it.key to it.value }
+        val placed = places.entries.toList().takeLast(SongState.MAX_PLACES).associate { it.key to it.value }
+        val keeps = placed.keys + kept.keys + bookmarks.keys + listOfNotNull(part?.path)
         return SongState(
             usual = root[USUAL_KEY]?.let(::speed) ?: Speed(),
-            speeds = speeds,
-            places = places,
+            speeds = kept,
+            places = placed,
             bookmarks = bookmarks,
             part = part,
             nextBookmarkId = maxOf(root[NEXT_BOOKMARK_KEY]?.long() ?: 1, usedId + 1),
+            ids = ids.filterKeys { it in keeps },
         )
     }
 
@@ -148,6 +156,7 @@ object SongStateJson {
     private const val PART_KEY: String = "part"
     private const val SONGS_KEY: String = "songs"
     private const val PATH_KEY: String = "path"
+    private const val MEDIA_STORE_ID_KEY: String = "mediaStoreId"
     private const val SPEED_KEY: String = "speed"
     private const val KEEP_PITCH_KEY: String = "keepPitch"
     private const val SEMITONES_KEY: String = "semitones"

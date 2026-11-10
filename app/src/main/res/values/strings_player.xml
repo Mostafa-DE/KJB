@@ -221,6 +221,7 @@
     <string name="bookmark_cancel">Cancel</string>
     <string name="bookmark_removed">Bookmark removed</string>
     <string name="bookmark_not_saved">The bookmark could not be saved.</string>
+    <string name="bookmark_full">No room for another bookmark. Remove one first.</string>
     <string name="bookmarks_title">Bookmarks</string>
     <string name="bookmark_no_note">No note</string>
     <string name="bookmark_play_from">Play from %1$s, %2$s</string>

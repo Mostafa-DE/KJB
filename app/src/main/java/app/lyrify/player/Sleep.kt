@@ -90,6 +90,8 @@ class SleepDriver(
     private val timer: MutableStateFlow<SleepTimer?>,
     private val clock: () -> Long,
     private val stopped: () -> Unit = {},
+    /** The music stopped at the start of a song (after the last song): that song is parked there. */
+    private val parked: () -> Unit = {},
 ) {
     /** Runs until cancelled: each timer set, until it stops or is turned off; without one the volume is full. */
     suspend fun run() {
@@ -118,6 +120,7 @@ class SleepDriver(
         // The next song has just started, faded to nothing: it waits at its start.
         port.setPlayWhenReady(false)
         port.seek(port.index, 0)
+        parked()
         stop()
     }
 
@@ -142,7 +145,13 @@ class SleepPart : ServicePart {
     override fun start(service: PlaybackService, session: MediaLibraryService.MediaLibrarySession) {
         val engine = service.playbackEngine
         val shared = PlayerExtras.of(service).also { extras = it }
-        val driver = SleepDriver(EngineExtras(engine), shared.sleep, SystemClock::elapsedRealtime) { shared.say(ExtrasSaid.SleepEnded) }
+        val driver = SleepDriver(
+            EngineExtras(engine),
+            shared.sleep,
+            SystemClock::elapsedRealtime,
+            stopped = { shared.say(ExtrasSaid.SleepEnded) },
+            parked = { shared.parked = engine.loaded.getOrNull(engine.index) },
+        )
         engine.addListener(object : EngineListener {
             override fun onSongStarted(uid: Long, lap: Boolean, natural: Boolean) {
                 if (natural) driver.songEnded()

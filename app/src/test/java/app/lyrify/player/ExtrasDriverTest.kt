@@ -1,5 +1,6 @@
 package app.lyrify.player
 
+import app.lyrify.library.SongRef
 import app.lyrify.settings.RememberPlace
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
@@ -18,9 +19,9 @@ import org.junit.Test
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class ExtrasDriverTest {
-    private val long = Playing(1, "/storage/emulated/0/Music/Talks/Night Ferry Talk.mp3", 1_800_000)
-    private val short = Playing(2, "/storage/emulated/0/Music/Harbour Glass/02 Paper Lantern.flac", 200_000)
-    private val other = Playing(3, "/storage/emulated/0/Music/Rips/Loose Thread.mp3", 240_000)
+    private val long = Playing(1, SongRef("/storage/emulated/0/Music/Talks/Night Ferry Talk.mp3", 101), 1_800_000)
+    private val short = Playing(2, SongRef("/storage/emulated/0/Music/Harbour Glass/02 Paper Lantern.flac", 102), 200_000)
+    private val other = Playing(3, SongRef("/storage/emulated/0/Music/Rips/Loose Thread.mp3", 103), 240_000)
     private val songs = listOf(long, short, other).associateBy { it.uid }
 
     private class MemoryStorage(var stored: SongState = SongState()) : SongStateStorage {
@@ -68,7 +69,7 @@ class ExtrasDriverTest {
         assertTrue(extras.ready.value)
         assertEquals(Speed(1.5f, keepPitch = false, semitones = 2), extras.state.value.usual)
         assertEquals(extras.state.value, storage.stored)
-        val mark = extras.edit { it.withBookmark(short.path, 61_000, "Bridge") }
+        val mark = extras.edit { it.withBookmark(short.song, 61_000, "Bridge") }
         runCurrent()
         assertEquals(Bookmark(1, 61_000, "Bridge"), mark)
         assertEquals(listOf(mark), storage.stored.bookmarksOf(short.path))
@@ -87,7 +88,7 @@ class ExtrasDriverTest {
         runCurrent()
         assertEquals(0.75f, run.port.speed, 0f)
         assertEquals(1.5f, run.port.pitch, 0.0001f)
-        run.extras.change { it.withSpeed(short.path) { speed -> speed.copy(speed = 1f, keepPitch = true) } }
+        run.extras.change { it.withSpeed(short.song) { speed -> speed.copy(speed = 1f, keepPitch = true) } }
         runCurrent()
         assertEquals(1f, run.port.speed, 0f)
         assertEquals(1f, run.port.pitch, 0f)
@@ -152,6 +153,8 @@ class ExtrasDriverTest {
         run.start(short)
         runCurrent()
         assertEquals(1_390_000L, run.extras.state.value.places[long.path])
+        // Kept as the play log and Favourites know the song: by path, with its MediaStore id as a hint.
+        assertEquals(101L, run.extras.state.value.ids[long.path])
         // A short song is no long song: nothing kept.
         run.port.positionMs = 60_000
         advanceTimeBy(1_100)
@@ -208,5 +211,75 @@ class ExtrasDriverTest {
         off.driver.stopped()
         runCurrent()
         assertNull(off.extras.state.value.places[long.path])
+    }
+
+    // A park at the start, and the part through seeks and song ends
+
+    @Test
+    fun `a song parked at its start by the queue's end or the sleep timer does not resume there, and the next start does`() = runTest {
+        val run = driving(SongState(places = mapOf(long.path to 1_390_000L)))
+        run.start(short)
+        run.driver.playingChanged(true)
+        // The queue played to its end: the player waits at its first song, the long one, paused at its start.
+        run.driver.playingChanged(false)
+        run.port.index = 0
+        run.port.positionMs = 0
+        run.driver.ended()
+        run.start(long, atMs = 0)
+        runCurrent()
+        assertEquals(emptyList<Pair<Int, Long>>(), run.port.seeks)
+        assertEquals(emptyList<ExtrasSaid>(), run.said)
+        // The sleep timer's park after its last song, said on the shared extras. (Leaving a song at its start forgets its place.)
+        run.start(short)
+        run.extras.change { it.withPlace(long.song, 1_390_000) }
+        run.extras.parked = long.uid
+        run.start(long, atMs = 0)
+        runCurrent()
+        assertEquals(emptyList<Pair<Int, Long>>(), run.port.seeks)
+        // A park is one start only: Next later resumes as ever.
+        run.start(short)
+        run.extras.change { it.withPlace(long.song, 1_390_000) }
+        run.start(long, atMs = 0)
+        runCurrent()
+        assertEquals(0 to 1_390_000L, run.port.seeks.lastOrNull())
+    }
+
+    @Test
+    fun `a seek past B goes back to A at once, and a seek before A plays on into the part`() = runTest {
+        val run = driving()
+        run.start(short, atMs = 30_000)
+        run.extras.change { it.copy(part = AbPart(short.path, 30_000, 40_000)) }
+        run.driver.playingChanged(true)
+        runCurrent()
+        run.port.positionMs = 199_500
+        run.driver.seeked(199_500)
+        assertEquals(1 to 30_000L, run.port.seeks.lastOrNull())
+        val seeks = run.port.seeks.size
+        run.port.positionMs = 5_000
+        run.driver.seeked(5_000)
+        runCurrent()
+        assertEquals(seeks, run.port.seeks.size)
+    }
+
+    @Test
+    fun `with a part on its song never runs on into the next one, and another song chosen ends the part`() = runTest {
+        val run = driving(SongState(places = mapOf(short.path to 120_000L)), mode = RememberPlace.ALL_SONGS)
+        run.start(short, atMs = 190_000)
+        run.extras.change { it.copy(part = AbPart(short.path, 189_000, 199_000)) }
+        run.driver.playingChanged(true)
+        runCurrent()
+        // The song ended before the loop caught it, and the next one started by itself: back to A.
+        run.start(other, natural = true)
+        assertEquals(1 to 189_000L, run.port.seeks.lastOrNull())
+        run.start(short, atMs = 189_000)
+        runCurrent()
+        assertEquals(AbPart(short.path, 189_000, 199_000), run.extras.state.value.part)
+        // Repeat one's lap goes back to A too, not to the start, and the part keeps the song from resuming elsewhere.
+        run.start(short, atMs = 0, lap = true, natural = true)
+        assertEquals(1 to 189_000L, run.port.seeks.lastOrNull())
+        // Another song chosen: the part ends.
+        run.start(other)
+        runCurrent()
+        assertNull(run.extras.state.value.part)
     }
 }

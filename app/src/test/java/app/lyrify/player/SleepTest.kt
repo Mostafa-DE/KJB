@@ -79,13 +79,13 @@ class SleepTest {
 
     // The driver, on a fake player
 
-    private class Run(val port: FakeExtrasPort, val timer: MutableStateFlow<SleepTimer?>, val driver: SleepDriver, var stops: Int = 0)
+    private class Run(val port: FakeExtrasPort, val timer: MutableStateFlow<SleepTimer?>, val driver: SleepDriver, var stops: Int = 0, var parks: Int = 0)
 
     private fun TestScope.driving(timer: SleepTimer?, setup: FakeExtrasPort.() -> Unit = {}): Run {
         val port = FakeExtrasPort().apply(setup)
         val flow = MutableStateFlow(timer)
         lateinit var run: Run
-        val driver = SleepDriver(port, flow, { testScheduler.currentTime }) { run.stops++ }
+        val driver = SleepDriver(port, flow, { testScheduler.currentTime }, stopped = { run.stops++ }, parked = { run.parks++ })
         run = Run(port, flow, driver)
         backgroundScope.launch { driver.run() }
         runCurrent()
@@ -108,6 +108,8 @@ class SleepTest {
         assertEquals(1f, run.port.volume, 0f)
         assertNull(run.timer.value)
         assertEquals(1, run.stops)
+        // Stopped in the middle of a song: no park at a song's start.
+        assertEquals(0, run.parks)
     }
 
     @Test
@@ -158,6 +160,8 @@ class SleepTest {
         assertEquals(1f, run.port.volume, 0f)
         assertNull(run.timer.value)
         assertEquals(1, run.stops)
+        // That song waits at its start: parked, so it does not resume at a place kept for it.
+        assertEquals(1, run.parks)
     }
 
     @Test
