@@ -45,11 +45,15 @@ class MainActivity : ComponentActivity() {
     /** Where a notification's tap asked KJB to open, until the shell has opened it. */
     private val destination = MutableStateFlow<Page?>(null)
 
+    /** The view an intent asked for (the widget's cover: the player), until the shell has shown it. */
+    private val view = MutableStateFlow<FullScreen?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         // A turn of the phone or a restore after process death delivers the same intent again: it was handled then.
         if (savedInstanceState == null) destination.value = destinationPage(intent.getStringExtra(EXTRA_DESTINATION))
+        if (savedInstanceState == null) view.value = destinationView(intent.getStringExtra(EXTRA_DESTINATION))
         // The stored AI switch is the truth: a schedule that got lost is made again.
         lifecycleScope.launch(logFailures) { AiLyrics.reconcile(applicationContext) }
         val ledger = LedgerRepository(this)
@@ -57,7 +61,7 @@ class MainActivity : ComponentActivity() {
             LyrifyTheme {
                 // The app's one message queue: the shell shows it above the dock, a sheet or full screen above its buttons.
                 CompositionLocalProvider(LocalToasts provides remember { ToastState() }) {
-                    App(ledger, destination.collectAsStateWithLifecycle().value) { destination.value = null }
+                    App(ledger, destination.collectAsStateWithLifecycle().value, view.collectAsStateWithLifecycle().value, { view.value = null }) { destination.value = null }
                 }
             }
         }
@@ -66,6 +70,7 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         destinationPage(intent.getStringExtra(EXTRA_DESTINATION))?.let { destination.value = it }
+        destinationView(intent.getStringExtra(EXTRA_DESTINATION))?.let { view.value = it }
     }
 }
 
@@ -74,7 +79,7 @@ class MainActivity : ComponentActivity() {
  * asked for a page; collects what every screen shows.
  */
 @Composable
-private fun App(ledger: LedgerStore, destination: Page?, onDestinationOpened: () -> Unit) {
+private fun App(ledger: LedgerStore, destination: Page?, view: FullScreen?, onViewOpened: () -> Unit, onDestinationOpened: () -> Unit) {
     val context = LocalContext.current
     val resources = LocalResources.current
     val toasts = LocalToasts.current
@@ -184,6 +189,8 @@ private fun App(ledger: LedgerStore, destination: Page?, onDestinationOpened: ()
         onRemove = { Lyrify.remove(context, it) },
         destination = destination,
         onDestinationOpened = onDestinationOpened,
+        view = view,
+        onViewOpened = onViewOpened,
     )
 }
 
