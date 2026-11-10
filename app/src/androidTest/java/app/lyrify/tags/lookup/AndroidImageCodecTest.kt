@@ -24,8 +24,8 @@ class AndroidImageCodecTest {
 
     @Test
     fun aLargeCoverBecomesA1000PxBaselineJpegWithinTarget() {
-        // Noise compresses badly, so the quality steps are really used.
-        val image = png(1200, 960) { x, y -> Color.rgb((x * 7 + y * 13) % 256, (x * y) % 256, (x xor y) % 256) }
+        // A picture with smooth areas, as covers are: it fits at the largest side.
+        val image = png(1200, 960) { x, y -> Color.rgb(x * 255 / 1200, y * 255 / 960, (x + y) / 8 % 256) }
 
         val cover = runBlocking { CoverPipeline(AndroidImageCodec).prepare(image) }
 
@@ -34,7 +34,23 @@ class AndroidImageCodecTest {
         assertTrue("${cover.jpeg.size} bytes", cover.jpeg.size <= CoverPipeline.TARGET_BYTES)
         val decoded = BitmapFactory.decodeByteArray(cover.jpeg, 0, cover.jpeg.size)
         assertEquals(cover.size, ImageSize(decoded.width, decoded.height))
-        assertEquals(1000, maxOf(decoded.width, decoded.height))
+        assertEquals(CoverPipeline.MAX_SIDE, maxOf(decoded.width, decoded.height))
+    }
+
+    @Test
+    fun aCoverStillTooLargeAt1000PxStepsDownToASmallerSideWithinTarget() {
+        // Noise compresses badly: on the phone even the lowest quality at 1000 px is over the target (about 288 KB with
+        // desktop libjpeg, over 300 KB with Android's encoder), so the pipeline takes the next side, as designed.
+        val image = png(1200, 960) { x, y -> Color.rgb((x * 7 + y * 13) % 256, (x * y) % 256, (x xor y) % 256) }
+        val lowestAtMax = AndroidImageCodec.jpeg(image, CoverPipeline.MAX_SIDE, CoverPipeline.QUALITIES.last())!!
+
+        val cover = runBlocking { CoverPipeline(AndroidImageCodec).prepare(image) }!!
+
+        assertTrue(Images.isBaselineJpeg(cover.jpeg))
+        assertTrue("${cover.jpeg.size} bytes", cover.jpeg.size <= CoverPipeline.TARGET_BYTES)
+        val side = maxOf(cover.size.width, cover.size.height)
+        assertTrue("$side px", side in CoverPipeline.SIDES)
+        if (lowestAtMax.size > CoverPipeline.TARGET_BYTES) assertTrue("$side px", side < CoverPipeline.MAX_SIDE) else assertEquals(CoverPipeline.MAX_SIDE, side)
     }
 
     @Test
