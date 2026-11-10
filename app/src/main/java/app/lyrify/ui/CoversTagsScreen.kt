@@ -128,6 +128,7 @@ fun outcomeWords(outcome: SongOutcome): Int = when (outcome) {
     SongOutcome.COULD_NOT_CHANGE -> R.string.tags_outcome_could_not
     SongOutcome.LEFT_AS_IT_WAS -> R.string.tags_outcome_left
     SongOutcome.RECOVERY_PENDING -> R.string.tags_outcome_recovery
+    SongOutcome.SET_ASIDE -> R.string.tags_outcome_set_aside
     SongOutcome.UNDO_NOT_SAVED -> R.string.tags_outcome_undo_not_saved
     SongOutcome.NOT_TRIED -> R.string.tags_outcome_not_tried
 }
