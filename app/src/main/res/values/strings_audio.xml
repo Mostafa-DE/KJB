@@ -1,4 +1,59 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Volume levelling, the equalizer and crossfade (milestones A1 and A2). -->
 <resources>
+    <string name="eq_title">Equalizer</string>
+    <string name="eq_now">Now: %1$s</string>
+    <!-- The toast when the output changes and the equalizer follows it, e.g. "Equalizer: Galaxy Buds". -->
+    <string name="eq_switched">Equalizer: %1$s</string>
+    <string name="eq_per_output">Saved per output</string>
+
+    <!-- The outputs. A Bluetooth output shows its own name; one whose name your phone hides is "Bluetooth audio". -->
+    <string name="eq_output_speaker">Phone speaker</string>
+    <string name="eq_output_wired">Wired headphones</string>
+    <string name="eq_output_usb">USB audio</string>
+    <string name="eq_output_bluetooth">Bluetooth audio</string>
+    <string name="eq_output_car">Car</string>
+    <string name="eq_output_other">Other output</string>
+
+    <string name="eq_bands">Bands</string>
+    <string name="eq_band_hz">%1$d Hz</string>
+    <string name="eq_band_khz">%1$d kHz</string>
+    <string name="eq_db">%1$s dB</string>
+
+    <string name="eq_presets">Presets</string>
+    <string name="eq_preset_flat">Flat</string>
+    <string name="eq_preset_bass">Bass</string>
+    <string name="eq_preset_bass_treble">Bass and treble</string>
+    <string name="eq_preset_vocal">Vocal</string>
+    <string name="eq_preset_rock">Rock</string>
+    <string name="eq_preset_pop">Pop</string>
+    <string name="eq_preset_classical">Classical</string>
+    <string name="eq_preset_jazz">Jazz</string>
+    <string name="eq_preset_electronic">Electronic</string>
+    <string name="eq_preset_acoustic">Acoustic</string>
+    <string name="eq_preset_small_speakers">Small speakers</string>
+    <string name="eq_your_presets">Your presets</string>
+    <string name="eq_save_preset">Save preset</string>
+    <string name="eq_save">Save</string>
+    <string name="eq_rename">Rename</string>
+    <string name="eq_rename_preset">Rename preset</string>
+    <string name="eq_delete">Delete</string>
+    <string name="eq_delete_preset">Delete %1$s?</string>
+    <string name="eq_delete_preset_text">Outputs that use it keep their sound.</string>
+    <string name="eq_preset_more">More for %1$s</string>
+    <string name="eq_name_taken">You already have a preset with that name.</string>
+
+    <string name="eq_bass_boost">Bass boost</string>
+    <string name="eq_preamp">Pre-amp</string>
+    <string name="eq_more">More</string>
+    <string name="eq_balance">Balance</string>
+    <string name="eq_balance_centre">Centre</string>
+    <string name="eq_balance_left">Left %1$d%%</string>
+    <string name="eq_balance_right">Right %1$d%%</string>
+    <string name="eq_mono">Mono</string>
+    <string name="eq_mono_detail">Both ears the same</string>
+
+    <string name="eq_phone_effects">Phone\'s sound effects</string>
+    <string name="eq_phone_effects_detail">Your phone\'s own panel</string>
+    <string name="eq_effects_wait">Play a song first, then try again.</string>
 </resources>

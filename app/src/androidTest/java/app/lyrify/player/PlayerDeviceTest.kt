@@ -203,6 +203,16 @@ class PlayerDeviceTest {
         return (secondAt - playingAt) to sawNatural
     }
 
+    /** Review E (A1b): the phone's sound effects panel needs the player's own session from the start, not 0 until it plays. */
+    @Test
+    fun theEngineHasItsOwnAudioSessionAsSoonAsItIsBuilt() {
+        val session = onMain {
+            val engine = GaplessEngine(context, { Settings() }, NoLevels) { mediaItemOf(it, LibrarySettings()) }
+            engine.audioSessionId.also { engine.release() }
+        }
+        assertTrue("audio session $session", session > 0)
+    }
+
     @Test
     fun aGeneratedSongPlaysThroughAMediaControllerAndTheNextFollows() {
         val songs = listOf(song(tone("kjb-tone-1.wav", 2, 440.0), "Tone One"), song(tone("kjb-tone-2.wav", 2, 660.0), "Tone Two"))

@@ -10,6 +10,7 @@ import androidx.media3.common.Timeline
 import androidx.media3.common.audio.AudioProcessor.StreamMetadata
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.extractor.metadata.id3.TextInformationFrame
+import app.lyrify.audio.EqSound
 import app.lyrify.audio.ReplayGainTags
 import app.lyrify.audio.Signals
 import app.lyrify.settings.AdvancedSettings
@@ -20,6 +21,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.math.abs
 import app.lyrify.audio.SongLevels as StreamLevels
 
 /** A1's audio chain inside P1's engine: one chain per player, live settings, and each stream's levels. */
@@ -34,16 +36,20 @@ class AudioChainTest {
         val off = Settings(audio = AudioSettings(levelling = Levelling.OFF))
         val auto = Settings()
 
-        assertFalse(AudioChain.processing(off))
-        assertTrue(AudioChain.processing(auto))
-        assertTrue(offloadAllowed(AdvancedSettings(audioOffload = true), AudioChain.processing(off)))
-        assertFalse(offloadAllowed(AdvancedSettings(audioOffload = true), AudioChain.processing(auto)))
+        assertFalse(AudioChain.processing(off, EqSound()))
+        assertTrue(AudioChain.processing(auto, EqSound()))
+        assertTrue(AudioChain.processing(off, EqSound(enabled = true)))
+        // Set but switched off: the equalizer changes nothing.
+        assertFalse(AudioChain.processing(off, EqSound(preampDb = 6f, mono = true)))
+        assertTrue(offloadAllowed(AdvancedSettings(audioOffload = true), AudioChain.processing(off, EqSound())))
+        assertFalse(offloadAllowed(AdvancedSettings(audioOffload = true), AudioChain.processing(auto, EqSound())))
+        assertFalse(offloadAllowed(AdvancedSettings(audioOffload = true), AudioChain.processing(off, EqSound(enabled = true))))
     }
 
     @Test
     fun `each player gets a chain of its own, levelling first and the limiter last`() {
-        val first = AudioChain.processors({ Settings() }, queue, StreamTags())
-        val second = AudioChain.processors({ Settings() }, queue, StreamTags())
+        val first = AudioChain.processors({ Settings() }, queue, StreamTags()) { EqSound() }
+        val second = AudioChain.processors({ Settings() }, queue, StreamTags()) { EqSound() }
 
         assertEquals(4, first.size)
         assertTrue(first.none { stage -> second.any { it === stage } })
@@ -73,7 +79,7 @@ class AudioChainTest {
     fun `the chain levels a tagged song by its gain, and follows the settings while it plays`() {
         var settings = Settings(audio = AudioSettings(levelling = Levelling.SONG))
         val streams = StreamTags().apply { record(PERIOD_8, TAGGED) }
-        val chain = AudioChain.processors({ settings }, queue, streams)
+        val chain = AudioChain.processors({ settings }, queue, streams) { EqSound() }
         val sine = Signals.sine(1_000.0, 0.5f, seconds = 1.0)
         val half = sine.size / 2 / 2
 
@@ -84,6 +90,80 @@ class AudioChainTest {
         val firstHalf = half * 2
         assertEquals(-6.0, Signals.gainDb(sine.copyOfRange(0, firstHalf), out.copyOfRange(0, firstHalf)), 0.2)
         assertEquals(0.0, Signals.gainDb(sine.copyOfRange(firstHalf, sine.size), out.copyOfRange(firstHalf, out.size)), 0.2)
+    }
+
+    @Test
+    fun `the chain plays the equalizer of the output playing, and follows it while it plays`() {
+        val settings = Settings(audio = AudioSettings(levelling = Levelling.OFF))
+        var eq = EqSound()
+        val chain = AudioChain.processors({ settings }, queue, StreamTags()) { eq }
+        val sine = Signals.sine(1_000.0, 0.5f, seconds = 1.0)
+        val half = sine.size / 2 / 2
+
+        val out = Signals.run(chain, sine, encoding = C.ENCODING_PCM_16BIT, stream = stream(PERIOD_8, "8")) { frame ->
+            if (frame >= half) eq = EqSound(enabled = true, preampDb = -6f)
+        }
+
+        val firstHalf = half * 2
+        assertEquals(0.0, Signals.gainDb(sine.copyOfRange(0, firstHalf), out.copyOfRange(0, firstHalf)), 0.2)
+        assertEquals(-6.0, Signals.gainDb(sine.copyOfRange(firstHalf, sine.size), out.copyOfRange(firstHalf, out.size)), 0.2)
+    }
+
+    // Review C: audio offload
+
+    @Test
+    fun `offload waits until the equalizer's profiles are read, and stays off while anything processes`() {
+        val offloadOn = Settings(audio = AudioSettings(levelling = Levelling.OFF), advanced = AdvancedSettings(audioOffload = true))
+        assertFalse(offloadWanted(offloadOn, eq = null))
+        assertTrue(offloadWanted(offloadOn, EqSound()))
+        assertFalse(offloadWanted(offloadOn, EqSound(enabled = true)))
+        assertFalse(offloadWanted(offloadOn.copy(audio = AudioSettings(levelling = Levelling.AUTO)), EqSound()))
+        assertFalse(offloadWanted(Settings(audio = AudioSettings(levelling = Levelling.OFF)), EqSound()))
+    }
+
+    @Test
+    fun `offload goes off at once, and back on only at the next song start if nothing processes then`() {
+        val applied = mutableListOf<Boolean>()
+        val gate = OffloadGate(applied::add)
+
+        gate.wanted(true)
+        assertEquals(emptyList<Boolean>(), applied)
+        gate.songStarted()
+        assertEquals(listOf(true), applied)
+        // The equalizer comes on mid-song: off at once.
+        gate.wanted(false)
+        assertEquals(listOf(true, false), applied)
+        // Off again mid-song, still gliding to unity: offload waits for the next song.
+        gate.wanted(true)
+        assertEquals(listOf(true, false), applied)
+        // On and off again before that song: nothing at its start.
+        gate.wanted(false)
+        gate.songStarted()
+        assertEquals(listOf(true, false), applied)
+        gate.wanted(true)
+        gate.songStarted()
+        gate.songStarted()
+        assertEquals(listOf(true, false, true), applied)
+    }
+
+    @Test
+    fun `a profile switch mid-song glides through the whole chain, the wave never stepping`() {
+        val settings = Settings(audio = AudioSettings(levelling = Levelling.OFF))
+        val speaker = EqSound(enabled = true, bandsDb = List(10) { if (it < 3) 6f else 0f }, preampDb = -3f)
+        val buds = EqSound(enabled = true, bandsDb = List(10) { if (it > 6) 4f else -2f }, bassBoostDb = 4f, preampDb = -9f, balance = 0.4f)
+        var eq = speaker
+        val chain = AudioChain.processors({ settings }, queue, StreamTags()) { eq }
+        val sine = Signals.sine(500.0, 0.4f, seconds = 1.0)
+        val change = sine.size / 2 / 2
+
+        val out = Signals.channel(Signals.run(chain, sine, stream = stream(PERIOD_8, "8"), chunk = 256) { frame -> if (frame >= change) eq = buds }, 0)
+
+        // The largest step between two samples, before, during and after the switch: gliding, it never jumps past either.
+        fun steepest(range: IntRange) = range.maxOf { abs(out[it] - out[it - 1]) }
+        val before = steepest(change - 4_800 until change)
+        val after = steepest(out.size - 4_800 until out.size)
+        val during = steepest(change until change + 4_800)
+        assertTrue("$during while switching, $before before, $after after", during <= maxOf(before, after) * 1.05f)
     }
 
     /** The stream of period [period], the one song of a timeline whose item is [mediaId], as a sink flushes it. */

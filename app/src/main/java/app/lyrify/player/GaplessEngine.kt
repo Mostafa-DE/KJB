@@ -16,6 +16,7 @@ import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionParameters.AudioOffloadPreferences
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.common.util.Util
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.Renderer
@@ -29,6 +30,7 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.extractor.mp4.Mp4Extractor
+import app.lyrify.audio.LiveEq
 import app.lyrify.library.Song
 import app.lyrify.library.displayTitle
 import app.lyrify.settings.LibrarySettings
@@ -127,6 +129,9 @@ class GaplessEngine(context: Context, settings: () -> Settings, levels: SongLeve
         .build()
 
     init {
+        // Media3 makes the session on a background thread and reports 0 until then; KJB's own, now, so the phone's sound
+        // effects panel opens for this player from the start.
+        player.setAudioSessionId(Util.generateAudioSessionId(context))
         player.addListener(object : Player.Listener {
             override fun onEvents(player: Player, events: Player.Events) {
                 listeners.forEach { it.onChanged() }
@@ -266,7 +271,7 @@ class GaplessEngine(context: Context, settings: () -> Settings, levels: SongLeve
 
         override fun buildAudioSink(context: Context, enableFloatOutput: Boolean, enableAudioOutputPlaybackParams: Boolean): AudioSink =
             DefaultAudioSink.Builder(context)
-                .setAudioProcessors(AudioChain.processors(settings, levels, streams).toTypedArray())
+                .setAudioProcessors(AudioChain.processors(settings, levels, streams, LiveEq.of(context).sound::value).toTypedArray())
                 // Float output stays off: with it, Media3 bypasses the processors.
                 .setEnableFloatOutput(false)
                 .setEnableAudioOutputPlaybackParameters(enableAudioOutputPlaybackParams)

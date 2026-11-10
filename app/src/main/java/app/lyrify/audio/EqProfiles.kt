@@ -3,6 +3,19 @@ package app.lyrify.audio
 import android.content.Context
 import android.util.Log
 import app.lyrify.LOG_TAG
+import app.lyrify.logFailures
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -16,6 +29,7 @@ import java.io.File
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import java.util.concurrent.CopyOnWriteArrayList
 
 /** One output's equalizer: what it does, and the preset its bands came from (none once a band was moved by hand). */
 data class EqProfile(val sound: EqSound = EqSound(), val preset: PresetChoice? = PresetChoice.BuiltIn(BuiltInPreset.FLAT))
@@ -59,6 +73,25 @@ data class EqProfiles(
                 if (preset is PresetChoice.Own && named(preset.name)) profile.copy(preset = null) else profile
             },
             presets = presets.filterNot { named(it.name) },
+        )
+    }
+
+    /**
+     * Renames an own preset, in every profile that uses it too; unchanged when it is gone, or [to] is blank or another
+     * preset's name (in any case).
+     */
+    fun renamePreset(from: String, to: String): EqProfiles {
+        val name = to.trim()
+        val at = presets.indexOfFirst { it.name.equals(from.trim(), ignoreCase = true) }
+        if (at < 0 || name.isEmpty()) return this
+        if (presets.withIndex().any { (index, other) -> index != at && other.name.equals(name, ignoreCase = true) }) return this
+        val old = presets[at].name
+        return copy(
+            profiles = profiles.mapValues { (_, profile) ->
+                val preset = profile.preset
+                if (preset is PresetChoice.Own && preset.name.equals(old, ignoreCase = true)) profile.copy(preset = PresetChoice.Own(name)) else profile
+            },
+            presets = presets.toMutableList().also { it[at] = it[at].copy(name = name) },
         )
     }
 
@@ -183,16 +216,28 @@ object EqProfilesJson {
 /**
  * [EqProfiles] in one app-private file, written whole or not at all (written aside, then moved over). A file that is
  * not profiles at all is moved aside as `eq-profiles-corrupt-<epochMillis>.json`, then the store starts over: every
- * output Flat and off. Loads and saves take turns, and each save writes its own file aside. Logs carry sizes and exception
- * names only, never a device name. Blocking.
+ * output Flat and off. Loads and saves take turns, and each save writes its own file aside; every save that was written
+ * is told to the [watch]ers, in turn, so the equalizer playing hears a restore. Logs carry sizes and exception names
+ * only, never a device name. Blocking.
  */
 class EqProfilesStore(private val file: File, private val clock: () -> Long, private val log: (String) -> Unit = {}) {
     private val lock = Any()
+    private val watchers = CopyOnWriteArrayList<(EqProfiles) -> Unit>()
 
     fun load(): EqProfiles = synchronized(lock) { read() }
 
-    /** False when it could not be written; the file before stays then. */
-    fun save(profiles: EqProfiles): Boolean = synchronized(lock) { write(profiles) }
+    /**
+     * False when it could not be written, or when [still], asked in this save's turn, says it is no longer wanted; the
+     * file before stays then.
+     */
+    fun save(profiles: EqProfiles, still: () -> Boolean = { true }): Boolean = synchronized(lock) {
+        still() && write(profiles).also { written -> if (written) watchers.forEach { it(profiles) } }
+    }
+
+    /** [onSaved] hears every save that was written, from any caller (a restore too), on the saving thread. */
+    fun watch(onSaved: (EqProfiles) -> Unit) {
+        watchers += onSaved
+    }
 
     private fun read(): EqProfiles {
         if (!file.isFile) return EqProfiles()
@@ -247,5 +292,101 @@ class EqProfilesStore(private val file: File, private val clock: () -> Long, pri
         fun of(context: Context): EqProfilesStore = made ?: EqProfilesStore(File(context.applicationContext.filesDir, "eq-profiles.json"), System::currentTimeMillis) {
             Log.w(LOG_TAG, it)
         }.also { made = it }
+    }
+}
+
+/**
+ * The equalizer as it plays, one per process ([of]): every output's profile and the user's presets ([profiles], null
+ * until the store is read), the output music plays on ([output]: OutputRoutesPart follows it while the player runs, the
+ * equalizer screen when it opens), and what the chain plays ([sound]: that output's profile, off until the profiles are
+ * read). A change is heard at the chain's next buffer and written [SAVE_DELAY_MS] after the changes stop, so a band
+ * dragged is one write; a write that fails leaves them unsaved, for the next change or [flush]. A save by anyone else,
+ * a backup's restore, becomes the profiles playing and is never written over. Changes and switches on the main thread.
+ */
+class LiveEq(private val store: EqProfilesStore, private val scope: CoroutineScope) {
+    private val _profiles = MutableStateFlow<EqProfiles?>(null)
+    val profiles: StateFlow<EqProfiles?> = _profiles.asStateFlow()
+    private val _output = MutableStateFlow(OutputKey.SPEAKER)
+    val output: StateFlow<OutputKey> = _output.asStateFlow()
+    private val _sound = MutableStateFlow(EqSound())
+
+    /** What every chain plays now; its value is read once per buffer on the playback threads. */
+    val sound: StateFlow<EqSound> = _sound.asStateFlow()
+
+    /** What the file holds as far as this knows: the last save written, this one's or another's. */
+    @Volatile
+    private var stored: EqProfiles? = null
+
+    /** This one's save in its turn, told apart from another's (a restore) when the store says it was written. */
+    @Volatile
+    private var saving: EqProfiles? = null
+    private val writing = Mutex()
+
+    init {
+        store.watch { saved ->
+            stored = saved
+            if (saved !== saving) {
+                _profiles.value = saved
+                publish()
+            }
+        }
+        scope.launch {
+            val loaded = store.load()
+            // A restore saved while this read wins.
+            if (_profiles.compareAndSet(null, loaded)) stored = loaded
+            publish()
+            _profiles.collectLatest { profiles ->
+                if (profiles == null || profiles === stored) return@collectLatest
+                delay(SAVE_DELAY_MS)
+                write(profiles)
+            }
+        }
+    }
+
+    /** Writes the profiles playing if a failed write left them unsaved: when the player stops. */
+    fun flush() {
+        scope.launch { _profiles.value?.let { write(it) } }
+    }
+
+    /** Writes [profiles] if they are unsaved, and only while they are still the ones playing when the store's turn comes. */
+    private suspend fun write(profiles: EqProfiles) {
+        writing.withLock {
+            if (profiles === stored) return
+            saving = profiles
+            try {
+                store.save(profiles) { _profiles.value === profiles }
+            } finally {
+                saving = null
+            }
+        }
+    }
+
+    /** [edit] applied to the profiles, with the output playing; nothing before the profiles are read. Heard at once. */
+    fun change(edit: (EqProfiles, OutputKey) -> EqProfiles) {
+        _profiles.update { profiles -> profiles?.let { edit(it, _output.value) } }
+        publish()
+    }
+
+    /** Music plays on [output] now, so its profile plays; false when it already did. */
+    fun switchTo(output: OutputKey): Boolean {
+        if (_output.value == output) return false
+        _output.value = output
+        publish()
+        return true
+    }
+
+    @Synchronized
+    private fun publish() {
+        _sound.value = _profiles.value?.profile(_output.value)?.sound ?: EqSound()
+    }
+
+    companion object {
+        /** How long after the last change the profiles are written. */
+        const val SAVE_DELAY_MS: Long = 300
+        private var made: LiveEq? = null
+
+        /** The app's: [EqProfilesStore.of]'s profiles, read and written on the IO threads. */
+        @Synchronized
+        fun of(context: Context): LiveEq = made ?: LiveEq(EqProfilesStore.of(context), CoroutineScope(SupervisorJob() + Dispatchers.IO + logFailures)).also { made = it }
     }
 }

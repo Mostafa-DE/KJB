@@ -1,8 +1,16 @@
 package app.lyrify.audio
 
+import android.content.Context
+import android.content.ContextWrapper
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Rule
@@ -11,6 +19,7 @@ import org.junit.rules.TemporaryFolder
 import java.io.File
 
 /** Profiles per output, the user's presets, and `eq-profiles.json` read leniently. Made-up device and preset names. */
+@OptIn(ExperimentalCoroutinesApi::class) // advanceTimeBy, runCurrent
 class EqProfilesTest {
     @get:Rule
     val folder = TemporaryFolder()
@@ -84,6 +93,23 @@ class EqProfilesTest {
     }
 
     @Test
+    fun `renaming a preset renames it in every profile that uses it`() {
+        val renamed = profiles.renamePreset("late night", "Quiet Hours")
+        assertEquals(listOf(OwnPreset("Quiet Hours", curve), OwnPreset("Bright Morning", BuiltInPreset.POP.bandsDb)), renamed.presets)
+        assertEquals(tuned.copy(preset = PresetChoice.Own("Quiet Hours")), renamed.profile(buds))
+        assertEquals(profiles.profile(OutputKey.SPEAKER), renamed.profile(OutputKey.SPEAKER))
+        // Only the case: still a rename.
+        assertEquals(listOf("LATE NIGHT", "Bright Morning"), profiles.renamePreset("Late Night", " LATE NIGHT ").presets.map { it.name })
+    }
+
+    @Test
+    fun `a rename onto another preset's name, a blank name or a preset that is gone changes nothing`() {
+        assertEquals(profiles, profiles.renamePreset("Late Night", "bright morning"))
+        assertEquals(profiles, profiles.renamePreset("Late Night", "   "))
+        assertEquals(profiles, profiles.renamePreset("Gone Away", "Something"))
+    }
+
+    @Test
     fun `a preset that is gone loads nothing`() {
         assertEquals(profiles, profiles.usePreset(buds, PresetChoice.Own("Gone Away")))
     }
@@ -147,6 +173,21 @@ class EqProfilesTest {
             {"name":"Short","bands":[1,2]},"Plain","Late Night",{"name":"Late Night","bands":[0,0,0,0,0,0,0,0,0,0]}]}
         """.trimIndent()
         assertEquals(listOf(OwnPreset("Late Night", curve)), EqProfilesJson.decode(stored)?.presets)
+    }
+
+    @Test
+    fun `a file as version 1 wrote it still reads, every field`() {
+        // Written by A1's first EqProfilesJson.encode, kept as it was: this must keep reading after any change.
+        val stored = """{"version":1,"profiles":{"speaker":{"enabled":true,"bands":[-2.0,-2.0,-1.0,0.0,2.0,4.0,4.0,3.0,1.0,0.0],""" +
+            """"bassBoost":0.0,"preamp":0.0,"balance":0.0,"mono":false,"preset":"VOCAL"},"bluetooth:Pebble Buds":{"enabled":true,""" +
+            """"bands":[3.0,2.0,1.0,0.0,-1.0,-1.0,0.0,1.0,2.0,3.0],"bassBoost":4.5,"preamp":-3.0,"balance":-0.25,"mono":true,""" +
+            """"ownPreset":"Late Night"},"wired":{"enabled":false,"bands":[1.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.5],"bassBoost":0.0,""" +
+            """"preamp":0.0,"balance":0.0,"mono":false,"preset":null}},"presets":[{"name":"Late Night","bands":[3.0,2.0,1.0,0.0,""" +
+            """-1.0,-1.0,0.0,1.0,2.0,3.0]},{"name":"Bright Morning","bands":[-1.0,0.0,2.0,3.0,4.0,3.0,1.0,0.0,-1.0,-1.0]}]}"""
+        val wired = OutputKey(OutputKind.WIRED)
+        val expected = profiles.withProfile(wired, EqProfile(EqSound(bandsDb = listOf(1f) + List(8) { 0f } + 0.5f), preset = null))
+        assertEquals(expected, EqProfilesJson.decode(stored))
+        assertEquals(stored, EqProfilesJson.encode(EqProfilesJson.decode(stored) ?: error("not read")))
     }
 
     @Test
@@ -215,5 +256,158 @@ class EqProfilesTest {
             parent.setWritable(true)
         }
         assertEquals(profiles, store.load())
+    }
+
+    // One per process
+
+    private fun context(dir: File): Context = object : ContextWrapper(null) {
+        override fun getApplicationContext(): Context = this
+
+        override fun getFilesDir(): File = dir
+    }
+
+    @Test
+    fun `the store and the playing equalizer are one per process, in files eq-profiles json`() {
+        val one = context(folder.newFolder("one"))
+        val other = context(folder.newFolder("other"))
+        assertSame(EqProfilesStore.of(one), EqProfilesStore.of(other))
+        assertSame(LiveEq.of(one), LiveEq.of(other))
+        // Whichever context came first, the file is the app's: a save lands in files/eq-profiles.json.
+        val store = EqProfilesStore.of(one)
+        assertTrue(store.save(profiles))
+        val written = listOf(File(folder.root, "one/eq-profiles.json"), File(folder.root, "other/eq-profiles.json")).filter(File::isFile)
+        assertEquals(1, written.size)
+    }
+
+    @Test
+    fun `a save from anywhere, a restore too, is heard by the store's watchers`() {
+        val store = store()
+        val heard = mutableListOf<EqProfiles>()
+        store.watch { heard += it }
+        assertTrue(store.save(profiles))
+        assertEquals(listOf(profiles), heard)
+    }
+
+    // The equalizer as it plays
+
+    private val bassOn = EqProfile(EqSound(enabled = true, BuiltInPreset.BASS.bandsDb), PresetChoice.BuiltIn(BuiltInPreset.BASS))
+
+    @Test
+    fun `the playing sound is off until the profiles are read, then the output's own`() = runTest {
+        val store = store().apply { save(profiles) }
+        val live = LiveEq(store, backgroundScope)
+        assertNull(live.profiles.value)
+        assertEquals(EqSound(), live.sound.value)
+        // Nothing to change before they are read.
+        live.change { all, output -> all.withProfile(output, bassOn) }
+        runCurrent()
+
+        assertEquals(profiles, live.profiles.value)
+        assertEquals(profiles.profile(OutputKey.SPEAKER).sound, live.sound.value)
+        assertTrue(live.switchTo(buds))
+        assertEquals(tuned.sound, live.sound.value)
+        assertFalse(live.switchTo(buds))
+    }
+
+    @Test
+    fun `a new output plays Flat with the equalizer off, and keeps what is set on it`() = runTest {
+        val live = LiveEq(store().apply { save(profiles) }, backgroundScope)
+        runCurrent()
+        val wired = OutputKey(OutputKind.WIRED)
+
+        live.switchTo(wired)
+        assertEquals(EqSound(), live.sound.value)
+        live.change { all, output -> all.withProfile(output, bassOn) }
+        assertEquals(bassOn.sound, live.sound.value)
+        live.switchTo(OutputKey.SPEAKER)
+        live.switchTo(wired)
+        assertEquals(bassOn.sound, live.sound.value)
+    }
+
+    @Test
+    fun `a change is heard at once and written once the changes stop`() = runTest {
+        val store = store().apply { save(profiles) }
+        val live = LiveEq(store, backgroundScope)
+        runCurrent()
+
+        repeat(5) { step -> live.change { all, output -> all.withProfile(output, bassOn.copy(sound = bassOn.sound.copy(preampDb = -step.toFloat()))) } }
+        assertEquals(-4f, live.sound.value.preampDb)
+        advanceTimeBy(LiveEq.SAVE_DELAY_MS - 1)
+        assertEquals(profiles, store.load())
+        advanceTimeBy(2)
+        runCurrent()
+        assertEquals(-4f, store.load().profile(OutputKey.SPEAKER).sound.preampDb)
+    }
+
+    @Test
+    fun `a restore saved by the backup replaces the playing profiles and is not written over`() = runTest {
+        val store = store().apply { save(profiles) }
+        val live = LiveEq(store, backgroundScope)
+        runCurrent()
+        val restored = EqProfiles().withProfile(OutputKey.SPEAKER, bassOn)
+
+        assertTrue(store.save(restored))
+        assertEquals(restored, live.profiles.value)
+        assertEquals(bassOn.sound, live.sound.value)
+        advanceTimeBy(LiveEq.SAVE_DELAY_MS * 2)
+        runCurrent()
+        assertEquals(restored, store.load())
+        assertNotSame(profiles, live.profiles.value)
+    }
+
+    // Review D: a write that fails
+
+    @Test
+    fun `a save that is no longer wanted when its turn comes writes nothing`() {
+        val store = store()
+        assertTrue(store.save(profiles))
+        val heard = mutableListOf<EqProfiles>()
+        store.watch { heard += it }
+        assertFalse(store.save(EqProfiles()) { false })
+        assertEquals(profiles, store.load())
+        assertEquals(emptyList<EqProfiles>(), heard)
+    }
+
+    @Test
+    fun `a write that failed stays unsaved, and the player stopping writes it`() = runTest {
+        val blocker = File(folder.root, "sub")
+        val store = store(File(blocker, "eq-profiles.json"))
+        val live = LiveEq(store, backgroundScope)
+        runCurrent()
+        // The folder is a file: every write fails.
+        blocker.writeText("in the way")
+
+        live.change { all, output -> all.withProfile(output, bassOn) }
+        advanceTimeBy(LiveEq.SAVE_DELAY_MS + 1)
+        runCurrent()
+        assertTrue(logs.any { it.startsWith("eq profiles: not written") })
+        assertEquals(bassOn.sound, live.sound.value)
+
+        blocker.delete()
+        live.flush()
+        runCurrent()
+        assertEquals(bassOn, store.load().profile(OutputKey.SPEAKER))
+        assertEquals(bassOn.sound, live.sound.value)
+    }
+
+    @Test
+    fun `after a failed write the next change writes everything, the newest included`() = runTest {
+        val blocker = File(folder.root, "sub")
+        val store = store(File(blocker, "eq-profiles.json"))
+        val live = LiveEq(store, backgroundScope)
+        runCurrent()
+        blocker.writeText("in the way")
+        live.change { all, output -> all.withProfile(output, bassOn) }
+        advanceTimeBy(LiveEq.SAVE_DELAY_MS + 1)
+        runCurrent()
+
+        blocker.delete()
+        val wired = OutputKey(OutputKind.WIRED)
+        live.switchTo(wired)
+        live.change { all, output -> all.withProfile(output, tuned) }
+        advanceTimeBy(LiveEq.SAVE_DELAY_MS + 1)
+        runCurrent()
+        assertEquals(bassOn, store.load().profile(OutputKey.SPEAKER))
+        assertEquals(tuned, store.load().profile(wired))
     }
 }
