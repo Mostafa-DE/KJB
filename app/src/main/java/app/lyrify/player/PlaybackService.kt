@@ -205,12 +205,18 @@ class PlaybackService : MediaLibraryService() {
             log = { Log.d(LOG_TAG, "own sweep: 1 diagnostic event") },
         )
         io.launch { sweep.run() }
+        var warned = false
         scope.launch {
             combine(core.book, library) { book, songs -> if (songs == null) null else ownSnapshot(book.current, ::find) }
                 .distinctUntilChanged()
                 .collect { snapshot ->
                     if (snapshot == null) return@collect
-                    if (Environment.isExternalStorageManager()) sweep.submit(snapshot) else Log.w(LOG_TAG, "All files access is off: no lookups for own songs")
+                    if (Environment.isExternalStorageManager()) {
+                        sweep.submit(snapshot)
+                    } else if (!warned) {
+                        warned = true
+                        Log.w(LOG_TAG, "All files access is off: no lookups for own songs")
+                    }
                 }
         }
     }
@@ -234,6 +240,8 @@ class PlaybackService : MediaLibraryService() {
 
         /** The queue ended with Repeat off: KJB waits at its first song, paused. */
         override fun onEnded() {
+            // An emptied player (the queue's last song removed) also ends: that play did not reach its end.
+            if (engine.loaded.isEmpty()) return tracker.end()
             tracker.end(naturalEnd = true)
             engine.setPlayWhenReady(false)
             engine.seek(0, 0)
@@ -382,7 +390,7 @@ class PlaybackService : MediaLibraryService() {
  */
 @OptIn(UnstableApi::class)
 private class ThumbnailLoader(private val context: Context) : BitmapLoader {
-    private val fallback = DataSourceBitmapLoader(context)
+    private val fallback = DataSourceBitmapLoader.Builder(context).build()
     private val io: ListeningExecutorService = MoreExecutors.listeningDecorator(Executors.newSingleThreadExecutor())
 
     override fun supportsMimeType(mimeType: String): Boolean = fallback.supportsMimeType(mimeType)
