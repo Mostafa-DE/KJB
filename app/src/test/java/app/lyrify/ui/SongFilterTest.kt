@@ -200,6 +200,28 @@ class SongFilterTest {
     }
 
     @Test
+    fun `title sections skip leading punctuation and brackets as the library's do, Arabic after Z`() {
+        val titled = LedgerState()
+            .put(song("/1.mp3", "(Dear Tide) Harbour", null, LyricsStatus.SYNCED, 1))
+            .put(song("/2.mp3", "& Copper Wings", null, LyricsStatus.SYNCED, 2))
+            .put(song("/3.mp3", "أمواج نحاسية", null, LyricsStatus.SYNCED, 3))
+            .put(song("/4.mp3", "12 Paper Moons", null, LyricsStatus.SYNCED, 4))
+            .put(song("/5.mp3", "Dune Lights", null, LyricsStatus.SYNCED, 5))
+            .put(song("/6.mp3", "Amber Field", null, LyricsStatus.SYNCED, 6))
+
+        assertEquals(
+            listOf(
+                Section.Letter("#") to listOf("/4.mp3"),
+                Section.Letter("A") to listOf("/6.mp3"),
+                Section.Letter("C") to listOf("/2.mp3"),
+                Section.Letter("D") to listOf("/1.mp3", "/5.mp3"),
+                Section.Letter("ا") to listOf("/3.mp3"),
+            ),
+            list(SongQuery(sort = SongSort.TITLE), titled).sections.map { it.section to it.songs.map { song -> song.path } },
+        )
+    }
+
+    @Test
     fun `sections follow the filter`() {
         assertEquals(
             listOf(Section.Letter("#") to listOf("/5.mp3"), Section.Letter("Q") to listOf("/4.mp3")),

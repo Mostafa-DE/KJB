@@ -8,7 +8,10 @@ import app.lyrify.R
 import app.lyrify.data.LedgerEntry
 import app.lyrify.data.LedgerState
 import app.lyrify.data.LyricsStatus
+import app.lyrify.library.nameLetter
+import app.lyrify.library.nameOrder
 import app.lyrify.lyrics.TrackNames
+import java.text.Collator
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -86,7 +89,7 @@ sealed interface Section {
 
     data object Earlier : Section
 
-    /** A first letter, "#" for digits, symbols and songs with no artist. */
+    /** A first letter ([nameLetter]), "#" for digits, nothing and songs with no artist. */
     data class Letter(val letter: String) : Section
 }
 
@@ -153,20 +156,16 @@ private fun sections(songs: List<LedgerEntry>, sort: SongSort, today: LocalDate,
         .sortedWith(compareByDescending<LedgerEntry> { it.updatedAt }.thenBy { it.path })
         .groupBy { day(dateOf(it.updatedAt, zone), today) }
         .map { (section, inIt) -> SongSection(section, inIt) }
-    SongSort.TITLE -> byLetter(songs) { TrackNames.normalize(it.title) }
-    SongSort.ARTIST -> byLetter(songs) { song -> song.artist?.let(TrackNames::cleanArtist)?.let(TrackNames::normalize).orEmpty() }
+    SongSort.TITLE -> byLetter(songs) { it.title }
+    SongSort.ARTIST -> byLetter(songs) { song -> song.artist?.let(TrackNames::cleanArtist).orEmpty() }
 }
 
-/** Sorted by [key] (normalized text), "#" (digits, symbols, nothing) first, then a section per letter. */
-private fun byLetter(songs: List<LedgerEntry>, key: (LedgerEntry) -> String): List<SongSection> {
-    val keyed = songs.map { it to key(it) }
-    return keyed
-        .sortedWith(compareBy<Pair<LedgerEntry, String>> { (_, k) -> if (letterOf(k) == HASH) 0 else 1 }.thenBy { it.second }.thenBy { it.first.title }.thenBy { it.first.path })
-        .groupBy({ (_, k) -> letterOf(k) }, { it.first })
+/** Sorted by [name] as the library's lists are ([nameOrder]), with a section per [nameLetter]: "#" (digits, nothing) first. */
+private fun byLetter(songs: List<LedgerEntry>, name: (LedgerEntry) -> String): List<SongSection> =
+    songs
+        .sortedWith(compareBy(nameOrder(Collator.getInstance()), name).thenBy { it.title }.thenBy { it.path })
+        .groupBy { nameLetter(name(it)) }
         .map { (letter, inIt) -> SongSection(Section.Letter(letter), inIt) }
-}
-
-private fun letterOf(key: String): String = key.firstOrNull()?.takeIf { it.isLetter() }?.uppercase() ?: HASH
 
 private fun dateOf(millis: Long, zone: ZoneId): LocalDate = Instant.ofEpochMilli(millis).atZone(zone).toLocalDate()
 
@@ -179,8 +178,6 @@ private fun day(date: LocalDate, today: LocalDate): Section = when {
 
 private fun matches(entry: LedgerEntry, words: String): Boolean =
     TrackNames.normalize(entry.title).contains(words) || TrackNames.normalize(entry.artist.orEmpty()).contains(words)
-
-private const val HASH = "#"
 
 /** "This week": today and the six days before. */
 private const val WEEK_DAYS = 7L

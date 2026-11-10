@@ -368,6 +368,34 @@ class LibraryTest {
     }
 
     @Test
+    fun `names sort from their first letter or digit, digits first and Arabic after Z, in every list`() {
+        val lib = library(
+            song("Music/1.mp3", artist = "Kit Calloway", album = "Harbour Glass", genre = "Folk", year = 2020),
+            song("Music/2.mp3", artist = "(Wren) Lantern Club", album = "'Til Low Water", genre = "Ambient", year = 2020),
+            song("Music/3.mp3", artist = "4 Gulls", album = "12 Tides", genre = "#Lofi", year = 2020),
+            song("Music/4.mp3", artist = "سفينة الملح", album = "باب الضباب", genre = "طرب", year = 2020),
+            song("Music/5.mp3", artist = "Mira Solen", album = "...Ash Tree", genre = "Folk", year = 2020),
+        )
+
+        assertEquals(listOf("12 Tides", "...Ash Tree", "Harbour Glass", "'Til Low Water", "باب الضباب"), sortAlbums(lib.albums, SortAlbums.TITLE).map { it.title })
+        assertEquals(listOf("4 Gulls", "Kit Calloway", "Mira Solen", "(Wren) Lantern Club", "سفينة الملح"), sortArtists(lib.artists, SortArtists.NAME).map { it.name })
+        assertEquals(listOf("Ambient", "Folk", "#Lofi", "طرب"), lib.genres.map { it.name })
+        assertEquals(listOf("3", "1", "5", "2", "4"), titles(sortSongs(lib.songs, SortSongs.ARTIST, LibrarySettings())))
+        assertEquals(listOf("3", "5", "1", "2", "4"), titles(sortSongs(lib.songs, SortSongs.ALBUM, LibrarySettings())))
+    }
+
+    @Test
+    fun `artists alike once their punctuation is skipped never mix, so each heads one run of songs`() {
+        val songs = listOf(
+            song("Music/1.mp3", artist = "Mira Solen", year = 2020),
+            song("Music/2.mp3", artist = "...Mira Solen", year = 2019),
+            song("Music/3.mp3", artist = "Mira Solen", year = 2018),
+        )
+
+        assertEquals(listOf("...Mira Solen", "Mira Solen", "Mira Solen"), sortSongs(songs, SortSongs.ARTIST, LibrarySettings()).map { it.artist })
+    }
+
+    @Test
     fun `album keys tell albums apart whatever their names hold`() {
         val one = albumKey(song("Music/1.mp3", album = "B", albumArtist = "A, C"))
         val two = albumKey(song("Music/2.mp3", album = "C, B", albumArtist = "A"))

@@ -85,6 +85,28 @@ class LibraryListsTest {
     }
 
     @Test
+    fun `title order and headings skip leading punctuation and brackets, digits under hash first, Arabic after Z`() {
+        val settings = LibrarySettings(songSort = SortSongs.TITLE)
+        val zone = ZoneId.of("UTC")
+        val titles = listOf(
+            "سفينة الملح", "Dune Lights", "'Til Morning", "(Dear Tide) Harbour", "Amber Field", "باب الضباب", "12 Paper Moons",
+            "Écume", "& Copper Wings", "Dawn Engines", "...Ashen Bell", "أمواج نحاسية",
+        )
+        val sorted = songsTab(titles.mapIndexed { at, title -> song("Music/t/$at.mp3", title = title) }, status, settings)
+        fun heading(song: Song) = (listSection(song, SortSongs.TITLE, settings, 0, zone) as ListSection.Letter).letter
+
+        assertEquals(
+            listOf(
+                "12 Paper Moons", "Amber Field", "...Ashen Bell", "& Copper Wings", "Dawn Engines", "(Dear Tide) Harbour", "Dune Lights",
+                "Écume", "'Til Morning", "أمواج نحاسية", "باب الضباب", "سفينة الملح",
+            ),
+            sorted.map { it.title },
+        )
+        // One heading per run of songs: "(Dear Tide)" sits among the other D titles, never above "#" and "A".
+        assertEquals(listOf("#", "A", "A", "C", "D", "D", "D", "E", "T", "ا", "ب", "س"), sorted.map(::heading))
+    }
+
+    @Test
     fun `the list header drops the chip's word, then Shuffle's, then Play's, then the chip, before anything overlaps`() {
         val shuffle = PartWidth(label = 100, icon = 48)
         val play = PartWidth(label = 90, icon = 48)
