@@ -3,8 +3,12 @@ package app.lyrify.ui
 import android.app.Activity
 import android.companion.AssociationInfo
 import android.companion.CompanionDeviceManager
+import android.content.Context
+import android.content.IntentSender
 import android.os.Build
-import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.LocalActivityResultRegistryOwner
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.ActivityResultRegistryOwner
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.RequiresApi
@@ -34,8 +38,11 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
 import app.lyrify.R
 import app.lyrify.player.StartWhenConnected
+import app.lyrify.player.openPicker
 import app.lyrify.settings.ConnectDevice
 
 /**
@@ -47,11 +54,8 @@ import app.lyrify.settings.ConnectDevice
 @Composable
 fun StartWhenConnectedSheet(devices: List<ConnectDevice>, onDismiss: () -> Unit) {
     val context = LocalContext.current
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
-        // The picker's result carries the new pairing too: added twice is still one device.
-        val info = result.data?.getParcelableExtra(CompanionDeviceManager.EXTRA_ASSOCIATION, AssociationInfo::class.java)
-        if (result.resultCode == Activity.RESULT_OK && info != null) StartWhenConnected.added(context, info)
-    }
+    // The activity's own results: Android may hand back its picker after this sheet is gone.
+    val activity = LocalActivityResultRegistryOwner.current
     LaunchedEffect(Unit) { StartWhenConnected.reconcile(context) }
     LyrifySheet(
         onDismiss = onDismiss,
@@ -59,7 +63,7 @@ fun StartWhenConnectedSheet(devices: List<ConnectDevice>, onDismiss: () -> Unit)
         footer = {
             LyrifyButton(
                 stringResource(R.string.connect_add),
-                onClick = { StartWhenConnected.add(context) { sender -> picker.launch(IntentSenderRequest.Builder(sender).build()) } },
+                onClick = { if (activity != null) StartWhenConnected.add(context) { sender -> launchPicker(activity, sender, context.applicationContext) } },
                 modifier = Modifier.fillMaxWidth(),
                 icon = R.drawable.ic_add,
             )
@@ -77,6 +81,25 @@ fun StartWhenConnectedSheet(devices: List<ConnectDevice>, onDismiss: () -> Unit)
         devices.forEach { device -> ConnectDeviceRow(device) { StartWhenConnected.remove(context, device.associationId) } }
     }
 }
+
+/**
+ * Android's picker [sender], launched on [activity]'s results through a launcher registered for this one launch, so it
+ * outlives the sheet; when KJB is no longer on screen it does not open ([openPicker]). The picker's result carries the
+ * new pairing too: added twice is still one device.
+ */
+@RequiresApi(Build.VERSION_CODES.TIRAMISU)
+private fun launchPicker(activity: ActivityResultRegistryOwner, sender: IntentSender, app: Context) {
+    lateinit var launcher: ActivityResultLauncher<IntentSenderRequest>
+    launcher = activity.activityResultRegistry.register(PICKER_KEY, ActivityResultContracts.StartIntentSenderForResult()) { result ->
+        launcher.unregister()
+        val info = result.data?.getParcelableExtra(CompanionDeviceManager.EXTRA_ASSOCIATION, AssociationInfo::class.java)
+        if (result.resultCode == Activity.RESULT_OK && info != null) StartWhenConnected.added(app, info)
+    }
+    val state = (activity as? LifecycleOwner)?.lifecycle?.currentState ?: Lifecycle.State.DESTROYED
+    if (!openPicker(state) { launcher.launch(IntentSenderRequest.Builder(sender).build()) }) launcher.unregister()
+}
+
+private const val PICKER_KEY: String = "app.lyrify.connect.picker"
 
 /** A picked device: its name, and Remove (TalkBack: "Remove Example Buds"). */
 @Composable

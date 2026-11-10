@@ -2,11 +2,17 @@ package app.lyrify.player
 
 import android.media.AudioDeviceInfo
 import android.media.AudioManager
+import androidx.lifecycle.Lifecycle
 import app.lyrify.settings.ConnectDevice
 import app.lyrify.settings.PlaybackSettings
+import app.lyrify.settings.Settings
+import app.lyrify.settings.SettingsStore
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.runCurrent
@@ -94,20 +100,38 @@ class StartWhenConnectedTest {
         assertNull(addressTail("bus0_media_out"))
     }
 
+    private val pickedBuds = DeviceMatch(addressTail = "5E:A1", name = "Example Buds")
+
     @Test
-    fun `music plays on the picked device when a Bluetooth output with its address has it`() {
-        val tail = "5E:A1"
-        assertTrue(playsOnDevice(listOf(RoutedOutput(AudioDeviceInfo.TYPE_BLUETOOTH_A2DP, "5E:A1")), tail))
-        assertTrue(playsOnDevice(listOf(RoutedOutput(AudioDeviceInfo.TYPE_BLE_HEADSET, "5E:A1")), tail))
-        // Another Bluetooth device (the car) has the music.
-        assertFalse(playsOnDevice(listOf(RoutedOutput(AudioDeviceInfo.TYPE_BLUETOOTH_A2DP, "77:02")), tail))
-        // A Bluetooth output whose address the phone hides entirely: any Bluetooth output counts.
-        assertTrue(playsOnDevice(listOf(RoutedOutput(AudioDeviceInfo.TYPE_BLUETOOTH_A2DP, null)), tail))
+    fun `with both addresses known, the last two bytes decide`() {
+        assertTrue(playsOnDevice(listOf(RoutedOutput(AudioDeviceInfo.TYPE_BLUETOOTH_A2DP, "5E:A1", "Example Buds")), pickedBuds))
+        assertTrue(playsOnDevice(listOf(RoutedOutput(AudioDeviceInfo.TYPE_BLE_HEADSET, "5E:A1", null)), pickedBuds))
+        // Another Bluetooth device (the car) has the music, even one with the same name.
+        assertFalse(playsOnDevice(listOf(RoutedOutput(AudioDeviceInfo.TYPE_BLUETOOTH_A2DP, "77:02", "Example Buds")), pickedBuds))
+    }
+
+    @Test
+    fun `with an address hidden, the device's name decides, exactly after trimming`() {
+        assertTrue(playsOnDevice(listOf(RoutedOutput(AudioDeviceInfo.TYPE_BLUETOOTH_A2DP, null, " Example Buds ")), pickedBuds))
+        // The pairing has no address: the name decides too.
+        assertTrue(playsOnDevice(listOf(RoutedOutput(AudioDeviceInfo.TYPE_BLUETOOTH_A2DP, "5E:A1", "Example Buds")), DeviceMatch(null, "Example Buds")))
+        assertFalse(playsOnDevice(listOf(RoutedOutput(AudioDeviceInfo.TYPE_BLUETOOTH_A2DP, null, "Example Buds Pro")), pickedBuds))
+        assertFalse(playsOnDevice(listOf(RoutedOutput(AudioDeviceInfo.TYPE_BLUETOOTH_A2DP, null, "example buds")), pickedBuds))
+    }
+
+    @Test
+    fun `a different headset connected with its address hidden does not start`() {
+        val other = listOf(RoutedOutput(AudioDeviceInfo.TYPE_BLUETOOTH_A2DP, null, "Other Headset Demo"))
+        assertFalse(playsOnDevice(other, pickedBuds))
+        assertFalse(playsOnDevice(other, DeviceMatch(null, "Example Buds")))
+        // Neither an address nor a name to go by: no start.
+        assertFalse(playsOnDevice(listOf(RoutedOutput(AudioDeviceInfo.TYPE_BLUETOOTH_A2DP, null, null)), pickedBuds))
+        assertFalse(playsOnDevice(listOf(RoutedOutput(AudioDeviceInfo.TYPE_BLUETOOTH_A2DP, null, "  ")), DeviceMatch(null, "  ")))
+        assertFalse(playsOnDevice(listOf(RoutedOutput(AudioDeviceInfo.TYPE_BLUETOOTH_A2DP, "5E:A1", null)), DeviceMatch(null, null)))
     }
 
     @Test
     fun `the phone speaker, wired headphones and a call's link are never the picked device`() {
-        val tail = "5E:A1"
         listOf(
             AudioDeviceInfo.TYPE_BUILTIN_SPEAKER,
             AudioDeviceInfo.TYPE_BUILTIN_SPEAKER_SAFE,
@@ -115,10 +139,10 @@ class StartWhenConnectedTest {
             AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
             AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
         ).forEach { type ->
-            assertFalse("type $type", playsOnDevice(listOf(RoutedOutput(type, "5E:A1")), tail))
-            assertFalse("type $type", playsOnDevice(listOf(RoutedOutput(type, null)), tail))
+            assertFalse("type $type", playsOnDevice(listOf(RoutedOutput(type, "5E:A1", "Example Buds")), pickedBuds))
+            assertFalse("type $type", playsOnDevice(listOf(RoutedOutput(type, null, "Example Buds")), pickedBuds))
         }
-        assertFalse(playsOnDevice(emptyList(), tail))
+        assertFalse(playsOnDevice(emptyList(), pickedBuds))
     }
 
     @Test
@@ -166,37 +190,220 @@ class StartWhenConnectedTest {
         assertEquals(0, currentTime)
     }
 
+    // A connect, from the event to the Play (review items A, C, D)
+
+    private val car = DeviceMatch(addressTail = "77:02", name = "Car Kit Demo")
+
+    /** The phone as a connect start sees it: which device holds the music, and what was played. */
+    private class FakePhone : ConnectPhone {
+        val pickedDevices = mutableMapOf<Int, DeviceMatch>()
+        var output: DeviceMatch? = null
+        val changes = Channel<Unit>(Channel.CONFLATED)
+        var listening = 0
+        var queueReadMs = 0L
+        var whileQueueRead: () -> Unit = {}
+        val played = mutableListOf<DeviceMatch>()
+
+        fun route(to: DeviceMatch?) {
+            output = to
+            changes.trySend(Unit)
+        }
+
+        override suspend fun picked(associationId: Int): DeviceMatch? = pickedDevices[associationId]
+
+        override fun addedJustNow(associationId: Int): Boolean = false
+
+        override suspend fun becomesOutput(device: DeviceMatch): Boolean {
+            listening++
+            try {
+                return awaitOutput(changes) { output == device }
+            } finally {
+                listening--
+            }
+        }
+
+        override fun moment(device: DeviceMatch, hasQueue: Boolean): ConnectMoment =
+            ConnectMoment(hasQueue, kjbPlaying = false, otherPlaying = false, inCall = false, deviceIsOutput = output == device)
+
+        override suspend fun hasQueue(): Boolean {
+            delay(queueReadMs)
+            whileQueueRead()
+            return true
+        }
+
+        override fun play(device: DeviceMatch) {
+            played += device
+        }
+    }
+
+    @Test
+    fun `a picked device that takes the music is played to`() = runTest {
+        val phone = FakePhone().apply { pickedDevices[4] = pickedBuds }
+        val starts = ConnectStarts(backgroundScope, phone) {}
+        starts.connected(4)
+        advanceTimeBy(2_000)
+        phone.route(pickedBuds)
+        runCurrent()
+
+        assertEquals(listOf(pickedBuds), phone.played)
+        assertEquals(0, phone.listening)
+    }
+
+    @Test
+    fun `the route is read again as the Play goes out, so music that left the device starts nothing`() = runTest {
+        val phone = FakePhone().apply {
+            pickedDevices[4] = pickedBuds
+            queueReadMs = 2_000
+            // The device took the music, then gave it back to the speaker while the queues were read.
+            whileQueueRead = { output = null }
+        }
+        val starts = ConnectStarts(backgroundScope, phone) {}
+        starts.connected(4)
+        phone.route(pickedBuds)
+        advanceTimeBy(5_000)
+
+        assertEquals(emptyList<DeviceMatch>(), phone.played)
+    }
+
+    @Test
+    fun `a later connect of a picked device starts the wait over for that device`() = runTest {
+        val phone = FakePhone().apply {
+            pickedDevices[4] = pickedBuds
+            pickedDevices[9] = car
+        }
+        val starts = ConnectStarts(backgroundScope, phone) {}
+        starts.connected(9)
+        advanceTimeBy(3_000)
+        starts.connected(4)
+        advanceTimeBy(1_000)
+        phone.route(pickedBuds)
+        runCurrent()
+
+        assertEquals(listOf(pickedBuds), phone.played)
+        assertEquals(0, phone.listening)
+    }
+
+    @Test
+    fun `a connect of a device that is not picked leaves the wait as it is`() = runTest {
+        val phone = FakePhone().apply { pickedDevices[4] = pickedBuds }
+        val starts = ConnectStarts(backgroundScope, phone) {}
+        starts.connected(4)
+        advanceTimeBy(1_000)
+        starts.connected(30)
+        advanceTimeBy(1_000)
+        phone.route(pickedBuds)
+        runCurrent()
+
+        assertEquals(listOf(pickedBuds), phone.played)
+    }
+
+    @Test
+    fun `a disconnect during the wait ends it, and the output is no longer watched`() = runTest {
+        val phone = FakePhone().apply { pickedDevices[4] = pickedBuds }
+        val starts = ConnectStarts(backgroundScope, phone) {}
+        starts.connected(4)
+        advanceTimeBy(2_000)
+        assertEquals(1, phone.listening)
+
+        starts.disconnected(4)
+        runCurrent()
+        assertEquals(0, phone.listening)
+        phone.route(pickedBuds)
+        advanceTimeBy(OUTPUT_WAIT_MS)
+
+        assertEquals(emptyList<DeviceMatch>(), phone.played)
+    }
+
+    @Test
+    fun `another device's disconnect leaves the wait as it is`() = runTest {
+        val phone = FakePhone().apply { pickedDevices[4] = pickedBuds }
+        val starts = ConnectStarts(backgroundScope, phone) {}
+        starts.connected(4)
+        advanceTimeBy(2_000)
+        starts.disconnected(9)
+        phone.route(pickedBuds)
+        runCurrent()
+
+        assertEquals(listOf(pickedBuds), phone.played)
+    }
+
+    @Test
+    fun `a playback that begins after the device left pauses, never the phone speaker`() {
+        val sent = ConnectStartSent(atMs = 1_000, device = pickedBuds)
+        assertTrue(pausesOnBegin(sent, nowMs = 3_000, stillOnDevice = false))
+        assertFalse(pausesOnBegin(sent, nowMs = 3_000, stillOnDevice = true))
+        // A play long after the connect start is the user's own.
+        assertFalse(pausesOnBegin(sent, nowMs = 1_000 + START_GUARD_MS, stillOnDevice = false))
+        assertFalse(pausesOnBegin(null, nowMs = 3_000, stillOnDevice = false))
+    }
+
+    // Add's picker (review item E)
+
+    @Test
+    fun `Android's picker opens only while KJB is on screen, and a launcher gone is no crash`() {
+        var launched = 0
+        assertFalse(openPicker(Lifecycle.State.CREATED) { launched++ })
+        assertFalse(openPicker(Lifecycle.State.DESTROYED) { launched++ })
+        assertEquals(0, launched)
+        assertTrue(openPicker(Lifecycle.State.STARTED) { launched++ })
+        assertTrue(openPicker(Lifecycle.State.RESUMED) { launched++ })
+        assertEquals(2, launched)
+        assertFalse(openPicker(Lifecycle.State.RESUMED) { throw IllegalStateException("unregistered") })
+    }
+
+    // The saved list against Android's pairings (review item F)
+
+    private class MemorySettings(initial: Settings) : SettingsStore {
+        val state = MutableStateFlow(initial)
+        override val settings: Flow<Settings> = state
+
+        override suspend fun update(change: (Settings) -> Settings): Boolean {
+            state.value = change(state.value)
+            return true
+        }
+    }
+
+    @Test
+    fun `devices Android no longer pairs with KJB leave the saved list`() = runTest {
+        val store = MemorySettings(Settings(playback = PlaybackSettings(headsetButtons = false, connectDevices = listOf(buds1, car1))))
+
+        assertTrue(reconcileConnectDevices(store, live = setOf(9, 30)))
+        assertEquals(PlaybackSettings(headsetButtons = false, connectDevices = listOf(car1)), store.state.value.playback)
+        reconcileConnectDevices(store, live = emptySet())
+        assertEquals(emptyList<ConnectDevice>(), store.state.value.playback.connectDevices)
+    }
+
     // The picked devices
 
     private val buds1 = ConnectDevice(4, "Example Buds")
-    private val car = ConnectDevice(9, "Car Kit Demo")
+    private val car1 = ConnectDevice(9, "Car Kit Demo")
 
     @Test
     fun `adding a device keeps one entry per association, in its place`() {
         val one = PlaybackSettings().withConnectDevice(buds1)
         assertEquals(listOf(buds1), one.connectDevices)
 
-        val two = one.withConnectDevice(car)
-        assertEquals(listOf(buds1, car), two.connectDevices)
+        val two = one.withConnectDevice(car1)
+        assertEquals(listOf(buds1, car1), two.connectDevices)
 
         // Added again (the picker's result and its callback both report it): still one entry, with the newest name.
-        assertEquals(listOf(buds1.copy(name = "Example Buds Pro"), car), two.withConnectDevice(buds1.copy(name = "Example Buds Pro")).connectDevices)
+        assertEquals(listOf(buds1.copy(name = "Example Buds Pro"), car1), two.withConnectDevice(buds1.copy(name = "Example Buds Pro")).connectDevices)
         // The other settings stay as they were.
         assertEquals(PlaybackSettings(headsetButtons = false, connectDevices = listOf(buds1)), PlaybackSettings(headsetButtons = false).withConnectDevice(buds1))
     }
 
     @Test
     fun `removing a device leaves the others`() {
-        val both = PlaybackSettings(connectDevices = listOf(buds1, car))
-        assertEquals(listOf(car), both.withoutConnectDevice(4).connectDevices)
+        val both = PlaybackSettings(connectDevices = listOf(buds1, car1))
+        assertEquals(listOf(car1), both.withoutConnectDevice(4).connectDevices)
         assertEquals(emptyList<ConnectDevice>(), both.withoutConnectDevice(4).withoutConnectDevice(9).connectDevices)
-        assertEquals(listOf(buds1, car), both.withoutConnectDevice(12).connectDevices)
+        assertEquals(listOf(buds1, car1), both.withoutConnectDevice(12).connectDevices)
     }
 
     @Test
     fun `devices Android no longer pairs with KJB leave the list`() {
-        val both = PlaybackSettings(connectDevices = listOf(buds1, car))
-        assertEquals(listOf(car), both.keepingConnectDevices(setOf(9, 30)).connectDevices)
+        val both = PlaybackSettings(connectDevices = listOf(buds1, car1))
+        assertEquals(listOf(car1), both.keepingConnectDevices(setOf(9, 30)).connectDevices)
         assertEquals(both, both.keepingConnectDevices(setOf(4, 9)))
         assertEquals(emptyList<ConnectDevice>(), both.keepingConnectDevices(emptySet()).connectDevices)
     }
@@ -205,7 +412,7 @@ class StartWhenConnectedTest {
     fun `the row reads the names of the devices, or Off with none`() {
         assertNull(connectNames(emptyList()))
         assertEquals("Example Buds", connectNames(listOf(buds1)))
-        assertEquals("Example Buds, Car Kit Demo", connectNames(listOf(buds1, car)))
+        assertEquals("Example Buds, Car Kit Demo", connectNames(listOf(buds1, car1)))
     }
 
     // The copy
