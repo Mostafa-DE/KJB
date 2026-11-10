@@ -388,6 +388,7 @@ class SharedWritesTest {
             "overnight/AiWorker.kt",
             "overnight/CrashGuard.kt",
             "player/QueueStore.kt",
+            "player/SongStateStore.kt",
             "settings/SettingsStore.kt",
             "stats/PlayLog.kt",
             "tags/CoversTagsStore.kt",

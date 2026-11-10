@@ -12,6 +12,7 @@ import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
+import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionParameters.AudioOffloadPreferences
 import androidx.media3.common.util.UnstableApi
@@ -79,6 +80,14 @@ interface PlaybackEngine : PlayerPort {
 
     /** The current song's length as decoded; C.TIME_UNSET until known. */
     val durationMs: Long
+
+    /** Speed and pitch (P2's Speed sheet). */
+    val playbackParameters: PlaybackParameters
+
+    /** 0 to 1: the sleep timer's fade (P2). */
+    var volume: Float
+
+    fun setPlaybackParameters(parameters: PlaybackParameters)
 
     fun setPlayWhenReady(play: Boolean)
 
@@ -164,6 +173,12 @@ class GaplessEngine(context: Context, settings: () -> Settings, levels: SongLeve
     override val audioSessionId: Int get() = player.audioSessionId
     override val bufferedMs: Long get() = player.bufferedPosition
     override val durationMs: Long get() = player.duration
+    override val playbackParameters: PlaybackParameters get() = player.playbackParameters
+    override var volume: Float
+        get() = player.volume
+        set(value) {
+            player.volume = value
+        }
 
     override fun load(items: List<Projected>, index: Int, positionMs: Long) {
         if (items.isEmpty() || index < 0) {
@@ -193,6 +208,10 @@ class GaplessEngine(context: Context, settings: () -> Settings, levels: SongLeve
         if (index !in 0 until player.mediaItemCount) return
         player.seekTo(index, positionMs)
         if (player.playbackState == Player.STATE_IDLE) player.prepare()
+    }
+
+    override fun setPlaybackParameters(parameters: PlaybackParameters) {
+        player.playbackParameters = parameters
     }
 
     override fun setPlayWhenReady(play: Boolean) {

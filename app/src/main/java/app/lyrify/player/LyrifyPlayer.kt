@@ -92,6 +92,7 @@ class LyrifyPlayer(
             .setIsLoading(engine.isLoading)
             .setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build())
             .setAudioSessionId(engine.audioSessionId)
+            .setPlaybackParameters(engine.playbackParameters)
             .setSeekBackIncrementMs(skips.backMs)
             .setSeekForwardIncrementMs(skips.forwardMs)
             .setMaxSeekToPreviousPositionMs(MAX_SEEK_TO_PREVIOUS_MS)

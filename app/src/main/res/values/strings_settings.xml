@@ -22,8 +22,6 @@
     <string name="set_remember_off_detail">Always from the start</string>
     <string name="set_headset">Headset buttons</string>
     <string name="set_headset_detail">Play, skip, back</string>
-    <string name="set_autostart">Start when connected</string>
-    <string name="set_autostart_detail">Bluetooth or car</string>
     <string name="set_clips">Skip short clips</string>
     <string name="set_clips_detail">Under 30 seconds</string>
     <string name="set_playpct">Count plays after</string>
