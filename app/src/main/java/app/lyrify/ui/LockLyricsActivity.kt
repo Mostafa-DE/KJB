@@ -266,7 +266,7 @@ private fun LockLines(lyrics: PanelLyrics?, positionMs: Long) {
     val look = rememberLyricsLook()
     val type = MaterialTheme.typography
     if (lyrics is PanelLyrics.Synced) {
-        SyncedLyrics(lyrics.lines, positionMs, enabled = false, LockLine, LockFrame, LineTones(now = LockText, past = LockMuted, next = LockMuted)) { }
+        SyncedLyrics(lyrics.lines, positionMs, enabled = false, LockLine, LockFrame, LineTones(now = DarkBrandColors.highlight, past = LockMuted, next = LockText.copy(alpha = NEXT_INK))) { }
         return
     }
     Column(verticalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.fillMaxWidth()) {

@@ -1,5 +1,10 @@
 package app.lyrify.ui
 
+import kotlinx.coroutines.sync.Mutex
+import androidx.compose.animation.core.Easing
+import androidx.compose.ui.graphics.Color
+import androidx.compose.runtime.State
+import androidx.compose.animation.animateColor
 import androidx.compose.runtime.referentialEqualityPolicy
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalDensity
@@ -226,6 +231,9 @@ class BackSwipe {
     var gone: Float by mutableFloatStateOf(0f)
         private set
 
+    /** Swipes one at a time: a new one waits until the last one has finished with the layers. */
+    val serial = Mutex()
+
     fun start(what: BackTaking) {
         taking = what
         progress = 0f
@@ -237,10 +245,9 @@ class BackSwipe {
         fromLeft = event.swipeEdge == BackEventCompat.EDGE_LEFT
     }
 
-    /** [owner]'s swipe given up: the layer springs back, then nothing is taken; a newer swipe is never touched. */
-    suspend fun cancel(owner: BackTaking) {
+    /** [owner]'s swipe given up: the layer springs back to rest; a newer swipe is never touched. Clearing is the caller's. */
+    suspend fun springBack(owner: BackTaking) {
         animate(progress, 0f, animationSpec = Motion.release) { value, _ -> if (owns(owner)) progress = value }
-        clear(owner)
     }
 
     /** [owner]'s swipe let go over a container transform: the shrink is let go of while the layer goes into the Now bar. */
@@ -301,9 +308,11 @@ private const val CONTAINER_SURFACE = "player surface"
 private const val CONTAINER_COVER = "player cover"
 
 /**
- * The bounds a Now bar capsule or a player screen ([container]'s end) grow from and into: the content scaled to them
- * (ScaleToBounds, so the player is laid out once, not on every frame), the outgoing end fading out as the incoming one
- * fades in, the corners going from the capsule's to none. Nothing without a container.
+ * The bounds a Now bar capsule or a player screen ([container]'s end) grow from and into, the content scaled to them
+ * (ScaleToBounds, so the player is laid out once, not on every frame), the corners going from the capsule's to none.
+ * The Now bar's end stays where it is, out of the overlay ([containerInOverlay]): it never moves or fades, and the
+ * player's card, opaque from its first frame ([containerFill]), grows over it and over the dock. Nothing with reduced
+ * motion.
  */
 @Composable
 fun containerBounds(container: Container?): Modifier {
@@ -317,14 +326,40 @@ fun containerBounds(container: Container?): Modifier {
         Modifier.sharedBounds(
             rememberSharedContentState(CONTAINER_SURFACE),
             container.visibility,
-            enter = fadeIn(tween(Motion.FADE_IN_MS * 2, delayMillis = Motion.FADE_OUT_MS)),
-            exit = fadeOut(tween(Motion.FADE_IN_MS)),
+            enter = EnterTransition.None,
+            exit = ExitTransition.None,
             boundsTransform = ContainerTransform,
             resizeMode = SharedTransitionScope.ResizeMode.scaleToBounds(ContentScale.FillWidth, Alignment.Center),
+            renderInOverlayDuringTransition = containerInOverlay(container.bar),
             clipInOverlayDuringTransition = remember(container) { OverlayClip(CornerShape { with(density) { corner.value.toPx() } }) },
         )
     }
 }
+
+/** Whether an end of the container transform is drawn above everything while it runs: the player's, never the Now bar's. */
+fun containerInOverlay(bar: Boolean): Boolean = !bar
+
+/**
+ * The player's card as it grows out of the Now bar: the bar's own colour at first and the page's once in place, never
+ * see-through on the way in, so the dock stays under it; going back into the bar it clears, so the bar shows through
+ * as it lands. Read while drawing.
+ */
+@Composable
+fun containerFill(visibility: AnimatedVisibilityScope, page: Color): State<Color> {
+    val bar = LocalChromeColors.current.bar
+    return visibility.transition.animateColor(transitionSpec = { tween(containerMs(targetState), easing = Motion.Rise) }, label = "container fill") { state ->
+        when (state) {
+            EnterExitState.PreEnter -> bar
+            EnterExitState.Visible -> page
+            EnterExitState.PostExit -> page.copy(alpha = 0f)
+        }
+    }
+}
+
+/** The player's content inside its growing card: it fades in once the card has grown a little, and out first on the way back. */
+fun containerContentEnter(): EnterTransition = fadeIn(tween(Motion.FADE_IN_MS * 2, delayMillis = Motion.FADE_OUT_MS))
+
+fun containerContentExit(): ExitTransition = fadeOut(tween(Motion.FADE_IN_MS))
 
 /**
  * The cover as it moves between the Now bar's orb and the player: one shared element, clipped by the caller with the
@@ -357,6 +392,26 @@ private val ContainerTransform = BoundsTransform { from, to -> tween(if (to.widt
 private val CAPSULE_CORNER = 32.dp
 
 // The page layer
+
+/**
+ * A back swipe over the page layer, as the platform reports it (PredictiveBackHandler): the page that is [current] (on
+ * top, taking touches), the page drawn under it while the finger holds the swipe ([under], null at rest), and how far
+ * the finger has taken the top page ([progress], 0 at rest). Only the platform's two endings change it: [committed]
+ * when the progress ends normally, the page under becoming current; [cancelled] when it is cancelled, everything back at
+ * rest as it was, however long the swipe was held and however fast it came back. Nothing moves it once it has ended.
+ */
+@Immutable
+data class PageSwipe(val current: PageLayer, val under: PageLayer? = null, val progress: Float = 0f) {
+    val resting: Boolean get() = under == null && progress == 0f
+
+    fun started(back: PageLayer): PageSwipe = PageSwipe(current, back, 0f)
+
+    fun moved(to: Float): PageSwipe = if (under == null) this else copy(progress = to.coerceIn(0f, 1f))
+
+    fun cancelled(): PageSwipe = PageSwipe(current)
+
+    fun committed(): PageSwipe = PageSwipe(under ?: current)
+}
 
 /** The page layer under the views: a tab and its pages above the root (the top last), as the shell draws it. */
 @Immutable
@@ -439,8 +494,12 @@ fun pageTransition(change: PageChange, rtl: Boolean, reduced: Boolean): ContentT
 fun backTransition(side: Int, reduced: Boolean): ContentTransform {
     if (reduced) return ContentTransform(fadeIn(tween(Motion.REDUCED_MS)), fadeOut(tween(Motion.REDUCED_MS)), targetContentZIndex = -1f)
     val enter = slideInHorizontally(tween(Motion.OPEN_MS, easing = LinearEasing)) { it / PAGE_SHIFT_SHARE * side }
-    return ContentTransform(enter, fadeOut(tween(Motion.OPEN_MS, easing = Motion.EmphasizedOut)), targetContentZIndex = -1f)
+    // The page leaving stays whole while the finger decides: its fade is the swipe's own, and only once it commits.
+    return ContentTransform(enter, fadeOut(tween(Motion.OPEN_MS, easing = HoldToEnd)), targetContentZIndex = -1f)
 }
+
+/** Nothing until the very end: a layer kept as it is through a seek, then gone. */
+private val HoldToEnd = Easing { if (it < 1f) 0f else 1f }
 
 /** A page moves a tenth of the width (the spec's Dist.PageX, the dock's own tab slide). */
 private const val PAGE_SHIFT_SHARE = 10

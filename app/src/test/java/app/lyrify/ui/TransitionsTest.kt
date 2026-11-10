@@ -306,4 +306,44 @@ class TransitionsTest {
         corner = 0f
         assertEquals(0f, radius(), 0.0001f)
     }
+
+    // Phone test 2026-11-10: a back swipe given up, slow or fast, leaves the page as it was; only the platform commits
+
+    private val albumPage = PageLayer(DockTab.LIBRARY, listOf(Page.Album("harbour-glass")))
+    private val libraryRoot = PageLayer(DockTab.LIBRARY, emptyList())
+
+    @Test
+    fun `a back swipe given up slowly, held and brought back to the edge, leaves the page current and at rest`() {
+        var swipe = PageSwipe(albumPage).started(libraryRoot)
+        listOf(0.05f, 0.2f, 0.3f, 0.3f, 0.3f, 0.3f, 0.2f, 0.08f, 0.01f).forEach { swipe = swipe.moved(it) }
+        val rest = swipe.cancelled()
+        assertEquals(PageSwipe(albumPage), rest)
+        assertTrue(rest.resting)
+        assertEquals(albumPage, rest.current)
+    }
+
+    @Test
+    fun `a back swipe given up fast leaves the page current and at rest too`() {
+        val rest = PageSwipe(albumPage).started(libraryRoot).moved(0.3f).cancelled()
+        assertEquals(PageSwipe(albumPage), rest)
+        // Given up before any move at all.
+        assertEquals(PageSwipe(albumPage), PageSwipe(albumPage).started(libraryRoot).cancelled())
+    }
+
+    @Test
+    fun `only the platform's completion commits a back swipe, and a move after either end changes nothing`() {
+        val done = PageSwipe(albumPage).started(libraryRoot).moved(0.4f).committed()
+        assertEquals(PageSwipe(libraryRoot), done)
+        assertEquals(done, done.moved(0.7f))
+        val rest = PageSwipe(albumPage).started(libraryRoot).moved(0.4f).cancelled()
+        assertEquals(rest, rest.moved(0.7f))
+        // A move is clamped while it lasts.
+        assertEquals(1f, PageSwipe(albumPage).started(libraryRoot).moved(1.6f).progress, 0f)
+    }
+
+    @Test
+    fun `the Now bar stays in place under the growing player, which covers it and the dock from the first frame`() {
+        assertFalse(containerInOverlay(bar = true))
+        assertTrue(containerInOverlay(bar = false))
+    }
 }

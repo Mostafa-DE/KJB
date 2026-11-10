@@ -205,5 +205,7 @@ dependencies {
     androidTestImplementation(libs.media3.test.utils)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+    // Edge swipes for the back gesture, as the system sees them (BackSwipeDeviceTest).
+    androidTestImplementation(libs.androidx.uiautomator)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
 }
