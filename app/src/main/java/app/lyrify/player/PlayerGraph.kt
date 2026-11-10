@@ -10,6 +10,7 @@ import app.lyrify.data.writeWithRetries
 import app.lyrify.library.LibraryGraph
 import app.lyrify.library.LibraryState
 import app.lyrify.logFailures
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -85,6 +86,7 @@ class PlayerCore(
     private val scope: CoroutineScope,
     private val wall: () -> Long,
     private val random: Random = Random.Default,
+    private val log: (String) -> Unit = {},
 ) {
     private val _book = MutableStateFlow(QueueBook())
     val book: StateFlow<QueueBook> = _book.asStateFlow()
@@ -105,13 +107,27 @@ class PlayerCore(
     /** The place of the queue playing saved since the last change of the book (the book holds it after that). */
     val place: StateFlow<PlaybackPlace?> = live.asStateFlow()
 
+    /** False once the queues could not be read: nothing is written over them this run. */
+    private var stored = true
+
     init {
         scope.launch {
-            val (book, repeat) = storage.load()
-            _book.value = book
-            _repeat.value = repeat
+            val read = try {
+                storage.load()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Read as nothing loaded, so a player waiting for the queues closes; their files are left as they are.
+                log("queues not read: ${e.javaClass.simpleName}")
+                null
+            }
+            stored = read != null
+            read?.let { (book, repeat) ->
+                _book.value = book
+                _repeat.value = repeat
+            }
             _ready.value = true
-            launch { _book.drop(1).collect { storage.saveBook(it) } }
+            if (stored) launch { _book.drop(1).collect { storage.saveBook(it) } }
         }
     }
 
@@ -181,7 +197,7 @@ class PlayerCore(
     }
 
     private fun placed(uid: Long, positionMs: Long, queueId: String?): PlaybackPlace? {
-        if (!_ready.value) return null
+        if (!_ready.value || !stored) return null
         return PlaybackPlace(queueId, uid, positionMs, _repeat.value, at = wall()).also { live.value = it }
     }
 
@@ -219,7 +235,7 @@ object PlayerGraph {
         val log: (String) -> Unit = { Log.w(LOG_TAG, it) }
         val io = Dispatchers.IO.limitedParallelism(1)
         val store = queuesStore(app.dataStoreFile("queues.json"), app.filesDir, CoroutineScope(Dispatchers.IO + SupervisorJob()), System::currentTimeMillis, log)
-        PlayerCore(QueueFiles(store, PlaceFile(File(app.filesDir, "playback.json"), log), io, log), scope, System::currentTimeMillis).also { created ->
+        PlayerCore(QueueFiles(store, PlaceFile(File(app.filesDir, "playback.json"), log), io, log), scope, System::currentTimeMillis, log = log).also { created ->
             // Each library read: moved songs take their new path, and songs gone leave the saved queues.
             scope.launch {
                 created.ready.first { it }

@@ -3,12 +3,14 @@ package app.lyrify.player
 import app.lyrify.library.SongRef
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.job
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
@@ -365,5 +367,34 @@ class QueueStoreTest {
             runCurrent()
             assertTrue(closes.isCompleted)
         }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `queues that cannot be read close the player, are logged without names, and their file is left as it was`() = runTest {
+        var saved = 0
+        val files = object : QueueStorage {
+            override suspend fun load(): Pair<QueueBook, Repeat> = throw IllegalStateException("a book this version can't read")
+
+            override suspend fun saveBook(book: QueueBook) {
+                saved++
+            }
+
+            override suspend fun savePlace(place: PlaybackPlace) = Unit
+        }
+        val logs = mutableListOf<String>()
+        val quiet = CoroutineScope(backgroundScope.coroutineContext + SupervisorJob(backgroundScope.coroutineContext.job) + CoroutineExceptionHandler { _, _ -> })
+        val core = PlayerCore(files, quiet, wall = { currentTime }, log = { logs += it })
+        val closes = backgroundScope.async { core.awaitNothingLoaded() }
+        runCurrent()
+
+        assertTrue("the player waits for ever", closes.isCompleted)
+        assertEquals(QueueBook(), core.book.value)
+        assertEquals(listOf("queues not read: IllegalStateException"), logs)
+
+        // Playing something now never writes over the file that could not be read.
+        core.switch { it.play(album, 0, albumSource, currentTime) }
+        runCurrent()
+        assertEquals(0, saved)
     }
 }
