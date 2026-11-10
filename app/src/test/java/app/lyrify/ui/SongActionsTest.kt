@@ -3,6 +3,7 @@ package app.lyrify.ui
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.SaverScope
 import androidx.compose.ui.text.TextRange
+import app.lyrify.R
 import app.lyrify.library.CollectionKind
 import app.lyrify.library.FavouriteCollection
 import app.lyrify.library.Playlist
@@ -454,5 +455,18 @@ class SongActionsTest {
             assertEquals(Said.NotSaved, it.said)
             assertNull(it.undo)
         }
+    }
+
+    // The hearts
+
+    @Test
+    fun `every heart tells TalkBack what a tap does, Remove from Favourites while it is on`() {
+        assertEquals(R.string.lib_favourite_song, heartLabel(on = false))
+        assertEquals(R.string.lib_unfavourite, heartLabel(on = true))
+        assertEquals(R.string.lib_favourite_album, heartLabel(CollectionKind.ALBUM, on = false))
+        assertEquals(R.string.lib_favourite_artist, heartLabel(CollectionKind.ARTIST, on = false))
+        assertEquals(R.string.lib_favourite_folder, heartLabel(CollectionKind.FOLDER, on = false))
+        assertEquals(R.string.lib_favourite_playlist, heartLabel(CollectionKind.PLAYLIST, on = false))
+        CollectionKind.entries.forEach { assertEquals(R.string.lib_unfavourite, heartLabel(it, on = true)) }
     }
 }

@@ -211,7 +211,7 @@ internal fun SecondaryRow(ui: PlayerUi, connection: PlayerConnection, onQueue: (
             val on = connection.toggleShuffle()
             scope.launch { toasts.show(Toast(resources.getString(if (on) R.string.player_shuffled else R.string.player_unshuffled), R.drawable.ic_shuffle)) }
         }
-        ToggleButton(if (favourite) R.drawable.ic_favorite_fill else R.drawable.ic_favorite, stringResource(if (favourite) R.string.player_favourite_on else R.string.player_favourite_off), on = favourite, bar = false) {
+        ToggleButton(if (favourite) R.drawable.ic_favorite_fill else R.drawable.ic_favorite, stringResource(heartLabel(favourite)), on = favourite, bar = false) {
             val song = listOf(ui.item.song)
             scope.launch {
                 if (!favourites.setSongs(song, !favourite)) {

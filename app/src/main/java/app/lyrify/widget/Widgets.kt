@@ -71,6 +71,7 @@ import app.lyrify.player.PlayerGraph
 import app.lyrify.player.ServicePart
 import app.lyrify.ui.EXTRA_DESTINATION
 import app.lyrify.ui.MainActivity
+import app.lyrify.ui.heartLabel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -381,7 +382,7 @@ private fun Heart(state: WidgetState.Loaded) {
     state.song.mediaStoreId?.let { parameters[SONG_ID] = it }
     CircleIconButton(
         imageProvider = ImageProvider(if (state.favourite) R.drawable.ic_favorite_fill else R.drawable.ic_favorite),
-        contentDescription = LocalContext.current.getString(if (state.favourite) R.string.player_favourite_on else R.string.player_favourite_off),
+        contentDescription = LocalContext.current.getString(heartLabel(state.favourite)),
         onClick = actionRunCallback<WidgetHeart>(parameters),
         modifier = GlanceModifier.size(40.dp),
         backgroundColor = null,

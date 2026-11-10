@@ -73,8 +73,6 @@
     <string name="player_shuffle_off">Shuffle, off</string>
     <string name="player_shuffled">Shuffle on</string>
     <string name="player_unshuffled">Shuffle off</string>
-    <string name="player_favourite_on">Favourite, on</string>
-    <string name="player_favourite_off">Favourite, off</string>
     <string name="player_favourited">Added to Favourites</string>
     <string name="player_unfavourited">Removed from Favourites</string>
     <string name="player_favourite_failed">Favourites could not be saved.</string>

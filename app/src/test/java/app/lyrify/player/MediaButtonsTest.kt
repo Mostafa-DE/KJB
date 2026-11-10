@@ -133,11 +133,11 @@ class MediaButtonsTest {
     @Test
     fun `Favourite shows a heart for the song playing, filled when it is a favourite`() {
         assertEquals(
-            listOf(NotificationButton(COMMAND_FAVOURITE, CommandButton.ICON_HEART_UNFILLED, R.string.player_favourite_off)),
+            listOf(NotificationButton(COMMAND_FAVOURITE, CommandButton.ICON_HEART_UNFILLED, R.string.lib_favourite_song)),
             notificationButtons(NotificationButtons.FAVOURITE, favourite = false, shuffled = true, repeat = Repeat.ALL),
         )
         assertEquals(
-            listOf(NotificationButton(COMMAND_FAVOURITE, CommandButton.ICON_HEART_FILLED, R.string.player_favourite_on)),
+            listOf(NotificationButton(COMMAND_FAVOURITE, CommandButton.ICON_HEART_FILLED, R.string.lib_unfavourite)),
             notificationButtons(NotificationButtons.FAVOURITE, favourite = true, shuffled = false, repeat = Repeat.OFF),
         )
     }
