@@ -39,6 +39,8 @@ import app.lyrify.logFailures
 import app.lyrify.media.NowPlaying
 import app.lyrify.media.QueueSweep
 import app.lyrify.settings.Settings
+import app.lyrify.ui.DESTINATION_PLAYER
+import app.lyrify.ui.EXTRA_DESTINATION
 import app.lyrify.ui.MainActivity
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
@@ -80,6 +82,12 @@ interface ServicePart {
 }
 
 /**
+ * The request code of the session's tap ([PlaybackService]): the AI's notifications open MainActivity with 0, and two
+ * PendingIntents for one activity and one code are one, so one tap would carry the other's destination.
+ */
+private const val OPEN_PLAYER: Int = 1
+
+/**
  * KJB's own player, as a media library service: the session (notification, lock screen, Bluetooth, headset buttons,
  * Assistant), the facade player over the engine, and the browse tree. A thin host: the queue model lives in
  * [PlayerCore], applied to the engine by [QueueBridge]; the engine's songs and plays come back into the model and the
@@ -115,7 +123,8 @@ class PlaybackService : MediaLibraryService() {
         player = LyrifyPlayer(mainLooper, engine, core, skips = ::skips, sync = ::sync, beforeSeek = ::heardSoFar)
         engine.addListener(Follower())
         val built = MediaLibrarySession.Builder(this, player, Callback())
-            .setSessionActivity(PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
+            // A tap on the notification or the lock screen's card opens the player, over the tab the app was on.
+            .setSessionActivity(PendingIntent.getActivity(this, OPEN_PLAYER, openPlayer(), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
             .setBitmapLoader(ThumbnailLoader(this))
             .build()
         session = built
@@ -168,6 +177,11 @@ class PlaybackService : MediaLibraryService() {
     }
 
     private fun find(ref: SongRef): Song? = library.value?.resolver?.find(ref)
+
+    /** KJB, brought back where it was (onNewIntent when it is open), showing the player. */
+    private fun openPlayer(): Intent = Intent(this, MainActivity::class.java)
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        .putExtra(EXTRA_DESTINATION, DESTINATION_PLAYER)
 
     private fun skips(): SkipAmounts = settings.value.playback.let { SkipAmounts(it.skipBackSeconds * 1_000L, it.skipForwardSeconds * 1_000L) }
 
