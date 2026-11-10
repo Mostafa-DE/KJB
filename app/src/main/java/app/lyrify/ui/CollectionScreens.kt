@@ -454,7 +454,7 @@ private fun BuiltInPage(ui: LibraryUi, library: Library, list: BuiltInList) {
             else -> p.lastPlayedAt?.let { DateUtils.getRelativeTimeSpanString(it, now, DateUtils.MINUTE_IN_MILLIS, DateUtils.FORMAT_ABBREV_RELATIVE).toString() }
         }
     }
-    SongListFrame(ui, songs, QueueSource(kind, list.name, ""), topBar = { under, backdrop -> CollectionTopBar(title, under, backdrop, ui) }) { songList ->
+    SongListFrame(ui, songs, QueueSource(kind, list.name, ""), topBar = { under, backdrop -> CollectionTopBar(title, under, backdrop, ui) }, loaded = rows != null) { songList ->
         item(key = "hero") { Hero(title, songsMeta(songs), art = { BuiltInTile(list, HERO) }) }
         if (list == BuiltInList.MOST_PLAYED) {
             // S1: ListeningCard() takes this row's place, with this month's time and plays.

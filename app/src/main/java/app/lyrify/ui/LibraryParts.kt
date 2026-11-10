@@ -160,7 +160,8 @@ class PageSongs(
 
 /**
  * A page of songs under its own top bar ([topBar], or the selection's while it selects): the list, its selection and
- * its sheets. [content] adds the list's items, the header and the rows ([songRows]) among them.
+ * its sheets. [content] adds the list's items, the header and the rows ([songRows]) among them. [loaded] false: [songs]
+ * is empty only because the list is still being read.
  */
 @Composable
 fun SongListFrame(
@@ -169,6 +170,7 @@ fun SongListFrame(
     source: QueueSource,
     topBar: @Composable (under: Boolean, backdrop: GlassBackdrop) -> Unit,
     state: LazyListState = rememberLazyListState(),
+    loaded: Boolean = true,
     content: LazyListScope.(PageSongs) -> Unit,
 ) {
     val sheets = rememberSongSheets()
@@ -176,7 +178,7 @@ fun SongListFrame(
     val playback = rememberPlayback()
     val name = sourceLabel(LocalResources.current, source)
     val list = PageSongs(ui, songs, source, sheets, selection, { selection = it }, playback, name)
-    SelectionHost(selection, songs, ui, sheets) { selection = it }
+    SelectionHost(selection, songs, loaded, ui, sheets) { selection = it }
     PageFrame(
         topBar = { under, backdrop -> if (selection.active) SelectionTopBar(selection, songs, under, backdrop) { selection = it } else topBar(under, backdrop) },
     ) { padding ->

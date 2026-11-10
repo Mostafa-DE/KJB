@@ -195,7 +195,7 @@ private fun SongsTab(ui: LibraryUi, library: Library, reselect: Int, topBar: @Co
     var sorting by rememberSaveable { mutableStateOf(false) }
     ReselectToTop(reselect) { state.animateScrollToItem(0) }
     val source = QueueSource(SourceKind.SONGS, "songs:${settings.songSort}:${settings.songFilter}", "")
-    SongListFrame(ui, songs, source, topBar, state) { list ->
+    SongListFrame(ui, songs, source, topBar, state, loaded = listed != null) { list ->
         item(key = "header") {
             ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, sort = songsOrder(settings), onSort = { sorting = true })
         }
@@ -574,7 +574,7 @@ fun SongsPage(page: Page.Songs) {
         sortSongs(matching, SortSongs.TITLE, ui.settings.library)
     }
     val source = QueueSource(SourceKind.SONGS, "status:${page.group}:${page.status}", title)
-    SongListFrame(ui, songs, source, topBar = { under, backdrop -> BackTopBar(title, under, backdrop) { nav.back() } }) { list ->
+    SongListFrame(ui, songs, source, topBar = { under, backdrop -> BackTopBar(title, under, backdrop) { nav.back() } }, loaded = library != null) { list ->
         item(key = "header") { ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll) }
         if (library != null && songs.isEmpty()) item(key = "empty") { EmptyState(EmptyArt.Icon(R.drawable.ic_search_off), stringResource(R.string.songs_no_match)) }
         songRows(list)

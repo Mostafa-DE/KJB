@@ -163,6 +163,15 @@ class SongActionsTest {
         assertEquals(listOf(lantern), SongSelection(setOf(lantern.path)).picked(listOf(lantern, bell, lantern)))
     }
 
+    @Test
+    fun `a list still loading keeps the selection, and the list once loaded trims it`() {
+        val picked = SongSelection(setOf(lantern.path, bell.path))
+
+        assertEquals(picked, picked.within(null))
+        assertEquals(SongSelection(setOf(lantern.path)), picked.within(listOf(lantern, water)))
+        assertEquals(SongSelection(), picked.within(emptyList()))
+    }
+
     // Toasts and Undo
 
     @Test

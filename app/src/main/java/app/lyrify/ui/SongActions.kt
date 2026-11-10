@@ -158,8 +158,9 @@ data class SongSelection(val paths: Set<String> = emptySet()) {
     /** The selected songs in [list]'s order, each once: what the four verbs act on. */
     fun picked(list: List<Song>): List<Song> = list.filter { it.path in paths }.distinctBy { it.path }
 
-    /** Songs that left [list] (trashed, the list changed) leave the selection. */
-    fun within(list: List<Song>): SongSelection = list.mapTo(HashSet()) { it.path }.let { listed -> if (paths.all(listed::contains)) this else SongSelection(paths intersect listed) }
+    /** Songs that left [list] (trashed, the list changed) leave the selection; a list still loading (null) keeps it as it is. */
+    fun within(list: List<Song>?): SongSelection =
+        list?.mapTo(HashSet()) { it.path }?.let { listed -> if (paths.all(listed::contains)) this else SongSelection(paths intersect listed) } ?: this
 
     companion object {
         val Saver: Saver<SongSelection, Any> = listSaver(save = { it.paths.toList() }, restore = { SongSelection(it.toSet()) })
@@ -649,11 +650,12 @@ fun SelectionTopBar(selection: SongSelection, list: List<Song>, under: Boolean, 
 }
 
 /**
- * A page's selection: back leaves it, songs that leave [list] leave it, and while it is on, its bar of four verbs (Play,
- * Add, Favourite, More) stands in for the Now bar and the dock.
+ * A page's selection: back leaves it, songs that leave [list] leave it once the list is [loaded] (a selection kept across
+ * a turn of the phone is not cleared by the empty list before), and while it is on, its bar of four verbs (Play, Add,
+ * Favourite, More) stands in for the Now bar and the dock.
  */
 @Composable
-fun SelectionHost(selection: SongSelection, list: List<Song>, ui: LibraryUi, sheets: SongSheets, onChange: (SongSelection) -> Unit) {
+fun SelectionHost(selection: SongSelection, list: List<Song>, loaded: Boolean, ui: LibraryUi, sheets: SongSheets, onChange: (SongSelection) -> Unit) {
     val nav = LocalNavigator.current
     val context = LocalContext.current
     val toasts = LocalToasts.current
@@ -661,7 +663,7 @@ fun SelectionHost(selection: SongSelection, list: List<Song>, ui: LibraryUi, she
     val scope = rememberCoroutineScope()
     val actions = rememberSongActions()
     BackHandler(enabled = selection.active) { onChange(SongSelection()) }
-    LaunchedEffect(list) { selection.within(list).let { if (it != selection) onChange(it) } }
+    LaunchedEffect(list, loaded) { selection.within(list.takeIf { loaded }).let { if (it != selection) onChange(it) } }
     val bar: @Composable () -> Unit = {
         val picked = selection.picked(list)
         val refs = picked.map { it.ref }
