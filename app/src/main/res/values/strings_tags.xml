@@ -168,6 +168,8 @@
         <item quantity="other">Changed %d albums, then notification access went off</item>
     </plurals>
     <string name="tags_undone">Undone</string>
+    <string name="tags_undo_failed">Couldn\'t undo. Try again.</string>
+    <string name="tags_paused">Tag changes are paused. KJB can\'t read its safety records.</string>
     <plurals name="tags_undone_kept">
         <item quantity="one">Undone. %d field changed since was kept</item>
         <item quantity="other">Undone. %d fields changed since were kept</item>

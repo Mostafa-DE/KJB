@@ -186,6 +186,9 @@ sealed interface Undone {
     data object InProgress : Undone
 
     data object Gone : Undone
+
+    /** History can't be read now: nothing was changed, and the album stays Done. */
+    data object Failed : Undone
 }
 
 /** What "Search myself" found. */
@@ -625,6 +628,8 @@ class CoversTags(
         return when (val result = write(jobs, changed, EditKind.COVERS_TAGS, dated.release.title)) {
             BatchResult.SessionsUnknown -> Applied.NoAccess
             BatchResult.NotEnoughSpace -> Applied.NotEnoughSpace
+            // An Undo's answer only: a write never gives it.
+            BatchResult.HistoryUnreadable -> Applied.Failed
             is BatchResult.Done -> settled(waiting, dated.release, changes, result, unknown.map { SongProblem(it.song.path, SongOutcome.COULD_NOT_CHANGE) })
         }
     }
@@ -698,6 +703,7 @@ class CoversTags(
         val result = when (val batch = undoEntry(entryId)) {
             BatchResult.SessionsUnknown -> return Undone.NoAccess
             BatchResult.NotEnoughSpace -> return Undone.NotEnoughSpace
+            BatchResult.HistoryUnreadable -> return Undone.Failed
             is BatchResult.Done -> batch
         }
         val back = result.songs.filter { it.outcome == SongOutcome.WRITTEN }.map { it.song.path }

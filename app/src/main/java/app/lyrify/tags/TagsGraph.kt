@@ -133,6 +133,25 @@ object TagsGraph {
         }
     }
 
+    /**
+     * Whether tag changes are paused, once the start-up recovery is done: KJB can't change its safety records
+     * ([WriteJournal.paused]), or can't read them now (an open intent it can't read, a journal it can't list). The
+     * writer then writes nothing, and Covers & tags says so.
+     */
+    suspend fun paused(context: Context): Boolean {
+        recovered.await()
+        val journal = parts(context.applicationContext).journal
+        return journal.paused || withContext(Dispatchers.IO) {
+            try {
+                journal.openPaths()
+                false
+            } catch (e: IOException) {
+                log("tags: the journal could not be read (${e.javaClass.simpleName}), tag changes paused")
+                true
+            }
+        }
+    }
+
     /** History and Undo's records, for the History list. */
     fun undo(context: Context): UndoStore = parts(context.applicationContext).undo
 

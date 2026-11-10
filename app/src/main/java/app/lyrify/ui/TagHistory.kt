@@ -185,6 +185,8 @@ internal fun startWrite(
 private fun writtenToast(resources: Resources, result: BatchResult, saved: String, asked: Int): Toast = when (result) {
     BatchResult.SessionsUnknown -> Toast(resources.getString(R.string.edit_need_access), R.drawable.ic_error, Tone.ERROR)
     BatchResult.NotEnoughSpace -> Toast(resources.getString(R.string.edit_no_space), R.drawable.ic_error, Tone.ERROR)
+    // An Undo's answer only: a write never gives it.
+    BatchResult.HistoryUnreadable -> Toast(resources.getString(R.string.edit_not_changed), R.drawable.ic_error, Tone.ERROR)
     is BatchResult.Done -> {
         val report = result.report()
         when {
@@ -201,6 +203,7 @@ private fun writtenToast(resources: Resources, result: BatchResult, saved: Strin
 internal fun undoneToast(resources: Resources, result: BatchResult): Toast = when (result) {
     BatchResult.SessionsUnknown -> Toast(resources.getString(R.string.edit_need_access), R.drawable.ic_error, Tone.ERROR)
     BatchResult.NotEnoughSpace -> Toast(resources.getString(R.string.edit_no_space), R.drawable.ic_error, Tone.ERROR)
+    BatchResult.HistoryUnreadable -> Toast(resources.getString(R.string.tags_undo_failed), R.drawable.ic_error, Tone.ERROR)
     is BatchResult.Done -> {
         val report = result.report()
         when {

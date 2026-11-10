@@ -488,6 +488,28 @@ class CoversTagsTest {
     }
 
     @Test
+    fun `an Undo whose History can't be read changes nothing, says so, and keeps the album Done`() = runTest {
+        val songs = lanternsSongs()
+        library = songs
+        answers("Lanterns" to lanterns)
+        val flow = flow()
+        val waiting = checked(flow).waiting("Lanterns")
+        flow.apply(waiting.album.id, waiting.match())
+        val written = songs.map { rig.bytes(it.target()) }
+        rig.dirs.undo.setReadable(false)
+        rig.restart()
+        val undone = try {
+            flow.undoAlbum(flow.state.value.done.single().id)
+        } finally {
+            rig.dirs.undo.setReadable(true)
+        }
+
+        assertEquals(Undone.Failed, undone)
+        songs.forEachIndexed { i, song -> assertArrayEquals(written[i], rig.bytes(song.target())) }
+        assertEquals(1, flow.state.value.done.size)
+    }
+
+    @Test
     fun `undo without notification access writes nothing`() = runTest {
         library = lanternsSongs()
         answers("Lanterns" to lanterns)

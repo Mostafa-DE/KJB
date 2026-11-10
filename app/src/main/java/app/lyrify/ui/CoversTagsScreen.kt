@@ -123,6 +123,9 @@ fun canWrite(access: Boolean, state: CoversTagsState): Boolean = access && state
  */
 fun uncheckableWords(count: Int): Words? = if (count > 0) Words(R.plurals.tags_uncheckable, count, listOf(count)) else null
 
+/** The line saying tag changes are paused (no song is written), or null when they are not. */
+fun pausedWords(paused: Boolean): Words? = if (paused) Words(R.string.tags_paused) else null
+
 /** What happened to one song, in words. */
 fun outcomeWords(outcome: SongOutcome): Int = when (outcome) {
     SongOutcome.WRITTEN -> R.string.tags_outcome_written
@@ -137,6 +140,7 @@ fun outcomeWords(outcome: SongOutcome): Int = when (outcome) {
     SongOutcome.SET_ASIDE -> R.string.tags_outcome_set_aside
     SongOutcome.UNDO_NOT_SAVED -> R.string.tags_outcome_undo_not_saved
     SongOutcome.NOT_TRIED -> R.string.tags_outcome_not_tried
+    SongOutcome.PAUSED -> R.string.tags_paused
 }
 
 /**
@@ -180,6 +184,7 @@ fun undoneWords(undone: Undone): Words = when (undone) {
     Undone.NotEnoughSpace -> Words(R.string.tags_no_space)
     Undone.InProgress -> Words(R.string.tags_in_progress)
     Undone.Gone -> Words(R.string.tags_gone)
+    Undone.Failed -> Words(R.string.tags_undo_failed)
 }
 
 /** A Ready card's summary: "6 changes", or the cover only. */
@@ -293,6 +298,10 @@ private sealed interface PageRow {
         override val key = "uncheckable"
     }
 
+    data class Paused(val words: Words) : PageRow {
+        override val key = "paused"
+    }
+
     data class Record(val record: AlbumRecord) : PageRow {
         override val key = "album ${record.id}"
     }
@@ -302,8 +311,9 @@ private sealed interface PageRow {
     }
 }
 
-private fun pageRows(state: CoversTagsState, uncheckable: Int): List<PageRow> = buildList {
+private fun pageRows(state: CoversTagsState, uncheckable: Int, paused: Boolean): List<PageRow> = buildList {
     add(PageRow.Start)
+    pausedWords(paused)?.let { add(PageRow.Paused(it)) }
     uncheckableWords(uncheckable)?.let { add(PageRow.Uncheckable(it)) }
     for ((section, count) in reviewSections(state)) {
         add(PageRow.Section(section, count))
@@ -346,7 +356,8 @@ fun CoversTagsPage() {
     var searching by rememberSaveable { mutableStateOf<String?>(null) }
     var problems by rememberSaveable { mutableStateOf<String?>(null) }
     val uncheckable by produceState(0) { value = TagsGraph.uncheckable(context) }
-    val rows = remember(state, uncheckable) { pageRows(state, uncheckable) }
+    val paused by produceState(false) { value = TagsGraph.paused(context) }
+    val rows = remember(state, uncheckable, paused) { pageRows(state, uncheckable, paused) }
     val writable = canWrite(access, state)
 
     fun apply(albumId: String, match: ReleaseMatch) {
@@ -419,6 +430,12 @@ fun CoversTagsPage() {
                         stringResource(R.string.tags_samsung_note),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = ScreenPadding, vertical = 4.dp),
+                    )
+                    is PageRow.Paused -> Text(
+                        row.words.text(),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error,
                         modifier = Modifier.padding(horizontal = ScreenPadding, vertical = 4.dp),
                     )
                     is PageRow.Uncheckable -> Text(
