@@ -198,7 +198,7 @@ class ReplayGainTest {
             "first" to SongLevels(ReplayGainTags(trackGainDb = -6f, trackPeak = 0.9f), albumInOrder = false),
             "second" to SongLevels(ReplayGainTags(trackGainDb = -12f, trackPeak = 0.9f), albumInOrder = false),
         )
-        val processor = ReplayGainProcessor({ AudioPipelineSettings(Levelling.SONG) }) { stream -> streams.getValue(stream.periodUid ?: "first") }
+        val processor = ReplayGainProcessor({ AudioPipelineSettings(Levelling.SONG) }, { stream -> streams.getValue(stream.periodUid ?: "first") })
         val first = Signals.run(listOf(processor), sine)
         val second = Signals.run(listOf(processor), sine, stream = StreamMetadata.DEFAULT.buildUpon().setPeriodUid("second").build())
         assertEquals(-6.0, Signals.gainDb(sine, first, settle = 0.0), 0.01)

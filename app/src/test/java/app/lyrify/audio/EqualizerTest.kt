@@ -12,6 +12,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.math.abs
 import kotlin.math.pow
 
 /** The equalizer's maths on sine sweeps, balance and mono, the limiter, the chain's order and the presets. */
@@ -38,10 +39,12 @@ class EqualizerTest {
     // The bands
 
     @Test
-    fun `each band boosts and cuts by its own gain at its centre, over a sweep of the 10 centres`() {
-        EQ_BANDS_HZ.forEachIndexed { index, hz ->
-            for (db in listOf(12f, 6f, -12f)) {
-                assertEquals("band $hz Hz at $db dB", db.toDouble(), gainAt(hz.toDouble(), eq(band(index, db))), 0.2)
+    fun `each band boosts and cuts by its own gain at its centre, over a sweep of the 10 centres at 44,1, 48 and 96 kHz`() {
+        for (rate in listOf(44_100, 48_000, 96_000)) {
+            EQ_BANDS_HZ.forEachIndexed { index, hz ->
+                for (db in listOf(12f, 6f, -12f)) {
+                    assertEquals("band $hz Hz at $db dB, $rate Hz", db.toDouble(), gainAt(hz.toDouble(), eq(band(index, db)), rate), 0.2)
+                }
             }
         }
     }
@@ -93,6 +96,41 @@ class EqualizerTest {
         assertEquals(10.0.pow(12.0 / 20), ratio(change + 9_600, 480), 0.05)
     }
 
+    /**
+     * The largest fourth difference of [samples] in [range]: for a smooth wave it stays at the level of its own bend and
+     * the float rounding, while a step or a kink, even far below hearing, stands out.
+     */
+    private fun roughness(samples: FloatArray, range: IntRange): Double =
+        range.maxOf { i -> abs(samples[i - 2].toDouble() - 4 * samples[i - 1] + 6 * samples[i] - 4 * samples[i + 1] + samples[i + 2]) }
+
+    @Test
+    fun `a band glides to a new gain without any step in the wave, even at 31 Hz`() {
+        for ((hz, index) in listOf(31.0 to 0, 1_000.0 to 5)) {
+            val sine = Signals.sine(hz, 0.2f, seconds = 1.0)
+            var settings = eq()
+            val change = 256 * 80
+            val out = Signals.channel(
+                Signals.run(listOf(EqualizerProcessor { settings }), sine, chunk = 256) { frame ->
+                    if (frame == change) settings = eq(band(index, 12f))
+                },
+                0,
+            )
+            // Once settled the wave is four times as loud; while it glides there, it is never rougher than then.
+            val settled = roughness(out, out.size - 4_800 until out.size - 2)
+            val gliding = roughness(out, change - 10 until change + 9_600)
+            assertTrue("$hz Hz: $gliding while gliding, $settled settled", gliding <= settled * 1.5)
+        }
+    }
+
+    @Test
+    fun `a long silence after a tone leaves every filter state at exactly zero, never a denormal`() {
+        val processor = EqualizerProcessor { eq(BuiltInPreset.BASS_AND_TREBLE.bandsDb, bassBoostDb = 12f) }
+        val tone = Signals.sine(31.0, 0.5f, seconds = 0.5)
+        Signals.run(listOf(processor), tone + FloatArray(Signals.RATE * 2 * 5))
+        assertTrue(processor.state.isNotEmpty())
+        assertTrue(processor.state.all { it == 0.0 })
+    }
+
     // Balance and mono
 
     private val left = Signals.sine(500.0, 0.5f, channels = 1)
@@ -102,7 +140,7 @@ class EqualizerTest {
 
     @Test
     fun `balance turns the other side down, never this side up`() {
-        val both = Signals.stereo(left, left)
+        val both = Signals.interleave(left, left)
         val hardLeft = balance(eq(balance = -1f), both)
         assertArrayEquals(left, Signals.channel(hardLeft, 0), 0f)
         assertEquals(0f, Signals.peak(Signals.channel(hardLeft, 1)), 0f)
@@ -113,7 +151,7 @@ class EqualizerTest {
 
     @Test
     fun `mono plays the mix of both channels on each`() {
-        val out = balance(eq(mono = true), Signals.stereo(left, silence))
+        val out = balance(eq(mono = true), Signals.interleave(left, silence))
         val half = left.map { it / 2 }.toFloatArray()
         assertArrayEquals(half, Signals.channel(out, 0), 1e-6f)
         assertArrayEquals(half, Signals.channel(out, 1), 1e-6f)
@@ -121,8 +159,35 @@ class EqualizerTest {
 
     @Test
     fun `with the equalizer off, balance and mono do nothing`() {
-        val input = Signals.stereo(left, silence)
+        val input = Signals.interleave(left, silence)
         assertArrayEquals(input, balance(eq(balance = -1f, mono = true, enabled = false), input), 0f)
+    }
+
+    private val other = Signals.sine(700.0, 0.25f, channels = 1)
+
+    @Test
+    fun `mono with more than two channels plays the mix of all of them on each`() {
+        val channels = arrayOf(left, silence, other, left, other, silence)
+        val out = Signals.run(listOf(BalanceProcessor { eq(mono = true) }), Signals.interleave(*channels), channels = 6)
+        val mid = FloatArray(left.size) { i -> channels.sumOf { it[i].toDouble() }.toFloat() / 6 }
+        for (c in 0 until 6) assertArrayEquals("channel $c", mid, Signals.channel(out, c, 6), 1e-6f)
+    }
+
+    @Test
+    fun `balance with more than two channels turns down each left or right pair, never the centre`() {
+        // 5.1: front left, front right, centre, low frequencies, back left, back right.
+        val surround = Signals.run(listOf(BalanceProcessor { eq(balance = -1f) }), Signals.interleave(left, left, left, left, left, left), channels = 6)
+        for (c in listOf(0, 2, 3, 4)) assertArrayEquals("channel $c", left, Signals.channel(surround, c, 6), 0f)
+        for (c in listOf(1, 5)) assertEquals("channel $c", 0f, Signals.peak(Signals.channel(surround, c, 6)), 0f)
+        // Quad: front left, front right, back left, back right.
+        val quad = Signals.run(listOf(BalanceProcessor { eq(balance = 0.5f) }), Signals.interleave(left, left, left, left), channels = 4)
+        for (c in listOf(0, 2)) assertArrayEquals("channel $c", left.map { it * 0.5f }.toFloatArray(), Signals.channel(quad, c, 4), 1e-6f)
+        for (c in listOf(1, 3)) assertArrayEquals("channel $c", left, Signals.channel(quad, c, 4), 0f)
+    }
+
+    @Test
+    fun `a mono song passes balance and mono unchanged`() {
+        assertArrayEquals(left, Signals.run(listOf(BalanceProcessor { eq(balance = -1f, mono = true) }), left, channels = 1), 0f)
     }
 
     // The pre-amp and the limiter
@@ -146,7 +211,7 @@ class EqualizerTest {
     @Test
     fun `the limiter keeps float input far above full scale at or below it`() {
         val input = Signals.sine(440.0, 4f)
-        val out = Signals.run(listOf(LimiterProcessor { eq() }), input)
+        val out = Signals.run(listOf(LimiterProcessor({ eq() })), input)
         val settled = out.sliceArray(out.size / 2 until out.size)
         assertTrue("peak ${Signals.peak(out)}", Signals.peak(out) <= ceiling + 1f / 32_768)
         assertTrue("crest ${crest(settled)}", crest(settled) > 1.38)
@@ -162,14 +227,43 @@ class EqualizerTest {
     @Test
     fun `the pre-amp sets the level before the limiter`() {
         val input = Signals.sine(1_000.0, 0.1f)
-        val out = Signals.run(listOf(LimiterProcessor { eq(preampDb = -6f) }), input)
+        val out = Signals.run(listOf(LimiterProcessor({ eq(preampDb = -6f) })), input)
         assertEquals(-6.0, Signals.gainDb(Signals.quantized16(input), out, settle = 0.1), 0.05)
+    }
+
+    @Test
+    fun `with the defaults, an untagged full-scale song leaves the chain bit-identical`() {
+        val input = Signals.quantized16(Signals.interleave(Signals.sine(1_000.0, 1f, channels = 1), Signals.sine(60.0, 0.99f, channels = 1)))
+        assertTrue(AudioPipelineSettings().processing)
+        assertArrayEquals(input, Signals.run(audioChain({ AudioPipelineSettings() }, { SongLevels.NONE }), input, encoding = C.ENCODING_PCM_16BIT), 0f)
+    }
+
+    @Test
+    fun `cuts alone leave loud music to the limiter untouched`() {
+        val input = Signals.quantized16(Signals.sine(1_000.0, 0.99f))
+        val cuts = AudioPipelineSettings(Levelling.SONG, eq = EqSound(enabled = true, band(2, -6f), preampDb = -0.5f))
+        // Levelling only cuts this song: what reaches the limiter is never louder than full scale, so it stands aside.
+        val levels = SongLevels(ReplayGainTags(trackGainDb = -0.2f, trackPeak = 1f), albumInOrder = false)
+        val chain = audioChain({ cuts }, { levels })
+        val expected = Signals.run(audioChain({ cuts.copy(eq = cuts.eq.copy(preampDb = 0f)) }, { levels }).take(3), input, encoding = C.ENCODING_PCM_16BIT)
+            .map { it * dbToGain(-0.5f) }.toFloatArray()
+        assertArrayEquals(Signals.quantized16(expected), Signals.run(chain, input, encoding = C.ENCODING_PCM_16BIT), 0f)
+    }
+
+    @Test
+    fun `a levelling boost from wrong peak tags is caught by the limiter`() {
+        val input = Signals.quantized16(Signals.sine(1_000.0, 1f))
+        // The tags claim a peak of a quarter, so +12 dB looks safe; the song really peaks at full scale.
+        val wrong = SongLevels(ReplayGainTags(trackGainDb = 12f, trackPeak = 0.25f), albumInOrder = false)
+        val out = Signals.run(audioChain({ AudioPipelineSettings(Levelling.SONG) }, { wrong }), input, encoding = C.ENCODING_PCM_16BIT)
+        assertTrue("peak ${Signals.peak(out)}", Signals.peak(out) <= ceiling + 1f / 32_768)
+        assertTrue("crest ${crest(out.sliceArray(out.size / 2 until out.size))}", crest(out.sliceArray(out.size / 2 until out.size)) > 1.38)
     }
 
     @Test
     fun `quiet music passes the limiter unchanged`() {
         val input = Signals.quantized16(Signals.sine(1_000.0, 0.5f))
-        assertArrayEquals(input, Signals.run(listOf(LimiterProcessor { eq() }), input), 0f)
+        assertArrayEquals(input, Signals.run(listOf(LimiterProcessor({ eq() })), input), 0f)
     }
 
     @Test

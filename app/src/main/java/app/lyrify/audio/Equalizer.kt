@@ -7,15 +7,13 @@ import androidx.media3.common.audio.AudioProcessor.StreamMetadata
 import androidx.media3.common.util.UnstableApi
 import kotlin.math.PI
 import kotlin.math.abs
-import kotlin.math.cos
 import kotlin.math.exp
 import kotlin.math.log10
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
-import kotlin.math.sign
-import kotlin.math.sin
 import kotlin.math.sqrt
+import kotlin.math.tan
 
 /**
  * What the equalizer does on one output: its own on/off, the 10 bands, bass boost, pre-amp, balance and mono. Off, it
@@ -87,130 +85,146 @@ sealed interface PresetChoice {
 }
 
 /**
- * Biquad filter coefficients from Robert Bristow-Johnson's Audio EQ Cookbook, stored as five doubles per filter,
- * normalised by a0: b0, b1, b2, a1, a2.
- */
-internal object Biquad {
-    const val SIZE: Int = 5
-
-    /** A peaking band: exactly [gainDb] at [hz], fading to nothing an octave or so either side for [q] near 1.4. */
-    fun peaking(hz: Double, gainDb: Double, q: Double, rate: Double, out: DoubleArray, at: Int) {
-        val a = 10.0.pow(gainDb / 40)
-        val w0 = 2 * PI * hz / rate
-        val alpha = sin(w0) / (2 * q)
-        val cosW0 = cos(w0)
-        set(out, at, 1 + alpha * a, -2 * cosW0, 1 - alpha * a, 1 + alpha / a, -2 * cosW0, 1 - alpha / a)
-    }
-
-    /** A low shelf: [gainDb] at the lowest frequencies, half of it at [hz], nothing far above; [slope] 1 is the steepest without a bump. */
-    fun lowShelf(hz: Double, gainDb: Double, slope: Double, rate: Double, out: DoubleArray, at: Int) {
-        val a = 10.0.pow(gainDb / 40)
-        val w0 = 2 * PI * hz / rate
-        val alpha = sin(w0) / 2 * sqrt((a + 1 / a) * (1 / slope - 1) + 2)
-        val cosW0 = cos(w0)
-        val twoRootAAlpha = 2 * sqrt(a) * alpha
-        set(
-            out, at,
-            a * ((a + 1) - (a - 1) * cosW0 + twoRootAAlpha),
-            2 * a * ((a - 1) - (a + 1) * cosW0),
-            a * ((a + 1) - (a - 1) * cosW0 - twoRootAAlpha),
-            (a + 1) + (a - 1) * cosW0 + twoRootAAlpha,
-            -2 * ((a - 1) + (a + 1) * cosW0),
-            (a + 1) + (a - 1) * cosW0 - twoRootAAlpha,
-        )
-    }
-
-    private fun set(out: DoubleArray, at: Int, b0: Double, b1: Double, b2: Double, a0: Double, a1: Double, a2: Double) {
-        out[at] = b0 / a0
-        out[at + 1] = b1 / a0
-        out[at + 2] = b2 / a0
-        out[at + 3] = a1 / a0
-        out[at + 4] = a2 / a0
-    }
-}
-
-/**
- * The second stage: the 10 peaking bands, then the bass boost low shelf, in double precision (the 31 Hz band's
- * coefficients sit close to 1). A change of gain glides by [STEP_DB] every [BLOCK] frames, recomputing only the filters
- * that move, so a profile switch or a slider does not click. Flat or off, it passes samples through untouched.
+ * The second stage: the 10 bands, then the bass boost shelf, in double precision. Each is a linear trapezoidal state
+ * variable filter (Andrew Simper, Cytomic, "Solving the continuous SVF equations using trapezoidal integration and
+ * equivalent currents", 2013; his formulas, no code copied): the same bell and low shelf responses as the Audio EQ
+ * Cookbook's peaking and shelf filters, but in a form whose gain may change on every sample without a click, because its
+ * state is the circuit's own and not tied to the coefficients.
+ *
+ * A new gain is reached through three smoothing steps of [GLIDE_SECONDS] each, so the gain bends smoothly into and out
+ * of every change (a slider drag, a profile switch) and the wave never steps or kinks. A filter whose two states both
+ * fall below [DENORMAL_FLOOR] is set to zero, so a long silence never leaves them as slow denormal numbers. Flat or off,
+ * it passes samples through untouched.
  */
 internal class EqualizerProcessor(settings: () -> AudioPipelineSettings) : FloatStage(settings) {
-    private val target = FloatArray(FILTERS)
-    private val current = FloatArray(FILTERS)
-    private val coefficients = DoubleArray(FILTERS * Biquad.SIZE)
+    /** Per filter, the gain it heads for, as the cookbook's A: 10^(dB / 40). */
+    private val target = DoubleArray(FILTERS) { 1.0 }
 
-    /** Two state values per filter and channel (transposed direct form II). */
-    private var state = DoubleArray(0)
+    /** Per filter, its three smoothing steps; the last is the gain in use. */
+    private val smoothed = DoubleArray(FILTERS * STEPS) { 1.0 }
 
-    /** Bands whose centre the sample rate can carry; the others stay at 0 dB. */
-    private val usable = BooleanArray(BANDS)
+    /** Per filter, tan(pi f / rate); 0 for a band the sample rate cannot carry, which then does nothing. */
+    private val warp = DoubleArray(FILTERS)
+
+    /** Per filter: a1, a2, a3 (the filter), m1, m2 (how much band and low pass are added to the input). */
+    private val coefficients = DoubleArray(FILTERS * SIZE)
+
+    /** Two state values per filter and channel. */
+    internal var state = DoubleArray(0)
+        private set
+    private var smoothing = 1.0
+    private var moving = false
     private var running = false
     private var fresh = true
-    private var blockLeft = 0
 
     override fun start(stream: StreamMetadata) {
         val size = channels * FILTERS * 2
         if (state.size != size) state = DoubleArray(size) else state.fill(0.0)
-        for (band in 0 until BANDS) usable[band] = EQ_BANDS_HZ[band] < sampleRate * MAX_CENTRE_SHARE
+        val rate = sampleRate.toDouble()
+        for (band in 0 until BANDS) {
+            val hz = EQ_BANDS_HZ[band]
+            warp[band] = if (hz < rate * MAX_CENTRE_SHARE) tan(PI * hz / rate) else 0.0
+        }
+        warp[SHELF] = tan(PI * SHELF_HZ / rate)
+        smoothing = 1.0 - exp(-1.0 / (GLIDE_SECONDS * rate))
         fresh = true
     }
 
     override fun begin(settings: AudioPipelineSettings) {
         val eq = settings.eq
         for (band in 0 until BANDS) {
-            target[band] = if (eq.enabled && usable[band]) eq.bandsDb[band].coerceIn(-EqSound.BAND_DB, EqSound.BAND_DB) else 0f
+            target[band] = if (eq.enabled && warp[band] != 0.0) amplitude(eq.bandsDb[band].coerceIn(-EqSound.BAND_DB, EqSound.BAND_DB)) else 1.0
         }
-        target[SHELF] = if (eq.enabled) eq.bassBoostDb.coerceIn(0f, EqSound.BASS_BOOST_DB) else 0f
+        target[SHELF] = if (eq.enabled) amplitude(eq.bassBoostDb.coerceIn(0f, EqSound.BASS_BOOST_DB)) else 1.0
         if (fresh) {
-            target.copyInto(current)
-            for (filter in 0 until FILTERS) design(filter)
+            for (filter in 0 until FILTERS) {
+                smoothed.fill(target[filter], filter * STEPS, (filter + 1) * STEPS)
+                design(filter)
+            }
             fresh = false
-            blockLeft = BLOCK
+        }
+        moving = false
+        var unity = true
+        for (filter in 0 until FILTERS) {
+            for (step in 0 until STEPS) if (smoothed[filter * STEPS + step] != target[filter]) moving = true
+            if (smoothed[filter * STEPS + STEPS - 1] != 1.0) unity = false
         }
         val wasRunning = running
-        running = current.any { it != 0f } || target.any { it != 0f }
+        running = moving || !unity
         // Idle filters forget their past, so starting again later begins from silence.
         if (wasRunning && !running) state.fill(0.0)
     }
 
     override fun process(frame: FloatArray) {
-        if (blockLeft == 0) {
-            glide()
-            blockLeft = BLOCK
-        }
-        blockLeft--
+        if (moving) glide()
         if (!running) return
         for (c in frame.indices) {
-            var x = frame[c].toDouble()
-            var z = c * FILTERS * 2
+            var v0 = frame[c].toDouble()
+            var s = c * FILTERS * 2
             var k = 0
             repeat(FILTERS) {
-                val y = coefficients[k] * x + state[z]
-                state[z] = coefficients[k + 1] * x - coefficients[k + 3] * y + state[z + 1]
-                state[z + 1] = coefficients[k + 2] * x - coefficients[k + 4] * y
-                x = y
-                z += 2
-                k += Biquad.SIZE
+                val ic1 = state[s]
+                val ic2 = state[s + 1]
+                val v3 = v0 - ic2
+                val v1 = coefficients[k] * ic1 + coefficients[k + 1] * v3
+                val v2 = ic2 + coefficients[k + 1] * ic1 + coefficients[k + 2] * v3
+                val next1 = 2 * v1 - ic1
+                val next2 = 2 * v2 - ic2
+                // Both at once: zeroing one alone would leave the other to fade far more slowly.
+                if (abs(next1) < DENORMAL_FLOOR && abs(next2) < DENORMAL_FLOOR) {
+                    state[s] = 0.0
+                    state[s + 1] = 0.0
+                } else {
+                    state[s] = next1
+                    state[s + 1] = next2
+                }
+                v0 += coefficients[k + 3] * v1 + coefficients[k + 4] * v2
+                s += 2
+                k += SIZE
             }
-            frame[c] = x.toFloat()
+            frame[c] = v0.toFloat()
         }
     }
 
-    /** Moves every filter that is not at its target one step closer. */
+    /** Moves every filter that is not at its target one sample closer, through its three smoothing steps. */
     private fun glide() {
+        moving = false
         for (filter in 0 until FILTERS) {
-            val gap = target[filter] - current[filter]
-            if (gap == 0f) continue
-            current[filter] = if (abs(gap) <= STEP_DB) target[filter] else current[filter] + STEP_DB * sign(gap)
+            val goal = target[filter]
+            val at = filter * STEPS
+            if (smoothed[at] == goal && smoothed[at + 1] == goal && smoothed[at + 2] == goal) continue
+            smoothed[at] += (goal - smoothed[at]) * smoothing
+            smoothed[at + 1] += (smoothed[at] - smoothed[at + 1]) * smoothing
+            smoothed[at + 2] += (smoothed[at + 1] - smoothed[at + 2]) * smoothing
+            if (abs(smoothed[at] - goal) < SETTLED && abs(smoothed[at + 1] - goal) < SETTLED && abs(smoothed[at + 2] - goal) < SETTLED) {
+                smoothed.fill(goal, at, at + STEPS)
+            } else {
+                moving = true
+            }
             design(filter)
         }
     }
 
     private fun design(filter: Int) {
-        val at = filter * Biquad.SIZE
-        val rate = sampleRate.toDouble()
-        if (filter == SHELF) Biquad.lowShelf(SHELF_HZ, current[filter].toDouble(), SHELF_SLOPE, rate, coefficients, at)
-        else Biquad.peaking(EQ_BANDS_HZ[filter].toDouble(), current[filter].toDouble(), BAND_Q, rate, coefficients, at)
+        val a = smoothed[filter * STEPS + STEPS - 1]
+        val g: Double
+        val k: Double
+        val at = filter * SIZE
+        if (filter == SHELF) {
+            g = warp[filter] / sqrt(a)
+            k = SHELF_K
+            coefficients[at + 3] = k * (a - 1)
+            coefficients[at + 4] = a * a - 1
+        } else {
+            g = warp[filter]
+            k = 1 / (BAND_Q * a)
+            coefficients[at + 3] = k * (a * a - 1)
+            coefficients[at + 4] = 0.0
+        }
+        val a1 = 1 / (1 + g * (g + k))
+        coefficients[at] = a1
+        coefficients[at + 1] = g * a1
+        coefficients[at + 2] = g * g * a1
     }
 
     private companion object {
@@ -219,34 +233,48 @@ internal class EqualizerProcessor(settings: () -> AudioPipelineSettings) : Float
         /** The bass boost shelf runs after the bands. */
         val SHELF: Int = BANDS
         val FILTERS: Int = BANDS + 1
+        const val SIZE: Int = 5
+        const val STEPS: Int = 3
 
         /** About one octave wide, so neighbouring bands meet near their -3 dB points. */
         const val BAND_Q: Double = 1.41
         const val SHELF_HZ: Double = 100.0
-        const val SHELF_SLOPE: Double = 1.0
+
+        /** 1 / Q for Q = 1 / sqrt(2): the cookbook's shelf slope 1, the steepest without a bump. */
+        val SHELF_K: Double = sqrt(2.0)
 
         /** A band applies only well below half the sample rate. */
         const val MAX_CENTRE_SHARE: Double = 0.45
-        const val BLOCK: Int = 32
-        const val STEP_DB: Float = 0.25f
+        const val GLIDE_SECONDS: Double = 0.005
+        const val SETTLED: Double = 1e-9
+        const val DENORMAL_FLOOR: Double = 1e-20
+
+        /** The cookbook's A for a gain in dB: the square root of the linear gain. */
+        fun amplitude(db: Float): Double = 10.0.pow(db / 40.0)
     }
 }
 
-/** The third stage: mono, then balance. Stereo only; other layouts pass through. */
+/**
+ * The third stage: mono, then balance. Mono mixes every channel into each; balance turns down the left channels or the
+ * right ones, in Android's channel order for 2 to 8 channels (front, then back, then side pairs), never a centre or the
+ * low frequencies. A mono song passes through.
+ */
 internal class BalanceProcessor(settings: () -> AudioPipelineSettings) : FloatStage(settings) {
-    /** 0 is stereo as recorded, 1 is mono. */
+    /** 0 is the channels as recorded, 1 is mono. */
     private val mix = Glide(0f)
     private val left = Glide()
     private val right = Glide()
     private var mixTarget = 0f
     private var leftTarget = 1f
     private var rightTarget = 1f
+    private var sides = IntArray(0)
     private var fresh = true
 
     override fun start(stream: StreamMetadata) {
         mix.setRate(sampleRate)
         left.setRate(sampleRate)
         right.setRate(sampleRate)
+        if (sides.size != channels) sides = sidesOf(channels)
         fresh = true
     }
 
@@ -265,12 +293,43 @@ internal class BalanceProcessor(settings: () -> AudioPipelineSettings) : FloatSt
     }
 
     override fun process(frame: FloatArray) {
-        if (frame.size != 2) return
-        val share = mix.next(mixTarget) / 2
-        val l = frame[0]
-        val r = frame[1]
-        frame[0] = (if (share == 0f) l else l + (r - l) * share) * left.next(leftTarget)
-        frame[1] = (if (share == 0f) r else r + (l - r) * share) * right.next(rightTarget)
+        if (frame.size < 2) return
+        val share = mix.next(mixTarget)
+        if (share != 0f) {
+            var sum = 0f
+            for (sample in frame) sum += sample
+            val mid = sum / frame.size
+            for (c in frame.indices) frame[c] += (mid - frame[c]) * share
+        }
+        val l = left.next(leftTarget)
+        val r = right.next(rightTarget)
+        for (c in frame.indices) {
+            when (sides[c]) {
+                LEFT -> frame[c] *= l
+                RIGHT -> frame[c] *= r
+            }
+        }
+    }
+
+    private companion object {
+        const val LEFT: Int = -1
+        const val CENTRE: Int = 0
+        const val RIGHT: Int = 1
+
+        /**
+         * Which side each of [count] channels is on. Media3 lays 3 to 8 channels out as Android's channel masks
+         * (Util.getAudioTrackChannelConfig): front left and right, centre, low frequencies, back left and right, then
+         * back centre (7) or side left and right (8); 4 is quad and 5 is quad with a centre.
+         */
+        fun sidesOf(count: Int): IntArray = when (count) {
+            3 -> intArrayOf(LEFT, RIGHT, CENTRE)
+            4 -> intArrayOf(LEFT, RIGHT, LEFT, RIGHT)
+            5 -> intArrayOf(LEFT, RIGHT, CENTRE, LEFT, RIGHT)
+            6 -> intArrayOf(LEFT, RIGHT, CENTRE, CENTRE, LEFT, RIGHT)
+            7 -> intArrayOf(LEFT, RIGHT, CENTRE, CENTRE, LEFT, RIGHT, CENTRE)
+            8 -> intArrayOf(LEFT, RIGHT, CENTRE, CENTRE, LEFT, RIGHT, LEFT, RIGHT)
+            else -> IntArray(count) { if (it == 0) LEFT else if (it == 1) RIGHT else CENTRE }
+        }
     }
 }
 
@@ -278,13 +337,17 @@ internal class BalanceProcessor(settings: () -> AudioPipelineSettings) : FloatSt
  * The last stage: the pre-amp, then a soft limiter, handing 16-bit PCM on. The limiter watches the loudest channel of
  * each frame: below [KNEE_START] it does nothing; through a [KNEE_DB] soft knee it eases the level towards [LIMIT_DB],
  * which nothing passes. It turns down at once and back up over [RELEASE_SECONDS], so a sine boosted far past full scale
- * keeps its shape instead of being clipped flat. With no stage changing the sound it stands aside, and 16-bit music
- * leaves the chain exactly as it came.
+ * keeps its shape instead of being clipped flat.
+ *
+ * It works only while some stage can push the music past full scale: a levelling gain above 1 (told by [chain]), a band
+ * or bass boost, or a pre-amp above 0 dB; and on any frame that did go past it all the same (a cut can overshoot a
+ * little). Otherwise it stands aside, so an untagged song with the equalizer off leaves the chain exactly as it came.
  */
-internal class LimiterProcessor(settings: () -> AudioPipelineSettings) : FloatStage(settings, int16Out = true) {
+internal class LimiterProcessor(settings: () -> AudioPipelineSettings, private val chain: ChainState = ChainState()) :
+    FloatStage(settings, int16Out = true) {
     private val preamp = Glide()
     private var preampTarget = 1f
-    private var engaged = false
+    private var boosting = false
     private var gain = 1f
     private var release = 1f
     private var fresh = true
@@ -297,8 +360,11 @@ internal class LimiterProcessor(settings: () -> AudioPipelineSettings) : FloatSt
     }
 
     override fun begin(settings: AudioPipelineSettings) {
-        engaged = settings.processing
-        preampTarget = if (settings.eq.enabled) dbToGain(settings.eq.preampDb.coerceIn(-EqSound.PREAMP_DB, EqSound.PREAMP_DB)) else 1f
+        val eq = settings.eq
+        preampTarget = if (eq.enabled) dbToGain(eq.preampDb.coerceIn(-EqSound.PREAMP_DB, EqSound.PREAMP_DB)) else 1f
+        var eqBoosts = eq.preampDb > 0f || eq.bassBoostDb > 0f
+        for (band in eq.bandsDb.indices) if (eq.bandsDb[band] > 0f) eqBoosts = true
+        boosting = chain.levellingGain > 1f || (eq.enabled && eqBoosts)
         if (fresh) {
             preamp.value = preampTarget
             fresh = false
@@ -308,9 +374,9 @@ internal class LimiterProcessor(settings: () -> AudioPipelineSettings) : FloatSt
     override fun process(frame: FloatArray) {
         val pre = preamp.next(preampTarget)
         if (pre != 1f) for (c in frame.indices) frame[c] *= pre
-        if (!engaged && gain == 1f) return
         var peak = 0f
         for (sample in frame) peak = max(peak, abs(sample))
+        if (!boosting && gain == 1f && peak <= 1f) return
         val wanted = if (peak <= KNEE_START) 1f else limit(peak)
         gain = if (wanted < gain) wanted else gain + (wanted - gain) * release
         if (wanted == 1f && 1f - gain < SETTLED) gain = 1f

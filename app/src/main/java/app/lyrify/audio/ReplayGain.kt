@@ -11,6 +11,7 @@ import androidx.media3.extractor.metadata.id3.TextInformationFrame
 import androidx.media3.extractor.metadata.vorbis.VorbisComment
 import app.lyrify.settings.AdvancedSettings
 import app.lyrify.settings.Levelling
+import kotlin.math.max
 import kotlin.math.min
 
 /** A song's ReplayGain tags: gains in dB against the -18 LUFS reference, peaks as linear sample values; null where missing. */
@@ -143,6 +144,7 @@ fun levellingGain(tags: ReplayGainTags, levelling: Levelling, albumInOrder: Bool
 internal class ReplayGainProcessor(
     settings: () -> AudioPipelineSettings,
     private val songLevels: (StreamMetadata) -> SongLevels,
+    private val chain: ChainState = ChainState(),
 ) : FloatStage(settings) {
     private var song = SongLevels.NONE
     private val gain = Glide()
@@ -160,6 +162,7 @@ internal class ReplayGainProcessor(
         // A new song starts at its own gain; only a change of setting mid-song glides.
         if (fresh) gain.value = target
         fresh = false
+        chain.levellingGain = max(target, gain.value)
     }
 
     override fun process(frame: FloatArray) {

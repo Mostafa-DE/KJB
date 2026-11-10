@@ -29,7 +29,7 @@ data class AudioPipelineSettings(
     val levellingBoostDb: Int = 0,
     val eq: EqSound = EqSound(),
 ) {
-    /** Some stage changes the sound: audio offload must stay off, and the limiter watches the peaks. */
+    /** Some stage is on: audio offload must stay off. */
     val processing: Boolean get() = levelling != Levelling.OFF || eq.enabled
 
     companion object {
@@ -53,8 +53,23 @@ fun offloadAllowed(audioOffload: Boolean, pipeline: AudioPipelineSettings): Bool
  * PCM on: DefaultAudioSink runs its silence skipping (16-bit only) and Sonic (speed) after this chain, and skips the chain
  * altogether when its float output is on.
  */
-fun audioChain(settings: () -> AudioPipelineSettings, songLevels: (StreamMetadata) -> SongLevels): List<AudioProcessor> =
-    listOf(ReplayGainProcessor(settings, songLevels), EqualizerProcessor(settings), BalanceProcessor(settings), LimiterProcessor(settings))
+fun audioChain(settings: () -> AudioPipelineSettings, songLevels: (StreamMetadata) -> SongLevels): List<AudioProcessor> {
+    val chain = ChainState()
+    return listOf(
+        ReplayGainProcessor(settings, songLevels, chain),
+        EqualizerProcessor(settings),
+        BalanceProcessor(settings),
+        LimiterProcessor(settings, chain),
+    )
+}
+
+/**
+ * What the stages of one chain tell each other: the levelling gain of the moment, so the limiter knows whether levelling
+ * can push the music past full scale. Only the playback thread touches it, one stage after another.
+ */
+internal class ChainState {
+    var levellingGain: Float = 1f
+}
 
 /**
  * A stage of the chain: takes 16-bit or float PCM, hands every frame to [process] in float, and writes float, or 16-bit

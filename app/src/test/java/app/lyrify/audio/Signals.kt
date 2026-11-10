@@ -26,8 +26,8 @@ internal object Signals {
         return FloatArray(frames * channels) { i -> (amplitude * sin(2 * PI * hz * (i / channels) / rate)).toFloat() }
     }
 
-    /** Stereo from two mono signals of the same length. */
-    fun stereo(left: FloatArray, right: FloatArray): FloatArray = FloatArray(left.size * 2) { i -> if (i % 2 == 0) left[i / 2] else right[i / 2] }
+    /** Interleaved frames from one mono signal per channel, all of the same length. */
+    fun interleave(vararg channels: FloatArray): FloatArray = FloatArray(channels[0].size * channels.size) { i -> channels[i % channels.size][i / channels.size] }
 
     /** Channel [channel] of interleaved [samples]. */
     fun channel(samples: FloatArray, channel: Int, channels: Int = 2): FloatArray = FloatArray(samples.size / channels) { samples[it * channels + channel] }
