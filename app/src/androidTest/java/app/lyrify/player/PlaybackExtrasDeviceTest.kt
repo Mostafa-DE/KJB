@@ -24,6 +24,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -127,7 +128,7 @@ class PlaybackExtrasDeviceTest {
     private class Built(val engine: GaplessEngine, val player: LyrifyPlayer, val session: MediaSession)
 
     /** Three 20 s tones in a queue, in the facade and engine the service builds, behind a session whose callback is P2's headset buttons. */
-    private fun build(): Built {
+    private fun build(headsetButtons: Boolean = true): Built {
         val songs = (1..3).map { song(tone("kjb-extras-$it.wav", 20, 330.0 + it * 110), "Tone $it") }
         val built = onMain {
             val core = PlayerCore(MemoryStorage(), scope, System::currentTimeMillis)
@@ -135,7 +136,7 @@ class PlaybackExtrasDeviceTest {
             val bridge = QueueBridge(engine)
             val find: (SongRef) -> Song? = { ref -> songs.firstOrNull { it.path == ref.path } }
             val player = LyrifyPlayer(Looper.getMainLooper(), engine, core, { SkipAmounts(30_000, 10_000) }, { bridge.sync(core.book.value, find) })
-            val headset = HeadsetButtons(scope) { true }
+            val headset = HeadsetButtons(scope) { headsetButtons }
             val session = MediaSession.Builder(context, player)
                 .setId("kjb-extras-test")
                 .setCallback(object : MediaSession.Callback {
@@ -202,6 +203,35 @@ class PlaybackExtrasDeviceTest {
         platform.dispatchMediaButtonEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_NEXT))
         platform.dispatchMediaButtonEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MEDIA_NEXT))
         assertTrue("Next did not skip", waitFor(1_000) { built.engine.index == 2 })
+    }
+
+    @Test
+    fun withHeadsetButtonsOffOnlyHeadsetPressesAreIgnored() {
+        val built = build(headsetButtons = false)
+        val platform = PlatformController(context, built.session.platformToken)
+        fun key(code: Int) {
+            platform.dispatchMediaButtonEvent(KeyEvent(KeyEvent.ACTION_DOWN, code))
+            platform.dispatchMediaButtonEvent(KeyEvent(KeyEvent.ACTION_UP, code))
+        }
+        // A headset's press: KJB ignores it ("Headset buttons are off in Settings").
+        key(KeyEvent.KEYCODE_HEADSETHOOK)
+        SystemClock.sleep(PRESS_WINDOW_MS + 500)
+        assertFalse("a headset press played with Headset buttons off", onMain { built.engine.playWhenReady })
+        // The lock screen and the phone's media card: the session's transport controls.
+        platform.transportControls.play()
+        assertTrue("Play from the media card did nothing", waitFor(3_000) { built.engine.playWhenReady })
+        platform.transportControls.pause()
+        assertTrue("Pause from the media card did nothing", waitFor(3_000) { !built.engine.playWhenReady })
+        // A MediaController: the widget, a car's screen, the app itself.
+        val controller = MediaController.Builder(context, built.session.token).setApplicationLooper(Looper.getMainLooper()).buildAsync().get(10, TimeUnit.SECONDS)
+        cleanups += { controller.release() }
+        onMain { controller.play() }
+        assertTrue("Play from a controller did nothing", waitFor(3_000) { built.engine.playWhenReady })
+        onMain { controller.pause() }
+        assertTrue("Pause from a controller did nothing", waitFor(3_000) { !built.engine.playWhenReady })
+        // A car's or a two-button headset's own Play key is no headset press.
+        key(KeyEvent.KEYCODE_MEDIA_PLAY)
+        assertTrue("the Play key did nothing", waitFor(3_000) { built.engine.playWhenReady })
     }
 
     @Test

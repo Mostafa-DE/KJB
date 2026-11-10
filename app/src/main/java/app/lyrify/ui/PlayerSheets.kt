@@ -133,6 +133,9 @@ fun partShown(part: AbPart?, path: String): Boolean = part != null && part.path 
 /** The song playing as its extras know it: the library's file, else the queue's. */
 internal fun PlayerUi.path(): String = song?.path ?: item.song.path
 
+/** The song playing as the library knows it, its id hint too. */
+internal fun PlayerUi.ref(): SongRef = song?.ref ?: item.song
+
 // What the player opens
 
 /** The extras' sheets and dialogs: one at a time. */
@@ -214,9 +217,10 @@ class PlayerExtrasUi internal constructor(
     /** The bookmark named in the dialog, at [bookmarkAt]; its toast takes it back. */
     fun saveBookmark(ui: PlayerUi, note: String) {
         open = null
-        val path = ui.path()
-        val mark = extras.edit { it.withBookmark(path, bookmarkAt, note) }
-            ?: return say(Toast(resources.getString(R.string.bookmark_not_saved), R.drawable.ic_error, Tone.ERROR))
+        val song = ui.ref()
+        val path = song.path
+        val mark = extras.edit { it.withBookmark(song, bookmarkAt, note) }
+            ?: return say(Toast(resources.getString(if (extras.ready.value) R.string.bookmark_full else R.string.bookmark_not_saved), R.drawable.ic_error, Tone.ERROR))
         scope.launch {
             val undo = toasts.show(Toast(resources.getString(R.string.bookmark_at, clock(mark.positionMs)), R.drawable.ic_bookmark_add, action = resources.getString(R.string.player_undo)))
             if (undo) extras.change { it.withoutBookmark(path, mark.id) }
@@ -406,7 +410,7 @@ private fun SpeedSheet(extras: PlayerExtrasUi, ui: PlayerUi) {
     var sliding by remember { mutableStateOf<Float?>(null) }
     var pitching by remember { mutableStateOf<Int?>(null) }
     val shown = speed.copy(speed = sliding ?: speed.speed, semitones = pitching ?: speed.semitones)
-    val set: ((Speed) -> Speed) -> Unit = { change -> store.change { it.withSpeed(path, change) } }
+    val set: ((Speed) -> Speed) -> Unit = { change -> store.change { it.withSpeed(ui.ref(), change) } }
     LyrifySheet(
         onDismiss = extras::close,
         footer = {
@@ -475,7 +479,7 @@ private fun SpeedSheet(extras: PlayerExtrasUi, ui: PlayerUi) {
             }
         }
         SheetSwitch(R.drawable.ic_music_note, stringResource(R.string.speed_this_song), stringResource(if (own) R.string.speed_this_song_on else R.string.speed_this_song_off), own) { on ->
-            store.change { it.thisSongOnly(path, on, usualAtOpen) }
+            store.change { it.thisSongOnly(ui.ref(), on, usualAtOpen) }
         }
         Text(stringResource(if (own) R.string.speed_own_sentence else R.string.speed_usual_sentence), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
@@ -644,5 +648,5 @@ internal fun ExtrasToasts() {
 private fun startOver(context: Context, path: String) {
     val connection = PlayerGraph.connection(context)
     if (connection.ui.value?.path() == path) connection.seekTo(0)
-    PlayerExtras.of(context).change { it.withPlace(path, null) }
+    PlayerExtras.of(context).change { it.withPlace(SongRef(path, it.ids[path]), null) }
 }

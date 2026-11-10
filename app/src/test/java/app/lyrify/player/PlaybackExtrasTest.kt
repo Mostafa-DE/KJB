@@ -1,8 +1,12 @@
 package app.lyrify.player
 
+import app.lyrify.library.Library
+import app.lyrify.library.LibraryState
 import app.lyrify.library.SongRef
+import app.lyrify.library.song
 import app.lyrify.settings.PlaybackSettings
 import app.lyrify.settings.RememberPlace
+import app.lyrify.settings.Settings
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -18,6 +22,8 @@ import kotlin.math.pow
 class PlaybackExtrasTest {
     private val lantern = "/storage/emulated/0/Music/Harbour Glass/01 Paper Lantern.flac"
     private val thread = "/storage/emulated/0/Music/Rips/Loose Thread.mp3"
+    private val lanternRef = SongRef(lantern, 11)
+    private val threadRef = SongRef(thread, 12)
 
     // Speed and pitch
 
@@ -55,20 +61,20 @@ class PlaybackExtrasTest {
     @Test
     fun `a speed set applies to every song, until a song keeps its own with This song only`() {
         val opened = SongState()
-        val set = opened.withSpeed(lantern) { it.copy(speed = 1.25f) }
+        val set = opened.withSpeed(lanternRef) { it.copy(speed = 1.25f) }
         assertEquals(Speed(1.25f), set.usual)
         assertEquals(Speed(1.25f), set.speedOf(thread))
         // This song only: what was set moves to the song, and the usual speed goes back to what it was.
-        val own = set.thisSongOnly(lantern, on = true, usualBefore = opened.usual)
+        val own = set.thisSongOnly(lanternRef, on = true, usualBefore = opened.usual)
         assertEquals(Speed(1.25f), own.speedOf(lantern))
         assertEquals(Speed(), own.speedOf(thread))
         assertEquals(Speed(), own.usual)
         // Changes now go to the song's own speed only.
-        val slower = own.withSpeed(lantern) { it.copy(speed = 0.75f, keepPitch = false) }
+        val slower = own.withSpeed(lanternRef) { it.copy(speed = 0.75f, keepPitch = false) }
         assertEquals(Speed(0.75f, keepPitch = false), slower.speedOf(lantern))
         assertEquals(Speed(), slower.usual)
         // Off: the song plays at the usual speed again.
-        val back = slower.thisSongOnly(lantern, on = false, usualBefore = Speed(1.5f))
+        val back = slower.thisSongOnly(lanternRef, on = false, usualBefore = Speed(1.5f))
         assertEquals(Speed(), back.speedOf(lantern))
         assertTrue(back.speeds.isEmpty())
         assertEquals(Speed(), back.speedOf(null))
@@ -80,14 +86,14 @@ class PlaybackExtrasTest {
 
     @Test
     fun `bookmarks keep the second, a trimmed note and their own ids, in time order`() {
-        val (one, first) = SongState().withBookmark(lantern, 61_900, "  Second verse  ")
+        val (one, first) = SongState().withBookmark(lanternRef, 61_900, "  Second verse  ")!!
         assertEquals(Bookmark(1, 61_000, "Second verse"), first)
-        val (two, second) = one.withBookmark(lantern, 12_400, "")
+        val (two, second) = one.withBookmark(lanternRef, 12_400, "")!!
         assertEquals(Bookmark(2, 12_000, ""), second)
         assertEquals(listOf(second, first), two.bookmarksOf(lantern))
         assertEquals(emptyList<Bookmark>(), two.bookmarksOf(thread))
         assertEquals(3, two.nextBookmarkId)
-        val (long, capped) = two.withBookmark(thread, 5_000, "x".repeat(500))
+        val (long, capped) = two.withBookmark(threadRef, 5_000, "x".repeat(500))!!
         assertEquals(SongState.MAX_NOTE, capped.note.length)
         assertEquals(listOf(first), long.withoutBookmark(lantern, 2).bookmarksOf(lantern))
         // The last bookmark of a song leaves no empty entry; removing one that is not there changes nothing.
@@ -178,15 +184,93 @@ class PlaybackExtrasTest {
 
     @Test
     fun `places are kept per song, the newest last, and the oldest go past the cap`() {
-        val one = SongState().withPlace(lantern, 61_000).withPlace(thread, 5_500)
+        val one = SongState().withPlace(lanternRef, 61_000).withPlace(threadRef, 5_500)
         assertEquals(listOf(lantern to 61_000L, thread to 5_500L), one.places.toList())
         // A place kept again is the newest.
-        assertEquals(listOf(thread, lantern), one.withPlace(lantern, 70_000).places.keys.toList())
-        assertEquals(mapOf(thread to 5_500L), one.withPlace(lantern, null).places)
-        val full = (1..SongState.MAX_PLACES + 5).fold(SongState()) { state, i -> state.withPlace("/m/$i.mp3", i * 10_000L) }
+        assertEquals(listOf(thread, lantern), one.withPlace(lanternRef, 70_000).places.keys.toList())
+        assertEquals(mapOf(thread to 5_500L), one.withPlace(lanternRef, null).places)
+        val full = (1..SongState.MAX_PLACES + 5).fold(SongState()) { state, i -> state.withPlace(SongRef("/m/$i.mp3"), i * 10_000L) }
         assertEquals(SongState.MAX_PLACES, full.places.size)
         assertFalse(full.places.containsKey("/m/1.mp3"))
         assertTrue(full.places.containsKey("/m/${SongState.MAX_PLACES + 5}.mp3"))
+    }
+
+    // Following a moved song, caps, songs gone
+
+    @Test
+    fun `song state notes each song's id hint, and lets it go once the song keeps nothing`() {
+        val state = SongState().withPlace(lanternRef, 61_000).thisSongOnly(threadRef, on = true, usualBefore = Speed())
+        assertEquals(mapOf(lantern to 11L, thread to 12L), state.ids)
+        val (marked, mark) = state.withBookmark(lanternRef, 5_000, "")!!
+        assertEquals(mapOf(lantern to 11L, thread to 12L), marked.ids)
+        val left = marked.withPlace(lanternRef, null).withoutBookmark(lantern, mark.id).thisSongOnly(threadRef, on = false, usualBefore = Speed())
+        assertEquals(emptyMap<String, Long>(), left.ids)
+    }
+
+    @Test
+    fun `a moved song takes its speed, place, bookmarks and part to its new path, and a song gone leaves`() {
+        val moved = "/storage/emulated/0/Music/Archive/01 Paper Lantern.flac"
+        val (kept, mark) = SongState(part = AbPart(lantern, 30_000, 40_000))
+            .withPlace(lanternRef, 61_000)
+            .withPlace(threadRef, 5_500)
+            .withSpeed(null) { it.copy(speed = 1.5f) }
+            .thisSongOnly(lanternRef, on = true, usualBefore = Speed())
+            .withBookmark(lanternRef, 12_000, "Bridge")!!
+        // Found by its id hint at its new path, as queues and Favourites find it; the other song is not on the phone.
+        val found = kept.refresh { ref -> if (ref.mediaStoreId == 11L) SongRef(moved, 11) else null }
+        assertEquals(mapOf(moved to 61_000L), found.places)
+        assertEquals(mapOf(moved to Speed(1.5f)), found.speeds)
+        assertEquals(listOf(mark), found.bookmarksOf(moved))
+        assertEquals(AbPart(moved, 30_000, 40_000), found.part)
+        assertEquals(mapOf(moved to 11L), found.ids)
+        assertEquals(Speed(), found.usual)
+        // Found where it was: nothing changes.
+        assertEquals(kept, kept.refresh { it })
+        // A new id at the same path is the new hint.
+        assertEquals(mapOf(lantern to 40L, thread to 12L), kept.refresh { if (it.path == lantern) SongRef(lantern, 40) else it }.ids)
+    }
+
+    @Test
+    fun `a song moved onto one with state of its own keeps that state and gains the moved bookmarks`() {
+        val (first, a) = SongState().withPlace(lanternRef, 61_000).withBookmark(lanternRef, 12_000, "")!!
+        val (both, b) = first.withPlace(threadRef, 5_500).withBookmark(threadRef, 30_000, "")!!
+        val merged = both.refresh { ref -> if (ref.path == lantern) threadRef else ref }
+        assertEquals(mapOf(thread to 5_500L), merged.places)
+        assertEquals(listOf(a, b), merged.bookmarksOf(thread))
+        assertEquals(mapOf(thread to 12L), merged.ids)
+    }
+
+    @Test
+    fun `a library read moves and drops song state, but never one not read, unreadable or empty`() {
+        val state = SongState().withPlace(lanternRef, 61_000)
+        assertEquals(state, state.followLibrary(LibraryState.Loading))
+        assertEquals(state, state.followLibrary(LibraryState.Unreadable))
+        assertEquals(state, state.followLibrary(LibraryState.Ready(Library.of(emptyList(), Settings()))))
+        val here = Library.of(listOf(song("Music/Harbour Glass/01 Paper Lantern.flac", id = 11)), Settings())
+        assertEquals(state, state.followLibrary(LibraryState.Ready(here)))
+        val moved = Library.of(listOf(song("Music/Archive/01 Paper Lantern.flac", id = 11)), Settings())
+        assertEquals(mapOf("/storage/emulated/0/Music/Archive/01 Paper Lantern.flac" to 61_000L), state.followLibrary(LibraryState.Ready(moved)).places)
+        val gone = Library.of(listOf(song("Music/Other/Night Ferry.mp3", id = 99)), Settings())
+        assertEquals(emptyMap<String, Long>(), state.followLibrary(LibraryState.Ready(gone)).places)
+    }
+
+    @Test
+    fun `a song keeps at most 100 bookmarks, and all songs together at most 1000`() {
+        val full = (0 until SongState.MAX_BOOKMARKS_PER_SONG).fold(SongState()) { state, i -> state.withBookmark(lanternRef, i * 1_000L, "")!!.first }
+        assertEquals(SongState.MAX_BOOKMARKS_PER_SONG, full.bookmarksOf(lantern).size)
+        assertNull(full.withBookmark(lanternRef, 500_000, ""))
+        val many = (0 until SongState.MAX_BOOKMARKS).fold(SongState()) { state, i -> state.withBookmark(SongRef("/m/${i / 50}.mp3"), i * 1_000L, "")!!.first }
+        assertNull(many.withBookmark(threadRef, 0, ""))
+        assertTrue(many.withoutBookmark("/m/0.mp3", 1).withBookmark(threadRef, 0, "") != null)
+    }
+
+    @Test
+    fun `at most 300 songs keep a speed of their own, the oldest go first`() {
+        val many = (1..SongState.MAX_SPEEDS + 5).fold(SongState()) { state, i -> state.thisSongOnly(SongRef("/m/$i.mp3", i.toLong()), on = true, usualBefore = Speed()) }
+        assertEquals(SongState.MAX_SPEEDS, many.speeds.size)
+        assertFalse(many.speeds.containsKey("/m/1.mp3"))
+        assertFalse(many.ids.containsKey("/m/1.mp3"))
+        assertTrue(many.speeds.containsKey("/m/${SongState.MAX_SPEEDS + 5}.mp3"))
     }
 
     // A bookmark's jump
@@ -255,6 +339,7 @@ class PlaybackExtrasTest {
         bookmarks = mapOf(lantern to listOf(Bookmark(1, 12_000, ""), Bookmark(4, 61_000, "Second verse"))),
         part = AbPart(lantern, 30_000, 40_000),
         nextBookmarkId = 5,
+        ids = mapOf(lantern to 11L, thread to 12L),
     )
 
     @Test
@@ -263,6 +348,19 @@ class PlaybackExtrasTest {
         assertEquals(SongState(), SongStateJson.decode(SongStateJson.encode(SongState())))
         // Places keep their order: the oldest first.
         assertEquals(listOf(thread, lantern), SongStateJson.decode(SongStateJson.encode(full))!!.places.keys.toList())
+    }
+
+    @Test
+    fun `a file from before the id hints reads as it was, with no hints, and caps hold on reading`() {
+        val old = """{"schemaVersion":1,"usual":{"speed":1.0},"songs":[{"path":"$lantern","place":61000,"speed":{"speed":1.25}}]}"""
+        val read = SongStateJson.decode(old)!!
+        assertEquals(mapOf(lantern to 61_000L), read.places)
+        assertEquals(Speed(1.25f), read.speeds[lantern])
+        assertEquals(emptyMap<String, Long>(), read.ids)
+        val marks = (1..150).joinToString(",") { """{"id":$it,"positionMs":${it * 1_000}}""" }
+        val crowded = SongStateJson.decode("""{"songs":[{"path":"$lantern","mediaStoreId":11,"bookmarks":[$marks]}]}""")!!
+        assertEquals(SongState.MAX_BOOKMARKS_PER_SONG, crowded.bookmarksOf(lantern).size)
+        assertEquals(mapOf(lantern to 11L), crowded.ids)
     }
 
     @Test

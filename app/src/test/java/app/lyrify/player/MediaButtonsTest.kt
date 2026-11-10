@@ -120,6 +120,9 @@ class MediaButtonsTest {
         assertTrue(press(counter, enabled = false))
         assertTrue(press(counter, playPause, enabled = false))
         assertFalse(counter.onKey(KeyEvent.KEYCODE_MEDIA_NEXT, down = true, repeat = 0, enabled = false))
+        // Play and Pause keys (a car, a Bluetooth headset with two buttons) are no headset presses: they still go on.
+        assertFalse(counter.onKey(KeyEvent.KEYCODE_MEDIA_PLAY, down = true, repeat = 0, enabled = false))
+        assertFalse(counter.onKey(KeyEvent.KEYCODE_MEDIA_PAUSE, down = true, repeat = 0, enabled = false))
         advanceTimeBy(1_000)
         runCurrent()
         assertEquals(emptyList<Press>(), acted)
