@@ -115,9 +115,12 @@ class ChromeTest {
     // The dock
 
     @Test
-    fun `the dock has three destinations, Library, Search and Tools`() {
-        assertEquals(listOf(DockTab.LIBRARY, DockTab.SEARCH, DockTab.TOOLS), DOCK_TABS)
-        assertEquals(listOf(R.string.nav_library, R.string.nav_search, R.string.nav_tools), DOCK_TABS.map { it.label })
+    fun `the dock has four destinations, Library, Playlists, Search and Tools`() {
+        assertEquals(listOf(DockTab.LIBRARY, DockTab.PLAYLISTS, DockTab.SEARCH, DockTab.TOOLS), DOCK_TABS)
+        assertEquals(listOf(R.string.nav_library, R.string.nav_playlists, R.string.nav_search, R.string.nav_tools), DOCK_TABS.map { it.label })
+        // Unit tests run in the module's folder.
+        val strings = java.io.File("src/main/res/values/strings.xml").readText()
+        assertTrue("""<string name="nav_playlists">Playlists</string>""" in strings)
     }
 
     @Test
@@ -139,6 +142,10 @@ class ChromeTest {
         assertEquals(1, tabSlide(DockTab.LIBRARY, DockTab.SEARCH))
         assertEquals(-1, tabSlide(DockTab.TOOLS, DockTab.LIBRARY))
         assertEquals(0, tabSlide(DockTab.SEARCH, DockTab.SEARCH))
+        // Playlists sits between Library and Search.
+        assertEquals(1, tabSlide(DockTab.LIBRARY, DockTab.PLAYLISTS))
+        assertEquals(-1, tabSlide(DockTab.SEARCH, DockTab.PLAYLISTS))
+        assertEquals(1, tabSlide(DockTab.PLAYLISTS, DockTab.TOOLS))
     }
 
     // Dialogs

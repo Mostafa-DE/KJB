@@ -85,8 +85,8 @@ val LocalLyrics = compositionLocalOf<LyricsUi> { error("No LyricsUi: AppShell pr
 
 /**
  * The app once set up: each dock tab with its own page stack ([Navigator], kept across a turn of the phone), the Now bar
- * and the dock over Library and Search and Tools' root, Tools pages as full screens, and the full-screen views over
- * everything. Every page and view is drawn by its entry composable in its owner's file; this file only routes. Back
+ * and the dock over Library, Playlists, Search and Tools' root, Tools pages as full screens, and the full-screen views
+ * over everything. Every page and view is drawn by its entry composable in its owner's file; this file only routes. Back
  * closes a sheet, dialog or menu first (their own windows), then a view, then a page, then walks back through the tab
  * history. The app reopens on the last tab ([Settings.nav]), or on the page a notification names ([destination]). What
  * [checkAnswers] say shows here, also once Check these has closed or the phone has turned.
@@ -198,6 +198,7 @@ fun AppShell(
                         when (val page = stack.lastOrNull()) {
                             null -> when (tab) {
                                 DockTab.LIBRARY -> LibraryPage()
+                                DockTab.PLAYLISTS -> PlaylistsPage()
                                 DockTab.SEARCH -> SearchPage()
                                 DockTab.TOOLS -> ToolsScreen(rows, nav::open)
                             }

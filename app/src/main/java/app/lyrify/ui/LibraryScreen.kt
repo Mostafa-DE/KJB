@@ -82,57 +82,34 @@ import java.text.Collator
 import java.time.Instant
 import java.time.ZoneId
 
-// Library's pages: its root with the tabs, Library > Songs with a lyrics filter, and Settings > Folders to skip.
+// Library's pages: its root with the tabs, the Playlists tab's root, Library > Songs with a lyrics filter, and Settings >
+// Folders to skip.
 
 /**
  * Library, the first tab, at its root: the text tabs ("Library tabs" in Settings shows, hides and orders them) over
- * Songs, Albums, Artists, Folders, Playlists and Genres. The tab shown is kept in settings.json; tapping Library again
- * goes to the top of its list.
+ * Songs, Playlists, Albums, Artists, Folders and Genres. Library's icon always opens it on Songs ([NavState.libraryTab]);
+ * tapping it again on Songs goes to the top of its list.
  */
 @Composable
 fun LibraryPage() {
     val nav = LocalNavigator.current
-    val context = LocalContext.current
     val ui = rememberLibraryUi() ?: return
-    val change = rememberSettingsChange()
     val tabs = ui.settings.library.tabs.filter { it.shown }.map { it.tab }.ifEmpty { listOf(LibraryTab.SONGS) }
-    var picked by rememberSaveable { mutableStateOf<LibraryTab?>(null) }
-    val tab = picked?.takeIf { it in tabs } ?: ui.settings.nav.libraryTab.takeIf { it in tabs } ?: tabs.first()
+    val tab = nav.state.libraryTab.takeIf { it in tabs } ?: tabs.first()
     val reselect = nav.state.reselectsOf(DockTab.LIBRARY)
     val sheets = rememberSongSheets()
-    var menu by remember { mutableStateOf(false) }
     // The Playlists tab's "⋯" rows and its import sheet (B1).
     val m3u = rememberM3uActions()
-    LifecycleResumeEffect(ui.state) {
-        // All files access may have been turned on meanwhile.
-        if (ui.state == LibraryState.Unreadable) LibraryGraph.repository(context).refresh()
-        onPauseOrDispose {}
-    }
     val topBar: @Composable (Boolean, GlassBackdrop) -> Unit = { under, backdrop ->
         Column {
             LyrifyTopBar(
                 title = { Text(stringResource(R.string.nav_library), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 under = under,
                 backdrop = backdrop,
-                actions = {
-                    if (tab == LibraryTab.PLAYLISTS) Box {
-                        ChromeIconButton(R.drawable.ic_more_horiz, stringResource(R.string.menu_more), { menu = true })
-                        LyrifyMenu(expanded = menu, onDismiss = { menu = false }) {
-                            MenuRow(stringResource(R.string.lib_new_playlist), R.drawable.ic_playlist_add, onClick = {
-                                menu = false
-                                sheets.show(OpenSheet.NewPlaylist(emptyList()))
-                            })
-                            PlaylistsM3uRows(m3u, close = { menu = false })
-                        }
-                    }
-                },
+                actions = { if (tab == LibraryTab.PLAYLISTS) PlaylistsMenu(sheets, m3u) },
             )
             TopBand(under, backdrop) {
-                LibraryTabsRow(tabs.map { stringResource(it.label) }, tabs.indexOf(tab)) { at ->
-                    val chosen = tabs[at]
-                    picked = chosen
-                    change { if (it.nav.libraryTab == chosen) it else it.copy(nav = it.nav.copy(libraryTab = chosen)) }
-                }
+                LibraryTabsRow(tabs.map { stringResource(it.label) }, tabs.indexOf(tab)) { at -> nav.pickLibraryTab(tabs[at]) }
             }
         }
     }
@@ -142,10 +119,10 @@ fun LibraryPage() {
         tab == LibraryTab.SONGS -> SongsTab(ui, library, reselect, topBar)
         else -> PageFrame(topBar = topBar) { padding ->
             when (tab) {
+                LibraryTab.PLAYLISTS -> PlaylistsTab(ui, library, padding, reselect, sheets)
                 LibraryTab.ALBUMS -> AlbumsTab(ui, library, padding, reselect)
                 LibraryTab.ARTISTS -> ArtistsTab(ui, library, padding, reselect)
                 LibraryTab.FOLDERS -> FoldersTab(library, padding, reselect)
-                LibraryTab.PLAYLISTS -> PlaylistsTab(ui, library, padding, reselect, sheets)
                 LibraryTab.GENRES -> GenresTab(library, padding, reselect)
                 LibraryTab.SONGS -> Unit
             }
@@ -155,10 +132,59 @@ fun LibraryPage() {
     M3uImportSheet(m3u)
 }
 
+/**
+ * Playlists, the second tab, at its root: the same list as Library's Playlists tab ([PlaylistsTab]) and the same "⋯",
+ * under its own top bar. Tapping Playlists again goes to the top of the list.
+ */
+@Composable
+fun PlaylistsPage() {
+    val nav = LocalNavigator.current
+    val ui = rememberLibraryUi() ?: return
+    val sheets = rememberSongSheets()
+    val m3u = rememberM3uActions()
+    val library = ui.library
+    PageFrame(
+        topBar = { under, backdrop ->
+            LyrifyTopBar(
+                title = { Text(stringResource(R.string.nav_playlists), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                under = under,
+                backdrop = backdrop,
+                actions = { PlaylistsMenu(sheets, m3u) },
+            )
+        },
+    ) { padding ->
+        if (library == null) LibraryUnavailable(ui.state, Modifier.padding(padding)) else PlaylistsTab(ui, library, padding, nav.state.reselectsOf(DockTab.PLAYLISTS), sheets)
+    }
+    SongSheetsHost(sheets, ui)
+    M3uImportSheet(m3u)
+}
+
+/** The Playlists list's "⋯": New playlist, then Export all and Import (B1). */
+@Composable
+private fun PlaylistsMenu(sheets: SongSheets, m3u: M3uActions) {
+    var menu by remember { mutableStateOf(false) }
+    Box {
+        ChromeIconButton(R.drawable.ic_more_horiz, stringResource(R.string.menu_more), { menu = true })
+        LyrifyMenu(expanded = menu, onDismiss = { menu = false }) {
+            MenuRow(stringResource(R.string.lib_new_playlist), R.drawable.ic_playlist_add, onClick = {
+                menu = false
+                sheets.show(OpenSheet.NewPlaylist(emptyList()))
+            })
+            PlaylistsM3uRows(m3u, close = { menu = false })
+        }
+    }
+}
+
 /** While the songs are read, nothing; when they cannot be, why, and the way to Settings. */
 @Composable
 private fun LibraryUnavailable(state: LibraryState, modifier: Modifier) {
     val nav = LocalNavigator.current
+    val context = LocalContext.current
+    LifecycleResumeEffect(state) {
+        // All files access may have been turned on meanwhile.
+        if (state == LibraryState.Unreadable) LibraryGraph.repository(context).refresh()
+        onPauseOrDispose {}
+    }
     if (state != LibraryState.Unreadable) return
     Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         EmptyState(
@@ -476,8 +502,8 @@ internal fun LazyListScope.folderRows(rows: List<FolderRow>) {
 }
 
 /**
- * Playlists: the pinned Queues row ("3 saved"), Built for you (Favourites, Most played, Recently played, Recently added),
- * then the user's playlists by name and New playlist.
+ * Playlists, in Library's Playlists tab and on the Playlists tab's root: the pinned Queues row ("3 saved"), Built for
+ * you (Favourites, Most played, Recently played, Recently added), then the user's playlists by name and New playlist.
  */
 @Composable
 private fun PlaylistsTab(ui: LibraryUi, library: Library, padding: PaddingValues, reselect: Int, sheets: SongSheets) {

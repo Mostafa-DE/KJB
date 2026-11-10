@@ -3,6 +3,7 @@ package app.lyrify.ui
 import app.lyrify.data.LyricsStatus
 import app.lyrify.library.SongRef
 import app.lyrify.settings.DockTab
+import app.lyrify.settings.LibraryTab
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -40,7 +41,6 @@ class NavTest {
         assertEquals(DockTab.TOOLS, start.open(Page.Licences).tab)
         assertEquals(DockTab.TOOLS, NavState.start(DockTab.LIBRARY).open(Page.Licence("Media3")).tab)
         assertEquals(DockTab.LIBRARY, NavState.start(DockTab.TOOLS).open(Page.Songs(status = LyricsStatus.AI_ALIGNED)).tab)
-        assertEquals(DockTab.LIBRARY, NavState.start(DockTab.SEARCH).open(Page.Queues).tab)
         assertEquals(DockTab.SEARCH, start.open(Page.SearchAll(SearchGroup.SONGS, "lantern")).tab)
     }
 
@@ -54,6 +54,131 @@ class NavTest {
         val fromPlayer = NavState.start(DockTab.SEARCH).show(FullScreen.Player).open(album)
         assertEquals(DockTab.LIBRARY, fromPlayer.tab)
         assertEquals(emptyList<FullScreen>(), fromPlayer.views)
+    }
+
+    @Test
+    fun `Playlists keeps its own stack beside Library's`() {
+        val nav = NavState.start(DockTab.PLAYLISTS).open(Page.Queues).select(DockTab.LIBRARY).open(album).select(DockTab.PLAYLISTS)
+        assertEquals(DockTab.PLAYLISTS, nav.tab)
+        assertEquals(listOf<Page>(Page.Queues), nav.pages)
+        assertEquals(listOf<Page>(album), nav.select(DockTab.LIBRARY).pages)
+    }
+
+    // Playlists, Queues and Favourites open inside the tab they were opened on: Library or Playlists, else Playlists
+
+    @Test
+    fun `Queues opened on Library's Playlists tab stays inside Library`() {
+        val nav = NavState.start(DockTab.LIBRARY).open(Page.Queues)
+        assertEquals(DockTab.LIBRARY, nav.tab)
+        assertEquals(listOf<Page>(Page.Queues), nav.pages)
+    }
+
+    @Test
+    fun `Queues opened on the Playlists tab stays inside Playlists`() {
+        val nav = NavState.start(DockTab.PLAYLISTS).open(Page.Queues)
+        assertEquals(DockTab.PLAYLISTS, nav.tab)
+        assertEquals(listOf<Page>(Page.Queues), nav.pages)
+    }
+
+    @Test
+    fun `All queues in the player's queue sheet opens on Playlists, whatever tab is under the player`() {
+        DockTab.entries.forEach { under ->
+            val nav = NavState.start(under).show(FullScreen.Player).open(Page.Queues)
+            assertEquals("$under", DockTab.PLAYLISTS, nav.tab)
+            assertEquals("$under", listOf<Page>(Page.Queues), nav.pages)
+        }
+    }
+
+    @Test
+    fun `a recent queue in the player's queue sheet opens on Playlists`() {
+        val nav = NavState.start(DockTab.SEARCH).show(FullScreen.Player).open(Page.Queue("q1"))
+        assertEquals(DockTab.PLAYLISTS, nav.tab)
+        assertEquals(listOf<Page>(Page.Queue("q1")), nav.pages)
+    }
+
+    @Test
+    fun `a playlist opened in Library stays in Library, and one opened in Playlists stays in Playlists`() {
+        assertEquals(DockTab.LIBRARY, NavState.start(DockTab.LIBRARY).open(Page.Playlist("p3")).tab)
+        assertEquals(DockTab.PLAYLISTS, NavState.start(DockTab.PLAYLISTS).open(Page.Playlist("p3")).tab)
+    }
+
+    @Test
+    fun `a playlist opened from Search or Tools opens on Playlists`() {
+        val search = NavState.start(DockTab.SEARCH).open(Page.Playlist("p3"))
+        assertEquals(DockTab.PLAYLISTS, search.tab)
+        assertEquals(listOf<Page>(Page.Playlist("p3")), search.pages)
+        assertEquals(listOf(DockTab.SEARCH), search.history)
+        assertEquals(DockTab.PLAYLISTS, NavState.start(DockTab.TOOLS).open(Page.Playlist("p3")).tab)
+    }
+
+    @Test
+    fun `Favourites opened from Library's Songs row stays inside Library`() {
+        val nav = NavState.start(DockTab.LIBRARY).open(Page.BuiltIn(BuiltInList.FAVOURITES))
+        assertEquals(DockTab.LIBRARY, nav.tab)
+        assertEquals(listOf<Page>(Page.BuiltIn(BuiltInList.FAVOURITES)), nav.pages)
+    }
+
+    @Test
+    fun `Favourites opened from Playlists stays in Playlists, from Search or Tools it opens on Playlists`() {
+        val favourites = Page.BuiltIn(BuiltInList.FAVOURITES)
+        assertEquals(DockTab.PLAYLISTS, NavState.start(DockTab.PLAYLISTS).open(favourites).tab)
+        assertEquals(DockTab.PLAYLISTS, NavState.start(DockTab.SEARCH).open(favourites).tab)
+        assertEquals(DockTab.PLAYLISTS, NavState.start(DockTab.TOOLS).open(favourites).tab)
+        assertEquals(DockTab.PLAYLISTS, NavState.start(DockTab.LIBRARY).show(FullScreen.Player).open(favourites).tab)
+    }
+
+    @Test
+    fun `Your listening, from Most played, follows the tab Most played is on`() {
+        val library = NavState.start(DockTab.LIBRARY).open(Page.BuiltIn(BuiltInList.MOST_PLAYED)).open(Page.Listening)
+        assertEquals(DockTab.LIBRARY, library.tab)
+        assertEquals(listOf(Page.BuiltIn(BuiltInList.MOST_PLAYED), Page.Listening), library.pages)
+        val playlists = NavState.start(DockTab.PLAYLISTS).open(Page.BuiltIn(BuiltInList.MOST_PLAYED)).open(Page.Listening).open(Page.TopList(TopKind.SONGS))
+        assertEquals(DockTab.PLAYLISTS, playlists.tab)
+        assertEquals(3, playlists.pages.size)
+    }
+
+    @Test
+    fun `an album or artist opened inside Playlists stays in Playlists`() {
+        val nav = NavState.start(DockTab.PLAYLISTS).open(Page.BuiltIn(BuiltInList.FAVOURITES)).open(album).open(artist)
+        assertEquals(DockTab.PLAYLISTS, nav.tab)
+        assertEquals(listOf(Page.BuiltIn(BuiltInList.FAVOURITES), album, artist), nav.pages)
+        assertEquals(DockTab.LIBRARY, NavState.start(DockTab.PLAYLISTS).show(FullScreen.Player).open(album).tab)
+    }
+
+    // The Library icon
+
+    @Test
+    fun `the Library icon opens Library on Songs, never on the last top tab used`() {
+        val albums = NavState.start(DockTab.LIBRARY).pickLibraryTab(LibraryTab.ALBUMS)
+        assertEquals(LibraryTab.ALBUMS, albums.libraryTab)
+        // From Albums to Search, then the Library icon: Songs.
+        assertEquals(LibraryTab.SONGS, albums.select(DockTab.SEARCH).select(DockTab.LIBRARY).libraryTab)
+        // On Library's root on Albums, the icon goes to Songs; on Songs, to the top of its list.
+        val songs = albums.select(DockTab.LIBRARY)
+        assertEquals(LibraryTab.SONGS, songs.libraryTab)
+        assertEquals(0, songs.reselectsOf(DockTab.LIBRARY))
+        assertEquals(1, songs.select(DockTab.LIBRARY).reselectsOf(DockTab.LIBRARY))
+        // A page popped to the root by the icon lands on Songs too.
+        assertEquals(LibraryTab.SONGS, albums.open(album).select(DockTab.LIBRARY).libraryTab)
+    }
+
+    @Test
+    fun `Back to Library keeps its top tab, and so does a page left open on it`() {
+        val albums = NavState.start(DockTab.LIBRARY).pickLibraryTab(LibraryTab.ALBUMS)
+        assertEquals(LibraryTab.ALBUMS, albums.select(DockTab.SEARCH).back()!!.libraryTab)
+        val page = albums.open(album).select(DockTab.SEARCH).select(DockTab.LIBRARY)
+        assertEquals(listOf<Page>(album), page.pages)
+        assertEquals(LibraryTab.ALBUMS, page.back()!!.libraryTab)
+    }
+
+    @Test
+    fun `the app launched on Library opens on Songs, and a turn of the phone keeps the top tab shown`() {
+        assertEquals(LibraryTab.SONGS, NavState.start(DockTab.LIBRARY).libraryTab)
+        assertEquals(LibraryTab.SONGS, restoreNav(null, DockTab.LIBRARY).libraryTab)
+        assertEquals(LibraryTab.SONGS, restoreNav(Tab2x.NOW, DockTab.LIBRARY).libraryTab)
+        val albums = NavState.start(DockTab.LIBRARY).pickLibraryTab(LibraryTab.ALBUMS).select(DockTab.TOOLS)
+        assertEquals(albums, NavState.decode(albums.encode()))
+        assertEquals(LibraryTab.ALBUMS, restoreNav(albums.encode(), DockTab.LIBRARY).libraryTab)
     }
 
     @Test
@@ -91,6 +216,13 @@ class NavTest {
     }
 
     @Test
+    fun `back walks the history across the four tabs, each once, then lets the phone leave`() {
+        val nav = NavState.start(DockTab.LIBRARY).select(DockTab.PLAYLISTS).select(DockTab.SEARCH).select(DockTab.TOOLS).select(DockTab.PLAYLISTS)
+        assertEquals(listOf(DockTab.LIBRARY, DockTab.SEARCH, DockTab.TOOLS), nav.history)
+        assertEquals(listOf(DockTab.PLAYLISTS, DockTab.TOOLS, DockTab.SEARCH, DockTab.LIBRARY), generateSequence(nav) { it.back() }.map { it.tab }.toList())
+    }
+
+    @Test
     fun `the tab history holds each tab once, the latest last`() {
         val nav = NavState.start(DockTab.LIBRARY).select(DockTab.TOOLS).select(DockTab.LIBRARY).select(DockTab.SEARCH)
         assertEquals(listOf(DockTab.TOOLS, DockTab.LIBRARY), nav.history)
@@ -119,6 +251,15 @@ class NavTest {
         assertEquals(1, top.reselectsOf(DockTab.LIBRARY))
         assertEquals(0, top.reselectsOf(DockTab.SEARCH))
         assertEquals(emptyList<DockTab>(), top.history)
+    }
+
+    @Test
+    fun `tapping Playlists at its root asks its list to go to the top`() {
+        val nav = NavState.start(DockTab.PLAYLISTS).open(Page.Queues)
+        val root = nav.select(DockTab.PLAYLISTS)
+        assertEquals(emptyList<Page>(), root.pages)
+        assertEquals(0, root.reselectsOf(DockTab.PLAYLISTS))
+        assertEquals(1, root.select(DockTab.PLAYLISTS).reselectsOf(DockTab.PLAYLISTS))
     }
 
     @Test
@@ -174,6 +315,7 @@ class NavTest {
     @Test
     fun `the Now bar and the dock show over Library and Search pages and on Tools' root, never over a Tools page or a view`() {
         assertTrue(NavState.start(DockTab.LIBRARY).open(album).chrome)
+        assertTrue(NavState.start(DockTab.PLAYLISTS).open(Page.Queues).chrome)
         assertTrue(NavState.start(DockTab.SEARCH).open(Page.SearchAll(SearchGroup.LYRICS, "rain")).chrome)
         assertTrue(NavState.start(DockTab.TOOLS).chrome)
         assertFalse(NavState.start(DockTab.TOOLS).open(Page.Duplicates).chrome)
@@ -228,6 +370,14 @@ class NavTest {
         assertEquals(NavState.start(DockTab.TOOLS), restoreNav(null, DockTab.TOOLS))
         val nav = NavState.start(DockTab.SEARCH).open(artist)
         assertEquals(nav, restoreNav(nav.encode(), DockTab.TOOLS))
+    }
+
+    @Test
+    fun `the app reopens on Playlists when it was the last tab`() {
+        assertEquals(NavState.start(DockTab.PLAYLISTS), restoreNav(null, DockTab.PLAYLISTS))
+        assertEquals(DockTab.PLAYLISTS, NavState.decode("""{"tab":"PLAYLISTS"}""")!!.tab)
+        val nav = NavState.start(DockTab.PLAYLISTS).open(Page.Playlist("p3"))
+        assertEquals(nav, restoreNav(nav.encode(), DockTab.LIBRARY))
     }
 
     /** Stands in for the 2.x shell's saved tab. */
