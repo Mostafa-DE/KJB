@@ -379,6 +379,10 @@ sealed interface OpenSheet {
     data class MakeTone(val song: SongRef) : OpenSheet
 }
 
+/** Whether [this] is a sheet of the song sheets' one window ([SheetFlow]); the name dialogs, Move to trash and the Tone editor are their own windows. */
+val OpenSheet.inSheet: Boolean
+    get() = this is OpenSheet.Menu || this is OpenSheet.AddTo || this is OpenSheet.Lyrics || this is OpenSheet.Info || this is OpenSheet.More
+
 /** Which sheet a page has open ([SongSheetsHost] draws it). Main thread only. */
 @Stable
 class SongSheets(open: OpenSheet? = null) {
@@ -541,55 +545,80 @@ fun SongSheetsHost(sheets: SongSheets, ui: LibraryUi, onActed: () -> Unit = {}) 
         onActed()
         scope.launch { toasts.say(resources, action()) }
     }
-    when (open) {
-        is OpenSheet.Menu -> {
-            val song = songOf(open.song) ?: return Gone(sheets)
-            val rows = sheetRows(open.place, SongSheetSlots.coversTags != null, SongSheetSlots.removeFromQueue != null)
-            SongMenuSheet(
-                song = song,
-                ui = ui,
-                rows = rows,
-                onArtist = song.artist?.takeIf { library.artist(it) != null }?.let { name -> { sheets.close(); nav.open(Page.Artist(name), SheetReturn(at, open)) } },
-                onAlbum = albumPageOf(song, library)?.let { page -> { sheets.close(); nav.open(page, SheetReturn(at, open)) } },
-                bookmarks = SongSheetSlots.bookmarks?.let { slot -> { slot(song.ref, sheets::close) } },
-                onDismiss = sheets::close,
-            ) { row ->
-                when (row) {
-                    SheetRow.PLAY_NEXT -> done(actions.playNext(listOf(song.ref)))
-                    SheetRow.ADD_TO -> sheets.show(OpenSheet.AddTo(listOf(song.ref), null, ui.title(song)))
-                    SheetRow.FAVOURITE -> scope.launch { toasts.say(resources, actions.favourite(listOf(song.ref), ui.playlists.favouriteSongs)) }
-                    SheetRow.LYRICS -> sheets.show(OpenSheet.Lyrics(song.ref))
-                    SheetRow.MAKE_TONE -> sheets.show(OpenSheet.MakeTone(song.ref))
-                    SheetRow.SONG_INFO -> sheets.show(OpenSheet.Info(song.ref))
-                    SheetRow.EDIT_TAGS -> {
-                        sheets.close()
-                        nav.show(FullScreen.EditTags(listOf(song.ref)))
+    // The sheets lead to one another in one window; the dialogs and the Tone editor open over it once it has gone.
+    SheetFlow(open.takeIf { it.inSheet }, onDismiss = sheets::close) { step ->
+        when (step) {
+            is OpenSheet.Menu -> {
+                val song = songOf(step.song) ?: return@SheetFlow Gone(sheets)
+                val rows = sheetRows(step.place, SongSheetSlots.coversTags != null, SongSheetSlots.removeFromQueue != null)
+                SongMenuSheet(
+                    song = song,
+                    ui = ui,
+                    rows = rows,
+                    onArtist = song.artist?.takeIf { library.artist(it) != null }?.let { name -> { sheets.close(); nav.open(Page.Artist(name), SheetReturn(at, step)) } },
+                    onAlbum = albumPageOf(song, library)?.let { page -> { sheets.close(); nav.open(page, SheetReturn(at, step)) } },
+                    bookmarks = SongSheetSlots.bookmarks?.let { slot -> { slot(song.ref, sheets::close) } },
+                    onDismiss = sheets::close,
+                ) { row ->
+                    when (row) {
+                        SheetRow.PLAY_NEXT -> done(actions.playNext(listOf(song.ref)))
+                        SheetRow.ADD_TO -> sheets.show(OpenSheet.AddTo(listOf(song.ref), null, ui.title(song)))
+                        SheetRow.FAVOURITE -> scope.launch { toasts.say(resources, actions.favourite(listOf(song.ref), ui.playlists.favouriteSongs)) }
+                        SheetRow.LYRICS -> sheets.show(OpenSheet.Lyrics(song.ref))
+                        SheetRow.MAKE_TONE -> sheets.show(OpenSheet.MakeTone(song.ref))
+                        SheetRow.SONG_INFO -> sheets.show(OpenSheet.Info(song.ref))
+                        SheetRow.EDIT_TAGS -> {
+                            sheets.close()
+                            nav.show(FullScreen.EditTags(listOf(song.ref)))
+                        }
+                        SheetRow.COVERS_TAGS -> {
+                            sheets.close()
+                            SongSheetSlots.coversTags?.invoke(song, nav)
+                        }
+                        SheetRow.REMOVE_FROM_QUEUE -> (step.place as? SheetPlace.Queue)?.let { place ->
+                            done(SongSheetSlots.removeFromQueue?.invoke(place.id, place.position)?.let { undo -> Outcome(Said.RemovedFromQueue) { undo.undo(); true } })
+                        }
+                        SheetRow.REMOVE_FROM_PLAYLIST -> (step.place as? SheetPlace.Playlist)?.let { place ->
+                            ui.playlists.playlist(place.id)?.let { playlist -> doneLater { actions.removeFromPlaylist(playlist, place.position) } }
+                        }
+                        SheetRow.MOVE_TO_TRASH -> sheets.show(OpenSheet.Trash(listOf(song.ref)))
                     }
-                    SheetRow.COVERS_TAGS -> {
-                        sheets.close()
-                        SongSheetSlots.coversTags?.invoke(song, nav)
-                    }
-                    SheetRow.REMOVE_FROM_QUEUE -> (open.place as? SheetPlace.Queue)?.let { place ->
-                        done(SongSheetSlots.removeFromQueue?.invoke(place.id, place.position)?.let { undo -> Outcome(Said.RemovedFromQueue) { undo.undo(); true } })
-                    }
-                    SheetRow.REMOVE_FROM_PLAYLIST -> (open.place as? SheetPlace.Playlist)?.let { place ->
-                        ui.playlists.playlist(place.id)?.let { playlist -> doneLater { actions.removeFromPlaylist(playlist, place.position) } }
-                    }
-                    SheetRow.MOVE_TO_TRASH -> sheets.show(OpenSheet.Trash(listOf(song.ref)))
                 }
             }
-        }
-        is OpenSheet.AddTo -> AddToSheet(open.songs, addToTitle(open.songs, ui, library), ui, onDismiss = sheets::close) { target ->
-            when (target) {
-                AddTarget.PlayNext -> done(actions.playNext(open.songs))
-                is AddTarget.AddToQueue -> done(actions.addToEnd(target.playing, open.songs))
-                is AddTarget.Queue -> done(actions.addToQueue(target.queue, open.songs))
-                AddTarget.NewQueue -> sheets.show(OpenSheet.NewQueue(open.songs, open.source, open.name))
-                AddTarget.Favourites -> doneLater { actions.favourite(open.songs, ui.playlists.favouriteSongs) }
-                is AddTarget.ToPlaylist -> doneLater { actions.addToPlaylist(target.playlist, open.songs) }
-                AddTarget.NewPlaylist -> sheets.show(OpenSheet.NewPlaylist(open.songs))
+            is OpenSheet.AddTo -> AddToSheet(step.songs, addToTitle(step.songs, ui, library), ui, onDismiss = sheets::close) { target ->
+                when (target) {
+                    AddTarget.PlayNext -> done(actions.playNext(step.songs))
+                    is AddTarget.AddToQueue -> done(actions.addToEnd(target.playing, step.songs))
+                    is AddTarget.Queue -> done(actions.addToQueue(target.queue, step.songs))
+                    AddTarget.NewQueue -> sheets.show(OpenSheet.NewQueue(step.songs, step.source, step.name))
+                    AddTarget.Favourites -> doneLater { actions.favourite(step.songs, ui.playlists.favouriteSongs) }
+                    is AddTarget.ToPlaylist -> doneLater { actions.addToPlaylist(target.playlist, step.songs) }
+                    AddTarget.NewPlaylist -> sheets.show(OpenSheet.NewPlaylist(step.songs))
+                }
             }
+            is OpenSheet.Lyrics -> {
+                val song = songOf(step.song) ?: return@SheetFlow Gone(sheets)
+                LyricsSheet(entry = ui.ledger.entries[song.path], song = song, onPickLyrics = { sheets.close(); nav.open(Page.Check(song.path)) }, onDismiss = sheets::close)
+            }
+            is OpenSheet.Info -> SongInfoSheet(songOf(step.song) ?: return@SheetFlow Gone(sheets), ui, onDismiss = sheets::close)
+            is OpenSheet.More -> {
+                val songs = step.songs.mapNotNull(::songOf)
+                SelectionMoreSheet(
+                    count = songs.size,
+                    onInfo = songs.singleOrNull()?.let { song -> { sheets.show(OpenSheet.Info(song.ref)) } },
+                    onEditTags = {
+                        sheets.close()
+                        onActed()
+                        nav.show(FullScreen.EditTags(songs.map { it.ref }))
+                    },
+                    onTrash = { sheets.show(OpenSheet.Trash(songs.map { it.ref })) },
+                    onDismiss = sheets::close,
+                )
+            }
+            else -> Unit
         }
+    }
+    when (open) {
         is OpenSheet.NewQueue -> NameDialog(stringResource(R.string.lib_new_queue), open.name, R.drawable.ic_queue_music, onDismiss = sheets::close) { name ->
             done(actions.newQueue(name, open.songs, open.source))
         }
@@ -598,25 +627,6 @@ fun SongSheetsHost(sheets: SongSheets, ui: LibraryUi, onActed: () -> Unit = {}) 
             NameDialog(stringResource(R.string.lib_new_playlist), start, R.drawable.ic_playlist_add, onDismiss = sheets::close) { name ->
                 doneLater { actions.newPlaylist(name, open.songs) }
             }
-        }
-        is OpenSheet.Lyrics -> {
-            val song = songOf(open.song) ?: return Gone(sheets)
-            LyricsSheet(entry = ui.ledger.entries[song.path], song = song, onPickLyrics = { sheets.close(); nav.open(Page.Check(song.path)) }, onDismiss = sheets::close)
-        }
-        is OpenSheet.Info -> SongInfoSheet(songOf(open.song) ?: return Gone(sheets), ui, onDismiss = sheets::close)
-        is OpenSheet.More -> {
-            val songs = open.songs.mapNotNull(::songOf)
-            SelectionMoreSheet(
-                count = songs.size,
-                onInfo = songs.singleOrNull()?.let { song -> { sheets.show(OpenSheet.Info(song.ref)) } },
-                onEditTags = {
-                    sheets.close()
-                    onActed()
-                    nav.show(FullScreen.EditTags(songs.map { it.ref }))
-                },
-                onTrash = { sheets.show(OpenSheet.Trash(songs.map { it.ref })) },
-                onDismiss = sheets::close,
-            )
         }
         is OpenSheet.Trash -> SongTrashDialog(open.songs.size, onCancel = sheets::close) {
             sheets.close()
@@ -644,6 +654,7 @@ fun SongSheetsHost(sheets: SongSheets, ui: LibraryUi, onActed: () -> Unit = {}) 
                 scope.launch { toasts.say(resources, R.string.tones_saved_as, tone.name) }
             }, onClose = sheets::close)
         }
+        else -> Unit
     }
 }
 
@@ -745,7 +756,7 @@ fun SelectionHost(selection: SongSelection, list: List<Song>, loaded: Boolean, u
 /** The selection's bar in place of the Now bar and the dock: Play, Add, Favourite and More, each an icon over its word. */
 @Composable
 private fun SelectionBar(onPlay: () -> Unit, onAdd: () -> Unit, onFavourite: () -> Unit, onMore: () -> Unit) {
-    GlassSurface(null, CircleShape, Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+    GlassSurface(null, CircleShape, Modifier.fillMaxWidth().padding(horizontal = 12.dp), solid = true) {
         Row(Modifier.heightIn(min = 64.dp).padding(horizontal = 4.dp)) {
             SelectionVerb(R.drawable.ic_play_arrow_fill, R.string.lib_play, Modifier.weight(1f), onPlay)
             SelectionVerb(R.drawable.ic_playlist_add, R.string.lib_add, Modifier.weight(1f), onAdd)

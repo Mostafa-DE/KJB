@@ -5,6 +5,7 @@ import androidx.annotation.PluralsRes
 import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -122,23 +123,26 @@ fun ToolsScreen(rows: List<ToolRow>, onOpen: (Page) -> Unit) {
             LyrifyTopBar(title = { Text(stringResource(R.string.tools_title), maxLines = 1, overflow = TextOverflow.Ellipsis) }, under = under, backdrop = backdrop)
         },
     ) { padding ->
+        val reduced = LocalReducedMotion.current
         LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding() + 8.dp, bottom = padding.calculateBottomPadding() + 24.dp)) {
-            item(key = "banners") { LyricsBanners(lyrics, Modifier.padding(start = ScreenPadding, end = ScreenPadding, bottom = 12.dp)) }
+            item(key = "banners", contentType = "banners") { LyricsBanners(lyrics, Modifier.padding(start = ScreenPadding, end = ScreenPadding, bottom = 12.dp)) }
             if (failed > 0) {
-                item(key = "retry") {
-                    LyrifyCard(Modifier.fillMaxWidth().padding(start = ScreenPadding, end = ScreenPadding, bottom = 16.dp)) {
+                item(key = "retry", contentType = "retry") {
+                    LyrifyCard(rowMotion(reduced).fillMaxWidth().padding(start = ScreenPadding, end = ScreenPadding, bottom = 16.dp)) {
                         Box(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) { RetryRow(failed, lyrics.retrying, canRetry = lyrics.connected, lyrics.onRetryFailed) }
                     }
                 }
             }
-            item(key = "tools") {
-                GroupedRows {
+            item(key = "tools", contentType = "group") {
+                GroupedRows(rowMotion(reduced)) {
                     rows.filter { it.tool != Tool.SETTINGS }.forEachIndexed { index, row -> ToolRowView(row, first = index == 0) { onOpen(row.tool.page) } }
                 }
             }
-            item(key = "settings") {
-                Spacer(Modifier.height(16.dp))
-                GroupedRows { rows.filter { it.tool == Tool.SETTINGS }.forEach { row -> ToolRowView(row, first = true) { onOpen(row.tool.page) } } }
+            item(key = "settings", contentType = "settings") {
+                Column(rowMotion(reduced)) {
+                    Spacer(Modifier.height(16.dp))
+                    GroupedRows { rows.filter { it.tool == Tool.SETTINGS }.forEach { row -> ToolRowView(row, first = true) { onOpen(row.tool.page) } } }
+                }
             }
         }
     }

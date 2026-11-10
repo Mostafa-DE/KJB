@@ -266,6 +266,7 @@ private fun AlbumPage(ui: LibraryUi, library: Library, key: String) {
     var menu by remember { mutableStateOf(false) }
     val songs = remember(album, byTitle, ui.settings.library) { if (byTitle) sortSongs(album.songs, SortSongs.TITLE, ui.settings.library) else album.songs }
     val source = QueueSource(SourceKind.ALBUM, key, album.title)
+    val reduced = LocalReducedMotion.current
     SongListFrame(ui, songs, source, topBar = { under, backdrop ->
         CollectionTopBar(album.title, under, backdrop, ui, heart = FavouriteCollection(CollectionKind.ALBUM, key)) {
             Box {
@@ -279,17 +280,21 @@ private fun AlbumPage(ui: LibraryUi, library: Library, key: String) {
             }
         }
     }) { list ->
-        item(key = "hero") {
-            Hero(
-                album.title,
-                songsMeta(songs, album.year?.toString()),
-                art = { BigCover(album.songs.firstOrNull()) },
-                link = album.artist?.let { name -> { LinkText(name, library.artist(name)?.let { { nav.open(Page.Artist(name)) } }) } },
-                glow = album.songs.firstOrNull()?.let { SongArt(it.path, it.ref.mediaStoreId) },
-            )
+        item(key = "hero", contentType = "hero") {
+            Box(rowMotion(reduced)) {
+                Hero(
+                    album.title,
+                    songsMeta(songs, album.year?.toString()),
+                    art = { BigCover(album.songs.firstOrNull()) },
+                    link = album.artist?.let { name -> { LinkText(name, library.artist(name)?.let { { nav.open(Page.Artist(name)) } }) } },
+                    glow = album.songs.firstOrNull()?.let { SongArt(it.path, it.ref.mediaStoreId) },
+                )
+            }
         }
-        item(key = "header") {
-            ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll, sort = stringResource(if (byTitle) R.string.lib_sort_title else R.string.lib_sort_track), onSort = { sorting = true })
+        item(key = "header", contentType = "header") {
+            Box(rowMotion(reduced)) {
+                ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll, sort = stringResource(if (byTitle) R.string.lib_sort_title else R.string.lib_sort_track), onSort = { sorting = true })
+            }
         }
         songRows(list)
     }
@@ -306,6 +311,7 @@ private fun ArtistPage(ui: LibraryUi, library: Library, name: String) {
     var menu by remember { mutableStateOf(false) }
     val songs = remember(artist, byTitle, ui.settings.library) { if (byTitle) sortSongs(artist.songs, SortSongs.TITLE, ui.settings.library) else artist.songs }
     val source = QueueSource(SourceKind.ARTIST, name, name)
+    val reduced = LocalReducedMotion.current
     SongListFrame(ui, songs, source, topBar = { under, backdrop ->
         CollectionTopBar(name, under, backdrop, ui, heart = FavouriteCollection(CollectionKind.ARTIST, name)) {
             CollectionSlots.artistMenu?.let { rows ->
@@ -316,16 +322,18 @@ private fun ArtistPage(ui: LibraryUi, library: Library, name: String) {
             }
         }
     }) { list ->
-        item(key = "hero") {
+        item(key = "hero", contentType = "hero") {
             val face = artist.albums.firstOrNull()?.songs?.firstOrNull()
-            Hero(name, artistLine(artist), art = { ArtistAvatar(artist, size = AVATAR) }, glow = face?.let { SongArt(it.path, it.ref.mediaStoreId) })
+            Box(rowMotion(reduced)) { Hero(name, artistLine(artist), art = { ArtistAvatar(artist, size = AVATAR) }, glow = face?.let { SongArt(it.path, it.ref.mediaStoreId) }) }
         }
         if (artist.albums.isNotEmpty()) {
-            item(key = "albums heading") { ListHeading(stringResource(R.string.library_tab_albums), artist.albums.size) }
-            item(key = "albums") { AlbumsRow(artist.albums) }
+            item(key = "albums heading", contentType = "heading") { Box(rowMotion(reduced)) { ListHeading(stringResource(R.string.library_tab_albums), artist.albums.size) } }
+            item(key = "albums", contentType = "albums") { Box(rowMotion(reduced)) { AlbumsRow(artist.albums) } }
         }
-        item(key = "header") {
-            ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll, sort = stringResource(if (byTitle) R.string.lib_sort_title else R.string.lib_sort_album), onSort = { sorting = true })
+        item(key = "header", contentType = "header") {
+            Box(rowMotion(reduced)) {
+                ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll, sort = stringResource(if (byTitle) R.string.lib_sort_title else R.string.lib_sort_album), onSort = { sorting = true })
+            }
         }
         songRows(list)
     }
@@ -337,9 +345,10 @@ private fun ArtistPage(ui: LibraryUi, library: Library, name: String) {
 @Composable
 private fun AlbumsRow(albums: List<Album>) {
     val nav = LocalNavigator.current
+    val reduced = LocalReducedMotion.current
     LazyRow(contentPadding = PaddingValues(horizontal = ScreenPadding), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        items(albums, key = { it.key }) { album ->
-            AlbumCard(album.title, album.year?.toString(), album.songs.firstOrNull(), Modifier.width(ALBUM_CARD)) { nav.open(Page.Album(album.key)) }
+        items(albums, key = { it.key }, contentType = { "album" }) { album ->
+            AlbumCard(album.title, album.year?.toString(), album.songs.firstOrNull(), rowMotion(reduced).width(ALBUM_CARD)) { nav.open(Page.Album(album.key)) }
         }
     }
 }
@@ -350,21 +359,22 @@ private fun FolderPage(ui: LibraryUi, library: Library, path: String) {
     val folder = library.folder(path)?.takeIf { path.isNotEmpty() } ?: return MissingPage(ui)
     val songs = folder.allSongs
     val source = QueueSource(SourceKind.FOLDER, path, folder.name)
+    val reduced = LocalReducedMotion.current
     SongListFrame(ui, songs, source, topBar = { under, backdrop ->
         CollectionTopBar(folder.name, under, backdrop, ui, heart = FavouriteCollection(CollectionKind.FOLDER, path), alwaysTitle = true)
     }) { list ->
-        item(key = "path") {
+        item(key = "path", contentType = "path") {
             Text(
                 path.split('/').joinToString(" › "),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
                 overflow = TextOverflow.MiddleEllipsis,
-                modifier = Modifier.padding(horizontal = ScreenPadding + 4.dp),
+                modifier = rowMotion(reduced).padding(horizontal = ScreenPadding + 4.dp),
             )
         }
-        item(key = "header") { ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll) }
-        folderRows(folder.rows)
+        item(key = "header", contentType = "header") { Box(rowMotion(reduced)) { ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll) } }
+        folderRows(folder.rows, reduced)
         songRows(list, folder.songs)
     }
 }
@@ -373,10 +383,11 @@ private fun FolderPage(ui: LibraryUi, library: Library, path: String) {
 @Composable
 private fun GenrePage(ui: LibraryUi, library: Library, name: String) {
     val genre = library.genre(name) ?: return MissingPage(ui)
+    val reduced = LocalReducedMotion.current
     SongListFrame(ui, genre.songs, QueueSource(SourceKind.GENRE, name, name), topBar = { under, backdrop ->
         CollectionTopBar(name, under, backdrop, ui, alwaysTitle = true)
     }) { list ->
-        item(key = "header") { ListHeader(genre.songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll) }
+        item(key = "header", contentType = "header") { Box(rowMotion(reduced)) { ListHeader(genre.songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll) } }
         songRows(list)
     }
 }
@@ -385,10 +396,11 @@ private fun GenrePage(ui: LibraryUi, library: Library, name: String) {
 @Composable
 private fun UnknownAlbumPage(ui: LibraryUi, library: Library) {
     val title = stringResource(R.string.lib_unknown_album)
+    val reduced = LocalReducedMotion.current
     SongListFrame(ui, library.unknownAlbum, QueueSource(SourceKind.ALBUM, "", title), topBar = { under, backdrop ->
         CollectionTopBar(title, under, backdrop, ui, alwaysTitle = true)
     }) { list ->
-        item(key = "header") { ListHeader(library.unknownAlbum.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll) }
+        item(key = "header", contentType = "header") { Box(rowMotion(reduced)) { ListHeader(library.unknownAlbum.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll) } }
         songRows(list)
     }
 }
@@ -416,6 +428,7 @@ internal fun PlaylistPage(ui: LibraryUi, library: Library, id: String) {
         if (byTitle) listed.sortedWith(compareBy(java.text.Collator.getInstance()) { ui.title(it.second) }) else listed
     }
     val songs = entries.map { it.second }
+    val reduced = LocalReducedMotion.current
     SongListFrame(ui, songs, QueueSource(SourceKind.PLAYLIST, id, playlist.name), topBar = { under, backdrop ->
         CollectionTopBar(playlist.name, under, backdrop, ui, heart = FavouriteCollection(CollectionKind.PLAYLIST, id)) {
             Box {
@@ -434,11 +447,15 @@ internal fun PlaylistPage(ui: LibraryUi, library: Library, id: String) {
             }
         }
     }) { list ->
-        item(key = "hero") { Hero(playlist.name, songsMeta(songs), art = { PlaylistTile(playlist, HERO) }, glow = songs.firstOrNull()?.let { SongArt(it.path, it.ref.mediaStoreId) }) }
-        item(key = "header") {
-            ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll, sort = stringResource(if (byTitle) R.string.lib_sort_title else R.string.lib_your_order), onSort = { sorting = true })
+        item(key = "hero", contentType = "hero") {
+            Box(rowMotion(reduced)) { Hero(playlist.name, songsMeta(songs), art = { PlaylistTile(playlist, HERO) }, glow = songs.firstOrNull()?.let { SongArt(it.path, it.ref.mediaStoreId) }) }
         }
-        if (songs.isEmpty()) item(key = "empty") { EmptyState(EmptyArt.Glyph, stringResource(R.string.songs_empty_title), text = stringResource(R.string.lib_playlist_empty)) }
+        item(key = "header", contentType = "header") {
+            Box(rowMotion(reduced)) {
+                ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll, sort = stringResource(if (byTitle) R.string.lib_sort_title else R.string.lib_your_order), onSort = { sorting = true })
+            }
+        }
+        if (songs.isEmpty()) item(key = "empty", contentType = "empty") { EmptyState(EmptyArt.Glyph, stringResource(R.string.songs_empty_title), rowMotion(reduced), text = stringResource(R.string.lib_playlist_empty)) }
         songRows(list, place = { at -> SheetPlace.Playlist(id, entries[at].first) }, repeats = true)
     }
     if (sorting) OrderSheet(R.string.lib_your_order, byTitle, { byTitle = it }) { sorting = false }
@@ -502,17 +519,20 @@ private fun BuiltInPage(ui: LibraryUi, library: Library, list: BuiltInList) {
             else -> lastPlayedText(p.lastPlayedAt)
         }
     }
+    val reduced = LocalReducedMotion.current
     SongListFrame(ui, songs, QueueSource(kind, list.name, ""), topBar = { under, backdrop -> CollectionTopBar(title, under, backdrop, ui) }, loaded = rows != null) { songList ->
-        item(key = "hero") { Hero(title, songsMeta(songs), art = { BuiltInTile(list, HERO) }) }
+        item(key = "hero", contentType = "hero") { Box(rowMotion(reduced)) { Hero(title, songsMeta(songs), art = { BuiltInTile(list, HERO) }) } }
         if (list == BuiltInList.MOST_PLAYED) {
-            item(key = "listening") { ListeningCard(Modifier.padding(start = ScreenPadding, end = ScreenPadding, top = 8.dp, bottom = 4.dp)) }
+            item(key = "listening", contentType = "listening") { ListeningCard(rowMotion(reduced).padding(start = ScreenPadding, end = ScreenPadding, top = 8.dp, bottom = 4.dp)) }
         }
-        item(key = "header") {
-            ListHeader(songs.size, R.plurals.lib_noun_songs, songList::shuffle, { songList.play() }, onAddAll = songList::addAll, sort = stringResource(if (byTitle) R.string.lib_sort_title else own), onSort = { sorting = true })
+        item(key = "header", contentType = "header") {
+            Box(rowMotion(reduced)) {
+                ListHeader(songs.size, R.plurals.lib_noun_songs, songList::shuffle, { songList.play() }, onAddAll = songList::addAll, sort = stringResource(if (byTitle) R.string.lib_sort_title else own), onSort = { sorting = true })
+            }
         }
         if (rows != null && songs.isEmpty()) {
-            item(key = "empty") {
-                EmptyState(EmptyArt.Glyph, stringResource(R.string.songs_empty_title), text = stringResource(if (list == BuiltInList.RECENTLY_ADDED) R.string.lib_added_empty else R.string.lib_played_empty))
+            item(key = "empty", contentType = "empty") {
+                EmptyState(EmptyArt.Glyph, stringResource(R.string.songs_empty_title), rowMotion(reduced), text = stringResource(if (list == BuiltInList.RECENTLY_ADDED) R.string.lib_added_empty else R.string.lib_played_empty))
             }
         }
         songRows(songList, note = { notes[it.path] })
@@ -535,27 +555,32 @@ private fun FavouritesPage(ui: LibraryUi, library: Library) {
     val others = FavouritesTab.entries.filter { it != FavouritesTab.SONGS }.sumOf { favourites.count(it) }
     var picked by rememberSaveable { mutableStateOf<FavouritesTab?>(null) }
     val shown = favourites.shown(picked ?: ui.settings.nav.favouritesTab)
+    val reduced = LocalReducedMotion.current
     SongListFrame(ui, songs, QueueSource(SourceKind.FAVOURITES, "favourites", ""), topBar = { under, backdrop -> CollectionTopBar(title, under, backdrop, ui) }) { list ->
-        item(key = "hero") {
-            Hero(title, songsMeta(songs, null).let { if (others > 0) stringResource(R.string.lib_after, it, pluralStringResource(R.plurals.lib_more_count, others, others)) else it }, art = { BuiltInTile(BuiltInList.FAVOURITES, HERO) })
+        item(key = "hero", contentType = "hero") {
+            Box(rowMotion(reduced)) {
+                Hero(title, songsMeta(songs, null).let { if (others > 0) stringResource(R.string.lib_after, it, pluralStringResource(R.plurals.lib_more_count, others, others)) else it }, art = { BuiltInTile(BuiltInList.FAVOURITES, HERO) })
+            }
         }
-        item(key = "header") { ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll) }
+        item(key = "header", contentType = "header") { Box(rowMotion(reduced)) { ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll) } }
         val tabs = favourites.tabs
         if (tabs.isNotEmpty()) {
-            item(key = "tabs") {
-                LibraryTabsRow(tabs.map { stringResource(R.string.lib_tab_count, stringResource(it.words), formatCount(favourites.count(it))) }, tabs.indexOf(shown)) { at ->
-                    val chosen = tabs[at]
-                    picked = chosen
-                    change { if (it.nav.favouritesTab == chosen) it else it.copy(nav = it.nav.copy(favouritesTab = chosen)) }
+            item(key = "tabs", contentType = "tabs") {
+                Box(rowMotion(reduced)) {
+                    LibraryTabsRow(tabs.map { stringResource(R.string.lib_tab_count, stringResource(it.words), formatCount(favourites.count(it))) }, tabs.indexOf(shown)) { at ->
+                        val chosen = tabs[at]
+                        picked = chosen
+                        change { if (it.nav.favouritesTab == chosen) it else it.copy(nav = it.nav.copy(favouritesTab = chosen)) }
+                    }
                 }
             }
         } else if (shown != null && shown != FavouritesTab.SONGS) {
-            item(key = "heading") { ListHeading(stringResource(shown.words), favourites.count(shown)) }
+            item(key = "heading", contentType = "heading") { Box(rowMotion(reduced)) { ListHeading(stringResource(shown.words), favourites.count(shown)) } }
         }
         when (shown) {
-            null -> item(key = "empty") { EmptyState(EmptyArt.Icon(R.drawable.ic_favorite), stringResource(R.string.lib_fav_empty_title), text = stringResource(R.string.lib_fav_empty)) }
+            null -> item(key = "empty", contentType = "empty") { EmptyState(EmptyArt.Icon(R.drawable.ic_favorite), stringResource(R.string.lib_fav_empty_title), rowMotion(reduced), text = stringResource(R.string.lib_fav_empty)) }
             FavouritesTab.SONGS -> songRows(list)
-            else -> favouriteRows(shown, favourites, library)
+            else -> favouriteRows(shown, favourites, library, reduced)
         }
     }
 }
@@ -602,30 +627,30 @@ internal class Favourites(
  * One Favourites tab other than Songs, whole, each item opening its page: albums as Library's two-column grid, artists
  * with their round images, folders and playlists as rows.
  */
-private fun LazyListScope.favouriteRows(tab: FavouritesTab, favourites: Favourites, library: Library) {
+private fun LazyListScope.favouriteRows(tab: FavouritesTab, favourites: Favourites, library: Library, reduced: Boolean) {
     when (tab) {
         FavouritesTab.SONGS -> Unit
-        FavouritesTab.ALBUMS -> items(favourites.albums.chunked(2), key = { "albums ${it.first().key}" }) { pair ->
+        FavouritesTab.ALBUMS -> items(favourites.albums.chunked(2), key = { "albums ${it.first().key}" }, contentType = { "albums" }) { pair ->
             val nav = LocalNavigator.current
             // Rows fade and move into place when the tab changes or a favourite comes or goes.
-            Row(Modifier.animateItem().fillMaxWidth().padding(horizontal = ScreenPadding, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+            Row(rowMotion(reduced).fillMaxWidth().padding(horizontal = ScreenPadding, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                 pair.forEach { album -> AlbumCard(album.title, album.artist, album.songs.firstOrNull(), Modifier.weight(1f)) { nav.open(Page.Album(album.key)) } }
                 if (pair.size == 1) Spacer(Modifier.weight(1f))
             }
         }
-        FavouritesTab.ARTISTS -> items(favourites.artists, key = { "artist ${it.name}" }) { artist ->
+        FavouritesTab.ARTISTS -> items(favourites.artists, key = { "artist ${it.name}" }, contentType = { "row" }) { artist ->
             val nav = LocalNavigator.current
-            NavRow(artist.name, artistLine(artist), Modifier.animateItem(), lead = { ArtistAvatar(artist) }) { nav.open(Page.Artist(artist.name)) }
+            NavRow(artist.name, artistLine(artist), rowMotion(reduced), lead = { ArtistAvatar(artist) }) { nav.open(Page.Artist(artist.name)) }
         }
-        FavouritesTab.FOLDERS -> items(favourites.folders, key = { "folder ${it.path}" }) { folder ->
+        FavouritesTab.FOLDERS -> items(favourites.folders, key = { "folder ${it.path}" }, contentType = { "row" }) { folder ->
             val nav = LocalNavigator.current
             val sub = stringResource(R.string.lib_after, pluralStringResource(R.plurals.lib_songs, folder.allSongs.size, folder.allSongs.size), folder.path)
-            NavRow(folder.name, sub, Modifier.animateItem(), lead = { Tile(R.drawable.ic_folder_fill) }) { nav.open(Page.Folder(folder.path)) }
+            NavRow(folder.name, sub, rowMotion(reduced), lead = { Tile(R.drawable.ic_folder_fill) }) { nav.open(Page.Folder(folder.path)) }
         }
-        FavouritesTab.PLAYLISTS -> items(favourites.playlists, key = { "playlist ${it.id}" }) { playlist ->
+        FavouritesTab.PLAYLISTS -> items(favourites.playlists, key = { "playlist ${it.id}" }, contentType = { "row" }) { playlist ->
             val nav = LocalNavigator.current
             val count = library.listed(playlist.songs).size
-            NavRow(playlist.name, pluralStringResource(R.plurals.lib_songs, count, count), Modifier.animateItem(), lead = { PlaylistTile(playlist) }) { nav.open(Page.Playlist(playlist.id)) }
+            NavRow(playlist.name, pluralStringResource(R.plurals.lib_songs, count, count), rowMotion(reduced), lead = { PlaylistTile(playlist) }) { nav.open(Page.Playlist(playlist.id)) }
         }
     }
 }

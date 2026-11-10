@@ -31,6 +31,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -169,7 +170,9 @@ fun PlaylistsPage() {
             )
         },
     ) { padding ->
-        if (library == null) LibraryUnavailable(ui.state, Modifier.padding(padding)) else PlaylistsTab(ui, library, padding, nav.state.reselectsOf(DockTab.PLAYLISTS), sheets)
+        FadeThrough(library, Modifier.fillMaxSize(), kind = { it == null }) { shown ->
+            if (shown == null) LibraryUnavailable(ui.state, Modifier.padding(padding)) else PlaylistsTab(ui, shown, padding, nav.state.reselectsOf(DockTab.PLAYLISTS), sheets)
+        }
     }
     SongSheetsHost(sheets, ui)
     M3uImportSheet(m3u)
@@ -241,19 +244,21 @@ private fun SongsTab(ui: LibraryUi, library: Library, reselect: Int, topBar: @Co
     var sorting by rememberSaveable { mutableStateOf(false) }
     ReselectToTop(reselect) { state.animateScrollToItem(0) }
     val source = QueueSource(SourceKind.SONGS, "songs:${settings.songSort}:${settings.songFilter}", "")
+    val reduced = LocalReducedMotion.current
     SongListFrame(ui, songs, source, topBar, state, loaded = listed != null) { list ->
-        item(key = "favourites") { FavouritesRowView(ui, library) }
-        item(key = "header") {
-            ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, sort = songsOrder(settings), onSort = { sorting = true })
+        item(key = "favourites", contentType = "favourites") { Box(rowMotion(reduced)) { FavouritesRowView(ui, library) } }
+        item(key = "header", contentType = "header") {
+            Box(rowMotion(reduced)) { ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, sort = songsOrder(settings), onSort = { sorting = true }) }
         }
         if (listed != null && songs.isEmpty()) {
-            item(key = "empty") {
+            item(key = "empty", contentType = "empty") {
                 if (library.songs.isEmpty()) {
-                    EmptyState(EmptyArt.Glyph, stringResource(R.string.songs_empty_title), text = stringResource(R.string.lib_no_songs))
+                    EmptyState(EmptyArt.Glyph, stringResource(R.string.songs_empty_title), rowMotion(reduced), text = stringResource(R.string.lib_no_songs))
                 } else {
                     EmptyState(
                         EmptyArt.Icon(R.drawable.ic_search_off),
                         stringResource(R.string.songs_no_match),
+                        rowMotion(reduced),
                         action = stringResource(R.string.lib_show_all),
                         onAction = { change { it.copy(library = it.library.copy(songFilter = LyricsFilter.ALL)) } },
                     )
@@ -261,7 +266,7 @@ private fun SongsTab(ui: LibraryUi, library: Library, reselect: Int, topBar: @Co
             }
         }
         sections.forEach { (section, start, slice) ->
-            stickyHeader(key = "section $start") { SectionChip(sectionWords(section)) }
+            stickyHeader(key = "section $start", contentType = "section") { SectionChip(sectionWords(section)) }
             songRows(list, slice, offset = start)
         }
     }
@@ -283,7 +288,6 @@ private fun SongsTab(ui: LibraryUi, library: Library, reselect: Int, topBar: @Co
                         role = Role.RadioButton,
                         count = counts[filter] ?: 0,
                     ) {
-                        LyricsMarkDot(filter.mark)
                         Text(stringResource(filter.words), maxLines = 1)
                     }
                 }
@@ -376,13 +380,6 @@ private val LyricsFilter.short: Int
         else -> words
     }
 
-private val LyricsFilter.mark: LyricsMark
-    get() = when (this) {
-        LyricsFilter.SYNCED -> LyricsMark.SYNCED
-        LyricsFilter.PLAIN -> LyricsMark.PLAIN
-        else -> LyricsMark.NONE
-    }
-
 /** Albums: a two-column grid of covers, "Unknown album" last; Play plays them all, album by album. */
 @Composable
 private fun AlbumsTab(ui: LibraryUi, library: Library, padding: PaddingValues, reselect: Int) {
@@ -396,6 +393,7 @@ private fun AlbumsTab(ui: LibraryUi, library: Library, padding: PaddingValues, r
     val state = rememberLazyGridState()
     var sorting by rememberSaveable { mutableStateOf(false) }
     ReselectToTop(reselect) { state.animateScrollToItem(0) }
+    val reduced = LocalReducedMotion.current
     LazyVerticalGrid(
         columns = GridCells.Fixed(2),
         state = state,
@@ -404,26 +402,28 @@ private fun AlbumsTab(ui: LibraryUi, library: Library, padding: PaddingValues, r
         horizontalArrangement = Arrangement.spacedBy(14.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        item(key = "header", span = { GridItemSpan(maxLineSpan) }) {
-            ListHeader(
-                albums.size + if (library.unknownAlbum.isEmpty()) 0 else 1,
-                R.plurals.lib_noun_albums,
-                onShuffle = { playback.shuffle(songs.map { it.ref }, source) },
-                onPlay = { playback.play(songs.map { it.ref }, 0, source) },
-                songs = songs.size,
-                sort = stringResource(order.words),
-                onSort = { sorting = true },
-                gutter = 0.dp,
-            )
+        item(key = "header", span = { GridItemSpan(maxLineSpan) }, contentType = "header") {
+            Box(rowMotion(reduced)) {
+                ListHeader(
+                    albums.size + if (library.unknownAlbum.isEmpty()) 0 else 1,
+                    R.plurals.lib_noun_albums,
+                    onShuffle = { playback.shuffle(songs.map { it.ref }, source) },
+                    onPlay = { playback.play(songs.map { it.ref }, 0, source) },
+                    songs = songs.size,
+                    sort = stringResource(order.words),
+                    onSort = { sorting = true },
+                    gutter = 0.dp,
+                )
+            }
         }
-        item(key = "same", span = { GridItemSpan(maxLineSpan) }) { SameNamesLine(NameKind.ALBUM, library) }
-        items(albums, key = { it.key }) { album ->
-            AlbumCard(album.title, album.artist, album.songs.firstOrNull()) { nav.open(Page.Album(album.key)) }
+        item(key = "same", span = { GridItemSpan(maxLineSpan) }, contentType = "same") { SameNamesLine(NameKind.ALBUM, library, rowMotion(reduced)) }
+        items(albums, key = { it.key }, contentType = { "album" }) { album ->
+            AlbumCard(album.title, album.artist, album.songs.firstOrNull(), rowMotion(reduced)) { nav.open(Page.Album(album.key)) }
         }
         if (library.unknownAlbum.isNotEmpty()) {
-            item(key = "unknown") {
+            item(key = "unknown", contentType = "album") {
                 val count = library.unknownAlbum.size
-                AlbumCard(stringResource(R.string.lib_unknown_album), pluralStringResource(R.plurals.lib_songs, count, count), null) { nav.open(Page.UnknownAlbum) }
+                AlbumCard(stringResource(R.string.lib_unknown_album), pluralStringResource(R.plurals.lib_songs, count, count), null, rowMotion(reduced)) { nav.open(Page.UnknownAlbum) }
             }
         }
     }
@@ -459,22 +459,25 @@ private fun ArtistsTab(ui: LibraryUi, library: Library, padding: PaddingValues, 
     val state = rememberLazyListState()
     var sorting by rememberSaveable { mutableStateOf(false) }
     ReselectToTop(reselect) { state.animateScrollToItem(0) }
+    val reduced = LocalReducedMotion.current
     LazyColumn(state = state, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = padding.calculateBottomPadding() + 16.dp)) {
-        item(key = "header") {
-            ListHeader(
-                artists.size,
-                R.plurals.lib_noun_artists,
-                onShuffle = { playback.shuffle(songs.map { it.ref }, source) },
-                onPlay = { playback.play(songs.map { it.ref }, 0, source) },
-                songs = songs.size,
-                sort = stringResource(if (order == SortArtists.NAME) R.string.lib_sort_name else R.string.lib_sort_most_songs),
-                onSort = { sorting = true },
-            )
+        item(key = "header", contentType = "header") {
+            Box(rowMotion(reduced)) {
+                ListHeader(
+                    artists.size,
+                    R.plurals.lib_noun_artists,
+                    onShuffle = { playback.shuffle(songs.map { it.ref }, source) },
+                    onPlay = { playback.play(songs.map { it.ref }, 0, source) },
+                    songs = songs.size,
+                    sort = stringResource(if (order == SortArtists.NAME) R.string.lib_sort_name else R.string.lib_sort_most_songs),
+                    onSort = { sorting = true },
+                )
+            }
         }
-        item(key = "same") { SameNamesLine(NameKind.ARTIST, library, Modifier.padding(horizontal = ScreenPadding)) }
+        item(key = "same", contentType = "same") { SameNamesLine(NameKind.ARTIST, library, rowMotion(reduced).padding(horizontal = ScreenPadding)) }
         // Prefixed: an artist named "header" or "same" would take a fixed row's key, and two rows with one key crash the list.
-        items(artists, key = { "artist ${it.name}" }) { artist ->
-            NavRow(artist.name, artistLine(artist), lead = { ArtistAvatar(artist) }) { nav.open(Page.Artist(artist.name)) }
+        items(artists, key = { "artist ${it.name}" }, contentType = { "row" }) { artist ->
+            NavRow(artist.name, artistLine(artist), rowMotion(reduced), lead = { ArtistAvatar(artist) }) { nav.open(Page.Artist(artist.name)) }
         }
     }
     if (sorting) {
@@ -505,22 +508,24 @@ private fun FoldersTab(library: Library, padding: PaddingValues, reselect: Int) 
     val source = QueueSource(SourceKind.FOLDER, "", stringResource(R.string.library_tab_folders))
     val state = rememberLazyListState()
     ReselectToTop(reselect) { state.animateScrollToItem(0) }
+    val reduced = LocalReducedMotion.current
     LazyColumn(state = state, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = padding.calculateBottomPadding() + 16.dp)) {
-        item(key = "header") {
-            ListHeader(rows.size, R.plurals.lib_noun_folders, { playback.shuffle(songs.map { it.ref }, source) }, { playback.play(songs.map { it.ref }, 0, source) }, songs = songs.size)
+        item(key = "header", contentType = "header") {
+            Box(rowMotion(reduced)) { ListHeader(rows.size, R.plurals.lib_noun_folders, { playback.shuffle(songs.map { it.ref }, source) }, { playback.play(songs.map { it.ref }, 0, source) }, songs = songs.size) }
         }
-        folderRows(rows)
+        folderRows(rows, reduced)
     }
 }
 
 /** A folder list's rows: "Music › Rips" for a collapsed chain, with how many songs it holds below it. */
-internal fun LazyListScope.folderRows(rows: List<FolderRow>) {
-    items(rows, key = { "folder ${it.folder.path}" }) { row ->
+internal fun LazyListScope.folderRows(rows: List<FolderRow>, reduced: Boolean) {
+    items(rows, key = { "folder ${it.folder.path}" }, contentType = { "row" }) { row ->
         val nav = LocalNavigator.current
         val count = row.folder.allSongs.size
         NavRow(
             row.names.joinToString(" › "),
             pluralStringResource(R.plurals.lib_songs, count, count),
+            rowMotion(reduced),
             lead = { Tile(R.drawable.ic_folder_fill) },
         ) { nav.open(Page.Folder(row.folder.path)) }
     }
@@ -548,26 +553,27 @@ private fun PlaylistsTab(ui: LibraryUi, library: Library, padding: PaddingValues
     val source = QueueSource(SourceKind.SONGS, "tab:playlists", stringResource(R.string.library_tab_playlists))
     val state = rememberLazyListState()
     ReselectToTop(reselect) { state.animateScrollToItem(0) }
+    val reduced = LocalReducedMotion.current
     LazyColumn(state = state, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = padding.calculateBottomPadding() + 16.dp)) {
-        item(key = "header") {
-            ListHeader(playlists.size + BuiltInList.entries.size, R.plurals.lib_noun_playlists, { playback.shuffle(songs.map { it.ref }, source) }, { playback.play(songs.map { it.ref }, 0, source) }, songs = songs.size)
+        item(key = "header", contentType = "header") {
+            Box(rowMotion(reduced)) { ListHeader(playlists.size + BuiltInList.entries.size, R.plurals.lib_noun_playlists, { playback.shuffle(songs.map { it.ref }, source) }, { playback.play(songs.map { it.ref }, 0, source) }, songs = songs.size) }
         }
-        item(key = "queues") {
-            NavRow(stringResource(R.string.lib_queues), pluralStringResource(R.plurals.lib_saved, saved, saved), lead = { Tile(R.drawable.ic_queue_music, brand.highlightContainer, brand.onHighlightContainer) }) {
+        item(key = "queues", contentType = "row") {
+            NavRow(stringResource(R.string.lib_queues), pluralStringResource(R.plurals.lib_saved, saved, saved), rowMotion(reduced), lead = { Tile(R.drawable.ic_queue_music, brand.highlightContainer, brand.onHighlightContainer) }) {
                 nav.open(Page.Queues)
             }
         }
-        item(key = "built heading") { ListHeading(stringResource(R.string.lib_built_for_you)) }
-        item(key = "favourites") { BuiltInRow(BuiltInList.FAVOURITES, favourites.size) }
-        item(key = "most") { BuiltInRow(BuiltInList.MOST_PLAYED, most) }
-        item(key = "played") { BuiltInRow(BuiltInList.RECENTLY_PLAYED, played) }
-        item(key = "added") { BuiltInRow(BuiltInList.RECENTLY_ADDED, added) }
-        item(key = "yours heading") { ListHeading(stringResource(R.string.lib_your_playlists)) }
-        items(playlists, key = { "playlist ${it.id}" }) { playlist ->
+        item(key = "built heading", contentType = "heading") { Box(rowMotion(reduced)) { ListHeading(stringResource(R.string.lib_built_for_you)) } }
+        item(key = "favourites", contentType = "built in") { Box(rowMotion(reduced)) { BuiltInRow(BuiltInList.FAVOURITES, favourites.size) } }
+        item(key = "most", contentType = "built in") { Box(rowMotion(reduced)) { BuiltInRow(BuiltInList.MOST_PLAYED, most) } }
+        item(key = "played", contentType = "built in") { Box(rowMotion(reduced)) { BuiltInRow(BuiltInList.RECENTLY_PLAYED, played) } }
+        item(key = "added", contentType = "built in") { Box(rowMotion(reduced)) { BuiltInRow(BuiltInList.RECENTLY_ADDED, added) } }
+        item(key = "yours heading", contentType = "heading") { Box(rowMotion(reduced)) { ListHeading(stringResource(R.string.lib_your_playlists)) } }
+        items(playlists, key = { "playlist ${it.id}" }, contentType = { "row" }) { playlist ->
             val count = library.listed(playlist.songs).size
-            NavRow(playlist.name, pluralStringResource(R.plurals.lib_songs, count, count), lead = { PlaylistTile(playlist) }) { nav.open(Page.Playlist(playlist.id)) }
+            NavRow(playlist.name, pluralStringResource(R.plurals.lib_songs, count, count), rowMotion(reduced), lead = { PlaylistTile(playlist) }) { nav.open(Page.Playlist(playlist.id)) }
         }
-        item(key = "new") { NewRow(stringResource(R.string.lib_new_playlist)) { sheets.show(OpenSheet.NewPlaylist(emptyList())) } }
+        item(key = "new", contentType = "new") { Box(rowMotion(reduced)) { NewRow(stringResource(R.string.lib_new_playlist)) { sheets.show(OpenSheet.NewPlaylist(emptyList())) } } }
     }
 }
 
@@ -608,12 +614,13 @@ private fun GenresTab(library: Library, padding: PaddingValues, reselect: Int) {
     val source = QueueSource(SourceKind.SONGS, "tab:genres", stringResource(R.string.library_tab_genres))
     val state = rememberLazyListState()
     ReselectToTop(reselect) { state.animateScrollToItem(0) }
+    val reduced = LocalReducedMotion.current
     LazyColumn(state = state, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = padding.calculateBottomPadding() + 16.dp)) {
-        item(key = "header") {
-            ListHeader(library.genres.size, R.plurals.lib_noun_genres, { playback.shuffle(songs.map { it.ref }, source) }, { playback.play(songs.map { it.ref }, 0, source) }, songs = songs.size)
+        item(key = "header", contentType = "header") {
+            Box(rowMotion(reduced)) { ListHeader(library.genres.size, R.plurals.lib_noun_genres, { playback.shuffle(songs.map { it.ref }, source) }, { playback.play(songs.map { it.ref }, 0, source) }, songs = songs.size) }
         }
-        items(library.genres, key = { "genre ${it.name}" }) { genre ->
-            NavRow(genre.name, pluralStringResource(R.plurals.lib_songs, genre.songs.size, genre.songs.size), lead = { Tile(R.drawable.ic_category) }) { nav.open(Page.Genre(genre.name)) }
+        items(library.genres, key = { "genre ${it.name}" }, contentType = { "row" }) { genre ->
+            NavRow(genre.name, pluralStringResource(R.plurals.lib_songs, genre.songs.size, genre.songs.size), rowMotion(reduced), lead = { Tile(R.drawable.ic_category) }) { nav.open(Page.Genre(genre.name)) }
         }
     }
 }
@@ -633,9 +640,10 @@ fun SongsPage(page: Page.Songs) {
         sortSongs(matching, SortSongs.TITLE, ui.settings.library)
     }
     val source = QueueSource(SourceKind.SONGS, "status:${page.group}:${page.status}", title)
+    val reduced = LocalReducedMotion.current
     SongListFrame(ui, songs, source, topBar = { under, backdrop -> BackTopBar(title, under, backdrop) { nav.back() } }, loaded = library != null) { list ->
-        item(key = "header") { ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll) }
-        if (library != null && songs.isEmpty()) item(key = "empty") { EmptyState(EmptyArt.Icon(R.drawable.ic_search_off), stringResource(R.string.songs_no_match)) }
+        item(key = "header", contentType = "header") { Box(rowMotion(reduced)) { ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll) } }
+        if (library != null && songs.isEmpty()) item(key = "empty", contentType = "empty") { EmptyState(EmptyArt.Icon(R.drawable.ic_search_off), stringResource(R.string.songs_no_match), rowMotion(reduced)) }
         songRows(list)
     }
 }
@@ -665,17 +673,18 @@ fun FoldersToSkipPage() {
     val skipped = ui.settings.library.foldersToSkip
     val folders = remember(ui.library, skipped) { skipChoices(ui.library?.all.orEmpty(), skipped) }
     PageFrame(topBar = { under, backdrop -> BackTopBar(stringResource(R.string.set_skip), under, backdrop) { nav.back() } }) { padding ->
+        val reduced = LocalReducedMotion.current
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = padding.calculateBottomPadding() + 24.dp)) {
-            item(key = "sentence") {
+            item(key = "sentence", contentType = "sentence") {
                 Text(
                     stringResource(R.string.lib_skip_sentence),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(start = ScreenPadding + 4.dp, end = ScreenPadding, top = 4.dp, bottom = 12.dp),
+                    modifier = rowMotion(reduced).padding(start = ScreenPadding + 4.dp, end = ScreenPadding, top = 4.dp, bottom = 12.dp),
                 )
             }
-            item(key = "folders") {
-                GroupedRows {
+            item(key = "folders", contentType = "group") {
+                GroupedRows(rowMotion(reduced)) {
                     folders.forEachIndexed { at, (folder, count) ->
                         val on = skipped.any { it.trim('/').equals(folder, ignoreCase = true) }
                         GroupedRow(
@@ -745,7 +754,7 @@ fun favouritesRow(songs: Int): FavouritesRow = FavouritesRow(
     Page.BuiltIn(BuiltInList.FAVOURITES),
 )
 
-/** A song row's lyrics mark, which never relies on colour alone: a filled dot for synced lyrics, a ring for plain, nothing for none. */
+/** Whether a song has lyrics, as its row and the Songs filter see it: synced, plain, or none. */
 enum class LyricsMark { SYNCED, PLAIN, NONE }
 
 /** The mark for a song whose ledger status is [status] (null: KJB has not looked it up). */
@@ -754,6 +763,16 @@ fun lyricsMark(status: LyricsStatus?): LyricsMark = when (status) {
     LyricsStatus.PLAIN_ONLY -> LyricsMark.PLAIN
     else -> LyricsMark.NONE
 }
+
+/**
+ * What a song's row marks besides its title: the lyrics icon after the artist ([lyrics]: synced or plain, none without
+ * lyrics), and the green dot before it for the song [playing] now, which only one row of a list can have.
+ */
+@Immutable
+data class RowMarks(val lyrics: LyricsMark, val playing: Boolean)
+
+/** The marks of the row of the song at [path], whose ledger status is [status], while the song at [playingPath] plays. */
+fun rowMarks(status: LyricsStatus?, path: String, playingPath: String?): RowMarks = RowMarks(lyricsMark(status), playing = path == playingPath)
 
 /** Whether a song with [mark] shows under the Songs tab's "Show" filter. */
 fun LyricsFilter.shows(mark: LyricsMark): Boolean = when (this) {

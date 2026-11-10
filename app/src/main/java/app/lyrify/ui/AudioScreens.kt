@@ -652,8 +652,18 @@ private fun PresetChips(
         // The chips' 48 dp taps reach 4 dp into the gaps above and below the row (the prototype's .eqchips margin).
         modifier = Modifier.fillMaxWidth().overhang(top = 4.dp, bottom = 4.dp).height(TOUCH).selectableGroup(),
     ) {
-        items(chips, key = ::chipKey) { chip ->
-            val item = if (reduced) Modifier else Modifier.animateItem()
+        items(
+            chips,
+            key = ::chipKey,
+            contentType = { chip ->
+                when (chip) {
+                    EqChip.Save -> "save"
+                    is EqChip.Preset -> if (chip.choice is PresetChoice.Own) "own" else "preset"
+                    EqChip.Custom -> "preset"
+                }
+            },
+        ) { chip ->
+            val item = rowMotion(reduced)
             when (chip) {
                 EqChip.Custom -> PresetChip(stringResource(R.string.eq_custom), selected = true, enabled, item) {}
                 EqChip.Save -> LyrifyChip(

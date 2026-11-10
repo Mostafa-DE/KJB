@@ -153,12 +153,7 @@ internal fun MainRow(ui: PlayerUi, settings: Settings, connection: PlayerConnect
                 .clickable(role = Role.Button, onClick = connection::playPause)
                 .semantics { contentDescription = label },
         ) {
-            Icon(
-                painterResource(if (ui.playing) R.drawable.ic_pause_fill else R.drawable.ic_play_arrow_fill),
-                contentDescription = null,
-                tint = chrome.onAction,
-                modifier = Modifier.size(40.dp),
-            )
+            PlayPauseIcon(ui.playing, tint = chrome.onAction, modifier = Modifier.size(40.dp))
         }
         RoundButton(R.drawable.ic_skip_next_fill, stringResource(R.string.player_next), size = 56.dp, iconSize = 38.dp, onClick = connection::next)
         SeekJump(seekIcon(back = false, forward), pluralStringResource(R.plurals.player_forward_seconds, forward, forward)) { connection.seekBy(forward * 1_000L) }

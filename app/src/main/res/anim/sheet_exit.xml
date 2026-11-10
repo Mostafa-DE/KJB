@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A sheet window closed by one of its own buttons: it slides a little down as it fades with its scrim, never
+     vanishing at once (motion spec 2.5). A sheet dragged or tapped away has already hidden itself, so this plays unseen. -->
+<set xmlns:android="http://schemas.android.com/apk/res/android"
+    android:duration="200"
+    android:interpolator="@android:interpolator/accelerate_cubic"
+    android:shareInterpolator="true">
+    <translate android:fromYDelta="0" android:toYDelta="8%p" />
+    <alpha android:fromAlpha="1" android:toAlpha="0" />
+</set>

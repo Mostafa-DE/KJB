@@ -10,6 +10,7 @@ import android.content.res.Resources
 import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
@@ -65,6 +66,7 @@ import androidx.compose.material3.TopAppBarScrollBehavior
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
@@ -127,6 +129,7 @@ import app.lyrify.BuildConfig
 import app.lyrify.R
 import app.lyrify.settings.DockTab
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.max
@@ -172,11 +175,12 @@ fun GlassSurface(
     shape: Shape,
     modifier: Modifier = Modifier,
     elevation: Dp = GLASS_SHADOW,
+    solid: Boolean = false,
     content: @Composable BoxScope.() -> Unit,
 ) {
     val chrome = LocalChromeColors.current
     val under = MaterialTheme.colorScheme.background
-    val source = backdrop?.takeIf { LocalGlassBlur.current }
+    val source = backdrop?.takeIf { LocalGlassBlur.current && !solid }
     val blurred = rememberGraphicsLayer()
     val radius = with(LocalDensity.current) { GLASS_BLUR.toPx() }
     val blur = remember(radius) { BlurEffect(radius, radius, TileMode.Clamp) }
@@ -196,12 +200,14 @@ fun GlassSurface(
                     drawLayer(blurred)
                     drawRect(chrome.glass)
                 } else {
-                    drawRect(chrome.glassSolid)
+                    drawRect(if (solid) chrome.bar else chrome.glassSolid)
                 }
             }
             .border(1.dp, chrome.glassEdge, shape),
-        content = content,
-    )
+    ) {
+        // Words on the glass take the theme's ink, light or dark, whatever surrounds the surface.
+        CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSurface) { content() }
+    }
 }
 
 // The dock
@@ -261,6 +267,13 @@ private const val TAB_FADE_DELAY_MS = 40
 private const val TAB_FADE_OUT_MS = 90
 private val TabSlide = spring(dampingRatio = 1f, stiffness = 300f, visibilityThreshold = IntOffset.VisibilityThreshold)
 
+/** The dot on a dock item: it pops in and out, never appearing at once. */
+@Composable
+private fun DockDot(dot: Boolean, modifier: Modifier) {
+    val reduced = LocalReducedMotion.current
+    AnimatedVisibility(dot, modifier, enter = badgeIn(reduced), exit = badgeOut(reduced)) { DotBadge() }
+}
+
 /** A dock item's name for TalkBack: its label, then its dot when it has one. */
 fun dockItemName(vararg parts: String?): String = parts.filterNotNull().joinToString(", ")
 
@@ -270,7 +283,7 @@ fun dockItemName(vararg parts: String?): String = parts.filterNotNull().joinToSt
  */
 @Composable
 fun Dock(selected: DockTab, dot: Boolean, backdrop: GlassBackdrop?, onSelect: (DockTab) -> Unit, modifier: Modifier = Modifier) {
-    GlassSurface(backdrop, CircleShape, modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+    GlassSurface(backdrop, CircleShape, modifier.fillMaxWidth().padding(horizontal = 12.dp), solid = true) {
         DockItems(selected, dot, onSelect)
     }
 }
@@ -336,7 +349,7 @@ private fun DockItem(tab: DockTab, selected: Boolean, dot: Boolean, modifier: Mo
                 tint = lerp(colors.onSurfaceVariant, brand.highlight, lit),
                 modifier = Modifier.size(24.dp),
             )
-            if (dot) DotBadge(Modifier.align(Alignment.TopEnd).offset(x = 3.dp, y = (-3).dp))
+            DockDot(dot, Modifier.align(Alignment.TopEnd).offset(x = 3.dp, y = (-3).dp))
         }
         Text(
             label,
@@ -554,9 +567,10 @@ data class Toast(val text: String, @DrawableRes val icon: Int? = null, val tone:
 /**
  * KJB's messages, in place of SnackbarHostState: one at a time, and the newest wins. [show] replaces the message on
  * screen at once, as Android's Snackbar does: the replaced one's caller hears "no action" (its Undo goes away, its change
- * stays done). [show] waits until its message has gone and says whether its action was tapped. A message floats at the
- * newest [ToastSlot] on screen (the shell's above the Now bar and the dock, else the open sheet's or full screen's), over
- * the content, never moving it.
+ * stays done), but a message with an action only at its own time ([toastMillis]), so what its Undo needs (a backup, a
+ * record) is never let go sooner than had it stayed. [show] waits until its message has gone and says whether its action
+ * was tapped. A message floats at the newest [ToastSlot] on screen (the shell's above the Now bar and the dock, else the
+ * open sheet's or full screen's), over the content, never moving it.
  */
 @Stable
 class ToastState private constructor(private val live: Boolean) {
@@ -564,12 +578,24 @@ class ToastState private constructor(private val live: Boolean) {
 
     private val slots = mutableStateListOf<Any>()
 
+    /** How a message left the screen. */
+    internal enum class End {
+        /** Its action was tapped. */
+        ACTED,
+
+        /** Its time ran out, or it was swiped or dismissed away. */
+        DISMISSED,
+
+        /** A newer message took its place. */
+        REPLACED,
+    }
+
     /** The message on screen; [dismiss] takes it off, [acted] when its action was tapped. */
     class Shown internal constructor(val toast: Toast) {
-        internal val result = CompletableDeferred<Boolean>()
+        internal val result = CompletableDeferred<End>()
 
         fun dismiss(acted: Boolean = false) {
-            result.complete(acted)
+            result.complete(if (acted) End.ACTED else End.DISMISSED)
         }
     }
 
@@ -579,11 +605,17 @@ class ToastState private constructor(private val live: Boolean) {
     suspend fun show(toast: Toast): Boolean {
         if (!live) return false
         val shown = Shown(toast)
-        // The message on screen goes at once; its caller hears that its action was not tapped.
-        current?.dismiss()
+        // The message on screen goes at once, its action with it; a late tap or timer on it changes nothing.
+        current?.result?.complete(End.REPLACED)
         current = shown
         return try {
-            shown.result.await()
+            coroutineScope {
+                // Its own time, from now: replaced, a message with an action ends for its caller no sooner.
+                val due = if (toast.action != null) launch { delay(toastMillis(toast)) } else null
+                val end = shown.result.await()
+                if (end == End.REPLACED) due?.join() else due?.cancel()
+                end == End.ACTED
+            }
         } finally {
             if (current === shown) current = null
         }
@@ -684,7 +716,11 @@ fun ToastSlot(
     }
 }
 
-/** Measures the message but reports no height, and draws it up or down from this point: it never pushes the layout. */
+/**
+ * Measures the message but reports no height, and draws it up or down from this point: it never pushes the layout. Its
+ * touch is where it is drawn: Compose hit-tests a child outside its parent's bounds unless a layer clips it, so no layer
+ * between the message and the screen may clip at the slot (hence SizeTransform(clip = false)).
+ */
 private fun Modifier.floatOver(float: ToastFloat): Modifier = layout { measurable, constraints ->
     val placeable = measurable.measure(constraints.copy(minHeight = 0, maxHeight = Constraints.Infinity))
     layout(placeable.width, 0) { placeable.place(0, if (float == ToastFloat.UP) -placeable.height else 0) }

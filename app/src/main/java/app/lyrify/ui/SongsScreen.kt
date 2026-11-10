@@ -263,8 +263,9 @@ private fun StatusSegment(group: SongGroup, count: Int, selected: Boolean, modif
 /** The statuses of the selected group with songs; none selected means the whole group. */
 @Composable
 private fun StatusChips(list: SongList, query: SongQuery, onQuery: (SongQuery) -> Unit) {
+    val reduced = LocalReducedMotion.current
     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(horizontal = ScreenPadding), modifier = Modifier.padding(top = 8.dp)) {
-        items(list.statuses, key = { it.name }) { status ->
+        items(list.statuses, key = { it.name }, contentType = { "chip" }) { status ->
             val style = status.style
             val selected = query.status == status
             val label = stringResource(style.label)
@@ -278,7 +279,7 @@ private fun StatusChips(list: SongList, query: SongQuery, onQuery: (SongQuery) -
                 icon = style.icon,
                 iconTint = LocalStatusColors.current[style.tone].accent,
                 count = count,
-                modifier = Modifier.semantics { contentDescription = description },
+                modifier = rowMotion(reduced).semantics { contentDescription = description },
             ) { Text(label, maxLines = 1) }
         }
     }
@@ -308,15 +309,17 @@ private fun SongSections(
     @StringRes openLabel: Int,
     onOpen: (String) -> Unit,
 ) {
+    val reduced = LocalReducedMotion.current
     LazyColumn(state = state, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
         if (list.sections.isEmpty()) {
-            item(key = "empty") {
+            item(key = "empty", contentType = "empty") {
                 if (noSongs) {
-                    EmptyState(EmptyArt.Glyph, stringResource(R.string.songs_empty_title), text = stringResource(R.string.songs_empty))
+                    EmptyState(EmptyArt.Glyph, stringResource(R.string.songs_empty_title), rowMotion(reduced), text = stringResource(R.string.songs_empty))
                 } else {
                     EmptyState(
                         EmptyArt.Icon(R.drawable.ic_search_off),
                         stringResource(R.string.songs_no_match),
+                        rowMotion(reduced),
                         action = stringResource(R.string.songs_clear_all),
                         onAction = { onQuery(SongQuery(sort = query.sort)) },
                     )
@@ -324,8 +327,8 @@ private fun SongSections(
             }
         }
         list.sections.forEach { section ->
-            stickyHeader(key = "section ${section.section}") { SectionHeader(section.section) }
-            items(section.songs, key = { it.path }) { entry -> SongRow(entry, Modifier.animateItem(), openLabel) { onOpen(entry.path) } }
+            stickyHeader(key = "section ${section.section}", contentType = "section") { SectionHeader(section.section) }
+            items(section.songs, key = { it.path }, contentType = { "song" }) { entry -> SongRow(entry, rowMotion(reduced), openLabel) { onOpen(entry.path) } }
         }
     }
 }

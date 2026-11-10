@@ -2,6 +2,7 @@ package app.lyrify.ui
 
 import androidx.compose.material3.ColorScheme
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -11,6 +12,7 @@ import androidx.compose.ui.unit.sp
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -174,5 +176,26 @@ class ThemeTokensTest {
         assertSame(BodyFont, AppTypography.labelSmall.fontFamily)
         assertSame(displayFont(26), AppTypography.headlineSmall.fontFamily)
         assertSame(displayFont(17), AppTypography.titleMedium.fontFamily)
+    }
+
+    @Test
+    fun `the Now bar and the dock are near-opaque, with the theme's own ink on them, light and dark`() {
+        val ends = listOf(LightColors to chromeColors(LightColors, LightBrandColors, dark = false), DarkColors to chromeColors(DarkColors, DarkBrandColors, dark = true))
+        ends.forEach { (scheme, chrome) ->
+            val ink = barInk(scheme)
+            assertEquals(scheme.onSurface, ink.title)
+            assertEquals(scheme.onSurfaceVariant, ink.line)
+            assertTrue("${chrome.bar.alpha}", chrome.bar.alpha in 0.92f..0.96f)
+            // Whatever scrolls behind the bar, its words keep their contrast: a list's text never reads through.
+            listOf(Color.White, Color.Black).forEach { behind ->
+                val fill = chrome.bar.compositeOver(behind)
+                assertTrue(contrast(ink.title, fill) >= 4.5f)
+                assertTrue(contrast(ink.line, fill) >= 4.5f)
+            }
+        }
+        // The bar's words take the ink, never the colour left by whatever is around them.
+        val bar = java.io.File("src/main/java/app/lyrify/ui/NowBar.kt").readText()
+        assertTrue(bar.contains("color = ink.title"))
+        assertTrue(bar.contains("color = ink.line"))
     }
 }

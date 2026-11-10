@@ -259,14 +259,20 @@ data class NavState(
 
     /**
      * Opens [page] on its tab ([homeOf]), closing the views; the page on top already is not opened twice. Opened from a
-     * view (the player) or from a song's [sheet], it keeps where it came from ([Origin]), and Back from it goes there.
+     * view (the player) or from a song's [sheet], it keeps where it came from ([Origin]), and Back from it goes there;
+     * the page already on top takes that new origin, so Back still goes back to the player or the sheet.
      */
     fun open(page: Page, sheet: SheetReturn? = null): NavState {
         val home = homeOf(page, tab, views.isNotEmpty())
         val origin = Origin(tab, history, views, sheet).takeIf { views.isNotEmpty() || sheet != null }
         val moved = visit(home).copy(views = emptyList(), reopen = null)
         val stack = moved.stacks[home].orEmpty()
-        return if (stack.lastOrNull()?.page == page) moved else moved.copy(stacks = stacks + (home to stack + StackEntry(page, origin)))
+        val top = stack.lastOrNull()
+        return when {
+            top?.page != page -> moved.copy(stacks = stacks + (home to stack + StackEntry(page, origin)))
+            origin == null -> moved
+            else -> moved.copy(stacks = stacks + (home to stack.dropLast(1) + top.copy(origin = origin)))
+        }
     }
 
     /** Shows [view] over everything; the view on top already is not shown twice. */

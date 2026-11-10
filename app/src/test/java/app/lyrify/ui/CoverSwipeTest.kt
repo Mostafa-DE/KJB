@@ -92,4 +92,17 @@ class CoverSwipeTest {
         assertEquals(SkipWay.PREVIOUS, comingFrom(shift = 1f))
         assertNull(comingFrom(shift = 0f))
     }
+
+    // A skip from elsewhere during the settle (review finding C)
+
+    @Test
+    fun `a finished swipe skips only when the song playing is still the one it started on`() {
+        // Nothing moved meanwhile: the swipe skips.
+        assertEquals(Settled.SKIP, settledSwipe(startedOn = 4, playingNow = 4, coming = 5))
+        // A headset or the notification already played the song sliding in: no second skip, the cover just lands.
+        assertEquals(Settled.LANDED, settledSwipe(startedOn = 4, playingNow = 5, coming = 5))
+        // It moved somewhere else: the cover springs back and nothing skips.
+        assertEquals(Settled.RETURN, settledSwipe(startedOn = 4, playingNow = 9, coming = 5))
+        assertEquals(Settled.RETURN, settledSwipe(startedOn = 4, playingNow = 9, coming = null))
+    }
 }

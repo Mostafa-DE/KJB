@@ -94,23 +94,26 @@ private fun YourListening(onBack: () -> Unit, onOpen: (Page) -> Unit) {
     val sheets = rememberSongSheets()
     val periods = listOf(R.string.stats_week, R.string.stats_month, R.string.stats_year, R.string.stats_all_time).map { stringResource(it) }
     ListeningFrame(stringResource(R.string.stats_title), onBack) { padding ->
+        val reduced = LocalReducedMotion.current
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding() + 8.dp, bottom = padding.calculateBottomPadding() + 24.dp)) {
-            item(key = "period") {
-                LyrifySegmented(periods, ListeningPeriod.entries.indexOf(shownPeriod), { shownPeriod = ListeningPeriod.entries[it] }, Modifier.padding(horizontal = ScreenPadding))
+            item(key = "period", contentType = "period") {
+                LyrifySegmented(periods, ListeningPeriod.entries.indexOf(shownPeriod), { shownPeriod = ListeningPeriod.entries[it] }, rowMotion(reduced).padding(horizontal = ScreenPadding))
             }
             when {
                 listening == null -> Unit
-                listening.plays == 0 -> item(key = "empty") {
-                    EmptyState(EmptyArt.Icon(R.drawable.ic_bar_chart), stringResource(R.string.stats_empty_title), text = stringResource(R.string.stats_empty_text))
+                listening.plays == 0 -> item(key = "empty", contentType = "empty") {
+                    EmptyState(EmptyArt.Icon(R.drawable.ic_bar_chart), stringResource(R.string.stats_empty_title), rowMotion(reduced), text = stringResource(R.string.stats_empty_text))
                 }
                 else -> {
-                    item(key = "totals") { Totals(listening) }
+                    item(key = "totals", contentType = "totals") { Box(rowMotion(reduced)) { Totals(listening) } }
                     TopKind.entries.forEach { kind ->
                         val tops = topsOf(listening, kind)
                         val (shown, more) = topPreview(tops)
                         if (shown.isEmpty()) return@forEach
-                        item(key = "head $kind") { TopHead(stringResource(kind.title), tops.size, if (more) ({ onOpen(Page.TopList(kind)) }) else null) }
-                        itemsIndexed(shown, key = { _, top -> "$kind ${keyOf(top)}" }) { i, top -> TopRow(top, i + 1, settings, onOpen, sheets::openSong) }
+                        item(key = "head $kind", contentType = "head") { Box(rowMotion(reduced)) { TopHead(stringResource(kind.title), tops.size, if (more) ({ onOpen(Page.TopList(kind)) }) else null) } }
+                        itemsIndexed(shown, key = { _, top -> "$kind ${keyOf(top)}" }, contentType = { _, _ -> "top" }) { i, top ->
+                            Box(rowMotion(reduced)) { TopRow(top, i + 1, settings, onOpen, sheets::openSong) }
+                        }
                     }
                 }
             }
@@ -127,15 +130,18 @@ private fun TopListPage(kind: TopKind, onBack: () -> Unit, onOpen: (Page) -> Uni
     val sheets = rememberSongSheets()
     val tops = listening?.let { topsOf(it, kind) }.orEmpty()
     ListeningFrame(stringResource(kind.title), onBack) { padding ->
+        val reduced = LocalReducedMotion.current
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding() + 8.dp, bottom = padding.calculateBottomPadding() + 24.dp)) {
-            item(key = "head") { TopHead(stringResource(shownPeriod.named), tops.size, onViewAll = null) }
+            item(key = "head", contentType = "head") { Box(rowMotion(reduced)) { TopHead(stringResource(shownPeriod.named), tops.size, onViewAll = null) } }
             if (listening != null && tops.isEmpty()) {
-                item(key = "empty") {
-                    EmptyState(EmptyArt.Icon(R.drawable.ic_bar_chart), stringResource(R.string.stats_empty_title), text = stringResource(R.string.stats_empty_text))
+                item(key = "empty", contentType = "empty") {
+                    EmptyState(EmptyArt.Icon(R.drawable.ic_bar_chart), stringResource(R.string.stats_empty_title), rowMotion(reduced), text = stringResource(R.string.stats_empty_text))
                 }
             }
             // Prefixed: an artist named "head" or "empty" would take a fixed row's key, and two rows with one key crash the list.
-            itemsIndexed(tops, key = { _, top -> "top ${keyOf(top)}" }) { i, top -> TopRow(top, i + 1, settings, onOpen, sheets::openSong) }
+            itemsIndexed(tops, key = { _, top -> "top ${keyOf(top)}" }, contentType = { _, _ -> "top" }) { i, top ->
+                Box(rowMotion(reduced)) { TopRow(top, i + 1, settings, onOpen, sheets::openSong) }
+            }
         }
     }
     SongSheetsHost(sheets)

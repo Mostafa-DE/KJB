@@ -382,13 +382,14 @@ fun CoversTagsPage() {
             )
         },
     ) { padding ->
+        val reduced = LocalReducedMotion.current
         LazyColumn(
             state = list,
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(top = padding.calculateTopPadding() + 8.dp, bottom = padding.calculateBottomPadding() + 24.dp),
         ) {
             if (!access) {
-                item(key = "access") {
+                item(key = "access", contentType = "access") {
                     val brand = LocalBrandColors.current
                     Banner(
                         R.drawable.ic_notifications,
@@ -397,63 +398,79 @@ fun CoversTagsPage() {
                         brand.highlightContainer,
                         brand.onHighlightContainer,
                         onAction = { context.startFirst(notificationAccessIntents(context)) },
-                        modifier = Modifier.padding(start = ScreenPadding, end = ScreenPadding, bottom = 12.dp),
+                        modifier = rowMotion(reduced).padding(start = ScreenPadding, end = ScreenPadding, bottom = 12.dp),
                     )
                 }
             }
-            items(rows, key = { it.key }) { row ->
-                when (row) {
-                    PageRow.Start -> StartRow(state, busy, onCheck = tags::check, onCancel = tags::cancel)
-                    is PageRow.Section -> SectionHead(row, onApplyAll = { confirmAll = true }.takeIf { row.section == ReviewSection.READY && writable })
-                    is PageRow.Ready -> ReadyCard(tags, row.waiting) { open = OpenAlbum(row.waiting.album.id, (row.waiting.proposal as Proposal.Ready).match.release.id) }
-                    is PageRow.Pick -> PickOneAlbum(
-                        tags,
-                        row.waiting,
-                        onUse = { match -> open = OpenAlbum(row.waiting.album.id, match.release.id) },
-                        onSearch = { searching = row.waiting.album.id },
-                        onSkip = { scope.launch { tags.skip(row.waiting.album.id) } },
-                    )
-                    PageRow.SamsungNote -> Text(
-                        stringResource(R.string.tags_samsung_note),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = ScreenPadding, vertical = 4.dp),
-                    )
-                    is PageRow.Paused -> Text(
-                        row.words.text(),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.padding(horizontal = ScreenPadding, vertical = 4.dp),
-                    )
-                    is PageRow.Uncheckable -> Text(
-                        row.words.text(),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = ScreenPadding, vertical = 4.dp),
-                    )
-                    is PageRow.Record -> SettledRow(
-                        row.record,
-                        fullCopy = row.record.entryId in state.fullCopies,
-                        enabled = writable,
-                        onUndo = { scope.launch { toasts.show(undoneWords(tags.undoAlbum(row.record.id)).text(resources)) } },
-                        onCheckAgain = { tags.checkAgain(row.record.id) },
-                        onOpen = { problems = row.record.id }.takeIf { row.record.problems.isNotEmpty() },
-                    )
-                    PageRow.History -> {
-                        Spacer(Modifier.height(16.dp))
-                        GroupedRows {
-                            GroupedRow(
-                                R.drawable.ic_history,
-                                stringResource(R.string.tags_history),
-                                tile = MaterialTheme.colorScheme.surfaceContainerHighest,
-                                onTile = MaterialTheme.colorScheme.onSurfaceVariant,
-                                first = true,
-                                supporting = {
-                                    val count = state.history.size
-                                    Text(if (count > 0) pluralStringResource(R.plurals.tags_edits, count, count) else stringResource(R.string.tags_no_edits))
-                                },
-                                onClick = { nav.open(Page.TagHistory) },
-                            )
+            items(
+                rows,
+                key = { it.key },
+                contentType = { row ->
+                    when (row) {
+                        PageRow.Start -> "start"
+                        is PageRow.Section -> "section"
+                        is PageRow.Ready -> "ready"
+                        is PageRow.Pick -> "pick"
+                        PageRow.SamsungNote, is PageRow.Paused, is PageRow.Uncheckable -> "text"
+                        is PageRow.Record -> "record"
+                        PageRow.History -> "history"
+                    }
+                },
+            ) { row ->
+                Column(rowMotion(reduced)) {
+                    when (row) {
+                        PageRow.Start -> StartRow(state, busy, onCheck = tags::check, onCancel = tags::cancel)
+                        is PageRow.Section -> SectionHead(row, onApplyAll = { confirmAll = true }.takeIf { row.section == ReviewSection.READY && writable })
+                        is PageRow.Ready -> ReadyCard(tags, row.waiting) { open = OpenAlbum(row.waiting.album.id, (row.waiting.proposal as Proposal.Ready).match.release.id) }
+                        is PageRow.Pick -> PickOneAlbum(
+                            tags,
+                            row.waiting,
+                            onUse = { match -> open = OpenAlbum(row.waiting.album.id, match.release.id) },
+                            onSearch = { searching = row.waiting.album.id },
+                            onSkip = { scope.launch { tags.skip(row.waiting.album.id) } },
+                        )
+                        PageRow.SamsungNote -> Text(
+                            stringResource(R.string.tags_samsung_note),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = ScreenPadding, vertical = 4.dp),
+                        )
+                        is PageRow.Paused -> Text(
+                            row.words.text(),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.padding(horizontal = ScreenPadding, vertical = 4.dp),
+                        )
+                        is PageRow.Uncheckable -> Text(
+                            row.words.text(),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = ScreenPadding, vertical = 4.dp),
+                        )
+                        is PageRow.Record -> SettledRow(
+                            row.record,
+                            fullCopy = row.record.entryId in state.fullCopies,
+                            enabled = writable,
+                            onUndo = { scope.launch { toasts.show(undoneWords(tags.undoAlbum(row.record.id)).text(resources)) } },
+                            onCheckAgain = { tags.checkAgain(row.record.id) },
+                            onOpen = { problems = row.record.id }.takeIf { row.record.problems.isNotEmpty() },
+                        )
+                        PageRow.History -> {
+                            Spacer(Modifier.height(16.dp))
+                            GroupedRows {
+                                GroupedRow(
+                                    R.drawable.ic_history,
+                                    stringResource(R.string.tags_history),
+                                    tile = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                    onTile = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    first = true,
+                                    supporting = {
+                                        val count = state.history.size
+                                        Text(if (count > 0) pluralStringResource(R.plurals.tags_edits, count, count) else stringResource(R.string.tags_no_edits))
+                                    },
+                                    onClick = { nav.open(Page.TagHistory) },
+                                )
+                            }
                         }
                     }
                 }

@@ -121,4 +121,26 @@ class PlayerScreenTest {
         assertEquals("01 Paper Lantern.mp3", ownNow(ui.copy(song = null), LibrarySettings(), now = 2_000)!!.title)
         assertNull(ownNow(null, LibrarySettings(), now = 2_000))
     }
+
+    // The line under the title
+
+    @Test
+    fun `the line under the title shows the artist and the album as tagged, the same name twice included`() {
+        assertEquals(MetaLine(MetaName("Mira Solen"), MetaName("Night Ferry")), metaLine("Mira Solen", "Night Ferry"))
+        assertEquals(MetaLine(MetaName("Tin Roof"), MetaName("Tin Roof")), metaLine("Tin Roof", "Tin Roof"))
+        assertTrue(metaLine("Mira Solen", "Night Ferry").artist.tappable)
+        assertTrue(metaLine("Mira Solen", "Night Ferry").album.tappable)
+    }
+
+    @Test
+    fun `a missing tag shows its placeholder, which is not tappable`() {
+        val noArtist = metaLine(null, "Night Ferry")
+        assertEquals(MetaName(null), noArtist.artist)
+        assertFalse(noArtist.artist.tappable)
+        assertTrue(noArtist.album.tappable)
+        val neither = metaLine("  ", " ")
+        assertEquals(MetaLine(MetaName(null), MetaName(null)), neither)
+        assertFalse(neither.artist.tappable)
+        assertFalse(neither.album.tappable)
+    }
 }

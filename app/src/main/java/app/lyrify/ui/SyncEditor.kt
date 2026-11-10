@@ -486,7 +486,8 @@ fun SyncEditorView(view: FullScreen.SyncEditor) {
 /**
  * "Synced lyrics saved" with Undo, for each Save whose Undo is neither used nor let go ([LrcEdits.pending]), one at a
  * time: also after a turn of the phone or a restart of the app, so an Undo is never lost while its message is due. The
- * message gone, the Undo is let go. The shell shows it.
+ * message gone, the Undo is let go, its copy of the lyrics before with it: a newer message takes its place at once, but
+ * the Undo is let go only at the message's own time ([ToastState.show]), never sooner. The shell shows it.
  */
 @Composable
 fun LyricsUndoOffers() {
