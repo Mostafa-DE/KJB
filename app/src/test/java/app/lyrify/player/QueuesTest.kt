@@ -53,6 +53,21 @@ class QueuesTest {
     }
 
     @Test
+    fun `a tap in the list a saved queue came from starts a new queue there, and the saved one keeps its place`() {
+        var book = playing(0).place(2, 61_000).play(folder, 0, folderSource, now = 2).book
+        val kept = book.recent.single()
+        book = book.keep(kept).resume(kept, now = 3).book.playNext(listOf(folder[1]), picked, now = 4)!!.book.place(2, 75_000)
+        val before = book.queue(kept)!!
+        val tapped = book.play(album, 4, albumSource, now = 5)
+        assertNotEquals(kept, tapped.book.currentId)
+        assertEquals("Harbour Glass 5", currentName(tapped.book))
+        assertFalse(tapped.toRecent)
+        assertEquals(before.copy(updatedAt = 5), tapped.book.queue(kept))
+        assertEquals(listOf(kept), tapped.book.saved)
+        assertFalse(kept in tapped.book.recent)
+    }
+
+    @Test
     fun `a queue never holds a song twice, so a list with repeats keeps the first of each`() {
         val list = listOf(album[0], album[1], album[0], album[2])
         val book = QueueBook().play(list, 2, albumSource, now = 1).book

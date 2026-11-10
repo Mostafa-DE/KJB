@@ -12,8 +12,10 @@ import app.lyrify.library.song
 import app.lyrify.player.NoPlayback
 import app.lyrify.player.PlaybackCommands
 import app.lyrify.player.QueueAdded
+import app.lyrify.player.QueueBook
 import app.lyrify.player.QueueSource
 import app.lyrify.player.QueueTarget
+import app.lyrify.player.SourceKind
 import app.lyrify.player.Undo
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -114,7 +116,7 @@ class SongActionsTest {
     // Add to
 
     @Test
-    fun `Add to offers the queue first, then saved and recent queues, Favourites, then the playlists by name`() {
+    fun `Add to offers the queue playing first, then saved and recent queues, Favourites, then the playlists by name`() {
         val playing = QueueTarget("q0", "Album · Harbour Glass", 12, saved = false, playing = true)
         val recent = QueueTarget("q1", "Folder · Rips", 30, saved = false, playing = false)
         val saved = QueueTarget("q2", "Sunday chores", 8, saved = true, playing = false)
@@ -122,7 +124,7 @@ class SongActionsTest {
         assertEquals(
             listOf(
                 AddTarget.PlayNext,
-                AddTarget.AddToQueue,
+                AddTarget.AddToQueue(playing),
                 AddTarget.Queue(saved),
                 AddTarget.Queue(older),
                 AddTarget.Queue(recent),
@@ -134,6 +136,87 @@ class SongActionsTest {
             ),
             addTargets(listOf(playing, recent, saved, older), listOf(sunday, roadTrip)),
         )
+        // A saved queue playing shows once, as the queue playing.
+        val savedPlaying = saved.copy(playing = true)
+        assertEquals(
+            listOf(AddTarget.PlayNext, AddTarget.AddToQueue(savedPlaying), AddTarget.Queue(older), AddTarget.NewQueue, AddTarget.Favourites, AddTarget.NewPlaylist),
+            addTargets(listOf(savedPlaying, older), emptyList()),
+        )
+        // With nothing playing, Play next and Add to queue make a queue of the songs.
+        assertEquals(listOf(AddTarget.PlayNext, AddTarget.AddToQueue(null), AddTarget.NewQueue, AddTarget.Favourites, AddTarget.NewPlaylist), addTargets(emptyList(), emptyList()))
+    }
+
+    /** The player's queue commands on a real [QueueBook], as player/PlayerConnection.kt runs them on the core. */
+    private class BookPlayback(var book: QueueBook) : PlaybackCommands {
+        private val picked = QueueSource(SourceKind.PICKED, "picked:9", "")
+        override val queues: StateFlow<List<QueueTarget>> = MutableStateFlow(emptyList())
+
+        override fun play(songs: List<SongRef>, start: Int, source: QueueSource) = Unit
+
+        override fun shuffle(songs: List<SongRef>, source: QueueSource) = Unit
+
+        override fun playNext(songs: List<SongRef>): Undo? = book.playNext(songs, picked, now = 9)?.let { edited ->
+            book = edited.book
+            Undo { book = book.restore(edited.queueId, edited.before) }
+        }
+
+        override fun addToQueue(songs: List<SongRef>): Undo? = book.addToCurrent(songs, picked, now = 9)?.takeIf { it.added > 0 }?.let { added ->
+            book = added.book
+            Undo { book = book.removeUids(added.queueId, added.uids) }
+        }
+
+        override fun addToQueue(id: String, songs: List<SongRef>): QueueAdded? = book.addTo(id, songs)?.let { added ->
+            book = added.book
+            QueueAdded(added.added, added.already, if (added.added > 0) Undo { book = book.removeUids(added.queueId, added.uids) } else null)
+        }
+
+        override fun newQueue(name: String, songs: List<SongRef>, source: QueueSource?): Undo? = null
+    }
+
+    @Test
+    fun `Add to end on the queue playing adds each song once, and says Already in its name for a song it has`() = runBlocking {
+        val album = QueueSource(SourceKind.ALBUM, "album:harbour", "Harbour Glass")
+        val start = QueueBook().play(listOf(lantern.ref, bell.ref), 0, album, now = 1).book.place(0, 42_000)
+        val player = BookPlayback(start)
+        val actions = SongActions(player, MemoryPlaylists())
+        val playing = QueueTarget(start.currentId!!, "Harbour Glass", 2, saved = false, playing = true)
+
+        assertEquals(Said.AlreadyIn("Harbour Glass", 1), actions.addToEnd(playing, listOf(bell.ref))?.said)
+        assertEquals(start, player.book)
+
+        val added = actions.addToEnd(playing, listOf(lantern.ref, water.ref))
+        assertEquals(Said.AddedTo("Harbour Glass", 1, already = 1), added?.said)
+        assertEquals(listOf(lantern.path, bell.path, water.path), player.book.current!!.items.map { it.song.path })
+        assertEquals(42_000L, player.book.current!!.positionMs)
+        assertTrue(added?.undo?.invoke() == true)
+        assertEquals(start.current!!.items, player.book.current!!.items)
+
+        // Nothing playing: Add to queue makes a queue of the songs.
+        val none = BookPlayback(QueueBook())
+        assertEquals(Said.AddedToQueue, SongActions(none, MemoryPlaylists()).addToEnd(null, listOf(water.ref))?.said)
+        assertEquals(listOf(water.path), none.book.current!!.items.map { it.song.path })
+    }
+
+    @Test
+    fun `adding to a saved queue that is not playing changes that queue only`() = runBlocking {
+        val album = QueueSource(SourceKind.ALBUM, "album:harbour", "Harbour Glass")
+        val picked = QueueSource(SourceKind.PICKED, "picked:1", "")
+        val playingBook = QueueBook().play(listOf(lantern.ref, bell.ref), 1, album, now = 1).book.place(1, 42_000)
+        val start = playingBook.newQueue("Road trip", listOf(water.ref), picked, now = 2)!!.book
+        val road = start.saved.single()
+        val player = BookPlayback(start)
+        val actions = SongActions(player, MemoryPlaylists())
+        val target = QueueTarget(road, "Road trip", 1, saved = true, playing = false)
+
+        val added = actions.addToQueue(target, listOf(water.ref, lantern.ref))
+        assertEquals(Said.AddedTo("Road trip", 1, already = 1), added?.said)
+        assertEquals(listOf(water.path, lantern.path), player.book.queue(road)!!.items.map { it.song.path })
+        // The queue playing, its place and the player's moves are as they were.
+        assertEquals(start.currentId, player.book.currentId)
+        assertEquals(start.current, player.book.current)
+        assertEquals(start.jumps, player.book.jumps)
+        assertEquals(Said.AlreadyIn("Road trip", 1), actions.addToQueue(target, listOf(lantern.ref))?.said)
+        assertEquals(2, player.book.queue(road)!!.items.size)
     }
 
     @Test

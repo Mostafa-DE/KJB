@@ -35,8 +35,9 @@ interface PlaybackCommands {
     val queues: StateFlow<List<QueueTarget>>
 
     /**
-     * A tap on the song at [start] in [songs]: inside the current queue when that came from [source] (songs added with
-     * Play next stay), else in a new queue from [source], the old one kept in Recent.
+     * A tap on the song at [start] in [songs]: inside the current queue when that came from [source] and is not saved
+     * (songs added with Play next stay), else in a new queue from [source], the old one kept in Recent (a saved one stays
+     * in Saved, at its place).
      */
     fun play(songs: List<SongRef>, start: Int, source: QueueSource)
 

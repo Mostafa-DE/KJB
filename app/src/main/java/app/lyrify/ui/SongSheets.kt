@@ -217,12 +217,14 @@ private fun FavouriteRow(on: Boolean, onToggle: () -> Unit) {
 }
 
 /**
- * Add to, the one door for one song or many: Play next and Add to queue, then the saved and recent queues and New
- * queue, then Favourites, then the user's playlists and New playlist. A place that already holds every song is ticked.
+ * Add to, the one door for one song or many. Queues first: the queue playing by name, with Play next and Add to end
+ * (without one, Play next and Add to queue), then the saved and recent queues and New queue; then Favourites, then the
+ * user's playlists and New playlist. A place that already holds every song is ticked.
  */
 @Composable
 internal fun AddToSheet(songs: List<SongRef>, title: String, ui: LibraryUi, onDismiss: () -> Unit, onTarget: (AddTarget) -> Unit) {
     val targets = remember(ui.queues, ui.playlists.playlists) { addTargets(ui.queues, ui.playlists.playlists) }
+    val playing = targets.firstNotNullOfOrNull { (it as? AddTarget.AddToQueue)?.playing }
     val paths = remember(songs) { songs.mapTo(HashSet()) { it.path } }
     val colors = MaterialTheme.colorScheme
     val brand = LocalBrandColors.current
@@ -231,14 +233,28 @@ internal fun AddToSheet(songs: List<SongRef>, title: String, ui: LibraryUi, onDi
             Text(stringResource(R.string.lib_add_to_title), style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { heading() })
             Text(title, style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
+        SectionTitle(stringResource(R.string.lib_queues), Modifier.padding(start = 8.dp, top = 12.dp, bottom = 4.dp))
+        playing?.let { queue ->
+            NavRow(
+                title = queue.name,
+                sub = pluralStringResource(R.plurals.lib_queue_playing, queue.songs, queue.songs),
+                lead = { Tile(R.drawable.ic_graphic_eq, brand.highlightContainer, brand.highlight) },
+                trailing = null,
+            ) { onTarget(AddTarget.AddToQueue(queue)) }
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp)) {
             LyrifyButton(stringResource(R.string.lib_play_next), { onTarget(AddTarget.PlayNext) }, Modifier.weight(1f), kind = ButtonKind.SECONDARY)
-            LyrifyButton(stringResource(R.string.lib_add_to_queue), { onTarget(AddTarget.AddToQueue) }, Modifier.weight(1f), kind = ButtonKind.SECONDARY)
+            LyrifyButton(
+                stringResource(if (playing != null) R.string.lib_add_to_end else R.string.lib_add_to_queue),
+                { onTarget(AddTarget.AddToQueue(playing)) },
+                Modifier.weight(1f),
+                kind = ButtonKind.SECONDARY,
+            )
         }
-        var heading: Int? = null
+        var heading: Int? = R.string.lib_queues
         targets.forEach { target ->
             val section = when (target) {
-                AddTarget.PlayNext, AddTarget.AddToQueue -> null
+                AddTarget.PlayNext, is AddTarget.AddToQueue -> null
                 is AddTarget.Queue, AddTarget.NewQueue -> R.string.lib_queues
                 AddTarget.Favourites -> R.string.lib_favourites
                 is AddTarget.ToPlaylist, AddTarget.NewPlaylist -> R.string.lib_your_playlists
@@ -248,7 +264,7 @@ internal fun AddToSheet(songs: List<SongRef>, title: String, ui: LibraryUi, onDi
                 SectionTitle(stringResource(section), Modifier.padding(start = 8.dp, top = 12.dp, bottom = 4.dp))
             }
             when (target) {
-                AddTarget.PlayNext, AddTarget.AddToQueue -> Unit
+                AddTarget.PlayNext, is AddTarget.AddToQueue -> Unit
                 is AddTarget.Queue -> NavRow(
                     title = target.queue.name,
                     sub = pluralStringResource(if (target.queue.saved) R.plurals.lib_queue_saved else R.plurals.lib_queue_recent, target.queue.songs, target.queue.songs),
