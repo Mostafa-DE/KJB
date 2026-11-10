@@ -1,7 +1,6 @@
 package app.lyrify.ui
 
 import android.content.res.Resources
-import android.text.format.DateUtils
 import androidx.annotation.StringRes
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -55,8 +54,6 @@ import app.lyrify.tags.AlbumRecord
 import app.lyrify.tags.Applied
 import app.lyrify.tags.CoversTags
 import app.lyrify.tags.CoversTagsState
-import app.lyrify.tags.EditKind
-import app.lyrify.tags.HistoryEntry
 import app.lyrify.tags.Settled
 import app.lyrify.tags.Stopped
 import app.lyrify.tags.SongOutcome
@@ -73,7 +70,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 
 // Covers & tags (covers-tags-spec.md, "Where it lives" and "Reviewing"): its page in Tools, its row at the top of Songs
-// and on Tools, the album sheet, Search myself, and the History of every edit.
+// and on Tools, and its row to History (T3's page, Page.TagHistory, where each Undo goes through undoEdit).
 
 // The page's logic, pure
 
@@ -703,65 +700,5 @@ private fun SettledRow(record: AlbumRecord, fullCopy: Boolean, enabled: Boolean,
             }
         },
         onClick = onOpen,
-    )
-}
-
-// History
-
-/**
- * Tools > Covers & tags > History: every edit (Covers & tags, and later song, album and artist edits and merges), the
- * latest first, each with Undo; an edit taken back says so. Undoing an older edit keeps fields changed again since.
- */
-@Composable
-fun TagHistoryList(onBack: () -> Unit) {
-    val resources = LocalResources.current
-    val toasts = LocalToasts.current
-    val scope = rememberCoroutineScope()
-    val tags = rememberCoversTags()
-    val state by tags.state.collectAsStateWithLifecycle()
-    val access = rememberNotificationAccess()
-    LaunchedEffect(tags) { tags.refreshHistory() }
-    PageFrame(
-        topBar = { under, backdrop ->
-            LyrifyTopBar(
-                title = { Text(stringResource(R.string.tags_history), maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                under = under,
-                backdrop = backdrop,
-                navigation = { ChromeIconButton(R.drawable.ic_arrow_back, stringResource(R.string.check_back), onBack) },
-            )
-        },
-    ) { padding ->
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding() + 8.dp, bottom = padding.calculateBottomPadding() + 24.dp)) {
-            if (state.loaded && state.history.isEmpty()) {
-                item(key = "empty") { EmptyState(EmptyArt.Icon(R.drawable.ic_history), stringResource(R.string.tags_no_edits), text = stringResource(R.string.tags_history_empty)) }
-            }
-            items(state.history, key = { it.id }) { entry ->
-                HistoryRow(entry, enabled = canWrite(access, state)) { scope.launch { toasts.show(undoneWords(tags.undo(entry.id)).text(resources)) } }
-            }
-        }
-    }
-}
-
-@Composable
-private fun HistoryRow(entry: HistoryEntry, enabled: Boolean, onUndo: () -> Unit) {
-    val now = remember { System.currentTimeMillis() }
-    val songs = pluralStringResource(R.plurals.tags_songs, entry.songs.size, entry.songs.size)
-    val at = DateUtils.getRelativeTimeSpanString(entry.at, now, DateUtils.MINUTE_IN_MILLIS, DateUtils.FORMAT_ABBREV_RELATIVE).toString()
-    val icon = when (entry.kind) {
-        EditKind.ALBUM, EditKind.COVERS_TAGS -> R.drawable.ic_album
-        EditKind.ARTIST, EditKind.MERGE -> R.drawable.ic_person
-        EditKind.SONG -> R.drawable.ic_sell
-    }
-    ItemRow(
-        title = entry.label,
-        sub = stringResource(R.string.tags_two_parts, songs, at),
-        lead = { Tile(icon) },
-        trailing = {
-            if (entry.songs.all { it.undone }) {
-                Text(stringResource(R.string.tags_undone_pill), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(end = 12.dp))
-            } else {
-                LyrifyButton(stringResource(R.string.tags_undo), onClick = onUndo, kind = ButtonKind.GHOST, compact = true, enabled = enabled)
-            }
-        },
     )
 }

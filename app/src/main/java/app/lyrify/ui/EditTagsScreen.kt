@@ -19,9 +19,9 @@ fun EditAlbumView(view: FullScreen.EditAlbum) {
     PageStub("T3") { nav.close(view) }
 }
 
-/** Tools > Covers & tags > History: every edit, each with Undo (the list is Covers & tags', T2). */
+/** Tools > Covers & tags > History: every edit, each with Undo (T3). */
 @Composable
 fun TagHistoryPage() {
     val nav = LocalNavigator.current
-    TagHistoryList { nav.back() }
+    PageStub("T3") { nav.back() }
 }

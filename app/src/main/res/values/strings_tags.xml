@@ -172,7 +172,4 @@
         <item quantity="other">Undone. %d songs changed since were skipped</item>
     </plurals>
 
-    <!-- History -->
-    <string name="tags_history_empty">Tag changes, album edits, renames and merges show here, each with Undo.</string>
-    <string name="tags_undone_pill">Undone</string>
 </resources>
