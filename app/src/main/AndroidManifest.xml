@@ -39,6 +39,11 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <!-- lyrics lock: permissions -->
+    <!-- "Display over other apps", for "Show when locked" only (ui/LockLyricsActivity): with it, Android lets KJB open
+         the lyrics over the lock screen when the screen turns on while KJB plays. Asked only when the user switches it
+         on, with a one-line reason; nothing is drawn over other apps. Tapping the music notification needs no
+         permission. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <!-- androidx.core adds this one for dynamic receivers KJB never registers. -->
     <uses-permission
@@ -157,6 +162,17 @@
         </receiver>
 
         <!-- lyrics lock -->
+        <!-- Lyrics over the lock screen (ui/LockLyricsActivity), shown without unlocking (showWhenLocked). It is the
+             player session's activity: a tap on the music notification opens it over the lock screen, or opens the
+             app on an unlocked phone. "Show when locked" also starts it when the screen turns on while KJB plays. Its
+             own task, never in recents; not exported (only KJB's own intents start it). -->
+        <activity
+            android:name=".ui.LockLyricsActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:launchMode="singleInstance"
+            android:showWhenLocked="true"
+            android:taskAffinity="" />
 
         <!-- widget -->
 

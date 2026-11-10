@@ -98,6 +98,7 @@ fun SettingsScreen(
     fun setPlayback(change: (PlaybackSettings) -> PlaybackSettings) = onChange { it.copy(playback = change(it.playback)) }
     fun setAudio(change: (AudioSettings) -> AudioSettings) = onChange { it.copy(audio = change(it.audio)) }
     fun setAdvanced(change: (AdvancedSettings) -> AdvancedSettings) = onChange { it.copy(advanced = change(it.advanced)) }
+    val showWhenLocked = rememberLockSwitch(onChange)
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -137,9 +138,7 @@ fun SettingsScreen(
                 GrantRow(R.drawable.ic_folder_open, R.string.setup_files_title, R.string.settings_files, grants.access.allFiles, R.string.setup_done, R.string.settings_turn_on, grants.onOpenAllFilesAccess)
                 GrantRow(R.drawable.ic_battery_full, R.string.setup_battery_title, R.string.settings_battery, grants.unrestricted, R.string.settings_unrestricted, R.string.open_app_info, grants.onOpenAppInfo)
                 val locked = settings.lyrics.showWhenLocked
-                SwitchRow(R.drawable.ic_lock, R.string.set_lock, stringResource(if (locked) R.string.set_lock_on else R.string.set_lock_off), locked) { on ->
-                    onChange { it.copy(lyrics = it.lyrics.copy(showWhenLocked = on)) }
-                }
+                SwitchRow(R.drawable.ic_lock, R.string.set_lock, stringResource(if (locked) R.string.set_lock_on else R.string.set_lock_off), locked, onSwitch = showWhenLocked)
             }
             section(R.string.settings_ai) {
                 SwitchRow(

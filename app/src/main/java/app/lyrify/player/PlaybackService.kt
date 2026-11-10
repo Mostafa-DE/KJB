@@ -39,7 +39,8 @@ import app.lyrify.logFailures
 import app.lyrify.media.NowPlaying
 import app.lyrify.media.QueueSweep
 import app.lyrify.settings.Settings
-import app.lyrify.ui.MainActivity
+import app.lyrify.ui.LockLyricsActivity
+import app.lyrify.ui.LockLyricsPart
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
@@ -89,7 +90,7 @@ interface ServicePart {
 @OptIn(UnstableApi::class)
 class PlaybackService : MediaLibraryService() {
     /** The service's parts: P2, A1, A3 and A4 each add one line here, in merge order. */
-    private val parts: List<ServicePart> = listOf()
+    private val parts: List<ServicePart> = listOf(LockLyricsPart())
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + logFailures)
     private val io = CoroutineScope(SupervisorJob() + Dispatchers.IO + logFailures)
@@ -115,7 +116,8 @@ class PlaybackService : MediaLibraryService() {
         player = LyrifyPlayer(mainLooper, engine, core, skips = ::skips, sync = ::sync, beforeSeek = ::heardSoFar)
         engine.addListener(Follower())
         val built = MediaLibrarySession.Builder(this, player, Callback())
-            .setSessionActivity(PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
+            // A tap on the notification: the lyrics over the lock screen, or the app once unlocked (P3).
+            .setSessionActivity(PendingIntent.getActivity(this, 0, Intent(this, LockLyricsActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
             .setBitmapLoader(ThumbnailLoader(this))
             .build()
         session = built

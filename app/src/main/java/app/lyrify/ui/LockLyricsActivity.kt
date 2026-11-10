@@ -1,0 +1,387 @@
+package app.lyrify.ui
+
+import android.app.KeyguardManager
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.graphics.Color as AndroidColor
+import android.os.Bundle
+import android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION
+import android.provider.Settings.canDrawOverlays
+import android.util.Log
+import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.paneTitle
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
+import androidx.core.net.toUri
+import androidx.lifecycle.compose.LifecycleResumeEffect
+import androidx.lifecycle.compose.LifecycleStartEffect
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.media3.session.MediaLibraryService
+import app.lyrify.LOG_TAG
+import app.lyrify.Lyrify
+import app.lyrify.R
+import app.lyrify.data.LedgerRepository
+import app.lyrify.data.LedgerState
+import app.lyrify.logFailures
+import app.lyrify.player.PlaybackService
+import app.lyrify.player.PlayerGraph
+import app.lyrify.player.ServicePart
+import app.lyrify.settings.Settings
+import coil3.compose.AsyncImage
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
+import kotlin.math.abs
+
+// Lyrics on the lock screen (P3): big synced lyrics and the controls over the lock screen (showWhenLocked), opened by a
+// tap on the music notification (the session activity) and, with "Show when locked", when the screen turns on while
+// KJB plays ([LockLyricsPart]). The switch's permission is asked in Settings ([rememberLockSwitch]).
+
+/** How the lock screen lyrics were asked for. */
+enum class LockOrigin { NOTIFICATION, SCREEN_ON }
+
+/** What opening the lock screen lyrics does. */
+enum class LockEntry { LYRICS, APP, NOTHING }
+
+/**
+ * Over the lock screen, the lyrics while a song is loaded, never when nothing plays. A tap on the notification of an
+ * unlocked phone opens the app, as it always did; the screen turning on never opens the app.
+ */
+fun lockEntry(origin: LockOrigin, locked: Boolean, loaded: Boolean): LockEntry = when {
+    locked && loaded -> LockEntry.LYRICS
+    !locked && origin == LockOrigin.NOTIFICATION -> LockEntry.APP
+    else -> LockEntry.NOTHING
+}
+
+/**
+ * "Show when locked": the lyrics open by themselves when the screen turns on over the lock screen, only while KJB plays,
+ * with the switch on and "Display over other apps" allowed (Android lets no app start a screen from the background
+ * otherwise).
+ */
+fun opensOnScreenOn(setting: Boolean, overlayAllowed: Boolean, playing: Boolean, locked: Boolean): Boolean = setting && overlayAllowed && playing && locked
+
+/** What turning "Show when locked" on or off does. */
+enum class LockSwitch {
+    STORE_OFF,
+    STORE_ON,
+
+    /** Ask for "Display over other apps" first, with its reason; on only once it is allowed. */
+    ASK,
+}
+
+fun lockSwitch(on: Boolean, overlayAllowed: Boolean): LockSwitch = when {
+    !on -> LockSwitch.STORE_OFF
+    overlayAllowed -> LockSwitch.STORE_ON
+    else -> LockSwitch.ASK
+}
+
+/** The synced lines the lock screen shows: the one before the line playing, it, and the next three (from the top before any). */
+fun lockWindow(size: Int, current: Int): IntRange {
+    val from = (current - 1).coerceAtLeast(0)
+    return from until minOf(size, from + LOCK_LINES)
+}
+
+private const val LOCK_LINES = 5
+
+/** On the activity's intent: started by [LockLyricsPart] when the screen turned on. */
+private const val EXTRA_SCREEN_ON = "app.lyrify.lock.screenOn"
+
+/**
+ * The lock screen lyrics, in their own task and never in recents. It is also the player session's activity: a tap on
+ * the music notification of an unlocked phone goes on to the app ([lockEntry]). Over the lock screen it closes when
+ * nothing is loaded any more, on a swipe, back or the chevron, when the screen turns off, and once the phone is
+ * unlocked; it keeps the screen on while the song plays.
+ */
+class LockLyricsActivity : ComponentActivity() {
+    private val closer = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) = finish()
+    }
+    private var listening = false
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        val core = PlayerGraph.core(this)
+        val loaded = core.ready.value && core.book.value.current != null
+        val origin = if (intent.getBooleanExtra(EXTRA_SCREEN_ON, false)) LockOrigin.SCREEN_ON else LockOrigin.NOTIFICATION
+        when (lockEntry(origin, getSystemService(KeyguardManager::class.java).isKeyguardLocked, loaded)) {
+            LockEntry.APP -> {
+                startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                finish()
+                return
+            }
+            LockEntry.NOTHING -> {
+                finish()
+                return
+            }
+            LockEntry.LYRICS -> Unit
+        }
+        enableEdgeToEdge(SystemBarStyle.dark(AndroidColor.TRANSPARENT), SystemBarStyle.dark(AndroidColor.TRANSPARENT))
+        ContextCompat.registerReceiver(
+            this,
+            closer,
+            IntentFilter().apply {
+                addAction(Intent.ACTION_SCREEN_OFF)
+                addAction(Intent.ACTION_USER_PRESENT)
+            },
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+        listening = true
+        val ledger = LedgerRepository(this)
+        setContent { LyrifyTheme { LockLyricsScreen(ledger.ledger.collectAsStateWithLifecycle(initialValue = LedgerState()).value, onClose = ::finish) } }
+    }
+
+    override fun onDestroy() {
+        if (listening) unregisterReceiver(closer)
+        super.onDestroy()
+    }
+}
+
+/** Light text on the cover's dark blur, whatever the phone's theme: it sits over the lock screen. */
+private val LockInk = Color(0xFF0A0A0B)
+private val LockText = Color(0xFFF7F5FF)
+private val LockMuted = LockText.copy(alpha = 0.55f)
+
+@Composable
+private fun LockLyricsScreen(ledger: LedgerState, onClose: () -> Unit) {
+    val context = LocalContext.current
+    val core = remember(context) { PlayerGraph.core(context) }
+    val connection = remember(context) { PlayerGraph.connection(context) }
+    LifecycleStartEffect(connection) {
+        connection.attach()
+        onStopOrDispose { connection.detach() }
+    }
+    val emptied by remember(core) { combine(core.ready, core.book) { ready, book -> ready && book.current == null } }.collectAsStateWithLifecycle(initialValue = false)
+    LaunchedEffect(emptied) { if (emptied) onClose() }
+    val ui = connection.ui.collectAsStateWithLifecycle().value
+    val screen = LocalView.current
+    val playing = ui?.playing == true
+    DisposableEffect(screen, playing) {
+        screen.keepScreenOn = playing
+        onDispose { screen.keepScreenOn = false }
+    }
+    val swipe = with(LocalDensity.current) { SWIPE_CLOSE.toPx() }
+    val title = stringResource(R.string.lock_title)
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(LockInk)
+            .semantics { paneTitle = title }
+            .pointerInput(onClose) {
+                var dragged = 0f
+                detectVerticalDragGestures(onDragStart = { dragged = 0f }, onDragEnd = { if (abs(dragged) > swipe) onClose() }) { _, drag -> dragged += drag }
+            },
+    ) {
+        if (ui == null) return@Box
+        val path = ui.item.song.path
+        AsyncImage(model = SongArt(path), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize().blur(52.dp).alpha(0.7f))
+        Box(Modifier.fillMaxSize().background(LockInk.copy(alpha = 0.55f)))
+        Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(horizontal = 16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp)) {
+                ChromeIconButton(R.drawable.ic_keyboard_arrow_down, stringResource(R.string.lock_close), onClose, glass = false, size = 48.dp, iconSize = 28.dp, tint = LockText)
+                SongCover(SongArt(path), size = 44.dp, shape = RoundedCornerShape(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(ui.song?.title ?: path.substringAfterLast('/'), style = MaterialTheme.typography.titleMedium, color = LockText, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    ui.song?.artist?.takeIf(String::isNotBlank)?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = LockMuted, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                }
+            }
+            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
+                LockLines(rememberSongLyrics(path, ledger.entries[path]), ui.positionAt(rememberClock(playing)))
+            }
+            LockControls(ui.positionAt(rememberClock(playing, everyMs = 500)), ui.durationMs, playing, connection::previous, connection::playPause, connection::next)
+            Text(stringResource(R.string.lock_hint), style = MaterialTheme.typography.labelMedium, color = LockMuted, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp))
+        }
+    }
+}
+
+/** The line before the one playing, it lit, and the next three; plain lyrics still; or "No lyrics yet". */
+@Composable
+private fun LockLines(lyrics: PanelLyrics?, positionMs: Long) {
+    val look = rememberLyricsLook()
+    val type = MaterialTheme.typography
+    Column(verticalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.fillMaxWidth()) {
+        when (lyrics) {
+            is PanelLyrics.Synced -> {
+                val at = currentLine(lyrics.lines, positionMs)
+                lockWindow(lyrics.lines.size, at).forEach { i ->
+                    Text(
+                        lyrics.lines[i].text,
+                        style = look.style(if (i == at) type.headlineMedium else type.headlineSmall, playing = i == at),
+                        textAlign = look.align,
+                        color = if (i == at) LockText else LockMuted,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+            is PanelLyrics.Plain -> lyrics.lines.take(PLAIN_LINES).forEach {
+                Text(it, style = look.style(type.titleLarge, playing = false), textAlign = look.align, color = LockText, modifier = Modifier.fillMaxWidth())
+            }
+            PanelLyrics.Finding, PanelLyrics.None -> Text(stringResource(R.string.player_no_lyrics), style = type.titleLarge, color = LockMuted, textAlign = look.align, modifier = Modifier.fillMaxWidth())
+            null -> Unit
+        }
+    }
+}
+
+/** The position (shown only), Previous, Play/Pause and Next. */
+@Composable
+private fun LockControls(positionMs: Long, durationMs: Long, playing: Boolean, onPrevious: () -> Unit, onPlayPause: () -> Unit, onNext: () -> Unit) {
+    val share = if (durationMs > 0) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
+    Box(Modifier.fillMaxWidth().padding(top = 16.dp).height(4.dp).clip(CircleShape).background(LockMuted.copy(alpha = 0.3f))) {
+        Box(Modifier.fillMaxWidth(share).height(4.dp).background(LockText))
+    }
+    Row(Modifier.fillMaxWidth().padding(top = 6.dp)) {
+        val style = MaterialTheme.typography.bodySmall.tabular()
+        Text(clock(positionMs), style = style, color = LockMuted)
+        Box(Modifier.weight(1f))
+        Text(clock(durationMs), style = style, color = LockMuted)
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(28.dp, Alignment.CenterHorizontally), verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
+        ChromeIconButton(R.drawable.ic_skip_previous_fill, stringResource(R.string.player_previous), onPrevious, glass = false, size = 56.dp, iconSize = 32.dp, tint = LockText)
+        PlayPauseButton(playing, onPlayPause, size = 72.dp)
+        ChromeIconButton(R.drawable.ic_skip_next_fill, stringResource(R.string.player_next), onNext, glass = false, size = 56.dp, iconSize = 32.dp, tint = LockText)
+    }
+}
+
+private const val PLAIN_LINES = 7
+private val SWIPE_CLOSE = 80.dp
+
+/**
+ * "Show when locked" in the playback service: while the session runs, the screen turning on over the lock screen opens
+ * the lyrics there when [opensOnScreenOn] says so. Started and stopped with the session.
+ */
+class LockLyricsPart : ServicePart {
+    private var scope: CoroutineScope? = null
+    private var receiver: BroadcastReceiver? = null
+    private var service: PlaybackService? = null
+
+    override fun start(service: PlaybackService, session: MediaLibraryService.MediaLibrarySession) {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + logFailures).also { this.scope = it }
+        val settings: StateFlow<Settings?> = Lyrify.settings(service).settings.stateIn(scope, SharingStarted.Eagerly, null)
+        val keyguard = service.getSystemService(KeyguardManager::class.java)
+        val screenOn = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                val on = settings.value?.lyrics?.showWhenLocked == true
+                if (!opensOnScreenOn(on, canDrawOverlays(service), session.player.isPlaying, keyguard.isKeyguardLocked)) return
+                try {
+                    service.startActivity(Intent(service, LockLyricsActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra(EXTRA_SCREEN_ON, true))
+                } catch (e: RuntimeException) {
+                    Log.w(LOG_TAG, "lock lyrics: not opened (${e.javaClass.simpleName})")
+                }
+            }
+        }
+        // The screen turning on reaches only receivers registered at run time.
+        ContextCompat.registerReceiver(service, screenOn, IntentFilter(Intent.ACTION_SCREEN_ON), ContextCompat.RECEIVER_NOT_EXPORTED)
+        receiver = screenOn
+        this.service = service
+    }
+
+    override fun stop() {
+        receiver?.let { service?.unregisterReceiver(it) }
+        receiver = null
+        service = null
+        scope?.cancel()
+        scope = null
+    }
+}
+
+/**
+ * Settings > Lyrics > "Show when locked": switched on, it first asks for "Display over other apps" when your phone has
+ * not allowed it ([lockSwitch]), with its one-line reason, then opens the phone's page for it; back from there, it is on
+ * only if allowed, and says so. Returns what the switch does; its dialog shows where this is called.
+ */
+@Composable
+fun rememberLockSwitch(onChange: ((Settings) -> Settings) -> Unit): (Boolean) -> Unit {
+    val context = LocalContext.current
+    val toasts = LocalToasts.current
+    val resources = LocalResources.current
+    val scope = rememberCoroutineScope()
+    var asking by rememberSaveable { mutableStateOf(false) }
+    var waiting by rememberSaveable { mutableStateOf(false) }
+    fun store(on: Boolean) {
+        onChange { it.copy(lyrics = it.lyrics.copy(showWhenLocked = on)) }
+        scope.launch { if (on || waiting) toasts.say(resources, if (on) R.string.lock_on else R.string.lock_denied) }
+    }
+    // Back from the phone's page.
+    LifecycleResumeEffect(Unit) {
+        if (waiting) {
+            store(canDrawOverlays(context))
+            waiting = false
+        }
+        onPauseOrDispose { }
+    }
+    if (asking) {
+        ConfirmDialog(
+            title = stringResource(R.string.lock_permission_title),
+            confirm = stringResource(R.string.lock_continue),
+            dismiss = stringResource(R.string.lock_cancel),
+            onConfirm = {
+                asking = false
+                waiting = true
+                context.startFirst(listOf(Intent(ACTION_MANAGE_OVERLAY_PERMISSION, "package:${context.packageName}".toUri()), Intent(ACTION_MANAGE_OVERLAY_PERMISSION)))
+            },
+            onDismiss = { asking = false },
+            text = stringResource(R.string.lock_permission_text),
+            icon = R.drawable.ic_lock,
+            destructive = false,
+        )
+    }
+    return { on ->
+        when (lockSwitch(on, canDrawOverlays(context))) {
+            LockSwitch.STORE_OFF -> onChange { it.copy(lyrics = it.lyrics.copy(showWhenLocked = false)) }
+            LockSwitch.STORE_ON -> store(true)
+            LockSwitch.ASK -> asking = true
+        }
+    }
+}
