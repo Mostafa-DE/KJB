@@ -73,6 +73,24 @@ class LyricsIndexDeviceTest {
         assertEquals(emptyMap<String, Long>(), store.indexed())
     }
 
+    /** Other scripts are words to the unicode61 tokenizer, and nothing typed reaches MATCH as its syntax. */
+    @Test
+    fun otherScriptsAreFoundAndQuerySyntaxNeverFails() = runBlocking {
+        val path = "/made/up/Harbour Light.mp3"
+        store.put(listOf(song(path, 1, "[00:01.00]Ο φάρος μετρά τα κύματα\n[00:02.00]灯台が波を数える\n[00:03.00]Near the harbour or the hill\n")))
+        val greek = StoredLine(path, 1_000, "Ο φάρος μετρά τα κύματα")
+        val near = StoredLine(path, 3_000, "Near the harbour or the hill")
+
+        assertEquals(listOf(greek), store.find(listOf("φαρος", "μετ")))
+        assertEquals(listOf(StoredLine(path, 2_000, "灯台が波を数える")), store.find(listOf("灯台")))
+        assertEquals(listOf(near), store.find(listOf("OR")))
+        assertEquals(listOf(near), store.find(listOf("NEAR")))
+        assertEquals(listOf(near), store.find(listOf("\"near", "the\"")))
+        for (syntax in listOf("\"", "*", "(", ")", "'", "-", "NEAR/2", "\"\"", "a\"b", "^")) {
+            assertEquals(syntax, emptyList<StoredLine>(), store.find(listOf(syntax)))
+        }
+    }
+
     /**
      * The cost of the index: [SONGS] made-up songs of about 40 lines (a chorus repeated), built in batches as a sync
      * does, then a one-letter search (the worst case). The log gets the time, the size and the counts.

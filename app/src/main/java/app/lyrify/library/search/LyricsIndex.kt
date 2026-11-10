@@ -262,8 +262,9 @@ object FileLrcFiles : LrcFiles {
 
 /**
  * [LyricsIndexStore] in app-private `databases/search.db`: a `songs` table (path, the `.lrc`'s modified time, how many
- * lines) and an FTS4 table of lines (the folded text indexed, the text and time kept beside it). The simple tokenizer
- * only splits on spaces and folds ASCII case here, since every line is stored [fold]ed. A line's docid is its song's id
+ * lines) and an FTS4 table of lines (the folded text indexed, the text and time kept beside it). Every line is stored
+ * [fold]ed, so the unicode61 tokenizer only splits it on its spaces into words of any script; it takes no accents off
+ * (`remove_diacritics=0`), as [fold] already did, so the index and [match] agree. A line's docid is its song's id
  * shifted left 16 bits plus its place, so a song's first match is its lowest docid. Disposable: a new [SCHEMA] drops it
  * and it is read again from the `.lrc` files; never backed up.
  */
@@ -279,7 +280,7 @@ class SqliteLyricsIndexStore(
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE songs (id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE, modified INTEGER NOT NULL, lines INTEGER NOT NULL)")
-        db.execSQL("CREATE VIRTUAL TABLE lines USING fts4(folded, text, time, notindexed=text, notindexed=time)")
+        db.execSQL("CREATE VIRTUAL TABLE lines USING fts4(folded, text, time, notindexed=text, notindexed=time, tokenize=unicode61 \"remove_diacritics=0\")")
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = recreate(db)
@@ -341,9 +342,15 @@ class SqliteLyricsIndexStore(
         }
     }
 
-    /** One FTS phrase: the words in a row, the last as a prefix. Folded words hold only letters, digits and no quotes. */
+    /**
+     * One FTS phrase: the words in a row, the last as a prefix. They are [fold]ed here again, so they hold only letters,
+     * digits and single spaces: a quote, a star, a bracket or a minus never reaches MATCH as its syntax, and OR or NEAR
+     * inside the quotes are words.
+     */
     private fun query(words: List<String>, signal: CancellationSignal): List<StoredLine> {
-        val phrase = "\"" + words.joinToString(" ") + "*\""
+        val folded = fold(words.joinToString(" "))
+        if (folded.isEmpty()) return emptyList()
+        val phrase = "\"$folded*\""
         return readableDatabase.rawQuery(FIND, arrayOf(phrase), signal).use { row ->
             buildList { while (row.moveToNext()) add(StoredLine(row.getString(0), if (row.isNull(1)) null else row.getLong(1), row.getString(2))) }
         }
@@ -384,8 +391,11 @@ class SqliteLyricsIndexStore(
     companion object {
         const val NAME: String = "search.db"
 
-        /** Bump on any change to the tables or to [fold]: the index is then read again from the `.lrc` files. */
-        const val SCHEMA: Int = 1
+        /**
+         * Bump on any change to the tables or to [fold]: the index is then read again from the `.lrc` files. 2: the
+         * unicode61 tokenizer in place of simple.
+         */
+        const val SCHEMA: Int = 2
 
         /** Lines a song may have in the index: its place takes the docid's low 16 bits. */
         const val MAX_LINES: Int = 2_000

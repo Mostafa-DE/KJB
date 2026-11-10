@@ -126,6 +126,22 @@ class LyricsIndexTest {
         assertEquals(listOf("01 Paper Lantern.mp3", "Ember Road.flac"), names.map { it.title })
     }
 
+    @Test
+    fun `lines in other scripts are found, and words MATCH reads as its syntax find a line or nothing`() = runTest {
+        files.put(lrc(lantern), 100, "[00:01.00]Ο φάρος μετρά τα κύματα\n[00:02.00]灯台が波を数える\n[00:03.00]Near the harbour or the hill\n")
+        val index = index()
+        index.sync(listOf(lantern))
+        val library = library(lantern)
+
+        assertEquals("Ο φάρος μετρά τα κύματα", index.find("φαρος μετ", library, settings).single().line)
+        assertEquals("灯台が波を数える", index.find("灯台", library, settings).single().line)
+        assertEquals("Near the harbour or the hill", index.find("OR", library, settings).single().line)
+        assertEquals("Near the harbour or the hill", index.find("NEAR", library, settings).single().line)
+        for (syntax in listOf("\"", "*", "(", ")", "'", "-", "\"hold", "NEAR/2", "\"\"")) {
+            assertEquals(syntax, emptyList<LyricHit>(), index.find(syntax, library, settings))
+        }
+    }
+
     // Keeping up to date
 
     @Test
@@ -295,7 +311,10 @@ private class FakeLrcFiles : LrcFiles {
     override fun modified(path: String): Long? = texts[path]?.first
 }
 
-/** The index in memory: a line matches as FTS4's phrase query does, whole words in a row with the last as a prefix. */
+/**
+ * The index in memory: a line matches as FTS4's phrase query does, whole words in a row with the last as a prefix, and
+ * the words are folded again first, as the SQLite store does.
+ */
 private class FakeLyricsIndexStore : LyricsIndexStore {
     private val songs = linkedMapOf<String, IndexedSong>()
     var failing = false
@@ -307,7 +326,8 @@ private class FakeLyricsIndexStore : LyricsIndexStore {
     override fun remove(songs: Collection<String>) = checked { songs.forEach { this.songs.remove(it) } }
 
     override suspend fun find(words: List<String>): List<StoredLine> = checked {
-        val phrase = " " + words.joinToString(" ")
+        val phrase = " " + fold(words.joinToString(" "))
+        if (phrase.isBlank()) return@checked emptyList()
         songs.values.mapNotNull { song ->
             song.lines.firstOrNull { (" " + it.folded).contains(phrase) }?.let { StoredLine(song.path, it.timeMs, it.text) }
         }
