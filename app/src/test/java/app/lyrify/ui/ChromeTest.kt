@@ -5,6 +5,7 @@ import androidx.compose.animation.core.SnapSpec
 import androidx.compose.animation.core.tween
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.platform.AccessibilityManager
 import app.lyrify.R
 import app.lyrify.settings.DockTab
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -129,6 +130,25 @@ class ChromeTest {
     }
 
     @Test
+    fun `with a longer accessibility timeout a replaced Undo message keeps what its Undo needs that long`() = runTest {
+        val toasts = ToastState(phone { own, controls -> if (controls) 30_000L else own })
+        var letGo = false
+        launch { letGo = !toasts.show(Toast("Synced lyrics saved", action = "Undo")) }
+        runCurrent()
+        // The pill on screen waits the same time.
+        assertEquals(30_000L, toasts.current?.millis)
+        val newer = async { toasts.show(Toast("Shuffle on")) }
+        runCurrent()
+        assertEquals(3_000L, toasts.current?.millis)
+        advanceTimeBy(29_999)
+        assertFalse(letGo)
+        advanceTimeBy(2)
+        assertTrue(letGo)
+        toasts.current?.dismiss()
+        assertFalse(newer.await())
+    }
+
+    @Test
     fun `a message replaced after its own time was up ends for its caller at once`() = runTest {
         val toasts = ToastState()
         val held = async { toasts.show(Toast("Synced lyrics saved", action = "Undo")) }
@@ -195,10 +215,27 @@ class ChromeTest {
     }
 
     @Test
-    fun `a message stays 4 seconds, 6 with an action or two lines`() {
-        assertEquals(4_000L, toastMillis(Toast("Tone deleted")))
-        assertEquals(6_000L, toastMillis(Toast("Tone deleted", action = "Undo")))
-        assertEquals(6_000L, toastMillis(Toast("Couldn't open your Clock app. Open it from your home screen.")))
+    fun `a message stays 3 seconds, 6 with an action or two lines`() {
+        assertEquals(3_000L, toastMillis(Toast("Tone deleted"), a11y = null))
+        assertEquals(6_000L, toastMillis(Toast("Tone deleted", action = "Undo"), a11y = null))
+        assertEquals(6_000L, toastMillis(Toast("Couldn't open your Clock app. Open it from your home screen."), a11y = null))
+    }
+
+    @Test
+    fun `the phone's accessibility timeout stretches a message, an action asked as controls, and never shortens it`() {
+        val asked = mutableListOf<Boolean>()
+        // As Android's: one time for controls, another for text alone.
+        val slow = phone { own, controls ->
+            asked += controls
+            if (controls) 30_000L else maxOf(own, 10_000L)
+        }
+        assertEquals(30_000L, toastMillis(Toast("Song moved to trash", action = "Undo"), slow))
+        assertEquals(10_000L, toastMillis(Toast("Tone deleted"), slow))
+        assertEquals(listOf(true, false), asked)
+        // A phone that answers less than the message's own time never cuts it short.
+        val hasty = phone { _, _ -> 1_000L }
+        assertEquals(6_000L, toastMillis(Toast("Song moved to trash", action = "Undo"), hasty))
+        assertEquals(3_000L, toastMillis(Toast("Tone deleted"), hasty))
     }
 
     @Test
@@ -304,5 +341,13 @@ class ChromeTest {
         assertSame(Motion.indicator, motion(Motion.indicator, reduced = false))
         assertEquals(1f, pressScale(0.92f, reduced = true))
         assertEquals(0.92f, pressScale(0.92f, reduced = false))
+    }
+
+    /** A phone whose accessibility timeout is [answer], given a message's own time and whether it has controls; it always has text. */
+    private fun phone(answer: (own: Long, controls: Boolean) -> Long) = object : AccessibilityManager {
+        override fun calculateRecommendedTimeoutMillis(originalTimeoutMillis: Long, containsIcons: Boolean, containsText: Boolean, containsControls: Boolean): Long {
+            assertTrue(containsText)
+            return answer(originalTimeoutMillis, containsControls)
+        }
     }
 }

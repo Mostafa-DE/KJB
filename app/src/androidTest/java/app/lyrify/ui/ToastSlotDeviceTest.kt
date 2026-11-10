@@ -22,6 +22,7 @@ import androidx.compose.ui.test.swipeRight
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Rule
 import org.junit.Test
@@ -30,7 +31,7 @@ import org.junit.runner.RunWith
 /**
  * A message takes taps where it is drawn (D1 review): its slot takes no room, and the message floats up from it over the
  * content (the shell's, above the dock) or down from it (the player's, under its top bar), yet its Undo and a swipe reach
- * the message, never the content under it.
+ * the message, never the content under it. A finger on it keeps it there.
  */
 @RunWith(AndroidJUnit4::class)
 class ToastSlotDeviceTest {
@@ -99,6 +100,35 @@ class ToastSlotDeviceTest {
         }
     }
 
+    @Test
+    fun aMessageHeldUnderAFingerStaysPastItsTimeAndGoesItsWholeTimeAfterTheLift() {
+        val toasts = ToastState()
+        var acted: Boolean? = null
+        compose.mainClock.autoAdvance = false
+        compose.setContent {
+            LaunchedEffect(Unit) { acted = toasts.show(Toast(MESSAGE, action = UNDO)) }
+            OverContent(onTapUnder = {}) {
+                Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()) {
+                    ToastSlot(Modifier.padding(horizontal = 16.dp), padding = PaddingValues(bottom = 8.dp), state = toasts)
+                    Spacer(Modifier.fillMaxWidth().height(64.dp))
+                }
+            }
+        }
+        compose.mainClock.advanceTimeBy(FRAMES_MS)
+        compose.onNodeWithText(MESSAGE).performTouchInput { down(center) }
+        compose.mainClock.advanceTimeBy(HELD_MS)
+        compose.runOnIdle { assertNotNull(toasts.current) }
+        compose.onNodeWithText(MESSAGE).performTouchInput { up() }
+        // Let go, it has its 6 s again from the lift.
+        compose.mainClock.advanceTimeBy(UNDO_MS - FRAMES_MS)
+        compose.runOnIdle { assertNotNull(toasts.current) }
+        compose.mainClock.advanceTimeBy(2 * FRAMES_MS)
+        compose.runOnIdle {
+            assertEquals(false, acted)
+            assertNull(toasts.current)
+        }
+    }
+
     /** The content a message floats over: the whole window, counting the taps that reach it. */
     @Composable
     private fun OverContent(onTapUnder: () -> Unit, slot: @Composable BoxScope.() -> Unit) {
@@ -111,5 +141,14 @@ class ToastSlotDeviceTest {
     private companion object {
         const val MESSAGE = "Removed from a made-up list"
         const val UNDO = "Undo"
+
+        /** A message with an action stays 6 s. */
+        const val UNDO_MS = 6_000L
+
+        /** Held well past those 6 s. */
+        const val HELD_MS = 10_000L
+
+        /** A few frames, for the message to come in and its timer to start or stop. */
+        const val FRAMES_MS = 100L
     }
 }
