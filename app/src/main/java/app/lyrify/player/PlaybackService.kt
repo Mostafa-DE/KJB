@@ -47,7 +47,6 @@ import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.ListeningExecutorService
 import com.google.common.util.concurrent.MoreExecutors
-import com.google.common.util.concurrent.SettableFuture
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -348,15 +347,18 @@ class PlaybackService : MediaLibraryService() {
             return Futures.immediateFuture(playing())
         }
 
-        /** Play on a headset or Bluetooth after KJB was closed: the queue playing at its place, once the queues and the library are read. */
+        /**
+         * Play on a headset or Bluetooth after KJB was closed: the queue playing at its place, once the queues and the
+         * library are read; nothing when the library cannot be read (no All files access), or after [RESUME_WAIT_MS].
+         */
         override fun onPlaybackResumption(mediaSession: MediaSession, controller: MediaSession.ControllerInfo, isForPlayback: Boolean): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
-            val result = SettableFuture.create<MediaSession.MediaItemsWithStartPosition>()
-            scope.launch {
+            val none = MediaSession.MediaItemsWithStartPosition(emptyList(), 0, 0)
+            val songs = LibraryGraph.repository(this@PlaybackService).state
+            return resumption(scope, RESUME_WAIT_MS, none, ready = {
                 core.ready.first { it }
-                library.first { it != null }
-                result.set(playing())
-            }
-            return result
+                // The service's own view of the library is what playing() reads: wait for it too, not only the read.
+                songs.first { it !is LibraryState.Loading } is LibraryState.Ready && library.first { it != null } != null
+            }) { playing() }
         }
     }
 

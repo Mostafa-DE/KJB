@@ -4,7 +4,11 @@ import app.lyrify.library.Song
 import app.lyrify.library.SongRef
 import app.lyrify.library.song
 import app.lyrify.stats.PlayEvent
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceTimeBy
@@ -303,6 +307,39 @@ class QueueBridgeTest {
         port.calls.clear()
         bridge.sync(book.refresh { ref -> if (ref.path == songs[2].path) elsewhere.ref else ref }, findMoved)
         assertEquals(emptyList<String>(), port.calls)
+    }
+
+    // Playback resumption (a headset's or a car's play after KJB was closed)
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `resumption hands over the queue once the queues and the library are read`() = runTest {
+        val answer = resumption(backgroundScope, timeoutMs = 10_000, none = "none", ready = { true }) { "queue" }
+        runCurrent()
+        assertTrue(answer.isDone)
+        assertEquals("queue", answer.get())
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `resumption answers with nothing when the library cannot be read, takes too long, or the service ends`() = runTest {
+        val unreadable = resumption(backgroundScope, timeoutMs = 10_000, none = "none", ready = { false }) { "queue" }
+        runCurrent()
+        assertTrue(unreadable.isDone)
+        assertEquals("none", unreadable.get())
+
+        val slow = resumption(backgroundScope, timeoutMs = 10_000, none = "none", ready = { awaitCancellation() }) { "queue" }
+        advanceTimeBy(10_001)
+        assertTrue(slow.isDone)
+        assertEquals("none", slow.get())
+
+        val service = CoroutineScope(coroutineContext + Job())
+        val ended = resumption(service, timeoutMs = 10_000, none = "none", ready = { awaitCancellation() }) { "queue" }
+        runCurrent()
+        service.cancel()
+        runCurrent()
+        assertTrue(ended.isDone)
+        assertEquals("none", ended.get())
     }
 
     // A song that cannot be played

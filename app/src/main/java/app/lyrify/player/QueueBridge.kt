@@ -4,7 +4,12 @@ import app.lyrify.library.Song
 import app.lyrify.library.SongRef
 import app.lyrify.stats.PlayEvent
 import app.lyrify.stats.PlayEvents
+import com.google.common.util.concurrent.ListenableFuture
+import com.google.common.util.concurrent.SettableFuture
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -150,6 +155,22 @@ class QueueBridge(private val port: PlayerPort) {
         }
     }
 }
+
+/**
+ * The answer to a headset's or a car's play after KJB was closed: [items] once [ready] says the queues and the library
+ * are read, [none] when it says the library cannot be read, when that takes longer than [timeoutMs], or when [scope]
+ * ends first. Never left waiting.
+ */
+fun <T> resumption(scope: CoroutineScope, timeoutMs: Long, none: T, ready: suspend () -> Boolean, items: () -> T): ListenableFuture<T> {
+    val result = SettableFuture.create<T>()
+    scope.launch { result.set(if (withTimeoutOrNull(timeoutMs) { ready() } == true) items() else none) }
+        // Cancelled (the service ended), or set already: set does nothing then.
+        .invokeOnCompletion { result.set(none) }
+    return result
+}
+
+/** How long a headset's play after KJB was closed waits for the queues and the library. */
+const val RESUME_WAIT_MS: Long = 10_000
 
 /** What the player does after a song could not be played. */
 sealed interface AfterError {
