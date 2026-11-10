@@ -122,6 +122,7 @@ class PlaybackService : MediaLibraryService() {
         bridge = QueueBridge(engine)
         player = LyrifyPlayer(mainLooper, engine, core, skips = ::skips, sync = ::sync, beforeSeek = ::heardSoFar)
         engine.addListener(Follower())
+        core.follow { engine.loaded.getOrNull(engine.index)?.let { PlayerAt(it, engine.positionMs) } }
         val built = MediaLibrarySession.Builder(this, player, Callback())
             // A tap on the notification or the lock screen's card opens the player, over the tab the app was on.
             .setSessionActivity(PendingIntent.getActivity(this, OPEN_PLAYER, openPlayer(), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
@@ -165,6 +166,7 @@ class PlaybackService : MediaLibraryService() {
     override fun onDestroy() {
         // Written before the process may go.
         engine.loaded.getOrNull(engine.index)?.let { uid -> core.savePlaceNow(uid, engine.positionMs) }
+        core.follow(null)
         heardSoFar()
         tracker.end()
         parts.forEach { it.stop() }

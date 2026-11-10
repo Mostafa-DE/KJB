@@ -32,6 +32,9 @@ import java.io.File
 import java.io.IOException
 import kotlin.random.Random
 
+/** Where the player is: the song [uid] of the queue playing, [positionMs] in. */
+data class PlayerAt(val uid: Long, val positionMs: Long)
+
 /** Where the queues are kept: `queues.json` and `playback.json` in the app ([QueueFiles]), memory in tests. */
 interface QueueStorage {
     /** The queues as stored, with the place of the one playing applied, and Repeat. */
@@ -133,6 +136,17 @@ class PlayerCore(
         return result
     }
 
+    /** Where the player is, while the service runs; null when it stops. */
+    private var player: (() -> PlayerAt?)? = null
+
+    /**
+     * The service hands in where its player is ([player]; null as it stops). Every change then first takes that place
+     * onto the queue playing, so a queue left (another queue played, Resume) keeps where it really was, not its last save.
+     */
+    fun follow(player: (() -> PlayerAt?)?) {
+        this.player = player
+    }
+
     fun now(): Long = wall()
 
     fun shuffleRandom(): Random = random
@@ -161,8 +175,9 @@ class PlayerCore(
         return PlaybackPlace(queueId, uid, positionMs, _repeat.value, at = wall()).also { live.value = it }
     }
 
-    /** The book with the live place in it, as the next change sees it. */
+    /** The book with the live place in it (the player's own first), as the next change sees it. */
     private fun folded(): QueueBook {
+        player?.invoke()?.let { savePlace(it.uid, it.positionMs) }
         val place = live.value ?: return _book.value
         live.value = null
         return withPlace(_book.value, place)

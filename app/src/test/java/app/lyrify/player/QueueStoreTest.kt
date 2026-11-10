@@ -309,4 +309,28 @@ class QueueStoreTest {
         core.savePlaceNow(first, 4_000)
         assertEquals(PlaybackPlace(core.book.value.currentId, first, 4_000, Repeat.OFF, at = 4_000), files.place)
     }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `a queue left keeps the player's place at the switch, before any save`() = runTest {
+        val files = Files()
+        val core = PlayerCore(files, backgroundScope, wall = { currentTime })
+        runCurrent()
+        core.switch { it.play(album, 0, albumSource, currentTime) }
+        runCurrent()
+        val albumId = core.book.value.currentId!!
+        val third = core.book.value.current!!.items[2].uid
+        core.follow { PlayerAt(third, 31_000) }
+        advanceTimeBy(4_000)
+        core.switch { it.play(folderSongs, 1, folderSource, currentTime) }
+        runCurrent()
+
+        assertEquals(2, core.book.value.queue(albumId)!!.index)
+        assertEquals(31_000L, core.book.value.queue(albumId)!!.positionMs)
+        // Until the player loads the new queue it still holds the album's song: the new queue's place stays.
+        core.change { it.rename(albumId, "Kept") }
+        runCurrent()
+        assertEquals(1, core.book.value.current!!.index)
+        assertEquals(0L, core.book.value.current!!.positionMs)
+    }
 }
