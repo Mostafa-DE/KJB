@@ -73,6 +73,7 @@ import app.lyrify.library.mostPlayed
 import app.lyrify.library.recentlyAdded
 import app.lyrify.library.recentlyPlayed
 import app.lyrify.library.search.Hit
+import app.lyrify.library.search.LibraryHits
 import app.lyrify.library.search.LyricHit
 import app.lyrify.library.search.Match
 import app.lyrify.library.search.SearchGraph
@@ -288,12 +289,8 @@ private fun rememberSearchResults(query: String): SearchResults? {
             value = null
             return@produceState
         }
-        // The lyrics found before stay until the new ones are in, so In lyrics does not blink at each key press.
         val before = value
-        value = withContext(Dispatchers.Default) {
-            val found = byName.find(query)
-            SearchResults(query, found.songs, found.artists, found.albums, found.folders, ranked(lists, query) { it.name }, before?.lyrics)
-        }
+        value = withContext(Dispatchers.Default) { namedResults(query, byName.find(query), ranked(lists, query) { it.name }, before) }
         // New words: the lyrics are searched once typing pauses (each key press starts over).
         if (before?.query != query) delay(LYRICS_DELAY_MS)
         val inLyrics = withContext(Dispatchers.Default) { lyrics.find(query, searched, shown) }
@@ -301,6 +298,14 @@ private fun rememberSearchResults(query: String): SearchResults? {
     }
     return results
 }
+
+/**
+ * The results for [query] by name, with In lyrics from [before] only when it was for the same words (the index, the
+ * library or the playlists changed), so it does not blink. New words wait for their own: the last words' lyric rows never
+ * show under them or join their queue.
+ */
+fun namedResults(query: String, found: LibraryHits, lists: List<Hit<ListRow>>, before: SearchResults?): SearchResults =
+    SearchResults(query, found.songs, found.artists, found.albums, found.folders, lists, before?.takeIf { it.query == query }?.lyrics)
 
 /** The built-in lists, then the user's playlists, each with how many of its songs the library shows. Off the main thread. */
 private suspend fun listRows(library: Library, playlists: PlaylistsState, names: Map<BuiltInList, String>, plays: PlaysQuery): List<ListRow> =
