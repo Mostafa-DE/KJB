@@ -1,0 +1,87 @@
+package app.lyrify.ui
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import java.io.File
+
+/** Lyrics on the lock screen: when they open, from the notification and by themselves, and the switch's permission. */
+class LockLyricsTest {
+    @Test
+    fun `a tap on the music notification shows the lyrics over the lock screen, and the app once unlocked`() {
+        assertEquals(LockEntry.LYRICS, lockEntry(LockOrigin.NOTIFICATION, locked = true, loaded = true))
+        assertEquals(LockEntry.APP, lockEntry(LockOrigin.NOTIFICATION, locked = false, loaded = true))
+        assertEquals(LockEntry.APP, lockEntry(LockOrigin.NOTIFICATION, locked = false, loaded = false))
+        // Never when nothing plays: the lock screen stays as it is.
+        assertEquals(LockEntry.NOTHING, lockEntry(LockOrigin.NOTIFICATION, locked = true, loaded = false))
+    }
+
+    @Test
+    fun `over the lock screen it waits for the queues to be read, also after a restart of the app`() {
+        assertEquals(LockEntry.WAIT, lockEntry(LockOrigin.NOTIFICATION, locked = true, loaded = null))
+        assertEquals(LockEntry.WAIT, lockEntry(LockOrigin.SCREEN_ON, locked = true, loaded = null))
+        assertEquals(LockEntry.APP, lockEntry(LockOrigin.NOTIFICATION, locked = false, loaded = null))
+        assertEquals(LockEntry.NOTHING, lockEntry(LockOrigin.SCREEN_ON, locked = false, loaded = null))
+    }
+
+    @Test
+    fun `a tap on the notification opens the player through its route, the lyrics on top, in KJB's own task`() {
+        // Unit tests run in the module's folder.
+        val service = File("src/main/java/app/lyrify/player/PlaybackService.kt").readText()
+        assertTrue(Regex("""PendingIntent\.getActivities\(\s*this,\s*OPEN_PLAYER,\s*arrayOf\(openPlayer\(\), Intent\(this, LockLyricsActivity::class\.java\)\)""").containsMatchIn(service))
+        assertTrue(service.contains(".putExtra(EXTRA_DESTINATION, DESTINATION_PLAYER)"))
+        // No trampoline: the lock screen lyrics never start another screen.
+        val lock = File("src/main/java/app/lyrify/ui/LockLyricsActivity.kt").readText()
+        assertFalse(lock.contains("startActivity(Intent(this,"))
+        // Its own document task when the screen turning on opens it, removed when it closes; no task of its own otherwise.
+        assertTrue(lock.contains("Intent.FLAG_ACTIVITY_NEW_DOCUMENT or Intent.FLAG_ACTIVITY_MULTIPLE_TASK"))
+        assertTrue(lock.contains("finishAndRemoveTask()"))
+        val manifest = File("src/main/AndroidManifest.xml").readText()
+        val activity = Regex("""<activity\s+android:name="\.ui\.LockLyricsActivity"[^>]*>""").find(manifest)!!.value
+        assertFalse(activity.contains("taskAffinity"))
+        assertFalse(activity.contains("singleInstance"))
+        assertTrue(activity.contains("android:showWhenLocked=\"true\""))
+    }
+
+    @Test
+    fun `Show when locked turns itself off once Display over other apps is taken back`() {
+        assertTrue(showWhenLockedNow(setting = true, overlayAllowed = true))
+        assertFalse(showWhenLockedNow(setting = true, overlayAllowed = false))
+        assertFalse(showWhenLockedNow(setting = false, overlayAllowed = true))
+    }
+
+    @Test
+    fun `opened by the screen turning on, it shows over the lock screen only, and never opens the app`() {
+        assertEquals(LockEntry.LYRICS, lockEntry(LockOrigin.SCREEN_ON, locked = true, loaded = true))
+        assertEquals(LockEntry.NOTHING, lockEntry(LockOrigin.SCREEN_ON, locked = false, loaded = true))
+        assertEquals(LockEntry.NOTHING, lockEntry(LockOrigin.SCREEN_ON, locked = true, loaded = false))
+    }
+
+    @Test
+    fun `Show when locked opens the lyrics on screen-on only while KJB plays, the switch on and Display over other apps allowed`() {
+        assertTrue(opensOnScreenOn(setting = true, overlayAllowed = true, playing = true, locked = true))
+        assertFalse(opensOnScreenOn(setting = false, overlayAllowed = true, playing = true, locked = true))
+        assertFalse(opensOnScreenOn(setting = true, overlayAllowed = false, playing = true, locked = true))
+        assertFalse(opensOnScreenOn(setting = true, overlayAllowed = true, playing = false, locked = true))
+        assertFalse(opensOnScreenOn(setting = true, overlayAllowed = true, playing = true, locked = false))
+    }
+
+    @Test
+    fun `the switch asks for Display over other apps only when it is turned on without it`() {
+        assertEquals(LockSwitch.ASK, lockSwitch(on = true, overlayAllowed = false))
+        assertEquals(LockSwitch.STORE_ON, lockSwitch(on = true, overlayAllowed = true))
+        assertEquals(LockSwitch.STORE_OFF, lockSwitch(on = false, overlayAllowed = false))
+        assertEquals(LockSwitch.STORE_OFF, lockSwitch(on = false, overlayAllowed = true))
+    }
+
+    @Test
+    fun `the lock screen shows the line before the one playing, it, and the next three`() {
+        assertEquals(0..4, lockWindow(size = 20, current = -1))
+        assertEquals(0..4, lockWindow(size = 20, current = 0))
+        assertEquals(4..8, lockWindow(size = 20, current = 5))
+        assertEquals(18..19, lockWindow(size = 20, current = 19))
+        assertEquals(0..1, lockWindow(size = 2, current = 1))
+        assertTrue(lockWindow(size = 0, current = -1).isEmpty())
+    }
+}

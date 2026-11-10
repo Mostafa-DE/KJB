@@ -2,12 +2,15 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- LRCLIB lookups. Requests carry artist, title, album and duration only. -->
+    <!-- LRCLIB lookups carry artist, title, album and duration only. Covers & tags asks musicbrainz.org with album
+         titles, artists, song titles, track counts and lengths, and gets covers from coverartarchive.org and the
+         archive.org servers it redirects to. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
     <!-- All files access: find songs in MediaStore and create .lrc files next to them in any
-         folder. Granted by the user in Settings. The app never changes music; songs leave only when the user
-         moves them to the system trash from the Duplicates tab (MediaStore.createTrashRequest, confirmed twice). -->
+         folder. Granted by the user in Settings. KJB changes a song file only when the user confirms (Covers & tags),
+         and only its tags and cover, never the music; every change can be undone. Songs leave only when the user
+         moves them to the system trash (MediaStore.createTrashRequest, confirmed twice). -->
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
 
     <!-- Tones: set a tone as the phone's ringtone, alarm or notification sound, only when the user taps Set. Granted by
@@ -38,7 +41,26 @@
          adds it too. -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
+    <!-- player: start when connected -->
+    <!-- "Start when connected" (player/StartWhenConnected.kt), Android 13 and later: the Companion Device Manager tells KJB
+         when a Bluetooth device the user picked in Android's picker connects (REQUEST_OBSERVE_COMPANION_DEVICE_PRESENCE),
+         and that pairing lets KJB start its mediaPlayback service from the background
+         (REQUEST_COMPANION_START_FOREGROUND_SERVICES_FROM_BACKGROUND, an exemption Android lists for companion apps). Both
+         are normal permissions, granted at install with no prompt. Not REQUEST_COMPANION_RUN_IN_BACKGROUND, which would
+         also lift battery limits, and not BLUETOOTH_CONNECT: the picker gives the device's name. -->
+    <uses-permission android:name="android.permission.REQUEST_OBSERVE_COMPANION_DEVICE_PRESENCE" />
+    <uses-permission android:name="android.permission.REQUEST_COMPANION_START_FOREGROUND_SERVICES_FROM_BACKGROUND" />
+    <!-- The pairing calls need this declared. Not required: a phone without it installs KJB and shows no row. -->
+    <uses-feature
+        android:name="android.software.companion_device_setup"
+        android:required="false" />
+
     <!-- lyrics lock: permissions -->
+    <!-- "Display over other apps", for "Show when locked" only (ui/LockLyricsActivity): with it, Android lets KJB open
+         the lyrics over the lock screen when the screen turns on while KJB plays. Asked only when the user switches it
+         on, with a one-line reason; nothing is drawn over other apps. Tapping the music notification needs no
+         permission. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <!-- androidx.core adds this one for dynamic receivers KJB never registers. -->
     <uses-permission
@@ -50,7 +72,8 @@
 
     <!-- onnxruntime-android (the AI lyrics engine) adds ACCESS_NETWORK_STATE, INTERNET and a ContentProvider that
          starts its 1DS telemetry client. The provider is removed below and telemetry is also switched off in code
-         (ai/Npu.kt). INTERNET stays for LRCLIB and the one-time model download (models/ModelStore.kt: Qualcomm AI Hub,
+         (ai/Npu.kt). INTERNET stays for LRCLIB, Covers & tags (tags/lookup/MetaClient.kt: MusicBrainz
+         and the Cover Art Archive only) and the one-time model download (models/ModelStore.kt: Qualcomm AI Hub,
          GitHub and Hugging Face only); ACCESS_NETWORK_STATE for that download's unmetered-network constraint. The AI
          itself never goes online. -->
 
@@ -156,10 +179,86 @@
             </intent-filter>
         </receiver>
 
+        <!-- Start when connected: bound by Android while a device paired with KJB is connected. Exported for the system,
+             and only the system holds BIND_COMPANION_DEVICE_SERVICE (a signature permission), so no app can bind it.
+             Android 13 and later (targetApi): before, KJB pairs with nothing, so Android never binds it. -->
+        <service
+            android:name=".player.ConnectService"
+            android:exported="true"
+            android:permission="android.permission.BIND_COMPANION_DEVICE_SERVICE"
+            tools:targetApi="33">
+            <intent-filter>
+                <action android:name="android.companion.CompanionDeviceService" />
+            </intent-filter>
+        </service>
+
         <!-- lyrics lock -->
+        <!-- Lyrics over the lock screen (ui/LockLyricsActivity), shown without unlocking (showWhenLocked). A tap on the
+             music notification opens the player with it on top, in KJB's task; on an unlocked phone it closes at once.
+             "Show when locked" also starts it when the screen turns on while KJB plays, then as a task of its own,
+             never in recents (excludeFromRecents counts for the task it starts), removed when it closes. Not exported:
+             only KJB's own intents start it. -->
+        <activity
+            android:name=".ui.LockLyricsActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:showWhenLocked="true" />
 
         <!-- widget -->
+        <!-- The home-screen widgets (widget/Widgets.kt): "KJB", 4 by 1, and "KJB large", 4 by 2. Glance receivers, exported
+             because the home screen sends them its widget updates; their buttons reach the player through a
+             MediaController, never a broadcast. -->
+        <receiver
+            android:name=".widget.SmallWidgetReceiver"
+            android:exported="true"
+            android:label="@string/app_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_small" />
+        </receiver>
+        <receiver
+            android:name=".widget.LargeWidgetReceiver"
+            android:exported="true"
+            android:label="@string/widget_large">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_large" />
+        </receiver>
 
         <!-- auto -->
+        <!-- Android Auto: KJB is a media app, and the car browses and plays through PlaybackService above. An app installed
+             from outside an app store shows in Android Auto only once its developer setting "Unknown sources" is on
+             (Settings, About, "Using Android Auto"). The monochrome icon marks KJB's items in the car. -->
+        <meta-data
+            android:name="com.google.android.gms.car.application"
+            android:resource="@xml/automotive_app_desc" />
+        <meta-data
+            android:name="androidx.car.app.TintableAttributionIcon"
+            android:resource="@drawable/ic_stat_kjb" />
+        <!-- Voice requests: Android Auto and the Assistant send "Play <words> on KJB" to the media session
+             (auto/CarBrowse.kt). Some systems look for this older search intent to know KJB takes them; one sent this
+             way only opens KJB. -->
+        <activity-alias
+            android:name=".auto.PlayFromSearch"
+            android:exported="true"
+            android:targetActivity=".ui.MainActivity">
+            <intent-filter>
+                <action android:name="android.media.action.MEDIA_PLAY_FROM_SEARCH" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity-alias>
+        <!-- Covers for the car's lists (auto/CarBrowse.kt), by MediaStore id only, read-only. Not exported: the browse tree
+             grants each app that browses it read access to the covers. -->
+        <provider
+            android:name=".auto.CarCovers"
+            android:authorities="${applicationId}.covers"
+            android:exported="false"
+            android:grantUriPermissions="true" />
     </application>
 </manifest>

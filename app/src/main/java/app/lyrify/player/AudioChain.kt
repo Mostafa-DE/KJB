@@ -32,22 +32,48 @@ interface SongLevels {
 
 object AudioChain {
     /**
-     * A new chain for one player: Volume levelling and its boost from [settings], read again at every buffer so a change
-     * is heard at once, and each song's levels from the tags its renderer read ([streams]) and its queue ([levels]). The
-     * equalizer stays off here until A1's equalizer screen hands the output's profile in.
+     * A new chain for one player: Volume levelling and its boost from [settings], and the equalizer of the output playing
+     * ([eq], LiveEq's sound), both read again at every buffer so a change is heard at once; each song's levels from the
+     * tags its renderer read ([streams]) and its queue ([levels]).
      */
-    fun processors(settings: () -> Settings, levels: SongLevels, streams: StreamTags): List<AudioProcessor> =
-        audioChain(PipelineSnapshot(settings)::get) { stream -> streams.levelsOf(stream, levels) }
+    fun processors(settings: () -> Settings, levels: SongLevels, streams: StreamTags, eq: () -> EqSound): List<AudioProcessor> =
+        audioChain(PipelineSnapshot(settings, eq)::get) { stream -> streams.levelsOf(stream, levels) }
 
     /** Whether any stage changes the sound now (levelling, the equalizer, balance): offload must then stay off. */
-    fun processing(settings: Settings): Boolean = AudioPipelineSettings.of(settings, EQUALIZER_OFF).processing
+    fun processing(settings: Settings, eq: EqSound): Boolean = AudioPipelineSettings.of(settings, eq).processing
 }
-
-/** The equalizer as the chain plays it until A1's equalizer screen hands in the output's profile: off. */
-private val EQUALIZER_OFF = EqSound()
 
 /** Whether audio offload may run: Advanced "Audio offload" is on, and nothing in the chain processes the sound. */
 fun offloadAllowed(advanced: AdvancedSettings, processing: Boolean): Boolean = advanced.audioOffload && !processing
+
+/** Whether offload may run now: [offloadAllowed], once the equalizer's profiles are read ([eq] is null until then). */
+fun offloadWanted(settings: Settings, eq: EqSound?): Boolean = eq != null && offloadAllowed(settings.advanced, AudioChain.processing(settings, eq))
+
+/**
+ * Audio offload as the engine applies it ([apply]), so the chain never drops out mid-song: off at once whenever some
+ * stage starts processing; back on only at the next song start, and only if nothing processes then (an equalizer just
+ * switched off is still gliding to unity). The engine starts with offload off. Main thread.
+ */
+class OffloadGate(private val apply: (Boolean) -> Unit) {
+    private var wanted = false
+    private var on = false
+
+    /** What [offloadWanted] says now. */
+    fun wanted(allowed: Boolean) {
+        wanted = allowed
+        if (!allowed && on) {
+            on = false
+            apply(false)
+        }
+    }
+
+    fun songStarted() {
+        if (wanted && !on) {
+            on = true
+            apply(true)
+        }
+    }
+}
 
 /**
  * The ReplayGain tags of each stream the audio renderer took on, by its period uid. The renderer reads a song ahead of
@@ -87,18 +113,21 @@ class StreamTags {
 }
 
 /**
- * The settings as one chain reads them: made again only when [settings] hands a new value, so a buffer allocates
- * nothing. One per chain; its stages all run on the playback thread.
+ * The settings as one chain reads them: made again only when [settings] or [eq] hands a new value, so a buffer
+ * allocates nothing. One per chain; its stages all run on the playback thread.
  */
-private class PipelineSnapshot(private val settings: () -> Settings) {
+private class PipelineSnapshot(private val settings: () -> Settings, private val eq: () -> EqSound) {
     private var from: Settings? = null
+    private var fromEq: EqSound? = null
     private var made = AudioPipelineSettings()
 
     fun get(): AudioPipelineSettings {
         val now = settings()
-        if (now !== from) {
-            made = AudioPipelineSettings.of(now, EQUALIZER_OFF)
+        val sound = eq()
+        if (now !== from || sound !== fromEq) {
+            made = AudioPipelineSettings.of(now, sound)
             from = now
+            fromEq = sound
         }
         return made
     }

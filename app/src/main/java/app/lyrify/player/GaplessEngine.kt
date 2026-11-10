@@ -16,6 +16,7 @@ import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionParameters.AudioOffloadPreferences
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.common.util.Util
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.Renderer
@@ -30,6 +31,7 @@ import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.extractor.mp4.Mp4Extractor
 import app.lyrify.audio.FadeSlot
+import app.lyrify.audio.LiveEq
 import app.lyrify.library.Song
 import app.lyrify.library.displayTitle
 import app.lyrify.settings.LibrarySettings
@@ -55,8 +57,11 @@ interface EngineListener {
     /** The last song ended with Repeat off. */
     fun onEnded() {}
 
-    /** The song could not be played (a file gone or unreadable); [hasNext] when another one follows. */
-    fun onError(error: PlaybackException, hasNext: Boolean) {}
+    /**
+     * The song could not be played (a file gone or unreadable); [next] is the song the player would play after it for
+     * its repeat mode, C.INDEX_UNSET when none follows.
+     */
+    fun onError(error: PlaybackException, next: Int) {}
 }
 
 /**
@@ -126,6 +131,9 @@ class GaplessEngine(context: Context, settings: () -> Settings, levels: SongLeve
         .build()
 
     init {
+        // Media3 makes the session on a background thread and reports 0 until then; KJB's own, now, so the phone's sound
+        // effects panel opens for this player from the start.
+        player.setAudioSessionId(Util.generateAudioSessionId(context))
         player.addListener(object : Player.Listener {
             override fun onEvents(player: Player, events: Player.Events) {
                 // The volume alone (the sleep timer's fade, a crossfade's gains) is nothing the session shows; these
@@ -156,7 +164,7 @@ class GaplessEngine(context: Context, settings: () -> Settings, levels: SongLeve
             }
 
             override fun onPlayerError(error: PlaybackException) {
-                val next = player.hasNextMediaItem()
+                val next = player.nextMediaItemIndex
                 listeners.forEach { it.onError(error, next) }
             }
         })
@@ -200,6 +208,13 @@ class GaplessEngine(context: Context, settings: () -> Settings, levels: SongLeve
             is Edit.Remove -> player.removeMediaItem(edit.at)
             is Edit.Insert -> player.addMediaItems(edit.at, edit.items.map(itemOf))
             is Edit.Move -> player.moveMediaItem(edit.from, edit.to)
+            is Edit.Replace -> {
+                // The song playing goes on from where it was, read from its new path.
+                val current = edit.at == player.currentMediaItemIndex
+                val position = player.currentPosition
+                player.replaceMediaItem(edit.at, itemOf(edit.item))
+                if (current) player.seekTo(edit.at, position)
+            }
         }
     }
 
@@ -275,7 +290,7 @@ class GaplessEngine(context: Context, settings: () -> Settings, levels: SongLeve
 
         override fun buildAudioSink(context: Context, enableFloatOutput: Boolean, enableAudioOutputPlaybackParams: Boolean): AudioSink =
             DefaultAudioSink.Builder(context)
-                .setAudioProcessors(AudioChain.processors(settings, levels, streams).toTypedArray())
+                .setAudioProcessors(AudioChain.processors(settings, levels, streams, LiveEq.of(context).sound::value).toTypedArray())
                 // Float output stays off: with it, Media3 bypasses the processors.
                 .setEnableFloatOutput(false)
                 .setEnableAudioOutputPlaybackParameters(enableAudioOutputPlaybackParams)

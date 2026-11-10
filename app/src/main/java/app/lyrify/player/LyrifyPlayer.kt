@@ -25,6 +25,30 @@ fun sessionView(port: PlayerPort, playing: Boolean, book: QueueBook, repeat: Rep
         SessionView(port.loaded, port.index, port.positionMs, playing, book.current?.shuffled == true, repeat)
     }
 
+/**
+ * A controller's move (Auto's or Bluetooth's queue view): the songs the player holds ([loaded]) from [fromIndex] until
+ * [toIndex] move so the first of them is at [newIndex], as `Player.moveMediaItems` does. In the queue playing each one
+ * moves in turn to where the song at its new place is, so songs not on the phone stay near where they were. The song
+ * playing stays current.
+ */
+fun controllerMove(book: QueueBook, loaded: List<Long>, fromIndex: Int, toIndex: Int, newIndex: Int): QueueBook {
+    val queueId = book.currentId ?: return book
+    val count = toIndex - fromIndex
+    if (fromIndex < 0 || count <= 0 || toIndex > loaded.size || newIndex !in 0..loaded.size - count || newIndex == fromIndex) return book
+    val order = loaded.toMutableList()
+    var moved = book
+    repeat(count) { k ->
+        val from = if (newIndex < fromIndex) fromIndex + k else fromIndex
+        val to = if (newIndex < fromIndex) newIndex + k else newIndex + count - 1
+        val uid = order[from]
+        val target = order[to]
+        order.add(to, order.removeAt(from))
+        val items = moved.queue(queueId)?.items ?: return moved
+        moved = moved.move(queueId, items.indexOfFirst { it.uid == uid }, items.indexOfFirst { it.uid == target })
+    }
+    return moved
+}
+
 /** The jumps of the seek buttons ("Skip amounts"), for the session's seek back and forward. */
 data class SkipAmounts(val backMs: Long, val forwardMs: Long)
 
@@ -154,16 +178,10 @@ class LyrifyPlayer(
         return Futures.immediateVoidFuture()
     }
 
-    /** A controller's move: the song moves in the queue playing. */
+    /** A controller's move: the songs move in the queue playing. */
     override fun handleMoveMediaItems(fromIndex: Int, toIndex: Int, newIndex: Int): ListenableFuture<*> {
-        val uid = engine.loaded.getOrNull(fromIndex)
-        val target = engine.loaded.getOrNull(newIndex)
-        if (toIndex - fromIndex == 1 && uid != null && target != null) {
-            core.change { book ->
-                val queue = book.current ?: return@change book
-                book.move(queue.id, queue.items.indexOfFirst { it.uid == uid }, queue.items.indexOfFirst { it.uid == target })
-            }
-        }
+        val loaded = engine.loaded
+        core.change { book -> controllerMove(book, loaded, fromIndex, toIndex, newIndex) }
         return Futures.immediateVoidFuture()
     }
 

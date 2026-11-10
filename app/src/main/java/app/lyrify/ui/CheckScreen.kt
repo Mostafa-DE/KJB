@@ -235,7 +235,7 @@ fun CheckScreen(ledger: LedgerState, timing: PlainTiming, actions: CheckActions,
 
     if (info) HelpSheet(stringResource(R.string.check_title), stringResource(R.string.check_info)) { info = false }
     searching?.let { entry ->
-        SearchMyselfSheet(entry, busy = entry.path in busy, actions = actions, onDismiss = { searching = null }) { id ->
+        SearchMyselfSheet(entry.track, busy = entry.path in busy, actions = actions, onDismiss = { searching = null }) { id ->
             searching = null
             act(entry.path) { actions.choose(entry.path, id) }
         }
@@ -275,12 +275,12 @@ private fun FileChip(name: String) {
     }
 }
 
-/** "Search myself": a field for the lyrics service's search, and up to ten results of the song's length. "Use" answers. */
+/** "Search myself" for [track]: a field for the lyrics service's search, and up to ten results of the song's length. "Use" answers. */
 @Composable
-private fun SearchMyselfSheet(entry: LedgerEntry, busy: Boolean, actions: CheckActions, onDismiss: () -> Unit, onChoose: (Long) -> Unit) {
+internal fun SearchMyselfSheet(track: LocalTrack, busy: Boolean, actions: CheckActions, onDismiss: () -> Unit, onChoose: (Long) -> Unit) {
     val colors = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
-    var text by rememberSaveable(entry.path) { mutableStateOf(TrackNames.cleanTitle(entry.title)) }
+    var text by rememberSaveable(track.path) { mutableStateOf(TrackNames.cleanTitle(track.title)) }
     var searchingNow by remember { mutableStateOf(false) }
     var found by remember { mutableStateOf<Searched?>(null) }
 
@@ -289,7 +289,7 @@ private fun SearchMyselfSheet(entry: LedgerEntry, busy: Boolean, actions: CheckA
         searchingNow = true
         scope.launch {
             found = try {
-                actions.search(entry.track, text)
+                actions.search(track, text)
             } finally {
                 searchingNow = false
             }

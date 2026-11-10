@@ -175,8 +175,9 @@ static void keepPictureDetails(TagLib::List<TagLib::VariantMap> &pictures, const
 // KJB patch: one save for the whole tag, the property map and the pictures together. Keys left out of the map are
 // removed, so the caller reads them first; with no pictures (null) the pictures are left as they are, else they are
 // replaced by these. An MP3 gets only its ID3v2 tag rewritten, as version id3v2_version (3 or 4), with DoNotDuplicate:
-// no ID3v1 tag is added and one already there is left as it is. An APE tag already there gets the same changes; none
-// is added.
+// no ID3v1 tag is added and one already there is left as it is. An APE tag already there gets the same changes: the
+// keys whose values changed, and, when pictures are written and it has cover items, covers to match (front and back,
+// none when there are none); no APE tag is added. A key, value or picture string holding U+0000 refuses the save.
 JNIEXPORT jboolean JNICALL
 Java_com_kyant_taglib_TagLib_saveTags(
         JNIEnv *env,
@@ -207,6 +208,15 @@ Java_com_kyant_taglib_TagLib_saveTags(
             }
             keepPictureDetails(pictureList, f.complexProperties("PICTURE"));
         }
+        for (const auto &[key, values]: propertyMap) {
+            if (HoldsNull(key)) return JNI_FALSE;
+            for (const auto &value: values) if (HoldsNull(value)) return JNI_FALSE;
+        }
+        for (const auto &picture: pictureList) {
+            for (const auto *name: {"description", "pictureType", "mimeType"}) {
+                if (HoldsNull(picture.value(name).toString())) return JNI_FALSE;
+            }
+        }
 
         if (auto *mpeg = dynamic_cast<TagLib::MPEG::File *>(f.file())) {
             TagLib::ID3v2::Tag *tag = mpeg->ID3v2Tag(true);
@@ -231,6 +241,10 @@ Java_com_kyant_taglib_TagLib_saveTags(
                     if (now == propertyMap.end()) ape.erase(key); else ape.replace(key, now->second);
                 }
                 mpeg->APETag()->setProperties(ape);
+                // Its cover items follow the pictures written; an APE tag without covers gets none.
+                if (pictures != nullptr && !mpeg->APETag()->complexProperties("PICTURE").isEmpty()) {
+                    mpeg->APETag()->setComplexProperties("PICTURE", pictureList);
+                }
                 tags |= TagLib::MPEG::File::APE;
             }
             const auto version = id3v2_version == 3 ? TagLib::ID3v2::v3 : TagLib::ID3v2::v4;

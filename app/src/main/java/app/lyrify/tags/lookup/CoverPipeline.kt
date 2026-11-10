@@ -48,20 +48,27 @@ class CoverPipeline(
     private val compute: CoroutineDispatcher = Dispatchers.Default,
 ) {
     /** The cover made from [image], or null when it is not a usable image. */
-    suspend fun prepare(image: ByteArray): Cover? = withContext(compute) { made(image) }
+    suspend fun prepare(image: ByteArray): Cover? = withContext(compute) { made(image, SIDES) { it.size <= TARGET_BYTES } }
 
-    private fun made(image: ByteArray): Cover? {
+    /**
+     * The smaller cover for Opus songs, made from [image]: [OPUS_SIDES] in turn, each at [QUALITIES], until it fits the
+     * comment header beside the song's other comments ([OpusCover.fitsBesideOthers]). Null when even the last won't.
+     */
+    suspend fun prepareOpus(image: ByteArray): Cover? = withContext(compute) { made(image, OPUS_SIDES) { OpusCover.fitsBesideOthers(it.size) } }
+
+    /** A baseline JPEG of [image] at the first of [sides] (never enlarged) and quality that [fits]. */
+    private fun made(image: ByteArray, sides: List<Int>, fits: (ByteArray) -> Boolean): Cover? {
         if (image.size > Body.IMAGE.maxBytes || !Images.isImage(image)) return null
         // The header's size, read before any pixel is decoded.
         val source = codec.size(image) ?: return null
         val longer = maxOf(source.width, source.height)
         val pixels = source.width.toLong() * source.height
         if (minOf(source.width, source.height) <= 0 || longer > MAX_SOURCE_SIDE || pixels > MAX_SOURCE_PIXELS) return null
-        for (side in SIDES.map { minOf(it, longer) }.distinct()) {
+        for (side in sides.map { minOf(it, longer) }.distinct()) {
             for (quality in QUALITIES) {
                 val jpeg = codec.jpeg(image, side, quality) ?: return null
                 if (!Images.isBaselineJpeg(jpeg)) return null
-                if (jpeg.size <= TARGET_BYTES) return codec.size(jpeg)?.let { Cover(jpeg, it) }
+                if (fits(jpeg)) return codec.size(jpeg)?.let { Cover(jpeg, it) }
             }
         }
         return null
@@ -82,6 +89,9 @@ class CoverPipeline(
 
         /** Nor one of more pixels than this (about 4 megapixels). */
         const val MAX_SOURCE_PIXELS: Int = 2048 * 2048
+
+        /** The sides an Opus cover tries, in order. */
+        val OPUS_SIDES: List<Int> = listOf(600, 500, 400, 300)
     }
 }
 
@@ -121,8 +131,8 @@ object AndroidImageCodec : ImageCodec {
 
 /**
  * Opus keeps the cover in its comment header as a base64 METADATA_BLOCK_PICTURE, and RFC 7845 lets readers ignore any
- * comment past the first 61,440 bytes of that header. So the cover is left out of an Opus song when the header would
- * pass that, and the album sheet says so.
+ * comment past the first 61,440 bytes of that header. So an Opus song gets a smaller cover
+ * ([CoverPipeline.prepareOpus]), and none only when even that would pass it; the album sheet says so.
  */
 object OpusCover {
     const val COMMENT_LIMIT_BYTES: Int = 61_440
@@ -142,6 +152,12 @@ object OpusCover {
 
     /** The cover fits beside the header's other [otherHeaderBytes] (magic, vendor, count and every other comment). */
     fun fits(jpegBytes: Int, otherHeaderBytes: Int): Boolean = otherHeaderBytes.toLong() + commentBytes(jpegBytes) <= COMMENT_LIMIT_BYTES
+
+    /** Room kept in the header for the song's own comments: its tags, lyrics (a few KB) and the vendor string. */
+    const val OTHER_COMMENTS_BYTES: Int = 16 * 1024
+
+    /** The cover fits beside [OTHER_COMMENTS_BYTES] of other comments. */
+    fun fitsBesideOthers(jpegBytes: Int): Boolean = fits(jpegBytes, OTHER_COMMENTS_BYTES)
 }
 
 /** Image checks that need no decoder. */

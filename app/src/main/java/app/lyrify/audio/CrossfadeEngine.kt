@@ -218,8 +218,11 @@ class CrossfadeEngine(
     private var duck: Float = 1f
     private var master: Float = 1f
     private var repeat: Repeat = Repeat.OFF
-    private var offload: Boolean = false
     private var gapless: Boolean = true
+
+    /** Offload as wanted (A1's gate, [setOffload]); after crossfade is turned off it waits for the next song's start. */
+    private var offload: Boolean = false
+    private var offloadAtNextSong: Boolean = false
 
     /** The last look, and whether each fade's player played since: a fade moves only while its player plays. */
     private var lookedAt: Long = clock()
@@ -248,7 +251,9 @@ class CrossfadeEngine(
         crossfadeMs = ms
         if (on != wasOn) {
             if (on) {
-                // The engine takes the one player's focus over.
+                // The engine takes the one player's focus over; offload goes off at once.
+                offloadAtNextSong = false
+                active.setOffload(false)
                 wantPlay = active.playWhenReady
                 suppressed = false
                 active.setFocusHandled(false)
@@ -264,8 +269,9 @@ class CrossfadeEngine(
                 active.setFocusHandled(true)
                 active.setPlayWhenReady(wantPlay)
                 applyVolumes()
+                // Never on mid-song, as A1's gate keeps it.
+                offloadAtNextSong = offload
             }
-            active.setOffload(offload && !on)
         }
         look()
     }
@@ -396,9 +402,11 @@ class CrossfadeEngine(
         look()
     }
 
+    /** Offload as A1's gate wants it (off at once, on only at a song start); the players never have it while crossfade is on. */
     override fun setOffload(allowed: Boolean) {
         offload = allowed
-        active.setOffload(allowed && !on)
+        offloadAtNextSong = false
+        if (!on) active.setOffload(allowed)
     }
 
     override fun setGapless(on: Boolean) {
@@ -681,6 +689,10 @@ class CrossfadeEngine(
         override fun onSongStarted(uid: Long, lap: Boolean, natural: Boolean) {
             if (slot !== active) return
             failedAhead = null
+            if (offloadAtNextSong) {
+                offloadAtNextSong = false
+                if (!on) slot.setOffload(offload)
+            }
             tell { it.onSongStarted(uid, lap, natural) }
             look()
         }
@@ -702,9 +714,9 @@ class CrossfadeEngine(
             }
         }
 
-        override fun onError(error: PlaybackException, hasNext: Boolean) {
+        override fun onError(error: PlaybackException, next: Int) {
             when {
-                slot === active -> tell { it.onError(error, hasNext) }
+                slot === active -> tell { it.onError(error, next) }
                 slot === standby -> {
                     failedAhead = standbyFor
                     dropStandby()

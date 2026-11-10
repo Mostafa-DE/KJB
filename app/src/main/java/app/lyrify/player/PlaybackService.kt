@@ -16,7 +16,6 @@ import android.util.Size
 import androidx.annotation.OptIn
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
-import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.util.BitmapLoader
 import androidx.media3.common.util.UnstableApi
@@ -26,33 +25,41 @@ import androidx.media3.session.LibraryResult
 import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaSession
 import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionCommands
 import androidx.media3.session.SessionError
 import androidx.media3.session.SessionResult
 import app.lyrify.LOG_TAG
 import app.lyrify.Lyrify
 import app.lyrify.R
 import app.lyrify.audio.CrossfadeEngine
+import app.lyrify.audio.LiveEq
 import app.lyrify.audio.MediaFocus
+import app.lyrify.audio.OutputRoutesPart
 import app.lyrify.audio.QueueFadeRules
+import app.lyrify.auto.Access
+import app.lyrify.auto.CarBrowse
+import app.lyrify.auto.ControllerAccess
 import app.lyrify.library.Library
 import app.lyrify.library.LibraryGraph
 import app.lyrify.library.LibraryState
-import app.lyrify.library.Playlist
 import app.lyrify.library.Song
 import app.lyrify.library.SongRef
+import app.lyrify.library.search.SearchGraph
 import app.lyrify.logFailures
 import app.lyrify.media.NowPlaying
 import app.lyrify.media.QueueSweep
 import app.lyrify.settings.Settings
 import app.lyrify.ui.DESTINATION_PLAYER
 import app.lyrify.ui.EXTRA_DESTINATION
+import app.lyrify.ui.LockLyricsActivity
+import app.lyrify.ui.LockLyricsPart
 import app.lyrify.ui.MainActivity
+import app.lyrify.widget.WidgetPart
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.ListeningExecutorService
 import com.google.common.util.concurrent.MoreExecutors
-import com.google.common.util.concurrent.SettableFuture
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -105,7 +112,7 @@ private const val OPEN_PLAYER: Int = 1
 @OptIn(UnstableApi::class)
 class PlaybackService : MediaLibraryService() {
     /** The service's parts: P2, A1, A3 and A4 each add one line here, in merge order. */
-    private val parts: List<ServicePart> = listOf(SleepPart(), ExtrasPart(), ButtonsPart())
+    private val parts: List<ServicePart> = listOf(WidgetPart(), LockLyricsPart(), SleepPart(), ExtrasPart(), ButtonsPart(), ConnectPart(), OutputRoutesPart())
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + logFailures)
     private val io = CoroutineScope(SupervisorJob() + Dispatchers.IO + logFailures)
@@ -119,19 +126,24 @@ class PlaybackService : MediaLibraryService() {
     private lateinit var bridge: QueueBridge
     private lateinit var settings: StateFlow<Settings>
     private lateinit var library: StateFlow<Library?>
-    private lateinit var playlists: StateFlow<List<Playlist>>
+    private lateinit var browse: CarBrowse
     private val playing = MutableStateFlow(false)
+    private lateinit var thumbnails: ThumbnailLoader
+
+    /** Songs that could not be played since one last played: the whole queue failing stops the player. */
+    private var failedInARow = 0
     private val tracker = PlayTracker({ event -> Lyrify.playEvents(this).onEvent(event) }, System::currentTimeMillis)
+    private val offload = OffloadGate { engine.setOffload(it) }
 
     override fun onCreate() {
         super.onCreate()
         core = PlayerGraph.core(this)
         settings = Lyrify.settings(this).settings.stateIn(scope, SharingStarted.Eagerly, Settings())
         library = LibraryGraph.repository(this).state.map { (it as? LibraryState.Ready)?.library }.stateIn(scope, SharingStarted.Eagerly, null)
-        playlists = LibraryGraph.playlists(this).state.map { it.playlists }.stateIn(scope, SharingStarted.Eagerly, emptyList())
         val levels = Levels()
         val main = Handler(mainLooper)
-        // One gapless player; with Crossfade on, a second one around each fade (A2). Focus is the engine's then.
+        // One gapless player; with Crossfade on, a second one around each fade (A2), in the same audio session. Focus is
+        // the engine's then.
         engine = CrossfadeEngine(
             newSlot = { GaplessEngine(this, settings::value, levels, ::mediaItem) },
             rules = QueueFadeRules(core, PlayerExtras.of(this), settings::value),
@@ -140,15 +152,23 @@ class PlaybackService : MediaLibraryService() {
             clock = SystemClock::elapsedRealtime,
             later = { task -> main.post(task) },
         )
+        // The phone's sound effects panel needs the player's own session from the start (A1).
+        PlayerGraph.audioSessionId = engine.audioSessionId
         bridge = QueueBridge(engine)
         player = LyrifyPlayer(mainLooper, engine, core, skips = ::skips, sync = ::sync, beforeSeek = ::heardSoFar)
         engine.addListener(Follower())
+        core.follow { engine.loaded.getOrNull(engine.index)?.let { PlayerAt(it, engine.positionMs) } }
+        thumbnails = ThumbnailLoader(this)
         val built = MediaLibrarySession.Builder(this, player, Callback())
-            // A tap on the notification or the lock screen's card opens the player, over the tab the app was on.
-            .setSessionActivity(PendingIntent.getActivity(this, OPEN_PLAYER, openPlayer(), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
-            .setBitmapLoader(ThumbnailLoader(this))
+            // A tap on the notification or the lock screen's card opens the player, over the tab the app was on, and the
+            // lyrics on top of it: over the lock screen they show without unlocking; on an unlocked phone they close at once (P3).
+            .setSessionActivity(
+                PendingIntent.getActivities(this, OPEN_PLAYER, arrayOf(openPlayer(), Intent(this, LockLyricsActivity::class.java)), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT),
+            )
+            .setBitmapLoader(thumbnails)
             .build()
         session = built
+        browse = CarBrowse(this, built, core, settings, scope, ::playing, search = SearchGraph.songs(this))
         setMediaNotificationProvider(
             DefaultMediaNotificationProvider.Builder(this).setChannelName(R.string.player_channel).build().apply { setSmallIcon(R.drawable.ic_stat_kjb) },
         )
@@ -160,6 +180,7 @@ class PlaybackService : MediaLibraryService() {
             combine(core.ready.filter { it }, core.book, library) { _, book, songs -> book to songs }.collect { (book, songs) ->
                 // Another queue or a jump moves the player: the play counter hears where the song playing was.
                 if (book.currentId != queueId || book.jumps != jumps) heardSoFar()
+                if (book.currentId != queueId) failedInARow = 0
                 queueId = book.currentId
                 jumps = book.jumps
                 if (songs != null) bridge.sync(book, ::find)
@@ -170,10 +191,17 @@ class PlaybackService : MediaLibraryService() {
         scope.launch {
             settings.collect {
                 engine.setCrossfade(it.audio.crossfadeSeconds)
-                engine.setOffload(offloadAllowed(it.advanced, AudioChain.processing(it)))
                 engine.setGapless(it.advanced.gaplessPlayback)
                 player.changed()
             }
+        }
+        // Offload only while no stage changes the sound (levelling, the equalizer of the output playing), once the
+        // equalizer is read; turned back on only at a song start (OffloadGate).
+        scope.launch {
+            val live = LiveEq.of(this@PlaybackService)
+            combine(settings, live.profiles, live.sound) { now, profiles, eq -> offloadWanted(now, eq.takeIf { profiles != null }) }
+                .distinctUntilChanged()
+                .collect(offload::wanted)
         }
         scope.launch { savePlaces(playing) { savePlace() } }
         scope.launch { repeatWhilePlaying(playing, POSITION_EVERY_MS) { tracker.position(engine.positionMs, playing = true) } }
@@ -187,11 +215,14 @@ class PlaybackService : MediaLibraryService() {
     override fun onDestroy() {
         // Written before the process may go.
         engine.loaded.getOrNull(engine.index)?.let { uid -> core.savePlaceNow(uid, engine.positionMs) }
+        core.follow(null)
         heardSoFar()
         tracker.end()
         parts.forEach { it.stop() }
         session?.release()
         session = null
+        // Its thread would outlive the service; a cover still loading fails, and the notification is going anyway.
+        thumbnails.shutdown()
         engine.release()
         player.release()
         scope.cancel()
@@ -259,6 +290,7 @@ class PlaybackService : MediaLibraryService() {
     /** The engine's songs and plays, back into the queue model and the play counter. */
     private inner class Follower : EngineListener {
         override fun onSongStarted(uid: Long, lap: Boolean, natural: Boolean) {
+            offload.songStarted()
             val book = core.book.value
             val item = book.current?.items?.firstOrNull { it.uid == uid } ?: return
             if (!lap) core.change { it.at(uid, core.now()) }
@@ -268,6 +300,7 @@ class PlaybackService : MediaLibraryService() {
         }
 
         override fun onPlayingChanged(playing: Boolean) {
+            if (playing) failedInARow = 0
             PlayerGraph.audioSessionId = engine.audioSessionId
             tracker.position(engine.positionMs, playing)
             this@PlaybackService.playing.value = playing
@@ -284,10 +317,14 @@ class PlaybackService : MediaLibraryService() {
             engine.seek(0, 0)
         }
 
-        /** A song that cannot be played is skipped quietly; the last one stops. */
-        override fun onError(error: PlaybackException, hasNext: Boolean) {
-            Log.w(LOG_TAG, "player: a song could not be played (${error.errorCodeName}), ${if (hasNext) "skipped" else "stopped"}")
-            if (hasNext) engine.seek(engine.index + 1, 0) else engine.setPlayWhenReady(false)
+        /**
+         * A song that cannot be played is skipped quietly, to the song the player would play next (round to the first
+         * under Repeat all); with nothing after it, or every song failed in a row, the player stops, the error showing.
+         */
+        override fun onError(error: PlaybackException, next: Int) {
+            failedInARow++
+            val step = skipAfterError(engine, next, failedInARow)
+            Log.w(LOG_TAG, "player: a song could not be played (${error.errorCodeName}), ${if (step is AfterError.Skip) "skipped" else "stopped after $failedInARow"}")
         }
     }
 
@@ -303,13 +340,14 @@ class PlaybackService : MediaLibraryService() {
     private inner class Callback : MediaLibrarySession.Callback {
         override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult {
             val base = super.onConnect(session, controller)
-            // TODO(integration): offer the parts' commands (Favourite, Shuffle, Repeat) to trusted controllers only, through
-            // A4's controller access check (CarAccess), once both are merged.
-            val own = parts.flatMap { it.commands }
-            if (!base.isAccepted || own.isEmpty()) return base
+            if (!base.isAccepted) return base
+            // Only KJB, the system's trusted controllers and the car see the library, search and queues, and get the
+            // parts' commands (Favourite, Shuffle, Repeat); any other app gets plain transport (auto/CarBrowse.kt).
+            val access = browse.connect(controller)
+            val offered = ControllerAccess.sessionCommands(access, base.availableSessionCommands.commands, parts.flatMap { it.commands })
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session, controller)
-                .setAvailableSessionCommands(base.availableSessionCommands.buildUpon().apply { own.forEach(::add) }.build())
-                .setAvailablePlayerCommands(base.availablePlayerCommands)
+                .setAvailableSessionCommands(SessionCommands.Builder().apply { offered.forEach(::add) }.build())
+                .setAvailablePlayerCommands(if (access == Access.TRANSPORT) ControllerAccess.transport(base.availablePlayerCommands) else base.availablePlayerCommands)
                 .build()
         }
 
@@ -319,8 +357,11 @@ class PlaybackService : MediaLibraryService() {
         override fun onCustomCommand(session: MediaSession, controller: MediaSession.ControllerInfo, customCommand: SessionCommand, args: Bundle): ListenableFuture<SessionResult> =
             Futures.immediateFuture(parts.firstNotNullOfOrNull { it.onCommand(customCommand, args) } ?: SessionResult(SessionError.ERROR_NOT_SUPPORTED))
 
+        override fun onDisconnected(session: MediaSession, controller: MediaSession.ControllerInfo) = browse.disconnect(controller)
+
+        // The browse tree, search and voice play: auto/CarBrowse.kt.
         override fun onGetLibraryRoot(session: MediaLibrarySession, browser: MediaSession.ControllerInfo, params: LibraryParams?): ListenableFuture<LibraryResult<MediaItem>> =
-            Futures.immediateFuture(LibraryResult.ofItem(folder(LibraryTree.ROOT, getString(R.string.app_name)), params))
+            Futures.immediateFuture(browse.root(params))
 
         override fun onGetChildren(
             session: MediaLibrarySession,
@@ -329,46 +370,45 @@ class PlaybackService : MediaLibraryService() {
             page: Int,
             pageSize: Int,
             params: LibraryParams?,
-        ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> {
-            val data = treeData() ?: return Futures.immediateFuture(LibraryResult.ofItemList(emptyList(), params))
-            val nodes = LibraryTree.children(parentId, data) ?: return Futures.immediateFuture(LibraryResult.ofError(SessionError.ERROR_BAD_VALUE))
-            val size = pageSize.coerceAtLeast(1)
-            val paged = nodes.drop(page.coerceAtLeast(0) * size).take(size)
-            return Futures.immediateFuture(LibraryResult.ofItemList(paged.map(::browseItem), params))
-        }
+        ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> = browse.children(browser, parentId, page, pageSize, params)
 
         override fun onGetItem(session: MediaLibrarySession, browser: MediaSession.ControllerInfo, mediaId: String): ListenableFuture<LibraryResult<MediaItem>> =
-            Futures.immediateFuture(
-                if (mediaId == LibraryTree.ROOT) LibraryResult.ofItem(folder(LibraryTree.ROOT, getString(R.string.app_name)), null) else LibraryResult.ofError(SessionError.ERROR_NOT_SUPPORTED),
-            )
+            Futures.immediateFuture(browse.item(mediaId))
 
-        /** A song picked in the browse tree plays its list from it, as a tap in the app does; the queue's songs go to the player. */
+        override fun onSearch(session: MediaLibrarySession, browser: MediaSession.ControllerInfo, query: String, params: LibraryParams?): ListenableFuture<LibraryResult<Void>> =
+            browse.search(browser, query, params)
+
+        override fun onGetSearchResult(
+            session: MediaLibrarySession,
+            browser: MediaSession.ControllerInfo,
+            query: String,
+            page: Int,
+            pageSize: Int,
+            params: LibraryParams?,
+        ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> = browse.searchResult(browser, query, page, pageSize, params)
+
+        /** A song picked in the browse tree plays its list from it, as a tap in the app does, and a voice request plays what it names. */
         override fun onSetMediaItems(
             mediaSession: MediaSession,
             controller: MediaSession.ControllerInfo,
             mediaItems: List<MediaItem>,
             startIndex: Int,
             startPositionMs: Long,
-        ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
-            val data = treeData()
-            val play = mediaItems.singleOrNull()?.mediaId?.let { id -> data?.let { LibraryTree.play(id, it) } }
-                ?: return super.onSetMediaItems(mediaSession, controller, mediaItems, startIndex, startPositionMs)
-            when (play) {
-                is TreePlay.FromList -> core.switch { it.play(play.songs, play.start, play.source, core.now()) }
-                is TreePlay.InQueue -> core.switch { it.jump(play.queueId, play.index, core.now()) }
-            }
-            return Futures.immediateFuture(playing())
-        }
+        ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> =
+            browse.setMediaItems(controller, mediaItems) ?: super.onSetMediaItems(mediaSession, controller, mediaItems, startIndex, startPositionMs)
 
-        /** Play on a headset or Bluetooth after KJB was closed: the queue playing at its place, once the queues and the library are read. */
+        /**
+         * Play on a headset or Bluetooth after KJB was closed: the queue playing at its place, once the queues and the
+         * library are read; nothing when the library cannot be read (no All files access), or after [RESUME_WAIT_MS].
+         */
         override fun onPlaybackResumption(mediaSession: MediaSession, controller: MediaSession.ControllerInfo, isForPlayback: Boolean): ListenableFuture<MediaSession.MediaItemsWithStartPosition> {
-            val result = SettableFuture.create<MediaSession.MediaItemsWithStartPosition>()
-            scope.launch {
+            val none = MediaSession.MediaItemsWithStartPosition(emptyList(), 0, 0)
+            val songs = LibraryGraph.repository(this@PlaybackService).state
+            return resumption(scope, RESUME_WAIT_MS, none, ready = {
                 core.ready.first { it }
-                library.first { it != null }
-                result.set(playing())
-            }
-            return result
+                // The service's own view of the library is what playing() reads: wait for it too, not only the read.
+                songs.first { it !is LibraryState.Loading } is LibraryState.Ready && library.first { it != null } != null
+            }) { playing() }
         }
     }
 
@@ -381,44 +421,6 @@ class PlaybackService : MediaLibraryService() {
         val position = if (projected[start].uid == queue?.current?.uid) queue.positionMs else 0
         return MediaSession.MediaItemsWithStartPosition(projected.map(::mediaItem), start, position)
     }
-
-    private fun treeData(): TreeData? {
-        val songs = library.value ?: return null
-        return TreeData(
-            library = songs,
-            book = core.book.value,
-            playlists = playlists.value,
-            settings = settings.value.library,
-            rootName = ::rootName,
-            queueName = { queueLabel(this, it) },
-        )
-    }
-
-    private fun rootName(id: String): String = getString(
-        when (id) {
-            LibraryTree.QUEUES -> R.string.player_tree_queues
-            LibraryTree.PLAYLISTS -> R.string.player_tree_playlists
-            LibraryTree.ALBUMS -> R.string.player_tree_albums
-            LibraryTree.ARTISTS -> R.string.player_tree_artists
-            else -> R.string.player_tree_songs
-        },
-    )
-
-    private fun browseItem(node: TreeNode): MediaItem {
-        val song = node.song ?: return folder(node.id, node.title, node.subtitle)
-        return MediaItem.Builder()
-            .setMediaId(node.id)
-            .setMediaMetadata(metadataOf(song, settings.value.library).buildUpon().setIsBrowsable(false).setIsPlayable(true).build())
-            .build()
-    }
-
-    private fun folder(id: String, title: String, subtitle: String? = null): MediaItem = MediaItem.Builder()
-        .setMediaId(id)
-        .setMediaMetadata(
-            MediaMetadata.Builder().setTitle(title).setSubtitle(subtitle).setIsBrowsable(true).setIsPlayable(false)
-                .setMediaType(MediaMetadata.MEDIA_TYPE_FOLDER_MIXED).build(),
-        )
-        .build()
 }
 
 /**
@@ -440,6 +442,9 @@ private class ThumbnailLoader(private val context: Context) : BitmapLoader {
         // No embedded cover: loadThumbnail throws, and the future fails.
         return io.submit<Bitmap> { context.contentResolver.loadThumbnail(uri, Size(COVER_PX, COVER_PX), null) }
     }
+
+    /** Lets the loading thread go, with the service. */
+    fun shutdown() = io.shutdown()
 
     private companion object {
         /** The notification and the lock screen show covers at most this size. */

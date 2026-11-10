@@ -12,11 +12,13 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import app.lyrify.tags.TagFixtures
 import java.io.File
 import java.nio.channels.SeekableByteChannel
 import java.nio.file.Files
@@ -130,6 +132,25 @@ class DuplicatesTest {
     }
 
     @Test
+    fun `a retagged copy of a song, of another size, is found identical by its audio`() = runTest {
+        val audio = TagFixtures.mp3Audio(frames = 40)
+        fun copy(id: Long, folderName: String, tag: ByteArray): AudioFile {
+            val made = song(id, "", folderName = folderName)
+            File(made.path).writeBytes(TagFixtures.mp3(tag, audio))
+            return made.copy(size = File(made.path).length())
+        }
+        val a = copy(1, "a", TagFixtures.id3v2("TIT2 Lanterns Over Brine".encodeToByteArray()))
+        val b = copy(2, "b", TagFixtures.id3v2(ByteArray(12_000) { 4 }, version = 4))
+        assertNotEquals(a.size, b.size)
+        library(a, b)
+
+        val group = scanned(engine()).groups.single()
+
+        assertEquals(Confidence.IDENTICAL, group.confidence)
+        assertEquals(setOf(1L, 2L), group.files.map { it.id }.toSet())
+    }
+
+    @Test
     fun `a scan counts every file and stores the groups it found`() = runTest {
         library(song(1, "same bytes"), song(2, "same bytes", folderName = "b"), song(3, "Paper Comet", title = "Paper Comet"))
         val engine = engine()
@@ -229,7 +250,7 @@ class DuplicatesTest {
     }
 
     @Test
-    fun `a group not duplicates comes back when one of its files changes or another copy appears`() = runTest {
+    fun `a group not duplicates comes back when another copy appears, and stays hidden through a retag`() = runTest {
         val a = song(1, "same bytes")
         val b = song(2, "same bytes", folderName = "b")
         library(a, b)
@@ -241,9 +262,10 @@ class DuplicatesTest {
 
         engine.notDuplicates(engine.state.value.results?.groups?.single() ?: error("no group"))
         assertTrue(scanned(engine).groups.isEmpty())
+        // A retag changes a file's size, never its id: the user's choice stands.
         val changed = song(2, "same bytes, retagged", folderName = "b")
         library(a, changed, c)
-        assertEquals(setOf(1L, 2L, 3L), scanned(engine).groups.single().files.map { it.id }.toSet())
+        assertTrue(scanned(engine).groups.isEmpty())
     }
 
     // Moving to the trash

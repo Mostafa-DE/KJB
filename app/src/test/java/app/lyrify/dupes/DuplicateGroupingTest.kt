@@ -397,11 +397,13 @@ class DuplicateGroupingTest {
     }
 
     @Test
-    fun `a group's key is its files' ids and sizes, in any order`() {
+    fun `a group's key is its files' ids in any order, so a retag that changes a size keeps it`() {
         val a = file(1, size = 100)
         val b = file(2, size = 200)
+        assertEquals("1,2", DuplicateGroup(Confidence.SAME_SONG, listOf(b, a)).key)
         assertEquals(DuplicateGroup(Confidence.SAME_SONG, listOf(a, b)).key, DuplicateGroup(Confidence.MAYBE, listOf(b, a)).key)
-        assertNotEquals(DuplicateGroup(Confidence.SAME_SONG, listOf(a, b)).key, DuplicateGroup(Confidence.SAME_SONG, listOf(a, b.copy(size = 201))).key)
+        assertEquals(DuplicateGroup(Confidence.SAME_SONG, listOf(a, b)).key, DuplicateGroup(Confidence.SAME_SONG, listOf(a, b.copy(size = 201))).key)
+        assertNotEquals(DuplicateGroup(Confidence.SAME_SONG, listOf(a, b)).key, DuplicateGroup(Confidence.SAME_SONG, listOf(a, file(3, size = 200))).key)
     }
 
     @Test

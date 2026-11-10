@@ -165,6 +165,21 @@ class QueuesTest {
         assertEquals(4, moved.current!!.index)
     }
 
+    @Test
+    fun `a controller moving several songs at once moves them all, and the current song stays current`() {
+        val book = playing(1)
+        val numbers = { queue: Queue? -> paths(queue).map { it.removePrefix("Harbour Glass ").toInt() } }
+        val up = controllerMove(book, book.current!!.items.map { it.uid }, fromIndex = 3, toIndex = 5, newIndex = 1)
+        assertEquals(listOf(1, 4, 5, 2, 3, 6), numbers(up.current))
+        assertEquals("Harbour Glass 2", currentName(up))
+        val down = controllerMove(up, up.current!!.items.map { it.uid }, fromIndex = 0, toIndex = 2, newIndex = 4)
+        assertEquals(listOf(5, 2, 3, 6, 1, 4), numbers(down.current))
+        assertEquals("Harbour Glass 2", currentName(down))
+        // One song, as before.
+        val one = controllerMove(down, down.current!!.items.map { it.uid }, fromIndex = 5, toIndex = 6, newIndex = 0)
+        assertEquals(listOf(4, 5, 2, 3, 6, 1), numbers(one.current))
+    }
+
     // Recent and Saved
 
     @Test
@@ -294,6 +309,17 @@ class QueuesTest {
         assertFalse(moved.current!!.current!!.playNext)
         assertEquals(book.jumps, moved.jumps)
         assertEquals(book, book.at(999, now = 3))
+    }
+
+    @Test
+    fun `a controller removing the song playing makes the next one current from its start`() {
+        val book = playing(2).place(2, 61_000)
+        val queue = book.current!!
+        val removed = book.removeUids(queue.id, setOf(queue.items[2].uid))
+        assertEquals(queue.items[3].uid, removed.current!!.current!!.uid)
+        assertEquals(0L, removed.current!!.positionMs)
+        // Removing another song keeps the place.
+        assertEquals(61_000L, book.removeUids(queue.id, setOf(queue.items[0].uid)).current!!.positionMs)
     }
 
     @Test

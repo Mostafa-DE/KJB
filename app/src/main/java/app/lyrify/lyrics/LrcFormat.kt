@@ -62,6 +62,15 @@ object LrcFormat {
     fun parseLrclib(synced: String): List<LrcLine> =
         synced.removePrefix("\uFEFF").lineSequence().flatMap(::parseLrclibLine).sortedBy { it.timeMs }.toList()
 
+    /**
+     * The `[offset:+/-ms]` tag of LRC [text]: a positive offset shows every line that much sooner. 0 without one (or one
+     * that is not a whole number). Samsung Music ignores the tag, so KJB's sync editor applies it and writes the times
+     * as they are meant, without the tag.
+     */
+    fun offsetMs(text: String): Long = OFFSET_TAG.find(text)?.groupValues?.get(1)?.toLongOrNull() ?: 0
+
+    private val OFFSET_TAG = Regex("""(?im)^\s*\[offset:\s*([+-]?\d{1,9})\s*]\s*$""")
+
     private fun parseLrclibLine(line: String): List<LrcLine> {
         val times = mutableListOf<Long>()
         var rest = line

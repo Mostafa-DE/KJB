@@ -10,6 +10,7 @@ import app.lyrify.data.writeWithRetries
 import app.lyrify.library.LibraryGraph
 import app.lyrify.library.LibraryState
 import app.lyrify.logFailures
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -23,6 +24,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -31,6 +33,9 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
 import kotlin.random.Random
+
+/** Where the player is: the song [uid] of the queue playing, [positionMs] in. */
+data class PlayerAt(val uid: Long, val positionMs: Long)
 
 /** Where the queues are kept: `queues.json` and `playback.json` in the app ([QueueFiles]), memory in tests. */
 interface QueueStorage {
@@ -81,6 +86,7 @@ class PlayerCore(
     private val scope: CoroutineScope,
     private val wall: () -> Long,
     private val random: Random = Random.Default,
+    private val log: (String) -> Unit = {},
 ) {
     private val _book = MutableStateFlow(QueueBook())
     val book: StateFlow<QueueBook> = _book.asStateFlow()
@@ -101,14 +107,37 @@ class PlayerCore(
     /** The place of the queue playing saved since the last change of the book (the book holds it after that). */
     val place: StateFlow<PlaybackPlace?> = live.asStateFlow()
 
+    /** False once the queues could not be read: nothing is written over them this run. */
+    private var stored = true
+
     init {
         scope.launch {
-            val (book, repeat) = storage.load()
-            _book.value = book
-            _repeat.value = repeat
+            val read = try {
+                storage.load()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // Read as nothing loaded, so a player waiting for the queues closes; their files are left as they are.
+                log("queues not read: ${e.javaClass.simpleName}")
+                null
+            }
+            stored = read != null
+            read?.let { (book, repeat) ->
+                _book.value = book
+                _repeat.value = repeat
+            }
             _ready.value = true
-            launch { _book.drop(1).collect { storage.saveBook(it) } }
+            if (stored) launch { _book.drop(1).collect { storage.saveBook(it) } }
         }
+    }
+
+    /**
+     * Returns once the queues are read and nothing is loaded: the player closes then. Never before they are read, so a
+     * player opened on a cold start (the widget's cover, the notification) waits for the queues instead of closing.
+     */
+    suspend fun awaitNothingLoaded() {
+        // The book as it is now: it is set before ready, so a ready read never meets the empty book from before the read.
+        combine(_ready, _book) { ready, _ -> ready && _book.value.current?.current == null }.first { it }
     }
 
     /** [change] applied to the book (the live place folded in first); before the queues are read, once they are. */
@@ -131,6 +160,17 @@ class PlayerCore(
         val (book, result) = change(folded()) ?: return null
         _book.value = book
         return result
+    }
+
+    /** Where the player is, while the service runs; null when it stops. */
+    private var player: (() -> PlayerAt?)? = null
+
+    /**
+     * The service hands in where its player is ([player]; null as it stops). Every change then first takes that place
+     * onto the queue playing, so a queue left (another queue played, Resume) keeps where it really was, not its last save.
+     */
+    fun follow(player: (() -> PlayerAt?)?) {
+        this.player = player
     }
 
     fun now(): Long = wall()
@@ -157,12 +197,13 @@ class PlayerCore(
     }
 
     private fun placed(uid: Long, positionMs: Long, queueId: String?): PlaybackPlace? {
-        if (!_ready.value) return null
+        if (!_ready.value || !stored) return null
         return PlaybackPlace(queueId, uid, positionMs, _repeat.value, at = wall()).also { live.value = it }
     }
 
-    /** The book with the live place in it, as the next change sees it. */
+    /** The book with the live place in it (the player's own first), as the next change sees it. */
     private fun folded(): QueueBook {
+        player?.invoke()?.let { savePlace(it.uid, it.positionMs) }
         val place = live.value ?: return _book.value
         live.value = null
         return withPlace(_book.value, place)
@@ -194,7 +235,7 @@ object PlayerGraph {
         val log: (String) -> Unit = { Log.w(LOG_TAG, it) }
         val io = Dispatchers.IO.limitedParallelism(1)
         val store = queuesStore(app.dataStoreFile("queues.json"), app.filesDir, CoroutineScope(Dispatchers.IO + SupervisorJob()), System::currentTimeMillis, log)
-        PlayerCore(QueueFiles(store, PlaceFile(File(app.filesDir, "playback.json"), log), io, log), scope, System::currentTimeMillis).also { created ->
+        PlayerCore(QueueFiles(store, PlaceFile(File(app.filesDir, "playback.json"), log), io, log), scope, System::currentTimeMillis, log = log).also { created ->
             // Each library read: moved songs take their new path, and songs gone leave the saved queues.
             scope.launch {
                 created.ready.first { it }

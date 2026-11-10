@@ -11,6 +11,7 @@ import app.lyrify.data.PathLocks
 import app.lyrify.data.Retry
 import app.lyrify.data.SharedWrite
 import app.lyrify.data.SharedWrites
+import app.lyrify.data.WholeWrite
 import app.lyrify.data.recorded
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
@@ -27,6 +28,7 @@ import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.NoSuchFileException
 import java.nio.file.Path
+import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
@@ -174,7 +176,7 @@ class LyricsPipeline(
     private val writeBytes: (FileChannel, ByteBuffer) -> Unit = SidecarFile::writeFully,
     /** The per-path lock shared with the tag writer ([app.lyrify.Lyrify.locks]): one file is never handled twice at once. */
     private val locks: PathLocks = PathLocks(),
-) {
+) : PathHold {
 
     /** Songs the AI is working on, for the queue sweep to skip (one set with the pipeline, so one per process). */
     val aiPaths: AiPaths = AiPaths()
@@ -201,8 +203,14 @@ class LyricsPipeline(
         }
         val previous = state.entries[track.path]
         when {
+            // A write of the user's lyrics the app's death cut short ([placeMine]): the file decides, nothing is looked up.
+            previous?.mine == true && previous.status == LyricsStatus.WRITING -> settleMine(track, sidecar, previous)
+            // Lyrics the user made or edited: nothing replaces them by itself, not even once their file is gone.
+            previous?.mine == true -> Processed(previous.status)
             previous?.status == LyricsStatus.REMOVED -> Processed(LyricsStatus.REMOVED)
             previous != null && previous.status == LyricsStatus.WRITING -> reconcile(track, sidecar, previous, lane)
+            // Waiting for a check since Covers & tags renamed it: its `.lrc` is still KJB's own, not one that was there.
+            previous?.retagCheck == true && Files.exists(sidecar, LinkOption.NOFOLLOW_LINKS) -> Processed(LyricsStatus.NEEDS_CHECK)
             Files.exists(sidecar, LinkOption.NOFOLLOW_LINKS) ->
                 Processed(previous?.status?.takeIf { it in ON_DISK } ?: outcome(previous, track, LyricsStatus.EXISTING))
             previous != null && previous.status !in ON_DISK && !force && !previous.isDue(clock()) && !previous.lookupStale ->
@@ -210,6 +218,27 @@ class LyricsPipeline(
             TrackNames.isInstrumental(track.title) -> Processed(outcome(previous, track, LyricsStatus.INSTRUMENTAL))
             else -> lookUpAndWrite(track, sidecar, previous, lane)
         }
+    }
+
+    /**
+     * Covers & tags changed [track]'s tags ([track] has the new names; [namesChanged]: its normalised title or artist).
+     * The `.lrc` is never touched: a song not found, or with no artist, is looked up again under its new names, and KJB's
+     * own `.lrc` from LRCLIB, still exactly as written, waits for a check ([retagEffect]). Returns what was done.
+     */
+    suspend fun retagged(track: LocalTrack, namesChanged: Boolean): Retag {
+        val effect = exclusive(track.path) {
+            val entry = ledger.entry(track.path)
+            val effect = retagEffect(entry, namesChanged)
+            val sidecar = LrcFormat.sidecarPath(track.path)?.let { File(it).toPath() }
+            when {
+                effect != Retag.NEEDS_CHECK -> effect
+                entry?.sha256 == null || sidecar == null || SidecarFile.compare(sidecar, entry.sha256, log) != Compared.SAME -> Retag.NONE
+                ledger.put(entry.retagged(track, clock())) -> effect
+                else -> Retag.NONE
+            }
+        }
+        if (effect == Retag.LOOK_UP) process(track, Lane.LOW, force = true)
+        return effect
     }
 
     /**
@@ -224,7 +253,7 @@ class LyricsPipeline(
         val sidecar = File(sidecarPath).toPath()
         val previous = ledger.entry(track.path) ?: return@exclusive null
         when {
-            !previous.status.waitsForAi || previous.lookupStale -> previous.status
+            previous.mine || !previous.status.waitsForAi || previous.lookupStale -> previous.status
             Files.exists(sidecar, LinkOption.NOFOLLOW_LINKS) -> outcome(previous, track, LyricsStatus.EXISTING)
             // The file and its ledger entries go together, even if the run is stopped.
             else -> withContext(NonCancellable) { recordAiResult(track, sidecar, previous, result) }
@@ -317,14 +346,22 @@ class LyricsPipeline(
      * "This one" on the check list: record [id] for the song at [audioPath], which waits for a check. LRCLIB is asked
      * once for the record (the user is waiting, and can tap again), which must still fit the song as a candidate
      * ([Candidates.searched]). Synced lyrics are written through the same marker and exclusive create as any; plain
-     * lyrics are kept as PLAIN_ONLY with that record, for the AI to time.
+     * lyrics are kept as PLAIN_ONLY with that record, for the AI to time. With [song] (the player's Search, its tags
+     * from the library), the song need not wait for a check; a write under way and lyrics the user made (unless they
+     * removed them) still win.
      */
-    suspend fun choose(audioPath: String, id: Long): Checked = exclusive(audioPath) {
-        val previous = ledger.entry(audioPath)?.takeIf { it.status == LyricsStatus.NEEDS_CHECK }
+    suspend fun choose(audioPath: String, id: Long, song: LocalTrack? = null): Checked = exclusive(audioPath) {
+        val stored = ledger.entry(audioPath)
+        val theirs = stored?.mine == true && stored.status != LyricsStatus.REMOVED
+        val searched = song != null && stored?.status != LyricsStatus.WRITING && !theirs
+        val previous = stored?.takeIf { it.status == LyricsStatus.NEEDS_CHECK || searched }
         val sidecar = LrcFormat.sidecarPath(audioPath)?.let { File(it).toPath() }
-        if (previous == null || sidecar == null) return@exclusive Checked.Changed
-        val track = previous.track
-        if (Files.exists(sidecar, LinkOption.NOFOLLOW_LINKS)) return@exclusive Checked.Done(outcome(previous, track, LyricsStatus.EXISTING))
+        val track = song ?: previous?.track
+        if ((previous == null && !searched) || track == null || sidecar == null) return@exclusive Checked.Changed
+        val retag = previous?.takeIf { it.retagCheck && Files.exists(sidecar, LinkOption.NOFOLLOW_LINKS) }
+        // "This one" on the lyrics a retag check has: they stay, KJB's own as before.
+        if (retag != null && id == retag.lrclibId) return@exclusive if (ledger.put(retag.kept(clock()))) Checked.Done(retag.writtenStatus()) else Checked.NotSaved
+        if (retag == null && Files.exists(sidecar, LinkOption.NOFOLLOW_LINKS)) return@exclusive Checked.Done(outcome(previous, track, LyricsStatus.EXISTING))
         val found = when (val result = client.byId(id, Lane.HIGH)) {
             is LrclibResult.Found -> result.records.firstOrNull { it.id == id }
             LrclibResult.NotFound -> null
@@ -341,12 +378,23 @@ class LyricsPipeline(
         // The file and its ledger entries go together, even if the screen closes.
         withContext(NonCancellable) {
             when {
-                text != null -> {
-                    val status = write(track, sidecar, previous, text, Written(LyricsStatus.SYNCED, LyricsSource.LRCLIB, id))
-                    if (status == LyricsStatus.SYNCED || status == LyricsStatus.EXISTING) Checked.Done(status) else Checked.NotSaved
+                // Synced lyrics over a retag check's own `.lrc`: replaced in one step, never deleted first.
+                retag != null && text != null -> replaceRetagged(track, sidecar, retag, text, id)
+                // Plain lyrics for the AI: the ledger first, then KJB's own `.lrc` goes, only while it is still exactly
+                // what KJB wrote; when the ledger can't be saved, it stays.
+                retag != null -> when {
+                    !record(retag, track, LyricsStatus.PLAIN_ONLY, id, durationMatched = true) -> Checked.NotSaved
+                    !clearRetagged(sidecar, retag) -> Checked.Done(outcome(retag, track, LyricsStatus.EXISTING))
+                    else -> Checked.Done(LyricsStatus.PLAIN_ONLY)
                 }
-                // A `.lrc` made during the fetch wins, as it does for synced lyrics (the exclusive create).
+                // A `.lrc` made during the fetch wins.
                 Files.exists(sidecar, LinkOption.NOFOLLOW_LINKS) -> Checked.Done(outcome(previous, track, LyricsStatus.EXISTING))
+                // The user picked them: put in place whole and marked as theirs, so nothing replaces them by itself.
+                text != null -> {
+                    val bytes = LrcFormat.encode(text)
+                    val entry = recorded(previous, track, LyricsStatus.SYNCED, id, clock(), sha256 = SidecarFile.sha256(bytes), size = bytes.size.toLong(), source = LyricsSource.LRCLIB)
+                    if (placeMine(ledger, writes, sidecar, bytes, previous, entry, replace = false, log, writeBytes)) Checked.Done(LyricsStatus.SYNCED) else Checked.NotSaved
+                }
                 record(previous, track, LyricsStatus.PLAIN_ONLY, id, durationMatched = true) -> Checked.Done(LyricsStatus.PLAIN_ONLY)
                 else -> Checked.NotSaved
             }
@@ -356,7 +404,40 @@ class LyricsPipeline(
     /** "None of these": the song at [audioPath] is not found, so the AI may take it, and no candidates are offered for it again. */
     suspend fun decline(audioPath: String): Checked = exclusive(audioPath) {
         val previous = ledger.entry(audioPath)?.takeIf { it.status == LyricsStatus.NEEDS_CHECK } ?: return@exclusive Checked.Changed
-        if (record(previous, previous.track, LyricsStatus.NOT_FOUND, declined = true)) Checked.Done(LyricsStatus.NOT_FOUND) else Checked.NotSaved
+        val sidecar = LrcFormat.sidecarPath(audioPath)?.let { File(it).toPath() }?.takeIf { previous.retagCheck && Files.exists(it, LinkOption.NOFOLLOW_LINKS) }
+        withContext(NonCancellable) {
+            when {
+                // The ledger first: if it can't be saved, the lyrics stay as they are.
+                !record(previous, previous.track, LyricsStatus.NOT_FOUND, declined = true) -> Checked.NotSaved
+                // A retag check's own lyrics are not the song either: KJB's `.lrc` goes, while it is still exactly what
+                // KJB wrote. One changed since is someone else's now, and stays.
+                sidecar != null && !clearRetagged(sidecar, previous) -> Checked.Done(outcome(previous, previous.track, LyricsStatus.EXISTING))
+                else -> Checked.Done(LyricsStatus.NOT_FOUND)
+            }
+        }
+    }
+
+    /**
+     * The user picked other synced lyrics for a retag check: KJB's own `.lrc`, still exactly as KJB wrote it, is replaced
+     * in one step and the lyrics are the user's ([placeMine]). When the write fails, the `.lrc` and the ledger stay as
+     * they were. One changed since is someone else's, and stays.
+     */
+    private suspend fun replaceRetagged(track: LocalTrack, sidecar: Path, previous: LedgerEntry, text: String, id: Long): Checked {
+        val sha256 = previous.sha256
+        if (sha256 == null || SidecarFile.compare(sidecar, sha256, log) != Compared.SAME) return Checked.Done(outcome(previous, track, LyricsStatus.EXISTING))
+        val bytes = LrcFormat.encode(text)
+        val entry = recorded(previous, track, LyricsStatus.SYNCED, id, clock(), sha256 = SidecarFile.sha256(bytes), size = bytes.size.toLong(), source = LyricsSource.LRCLIB)
+        return if (placeMine(ledger, writes, sidecar, bytes, previous, entry, replace = true, log, writeBytes)) Checked.Done(LyricsStatus.SYNCED) else Checked.NotSaved
+    }
+
+    /** Deletes a retag check's own `.lrc`, only while it is still exactly what KJB wrote. False when it stays. */
+    private fun clearRetagged(sidecar: Path, entry: LedgerEntry): Boolean {
+        val sha256 = entry.sha256 ?: return false
+        return when (SidecarFile.compare(sidecar, sha256, log)) {
+            Compared.SAME -> SidecarFile.delete(sidecar, writes, log) == Removal.REMOVED
+            Compared.MISSING -> true
+            Compared.CHANGED, Compared.UNREADABLE -> false
+        }
     }
 
     /** "Show lyrics": the first [PREVIEW_LINES] lines of record [id], asked for once. Shown, never stored or logged. */
@@ -492,6 +573,9 @@ class LyricsPipeline(
         if (stamp == null || abs(stamp.modifiedAt - entry.updatedAt) > ADOPT_WINDOW_MS) return@exclusive false
         ledger.put(entry.copy(sha256 = stamp.sha256, writtenAt = stamp.modifiedAt)).also { if (it) log("${entry.title}: v1 lyrics adopted") }
     }
+
+    /** The sync editor's save and undo (LrcEdits) hold the song as a lookup does: never at the same time as one. */
+    override suspend fun <T> holding(path: String, block: suspend () -> T): T = exclusive(path, block)
 
     /** Runs [block] once no other call (nor the tag writer) is handling [path], keeping others off it meanwhile. */
     private suspend fun <T> exclusive(path: String, block: suspend () -> T): T = locks.exclusive(path, block)
@@ -663,6 +747,34 @@ class LyricsPipeline(
                 if (SidecarFile.deleteInterrupted(sidecar, writes, log)) lookUpAndWrite(track, sidecar, marker, lane) else Processed(LyricsStatus.WRITING)
             Interrupted.FOREIGN -> Processed(keepForeign(marker, track, marker))
         }
+    }
+
+    /**
+     * [marker] began a whole-file write of the user's lyrics ([placeMine]) whose end was never recorded. The rename is
+     * one step, so the `.lrc` is the new file or the one before: the new one is the user's lyrics as meant; the one
+     * before (or none, where there was none) brings its entry back; anything else is left as it is, kept as the user's.
+     * Never a delete of the `.lrc`, never a lookup; only the temporary file the marker names goes. Should the entry not
+     * be stored, the next look tries again.
+     */
+    private suspend fun settleMine(track: LocalTrack, sidecar: Path, marker: LedgerEntry): Processed? {
+        val whole = marker.whole
+        whole?.temp?.let { SidecarFile.deleteTemp(sidecar, it, writes, log) }
+        val there = Files.exists(sidecar, LinkOption.NOFOLLOW_LINKS)
+        val onDisk = try {
+            if (there) SidecarFile.stamp(sidecar)?.sha256 else null
+        } catch (e: IOException) {
+            log("${sidecar.fileName}: not readable: ${e.javaClass.simpleName}")
+            return Processed(LyricsStatus.WRITING)
+        }
+        val asBefore = whole != null && if (there) onDisk != null && onDisk == whole.oldSha256 else whole.oldSha256 == null
+        val settled = when {
+            there && onDisk != null && onDisk == marker.sha256 -> marker.copy(status = LyricsStatus.SYNCED, whole = null)
+            asBefore -> whole?.before
+            else -> recorded(marker, track, LyricsStatus.EXISTING, marker.lrclibId, clock()).copy(mine = true)
+        }
+        // The song had no entry before: it has none again.
+        if (settled == null) return if (ledger.drop(marker.path)) null else Processed(LyricsStatus.WRITING)
+        return Processed(if (ledger.put(settled)) settled.status else LyricsStatus.WRITING)
     }
 
     /** What LRCLIB's answer means for the ledger. */
@@ -840,6 +952,57 @@ internal enum class Interrupted {
 }
 
 /**
+ * The one way KJB puts lyrics the user chose in place as a song's `.lrc`, marked as theirs ([LedgerEntry.mine]): the
+ * sync editor's Save ([LrcEdits]) and a pick in Check these ([LyricsPipeline.choose]). The caller holds the song.
+ *
+ * A WRITING marker goes into the ledger first, marked as the user's, with the new bytes' hash and size, [entry] as it is
+ * to be, the temporary file's name, the old `.lrc`'s hash ([replace]) and [before] ([LedgerEntry.whole]); none stored,
+ * nothing is written. The bytes then go into that temporary file beside the `.lrc`, synced, and are renamed into place in
+ * one step ([SidecarFile.putWhole]): the `.lrc` is never deleted first nor holds part of them. Then [entry] replaces the
+ * marker. Should the app die, or the ledger fail, before that, the next start settles the marker by the `.lrc` alone
+ * ([LyricsPipeline.finishInterrupted]). When the bytes can't be put in place, [before] comes back. True when the `.lrc`
+ * holds the bytes, as the user's or soon to be.
+ */
+internal suspend fun placeMine(
+    ledger: LedgerStore,
+    writes: SharedWrites,
+    sidecar: Path,
+    bytes: ByteArray,
+    before: LedgerEntry?,
+    entry: LedgerEntry,
+    replace: Boolean,
+    log: (String) -> Unit,
+    writeBytes: (FileChannel, ByteBuffer) -> Unit = SidecarFile::writeFully,
+): Boolean {
+    if (!writes.allows(if (replace) SharedWrite.LRC_REPLACE else SharedWrite.LRC_CREATE, sidecar.toString())) return false
+    val old = if (replace) {
+        try {
+            SidecarFile.stamp(sidecar)?.sha256
+        } catch (e: IOException) {
+            log("lyrics: not written, the file before not read (${e.javaClass.simpleName})")
+            return false
+        }
+    } else {
+        null
+    }
+    val mine = entry.copy(mine = true)
+    val marker = mine.copy(status = LyricsStatus.WRITING, pendingText = null, whole = WholeWrite(SidecarFile.temp(sidecar).fileName.toString(), old, before))
+    if (!ledger.put(marker)) {
+        log("lyrics: not written, the ledger not marked")
+        return false
+    }
+    try {
+        SidecarFile.putWhole(sidecar, bytes, replace, writeBytes)
+    } catch (e: IOException) {
+        log("lyrics: not written (${e.javaClass.simpleName}), the file before stays")
+        if (!(if (before != null) ledger.put(before) else ledger.drop(entry.path))) log("lyrics: the entry before not put back")
+        return false
+    }
+    if (!ledger.put(mine)) log("lyrics: written, the ledger settles it at the next start")
+    return true
+}
+
+/**
  * Every file operation on `.lrc` files. KJB deletes exactly three kinds of file, all here:
  * a partial `.lrc` the same [create] call just made; (by [delete], when the user asks) a `.lrc`
  * KJB wrote whose bytes still have the hash it recorded; and (by [deleteInterrupted]) the
@@ -849,6 +1012,8 @@ internal enum class Interrupted {
 internal object SidecarFile {
     /** Larger than any lyrics file; such a file is not one KJB wrote. */
     private const val MAX_BYTES: Long = 1024 * 1024
+
+    private const val TEMP = ".kjb-tmp"
 
     /** A file's content hash and modification time. */
     data class Stamp(val sha256: String, val modifiedAt: Long)
@@ -979,6 +1144,50 @@ internal object SidecarFile {
 
     fun writeFully(channel: FileChannel, buffer: ByteBuffer) {
         while (buffer.hasRemaining()) channel.write(buffer)
+    }
+
+    /** Where a whole-file write of [path] goes first ([putWhole]): hidden, beside it, so the rename stays on one file system. */
+    fun temp(path: Path): Path = path.resolveSibling(".${path.fileName}$TEMP")
+
+    /** Whether a file named [name] is a temporary file of a whole-file write ([temp]). */
+    fun isTemp(name: String): Boolean = name.startsWith(".") && name.endsWith(TEMP)
+
+    /**
+     * [bytes] as [path] in one step: into a temporary file beside it ([temp]; one a write the app's death cut short left
+     * goes first), synced, then renamed over the regular file there ([replace]) or into place where nothing is. The file
+     * is never deleted first, so it holds the old bytes or the new ones, whole. Throws an IOException, the temporary
+     * file deleted, and nothing changed.
+     */
+    fun putWhole(path: Path, bytes: ByteArray, replace: Boolean, write: (FileChannel, ByteBuffer) -> Unit = ::writeFully) {
+        val temp = temp(path)
+        try {
+            Files.deleteIfExists(temp)
+            FileChannel.open(temp, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE).use { channel ->
+                write(channel, ByteBuffer.wrap(bytes))
+                channel.force(true)
+            }
+            if (replace) {
+                Files.move(temp, path, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+            } else {
+                if (Files.exists(path, LinkOption.NOFOLLOW_LINKS)) throw FileAlreadyExistsException(path.fileName.toString())
+                Files.move(temp, path, StandardCopyOption.ATOMIC_MOVE)
+            }
+        } catch (e: IOException) {
+            deletePartial(temp, log = {})
+            throw e
+        }
+    }
+
+    /** Deletes [name], the temporary file a whole-file write of [path] named in its marker, if it is one ([isTemp]) and there. */
+    fun deleteTemp(path: Path, name: String, writes: SharedWrites, log: (String) -> Unit) {
+        if (!isTemp(name) || name.contains('/')) return
+        val temp = path.resolveSibling(name)
+        if (!writes.allows(SharedWrite.LRC_DELETE, temp.toString())) return
+        try {
+            Files.deleteIfExists(temp)
+        } catch (e: IOException) {
+            log("lyrics: temp file not removed (${e.javaClass.simpleName})")
+        }
     }
 
     /** [path] was created by this very call (which [SharedWrites] allowed) and is incomplete: KJB's own partial file. */

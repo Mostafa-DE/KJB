@@ -1,12 +1,16 @@
 package app.lyrify.player
 
 import app.lyrify.library.SongRef
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.job
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
@@ -308,5 +312,89 @@ class QueueStoreTest {
         advanceTimeBy(4_000)
         core.savePlaceNow(first, 4_000)
         assertEquals(PlaybackPlace(core.book.value.currentId, first, 4_000, Repeat.OFF, at = 4_000), files.place)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `a queue left keeps the player's place at the switch, before any save`() = runTest {
+        val files = Files()
+        val core = PlayerCore(files, backgroundScope, wall = { currentTime })
+        runCurrent()
+        core.switch { it.play(album, 0, albumSource, currentTime) }
+        runCurrent()
+        val albumId = core.book.value.currentId!!
+        val third = core.book.value.current!!.items[2].uid
+        core.follow { PlayerAt(third, 31_000) }
+        advanceTimeBy(4_000)
+        core.switch { it.play(folderSongs, 1, folderSource, currentTime) }
+        runCurrent()
+
+        assertEquals(2, core.book.value.queue(albumId)!!.index)
+        assertEquals(31_000L, core.book.value.queue(albumId)!!.positionMs)
+        // Until the player loads the new queue it still holds the album's song: the new queue's place stays.
+        core.change { it.rename(albumId, "Kept") }
+        runCurrent()
+        assertEquals(1, core.book.value.current!!.index)
+        assertEquals(0L, core.book.value.current!!.positionMs)
+    }
+
+    // A cold start: the player screen opens before the queues are read
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `on a cold start the player stays open until the queues have loaded, and closes only when they load empty`() = runTest {
+        for (stored in listOf(QueueBook().play(listOf(album[0]), 0, albumSource, now = 1).book, QueueBook())) {
+            val read = CompletableDeferred<Unit>()
+            val files = object : QueueStorage {
+                override suspend fun load(): Pair<QueueBook, Repeat> = read.await().let { stored to Repeat.OFF }
+
+                override suspend fun saveBook(book: QueueBook) = Unit
+
+                override suspend fun savePlace(place: PlaybackPlace) = Unit
+            }
+            val core = PlayerCore(files, backgroundScope, wall = { currentTime })
+            val closes = backgroundScope.async { core.awaitNothingLoaded() }
+            runCurrent()
+            assertFalse("closed while the queues were read", closes.isCompleted)
+
+            read.complete(Unit)
+            runCurrent()
+            assertEquals(stored.current == null, closes.isCompleted)
+            if (stored.current == null) continue
+
+            // Its one song removed later: nothing is loaded now, and the player closes.
+            core.change { it.remove(it.currentId!!, it.current!!.items.single().uid)!!.book }
+            runCurrent()
+            assertTrue(closes.isCompleted)
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `queues that cannot be read close the player, are logged without names, and their file is left as it was`() = runTest {
+        var saved = 0
+        val files = object : QueueStorage {
+            override suspend fun load(): Pair<QueueBook, Repeat> = throw IllegalStateException("a book this version can't read")
+
+            override suspend fun saveBook(book: QueueBook) {
+                saved++
+            }
+
+            override suspend fun savePlace(place: PlaybackPlace) = Unit
+        }
+        val logs = mutableListOf<String>()
+        val quiet = CoroutineScope(backgroundScope.coroutineContext + SupervisorJob(backgroundScope.coroutineContext.job) + CoroutineExceptionHandler { _, _ -> })
+        val core = PlayerCore(files, quiet, wall = { currentTime }, log = { logs += it })
+        val closes = backgroundScope.async { core.awaitNothingLoaded() }
+        runCurrent()
+
+        assertTrue("the player waits for ever", closes.isCompleted)
+        assertEquals(QueueBook(), core.book.value)
+        assertEquals(listOf("queues not read: IllegalStateException"), logs)
+
+        // Playing something now never writes over the file that could not be read.
+        core.switch { it.play(album, 0, albumSource, currentTime) }
+        runCurrent()
+        assertEquals(0, saved)
     }
 }

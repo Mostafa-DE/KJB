@@ -10,6 +10,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import app.lyrify.tags.TagFixtures
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.channels.SeekableByteChannel
@@ -36,12 +37,12 @@ class ContentHasherTest {
         }
     }
 
-    private fun audio(name: String, bytes: ByteArray, id: Long = name.hashCode().toLong(), size: Long = bytes.size.toLong()): AudioFile {
+    private fun audio(name: String, bytes: ByteArray, id: Long = name.hashCode().toLong(), size: Long = bytes.size.toLong(), durationMs: Long = 200_000): AudioFile {
         val file = File(folder.root, name)
         file.writeBytes(bytes)
         return AudioFile(
             id = id, path = file.path, relativePath = "Music/", displayName = name, title = name, artist = null, album = null,
-            durationMs = 200_000, size = size, mimeType = "audio/mpeg", bitrate = null, addedAt = 0,
+            durationMs = durationMs, size = size, mimeType = "audio/mpeg", bitrate = null, addedAt = 0,
         )
     }
 
@@ -111,12 +112,45 @@ class ContentHasherTest {
     // Content keys
 
     @Test
-    fun `only files that share a size with another file are opened`() = runTest {
-        val files = listOf(audio("a.mp3", bytes("HEAD-x-TAIL")), audio("b.mp3", bytes("HEAD-x-TAIL")), audio("c.mp3", bytes("lonely")))
+    fun `only files that share a length with another file are opened`() = runTest {
+        val files = listOf(audio("a.mp3", bytes("HEAD-x-TAIL")), audio("b.mp3", bytes("HEAD-x-TAIL")), audio("c.mp3", bytes("HEAD-x-TAIL"), durationMs = 199_000))
         val keys = identicalKeys(files, hasher)
         assertEquals(setOf("a.mp3", "b.mp3"), opened.toSet())
         assertEquals(keys[files[0].id], keys[files[1].id])
         assertNull(keys[files[2].id])
+    }
+
+    // The audio payload: tags never count
+
+    @Test
+    fun `two copies of one song with different tags are identical, other audio of the same length is not`() = runTest {
+        val song = TagFixtures.mp3Audio(frames = 40)
+        val files = listOf(
+            audio("a.mp3", TagFixtures.mp3(TagFixtures.id3v2("TIT2 Paper Lantern".encodeToByteArray()), song)),
+            audio("b.mp3", TagFixtures.mp3(TagFixtures.id3v2(ByteArray(9_000) { 7 }, version = 4), song, v1 = TagFixtures.id3v1())),
+            audio("c.mp3", TagFixtures.mp3(audio = TagFixtures.mp3Audio(frames = 40, seed = 2))),
+        )
+        assertNotEquals(files[0].size, files[1].size)
+
+        val keys = identicalKeys(files, hasher)
+
+        assertNotNull(keys[files[0].id])
+        assertEquals(keys[files[0].id], keys[files[1].id])
+        assertNotEquals(keys[files[0].id], keys[files[2].id])
+        // The tag engine's payload hash, never the whole file.
+        assertEquals(emptyList<String>(), opened)
+    }
+
+    @Test
+    fun `an Ogg copy whose bigger comment renumbered its pages is identical`() = runTest {
+        val packets = TagFixtures.audioPackets()
+        val files = listOf(
+            audio("a.ogg", TagFixtures.ogg(TagFixtures.vorbisPackets(audio = packets), headers = 3)),
+            audio("b.ogg", TagFixtures.ogg(TagFixtures.vorbisPackets(comment = ByteArray(150_000) { 3 }, audio = packets), headers = 3)),
+        )
+        val keys = identicalKeys(files, hasher)
+        assertNotNull(keys[files[0].id])
+        assertEquals(keys[files[0].id], keys[files[1].id])
     }
 
     @Test

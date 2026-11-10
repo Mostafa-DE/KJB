@@ -64,17 +64,6 @@ class M3uScreensTest {
         assertFalse(FILE.readText().contains('—'))
     }
 
-    @Test
-    fun `the Playlists tab and a playlist's page place the m3u rows and the import sheet`() {
-        val tab = File("src/main/java/app/lyrify/ui/LibraryScreen.kt").readText()
-        val pages = File("src/main/java/app/lyrify/ui/CollectionScreens.kt").readText()
-
-        listOf("val m3u = rememberM3uActions()", "PlaylistsM3uRows(m3u, close = { menu = false })", "M3uImportSheet(m3u)").forEach { assertTrue(it, tab.contains(it)) }
-        listOf("val m3u = rememberM3uActions()", "PlaylistExportRow(m3u, playlist, close = { menu = false })").forEach { assertTrue(it, pages.contains(it)) }
-        assertFalse(tab.contains("B1 (m3u):"))
-        assertFalse(pages.contains("B1 (m3u):"))
-    }
-
     private fun strings(): Map<String, String> =
         Regex("""<string name="([^"]+)">([^<]*)</string>""").findAll(FILE.readText()).associate { it.groupValues[1] to unescape(it.groupValues[2]) }
 

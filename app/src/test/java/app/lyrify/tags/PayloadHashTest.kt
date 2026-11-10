@@ -13,6 +13,7 @@ import app.lyrify.tags.TagFixtures.oggPages
 import app.lyrify.tags.TagFixtures.opusPackets
 import app.lyrify.tags.TagFixtures.vorbisPackets
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -52,6 +53,40 @@ class PayloadHashTest {
         assertEquals(before, payload("v1.mp3", mp3(id3v2(bigTag(10), version = 3), audio, v1 = id3v1())))
         assertEquals(before, payload("v1 other title.mp3", mp3(id3v2(bigTag(10), version = 3), audio, v1 = id3v1("Tin Roof"))))
         assertEquals(before, payload("no tag.mp3", mp3(tag = null, audio = audio)))
+    }
+
+    @Test
+    fun `an MP3's APE tag, before an ID3v1 tag or at the end, is not part of its payload`() {
+        val audio = mp3Audio()
+        val before = payload("plain.mp3", mp3(audio = audio))
+        val ape = TagFixtures.ape(mapOf("Title" to "Paper Lantern"), cover = bigTag(2_000))
+        val other = TagFixtures.ape(mapOf("Title" to "Tin Roof", "KJB Only" to "kept"), cover = bigTag(5_000), header = true)
+        assertEquals(before, payload("ape.mp3", mp3(audio = audio + ape)))
+        assertEquals(before, payload("ape v1.mp3", mp3(audio = audio + ape, v1 = id3v1())))
+        assertEquals(before, payload("other ape v1.mp3", mp3(audio = audio + other, v1 = id3v1())))
+        // A footer whose size runs past the tag is not an APE tag's: the bytes stay in the payload.
+        val broken = ape.copyOf().also { it[it.size - 32 + 12] = 0x7F; it[it.size - 32 + 15] = 0x7F }
+        assertNotEquals(before, payload("broken ape.mp3", mp3(audio = audio + broken)))
+    }
+
+    @Test
+    fun `an APE footer whose size, items or header don't hold together is audio, not a tag`() {
+        val audio = mp3Audio()
+        fun footer(size: Int, count: Int, flags: Int = 0): ByteArray = "APETAGEX".encodeToByteArray() +
+            java.nio.ByteBuffer.allocate(24).order(java.nio.ByteOrder.LITTLE_ENDIAN).putInt(2000).putInt(size).putInt(count).putInt(flags).putLong(0).array()
+        // A footer alone, claiming the audio before it as its items: those bytes stay in the payload.
+        val bogus = footer(size = 2_000, count = 1)
+        val changed = audio.copyOf().also { it[it.size - 500] = (it[it.size - 500] + 1).toByte() }
+        assertNotNull(payload("a.mp3", mp3(audio = audio + bogus)))
+        assertNotEquals(payload("a.mp3", mp3(audio = audio + bogus)), payload("b.mp3", mp3(audio = changed + bogus)))
+        // A tag whose item count is wrong, or which claims a header that is not there, is not a tag either.
+        val plain = payload("plain.mp3", mp3(audio = audio))
+        val wrongCount = TagFixtures.ape(mapOf("Title" to "Paper Lantern", "Artist" to "Kit Calloway")).also { it[it.size - 32 + 16] = 3 }
+        val noHeader = TagFixtures.ape(mapOf("Title" to "Paper Lantern")).also { it[it.size - 32 + 23] = 0x80.toByte() }
+        assertNotEquals(plain, payload("count.mp3", mp3(audio = audio + wrongCount)))
+        assertNotEquals(plain, payload("header.mp3", mp3(audio = audio + noHeader)))
+        // A real tag with its header is still a tag.
+        assertEquals(payload("plain.mp3", mp3(audio = audio)), payload("real.mp3", mp3(audio = audio + TagFixtures.ape(mapOf("Title" to "Tin Roof"), header = true))))
     }
 
     @Test
@@ -159,6 +194,35 @@ class PayloadHashTest {
         assertNotEquals(before, payload("joined.opus", ogg(opusPackets(audio = joined), headers = 2)))
     }
 
+    // Slices, for Duplicates' prefilter
+
+    @Test
+    fun `a payload slice hashes the start of the audio only, the same through a retag, in every format`() {
+        val mp3Audio = mp3Audio(frames = 40)
+        val audio = audioPackets()
+        val copies = listOf(
+            "a.mp3" to mp3(id3v2("TIT2 Paper Lantern".encodeToByteArray()), mp3Audio) to ("b.mp3" to mp3(id3v2(bigTag(9_000), version = 4), mp3Audio, v1 = id3v1())),
+            "a.flac" to flac() to ("b.flac" to flac(comment = bigTag(5_000), padding = 900)),
+            "a.m4a" to m4a() to ("b.m4a" to m4a(tags = bigTag(4_000), moovFirst = false)),
+            "a.ogg" to ogg(vorbisPackets(audio = audio), headers = 3) to ("b.ogg" to ogg(vorbisPackets(comment = bigTag(150_000), audio = audio), headers = 3)),
+            "a.opus" to ogg(opusPackets(audio = audio), headers = 2) to ("b.opus" to ogg(opusPackets(comment = bigTag(70_000), audio = audio), headers = 2)),
+        )
+        for ((first, second) in copies) {
+            val a = file(first.first, first.second).toPath()
+            val b = file(second.first, second.second).toPath()
+            val sliceA = PayloadHash.slice(a, 100)!!
+            assertEquals(first.first, sliceA, PayloadHash.slice(b, 100))
+            assertFalse(first.first, sliceA.whole)
+            assertEquals(first.first, PayloadHash.of(a)!!.format, sliceA.format)
+            assertNotEquals(first.first, PayloadHash.of(a)!!.sha256, sliceA.sha256)
+            // A slice as long as the audio is the whole payload hash.
+            val whole = PayloadHash.slice(a, Long.MAX_VALUE)!!
+            assertTrue(first.first, whole.whole)
+            assertEquals(first.first, PayloadHash.of(a)!!.sha256, whole.sha256)
+        }
+        assertNull(PayloadHash.slice(file("text.mp3", "not audio".encodeToByteArray()).toPath(), 100))
+    }
+
     @Test
     fun `Opus in an ogg file is Opus, and a second stream, no audio or no Ogg pages means no payload`() {
         assertEquals(AudioFormat.OPUS, payload("opus.ogg", ogg(opusPackets(), headers = 2))?.format)
@@ -189,6 +253,8 @@ class PayloadHashTest {
         val formats = fixtures.listFiles()!!.sortedBy { it.name }.associate { it.name to PayloadHash.of(it.toPath())?.format }
         assertEquals(
             mapOf(
+                "harbour-lights-ape.mp3" to AudioFormat.MP3,
+                "kelp-lighthouse-v24-ape.mp3" to AudioFormat.MP3,
                 "lanterns-over-kelp-v24.mp3" to AudioFormat.MP3,
                 "northbound-tide.m4a" to AudioFormat.M4A,
                 "paper-comet-messy.ogg" to AudioFormat.OGG_VORBIS,

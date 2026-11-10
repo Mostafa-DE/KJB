@@ -7,6 +7,7 @@ import app.lyrify.player.QueueSource
 import app.lyrify.player.SourceKind
 import app.lyrify.settings.LibrarySettings
 import app.lyrify.settings.Settings
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -161,5 +162,14 @@ class SearchIndexTest {
         assertEquals(QueueSource(SourceKind.SEARCH, "search:ferry bell", "Ferry Bell"), searchSource("  Ferry   Bell "))
         assertEquals(searchSource("ferry bell").key, searchSource("FÉRRY Bell").key)
         assertEquals("FÉRRY Bell", searchSource("FÉRRY Bell").name)
+    }
+
+    @Test
+    fun `the car's search is Search's, the songs by name as Search ranks them, then those found only by their lyrics`() = runBlocking {
+        val library = library(keeper, glow, lantern, lanterns, cafe)
+        val search = SearchSongs { query, _, _ -> if (query == "lantern") listOf(glow, cafe) else emptyList() }
+        // Word starts first, each by name, then inside a word; then the lyrics' songs not found by name.
+        assertEquals(listOf(lanterns, lantern, keeper, glow, cafe), search.songs("lantern", library, LibrarySettings()))
+        assertEquals(searchSource("Lantern"), search.source("Lantern"))
     }
 }

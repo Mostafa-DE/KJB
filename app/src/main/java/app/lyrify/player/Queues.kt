@@ -203,14 +203,18 @@ data class QueueBook(
         return edit(queueId) { it.copy(items = before, index = index) }
     }
 
-    /** Undo of an add: the songs with [uids] leave queue [queueId] again; the current song stays current. */
+    /**
+     * Undo of an add, or a controller's remove: the songs with [uids] leave queue [queueId]; the current song stays
+     * current, or when it went, the next one is current from its start.
+     */
     fun removeUids(queueId: String, uids: Collection<Long>): QueueBook {
         val queue = queue(queueId) ?: return this
         val currentUid = queue.current?.uid
         val items = queue.items.filterNot { it.uid in uids }
         if (items.isEmpty()) return dropped(setOf(queueId), evenCurrent = true)
-        val index = items.indexOfFirst { it.uid == currentUid }.takeIf { it >= 0 } ?: queue.index.coerceAtMost(items.lastIndex)
-        return edit(queueId) { it.copy(items = items, index = index, unshuffled = it.unshuffled?.minus(uids.toSet())) }
+        val kept = items.indexOfFirst { it.uid == currentUid }
+        val index = kept.takeIf { it >= 0 } ?: queue.index.coerceAtMost(items.lastIndex)
+        return edit(queueId) { it.copy(items = items, index = index, positionMs = if (kept >= 0) it.positionMs else 0, unshuffled = it.unshuffled?.minus(uids.toSet())) }
     }
 
     /** "Keep": a recent queue moves to Saved, where it never drops off. */

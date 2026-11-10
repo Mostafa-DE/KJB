@@ -3,8 +3,15 @@ package app.lyrify.player
 import app.lyrify.library.Song
 import app.lyrify.library.SongRef
 import app.lyrify.library.song
+import app.lyrify.stats.FakePlayLog
+import app.lyrify.stats.LoggedPlay
+import app.lyrify.stats.PlayCounter
 import app.lyrify.stats.PlayEvent
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceTimeBy
@@ -46,6 +53,11 @@ class QueueBridgeTest {
                 is Edit.Remove -> list.removeAt(edit.at)
                 is Edit.Insert -> list.addAll(edit.at, edit.items.map { it.uid })
                 is Edit.Move -> list.add(edit.to, list.removeAt(edit.from))
+                is Edit.Replace -> {
+                    list[edit.at] = edit.item.uid
+                    calls += "replace ${edit.at} ${edit.item.song.path}"
+                    return
+                }
             }
             loaded = list
             index = if (current != null && current in list) list.indexOf(current) else index.coerceAtMost(list.lastIndex)
@@ -239,6 +251,44 @@ class QueueBridgeTest {
         assertTrue(events.last() is PlayEvent.Ended)
     }
 
+    /**
+     * What the service sends on a restart: the queue loaded at its place starts a play there, paused ([PlayTracker.start]
+     * with the engine's position, a Position right after the Started). The counter goes on with the play it kept, and a
+     * restored song never played leaves nothing.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `a queue restored after a restart goes on as the play kept before it, and one never played leaves no play`() = runTest {
+        val log = FakePlayLog()
+        val share = MutableStateFlow<Int?>(50)
+        val started = wall
+        val before = PlayTracker(PlayCounter(log, share, backgroundScope), wall = { wall })
+        before.start(refs[0], 180_000, positionMs = 0, playing = true)
+        for (at in 5_000L..60_000L step 5_000L) {
+            wall += 5_000
+            before.position(at, playing = true)
+        }
+        before.position(60_000, playing = false)
+        runCurrent()
+
+        // The app starts again: the player loads the song at its place, paused, then plays it to its end.
+        wall += 600_000
+        val after = PlayTracker(PlayCounter(log, share, backgroundScope), wall = { wall })
+        after.start(refs[0], 180_000, positionMs = 60_000, playing = false)
+        after.position(60_000, playing = true)
+        for (at in 65_000L..175_000L step 5_000L) {
+            wall += 5_000
+            after.position(at, playing = true)
+        }
+        wall += 5_000
+        // On to the next song, which the app stops before it is played: no play of it.
+        after.start(refs[1], 180_000, positionMs = 0, playing = false, naturalEnd = true)
+        after.end()
+        runCurrent()
+
+        assertEquals(listOf(LoggedPlay(refs[0], started, 180_000, counted = true)), log.plays)
+    }
+
     @OptIn(ExperimentalCoroutinesApi::class)
     @Test
     fun `while playing, something runs every few seconds, and stops on pause`() = runTest {
@@ -278,5 +328,80 @@ class QueueBridgeTest {
         advanceTimeBy(10_001)
         assertEquals(listOf(10_000L, 20_000L, 25_000L, 95_000L), saved)
         job.cancel()
+    }
+
+    @Test
+    fun `a song moved on the phone reaches the player at its new path, and only that song is replaced`() {
+        val elsewhere = songs[2].copy(ref = SongRef("Music/Moved/03 Paper Lantern 3.mp3", songs[2].ref.mediaStoreId))
+        var moved = false
+        val findMoved: (SongRef) -> Song? = { ref -> if (moved && ref.path in setOf(songs[2].path, elsewhere.path)) elsewhere else find(ref) }
+        val book = QueueBook().play(refs, 0, albumSource, now = 1).book
+        bridge.sync(book, findMoved)
+        val uids = port.loaded
+        port.calls.clear()
+
+        moved = true
+        bridge.sync(book, findMoved)
+        assertEquals(listOf("replace 2 ${elsewhere.path}"), port.calls)
+        assertEquals(uids, port.loaded)
+        // The queue taking the new path too (the next library read) changes nothing more.
+        port.calls.clear()
+        bridge.sync(book.refresh { ref -> if (ref.path == songs[2].path) elsewhere.ref else ref }, findMoved)
+        assertEquals(emptyList<String>(), port.calls)
+    }
+
+    // Playback resumption (a headset's or a car's play after KJB was closed)
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `resumption hands over the queue once the queues and the library are read`() = runTest {
+        val answer = resumption(backgroundScope, timeoutMs = 10_000, none = "none", ready = { true }) { "queue" }
+        runCurrent()
+        assertTrue(answer.isDone)
+        assertEquals("queue", answer.get())
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `resumption answers with nothing when the library cannot be read, takes too long, or the service ends`() = runTest {
+        val unreadable = resumption(backgroundScope, timeoutMs = 10_000, none = "none", ready = { false }) { "queue" }
+        runCurrent()
+        assertTrue(unreadable.isDone)
+        assertEquals("none", unreadable.get())
+
+        val slow = resumption(backgroundScope, timeoutMs = 10_000, none = "none", ready = { awaitCancellation() }) { "queue" }
+        advanceTimeBy(10_001)
+        assertTrue(slow.isDone)
+        assertEquals("none", slow.get())
+
+        val service = CoroutineScope(coroutineContext + Job())
+        val ended = resumption(service, timeoutMs = 10_000, none = "none", ready = { awaitCancellation() }) { "queue" }
+        runCurrent()
+        service.cancel()
+        runCurrent()
+        assertTrue(ended.isDone)
+        assertEquals("none", ended.get())
+    }
+
+    // A song that cannot be played
+
+    @Test
+    fun `after a song fails the player goes on with the song it would play next, wrapping under Repeat all`() {
+        assertEquals(AfterError.Skip(2), afterError(next = 2, failedInARow = 1, size = 4))
+        // The last song failed with Repeat all: back to the first, never a stall past the end.
+        assertEquals(AfterError.Skip(0), afterError(next = 0, failedInARow = 1, size = 4))
+        // The last song failed with Repeat off: nothing follows.
+        assertEquals(AfterError.Stop, afterError(next = -1, failedInARow = 1, size = 4))
+    }
+
+    @Test
+    fun `when every song fails in a row the player stops with the error, instead of going round for ever`() {
+        val size = 3
+        var at = 0
+        val steps = (1..size).map { failed ->
+            afterError(next = (at + 1) % size, failedInARow = failed, size = size).also { if (it is AfterError.Skip) at = it.index }
+        }
+        assertEquals(listOf(AfterError.Skip(1), AfterError.Skip(2), AfterError.Stop), steps)
+        assertEquals(AfterError.Stop, afterError(next = 0, failedInARow = 1, size = 1))
     }
 }

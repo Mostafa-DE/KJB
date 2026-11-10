@@ -33,10 +33,14 @@ data class Payload(
     val layout: String? = null,
 )
 
+/** The start of a song's audio payload, hashed ([PayloadHash.slice]); [whole] when that was all of it. */
+data class PayloadSlice(val format: AudioFormat, val sha256: String, val whole: Boolean)
+
 /**
  * The one audio payload hash, used by the writer's checks, by Undo and by Duplicates. It covers the audio data only,
  * so a retag never changes it:
- * - MP3: the bytes between the ID3v2 tag (at the start, if any) and an ID3v1 tag (the last 128 bytes, if any);
+ * - MP3: the bytes between the ID3v2 tag (at the start, if any) and an APE tag (if any) or an ID3v1 tag (the last 128
+ *   bytes, if any), whichever comes first: the tag writer updates an APE tag an MP3 already has;
  * - FLAC: the bytes after the metadata blocks (and after an ID3v2 tag before them), up to an ID3v1 tag;
  * - M4A: the contents of every `mdat` box, in order. [Payload.layout] records where each `stco`/`co64` chunk offset
  *   points inside them, so a write that left the offsets wrong is caught;
@@ -49,17 +53,29 @@ data class Payload(
  */
 object PayloadHash {
     /** [path]'s payload, or null when its format is not allowed or the file is not well formed. */
-    fun of(path: Path): Payload? {
+    fun of(path: Path): Payload? = read(path, Long.MAX_VALUE)?.payload
+
+    /**
+     * The first [bytes] of [path]'s audio payload (all of it when shorter), hashed as [of] hashes it, without M4A's
+     * chunk layout: equal for two copies of one song whatever their tags, and cheap, since it reads only the start of
+     * the audio. Duplicates' prefilter. Null as for [of].
+     */
+    fun slice(path: Path, bytes: Long): PayloadSlice? = read(path, bytes)?.let { PayloadSlice(it.payload.format, it.payload.sha256, it.whole) }
+
+    /** A payload hashed up to a limit: [whole] when the limit left nothing out. */
+    private class Read(val payload: Payload, val whole: Boolean)
+
+    private fun read(path: Path, limit: Long): Read? {
         val extension = path.fileName?.toString()?.substringAfterLast('.', "")?.lowercase() ?: return null
         if (extension !in AudioFormat.EXTENSIONS) return null
         return try {
             FileInputStream(path.toFile()).use { input ->
                 val file = Reader(input.channel)
                 when (extension) {
-                    "mp3" -> mp3(file)
-                    "flac" -> flac(file)
-                    "m4a" -> m4a(file)
-                    else -> ogg(file)
+                    "mp3" -> mp3(file, limit)
+                    "flac" -> flac(file, limit)
+                    "m4a" -> m4a(file, limit)
+                    else -> ogg(file, limit)
                 }
             }
         } catch (_: IOException) {
@@ -67,6 +83,12 @@ object PayloadHash {
         } catch (_: Malformed) {
             null
         }
+    }
+
+    /** [from] to [to] of [file], or its first [limit] bytes. */
+    private fun range(file: Reader, format: AudioFormat, from: Long, to: Long, limit: Long): Read {
+        val stop = if (to - from > limit) from + limit else to
+        return Read(Payload(format, file.hash(from, stop)), stop == to)
     }
 
     /** SHA-256 (hex) of every byte of the file at [path]. */
@@ -77,17 +99,17 @@ object PayloadHash {
         digest.hex()
     }
 
-    private fun mp3(file: Reader): Payload {
+    private fun mp3(file: Reader, limit: Long): Read {
         val start = id3v2End(file, 0)
-        val end = id3v1Start(file, start)
+        val end = apeStart(file, start, id3v1Start(file, start))
         // Real MPEG audio starts with a frame header within the first bytes after the tag.
         val head = file.read(start, minOf(SYNC_WINDOW, end - start).toInt())
         val synced = (0 until head.size - 3).any { mpegFrameHeader(head, it) }
         if (!synced) throw Malformed()
-        return Payload(AudioFormat.MP3, file.hash(start, end))
+        return range(file, AudioFormat.MP3, start, end, limit)
     }
 
-    private fun flac(file: Reader): Payload {
+    private fun flac(file: Reader, limit: Long): Read {
         var at = id3v2End(file, 0)
         if (!file.read(at, 4).contentEquals(FLAC_MAGIC)) throw Malformed()
         at += 4
@@ -104,7 +126,7 @@ object PayloadHash {
         val end = id3v1Start(file, at)
         val sync = file.read(at, 2)
         if (sync[0] != 0xFF.toByte() || sync[1].toInt() and 0xFE != 0xF8) throw Malformed()
-        return Payload(AudioFormat.FLAC, file.hash(at, end))
+        return range(file, AudioFormat.FLAC, at, end, limit)
     }
 
     private class Box(val type: String, val start: Long, val bodyStart: Long, val end: Long)
@@ -128,7 +150,7 @@ object PayloadHash {
         }
     }
 
-    private fun m4a(file: Reader): Payload {
+    private fun m4a(file: Reader, limit: Long): Read {
         val top = boxes(file, 0, file.size)
         if (top.firstOrNull()?.type != "ftyp" || top.any { it.type == "moof" }) throw Malformed()
         val moov = top.singleOrNull { it.type == "moov" } ?: throw Malformed()
@@ -136,7 +158,14 @@ object PayloadHash {
         if (mdats.isEmpty()) throw Malformed()
 
         val audio = sha256()
-        mdats.forEach { file.digest(audio, it.bodyStart, it.end) }
+        var left = limit
+        for (mdat in mdats) {
+            val take = minOf(mdat.end - mdat.bodyStart, left)
+            file.digest(audio, mdat.bodyStart, mdat.bodyStart + take)
+            left -= take
+        }
+        // A slice: the start of the audio, without the chunk layout.
+        if (mdats.sumOf { it.end - it.bodyStart } > limit) return Read(Payload(AudioFormat.M4A, audio.hex()), whole = false)
 
         // Each chunk offset as a place in the audio data: the mdat bodies one after another.
         val layout = sha256()
@@ -165,11 +194,12 @@ object PayloadHash {
                 layout.update(ByteBuffer.allocate(8).putLong(place).array())
             }
         }
-        return Payload(AudioFormat.M4A, audio.hex(), layout.hex())
+        return Read(Payload(AudioFormat.M4A, audio.hex(), layout.hex()), whole = true)
     }
 
-    private fun ogg(file: Reader): Payload {
+    private fun ogg(file: Reader, limit: Long): Read {
         val digest = sha256()
+        var digested = 0L
         var format: AudioFormat? = null
         var headers = Int.MAX_VALUE
         var serial: Int? = null
@@ -198,7 +228,15 @@ object PayloadHash {
                         else -> throw Malformed()
                     }
                 }
-                if (packet >= headers) digest.update(body, offset, length)
+                if (packet >= headers) {
+                    // A slice ends inside the audio: what was read so far.
+                    if (length > limit - digested) {
+                        digest.update(body, offset, (limit - digested).toInt())
+                        return Read(Payload(checkNotNull(format), digest.hex()), whole = false)
+                    }
+                    digest.update(body, offset, length)
+                    digested += length
+                }
                 packetLength += length
                 offset += length
                 if (length < 255) {
@@ -210,7 +248,7 @@ object PayloadHash {
             at += 27 + lacing.size + body.size
         }
         if (format == null || packet <= headers || packetLength != 0L) throw Malformed()
-        return Payload(format, digest.hex())
+        return Read(Payload(format, digest.hex()), whole = true)
     }
 
     /** Where the ID3v2 tag at [at] ends (with its footer), or [at] when there is none. */
@@ -232,6 +270,49 @@ object PayloadHash {
     private fun id3v1Start(file: Reader, after: Long): Long {
         val start = file.size - ID3V1_BYTES
         return if (start >= after && file.read(start, 3).contentEquals(ID3V1_MAGIC)) start else file.size
+    }
+
+    /**
+     * Where an APE tag ending at [end] starts (with its header, if it has one), or [end] when no whole tag ends there: the
+     * footer, a header where the footer says one is (with the same version, size and count), and exactly the items the
+     * footer counts, filling the space between. Anything less is audio: a footer alone never cuts the payload short.
+     */
+    private fun apeStart(file: Reader, after: Long, end: Long): Long {
+        if (end - after < APE_FOOTER_BYTES) return end
+        val footer = ByteBuffer.wrap(file.read(end - APE_FOOTER_BYTES, APE_FOOTER_BYTES.toInt())).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        if (!ByteArray(8).also { footer.get(it) }.contentEquals(APE_MAGIC)) return end
+        val version = footer.getInt(8)
+        val size = footer.getInt(12).toLong() and 0xFFFFFFFFL
+        val count = footer.getInt(16).toLong() and 0xFFFFFFFFL
+        val flags = footer.getInt(20)
+        if (version != 1000 && version != 2000) return end
+        // The footer's own flags never say "this is the header".
+        if (flags and APE_IS_HEADER != 0) return end
+        if (size < APE_FOOTER_BYTES || size > end - after || count > (size - APE_FOOTER_BYTES) / APE_MIN_ITEM_BYTES) return end
+        val items = end - size
+        val header = version == 2000 && flags and APE_HAS_HEADER != 0
+        val start = items - if (header) APE_FOOTER_BYTES else 0
+        if (start < after) return end
+        if (header) {
+            val head = ByteBuffer.wrap(file.read(start, APE_FOOTER_BYTES.toInt())).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+            val same = ByteArray(8).also { head.get(it) }.contentEquals(APE_MAGIC) && head.getInt(8) == version &&
+                (head.getInt(12).toLong() and 0xFFFFFFFFL) == size && (head.getInt(16).toLong() and 0xFFFFFFFFL) == count &&
+                head.getInt(20) and APE_IS_HEADER != 0
+            if (!same) return end
+        }
+        // Each item: value size and flags (8 bytes), a key of 2 to 255 printable ASCII characters, a 0, the value.
+        val itemsEnd = end - APE_FOOTER_BYTES
+        var at = items
+        repeat(count.toInt()) {
+            if (at + APE_MIN_ITEM_BYTES > itemsEnd) return end
+            val valueSize = ByteBuffer.wrap(file.read(at, 4)).order(java.nio.ByteOrder.LITTLE_ENDIAN).int.toLong() and 0xFFFFFFFFL
+            val key = file.read(at + 8, minOf(APE_MAX_KEY + 1L, itemsEnd - at - 8).toInt())
+            val keyLength = key.indexOf(0.toByte())
+            if (keyLength < 2 || key.take(keyLength).any { it < 0x20 || it > 0x7E }) return end
+            at += 8 + keyLength + 1 + valueSize
+            if (at > itemsEnd) return end
+        }
+        return if (at == itemsEnd) start else end
     }
 
     /** An MPEG audio frame header at [at]: the sync, and no reserved version, layer, bitrate or sample rate. */
@@ -287,6 +368,14 @@ object PayloadHash {
     private val OGG_MAGIC = "OggS".encodeToByteArray()
     private val VORBIS_ID = byteArrayOf(1) + "vorbis".encodeToByteArray()
     private val OPUS_ID = "OpusHead".encodeToByteArray()
+    private val APE_MAGIC = "APETAGEX".encodeToByteArray()
+    private const val APE_FOOTER_BYTES: Long = 32
+    private const val APE_HAS_HEADER: Int = 1 shl 31
+    private const val APE_IS_HEADER: Int = 1 shl 29
+
+    /** The smallest item: value size and flags, a 2-character key, its 0, an empty value. */
+    private const val APE_MIN_ITEM_BYTES: Long = 11
+    private const val APE_MAX_KEY: Int = 255
     private const val ID3V1_BYTES: Long = 128
     private const val STREAMINFO: Int = 0
 

@@ -124,6 +124,7 @@ class FakeSlot(val number: Int, private val clock: () -> Long, private val lengt
             is Edit.Remove -> list.removeAt(edit.at)
             is Edit.Insert -> list.addAll(edit.at, edit.items.map { it.uid })
             is Edit.Move -> list.add(edit.to, list.removeAt(edit.from))
+            is Edit.Replace -> list[edit.at] = edit.item.uid
         }
         loaded = list
         index = list.indexOf(playing)
@@ -213,7 +214,7 @@ class FakeSlot(val number: Int, private val clock: () -> Long, private val lengt
         playbackState = Player.STATE_IDLE
         val failed = LoadError()
         error = failed
-        val next = index < loaded.lastIndex
+        val next = if (index < loaded.lastIndex) index + 1 else C.INDEX_UNSET
         emit { it.onError(failed, next) }
     }
 
@@ -347,8 +348,8 @@ class Heard : EngineListener {
         events += "ended"
     }
 
-    override fun onError(error: PlaybackException, hasNext: Boolean) {
-        events += "error $hasNext"
+    override fun onError(error: PlaybackException, next: Int) {
+        events += "error $next"
     }
 }
 

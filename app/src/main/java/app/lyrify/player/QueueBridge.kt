@@ -4,7 +4,12 @@ import app.lyrify.library.Song
 import app.lyrify.library.SongRef
 import app.lyrify.stats.PlayEvent
 import app.lyrify.stats.PlayEvents
+import com.google.common.util.concurrent.ListenableFuture
+import com.google.common.util.concurrent.SettableFuture
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -40,6 +45,9 @@ sealed interface Edit {
 
     /** The song at [from] moves to [to] (its place once taken out), as `Player.moveMediaItem` does. */
     data class Move(val from: Int, val to: Int) : Edit
+
+    /** The song at [at] is [item] at another path (its file moved): the player reads it from there, at the same place. */
+    data class Replace(val at: Int, val item: Projected) : Edit
 }
 
 /**
@@ -105,19 +113,24 @@ interface PlayerPort {
 
 /**
  * Applies the queue model to the player ([sync] on every change of the book or the library): another queue is loaded at
- * its place; edits to the queue playing are applied as [edits], so the song playing never stops; a jump in the book
- * ([QueueBook.jumps]) moves the player to the current song at its position. The player moving on by itself comes back
- * through [QueueBook.at], which leaves the player as it is.
+ * its place; edits to the queue playing are applied as [edits], so the song playing never stops; a song whose file
+ * moved is replaced with its new path ([Edit.Replace]); a jump in the book ([QueueBook.jumps]) moves the player to the
+ * current song at its position. The player moving on by itself comes back through [QueueBook.at], which leaves the
+ * player as it is.
  */
 class QueueBridge(private val port: PlayerPort) {
     private var loadedId: String? = null
     private var jumps: Long = 0
+
+    /** The path the player was handed for each song it holds, by uid. */
+    private var paths: Map<Long, String> = emptyMap()
 
     fun sync(book: QueueBook, find: (SongRef) -> Song?) {
         val queue = book.current
         if (queue == null) {
             if (loadedId != null || port.loaded.isNotEmpty()) port.load(emptyList(), -1, 0)
             loadedId = null
+            paths = emptyMap()
             return
         }
         val projected = projection(queue, find)
@@ -127,10 +140,14 @@ class QueueBridge(private val port: PlayerPort) {
             port.load(projected, start, position)
             loadedId = queue.id
             jumps = book.jumps
+            paths = projected.associate { it.uid to it.song.path }
             return
         }
         val playing = port.loaded.getOrNull(port.index)
         edits(port.loaded, projected).forEach(port::apply)
+        // The player now holds projected's songs in its order: a song at another path than it was handed is replaced.
+        projected.forEachIndexed { at, item -> if (paths[item.uid].let { it != null && it != item.song.path }) port.apply(Edit.Replace(at, item)) }
+        paths = projected.associate { it.uid to it.song.path }
         val lost = playing != null && projected.none { it.uid == playing }
         if (book.jumps != jumps || lost) {
             jumps = book.jumps
@@ -138,6 +155,47 @@ class QueueBridge(private val port: PlayerPort) {
         }
     }
 }
+
+/**
+ * The answer to a headset's or a car's play after KJB was closed: [items] once [ready] says the queues and the library
+ * are read, [none] when it says the library cannot be read, when that takes longer than [timeoutMs], or when [scope]
+ * ends first. Never left waiting.
+ */
+fun <T> resumption(scope: CoroutineScope, timeoutMs: Long, none: T, ready: suspend () -> Boolean, items: () -> T): ListenableFuture<T> {
+    val result = SettableFuture.create<T>()
+    scope.launch { result.set(if (withTimeoutOrNull(timeoutMs) { ready() } == true) items() else none) }
+        // Cancelled (the service ended), or set already: set does nothing then.
+        .invokeOnCompletion { result.set(none) }
+    return result
+}
+
+/** How long a headset's play after KJB was closed waits for the queues and the library. */
+const val RESUME_WAIT_MS: Long = 10_000
+
+/** What the player does after a song could not be played. */
+sealed interface AfterError {
+    /** On to the song at [index]. */
+    data class Skip(val index: Int) : AfterError
+
+    /** Stop where it is, the error showing. */
+    data object Stop : AfterError
+}
+
+/**
+ * After a song failed: on to [next], the song the player would play next for its repeat mode (the first one after the
+ * last under Repeat all; -1 for none), unless [failedInARow] reached the [size] of the queue: then every song failed,
+ * and the player stops instead of going round for ever.
+ */
+fun afterError(next: Int, failedInARow: Int, size: Int): AfterError = if (next < 0 || failedInARow >= size) AfterError.Stop else AfterError.Skip(next)
+
+/** [afterError] done on [engine]: on to the next song from its start, or stopped where it is. */
+fun skipAfterError(engine: PlaybackEngine, next: Int, failedInARow: Int): AfterError =
+    afterError(next, failedInARow, engine.loaded.size).also { step ->
+        when (step) {
+            is AfterError.Skip -> engine.seek(step.index, 0)
+            AfterError.Stop -> engine.setPlayWhenReady(false)
+        }
+    }
 
 /**
  * Tells the play counter ([PlayEvents], stats/) about KJB's own plays, raw, one play at a time: [start] (a song starts,

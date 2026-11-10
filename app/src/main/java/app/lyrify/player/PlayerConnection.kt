@@ -154,6 +154,9 @@ class PlayerConnection(
     /** A queue just moved to Recent. */
     val toRecent: SharedFlow<Unit> get() = core.toRecent
 
+    /** Returns once the queues are read and nothing is loaded ([PlayerCore.awaitNothingLoaded]). */
+    suspend fun awaitNothingLoaded() = core.awaitNothingLoaded()
+
     override val queues: StateFlow<List<QueueTarget>> = core.book.map { book ->
         (book.saved + book.recent + listOfNotNull(book.currentId)).distinct().mapNotNull(book::queue).map { queue ->
             QueueTarget(queue.id, queueLabel(context, queue), queue.items.size, saved = queue.id in book.saved, playing = queue.id == book.currentId)

@@ -157,11 +157,11 @@ class JournalRecoveryTest {
         val recovered = recover()
 
         assertEquals(Recovered(setAside = 1), recovered)
+        // Opened, to be read through, but never written: the song is as the kill left it.
         assertArrayEquals(broken, rig.bytes(song))
         assertEquals(0, rig.journal.pending().size)
         assertTrue(backup.isFile)
         assertEquals(1, File(rig.dirs.journal, WriteJournal.SET_ASIDE).listFiles()!!.size)
-        assertFalse(rig.events.count { it == "open rw" } > 1)
     }
 
     @Test

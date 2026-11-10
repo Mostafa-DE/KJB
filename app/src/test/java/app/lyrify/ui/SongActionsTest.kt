@@ -65,6 +65,8 @@ class SongActionsTest {
 
         override suspend fun edit(id: String, change: (Playlist) -> Playlist) = write { state -> state.playlist(id)?.let { state.put(change(it)) } ?: state }
 
+        override suspend fun update(change: (PlaylistsState) -> PlaylistsState) = write(change)
+
         override suspend fun forget(paths: Set<String>) = write { it.forget(paths) }
     }
 

@@ -509,8 +509,8 @@ class CrossfadeEngineTest {
     fun `a song that fails in a fade is skipped with the short fade, as the service skips it`() = runTest {
         val rig = FadeRig(this, crossfadeSeconds = 6) { rig ->
             rig.engine.addListener(object : EngineListener {
-                override fun onError(error: PlaybackException, hasNext: Boolean) {
-                    if (hasNext) rig.engine.seek(rig.engine.index + 1, 0)
+                override fun onError(error: PlaybackException, next: Int) {
+                    if (next >= 0) rig.engine.seek(next, 0)
                 }
             })
         }
@@ -518,7 +518,7 @@ class CrossfadeEngineTest {
         rig.run(1_000)
         val (first, second) = rig.two(rig.live)
         second.fail()
-        assertTrue("error true" in rig.heard.events)
+        assertTrue("error 2" in rig.heard.events)
         assertEquals(2, rig.engine.index)
         rig.run(FakeSlot.BUFFER_MS + SHORT_FADE_MS + 50)
         assertTrue(first.released)
@@ -634,7 +634,12 @@ class CrossfadeEngineTest {
         assertEquals(first.audioSessionId, second.audioSessionId)
         rig.run(8_000)
         assertEquals(first.audioSessionId, rig.engine.audioSessionId)
+        // Crossfade off: as A1's offload gate does, offload comes back only at the next song's start, never mid-song.
         rig.engine.setCrossfade(0)
+        assertFalse(second.offload)
+        rig.runToLeft(0)
+        rig.run(50)
+        assertEquals(rig.start(2, natural = true), rig.heard.starts.last())
         assertTrue(second.offload)
     }
 }
