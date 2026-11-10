@@ -212,6 +212,9 @@ interface PlaylistStore : FavouritesPort {
     /** Undo: [playlist] as it was before a change, or back after a delete. */
     suspend fun put(playlist: Playlist): Boolean
 
+    /** Undo: [change] made to the playlist [id] as it is now, in one write, so the changes made since stay. */
+    suspend fun edit(id: String, change: (Playlist) -> Playlist): Boolean
+
     /** After songs were moved to the trash: they leave every playlist and Favourites. */
     suspend fun forget(paths: Set<String>): Boolean
 }
@@ -321,6 +324,8 @@ class PlaylistsRepository internal constructor(
     override suspend fun delete(id: String): Boolean = write { it.delete(id) }
 
     override suspend fun put(playlist: Playlist): Boolean = write { it.put(playlist) }
+
+    override suspend fun edit(id: String, change: (Playlist) -> Playlist): Boolean = write { state -> state.playlist(id)?.let { state.put(change(it)) } ?: state }
 
     override suspend fun forget(paths: Set<String>): Boolean = write { it.forget(paths) }
 

@@ -315,6 +315,12 @@ fun destinationPage(destination: String?): Page? = when (destination) {
     else -> null
 }
 
+/** The home-screen widget's cover opens the player (widget/, A3). */
+const val DESTINATION_PLAYER: String = "player"
+
+/** The full-screen view [destination] names; null for none. */
+fun destinationView(destination: String?): FullScreen? = if (destination == DESTINATION_PLAYER) FullScreen.Player else null
+
 /** The saved-state key of the page at the top of [stack] on [tab], or of the tab's root when it is empty. */
 fun pageKey(tab: DockTab, stack: List<Page>): String =
     tab.name + "/" + stack.size + stack.lastOrNull()?.let { "/" + JSON.encodeToString(Page.serializer(), it) }.orEmpty()

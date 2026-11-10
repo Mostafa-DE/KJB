@@ -39,6 +39,8 @@ import app.lyrify.logFailures
 import app.lyrify.media.NowPlaying
 import app.lyrify.media.QueueSweep
 import app.lyrify.settings.Settings
+import app.lyrify.ui.DESTINATION_PLAYER
+import app.lyrify.ui.EXTRA_DESTINATION
 import app.lyrify.ui.MainActivity
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
@@ -83,6 +85,12 @@ interface ServicePart {
 }
 
 /**
+ * The request code of the session's tap ([PlaybackService]): the AI's notifications open MainActivity with 0, and two
+ * PendingIntents for one activity and one code are one, so one tap would carry the other's destination.
+ */
+private const val OPEN_PLAYER: Int = 1
+
+/**
  * KJB's own player, as a media library service: the session (notification, lock screen, Bluetooth, headset buttons,
  * Assistant), the facade player over the engine, and the browse tree. A thin host: the queue model lives in
  * [PlayerCore], applied to the engine by [QueueBridge]; the engine's songs and plays come back into the model and the
@@ -121,7 +129,8 @@ class PlaybackService : MediaLibraryService() {
         player = LyrifyPlayer(mainLooper, engine, core, skips = ::skips, sync = ::sync, beforeSeek = ::heardSoFar)
         engine.addListener(Follower())
         val built = MediaLibrarySession.Builder(this, player, Callback())
-            .setSessionActivity(PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
+            // A tap on the notification or the lock screen's card opens the player, over the tab the app was on.
+            .setSessionActivity(PendingIntent.getActivity(this, OPEN_PLAYER, openPlayer(), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
             .setBitmapLoader(ThumbnailLoader(this))
             .build()
         session = built
@@ -160,7 +169,8 @@ class PlaybackService : MediaLibraryService() {
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? = session
 
     override fun onDestroy() {
-        savePlace()
+        // Written before the process may go.
+        engine.loaded.getOrNull(engine.index)?.let { uid -> core.savePlaceNow(uid, engine.positionMs) }
         heardSoFar()
         tracker.end()
         parts.forEach { it.stop() }
@@ -175,6 +185,11 @@ class PlaybackService : MediaLibraryService() {
 
     private fun find(ref: SongRef): Song? = library.value?.resolver?.find(ref)
 
+    /** KJB, brought back where it was (onNewIntent when it is open), showing the player. */
+    private fun openPlayer(): Intent = Intent(this, MainActivity::class.java)
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        .putExtra(EXTRA_DESTINATION, DESTINATION_PLAYER)
+
     private fun skips(): SkipAmounts = skipAmounts(settings.value.playback)
 
     private fun mediaItem(projected: Projected): MediaItem = mediaItemOf(projected, settings.value.library)
@@ -184,13 +199,11 @@ class PlaybackService : MediaLibraryService() {
         if (core.ready.value) library.value?.let { bridge.sync(core.book.value, ::find) }
     }
 
-    /** Where the queue playing is, into `playback.json`. */
+    /** Where the queue playing is (its song and position), into `playback.json`. */
     private fun savePlace() {
         if (!::engine.isInitialized) return
         val uid = engine.loaded.getOrNull(engine.index) ?: return
-        val queue = core.book.value.current ?: return
-        val index = queue.items.indexOfFirst { it.uid == uid }
-        if (index >= 0) core.savePlace(index, engine.positionMs)
+        core.savePlace(uid, engine.positionMs)
     }
 
     /** Where the song playing is now, for the play counter. */
@@ -233,6 +246,8 @@ class PlaybackService : MediaLibraryService() {
             val book = core.book.value
             val item = book.current?.items?.firstOrNull { it.uid == uid } ?: return
             if (!lap) core.change { it.at(uid, core.now()) }
+            // Every song start, each lap of Repeat one too: the place names the song playing.
+            savePlace()
             tracker.start(item.song, find(item.song)?.durationMs ?: C.TIME_UNSET, engine.positionMs, engine.isPlaying, naturalEnd = natural)
         }
 
@@ -262,15 +277,11 @@ class PlaybackService : MediaLibraryService() {
 
     /** What the audio chain asks about the stream playing (A1). */
     private inner class Levels : SongLevels {
-        override fun song(mediaId: String): SongRef? = item(mediaId)?.song
-
         override fun albumInOrder(mediaId: String): Boolean {
             val queue = core.book.value.current ?: return false
             val uid = mediaId.toLongOrNull() ?: return false
             return albumInOrder(queue, queue.items.indexOfFirst { it.uid == uid })
         }
-
-        private fun item(mediaId: String): QueueItem? = mediaId.toLongOrNull()?.let { uid -> core.book.value.current?.items?.firstOrNull { it.uid == uid } }
     }
 
     private inner class Callback : MediaLibrarySession.Callback {

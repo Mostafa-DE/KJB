@@ -111,6 +111,8 @@ fun AppShell(
     onRemove: suspend (String) -> Removal,
     destination: Page?,
     onDestinationOpened: () -> Unit,
+    view: FullScreen? = null,
+    onViewOpened: () -> Unit = {},
 ) {
     val lastTab = settings.nav.lastTab
     val nav = rememberSaveable(saver = NavState.saver(lastTab)) { Navigator(NavState.start(lastTab)) }
@@ -158,6 +160,13 @@ fun AppShell(
         destination?.let {
             nav.open(it)
             onDestinationOpened()
+        }
+    }
+    // The widget's cover: the player, also on a cold start.
+    LaunchedEffect(view) {
+        view?.let {
+            nav.show(it)
+            onViewOpened()
         }
     }
     LaunchedEffect(checkAnswers) {

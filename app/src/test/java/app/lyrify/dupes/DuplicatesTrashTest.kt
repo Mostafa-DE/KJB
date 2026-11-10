@@ -108,7 +108,7 @@ class DuplicatesTrashTest {
         val before = snapshot(files)
 
         assertTrue(engine.askTrash(group, setOf(2L, 3L)))
-        assertEquals(Confirmation.Ask(listOf(2L, 3L)), engine.confirmTrash())
+        assertEquals(Confirmation.Ask(listOf(2L, 3L)), engine.confirmShown())
         trashOnDisk(files[1])
         trashOnDisk(files[2])
         // Nothing is cleaned up before the phone's answer, though the files are in its trash already.
@@ -131,7 +131,7 @@ class DuplicatesTrashTest {
         val group = scannedGroup(engine)
         val before = snapshot(files)
         engine.askTrash(group, setOf(2L, 3L))
-        engine.confirmTrash()
+        engine.confirmShown()
         assertEquals(Trashed.Unchanged, engine.systemAnswered(approved = false))
         assertEquals(before, snapshot(files))
         assertTrue(files.all { File(it.path).isFile })
@@ -146,7 +146,7 @@ class DuplicatesTrashTest {
         val before = snapshot(files)
         engine.askTrash(group, setOf(2L))
         engine.cancelTrash()
-        assertEquals(Confirmation.NotAsked, engine.confirmTrash())
+        assertEquals(Confirmation.NotAsked, engine.confirmShown())
         assertEquals(Trashed.Unchanged, engine.systemAnswered(approved = true))
         assertEquals(before, snapshot(files))
     }
@@ -157,7 +157,7 @@ class DuplicatesTrashTest {
         val pipeline = pipeline()
         val engine = engine(files, pipeline)
         engine.askTrash(scannedGroup(engine), setOf(2L))
-        engine.confirmTrash()
+        engine.confirmShown()
         trashOnDisk(files[1])
         engine.systemAnswered(approved = true)
         assertFalse(lrc(files[1]).exists())
@@ -178,3 +178,6 @@ class DuplicatesTrashTest {
         const val DAY: Long = 24 * 60 * 60_000L
     }
 }
+
+/** "Move to trash" in KJB's dialog, for the files it shows. */
+private suspend fun Duplicates.confirmShown(): Confirmation = confirmTrash((state.value.trash as? TrashStep.Confirm)?.files.orEmpty())

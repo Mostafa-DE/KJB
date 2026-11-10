@@ -61,6 +61,7 @@ import app.lyrify.dupes.MediaStoreTrash
 import app.lyrify.dupes.Restored
 import app.lyrify.dupes.ScanResults
 import app.lyrify.dupes.ScanStatus
+import app.lyrify.dupes.SongTrash
 import app.lyrify.dupes.TrashStep
 import app.lyrify.dupes.Trashed
 import app.lyrify.dupes.TrashedSong
@@ -189,30 +190,31 @@ fun duplicatesBadge(): Int {
 
 /**
  * Opens the phone's own trash dialog for MediaStore ids (to the trash, or with trash false back out of it) and hands the
- * answer to the engine, whichever of its dialogs was open; the result shows in [toasts].
+ * answer to the shared trash flow ([SongTrash]: Duplicates and the song sheet), whichever of its dialogs was open; the
+ * result shows in [toasts].
  */
 @Composable
-fun rememberPhoneTrash(engine: Duplicates, toasts: ToastState): (List<Long>, Boolean) -> Unit {
+fun rememberPhoneTrash(songTrash: SongTrash, toasts: ToastState): (List<Long>, Boolean) -> Unit {
     val context = LocalContext.current
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
         val approved = result.resultCode == Activity.RESULT_OK
         scope.launch {
-            if (engine.state.value.trash is TrashStep.Restoring) {
-                if (engine.restoreAnswered(approved) == Restored.Back) toasts.say(resources, R.string.dupes_restored)
+            if (songTrash.step is TrashStep.Restoring) {
+                if (songTrash.restoreAnswered(approved) == Restored.Back) toasts.say(resources, R.string.dupes_restored)
             } else {
-                val moved = engine.systemAnswered(approved) as? Trashed.Moved
+                val moved = songTrash.answered(approved) as? Trashed.Moved
                 if (moved != null && moved.count > 0) toasts.show(messageToast(R.plurals.dupes_moved, resources.getQuantityString(R.plurals.dupes_moved, moved.count, moved.count)))
             }
         }
     }
-    return remember(launcher, engine) {
+    return remember(launcher, songTrash) {
         { ids, trash ->
             when (val request = MediaStoreTrash(context.contentResolver, Lyrify.writes).request(ids, trash)) {
                 is MediaStoreTrash.Request.Ready -> launcher.launch(IntentSenderRequest.Builder(request.intent).build())
                 is MediaStoreTrash.Request.Unavailable -> scope.launch {
-                    if (trash) engine.systemAnswered(approved = false) else engine.restoreAnswered(approved = false)
+                    if (trash) songTrash.answered(approved = false) else songTrash.restoreAnswered(approved = false)
                     toasts.say(resources, R.string.dupes_trash_failed)
                 }
             }
@@ -225,7 +227,7 @@ fun rememberPhoneTrash(engine: Duplicates, toasts: ToastState): (List<Long>, Boo
 fun DuplicatesTopBar(under: Boolean, backdrop: GlassBackdrop, onBack: () -> Unit) {
     val engine = rememberDuplicates()
     val state by engine.state.collectAsStateWithLifecycle()
-    val phoneTrash = rememberPhoneTrash(engine, LocalToasts.current)
+    val phoneTrash = rememberPhoneTrash(engine.trash, LocalToasts.current)
     var menu by remember { mutableStateOf(false) }
     var trashed by rememberSaveable { mutableStateOf(false) }
     LyrifyTopBar(
@@ -275,7 +277,7 @@ fun DuplicatesTopBar(under: Boolean, backdrop: GlassBackdrop, onBack: () -> Unit
 fun DuplicatesScreen(contentPadding: PaddingValues, toasts: ToastState) {
     val engine = rememberDuplicates()
     val state by engine.state.collectAsStateWithLifecycle()
-    val phoneTrash = rememberPhoneTrash(engine, toasts)
+    val phoneTrash = rememberPhoneTrash(engine.trash, toasts)
     val scope = rememberCoroutineScope()
     val resources = LocalResources.current
     var open by rememberSaveable { mutableStateOf<String?>(null) }
@@ -334,7 +336,7 @@ fun DuplicatesScreen(contentPadding: PaddingValues, toasts: ToastState) {
                 // The group shows again with what is left; the message shows above the dock.
                 open = null
                 scope.launch {
-                    when (val confirmation = engine.confirmTrash()) {
+                    when (val confirmation = engine.confirmTrash(confirm.files)) {
                         is Confirmation.Ask -> phoneTrash(confirmation.ids, true)
                         Confirmation.Changed -> toasts.say(resources, R.string.dupes_changed)
                         Confirmation.Unavailable -> toasts.say(resources, R.string.dupes_trash_failed)

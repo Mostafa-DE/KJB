@@ -366,16 +366,21 @@ class SharedWritesTest {
 
         /** Change the user's files (shared storage): each asks [SharedWrites] first. */
         val SHARED: Set<String> = setOf(
-            "dupes/Duplicates.kt",
+            "backup/M3u.kt",
+            "dupes/SongTrash.kt",
             "lyrics/LyricsPipeline.kt",
+            "tags/SafeWriter.kt",
+            "tags/WriteJournal.kt",
             "tones/ToneFiles.kt",
         )
 
         /** Change only the app's own storage (files/, cache/, DataStore). */
         val APP_PRIVATE: Set<String> = setOf(
+            "audio/EqProfiles.kt",
             "data/LedgerRepository.kt",
             "dupes/DuplicatesStore.kt",
             "library/Playlists.kt",
+            "library/search/RecentSearches.kt",
             "models/ModelDownloadWorker.kt",
             "models/ModelStore.kt",
             "overnight/AiRunLog.kt",
@@ -384,6 +389,9 @@ class SharedWritesTest {
             "player/QueueStore.kt",
             "player/SongStateStore.kt",
             "settings/SettingsStore.kt",
+            "stats/PlayLog.kt",
+            "tags/UndoStore.kt",
+            "tags/lookup/MetaClient.kt",
             "tones/ToneAudio.kt",
         )
     }

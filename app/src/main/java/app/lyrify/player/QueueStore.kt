@@ -25,8 +25,12 @@ import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
 
-/** What `playback.json` holds: the queue playing, the song and position in it, and Repeat. Small: written every 10 s while playing. */
-data class PlaybackPlace(val queueId: String?, val index: Int, val positionMs: Long, val repeat: Repeat = Repeat.OFF)
+/**
+ * What `playback.json` holds: the queue playing, the song in it (its item's [uid]) and the position, together, Repeat,
+ * and when the player said so ([at], wall-clock millis). Small: written on every song start and pause, every 10 s while
+ * playing, and as the service ends.
+ */
+data class PlaybackPlace(val queueId: String?, val uid: Long?, val positionMs: Long, val repeat: Repeat = Repeat.OFF, val at: Long = 0)
 
 /**
  * The stored form of [QueueBook] (`queues.json`): a schema version, the lists, the counters, and each queue with its
@@ -182,9 +186,10 @@ object PlaybackJson {
         JsonObject(
             mapOf(
                 QUEUE_ID_KEY to (place.queueId?.let(::JsonPrimitive) ?: JsonNull),
-                INDEX_KEY to JsonPrimitive(place.index),
+                UID_KEY to (place.uid?.let(::JsonPrimitive) ?: JsonNull),
                 POSITION_KEY to JsonPrimitive(place.positionMs),
                 REPEAT_KEY to JsonPrimitive(place.repeat.name),
+                AT_KEY to JsonPrimitive(place.at),
             ),
         ),
     )
@@ -197,22 +202,29 @@ object PlaybackJson {
         } ?: return null
         return PlaybackPlace(
             queueId = root[QUEUE_ID_KEY]?.text(),
-            index = root.int(INDEX_KEY)?.takeIf { it >= 0 } ?: 0,
+            uid = root.long(UID_KEY),
             positionMs = root.long(POSITION_KEY)?.takeIf { it >= 0 } ?: 0,
             repeat = root[REPEAT_KEY]?.text()?.let { name -> Repeat.entries.firstOrNull { it.name == name } } ?: Repeat.OFF,
+            at = root.long(AT_KEY)?.takeIf { it >= 0 } ?: 0,
         )
     }
 
     private const val QUEUE_ID_KEY: String = "queueId"
-    private const val INDEX_KEY: String = "index"
+    private const val UID_KEY: String = "uid"
     private const val POSITION_KEY: String = "positionMs"
     private const val REPEAT_KEY: String = "repeat"
+    private const val AT_KEY: String = "at"
 }
 
-/** [book] with the place `playback.json` kept for its current queue, when [place] names that queue at a song it still has. */
+/**
+ * [book] with the place `playback.json` kept for its current queue, when [place] names that queue, a song it still has,
+ * and is newer than the queue's own place in `queues.json`: the newest wins, so neither a place written before a song
+ * change nor a book written before the last pause takes the other back.
+ */
 fun withPlace(book: QueueBook, place: PlaybackPlace?): QueueBook {
-    if (place == null || place.queueId == null || place.queueId != book.currentId) return book
-    return book.place(place.index, place.positionMs)
+    if (place?.queueId == null || place.queueId != book.currentId) return book
+    val index = book.current?.items?.indexOfFirst { it.uid == place.uid } ?: return book
+    return book.place(index, place.positionMs, place.at)
 }
 
 private fun JsonElement.text(): String? = (this as? JsonPrimitive)?.takeIf { it.isString }?.content
@@ -273,8 +285,8 @@ internal fun queuesStore(file: File, backupDir: File, scope: CoroutineScope, clo
     )
 
 /**
- * `playback.json`: one small app-private file, written whole or not at all (aside, then moved over), at most every 10 s
- * while playing and on every pause. One that cannot be read is no place: the queues open at their stored places. Blocking.
+ * `playback.json`: one small app-private file, written whole or not at all (aside, then moved over). One that cannot be
+ * read is no place: the queues open at their stored places. Blocking.
  */
 class PlaceFile(private val file: File, private val log: (String) -> Unit = {}) {
     fun load(): PlaybackPlace? {

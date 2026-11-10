@@ -269,19 +269,29 @@ data class QueueBook(
         return edit(queue.id) { it.copy(items = items, index = items.indexOfFirst { item -> item.uid == currentUid }, unshuffled = null) }
     }
 
-    /** The player moved to the song [uid] by itself (the song before ended, or Next): it is current, from its start. */
+    /**
+     * The player moved to the song [uid] by itself (the song before ended, or Next): it is current, from its start. The
+     * song already current (the player loading the queue at its place) keeps its place, and only stops waiting as a Play
+     * next song.
+     */
     fun at(uid: Long, now: Long): QueueBook {
         val queue = current ?: return this
         val index = queue.items.indexOfFirst { it.uid == uid }
-        if (index < 0 || (index == queue.index && queue.positionMs == 0L && queue.current?.playNext != true)) return this
+        if (index < 0) return this
+        if (index == queue.index) return if (queue.current?.playNext == true) edit(queue.id) { it.copy(items = it.items.unmarked(index)) } else this
         return edit(queue.id) { it.copy(items = it.items.unmarked(index), index = index, positionMs = 0, updatedAt = now) }
     }
 
-    /** Where the queue playing is now (saved at least every 10 s while playing, and on every pause). */
-    fun place(index: Int, positionMs: Long): QueueBook {
+    /**
+     * Where the queue playing is now (saved on every song start, every pause and every 10 s while playing). With [at],
+     * when the player said so: a word older than the queue's own place ([Queue.updatedAt]) changes nothing, a newer one
+     * becomes its place.
+     */
+    fun place(index: Int, positionMs: Long, at: Long? = null): QueueBook {
         val queue = current ?: return this
-        if (index !in queue.items.indices || (index == queue.index && positionMs == queue.positionMs)) return this
-        return edit(queue.id) { it.copy(index = index, positionMs = positionMs.coerceAtLeast(0)) }
+        if (index !in queue.items.indices || (at != null && at < queue.updatedAt)) return this
+        if (index == queue.index && positionMs == queue.positionMs) return this
+        return edit(queue.id) { it.copy(index = index, positionMs = positionMs.coerceAtLeast(0), updatedAt = at ?: it.updatedAt) }
     }
 
     /**

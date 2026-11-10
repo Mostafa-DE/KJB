@@ -35,6 +35,25 @@ Third-party software and assets built into the app (screens)
   BricolageGrotesque[opsz,wdth,wght].ttf as Google Fonts ships it (google/fonts, ofl/bricolagegrotesque), bundled as
   app/src/main/res/font/bricolage_grotesque.ttf. SIL Open Font License 1.1, full text at the end of this file.
 
+Third-party software built into the app (tags)
+
+- TagLib 2.3.2 (https://github.com/taglib/taglib), GNU Lesser General Public License 2.1 (TagLib is offered under
+  LGPL-2.1 or MPL-1.1; KJB takes the LGPL-2.1 option), Copyright Scott Wheeler and the TagLib authors. Built from
+  source in taglib/src/main/cpp/taglib (unchanged; licence text in COPYING.LGPL there) into libtaglib.so, which reads
+  and writes tags and covers on KJB's private copies of a song.
+- Kyant0/taglib 1.0.6 (https://github.com/Kyant0/taglib), the JNI wrapper around TagLib, Apache License 2.0,
+  Copyright Kyant. Vendored in taglib/ with KJB's changes, which taglib/README.md lists; its licence is taglib/LICENSE.
+- utfcpp 4.2.0 (https://github.com/nemtrif/utfcpp), Boost Software License 1.0, Copyright Nemanja Trifunovic. Used
+  by TagLib; licence text in taglib/src/main/cpp/taglib/3rdparty/utfcpp/LICENSE.
+
+Third-party code (sound)
+
+- Gramophone (https://github.com/FoedusProgramme/Gramophone), GNU General Public License version 3 or later,
+  Copyright (C) 2025 nift4. KJB's ReplayGain tag reading (app/src/main/java/app/lyrify/audio/ReplayGain.kt) is ported
+  from its ReplayGainUtil.kt at commit e6fa468f7a1e3e1c832afbd0dc67ef2966146e96: the tag names and units, the
+  reference loudness shift, the +5 dB offset for Opus R128 gains, and the rule that peak times gain stays at or below
+  full scale.
+
 AI models (downloaded by the app, not part of it)
 
 - Whisper-Large-V3-Turbo by OpenAI, as quantized (w8a16) and compiled for Snapdragon NPUs by Qualcomm AI Hub

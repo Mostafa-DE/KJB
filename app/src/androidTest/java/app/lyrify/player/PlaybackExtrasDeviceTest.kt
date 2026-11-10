@@ -121,8 +121,6 @@ class PlaybackExtrasDeviceTest {
     }
 
     private object NoLevels : SongLevels {
-        override fun song(mediaId: String): SongRef? = null
-
         override fun albumInOrder(mediaId: String): Boolean = false
     }
 

@@ -5,6 +5,7 @@ import android.content.Context
 import android.os.StrictMode
 import android.util.Log
 import app.lyrify.data.LedgerRepository
+import app.lyrify.data.PathLocks
 import app.lyrify.data.SharedWrites
 import app.lyrify.library.FavouritesPort
 import app.lyrify.library.LibraryGraph
@@ -24,6 +25,7 @@ import app.lyrify.settings.SettingsStore
 import app.lyrify.stats.PlayEvents
 import app.lyrify.stats.PlaysQuery
 import app.lyrify.stats.StatsGraph
+import app.lyrify.tags.TagsGraph
 import app.lyrify.ui.CheckAnswers
 import app.lyrify.ui.songImageLoader
 import coil3.SingletonImageLoader
@@ -60,6 +62,8 @@ class LyrifyApplication : Application() {
             StrictMode.setThreadPolicy(StrictMode.ThreadPolicy.Builder().detectDiskReads().detectDiskWrites().penaltyLog().build())
         }
         SingletonImageLoader.setSafe(::songImageLoader)
+        // Tag writes the app's death interrupted are settled first, in the background, before any tag write.
+        TagsGraph.startRecovery(this)
     }
 }
 
@@ -72,6 +76,9 @@ object Lyrify {
 
     /** The one checkpoint for changes to the user's files: a debug build changes only its test folder. */
     val writes: SharedWrites = SharedWrites.forThisBuild { Log.w(LOG_TAG, it) }
+
+    /** The per-path lock the lyrics pipeline and the tag writer share: one song is never changed by both at once. */
+    val locks: PathLocks = PathLocks()
 
     /** Work started from the screen that must finish even if the screen closes. */
     private val background: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO + logFailures)
@@ -97,6 +104,7 @@ object Lyrify {
         writes = writes,
         log = { Log.d(LOG_TAG, it) },
         warn = { Log.w(LOG_TAG, it) },
+        locks = locks,
     ).also { created ->
         pipeline = created
         background.launch {

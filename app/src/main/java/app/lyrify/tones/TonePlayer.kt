@@ -10,6 +10,8 @@ import android.net.Uri
 import android.provider.MediaStore
 import android.util.Log
 import app.lyrify.LOG_TAG
+import app.lyrify.Lyrify
+import app.lyrify.tags.TagsGraph
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -75,7 +77,13 @@ class TonePlayer(context: Context, private val scope: CoroutineScope) {
         state.value = PreviewPlaying(source.key, 0f)
         job = scope.launch {
             val player = MediaPlayer()
+            // The song is busy for the tag writer while its preview plays; one the writer or its recovery holds is not played.
+            val song = (source as? PreviewSource.Window)?.songPath?.also(TagsGraph.held::hold)
             try {
+                if (song != null && song in Lyrify.locks) {
+                    onFailed()
+                    return@launch
+                }
                 player.setAudioAttributes(attributes)
                 withContext(Dispatchers.IO) {
                     when (source) {
@@ -106,6 +114,7 @@ class TonePlayer(context: Context, private val scope: CoroutineScope) {
                 Log.w(LOG_TAG, "preview not played: ${e.javaClass.simpleName}")
                 onFailed()
             } finally {
+                song?.let(TagsGraph.held::release)
                 player.release()
                 // A newer preview owns the state once this one was stopped for it.
                 if (job === currentCoroutineContext()[Job]) state.value = null

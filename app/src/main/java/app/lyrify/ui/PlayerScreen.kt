@@ -636,15 +636,15 @@ private fun TitleAndLinks(ui: PlayerUi, settings: LibrarySettings) {
     )
     Row(horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().height(TOUCH)) {
         val artist = song?.artist?.takeIf(String::isNotBlank)
-        LinkText(artist ?: stringResource(if (song == null) R.string.player_not_on_phone else R.string.player_no_artist), artist?.let { { nav.open(Page.Artist(it)) } }, Modifier.weight(1f, fill = false))
+        PlayerLink(artist ?: stringResource(if (song == null) R.string.player_not_on_phone else R.string.player_no_artist), artist?.let { { nav.open(Page.Artist(it)) } }, Modifier.weight(1f, fill = false))
         Text("·", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 8.dp))
         val key = song?.let(::albumKey)
-        LinkText(song?.album?.takeIf { key != null } ?: stringResource(R.string.player_unknown_album), key?.let { { nav.open(Page.Album(it)) } }, Modifier.weight(1f, fill = false))
+        PlayerLink(song?.album?.takeIf { key != null } ?: stringResource(R.string.player_unknown_album), key?.let { { nav.open(Page.Album(it)) } }, Modifier.weight(1f, fill = false))
     }
 }
 
 @Composable
-private fun LinkText(text: String, onClick: (() -> Unit)?, modifier: Modifier) {
+private fun PlayerLink(text: String, onClick: (() -> Unit)?, modifier: Modifier) {
     val colors = MaterialTheme.colorScheme
     Box(
         contentAlignment = Alignment.Center,

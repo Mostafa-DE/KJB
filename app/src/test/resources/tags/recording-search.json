@@ -1,0 +1,65 @@
+{
+  "created": "2026-11-10T09:14:02.000Z",
+  "count": 2,
+  "offset": 0,
+  "recordings": [
+    {
+      "id": "e0e0e0e0-0000-4000-8000-0000000000b9",
+      "score": 100,
+      "artist-credit-id": "11111111-2222-4333-8444-555555555509",
+      "title": "Kestrel Lights",
+      "length": 251428,
+      "video": null,
+      "artist-credit": [ { "name": "Quillmere", "artist": { "id": "a1b2c3d4-0000-4000-8000-00000000aa09", "name": "Quillmere", "sort-name": "Quillmere", "disambiguation": "made-up band" } } ],
+      "first-release-date": "2020",
+      "releases": [
+        {
+          "id": "0b7c1f4e-5a2d-4c3b-9e8f-1a2b3c4d5e09",
+          "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+          "count": 1,
+          "title": "Kestrel Lights",
+          "status": "Official",
+          "release-group": { "id": "6f1e2d3c-4b5a-4968-8776-5a4b3c2d1e09", "type-id": "d6038452-8ee0-3f68-affc-2de9a1ede0b9", "primary-type-id": "d6038452-8ee0-3f68-affc-2de9a1ede0b9", "title": "Kestrel Lights", "primary-type": "Single" },
+          "date": "2020-03-06",
+          "country": "XW",
+          "release-events": [ { "date": "2020-03-06", "area": { "id": "525d4e18-3d00-31b9-a58b-a146a916de8f", "name": "[Worldwide]", "iso-3166-1-codes": ["XW"] } } ],
+          "track-count": 1,
+          "media": [
+            { "id": "d1d1d1d1-0000-4000-8000-000000000009", "position": 1, "format": "Digital Media", "track": [ { "id": "f0f0f0f0-0000-4000-8000-0000000000c9", "number": "1", "title": "Kestrel Lights", "length": 251428 } ], "track-count": 1, "track-offset": 0 }
+          ]
+        },
+        {
+          "id": "0b7c1f4e-5a2d-4c3b-9e8f-1a2b3c4d5e10",
+          "count": 1,
+          "title": "Night Ferries, Volume 2",
+          "status": "Official",
+          "artist-credit": [ { "name": "Various Artists", "artist": { "id": "89ad4ac3-39f7-470e-963a-56509c546377", "name": "Various Artists", "sort-name": "Various Artists" } } ],
+          "release-group": { "id": "6f1e2d3c-4b5a-4968-8776-5a4b3c2d1e10", "title": "Night Ferries, Volume 2", "primary-type": "Album", "secondary-types": ["Compilation"] },
+          "date": "2021",
+          "country": "DE",
+          "track-count": 18,
+          "media": [
+            { "position": 2, "format": "CD", "track": [ { "id": "f0f0f0f0-0000-4000-8000-000000000c10", "number": "4", "title": "Kestrel Lights", "length": 251000 } ], "track-count": 9, "track-offset": 3 }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "e0e0e0e0-0000-4000-8000-0000000000b8",
+      "score": 64,
+      "title": "Kestrel Lights (live)",
+      "length": 262000,
+      "artist-credit": [ { "name": "Quillmere", "artist": { "id": "a1b2c3d4-0000-4000-8000-00000000aa09", "name": "Quillmere" } } ],
+      "releases": [
+        {
+          "id": "0b7c1f4e-5a2d-4c3b-9e8f-1a2b3c4d5e11",
+          "title": "Live at Ulso Hall",
+          "release-group": { "id": "6f1e2d3c-4b5a-4968-8776-5a4b3c2d1e11", "primary-type": "Album", "secondary-types": ["Live"] },
+          "date": "2022-10-01",
+          "track-count": 12,
+          "media": [ { "position": 1, "format": "Digital Media", "track": [ { "id": "f0f0f0f0-0000-4000-8000-000000000c11", "number": "7", "title": "Kestrel Lights (live)", "length": 262000 } ], "track-count": 12, "track-offset": 6 } ]
+        }
+      ]
+    }
+  ]
+}

@@ -24,5 +24,12 @@
             android:exported="false"
             android:foregroundServiceType="mediaProcessing"
             tools:targetApi="35" />
+
+        <!-- Debug builds only, for TagEngineDeviceTest: writes a song in the test folder with the tag writer in a process
+             of its own, and stops mid-write for the test to kill it (see TagKillService.kt). Bound by the test only. -->
+        <service
+            android:name=".tags.TagKillService"
+            android:exported="false"
+            android:process=":tagkill" />
     </application>
 </manifest>

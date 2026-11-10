@@ -1,0 +1,115 @@
+{
+  "release-group": {
+    "first-release-date": "1998-04-17",
+    "primary-type-id": "f529b476-6e62-324f-b0aa-1f3e33d313fc",
+    "artist-credit": [ { "joinphrase": "", "artist": { "id": "a1b2c3d4-0000-4000-8000-00000000aa01", "name": "Mira Solen", "sort-name": "Solen, Mira", "type": "Person" }, "name": "Mira Solen" } ],
+    "secondary-type-ids": [],
+    "secondary-types": [],
+    "id": "6f1e2d3c-4b5a-4968-8776-5a4b3c2d1e02",
+    "primary-type": "Album",
+    "title": "Lanterns of Ulso",
+    "disambiguation": ""
+  },
+  "quality": "normal",
+  "text-representation": { "language": "eng", "script": "Latn" },
+  "country": "XE",
+  "title": "Lanterns of Ulso",
+  "date": "2011-09-02",
+  "id": "0b7c1f4e-5a2d-4c3b-9e8f-1a2b3c4d5e01",
+  "media": [
+    {
+      "track-offset": 0,
+      "position": 1,
+      "title": "",
+      "format-id": "9712d52a-4509-3d4b-a1a2-67c88c643e31",
+      "id": "d1d1d1d1-0000-4000-8000-000000000001",
+      "format": "CD",
+      "track-count": 3,
+      "tracks": [
+        {
+          "recording": {
+            "length": 254000,
+            "video": false,
+            "artist-credit": [ { "name": "Mira Solen", "artist": { "id": "a1b2c3d4-0000-4000-8000-00000000aa01", "name": "Mira Solen", "sort-name": "Solen, Mira" }, "joinphrase": "" } ],
+            "first-release-date": "1998-04-17",
+            "disambiguation": "",
+            "title": "Quiet Ember",
+            "id": "e0e0e0e0-0000-4000-8000-0000000000b1"
+          },
+          "number": "1",
+          "artist-credit": [ { "artist": { "id": "a1b2c3d4-0000-4000-8000-00000000aa01", "name": "Mira Solen", "sort-name": "Solen, Mira" }, "joinphrase": "", "name": "Mira Solen" } ],
+          "length": 254000,
+          "position": 1,
+          "title": "Quiet Ember",
+          "id": "f0f0f0f0-0000-4000-8000-0000000000c1"
+        },
+        {
+          "recording": {
+            "length": 198500,
+            "video": false,
+            "artist-credit": [
+              { "name": "Mira Solen", "artist": { "id": "a1b2c3d4-0000-4000-8000-00000000aa01", "name": "Mira Solen" }, "joinphrase": " feat. " },
+              { "name": "Glass Harbour", "artist": { "id": "a1b2c3d4-0000-4000-8000-00000000aa02", "name": "Glass Harbour" }, "joinphrase": "" }
+            ],
+            "title": "Salt Road",
+            "id": "e0e0e0e0-0000-4000-8000-0000000000b2"
+          },
+          "number": "2",
+          "artist-credit": [
+            { "name": "Mira Solen", "artist": { "id": "a1b2c3d4-0000-4000-8000-00000000aa01", "name": "Mira Solen" }, "joinphrase": " feat. " },
+            { "name": "Glass Harbour", "artist": { "id": "a1b2c3d4-0000-4000-8000-00000000aa02", "name": "Glass Harbour" }, "joinphrase": "" }
+          ],
+          "length": 198500,
+          "position": 2,
+          "title": "Salt Road",
+          "id": "f0f0f0f0-0000-4000-8000-0000000000c2"
+        },
+        {
+          "recording": { "length": 301200, "video": null, "title": "Nachtfähre", "id": "e0e0e0e0-0000-4000-8000-0000000000b3" },
+          "number": "3",
+          "artist-credit": [ { "name": "Mira Solen", "artist": { "id": "a1b2c3d4-0000-4000-8000-00000000aa01", "name": "Mira Solen" }, "joinphrase": "" } ],
+          "length": null,
+          "position": 3,
+          "title": "Nachtfähre",
+          "id": "f0f0f0f0-0000-4000-8000-0000000000c3"
+        }
+      ]
+    },
+    {
+      "track-offset": 0,
+      "position": 2,
+      "title": "",
+      "format": "CD",
+      "track-count": 2,
+      "tracks": [
+        {
+          "recording": { "length": 222000, "title": "Brennmoor", "id": "e0e0e0e0-0000-4000-8000-0000000000b4" },
+          "number": "1",
+          "artist-credit": [ { "name": "Mira Solen", "artist": { "id": "a1b2c3d4-0000-4000-8000-00000000aa01", "name": "Mira Solen" }, "joinphrase": "" } ],
+          "length": 222000,
+          "position": 1,
+          "title": "Brennmoor",
+          "id": "f0f0f0f0-0000-4000-8000-0000000000c4"
+        },
+        {
+          "recording": { "length": 187000, "title": "Vael (Reprise)", "id": "e0e0e0e0-0000-4000-8000-0000000000b5" },
+          "number": "2",
+          "length": 187000,
+          "position": 2,
+          "title": "Vael (Reprise)",
+          "id": "f0f0f0f0-0000-4000-8000-0000000000c5"
+        }
+      ]
+    }
+  ],
+  "barcode": "0000000000017",
+  "status": "Official",
+  "artist-credit": [ { "joinphrase": "", "artist": { "id": "a1b2c3d4-0000-4000-8000-00000000aa01", "name": "Mira Solen", "sort-name": "Solen, Mira", "type": "Person" }, "name": "Mira Solen" } ],
+  "status-id": "4e304316-386d-3409-af2e-78857eec5cfe",
+  "release-events": [ { "date": "2011-09-02", "area": { "id": "89a675c2-3e37-3518-b83c-418bad59a85a", "name": "Europe", "iso-3166-1-codes": ["XE"] } } ],
+  "packaging": "Jewel Case",
+  "cover-art-archive": { "back": true, "front": true, "darkened": false, "artwork": true, "count": 2 },
+  "disambiguation": "2011 remaster",
+  "packaging-id": "ec27701a-4a22-37f4-bfac-6616e0f9750a",
+  "asin": null
+}
