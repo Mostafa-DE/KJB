@@ -333,7 +333,7 @@ private fun SleepReadout(timer: SleepTimer, ui: PlayerUi) {
 /** Custom: a number of minutes or of songs, with Less and More, then Start timer. */
 @Composable
 private fun CustomSleepSheet(extras: PlayerExtrasUi, ui: PlayerUi, songs: Boolean) {
-    val running = extras.extras.sleep.value
+    val running = extras.extras.sleep.collectAsStateWithLifecycle().value
     var value by rememberSaveable(songs) {
         mutableIntStateOf(
             when {

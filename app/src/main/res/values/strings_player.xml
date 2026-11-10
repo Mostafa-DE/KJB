@@ -202,12 +202,10 @@
     <string name="speed_usual_sentence">This speed applies to every song until you change it.</string>
     <string name="speed_reset">Reset</string>
     <string name="speed_done">Done</string>
-    <string name="speed_chip">Speed %1$s. Change it</string>
 
     <!-- Repeat a part (A-B) -->
     <string name="part_stop">Stop the part</string>
     <string name="part_chip">A-B</string>
-    <string name="part_chip_label">Repeating a part. Stop it</string>
     <string name="part_started">Drag A and B to pick the part</string>
     <string name="part_stopped">Repeat a part off</string>
     <string name="part_too_short">This song is too short to repeat a part.</string>
