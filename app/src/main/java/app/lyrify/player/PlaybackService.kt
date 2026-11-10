@@ -37,6 +37,7 @@ import app.lyrify.library.LibraryGraph
 import app.lyrify.library.LibraryState
 import app.lyrify.library.Song
 import app.lyrify.library.SongRef
+import app.lyrify.library.search.SearchGraph
 import app.lyrify.logFailures
 import app.lyrify.media.NowPlaying
 import app.lyrify.media.QueueSweep
@@ -140,7 +141,7 @@ class PlaybackService : MediaLibraryService() {
             .setBitmapLoader(thumbnails)
             .build()
         session = built
-        browse = CarBrowse(this, built, core, settings, scope, ::playing)
+        browse = CarBrowse(this, built, core, settings, scope, ::playing, search = SearchGraph.songs(this))
         setMediaNotificationProvider(
             DefaultMediaNotificationProvider.Builder(this).setChannelName(R.string.player_channel).build().apply { setSmallIcon(R.drawable.ic_stat_kjb) },
         )

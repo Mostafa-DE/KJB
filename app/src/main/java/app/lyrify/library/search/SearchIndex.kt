@@ -12,8 +12,10 @@ import app.lyrify.library.LibraryState
 import app.lyrify.library.Song
 import app.lyrify.library.displayTitle
 import app.lyrify.logFailures
+import app.lyrify.player.LibraryTree
 import app.lyrify.player.QueueSource
 import app.lyrify.player.SourceKind
+import app.lyrify.player.TreeSearch
 import app.lyrify.settings.LibrarySettings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -135,6 +137,18 @@ fun searchQueue(songs: List<Song>, lyrics: List<Song>): List<Song> = (songs + ly
 
 /** The results' queue as a list: "Search · words", with the words as typed; the same words in another case or with other accents are the same list. */
 fun searchSource(query: String): QueueSource = QueueSource(SourceKind.SEARCH, "search:" + fold(query), query.trim().replace(SPACES, " "))
+
+/**
+ * Search's songs for a search typed or said in the car ([TreeSearch], auto/CarBrowse.kt), what a song tapped in Search's
+ * results plays: the songs found by their names as Search ranks them, then those found only by their [lyrics]; they play
+ * as Search's queue ("Search · words").
+ */
+class SearchSongs(private val lyrics: suspend (query: String, library: Library, settings: LibrarySettings) -> List<Song>) : TreeSearch {
+    override suspend fun songs(query: String, library: Library, settings: LibrarySettings): List<Song> =
+        searchQueue(SearchGraph.names(library, settings).find(query).songs.map { it.item }, lyrics(query, library, settings))
+
+    override fun source(query: String): QueueSource = searchSource(query)
+}
 
 /** For each folded character, where it came from in the text: its first index, and the index after it. */
 private class Places(capacity: Int) {
@@ -266,6 +280,11 @@ object SearchGraph {
         }
         index
     }.also { lyrics = it }
+
+    /** Search for the car ([SearchSongs]): the names index, then the songs the lyrics index finds, as many as a car list holds. */
+    fun songs(context: Context): TreeSearch = SearchSongs { query, library, settings ->
+        lyrics(context).find(query, library, settings, limit = LibraryTree.MAX_CHILDREN).map { it.song }
+    }
 
     /** Looks at the `.lrc` files again soon: Search opened, or lyrics were written or removed. */
     fun refreshLyrics() {

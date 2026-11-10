@@ -239,9 +239,8 @@ object LibraryTree {
 }
 
 /**
- * The car's search, by name and by voice: what the Search tab finds for some words, as songs. The integration wires it
- * to L2's search (the names index, then the songs found by their lyrics, as `searchQueue`, and `searchSource`); until
- * then [NameSearch].
+ * The car's search, by name and by voice: what the Search tab finds for some words, as songs. The service hands the car
+ * Search's own ([app.lyrify.library.search.SearchSongs]: the names index, then the songs found by their lyrics).
  */
 interface TreeSearch {
     /** The songs found for [query], best first: what a tap on a song in Search's results plays. Off the main thread. */
@@ -252,8 +251,9 @@ interface TreeSearch {
 }
 
 /**
- * Until L2's search is wired: the songs whose title as shown, artist or album holds the words, ignoring case and
- * accents; those found by title first, then by artist, then by album, each in library order.
+ * A search by names alone, where Search is not at hand (CarBrowse's default, for tests): the songs whose title as shown,
+ * artist or album holds the words, ignoring case and accents; those found by title first, then by artist, then by album,
+ * each in library order.
  */
 object NameSearch : TreeSearch {
     private val MARKS = Regex("""\p{M}+""")
