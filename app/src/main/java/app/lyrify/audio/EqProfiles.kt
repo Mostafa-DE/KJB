@@ -1,5 +1,8 @@
 package app.lyrify.audio
 
+import android.content.Context
+import android.util.Log
+import app.lyrify.LOG_TAG
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -230,9 +233,19 @@ class EqProfilesStore(private val file: File, private val clock: () -> Long, pri
         }
     }
 
-    private companion object {
-        const val TMP: String = ".tmp"
-        const val CORRUPT_PREFIX: String = "eq-profiles-corrupt-"
-        const val CORRUPT_SUFFIX: String = ".json"
+    companion object {
+        private const val TMP: String = ".tmp"
+        private const val CORRUPT_PREFIX: String = "eq-profiles-corrupt-"
+        private const val CORRUPT_SUFFIX: String = ".json"
+        private var made: EqProfilesStore? = null
+
+        /**
+         * The app's profiles: app-private `files/eq-profiles.json`, one store per process, shared by the equalizer and a
+         * backup and its restore (backup/), so their loads and saves take turns.
+         */
+        @Synchronized
+        fun of(context: Context): EqProfilesStore = made ?: EqProfilesStore(File(context.applicationContext.filesDir, "eq-profiles.json"), System::currentTimeMillis) {
+            Log.w(LOG_TAG, it)
+        }.also { made = it }
     }
 }

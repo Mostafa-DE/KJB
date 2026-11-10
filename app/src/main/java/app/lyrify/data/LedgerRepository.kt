@@ -122,21 +122,30 @@ internal fun readableLedger(data: Flow<LedgerState>, log: (String) -> Unit): Flo
 }
 
 /** The ledger in a typed DataStore; one file per process however many repositories are made. */
-class LedgerRepository(context: Context) : LedgerStore {
-    private val store: DataStore<LedgerState> = LedgerFile.store(context)
+class LedgerRepository internal constructor(private val store: DataStore<LedgerState>, private val log: (String) -> Unit) : LedgerStore {
+    constructor(context: Context) : this(LedgerFile.store(context), { Log.w(LOG_TAG, it) })
 
-    override val ledger: Flow<LedgerState> = readableLedger(store.data) { Log.w(LOG_TAG, it) }
+    override val ledger: Flow<LedgerState> = readableLedger(store.data, log)
 
     override suspend fun entry(path: String): LedgerEntry? = ledger.first().entries[path]
 
     /** A failed write is retried a few times, then reported; the track is handled again next time it is seen. */
     override suspend fun put(entry: LedgerEntry): Boolean =
-        writeWithRetries(onFailure = { Log.w(LOG_TAG, "ledger not written: ${it.javaClass.simpleName}") }) {
+        writeWithRetries(onFailure = { log("ledger not written: ${it.javaClass.simpleName}") }) {
             store.updateData { it.put(entry) }
         }
 
     override suspend fun drop(path: String): Boolean =
-        writeWithRetries(onFailure = { Log.w(LOG_TAG, "ledger not written: ${it.javaClass.simpleName}") }) {
+        writeWithRetries(onFailure = { log("ledger not written: ${it.javaClass.simpleName}") }) {
             store.updateData { it.drop(path) }
+        }
+
+    /**
+     * A restore (backup/): [change] made to the whole ledger in one write, so a backup's lyrics choices land together or
+     * not at all. False when it could not be written, or the ledger cannot be read; then nothing changed.
+     */
+    suspend fun update(change: (LedgerState) -> LedgerState): Boolean =
+        writeWithRetries(onFailure = { log("ledger not written: ${it.javaClass.simpleName}") }) {
+            store.updateData(change)
         }
 }

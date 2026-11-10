@@ -29,6 +29,11 @@ class FakePlayLog(plays: List<LoggedPlay> = emptyList()) : PlayLogStore {
         return true
     }
 
+    override suspend fun all(): List<LoggedPlay>? = if (failing) null else plays.sortedBy { it.startedAt }
+
+    /** Each as [put] writes it, or none when [failing]. */
+    override suspend fun putAll(plays: List<LoggedPlay>): Boolean = !failing && plays.all { put(it) }
+
     override suspend fun openPlays(): List<StoredPlay> = open.map { (key, state) ->
         StoredPlay(plays.first { it.song.path == key.first && it.startedAt == key.second }, state)
     }

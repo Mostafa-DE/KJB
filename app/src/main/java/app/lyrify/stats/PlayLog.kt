@@ -32,6 +32,15 @@ interface PlayLogStore {
      * its plays that counted, the last of those, the time heard in all its plays, and the id hint of its latest play.
      */
     suspend fun totals(from: Long? = null, until: Long? = null): List<SongPlays>
+
+    /** Every play in the log, the oldest first, for a backup (backup/); null when the log cannot be read. */
+    suspend fun all(): List<LoggedPlay>?
+
+    /**
+     * A restore's [plays], each written as [put] writes it without an [OpenState], all in one go or none: a play of the
+     * same song and start is the same play, so restoring a backup twice adds nothing. False when none was written.
+     */
+    suspend fun putAll(plays: List<LoggedPlay>): Boolean
 }
 
 /** Where a play still going stands: the song's length, its position, and the parts of it heard. */
@@ -118,6 +127,9 @@ object PlaysSchema {
     const val PUT: String = "INSERT INTO plays (path, started_at, media_id, heard_ms, counted) VALUES (?, ?, ?, ?, ?) " +
         "ON CONFLICT (path, started_at) DO UPDATE SET media_id = coalesce(excluded.media_id, media_id), " +
         "heard_ms = max(heard_ms, excluded.heard_ms), counted = max(counted, excluded.counted)"
+
+    /** Every play, the oldest first: path, start, id hint, time heard, counted (a backup; [storedPlayOf] reads them). */
+    const val ALL: String = "SELECT path, started_at, media_id, heard_ms, counted FROM plays ORDER BY started_at, path"
 
     const val KEEP_OPEN: String = "INSERT OR REPLACE INTO open_plays (path, started_at, duration_ms, position_ms, spans) VALUES (?, ?, ?, ?, ?)"
 
@@ -212,6 +224,35 @@ class SqlPlayLog(private val db: SQLiteOpenHelper, private val io: CoroutineDisp
         } catch (e: Exception) {
             log("plays: not read (${e.javaClass.simpleName})")
             emptyList()
+        }
+    }
+
+    override suspend fun all(): List<LoggedPlay>? = withContext(io) {
+        try {
+            db.readableDatabase.rawQuery(PlaysSchema.ALL, null).use { rows ->
+                buildList {
+                    while (rows.moveToNext()) {
+                        storedPlayOf(rows.text(0), rows.number(1), rows.number(2), rows.number(3), rows.number(4), null, null, null)?.let { add(it.play) }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            log("plays: not read for a backup (${e.javaClass.simpleName})")
+            null
+        }
+    }
+
+    override suspend fun putAll(plays: List<LoggedPlay>): Boolean = withContext(io) {
+        try {
+            db.writableDatabase.transaction {
+                plays.forEach { play ->
+                    execSQL(PlaysSchema.PUT, arrayOf<Any?>(play.song.path, play.startedAt, play.song.mediaStoreId, play.heardMs, if (play.counted) 1L else 0L))
+                }
+            }
+            true
+        } catch (e: Exception) {
+            log("plays: ${plays.size} not restored (${e.javaClass.simpleName})")
+            false
         }
     }
 

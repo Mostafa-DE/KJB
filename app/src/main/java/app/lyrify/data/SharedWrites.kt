@@ -38,6 +38,12 @@ enum class SharedWrite {
     /** A playlist exported as `.m3u8` (3.0, backup/M3u.kt; the system save dialog picks the place). */
     M3U_EXPORT,
 
+    /** A backup zip saved where the user picked, or in the automatic backup folder (3.0, backup/AutoBackup.kt). */
+    BACKUP_SAVE,
+
+    /** An automatic backup older than the 5 kept, deleted from its folder (3.0, backup/AutoBackup.kt). */
+    BACKUP_DELETE,
+
     /** Songs moved to the phone's trash through its own dialog (dupes/Duplicates.kt, MediaStoreTrash). */
     TRASH,
 
