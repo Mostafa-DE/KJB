@@ -748,6 +748,7 @@ class TagEngineDeviceTest {
                                     LOG_TAG,
                                     "tags device test: after the replacement, the path shows the held file: ${phone.fileId(path) == held}, " +
                                         "its size ${atPath.st_size} (new file ${foreign.size}), the descriptor's size ${open.size()}, " +
+                                        "the descriptor's fstat now names the path's file: ${open.fileId() == phone.fileId(path)}, " +
                                         "MediaStore's row changed: ${phone.idOf(path) != id}",
                                 )
                             }

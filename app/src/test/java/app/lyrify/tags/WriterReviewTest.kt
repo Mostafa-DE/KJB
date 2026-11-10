@@ -838,7 +838,8 @@ class WriterReviewTest {
         val song = rig.song("Paper Lantern", 41, fields)
         assertEquals(SongOutcome.WRITTEN, write(song, titleOnly))
         val before = rig.bytes(song)
-        // The release opens the song anew ("open r") and reads it: the song is replaced right after that read.
+        // The release opens the song anew ("open r") and reads it: the song is replaced right after that read, not through
+        // MediaStore (its row stays), and the held descriptor reports the new file's identity, as the phone's FUSE does.
         rig.songs.onRead = {
             if (rig.events.last() == "open r") {
                 rig.songs.onRead = {}

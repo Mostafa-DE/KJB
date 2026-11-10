@@ -524,22 +524,23 @@ class Backups(
      * Closes [intent], deleting its backup, only on proof that the backup is no longer needed: the file at the song's
      * path, opened anew here and read whole, holds exactly [proof] (the written state after a write; the original when
      * nothing was written, or the backup was put back), that descriptor is still the file at the path (`fstat` against
-     * `lstat`), and MediaStore's row at the path is still the song's own, [mediaStoreId]. A song another app deletes and
-     * makes again under its name through MediaStore gets a new row at once, while the phone's file system may still show
-     * this process the old file for a while (seen on Android 17: the descriptor and the path both kept the old file's
-     * identity and size): the row tells it. Proven twice, the second time right before the delete, so a write into the
-     * same file in between (the same inode, other bytes) is caught. No fsync, scan or Undo save runs between the proofs and the delete; the
+     * `lstat`), and MediaStore's row at the path is still the song's own, [mediaStoreId]. Proven twice: the second time
+     * through a descriptor opened anew on the path right before the delete, held while it is deleted.
+     *
+     * On the phone, a descriptor's `fstat` can't tell a song replaced under its name: MediaProvider's FUSE daemon answers
+     * it by `lstat` of the path (FuseDaemon `pf_getattr`), not by the open file, while the size and the bytes read stay
+     * the open file's. So a descriptor held across a replacement reports the new file's identity with the old file's
+     * bytes (seen on Android 17). The second, fresh descriptor reads the bytes now at the path, and the row tells any
+     * replacement made through MediaStore, which gives the path a new row at once. No fsync, scan or Undo save runs between the proofs and the delete; the
      * intent is closed after it. A backup Undo keeps as the song's snapshot is never deleted here.
      *
      * A read or `lstat` that fails throws, and leaves the backup and the intent as they are: an error decides nothing.
      */
     fun releaseBackup(intent: WriteIntent, proof: FileState, mediaStoreId: Long): Release {
         val snapshot = intent.backup in undo.keptBackups()
-        val proven = songs.openToRead(intent.path).use { song ->
-            fun proven() = song.holds(proof) && song.fileId() == songs.fileId(intent.path) && songs.idOf(intent.path) == mediaStoreId
-            val proven = proven() && proven()
-            if (proven && !snapshot) Files.deleteIfExists(File(dirs.backups, intent.backup).toPath())
-            proven
+        fun proven(song: OpenSong) = song.holds(proof) && song.fileId() == songs.fileId(intent.path) && songs.idOf(intent.path) == mediaStoreId
+        val proven = songs.openToRead(intent.path).use(::proven) && songs.openToRead(intent.path).use { song ->
+            proven(song).also { if (it && !snapshot) Files.deleteIfExists(File(dirs.backups, intent.backup).toPath()) }
         }
         if (!proven) {
             log("tags: the song is not as proven at its path, its backup kept")
