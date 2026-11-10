@@ -1,4 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Android Auto (milestone A4). -->
 <resources>
+    <!-- The car's lists: atop Songs and first in Playlists. -->
+    <string name="auto_shuffle_all">Shuffle all</string>
+    <!-- Playlists' two headings in the car. -->
+    <string name="auto_built_for_you">Built for you</string>
+    <string name="auto_your_playlists">Your playlists</string>
+    <!-- The car says this when a voice request matches no song. -->
+    <string name="auto_nothing_found">No songs found</string>
 </resources>

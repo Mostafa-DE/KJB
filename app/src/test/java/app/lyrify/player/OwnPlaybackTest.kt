@@ -90,7 +90,7 @@ class OwnPlaybackTest {
 
     @Test
     fun `a playlist lists the songs on the phone, and Songs follows Show file names`() {
-        val lists = LibraryTree.children(LibraryTree.PLAYLISTS, data())!!
+        val lists = LibraryTree.children(LibraryTree.PLAYLISTS, data())!!.filter { it.group == LibraryTree.YOUR_PLAYLISTS }
         assertEquals(listOf("Road trip"), lists.map { it.title })
         val inList = LibraryTree.children(lists[0].id, data())!!
         assertEquals(listOf(songs.last().path, songs[0].path), inList.map { it.song!!.path })
@@ -116,11 +116,11 @@ class OwnPlaybackTest {
     }
 
     @Test
-    fun `every level is capped`() {
+    fun `every level is capped for a client that asks for everything`() {
         val many = (1..LibraryTree.MAX_CHILDREN + 30).map { song("Music/Many/Song $it.mp3", artist = "Artist $it") }
         val big = TreeData(Library.of(many, Settings()), QueueBook(), emptyList(), LibrarySettings()) { "" }
-        assertEquals(LibraryTree.MAX_CHILDREN, LibraryTree.children(LibraryTree.SONGS, big)!!.size)
-        assertEquals(LibraryTree.MAX_CHILDREN, LibraryTree.children(LibraryTree.ARTISTS, big)!!.size)
+        assertEquals(LibraryTree.MAX_CHILDREN, LibraryTree.page(LibraryTree.children(LibraryTree.SONGS, big)!!, 0, Int.MAX_VALUE).size)
+        assertEquals(LibraryTree.MAX_CHILDREN, LibraryTree.page(LibraryTree.children(LibraryTree.ARTISTS, big)!!, 0, Int.MAX_VALUE).size)
     }
 
     // What the session shows
