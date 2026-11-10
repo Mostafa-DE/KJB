@@ -1,5 +1,6 @@
 package app.lyrify.ui
 
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.NonCancellable
@@ -46,7 +47,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
@@ -196,18 +196,31 @@ fun AppShell(
     // The page layer follows every move; while a back swipe drives it, the swipe does (a swipe back into the player
     // leaves it to move here, under the player).
     val layer = pageLayerOf(state)
-    LaunchedEffect(layer) { if (swipe.taking !is BackTaking.Page) pages.animateTo(layer) }
+    // Whenever no swipe drives it, the page layer converges on the page that is current, whatever a swipe left behind:
+    // a page can never stay drawn half way, nor current but hidden under another.
+    val resting = layer.takeIf { swipe.taking !is BackTaking.Page }
+    LaunchedEffect(resting) {
+        val target = resting ?: return@LaunchedEffect
+        when {
+            pages.currentState == target && pages.targetState != target -> pages.snapTo(target)
+            pages.currentState != target || pages.targetState != target -> pages.animateTo(target)
+        }
+    }
     // Pages and the tab history; a page's own back (selection, a page's sheet) is composed later and comes first.
     PredictiveBackHandler(enabled = state.views.isEmpty() && (state.pages.isNotEmpty() || state.history.isNotEmpty())) { events ->
-        val back = backFromPages(nav, pages, swipe, reduced)
-        try {
-            events.collect { back.follow(it) }
-        } catch (e: CancellationException) {
-            withContext(NonCancellable) { back.cancel() }
-            throw e
+        // One swipe at a time: a new one waits for the last one's ending, so two never pull the layers two ways.
+        swipe.serial.withLock {
+            val back = backFromPages(nav, pages, swipe, reduced)
+            try {
+                events.collect { back.follow(it) }
+            } catch (e: CancellationException) {
+                // The platform cancelled it (given up, slow or fast): everything goes back to rest, nothing moves.
+                withContext(NonCancellable) { back.cancel() }
+                throw e
+            }
+            // Only the progress ending normally commits.
+            withContext(NonCancellable) { back.commit() }
         }
-        // Run to the end here, so a new swipe starts only after this one has finished with the layers.
-        withContext(NonCancellable) { back.commit() }
     }
 
     // The song KJB plays shows as playing in the lists, while the Now bar shows KJB's own song (not another app's).
@@ -258,14 +271,16 @@ fun AppShell(
             if (state.views.isNotEmpty()) {
                 key(state.views.size) {
                     PredictiveBackHandler { events ->
-                        val back = backFromView(nav, swipe, reduced)
-                        try {
-                            events.collect { back.follow(it) }
-                        } catch (e: CancellationException) {
-                            withContext(NonCancellable) { back.cancel() }
-                            throw e
+                        swipe.serial.withLock {
+                            val back = backFromView(nav, swipe, reduced)
+                            try {
+                                events.collect { back.follow(it) }
+                            } catch (e: CancellationException) {
+                                withContext(NonCancellable) { back.cancel() }
+                                throw e
+                            }
+                            withContext(NonCancellable) { back.commit() }
                         }
-                        withContext(NonCancellable) { back.commit() }
                     }
                 }
             }
@@ -505,6 +520,9 @@ private fun SharedTransitionScope.ViewLayers(
                                 drawRect(Color.Black, alpha = dim)
                             },
                     )
+                    val page = MaterialTheme.colorScheme.background
+                    val growing = container != null && !reduced
+                    val fill = if (growing) containerFill(this@AnimatedVisibility, page) else null
                     Surface(
                         Modifier
                             .fillMaxSize()
@@ -512,10 +530,16 @@ private fun SharedTransitionScope.ViewLayers(
                             .inertUnless { takesInput(headed = visible.targetState, settled = transition.currentState == transition.targetState, container = container != null) }
                             .animateEnterExit(viewEnter(arrives, reduced), viewExit(leaves, reduced))
                             .then(containerBounds(container))
-                            .backPeek(swipe) { swipe.taking == BackTaking.View(view) },
-                        color = MaterialTheme.colorScheme.background,
+                            .backPeek(swipe) { swipe.taking == BackTaking.View(view) }
+                            // The card the player grows in: opaque from its first frame, so the dock stays under it.
+                            .drawBehind { drawRect(fill?.value ?: page) },
+                        color = Color.Transparent,
                     ) {
-                        CompositionLocalProvider(LocalContainer provides container, LocalLayerHeaded provides visible.targetState) { content(view) }
+                        // Inside the growing card, the player's own content fades in, and out first on the way back.
+                        val content = if (growing) Modifier.animateEnterExit(containerContentEnter(), containerContentExit()) else Modifier
+                        Box(content) {
+                            CompositionLocalProvider(LocalContainer provides container, LocalLayerHeaded provides visible.targetState) { content(view) }
+                        }
                     }
                 }
             }
@@ -547,11 +571,13 @@ private class PlainBack(private val nav: Navigator) : ShellBack {
 }
 
 /**
- * Back from a page or across the tab history, following the finger: the page it goes back to (or the tab) is drawn
- * under the one leaving, which shrinks; let go, the page leaves as a pop does; given up, everything comes back. Back to
- * the player (or another view) a page was opened from draws that view under the page, its bar and dock, which shrink
- * over it and fade away when let go. The move itself happens at once when let go, so a swipe that follows goes on from
- * there. With reduced motion nothing follows the finger: Back just fades.
+ * Back from a page or across the tab history, following the finger ([PageSwipe]): the page it goes back to (or the tab)
+ * is drawn under the one leaving, which shrinks and stays whole. Committed (the platform's progress ended normally), the
+ * move happens at once and the page fades away while the one under it settles. Cancelled (given up, slow or fast), the
+ * page springs back to rest first, covering the screen again, and only then is the page under it let go of, so every
+ * layer is as it was: its offset, scale, alpha, which page is drawn, and the order they are drawn in. Back to the player
+ * (or another view) a page was opened from draws that view under the page, its bar and dock instead. With reduced
+ * motion nothing follows the finger: Back just fades.
  */
 private fun backFromPages(nav: Navigator, pages: SeekableTransitionState<PageLayer>, swipe: BackSwipe, reduced: Boolean): ShellBack {
     val from = nav.state
@@ -561,26 +587,35 @@ private fun backFromPages(nav: Navigator, pages: SeekableTransitionState<PageLay
     val dest = pageLayerOf(to)
     val intoViews = to.views.isNotEmpty()
     val taking = if (intoViews) BackTaking.Pages(to.views) else BackTaking.Page(origin.key)
+    var layers = PageSwipe(origin).started(dest)
     swipe.start(taking)
     return object : ShellBack {
         override suspend fun follow(event: BackEventCompat) {
             swipe.follow(event)
-            if (!intoViews) pages.seekTo(event.progress, dest)
+            layers = layers.moved(event.progress)
+            if (!intoViews) pages.seekTo(layers.progress, dest)
         }
 
         override suspend fun commit() {
+            layers = layers.committed()
             nav.back()
             try {
-                if (intoViews) swipe.leave(taking) else pages.animateTo(dest)
+                coroutineScope {
+                    launch { swipe.leave(taking) }
+                    if (!intoViews) pages.animateTo(layers.current)
+                }
             } finally {
                 swipe.clear(taking)
             }
         }
 
         override suspend fun cancel() {
-            coroutineScope {
-                if (!intoViews) launch { pages.seekBack(origin) }
-                swipe.cancel(taking)
+            layers = layers.cancelled()
+            try {
+                swipe.springBack(taking)
+            } finally {
+                if (!intoViews) pages.snapTo(layers.current)
+                swipe.clear(taking)
             }
         }
     }
@@ -603,20 +638,14 @@ private fun backFromView(nav: Navigator, swipe: BackSwipe, reduced: Boolean): Sh
             nav.back()
         }
 
-        override suspend fun cancel() = swipe.cancel(taking)
+        override suspend fun cancel() {
+            try {
+                swipe.springBack(taking)
+            } finally {
+                swipe.clear(taking)
+            }
+        }
     }
-}
-
-/** Seeks the page layer back to where a given-up swipe began ([origin]), then settles there. */
-private suspend fun SeekableTransitionState<PageLayer>.seekBack(origin: PageLayer) {
-    val from = fraction
-    val start = withFrameMillis { it }
-    var elapsed = 0L
-    while (elapsed < Motion.SETTLE_MS) {
-        elapsed = withFrameMillis { it } - start
-        seekTo(from * (1f - Motion.Standard.transform((elapsed / Motion.SETTLE_MS.toFloat()).coerceIn(0f, 1f))))
-    }
-    snapTo(origin)
 }
 
 /**
