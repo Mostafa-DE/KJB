@@ -71,6 +71,9 @@ object StatsGraph {
         PlayStats(store(context), library = { (library.value as? LibraryState.Ready)?.library })
     }.also { stats = it }
 
+    /** The play log itself, for a backup and a restore (backup/). */
+    fun log(context: Context): PlayLogStore = store(context)
+
     fun events(context: Context): PlayEvents = counter(context)
 
     fun plays(context: Context): PlaysQuery = stats(context)

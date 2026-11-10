@@ -217,6 +217,9 @@ interface PlaylistStore : FavouritesPort {
 
     /** After songs were moved to the trash: they leave every playlist and Favourites. */
     suspend fun forget(paths: Set<String>): Boolean
+
+    /** A restore (backup/): [change] made to the whole state in one write, so a backup's playlists land together or not at all. */
+    suspend fun update(change: (PlaylistsState) -> PlaylistsState): Boolean
 }
 
 /**
@@ -328,6 +331,8 @@ class PlaylistsRepository internal constructor(
     override suspend fun edit(id: String, change: (Playlist) -> Playlist): Boolean = write { state -> state.playlist(id)?.let { state.put(change(it)) } ?: state }
 
     override suspend fun forget(paths: Set<String>): Boolean = write { it.forget(paths) }
+
+    override suspend fun update(change: (PlaylistsState) -> PlaylistsState): Boolean = write(change)
 
     private suspend fun write(change: (PlaylistsState) -> PlaylistsState): Boolean =
         writeWithRetries(onFailure = { log("playlists not written: ${it.javaClass.simpleName}") }) { store.updateData(change) }
