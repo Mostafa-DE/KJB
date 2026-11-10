@@ -109,11 +109,11 @@ private fun HistoryLine(row: HistoryRow, enabled: Boolean, onUndo: () -> Unit) {
     val time = DateUtils.getRelativeTimeSpanString(row.at, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS).toString()
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
-        modifier = Modifier.fillMaxWidth().heightIn(min = 72.dp).padding(horizontal = ScreenPadding, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp).padding(horizontal = ScreenPadding, vertical = 8.dp),
     ) {
         Box(contentAlignment = Alignment.Center, modifier = Modifier.size(48.dp).clip(RoundedCornerShape(14.dp)).background(colors.surfaceContainerHigh)) {
-            Icon(painterResource(row.kind.icon), contentDescription = null, tint = colors.onSurfaceVariant, modifier = Modifier.size(22.dp))
+            Icon(painterResource(row.kind.icon), contentDescription = null, tint = colors.onSurfaceVariant, modifier = Modifier.size(24.dp))
         }
         Column(Modifier.weight(1f)) {
             Text(row.label, style = MaterialTheme.typography.bodyLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -127,8 +127,7 @@ private fun HistoryLine(row: HistoryRow, enabled: Boolean, onUndo: () -> Unit) {
                 stringResource(R.string.edit_undo),
                 onClick = onUndo,
                 modifier = Modifier.semantics { contentDescription = named },
-                kind = ButtonKind.SECONDARY,
-                icon = R.drawable.ic_undo,
+                kind = ButtonKind.GHOST,
                 compact = true,
                 enabled = enabled,
             )

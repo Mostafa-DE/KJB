@@ -1,5 +1,6 @@
 package app.lyrify.ui
 
+import androidx.compose.ui.draw.shadow
 import android.content.Context
 import android.content.res.Resources
 import android.net.Uri
@@ -147,7 +148,7 @@ fun EditTagsView(view: FullScreen.EditTags) {
         field(TagField.ARTIST, Modifier.fillMaxWidth())
         field(TagField.ALBUM, Modifier.fillMaxWidth())
         field(TagField.ALBUM_ARTIST, Modifier.fillMaxWidth())
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             field(TagField.YEAR, Modifier.weight(1f))
             // Several songs never share a track number (the prototype's Edit tags shows it for one song only).
             if (one) field(TagField.TRACK, Modifier.weight(1f))
@@ -229,11 +230,11 @@ fun EditAlbumView(view: FullScreen.EditAlbum) {
         }
         field(TagField.ALBUM, Modifier.fillMaxWidth())
         field(TagField.ALBUM_ARTIST, Modifier.fillMaxWidth())
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             field(TagField.YEAR, Modifier.weight(1f))
             field(TagField.GENRE, Modifier.weight(1f))
         }
-        Text(stringResource(R.string.edit_track_numbers), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(stringResource(R.string.edit_track_numbers), style = SectionLabel, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp))
         LyrifySegmented(listOf(stringResource(R.string.edit_track_keep), stringResource(R.string.edit_track_order)), if (numberInOrder) 1 else 0, { numberInOrder = it == 1 })
         Changes(plans, previewLines(TagEdits.preview(plans, perSong = setOf(TagField.TRACK)), plans, resources))
     }
@@ -293,8 +294,8 @@ private fun EditorFrame(title: String, edited: Boolean, ready: Boolean, saving: 
         containerColor = MaterialTheme.colorScheme.background,
     ) { padding ->
         Column(
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-            modifier = Modifier.padding(padding).verticalScroll(rememberScrollState()).padding(horizontal = ScreenPadding, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+            modifier = Modifier.padding(padding).verticalScroll(rememberScrollState()).padding(start = ScreenPadding, end = ScreenPadding, top = 4.dp, bottom = 8.dp),
         ) {
             if (!access) AccessLine()
             content()
@@ -367,7 +368,7 @@ private fun Changes(plans: List<SongPlan>, lines: List<ChangeLine>) {
     Text(
         if (plans.isEmpty()) stringResource(R.string.edit_no_changes) else pluralStringResource(R.plurals.edit_changes, plans.size, plans.size),
         style = MaterialTheme.typography.titleMedium,
-        modifier = Modifier.padding(top = 8.dp).semantics { heading() },
+        modifier = Modifier.padding(top = 2.dp).semantics { heading() },
     )
     if (lines.isNotEmpty()) ChangeList(lines)
 }
@@ -445,8 +446,9 @@ private fun CoverEditor(songs: List<Song>, opus: Map<String, Int>, cover: CoverE
             is CoverEdit.Replace -> cover.picture.data
             CoverEdit.Remove -> null
         }
-        SongCover(shown, size = COVER, shape = RoundedCornerShape(24.dp))
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        val chrome = LocalChromeColors.current
+        SongCover(shown, Modifier.shadow(16.dp, RoundedCornerShape(22.dp), ambientColor = chrome.shadowStrong, spotColor = chrome.shadowStrong), size = COVER, shape = RoundedCornerShape(22.dp))
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
             LyrifyButton(
                 stringResource(R.string.edit_cover_change),
                 onClick = { picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
@@ -676,7 +678,7 @@ private val FORM_SAVER: Saver<TagForm, String> = Saver(
     },
 )
 
-private val COVER = 132.dp
+private val COVER = 124.dp
 private const val TEXT_LENGTH = 200
 private const val NUMBER_LENGTH = 4
 private const val PHOTO_MAX_BYTES = 64 * 1024 * 1024
