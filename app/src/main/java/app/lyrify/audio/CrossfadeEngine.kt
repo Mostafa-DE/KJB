@@ -520,6 +520,8 @@ class CrossfadeEngine(
         val waiting = standby?.takeIf { standbyFor == to }
         // Far from the end the song coming in is not needed yet.
         val coming = if (leftMs > crossfadeMs + PREPARE_LEAD_MS) null else comingIn(toIndex, to, waiting)
+        // A player waiting already takes the song's own speed again: the Speed sheet may have changed it since.
+        if (waiting != null && coming != null && waiting.playbackParameters != coming.parameters) waiting.setPlaybackParameters(coming.parameters)
         val fadeMs = naturalFadeMs(crossfadeMs, outMs, outSpeed, coming?.playsMs, coming?.parameters?.speed ?: outSpeed)
         val step = fadeStep(leftMs, fadeMs, ready = waiting?.playbackState == Player.STATE_READY && waiting.error == null)
         // A song waiting already stays while its fade may still come: its real length may have shortened the fade.
@@ -538,18 +540,19 @@ class CrossfadeEngine(
     }
 
     /** The song coming in as its fade sees it: where it comes in ([atMs]), how much of it plays from there, its speed. */
-    private class Coming(val atMs: Long, val playsMs: Long?, val parameters: PlaybackParameters?)
+    private class Coming(val atMs: Long, val playsMs: Long?, val parameters: PlaybackParameters)
 
     /**
      * The song [to] at [index], coming in: at its kept place, if any; as long as the library says, or as its file really
-     * is once loaded on the second player ([waiting]), whichever is shorter; at its own speed.
+     * is once loaded on the second player ([waiting]), whichever is shorter; at its own speed as the rules say now, never
+     * the speed a waiting player was left at.
      */
     private fun comingIn(index: Int, to: Long, waiting: FadeSlot?): Coming {
         val libraryMs = active.items.getOrNull(index)?.mediaMetadata?.durationMs?.takeIf { it > 0 }
         val fileMs = waiting?.durationMs?.takeIf { it > 0 }
         val lengthMs = listOfNotNull(libraryMs, fileMs).minOrNull()
         val atMs = if (waiting != null) standbyAt else (libraryMs ?: lengthMs)?.let { rules.placeOf(to, it) } ?: 0
-        return Coming(atMs, lengthMs?.let { it - atMs }, waiting?.playbackParameters ?: rules.parametersOf(to))
+        return Coming(atMs, lengthMs?.let { it - atMs }, rules.parametersOf(to) ?: active.playbackParameters)
     }
 
     /** The next song [to], at [index], loaded on a second player that waits silent where it comes in, at its own speed. */
