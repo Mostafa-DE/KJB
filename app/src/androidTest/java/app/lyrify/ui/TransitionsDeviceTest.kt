@@ -1,9 +1,11 @@
 package app.lyrify.ui
 
+import androidx.compose.foundation.clickable
 import androidx.compose.material3.Text
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -79,5 +81,26 @@ class TransitionsDeviceTest {
         compose.mainClock.advanceTimeBy(1_000)
         compose.onNodeWithText("Paper Lantern").assertDoesNotExist()
         compose.onNodeWithText("Add to").assertExists()
+    }
+
+    @Test
+    fun aSheetStepOnItsWayOutTakesNoTap() {
+        var step by mutableStateOf("Paper Lantern")
+        var tapped = 0
+        compose.setContent {
+            LyrifyTheme {
+                SheetFlow(step, onDismiss = {}) { shown ->
+                    LyrifySheet(onDismiss = {}) { Text(shown, Modifier.clickable { if (shown == "Paper Lantern") tapped++ }) }
+                }
+            }
+        }
+        compose.waitForIdle()
+        compose.mainClock.autoAdvance = false
+        step = "Add to"
+        compose.mainClock.advanceTimeByFrame()
+        compose.mainClock.advanceTimeBy(Motion.FADE_OUT_MS / 2L)
+        // Still drawn while it fades, the old step is gone for the finger from the first frame of its exit.
+        compose.onNodeWithText("Paper Lantern").performClick()
+        compose.runOnIdle { assertEquals(0, tapped) }
     }
 }

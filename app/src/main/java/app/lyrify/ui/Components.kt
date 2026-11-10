@@ -1,5 +1,6 @@
 package app.lyrify.ui
 
+import androidx.compose.animation.EnterExitState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.unit.IntSize
@@ -358,7 +359,10 @@ fun <K : Any> SheetFlow(step: K?, onDismiss: () -> Unit, content: @Composable (K
             transitionSpec = { fadeThrough(reduced) using SizeTransform { _, _ -> spring(dampingRatio = 1f, stiffness = 300f, visibilityThreshold = IntSize.VisibilityThreshold) } },
             label = "sheet step",
         ) { at ->
-            CompositionLocalProvider(LocalSheetFlow provides true) { content(at) }
+            // Only the step arriving or resting takes touches: a tap meant for the next step never lands on the old one.
+            Box(Modifier.inertUnless { takesInput(headed = transition.targetState == EnterExitState.Visible, settled = true, container = false) }) {
+                CompositionLocalProvider(LocalSheetFlow provides true) { content(at) }
+            }
         }
     }
 }

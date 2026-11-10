@@ -434,7 +434,7 @@ fun SongRow(
         LyricsMark.PLAIN -> stringResource(R.string.lib_mark_plain)
         LyricsMark.NONE -> null
     }
-    val description = listOfNotNull(title, artist, markWords, note, line?.text).joinToString(", ")
+    val description = songRowWords(title, artist, markWords, note, line?.text, if (marks.playing) stringResource(R.string.lib_playing) else null)
     val tapLabel = stringResource(if (selecting) R.string.lib_select else R.string.lib_play)
     val holdLabel = if (onLongPress != null) stringResource(R.string.lib_select) else null
     val brand = LocalBrandColors.current
@@ -514,6 +514,10 @@ fun SongRow(
         }
     }
 }
+
+/** What TalkBack says for a song's row: its title, artist, lyrics, note and lyrics line, and ([playing]) that it plays. */
+fun songRowWords(title: String, artist: String, lyrics: String?, note: String?, line: String?, playing: String?): String =
+    listOfNotNull(title, artist, lyrics, note, line, playing).joinToString(", ")
 
 /** The path of the song KJB's own player has loaded; the shell provides it, so its row shows it playing. */
 val LocalPlayingPath = staticCompositionLocalOf<String?> { null }

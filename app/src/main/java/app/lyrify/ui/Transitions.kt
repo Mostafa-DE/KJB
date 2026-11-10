@@ -1,5 +1,20 @@
 package app.lyrify.ui
 
+import androidx.compose.runtime.referentialEqualityPolicy
+import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.node.PointerInputModifierNode
+import androidx.compose.ui.node.ModifierNodeElement
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEvent
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.Outline
+import androidx.compose.ui.geometry.toRect
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.RoundRect
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.activity.BackEventCompat
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibilityScope
@@ -150,6 +165,36 @@ fun expandIn(reduced: Boolean): EnterTransition =
 fun shrinkOut(reduced: Boolean): ExitTransition =
     if (reduced) fadeOut(tween(Motion.REDUCED_MS)) else shrinkVertically(spring(dampingRatio = 1f, stiffness = 300f, visibilityThreshold = IntSize.VisibilityThreshold)) + fadeOut(tween(Motion.FADE_OUT_MS))
 
+// Touches
+
+/**
+ * Whether a layer takes touches: only one arriving or resting ([headed] for the screen), never one on its way out; and a
+ * container transform not before it has landed ([settled]), its layout not being where it is drawn.
+ */
+fun takesInput(headed: Boolean, settled: Boolean, container: Boolean): Boolean = headed && (settled || !container)
+
+/**
+ * A layer that takes touches only while [takes] says so (read at each touch): otherwise every pointer change is consumed
+ * before its content sees it, so a page, view or sheet step on its way out never acts on a tap.
+ */
+fun Modifier.inertUnless(takes: () -> Boolean): Modifier = this then InertElement(takes)
+
+private data class InertElement(val takes: () -> Boolean) : ModifierNodeElement<InertNode>() {
+    override fun create(): InertNode = InertNode(takes)
+
+    override fun update(node: InertNode) {
+        node.takes = takes
+    }
+}
+
+private class InertNode(var takes: () -> Boolean) : Modifier.Node(), PointerInputModifierNode {
+    override fun onPointerEvent(pointerEvent: PointerEvent, pass: PointerEventPass, bounds: IntSize) {
+        if (pass == PointerEventPass.Initial && !takes()) pointerEvent.changes.forEach { it.consume() }
+    }
+
+    override fun onCancelPointerInput() = Unit
+}
+
 // A back swipe (predictive back, Android 14 and later)
 
 /** What a back swipe takes away: the top [View], the page layer's top [Page] (by its key), or the [Pages] over the views it goes back to. */
@@ -168,7 +213,8 @@ sealed interface BackTaking {
  */
 @Stable
 class BackSwipe {
-    var taking: BackTaking? by mutableStateOf(null)
+    // By identity: a new swipe over the same layer is a new taking, even when equal to the last one.
+    var taking: BackTaking? by mutableStateOf(null, referentialEqualityPolicy())
         private set
 
     var progress: Float by mutableFloatStateOf(0f)
@@ -191,23 +237,28 @@ class BackSwipe {
         fromLeft = event.swipeEdge == BackEventCompat.EDGE_LEFT
     }
 
-    /** Given up: the layer springs back, then nothing is taken. */
-    suspend fun cancel() {
-        animate(progress, 0f, animationSpec = Motion.release) { value, _ -> progress = value }
-        clear()
+    /** [owner]'s swipe given up: the layer springs back, then nothing is taken; a newer swipe is never touched. */
+    suspend fun cancel(owner: BackTaking) {
+        animate(progress, 0f, animationSpec = Motion.release) { value, _ -> if (owns(owner)) progress = value }
+        clear(owner)
     }
 
-    /** Let go over a container transform: the shrink is let go of while the layer goes into the Now bar. */
-    suspend fun settle() {
-        animate(progress, 0f, animationSpec = tween(Motion.OPEN_MS, easing = Motion.Rise)) { value, _ -> progress = value }
+    /** [owner]'s swipe let go over a container transform: the shrink is let go of while the layer goes into the Now bar. */
+    suspend fun settle(owner: BackTaking) {
+        animate(progress, 0f, animationSpec = tween(Motion.OPEN_MS, easing = Motion.Rise)) { value, _ -> if (owns(owner)) progress = value }
     }
 
-    /** Let go over the views: the pages fade away from where the swipe left them. */
-    suspend fun leave() {
-        animate(0f, 1f, animationSpec = tween(Motion.SETTLE_MS, easing = Motion.EmphasizedOut)) { value, _ -> gone = value }
+    /** [owner]'s swipe let go over the views: the pages fade away from where the swipe left them. */
+    suspend fun leave(owner: BackTaking) {
+        animate(0f, 1f, animationSpec = tween(Motion.SETTLE_MS, easing = Motion.EmphasizedOut)) { value, _ -> if (owns(owner)) gone = value }
     }
 
-    fun clear() {
+    /** Whether [owner] (the taking a swipe started with, by identity) is still the swipe in progress. */
+    fun owns(owner: BackTaking): Boolean = taking === owner
+
+    /** Nothing is taken any more, unless a newer swipe has started meanwhile: a swipe cleans up only after itself. */
+    fun clear(owner: BackTaking) {
+        if (!owns(owner)) return
         taking = null
         progress = 0f
         gone = 0f
@@ -243,6 +294,9 @@ class Container(val shared: SharedTransitionScope, val visibility: AnimatedVisib
 
 val LocalContainer = compositionLocalOf<Container?> { null }
 
+/** Whether the view layer around this is headed for the screen (arriving or resting) rather than leaving it. */
+val LocalLayerHeaded = compositionLocalOf { true }
+
 private const val CONTAINER_SURFACE = "player surface"
 private const val CONTAINER_COVER = "player cover"
 
@@ -253,10 +307,12 @@ private const val CONTAINER_COVER = "player cover"
  */
 @Composable
 fun containerBounds(container: Container?): Modifier {
-    container ?: return Modifier
-    val corner by container.visibility.transition.animateDp(transitionSpec = { tween(containerMs(targetState), easing = Motion.Rise) }, label = "container corner") { state ->
+    if (container == null || LocalReducedMotion.current) return Modifier
+    // The corner is read only when the overlay is drawn: one clip for the whole transform, nothing recomposed per frame.
+    val corner = container.visibility.transition.animateDp(transitionSpec = { tween(containerMs(targetState), easing = Motion.Rise) }, label = "container corner") { state ->
         if ((state == EnterExitState.Visible) == container.bar) CAPSULE_CORNER else 0.dp
     }
+    val density = LocalDensity.current
     return with(container.shared) {
         Modifier.sharedBounds(
             rememberSharedContentState(CONTAINER_SURFACE),
@@ -265,7 +321,7 @@ fun containerBounds(container: Container?): Modifier {
             exit = fadeOut(tween(Motion.FADE_IN_MS)),
             boundsTransform = ContainerTransform,
             resizeMode = SharedTransitionScope.ResizeMode.scaleToBounds(ContentScale.FillWidth, Alignment.Center),
-            clipInOverlayDuringTransition = OverlayClip(RoundedCornerShape(corner)),
+            clipInOverlayDuringTransition = remember(container) { OverlayClip(CornerShape { with(density) { corner.value.toPx() } }) },
         )
     }
 }
@@ -276,9 +332,21 @@ fun containerBounds(container: Container?): Modifier {
  */
 @Composable
 fun containerCover(container: Container?): Modifier {
-    container ?: return Modifier
+    if (container == null || LocalReducedMotion.current) return Modifier
     return with(container.shared) { Modifier.sharedElement(rememberSharedContentState(CONTAINER_COVER), container.visibility, boundsTransform = ContainerTransform) }
 }
+
+/** A rounded rectangle whose corner [radius] (px) is read each time it is drawn, so an animated corner needs one shape. */
+class CornerShape(private val radius: () -> Float) : Shape {
+    override fun createOutline(size: Size, layoutDirection: LayoutDirection, density: Density): Outline =
+        Outline.Rounded(RoundRect(size.toRect(), CornerRadius(radius())))
+}
+
+/**
+ * Whether the Now bar and the dock stay put as a full screen comes or goes: they do while the bar grows into [view]
+ * (or [view] shrinks into it), the bar being one end of the transform; for a view that rises they slide away.
+ */
+fun chromeStays(view: FullScreen?, barShown: Boolean): Boolean = view != null && viewMotion(view, barShown) == ViewMotion.CONTAINER
 
 /** Opening grows over [Motion.CONTAINER_MS]; closing, the smaller move back, over [Motion.OPEN_MS] (the spec's 0.7). */
 private fun containerMs(target: EnterExitState): Int = if (target == EnterExitState.Visible) Motion.CONTAINER_MS else Motion.OPEN_MS
@@ -477,6 +545,21 @@ private const val DRAG_CLOSE_SHARE = 0.25f
 
 /** The fling that closes the player, in dp per second. */
 const val DRAG_FLING_DP: Float = 800f
+
+/**
+ * Where the player's drag goes once let go: back to 0 when it springs back, or when it closes into the Now bar (the
+ * container shrinks it whole); null when it falls away as it closes, leaving from where the finger left it.
+ */
+fun dragRelease(closes: Boolean, intoBar: Boolean): Float? = if (!closes || intoBar) 0f else null
+
+/** With reduced motion the player does not move under a drag; it fades to this as the drag nears what closes it. */
+const val REDUCED_DRAG_ALPHA: Float = 0.4f
+
+/** The player's alpha [offset] px into a drag down over its [height], with reduced motion: so it never closes unseen. */
+fun reducedDragAlpha(offset: Float, height: Float): Float {
+    val p = if (height > 0f) (offset.coerceAtLeast(0f) / (height * DRAG_FULL_SHARE)).coerceIn(0f, 1f) else 0f
+    return 1f - (1f - REDUCED_DRAG_ALPHA) * p
+}
 
 // Dialogs
 

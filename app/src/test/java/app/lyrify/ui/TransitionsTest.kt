@@ -5,10 +5,15 @@ import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Outline
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.LayoutDirection
 import app.lyrify.settings.DockTab
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -232,5 +237,73 @@ class TransitionsTest {
         assertEquals(4 to 160f, reorderStep(index = 4, size = 5, offset = 160f, row = row))
         assertEquals(0 to -60f, reorderStep(index = 0, size = 5, offset = -60f, row = row))
         assertEquals(0 to 0f, reorderStep(index = 0, size = 1, offset = 0f, row = row))
+    }
+
+    // Review M2: who takes touches, the chrome under a container transform, a swipe's own cleanup, the drag's feedback
+
+    @Test
+    fun `only a layer arriving or resting takes touches, never one leaving, and a container only once it has landed`() {
+        assertTrue(takesInput(headed = true, settled = true, container = false))
+        assertTrue(takesInput(headed = true, settled = false, container = false))
+        assertFalse(takesInput(headed = false, settled = false, container = false))
+        assertFalse(takesInput(headed = false, settled = true, container = false))
+        // Growing out of the Now bar or back into it, the player is drawn where its layout is not.
+        assertFalse(takesInput(headed = true, settled = false, container = true))
+        assertFalse(takesInput(headed = false, settled = false, container = true))
+        assertTrue(takesInput(headed = true, settled = true, container = true))
+    }
+
+    @Test
+    fun `the Now bar stays put while it grows into the player or the player shrinks into it, and slides only for a view that rises`() {
+        assertTrue(chromeStays(FullScreen.Player, barShown = true))
+        assertTrue(chromeStays(FullScreen.CompanionNow, barShown = true))
+        assertFalse(chromeStays(FullScreen.Player, barShown = false))
+        assertFalse(chromeStays(FullScreen.Equalizer, barShown = true))
+        assertFalse(chromeStays(null, barShown = true))
+    }
+
+    @Test
+    fun `a back swipe's cleanup clears only its own swipe, never the next one`() {
+        val swipe = BackSwipe()
+        val first = BackTaking.Page("LIBRARY/1")
+        swipe.start(first)
+        // Given up, then the same page swiped again: an equal taking, but a new swipe.
+        val second = BackTaking.Page("LIBRARY/1")
+        swipe.start(second)
+        swipe.clear(first)
+        assertSame(second, swipe.taking)
+        assertFalse(swipe.owns(first))
+        assertTrue(swipe.owns(second))
+        swipe.clear(second)
+        assertEquals(null, swipe.taking)
+    }
+
+    @Test
+    fun `let go short of closing the player springs back, closing into the bar lets go, closing as it falls keeps going`() {
+        assertEquals(0f, dragRelease(closes = false, intoBar = true))
+        assertEquals(0f, dragRelease(closes = false, intoBar = false))
+        assertEquals(0f, dragRelease(closes = true, intoBar = true))
+        // Falling away, the player leaves from where the finger left it.
+        assertEquals(null, dragRelease(closes = true, intoBar = false))
+    }
+
+    @Test
+    fun `with reduced motion a drag down on the player fades it as it goes, so it never closes unseen`() {
+        val height = 2000f
+        assertEquals(1f, reducedDragAlpha(0f, height), 0.0001f)
+        assertEquals(1f, reducedDragAlpha(-50f, height), 0.0001f)
+        assertTrue(reducedDragAlpha(height * 0.25f, height) < 1f)
+        assertEquals(REDUCED_DRAG_ALPHA, reducedDragAlpha(height, height), 0.0001f)
+    }
+
+    @Test
+    fun `the container's corners are read when drawn, so one shape serves the whole transform`() {
+        var corner = 32f
+        val shape = CornerShape { corner }
+        val density = Density(1f)
+        fun radius() = (shape.createOutline(Size(400f, 800f), LayoutDirection.Ltr, density) as Outline.Rounded).roundRect.topLeftCornerRadius.x
+        assertEquals(32f, radius(), 0.0001f)
+        corner = 0f
+        assertEquals(0f, radius(), 0.0001f)
     }
 }

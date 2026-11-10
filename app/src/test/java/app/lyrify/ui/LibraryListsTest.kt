@@ -198,4 +198,10 @@ class LibraryListsTest {
         // The one dot left in the copy is Android's own "three dots" menu.
         assertFalse(Regex("(?i)\\bdots?\\b").containsMatchIn(strings.replace("tap the three dots", "")))
     }
+
+    @Test
+    fun `TalkBack hears that a row's song is the one playing`() {
+        assertEquals("Paper Lantern, Tin Roof, Synced lyrics, Playing", songRowWords("Paper Lantern", "Tin Roof", "Synced lyrics", note = null, line = null, playing = "Playing"))
+        assertEquals("Paper Lantern, Tin Roof", songRowWords("Paper Lantern", "Tin Roof", null, note = null, line = null, playing = null))
+    }
 }

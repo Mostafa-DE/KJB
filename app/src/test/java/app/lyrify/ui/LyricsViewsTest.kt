@@ -1,5 +1,6 @@
 package app.lyrify.ui
 
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import app.lyrify.data.LyricsStatus
@@ -18,7 +19,6 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.io.File
 
 /**
  * Lyrics on the player, as pure rules: the side the player remembers, "Aa", the lookup's plain lyrics standing in for a
@@ -120,15 +120,6 @@ class LyricsViewsTest {
     }
 
     @Test
-    fun `no lyrics view keeps a bigger style for the line playing`() {
-        val views = listOf("LyricsViews.kt", "PlayerScreen.kt", "LockLyricsActivity.kt").map { File("src/main/java/app/lyrify/ui/$it").readText() }
-        views.forEach { source ->
-            assertFalse(source.contains("LineNow"))
-            assertFalse(source.contains("lerp(look.style"))
-        }
-    }
-
-    @Test
     fun `the lines follow the song until the user scrolls, then wait 3,5 s, and a tap on a line follows again at once`() {
         val follow = LyricsFollow()
         assertTrue(follow.follows(now = 0))
@@ -151,19 +142,91 @@ class LyricsViewsTest {
         assertEquals(48 - 710, followOffset(padTop = 48, rowSize = 100, viewport = 2000, anchor = 0.38f))
     }
 
+    // Review M2: lines sharing a time, a seek or a finger during the pause, a line scrolled to from off screen
+
+    private val tied = listOf(LrcLine(1_000, "Paper lanterns rise"), LrcLine(5_000, "Over the harbour glass"), LrcLine(5_000, "Sobre el vidrio del puerto"), LrcLine(9_000, "Tin roof choir"))
+
     @Test
-    fun `the sung words of the line playing light up as it goes, a quarter early, and never past its end`() {
-        val text = "Paper lanterns rise over harbour glass"
-        assertEquals(0, sungEnd(text, 0f))
-        assertEquals("Paper".length, sungEnd(text, 0.14f))
-        assertEquals("Paper lanterns rise".length, sungEnd(text, 0.45f))
-        assertEquals(text.length, sungEnd(text, 0.8f))
-        assertEquals(text.length, sungEnd(text, 1.5f))
-        assertEquals(0, sungEnd("", 0.5f))
-        val lines = listOf(LrcLine(1_000, "Paper lanterns rise"), LrcLine(5_000, "Over the harbour glass"))
-        assertEquals(0.5f, lineShare(lines, at = 0, positionMs = 3_000), 0.0001f)
-        // The last line runs 8 s, as the prototype's.
-        assertEquals(0.25f, lineShare(lines, at = 1, positionMs = 7_000), 0.0001f)
-        assertEquals(0f, lineShare(lines, at = -1, positionMs = 500), 0.0001f)
+    fun `lines that share a time are current together, the first of them leading, and none of them counts as sung before its time`() {
+        assertEquals(1, currentLine(tied, 6_000))
+        assertEquals(LineState.PAST, lineState(tied, at = 1, index = 0))
+        assertEquals(LineState.NOW, lineState(tied, at = 1, index = 1))
+        assertEquals(LineState.NOW, lineState(tied, at = 1, index = 2))
+        assertEquals(LineState.NEXT, lineState(tied, at = 1, index = 3))
+        assertEquals(LineState.NEXT, lineState(tied, at = -1, index = 0))
+        assertEquals(3, currentLine(tied, 9_000))
+    }
+
+    @Test
+    fun `a seek or a jump to another line ends the pause at once, the song moving on to the next line does not`() {
+        val paused = LyricsFollow().touched(now = 10_000)
+        assertFalse(paused.moved(from = 4, to = 5).follows(now = 10_500, held = false))
+        assertFalse(paused.moved(from = 4, to = 4).follows(now = 10_500, held = false))
+        assertTrue(paused.moved(from = 4, to = 12).follows(now = 10_500, held = false))
+        assertTrue(paused.moved(from = 4, to = 2).follows(now = 10_500, held = false))
+    }
+
+    @Test
+    fun `the line playing is lit whole, in one colour, its word times never shown`() {
+        val tones = LineTones(now = Color.White, past = Color.Gray, next = Color.DarkGray)
+        assertEquals("Paper lanterns rise", shownLine("<00:01.00>Paper <00:01.52>lanterns <00:02.10>rise"))
+        assertEquals("Over the harbour glass", shownLine("Over the harbour glass"))
+        assertEquals("Tin roof", shownLine("<1:02.3>Tin <1:02:45>roof<1:03.00>"))
+        // One colour for the whole line, whatever its words' times say.
+        assertEquals(Color.White, lineColor(LineState.NOW, tones))
+        assertEquals(Color.Gray, lineColor(LineState.PAST, tones))
+        assertEquals(Color.DarkGray, lineColor(LineState.NEXT, tones))
+    }
+
+    @Test
+    fun `nothing scrolls the lines while a finger is on them, however long it stays`() {
+        val follow = LyricsFollow()
+        assertTrue(follow.follows(now = 0, held = false))
+        assertFalse(follow.follows(now = 0, held = true))
+        assertFalse(follow.touched(now = 0).follows(now = 60_000, held = true))
+    }
+
+    @Test
+    fun `a line scrolled to from off screen is corrected by its own height once it is laid out`() = kotlinx.coroutines.runBlocking {
+        // 2000 px list, 48 px top padding, anchored at 38%: a 300 px line must end with its top at 610 px.
+        val list = FakeLines(firstVisibleHeight = 60)
+        followLine(list, at = 30, padTop = 48, viewport = 2_000, anchor = 0.38f, smooth = true)
+        assertEquals(listOf("jump 30 ${followOffset(48, 60, 2_000, 0.38f)}", "by ${list.laidTop - 610}"), list.calls)
+        // Already laid out: one smooth move by what is left.
+        val near = FakeLines(firstVisibleHeight = 60, visible = mapOf(5 to (700 to 100)))
+        followLine(near, at = 5, padTop = 48, viewport = 2_000, anchor = 0.38f, smooth = true)
+        assertEquals(listOf("by -10"), near.calls)
+    }
+
+    /** The list as followLine sees it: line 30 is not laid out until a jump lands it 40 px off, 300 px tall. */
+    private class FakeLines(private val firstVisibleHeight: Int, visible: Map<Int, Pair<Int, Int>> = emptyMap()) : LineList {
+        val calls = mutableListOf<String>()
+        private val laid = visible.toMutableMap()
+        val laidTop = 650
+
+        override fun laidOut(index: Int): Pair<Int, Int>? = laid[index]
+
+        override fun firstHeight(): Int = firstVisibleHeight
+
+        override suspend fun jumpTo(index: Int, offset: Int, smooth: Boolean) {
+            calls += "jump $index $offset"
+            laid[index] = laidTop to 300
+        }
+
+        override suspend fun moveBy(px: Int, smooth: Boolean) {
+            calls += "by $px"
+        }
+    }
+
+    @Test
+    fun `in every lyrics view the first and last lines rest clear of the faded edges, even in a short list`() {
+        // The smallest flip area the prototype plans for is 200 dp tall.
+        val shortest = 200f
+        listOf(PanelFrame, FullFrame, LockFrame).forEach { frame ->
+            assertTrue(frame.top * shortest >= LYRICS_FADE.value)
+            assertTrue(frame.bottom * shortest >= LYRICS_FADE.value)
+            // The anchor sits below the top fade, so the line playing is never faded.
+            assertTrue(frame.anchor * shortest > LYRICS_FADE.value)
+        }
     }
 }

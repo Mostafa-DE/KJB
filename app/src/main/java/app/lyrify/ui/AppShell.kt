@@ -1,5 +1,9 @@
 package app.lyrify.ui
 
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.NonCancellable
+import androidx.compose.animation.EnterExitState
 import androidx.activity.BackEventCompat
 import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.animation.AnimatedContent
@@ -136,7 +140,6 @@ fun AppShell(
     val holder = rememberSaveableStateHolder()
     val reduced = LocalReducedMotion.current
     val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
-    val scope = rememberCoroutineScope()
     var bottom by remember { mutableStateOf(0.dp) }
     // The page layer moves as its stack changes; a back swipe seeks it toward the page it goes back to.
     val pages = remember { SeekableTransitionState(pageLayerOf(state)) }
@@ -166,6 +169,8 @@ fun AppShell(
     val bar = nowBarShows(own.now, track, otherPlayback?.playing == true)
     val backup = rememberBackupActions { on -> onSettings { it.copy(backup = it.backup.copy(automatic = on)) } }
     val slot = bottomSlot(nav.selectionBar != null, state.chrome, WindowInsets.isImeVisible)
+    val barOnScreen = slot == BottomSlot.BAR_AND_DOCK && bar != NowBarShows.Hidden
+    val chromeStill = rememberChromeStill(slot != BottomSlot.NONE, state.views, barOnScreen, reduced)
 
     LaunchedEffect(state.tab) {
         val tab = state.tab
@@ -194,14 +199,15 @@ fun AppShell(
     LaunchedEffect(layer) { if (swipe.taking !is BackTaking.Page) pages.animateTo(layer) }
     // Pages and the tab history; a page's own back (selection, a page's sheet) is composed later and comes first.
     PredictiveBackHandler(enabled = state.views.isEmpty() && (state.pages.isNotEmpty() || state.history.isNotEmpty())) { events ->
-        val back = backFromPages(nav, pages, swipe, scope, reduced)
+        val back = backFromPages(nav, pages, swipe, reduced)
         try {
             events.collect { back.follow(it) }
         } catch (e: CancellationException) {
-            back.cancel()
+            withContext(NonCancellable) { back.cancel() }
             throw e
         }
-        back.commit()
+        // Run to the end here, so a new swipe starts only after this one has finished with the layers.
+        withContext(NonCancellable) { back.commit() }
     }
 
     // The song KJB plays shows as playing in the lists, while the Now bar shows KJB's own song (not another app's).
@@ -230,6 +236,7 @@ fun AppShell(
                 BottomChrome(
                     modifier = Modifier.align(Alignment.BottomCenter).onSizeChanged { bottom = with(density) { it.height.toDp() } },
                     slot = slot,
+                    still = chromeStill,
                     selection = nav.selectionBar,
                     bar = {
                         NowBar(
@@ -251,19 +258,19 @@ fun AppShell(
             if (state.views.isNotEmpty()) {
                 key(state.views.size) {
                     PredictiveBackHandler { events ->
-                        val back = backFromView(nav, swipe, scope, reduced)
+                        val back = backFromView(nav, swipe, reduced)
                         try {
                             events.collect { back.follow(it) }
                         } catch (e: CancellationException) {
-                            back.cancel()
+                            withContext(NonCancellable) { back.cancel() }
                             throw e
                         }
-                        back.commit()
+                        withContext(NonCancellable) { back.commit() }
                     }
                 }
             }
             val preview = (swipe.taking as? BackTaking.Pages)?.views.orEmpty()
-            ViewLayers(state.views, preview, barOnScreen = slot == BottomSlot.BAR_AND_DOCK && bar != NowBarShows.Hidden, swipe, reduced) { view ->
+            ViewLayers(state.views, preview, barOnScreen, swipe, reduced) { view ->
                 when (view) {
                     FullScreen.Player -> PlayerView()
                     FullScreen.FullLyrics -> FullLyricsView()
@@ -353,6 +360,7 @@ private fun PageContent(
 private fun SharedTransitionScope.BottomChrome(
     modifier: Modifier,
     slot: BottomSlot,
+    still: Boolean,
     selection: (@Composable () -> Unit)?,
     bar: @Composable () -> Unit,
     dock: @Composable () -> Unit,
@@ -363,7 +371,14 @@ private fun SharedTransitionScope.BottomChrome(
     if (selection != null) lastSelection.value = selection
     Column(modifier.fillMaxWidth().navigationBarsPadding().imePadding().padding(bottom = 12.dp)) {
         ToastSlot(Modifier.padding(horizontal = ScreenPadding), padding = PaddingValues(bottom = 8.dp))
-        AnimatedVisibility(visible = slot != BottomSlot.NONE, enter = chromeEnter(reduced), exit = chromeExit(reduced)) {
+        // While the Now bar grows into the player or the player shrinks into it, the chrome stays where it is: the bar is
+        // one end of the transform, so it must not slide or fade under it; the player covers the dock meanwhile.
+        AnimatedVisibility(
+            visible = slot != BottomSlot.NONE,
+            enter = if (still) EnterTransition.None else chromeEnter(reduced),
+            // No exit of its own: the shared bounds keep the chrome composed, as it was, until the transform has ended.
+            exit = if (still) ExitTransition.None else chromeExit(reduced),
+        ) {
             val container = remember(this) { Container(this@BottomChrome, this, bar = true) }
             CompositionLocalProvider(LocalContainer provides container) {
                 AnimatedContent(
@@ -387,14 +402,34 @@ private fun SharedTransitionScope.BottomChrome(
 }
 
 /**
+ * Whether the bottom chrome stays put for its current change ([chromeStays]): decided when it starts showing or hiding,
+ * from the view opening over it (with the bar on screen just before) or the view that has just closed (with the bar on
+ * screen now), and kept until the next change. Never with reduced motion: there everything fades.
+ */
+@Composable
+private fun rememberChromeStill(shown: Boolean, views: List<FullScreen>, barOnScreen: Boolean, reduced: Boolean): Boolean {
+    val before = remember { Kept(ChromeMoment(shown, views, barOnScreen)) }
+    val still = remember { Kept(false) }
+    val was = before.value
+    if (shown != was.shown) {
+        still.value = !reduced && if (shown) chromeStays(was.views.lastOrNull(), barOnScreen) else chromeStays(views.lastOrNull(), was.barOnScreen)
+    }
+    SideEffect { before.value = ChromeMoment(shown, views, barOnScreen) }
+    return still.value
+}
+
+/** What the bottom chrome saw in the composition before: whether it showed, the views, and whether the bar was on screen. */
+private data class ChromeMoment(val shown: Boolean, val views: List<FullScreen>, val barOnScreen: Boolean)
+
+/**
  * The page layer: the shown tab's top page, moving as [pageChange] says (a push or a pop along the screen, another tab
  * from its side, a stack emptied fading through). A back swipe ([BackTaking.Page]) seeks it toward the page it goes
  * back to, drawn under the one leaving, which shrinks; the page under it dims and lights up as the swipe goes on.
  */
 @Composable
 private fun PageLayers(pages: SeekableTransitionState<PageLayer>, swipe: BackSwipe, rtl: Boolean, reduced: Boolean, content: @Composable (PageLayer) -> Unit) {
-    val transition = rememberTransition(pages, label = "pages")
-    transition.AnimatedContent(
+    val moves = rememberTransition(pages, label = "pages")
+    moves.AnimatedContent(
         transitionSpec = {
             val change = pageChange(initialState, targetState)
             if (swipe.taking is BackTaking.Page) backTransition(enterSide(change, rtl), reduced) else pageTransition(change, rtl, reduced)
@@ -406,6 +441,8 @@ private fun PageLayers(pages: SeekableTransitionState<PageLayer>, swipe: BackSwi
         Box(
             Modifier
                 .fillMaxSize()
+                // Only the page arriving or resting takes touches; the one leaving is gone for the finger at once.
+                .inertUnless { takesInput(headed = transition.targetState == EnterExitState.Visible, settled = true, container = false) }
                 .backPeek(swipe, taken)
                 .drawWithContent {
                     drawContent()
@@ -444,15 +481,16 @@ private fun SharedTransitionScope.ViewLayers(
             visible.targetState = view in wanted
             val arrives = remember { viewMotion(view, barBefore.value) }
             val leaves = viewMotion(view, barOnScreen)
-            val takenBySwipe = swipe.taking == BackTaking.View(view)
+            // The swipe that is taking this view, if one is: the layer lets go of it, and only of it, once the view has left.
+            val swiped = swipe.taking?.takeIf { it == BackTaking.View(view) }
             if (visible.isIdle && !visible.currentState) {
                 LaunchedEffect(Unit) {
                     drawn = drawn - view
-                    if (swipe.taking == BackTaking.View(view)) swipe.clear()
+                    swiped?.let(swipe::clear)
                 }
             }
             // Going back into the bar, the player lets go of the swipe's shrink as it shrinks to the bar.
-            if (!visible.targetState && takenBySwipe && leaves == ViewMotion.CONTAINER) LaunchedEffect(Unit) { swipe.settle() }
+            if (!visible.targetState && swiped != null && leaves == ViewMotion.CONTAINER) LaunchedEffect(swiped) { swipe.settle(swiped) }
             AnimatedVisibility(visibleState = visible, enter = EnterTransition.None, exit = ExitTransition.None) {
                 val end = remember(this) { Container(this@ViewLayers, this, bar = false) }
                 val container = end.takeIf { arrives == ViewMotion.CONTAINER || leaves == ViewMotion.CONTAINER }
@@ -470,12 +508,14 @@ private fun SharedTransitionScope.ViewLayers(
                     Surface(
                         Modifier
                             .fillMaxSize()
+                            // Leaving, or growing out of the bar or into it (drawn where its layout is not), it takes no touches.
+                            .inertUnless { takesInput(headed = visible.targetState, settled = transition.currentState == transition.targetState, container = container != null) }
                             .animateEnterExit(viewEnter(arrives, reduced), viewExit(leaves, reduced))
                             .then(containerBounds(container))
                             .backPeek(swipe) { swipe.taking == BackTaking.View(view) },
                         color = MaterialTheme.colorScheme.background,
                     ) {
-                        CompositionLocalProvider(LocalContainer provides container) { content(view) }
+                        CompositionLocalProvider(LocalContainer provides container, LocalLayerHeaded provides visible.targetState) { content(view) }
                     }
                 }
             }
@@ -483,63 +523,64 @@ private fun SharedTransitionScope.ViewLayers(
     }
 }
 
-/** One back swipe of the shell: each move of the finger it [follow]s, then it [commit]s when let go or [cancel]s when given up. */
+/**
+ * One back swipe of the shell: each move of the finger it [follow]s, then it [commit]s when let go or [cancel]s when
+ * given up, both run to their end in the swipe's own handler. Each cleans up only after itself ([BackSwipe.owns]).
+ */
 private interface ShellBack {
     suspend fun follow(event: BackEventCompat)
 
-    fun commit()
+    suspend fun commit()
 
-    fun cancel()
+    suspend fun cancel()
 }
 
 /** Back with nothing following the finger (reduced motion): it just goes back, with the move's own fade. */
 private class PlainBack(private val nav: Navigator) : ShellBack {
     override suspend fun follow(event: BackEventCompat) = Unit
 
-    override fun commit() {
+    override suspend fun commit() {
         nav.back()
     }
 
-    override fun cancel() = Unit
+    override suspend fun cancel() = Unit
 }
 
 /**
  * Back from a page or across the tab history, following the finger: the page it goes back to (or the tab) is drawn
  * under the one leaving, which shrinks; let go, the page leaves as a pop does; given up, everything comes back. Back to
  * the player (or another view) a page was opened from draws that view under the page, its bar and dock, which shrink
- * over it and fade away when let go. With reduced motion nothing follows the finger: Back just fades.
+ * over it and fade away when let go. The move itself happens at once when let go, so a swipe that follows goes on from
+ * there. With reduced motion nothing follows the finger: Back just fades.
  */
-private fun backFromPages(nav: Navigator, pages: SeekableTransitionState<PageLayer>, swipe: BackSwipe, scope: CoroutineScope, reduced: Boolean): ShellBack {
+private fun backFromPages(nav: Navigator, pages: SeekableTransitionState<PageLayer>, swipe: BackSwipe, reduced: Boolean): ShellBack {
     val from = nav.state
     val to = from.back()
     if (to == null || reduced) return PlainBack(nav)
     val origin = pageLayerOf(from)
     val dest = pageLayerOf(to)
     val intoViews = to.views.isNotEmpty()
-    swipe.start(if (intoViews) BackTaking.Pages(to.views) else BackTaking.Page(origin.key))
+    val taking = if (intoViews) BackTaking.Pages(to.views) else BackTaking.Page(origin.key)
+    swipe.start(taking)
     return object : ShellBack {
         override suspend fun follow(event: BackEventCompat) {
             swipe.follow(event)
             if (!intoViews) pages.seekTo(event.progress, dest)
         }
 
-        override fun commit() {
-            scope.launch {
-                if (intoViews) {
-                    swipe.leave()
-                    nav.back()
-                } else {
-                    nav.back()
-                    pages.animateTo(dest)
-                }
-                swipe.clear()
+        override suspend fun commit() {
+            nav.back()
+            try {
+                if (intoViews) swipe.leave(taking) else pages.animateTo(dest)
+            } finally {
+                swipe.clear(taking)
             }
         }
 
-        override fun cancel() {
-            scope.launch {
+        override suspend fun cancel() {
+            coroutineScope {
                 if (!intoViews) launch { pages.seekBack(origin) }
-                swipe.cancel()
+                swipe.cancel(taking)
             }
         }
     }
@@ -550,20 +591,19 @@ private fun backFromPages(nav: Navigator, pages: SeekableTransitionState<PageLay
  * from there (into the Now bar for the player), and its layer lets go of the swipe once it has left; given up, it comes
  * back. With reduced motion it just fades.
  */
-private fun backFromView(nav: Navigator, swipe: BackSwipe, scope: CoroutineScope, reduced: Boolean): ShellBack {
+private fun backFromView(nav: Navigator, swipe: BackSwipe, reduced: Boolean): ShellBack {
     val view = nav.state.views.lastOrNull()
     if (view == null || reduced) return PlainBack(nav)
-    swipe.start(BackTaking.View(view))
+    val taking = BackTaking.View(view)
+    swipe.start(taking)
     return object : ShellBack {
         override suspend fun follow(event: BackEventCompat) = swipe.follow(event)
 
-        override fun commit() {
+        override suspend fun commit() {
             nav.back()
         }
 
-        override fun cancel() {
-            scope.launch { swipe.cancel() }
-        }
+        override suspend fun cancel() = swipe.cancel(taking)
     }
 }
 

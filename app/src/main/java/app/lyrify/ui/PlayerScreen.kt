@@ -283,8 +283,16 @@ fun panelLyrics(lrc: String?, status: LyricsStatus?): PanelLyrics {
 
 private val HEADER_TAG = Regex("""^\[[a-zA-Z#]+:.*]$""")
 
-/** The line playing at [positionMs]: the last one that has started; -1 before the first. */
-fun currentLine(lines: List<LrcLine>, positionMs: Long): Int = lines.indexOfLast { it.timeMs <= positionMs }
+/**
+ * The line playing at [positionMs]: the last one that has started, or with others sharing its time the first of them
+ * (they play together, [lineState]); -1 before the first.
+ */
+fun currentLine(lines: List<LrcLine>, positionMs: Long): Int {
+    val last = lines.indexOfLast { it.timeMs <= positionMs }
+    if (last < 0) return -1
+    val time = lines[last].timeMs
+    return lines.indexOfFirst { it.timeMs == time }
+}
 
 /** A time as the player shows it: "1:42", or "1:02:03" past an hour. */
 fun clock(ms: Long): String {
@@ -398,6 +406,9 @@ fun PlayerView() {
     val fling = with(LocalDensity.current) { DRAG_FLING_DP.dp.toPx() }
     val intoBar = LocalContainer.current != null
     val letGo = { drag.release(fling, intoBar, close) }
+    // Shown again while it was leaving (opened again at once), the player comes back whole.
+    val headed = LocalLayerHeaded.current
+    LaunchedEffect(headed) { if (headed) drag.reset() }
     var lyricsRoute by remember { mutableStateOf<PlayerRoute?>(null) }
     val extras = rememberPlayerExtras()
     val route: (PlayerRoute) -> Unit = { route ->
@@ -423,8 +434,12 @@ fun PlayerView() {
             .fillMaxSize()
             .onSizeChanged { drag.height = it.height.toFloat() }
             .graphicsLayer {
-                // Dragged down, the player follows the finger, shrinking and rounding as it goes ([dragPeek]).
-                if (reduced) return@graphicsLayer
+                // Dragged down, the player follows the finger, shrinking and rounding as it goes ([dragPeek]); with
+                // reduced motion it stays put and fades instead, so a drag never closes it unseen.
+                if (reduced) {
+                    alpha = reducedDragAlpha(drag.offset.value, size.height)
+                    return@graphicsLayer
+                }
                 val peek = dragPeek(drag.offset.value, size.height)
                 translationY = peek.shiftY
                 scaleX = peek.scale
@@ -471,7 +486,8 @@ fun PlayerView() {
 /**
  * The player dragged down by its top bar or its cover: it follows the finger ([dragPeek]); let go, it closes past a
  * quarter of its [height] or on a fling down ([dragCloses]), else springs back ([Motion.release]). Closing into the Now
- * bar, it lets go of the drag as the container shrinks, so the whole player lands in the bar.
+ * bar, it lets go of the drag as the container shrinks, so the whole player lands in the bar; falling away, it leaves
+ * from where the finger left it ([dragRelease]).
  */
 @Stable
 private class PlayerDrag(private val scope: CoroutineScope) {
@@ -488,12 +504,15 @@ private class PlayerDrag(private val scope: CoroutineScope) {
     fun release(fling: Float, intoBar: Boolean, close: () -> Unit) {
         val velocity = tracker.calculateVelocity().y
         tracker.resetTracking()
-        if (dragCloses(offset.value, velocity, height, fling)) {
-            close()
-            if (intoBar) scope.launch { offset.animateTo(0f, tween(Motion.OPEN_MS, easing = Motion.Rise)) }
-        } else {
-            scope.launch { offset.animateTo(0f, Motion.release) }
-        }
+        val closes = dragCloses(offset.value, velocity, height, fling)
+        if (closes) close()
+        val to = dragRelease(closes, intoBar) ?: return
+        scope.launch { offset.animateTo(to, if (closes) tween(Motion.OPEN_MS, easing = Motion.Rise) else Motion.release) }
+    }
+
+    /** Back to where it rests, as the player shows again. */
+    suspend fun reset() {
+        if (offset.value != 0f) offset.animateTo(0f, Motion.release)
     }
 }
 

@@ -266,7 +266,7 @@ private fun LockLines(lyrics: PanelLyrics?, positionMs: Long) {
     val look = rememberLyricsLook()
     val type = MaterialTheme.typography
     if (lyrics is PanelLyrics.Synced) {
-        SyncedLyrics(lyrics.lines, positionMs, enabled = false, LockLine, LockFrame, LineTones(now = LockText, sung = LocalBrandColors.current.highlight, past = LockMuted, next = LockMuted)) { }
+        SyncedLyrics(lyrics.lines, positionMs, enabled = false, LockLine, LockFrame, LineTones(now = LockText, past = LockMuted, next = LockMuted)) { }
         return
     }
     Column(verticalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.fillMaxWidth()) {
@@ -409,5 +409,5 @@ fun rememberLockSwitch(on: Boolean, onChange: ((Settings) -> Settings) -> Unit):
 internal val LockLine = display(22, 29, -0.015)
 
 /** Where the lock screen's lines sit: the line playing a little above the middle, those sung above it. */
-private val LockFrame = LyricsFrame(sides = 0.dp, top = 0.3f, anchor = 0.4f, bottom = 0.5f)
+internal val LockFrame = LyricsFrame(sides = 0.dp, top = 0.3f, anchor = 0.4f, bottom = 0.5f)
 private val LockStill = display(22, 33)
