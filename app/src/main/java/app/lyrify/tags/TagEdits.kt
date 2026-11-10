@@ -452,16 +452,23 @@ fun historyRows(memory: UndoMemory): List<HistoryRow> =
 data class EditReport(val written: Int, val busy: Int, val failed: Int, val changedSince: Int, val skippedFields: Int)
 
 fun BatchResult.Done.report(): EditReport {
-    val counts = songs.groupingBy { it.outcome }.eachCount()
-    fun count(vararg outcomes: SongOutcome) = outcomes.sumOf { counts[it] ?: 0 }
-    return EditReport(
-        // Written, its Undo saved by the start-up recovery.
-        written = count(SongOutcome.WRITTEN, SongOutcome.UNDO_NOT_SAVED),
-        busy = count(SongOutcome.BUSY),
-        failed = count(SongOutcome.COULD_NOT_CHANGE, SongOutcome.LEFT_AS_IT_WAS, SongOutcome.RECOVERY_PENDING, SongOutcome.NOT_ALLOWED, SongOutcome.NOT_TRIED),
-        changedSince = count(SongOutcome.CHANGED_SINCE, SongOutcome.DIFFERENT_FILE),
-        skippedFields = skippedFields,
-    )
+    var written = 0
+    var busy = 0
+    var failed = 0
+    var changedSince = 0
+    // Every outcome has its count, so a new one can't pass for nothing changed.
+    for (song in songs) {
+        when (song.outcome) {
+            // Written, its Undo saved by the start-up recovery.
+            SongOutcome.WRITTEN, SongOutcome.UNDO_NOT_SAVED -> written++
+            SongOutcome.BUSY -> busy++
+            // A song replaced while it was written was set aside, its backup kept: not changed.
+            SongOutcome.COULD_NOT_CHANGE, SongOutcome.LEFT_AS_IT_WAS, SongOutcome.RECOVERY_PENDING, SongOutcome.SET_ASIDE, SongOutcome.NOT_ALLOWED, SongOutcome.NOT_TRIED -> failed++
+            SongOutcome.CHANGED_SINCE, SongOutcome.DIFFERENT_FILE -> changedSince++
+            SongOutcome.UNCHANGED -> Unit
+        }
+    }
+    return EditReport(written, busy, failed, changedSince, skippedFields)
 }
 
 // Favourites follow their albums and artists

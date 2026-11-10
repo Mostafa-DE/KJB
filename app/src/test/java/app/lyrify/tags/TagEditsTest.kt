@@ -540,6 +540,17 @@ class TagEditsTest {
     }
 
     @Test
+    fun `every outcome but unchanged counts in a write's report, so a song set aside is never nothing changed`() {
+        val target = SongTarget("/storage/emulated/0/Music/a.mp3", 1)
+        for (outcome in SongOutcome.entries - SongOutcome.UNCHANGED) {
+            val report = BatchResult.Done(listOf(SongResult(target, outcome)), entryId = null).report()
+            assertEquals(outcome.name, 1, report.written + report.busy + report.failed + report.changedSince)
+        }
+        val asideAlone = BatchResult.Done(listOf(SongResult(target, SongOutcome.SET_ASIDE)), entryId = null).report()
+        assertEquals(EditReport(written = 0, busy = 0, failed = 1, changedSince = 0, skippedFields = 0), asideAlone)
+    }
+
+    @Test
     fun `a write's report counts what was written, in use, failed and changed since`() {
         val target = SongTarget("/storage/emulated/0/Music/a.mp3", 1)
         val result = BatchResult.Done(
