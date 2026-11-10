@@ -47,7 +47,17 @@ data class EqProfiles(
         return copy(presets = if (at < 0) presets + preset else presets.toMutableList().also { it[at] = preset })
     }
 
-    fun deletePreset(name: String): EqProfiles = copy(presets = presets.filterNot { it.name.equals(name.trim(), ignoreCase = true) })
+    /** Removes an own preset; the profiles that used it keep their bands, with no preset. */
+    fun deletePreset(name: String): EqProfiles {
+        fun named(other: String) = other.equals(name.trim(), ignoreCase = true)
+        return copy(
+            profiles = profiles.mapValues { (_, profile) ->
+                val preset = profile.preset
+                if (preset is PresetChoice.Own && named(preset.name)) profile.copy(preset = null) else profile
+            },
+            presets = presets.filterNot { named(it.name) },
+        )
+    }
 
     /** The bands of [choice]; null for an own preset that is gone. */
     fun bandsOf(choice: PresetChoice): List<Float>? = when (choice) {
@@ -170,10 +180,18 @@ object EqProfilesJson {
 /**
  * [EqProfiles] in one app-private file, written whole or not at all (written aside, then moved over). A file that is
  * not profiles at all is moved aside as `eq-profiles-corrupt-<epochMillis>.json`, then the store starts over: every
- * output Flat and off. Logs carry sizes and exception names only, never a device name. Blocking.
+ * output Flat and off. Loads and saves take turns, and each save writes its own file aside. Logs carry sizes and exception
+ * names only, never a device name. Blocking.
  */
 class EqProfilesStore(private val file: File, private val clock: () -> Long, private val log: (String) -> Unit = {}) {
-    fun load(): EqProfiles {
+    private val lock = Any()
+
+    fun load(): EqProfiles = synchronized(lock) { read() }
+
+    /** False when it could not be written; the file before stays then. */
+    fun save(profiles: EqProfiles): Boolean = synchronized(lock) { write(profiles) }
+
+    private fun read(): EqProfiles {
         if (!file.isFile) return EqProfiles()
         val text = try {
             file.readText()
@@ -196,16 +214,17 @@ class EqProfilesStore(private val file: File, private val clock: () -> Long, pri
         return EqProfiles()
     }
 
-    /** False when it could not be written; the file before stays then. */
-    fun save(profiles: EqProfiles): Boolean {
-        val aside = File(file.path + TMP)
+    private fun write(profiles: EqProfiles): Boolean {
+        var aside: File? = null
         return try {
-            file.parentFile?.mkdirs()
+            val folder = file.absoluteFile.parentFile ?: throw IOException("no folder")
+            folder.mkdirs()
+            aside = File.createTempFile(file.name, TMP, folder)
             aside.writeText(EqProfilesJson.encode(profiles))
             Files.move(aside.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
             true
         } catch (e: IOException) {
-            aside.delete()
+            aside?.delete()
             log("eq profiles: not written (${e.javaClass.simpleName})")
             false
         }

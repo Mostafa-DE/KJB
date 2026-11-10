@@ -77,6 +77,13 @@ class EqProfilesTest {
     }
 
     @Test
+    fun `deleting a preset leaves the profiles that used it with their bands and no preset`() {
+        val deleted = profiles.deletePreset("late night")
+        assertEquals(tuned.copy(preset = null), deleted.profile(buds))
+        assertEquals(profiles.profile(OutputKey.SPEAKER), deleted.profile(OutputKey.SPEAKER))
+    }
+
+    @Test
     fun `a preset that is gone loads nothing`() {
         assertEquals(profiles, profiles.usePreset(buds, PresetChoice.Own("Gone Away")))
     }
@@ -173,6 +180,26 @@ class EqProfilesTest {
         assertEquals("Pebble Buds", File(folder.root, "eq-profiles-corrupt-1762700000000.json").readText())
         assertFalse(logs.joinToString().contains("Pebble"))
         assertTrue(logs.isNotEmpty())
+    }
+
+    @Test
+    fun `saves and loads from many threads at once never mix, fail or leave a file aside`() {
+        val store = store()
+        val versions = (1..8).map { n -> profiles.savePreset("Version $n", List(10) { n.toFloat() }) }
+        val results = java.util.concurrent.ConcurrentLinkedQueue<Boolean>()
+        val threads = versions.map { version ->
+            Thread {
+                repeat(40) {
+                    results += store.save(version)
+                    results += store.load() in versions
+                }
+            }
+        }
+        threads.forEach(Thread::start)
+        threads.forEach(Thread::join)
+        assertTrue(results.all { it })
+        assertTrue(store.load() in versions)
+        assertEquals(listOf("eq-profiles.json"), folder.root.list()?.toList())
     }
 
     @Test
