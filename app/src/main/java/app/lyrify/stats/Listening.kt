@@ -47,6 +47,18 @@ fun periodOf(period: ListeningPeriod, now: Long, zone: ZoneId, firstDayOfWeek: D
 
 private fun startOf(day: LocalDate, zone: ZoneId): Long = day.atStartOfDay(zone).toInstant().toEpochMilli()
 
+/** A day of the phone's calendar: its [date], and the first moment of the next day ([nextStart], wall-clock millis). */
+data class Day(val date: LocalDate, val nextStart: Long)
+
+/**
+ * The day [now] falls on in [zone], and when the next one starts (midnight, or that day's first hour where a clock change
+ * skips midnight): where Your listening's periods may turn, so a page left open reads again then.
+ */
+fun dayOf(now: Long, zone: ZoneId): Day {
+    val date = dateOf(now, zone)
+    return Day(date, startOf(date.plusDays(1), zone))
+}
+
 /** One row of a top list: its plays that counted, the time heard in all its plays, and the last play that counted. */
 data class Top<T>(val item: T, val plays: Int, val heardMs: Long, val lastPlayedAt: Long?)
 

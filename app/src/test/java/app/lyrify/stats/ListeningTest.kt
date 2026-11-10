@@ -15,6 +15,7 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 import java.time.DayOfWeek
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneId
 import java.time.ZonedDateTime
 
@@ -68,6 +69,45 @@ class ListeningTest {
         val saoPaulo = ZoneId.of("America/Sao_Paulo")
         val period = week(at("2018-11-07T12:00-02:00[America/Sao_Paulo]"), saoPaulo, DayOfWeek.SUNDAY)
         assertEquals(Period(Instant.parse("2018-11-04T03:00:00Z").toEpochMilli(), Instant.parse("2018-11-11T02:00:00Z").toEpochMilli()), period)
+    }
+
+    @Test
+    fun `a period read a minute before midnight turns at that midnight`() {
+        val sunday = at("2026-11-15T23:59+01:00[Europe/Berlin]")
+        val day = dayOf(sunday, berlin)
+
+        assertEquals(Day(LocalDate.of(2026, 11, 15), at("2026-11-16T00:00+01:00[Europe/Berlin]")), day)
+        assertEquals(MINUTE, day.nextStart - sunday)
+        assertEquals(week(sunday)!!.until, day.nextStart)
+        assertEquals(day.nextStart, week(day.nextStart)!!.from)
+        assertEquals(LocalDate.of(2026, 11, 16), dayOf(day.nextStart, berlin).date)
+        // The last minute of the year: Month and Year turn at the same midnight.
+        val lastMinute = at("2026-12-31T23:59+01:00[Europe/Berlin]")
+        listOf(ListeningPeriod.MONTH, ListeningPeriod.YEAR).forEach { period ->
+            assertEquals(period.name, periodOf(period, lastMinute, berlin, DayOfWeek.MONDAY)!!.until, dayOf(lastMinute, berlin).nextStart)
+        }
+    }
+
+    @Test
+    fun `on a clock change day the page turns at the next day's first moment, not 24 hours on`() {
+        // Berlin's clocks went forward at 02:00 on Sunday 29 March 2026 (a 23 hour day) and back on 25 October (25 hours).
+        val spring = at("2026-03-29T00:00:30+01:00[Europe/Berlin]")
+        assertEquals(at("2026-03-30T00:00+02:00[Europe/Berlin]"), dayOf(spring, berlin).nextStart)
+        assertEquals(23 * HOUR - 30_000, dayOf(spring, berlin).nextStart - spring)
+        val autumn = at("2026-10-25T00:00+02:00[Europe/Berlin]")
+        assertEquals(25 * HOUR, dayOf(autumn, berlin).nextStart - autumn)
+        val saturday = at("2026-03-28T23:59+01:00[Europe/Berlin]")
+        assertEquals(MINUTE, dayOf(saturday, berlin).nextStart - saturday)
+
+        // São Paulo's clocks jumped from midnight to 01:00 on Sunday 4 November 2018: Saturday 23:59 turns a minute later, at 01:00, into a new week.
+        val saoPaulo = ZoneId.of("America/Sao_Paulo")
+        val night = at("2018-11-03T23:59-03:00[America/Sao_Paulo]")
+        val turn = dayOf(night, saoPaulo)
+        assertEquals(Day(LocalDate.of(2018, 11, 3), Instant.parse("2018-11-04T03:00:00Z").toEpochMilli()), turn)
+        assertEquals(MINUTE, turn.nextStart - night)
+        assertEquals(week(night, saoPaulo, DayOfWeek.SUNDAY)!!.until, turn.nextStart)
+        assertEquals(turn.nextStart, week(turn.nextStart, saoPaulo, DayOfWeek.SUNDAY)!!.from)
+        assertEquals(LocalDate.of(2018, 11, 4), dayOf(turn.nextStart, saoPaulo).date)
     }
 
     @Test
@@ -254,5 +294,7 @@ class ListeningTest {
 
     private companion object {
         const val T0: Long = 1_800_000_000_000L
+        const val MINUTE: Long = 60_000
+        const val HOUR: Long = 3_600_000
     }
 }

@@ -58,12 +58,11 @@ import app.lyrify.stats.SongPlays
 import app.lyrify.stats.StatsGraph
 import app.lyrify.stats.Top
 import app.lyrify.stats.WhenPlayed
+import app.lyrify.stats.dayOf
 import app.lyrify.stats.whenPlayed
 import kotlinx.coroutines.delay
-import java.time.Duration
 import java.time.LocalDate
 import java.time.ZoneId
-import java.time.ZonedDateTime
 import java.time.temporal.WeekFields
 import java.util.Date
 import java.util.Locale
@@ -341,15 +340,14 @@ private fun rememberListening(period: ListeningPeriod): Listening? {
     return listening
 }
 
-/** The phone's date, turning just after its midnight. */
+/** The phone's date, turning just after its midnight ([dayOf]). */
 @Composable
 private fun rememberToday(): LocalDate {
-    val today by produceState(LocalDate.now()) {
+    val today by produceState(dayOf(System.currentTimeMillis(), ZoneId.systemDefault()).date) {
         while (true) {
-            val zone = ZoneId.systemDefault()
-            val midnight = LocalDate.now(zone).plusDays(1).atStartOfDay(zone)
-            delay(Duration.between(ZonedDateTime.now(zone), midnight).toMillis().coerceAtLeast(0) + MIDNIGHT_MARGIN_MS)
-            value = LocalDate.now()
+            val now = System.currentTimeMillis()
+            delay((dayOf(now, ZoneId.systemDefault()).nextStart - now).coerceAtLeast(0) + MIDNIGHT_MARGIN_MS)
+            value = dayOf(System.currentTimeMillis(), ZoneId.systemDefault()).date
         }
     }
     return today
