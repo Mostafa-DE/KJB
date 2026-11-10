@@ -76,9 +76,8 @@ import app.lyrify.audio.EqSound
 import app.lyrify.audio.LiveEq
 import app.lyrify.audio.OutputKey
 import app.lyrify.audio.PresetChoice
-import app.lyrify.audio.currentOutput
-import app.lyrify.audio.musicDevices
 import app.lyrify.audio.outputLabel
+import app.lyrify.audio.readOutput
 import app.lyrify.player.PlayerGraph
 import kotlinx.coroutines.launch
 import kotlin.math.abs
@@ -100,21 +99,26 @@ fun EqualizerView() {
     val profiles by live.profiles.collectAsStateWithLifecycle()
     val output by live.output.collectAsStateWithLifecycle()
     // The output playing now, also when the player is not running to follow it.
-    LaunchedEffect(live) { live.switchTo(currentOutput(musicDevices(context.getSystemService(AudioManager::class.java)))) }
+    LaunchedEffect(live) { live.switchTo(readOutput(context.getSystemService(AudioManager::class.java))) }
     EqualizerScreen(
         state = profiles?.let { eqScreenState(it, output) },
         onAction = { action -> live.change { all, at -> all.after(at, action) } },
         onNameTaken = { scope.launch { toasts.show(Toast(resources.getString(R.string.eq_name_taken))) } },
         onPhoneEffects = {
             // The phone's own sound effects panel for KJB's player, the link that was in the player's "⋯".
-            val panel = Intent(AudioEffect.ACTION_DISPLAY_AUDIO_EFFECT_CONTROL_PANEL)
-                .putExtra(AudioEffect.EXTRA_AUDIO_SESSION, PlayerGraph.audioSessionId)
-                .putExtra(AudioEffect.EXTRA_PACKAGE_NAME, context.packageName)
-                .putExtra(AudioEffect.EXTRA_CONTENT_TYPE, AudioEffect.CONTENT_TYPE_MUSIC)
-            try {
-                context.startActivity(panel)
-            } catch (_: ActivityNotFoundException) {
-                scope.launch { toasts.show(Toast(resources.getString(R.string.player_no_effects))) }
+            val session = effectsSession(PlayerGraph.audioSessionId)
+            if (session == null) {
+                scope.launch { toasts.show(Toast(resources.getString(R.string.eq_effects_wait))) }
+            } else {
+                val panel = Intent(AudioEffect.ACTION_DISPLAY_AUDIO_EFFECT_CONTROL_PANEL)
+                    .putExtra(AudioEffect.EXTRA_AUDIO_SESSION, session)
+                    .putExtra(AudioEffect.EXTRA_PACKAGE_NAME, context.packageName)
+                    .putExtra(AudioEffect.EXTRA_CONTENT_TYPE, AudioEffect.CONTENT_TYPE_MUSIC)
+                try {
+                    context.startActivity(panel)
+                } catch (_: ActivityNotFoundException) {
+                    scope.launch { toasts.show(Toast(resources.getString(R.string.player_no_effects))) }
+                }
             }
         },
         onBack = { nav.close(FullScreen.Equalizer) },
@@ -222,6 +226,12 @@ fun dbText(db: Float): String {
 }
 
 private const val MINUS: String = "−"
+
+/**
+ * The audio session the phone's sound effects panel opens for: the player's own; null before the player has one, as
+ * session 0 would be every app's output.
+ */
+fun effectsSession(audioSessionId: Int): Int? = audioSessionId.takeIf { it > 0 }
 
 // The screen
 
@@ -480,8 +490,9 @@ private fun Bands(bandsDb: List<Float>, enabled: Boolean, onBand: (Int, Float) -
                     enabled = enabled,
                     vertical = true,
                     onChange = { onBand(index, it) },
-                    // Room for the knob at either end, clear of the gain above and the frequency below.
-                    modifier = Modifier.padding(vertical = 10.dp).height(BAND_HEIGHT).fillMaxWidth(),
+                    // Room for the knob at either end, clear of the gain above and the frequency below; a drag that starts
+                    // between two sliders, or on a label, scrolls the page.
+                    modifier = Modifier.padding(vertical = 10.dp).height(BAND_HEIGHT).width(BAND_TOUCH),
                 )
                 Text(
                     if (hz < 1_000) hz.toString() else "${hz / 1_000}k",
@@ -632,3 +643,6 @@ private const val OFF_ALPHA: Float = 0.38f
 private const val TRACK_ALPHA: Float = 0.16f
 private val TRACK = 6.dp
 private val BAND_HEIGHT = 176.dp
+
+/** A band slider's touch width, narrower than its column so the gaps between sliders scroll. */
+private val BAND_TOUCH = 28.dp

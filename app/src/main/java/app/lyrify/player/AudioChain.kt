@@ -46,6 +46,35 @@ object AudioChain {
 /** Whether audio offload may run: Advanced "Audio offload" is on, and nothing in the chain processes the sound. */
 fun offloadAllowed(advanced: AdvancedSettings, processing: Boolean): Boolean = advanced.audioOffload && !processing
 
+/** Whether offload may run now: [offloadAllowed], once the equalizer's profiles are read ([eq] is null until then). */
+fun offloadWanted(settings: Settings, eq: EqSound?): Boolean = eq != null && offloadAllowed(settings.advanced, AudioChain.processing(settings, eq))
+
+/**
+ * Audio offload as the engine applies it ([apply]), so the chain never drops out mid-song: off at once whenever some
+ * stage starts processing; back on only at the next song start, and only if nothing processes then (an equalizer just
+ * switched off is still gliding to unity). The engine starts with offload off. Main thread.
+ */
+class OffloadGate(private val apply: (Boolean) -> Unit) {
+    private var wanted = false
+    private var on = false
+
+    /** What [offloadWanted] says now. */
+    fun wanted(allowed: Boolean) {
+        wanted = allowed
+        if (!allowed && on) {
+            on = false
+            apply(false)
+        }
+    }
+
+    fun songStarted() {
+        if (wanted && !on) {
+            on = true
+            apply(true)
+        }
+    }
+}
+
 /**
  * The ReplayGain tags of each stream the audio renderer took on, by its period uid. The renderer reads a song ahead of
  * the chain playing it, so the chain looks a song's tags up here when that song reaches it. Only the last [KEPT] streams

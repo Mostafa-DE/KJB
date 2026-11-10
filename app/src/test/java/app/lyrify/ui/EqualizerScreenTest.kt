@@ -67,6 +67,15 @@ class EqualizerScreenTest {
         assertEquals("0", dbText(-0f))
     }
 
+    // Review E: the phone's sound effects
+
+    @Test
+    fun `the phone's sound effects open only for the player's own audio session, never the whole phone's output`() {
+        assertNull(effectsSession(0))
+        assertNull(effectsSession(-1))
+        assertEquals(4_097, effectsSession(4_097))
+    }
+
     // On and off
 
     @Test

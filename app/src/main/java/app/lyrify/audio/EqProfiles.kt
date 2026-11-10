@@ -14,6 +14,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -224,9 +226,12 @@ class EqProfilesStore(private val file: File, private val clock: () -> Long, pri
 
     fun load(): EqProfiles = synchronized(lock) { read() }
 
-    /** False when it could not be written; the file before stays then. */
-    fun save(profiles: EqProfiles): Boolean = synchronized(lock) {
-        write(profiles).also { written -> if (written) watchers.forEach { it(profiles) } }
+    /**
+     * False when it could not be written, or when [still], asked in this save's turn, says it is no longer wanted; the
+     * file before stays then.
+     */
+    fun save(profiles: EqProfiles, still: () -> Boolean = { true }): Boolean = synchronized(lock) {
+        still() && write(profiles).also { written -> if (written) watchers.forEach { it(profiles) } }
     }
 
     /** [onSaved] hears every save that was written, from any caller (a restore too), on the saving thread. */
@@ -295,10 +300,10 @@ class EqProfilesStore(private val file: File, private val clock: () -> Long, pri
  * until the store is read), the output music plays on ([output]: OutputRoutesPart follows it while the player runs, the
  * equalizer screen when it opens), and what the chain plays ([sound]: that output's profile, off until the profiles are
  * read). A change is heard at the chain's next buffer and written [SAVE_DELAY_MS] after the changes stop, so a band
- * dragged is one write. A save by anyone else, a backup's restore, becomes the profiles playing and is not written back.
- * Changes and switches on the main thread.
+ * dragged is one write; a write that fails leaves them unsaved, for the next change or [flush]. A save by anyone else,
+ * a backup's restore, becomes the profiles playing and is never written over. Changes and switches on the main thread.
  */
-class LiveEq(private val store: EqProfilesStore, scope: CoroutineScope) {
+class LiveEq(private val store: EqProfilesStore, private val scope: CoroutineScope) {
     private val _profiles = MutableStateFlow<EqProfiles?>(null)
     val profiles: StateFlow<EqProfiles?> = _profiles.asStateFlow()
     private val _output = MutableStateFlow(OutputKey.SPEAKER)
@@ -308,14 +313,19 @@ class LiveEq(private val store: EqProfilesStore, scope: CoroutineScope) {
     /** What every chain plays now; its value is read once per buffer on the playback threads. */
     val sound: StateFlow<EqSound> = _sound.asStateFlow()
 
-    /** What the file holds as far as this knows: its own last save, or another's. */
+    /** What the file holds as far as this knows: the last save written, this one's or another's. */
     @Volatile
     private var stored: EqProfiles? = null
 
+    /** This one's save in its turn, told apart from another's (a restore) when the store says it was written. */
+    @Volatile
+    private var saving: EqProfiles? = null
+    private val writing = Mutex()
+
     init {
         store.watch { saved ->
-            if (saved !== stored) {
-                stored = saved
+            stored = saved
+            if (saved !== saving) {
                 _profiles.value = saved
                 publish()
             }
@@ -328,8 +338,25 @@ class LiveEq(private val store: EqProfilesStore, scope: CoroutineScope) {
             _profiles.collectLatest { profiles ->
                 if (profiles == null || profiles === stored) return@collectLatest
                 delay(SAVE_DELAY_MS)
-                stored = profiles
-                store.save(profiles)
+                write(profiles)
+            }
+        }
+    }
+
+    /** Writes the profiles playing if a failed write left them unsaved: when the player stops. */
+    fun flush() {
+        scope.launch { _profiles.value?.let { write(it) } }
+    }
+
+    /** Writes [profiles] if they are unsaved, and only while they are still the ones playing when the store's turn comes. */
+    private suspend fun write(profiles: EqProfiles) {
+        writing.withLock {
+            if (profiles === stored) return
+            saving = profiles
+            try {
+                store.save(profiles) { _profiles.value === profiles }
+            } finally {
+                saving = null
             }
         }
     }

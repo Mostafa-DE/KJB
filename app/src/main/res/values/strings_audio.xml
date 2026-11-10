@@ -5,7 +5,7 @@
     <string name="eq_now">Now: %1$s</string>
     <!-- The toast when the output changes and the equalizer follows it, e.g. "Equalizer: Galaxy Buds". -->
     <string name="eq_switched">Equalizer: %1$s</string>
-    <string name="eq_per_output">Each output keeps its own sound, and KJB switches to it when you change output.</string>
+    <string name="eq_per_output">Saved per output</string>
 
     <!-- The outputs. A Bluetooth output shows its own name; one whose name your phone hides is "Bluetooth audio". -->
     <string name="eq_output_speaker">Phone speaker</string>
@@ -55,4 +55,5 @@
 
     <string name="eq_phone_effects">Phone\'s sound effects</string>
     <string name="eq_phone_effects_detail">Your phone\'s own panel</string>
+    <string name="eq_effects_wait">Play a song first, then try again.</string>
 </resources>

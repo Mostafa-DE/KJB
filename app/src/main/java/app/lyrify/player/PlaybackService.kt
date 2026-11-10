@@ -122,6 +122,7 @@ class PlaybackService : MediaLibraryService() {
     /** Songs that could not be played since one last played: the whole queue failing stops the player. */
     private var failedInARow = 0
     private val tracker = PlayTracker({ event -> Lyrify.playEvents(this).onEvent(event) }, System::currentTimeMillis)
+    private val offload = OffloadGate { engine.setOffload(it) }
 
     override fun onCreate() {
         super.onCreate()
@@ -129,6 +130,8 @@ class PlaybackService : MediaLibraryService() {
         settings = Lyrify.settings(this).settings.stateIn(scope, SharingStarted.Eagerly, Settings())
         library = LibraryGraph.repository(this).state.map { (it as? LibraryState.Ready)?.library }.stateIn(scope, SharingStarted.Eagerly, null)
         engine = GaplessEngine(this, settings::value, Levels(), ::mediaItem)
+        // The phone's sound effects panel needs the player's own session from the start (A1).
+        PlayerGraph.audioSessionId = engine.audioSessionId
         bridge = QueueBridge(engine)
         player = LyrifyPlayer(mainLooper, engine, core, skips = ::skips, sync = ::sync, beforeSeek = ::heardSoFar)
         engine.addListener(Follower())
@@ -169,11 +172,13 @@ class PlaybackService : MediaLibraryService() {
                 player.changed()
             }
         }
-        // Offload only while no stage changes the sound: levelling, or the equalizer of the output playing.
+        // Offload only while no stage changes the sound (levelling, the equalizer of the output playing), once the
+        // equalizer is read; turned back on only at a song start (OffloadGate).
         scope.launch {
-            combine(settings, LiveEq.of(this@PlaybackService).sound) { now, eq -> offloadAllowed(now.advanced, AudioChain.processing(now, eq)) }
+            val live = LiveEq.of(this@PlaybackService)
+            combine(settings, live.profiles, live.sound) { now, profiles, eq -> offloadWanted(now, eq.takeIf { profiles != null }) }
                 .distinctUntilChanged()
-                .collect(engine::setOffload)
+                .collect(offload::wanted)
         }
         scope.launch { savePlaces(playing) { savePlace() } }
         scope.launch { repeatWhilePlaying(playing, POSITION_EVERY_MS) { tracker.position(engine.positionMs, playing = true) } }
@@ -262,6 +267,7 @@ class PlaybackService : MediaLibraryService() {
     /** The engine's songs and plays, back into the queue model and the play counter. */
     private inner class Follower : EngineListener {
         override fun onSongStarted(uid: Long, lap: Boolean, natural: Boolean) {
+            offload.songStarted()
             val book = core.book.value
             val item = book.current?.items?.firstOrNull { it.uid == uid } ?: return
             if (!lap) core.change { it.at(uid, core.now()) }

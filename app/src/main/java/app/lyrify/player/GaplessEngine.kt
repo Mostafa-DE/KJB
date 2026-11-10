@@ -15,6 +15,7 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionParameters.AudioOffloadPreferences
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.common.util.Util
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.Renderer
@@ -119,6 +120,9 @@ class GaplessEngine(context: Context, settings: () -> Settings, levels: SongLeve
         .build()
 
     init {
+        // Media3 makes the session on a background thread and reports 0 until then; KJB's own, now, so the phone's sound
+        // effects panel opens for this player from the start.
+        player.setAudioSessionId(Util.generateAudioSessionId(context))
         player.addListener(object : Player.Listener {
             override fun onEvents(player: Player, events: Player.Events) {
                 listeners.forEach { it.onChanged() }

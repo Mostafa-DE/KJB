@@ -354,4 +354,60 @@ class EqProfilesTest {
         assertEquals(restored, store.load())
         assertNotSame(profiles, live.profiles.value)
     }
+
+    // Review D: a write that fails
+
+    @Test
+    fun `a save that is no longer wanted when its turn comes writes nothing`() {
+        val store = store()
+        assertTrue(store.save(profiles))
+        val heard = mutableListOf<EqProfiles>()
+        store.watch { heard += it }
+        assertFalse(store.save(EqProfiles()) { false })
+        assertEquals(profiles, store.load())
+        assertEquals(emptyList<EqProfiles>(), heard)
+    }
+
+    @Test
+    fun `a write that failed stays unsaved, and the player stopping writes it`() = runTest {
+        val blocker = File(folder.root, "sub")
+        val store = store(File(blocker, "eq-profiles.json"))
+        val live = LiveEq(store, backgroundScope)
+        runCurrent()
+        // The folder is a file: every write fails.
+        blocker.writeText("in the way")
+
+        live.change { all, output -> all.withProfile(output, bassOn) }
+        advanceTimeBy(LiveEq.SAVE_DELAY_MS + 1)
+        runCurrent()
+        assertTrue(logs.any { it.startsWith("eq profiles: not written") })
+        assertEquals(bassOn.sound, live.sound.value)
+
+        blocker.delete()
+        live.flush()
+        runCurrent()
+        assertEquals(bassOn, store.load().profile(OutputKey.SPEAKER))
+        assertEquals(bassOn.sound, live.sound.value)
+    }
+
+    @Test
+    fun `after a failed write the next change writes everything, the newest included`() = runTest {
+        val blocker = File(folder.root, "sub")
+        val store = store(File(blocker, "eq-profiles.json"))
+        val live = LiveEq(store, backgroundScope)
+        runCurrent()
+        blocker.writeText("in the way")
+        live.change { all, output -> all.withProfile(output, bassOn) }
+        advanceTimeBy(LiveEq.SAVE_DELAY_MS + 1)
+        runCurrent()
+
+        blocker.delete()
+        val wired = OutputKey(OutputKind.WIRED)
+        live.switchTo(wired)
+        live.change { all, output -> all.withProfile(output, tuned) }
+        advanceTimeBy(LiveEq.SAVE_DELAY_MS + 1)
+        runCurrent()
+        assertEquals(bassOn, store.load().profile(OutputKey.SPEAKER))
+        assertEquals(tuned, store.load().profile(wired))
+    }
 }
