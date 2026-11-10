@@ -546,7 +546,7 @@ class SafeWriter(
              * backup, when the proof fails; left for the start-up recovery when the song can't be read for it.
              */
             fun release(proof: FileState, outcome: SongOutcome): SongOutcome = try {
-                when (backups.releaseBackup(intentBegun, proof)) {
+                when (backups.releaseBackup(intentBegun, proof, song.mediaStoreId)) {
                     Backups.Release.RELEASED -> outcome
                     Backups.Release.SET_ASIDE -> SongOutcome.SET_ASIDE
                     // Settled, its intent still open: the start-up recovery closes it.
