@@ -19,7 +19,7 @@
         <item quantity="other">%1$s of %2$s songs found</item>
     </plurals>
     <string name="m3u_missing">Not found</string>
-    <string name="m3u_more_missing">And %1$s more</string>
+    <string name="m3u_more">And %1$s more</string>
     <string name="m3u_create">Create playlist</string>
     <string name="m3u_skip">Skip</string>
     <string name="m3u_cancel">Cancel</string>
@@ -29,4 +29,11 @@
     <string name="m3u_no_songs">This file lists no songs.</string>
     <string name="m3u_too_big">This file is too big to be a playlist.</string>
     <string name="m3u_unreadable">KJB couldn\'t read this file.</string>
+    <string name="m3u_not_m3u">This isn\'t a playlist file. Pick one ending in .m3u or .m3u8.</string>
+    <plurals name="m3u_by_name">
+        <item quantity="one">%1$s matched by name</item>
+        <item quantity="other">%1$s matched by name</item>
+    </plurals>
+    <string name="m3u_by_name_text">Found by title, artist and length only, not by where the file is. Check them before you create the playlist.</string>
+    <string name="m3u_by_name_include">Include them</string>
 </resources>

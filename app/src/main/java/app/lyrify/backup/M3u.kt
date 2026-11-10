@@ -16,8 +16,6 @@ import app.lyrify.library.SongResolver
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
-import java.net.URI
-import java.net.URISyntaxException
 import java.nio.ByteBuffer
 import java.nio.charset.CharacterCodingException
 import java.nio.charset.Charset
@@ -31,57 +29,89 @@ data class M3uEntry(
     val location: String,
     /** `#EXTINF`'s text after the comma, "Artist - Title" by custom; null without one. */
     val info: String? = null,
-    /** `#EXTINF`'s length; null without one, or for -1 and 0 (a stream, or not known). */
+    /** `#EXTINF`'s length; null without one, for -1 and 0 (a stream, or not known), or one no Long holds in milliseconds. */
     val durationMs: Long? = null,
 ) {
     /** How the import result lists it when it is missing: [info], else the file's name. */
     val label: String get() = info ?: location.substringAfterLast('/').substringAfterLast('\\')
 }
 
+/** A song an entry found: by its path or its file name in its folder, or [byName], by `#EXTINF`'s title, artist and length only. */
+data class M3uFound(val song: Song, val byName: Boolean)
+
 /** What one m3u file found in the library: its songs in the file's order (a song possibly twice), and the entries missing. */
-data class M3uImport(val name: String, val found: List<Song>, val missing: List<M3uEntry>) {
+data class M3uImport(val name: String, val found: List<M3uFound>, val missing: List<M3uEntry>) {
     /** "18 of 20 songs found": [found] of this many. */
     val total: Int get() = found.size + missing.size
+
+    /** "3 matched by name": found by `#EXTINF` alone, listed apart so the user can check them or leave them out. */
+    val byName: List<M3uFound> get() = found.filter { it.byName }
+
+    /** The new playlist's songs, in the file's order: all found, or without those found [byName]. */
+    fun songs(includeByName: Boolean): List<Song> = found.filter { includeByName || !it.byName }.map { it.song }
 }
 
 /**
  * Playlists as extended M3U files (spec "Playlists: import and export (m3u)"): written as UTF-8 `.m3u8` with LF line
- * ends and no BOM; read from `.m3u` or `.m3u8`, with any BOM, any line ends, and `.m3u` in UTF-8 or Latin-1. Entries are
- * found in the library by their path, then their file name in its folder, then `#EXTINF`'s title, artist and length
- * ([SongResolver.M3U]). KJB never writes MediaStore playlists (deprecated since API 31).
+ * ends and no BOM; read from `.m3u` or `.m3u8`, with any BOM, any line ends, and `.m3u` in UTF-8, UTF-16 or Latin-1.
+ * Entries are found in the library by their path, then their file name in its folder, then `#EXTINF`'s title, artist and
+ * length ([SongResolver.M3U]). KJB never writes MediaStore playlists (deprecated since API 31).
  */
 object M3u {
     /** Files larger than this are not playlists (Gramophone's cap). */
     const val MAX_BYTES: Int = 5 * 1024 * 1024
+
+    /** Files with more entries than this are not read: a playlist that long is a mistake, and its result would not fit. */
+    const val MAX_ENTRIES: Int = 10_000
+
+    /** Nor are files with a line longer than this (Linux's longest path). */
+    const val MAX_LINE_CHARS: Int = 4096
 
     const val EXTENSION: String = "m3u8"
 
     /** What Android calls m3u files, for the save dialog when the phone knows no type for [EXTENSION]. */
     const val MIME_TYPE: String = "audio/x-mpegurl"
 
-    /** What the open dialog offers: the types phones and computers give `.m3u` and `.m3u8` files. */
-    val MIME_TYPES: Array<String> = arrayOf(MIME_TYPE, "audio/mpegurl", "application/x-mpegurl", "application/vnd.apple.mpegurl")
+    /**
+     * What the open dialog offers: the types phones and computers give `.m3u` and `.m3u8` files, and the plain text and
+     * unknown types some providers give them instead; only names ending in either are read ([isM3u]).
+     */
+    val MIME_TYPES: Array<String> =
+        arrayOf(MIME_TYPE, "audio/mpegurl", "application/x-mpegurl", "application/vnd.apple.mpegurl", "text/plain", "application/octet-stream")
 
     // Writing
 
     /**
      * The playlist of [songs] as extended M3U: each song found on the phone ([SongResolver.IN_APP]) with its `#EXTINF`
-     * and its path now, a song no longer there by its stored path alone.
+     * and its path now, a song no longer there by its stored path alone. Every line is kept to one line ([oneLine]).
      */
     fun write(songs: List<SongRef>, resolver: SongResolver): String = buildString {
         append(HEADER).append('\n')
         songs.forEach { ref ->
             val song = resolver.find(ref)
             if (song != null) append(EXTINF).append(seconds(song.durationMs)).append(',').append(info(song)).append('\n')
-            append(song?.path ?: ref.path).append('\n')
+            append(oneLine(song?.path ?: ref.path)).append('\n')
         }
     }
 
     /** `Name.m3u8` for the playlist [name], with the characters a folder cannot hold replaced; [fallback] for a blank name. */
-    fun fileName(name: String, fallback: String): String {
-        val safe = name.map { if (it in NOT_IN_FILE_NAMES || it.isISOControl()) '_' else it }.joinToString("").trim()
-        return "${safe.ifEmpty { fallback }}.$EXTENSION"
+    fun fileName(name: String, fallback: String): String = "${baseName(name, fallback)}.$EXTENSION"
+
+    /** Export all: [fileName] for each of [names], with " (2)", " (3)"... so no two in the folder share one, case aside. */
+    fun fileNames(names: List<String>, fallback: String): List<String> {
+        val taken = mutableListOf<String>()
+        return names.map { name -> uniqueName(baseName(name, fallback), taken).also { taken += it } + ".$EXTENSION" }
     }
+
+    /**
+     * Whether an export goes through a folder the user picks (checked before any file exists, then a new document in it)
+     * rather than the save dialog, which makes the document itself before KJB can check it: a debug build, which writes
+     * only into its test folder ([exportAllowed]).
+     */
+    fun exportsByFolder(writes: SharedWrites): Boolean = writes.testFolderOnly
+
+    private fun baseName(name: String, fallback: String): String =
+        name.map { if (it in NOT_IN_FILE_NAMES || it.isISOControl()) '_' else it }.joinToString("").trim().ifEmpty { fallback }
 
     /** Whole seconds, rounded; -1 when the length is not known. */
     private fun seconds(durationMs: Long): Long = if (durationMs <= 0) -1 else (durationMs + 500) / 1000
@@ -93,7 +123,8 @@ object M3u {
         return if (artist == null) title else "$artist - $title"
     }
 
-    private fun oneLine(text: String): String = text.replace(LINE_BREAKS, " ").trim()
+    /** [text] with each run of line and paragraph breaks and other control characters made one space, so it stays one line. */
+    private fun oneLine(text: String): String = text.replace(NOT_ON_ONE_LINE, " ").trim()
 
     // Reading
 
@@ -109,23 +140,31 @@ object M3u {
         }
     }
 
+    /** Whether [fileName] is an m3u file's: ending in `.m3u` or `.m3u8`, case aside. */
+    fun isM3u(fileName: String?): Boolean = fileName?.trim()?.substringAfterLast('.', "")?.lowercase(Locale.ROOT).let { it == "m3u" || it == EXTENSION }
+
     /**
-     * The entries of the m3u file [fileName] holding [bytes]. A BOM decides the encoding; otherwise `.m3u8` is UTF-8, and
-     * `.m3u` is UTF-8 when it reads as UTF-8, else Latin-1 (read as Windows-1252, which Windows writes for it).
+     * The entries of the m3u file [fileName] holding [bytes]; null when it is too big to be a playlist (over [MAX_ENTRIES]
+     * entries, or a line over [MAX_LINE_CHARS]). A BOM decides the encoding; otherwise `.m3u8` is UTF-8, and `.m3u` is
+     * UTF-16 when it holds NUL bytes, UTF-8 when it reads as UTF-8, else Latin-1 (read as Windows-1252, which Windows
+     * writes for it).
      */
-    fun read(bytes: ByteArray, fileName: String?): List<M3uEntry> = parse(decode(bytes, utf8 = fileName?.endsWith(".$EXTENSION", ignoreCase = true) == true))
+    fun read(bytes: ByteArray, fileName: String?): List<M3uEntry>? = parse(decode(bytes, utf8 = fileName?.trim()?.endsWith(".$EXTENSION", ignoreCase = true) == true))
 
     /** The playlist's name from its file's: without `.m3u` or `.m3u8`; null when that leaves nothing. */
     fun playlistName(fileName: String?): String? {
         val name = fileName?.trim() ?: return null
-        val extension = name.substringAfterLast('.', "").lowercase(Locale.ROOT)
-        return (if (extension == "m3u" || extension == EXTENSION) name.substringBeforeLast('.') else name).trim().takeIf(String::isNotEmpty)
+        return (if (isM3u(name)) name.substringBeforeLast('.') else name).trim().takeIf(String::isNotEmpty)
     }
 
     private fun decode(bytes: ByteArray, utf8: Boolean): String {
         val bom = BOMS.firstOrNull { (mark, _) -> bytes.size >= mark.size && mark.indices.all { bytes[it] == mark[it] } }
         if (bom != null) return String(bytes, bom.first.size, bytes.size - bom.first.size, bom.second)
         if (utf8) return String(bytes, Charsets.UTF_8)
+        // UTF-16 without a BOM: an ASCII character's other byte is NUL, after it (little-endian) or before it (big-endian).
+        val nulsAtEven = bytes.indices.count { it % 2 == 0 && bytes[it] == NUL }
+        val nulsAtOdd = bytes.indices.count { it % 2 == 1 && bytes[it] == NUL }
+        if (nulsAtEven + nulsAtOdd > 0) return String(bytes, if (nulsAtEven > nulsAtOdd) Charsets.UTF_16BE else Charsets.UTF_16LE)
         return try {
             Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT)
                 .decode(ByteBuffer.wrap(bytes)).toString()
@@ -134,14 +173,20 @@ object M3u {
         }
     }
 
-    /** Every line not starting with `#` is an entry; an `#EXTINF` names the next one. Blank lines and other comments are skipped. */
-    private fun parse(text: String): List<M3uEntry> {
+    /**
+     * Every line not starting with `#` is an entry; an `#EXTINF` names the next one. Blank lines and other comments are
+     * skipped. Lines are taken one at a time, and reading stops at the first sign the file is too big.
+     */
+    private fun parse(text: String): List<M3uEntry>? {
         val entries = mutableListOf<M3uEntry>()
         var pending: Pair<String?, Long?>? = null
-        text.lines().map(String::trim).forEach { line ->
+        for (raw in text.lineSequence()) {
+            if (raw.length > MAX_LINE_CHARS) return null
+            val line = raw.trim()
             when {
                 line.startsWith(EXTINF, ignoreCase = true) -> pending = extinf(line.substring(EXTINF.length))
                 line.isEmpty() || line.startsWith('#') -> Unit
+                entries.size == MAX_ENTRIES -> return null
                 else -> {
                     entries += M3uEntry(line, pending?.first, pending?.second)
                     pending = null
@@ -158,28 +203,26 @@ object M3u {
             if (rest[at] == '"') quoted = !quoted
             rest[at] == ',' && !quoted
         }
-        val length = (if (comma == null) rest else rest.substring(0, comma)).trim().substringBefore(' ').toDoubleOrNull()
+        val seconds = (if (comma == null) rest else rest.substring(0, comma)).trim().substringBefore(' ').toDoubleOrNull()
         val info = comma?.let { rest.substring(it + 1).trim() }?.takeIf(String::isNotEmpty)
-        return info to length?.takeIf { it > 0 }?.let { (it * 1000).roundToLong() }
+        // Infinity, NaN and lengths whose milliseconds no Long holds are no length.
+        val millis = seconds?.times(1000)?.takeIf { it > 0 && it < Long.MAX_VALUE.toDouble() }
+        return info to millis?.roundToLong()
     }
 
     // Finding the songs
 
     /**
-     * Where [location] says the song is on this phone: a `file://` URL decoded, an absolute path tidied, a relative one
-     * resolved against [folder] (the playlist's, when its provider says), else kept as written, as a Windows path is;
-     * null for any other URL (a stream), which only its `#EXTINF` can find.
+     * Where [location] says the song is on this phone: a `file://` URL's path (everything after `file://`, `?` and `#`
+     * too, percent-decoded), an absolute path tidied, a relative one resolved against [folder] (the playlist's, when its
+     * provider says), else kept as written, as a Windows path is; null for any other URL (a stream), which only its
+     * `#EXTINF` can find.
      */
     fun localPath(location: String, folder: String?): String? {
         val line = location.trim()
         val scheme = URL_SCHEME.find(line)?.groupValues?.get(1)?.lowercase(Locale.ROOT)
         return when {
-            scheme == "file" -> try {
-                URI(line).path
-            } catch (_: URISyntaxException) {
-                // Spaces and the like left as they are: the rest is the path.
-                line.substring(FILE_URL.length).takeIf { it.startsWith('/') }
-            }?.let(::tidy)
+            scheme == "file" -> percentDecoded(line.substring(FILE_URL.length)).takeIf { it.startsWith('/') }?.let(::tidy)
             scheme != null -> null
             line.startsWith('/') -> tidy(line)
             line.startsWith("\\\\") || WINDOWS_DRIVE.containsMatchIn(line) -> line
@@ -188,31 +231,38 @@ object M3u {
         }
     }
 
+    /** The song [entry] names, by [SongResolver.M3U]'s ways in their order: [findByPath], then [findByName]. */
+    fun find(entry: M3uEntry, resolver: SongResolver, folder: String?): Song? = findByPath(entry, resolver, folder) ?: findByName(entry, resolver)
+
+    /** Rules 1 and 2: the song at [entry]'s path, else the one song with its file name in a folder of the same name. */
+    fun findByPath(entry: M3uEntry, resolver: SongResolver, folder: String?): Song? =
+        resolver.find(SongClue(path = localPath(entry.location, folder)), SongResolver.M3U - FindBy.TAGS)
+
     /**
-     * The song [entry] names, by [SongResolver.M3U]'s ways in their order: its path, its file name in its folder, then
-     * `#EXTINF`'s title, artist and length within 2 s. "A - B - C" may be the artist "A" or "A - B", or a title without
-     * an artist, so each reading is tried; readings that name different songs name none.
+     * Rule 3: `#EXTINF`'s title, artist and length within 2 s. "A - B - C" is read two ways only: the artist before the
+     * first dash and the title after it ("A", "B - C"), or a title without an artist; readings that name different songs
+     * name none. A later dash never splits, so a song only such a split would name is not taken.
      */
-    fun find(entry: M3uEntry, resolver: SongResolver, folder: String?): Song? {
-        val path = localPath(entry.location, folder)
-        resolver.find(SongClue(path = path), SongResolver.M3U - FindBy.TAGS)?.let { return it }
+    fun findByName(entry: M3uEntry, resolver: SongResolver): Song? {
+        val info = entry.info ?: return null
         val length = entry.durationMs ?: return null
-        return readings(entry.info).mapNotNull { (artist, title) ->
+        val dash = info.indexOf(DASH)
+        val split = if (dash < 0) null else info.substring(0, dash).trim() to info.substring(dash + DASH.length).trim()
+        return listOfNotNull(split, null to info).mapNotNull { (artist, title) ->
             resolver.find(SongClue(title = title, artist = artist, durationMs = length), setOf(FindBy.TAGS))
         }.distinct().singleOrNull()
     }
 
-    /** What an import of [entries] (a file read for the playlist [name]) finds in the library. */
+    /** What an import of [entries] (a file read for the playlist [name]) finds in the library, and how. */
     fun match(name: String, entries: List<M3uEntry>, resolver: SongResolver, folder: String?): M3uImport {
-        val songs = entries.map { it to find(it, resolver, folder) }
-        return M3uImport(name, found = songs.mapNotNull { it.second }, missing = songs.filter { it.second == null }.map { it.first })
-    }
-
-    /** "A - B - C" as (A, "B - C"), ("A - B", C) and (no artist, "A - B - C"). */
-    private fun readings(info: String?): List<Pair<String?, String>> {
-        val text = info ?: return emptyList()
-        val dashes = generateSequence(text.indexOf(DASH)) { text.indexOf(DASH, it + 1).takeIf { at -> at >= 0 } }.takeWhile { it >= 0 }
-        return dashes.map { text.substring(0, it).trim() to text.substring(it + DASH.length).trim() }.toList() + (null to text)
+        val found = mutableListOf<M3uFound>()
+        val missing = mutableListOf<M3uEntry>()
+        entries.forEach { entry ->
+            val byPath = findByPath(entry, resolver, folder)
+            val song = byPath ?: findByName(entry, resolver)
+            if (song == null) missing += entry else found += M3uFound(song, byName = byPath == null)
+        }
+        return M3uImport(name, found, missing)
     }
 
     /** `.` and `..` resolved, empty names dropped; a path above the root stays at the root. */
@@ -226,6 +276,26 @@ object M3u {
             }
         }
         return names.joinToString("/", prefix = "/")
+    }
+
+    /** `%XX` escapes as UTF-8 bytes; a `%` that starts no escape stays as it is. */
+    private fun percentDecoded(text: String): String {
+        if ('%' !in text) return text
+        val bytes = ByteArrayOutputStream()
+        var at = 0
+        while (at < text.length) {
+            val hex = if (text[at] == '%' && at + 2 < text.length) text.substring(at + 1, at + 3) else null
+            val escaped = hex?.takeIf { it.all { digit -> digit.digitToIntOrNull(16) != null } }?.toInt(16)
+            if (escaped != null) {
+                bytes.write(escaped)
+                at += 3
+            } else {
+                val end = text.indexOf('%', at + 1).takeIf { it >= 0 } ?: text.length
+                bytes.write(text.substring(at, end).encodeToByteArray())
+                at = end
+            }
+        }
+        return bytes.toByteArray().decodeToString()
     }
 
     // Naming
@@ -262,7 +332,7 @@ object M3u {
     }
 
     /**
-     * Whether an export may write the document at [path] ([SharedWrite.M3U_EXPORT]). The save dialog is the user's own
+     * Whether an export may write the document at [path] ([SharedWrite.M3U_EXPORT]). The dialogs are the user's own
      * choice, but a debug build still writes only into its test folder, so a document with no path (another provider's)
      * counts as outside it there. A release build writes anywhere.
      */
@@ -276,7 +346,10 @@ object M3u {
     private const val DOWNLOADS_AUTHORITY: String = "com.android.providers.downloads.documents"
     private const val RAW_PREFIX: String = "raw:"
     private const val FILE_URL: String = "file://"
-    private val LINE_BREAKS = Regex("[\r\n]+")
+    private const val NUL: Byte = 0
+
+    /** Controls (CR, LF, U+0085 among them) and the line and paragraph separators. */
+    private val NOT_ON_ONE_LINE = Regex("[\\p{Cc}\u2028\u2029]+")
 
     /** "file://", "https://"; not "C:\". */
     private val URL_SCHEME = Regex("""^([A-Za-z][A-Za-z0-9+.-]+)://""")
@@ -300,6 +373,9 @@ sealed interface M3uRead {
     data class TooBig(override val name: String?) : M3uRead
 
     data class Unreadable(override val name: String?) : M3uRead
+
+    /** Its name ends in neither `.m3u` nor `.m3u8` (the open dialog offers text files too). */
+    data class NotM3u(override val name: String?) : M3uRead
 }
 
 /**
@@ -311,7 +387,10 @@ class M3uDocuments(private val resolver: ContentResolver, private val writes: Sh
     /** The type the save dialog and new documents get: the phone's own for `.m3u8`, so no provider adds another extension. */
     val mimeType: String = MimeTypeMap.getSingleton().getMimeTypeFromExtension(M3u.EXTENSION) ?: M3u.MIME_TYPE
 
-    /** Writes [text] into [document], made or picked in the save dialog; false when refused or it failed. */
+    /**
+     * Writes [text] into [document], made or picked in the save dialog (a release build's way; a debug build exports by
+     * folder, [M3u.exportsByFolder]); false when refused or it failed.
+     */
     fun write(document: Uri, text: String): Boolean {
         val id = try {
             DocumentsContract.getDocumentId(document)
@@ -344,13 +423,14 @@ class M3uDocuments(private val resolver: ContentResolver, private val writes: Sh
         }
     }
 
-    /** Reads the m3u file [document], picked in the open dialog. */
+    /** Reads the m3u file [document], picked in the open dialog; a file whose name is not an m3u's is not read ([M3u.isM3u]). */
     fun read(document: Uri): M3uRead {
         var name: String? = null
         return try {
             name = resolver.query(document, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
                 if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getString(0) else null
             }
+            if (!M3u.isM3u(name)) return M3uRead.NotM3u(name)
             val folder = try {
                 M3u.documentPath(document.authority, DocumentsContract.getDocumentId(document), primaryRoot())?.substringBeforeLast('/')
             } catch (_: IllegalArgumentException) {
@@ -358,7 +438,7 @@ class M3uDocuments(private val resolver: ContentResolver, private val writes: Sh
             }
             val input = resolver.openInputStream(document) ?: throw IOException("no stream")
             val bytes = input.use(M3u::readBounded) ?: return M3uRead.TooBig(name)
-            M3uRead.Entries(name, folder, M3u.read(bytes, name))
+            M3uRead.Entries(name, folder, M3u.read(bytes, name) ?: return M3uRead.TooBig(name))
         } catch (e: Exception) {
             // IOException, SecurityException, or the provider's own.
             log("m3u: file not read: ${e.javaClass.simpleName}")

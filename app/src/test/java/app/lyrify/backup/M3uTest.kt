@@ -69,11 +69,30 @@ class M3uTest {
     }
 
     @Test
+    fun `paths are written on one line too, without line or paragraph breaks or other controls`() {
+        val odd = song("Music/Night Ferry/02 Grey\u2028Pier\u0085.mp3", title = "Grey\u2029Pier", artist = null, durationMs = 90_000)
+        val gone = SongRef(VOLUME + "Music/Gone/03 Salt\r\nRoad\u0007.mp3")
+
+        assertEquals(
+            "#EXTM3U\n#EXTINF:90,Grey Pier\n/storage/emulated/0/Music/Night Ferry/02 Grey Pier .mp3\n/storage/emulated/0/Music/Gone/03 Salt Road .mp3\n",
+            M3u.write(listOf(odd.ref, gone), SongResolver(listOf(odd))),
+        )
+    }
+
+    @Test
     fun `the file is named after the playlist, without characters a folder cannot hold`() {
         assertEquals("Road Trip.m3u8", M3u.fileName("Road Trip", fallback = "Playlist"))
         assertEquals("Night_Drive_ Part 2_.m3u8", M3u.fileName("Night/Drive: Part 2?", fallback = "Playlist"))
         assertEquals("a_b_c_d_e_f_g_h.m3u8", M3u.fileName("a\\b*c\"d<e>f|g\u0007h", fallback = "Playlist"))
         assertEquals("Playlist.m3u8", M3u.fileName("   ", fallback = "Playlist"))
+    }
+
+    @Test
+    fun `export all names each file apart within the folder, case aside`() {
+        assertEquals(
+            listOf("Night_Drive.m3u8", "Night_Drive (2).m3u8", "night_drive (3).m3u8", "Road Trip.m3u8", "Playlist.m3u8", "Playlist (2).m3u8"),
+            M3u.fileNames(listOf("Night/Drive", "Night:Drive", "night?drive", "Road Trip", " ", ""), fallback = "Playlist"),
+        )
     }
 
     // Reading
@@ -137,6 +156,36 @@ class M3uTest {
     }
 
     @Test
+    fun `an #EXTINF length that is not a number of milliseconds a Long holds is none, and its name stays`() {
+        val text = listOf("Infinity", "-Infinity", "NaN", "1e300", "9223372036854775807").joinToString("") { "#EXTINF:$it,Kit Calloway - Paper Lantern\n/a/$it.mp3\n" }
+
+        assertEquals(
+            listOf("Infinity", "-Infinity", "NaN", "1e300", "9223372036854775807").map { M3uEntry("/a/$it.mp3", "Kit Calloway - Paper Lantern", null) },
+            M3u.read(text.toByteArray(Charsets.UTF_8), "Mix.m3u8"),
+        )
+    }
+
+    @Test
+    fun `a file with more than 10,000 entries or a line over 4 KB is too big`() {
+        val lines = { count: Int -> (1..count).joinToString("\n") { "/a/$it.mp3" }.toByteArray(Charsets.UTF_8) }
+
+        assertEquals(M3u.MAX_ENTRIES, M3u.read(lines(M3u.MAX_ENTRIES), "Mix.m3u8")?.size)
+        assertNull(M3u.read(lines(M3u.MAX_ENTRIES + 1), "Mix.m3u8"))
+        val longest = "/" + "a".repeat(M3u.MAX_LINE_CHARS - 1)
+        assertEquals(listOf(M3uEntry(longest)), M3u.read(longest.toByteArray(Charsets.UTF_8), "Mix.m3u8"))
+        assertNull(M3u.read("$longest\n#EXTINF:1,${"b".repeat(M3u.MAX_LINE_CHARS)}\n".toByteArray(Charsets.UTF_8), "Mix.m3u8"))
+    }
+
+    @Test
+    fun `an m3u without a BOM but with NUL bytes is UTF-16, big-endian when the NULs come first`() {
+        val text = "#EXTM3U\r\n#EXTINF:201,Kit Calloway - Paper Lantern\r\n/a/Café.mp3\r\n"
+        val expected = listOf(M3uEntry("/a/Café.mp3", "Kit Calloway - Paper Lantern", 201_000))
+
+        assertEquals(expected, M3u.read(text.toByteArray(Charsets.UTF_16LE), "Mix.m3u"))
+        assertEquals(expected, M3u.read(text.toByteArray(Charsets.UTF_16BE), "Mix.m3u"))
+    }
+
+    @Test
     fun `an m3u in UTF-8 reads as UTF-8, one that is not reads as Latin-1 as Windows writes it`() {
         val text = "#EXTINF:201,Kit Calloway - Café Lights’ End\n/a/Café.mp3\n"
         val expected = listOf(M3uEntry("/a/Café.mp3", "Kit Calloway - Café Lights’ End", 201_000))
@@ -166,6 +215,16 @@ class M3uTest {
 
         assertArrayEquals(limit, M3u.readBounded(ByteArrayInputStream(limit)))
         assertNull(M3u.readBounded(ByteArrayInputStream(limit + 'a'.code.toByte())))
+    }
+
+    @Test
+    fun `the open dialog offers text files too, but only names ending in m3u or m3u8 are read`() {
+        assertTrue("text/plain" in M3u.MIME_TYPES && "application/octet-stream" in M3u.MIME_TYPES && "audio/x-mpegurl" in M3u.MIME_TYPES)
+        assertTrue(M3u.isM3u("Road Trip.m3u"))
+        assertTrue(M3u.isM3u("Road Trip.M3U8 "))
+        assertFalse(M3u.isM3u("Road Trip.txt"))
+        assertFalse(M3u.isM3u("Road Trip.m3u.bak"))
+        assertFalse(M3u.isM3u(null))
     }
 
     @Test
@@ -200,6 +259,10 @@ class M3uTest {
     fun `file URLs are paths, other URLs are not, and Windows paths are never resolved against the folder`() {
         assertEquals(lantern.path, M3u.localPath("file:///storage/emulated/0/Music/Harbour%20Glass/01%20Paper%20Lantern.mp3", folder = null))
         assertEquals(lantern.path, M3u.localPath("file:///storage/emulated/0/Music/Harbour Glass/01 Paper Lantern.mp3", folder = null))
+        // Everything after file:// is the path, ? and # too, percent-decoded; a % that starts no escape stays.
+        assertEquals("/storage/emulated/0/Music/Is it #1? Yes.mp3", M3u.localPath("file:///storage/emulated/0/Music/Is it #1? Yes.mp3", folder = null))
+        assertEquals("/storage/emulated/0/Music/Is it #1?.mp3", M3u.localPath("file:///storage/emulated/0/Music/Is%20it%20%231%3F.mp3", folder = null))
+        assertEquals("/storage/emulated/0/Music/100% Café 50%.mp3", M3u.localPath("file:///storage/emulated/0/Music/100%25%20Caf%C3%A9%2050%.mp3", folder = null))
         assertNull(M3u.localPath("https://radio.example/stream.mp3", folder = "/storage/emulated/0/Music"))
         assertEquals("C:\\Music\\Harbour Glass\\01 Paper Lantern.mp3", M3u.localPath("C:\\Music\\Harbour Glass\\01 Paper Lantern.mp3", "/storage/emulated/0/Music"))
         assertEquals("\\\\nas\\Music\\01 Paper Lantern.mp3", M3u.localPath("\\\\nas\\Music\\01 Paper Lantern.mp3", "/storage/emulated/0/Music"))
@@ -256,7 +319,7 @@ class M3uTest {
     }
 
     @Test
-    fun `an #EXTINF with a dash inside the title or artist finds its song, and two readings naming two songs find none`() {
+    fun `an #EXTINF is read two ways only, the artist before the first dash, or a title without an artist`() {
         val live = song("Music/Harbour Glass/03 Paper Lantern - Live.mp3", title = "Paper Lantern - Live", artist = "Kit Calloway", durationMs = 200_000)
         val untagged = song("Music/Tapes/Side A - Tin Roof.mp3", title = "Side A - Tin Roof", artist = null, durationMs = 100_000)
         val resolver = SongResolver(listOf(live, untagged))
@@ -264,8 +327,13 @@ class M3uTest {
         assertEquals(live, M3u.find(M3uEntry("x.mp3", "Kit Calloway - Paper Lantern - Live", 200_000), resolver, folder = null))
         assertEquals(untagged, M3u.find(M3uEntry("x.mp3", "Side A - Tin Roof", 100_000), resolver, folder = null))
 
+        // Only a split at a later dash would find this one: never taken.
         val other = song("Music/Odd/Live.mp3", title = "Live", artist = "Kit Calloway - Paper Lantern", durationMs = 200_000)
-        assertNull(M3u.find(M3uEntry("x.mp3", "Kit Calloway - Paper Lantern - Live", 200_000), SongResolver(listOf(live, other)), folder = null))
+        assertNull(M3u.find(M3uEntry("x.mp3", "Kit Calloway - Paper Lantern - Live", 200_000), SongResolver(listOf(other)), folder = null))
+        assertEquals(live, M3u.find(M3uEntry("x.mp3", "Kit Calloway - Paper Lantern - Live", 200_000), SongResolver(listOf(live, other)), folder = null))
+        // The two readings naming two songs name none.
+        val titled = song("Music/Odd/Side A.mp3", title = "Tin Roof", artist = "Side A", durationMs = 100_000)
+        assertNull(M3u.find(M3uEntry("x.mp3", "Side A - Tin Roof", 100_000), SongResolver(listOf(untagged, titled)), folder = null))
     }
 
     @Test
@@ -276,8 +344,15 @@ class M3uTest {
 
         val result = M3u.match("Road Trip", entries, resolver, folder = null)
 
-        assertEquals(M3uImport("Road Trip", found = listOf(lantern, lantern, ferry), missing = listOf(saltRoad, greyPier)), result)
+        assertEquals(
+            M3uImport("Road Trip", found = listOf(M3uFound(lantern, byName = false), M3uFound(lantern, byName = false), M3uFound(ferry, byName = true)), missing = listOf(saltRoad, greyPier)),
+            result,
+        )
         assertEquals(5, result.total)
+        // Found by its #EXTINF alone: listed apart, and left out when the user says so.
+        assertEquals(listOf(ferry), result.byName.map { it.song })
+        assertEquals(listOf(lantern, lantern, ferry), result.songs(includeByName = true))
+        assertEquals(listOf(lantern, lantern), result.songs(includeByName = false))
         assertEquals(listOf("Mira Solen - Salt Road", "04 Grey Pier.mp3"), result.missing.map { it.label })
         assertEquals(0, M3u.match("Empty", emptyList(), resolver, folder = null).total)
     }
@@ -311,6 +386,12 @@ class M3uTest {
         assertNull(M3u.documentPath("com.example.cloud.documents", "primary:Music/Mix.m3u8", primary))
         assertNull(M3u.documentPath(storage, "no-colon", primary))
         assertNull(M3u.documentPath(null, "primary:Music/Mix.m3u8", primary))
+    }
+
+    @Test
+    fun `a debug build exports through a folder it checks before any file exists, a release build through the save dialog`() {
+        assertTrue(M3u.exportsByFolder(SharedWrites(testFolderOnly = true)))
+        assertFalse(M3u.exportsByFolder(SharedWrites.ANYWHERE))
     }
 
     @Test

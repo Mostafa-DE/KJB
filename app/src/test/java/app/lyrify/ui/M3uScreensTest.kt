@@ -2,6 +2,7 @@ package app.lyrify.ui
 
 import app.lyrify.R
 import app.lyrify.backup.M3uEntry
+import app.lyrify.backup.M3uFound
 import app.lyrify.backup.M3uImport
 import app.lyrify.backup.M3uRead
 import app.lyrify.library.SongResolver
@@ -24,8 +25,8 @@ class M3uScreensTest {
         val read = M3uRead.Entries("Road Trip.m3u8", folder = null, entries = listOf(M3uEntry(lantern.path), gone, M3uEntry("Night Ferry/01 Low Water.mp3")))
 
         assertEquals(
-            ImportResult.Found(M3uImport("Road Trip", found = listOf(lantern, ferry), missing = listOf(gone))),
-            importResult(read, resolver, untitled = "Imported playlist"),
+            ImportResult.Found(DOC, M3uImport("Road Trip", found = listOf(M3uFound(lantern, byName = false), M3uFound(ferry, byName = false)), missing = listOf(gone))),
+            importResult(DOC, read, resolver, untitled = "Imported playlist"),
         )
     }
 
@@ -33,15 +34,16 @@ class M3uScreensTest {
     fun `relative paths are read against the file's folder`() {
         val read = M3uRead.Entries("Mix.m3u", folder = "/storage/emulated/0/Music/Harbour Glass", entries = listOf(M3uEntry("01 Paper Lantern.mp3")))
 
-        assertEquals(ImportResult.Found(M3uImport("Mix", listOf(lantern), emptyList())), importResult(read, resolver, "Imported playlist"))
+        assertEquals(ImportResult.Found(DOC, M3uImport("Mix", listOf(M3uFound(lantern, byName = false)), emptyList())), importResult(DOC, read, resolver, "Imported playlist"))
     }
 
     @Test
-    fun `a file with no songs, too big or unreadable says why, under its name or a stand-in`() {
-        assertEquals(ImportResult.Failed("Road Trip", R.string.m3u_no_songs), importResult(M3uRead.Entries("Road Trip.m3u", null, emptyList()), resolver, "Imported playlist"))
-        assertEquals(ImportResult.Failed("Road Trip", R.string.m3u_too_big), importResult(M3uRead.TooBig("Road Trip.m3u8"), resolver, "Imported playlist"))
-        assertEquals(ImportResult.Failed("Imported playlist", R.string.m3u_unreadable), importResult(M3uRead.Unreadable(null), resolver, "Imported playlist"))
-        assertEquals("Imported playlist", importResult(M3uRead.Entries(".m3u8", null, listOf(M3uEntry(lantern.path))), resolver, "Imported playlist").name)
+    fun `a file with no songs, too big, unreadable or not an m3u says why, under its name or a stand-in`() {
+        assertEquals(ImportResult.Failed(DOC, "Road Trip", R.string.m3u_no_songs), importResult(DOC, M3uRead.Entries("Road Trip.m3u", null, emptyList()), resolver, "Imported playlist"))
+        assertEquals(ImportResult.Failed(DOC, "Road Trip", R.string.m3u_too_big), importResult(DOC, M3uRead.TooBig("Road Trip.m3u8"), resolver, "Imported playlist"))
+        assertEquals(ImportResult.Failed(DOC, "Imported playlist", R.string.m3u_unreadable), importResult(DOC, M3uRead.Unreadable(null), resolver, "Imported playlist"))
+        assertEquals(ImportResult.Failed(DOC, "Notes.txt", R.string.m3u_not_m3u), importResult(DOC, M3uRead.NotM3u("Notes.txt"), resolver, "Imported playlist"))
+        assertEquals("Imported playlist", importResult(DOC, M3uRead.Entries(".m3u8", null, listOf(M3uEntry(lantern.path))), resolver, "Imported playlist").name)
     }
 
     @Test
@@ -50,12 +52,14 @@ class M3uScreensTest {
 
         assertEquals("18 of 20 songs found", found.getValue("other").format("18", "20"))
         assertEquals("1 of 1 song found", found.getValue("one").format("1", "1"))
-        assertEquals("And 7 more", strings().getValue("m3u_more_missing").format("7"))
+        assertEquals("And 7 more", strings().getValue("m3u_more").format("7"))
+        assertEquals("3 matched by name", plural("m3u_by_name").getValue("other").format("3"))
+        assertEquals("1 matched by name", plural("m3u_by_name").getValue("one").format("1"))
     }
 
     @Test
     fun `labels are three words or fewer, and no text has an em-dash`() {
-        val labels = listOf("m3u_export", "m3u_export_all", "m3u_import", "m3u_create", "m3u_skip", "m3u_cancel", "m3u_close", "m3u_missing")
+        val labels = listOf("m3u_export", "m3u_export_all", "m3u_import", "m3u_create", "m3u_skip", "m3u_cancel", "m3u_close", "m3u_missing", "m3u_by_name_include")
         labels.forEach { assertTrue(it, strings().getValue(it).split(' ').size <= 3) }
         assertFalse(FILE.readText().contains('—'))
     }
@@ -73,5 +77,8 @@ class M3uScreensTest {
     private companion object {
         /** Unit tests run in the module's folder. */
         val FILE = File("src/main/res/values/strings_backup.xml")
+
+        /** A picked file, as the sheet keeps it. */
+        const val DOC: String = "content://com.android.externalstorage.documents/document/primary%3AMusic%2FRoad%20Trip.m3u8"
     }
 }
