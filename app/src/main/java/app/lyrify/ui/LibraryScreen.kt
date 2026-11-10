@@ -456,7 +456,8 @@ private fun ArtistsTab(ui: LibraryUi, library: Library, padding: PaddingValues, 
             )
         }
         item(key = "same") { SameNamesLine(NameKind.ARTIST, library, Modifier.padding(horizontal = ScreenPadding)) }
-        items(artists, key = { it.name }) { artist ->
+        // Prefixed: an artist named "header" or "same" would take a fixed row's key, and two rows with one key crash the list.
+        items(artists, key = { "artist ${it.name}" }) { artist ->
             NavRow(artist.name, artistLine(artist), lead = { ArtistAvatar(artist) }) { nav.open(Page.Artist(artist.name)) }
         }
     }

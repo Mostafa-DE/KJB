@@ -301,12 +301,15 @@ enum class Access {
     /** The library, search, Recent queues and queue changes: KJB itself and the system's trusted controllers. */
     LIBRARY,
 
-    /** Play, pause, next, previous and the song playing, as every media notification shows: any other app. */
+    /** Play, pause, next, previous, seeking in the song and the song playing, as every media notification shows: any other app. */
     TRANSPORT,
 }
 
 /** A media controller as [ControllerAccess] sees it: the session's ControllerInfo on the phone, made up in tests. */
 data class Caller(val packageName: String, val uid: Int, val trusted: Boolean)
+
+/** What a controller is offered as it connects ([ControllerAccess.offer]): player commands by code, and session commands. */
+data class Offer<T>(val player: Set<Int>, val session: Set<T>)
 
 /**
  * Who may see KJB's library through its media session. KJB itself (its package and uid); the controllers the system
@@ -347,10 +350,11 @@ class ControllerAccess(
             "1CA8DCC0BED3CBD872D2CB791200C0292CA9975768A82D676B8B424FB65B5295",
         )
 
-        /** Plain transport: play and pause, next and previous, and the song playing; never the queue or a change to it. */
+        /** Plain transport: play and pause, next and previous, seeking in the song, and the song playing; never the queue or a change to it. */
         val TRANSPORT_COMMANDS: List<Int> = listOf(
             Player.COMMAND_PLAY_PAUSE,
             Player.COMMAND_PREPARE,
+            Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM,
             Player.COMMAND_SEEK_TO_NEXT,
             Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM,
             Player.COMMAND_SEEK_TO_PREVIOUS,
@@ -365,10 +369,14 @@ class ControllerAccess(
          */
         fun <T> sessionCommands(access: Access, base: Set<T>, own: List<T>): Set<T> = if (access == Access.TRANSPORT) emptySet() else base + own
 
-        /** [base] narrowed to [TRANSPORT_COMMANDS]. */
-        @OptIn(UnstableApi::class)
-        fun transport(base: Player.Commands): Player.Commands =
-            Player.Commands.Builder().apply { TRANSPORT_COMMANDS.filter(base::contains).forEach(::add) }.build()
+        /**
+         * What a controller with [access] is offered as it connects, out of [every] player command and the session's own
+         * commands ([session], the library's included): KJB, the system and the car get them all, with the parts' ([own]);
+         * any other app gets [TRANSPORT_COMMANDS] and no session command. On the phone [every] and [session] are Media3's
+         * ConnectionResult defaults, never what its own onConnect returns: since Media3 1.11 that offers no command at all.
+         */
+        fun <T> offer(access: Access, every: Set<Int>, session: Set<T>, own: List<T>): Offer<T> =
+            Offer(if (access == Access.TRANSPORT) every intersect TRANSPORT_COMMANDS.toSet() else every, sessionCommands(access, session, own))
 
         /** The rule on the phone: signing certificates from the package manager. */
         fun of(context: Context): ControllerAccess {

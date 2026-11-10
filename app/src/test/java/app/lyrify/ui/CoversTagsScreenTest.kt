@@ -88,6 +88,39 @@ class CoversTagsScreenTest {
         assertEquals(emptyList<Pair<ReviewSection, Int>>(), reviewSections(CoversTagsState()))
     }
 
+    // The page's rows: each needs a key of its own, or the list crashes
+
+    @Test
+    fun `an album in two sections at once, or twice in one, still gives every row a key of its own`() {
+        val pick = waiting("Lanterns", false)
+        // "Check again" placed the album in Pick one before its Skipped record went, and History rebuilt two Done records of one album.
+        val records = listOf(
+            record(Settled.SKIPPED).copy(id = pick.album.id),
+            record(Settled.DONE).copy(id = "harbour", entryId = 7),
+            record(Settled.DONE).copy(id = "harbour", entryId = 9, at = 2),
+        )
+        val state = CoversTagsState(loaded = true, waiting = listOf(pick, waiting("Kelp", true)), memory = CoversTagsMemory(albums = records, checkedOnce = true))
+
+        val keys = pageRows(state, uncheckable = 2, paused = true).map { it.key }
+        assertEquals(keys.distinct(), keys)
+    }
+
+    @Test
+    fun `an album's row keeps its key as albums come and go around it, and the song sheet finds it by its id`() {
+        val lanterns = waiting("Lanterns", true)
+        val harbour = waiting("Harbour", true)
+        fun keyOf(state: CoversTagsState, id: String) = pageRows(state, 0, false).single { it.albumId == id }.key
+
+        val alone = CoversTagsState(waiting = listOf(lanterns))
+        val after = CoversTagsState(waiting = listOf(harbour, lanterns), memory = CoversTagsMemory(albums = listOf(record(Settled.DONE).copy(id = "kelp"))))
+        assertEquals(keyOf(alone, lanterns.album.id), keyOf(after, lanterns.album.id))
+        // The first of two Done records of one album keeps its key when the second comes.
+        val done = record(Settled.DONE).copy(id = "kelp", at = 5)
+        val one = CoversTagsState(memory = CoversTagsMemory(albums = listOf(done)))
+        val two = CoversTagsState(memory = CoversTagsMemory(albums = listOf(done, done.copy(entryId = 9, at = 1))))
+        assertEquals(pageRows(one, 0, false).single { it.albumId == "kelp" }.key, pageRows(two, 0, false).first { it.albumId == "kelp" }.key)
+    }
+
     // Confirming
 
     @Test

@@ -134,7 +134,8 @@ private fun TopListPage(kind: TopKind, onBack: () -> Unit, onOpen: (Page) -> Uni
                     EmptyState(EmptyArt.Icon(R.drawable.ic_bar_chart), stringResource(R.string.stats_empty_title), text = stringResource(R.string.stats_empty_text))
                 }
             }
-            itemsIndexed(tops, key = { _, top -> keyOf(top) }) { i, top -> TopRow(top, i + 1, settings, onOpen, sheets::openSong) }
+            // Prefixed: an artist named "head" or "empty" would take a fixed row's key, and two rows with one key crash the list.
+            itemsIndexed(tops, key = { _, top -> "top ${keyOf(top)}" }) { i, top -> TopRow(top, i + 1, settings, onOpen, sheets::openSong) }
         }
     }
     SongSheetsHost(sheets)

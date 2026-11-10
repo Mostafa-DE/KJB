@@ -17,6 +17,7 @@ import androidx.annotation.OptIn
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
 import androidx.media3.common.util.BitmapLoader
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSourceBitmapLoader
@@ -36,7 +37,6 @@ import app.lyrify.audio.LiveEq
 import app.lyrify.audio.MediaFocus
 import app.lyrify.audio.OutputRoutesPart
 import app.lyrify.audio.QueueFadeRules
-import app.lyrify.auto.Access
 import app.lyrify.auto.CarBrowse
 import app.lyrify.auto.ControllerAccess
 import app.lyrify.library.Library
@@ -338,17 +338,24 @@ class PlaybackService : MediaLibraryService() {
     }
 
     private inner class Callback : MediaLibrarySession.Callback {
-        override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult {
-            val base = super.onConnect(session, controller)
-            if (!base.isAccepted) return base
-            // Only KJB, the system's trusted controllers and the car see the library, search and queues, and get the
-            // parts' commands (Favourite, Shuffle, Repeat); any other app gets plain transport (auto/CarBrowse.kt).
-            val access = browse.connect(controller)
-            val offered = ControllerAccess.sessionCommands(access, base.availableSessionCommands.commands, parts.flatMap { it.commands })
-            return MediaSession.ConnectionResult.AcceptedResultBuilder(session, controller)
-                .setAvailableSessionCommands(SessionCommands.Builder().apply { offered.forEach(::add) }.build())
-                .setAvailablePlayerCommands(if (access == Access.TRANSPORT) ControllerAccess.transport(base.availablePlayerCommands) else base.availablePlayerCommands)
-                .build()
+        /** Every player command by code, and the session's own commands with the library's: what [ControllerAccess.offer] narrows. */
+        private val everyPlayer: Set<Int> = MediaSession.ConnectionResult.DEFAULT_PLAYER_COMMANDS.let { all -> (0 until all.size()).map(all::get).toSet() }
+        private val everySession: Set<SessionCommand> = MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.commands
+
+        /**
+         * Only KJB, the system's trusted controllers and the car get every command, see the library, search and queues,
+         * and get the parts' commands (Favourite, Shuffle, Repeat); any other app gets plain transport (auto/CarBrowse.kt).
+         * Built from Media3's full defaults: since Media3 1.11 its own onConnect offers no command at all, and its own
+         * default here gives any other app read-only commands, without play and pause.
+         */
+        override fun onConnectAsync(session: MediaSession, controller: MediaSession.ControllerInfo): ListenableFuture<MediaSession.ConnectionResult> {
+            val offer = ControllerAccess.offer(browse.connect(controller), everyPlayer, everySession, parts.flatMap { it.commands })
+            return Futures.immediateFuture(
+                MediaSession.ConnectionResult.AcceptedResultBuilder(session)
+                    .setAvailableSessionCommands(SessionCommands.Builder().apply { offer.session.forEach(::add) }.build())
+                    .setAvailablePlayerCommands(Player.Commands.Builder().apply { offer.player.forEach(::add) }.build())
+                    .build(),
+            )
         }
 
         override fun onMediaButtonEvent(session: MediaSession, controllerInfo: MediaSession.ControllerInfo, intent: Intent): Boolean =
