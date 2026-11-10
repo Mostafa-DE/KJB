@@ -240,6 +240,22 @@ class BackupRestoreTest {
     }
 
     @Test
+    fun `bookmarks restored where the song has a new path land on that song, known as the phone knows it, and follow it`() {
+        val stores = MemoryStores()
+
+        restore(stores, newLibrary, chosen = setOf(Section.BOOKMARKS))
+
+        val state = stores.songState
+        assertEquals(listOf(30_000L to "Chorus", 95_000L to ""), state.bookmarksOf(newLantern.path).map { it.positionMs to it.note })
+        assertEquals(mapOf(newLantern.path to newLantern.ref.mediaStoreId, newWater.path to newWater.ref.mediaStoreId), state.ids)
+        // Renamed in its folder later: found by its id hint, as queues and Favourites are, its bookmarks go with it.
+        val renamed = BackupFixtures.moved(newLantern, "/storage/1A2B-3C4D/Songs/Paper Lantern (live).flac", newLantern.durationMs)
+            .let { it.copy(ref = it.ref.copy(mediaStoreId = newLantern.ref.mediaStoreId)) }
+        val after = state.refresh { ref -> SongResolver(listOf(renamed, newBell, newWater)).find(ref)?.ref }
+        assertEquals(2, after.bookmarksOf(renamed.path).size)
+    }
+
+    @Test
     fun `songs not on the phone are listed, and left out of what they were in`() {
         val stores = MemoryStores()
         val library = listOf(lantern, bell)

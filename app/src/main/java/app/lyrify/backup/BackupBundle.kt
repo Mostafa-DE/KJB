@@ -240,10 +240,13 @@ object BackupBundle {
 
     /**
      * Each song's place and bookmarks, read through the song state's own API (its places, then [SongState.bookmarksOf]):
-     * songs with a place first, the oldest first, as it keeps them. The speeds and the part repeating stay on the phone.
+     * songs with a place first, the oldest first, as it keeps them. A song is known as the song state knows it (its path
+     * and [SongState.ids] hint), kept by its path only, as every section is ([bare]). The speeds and the part repeating
+     * stay on the phone.
      */
     private fun marksOf(state: SongState): List<BackupMarks> = (state.places.keys + state.bookmarks.keys).distinct().map { path ->
-        BackupMarks(path, state.places[path], state.bookmarksOf(path).map { BackupBookmark(it.positionMs, it.note) })
+        val song = bare(SongRef(path, state.ids[path]))
+        BackupMarks(song.path, state.places[path], state.bookmarksOf(path).map { BackupBookmark(it.positionMs, it.note) })
     }
 
     /** The lyrics choices: no write cut short (its entry holds lyrics text), nor what only a newer version could read. */

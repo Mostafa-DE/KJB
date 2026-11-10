@@ -101,6 +101,7 @@ object BackupFixtures {
         bookmarks = mapOf(lantern.path to listOf(Bookmark(1, 30_000, "Chorus"), Bookmark(2, 95_000, ""))),
         part = AbPart(lantern.path, 30_000, 60_000),
         nextBookmarkId = 3,
+        ids = mapOf(lantern.path to 11L, water.path to 13L),
     )
 
     val buds: OutputKey = OutputKey(OutputKind.BLUETOOTH, "Harbour Buds")

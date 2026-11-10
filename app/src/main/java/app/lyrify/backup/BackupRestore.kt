@@ -277,14 +277,15 @@ class RestorePlan(val contents: BackupContents, resolver: SongResolver) {
 
         /**
          * [now] with the backup's places for songs that have none, and its bookmarks not there yet (the same spot and
-         * note), each [song] as the song state knows it, through the song state's own API ([SongState.withPlace],
-         * [SongState.withBookmark]), which gives each bookmark its new id and keeps the newest places.
+         * note), each on its song as this phone knows it (its path and id hint, [Song.ref]), so they follow it when it
+         * moves. Through the song state's own API ([SongState.withPlace], [SongState.withBookmark]), which gives each
+         * bookmark its new id, keeps the newest places and holds its caps (a bookmark past them is left out).
          */
         internal fun mergeMarks(now: SongState, marks: List<Pair<Song, BackupMarks>>): SongState = marks.fold(now) { before, (song, kept) ->
-            val key = song.path
-            val placed = kept.placeMs?.takeIf { key !in before.places }?.let { before.withPlace(key, it) } ?: before
+            val key = song.ref
+            val placed = kept.placeMs?.takeIf { key.path !in before.places }?.let { before.withPlace(key, it) } ?: before
             kept.bookmarks.fold(placed) { state, mark ->
-                if (state.bookmarksOf(key).any { it.positionMs == mark.positionMs && it.note == mark.note }) state else state.withBookmark(key, mark.positionMs, mark.note).first
+                if (state.bookmarksOf(key.path).any { it.positionMs == mark.positionMs && it.note == mark.note }) state else state.withBookmark(key, mark.positionMs, mark.note)?.first ?: state
             }
         }
 
