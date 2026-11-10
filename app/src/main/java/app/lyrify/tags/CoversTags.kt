@@ -69,13 +69,8 @@ interface AlbumSource {
     suspend fun cover(release: MbRelease): MetaAnswer<Cover>
 }
 
-/** [AlbumSource] over the one [AlbumLookup] and the cover pipeline, which decodes on [compute]. */
-class PhoneAlbumSource(
-    private val lookup: AlbumLookup,
-    private val pipeline: CoverPipeline,
-    override val busy: StateFlow<Boolean>,
-    private val compute: CoroutineDispatcher = Dispatchers.Default,
-) : AlbumSource {
+/** [AlbumSource] over the one [AlbumLookup] and the cover pipeline. */
+class PhoneAlbumSource(private val lookup: AlbumLookup, private val pipeline: CoverPipeline, override val busy: StateFlow<Boolean>) : AlbumSource {
     override suspend fun check(album: PhoneAlbum, fresh: Boolean): Lookup = lookup.check(album, fresh)
 
     override suspend fun search(album: PhoneAlbum, title: String, artist: String?): Lookup = lookup.search(album, title, artist)
@@ -83,7 +78,7 @@ class PhoneAlbumSource(
     override suspend fun dated(match: ReleaseMatch): MetaAnswer<ReleaseMatch> = lookup.withOriginalYear(match)
 
     override suspend fun cover(release: MbRelease): MetaAnswer<Cover> = when (val answer = lookup.cover(release)) {
-        is MetaAnswer.Ok -> withContext(compute) { pipeline.prepare(answer.value) }?.let { MetaAnswer.Ok(it, answer.fromCache) } ?: MetaAnswer.Failed("not a usable image")
+        is MetaAnswer.Ok -> pipeline.prepare(answer.value)?.let { MetaAnswer.Ok(it, answer.fromCache) } ?: MetaAnswer.Failed("not a usable image")
         MetaAnswer.NotFound -> MetaAnswer.NotFound
         MetaAnswer.Busy -> MetaAnswer.Busy
         is MetaAnswer.Failed -> answer
