@@ -44,6 +44,7 @@ class EqualizerScreenTest {
         assertEquals(BuiltInPreset.entries.map(PresetChoice::BuiltIn) + PresetChoice.Own("Late Night") + PresetChoice.Own("Bright Morning"), state.presets)
         assertEquals(11, BuiltInPreset.entries.size)
         assertEquals(PresetChoice.Own("Late Night"), state.selected)
+        assertEquals(eqOutputRows(profiles, buds), state.outputs)
     }
 
     @Test
