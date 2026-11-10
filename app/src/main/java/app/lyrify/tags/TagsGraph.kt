@@ -23,6 +23,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
 
@@ -114,6 +115,16 @@ object TagsGraph {
      */
     @Synchronized
     fun lookup(context: Context): AlbumLookup = lookup ?: AlbumLookup(MusicBrainz(client(context)), ::log).also { lookup = it }
+
+    /**
+     * The writes the start-up recovery set aside because their song could not be read at [JournalRecovery.READ_TRIES]
+     * starts in a row (their originals kept), once it is done: Covers & tags says how many.
+     */
+    suspend fun uncheckable(context: Context): Int {
+        recovered.await()
+        val journal = parts(context.applicationContext).journal
+        return withContext(Dispatchers.IO) { journal.uncheckable() }
+    }
 
     /** History and Undo's records, for the History list. */
     fun undo(context: Context): UndoStore = parts(context.applicationContext).undo

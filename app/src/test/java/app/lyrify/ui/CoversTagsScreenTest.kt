@@ -108,6 +108,13 @@ class CoversTagsScreenTest {
     // Words
 
     @Test
+    fun `songs whose interrupted write could not be checked get one line, and none when there are none`() {
+        assertEquals(null, uncheckableWords(0))
+        assertEquals(Words(R.plurals.tags_uncheckable, 1, listOf(1)), uncheckableWords(1))
+        assertEquals(Words(R.plurals.tags_uncheckable, 3, listOf(3)), uncheckableWords(3))
+    }
+
+    @Test
     fun `every song outcome has its own words`() {
         assertEquals(R.string.tags_outcome_busy, outcomeWords(SongOutcome.BUSY))
         assertEquals(R.string.tags_outcome_recovery, outcomeWords(SongOutcome.RECOVERY_PENDING))

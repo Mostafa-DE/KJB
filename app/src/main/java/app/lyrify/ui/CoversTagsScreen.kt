@@ -117,6 +117,12 @@ fun applyCopy(albums: List<AlbumChanges>, noted: Boolean): ApplyCopy = ApplyCopy
 /** Writing needs notification access (plan decision 1), and one apply at a time. */
 fun canWrite(access: Boolean, state: CoversTagsState): Boolean = access && state.applying == null
 
+/**
+ * The line for the songs whose interrupted write could not be checked at several starts (their originals kept), or
+ * null when there are none.
+ */
+fun uncheckableWords(count: Int): Words? = if (count > 0) Words(R.plurals.tags_uncheckable, count, listOf(count)) else null
+
 /** What happened to one song, in words. */
 fun outcomeWords(outcome: SongOutcome): Int = when (outcome) {
     SongOutcome.WRITTEN -> R.string.tags_outcome_written
@@ -283,6 +289,10 @@ private sealed interface PageRow {
         override val key = "note"
     }
 
+    data class Uncheckable(val words: Words) : PageRow {
+        override val key = "uncheckable"
+    }
+
     data class Record(val record: AlbumRecord) : PageRow {
         override val key = "album ${record.id}"
     }
@@ -292,8 +302,9 @@ private sealed interface PageRow {
     }
 }
 
-private fun pageRows(state: CoversTagsState): List<PageRow> = buildList {
+private fun pageRows(state: CoversTagsState, uncheckable: Int): List<PageRow> = buildList {
     add(PageRow.Start)
+    uncheckableWords(uncheckable)?.let { add(PageRow.Uncheckable(it)) }
     for ((section, count) in reviewSections(state)) {
         add(PageRow.Section(section, count))
         when (section) {
@@ -334,7 +345,8 @@ fun CoversTagsPage() {
     var confirmOne by remember { mutableStateOf<OpenAlbum?>(null) }
     var searching by rememberSaveable { mutableStateOf<String?>(null) }
     var problems by rememberSaveable { mutableStateOf<String?>(null) }
-    val rows = remember(state) { pageRows(state) }
+    val uncheckable by produceState(0) { value = TagsGraph.uncheckable(context) }
+    val rows = remember(state, uncheckable) { pageRows(state, uncheckable) }
     val writable = canWrite(access, state)
 
     fun apply(albumId: String, match: ReleaseMatch) {
@@ -405,6 +417,12 @@ fun CoversTagsPage() {
                     )
                     PageRow.SamsungNote -> Text(
                         stringResource(R.string.tags_samsung_note),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = ScreenPadding, vertical = 4.dp),
+                    )
+                    is PageRow.Uncheckable -> Text(
+                        row.words.text(),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(horizontal = ScreenPadding, vertical = 4.dp),
