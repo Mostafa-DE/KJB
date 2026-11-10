@@ -1,0 +1,520 @@
+package app.lyrify.ui
+
+import androidx.activity.BackEventCompat
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibilityScope
+import androidx.compose.animation.BoundsTransform
+import androidx.compose.animation.ContentTransform
+import androidx.compose.animation.EnterExitState
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.SharedTransitionScope
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.VisibilityThreshold
+import androidx.compose.animation.core.animateDp
+import androidx.compose.animation.core.animate
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandHorizontally
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.lazy.LazyItemScope
+import androidx.compose.foundation.lazy.grid.LazyGridItemScope
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.dp
+import app.lyrify.settings.DockTab
+
+// How KJB's screens change, after the motion spec (handoff/motion-spec.md): the pure decisions first (what changed,
+// which way it moves, how far a drag or a back swipe has gone), tested on the JVM, then the transitions they pick. The
+// durations and curves are Motion's (Theme.kt); with reduced motion every slide, scale and container transform becomes a
+// fade of Motion.REDUCED_MS (decision D4).
+
+// States and lists
+
+/**
+ * One state of a screen replacing another (its list, its empty state, its loading state): the old one fades out, then the
+ * new one fades in, so they never overlap; with [reduced] motion a short cross-fade.
+ */
+fun fadeThrough(reduced: Boolean): ContentTransform =
+    if (reduced) {
+        fadeIn(tween(Motion.REDUCED_MS)) togetherWith fadeOut(tween(Motion.REDUCED_MS))
+    } else {
+        fadeIn(tween(Motion.FADE_IN_MS, delayMillis = Motion.FADE_OUT_MS)) togetherWith fadeOut(tween(Motion.FADE_OUT_MS))
+    }
+
+/**
+ * [content] for [state], faded through ([fadeThrough]) whenever its [kind] changes: give the kind of state (loading,
+ * empty, the list), never the data, so a list that changes stays in place and its rows move on their own.
+ */
+@Composable
+fun <S> FadeThrough(state: S, modifier: Modifier = Modifier, kind: (S) -> Any? = { it }, content: @Composable (S) -> Unit) {
+    val reduced = LocalReducedMotion.current
+    AnimatedContent(state, modifier, transitionSpec = { fadeThrough(reduced) }, contentKey = kind, label = "state") { content(it) }
+}
+
+/**
+ * A list row's motion: it slides to its new place and fades in and out as rows come and go ([LazyItemScope.animateItem]);
+ * with [reduced] motion it only fades. The row needs its stable key; read [reduced] once above the list.
+ */
+fun LazyItemScope.rowMotion(reduced: Boolean): Modifier =
+    if (reduced) Modifier.animateItem(fadeInSpec = tween(Motion.REDUCED_MS), placementSpec = null, fadeOutSpec = tween(Motion.REDUCED_MS)) else Modifier.animateItem()
+
+/** [rowMotion] for a grid's cell. */
+fun LazyGridItemScope.rowMotion(reduced: Boolean): Modifier =
+    if (reduced) Modifier.animateItem(fadeInSpec = tween(Motion.REDUCED_MS), placementSpec = null, fadeOutSpec = tween(Motion.REDUCED_MS)) else Modifier.animateItem()
+
+/** The last value shown, kept while what shows it leaves (a bar or a sheet fading out after its state went away). */
+class Kept<T>(var value: T)
+
+/** Play and Pause taking each other's place: the new icon fades in and grows from 80% with a small overshoot. */
+fun playPauseSwap(reduced: Boolean): ContentTransform =
+    if (reduced) {
+        ContentTransform(fadeIn(tween(Motion.REDUCED_MS)), fadeOut(tween(Motion.REDUCED_MS)), sizeTransform = null)
+    } else {
+        ContentTransform(fadeIn(tween(Motion.QUICK_MS)) + scaleIn(Motion.indicator, initialScale = 0.8f), fadeOut(tween(Motion.FADE_OUT_MS)), sizeTransform = null)
+    }
+
+// The bottom chrome
+
+/** The Now bar and the dock (or the selection bar) arriving: up from below while they fade in; with reduced motion a fade. */
+fun chromeEnter(reduced: Boolean): EnterTransition =
+    if (reduced) fadeIn(tween(Motion.REDUCED_MS)) else slideInVertically(tween(Motion.OPEN_MS, easing = Motion.Rise)) { it } + fadeIn(tween(Motion.FADE_IN_MS))
+
+/** The chrome leaving: down and out, as a full screen or the keyboard takes its place. */
+fun chromeExit(reduced: Boolean): ExitTransition =
+    if (reduced) fadeOut(tween(Motion.REDUCED_MS)) else slideOutVertically(tween(Motion.SETTLE_MS, easing = Motion.EmphasizedOut)) { it } + fadeOut(tween(Motion.SETTLE_MS))
+
+/**
+ * The selection bar and the Now bar with the dock taking each other's place: the old one fades out, the new one rises a
+ * fifth of its height as it fades in. The slot takes the new size at once (no size animation), so the pages under it
+ * pad once, not on every frame.
+ */
+fun chromeSwap(reduced: Boolean): ContentTransform {
+    if (reduced) return ContentTransform(fadeIn(tween(Motion.REDUCED_MS)), fadeOut(tween(Motion.REDUCED_MS)), sizeTransform = null)
+    val enter = fadeIn(tween(Motion.FADE_IN_MS, delayMillis = Motion.FADE_OUT_MS)) + slideInVertically(tween(Motion.OPEN_MS, easing = Motion.Rise)) { it / 5 }
+    return ContentTransform(enter, fadeOut(tween(Motion.FADE_OUT_MS)), sizeTransform = null)
+}
+
+/** The Now bar arriving when a song loads: it rises half its height as it fades in, into room made at once (no resizing on every frame). */
+fun barEnter(reduced: Boolean): EnterTransition =
+    if (reduced) fadeIn(tween(Motion.REDUCED_MS)) else slideInVertically(tween(Motion.OPEN_MS, easing = Motion.Rise)) { it / 2 } + fadeIn(tween(Motion.FADE_IN_MS))
+
+/** The Now bar leaving when nothing is loaded any more. */
+fun barExit(reduced: Boolean): ExitTransition =
+    if (reduced) fadeOut(tween(Motion.REDUCED_MS)) else slideOutVertically(tween(Motion.SETTLE_MS, easing = Motion.EmphasizedOut)) { it / 2 } + fadeOut(tween(Motion.SETTLE_MS))
+
+/** A badge or a dot arriving: it pops from 60% with a small overshoot as it fades in (motion spec 2.7). */
+fun badgeIn(reduced: Boolean): EnterTransition =
+    if (reduced) fadeIn(tween(Motion.REDUCED_MS)) else scaleIn(Motion.indicator, initialScale = 0.6f) + fadeIn(tween(Motion.FADE_IN_MS))
+
+/** A badge leaving. */
+fun badgeOut(reduced: Boolean): ExitTransition =
+    if (reduced) fadeOut(tween(Motion.REDUCED_MS)) else scaleOut(tween(Motion.FADE_IN_MS), targetScale = 0.6f) + fadeOut(tween(Motion.FADE_IN_MS))
+
+/** A chip arriving in its row: it fades in and grows from 92% as its room opens beside it. */
+fun chipIn(reduced: Boolean): EnterTransition =
+    if (reduced) fadeIn(tween(Motion.REDUCED_MS)) else fadeIn(tween(Motion.FADE_IN_MS)) + scaleIn(Motion.settle, initialScale = 0.92f) + expandHorizontally(spring(dampingRatio = 1f, stiffness = 300f, visibilityThreshold = IntSize.VisibilityThreshold))
+
+/** A chip leaving its row. */
+fun chipOut(reduced: Boolean): ExitTransition =
+    if (reduced) fadeOut(tween(Motion.REDUCED_MS)) else fadeOut(tween(Motion.FADE_OUT_MS)) + scaleOut(tween(Motion.FADE_IN_MS), targetScale = 0.92f) + shrinkHorizontally(spring(dampingRatio = 1f, stiffness = 300f, visibilityThreshold = IntSize.VisibilityThreshold))
+
+/** Something that opens its own room (a banner, an expander): it grows and fades in; with reduced motion it only fades. */
+fun expandIn(reduced: Boolean): EnterTransition =
+    if (reduced) fadeIn(tween(Motion.REDUCED_MS)) else expandVertically(spring(dampingRatio = 1f, stiffness = 300f, visibilityThreshold = IntSize.VisibilityThreshold)) + fadeIn(tween(Motion.FADE_IN_MS))
+
+/** Its room closing. */
+fun shrinkOut(reduced: Boolean): ExitTransition =
+    if (reduced) fadeOut(tween(Motion.REDUCED_MS)) else shrinkVertically(spring(dampingRatio = 1f, stiffness = 300f, visibilityThreshold = IntSize.VisibilityThreshold)) + fadeOut(tween(Motion.FADE_OUT_MS))
+
+// A back swipe (predictive back, Android 14 and later)
+
+/** What a back swipe takes away: the top [View], the page layer's top [Page] (by its key), or the [Pages] over the views it goes back to. */
+sealed interface BackTaking {
+    data class View(val view: FullScreen) : BackTaking
+
+    data class Page(val key: String) : BackTaking
+
+    data class Pages(val views: List<FullScreen>) : BackTaking
+}
+
+/**
+ * The back swipe in progress, shared by the shell's layers: what it [taking]s away, how far it has gone ([progress], 0
+ * to 1) and from which edge. The layer taken draws [backPeek] of it and the one under it lights up; both read it while
+ * drawing only, so a swipe never recomposes a page. [gone]: the pages fading away over the views they go back to.
+ */
+@Stable
+class BackSwipe {
+    var taking: BackTaking? by mutableStateOf(null)
+        private set
+
+    var progress: Float by mutableFloatStateOf(0f)
+        private set
+
+    var fromLeft: Boolean by mutableStateOf(true)
+        private set
+
+    var gone: Float by mutableFloatStateOf(0f)
+        private set
+
+    fun start(what: BackTaking) {
+        taking = what
+        progress = 0f
+        gone = 0f
+    }
+
+    fun follow(event: BackEventCompat) {
+        progress = event.progress
+        fromLeft = event.swipeEdge == BackEventCompat.EDGE_LEFT
+    }
+
+    /** Given up: the layer springs back, then nothing is taken. */
+    suspend fun cancel() {
+        animate(progress, 0f, animationSpec = Motion.release) { value, _ -> progress = value }
+        clear()
+    }
+
+    /** Let go over a container transform: the shrink is let go of while the layer goes into the Now bar. */
+    suspend fun settle() {
+        animate(progress, 0f, animationSpec = tween(Motion.OPEN_MS, easing = Motion.Rise)) { value, _ -> progress = value }
+    }
+
+    /** Let go over the views: the pages fade away from where the swipe left them. */
+    suspend fun leave() {
+        animate(0f, 1f, animationSpec = tween(Motion.SETTLE_MS, easing = Motion.EmphasizedOut)) { value, _ -> gone = value }
+    }
+
+    fun clear() {
+        taking = null
+        progress = 0f
+        gone = 0f
+    }
+}
+
+/**
+ * A layer as a back swipe takes it ([taken], read while drawing): [backPeek]'s shrink, shift and corners, and its fade
+ * when it goes away over views ([BackSwipe.gone]). Untouched while nothing is taken.
+ */
+fun Modifier.backPeek(swipe: BackSwipe, taken: () -> Boolean): Modifier = graphicsLayer {
+    if (!taken()) return@graphicsLayer
+    val peek = backPeek(swipe.progress, swipe.fromLeft, size.width)
+    scaleX = peek.scale
+    scaleY = peek.scale
+    translationX = peek.shiftX
+    alpha = 1f - swipe.gone
+    shape = RoundedCornerShape(PEEK_CORNER * peek.corner)
+    clip = peek.corner > 0f
+}
+
+/** The corners a layer taken by a back swipe or a drag rounds to. */
+val PEEK_CORNER = 28.dp
+
+// The container transform between the Now bar and the player (decision D2)
+
+/**
+ * One end of the container transform: the shell's shared transition scope, and the visibility of that end, the Now
+ * bar's chrome ([bar]) or the player's layer. Null where nothing grows: outside the shell, and for a view that rises.
+ */
+@Stable
+class Container(val shared: SharedTransitionScope, val visibility: AnimatedVisibilityScope, val bar: Boolean)
+
+val LocalContainer = compositionLocalOf<Container?> { null }
+
+private const val CONTAINER_SURFACE = "player surface"
+private const val CONTAINER_COVER = "player cover"
+
+/**
+ * The bounds a Now bar capsule or a player screen ([container]'s end) grow from and into: the content scaled to them
+ * (ScaleToBounds, so the player is laid out once, not on every frame), the outgoing end fading out as the incoming one
+ * fades in, the corners going from the capsule's to none. Nothing without a container.
+ */
+@Composable
+fun containerBounds(container: Container?): Modifier {
+    container ?: return Modifier
+    val corner by container.visibility.transition.animateDp(transitionSpec = { tween(containerMs(targetState), easing = Motion.Rise) }, label = "container corner") { state ->
+        if ((state == EnterExitState.Visible) == container.bar) CAPSULE_CORNER else 0.dp
+    }
+    return with(container.shared) {
+        Modifier.sharedBounds(
+            rememberSharedContentState(CONTAINER_SURFACE),
+            container.visibility,
+            enter = fadeIn(tween(Motion.FADE_IN_MS * 2, delayMillis = Motion.FADE_OUT_MS)),
+            exit = fadeOut(tween(Motion.FADE_IN_MS)),
+            boundsTransform = ContainerTransform,
+            resizeMode = SharedTransitionScope.ResizeMode.scaleToBounds(ContentScale.FillWidth, Alignment.Center),
+            clipInOverlayDuringTransition = OverlayClip(RoundedCornerShape(corner)),
+        )
+    }
+}
+
+/**
+ * The cover as it moves between the Now bar's orb and the player: one shared element, clipped by the caller with the
+ * player's corners (which at the orb's size round to its circle, so the shape follows the size).
+ */
+@Composable
+fun containerCover(container: Container?): Modifier {
+    container ?: return Modifier
+    return with(container.shared) { Modifier.sharedElement(rememberSharedContentState(CONTAINER_COVER), container.visibility, boundsTransform = ContainerTransform) }
+}
+
+/** Opening grows over [Motion.CONTAINER_MS]; closing, the smaller move back, over [Motion.OPEN_MS] (the spec's 0.7). */
+private fun containerMs(target: EnterExitState): Int = if (target == EnterExitState.Visible) Motion.CONTAINER_MS else Motion.OPEN_MS
+
+private val ContainerTransform = BoundsTransform { from, to -> tween(if (to.width >= from.width) Motion.CONTAINER_MS else Motion.OPEN_MS, easing = Motion.Rise) }
+
+/** The Now bar's capsule corners. */
+private val CAPSULE_CORNER = 32.dp
+
+// The page layer
+
+/** The page layer under the views: a tab and its pages above the root (the top last), as the shell draws it. */
+@Immutable
+data class PageLayer(val tab: DockTab, val stack: List<Page>) {
+    /** The saved-state key of the page drawn ([pageKey]): the layer's identity while it moves. */
+    val key: String get() = pageKey(tab, stack)
+}
+
+fun pageLayerOf(state: NavState): PageLayer = PageLayer(state.tab, state.pages)
+
+/** How the page layer changed, which picks how it moves. */
+sealed interface PageChange {
+    /** Another tab, coming from its [side] of the dock (1 from the end, -1 from the start). */
+    data class Tab(val side: Int) : PageChange
+
+    /** A page opened over the one shown. */
+    data object Push : PageChange
+
+    /** Back to the page under it. */
+    data object Pop : PageChange
+
+    /** More than one page gone at once (the dock tapped again on a deep stack): it fades through to the root. */
+    data object Reset : PageChange
+
+    data object None : PageChange
+}
+
+/** What changed between the layers [from] and [to]: the stack decides, not the tab alone (motion spec F1). */
+fun pageChange(from: PageLayer, to: PageLayer): PageChange = when {
+    from.tab != to.tab -> PageChange.Tab(tabSlide(from.tab, to.tab))
+    from.stack == to.stack -> PageChange.None
+    to.stack.size == from.stack.size + 1 && to.stack.startsWith(from.stack) -> PageChange.Push
+    to.stack.size == from.stack.size - 1 && from.stack.startsWith(to.stack) -> PageChange.Pop
+    else -> PageChange.Reset
+}
+
+private fun List<Page>.startsWith(other: List<Page>): Boolean = size >= other.size && subList(0, other.size) == other
+
+/**
+ * The side the new page comes from, on screen: 1 from the right, -1 from the left, 0 for none. A push comes from the
+ * end, a pop from the start, another tab from its side; right to left mirrors them.
+ */
+fun enterSide(change: PageChange, rtl: Boolean): Int {
+    val side = when (change) {
+        is PageChange.Tab -> change.side
+        PageChange.Push -> 1
+        PageChange.Pop -> -1
+        PageChange.Reset, PageChange.None -> 0
+    }
+    return if (rtl) -side else side
+}
+
+/**
+ * How the page layer moves for [change] (shared axis X, motion spec 2.1): a push or a pop slides a tenth of the width
+ * from [enterSide] as it fades in, while the old page slides the other way and fades out first, so two pages never
+ * show half each; a pop draws the page it goes back to under the one leaving. Another tab is the dock's [tabSwitch];
+ * a reset fades through. With [reduced] motion every change is a 100 ms fade (decision D4).
+ */
+fun pageTransition(change: PageChange, rtl: Boolean, reduced: Boolean): ContentTransform {
+    if (change == PageChange.None) return EnterTransition.None togetherWith ExitTransition.None
+    if (reduced) return fadeIn(tween(Motion.REDUCED_MS)) togetherWith fadeOut(tween(Motion.REDUCED_MS))
+    val side = enterSide(change, rtl)
+    return when (change) {
+        is PageChange.Tab -> tabSwitch(side, reduced = false)
+        PageChange.Reset -> fadeThrough(reduced = false)
+        else -> {
+            val enter = slideInHorizontally(tween(Motion.OPEN_MS, easing = Motion.Rise)) { it / PAGE_SHIFT_SHARE * side } +
+                fadeIn(tween(Motion.OPEN_MS - Motion.FADE_OUT_MS, delayMillis = Motion.FADE_OUT_MS))
+            val exit = slideOutHorizontally(tween(Motion.SETTLE_MS, easing = Motion.EmphasizedOut)) { -it / PAGE_SHIFT_SHARE * side } + fadeOut(tween(Motion.FADE_OUT_MS))
+            ContentTransform(enter, exit, targetContentZIndex = if (change == PageChange.Pop) -1f else 0f)
+        }
+    }
+}
+
+/**
+ * The page layer under a back swipe, which seeks it by the finger's progress: the page gone back to waits under the
+ * one leaving, sliding in from [side] a little as the finger moves, and the one leaving (shrunk by [backPeek]) fades
+ * only toward the end, so it stays clear while the user decides. Linear in time: the finger is the easing.
+ */
+fun backTransition(side: Int, reduced: Boolean): ContentTransform {
+    if (reduced) return ContentTransform(fadeIn(tween(Motion.REDUCED_MS)), fadeOut(tween(Motion.REDUCED_MS)), targetContentZIndex = -1f)
+    val enter = slideInHorizontally(tween(Motion.OPEN_MS, easing = LinearEasing)) { it / PAGE_SHIFT_SHARE * side }
+    return ContentTransform(enter, fadeOut(tween(Motion.OPEN_MS, easing = Motion.EmphasizedOut)), targetContentZIndex = -1f)
+}
+
+/** A page moves a tenth of the width (the spec's Dist.PageX, the dock's own tab slide). */
+private const val PAGE_SHIFT_SHARE = 10
+
+// The views
+
+/** The views drawn: those [drawn] before, in their places (a closing one stays until it has left), then those newly [shown] on top. */
+fun drawnViews(drawn: List<FullScreen>, shown: List<FullScreen>): List<FullScreen> = drawn + shown.filterNot { it in drawn }
+
+/** The views drawn that are leaving: drawn, and no longer shown. */
+fun leavingViews(drawn: List<FullScreen>, shown: List<FullScreen>): List<FullScreen> = drawn.filterNot { it in shown }
+
+/** How a view arrives and leaves: grown out of the Now bar and back into it, or rising over the screen. */
+enum class ViewMotion { CONTAINER, RISE }
+
+/**
+ * The player (and the companion's Now screen, the Now bar's other end) grows out of the bar while the bar is on screen
+ * ([barShown]); every other view, and the player without the bar (from a Tools page, the widget), rises.
+ */
+fun viewMotion(view: FullScreen, barShown: Boolean): ViewMotion =
+    if (barShown && (view == FullScreen.Player || view == FullScreen.CompanionNow)) ViewMotion.CONTAINER else ViewMotion.RISE
+
+/**
+ * A view arriving: rising 18% of its height as it fades in (the prototype's upIn, shared axis Y); grown from the Now
+ * bar, the shared bounds move it, so the layer itself does nothing. With [reduced] motion, a 100 ms fade.
+ */
+fun viewEnter(motion: ViewMotion, reduced: Boolean): EnterTransition = when {
+    reduced -> fadeIn(tween(Motion.REDUCED_MS))
+    motion == ViewMotion.CONTAINER -> EnterTransition.None
+    else -> slideInVertically(tween(Motion.OPEN_MS, easing = Motion.Rise)) { it * RISE_SHARE / 100 } + fadeIn(tween(Motion.OPEN_MS, easing = Motion.Rise))
+}
+
+/** A view leaving: down and out, the reverse of [viewEnter], a little quicker. */
+fun viewExit(motion: ViewMotion, reduced: Boolean): ExitTransition = when {
+    reduced -> fadeOut(tween(Motion.REDUCED_MS))
+    motion == ViewMotion.CONTAINER -> ExitTransition.None
+    else -> slideOutVertically(tween(Motion.SETTLE_MS, easing = Motion.EmphasizedOut)) { it * RISE_SHARE / 100 } + fadeOut(tween(Motion.SETTLE_MS, easing = Motion.EmphasizedOut))
+}
+
+/** How far a view rises, in percent of its height. */
+private const val RISE_SHARE = 18
+
+// The bottom slot
+
+/** What the bottom chrome shows: a page's selection bar, the Now bar and the dock, or nothing. */
+enum class BottomSlot { SELECTION, BAR_AND_DOCK, NONE }
+
+/** Nothing over the keyboard ([ime]) or where the tab shows no [chrome]; else the selection bar while [selecting], or the Now bar and the dock. */
+fun bottomSlot(selecting: Boolean, chrome: Boolean, ime: Boolean): BottomSlot = when {
+    !chrome || ime -> BottomSlot.NONE
+    selecting -> BottomSlot.SELECTION
+    else -> BottomSlot.BAR_AND_DOCK
+}
+
+// A finger taking a layer away
+
+/**
+ * How a layer looks while a finger takes it away: its [scale], how far it has moved ([shiftX], [shiftY], px), how round
+ * its corners are ([corner], 0 to 1 of [PEEK_CORNER]), and how dim the layer under it still is ([dim], black's alpha).
+ */
+@Immutable
+data class Peek(val scale: Float, val shiftX: Float, val shiftY: Float, val corner: Float, val dim: Float)
+
+/** The layer under a view, dimmed (One UI dims the old screen). */
+const val DIM_UNDER: Float = 0.24f
+
+/** How small a back swipe makes a layer (the predictive back guidance's 0.9). */
+const val BACK_SCALE: Float = 0.9f
+
+/** How small a drag down makes the player. */
+const val DRAG_SCALE: Float = 0.92f
+
+/**
+ * A back swipe [progress] (0 to 1, clamped) from the left edge ([fromLeft]) or the right: the layer shrinks to
+ * [BACK_SCALE], rounds its corners and moves a twentieth of its [width] the finger's way, while the layer under it
+ * lights up from [DIM_UNDER].
+ */
+fun backPeek(progress: Float, fromLeft: Boolean, width: Float): Peek {
+    val p = progress.coerceIn(0f, 1f)
+    val shift = p * width / BACK_SHIFT_SHARE
+    return Peek(scale = 1f - (1f - BACK_SCALE) * p, shiftX = if (fromLeft) shift else -shift, shiftY = 0f, corner = p, dim = DIM_UNDER * (1f - p))
+}
+
+private const val BACK_SHIFT_SHARE = 20f
+
+/** The player dragged down [offset] px (never up) over its [height]: it follows the finger, shrinking to [DRAG_SCALE] and rounding by half the height. */
+fun dragPeek(offset: Float, height: Float): Peek {
+    val y = offset.coerceAtLeast(0f)
+    val p = if (height > 0f) (y / (height * DRAG_FULL_SHARE)).coerceIn(0f, 1f) else 0f
+    return Peek(scale = 1f - (1f - DRAG_SCALE) * p, shiftX = 0f, shiftY = y, corner = p, dim = DIM_UNDER * (1f - p))
+}
+
+private const val DRAG_FULL_SHARE = 0.5f
+
+/**
+ * Whether letting go of the player dragged down [offset] px at [velocity] px/s (down positive) closes it: past a quarter
+ * of its [height], or flung down faster than [fling] px/s while below where it started. Else it springs back.
+ */
+fun dragCloses(offset: Float, velocity: Float, height: Float, fling: Float): Boolean = offset > height * DRAG_CLOSE_SHARE || (offset > 0f && velocity > fling)
+
+private const val DRAG_CLOSE_SHARE = 0.25f
+
+/** The fling that closes the player, in dp per second. */
+const val DRAG_FLING_DP: Float = 800f
+
+// Dialogs
+
+/**
+ * A dialog that leaves before its action runs (decision D5): a tap starts the exit and keeps the action, which runs once
+ * the exit has ended, about 90 ms later. While it leaves, other taps are ignored, so a double tap never confirms twice
+ * and Cancel cannot follow a confirm.
+ */
+@Stable
+class DialogExit {
+    var leaving: Boolean by mutableStateOf(false)
+        private set
+
+    private var action: (() -> Unit)? = null
+
+    /** Starts the exit with [then] to run after it; false when the dialog is already leaving. */
+    fun leave(then: () -> Unit): Boolean {
+        if (leaving) return false
+        leaving = true
+        action = then
+        return true
+    }
+
+    /** The exit has ended: the action runs, once. */
+    fun ended() {
+        val then = action ?: return
+        action = null
+        then()
+    }
+}
+
+/** A dialog's card arriving: it fades in and grows from 94% with a little overshoot (the prototype's dlgIn). */
+fun dialogEnter(reduced: Boolean): EnterTransition =
+    if (reduced) fadeIn(tween(Motion.REDUCED_MS)) else fadeIn(tween(Motion.FADE_IN_MS)) + scaleIn(Motion.snappy, initialScale = DIALOG_FROM)
+
+/** The card leaving, quicker: it fades and shrinks a little. */
+fun dialogExit(reduced: Boolean): ExitTransition =
+    if (reduced) fadeOut(tween(Motion.REDUCED_MS)) else fadeOut(tween(Motion.FADE_OUT_MS)) + scaleOut(tween(Motion.FADE_OUT_MS), targetScale = DIALOG_TO)
+
+private const val DIALOG_FROM = 0.94f
+private const val DIALOG_TO = 0.96f

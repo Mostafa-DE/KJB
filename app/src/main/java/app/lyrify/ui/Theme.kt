@@ -372,6 +372,7 @@ data class ChromeColors(
     val shadowStrong: Color,
     val scrim: Color,
     val sheet: Color,
+    val bar: Color,
 )
 
 internal fun chromeColors(scheme: ColorScheme, brand: BrandColors, dark: Boolean) = ChromeColors(
@@ -389,7 +390,14 @@ internal fun chromeColors(scheme: ColorScheme, brand: BrandColors, dark: Boolean
     shadowStrong = if (dark) Color.Black.copy(alpha = 0.65f) else ShadowInk.copy(alpha = 0.38f),
     scrim = if (dark) Color.Black.copy(alpha = 0.56f) else ShadowInk.copy(alpha = 0.36f),
     sheet = if (dark) scheme.surfaceContainer else scheme.surfaceContainerLowest,
+    bar = scheme.surfaceContainerHigh.copy(alpha = BAR_ALPHA),
 )
+
+/** The words on the Now bar and the dock: the title in the theme's ink, the second line in its secondary ink, light or dark. */
+@Immutable
+data class BarInk(val title: Color, val line: Color)
+
+fun barInk(scheme: ColorScheme): BarInk = BarInk(title = scheme.onSurface, line = scheme.onSurfaceVariant)
 
 val LocalChromeColors = staticCompositionLocalOf { chromeColors(LightColors, LightBrandColors, dark = false) }
 
@@ -452,6 +460,9 @@ object Motion {
     /** Sizes and content that moves. */
     val settle: SpringSpec<Float> = spring(dampingRatio = 1f, stiffness = 300f)
 
+    /** Something the finger let go of short of its goal (the player dragged down, a back swipe given up): it settles back. */
+    val release: SpringSpec<Float> = spring(dampingRatio = 0.9f, stiffness = 400f)
+
     // Curves
 
     /** CSS "ease": the prototype's default (the cover springing back, a queue row moving). */
@@ -495,11 +506,23 @@ object Motion {
     /** A toast or a sheet arriving. */
     const val ARRIVE_MS = 280
 
-    /** The player opening; a lyric line taking its colour. */
+    /** The player opening; a lyric line taking its colour; a page or a full screen arriving. */
     const val OPEN_MS = 300
 
-    /** The cover turning to its lyrics. */
-    const val FLIP_MS = 550
+    /** The cover turning to its lyrics: the prototype's 550 ms cut to One UI's longest, 500 (decision D3). */
+    const val FLIP_MS = 500
+
+    /** A dialog, a state or new text fading in. */
+    const val FADE_IN_MS = 150
+
+    /** What leaves as something else fades in: a dialog closing, old text before the new. */
+    const val FADE_OUT_MS = 90
+
+    /** The Now bar growing into the player, and back: the largest move, so the longest. */
+    const val CONTAINER_MS = 450
+
+    /** With reduced motion, every slide, scale and container transform is a fade this long (decision D4). */
+    const val REDUCED_MS = 100
 }
 
 /** [spec], or with reduced motion snap(): the value lands at once. */
@@ -556,5 +579,8 @@ private const val GLASS_STEP = 0.01f
 private const val MIN_TEXT_CONTRAST = 4.5f
 private const val MIN_MARK_CONTRAST = 3f
 private const val GLASS_SOLID_ALPHA = 0.97f
+
+/** The Now bar and the dock: an elevated surface nearly opaque, so a list scrolling behind never reads through. */
+private const val BAR_ALPHA = 0.94f
 private const val PRESS_TINT = 0.10f
 private const val PRESS_MIN_MS = 60
