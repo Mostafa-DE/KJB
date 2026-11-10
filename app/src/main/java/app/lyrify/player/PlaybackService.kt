@@ -29,6 +29,8 @@ import androidx.media3.session.SessionResult
 import app.lyrify.LOG_TAG
 import app.lyrify.Lyrify
 import app.lyrify.R
+import app.lyrify.audio.LiveEq
+import app.lyrify.audio.OutputRoutesPart
 import app.lyrify.auto.Access
 import app.lyrify.auto.CarBrowse
 import app.lyrify.auto.ControllerAccess
@@ -102,7 +104,7 @@ private const val OPEN_PLAYER: Int = 1
 @OptIn(UnstableApi::class)
 class PlaybackService : MediaLibraryService() {
     /** The service's parts: P2, A1, A3 and A4 each add one line here, in merge order. */
-    private val parts: List<ServicePart> = listOf(WidgetPart(), LockLyricsPart())
+    private val parts: List<ServicePart> = listOf(WidgetPart(), LockLyricsPart(), OutputRoutesPart())
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + logFailures)
     private val io = CoroutineScope(SupervisorJob() + Dispatchers.IO + logFailures)
@@ -163,10 +165,15 @@ class PlaybackService : MediaLibraryService() {
         scope.launch { core.repeat.collect { engine.setRepeat(it); player.changed() } }
         scope.launch {
             settings.collect {
-                engine.setOffload(offloadAllowed(it.advanced, AudioChain.processing(it)))
                 engine.setGapless(it.advanced.gaplessPlayback)
                 player.changed()
             }
+        }
+        // Offload only while no stage changes the sound: levelling, or the equalizer of the output playing.
+        scope.launch {
+            combine(settings, LiveEq.of(this@PlaybackService).sound) { now, eq -> offloadAllowed(now.advanced, AudioChain.processing(now, eq)) }
+                .distinctUntilChanged()
+                .collect(engine::setOffload)
         }
         scope.launch { savePlaces(playing) { savePlace() } }
         scope.launch { repeatWhilePlaying(playing, POSITION_EVERY_MS) { tracker.position(engine.positionMs, playing = true) } }

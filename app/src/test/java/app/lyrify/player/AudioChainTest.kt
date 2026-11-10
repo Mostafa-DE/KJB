@@ -10,6 +10,7 @@ import androidx.media3.common.Timeline
 import androidx.media3.common.audio.AudioProcessor.StreamMetadata
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.extractor.metadata.id3.TextInformationFrame
+import app.lyrify.audio.EqSound
 import app.lyrify.audio.ReplayGainTags
 import app.lyrify.audio.Signals
 import app.lyrify.settings.AdvancedSettings
@@ -34,16 +35,20 @@ class AudioChainTest {
         val off = Settings(audio = AudioSettings(levelling = Levelling.OFF))
         val auto = Settings()
 
-        assertFalse(AudioChain.processing(off))
-        assertTrue(AudioChain.processing(auto))
-        assertTrue(offloadAllowed(AdvancedSettings(audioOffload = true), AudioChain.processing(off)))
-        assertFalse(offloadAllowed(AdvancedSettings(audioOffload = true), AudioChain.processing(auto)))
+        assertFalse(AudioChain.processing(off, EqSound()))
+        assertTrue(AudioChain.processing(auto, EqSound()))
+        assertTrue(AudioChain.processing(off, EqSound(enabled = true)))
+        // Set but switched off: the equalizer changes nothing.
+        assertFalse(AudioChain.processing(off, EqSound(preampDb = 6f, mono = true)))
+        assertTrue(offloadAllowed(AdvancedSettings(audioOffload = true), AudioChain.processing(off, EqSound())))
+        assertFalse(offloadAllowed(AdvancedSettings(audioOffload = true), AudioChain.processing(auto, EqSound())))
+        assertFalse(offloadAllowed(AdvancedSettings(audioOffload = true), AudioChain.processing(off, EqSound(enabled = true))))
     }
 
     @Test
     fun `each player gets a chain of its own, levelling first and the limiter last`() {
-        val first = AudioChain.processors({ Settings() }, queue, StreamTags())
-        val second = AudioChain.processors({ Settings() }, queue, StreamTags())
+        val first = AudioChain.processors({ Settings() }, queue, StreamTags()) { EqSound() }
+        val second = AudioChain.processors({ Settings() }, queue, StreamTags()) { EqSound() }
 
         assertEquals(4, first.size)
         assertTrue(first.none { stage -> second.any { it === stage } })
@@ -73,7 +78,7 @@ class AudioChainTest {
     fun `the chain levels a tagged song by its gain, and follows the settings while it plays`() {
         var settings = Settings(audio = AudioSettings(levelling = Levelling.SONG))
         val streams = StreamTags().apply { record(PERIOD_8, TAGGED) }
-        val chain = AudioChain.processors({ settings }, queue, streams)
+        val chain = AudioChain.processors({ settings }, queue, streams) { EqSound() }
         val sine = Signals.sine(1_000.0, 0.5f, seconds = 1.0)
         val half = sine.size / 2 / 2
 
@@ -84,6 +89,23 @@ class AudioChainTest {
         val firstHalf = half * 2
         assertEquals(-6.0, Signals.gainDb(sine.copyOfRange(0, firstHalf), out.copyOfRange(0, firstHalf)), 0.2)
         assertEquals(0.0, Signals.gainDb(sine.copyOfRange(firstHalf, sine.size), out.copyOfRange(firstHalf, out.size)), 0.2)
+    }
+
+    @Test
+    fun `the chain plays the equalizer of the output playing, and follows it while it plays`() {
+        val settings = Settings(audio = AudioSettings(levelling = Levelling.OFF))
+        var eq = EqSound()
+        val chain = AudioChain.processors({ settings }, queue, StreamTags()) { eq }
+        val sine = Signals.sine(1_000.0, 0.5f, seconds = 1.0)
+        val half = sine.size / 2 / 2
+
+        val out = Signals.run(chain, sine, encoding = C.ENCODING_PCM_16BIT, stream = stream(PERIOD_8, "8")) { frame ->
+            if (frame >= half) eq = EqSound(enabled = true, preampDb = -6f)
+        }
+
+        val firstHalf = half * 2
+        assertEquals(0.0, Signals.gainDb(sine.copyOfRange(0, firstHalf), out.copyOfRange(0, firstHalf)), 0.2)
+        assertEquals(-6.0, Signals.gainDb(sine.copyOfRange(firstHalf, sine.size), out.copyOfRange(firstHalf, out.size)), 0.2)
     }
 
     /** The stream of period [period], the one song of a timeline whose item is [mediaId], as a sink flushes it. */

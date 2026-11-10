@@ -28,6 +28,7 @@ import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.extractor.mp4.Mp4Extractor
+import app.lyrify.audio.LiveEq
 import app.lyrify.library.Song
 import app.lyrify.library.displayTitle
 import app.lyrify.settings.LibrarySettings
@@ -247,7 +248,7 @@ class GaplessEngine(context: Context, settings: () -> Settings, levels: SongLeve
 
         override fun buildAudioSink(context: Context, enableFloatOutput: Boolean, enableAudioOutputPlaybackParams: Boolean): AudioSink =
             DefaultAudioSink.Builder(context)
-                .setAudioProcessors(AudioChain.processors(settings, levels, streams).toTypedArray())
+                .setAudioProcessors(AudioChain.processors(settings, levels, streams, LiveEq.of(context).sound::value).toTypedArray())
                 // Float output stays off: with it, Media3 bypasses the processors.
                 .setEnableFloatOutput(false)
                 .setEnableAudioOutputPlaybackParameters(enableAudioOutputPlaybackParams)

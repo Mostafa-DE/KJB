@@ -32,19 +32,16 @@ interface SongLevels {
 
 object AudioChain {
     /**
-     * A new chain for one player: Volume levelling and its boost from [settings], read again at every buffer so a change
-     * is heard at once, and each song's levels from the tags its renderer read ([streams]) and its queue ([levels]). The
-     * equalizer stays off here until A1's equalizer screen hands the output's profile in.
+     * A new chain for one player: Volume levelling and its boost from [settings], and the equalizer of the output playing
+     * ([eq], LiveEq's sound), both read again at every buffer so a change is heard at once; each song's levels from the
+     * tags its renderer read ([streams]) and its queue ([levels]).
      */
-    fun processors(settings: () -> Settings, levels: SongLevels, streams: StreamTags): List<AudioProcessor> =
-        audioChain(PipelineSnapshot(settings)::get) { stream -> streams.levelsOf(stream, levels) }
+    fun processors(settings: () -> Settings, levels: SongLevels, streams: StreamTags, eq: () -> EqSound): List<AudioProcessor> =
+        audioChain(PipelineSnapshot(settings, eq)::get) { stream -> streams.levelsOf(stream, levels) }
 
     /** Whether any stage changes the sound now (levelling, the equalizer, balance): offload must then stay off. */
-    fun processing(settings: Settings): Boolean = AudioPipelineSettings.of(settings, EQUALIZER_OFF).processing
+    fun processing(settings: Settings, eq: EqSound): Boolean = AudioPipelineSettings.of(settings, eq).processing
 }
-
-/** The equalizer as the chain plays it until A1's equalizer screen hands in the output's profile: off. */
-private val EQUALIZER_OFF = EqSound()
 
 /** Whether audio offload may run: Advanced "Audio offload" is on, and nothing in the chain processes the sound. */
 fun offloadAllowed(advanced: AdvancedSettings, processing: Boolean): Boolean = advanced.audioOffload && !processing
@@ -87,18 +84,21 @@ class StreamTags {
 }
 
 /**
- * The settings as one chain reads them: made again only when [settings] hands a new value, so a buffer allocates
- * nothing. One per chain; its stages all run on the playback thread.
+ * The settings as one chain reads them: made again only when [settings] or [eq] hands a new value, so a buffer
+ * allocates nothing. One per chain; its stages all run on the playback thread.
  */
-private class PipelineSnapshot(private val settings: () -> Settings) {
+private class PipelineSnapshot(private val settings: () -> Settings, private val eq: () -> EqSound) {
     private var from: Settings? = null
+    private var fromEq: EqSound? = null
     private var made = AudioPipelineSettings()
 
     fun get(): AudioPipelineSettings {
         val now = settings()
-        if (now !== from) {
-            made = AudioPipelineSettings.of(now, EQUALIZER_OFF)
+        val sound = eq()
+        if (now !== from || sound !== fromEq) {
+            made = AudioPipelineSettings.of(now, sound)
             from = now
+            fromEq = sound
         }
         return made
     }
