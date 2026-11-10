@@ -2,11 +2,17 @@ package app.lyrify.player
 
 import app.lyrify.library.SongRef
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.currentTime
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -113,23 +119,27 @@ class QueueStoreTest {
 
     @Test
     fun `the place reads back, and anything it cannot use reads as no place or its default`() {
-        val place = PlaybackPlace("q3", 4, 61_500, Repeat.ONE)
+        val place = PlaybackPlace("q3", 7, 61_500, Repeat.ONE, at = 1_000)
         assertEquals(place, PlaybackJson.decode(PlaybackJson.encode(place)))
-        assertEquals(PlaybackPlace(null, 0, 0, Repeat.OFF), PlaybackJson.decode("""{"queueId":null}"""))
-        assertEquals(PlaybackPlace("q1", 0, 0, Repeat.OFF), PlaybackJson.decode("""{"queueId":"q1","index":-3,"positionMs":"x","repeat":"SOMETIMES"}"""))
+        assertEquals(PlaybackPlace(null, null, 0, Repeat.OFF), PlaybackJson.decode("""{"queueId":null}"""))
+        assertEquals(PlaybackPlace("q1", null, 0, Repeat.OFF), PlaybackJson.decode("""{"queueId":"q1","uid":"x","positionMs":"x","repeat":"SOMETIMES","at":-1}"""))
         assertNull(PlaybackJson.decode("[1]"))
         assertNull(PlaybackJson.decode(""))
     }
 
     @Test
-    fun `the place applies to the queue it names, at a song it still has`() {
-        val book = QueueBook().play(album, 0, albumSource, now = 1).book
+    fun `the place applies to the queue it names, at the song it names, when it is newer than the queue's own`() {
+        val book = QueueBook().play(album, 0, albumSource, now = 10).book
         val id = book.currentId!!
-        val placed = withPlace(book, PlaybackPlace(id, 2, 33_000, Repeat.ALL))
+        val third = book.current!!.items[2].uid
+        val placed = withPlace(book, PlaybackPlace(id, third, 33_000, Repeat.ALL, at = 15))
         assertEquals(2, placed.current!!.index)
         assertEquals(33_000L, placed.current!!.positionMs)
-        assertEquals(book, withPlace(book, PlaybackPlace("q99", 2, 33_000)))
-        assertEquals(book, withPlace(book, PlaybackPlace(id, 40, 33_000)))
+        assertEquals(15L, placed.current!!.updatedAt)
+        assertEquals(book, withPlace(book, PlaybackPlace("q99", third, 33_000, at = 15)))
+        assertEquals(book, withPlace(book, PlaybackPlace(id, 999, 33_000, at = 15)))
+        // Written before the queue's own place: the queue's wins.
+        assertEquals(book, withPlace(book, PlaybackPlace(id, third, 33_000, at = 5)))
         assertEquals(book, withPlace(book, null))
     }
 
@@ -138,8 +148,8 @@ class QueueStoreTest {
         val file = File(folder.root, "playback.json")
         val places = PlaceFile(file) { logs += it }
         assertNull(places.load())
-        assertTrue(places.save(PlaybackPlace("q2", 1, 9_000, Repeat.ALL)))
-        assertEquals(PlaybackPlace("q2", 1, 9_000, Repeat.ALL), places.load())
+        assertTrue(places.save(PlaybackPlace("q2", 1, 9_000, Repeat.ALL, at = 3)))
+        assertEquals(PlaybackPlace("q2", 1, 9_000, Repeat.ALL, at = 3), places.load())
         assertFalse(File(folder.root, "playback.json.tmp").exists())
         file.writeText("{broken")
         assertNull(places.load())
@@ -165,5 +175,138 @@ class QueueStoreTest {
         assertEquals(QueueBook(), store.data.first())
         assertEquals("[not queues]", File(folder.root, "queues-corrupt-1234.json").readText())
         assertTrue(logs.none { "Lantern" in it || "/storage" in it })
+    }
+
+    // Restoring: the place and the queue's own, the newest wins
+
+    /** The two files in memory, kept across a restart (a new [PlayerCore]) and read as [QueueFiles] reads them. */
+    private class Files : QueueStorage {
+        var book = QueueBook()
+        var place: PlaybackPlace? = null
+
+        override suspend fun load(): Pair<QueueBook, Repeat> = withPlace(book, place) to (place?.repeat ?: Repeat.OFF)
+
+        override suspend fun saveBook(book: QueueBook) {
+            this.book = book
+        }
+
+        override suspend fun savePlace(place: PlaybackPlace) {
+            this.place = place
+        }
+    }
+
+    /** What the service does when the player starts song [uid] by itself: the queue follows, and the place is written. */
+    private fun PlayerCore.started(uid: Long, now: Long) {
+        change { it.at(uid, now) }
+        savePlace(uid, 0)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private fun TestScope.restart(files: Files): QueueBook {
+        val core = PlayerCore(files, backgroundScope, wall = { currentTime })
+        runCurrent()
+        return core.book.value
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `a restart after the song changed opens on that song from its start, even when its place was not written`() = runTest {
+        val files = Files()
+        val core = PlayerCore(files, backgroundScope, wall = { currentTime })
+        runCurrent()
+        core.switch { it.play(album, 0, albumSource, currentTime) }
+        runCurrent()
+        val (first, second) = core.book.value.current!!.items.map { it.uid }
+        advanceTimeBy(10_000)
+        core.savePlace(first, 10_000)
+        runCurrent()
+        advanceTimeBy(5_000)
+        // The player moved on; the place it would write next never came (the app was killed).
+        core.change { it.at(second, currentTime) }
+        runCurrent()
+
+        val book = restart(files)
+        assertEquals(second, book.current!!.current!!.uid)
+        assertEquals(0L, book.current!!.positionMs)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `a restart opens where the last place written says, the song and the position together`() = runTest {
+        val files = Files()
+        val core = PlayerCore(files, backgroundScope, wall = { currentTime })
+        runCurrent()
+        core.switch { it.play(album, 0, albumSource, currentTime) }
+        runCurrent()
+        val (_, second) = core.book.value.current!!.items.map { it.uid }
+        advanceTimeBy(3_000)
+        core.started(second, currentTime)
+        advanceTimeBy(10_000)
+        core.savePlace(second, 10_000)
+        runCurrent()
+
+        val book = restart(files)
+        assertEquals(second, book.current!!.current!!.uid)
+        assertEquals(10_000L, book.current!!.positionMs)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `a restart after the queue ended opens at its first song, from the start`() = runTest {
+        val files = Files()
+        val core = PlayerCore(files, backgroundScope, wall = { currentTime })
+        runCurrent()
+        core.switch { it.play(album, 3, albumSource, currentTime) }
+        runCurrent()
+        val uids = core.book.value.current!!.items.map { it.uid }
+        advanceTimeBy(10_000)
+        core.savePlace(uids.last(), 170_000)
+        runCurrent()
+        // The last song ended: the player waits at the first song, paused.
+        advanceTimeBy(4_000)
+        core.started(uids.first(), currentTime)
+        runCurrent()
+
+        val book = restart(files)
+        assertEquals(0, book.current!!.index)
+        assertEquals(0L, book.current!!.positionMs)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `a restart after a switch before the first save opens the new queue, and the old one keeps its place`() = runTest {
+        val files = Files()
+        val core = PlayerCore(files, backgroundScope, wall = { currentTime })
+        runCurrent()
+        core.switch { it.play(album, 0, albumSource, currentTime) }
+        runCurrent()
+        val albumId = core.book.value.currentId!!
+        val third = core.book.value.current!!.items[2].uid
+        advanceTimeBy(10_000)
+        core.savePlace(third, 50_000)
+        runCurrent()
+        advanceTimeBy(2_000)
+        core.switch { it.play(folderSongs, 1, folderSource, currentTime) }
+        runCurrent()
+
+        val book = restart(files)
+        assertEquals(1, book.current!!.index)
+        assertEquals(0L, book.current!!.positionMs)
+        assertEquals(2, book.queue(albumId)!!.index)
+        assertEquals(50_000L, book.queue(albumId)!!.positionMs)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `the service's last place is written before it returns`() = runTest {
+        val files = Files()
+        val core = PlayerCore(files, backgroundScope, wall = { currentTime })
+        runCurrent()
+        core.switch { it.play(album, 0, albumSource, currentTime) }
+        runCurrent()
+        val first = core.book.value.current!!.items[0].uid
+        advanceTimeBy(4_000)
+        core.savePlaceNow(first, 4_000)
+        assertEquals(PlaybackPlace(core.book.value.currentId, first, 4_000, Repeat.OFF, at = 4_000), files.place)
     }
 }

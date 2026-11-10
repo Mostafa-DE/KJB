@@ -26,6 +26,7 @@ import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
@@ -70,9 +71,10 @@ class QueueFiles internal constructor(
 /**
  * The queues of the whole app, one per process: the [book] (every queue, the one playing, Recent and Saved), [repeat],
  * and the operations the screens and the player's session ask for. Read from storage once ([ready]); every change of the
- * book is stored (`queues.json`), while the place of the queue playing is kept apart ([savePlace], `playback.json`, every
- * 10 s while playing) and folded into the book before the next change, so the book is not rewritten every 10 s. Main
- * thread only. A change asked for before the queues are read waits for them.
+ * book is stored (`queues.json`), while the place of the queue playing is kept apart ([savePlace], `playback.json`, on
+ * every song start and pause and every 10 s while playing) and folded into the book before the next change, so the book
+ * is not rewritten every 10 s. Each place carries when it was said; on a restart the newer of the two wins
+ * ([withPlace]). Main thread only. A change asked for before the queues are read waits for them.
  */
 class PlayerCore(
     private val storage: QueueStorage,
@@ -138,16 +140,25 @@ class PlayerCore(
     fun setRepeat(repeat: Repeat) {
         _repeat.value = repeat
         val book = _book.value
-        val place = live.value ?: book.current?.let { PlaybackPlace(it.id, it.index, it.positionMs) } ?: PlaybackPlace(null, 0, 0)
-        savePlace(place.index, place.positionMs, place.queueId)
+        val place = live.value ?: book.current?.let { PlaybackPlace(it.id, it.current?.uid, it.positionMs) } ?: PlaybackPlace(null, null, 0)
+        savePlace(place.uid ?: return, place.positionMs, place.queueId)
     }
 
-    /** The queue playing is at song [index], [positionMs] in: `playback.json` now, the book at the next change. */
-    fun savePlace(index: Int, positionMs: Long, queueId: String? = _book.value.currentId) {
-        if (!_ready.value) return
-        val place = PlaybackPlace(queueId, index, positionMs, _repeat.value)
-        live.value = place
+    /** The queue playing is at song [uid], [positionMs] in, now: `playback.json` at once, the book at the next change. */
+    fun savePlace(uid: Long, positionMs: Long, queueId: String? = _book.value.currentId) {
+        val place = placed(uid, positionMs, queueId) ?: return
         scope.launch { storage.savePlace(place) }
+    }
+
+    /** As [savePlace], written before it returns: the service's last word as it ends. Blocks for one small file. */
+    fun savePlaceNow(uid: Long, positionMs: Long) {
+        val place = placed(uid, positionMs, _book.value.currentId) ?: return
+        runBlocking { storage.savePlace(place) }
+    }
+
+    private fun placed(uid: Long, positionMs: Long, queueId: String?): PlaybackPlace? {
+        if (!_ready.value) return null
+        return PlaybackPlace(queueId, uid, positionMs, _repeat.value, at = wall()).also { live.value = it }
     }
 
     /** The book with the live place in it, as the next change sees it. */

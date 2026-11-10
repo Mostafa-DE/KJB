@@ -163,7 +163,8 @@ class PlaybackService : MediaLibraryService() {
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? = session
 
     override fun onDestroy() {
-        savePlace()
+        // Written before the process may go.
+        engine.loaded.getOrNull(engine.index)?.let { uid -> core.savePlaceNow(uid, engine.positionMs) }
         heardSoFar()
         tracker.end()
         parts.forEach { it.stop() }
@@ -192,13 +193,11 @@ class PlaybackService : MediaLibraryService() {
         if (core.ready.value) library.value?.let { bridge.sync(core.book.value, ::find) }
     }
 
-    /** Where the queue playing is, into `playback.json`. */
+    /** Where the queue playing is (its song and position), into `playback.json`. */
     private fun savePlace() {
         if (!::engine.isInitialized) return
         val uid = engine.loaded.getOrNull(engine.index) ?: return
-        val queue = core.book.value.current ?: return
-        val index = queue.items.indexOfFirst { it.uid == uid }
-        if (index >= 0) core.savePlace(index, engine.positionMs)
+        core.savePlace(uid, engine.positionMs)
     }
 
     /** Where the song playing is now, for the play counter. */
@@ -241,6 +240,8 @@ class PlaybackService : MediaLibraryService() {
             val book = core.book.value
             val item = book.current?.items?.firstOrNull { it.uid == uid } ?: return
             if (!lap) core.change { it.at(uid, core.now()) }
+            // Every song start, each lap of Repeat one too: the place names the song playing.
+            savePlace()
             tracker.start(item.song, find(item.song)?.durationMs ?: C.TIME_UNSET, engine.positionMs, engine.isPlaying, naturalEnd = natural)
         }
 

@@ -297,6 +297,19 @@ class QueuesTest {
     }
 
     @Test
+    fun `the player loading the song already current keeps its place, only its Play next wait ends`() {
+        val book = playing(2).place(2, 61_000)
+        assertEquals(book, book.at(book.current!!.current!!.uid, now = 9))
+
+        val waiting = playing(0).playNext(listOf(folder[0]), picked, now = 2)!!.book
+        val next = waiting.current!!.items[1]
+        val jumped = waiting.place(1, 12_000)
+        val loaded = jumped.at(next.uid, now = 9)
+        assertEquals(12_000L, loaded.current!!.positionMs)
+        assertFalse(loaded.current!!.current!!.playNext)
+    }
+
+    @Test
     fun `songs gone from the phone leave saved queues on the next load, moved ones take their new path`() {
         var book = playing(0).play(folder, 0, folderSource, now = 2).book
         book = book.keep(book.recent.single())
