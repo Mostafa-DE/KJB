@@ -389,9 +389,8 @@ class LyricsPipeline(
                     else -> Checked.Done(LyricsStatus.PLAIN_ONLY)
                 }
                 text != null -> {
-                    val status = write(track, sidecar, previous, text, Written(LyricsStatus.SYNCED, LyricsSource.LRCLIB, id))
                     // The user picked them: nothing replaces them by itself, nor asks about them again.
-                    if (status == LyricsStatus.SYNCED) ledger.entry(audioPath)?.let { ledger.put(it.copy(mine = true)) }
+                    val status = write(track, sidecar, previous, text, Written(LyricsStatus.SYNCED, LyricsSource.LRCLIB, id, mine = true))
                     if (status == LyricsStatus.SYNCED || status == LyricsStatus.EXISTING) Checked.Done(status) else Checked.NotSaved
                 }
                 // A `.lrc` made during the fetch wins, as it does for synced lyrics (the exclusive create).
@@ -660,6 +659,8 @@ class LyricsPipeline(
         val agreement: Double? = null,
         /** Why the AI rejected its lyrics ([LedgerEntry.aiReason]). */
         val aiReason: String? = null,
+        /** The user picked them ([LedgerEntry.mine]): marked so in the entry that records the file, never in its marker. */
+        val mine: Boolean = false,
     )
 
     /** A write that made no file: LRCLIB lyrics are looked up again after a while, the AI's song waits for its next try. */
@@ -692,7 +693,7 @@ class LyricsPipeline(
                 // Should this entry be lost, the marker stays and reconcile finds the file complete.
                 record(
                     previous, track, written.status, written.lrclibId, written.durationMatched,
-                    sha256 = sha256, size = size, source = written.source, agreement = written.agreement,
+                    sha256 = sha256, size = size, source = written.source, agreement = written.agreement, mine = written.mine,
                 )
                 written.status
             }
@@ -880,11 +881,12 @@ class LyricsPipeline(
         aiReason: String? = null,
         candidates: List<Candidate> = emptyList(),
         declined: Boolean = false,
+        mine: Boolean = false,
     ): Boolean {
         val entry = recorded(
             previous, track, status, lrclibId, clock(), durationMatched, sha256, size,
             source = source, agreement = agreement, aiReason = aiReason, candidates = candidates, declined = declined,
-        )
+        ).copy(mine = mine)
         val stored = ledger.put(entry)
         log("${track.title}: $status${lrclibId?.let { " (LRCLIB $it)" }.orEmpty()}${if (stored) "" else ", not stored"}")
         return stored
