@@ -1,0 +1,170 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Edit tags, Edit album, Rename artist, Merge and the "may be the same" suggestions (milestone T3). -->
+<resources>
+    <!-- The editor -->
+    <string name="edit_close">Close</string>
+    <string name="edit_save">Save</string>
+    <string name="edit_saving">Saving</string>
+    <string name="edit_field_title">Title</string>
+    <string name="edit_field_artist">Artist</string>
+    <string name="edit_field_album">Album</string>
+    <string name="edit_field_album_artist">Album artist</string>
+    <string name="edit_field_year">Year</string>
+    <string name="edit_field_track">Track</string>
+    <string name="edit_field_disc">Disc</string>
+    <string name="edit_field_genre">Genre</string>
+    <string name="edit_keep_as_is">Keep as is</string>
+    <string name="edit_problem_title">Type a title</string>
+    <string name="edit_problem_album">Type an album name</string>
+    <string name="edit_problem_year">Four digits</string>
+    <string name="edit_problem_number">A number</string>
+    <plurals name="edit_selected">
+        <item quantity="one">%d song selected. A field that says Keep as is stays as it is on each song.</item>
+        <item quantity="other">%d songs selected. A field that says Keep as is stays as it is on each song.</item>
+    </plurals>
+    <string name="edit_album_sentence">Every song on this album at once. The music itself never changes.</string>
+    <string name="edit_footer">Only the tags and the cover change, never the music. KJB asks before it writes.</string>
+    <string name="edit_no_access">Changes need notification access</string>
+    <string name="edit_turn_on">Turn on</string>
+
+    <!-- The cover -->
+    <string name="edit_cover_change">Change</string>
+    <string name="edit_cover_find">Find online</string>
+    <string name="edit_cover_remove">Remove</string>
+    <string name="edit_photo_failed">Couldn\'t use that photo</string>
+    <string name="edit_opus_note">Opus songs keep their own cover: the new one is too big for them.</string>
+    <string name="edit_find_sentence">Covers for “%1$s”, from MusicBrainz and the Cover Art Archive. Pick one to use.</string>
+    <string name="edit_find_sentence_by">Covers for “%1$s” by %2$s, from MusicBrainz and the Cover Art Archive. Pick one to use.</string>
+    <string name="edit_find_looking">Looking for covers</string>
+    <string name="edit_find_none">No covers found online.</string>
+    <string name="edit_find_busy">MusicBrainz is busy. Try again in a minute.</string>
+    <string name="edit_find_failed">Couldn\'t look online. Check your connection.</string>
+    <string name="edit_use">Use</string>
+    <string name="edit_use_named">Use the cover of %1$s</string>
+    <string name="edit_cover_size">%1$d × %2$d</string>
+    <string name="edit_two_parts">%1$s · %2$s</string>
+
+    <!-- Edit album -->
+    <string name="edit_track_numbers">Track numbers</string>
+    <string name="edit_track_keep">Keep</string>
+    <string name="edit_track_order">Number in this order</string>
+    <plurals name="edit_changes">
+        <item quantity="one">Changes %d song</item>
+        <item quantity="other">Changes %d songs</item>
+    </plurals>
+    <string name="edit_no_changes">No changes yet</string>
+    <string name="edit_none">None</string>
+    <string name="edit_old_new">%1$s → %2$s</string>
+    <string name="edit_cover">Cover</string>
+    <string name="edit_old_cover">Old cover</string>
+    <string name="edit_new_cover">New cover</string>
+    <string name="edit_no_cover">No cover</string>
+
+    <!-- Confirming and leaving -->
+    <plurals name="edit_confirm_title">
+        <item quantity="one">Change %d song?</item>
+        <item quantity="other">Change %d songs?</item>
+    </plurals>
+    <plurals name="edit_confirm_tags">
+        <item quantity="one">KJB writes the changes into the song file. The music itself never changes, and you can undo.</item>
+        <item quantity="other">KJB writes the changes into the song files. The music itself never changes, and you can undo.</item>
+    </plurals>
+    <string name="edit_confirm_album">KJB writes the new album details into every song of “%1$s”. The music itself never changes, and you can undo.</string>
+    <string name="edit_confirm_rename">“%1$s” becomes “%2$s” in the artist and album artist fields, credits included. The music itself never changes, and you can undo.</string>
+    <string name="edit_confirm_merge_artists">Songs by “%1$s” become “%2$s”. The music itself never changes, and you can undo.</string>
+    <string name="edit_confirm_merge_albums">Songs on “%1$s” become “%2$s”. The music itself never changes, and you can undo.</string>
+    <string name="edit_change">Change</string>
+    <string name="edit_cancel">Cancel</string>
+    <string name="edit_leave_title">Leave without saving?</string>
+    <string name="edit_leave_text">The changes you typed are not written.</string>
+    <string name="edit_leave">Leave</string>
+
+    <!-- History labels -->
+    <string name="edit_label_song">Tags · %1$s</string>
+    <plurals name="edit_label_songs">
+        <item quantity="one">Tags · %d song</item>
+        <item quantity="other">Tags · %d songs</item>
+    </plurals>
+    <string name="edit_label_album">Album · %1$s</string>
+    <string name="edit_label_rename">Renamed %1$s to %2$s</string>
+    <string name="edit_label_merge">Merged %1$s and %2$s</string>
+
+    <!-- Messages -->
+    <string name="edit_saved">Tags saved</string>
+    <plurals name="edit_saved_songs">
+        <item quantity="one">Tags saved on %d song</item>
+        <item quantity="other">Tags saved on %d songs</item>
+    </plurals>
+    <string name="edit_album_saved">Album saved</string>
+    <string name="edit_renamed">Artist renamed</string>
+    <string name="edit_merged">Merged into %1$s</string>
+    <string name="edit_nothing_changed">Nothing changed</string>
+    <plurals name="edit_partly">
+        <item quantity="one">Changed %1$d of %2$d song. The rest were left as they were.</item>
+        <item quantity="other">Changed %1$d of %2$d songs. The rest were left as they were.</item>
+    </plurals>
+    <string name="edit_in_use">Those songs were playing, so they were left as they were.</string>
+    <string name="edit_not_changed">Couldn\'t change the songs. They were left as they were.</string>
+    <string name="edit_need_access">Turn on notification access first</string>
+    <string name="edit_no_space">Not enough space on your phone</string>
+    <string name="edit_undone">Undone</string>
+    <plurals name="edit_undone_kept">
+        <item quantity="one">Undone. %d field changed since was kept</item>
+        <item quantity="other">Undone. %d fields changed since were kept</item>
+    </plurals>
+    <plurals name="edit_undone_skipped">
+        <item quantity="one">Undone. %d song changed since was skipped</item>
+        <item quantity="other">Undone. %d songs changed since were skipped</item>
+    </plurals>
+    <string name="edit_nothing_to_undo">Nothing to undo: those tags changed since</string>
+    <string name="edit_undo_partly">Couldn\'t undo every song. The rest were left as they were.</string>
+
+    <!-- History -->
+    <string name="edit_history">History</string>
+    <string name="edit_no_edits">No edits yet</string>
+    <string name="edit_history_empty">Tag edits, album edits, renames and merges show here, each with Undo.</string>
+    <string name="edit_undo">Undo</string>
+    <string name="edit_undo_named">Undo %1$s</string>
+    <string name="edit_undone_pill">Undone</string>
+
+    <!-- Rename and merge -->
+    <string name="edit_rename_artist">Rename artist</string>
+    <string name="edit_merge_with">Merge with…</string>
+    <string name="edit_next">Next</string>
+    <string name="edit_merge_artists">Merge artists</string>
+    <string name="edit_merge_albums">Merge albums</string>
+    <string name="edit_pick_artist">Pick the artist to merge with “%1$s”. Similar spellings come first.</string>
+    <string name="edit_pick_album">Pick the album to merge with “%1$s”. Similar spellings come first.</string>
+    <string name="edit_no_others">No other names to merge with.</string>
+    <string name="edit_find_name">Find a name</string>
+    <string name="edit_similar">Similar</string>
+    <string name="edit_keep_artist">Keep which name? Every song of both takes it, in the artist and album artist fields.</string>
+    <string name="edit_keep_album">Keep which name? Every song of both takes it, in the album field.</string>
+    <string name="edit_another_name">Another name</string>
+    <string name="edit_new_name">New name</string>
+    <string name="edit_nothing_yet">Nothing to change yet</string>
+    <string name="edit_merge">Merge</string>
+    <plurals name="edit_merge_songs">
+        <item quantity="one">Merge · %d song</item>
+        <item quantity="other">Merge · %d songs</item>
+    </plurals>
+    <string name="edit_also_credited">Also credited on</string>
+    <string name="edit_rename_preview">“%1$s” becomes “%2$s” in the artist and album artist fields of these songs.</string>
+    <plurals name="edit_rename_songs">
+        <item quantity="one">Rename · %d song</item>
+        <item quantity="other">Rename · %d songs</item>
+    </plurals>
+
+    <!-- May be the same -->
+    <plurals name="edit_may_be_same">
+        <item quantity="one">%d may be the same</item>
+        <item quantity="other">%d may be the same</item>
+    </plurals>
+    <string name="edit_suggest_title">May be the same</string>
+    <string name="edit_suggest_artists">These artist names look like spellings of one name. KJB never merges them by itself.</string>
+    <string name="edit_suggest_albums">These album names look like spellings of one name. KJB never merges them by itself.</string>
+    <string name="edit_not_same">Not the same</string>
+    <string name="edit_merge_ellipsis">Merge…</string>
+    <string name="edit_kept_apart">Kept apart</string>
+    <string name="edit_nothing_alike">Nothing looks alike now.</string>
+</resources>

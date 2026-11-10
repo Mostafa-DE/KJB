@@ -34,6 +34,7 @@ object TagsGraph {
     private var parts: Parts? = null
     private var writer: SafeWriter? = null
     private var lookup: AlbumLookup? = null
+    private var keptApart: KeptApart? = null
     private var recovering = false
 
     private class Parts(context: Context) {
@@ -99,8 +100,9 @@ object TagsGraph {
     }
 
     /**
-     * The one album lookup (Covers & tags): one MusicBrainz and Cover Art Archive client for the app, so its gate (one
-     * request at a time, 1.1 s apart, the 503 backoff) and its answer cache in `cache/tag-cache/` hold app-wide.
+     * The one album lookup: one MusicBrainz and Cover Art Archive client for the app, so its gate (one request at a
+     * time, 1.1 s apart, the 503 backoff) and its answer cache in `cache/tag-cache/` hold app-wide; Covers & tags'
+     * checks and Edit tags' Find online take turns.
      */
     @Synchronized
     fun lookup(context: Context): AlbumLookup = lookup ?: run {
@@ -110,6 +112,11 @@ object TagsGraph {
 
     /** History and Undo's records, for the History list. */
     fun undo(context: Context): UndoStore = parts(context.applicationContext).undo
+
+    /** The names kept apart with "Not the same", in `same-names.json`. */
+    @Synchronized
+    fun keptApart(context: Context): KeptApart =
+        keptApart ?: KeptApart(File(context.applicationContext.filesDir, "same-names.json"), ::log).also { keptApart = it }
 
     @Synchronized
     private fun parts(context: Context): Parts = parts ?: Parts(context).also { parts = it }
