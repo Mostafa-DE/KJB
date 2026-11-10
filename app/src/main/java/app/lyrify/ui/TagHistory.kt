@@ -45,12 +45,14 @@ import app.lyrify.library.LibraryState
 import app.lyrify.logFailures
 import app.lyrify.tags.BatchResult
 import app.lyrify.tags.EditKind
+import app.lyrify.tags.EditWords
 import app.lyrify.tags.HistoryRow
 import app.lyrify.tags.SongPlan
 import app.lyrify.tags.TagsGraph
 import app.lyrify.tags.historyRows
 import app.lyrify.tags.report
 import app.lyrify.tags.undoEdit
+import app.lyrify.tags.writeWords
 import app.lyrify.tags.writeEdit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -189,12 +191,13 @@ private fun writtenToast(resources: Resources, result: BatchResult, saved: Strin
     BatchResult.HistoryUnreadable -> Toast(resources.getString(R.string.edit_not_changed), R.drawable.ic_error, Tone.ERROR)
     is BatchResult.Done -> {
         val report = result.report()
-        when {
-            report.written == 0 && report.busy == 0 && report.failed == 0 -> Toast(resources.getString(R.string.edit_nothing_changed), R.drawable.ic_sell)
-            report.written == 0 && report.failed == 0 -> Toast(resources.getString(R.string.edit_in_use), R.drawable.ic_error, Tone.ERROR)
-            report.written == 0 -> Toast(resources.getString(R.string.edit_not_changed), R.drawable.ic_error, Tone.ERROR)
-            report.busy + report.failed > 0 -> Toast(resources.getQuantityString(R.plurals.edit_partly, asked, report.written, asked), R.drawable.ic_sell)
-            else -> Toast(saved, R.drawable.ic_sell)
+        when (report.writeWords()) {
+            EditWords.PAUSED -> Toast(resources.getString(R.string.tags_paused), R.drawable.ic_error, Tone.ERROR)
+            EditWords.NOTHING_CHANGED -> Toast(resources.getString(R.string.edit_nothing_changed), R.drawable.ic_sell)
+            EditWords.IN_USE -> Toast(resources.getString(R.string.edit_in_use), R.drawable.ic_error, Tone.ERROR)
+            EditWords.NOT_CHANGED -> Toast(resources.getString(R.string.edit_not_changed), R.drawable.ic_error, Tone.ERROR)
+            EditWords.PARTLY -> Toast(resources.getQuantityString(R.plurals.edit_partly, asked, report.written, asked), R.drawable.ic_sell)
+            EditWords.SAVED -> Toast(saved, R.drawable.ic_sell)
         }
     }
 }
@@ -207,6 +210,7 @@ internal fun undoneToast(resources: Resources, result: BatchResult): Toast = whe
     is BatchResult.Done -> {
         val report = result.report()
         when {
+            report.paused > 0 -> Toast(resources.getString(R.string.tags_paused), R.drawable.ic_error, Tone.ERROR)
             report.busy + report.failed > 0 -> Toast(resources.getString(R.string.edit_undo_partly), R.drawable.ic_error, Tone.ERROR)
             report.written == 0 -> Toast(resources.getString(R.string.edit_nothing_to_undo), R.drawable.ic_undo)
             report.changedSince > 0 -> Toast(resources.getQuantityString(R.plurals.edit_undone_skipped, report.changedSince, report.changedSince), R.drawable.ic_undo)

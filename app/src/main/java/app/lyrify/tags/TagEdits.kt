@@ -446,16 +446,30 @@ fun historyRows(memory: UndoMemory): List<HistoryRow> =
 
 /**
  * How a write or an Undo went, for its message: songs [written] (an Undo: taken back), left alone while in use
- * ([busy]), that could not be changed ([failed]), whose tags or audio [changedSince] (an Undo), and the fields an Undo
- * kept because a later edit changed them ([skippedFields]).
+ * ([busy]), that could not be changed ([failed]), whose tags or audio [changedSince] (an Undo), the fields an Undo
+ * kept because a later edit changed them ([skippedFields]), and songs left alone because tag changes are [paused].
  */
-data class EditReport(val written: Int, val busy: Int, val failed: Int, val changedSince: Int, val skippedFields: Int)
+data class EditReport(val written: Int, val busy: Int, val failed: Int, val changedSince: Int, val skippedFields: Int, val paused: Int = 0)
+
+/** What a write's message says: the Edit tags toast's words, in the order they are checked. */
+enum class EditWords { PAUSED, NOTHING_CHANGED, IN_USE, NOT_CHANGED, PARTLY, SAVED }
+
+/** A song paused says so first: KJB can't read its safety records, and no other word tells the user that. */
+fun EditReport.writeWords(): EditWords = when {
+    paused > 0 -> EditWords.PAUSED
+    written == 0 && busy == 0 && failed == 0 -> EditWords.NOTHING_CHANGED
+    written == 0 && failed == 0 -> EditWords.IN_USE
+    written == 0 -> EditWords.NOT_CHANGED
+    busy + failed > 0 -> EditWords.PARTLY
+    else -> EditWords.SAVED
+}
 
 fun BatchResult.Done.report(): EditReport {
     var written = 0
     var busy = 0
     var failed = 0
     var changedSince = 0
+    var paused = 0
     // Every outcome has its count, so a new one can't pass for nothing changed.
     for (song in songs) {
         when (song.outcome) {
@@ -463,14 +477,13 @@ fun BatchResult.Done.report(): EditReport {
             SongOutcome.WRITTEN, SongOutcome.UNDO_NOT_SAVED -> written++
             SongOutcome.BUSY -> busy++
             // A song replaced while it was written was set aside, its backup kept: not changed.
-            SongOutcome.COULD_NOT_CHANGE, SongOutcome.LEFT_AS_IT_WAS, SongOutcome.RECOVERY_PENDING, SongOutcome.SET_ASIDE, SongOutcome.NOT_ALLOWED, SongOutcome.NOT_TRIED,
-            SongOutcome.PAUSED,
-            -> failed++
+            SongOutcome.COULD_NOT_CHANGE, SongOutcome.LEFT_AS_IT_WAS, SongOutcome.RECOVERY_PENDING, SongOutcome.SET_ASIDE, SongOutcome.NOT_ALLOWED, SongOutcome.NOT_TRIED -> failed++
+            SongOutcome.PAUSED -> paused++
             SongOutcome.CHANGED_SINCE, SongOutcome.DIFFERENT_FILE -> changedSince++
             SongOutcome.UNCHANGED -> Unit
         }
     }
-    return EditReport(written, busy, failed, changedSince, skippedFields)
+    return EditReport(written, busy, failed, changedSince, skippedFields, paused)
 }
 
 // Favourites follow their albums and artists

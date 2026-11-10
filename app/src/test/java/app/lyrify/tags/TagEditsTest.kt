@@ -540,11 +540,25 @@ class TagEditsTest {
     }
 
     @Test
+    fun `a paused write in Edit tags says paused, never not changed`() {
+        val first = SongTarget("/storage/emulated/0/Music/a.mp3", 1)
+        val second = SongTarget("/storage/emulated/0/Music/b.mp3", 2)
+        fun words(vararg outcomes: Pair<SongTarget, SongOutcome>) = BatchResult.Done(outcomes.map { SongResult(it.first, it.second) }, entryId = null).report().writeWords()
+
+        assertEquals(EditWords.PAUSED, words(first to SongOutcome.PAUSED))
+        // Any song paused: the toast says so, whatever the others did.
+        assertEquals(EditWords.PAUSED, words(first to SongOutcome.WRITTEN, second to SongOutcome.PAUSED))
+        assertEquals(EditWords.PAUSED, words(first to SongOutcome.COULD_NOT_CHANGE, second to SongOutcome.PAUSED))
+        assertEquals(EditWords.NOT_CHANGED, words(first to SongOutcome.COULD_NOT_CHANGE))
+        assertEquals(EditWords.SAVED, words(first to SongOutcome.WRITTEN))
+    }
+
+    @Test
     fun `every outcome but unchanged counts in a write's report, so a song set aside is never nothing changed`() {
         val target = SongTarget("/storage/emulated/0/Music/a.mp3", 1)
         for (outcome in SongOutcome.entries - SongOutcome.UNCHANGED) {
             val report = BatchResult.Done(listOf(SongResult(target, outcome)), entryId = null).report()
-            assertEquals(outcome.name, 1, report.written + report.busy + report.failed + report.changedSince)
+            assertEquals(outcome.name, 1, report.written + report.busy + report.failed + report.changedSince + report.paused)
         }
         val asideAlone = BatchResult.Done(listOf(SongResult(target, SongOutcome.SET_ASIDE)), entryId = null).report()
         assertEquals(EditReport(written = 0, busy = 0, failed = 1, changedSince = 0, skippedFields = 0), asideAlone)
