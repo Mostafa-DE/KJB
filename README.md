@@ -167,7 +167,16 @@ leaves the phone.
 ## Licence and credits
 
 KJB is free software under the GNU General Public License, version 3 (see `LICENSE`). Settings > About > Licences lists
-everything the app is built with and shows each licence in full; `NOTICE` says the same in the repository.
+everything the app is built with and shows each licence in full; `NOTICE` says the same in the repository. `LICENSE`
+ends with this additional permission, which also opens KJB's own page in the app's Licences:
+
+Additional permission under GNU GPL version 3 section 7
+
+If you modify this Program, or any covered work, by linking or combining it with the Qualcomm AI Engine Direct (QNN)
+runtime libraries (com.qualcomm.qti:qnn-runtime), or with the other libraries that the KJB app bundles under licences
+other than the GNU GPL as listed in the NOTICE file (or a modified version of any of those libraries), containing parts
+covered by the terms of the Qualcomm AI Stack License or of those other libraries' licences, the licensors of this
+Program grant you additional permission to convey the resulting work.
 
 - Lyrics come from [LRCLIB](https://lrclib.net), a free, community-built lyrics database. Lyrics belong to their
   rights holders.
@@ -175,7 +184,6 @@ everything the app is built with and shows each licence in full; `NOTICE` says t
   [Cover Art Archive](https://coverartarchive.org).
 - Tags are read and written with [TagLib](https://taglib.org) (LGPL 2.1) through
   [Kyant0/taglib](https://github.com/Kyant0/taglib) (Apache 2.0).
-- ReplayGain reading is ported from [Gramophone](https://github.com/FoedusProgramme/Gramophone) (GPL 3.0 or later).
 - Playback is [Media3](https://github.com/androidx/media); the AI uses [ONNX Runtime](https://onnxruntime.ai), Qualcomm
   AI Hub's Whisper, UVR's MDX-Net and wav2vec2 models (see `NOTICE`).
 - Icons: Material Symbols. Font: Bricolage Grotesque (SIL Open Font License 1.1).

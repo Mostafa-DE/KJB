@@ -29,6 +29,16 @@ class LicencesTest {
     }
 
     @Test
+    fun `KJB's GPL section 7 permission opens its page, ends LICENSE, and reads the same in the README`() {
+        assertEquals(listOf(PERMISSION, "gpl-3.0.txt"), KJB_LICENCE.texts)
+        val permission = paragraphs(File(folder, PERMISSION).readText())
+        assertEquals("Additional permission under GNU GPL version 3 section 7", permission.first())
+        assertTrue(permission.last(), permission.last().contains("Qualcomm AI Engine Direct (QNN) runtime"))
+        assertEquals(permission, paragraphs(File("../LICENSE").readText()).takeLast(permission.size))
+        assertTrue(paragraphs(File("../README.md").readText()).windowed(permission.size).contains(permission))
+    }
+
+    @Test
     fun `each entry has its own name, a licence and a holder`() {
         assertEquals(SHIPPED.size, SHIPPED.map { it.name }.toSet().size)
         assertTrue(SHIPPED.size > 20)
@@ -64,6 +74,8 @@ class LicencesTest {
     }
 
     private companion object {
+        const val PERMISSION: String = "kjb-additional-permission.txt"
+
         /** A [libraries] line of the catalog: its alias and its group. */
         val LIBRARY = Regex("""(?m)^([\w-]+)\s*=\s*\{\s*group\s*=\s*"([^"]+)"""")
 
