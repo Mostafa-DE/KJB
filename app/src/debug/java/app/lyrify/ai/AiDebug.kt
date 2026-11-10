@@ -80,7 +80,7 @@ class AiDebugReceiver : BroadcastReceiver() {
         try {
             context.startForegroundService(Intent(context, AiDebugService::class.java).putExtras(intent))
         } catch (e: ForegroundServiceStartNotAllowedException) {
-            Log.w(LOG_TAG, "AI debug: Android refused to start the run in the background ($e). $USAGE")
+            Log.w(LOG_TAG, "AI debug: Android refused to start the run in the background (${e.javaClass.simpleName}). $USAGE")
         }
     }
 }
@@ -158,14 +158,15 @@ class AiDebugService : Service() {
             retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
         }
         if (durationMs == null) {
-            Log.w(LOG_TAG, "AI debug: no duration for ${song.path}")
+            Log.w(LOG_TAG, "AI debug: no duration for the song")
             return
         }
         val lyrics = request.lyrics?.readText()
+        val mode = if (lyrics == null) "transcribe" else "align"
         Log.i(
             LOG_TAG,
-            "AI debug: ${song.path} (${durationMs / 1000} s), ${if (lyrics == null) "transcribe" else "align"}, ${request.threads} threads, " +
-                "models in ${request.models.path}; ONNX Runtime ${BuildConfig.ORT_VERSION}, QNN EP ${BuildConfig.QNN_EP_VERSION}, " +
+            "AI debug: a song of ${durationMs / 1000} s, $mode, ${request.threads} threads, " +
+                "ONNX Runtime ${BuildConfig.ORT_VERSION}, QNN EP ${BuildConfig.QNN_EP_VERSION}, " +
                 "QNN ${BuildConfig.QNN_RUNTIME_VERSION}",
         )
         val assets = WhisperAssets(asset("vocab.json"), asset("added_tokens.json"), asset("generation_config.json"))

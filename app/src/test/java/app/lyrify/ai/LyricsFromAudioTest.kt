@@ -145,7 +145,7 @@ class LyricsFromAudioTest {
     }
 
     @Test
-    fun `a failure's reason keeps file names but no folders, the log keeps the whole message`() = runTest {
+    fun `a failure's reason keeps file names but no folders, the log only the exception's kind`() = runTest {
         val song = LocalTrack("/storage/emulated/0/Music/Some Band/01 Song One.mp3", "Song One", null, null, durationMs = 30_000)
         val model = "/data/user/0/app.lyrify/files/models/${AiModels.MDX}"
         val message = "${song.path}: open failed: ENOENT (No such file or directory); Load model from $model failed:Protobuf parsing failed."
@@ -155,9 +155,9 @@ class LyricsFromAudioTest {
         val reason = "FileNotFoundException: 01 Song One.mp3: open failed: ENOENT (No such file or directory); " +
             "Load model from ${AiModels.MDX} failed:Protobuf parsing failed."
         assertEquals(AiResult.Failed(reason), engine.run(song, null))
-        // A release build's log has the file name and the short reason: no folders, no stack trace.
-        assertEquals(listOf("01 Song One.mp3: AI failed: $reason"), logged)
-        // A debug build's has the whole trace.
+        // Logcat gets the exception's kind only: no file name, no message (the run log has the reason).
+        assertEquals(listOf("AI failed: FileNotFoundException"), logged)
+        // Under VERBOSE it has the whole trace.
         val traced = mutableListOf<String>()
         LyricsFromAudio(FakeStages(4..27, sung, failDecode = FileNotFoundException(message)), { now++ }, traced::add, traces = true).run(song, null)
         assertTrue(traced.toString(), traced.single().contains(message) && traced.single().contains("\tat "))

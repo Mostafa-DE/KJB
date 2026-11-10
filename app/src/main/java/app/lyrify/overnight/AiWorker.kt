@@ -46,6 +46,7 @@ import app.lyrify.models.inForeground
 import app.lyrify.ui.DESTINATION_AI
 import app.lyrify.ui.EXTRA_DESTINATION
 import app.lyrify.ui.MainActivity
+import app.lyrify.verbose
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
@@ -125,8 +126,9 @@ class AiWorker(context: Context, params: WorkerParameters) : CoroutineWorker(con
                 "${NpuChips.device()?.socModel} NPU, ONNX Runtime ${BuildConfig.ORT_VERSION}, QNN EP ${BuildConfig.QNN_EP_VERSION}, " +
                 "QNN ${BuildConfig.QNN_RUNTIME_VERSION}, $AI_THREADS CPU threads, KJB ${BuildConfig.VERSION_NAME}",
         )
+        // The run log names the songs; logcat (which bug reports carry) gets its lines only under VERBOSE.
         val log: (String) -> Unit = {
-            Log.i(LOG_TAG, it)
+            if (verbose()) Log.i(LOG_TAG, it)
             runLog.append(it)
         }
         val pipeline = Lyrify.pipeline(context)
@@ -154,7 +156,7 @@ class AiWorker(context: Context, params: WorkerParameters) : CoroutineWorker(con
                 AiLyrics.show(progress)
                 foreground(progress)
             },
-            log = log,
+            runLog = log,
         )
         val started = SystemClock.elapsedRealtime()
         return try {
@@ -183,7 +185,7 @@ class AiWorker(context: Context, params: WorkerParameters) : CoroutineWorker(con
         inForeground({ setForeground(AiLyrics.foregroundInfo(applicationContext, progress)) }) { e ->
             // Started from the background without an exemption (see the card's battery tip), or the day's time for long
             // work used up. A cancelled run is rethrown, not taken for this.
-            Log.w(LOG_TAG, "AI: not allowed to start in the background: ${e.message}")
+            Log.w(LOG_TAG, "AI: not allowed to start in the background: ${e.javaClass.simpleName}")
         }
 
     /**
@@ -203,7 +205,7 @@ class AiWorker(context: Context, params: WorkerParameters) : CoroutineWorker(con
             SystemClock::elapsedRealtime,
             log = { Log.d(LOG_TAG, "AI: $it") },
             notes = { runLog.append("AI:   $it") },
-            traces = BuildConfig.DEBUG,
+            traces = verbose(),
         )
         return object : SongEngine {
             override suspend fun run(track: LocalTrack, plainLyrics: String?, onStage: (AiStage) -> Unit, beforeChunk: suspend () -> Unit): AiResult =

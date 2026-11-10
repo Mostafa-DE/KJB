@@ -77,7 +77,7 @@ fun Context.startFirst(intents: List<Intent>) {
             startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             return
         } catch (e: ActivityNotFoundException) {
-            Log.d(LOG_TAG, "no screen for ${intent.action}: ${e.message}")
+            Log.d(LOG_TAG, "no screen for ${intent.action}: ${e.javaClass.simpleName}")
         }
     }
 }

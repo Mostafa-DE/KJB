@@ -375,7 +375,7 @@ class ToneFiles(
             when (e) {
                 is CancellationException -> throw e
                 is ToneSourceException -> {
-                    log("tone not saved, song unreadable: ${e.message}")
+                    log("tone not saved, song unreadable: ${(e.cause ?: e).javaClass.simpleName}")
                     return SaveResult.Failed(SaveFailure.SONG_UNREADABLE)
                 }
                 is Exception -> {

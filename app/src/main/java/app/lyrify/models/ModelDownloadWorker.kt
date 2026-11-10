@@ -92,7 +92,7 @@ class ModelDownloadWorker(context: Context, params: WorkerParameters) : Coroutin
     private suspend fun foreground(done: Long, total: Long): Boolean =
         inForeground({ setForeground(ModelDownloads.foregroundInfo(applicationContext, done, total)) }) { e ->
             // The download goes on as an ordinary job.
-            Log.w(LOG_TAG, "models: not allowed to download in the foreground: ${e.message}")
+            Log.w(LOG_TAG, "models: not allowed to download in the foreground: ${e.javaClass.simpleName}")
         }
 }
 

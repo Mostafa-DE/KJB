@@ -172,6 +172,8 @@ class LyricsPipeline(
     private val log: (String) -> Unit = {},
     /** For what needs a person to look: the ledger failing where a file's safety depends on it. */
     private val warn: (String) -> Unit = log,
+    /** The song's outcome by its title, for debugging: the app passes it to logcat only under VERBOSE. Never lyrics. */
+    private val detail: (String) -> Unit = {},
     /** How the bytes go into a new `.lrc`; tests make it fail. */
     private val writeBytes: (FileChannel, ByteBuffer) -> Unit = SidecarFile::writeFully,
     /** The per-path lock shared with the tag writer ([app.lyrify.Lyrify.locks]): one file is never handled twice at once. */
@@ -191,14 +193,14 @@ class LyricsPipeline(
     suspend fun process(track: LocalTrack, lane: Lane = Lane.HIGH, force: Boolean = false): Processed? = exclusive(track.path) {
         val sidecarPath = LrcFormat.sidecarPath(track.path)
         if (sidecarPath == null) {
-            log("skip ${track.path}: no file extension")
+            log("lyrics: a song skipped, its file has no extension")
             return@exclusive null
         }
         if (!writes.allows(SharedWrite.LRC_CREATE, sidecarPath)) return@exclusive null
         val sidecar = File(sidecarPath).toPath()
         val state = ledger.ledger.first()
         if (!state.readable) {
-            log("skip ${track.path}: the ledger cannot be read")
+            log("lyrics: a song skipped, the ledger cannot be read")
             return@exclusive null
         }
         val previous = state.entries[track.path]
@@ -545,7 +547,7 @@ class LyricsPipeline(
             Compared.UNREADABLE -> Removal.FAILED
         }
         if ((removal == Removal.CHANGED || removal == Removal.FAILED) && !ledger.put(entry)) {
-            warn("${entry.title}: marked removed, but its lyrics file is still there; it can be removed again")
+            warn("lyrics: marked removed, but the lyrics file is still there; it can be removed again")
         }
         return removal
     }
@@ -567,11 +569,11 @@ class LyricsPipeline(
         val stamp = try {
             SidecarFile.stamp(sidecar)
         } catch (e: IOException) {
-            log("${sidecar.fileName}: not readable: ${e.javaClass.simpleName}")
+            log("lyrics: a lyrics file not readable: ${e.javaClass.simpleName}")
             null
         }
         if (stamp == null || abs(stamp.modifiedAt - entry.updatedAt) > ADOPT_WINDOW_MS) return@exclusive false
-        ledger.put(entry.copy(sha256 = stamp.sha256, writtenAt = stamp.modifiedAt)).also { if (it) log("${entry.title}: v1 lyrics adopted") }
+        ledger.put(entry.copy(sha256 = stamp.sha256, writtenAt = stamp.modifiedAt)).also { if (it) log("lyrics: 1 file of v1 adopted") }
     }
 
     /** The sync editor's save and undo (LrcEdits) hold the song as a lookup does: never at the same time as one. */
@@ -599,7 +601,7 @@ class LyricsPipeline(
     }
 
     private suspend fun busy(previous: LedgerEntry?, track: LocalTrack, cause: String): Processed {
-        log("${track.title}: LRCLIB unavailable ($cause)")
+        log("lyrics: LRCLIB unavailable ($cause)")
         return Processed(outcome(previous, track, LyricsStatus.ERROR), lrclibBusy = true)
     }
 
@@ -642,7 +644,7 @@ class LyricsPipeline(
     /** The AI's lyrics, checked once more with Samsung's rules before anything is written (the engine checked them too). */
     private suspend fun writeAi(track: LocalTrack, sidecar: Path, previous: LedgerEntry, text: String, written: Written): LyricsStatus {
         val problem = LrcFormat.validate(text, track.durationMs) ?: return write(track, sidecar, previous, text, written)
-        log("${track.title}: AI lyrics unusable ($problem)")
+        log("lyrics: AI lyrics unusable ($problem)")
         return verdict(previous, track, written.copy(status = LyricsStatus.AI_REJECTED, aiReason = RejectReason.INVALID_LRC.name))
     }
 
@@ -683,7 +685,7 @@ class LyricsPipeline(
             sha256 = sha256, size = size, pendingText = text, source = written.source, agreement = written.agreement,
         )
         if (!ledger.put(marker)) {
-            log("${track.title}: ledger not writable, no lyrics written")
+            log("lyrics: ledger not writable, no lyrics written")
             return notWritten(previous, track, written)
         }
         return when (SidecarFile.create(sidecar, bytes, writes, log, writeBytes)) {
@@ -699,7 +701,7 @@ class LyricsPipeline(
             Created.FAILED ->
                 if (Files.exists(sidecar, LinkOption.NOFOLLOW_LINKS)) {
                     // The partial file could not be deleted: the marker stays, so reconcile deletes it and tries again.
-                    log("${track.title}: partial lyrics file left, settled next time")
+                    log("lyrics: partial lyrics file left, settled next time")
                     LyricsStatus.WRITING
                 } else {
                     notWritten(previous, track, written)
@@ -714,7 +716,7 @@ class LyricsPipeline(
      */
     private suspend fun keepForeign(previous: LedgerEntry?, track: LocalTrack, marker: LedgerEntry): LyricsStatus {
         if (!record(previous, track, LyricsStatus.EXISTING) && !ledger.put(marker.copy(pendingText = null))) {
-            warn("${track.title}: ledger not writable twice; its WRITING entry keeps the text, so a later look could delete a file that is not KJB's")
+            warn("lyrics: ledger not writable twice; a WRITING entry keeps its text, so a later look could delete a file that is not KJB's")
         }
         return LyricsStatus.EXISTING
     }
@@ -729,7 +731,7 @@ class LyricsPipeline(
             SidecarFile.interrupted(sidecar, marker)
         } catch (e: IOException) {
             // Left as it is: settled the next time the track is seen.
-            log("${sidecar.fileName}: not readable: ${e.javaClass.simpleName}")
+            log("lyrics: a lyrics file not readable: ${e.javaClass.simpleName}")
             return Processed(LyricsStatus.WRITING)
         }
         return when (left) {
@@ -763,7 +765,7 @@ class LyricsPipeline(
         val onDisk = try {
             if (there) SidecarFile.stamp(sidecar)?.sha256 else null
         } catch (e: IOException) {
-            log("${sidecar.fileName}: not readable: ${e.javaClass.simpleName}")
+            log("lyrics: a lyrics file not readable: ${e.javaClass.simpleName}")
             return Processed(LyricsStatus.WRITING)
         }
         val asBefore = whole != null && if (there) onDisk != null && onDisk == whole.oldSha256 else whole.oldSha256 == null
@@ -854,7 +856,7 @@ class LyricsPipeline(
             when (val lrc = LrcFormat.convert(match.record.syncedLyrics.orEmpty(), durationMs)) {
                 is Conversion.Ready -> return Lookup.Write(match.record, lrc.text) to current
                 is Conversion.Rejected -> {
-                    log("LRCLIB ${match.record.id}: synced lyrics unusable (${lrc.problem})")
+                    log("lyrics: an LRCLIB record's synced lyrics unusable (${lrc.problem})")
                     current = current.copy(unusableSynced = current.unusableSynced + match.record.id)
                 }
             }
@@ -893,7 +895,8 @@ class LyricsPipeline(
             source = source, agreement = agreement, aiReason = aiReason, candidates = candidates, declined = declined,
         )
         val stored = ledger.put(entry)
-        log("${track.title}: $status${lrclibId?.let { " (LRCLIB $it)" }.orEmpty()}${if (stored) "" else ", not stored"}")
+        log("lyrics: $status${if (stored) "" else ", not stored"}")
+        detail("${track.title}: $status${lrclibId?.let { " (LRCLIB $it)" }.orEmpty()}")
         return stored
     }
 
@@ -1034,10 +1037,10 @@ internal object SidecarFile {
         val channel = try {
             FileChannel.open(path, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)
         } catch (_: FileAlreadyExistsException) {
-            log("${path.fileName}: appeared during the lookup, kept as it is")
+            log("lyrics: a lyrics file appeared during the lookup, kept as it is")
             return Created.ALREADY_THERE
         } catch (e: IOException) {
-            log("${path.fileName}: not created: ${e.javaClass.simpleName}: ${e.message}")
+            log("lyrics: a lyrics file not created: ${e.javaClass.simpleName}")
             return Created.FAILED
         }
         return try {
@@ -1047,12 +1050,12 @@ internal object SidecarFile {
             }
             Created.YES
         } catch (e: IOException) {
-            log("${path.fileName}: not written: ${e.javaClass.simpleName}: ${e.message}")
+            log("lyrics: a lyrics file not written: ${e.javaClass.simpleName}")
             deletePartial(path, log)
             Created.FAILED
         } catch (e: Throwable) {
             // Anything else (a cancellation, an Error) still leaves no partial file, and goes on up.
-            log("${path.fileName}: not written: ${e.javaClass.simpleName}")
+            log("lyrics: a lyrics file not written: ${e.javaClass.simpleName}")
             deletePartial(path, log)
             throw e
         }
@@ -1061,17 +1064,17 @@ internal object SidecarFile {
     /** Whether [path] is a regular file (never through a link) whose bytes hash to [sha256]. */
     fun compare(path: Path, sha256: String, log: (String) -> Unit): Compared {
         if (!Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
-            log("${path.fileName}: gone already")
+            log("lyrics: a lyrics file gone already")
             return Compared.MISSING
         }
         val stamp = try {
             stamp(path)
         } catch (e: IOException) {
-            log("${path.fileName}: not readable: ${e.javaClass.simpleName}: ${e.message}")
+            log("lyrics: a lyrics file not readable: ${e.javaClass.simpleName}")
             return Compared.UNREADABLE
         }
         if (stamp?.sha256 == sha256) return Compared.SAME
-        log("${path.fileName}: changed outside KJB, left alone")
+        log("lyrics: a lyrics file changed outside KJB, left alone")
         return Compared.CHANGED
     }
 
@@ -1085,13 +1088,13 @@ internal object SidecarFile {
         if (!writes.allows(SharedWrite.LRC_DELETE, path.toString())) return Removal.FAILED
         return try {
             Files.delete(path)
-            log("${path.fileName}: removed")
+            log("lyrics: a lyrics file removed")
             Removal.REMOVED
         } catch (_: NoSuchFileException) {
-            log("${path.fileName}: gone already")
+            log("lyrics: a lyrics file gone already")
             Removal.ALREADY_GONE
         } catch (e: IOException) {
-            log("${path.fileName}: not removed: ${e.javaClass.simpleName}: ${e.message}")
+            log("lyrics: a lyrics file not removed: ${e.javaClass.simpleName}")
             if (Files.exists(path, LinkOption.NOFOLLOW_LINKS)) Removal.FAILED else Removal.ALREADY_GONE
         }
     }
@@ -1124,10 +1127,10 @@ internal object SidecarFile {
         if (!writes.allows(SharedWrite.LRC_DELETE, path.toString())) return false
         return try {
             Files.deleteIfExists(path)
-            log("${path.fileName}: partial file of an interrupted write removed")
+            log("lyrics: the partial lyrics file of an interrupted write removed")
             true
         } catch (e: IOException) {
-            log("${path.fileName}: partial file of an interrupted write not removed: ${e.javaClass.simpleName}")
+            log("lyrics: the partial lyrics file of an interrupted write not removed: ${e.javaClass.simpleName}")
             false
         }
     }
@@ -1195,7 +1198,7 @@ internal object SidecarFile {
         try {
             Files.deleteIfExists(path)
         } catch (e: IOException) {
-            log("${path.fileName}: partial file not removed: ${e.javaClass.simpleName}")
+            log("lyrics: a partial lyrics file not removed: ${e.javaClass.simpleName}")
         }
     }
 }

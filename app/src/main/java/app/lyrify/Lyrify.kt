@@ -39,7 +39,11 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** Logcat tag (`adb logcat -s KJB`). Song titles and file paths appear in it; it never leaves the phone. */
+/**
+ * Logcat tag (`adb logcat -s KJB`). Bug reports carry logcat, so its lines hold counts, status codes and exception class
+ * names only: never a title, artist, album, path, URL or lyrics (LogPrivacyTest). Under [verbose] the lyrics pipeline
+ * also names each song's outcome, and exceptions come with their stack traces.
+ */
 const val LOG_TAG: String = "KJB"
 
 /** The User-Agent of the app's requests (LRCLIB, the AI download): its name, version and repository. */
@@ -48,8 +52,10 @@ val USER_AGENT: String = "KJB/${BuildConfig.VERSION_NAME} ( https://github.com/M
 /** Extra diagnostics: `adb shell setprop log.tag.KJB VERBOSE`. */
 fun verbose(): Boolean = Log.isLoggable(LOG_TAG, Log.VERBOSE)
 
-/** Logs a coroutine failure instead of crashing the process. */
-val logFailures: CoroutineExceptionHandler = CoroutineExceptionHandler { _, e -> Log.e(LOG_TAG, "background work failed", e) }
+/** Logs a coroutine failure instead of crashing the process: its class, and only under [verbose] its trace (it can quote a path). */
+val logFailures: CoroutineExceptionHandler = CoroutineExceptionHandler { _, e ->
+    Log.e(LOG_TAG, "background work failed: ${e.javaClass.simpleName}", e.takeIf { verbose() })
+}
 
 /**
  * The process: one image loader for the covers, set before any screen asks for one. Debug builds also log disk work on
@@ -104,6 +110,7 @@ object Lyrify {
         writes = writes,
         log = { Log.d(LOG_TAG, it) },
         warn = { Log.w(LOG_TAG, it) },
+        detail = { if (verbose()) Log.v(LOG_TAG, it) },
         locks = locks,
     ).also { created ->
         pipeline = created

@@ -140,8 +140,9 @@ enum class AiRunEnd {
  * again after the failed-run wait) instead of killing every run; deaths in a row in the align stage leave the songs to
  * time waiting, in another stage they stop the AI ([AiRunEnd.CRASHED]), until the next version of the app. A model that
  * does not load counts as a death of the song in its stage too; it is downloaded again once, then the AI pauses
- * ([ModelLoadFailures]). A song whose audio file was replaced during its run is abandoned: nothing is recorded. [log]
- * gets one line per event: titles, stages, times, counts, never lyrics.
+ * ([ModelLoadFailures]). A song whose audio file was replaced during its run is abandoned: nothing is recorded.
+ * [runLog] gets one line per event: titles, stages, times, counts, never lyrics. It is the AI's run log ([AiRunLog]), in
+ * the app's own files and shown on the phone; logcat repeats it only under VERBOSE, as it names songs.
  */
 class AiRunner(
     private val ledger: LedgerStore,
@@ -170,7 +171,7 @@ class AiRunner(
     /** A model that did not load for the first time ([loadFailures]): deleted, to be downloaded again. */
     private val badModel: suspend (File) -> Unit = {},
     private val onProgress: suspend (AiProgress) -> Unit = {},
-    private val log: (String) -> Unit = {},
+    private val runLog: (String) -> Unit = {},
 ) {
     private var engine: SongEngine? = null
 
@@ -184,31 +185,31 @@ class AiRunner(
     }
 
     private fun closeEngine() {
-        engine?.let { runCatching { it.close() }.onFailure { e -> log("AI: the engine did not close cleanly (${e.javaClass.simpleName})") } }
+        engine?.let { runCatching { it.close() }.onFailure { e -> runLog("AI: the engine did not close cleanly (${e.javaClass.simpleName})") } }
         engine = null
     }
 
     private suspend fun songs(): AiRunEnd {
         guard.collectDeaths().forEach {
-            log("AI: ${it.title}: the app died during ${it.stage.label()} (${it.deaths} of ${CrashGuard.MAX_DEATHS} for this song)")
+            runLog("AI: ${it.title}: the app died during ${it.stage.label()} (${it.deaths} of ${CrashGuard.MAX_DEATHS} for this song)")
         }
         val verdict = guard.verdict()
         if (verdict == GuardVerdict.HOLD) {
-            log("AI: held: the app died ${CrashGuard.MAX_DEATHS_IN_A_ROW} times in a row in one stage; waiting for the next version")
+            runLog("AI: held: the app died ${CrashGuard.MAX_DEATHS_IN_A_ROW} times in a row in one stage; waiting for the next version")
             return AiRunEnd.CRASHED
         }
         if (verdict == GuardVerdict.NO_ALIGN) {
-            log("AI: timing known lyrics is off: it killed the app ${CrashGuard.MAX_DEATHS_IN_A_ROW} times in a row; those songs wait for the next version")
+            runLog("AI: timing known lyrics is off: it killed the app ${CrashGuard.MAX_DEATHS_IN_A_ROW} times in a row; those songs wait for the next version")
         }
         val state = ledger.ledger.first()
         if (!state.readable) {
             // Nothing is known about any song; the crash guard's records are kept for when it reads again.
-            log("AI: the song list cannot be read; nothing runs")
+            runLog("AI: the song list cannot be read; nothing runs")
             return AiRunEnd.DONE
         }
         val jobs = AiQueue.of(state, clock(), canTake, align = verdict != GuardVerdict.NO_ALIGN)
         guard.prune(state)
-        log("AI: ${jobs.size} songs waiting")
+        runLog("AI: ${jobs.size} songs waiting")
         var done = 0
         for (job in jobs) {
             if (!pluggedIn.first() || coolDown(AiProgress(done, jobs.size, current = null, hot = true), "before the next song") == null) {
@@ -220,7 +221,7 @@ class AiRunner(
                 // The song may have changed since the queue was made: lyrics found or removed, the file gone.
                 val entry = ledger.entry(job.track.path)?.takeIf { AiQueue.wants(it, clock()) && canTake(it.path) }
                 if (entry == null) {
-                    log("AI: ${job.track.title} skipped, it changed")
+                    runLog("AI: ${job.track.title} skipped, it changed")
                     continue
                 }
                 val current = AiQueue.job(entry)
@@ -230,20 +231,20 @@ class AiRunner(
                     val stage = song.diedIn?.label() ?: "a run"
                     val status = record(current.track, AiResult.Failed("the app died during $stage ${song.deaths} times"))
                     guard.drop(entry.path)
-                    log("AI: $title: given up for now, the app died during it ${song.deaths} times (last during $stage); now $status")
+                    runLog("AI: $title: given up for now, the app died during it ${song.deaths} times (last during $stage); now $status")
                     continue
                 }
                 val plain = when (val lyrics = current.lrclibId?.let { plainLyrics(it) }) {
                     null, PlainLyrics.None -> null
                     is PlainLyrics.Found -> lyrics.text
                     is PlainLyrics.Unavailable -> {
-                        log("AI: $title waits, LRCLIB unavailable (${lyrics.cause})")
+                        runLog("AI: $title waits, LRCLIB unavailable (${lyrics.cause})")
                         continue
                     }
                 }
                 val working = AiProgress(done, jobs.size, title)
                 onProgress(working)
-                log("AI: $title: ${if (plain == null) "transcribing" else "timing known lyrics"}")
+                runLog("AI: $title: ${if (plain == null) "transcribing" else "timing known lyrics"}")
                 val started = clock()
                 val songEngine = engine ?: openEngine(models).also { engine = it }
                 val result = try {
@@ -251,18 +252,18 @@ class AiRunner(
                         songEngine.run(current.track, plain, song::entering) { beforeChunk(working) }
                     }
                 } catch (e: CancellationException) {
-                    log("AI: $title: stopped")
+                    runLog("AI: $title: stopped")
                     throw e
                 } finally {
                     song.ended()
                 }
                 if (result == null) {
-                    log("AI: $title: stopped, unplugged")
+                    runLog("AI: $title: stopped, unplugged")
                     return AiRunEnd.UNPLUGGED
                 }
                 if (result is AiResult.Failed && result.npu) {
                     // The phone's NPU, not the song: nothing is recorded, and the next period tries again.
-                    log("AI: the phone's NPU could not be used (${result.reason}); trying again later")
+                    runLog("AI: the phone's NPU could not be used (${result.reason}); trying again later")
                     return AiRunEnd.NO_NPU
                 }
                 if (result is AiResult.Failed && result.model != null) {
@@ -270,12 +271,12 @@ class AiRunner(
                     // a death in the stage it was in all the same, so a song is not run forever.
                     song.died()
                     if (loadFailures.failed(result.model)) {
-                        log("AI: ${result.model.name} did not load (${result.reason}); deleted, to be downloaded again")
+                        runLog("AI: ${result.model.name} did not load (${result.reason}); deleted, to be downloaded again")
                         closeEngine()
                         badModel(result.model)
                         return AiRunEnd.BAD_MODEL
                     }
-                    log(
+                    runLog(
                         "AI: ${result.model.name} did not load again after it was downloaded again (${result.reason}); kept, " +
                             "and the AI is paused until the next version of KJB or until the models are deleted",
                     )
@@ -284,13 +285,13 @@ class AiRunner(
                 // Replaced while the run waited (LRCLIB, the heat) or worked: what it made is of another recording.
                 if (song.audioChanged()) {
                     guard.drop(entry.path)
-                    log("AI: $title: its audio file changed during the run; nothing recorded, it starts over in a later run")
+                    runLog("AI: $title: its audio file changed during the run; nothing recorded, it starts over in a later run")
                     continue
                 }
                 val status = record(current.track, result)
                 guard.completed(entry.path)
                 if (status in AiQueue.DONE) done++
-                log("AI: $title: ${describe(result)} after ${seconds(clock() - started)}, now $status")
+                runLog("AI: $title: ${describe(result)} after ${seconds(clock() - started)}, now $status")
             } finally {
                 aiPaths.release(job.track.path)
             }
@@ -316,17 +317,17 @@ class AiRunner(
             if (status <= MAX_THERMAL_STATUS) break
             if (hottest == 0) {
                 onProgress(hot)
-                log("AI: the phone is warm (thermal status $status), waiting $where")
+                runLog("AI: the phone is warm (thermal status $status), waiting $where")
             }
             hottest = maxOf(hottest, status)
             val unplugged = withTimeoutOrNull(THERMAL_POLL_MS) { pluggedIn.first { !it } } != null
             if (unplugged) {
-                log("AI: unplugged while waiting for the phone to cool down")
+                runLog("AI: unplugged while waiting for the phone to cool down")
                 return null
             }
         }
         if (hottest == 0) return false
-        log("AI: cooled down after ${minutes(clock() - start)} (thermal status up to $hottest) $where")
+        runLog("AI: cooled down after ${minutes(clock() - start)} (thermal status up to $hottest) $where")
         return true
     }
 
@@ -335,7 +336,7 @@ class AiRunner(
         val work = async(engineContext) { block() }
         val watch = launch {
             pluggedIn.first { !it }
-            log("AI: unplugged, stopping after the current step")
+            runLog("AI: unplugged, stopping after the current step")
             work.cancel()
         }
         try {
@@ -350,7 +351,7 @@ class AiRunner(
         }
     }
 
-    /** For the log: no lyrics, and of a failure only its kind (a message could quote what Whisper heard). */
+    /** For the run log: no lyrics, and of a failure only its kind (a message could quote what Whisper heard). */
     private fun describe(result: AiResult): String = when (result) {
         is AiResult.Transcribed -> "transcribed, ${result.stats.lines} lines"
         is AiResult.Aligned -> "timed, agreement %.2f".format(Locale.ROOT, result.agreement)
