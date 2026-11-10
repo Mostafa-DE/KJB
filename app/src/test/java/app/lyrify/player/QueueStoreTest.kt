@@ -65,6 +65,14 @@ class QueueStoreTest {
     }
 
     @Test
+    fun `a queue stored before start times were kept starts at its last play`() {
+        val old = QueuesJson.encode(book()).replace(Regex(""","?startedAt"?:\d+"""), "")
+        val read = QueuesJson.decode(old)!!
+        assertEquals(book().queues.size, read.queues.size)
+        assertTrue(read.queues.all { it.startedAt == it.updatedAt && it.startedAt > 0 })
+    }
+
+    @Test
     fun `missing parts read as empty, unknown keys are ignored, and only text that is no JSON object is not queues`() {
         assertEquals(QueueBook(), QueuesJson.decode("{}"))
         assertEquals(QueueBook(), QueuesJson.decode("""{"schemaVersion":9,"somethingNew":[1,2]}"""))

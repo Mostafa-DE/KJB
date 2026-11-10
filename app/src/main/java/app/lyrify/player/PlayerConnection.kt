@@ -3,6 +3,7 @@ package app.lyrify.player
 import android.content.ComponentName
 import android.content.Context
 import android.os.SystemClock
+import android.text.format.DateFormat
 import android.util.Log
 import androidx.annotation.OptIn
 import androidx.compose.runtime.Immutable
@@ -30,6 +31,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.util.Date
 import java.util.concurrent.ExecutionException
 
 /** What the session's player says, through the screens' MediaController: playing or not, where, and how long the song is. */
@@ -100,8 +102,18 @@ fun playerUi(book: QueueBook, repeat: Repeat, place: PlaybackPlace?, transport: 
     )
 }
 
-/** A queue's name as the app shows it: the user's name, else its source ("Album · Harbour Glass", "Songs"). */
-fun queueLabel(context: Context, queue: Queue): String = queue.name ?: sourceLabel(context, queue.source, queue.items.size)
+/**
+ * [queue]'s name as the app shows it, the same in every list: the user's name, else its source and the time it started
+ * ("Album · Harbour Glass · 21:30", "Songs · 21:30"), numbered when another of [book]'s queues reads the same ([queueNames]).
+ */
+fun queueLabel(context: Context, book: QueueBook, queue: Queue): String = queueLabels(context, book)[queue.id] ?: madeName(context, queue)
+
+/** Every queue's name in [book], by id ([queueLabel]). */
+fun queueLabels(context: Context, book: QueueBook): Map<String, String> = queueNames(book.queues) { madeName(context, it) }
+
+/** An unnamed queue's name: its source and the time it started, in the phone's 12 or 24 hour clock. */
+private fun madeName(context: Context, queue: Queue): String =
+    context.getString(R.string.queue_name_made, sourceLabel(context, queue.source, queue.items.size), DateFormat.getTimeFormat(context).format(Date(queue.startedAt)))
 
 /** A source as the app names it; a picked queue by its size ("Picked · 3 songs"). */
 fun sourceLabel(context: Context, source: QueueSource, songs: Int): String {
@@ -158,8 +170,9 @@ class PlayerConnection(
     suspend fun awaitNothingLoaded() = core.awaitNothingLoaded()
 
     override val queues: StateFlow<List<QueueTarget>> = core.book.map { book ->
+        val names = queueLabels(context, book)
         (book.saved + book.recent + listOfNotNull(book.currentId)).distinct().mapNotNull(book::queue).map { queue ->
-            QueueTarget(queue.id, queueLabel(context, queue), queue.items.size, saved = queue.id in book.saved, playing = queue.id == book.currentId)
+            QueueTarget(queue.id, names.getValue(queue.id), queue.items.size, saved = queue.id in book.saved, playing = queue.id == book.currentId)
         }
     }.stateIn(scope, SharingStarted.Eagerly, emptyList())
 

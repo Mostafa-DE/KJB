@@ -101,7 +101,7 @@ import app.lyrify.player.PlayerUi
 import app.lyrify.player.Queue
 import app.lyrify.player.QueueItem
 import app.lyrify.player.Repeat
-import app.lyrify.player.queueLabel
+import app.lyrify.player.sourceLabel
 import app.lyrify.settings.LibrarySettings
 import app.lyrify.settings.PlayerUiSettings
 import app.lyrify.settings.Settings
@@ -557,7 +557,8 @@ private fun PlayerTopBar(ui: PlayerUi, onClose: () -> Unit, onRoute: (PlayerRout
             .pointerInput(Unit) { detectVerticalDragGestures(onDragEnd = onDragEnd, onDragCancel = onDragEnd) { change, dy -> onDrag(change, dy) } },
     ) {
         ChromeIconButton(R.drawable.ic_keyboard_arrow_down, stringResource(R.string.player_close), onClose)
-        val name = queueLabel(context, ui.queue)
+        // Where it plays from, without the time the queue started that the queue lists add.
+        val name = ui.queue.name ?: sourceLabel(context, ui.queue.source, ui.queue.items.size)
         Text(
             fromLine(stringResource(R.string.player_from, name), name, MaterialTheme.colorScheme.onSurface),
             style = SourceStyle,

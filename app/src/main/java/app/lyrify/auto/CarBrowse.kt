@@ -47,6 +47,7 @@ import app.lyrify.player.TreePlay
 import app.lyrify.player.TreeSearch
 import app.lyrify.player.metadataOf
 import app.lyrify.player.queueLabel
+import app.lyrify.player.queueLabels
 import app.lyrify.settings.LibrarySettings
 import app.lyrify.settings.Settings
 import com.google.common.collect.ImmutableList
@@ -211,9 +212,11 @@ class CarBrowse(
         } else {
             withContext(Dispatchers.IO) { Lyrify.plays(context).let { mostPlayed(it, library) to recentlyPlayed(it, library) } }
         }
+        val book = core.book.value
+        val queueNames = queueLabels(context, book)
         return TreeData(
             library = library,
-            book = core.book.value,
+            book = book,
             playlists = lists.playlists,
             settings = settings.library,
             name = ::name,
@@ -222,7 +225,7 @@ class CarBrowse(
             recentlyPlayed = recent,
             now = System.currentTimeMillis(),
             found = searches.of(controller.packageName),
-        ) { queueLabel(context, it) }
+        ) { queueNames[it.id] ?: queueLabel(context, book, it) }
     }
 
     private suspend fun find(query: String, library: Library): Found =
