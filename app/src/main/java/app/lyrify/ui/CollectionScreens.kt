@@ -228,7 +228,7 @@ private fun AlbumPage(ui: LibraryUi, library: Library, key: String) {
                 LyrifyMenu(expanded = menu, onDismiss = { menu = false }) {
                     MenuRow(stringResource(R.string.lib_edit_album), R.drawable.ic_edit, onClick = {
                         menu = false
-                        nav.show(FullScreen.EditAlbum(key))
+                        nav.show(FullScreen.EditAlbum(key, byTitle))
                     })
                 }
             }

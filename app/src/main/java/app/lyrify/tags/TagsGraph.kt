@@ -8,11 +8,16 @@ import app.lyrify.LOG_TAG
 import app.lyrify.Lyrify
 import app.lyrify.logFailures
 import app.lyrify.media.TrackResolver
+import app.lyrify.tags.lookup.AlbumLookup
+import app.lyrify.tags.lookup.MetaCache
+import app.lyrify.tags.lookup.MetaClient
+import app.lyrify.tags.lookup.MusicBrainz
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import java.io.File
 import java.io.IOException
 
 /**
@@ -28,6 +33,8 @@ object TagsGraph {
     private val recovered = CompletableDeferred<Unit>()
     private var parts: Parts? = null
     private var writer: SafeWriter? = null
+    private var lookup: AlbumLookup? = null
+    private var keptApart: KeptApart? = null
     private var recovering = false
 
     private class Parts(context: Context) {
@@ -94,6 +101,21 @@ object TagsGraph {
 
     /** History and Undo's records, for the History list. */
     fun undo(context: Context): UndoStore = parts(context.applicationContext).undo
+
+    /**
+     * The one MusicBrainz and Cover Art Archive client, so one gate app-wide: Covers & tags' checks and Edit tags' Find
+     * online take turns. Successful answers are kept in `tag-cache/`.
+     */
+    @Synchronized
+    fun lookup(context: Context): AlbumLookup = lookup ?: AlbumLookup(
+        MusicBrainz(MetaClient(MetaCache(File(context.applicationContext.filesDir, "tag-cache")), log = ::log)),
+        ::log,
+    ).also { lookup = it }
+
+    /** The names kept apart with "Not the same", in `same-names.json`. */
+    @Synchronized
+    fun keptApart(context: Context): KeptApart =
+        keptApart ?: KeptApart(File(context.applicationContext.filesDir, "same-names.json"), ::log).also { keptApart = it }
 
     @Synchronized
     private fun parts(context: Context): Parts = parts ?: Parts(context).also { parts = it }

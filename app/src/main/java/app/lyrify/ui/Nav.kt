@@ -171,9 +171,9 @@ sealed interface FullScreen {
     @Serializable @SerialName("editTags")
     data class EditTags(val songs: List<SongRef>) : FullScreen
 
-    /** Edit album, by the library's album key (EditTagsScreen.kt, T3). */
+    /** Edit album, by the library's album key; [byTitle]: its page lists the songs by title (EditTagsScreen.kt, T3). */
     @Serializable @SerialName("editAlbum")
-    data class EditAlbum(val key: String) : FullScreen
+    data class EditAlbum(val key: String, val byTitle: Boolean = false) : FullScreen
 
     /** The equalizer, from the player's "⋯" (AudioScreens.kt, A1). */
     @Serializable @SerialName("equalizer")

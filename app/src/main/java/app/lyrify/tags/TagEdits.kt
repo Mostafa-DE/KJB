@@ -126,6 +126,22 @@ data class SongPlan(val song: Song, val fields: Map<TagField, String>, val cover
         }
 
     val changesSomething: Boolean get() = fields.isNotEmpty() || cover != CoverEdit.Keep
+
+    /** The song as the library will read it once this is written: where its album or artist page moves to. */
+    val after: Song
+        get() = fields.entries.fold(song) { at, (field, value) ->
+            val text = value.takeIf(String::isNotEmpty)
+            when (field) {
+                TagField.TITLE -> at.copy(title = value)
+                TagField.ARTIST -> at.copy(artist = text)
+                TagField.ALBUM -> at.copy(album = text)
+                TagField.ALBUM_ARTIST -> at.copy(albumArtist = text)
+                TagField.YEAR -> at.copy(year = text?.toIntOrNull())
+                TagField.TRACK -> at.copy(track = text?.toIntOrNull())
+                TagField.DISC -> at.copy(disc = text?.toIntOrNull())
+                TagField.GENRE -> at.copy(genre = text)
+            }
+        }
 }
 
 /** The plans of Edit tags, Edit album, Rename artist and Merge (player-spec "Edit tags (manual)"). */

@@ -224,6 +224,20 @@ class TagEditsTest {
         assertEquals(mapOf(TagField.ALBUM to FieldProblem.NEEDS_TEXT), form.with(TagField.ALBUM, " ").problems(setOf(TagField.ALBUM)))
     }
 
+    @Test
+    fun `a plan says how the library will read the song once written, so its album page can follow`() {
+        val songs = albumSongs()
+        val form = TagForm.of(songs, TagEdits.ALBUM_FIELDS).with(TagField.ALBUM, "Switchyard Nocturnes").with(TagField.ALBUM_ARTIST, "").with(TagField.YEAR, "2025")
+
+        val after = TagEdits.album(songs, form, CoverEdit.Keep, numberInOrder = true).first().after
+
+        assertEquals("Switchyard Nocturnes", after.album)
+        assertNull(after.albumArtist)
+        assertEquals(2025, after.year)
+        assertEquals(1, after.track)
+        assertEquals(albumKey(song("Music/x.mp3", artist = "Kit Calloway", album = "Switchyard Nocturnes")), albumKey(after))
+    }
+
     // Rename and merge
 
     private val credits = listOf(
