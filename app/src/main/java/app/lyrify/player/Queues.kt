@@ -70,12 +70,13 @@ data class QueueBook(
     fun queue(id: String): Queue? = queues.firstOrNull { it.id == id }
 
     /**
-     * A tap on [songs]`[start]` in a list from [source]: inside the current queue when it came from that list (songs
-     * added with Play next stay), else a new queue from the list, starting at the tapped song, the old one kept in Recent.
+     * A tap on [songs]`[start]` in a list from [source]: inside the current queue when it came from that list and is not
+     * saved (songs added with Play next stay), else a new queue from the list, starting at the tapped song, the old one
+     * kept in Recent, or in Saved at its place: a saved queue is kept for later, so a tap never moves it.
      */
     fun play(songs: List<SongRef>, start: Int, source: QueueSource, now: Long): Switched {
         val song = songs.getOrNull(start) ?: return Switched(this, toRecent = false)
-        val playing = current
+        val playing = current?.takeUnless { it.id in saved }
         if (playing != null && playing.from(source)) {
             val items = playing.items
             val at = items.getOrNull(start)?.takeIf { it.song.path == song.path && !it.playNext }?.let { start }
