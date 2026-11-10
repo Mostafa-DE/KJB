@@ -272,15 +272,47 @@ object PayloadHash {
         return if (start >= after && file.read(start, 3).contentEquals(ID3V1_MAGIC)) start else file.size
     }
 
-    /** Where an APE tag ending at [end] starts (with its header, if it has one), or [end] when none ends there. */
+    /**
+     * Where an APE tag ending at [end] starts (with its header, if it has one), or [end] when no whole tag ends there: the
+     * footer, a header where the footer says one is (with the same version, size and count), and exactly the items the
+     * footer counts, filling the space between. Anything less is audio: a footer alone never cuts the payload short.
+     */
     private fun apeStart(file: Reader, after: Long, end: Long): Long {
         if (end - after < APE_FOOTER_BYTES) return end
         val footer = ByteBuffer.wrap(file.read(end - APE_FOOTER_BYTES, APE_FOOTER_BYTES.toInt())).order(java.nio.ByteOrder.LITTLE_ENDIAN)
         if (!ByteArray(8).also { footer.get(it) }.contentEquals(APE_MAGIC)) return end
+        val version = footer.getInt(8)
         val size = footer.getInt(12).toLong() and 0xFFFFFFFFL
-        val header = if (footer.getInt(20) and (1 shl 31) != 0) APE_FOOTER_BYTES else 0
-        val start = end - size - header
-        return if (size < APE_FOOTER_BYTES || start < after) end else start
+        val count = footer.getInt(16).toLong() and 0xFFFFFFFFL
+        val flags = footer.getInt(20)
+        if (version != 1000 && version != 2000) return end
+        // The footer's own flags never say "this is the header".
+        if (flags and APE_IS_HEADER != 0) return end
+        if (size < APE_FOOTER_BYTES || size > end - after || count > (size - APE_FOOTER_BYTES) / APE_MIN_ITEM_BYTES) return end
+        val items = end - size
+        val header = version == 2000 && flags and APE_HAS_HEADER != 0
+        val start = items - if (header) APE_FOOTER_BYTES else 0
+        if (start < after) return end
+        if (header) {
+            val head = ByteBuffer.wrap(file.read(start, APE_FOOTER_BYTES.toInt())).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+            val same = ByteArray(8).also { head.get(it) }.contentEquals(APE_MAGIC) && head.getInt(8) == version &&
+                (head.getInt(12).toLong() and 0xFFFFFFFFL) == size && (head.getInt(16).toLong() and 0xFFFFFFFFL) == count &&
+                head.getInt(20) and APE_IS_HEADER != 0
+            if (!same) return end
+        }
+        // Each item: value size and flags (8 bytes), a key of 2 to 255 printable ASCII characters, a 0, the value.
+        val itemsEnd = end - APE_FOOTER_BYTES
+        var at = items
+        repeat(count.toInt()) {
+            if (at + APE_MIN_ITEM_BYTES > itemsEnd) return end
+            val valueSize = ByteBuffer.wrap(file.read(at, 4)).order(java.nio.ByteOrder.LITTLE_ENDIAN).int.toLong() and 0xFFFFFFFFL
+            val key = file.read(at + 8, minOf(APE_MAX_KEY + 1L, itemsEnd - at - 8).toInt())
+            val keyLength = key.indexOf(0.toByte())
+            if (keyLength < 2 || key.take(keyLength).any { it < 0x20 || it > 0x7E }) return end
+            at += 8 + keyLength + 1 + valueSize
+            if (at > itemsEnd) return end
+        }
+        return if (at == itemsEnd) start else end
     }
 
     /** An MPEG audio frame header at [at]: the sync, and no reserved version, layer, bitrate or sample rate. */
@@ -338,6 +370,12 @@ object PayloadHash {
     private val OPUS_ID = "OpusHead".encodeToByteArray()
     private val APE_MAGIC = "APETAGEX".encodeToByteArray()
     private const val APE_FOOTER_BYTES: Long = 32
+    private const val APE_HAS_HEADER: Int = 1 shl 31
+    private const val APE_IS_HEADER: Int = 1 shl 29
+
+    /** The smallest item: value size and flags, a 2-character key, its 0, an empty value. */
+    private const val APE_MIN_ITEM_BYTES: Long = 11
+    private const val APE_MAX_KEY: Int = 255
     private const val ID3V1_BYTES: Long = 128
     private const val STREAMINFO: Int = 0
 
