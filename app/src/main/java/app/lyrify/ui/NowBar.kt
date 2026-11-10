@@ -359,45 +359,50 @@ private fun BarRow(
     val swipe = with(LocalDensity.current) { SWIPE_UP.toPx() }
     val ink = barInk(MaterialTheme.colorScheme)
     val container = LocalContainer.current
-    GlassSurface(null, CircleShape, Modifier.fillMaxWidth().padding(horizontal = 12.dp).then(containerBounds(container)), solid = true) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
-                .heightIn(min = 64.dp)
-                .pointerInput(onOpen) {
-                    var dragged = 0f
-                    detectVerticalDragGestures(onDragStart = { dragged = 0f }, onDragEnd = { if (dragged < -swipe) onOpen() }) { _, dy -> dragged += dy }
-                }
-                .padding(end = 8.dp),
-        ) {
+    Box(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+        // The player's end of the transform is an empty stand-in of the bar's size: the bar itself is never laid out at
+        // the bounds on their way, so it stays put while the player grows out of it and shrinks back into it.
+        Box(Modifier.matchParentSize().then(containerBounds(container)))
+        GlassSurface(null, CircleShape, Modifier.fillMaxWidth(), solid = true) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier
-                    .weight(1f)
-                    .clip(CircleShape)
-                    .clickable(role = Role.Button, onClick = onOpen)
-                    .semantics(mergeDescendants = true) { contentDescription = openLabel }
                     .heightIn(min = 64.dp)
-                    .padding(start = 8.dp, end = 4.dp),
+                    .pointerInput(onOpen) {
+                        var dragged = 0f
+                        detectVerticalDragGestures(onDragStart = { dragged = 0f }, onDragEnd = { if (dragged < -swipe) onOpen() }) { _, dy -> dragged += dy }
+                    }
+                    .padding(end = 8.dp),
             ) {
-                Orb(cover, status, ring, if (sharedCover) containerCover(container) else Modifier)
-                Column(Modifier.weight(1f).clearAndSetSemantics {}) {
-                    Text(title, style = MaterialTheme.typography.titleSmall, color = ink.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    line()
-                }
-            }
-            if (onPlayPause != null) {
-                Box(
-                    contentAlignment = Alignment.Center,
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
                     modifier = Modifier
-                        .size(48.dp)
+                        .weight(1f)
                         .clip(CircleShape)
-                        .background(LocalChromeColors.current.action, CircleShape)
-                        .clickable(role = Role.Button, onClickLabel = null, onClick = onPlayPause)
-                        .semantics { contentDescription = playLabel },
+                        .clickable(role = Role.Button, onClick = onOpen)
+                        .semantics(mergeDescendants = true) { contentDescription = openLabel }
+                        .heightIn(min = 64.dp)
+                        .padding(start = 8.dp, end = 4.dp),
                 ) {
-                    PlayPauseIcon(playing, tint = LocalChromeColors.current.onAction, modifier = Modifier.size(28.dp))
+                    Orb(cover, status, ring, if (sharedCover) containerCover(container) else Modifier)
+                    Column(Modifier.weight(1f).clearAndSetSemantics {}) {
+                        Text(title, style = MaterialTheme.typography.titleSmall, color = ink.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        line()
+                    }
+                }
+                if (onPlayPause != null) {
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(CircleShape)
+                            .background(LocalChromeColors.current.action, CircleShape)
+                            .clickable(role = Role.Button, onClickLabel = null, onClick = onPlayPause)
+                            .semantics { contentDescription = playLabel },
+                    ) {
+                        PlayPauseIcon(playing, tint = LocalChromeColors.current.onAction, modifier = Modifier.size(28.dp))
+                    }
                 }
             }
         }
