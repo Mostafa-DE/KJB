@@ -1,13 +1,13 @@
 package app.lyrify.ui
 
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.CompositingStrategy
 import coil3.request.ImageRequest
 import kotlinx.coroutines.delay
 import androidx.compose.ui.graphics.Color
 import androidx.compose.animation.core.LinearEasing
-import androidx.compose.ui.text.withStyle
-import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.lazy.LazyListState
@@ -99,7 +99,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
-import kotlin.math.floor
 import kotlin.math.roundToInt
 import java.io.IOException
 
@@ -235,23 +234,59 @@ fun rememberLyricsLook(): LyricsLook {
 @Immutable
 data class LyricsFrame(val sides: Dp, val top: Float, val anchor: Float, val bottom: Float)
 
-/** The colours of the lines: the one playing ([now], its sung words in [sung]), those sung before it, and those to come. */
+/** The colours of the lines: the one playing ([now], all of it), those sung before it, and those to come. */
 @Immutable
-data class LineTones(val now: Color, val sung: Color, val past: Color, val next: Color)
+data class LineTones(val now: Color, val past: Color, val next: Color)
 
-/** The theme's line colours: on-surface for the line playing with its sung words in coral, outline for sung lines, the secondary ink to come. */
+/** The theme's line colours: on-surface for the line playing, outline for sung lines, the secondary ink to come. */
 @Composable
 fun themeTones(): LineTones {
     val colors = MaterialTheme.colorScheme
-    return LineTones(now = colors.onSurface, sung = LocalBrandColors.current.highlight, past = colors.outline, next = colors.onSurfaceVariant)
+    return LineTones(now = colors.onSurface, past = colors.outline, next = colors.onSurfaceVariant)
+}
+
+/** Where a line is in the song: sung, playing (a whole group of lines sharing a time plays together), or to come. */
+enum class LineState { PAST, NOW, NEXT }
+
+/** [index]'s place against the line playing [at] (the first of its group, [currentLine]; -1 before the first). */
+fun lineState(lines: List<LrcLine>, at: Int, index: Int): LineState {
+    if (at < 0) return LineState.NEXT
+    val now = lines[at].timeMs
+    val time = lines[index].timeMs
+    return when {
+        time < now -> LineState.PAST
+        time == now -> LineState.NOW
+        else -> LineState.NEXT
+    }
+}
+
+/** A line's one colour: the whole line playing in [LineTones.now], never word by word. */
+fun lineColor(state: LineState, tones: LineTones): Color = when (state) {
+    LineState.PAST -> tones.past
+    LineState.NOW -> tones.now
+    LineState.NEXT -> tones.next
+}
+
+/** A line's words as shown: an enhanced LRC's word times (`<01:02.30>`) are for timing only, never shown. */
+fun shownLine(text: String): String = text.replace(WORD_TIME, "").replace(SPACES, " ").trim()
+
+private val WORD_TIME = Regex("""<\d+:\d+(?:[.:]\d+)?>""")
+private val SPACES = Regex("""\s{2,}""")
+
+/** The first line after [at]'s group: where the song goes next on its own. 0 before the first line. */
+private fun nextStart(lines: List<LrcLine>, at: Int): Int {
+    if (at < 0) return 0
+    val time = lines[at].timeMs
+    return (at + 1 until lines.size).firstOrNull { lines[it].timeMs > time } ?: lines.size
 }
 
 /**
  * Synced lines with the "Aa" choices, every one in the same [style] (the line playing never grows, so nothing reflows):
- * the line playing stands out by its colour alone, its sung words in the accent (the prototype's .sung), and each line
- * fades to its colour. The list follows the song with a smooth scroll that keeps the line playing at the frame's
- * anchor, also after a seek or a tap on a line ([onLine]); after the user scrolls it is left alone for [LEAVE_ALONE_MS]
- * ([LyricsFollow]). With reduced motion the list moves at once and the colours switch.
+ * the line playing is lit whole by its colour, as Samsung Music does (lines sharing its time with it), never word by
+ * word; word times in the file are not shown. Each line fades to its colour. The list follows the song with a smooth
+ * scroll that keeps the line playing at the frame's anchor ([followLine]): after a seek or a tap on a line at once, but
+ * never while a finger is on it, and for [LEAVE_ALONE_MS] after the user scrolls ([LyricsFollow]). With reduced motion
+ * the list moves at once and the colours switch.
  */
 @Composable
 fun SyncedLyrics(
@@ -268,41 +303,49 @@ fun SyncedLyrics(
     val list = rememberLazyListState()
     val reduced = LocalReducedMotion.current
     val at = currentLine(lines, positionMs)
-    val sung = if (at >= 0) sungEnd(lines[at].text, lineShare(lines, at, positionMs)) else 0
     var follow by remember { mutableStateOf(LyricsFollow()) }
-    val dragged by list.interactionSource.collectIsDraggedAsState()
+    val dragged = list.interactionSource.collectIsDraggedAsState()
     // A touch and its release both count: the list waits from the moment the finger lets go.
-    LaunchedEffect(dragged) { if (dragged || follow != LyricsFollow()) follow = follow.touched(SystemClock.elapsedRealtime()) }
+    LaunchedEffect(dragged.value) { if (dragged.value || follow != LyricsFollow()) follow = follow.touched(SystemClock.elapsedRealtime()) }
+    // The line the list last went toward: a jump from it (a seek) ends the wait.
+    val last = remember { Kept(at) }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val viewport = constraints.maxHeight
         val padTop = (viewport * frame.top).roundToInt()
         LaunchedEffect(at, follow, viewport) {
+            if (last.value != at) {
+                val moved = follow.moved(last.value, at, nextStart(lines, last.value))
+                last.value = at
+                if (moved != follow) {
+                    follow = moved
+                    return@LaunchedEffect
+                }
+            }
             if (at < 0) return@LaunchedEffect
             delay(follow.waitMs(SystemClock.elapsedRealtime()))
-            list.follow(at, padTop, viewport, frame.anchor, reduced)
+            // A finger still on the list: its release starts the wait again.
+            if (!follow.follows(SystemClock.elapsedRealtime(), held = dragged.value)) return@LaunchedEffect
+            followLine(LazyLines(list), at, padTop, viewport, frame.anchor, smooth = !reduced)
         }
         val density = LocalDensity.current
+        val fade = with(density) { LYRICS_FADE.toPx() }
         LazyColumn(
             state = list,
             userScrollEnabled = enabled,
-            modifier = Modifier.fillMaxSize(),
+            // The lines dissolve into the top and bottom edges instead of being cut; every frame keeps more room than
+            // the fade above its first line and below its last, so each can still rest in full view.
+            modifier = Modifier
+                .fillMaxSize()
+                .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                .drawWithContent {
+                    drawContent()
+                    val edge = (fade / size.height).coerceIn(0f, 0.5f)
+                    drawRect(Brush.verticalGradient(0f to Color.Transparent, edge to Color.Black, 1f - edge to Color.Black, 1f to Color.Transparent), blendMode = BlendMode.DstIn)
+                },
             contentPadding = with(density) { PaddingValues(start = frame.sides, end = frame.sides, top = padTop.toDp(), bottom = (viewport * frame.bottom).toDp()) },
         ) {
             itemsIndexed(lines, contentType = { _, _ -> "line" }) { i, line ->
-                LyricLine(
-                    line = line,
-                    tone = when {
-                        i == at -> tones.now
-                        i < at -> tones.past
-                        else -> tones.next
-                    },
-                    sung = if (i == at) sung else 0,
-                    sungColor = tones.sung,
-                    style = shown,
-                    align = look.align,
-                    reduced = reduced,
-                    enabled = enabled,
-                ) {
+                LyricLine(line, lineColor(lineState(lines, at, i), tones), shown, look.align, reduced, enabled) {
                     follow = follow.tapped()
                     onLine(line)
                 }
@@ -311,19 +354,12 @@ fun SyncedLyrics(
     }
 }
 
-/** One synced line: its colour fades over the token's 300 ms, linear (colour only, never its size); the first [sung] characters in [sungColor]. */
+/** One synced line, all of it in one colour that fades over the token's 300 ms, linear (colour only, never its size). */
 @Composable
-private fun LyricLine(line: LrcLine, tone: Color, sung: Int, sungColor: Color, style: TextStyle, align: TextAlign, reduced: Boolean, enabled: Boolean, onTap: () -> Unit) {
-    val label = stringResource(R.string.player_line_at, clock(line.timeMs), line.text)
+private fun LyricLine(line: LrcLine, tone: Color, style: TextStyle, align: TextAlign, reduced: Boolean, enabled: Boolean, onTap: () -> Unit) {
+    val text = remember(line.text) { shownLine(line.text) }
+    val label = stringResource(R.string.player_line_at, clock(line.timeMs), text)
     val color by animateColorAsState(tone, motion(tween(Motion.OPEN_MS, easing = LinearEasing), reduced), label = "line colour")
-    val text = if (sung > 0) {
-        buildAnnotatedString {
-            withStyle(SpanStyle(color = sungColor)) { append(line.text.substring(0, sung.coerceAtMost(line.text.length))) }
-            append(line.text.substring(sung.coerceAtMost(line.text.length)))
-        }
-    } else {
-        AnnotatedString(line.text)
-    }
     Text(
         text,
         style = style,
@@ -338,22 +374,50 @@ private fun LyricLine(line: LrcLine, tone: Color, sung: Int, sungColor: Color, s
     )
 }
 
+/** The lines as [followLine] sees them: where a line is laid out ([laidOut]: its top and height, px), and two ways to scroll. */
+interface LineList {
+    fun laidOut(index: Int): Pair<Int, Int>?
+
+    /** The height of the first line laid out, to guess an unseen line's by. */
+    fun firstHeight(): Int
+
+    suspend fun jumpTo(index: Int, offset: Int, smooth: Boolean)
+
+    suspend fun moveBy(px: Int, smooth: Boolean)
+}
+
 /**
- * Scrolls to the line [at]: by the distance left when it is laid out, else to its row; either way its middle ends at
- * [anchor] of the [viewport]. Smooth on the standard curve; at once with [reduced] motion.
+ * Scrolls to the line [at] until its middle sits at [anchor] of the [viewport]: from where it is when laid out, else
+ * to its row first (its height guessed from the first line laid out), then by what is left once its own height is
+ * known. Smooth on the standard curve, or at once.
  */
-private suspend fun LazyListState.follow(at: Int, padTop: Int, viewport: Int, anchor: Float, reduced: Boolean) {
-    val info = layoutInfo
-    val item = info.visibleItemsInfo.firstOrNull { it.index == at }
-    if (item != null) {
-        val delta = followDelta(item.offset - info.viewportStartOffset, item.size, viewport, anchor).toFloat()
-        if (delta == 0f) return
-        if (reduced) scrollBy(delta) else animateScrollBy(delta, tween(Motion.OPEN_MS, easing = Motion.Standard))
-    } else {
-        val offset = followOffset(padTop, info.visibleItemsInfo.firstOrNull()?.size ?: 0, viewport, anchor)
-        if (reduced) scrollToItem(at, offset) else animateScrollToItem(at, offset)
+suspend fun followLine(list: LineList, at: Int, padTop: Int, viewport: Int, anchor: Float, smooth: Boolean) {
+    if (list.laidOut(at) == null) list.jumpTo(at, followOffset(padTop, list.firstHeight(), viewport, anchor), smooth)
+    val (top, size) = list.laidOut(at) ?: return
+    val delta = followDelta(top, size, viewport, anchor)
+    if (delta != 0) list.moveBy(delta, smooth)
+}
+
+/** A LazyColumn's lines for [followLine]: tops measured from the list's top. */
+private class LazyLines(private val list: LazyListState) : LineList {
+    override fun laidOut(index: Int): Pair<Int, Int>? {
+        val info = list.layoutInfo
+        return info.visibleItemsInfo.firstOrNull { it.index == index }?.let { (it.offset - info.viewportStartOffset) to it.size }
+    }
+
+    override fun firstHeight(): Int = list.layoutInfo.visibleItemsInfo.firstOrNull()?.size ?: 0
+
+    override suspend fun jumpTo(index: Int, offset: Int, smooth: Boolean) {
+        if (smooth) list.animateScrollToItem(index, offset) else list.scrollToItem(index, offset)
+    }
+
+    override suspend fun moveBy(px: Int, smooth: Boolean) {
+        if (smooth) list.animateScrollBy(px.toFloat(), tween(Motion.OPEN_MS, easing = Motion.Standard)) else list.scrollBy(px.toFloat())
     }
 }
+
+/** How far the lyrics fade into the list's top and bottom edges. */
+internal val LYRICS_FADE = 28.dp
 
 /** Each view's frame, after the prototype's: the cover's back (.lplines, 38% anchor) and full lyrics (.flines, 40%). */
 internal val PanelFrame = LyricsFrame(sides = 12.dp, top = 0.26f, anchor = 0.38f, bottom = 0.52f)
@@ -394,7 +458,11 @@ data class LyricsFollow(val touchedAt: Long = NEVER) {
 
     fun tapped(): LyricsFollow = LyricsFollow()
 
-    fun follows(now: Long): Boolean = now - touchedAt >= LEAVE_ALONE_MS
+    /** Never while a finger is [held] on the list, however long; else once the wait is over. */
+    fun follows(now: Long, held: Boolean = false): Boolean = !held && now - touchedAt >= LEAVE_ALONE_MS
+
+    /** The line playing went [from] one line [to] another: on to the [next] (or nowhere) the wait goes on; a seek ends it. */
+    fun moved(from: Int, to: Int, next: Int = from + 1): LyricsFollow = if (to == from || to == next) this else tapped()
 
     /** How long until it follows again: 0 when it does. */
     fun waitMs(now: Long): Long = (touchedAt + LEAVE_ALONE_MS - now).coerceAtLeast(0)
@@ -415,26 +483,6 @@ fun followDelta(itemTop: Int, itemSize: Int, viewport: Int, anchor: Float): Int 
  * padding ([padTop]) less the offset, so this puts its middle at [anchor], taking [rowSize] for its height.
  */
 fun followOffset(padTop: Int, rowSize: Int, viewport: Int, anchor: Float): Int = padTop - (viewport * anchor - rowSize / 2f).roundToInt()
-
-/**
- * Where the sung part of the line playing ends in [text] after [share] of the line's time: whole words, a quarter
- * early (the prototype's sungSplit), never past the end.
- */
-fun sungEnd(text: String, share: Float): Int {
-    val words = text.split(' ')
-    val sung = floor(share * words.size * SUNG_LEAD).toInt().coerceIn(0, words.size)
-    return words.take(sung).joinToString(" ").length
-}
-
-/** How far the line [at] is at [positionMs], 0 to 1: up to the next line's start, or 8 s for the last one. */
-fun lineShare(lines: List<LrcLine>, at: Int, positionMs: Long): Float {
-    val line = lines.getOrNull(at) ?: return 0f
-    val end = lines.getOrNull(at + 1)?.timeMs ?: (line.timeMs + LAST_LINE_MS)
-    return if (end <= line.timeMs) 1f else ((positionMs - line.timeMs).toFloat() / (end - line.timeMs)).coerceIn(0f, 1f)
-}
-
-private const val SUNG_LEAD = 1.25f
-private const val LAST_LINE_MS = 8_000L
 
 // Full lyrics
 
