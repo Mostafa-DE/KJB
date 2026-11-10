@@ -63,6 +63,11 @@ Third-party software and assets built into the app (player, screens and storage)
 - Bricolage Grotesque (https://github.com/ateliertriay/bricolage), the variable font
   BricolageGrotesque[opsz,wdth,wght].ttf as Google Fonts ships it (google/fonts, ofl/bricolagegrotesque), bundled as
   app/src/main/res/font/bricolage_grotesque.ttf. SIL Open Font License 1.1, full text at the end of this file.
+- Roboto Flex (https://github.com/googlefonts/roboto-flex), the variable font
+  RobotoFlex[GRAD,XOPQ,XTRA,YOPQ,YTAS,YTDE,YTFI,YTLC,YTUC,opsz,slnt,wdth,wght].ttf as Google Fonts ships it (google/fonts,
+  ofl/robotoflex), cut with fontTools' instancer to its weight (400 to 700) and optical size axes, the others fixed at
+  their defaults, and bundled as app/src/main/res/font/roboto_flex.ttf. SIL Open Font License 1.1, full text at the end
+  of this file.
 
 Third-party software built into the app (tags)
 
@@ -137,9 +142,10 @@ Copyright 2016-2025 JetBrains s.r.o and contributors
 Samsung and Samsung Music are trademarks of Samsung Electronics Co., Ltd. Snapdragon and Qualcomm are trademarks of
 Qualcomm Incorporated. KJB is not affiliated with, endorsed by, or sponsored by Samsung or Qualcomm.
 
-Bricolage Grotesque licence
+Bricolage Grotesque and Roboto Flex licence
 
 Copyright 2022 The Bricolage Grotesque Project Authors (https://github.com/ateliertriay/bricolage)
+Copyright 2017 The Roboto Flex Project Authors (https://github.com/TypeNetwork/Roboto-Flex)
 
 This Font Software is licensed under the SIL Open Font License, Version 1.1.
 This license is copied below, and is also available with a FAQ at:
