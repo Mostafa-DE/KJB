@@ -59,12 +59,12 @@ interface TagFile {
 }
 
 /**
- * [TagFile] through the vendored TagLib (`:taglib`), on files under [privateRoot] only. Each call opens its own
+ * [TagFile] through the vendored TagLib (`:taglib`), on regular files under [privateRoot] only. Each call opens its own
  * descriptor and hands TagLib a duplicate it closes itself, as the wrapper's own tests do.
  */
 class TagLibFile(private val privateRoot: File) : TagFile {
     override fun read(file: File): SongTags? {
-        if (!private(file)) return null
+        if (!accepts(file)) return null
         return try {
             val metadata = open(file, ParcelFileDescriptor.MODE_READ_ONLY) { TagLib.getMetadata(it, readPictures = true) } ?: return null
             val audio = open(file, ParcelFileDescriptor.MODE_READ_ONLY) { TagLib.getAudioProperties(it, AudioPropertiesReadStyle.Average) } ?: return null
@@ -84,7 +84,7 @@ class TagLibFile(private val privateRoot: File) : TagFile {
     }
 
     override fun write(file: File, fields: Map<String, List<String>>, pictures: List<TagPicture>?, id3: Id3Version): Boolean {
-        if (!private(file)) return false
+        if (!accepts(file)) return false
         val map = HashMap<String, Array<String>>().apply { fields.forEach { (key, values) -> put(key, values.toTypedArray()) } }
         val set = pictures?.map { Picture(it.data, it.description, it.type, it.mime) }?.toTypedArray()
         return try {
@@ -94,7 +94,13 @@ class TagLibFile(private val privateRoot: File) : TagFile {
         }
     }
 
-    private fun private(file: File): Boolean = file.canonicalFile.startsWith(privateRoot.canonicalFile)
+    /**
+     * Whether TagLib may be given [file]: under [privateRoot], and a regular file. A pipe or device there is refused
+     * before it is opened (its open or TagLib's reads could wait for good), as the native side refuses its descriptor. A
+     * missing file passes, so its open throws as [TagFile] says.
+     */
+    internal fun accepts(file: File): Boolean =
+        file.canonicalFile.startsWith(privateRoot.canonicalFile) && (file.isFile || !file.exists()) // safe: an error reads as missing, so the open throws
 
     /** Runs [call] with a descriptor of [file] that TagLib owns and closes. */
     private fun <T> open(file: File, mode: Int, call: (Int) -> T): T =

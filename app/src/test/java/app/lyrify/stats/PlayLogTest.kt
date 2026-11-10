@@ -2,14 +2,21 @@ package app.lyrify.stats
 
 import app.lyrify.library.SongRef
 import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
+import java.io.File
 
 /** The play log's rows as `plays.db` gives them back, whatever wrote them, and the store's rules. Made-up names only. */
 class PlayLogTest {
+    @get:Rule
+    val folder = TemporaryFolder()
+
     private val path = "/storage/emulated/0/Music/KJB test/Salt Lattice.mp3"
 
     @Test
@@ -118,7 +125,45 @@ class PlayLogTest {
         }
     }
 
+    // An unreadable plays.db (the open that finds it runs in PlaysDbDeviceTest)
+
+    @Test
+    fun `an unreadable file is moved aside with its journal files, never deleted, and nothing else moves`() {
+        val dir = folder.root
+        val file = File(dir, PlaysSchema.NAME).apply { writeBytes(JUNK) }
+        File(dir, "plays.db-wal").writeBytes(byteArrayOf(1, 2))
+        File(dir, "plays.db-shm").writeBytes(byteArrayOf(3))
+        File(dir, "other.db").writeBytes(byteArrayOf(4))
+
+        assertEquals(File(dir, "plays-unreadable-$NOW.db"), keepAside(file, NOW))
+        assertEquals(listOf("other.db", "plays-unreadable-$NOW.db", "plays-unreadable-$NOW.db-shm", "plays-unreadable-$NOW.db-wal"), dir.list()?.sorted())
+        assertArrayEquals(JUNK, File(dir, "plays-unreadable-$NOW.db").readBytes())
+        assertArrayEquals(byteArrayOf(1, 2), File(dir, "plays-unreadable-$NOW.db-wal").readBytes())
+    }
+
+    @Test
+    fun `a file kept aside before is never overwritten, even at the same millisecond`() {
+        val dir = folder.root
+        File(dir, "plays-unreadable-$NOW.db").writeBytes(byteArrayOf(9))
+        File(dir, "plays-unreadable-${NOW + 1}.db-wal").writeBytes(byteArrayOf(8))
+        val file = File(dir, PlaysSchema.NAME).apply { writeBytes(JUNK) }
+
+        assertEquals(File(dir, "plays-unreadable-${NOW + 2}.db"), keepAside(file, NOW))
+        assertArrayEquals(byteArrayOf(9), File(dir, "plays-unreadable-$NOW.db").readBytes())
+        assertArrayEquals(byteArrayOf(8), File(dir, "plays-unreadable-${NOW + 1}.db-wal").readBytes())
+        assertArrayEquals(JUNK, File(dir, "plays-unreadable-${NOW + 2}.db").readBytes())
+        assertFalse(file.exists())
+    }
+
+    @Test
+    fun `with no file there, nothing is kept aside`() {
+        assertNull(keepAside(File(folder.root, PlaysSchema.NAME), NOW))
+        assertEquals(emptyList<String>(), folder.root.list()?.toList())
+    }
+
     private companion object {
         const val T0: Long = 1_800_000_000_000L
+        const val NOW: Long = 1_762_800_000_000L
+        val JUNK = ByteArray(8_192) { (it * 31 + 7).toByte() }
     }
 }

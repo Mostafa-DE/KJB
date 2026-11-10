@@ -4,13 +4,20 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
+import java.io.File
 
 /**
  * A change to a song's tags, applied to what the file holds: only the fields asked for change, every other field and
  * picture stays as it was, and the front cover is replaced alone. Made-up names only.
  */
 class TagEditTest {
+    @get:Rule
+    val folder = TemporaryFolder()
+
     private val back = TagPicture(byteArrayOf(1, 2, 3), "", "Back Cover", "image/jpeg")
     private val front = TagPicture(byteArrayOf(4, 5, 6), "", FRONT_COVER, "image/jpeg")
     private val newFront = TagPicture(byteArrayOf(7, 8, 9), "", FRONT_COVER, "image/jpeg")
@@ -101,6 +108,26 @@ class TagEditTest {
         assertEquals(front, applied.frontBefore)
         assertNull(applied.frontAfter)
         assertFalse(TagEdit(cover = CoverEdit.Remove).applyTo(tags.copy(pictures = listOf(back))).changesSomething)
+    }
+
+    /**
+     * TagLib is given a regular file under the private root only: a pipe there would block its open or its reads (on the
+     * phone a pipe's read never ended), so it is refused before it is opened, as the native side refuses its descriptor.
+     */
+    @Test
+    fun `TagLib is given only a regular file under the private root, never a pipe or a folder`() {
+        val root = folder.newFolder("files")
+        val tags = TagLibFile(root)
+        val song = File(root, "work.mp3").apply { writeBytes(byteArrayOf(1, 2, 3)) }
+        assertTrue(tags.accepts(song))
+        // A missing file is not refused here: its open throws, as TagFile says.
+        assertTrue(tags.accepts(File(root, "gone.mp3")))
+        assertFalse(tags.accepts(File(root, "folder.mp3").apply { mkdirs() }))
+        assertFalse(tags.accepts(folder.newFile("outside.mp3")))
+
+        val pipe = File(root, "pipe.mp3")
+        assumeTrue(ProcessBuilder("mkfifo", pipe.path).start().waitFor() == 0 && pipe.exists())
+        assertFalse(tags.accepts(pipe))
     }
 
     @Test

@@ -52,7 +52,9 @@ import java.nio.channels.ReadableByteChannel
 import java.nio.channels.WritableByteChannel
 import java.nio.file.StandardOpenOption
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 
 /**
  * The tag engine on the phone, with the real TagLib (`:taglib`): a property-map round trip per format keeps every other
@@ -258,13 +260,35 @@ class TagEngineDeviceTest {
             assertTrue("a save left its descriptor open", named(write) != writeName)
         }
 
-        // A descriptor with no file name to tell its format (a pipe): null, and the descriptor closed.
-        val pipe = ParcelFileDescriptor.createPipe()
-        val readEnd = pipe[0].detachFd()
-        val pipeName = named(readEnd)
-        assertNull(TagLib.getMetadata(readEnd, readPictures = true))
-        assertTrue("the pipe's descriptor was left open", named(readEnd) != pipeName)
-        pipe[1].close()
+        // A descriptor that is not a regular file (a pipe): refused before anything is read, null or false at once, and
+        // the descriptor closed. The pipe's write end stays open while TagLib has it, so a read would wait for good: each
+        // call runs on a thread of its own under a time limit, and closing the write end afterwards ends any read still
+        // waiting, so this test fails rather than hangs.
+        val calls = listOf<Pair<String, (Int) -> Any?>>(
+            "getMetadata" to { fd -> TagLib.getMetadata(fd, readPictures = true) },
+            "getAudioProperties" to { fd -> TagLib.getAudioProperties(fd) },
+            "getId3v2Frames" to { fd -> TagLib.getId3v2Frames(fd) },
+            "saveTags" to { fd -> TagLib.saveTags(fd, HashMap(), null, 3) },
+        )
+        for ((name, call) in calls) {
+            val pipe = ParcelFileDescriptor.createPipe()
+            val readEnd = pipe[0].detachFd()
+            val pipeName = named(readEnd)
+            val worker = Executors.newSingleThreadExecutor()
+            try {
+                val answer = worker.submit<Any?> { call(readEnd) }
+                val result = try {
+                    answer.get(10, TimeUnit.SECONDS)
+                } catch (_: TimeoutException) {
+                    throw AssertionError("$name read the pipe instead of refusing it")
+                }
+                assertTrue("$name answered $result", result == null || result == false)
+                assertTrue("$name left the pipe's descriptor open", named(readEnd) != pipeName)
+            } finally {
+                pipe[1].close()
+                worker.shutdown()
+            }
+        }
 
         // An ID3v2 version TagLib can't write: refused, the descriptor closed all the same.
         val song = fixture("paper-comet-v23.mp3")

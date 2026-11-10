@@ -178,24 +178,36 @@ class ThemeTokensTest {
         assertSame(displayFont(17), AppTypography.titleMedium.fontFamily)
     }
 
+    /**
+     * The Now bar and the dock draw [ChromeColors.bar] (GlassSurface with `solid = true`): the elevated surface, opaque.
+     * At 94% a list's text showed through on the phone, 1.13:1 light and 1.19:1 dark against its own rows' background.
+     */
     @Test
-    fun `the Now bar and the dock are near-opaque, with the theme's own ink on them, light and dark`() {
+    fun `the Now bar and the dock are opaque, so a list's text never shows through, with the theme's own ink on them, light and dark`() {
         val ends = listOf(LightColors to chromeColors(LightColors, LightBrandColors, dark = false), DarkColors to chromeColors(DarkColors, DarkBrandColors, dark = true))
         ends.forEach { (scheme, chrome) ->
             val ink = barInk(scheme)
             assertEquals(scheme.onSurface, ink.title)
             assertEquals(scheme.onSurfaceVariant, ink.line)
-            assertTrue("${chrome.bar.alpha}", chrome.bar.alpha in 0.92f..0.96f)
-            // Whatever scrolls behind the bar, its words keep their contrast: a list's text never reads through.
-            listOf(Color.White, Color.Black).forEach { behind ->
-                val fill = chrome.bar.compositeOver(behind)
-                assertTrue(contrast(ink.title, fill) >= 4.5f)
-                assertTrue(contrast(ink.line, fill) >= 4.5f)
-            }
+            assertColor("bar", hex(scheme.surfaceContainerHigh), chrome.bar)
+            assertEquals(1f, chrome.bar.alpha)
+            // A list's words under the bar and the page around them come out the same colour: nothing of them is left.
+            val rows = listOf(scheme.onSurface, scheme.onSurfaceVariant, scheme.background, Color.White, Color.Black).map { chrome.bar.compositeOver(it) }
+            rows.forEach { row -> assertEquals(1f, contrast(row, chrome.bar.compositeOver(scheme.background)), 0.001f) }
+            // And the bar's own words keep their contrast on it.
+            assertTrue(contrast(ink.title, chrome.bar) >= 4.5f)
+            assertTrue(contrast(ink.line, chrome.bar) >= 4.5f)
         }
+        // The JVM has no Compose renderer here (no Robolectric), so which fill a composable draws is read from its source:
+        // the Now bar and the dock are solid glass, and solid glass draws the bar colour.
+        val source = { name: String -> java.io.File("src/main/java/app/lyrify/ui/$name").readText() }
+        val nowBar = source("NowBar.kt")
+        val chromeKt = source("Chrome.kt")
+        assertTrue(Regex("GlassSurface\\(backdrop, CircleShape, [^\\n]*containerBounds\\(container\\)\\), solid = true\\)").containsMatchIn(nowBar))
+        assertTrue(Regex("fun Dock\\([^\\n]*\\n\\s*GlassSurface\\([^\\n]*solid = true\\)").containsMatchIn(chromeKt))
+        assertTrue(chromeKt.contains("drawRect(if (solid) chrome.bar else chrome.glassSolid)"))
         // The bar's words take the ink, never the colour left by whatever is around them.
-        val bar = java.io.File("src/main/java/app/lyrify/ui/NowBar.kt").readText()
-        assertTrue(bar.contains("color = ink.title"))
-        assertTrue(bar.contains("color = ink.line"))
+        assertTrue(nowBar.contains("color = ink.title"))
+        assertTrue(nowBar.contains("color = ink.line"))
     }
 }
