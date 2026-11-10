@@ -71,6 +71,7 @@ import app.lyrify.lyrics.LrcFormat
 import app.lyrify.lyrics.LrcLine
 import app.lyrify.lyrics.LyricsPipeline
 import app.lyrify.lyrics.PlainLyrics
+import app.lyrify.lyrics.readSidecar
 import app.lyrify.player.PlayerGraph
 import app.lyrify.player.PlayerUi
 import app.lyrify.settings.LibrarySettings
@@ -143,14 +144,12 @@ fun lineTap(line: LrcLine, playing: Boolean): LineTap = LineTap(line.timeMs, pla
 
 // The song's lyrics
 
-/** The `.lrc` next to the song at [path]; null without one (or one too large to be lyrics). Blocking. */
+/** The `.lrc` next to the song at [path]; null without one, or for a link, a folder or a file too large to be lyrics ([readSidecar]). Blocking. */
 fun readLrc(path: String): String? = try {
-    LrcFormat.sidecarPath(path)?.let(::File)?.takeIf { it.isFile && it.length() <= MAX_LRC_BYTES }?.readText()
+    LrcFormat.sidecarPath(path)?.let { readSidecar(File(it).toPath()) }?.decodeToString()
 } catch (_: IOException) {
     null
 }
-
-private const val MAX_LRC_BYTES: Long = 1024 * 1024
 
 /** LRCLIB's plain lyrics by record, for the views and the editor: a few songs' worth, in memory for this run only. */
 private object PlainCache {
