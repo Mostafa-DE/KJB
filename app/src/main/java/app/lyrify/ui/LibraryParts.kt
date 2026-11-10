@@ -164,7 +164,10 @@ class PageSongs(
     fun shuffle() = playback.shuffle(songs.map { it.ref }, source)
 
     /** "Add all": the Add to sheet for every song, in the list's order. */
-    fun addAll() = sheets.show(OpenSheet.AddTo(songs.map { it.ref }, source, sourceName))
+    fun addAll() = addTo(songs)
+
+    /** The Add to sheet for [these], from this list's source: an album's "⋯" gives its songs in album order. */
+    fun addTo(these: List<Song>) = sheets.show(OpenSheet.AddTo(these.map { it.ref }, source, sourceName))
 
     /** A tap on [song] at [at] in [songs]: it plays from there, or while selecting, it is picked or unpicked. */
     fun tap(song: Song, at: Int) = if (selection.active) onSelection(selection.toggle(song)) else play(at)
@@ -173,7 +176,8 @@ class PageSongs(
 /**
  * A page of songs under its own top bar ([topBar], or the selection's while it selects): the list, its selection and
  * its sheets. [content] adds the list's items, the header and the rows ([songRows]) among them. [loaded] false: [songs]
- * is empty only because the list is still being read.
+ * is empty only because the list is still being read. [sheet] is the page's own sheet on its songs (an album's or an
+ * artist's "⋯"), always in the composition.
  */
 @Composable
 fun SongListFrame(
@@ -183,6 +187,7 @@ fun SongListFrame(
     topBar: @Composable (under: Boolean, backdrop: GlassBackdrop) -> Unit,
     state: LazyListState = rememberLazyListState(),
     loaded: Boolean = true,
+    sheet: @Composable (PageSongs) -> Unit = {},
     content: LazyListScope.(PageSongs) -> Unit,
 ) {
     val sheets = rememberSongSheets()
@@ -199,6 +204,7 @@ fun SongListFrame(
         }
     }
     SongSheetsHost(sheets, ui) { selection = SongSelection() }
+    sheet(list)
 }
 
 /**

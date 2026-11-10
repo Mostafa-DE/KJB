@@ -74,17 +74,14 @@ private sealed interface ArtistEdit {
 /** The menu leaves the screen as its row is tapped, so what the row opens is kept here for the page to draw. */
 private var artistEdit: ArtistEdit? by mutableStateOf(null)
 
-/** "Rename artist" and "Merge with…" in an artist page's "⋯" (CollectionSlots.artistMenu); [close] closes the menu. */
-@Composable
-internal fun ArtistMenuRows(name: String, close: () -> Unit) {
-    MenuRow(stringResource(R.string.edit_rename_artist), R.drawable.ic_edit, onClick = {
-        close()
-        artistEdit = ArtistEdit.Rename(name)
-    })
-    MenuRow(stringResource(R.string.edit_merge_with), R.drawable.ic_merge, onClick = {
-        close()
-        artistEdit = ArtistEdit.Merge(name)
-    })
+/** "Rename artist" in an artist page's "⋯": [ArtistEditHost] on that page draws its dialog. */
+internal fun openRename(name: String) {
+    artistEdit = ArtistEdit.Rename(name)
+}
+
+/** "Merge with…" in an artist page's "⋯": [ArtistEditHost] on that page draws its sheet. */
+internal fun openMerge(name: String) {
+    artistEdit = ArtistEdit.Merge(name)
 }
 
 /** On artist [name]'s page: the rename dialog or the merge sheet its "⋯" opened. */
