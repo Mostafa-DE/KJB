@@ -471,7 +471,7 @@ class TagEditsTest {
     }
 
     @Test
-    fun `a photo is made a cover by the cover pipeline, a large or HEIC one through a JPEG first`() {
+    fun `a photo is made a cover by the cover pipeline, a large or HEIC one through a JPEG first`() = runBlocking {
         val codec = FakeCodec(bytes = 1_000)
 
         val small = pickedCover(JPEG + ByteArray(50), codec)
@@ -489,7 +489,7 @@ class TagEditsTest {
     }
 
     @Test
-    fun `a large or HEIC photo steps its quality and size down until the cover pipeline takes it`() {
+    fun `a large or HEIC photo steps its quality and size down until the cover pipeline takes it`() = runBlocking {
         // Too large for the pipeline at quality 100 and 90; a 1000 px JPEG at 80 fits.
         val codec = object : ImageCodec {
             val asked = mutableListOf<Pair<Int, Int>>()

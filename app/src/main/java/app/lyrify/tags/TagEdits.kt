@@ -315,7 +315,7 @@ object TagEdits {
  * not take (HEIC), is first made a JPEG of at most [CoverPipeline.MAX_SIDE] px, its quality and then its size stepped
  * down until the pipeline takes it; then the pipeline makes it what every cover is. Null when it is not an image.
  */
-fun pickedCover(image: ByteArray, codec: ImageCodec, pipeline: CoverPipeline = CoverPipeline(codec)): TagPicture? {
+suspend fun pickedCover(image: ByteArray, codec: ImageCodec, pipeline: CoverPipeline = CoverPipeline(codec)): TagPicture? {
     val taken = if (image.size <= Body.IMAGE.maxBytes && Images.isImage(image)) image else takenJpeg(image, codec) ?: return null
     val cover = pipeline.prepare(taken) ?: return null
     return TagPicture(cover.jpeg, "", FRONT_COVER, "image/jpeg")
