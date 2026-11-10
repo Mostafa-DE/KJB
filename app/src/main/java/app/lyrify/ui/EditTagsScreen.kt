@@ -78,6 +78,8 @@ import app.lyrify.tags.lookup.MetaAnswer
 import app.lyrify.tags.lookup.Proposal
 import app.lyrify.tags.pickedCover
 import app.lyrify.tags.report
+import app.lyrify.tags.undoEdit
+import app.lyrify.tags.writeEdit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -606,8 +608,8 @@ internal fun ToastState.later(toast: Toast) {
 }
 
 /**
- * Writes [plans] as one History entry of [kind] shown as [label]; once done, says how it went ([saved] when every song
- * took it), with Undo, while [after] moves the screen on.
+ * Writes [plans] as one History entry of [kind] shown as [label] ([writeEdit]: favourites follow); once done, says how
+ * it went ([saved] when every song took it), with Undo, while [after] moves the screen on.
  */
 internal fun startWrite(
     context: Context,
@@ -620,15 +622,13 @@ internal fun startWrite(
     after: suspend () -> Unit = {},
 ) {
     val app = context.applicationContext
-    val jobs = plans.mapNotNull { it.job }
     edits.launch {
-        val writer = withContext(Dispatchers.IO) { TagsGraph.writer(app) }
-        val result = writer.write(jobs, kind, label)
+        val result = writeEdit(app, plans, kind, label)
         edits.launch {
             val entry = (result as? BatchResult.Done)?.entryId
-            val toast = writtenToast(resources, result, saved, jobs.size)
+            val toast = writtenToast(resources, result, saved, plans.count { it.job != null })
             if (toasts.show(toast.copy(action = entry?.let { resources.getString(R.string.lib_undo) })) && entry != null) {
-                toasts.show(undoneToast(resources, writer.undo(entry)))
+                toasts.show(undoneToast(resources, undoEdit(app, entry)))
             }
         }
         after()

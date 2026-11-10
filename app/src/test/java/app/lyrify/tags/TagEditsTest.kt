@@ -1,12 +1,20 @@
 package app.lyrify.tags
 
 import app.lyrify.library.Album
+import app.lyrify.library.CollectionKind
+import app.lyrify.library.FavouriteCollection
+import app.lyrify.library.FavouritesPort
+import app.lyrify.library.Library
 import app.lyrify.library.Song
 import app.lyrify.library.SongRef
 import app.lyrify.library.albumKey
 import app.lyrify.library.song
+import app.lyrify.settings.Settings
 import app.lyrify.tags.lookup.ImageCodec
 import app.lyrify.tags.lookup.ImageSize
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -429,6 +437,128 @@ class TagEditsTest {
         assertEquals(listOf(listOf("ARTIST"), listOf("ARTIST")), recorded.songs.map { song -> song.fields.map { it.key } })
         assertEquals(listOf("Kit Calloway feat. Mira Okafor"), rig.fields(one)["ARTIST"])
         assertEquals(listOf("Folk"), rig.fields(one)["GENRE"])
+    }
+
+    // Favourites follow their albums and artists
+
+    private val harbour = Library.of(
+        listOf(
+            song("Music/h/1.mp3", title = "Lamp Oil", artist = "Kit Calloway", album = "Harbour Glass", albumArtist = "Kit Calloway", id = 1),
+            song("Music/h/2.mp3", title = "Porch Wire", artist = "Kit Calloway feat. Mira Okafor", album = "Harbour Glass", albumArtist = "Kit Calloway", id = 2),
+            song("Music/p/3.mp3", title = "Tin Roof", artist = "Mira Okafor", album = "Porch Lights", albumArtist = "Mira Okafor", id = 3),
+            song("Music/k/4.mp3", title = "Low Tide", artist = "Kit Caloway", album = "Ferry Bell", albumArtist = "Kit Caloway", id = 4),
+        ),
+        Settings(),
+    )
+
+    private fun artist(name: String) = FavouriteCollection(CollectionKind.ARTIST, name)
+
+    private fun album(artist: String, title: String) = FavouriteCollection(CollectionKind.ALBUM, checkNotNull(albumKey(song("Music/x.mp3", artist = artist, album = title))))
+
+    private fun moved(plans: List<SongPlan>, favourites: List<FavouriteCollection>, written: Set<String> = plans.map { it.song.path }.toSet()) =
+        FavouriteMoves.of(plans.filter { it.song.path in written }.map { it.song to it.after }, harbour, favourites).map { it.from to it.to }
+
+    @Test
+    fun `a renamed artist keeps its heart under the new name, as do its credits and its albums`() {
+        val favourites = listOf(artist("Kit Calloway"), artist("Kit Calloway feat. Mira Okafor"), artist("Mira Okafor"), album("Kit Calloway", "Harbour Glass"), album("Mira Okafor", "Porch Lights"))
+
+        val moves = moved(TagEdits.rename(harbour.songs, listOf("Kit Calloway"), "Kit Callaway"), favourites)
+
+        assertEquals(
+            listOf(
+                artist("Kit Calloway") to artist("Kit Callaway"),
+                artist("Kit Calloway feat. Mira Okafor") to artist("Kit Callaway feat. Mira Okafor"),
+                album("Kit Calloway", "Harbour Glass") to album("Kit Callaway", "Harbour Glass"),
+            ),
+            moves,
+        )
+    }
+
+    @Test
+    fun `a favourite moves only when every one of its songs was written`() {
+        val plans = TagEdits.rename(harbour.songs, listOf("Kit Calloway"), "Kit Callaway")
+
+        val moves = moved(plans, listOf(artist("Kit Calloway"), album("Kit Calloway", "Harbour Glass")), written = setOf(harbour.songs[0].path))
+
+        // Porch Wire was in use: the album is split for now, so its heart stays.
+        assertEquals(listOf(artist("Kit Calloway") to artist("Kit Callaway")), moves)
+    }
+
+    @Test
+    fun `a merge moves the heart of the name given up, and the kept one stays`() {
+        val plans = TagEdits.rename(harbour.songs, listOf("Kit Calloway", "Kit Caloway"), "Kit Calloway")
+
+        val moves = moved(plans, listOf(artist("Kit Calloway"), artist("Kit Caloway"), album("Kit Caloway", "Ferry Bell")))
+
+        assertEquals(listOf(artist("Kit Caloway") to artist("Kit Calloway"), album("Kit Caloway", "Ferry Bell") to album("Kit Calloway", "Ferry Bell")), moves)
+    }
+
+    @Test
+    fun `Edit album moves the album's heart to its new name, numbering alone moves nothing`() {
+        val songs = checkNotNull(harbour.album(album("Kit Calloway", "Harbour Glass").key)).songs
+        val form = TagForm.of(songs, TagEdits.ALBUM_FIELDS)
+        val favourites = listOf(album("Kit Calloway", "Harbour Glass"))
+
+        assertEquals(
+            listOf(album("Kit Calloway", "Harbour Glass") to album("Kit Calloway", "Harbour Glass Nocturnes")),
+            moved(TagEdits.album(songs, form.with(TagField.ALBUM, "Harbour Glass Nocturnes"), CoverEdit.Keep, numberInOrder = false), favourites),
+        )
+        assertEquals(emptyList<Any>(), moved(TagEdits.album(songs, form, CoverEdit.Keep, numberInOrder = true), favourites))
+    }
+
+    @Test
+    fun `undoing the edit moves the heart back, unless a field changed again since`() {
+        val renamed = Library.of(
+            listOf(
+                song("Music/h/1.mp3", title = "Lamp Oil", artist = "Kit Callaway", album = "Harbour Glass", albumArtist = "Kit Callaway", id = 1),
+                song("Music/h/2.mp3", title = "Porch Wire", artist = "Kit Callaway", album = "Harbour Glass", albumArtist = "Kit Callaway", id = 2),
+            ),
+            Settings(),
+        )
+        fun edit(path: String, vararg fields: FieldChange) =
+            SongEdit(1, path, Payload(AudioFormat.MP3, "aa"), "before", "after", fields.toList())
+        val entry = HistoryEntry(
+            7,
+            EditKind.ARTIST,
+            "Renamed",
+            0,
+            listOf(
+                edit(renamed.songs[0].path, FieldChange("ARTIST", listOf("Kit Calloway"), listOf("Kit Callaway")), FieldChange("ALBUMARTIST", listOf("Kit Calloway"), listOf("Kit Callaway"))),
+                edit(renamed.songs[1].path, FieldChange("ARTIST", listOf("Kit Calloway"), listOf("Kit Callaway")), FieldChange("ALBUMARTIST", listOf("Kit Calloway"), listOf("Kit Calloway Trio"))),
+            ),
+        )
+        val favourites = listOf(artist("Kit Callaway"), album("Kit Callaway", "Harbour Glass"))
+
+        val back = FavouriteMoves.of(FavouriteMoves.undone(entry, renamed.songs.map { it.path }.toSet(), renamed), renamed, favourites)
+
+        // Porch Wire's album artist is "Kit Callaway" now, not the edit's "Kit Calloway Trio": it stays, so the album
+        // splits and keeps its heart; the artist's songs all go back.
+        assertEquals(listOf(artist("Kit Callaway") to artist("Kit Calloway")), back.map { it.from to it.to })
+        assertEquals(emptyList<Pair<Song, Song>>(), FavouriteMoves.undone(entry, emptySet(), renamed))
+    }
+
+    /** Favourites in memory, the latest first. */
+    private class FakeFavourites(start: List<FavouriteCollection>) : FavouritesPort {
+        val now = MutableStateFlow(start)
+        override val songs: Flow<List<SongRef>> = flowOf(emptyList())
+        override val collections: Flow<List<FavouriteCollection>> = now
+
+        override suspend fun setSongs(songs: List<SongRef>, favourite: Boolean): Boolean = true
+
+        override suspend fun setCollection(collection: FavouriteCollection, favourite: Boolean): Boolean {
+            now.value = if (favourite) listOf(collection) + (now.value - collection) else now.value - collection
+            return true
+        }
+    }
+
+    @Test
+    fun `a heart moves on at the new key and off at the old one`() {
+        val favourites = FakeFavourites(listOf(artist("Mira Okafor"), artist("Kit Caloway"), artist("Kit Calloway")))
+
+        val stored = runBlocking { FavouriteMoves.apply(listOf(FavouriteMove(artist("Kit Caloway"), artist("Kit Calloway"))), favourites) }
+
+        assertTrue(stored)
+        assertEquals(listOf(artist("Kit Calloway"), artist("Mira Okafor")), favourites.now.value)
     }
 
     private companion object {

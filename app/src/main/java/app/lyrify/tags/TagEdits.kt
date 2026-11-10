@@ -1,8 +1,18 @@
 package app.lyrify.tags
 
 import app.lyrify.library.Album
+import android.content.Context
+import android.util.Log
+import app.lyrify.LOG_TAG
 import app.lyrify.library.Artist
+import app.lyrify.library.CollectionKind
+import app.lyrify.library.FavouriteCollection
+import app.lyrify.library.FavouritesPort
+import app.lyrify.library.Library
+import app.lyrify.library.LibraryGraph
+import app.lyrify.library.LibraryState
 import app.lyrify.library.Song
+import app.lyrify.library.albumKey
 import app.lyrify.lyrics.TrackNames
 import app.lyrify.tags.lookup.Body
 import app.lyrify.tags.lookup.CoverPipeline
@@ -16,9 +26,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
@@ -32,9 +44,10 @@ import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.text.Collator
 
-// Edit tags (manual), milestone T3: what Edit tags, Edit album, Rename artist and Merge plan to write, the names that
-// may be the same, and what a write or an Undo says. Pure, apart from the kept-apart pairs' file; the writer
-// (SafeWriter) does every write, one song at a time, and keeps History.
+// Edit tags (manual), milestone T3: what Edit tags, Edit album, Rename artist and Merge plan to write, the favourites
+// that follow a renamed album or artist, the names that may be the same, and what a write or an Undo says. Pure, apart
+// from writeEdit and undoEdit and the kept-apart pairs' file; the writer (SafeWriter) does every write, one song at a
+// time, and keeps History.
 
 /** The fields Edit tags shows, in its order, with the TagLib property each one is written as. */
 enum class TagField(val key: String) {
@@ -270,6 +283,109 @@ fun BatchResult.Done.report(): EditReport {
         skippedFields = skippedFields,
     )
 }
+
+// Favourites follow their albums and artists
+
+/** A favourite album or artist, and where its heart goes once an edit moved all its songs ([FavouriteMoves]). */
+data class FavouriteMove(val from: FavouriteCollection, val to: FavouriteCollection)
+
+/**
+ * A favourite album or artist keeps its heart when an edit gives it a new name or key: a rename, a merge, Edit album,
+ * and their Undo. It moves only when every one of its songs was written and all now share one new key; an album or
+ * artist an edit split (a song in use, a field changed since) keeps its heart where it is. Pure, apart from [apply].
+ */
+object FavouriteMoves {
+    /** The hearts to move after [changed] songs were written: each as [library] read it before, and as it is now. */
+    fun of(changed: List<Pair<Song, Song>>, library: Library, favourites: Collection<FavouriteCollection>): List<FavouriteMove> {
+        val now = changed.associate { (before, after) -> before.path to after }
+        return favourites.mapNotNull { favourite ->
+            val songs = when (favourite.kind) {
+                CollectionKind.ARTIST -> library.artist(favourite.key)?.songs
+                CollectionKind.ALBUM -> library.album(favourite.key)?.songs
+                CollectionKind.FOLDER, CollectionKind.PLAYLIST -> null
+            }
+            if (songs.isNullOrEmpty() || songs.any { it.path !in now }) return@mapNotNull null
+            val keys = songs.map { keyOf(favourite.kind, now.getValue(it.path)) }.distinct()
+            val key = keys.singleOrNull()?.takeIf { it != favourite.key } ?: return@mapNotNull null
+            FavouriteMove(favourite, FavouriteCollection(favourite.kind, key))
+        }
+    }
+
+    /**
+     * What an Undo of [entry] changed back in the songs it [written], from [library] as it read them before the Undo:
+     * each field the edit wrote goes back where the song still held the edit's value.
+     */
+    fun undone(entry: HistoryEntry, written: Set<String>, library: Library): List<Pair<Song, Song>> =
+        entry.songs.filter { it.path in written }.mapNotNull { edit ->
+            val song = library.song(edit.path) ?: return@mapNotNull null
+            val back = edit.fields.mapNotNull { change ->
+                val field = TagField.entries.firstOrNull { it.key == change.key } ?: return@mapNotNull null
+                (field to change.old.firstOrNull().orEmpty()).takeIf { field.of(song) == change.new.firstOrNull().orEmpty() }
+            }.toMap()
+            song to SongPlan(song, back).after
+        }
+
+    /** Each heart on at its new key, then off at the old one (kept when the new one could not be stored). */
+    suspend fun apply(moves: List<FavouriteMove>, favourites: FavouritesPort): Boolean =
+        moves.fold(true) { stored, move -> favourites.setCollection(move.to, true) && favourites.setCollection(move.from, false) && stored }
+
+    private fun keyOf(kind: CollectionKind, song: Song): String? = when (kind) {
+        CollectionKind.ARTIST -> song.artist?.trim()?.takeIf(String::isNotEmpty)
+        CollectionKind.ALBUM -> albumKey(song)
+        CollectionKind.FOLDER, CollectionKind.PLAYLIST -> null
+    }
+}
+
+/**
+ * Writes [plans] as one History entry of [kind] shown as [label], through the one tag writer, then moves the hearts
+ * of the favourite albums and artists the edit renamed ([FavouriteMoves]).
+ */
+suspend fun writeEdit(context: Context, plans: List<SongPlan>, kind: EditKind, label: String): BatchResult {
+    val app = context.applicationContext
+    val library = (LibraryGraph.repository(app).state.value as? LibraryState.Ready)?.library
+    val result = withContext(Dispatchers.IO) { TagsGraph.writer(app) }.write(plans.mapNotNull { it.job }, kind, label)
+    if (library != null && result is BatchResult.Done) {
+        val written = result.writtenPaths()
+        moveHearts(app) { FavouriteMoves.of(plans.filter { it.song.path in written }.map { it.song to it.after }, library, it) }
+    }
+    return result
+}
+
+/**
+ * Undoes History entry [entryId], and moves back the hearts its edit moved. Every Undo of a tag edit comes here: the
+ * message's Undo and History's.
+ */
+suspend fun undoEdit(context: Context, entryId: Long): BatchResult {
+    val app = context.applicationContext
+    // Read again first: an Undo right after its edit must see the names the edit wrote.
+    val library = freshLibrary(app)
+    val entry = withContext(Dispatchers.IO) { TagsGraph.undo(app).memory() }.entries.firstOrNull { it.id == entryId }
+    val result = withContext(Dispatchers.IO) { TagsGraph.writer(app) }.undo(entryId)
+    if (library != null && entry != null && result is BatchResult.Done) {
+        moveHearts(app) { FavouriteMoves.of(FavouriteMoves.undone(entry, result.writtenPaths(), library), library, it) }
+    }
+    return result
+}
+
+private fun BatchResult.Done.writtenPaths(): Set<String> =
+    songs.filter { it.outcome == SongOutcome.WRITTEN || it.outcome == SongOutcome.UNDO_NOT_SAVED }.mapTo(HashSet()) { it.song.path }
+
+private suspend fun moveHearts(app: Context, moves: (List<FavouriteCollection>) -> List<FavouriteMove>) {
+    val favourites = LibraryGraph.favourites(app)
+    val planned = moves(favourites.collections.first())
+    if (planned.isNotEmpty() && !FavouriteMoves.apply(planned, favourites)) Log.w(LOG_TAG, "tags: ${planned.size} favourites not all moved")
+}
+
+/** The library read again now, or as it is when that takes longer than [FRESH_WAIT_MS]. */
+private suspend fun freshLibrary(app: Context): Library? {
+    val repository = LibraryGraph.repository(app)
+    val before = repository.state.value
+    repository.refresh()
+    val read = withTimeoutOrNull(FRESH_WAIT_MS) { repository.state.first { it !== before && it is LibraryState.Ready } }
+    return ((read ?: repository.state.value) as? LibraryState.Ready)?.library
+}
+
+private const val FRESH_WAIT_MS = 3_000L
 
 // "2 may be the same"
 
