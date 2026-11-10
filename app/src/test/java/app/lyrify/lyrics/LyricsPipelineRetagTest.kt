@@ -225,6 +225,37 @@ class LyricsPipelineRetagTest {
         assertEquals(LyricsStatus.NOT_FOUND, ledger[track.path]?.status)
     }
 
+    // Review D: the user's own choice is never touched
+
+    @Test
+    fun `lyrics the user picked in Check these are never marked for a check`() = runTest {
+        val pipeline = pipeline()
+        val track = audio()
+        ledger.put(recorded(null, track, LyricsStatus.NEEDS_CHECK, null, BASE, candidates = listOf(Candidate(42, "Salt Road", "Mira Solen", null, 200.0, synced = true))))
+        client.onId = { LrclibResult.Found(listOf(record(42))) }
+        assertEquals(Checked.Done(LyricsStatus.SYNCED), pipeline.choose(track.path, 42))
+        val lrc = sidecar(track).readText()
+
+        assertEquals(Retag.NONE, pipeline.retagged(track.copy(title = "Salt Roads"), namesChanged = true))
+
+        assertEquals(LyricsStatus.SYNCED, ledger[track.path]?.status)
+        assertEquals(lrc, sidecar(track).readText())
+    }
+
+    @Test
+    fun `None of these keeps the lrc when the ledger can't be written`() = runTest {
+        val pipeline = pipeline()
+        val track = audio()
+        val lrc = pipeline.withLyrics(track)
+        pipeline.retagged(track.copy(title = "Salt Roads"), namesChanged = true)
+        ledger.accepts = { false }
+
+        assertEquals(Checked.NotSaved, pipeline.decline(track.path))
+
+        assertEquals(lrc, sidecar(track).readText())
+        assertEquals(LyricsStatus.NEEDS_CHECK, ledger[track.path]?.status)
+    }
+
     private companion object {
         const val BASE: Long = 1_800_000_000_000
     }

@@ -21,8 +21,9 @@ enum class Retag {
 /**
  * The rule. Only NOT_FOUND and UNIDENTIFIED are looked up again; REMOVED, instrumental, rejected and another length
  * never are. KJB's own `.lrc` made from LRCLIB's lyrics found by name (synced, or plain lyrics the AI timed) waits for
- * a check when the song's normalised title or artist [namesChanged]. Lyrics the user made or edited, a `.lrc` that was
- * there before, and lyrics the AI heard (they follow the audio, not the names) never do.
+ * a check when the song's normalised title or artist [namesChanged]. Lyrics the user made, edited or picked in Check
+ * these ([LedgerEntry.mine]), a `.lrc` that was there before, and lyrics the AI heard (they follow the audio, not the
+ * names) never do.
  */
 fun retagEffect(entry: LedgerEntry?, namesChanged: Boolean): Retag = when {
     entry == null -> Retag.NONE
@@ -59,7 +60,10 @@ fun LedgerEntry.retagged(track: LocalTrack, now: Long): LedgerEntry = copy(
     updatedAt = now,
 )
 
-/** "This one" on a retag check's own lyrics at [now]: KJB's own `.lrc` again, as it was before the check. */
-fun LedgerEntry.kept(now: Long): LedgerEntry = copy(status = writtenStatus(), candidates = emptyList(), nextAttemptAt = null, updatedAt = now)
+/**
+ * "This one" on a retag check's own lyrics at [now]: KJB's own `.lrc` again, as it was before the check, and now the
+ * user's choice ([LedgerEntry.mine]): never asked about again.
+ */
+fun LedgerEntry.kept(now: Long): LedgerEntry = copy(status = writtenStatus(), candidates = emptyList(), nextAttemptAt = null, updatedAt = now, mine = true)
 
 private const val MS_PER_SECOND: Double = 1_000.0

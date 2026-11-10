@@ -371,6 +371,8 @@ class LyricsPipeline(
                 retag && !clearRetagged(sidecar, previous) -> Checked.Done(outcome(previous, track, LyricsStatus.EXISTING))
                 text != null -> {
                     val status = write(track, sidecar, previous, text, Written(LyricsStatus.SYNCED, LyricsSource.LRCLIB, id))
+                    // The user picked them: nothing replaces them by itself, nor asks about them again.
+                    if (status == LyricsStatus.SYNCED) ledger.entry(audioPath)?.let { ledger.put(it.copy(mine = true)) }
                     if (status == LyricsStatus.SYNCED || status == LyricsStatus.EXISTING) Checked.Done(status) else Checked.NotSaved
                 }
                 // A `.lrc` made during the fetch wins, as it does for synced lyrics (the exclusive create).
@@ -384,14 +386,15 @@ class LyricsPipeline(
     /** "None of these": the song at [audioPath] is not found, so the AI may take it, and no candidates are offered for it again. */
     suspend fun decline(audioPath: String): Checked = exclusive(audioPath) {
         val previous = ledger.entry(audioPath)?.takeIf { it.status == LyricsStatus.NEEDS_CHECK } ?: return@exclusive Checked.Changed
-        val sidecar = LrcFormat.sidecarPath(audioPath)?.let { File(it).toPath() }
+        val sidecar = LrcFormat.sidecarPath(audioPath)?.let { File(it).toPath() }?.takeIf { previous.retagCheck && Files.exists(it, LinkOption.NOFOLLOW_LINKS) }
         withContext(NonCancellable) {
-            // A retag check's own lyrics are not the song either: KJB's `.lrc` goes, while it is still exactly what KJB wrote.
-            val kept = previous.retagCheck && sidecar != null && Files.exists(sidecar, LinkOption.NOFOLLOW_LINKS) && !clearRetagged(sidecar, previous)
             when {
-                kept -> Checked.Done(outcome(previous, previous.track, LyricsStatus.EXISTING))
-                record(previous, previous.track, LyricsStatus.NOT_FOUND, declined = true) -> Checked.Done(LyricsStatus.NOT_FOUND)
-                else -> Checked.NotSaved
+                // The ledger first: if it can't be saved, the lyrics stay as they are.
+                !record(previous, previous.track, LyricsStatus.NOT_FOUND, declined = true) -> Checked.NotSaved
+                // A retag check's own lyrics are not the song either: KJB's `.lrc` goes, while it is still exactly what
+                // KJB wrote. One changed since is someone else's now, and stays.
+                sidecar != null && !clearRetagged(sidecar, previous) -> Checked.Done(outcome(previous, previous.track, LyricsStatus.EXISTING))
+                else -> Checked.Done(LyricsStatus.NOT_FOUND)
             }
         }
     }
