@@ -120,6 +120,9 @@
     <string name="lib_favourite_artist">Favourite this artist</string>
     <string name="lib_favourite_folder">Favourite this folder</string>
     <string name="lib_favourite_playlist">Favourite this playlist</string>
+    <string name="lib_favourite_song">Favourite this song</string>
+    <!-- Every heart's label while it is on: a song's, or an album, artist, folder or playlist page's. -->
+    <string name="lib_unfavourite">Remove from Favourites</string>
     <string name="lib_more_album">More for this album</string>
     <string name="lib_more_artist">More for this artist</string>
     <string name="lib_more_playlist">More for this playlist</string>

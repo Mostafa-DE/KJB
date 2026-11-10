@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -184,18 +183,20 @@ private fun ActionRow(
     }
 }
 
-/** The heart as a sheet row: a switch for TalkBack, a filled coral heart and "On" while it is on. */
+/** The heart as a sheet row: a filled coral heart and "On" while it is on; TalkBack hears what a tap does. */
 @Composable
 private fun FavouriteRow(on: Boolean, onToggle: () -> Unit) {
     val brand = LocalBrandColors.current
     val colors = MaterialTheme.colorScheme
+    val label = stringResource(heartLabel(on))
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(16.dp),
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
-            .toggleable(on, role = Role.Switch) { onToggle() }
+            .clickable(role = Role.Button, onClick = onToggle)
+            .semantics { contentDescription = label }
             .heightIn(min = 52.dp)
             .padding(horizontal = 8.dp),
     ) {

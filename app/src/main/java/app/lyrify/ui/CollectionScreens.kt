@@ -15,6 +15,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.annotation.StringRes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,7 +31,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
@@ -151,7 +151,7 @@ private fun CollectionTopBar(
     )
 }
 
-/** The collection's heart: a switch for TalkBack ("Favourite this album"); Added or Removed with Undo. */
+/** The collection's heart: TalkBack hears what a tap does ("Favourite this album", "Remove from Favourites"); Added or Removed with Undo. */
 @Composable
 private fun HeartButton(collection: FavouriteCollection, ui: LibraryUi) {
     val chrome = LocalChromeColors.current
@@ -161,18 +161,11 @@ private fun HeartButton(collection: FavouriteCollection, ui: LibraryUi) {
     val scope = rememberCoroutineScope()
     val actions = rememberSongActions()
     val on = collection in ui.playlists.favouriteCollections
-    val name = stringResource(
-        when (collection.kind) {
-            CollectionKind.ALBUM -> R.string.lib_favourite_album
-            CollectionKind.ARTIST -> R.string.lib_favourite_artist
-            CollectionKind.FOLDER -> R.string.lib_favourite_folder
-            CollectionKind.PLAYLIST -> R.string.lib_favourite_playlist
-        },
-    )
+    val name = stringResource(heartLabel(collection.kind, on))
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
-            .toggleable(on, role = Role.Switch) { scope.launch { toasts.say(resources, actions.favourite(collection, it)) } }
+            .clickable(role = Role.Button) { scope.launch { toasts.say(resources, actions.favourite(collection, !on)) } }
             .semantics { contentDescription = name }
             .minimumInteractiveComponentSize(),
     ) {

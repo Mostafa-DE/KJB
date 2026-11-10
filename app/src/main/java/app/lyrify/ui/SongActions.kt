@@ -52,6 +52,7 @@ import app.lyrify.Lyrify
 import app.lyrify.R
 import app.lyrify.dupes.Confirmation
 import app.lyrify.dupes.trashFile
+import app.lyrify.library.CollectionKind
 import app.lyrify.library.FavouriteCollection
 import app.lyrify.library.FavouritesPort
 import app.lyrify.library.Library
@@ -483,6 +484,23 @@ private fun saidIcon(said: Said): Int = when (said) {
     Said.Renamed -> R.drawable.ic_edit
     Said.PlaylistDeleted -> R.drawable.ic_delete
     Said.NotSaved -> R.drawable.ic_error
+}
+
+/** A song's heart for TalkBack (the sheet's, the player's, the widget's, the notification's): what a tap does now. */
+@StringRes
+fun heartLabel(on: Boolean): Int = if (on) R.string.lib_unfavourite else R.string.lib_favourite_song
+
+/** A collection page's heart for TalkBack: "Favourite this album", or "Remove from Favourites" while it is on. */
+@StringRes
+fun heartLabel(kind: CollectionKind, on: Boolean): Int = if (on) {
+    R.string.lib_unfavourite
+} else {
+    when (kind) {
+        CollectionKind.ALBUM -> R.string.lib_favourite_album
+        CollectionKind.ARTIST -> R.string.lib_favourite_artist
+        CollectionKind.FOLDER -> R.string.lib_favourite_folder
+        CollectionKind.PLAYLIST -> R.string.lib_favourite_playlist
+    }
 }
 
 /** How a queue's source reads: "Album · Harbour Glass", "Favourites"; the start of a new queue's name. */
