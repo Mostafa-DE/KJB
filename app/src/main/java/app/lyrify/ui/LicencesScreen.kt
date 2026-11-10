@@ -149,7 +149,7 @@ fun shipped(name: String): Shipped? = SHIPPED.firstOrNull { it.name == name }
  * mark dropped.
  */
 internal fun paragraphs(text: String): List<String> =
-    text.removePrefix("﻿").replace("\r\n", "\n").split(BLANK_LINES)
+    text.removePrefix("\uFEFF").replace("\r\n", "\n").split(BLANK_LINES)
         .map { paragraph -> paragraph.lines().joinToString(" ") { it.trim() }.trim() }
         .filter { it.isNotEmpty() }
 

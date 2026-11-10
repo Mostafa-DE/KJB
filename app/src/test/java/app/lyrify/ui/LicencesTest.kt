@@ -54,7 +54,7 @@ class LicencesTest {
 
     @Test
     fun `a licence reads as paragraphs that fit the phone's width`() {
-        val text = "﻿MIT Licence\r\n\r\nCopyright (c) 2026 Quillmere\r\n\r\nPermission is hereby granted,\nfree of charge,\n  to any person\n\n\n\n" +
+        val text = "\uFEFFMIT Licence\r\n\r\nCopyright (c) 2026 Quillmere\r\n\r\nPermission is hereby granted,\nfree of charge,\n  to any person\n\n\n\n" +
             "THE SOFTWARE IS PROVIDED \"AS IS\".\n   \n"
         assertEquals(
             listOf("MIT Licence", "Copyright (c) 2026 Quillmere", "Permission is hereby granted, free of charge, to any person", "THE SOFTWARE IS PROVIDED \"AS IS\"."),
