@@ -287,6 +287,8 @@ class PlaybackService : MediaLibraryService() {
     private inner class Callback : MediaLibrarySession.Callback {
         override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult {
             val base = super.onConnect(session, controller)
+            // TODO(integration): offer the parts' commands (Favourite, Shuffle, Repeat) to trusted controllers only, through
+            // A4's controller access check (CarAccess), once both are merged.
             val own = parts.flatMap { it.commands }
             if (!base.isAccepted || own.isEmpty()) return base
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session, controller)
