@@ -13,6 +13,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 
 /** One song's plays: how many, the last one (wall-clock millis), and how long it was heard in all. */
@@ -56,11 +57,11 @@ object StatsGraph {
         SqlPlayLog(PlaysDb(context.applicationContext, log = log), log = log)
     }.also { store = it }
 
-    /** Counts KJB's own plays under "Count a play after" as it is set at each event. */
+    /** Counts KJB's own plays under "Count a play after", from the moment the settings are read and as they change. */
     @Synchronized
     fun counter(context: Context): PlayCounter = counter ?: run {
-        val settings = Lyrify.settings(context).settings.stateIn(scope, SharingStarted.Eagerly, Settings())
-        PlayCounter(store(context), share = { settings.value.playback.countPlayAfterPercent }, scope = scope, log = { Log.w(LOG_TAG, it) })
+        val share = Lyrify.settings(context).settings.map<Settings, Int?> { it.playback.countPlayAfterPercent }.stateIn(scope, SharingStarted.Eagerly, null)
+        PlayCounter(store(context), share, scope = scope, log = { Log.w(LOG_TAG, it) })
     }.also { counter = it }
 
     /** Plays per song, joined with the library of the moment. */

@@ -24,7 +24,8 @@ import kotlin.system.measureNanoTime
 
 /**
  * The real `plays.db` on the phone, in a folder of its own in the debug app's cache: the same rules as the JVM tests'
- * FakePlayLog, its versions, damaged rows, an unreadable file, and the top lists' speed. Made-up names only.
+ * FakePlayLog (plays written again, plays still going), its versions, damaged rows, an unreadable file, and the top
+ * lists' speed. Made-up names only.
  */
 @RunWith(AndroidJUnit4::class)
 class PlaysDbDeviceTest {
@@ -62,6 +63,27 @@ class PlaysDbDeviceTest {
     }
 
     @Test
+    fun aPlayWrittenAgainNeverLosesItsCountOrTimeHeard() = runBlocking {
+        val store = open()
+        assertTrue(store.put(LoggedPlay(SongRef(PATH, 12), T0, 120_000, counted = true)))
+        assertTrue(store.put(LoggedPlay(SongRef(PATH), T0, 5_000, counted = false)))
+
+        assertEquals(listOf(SongPlays(SongRef(PATH, 12), 1, T0, 120_000)), store.totals())
+    }
+
+    @Test
+    fun aPlayStillGoingIsKeptWhereItStoodAndLetGoWhenItCloses() = runBlocking {
+        val store = open()
+        val state = OpenState(200_000, 60_000, listOf(HeardSpan(0, 30_000), HeardSpan(40_000, 70_000)))
+        assertTrue(store.put(LoggedPlay(SongRef(PATH, 12), T0, 60_000, counted = false), state))
+        assertEquals(listOf(StoredPlay(LoggedPlay(SongRef(PATH, 12), T0, 60_000, counted = false), state)), store.openPlays())
+
+        assertTrue(store.put(LoggedPlay(SongRef(PATH, 12), T0, 110_000, counted = true)))
+        assertEquals(emptyList<StoredPlay>(), store.openPlays())
+        assertEquals(listOf(SongPlays(SongRef(PATH, 12), 1, T0, 110_000)), store.totals())
+    }
+
+    @Test
     fun aVersionOneFileUpgradesWithItsPlays() = runBlocking {
         SQLiteDatabase.openOrCreateDatabase(file, null).use { db ->
             PlaysSchema.STEPS[0].forEach(db::execSQL)
@@ -74,6 +96,9 @@ class PlaysDbDeviceTest {
         assertTrue(store.put(LoggedPlay(SongRef(PATH, 12), T0 + 1_000, 60_000, counted = true)))
         assertEquals(listOf(SongPlays(SongRef(PATH, 12), 2, T0 + 1_000, 180_000)), store.totals())
         assertEquals(PlaysSchema.VERSION, opened.single().readableDatabase.version)
+        // Version 2's table is there: a play still going is kept.
+        assertTrue(store.put(LoggedPlay(SongRef(PATH, 12), T0 + 2_000, 30_000, counted = false), OpenState(200_000, 30_000, listOf(HeardSpan(0, 30_000)))))
+        assertEquals(1, store.openPlays().size)
     }
 
     @Test

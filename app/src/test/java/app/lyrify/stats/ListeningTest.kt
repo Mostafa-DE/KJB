@@ -36,42 +36,60 @@ class ListeningTest {
 
     // Periods, in the phone's time
 
+    private fun week(now: Long, zone: ZoneId = berlin, first: DayOfWeek = DayOfWeek.MONDAY) = periodOf(ListeningPeriod.WEEK, now, zone, first)
+
     @Test
-    fun `the week starts on the first day of the phone's week, at midnight there`() {
+    fun `the week runs from midnight of the first day of the phone's week to the next one`() {
         val now = at("2026-11-11T15:00+01:00[Europe/Berlin]")
-        assertEquals(at("2026-11-09T00:00+01:00[Europe/Berlin]"), periodStart(ListeningPeriod.WEEK, now, berlin, DayOfWeek.MONDAY))
-        assertEquals(at("2026-11-08T00:00+01:00[Europe/Berlin]"), periodStart(ListeningPeriod.WEEK, now, berlin, DayOfWeek.SUNDAY))
-        assertEquals(at("2026-11-09T00:00+01:00[Europe/Berlin]"), periodStart(ListeningPeriod.WEEK, at("2026-11-09T00:30+01:00[Europe/Berlin]"), berlin, DayOfWeek.MONDAY))
+        assertEquals(Period(at("2026-11-09T00:00+01:00[Europe/Berlin]"), at("2026-11-16T00:00+01:00[Europe/Berlin]")), week(now))
+        assertEquals(Period(at("2026-11-08T00:00+01:00[Europe/Berlin]"), at("2026-11-15T00:00+01:00[Europe/Berlin]")), week(now, first = DayOfWeek.SUNDAY))
+        assertEquals(at("2026-11-09T00:00+01:00[Europe/Berlin]"), week(at("2026-11-09T00:30+01:00[Europe/Berlin]"))?.from)
     }
 
     @Test
-    fun `month and year start on their first day at local midnight, and all time has no start`() {
+    fun `month and year run from their first day at local midnight to the next, and all time has no bounds`() {
         val now = at("2026-11-11T15:00+01:00[Europe/Berlin]")
-        assertEquals(at("2026-11-01T00:00+01:00[Europe/Berlin]"), periodStart(ListeningPeriod.MONTH, now, berlin, DayOfWeek.MONDAY))
-        assertEquals(at("2026-01-01T00:00+01:00[Europe/Berlin]"), periodStart(ListeningPeriod.YEAR, now, berlin, DayOfWeek.MONDAY))
-        assertNull(periodStart(ListeningPeriod.ALL_TIME, now, berlin, DayOfWeek.MONDAY))
+        assertEquals(Period(at("2026-11-01T00:00+01:00[Europe/Berlin]"), at("2026-12-01T00:00+01:00[Europe/Berlin]")), periodOf(ListeningPeriod.MONTH, now, berlin, DayOfWeek.MONDAY))
+        assertEquals(Period(at("2026-01-01T00:00+01:00[Europe/Berlin]"), at("2027-01-01T00:00+01:00[Europe/Berlin]")), periodOf(ListeningPeriod.YEAR, now, berlin, DayOfWeek.MONDAY))
+        assertNull(periodOf(ListeningPeriod.ALL_TIME, now, berlin, DayOfWeek.MONDAY))
     }
 
     @Test
-    fun `a week across the clock change starts at local midnight, not seven times 24 hours on`() {
-        // Clocks went forward on Sunday 29 March 2026: that week had 167 hours.
-        val now = at("2026-03-30T00:15+02:00[Europe/Berlin]")
-        assertEquals(Instant.parse("2026-03-29T22:00:00Z").toEpochMilli(), periodStart(ListeningPeriod.WEEK, now, berlin, DayOfWeek.MONDAY))
+    fun `the week that holds the clock change runs midnight to midnight, 167 hours`() {
+        // Clocks went forward at 02:00 on Sunday 29 March 2026.
+        val period = week(at("2026-03-29T12:00+02:00[Europe/Berlin]"))
+        assertEquals(Period(Instant.parse("2026-03-22T23:00:00Z").toEpochMilli(), Instant.parse("2026-03-29T22:00:00Z").toEpochMilli()), period)
+        assertEquals(167 * 3_600_000L, period!!.until - period.from)
     }
 
     @Test
     fun `a week whose first day has no midnight starts at that day's first hour`() {
         // São Paulo's clocks jumped from midnight to 01:00 on Sunday 4 November 2018.
         val saoPaulo = ZoneId.of("America/Sao_Paulo")
-        val now = at("2018-11-07T12:00-02:00[America/Sao_Paulo]")
-        assertEquals(Instant.parse("2018-11-04T03:00:00Z").toEpochMilli(), periodStart(ListeningPeriod.WEEK, now, saoPaulo, DayOfWeek.SUNDAY))
+        val period = week(at("2018-11-07T12:00-02:00[America/Sao_Paulo]"), saoPaulo, DayOfWeek.SUNDAY)
+        assertEquals(Period(Instant.parse("2018-11-04T03:00:00Z").toEpochMilli(), Instant.parse("2018-11-11T02:00:00Z").toEpochMilli()), period)
     }
 
     @Test
     fun `the same moment falls in each phone's own week`() {
         val now = Instant.parse("2026-11-09T02:00:00Z").toEpochMilli()
-        assertEquals(Instant.parse("2026-11-08T23:00:00Z").toEpochMilli(), periodStart(ListeningPeriod.WEEK, now, berlin, DayOfWeek.MONDAY))
-        assertEquals(Instant.parse("2026-11-02T08:00:00Z").toEpochMilli(), periodStart(ListeningPeriod.WEEK, now, ZoneId.of("America/Los_Angeles"), DayOfWeek.MONDAY))
+        assertEquals(Instant.parse("2026-11-08T23:00:00Z").toEpochMilli(), week(now)?.from)
+        assertEquals(Instant.parse("2026-11-02T08:00:00Z").toEpochMilli(), week(now, ZoneId.of("America/Los_Angeles"))?.from)
+    }
+
+    @Test
+    fun `last week's figures leave out this week's plays, and so do last month's and last year's`() = runBlocking {
+        val stats = stats(
+            play(alder, at("2025-12-31T23:59+01:00[Europe/Berlin]")),
+            play(birch, at("2026-10-31T23:59+01:00[Europe/Berlin]")),
+            play(ember, at("2026-11-08T23:59+01:00[Europe/Berlin]")),
+            play(salt, at("2026-11-09T00:00+01:00[Europe/Berlin]")),
+        )
+        fun songs(period: ListeningPeriod, now: String) = runBlocking { stats.listening(period, at(now), berlin, DayOfWeek.MONDAY).songs.map { it.item } }
+
+        assertEquals(listOf(ember), songs(ListeningPeriod.WEEK, "2026-11-05T15:00+01:00[Europe/Berlin]"))
+        assertEquals(listOf(birch), songs(ListeningPeriod.MONTH, "2026-10-15T15:00+02:00[Europe/Berlin]"))
+        assertEquals(listOf(alder), songs(ListeningPeriod.YEAR, "2025-06-15T15:00+02:00[Europe/Berlin]"))
     }
 
     @Test

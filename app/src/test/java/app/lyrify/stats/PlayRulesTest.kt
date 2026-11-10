@@ -3,6 +3,7 @@ package app.lyrify.stats
 import app.lyrify.library.SongRef
 import app.lyrify.settings.PlaybackSettings
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -21,22 +22,23 @@ class PlayRulesTest {
     private val kettle = SongRef("/storage/emulated/0/Music/KJB test/Copper Kettle Waltz.flac")
     private val store = FakePlayLog()
     private val logs = mutableListOf<String>()
-    private var share = 50
+    /** "Count a play after" as the settings give it; null until they are read. */
+    private val share = MutableStateFlow<Int?>(50)
     private val clock = Clock()
 
     private class Clock(var now: Long = T0)
 
-    private fun TestScope.counter(): PlayCounter = PlayCounter(store, { share }, backgroundScope, log = { logs += it })
+    private fun TestScope.counter(): PlayCounter = PlayCounter(store, share, backgroundScope, log = { logs += it })
 
-    /** One play of [song] on the counter: started and playing at 0, then driven like the player drives it. */
-    private inner class Lap(private val counter: PlayEvents, val id: Long, val song: SongRef = lantern, durationMs: Long = SONG_MS) {
-        var position: Long = 0
+    /** One play of [song] on the counter: started and playing at [from], then driven like the player drives it. */
+    private inner class Lap(private val counter: PlayEvents, val id: Long, val song: SongRef = lantern, durationMs: Long = SONG_MS, from: Long = 0) {
+        var position: Long = from
             private set
         private var playing = true
 
         init {
             counter.onEvent(PlayEvent.Started(id, song, clock.now, durationMs))
-            counter.onEvent(PlayEvent.Position(id, song, clock.now, 0, playing = true))
+            counter.onEvent(PlayEvent.Position(id, song, clock.now, from, playing = true))
         }
 
         /** Plays for [ms] (paused: only time passes), a position every 5 s, as the player's ticker sends them. */
@@ -99,7 +101,9 @@ class PlayRulesTest {
     fun `each choice counts a play through the counter once that share was heard`() = runTest {
         val counter = counter()
         PlaybackSettings.PLAY_SHARES.forEachIndexed { i, choice ->
-            share = choice
+            // The plays before are counted under their own choice.
+            runCurrent()
+            share.value = choice
             val short = Lap(counter, id = 2L * i + 1)
             short.play(SONG_MS * choice / 100 - 5_000)
             short.end()
@@ -115,8 +119,8 @@ class PlayRulesTest {
 
     @Test
     fun `a short clip played to the end is heard but never counts`() = runTest {
+        share.value = 10
         val counter = counter()
-        share = 10
         Lap(counter, id = 1, durationMs = 20_000).apply { play(20_000); end() }
         runCurrent()
 
@@ -215,8 +219,8 @@ class PlayRulesTest {
 
     @Test
     fun `a song counts once per play, as soon as its share is heard`() = runTest {
+        share.value = 10
         val counter = counter()
-        share = 10
         val lap = Lap(counter, id = 1)
         lap.play(25_000)
         runCurrent()
@@ -227,7 +231,7 @@ class PlayRulesTest {
         lap.end()
         runCurrent()
         assertEquals(listOf(LoggedPlay(lantern, T0, SONG_MS, counted = true)), store.plays)
-        assertEquals(2, store.puts)
+        assertEquals(emptyList<StoredPlay>(), store.openPlays())
     }
 
     @Test
@@ -250,23 +254,50 @@ class PlayRulesTest {
     }
 
     @Test
-    fun `changing the setting mid-song applies from then on, and a counted play stays counted`() = runTest {
+    fun `changing the setting mid-song applies from the play's next event, and a counted play stays counted`() = runTest {
         val counter = counter()
         val lap = Lap(counter, id = 1)
         lap.play(80_000)
         runCurrent()
-        assertEquals(emptyList<LoggedPlay>(), store.plays)
+        assertEquals(listOf(false), store.plays.map { it.counted })
 
-        share = 30
+        share.value = 30
         lap.play(5_000)
         runCurrent()
         assertEquals(listOf(true), store.plays.map { it.counted })
 
-        share = 100
+        share.value = 100
         lap.play(5_000)
         lap.end()
         runCurrent()
         assertEquals(listOf(LoggedPlay(lantern, T0, 90_000, counted = true)), store.plays)
+    }
+
+    @Test
+    fun `nothing counts against the default before the setting is read, then the setting read applies`() = runTest {
+        share.value = null
+        val counter = counter()
+        Lap(counter, id = 1).play(150_000)
+        runCurrent()
+        assertEquals(emptyList<LoggedPlay>(), store.plays)
+
+        // Read as 100%: 150 s of 200 is no play yet, where the default 50% would have counted it.
+        share.value = 100
+        runCurrent()
+        assertEquals(listOf(LoggedPlay(lantern, T0, 150_000, counted = false)), store.plays)
+    }
+
+    @Test
+    fun `the same play started twice is still one play, and its count is never taken back`() = runTest {
+        val counter = counter()
+        val lap = Lap(counter, id = 1)
+        lap.play(120_000)
+        counter.onEvent(PlayEvent.Started(1, lantern, clock.now, SONG_MS))
+        lap.play(10_000)
+        lap.end()
+        runCurrent()
+
+        assertEquals(listOf(LoggedPlay(lantern, T0, 130_000, counted = true)), store.plays)
     }
 
     @Test
@@ -309,7 +340,7 @@ class PlayRulesTest {
         next.end()
         runCurrent()
 
-        assertEquals(listOf(LoggedPlay(lantern, T0, 35_000, counted = false), LoggedPlay(kettle, T0 + 30_000, 10_000, counted = false)), store.plays)
+        assertEquals(listOf(LoggedPlay(lantern, T0, 35_000, counted = false), LoggedPlay(kettle, T0 + 30_000, 10_000, counted = false)), store.plays.sortedBy { it.startedAt })
     }
 
     @Test
@@ -318,11 +349,12 @@ class PlayRulesTest {
         Lap(counter, id = 1).play(30_000)
         Lap(counter, id = 2, song = kettle).play(5_000)
         runCurrent()
-        assertEquals(emptyList<LoggedPlay>(), store.plays)
+        assertEquals(listOf(lantern), store.openPlays().map { it.play.song })
 
         Lap(counter, id = 3)
         runCurrent()
         assertEquals(listOf(LoggedPlay(lantern, T0, 30_000, counted = false)), store.plays)
+        assertEquals(emptyList<StoredPlay>(), store.openPlays())
     }
 
     @Test
@@ -344,8 +376,106 @@ class PlayRulesTest {
             end()
         }
         runCurrent()
-        assertEquals(1, store.plays.size)
-        assertEquals(2, counter.written.value)
+        assertEquals(listOf(LoggedPlay(lantern, T0 + SONG_MS, SONG_MS, counted = true)), store.plays)
+        assertTrue(counter.written.value > 0)
+    }
+
+    // The app stopping mid-play
+
+    @Test
+    fun `while it plays, a play is kept every 15 s and on pause, and let go when it ends`() = runTest {
+        val counter = counter()
+        val lap = Lap(counter, id = 1)
+        lap.play(10_000)
+        runCurrent()
+        assertEquals(emptyList<StoredPlay>(), store.openPlays())
+
+        lap.play(5_000)
+        runCurrent()
+        assertEquals(listOf(StoredPlay(LoggedPlay(lantern, T0, 15_000, counted = false), OpenState(SONG_MS, 15_000, listOf(HeardSpan(0, 15_000))))), store.openPlays())
+
+        lap.play(5_000)
+        lap.pause()
+        runCurrent()
+        assertEquals(OpenState(SONG_MS, 20_000, listOf(HeardSpan(0, 20_000))), store.openPlays().single().state)
+
+        lap.end()
+        runCurrent()
+        assertEquals(emptyList<StoredPlay>(), store.openPlays())
+        assertEquals(listOf(LoggedPlay(lantern, T0, 20_000, counted = false)), store.plays)
+    }
+
+    @Test
+    fun `a play counted before the app stopped is not counted again when it goes on`() = runTest {
+        Lap(counter(), id = 1).apply {
+            play(120_000)
+            pause()
+        }
+        runCurrent()
+        assertEquals(listOf(LoggedPlay(lantern, T0, 120_000, counted = true)), store.plays)
+
+        // The app starts again; the player reopens the song where it was and plays on.
+        val again = counter()
+        Lap(again, id = 1, from = 120_000).apply {
+            play(80_000)
+            end()
+        }
+        runCurrent()
+
+        assertEquals(listOf(LoggedPlay(lantern, T0, SONG_MS, counted = true)), store.plays)
+        assertEquals(emptyList<StoredPlay>(), store.openPlays())
+    }
+
+    @Test
+    fun `a play cut short by the app stopping counts once the rest of its share is heard`() = runTest {
+        Lap(counter(), id = 1).apply {
+            play(80_000)
+            pause()
+        }
+        runCurrent()
+        assertEquals(listOf(LoggedPlay(lantern, T0, 80_000, counted = false)), store.plays)
+
+        // The player kept its place a few seconds earlier than the counter did: still the same play.
+        Lap(counter(), id = 2, from = 75_000).play(25_000)
+        runCurrent()
+        assertEquals(listOf(true), store.plays.map { it.counted })
+        assertEquals(listOf(T0), store.plays.map { it.startedAt })
+    }
+
+    @Test
+    fun `after the app stopped, another song closes the kept play as it stood`() = runTest {
+        Lap(counter(), id = 1).apply {
+            play(40_000)
+            pause()
+        }
+        runCurrent()
+
+        Lap(counter(), id = 2, song = kettle).apply {
+            play(10_000)
+            end()
+        }
+        runCurrent()
+
+        assertEquals(listOf(LoggedPlay(lantern, T0, 40_000, counted = false), LoggedPlay(kettle, T0 + 40_000, 10_000, counted = false)), store.plays.sortedBy { it.startedAt })
+        assertEquals(emptyList<StoredPlay>(), store.openPlays())
+    }
+
+    @Test
+    fun `after the app stopped, the same song from elsewhere is a new play`() = runTest {
+        Lap(counter(), id = 1).apply {
+            play(120_000)
+            pause()
+        }
+        runCurrent()
+
+        Lap(counter(), id = 2).apply {
+            play(SONG_MS)
+            end()
+        }
+        runCurrent()
+
+        assertEquals(listOf(LoggedPlay(lantern, T0, 120_000, counted = true), LoggedPlay(lantern, T0 + 120_000, SONG_MS, counted = true)), store.plays.sortedBy { it.startedAt })
+        assertEquals(emptyList<StoredPlay>(), store.openPlays())
     }
 
     private companion object {

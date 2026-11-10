@@ -20,12 +20,16 @@ import java.time.temporal.TemporalAdjusters
 /** Your listening's periods: this week, this month, this year, or all time, in the phone's own calendar. */
 enum class ListeningPeriod { WEEK, MONTH, YEAR, ALL_TIME }
 
+/** A period's bounds in wall-clock millis: from (inclusive) until (exclusive). */
+data class Period(val from: Long, val until: Long)
+
 /**
- * When [period] began, as of [now]: local midnight in [zone] of the week's first day ([firstDayOfWeek], the phone's),
- * the month's first or the year's first (that day's first moment where a clock change skips midnight); null for all
+ * [period]'s bounds as of [now], in the phone's calendar ([zone], [firstDayOfWeek]): from the first moment of the week's
+ * first day, the month's first or the year's first (midnight, or that day's first hour where a clock change skips
+ * midnight) until the first moment of the next one, so a week across a clock change has 167 or 169 hours. Null for all
  * time. Plays count in the period they started in.
  */
-fun periodStart(period: ListeningPeriod, now: Long, zone: ZoneId, firstDayOfWeek: DayOfWeek): Long? {
+fun periodOf(period: ListeningPeriod, now: Long, zone: ZoneId, firstDayOfWeek: DayOfWeek): Period? {
     val today = dateOf(now, zone)
     val first = when (period) {
         ListeningPeriod.WEEK -> today.with(TemporalAdjusters.previousOrSame(firstDayOfWeek))
@@ -33,8 +37,15 @@ fun periodStart(period: ListeningPeriod, now: Long, zone: ZoneId, firstDayOfWeek
         ListeningPeriod.YEAR -> today.withDayOfYear(1)
         ListeningPeriod.ALL_TIME -> return null
     }
-    return first.atStartOfDay(zone).toInstant().toEpochMilli()
+    val next = when (period) {
+        ListeningPeriod.WEEK -> first.plusWeeks(1)
+        ListeningPeriod.MONTH -> first.plusMonths(1)
+        else -> first.plusYears(1)
+    }
+    return Period(startOf(first, zone), startOf(next, zone))
 }
+
+private fun startOf(day: LocalDate, zone: ZoneId): Long = day.atStartOfDay(zone).toInstant().toEpochMilli()
 
 /** One row of a top list: its plays that counted, the time heard in all its plays, and the last play that counted. */
 data class Top<T>(val item: T, val plays: Int, val heardMs: Long, val lastPlayedAt: Long?)
@@ -133,7 +144,8 @@ class PlayStats(
 
     /** Your listening for [period] as of [now], in the phone's [zone] and with its [firstDayOfWeek]. */
     suspend fun listening(period: ListeningPeriod, now: Long, zone: ZoneId, firstDayOfWeek: DayOfWeek): Listening {
-        val totals = store.totals(from = periodStart(period, now, zone, firstDayOfWeek))
+        val bounds = periodOf(period, now, zone, firstDayOfWeek)
+        val totals = store.totals(bounds?.from, bounds?.until)
         return withContext(compute) { listeningOf(totals, library()) }
     }
 
