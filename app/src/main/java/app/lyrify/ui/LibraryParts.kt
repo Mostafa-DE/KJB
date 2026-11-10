@@ -59,6 +59,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -344,7 +345,11 @@ fun <T> SortSheet(title: String, options: List<Pair<T, String>>, selected: T, on
 
 // Rows and tiles
 
-/** A song's row: its cover, title and artist with the lyrics mark; a tap plays, "⋯" opens the song sheet, a long press selects. */
+/**
+ * A song's row: its cover, title and artist with the lyrics mark; a tap plays, "⋯" opens the song sheet, a long press
+ * selects (none without [onLongPress]). Search passes its [shownTitle] with the match highlighted, and for a song found
+ * in its lyrics the matching [line] under the artist.
+ */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun SongRow(
@@ -353,13 +358,15 @@ fun SongRow(
     selecting: Boolean,
     selected: Boolean,
     onTap: () -> Unit,
-    onLongPress: () -> Unit,
+    onLongPress: (() -> Unit)?,
     onMore: () -> Unit,
     modifier: Modifier = Modifier,
     note: String? = null,
+    shownTitle: AnnotatedString? = null,
+    line: AnnotatedString? = null,
 ) {
     val colors = MaterialTheme.colorScheme
-    val title = ui.title(song)
+    val title = shownTitle?.text ?: ui.title(song)
     val artist = song.artist ?: stringResource(R.string.check_no_artist)
     val mark = lyricsMark(ui.status(song))
     val markWords = when (mark) {
@@ -367,9 +374,9 @@ fun SongRow(
         LyricsMark.PLAIN -> stringResource(R.string.lib_mark_plain)
         LyricsMark.NONE -> null
     }
-    val description = listOfNotNull(title, artist, markWords, note).joinToString(", ")
+    val description = listOfNotNull(title, artist, markWords, note, line?.text).joinToString(", ")
     val tapLabel = stringResource(if (selecting) R.string.lib_select else R.string.lib_play)
-    val holdLabel = stringResource(R.string.lib_select)
+    val holdLabel = if (onLongPress != null) stringResource(R.string.lib_select) else null
     Row(verticalAlignment = Alignment.CenterVertically, modifier = modifier.fillMaxWidth().padding(start = 8.dp, end = 4.dp)) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -378,7 +385,7 @@ fun SongRow(
                 .weight(1f)
                 .clip(RoundedCornerShape(16.dp))
                 .background(if (selected) LocalBrandColors.current.highlightContainer else Color.Transparent)
-                .combinedClickable(onClickLabel = tapLabel, onLongClickLabel = holdLabel, onLongClick = if (selecting) null else onLongPress, onClick = onTap)
+                .combinedClickable(onClickLabel = tapLabel, onLongClickLabel = holdLabel, onLongClick = onLongPress?.takeUnless { selecting }, onClick = onTap)
                 .semantics {
                     contentDescription = description
                     if (selecting) this.selected = selected
@@ -388,7 +395,7 @@ fun SongRow(
         ) {
             SongCover(SongArt(song.path, song.ref.mediaStoreId))
             Column(Modifier.weight(1f).clearAndSetSemantics {}) {
-                Text(title, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(shownTitle ?: AnnotatedString(title), style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     LyricsMarkDot(mark)
                     Text(
@@ -398,6 +405,12 @@ fun SongRow(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
+                }
+                if (line != null) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 4.dp)) {
+                        Icon(painterResource(R.drawable.ic_lyrics), contentDescription = null, tint = LocalBrandColors.current.highlight, modifier = Modifier.padding(top = 2.dp).size(16.dp))
+                        Text(line, style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    }
                 }
             }
         }

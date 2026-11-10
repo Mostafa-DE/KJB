@@ -13,6 +13,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 /** Search's results as the page shows them: groups in order with counts, the first four, then View all. Made-up names only. */
 class SearchScreenTest {
@@ -72,5 +73,15 @@ class SearchScreenTest {
     @Test
     fun `a tapped song plays the song results, then the songs found only in lyrics`() {
         assertEquals(songs + bell, results.queue)
+    }
+
+    @Test
+    fun `song results are the library's song rows, with the song sheet, and lists go by the library's names`() {
+        val screen = File("src/main/java/app/lyrify/ui/SearchScreen.kt").readText()
+        val strings = File("src/main/res/values/strings_search.xml").readText()
+
+        listOf("SongRow(", "sheets::openSong", "SongSheetsHost(sheets", "stringResource(it.words)").forEach { assertTrue(it, screen.contains(it)) }
+        assertFalse(screen.contains("private fun SongResult("))
+        assertFalse(strings.contains("search_list_"))
     }
 }

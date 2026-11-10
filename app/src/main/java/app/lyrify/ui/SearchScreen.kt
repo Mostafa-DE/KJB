@@ -69,6 +69,7 @@ import app.lyrify.library.LibraryGraph
 import app.lyrify.library.LibraryState
 import app.lyrify.library.PlaylistsState
 import app.lyrify.library.Song
+import app.lyrify.library.SongRef
 import app.lyrify.library.mostPlayed
 import app.lyrify.library.recentlyAdded
 import app.lyrify.library.recentlyPlayed
@@ -177,6 +178,8 @@ fun SearchPage() {
     LaunchedEffect(ledger) { SearchGraph.refreshLyrics() }
     val results = rememberSearchResults(query)
     val commit = { recent.add(query) }
+    val ui = rememberLibraryUi()
+    val sheets = rememberSongSheets()
 
     PageFrame(
         topBar = { under, backdrop ->
@@ -193,7 +196,7 @@ fun SearchPage() {
             val play = rememberPlay(commit)
             val reading by remember(context) { SearchGraph.lyrics(context).building }.collectAsStateWithLifecycle()
             LazyColumn(state = resultList, modifier = modifier, contentPadding = PaddingValues(bottom = 16.dp)) {
-                if (results == null) return@LazyColumn
+                if (results == null || ui == null) return@LazyColumn
                 val groups = resultGroups(results)
                 item(key = "count") { ResultCount(groups.sumOf { it.count }) }
                 if (groups.isEmpty() && results.lyrics != null) {
@@ -206,7 +209,7 @@ fun SearchPage() {
                             nav.open(Page.SearchAll(group.group, results.query))
                         }
                     }
-                    resultRows(results, group.group, all = false, onSong = { play(results, it) }) {
+                    resultRows(results, group.group, all = false, ui, onSong = { play(results, it) }, onMore = sheets::openSong) {
                         commit()
                         nav.open(it)
                     }
@@ -215,6 +218,7 @@ fun SearchPage() {
             }
         }
     }
+    ui?.let { SongSheetsHost(sheets, it) }
 }
 
 /** "View all" of one group of results for the page's words: every result, with Shuffle and Play over songs. */
@@ -227,6 +231,8 @@ fun SearchAllPage(page: Page.SearchAll) {
     val commands = remember(context) { Lyrify.playback(context) }
     val play = rememberPlay { recent.add(page.query) }
     val title = stringResource(R.string.search_all_title, groupLabel(page.group), page.query.trim())
+    val ui = rememberLibraryUi()
+    val sheets = rememberSongSheets()
     PageFrame(
         topBar = { under, backdrop ->
             LyrifyTopBar(
@@ -238,7 +244,7 @@ fun SearchAllPage(page: Page.SearchAll) {
         },
     ) { padding ->
         LazyColumn(Modifier.padding(padding).consumeWindowInsets(padding).fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
-            if (results == null) return@LazyColumn
+            if (results == null || ui == null) return@LazyColumn
             val songs = when (page.group) {
                 SearchGroup.SONGS -> results.songs.map { it.item }
                 SearchGroup.LYRICS -> results.lyrics.orEmpty().map { it.song }
@@ -256,9 +262,10 @@ fun SearchAllPage(page: Page.SearchAll) {
                     )
                 }
             }
-            resultRows(results, page.group, all = true, onSong = { play(results, it) }, onOpen = nav::open)
+            resultRows(results, page.group, all = true, ui, onSong = { play(results, it) }, onMore = sheets::openSong, onOpen = nav::open)
         }
     }
+    ui?.let { SongSheetsHost(sheets, it) }
 }
 
 /**
@@ -322,12 +329,7 @@ private suspend fun listRows(library: Library, playlists: PlaylistsState, names:
     }
 
 @Composable
-private fun builtInNames(): Map<BuiltInList, String> = mapOf(
-    BuiltInList.FAVOURITES to stringResource(R.string.search_list_favourites),
-    BuiltInList.MOST_PLAYED to stringResource(R.string.search_list_most_played),
-    BuiltInList.RECENTLY_PLAYED to stringResource(R.string.search_list_recently_played),
-    BuiltInList.RECENTLY_ADDED to stringResource(R.string.search_list_recently_added),
-)
+private fun builtInNames(): Map<BuiltInList, String> = BuiltInList.entries.associateWith { stringResource(it.words) }
 
 /** A song tapped in the results: the search goes among the recent ones, and the results' queue plays from the song. */
 @Composable
@@ -341,12 +343,24 @@ private fun rememberPlay(onCommit: () -> Unit): (SearchResults, Song) -> Unit {
     }
 }
 
-/** [group]'s rows: songs play from the results' queue, anything else opens its page. */
-private fun LazyListScope.resultRows(results: SearchResults, group: SearchGroup, all: Boolean, onSong: (Song) -> Unit, onOpen: (Page) -> Unit) {
+/**
+ * [group]'s rows: songs are the library's song rows (a tap plays from the results' queue, "⋯" opens the song sheet,
+ * [onMore]), anything else opens its page.
+ */
+private fun LazyListScope.resultRows(
+    results: SearchResults,
+    group: SearchGroup,
+    all: Boolean,
+    ui: LibraryUi,
+    onSong: (Song) -> Unit,
+    onMore: (SongRef) -> Unit,
+    onOpen: (Page) -> Unit,
+) {
     val count = shownCount(results, group, all)
     when (group) {
         SearchGroup.SONGS -> items(results.songs.take(count), key = { "song ${it.item.path}" }) { hit ->
-            SongResult(hit.item, highlighted(hit.text, hit.match), line = null) { onSong(hit.item) }
+            val song = hit.item
+            SongRow(song, ui, selecting = false, selected = false, onTap = { onSong(song) }, onLongPress = null, onMore = { onMore(song.ref) }, shownTitle = highlighted(hit.text, hit.match))
         }
         SearchGroup.ARTISTS -> items(results.artists.take(count), key = { "artist ${it.item.name}" }) { hit ->
             val songs = hit.item.songs.size
@@ -371,7 +385,8 @@ private fun LazyListScope.resultRows(results: SearchResults, group: SearchGroup,
             }
         }
         SearchGroup.LYRICS -> items(results.lyrics.orEmpty().take(count), key = { "lyrics ${it.song.path}" }) { hit ->
-            SongResult(hit.song, AnnotatedString(hit.title), line = highlighted(hit.line, hit.match)) { onSong(hit.song) }
+            val song = hit.song
+            SongRow(song, ui, selecting = false, selected = false, onTap = { onSong(song) }, onLongPress = null, onMore = { onMore(song.ref) }, line = highlighted(hit.line, hit.match))
         }
     }
 }
@@ -493,23 +508,14 @@ private fun SongsHeader(count: Int, onShuffle: () -> Unit, onPlay: () -> Unit) {
     }
 }
 
-/** A song: cover, title (matched part highlighted), artist, and with [line] the lyrics line it was found by. One TalkBack stop. */
-@Composable
-private fun SongResult(song: Song, title: AnnotatedString, line: AnnotatedString?, onClick: () -> Unit) {
-    val artist = song.artist?.takeIf(String::isNotBlank)
-    ResultRow(title, artist, listOfNotNull(title.text, artist, line?.text).joinToString(", "), stringResource(R.string.search_play), onClick, line) {
-        SongCover(SongArt(song.path))
-    }
-}
-
 /** An artist, album, folder or list: its [lead], name (matched part highlighted) and one line under it; a tap opens it. */
 @Composable
 private fun NavResult(title: AnnotatedString, sub: String?, onClick: () -> Unit, lead: @Composable () -> Unit) {
-    ResultRow(title, sub, listOfNotNull(title.text, sub).joinToString(", "), stringResource(R.string.search_open), onClick, line = null, lead)
+    ResultRow(title, sub, listOfNotNull(title.text, sub).joinToString(", "), stringResource(R.string.search_open), onClick, lead)
 }
 
 @Composable
-private fun ResultRow(title: AnnotatedString, sub: String?, description: String, clickLabel: String, onClick: () -> Unit, line: AnnotatedString?, lead: @Composable () -> Unit) {
+private fun ResultRow(title: AnnotatedString, sub: String?, description: String, clickLabel: String, onClick: () -> Unit, lead: @Composable () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -528,13 +534,6 @@ private fun ResultRow(title: AnnotatedString, sub: String?, description: String,
                 if (sub != null) {
                     Text(sub, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-            }
-        }
-        if (line != null) {
-            // Under the title, past the 48 dp cover and its 16 dp gap.
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(start = 64.dp, top = 4.dp)) {
-                Icon(painterResource(R.drawable.ic_lyrics), contentDescription = null, tint = LocalBrandColors.current.highlight, modifier = Modifier.padding(top = 2.dp).size(16.dp))
-                Text(line, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
         }
     }

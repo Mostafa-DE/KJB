@@ -18,11 +18,6 @@
     <string name="search_all_title">%1$s · %2$s</string>
     <!-- Under a folder found: how many songs, then where it is ("12 songs · Music/Rips"). -->
     <string name="search_folder_line">%1$s · %2$s</string>
-    <!-- The built-in lists, found by name like playlists. -->
-    <string name="search_list_favourites">Favourites</string>
-    <string name="search_list_most_played">Most played</string>
-    <string name="search_list_recently_played">Recently played</string>
-    <string name="search_list_recently_added">Recently added</string>
     <string name="search_shuffle">Shuffle</string>
     <string name="search_play">Play</string>
     <string name="search_open">Open</string>
