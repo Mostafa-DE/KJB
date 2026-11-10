@@ -1,9 +1,14 @@
 package app.lyrify.player
 
+import android.os.SystemClock
+import androidx.media3.session.MediaLibraryService
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.launch
 
 // The sleep timer (milestone P2): by time or by songs, the music fading out over the last 10 s and then pausing. The
 // screens set it ([PlayerExtras.sleep]); [SleepDriver] runs it in the service, on the player.
@@ -126,5 +131,31 @@ class SleepDriver(
         port.volume = 1f
         timer.value = null
         stopped()
+    }
+}
+
+/** The sleep timer in the service: [SleepDriver] on the engine, told of the songs that end. A timer ends with the service. */
+class SleepPart : ServicePart {
+    private var scope: CoroutineScope? = null
+    private var extras: PlayerExtras? = null
+
+    override fun start(service: PlaybackService, session: MediaLibraryService.MediaLibrarySession) {
+        val engine = service.playbackEngine
+        val shared = PlayerExtras.of(service).also { extras = it }
+        val driver = SleepDriver(EngineExtras(engine), shared.sleep, SystemClock::elapsedRealtime) { shared.say(ExtrasSaid.SleepEnded) }
+        engine.addListener(object : EngineListener {
+            override fun onSongStarted(uid: Long, lap: Boolean, natural: Boolean) {
+                if (natural) driver.songEnded()
+            }
+
+            override fun onEnded() = driver.queueEnded()
+        })
+        scope = partScope().also { it.launch { driver.run() } }
+    }
+
+    override fun stop() {
+        scope?.cancel()
+        scope = null
+        extras?.sleep?.value = null
     }
 }

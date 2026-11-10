@@ -77,6 +77,9 @@ interface ServicePart {
 
     /** A command this part declared; null when it is not this part's. */
     fun onCommand(command: SessionCommand, args: Bundle): SessionResult? = null
+
+    /** A media button (a headset, Bluetooth, a car); true when this part took it, false to leave it to the session. */
+    fun onMediaButton(session: MediaSession, controller: MediaSession.ControllerInfo, intent: Intent): Boolean = false
 }
 
 /**
@@ -89,13 +92,16 @@ interface ServicePart {
 @OptIn(UnstableApi::class)
 class PlaybackService : MediaLibraryService() {
     /** The service's parts: P2, A1, A3 and A4 each add one line here, in merge order. */
-    private val parts: List<ServicePart> = listOf()
+    private val parts: List<ServicePart> = listOf(SleepPart(), ExtrasPart(), ButtonsPart())
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + logFailures)
     private val io = CoroutineScope(SupervisorJob() + Dispatchers.IO + logFailures)
     private var session: MediaLibrarySession? = null
     private lateinit var core: PlayerCore
     private lateinit var engine: GaplessEngine
+
+    /** The engine, for the parts that work on the player itself (speed, the sleep timer's fade). */
+    internal val playbackEngine: PlaybackEngine get() = engine
     private lateinit var player: LyrifyPlayer
     private lateinit var bridge: QueueBridge
     private lateinit var settings: StateFlow<Settings>
@@ -169,7 +175,7 @@ class PlaybackService : MediaLibraryService() {
 
     private fun find(ref: SongRef): Song? = library.value?.resolver?.find(ref)
 
-    private fun skips(): SkipAmounts = settings.value.playback.let { SkipAmounts(it.skipBackSeconds * 1_000L, it.skipForwardSeconds * 1_000L) }
+    private fun skips(): SkipAmounts = skipAmounts(settings.value.playback)
 
     private fun mediaItem(projected: Projected): MediaItem = mediaItemOf(projected, settings.value.library)
 
@@ -277,6 +283,9 @@ class PlaybackService : MediaLibraryService() {
                 .setAvailablePlayerCommands(base.availablePlayerCommands)
                 .build()
         }
+
+        override fun onMediaButtonEvent(session: MediaSession, controllerInfo: MediaSession.ControllerInfo, intent: Intent): Boolean =
+            parts.any { it.onMediaButton(session, controllerInfo, intent) } || super.onMediaButtonEvent(session, controllerInfo, intent)
 
         override fun onCustomCommand(session: MediaSession, controller: MediaSession.ControllerInfo, customCommand: SessionCommand, args: Bundle): ListenableFuture<SessionResult> =
             Futures.immediateFuture(parts.firstNotNullOfOrNull { it.onCommand(customCommand, args) } ?: SessionResult(SessionError.ERROR_NOT_SUPPORTED))

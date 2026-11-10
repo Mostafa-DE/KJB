@@ -1,15 +1,37 @@
 package app.lyrify.player
 
+import android.content.Intent
+import android.os.Build
+import android.os.Bundle
 import android.view.KeyEvent
 import androidx.annotation.OptIn
 import androidx.annotation.StringRes
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.common.util.Util
 import androidx.media3.session.CommandButton
+import androidx.media3.session.MediaLibraryService
+import androidx.media3.session.MediaSession
+import androidx.media3.session.SessionCommand
+import androidx.media3.session.SessionError
+import androidx.media3.session.SessionResult
+import app.lyrify.Lyrify
 import app.lyrify.R
+import app.lyrify.library.FavouritesPort
+import app.lyrify.library.LibraryGraph
+import app.lyrify.library.SongRef
 import app.lyrify.settings.NotificationButtons
+import app.lyrify.settings.Settings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 // Headset and car buttons, and the notification's extra buttons (milestone P2).
@@ -98,4 +120,91 @@ fun notificationButtons(choice: NotificationButtons, favourite: Boolean, shuffle
             Repeat.ONE -> NotificationButton(COMMAND_REPEAT, CommandButton.ICON_REPEAT_ONE, R.string.player_repeat_one)
         },
     )
+}
+
+/**
+ * The headset buttons and the notification's extra buttons in the service. Presses from headsets and Bluetooth go
+ * through the [PressCounter] ("Headset buttons"); with nothing loaded (KJB was closed) they go to the session, which
+ * resumes the last queue. The notification's own taps on Android 11 and 12 are not presses and go to the session too.
+ * The extra buttons follow the setting, the song playing, Shuffle and Repeat.
+ */
+@OptIn(UnstableApi::class)
+class ButtonsPart : ServicePart {
+    override val commands: List<SessionCommand> = listOf(COMMAND_FAVOURITE, COMMAND_SHUFFLE, COMMAND_REPEAT).map { SessionCommand(it, Bundle.EMPTY) }
+
+    private var scope: CoroutineScope? = null
+    private var counter: PressCounter? = null
+    private var core: PlayerCore? = null
+    private var favourites: FavouritesPort? = null
+    private var favouriteSongs: StateFlow<List<SongRef>> = MutableStateFlow(emptyList())
+    private var settings: StateFlow<Settings> = MutableStateFlow(Settings())
+
+    override fun start(service: PlaybackService, session: MediaLibraryService.MediaLibrarySession) {
+        val scope = partScope().also { scope = it }
+        val core = PlayerGraph.core(service).also { core = it }
+        val favourites = LibraryGraph.favourites(service).also { favourites = it }
+        settings = Lyrify.settings(service).settings.stateIn(scope, SharingStarted.Eagerly, Settings())
+        favouriteSongs = favourites.songs.stateIn(scope, SharingStarted.Eagerly, emptyList())
+        counter = PressCounter(scope) { press ->
+            val player = session.player
+            when (press) {
+                Press.PLAY_PAUSE -> Util.handlePlayPauseButtonAction(player)
+                Press.NEXT -> player.seekToNext()
+                Press.PREVIOUS -> player.seekToPrevious()
+            }
+        }
+        scope.launch {
+            combine(settings.map { it.advanced.notificationButtons }.distinctUntilChanged(), favouriteSongs, core.book, core.repeat) { choice, favourite, book, repeat ->
+                val path = book.current?.current?.song?.path
+                notificationButtons(choice, favourite = path != null && favourite.any { it.path == path }, shuffled = book.current?.shuffled == true, repeat = repeat)
+            }.distinctUntilChanged().collect { buttons ->
+                session.setMediaButtonPreferences(
+                    buttons.map { button ->
+                        CommandButton.Builder(button.icon)
+                            .setDisplayName(service.getString(button.label))
+                            .setSessionCommand(SessionCommand(button.command, Bundle.EMPTY))
+                            .setSlots(CommandButton.SLOT_OVERFLOW)
+                            .build()
+                    },
+                )
+            }
+        }
+    }
+
+    override fun stop() {
+        scope?.cancel()
+        scope = null
+        counter = null
+    }
+
+    override fun onCommand(command: SessionCommand, args: Bundle): SessionResult? {
+        val core = core ?: return null
+        when (command.customAction) {
+            COMMAND_FAVOURITE -> {
+                val song = core.book.value.current?.current?.song ?: return SessionResult(SessionError.ERROR_BAD_VALUE)
+                val favourite = favouriteSongs.value.any { it.path == song.path }
+                scope?.launch { favourites?.setSongs(listOf(song), !favourite) }
+            }
+            COMMAND_SHUFFLE -> core.change { it.toggleShuffle(core.shuffleRandom()) }
+            COMMAND_REPEAT -> core.setRepeat(Repeat.entries[(core.repeat.value.ordinal + 1) % Repeat.entries.size])
+            else -> return null
+        }
+        return SessionResult(SessionResult.RESULT_SUCCESS)
+    }
+
+    override fun onMediaButton(session: MediaSession, controller: MediaSession.ControllerInfo, intent: Intent): Boolean {
+        if (session.isMediaNotificationController(controller)) return false
+        val event = keyEvent(intent) ?: return false
+        val enabled = settings.value.playback.headsetButtons
+        if (enabled && session.player.mediaItemCount == 0) return false
+        return counter?.onKey(event.keyCode, event.action == KeyEvent.ACTION_DOWN, event.repeatCount, enabled) ?: false
+    }
+
+    private fun keyEvent(intent: Intent): KeyEvent? =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            intent.getParcelableExtra(Intent.EXTRA_KEY_EVENT, KeyEvent::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            intent.getParcelableExtra(Intent.EXTRA_KEY_EVENT)
+        }
 }
