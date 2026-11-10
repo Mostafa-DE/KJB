@@ -1,8 +1,5 @@
 package app.lyrify.ui
 
-import android.content.ActivityNotFoundException
-import android.content.Intent
-import android.media.audiofx.AudioEffect
 import android.os.SystemClock
 import androidx.annotation.DrawableRes
 import androidx.compose.animation.core.Animatable
@@ -323,9 +320,6 @@ private fun Backdrop(path: String) {
 private fun PlayerTopBar(ui: PlayerUi, onClose: () -> Unit, onRoute: (PlayerRoute) -> Unit, onSwipeDown: () -> Unit) {
     val context = LocalContext.current
     val nav = LocalNavigator.current
-    val toasts = LocalToasts.current
-    val resources = LocalResources.current
-    val scope = rememberCoroutineScope()
     var menu by remember { mutableStateOf(false) }
     val swipe = with(LocalDensity.current) { SWIPE_DOWN.toPx() }
     Row(
@@ -361,18 +355,8 @@ private fun PlayerTopBar(ui: PlayerUi, onClose: () -> Unit, onRoute: (PlayerRout
                 MenuRow(stringResource(R.string.player_menu_ab), R.drawable.ic_repeat, pick { onRoute(PlayerRoute.REPEAT_PART) })
                 MenuRow(stringResource(R.string.player_menu_bookmark), R.drawable.ic_bookmark_add, pick { onRoute(PlayerRoute.BOOKMARK) })
                 MenuRow(stringResource(R.string.player_menu_play_on), R.drawable.ic_speaker, pick { onRoute(PlayerRoute.PLAY_ON) })
-                // The phone's own sound effects panel, until A1's equalizer takes this route.
-                MenuRow(stringResource(R.string.player_menu_equalizer), R.drawable.ic_equalizer, pick {
-                    val panel = Intent(AudioEffect.ACTION_DISPLAY_AUDIO_EFFECT_CONTROL_PANEL)
-                        .putExtra(AudioEffect.EXTRA_AUDIO_SESSION, PlayerGraph.audioSessionId)
-                        .putExtra(AudioEffect.EXTRA_PACKAGE_NAME, context.packageName)
-                        .putExtra(AudioEffect.EXTRA_CONTENT_TYPE, AudioEffect.CONTENT_TYPE_MUSIC)
-                    try {
-                        context.startActivity(panel)
-                    } catch (_: ActivityNotFoundException) {
-                        scope.launch { toasts.show(Toast(resources.getString(R.string.player_no_effects))) }
-                    }
-                })
+                // KJB's equalizer (AudioScreens.kt); the phone's own sound effects open from inside it.
+                MenuRow(stringResource(R.string.player_menu_equalizer), R.drawable.ic_equalizer, pick { nav.show(FullScreen.Equalizer) })
                 MenuRow(stringResource(R.string.player_menu_tone), R.drawable.ic_ring_volume, pick { onRoute(PlayerRoute.MAKE_TONE) })
                 MenuRow(stringResource(R.string.player_menu_info), R.drawable.ic_info, pick { onRoute(PlayerRoute.SONG_INFO) })
             }
