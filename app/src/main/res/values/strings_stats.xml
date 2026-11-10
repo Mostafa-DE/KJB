@@ -1,4 +1,53 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Plays and Your listening (milestone S1). -->
 <resources>
+    <string name="stats_title">Your listening</string>
+
+    <!-- The period switch, and the period as the View all pages and the card name it. -->
+    <string name="stats_week">Week</string>
+    <string name="stats_month">Month</string>
+    <string name="stats_year">Year</string>
+    <string name="stats_all_time">All time</string>
+    <string name="stats_this_week">This week</string>
+    <string name="stats_this_month">This month</string>
+    <string name="stats_this_year">This year</string>
+
+    <string name="stats_time">Listening time</string>
+    <string name="stats_plays_label">Plays</string>
+    <string name="stats_top_songs">Top songs</string>
+    <string name="stats_top_artists">Top artists</string>
+    <string name="stats_top_albums">Top albums</string>
+    <string name="stats_view_all">View all</string>
+    <string name="stats_empty_title">Nothing yet</string>
+    <string name="stats_empty_text">Play some music and your top songs show here.</string>
+
+    <!-- Listening time: whole minutes, then hours and minutes. -->
+    <string name="stats_minutes">%1$s min</string>
+    <string name="stats_hours">%1$s h %2$s min</string>
+    <plurals name="stats_plays">
+        <item quantity="one">%1$s play</item>
+        <item quantity="other">%1$s plays</item>
+    </plurals>
+    <!-- A top list's row for TalkBack: its rank, its name, its plays. -->
+    <string name="stats_row">%1$d. %2$s, %3$s</string>
+    <!-- Under a row's name: "Wren Halloran · 42 min". -->
+    <string name="stats_row_line">%1$s · %2$s</string>
+    <string name="stats_open_artist">Open artist</string>
+    <string name="stats_open_album">Open album</string>
+    <!-- The card on Most played: "This month · 3 h 20 min · 41 plays". -->
+    <string name="stats_card_line">%1$s · %2$s · %3$s</string>
+
+    <!-- Song info and Recently played. -->
+    <plurals name="stats_played_times">
+        <item quantity="one">Played %1$s time</item>
+        <item quantity="other">Played %1$s times</item>
+    </plurals>
+    <string name="stats_not_played">Not played yet</string>
+    <string name="stats_never">Never</string>
+    <string name="stats_today">Today %1$s</string>
+    <string name="stats_yesterday">Yesterday</string>
+    <plurals name="stats_days_ago">
+        <item quantity="one">%1$d day ago</item>
+        <item quantity="other">%1$d days ago</item>
+    </plurals>
 </resources>

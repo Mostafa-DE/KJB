@@ -384,6 +384,7 @@ class SharedWritesTest {
             "overnight/AiWorker.kt",
             "overnight/CrashGuard.kt",
             "settings/SettingsStore.kt",
+            "stats/PlayLog.kt",
             "tones/ToneAudio.kt",
         )
     }
