@@ -82,7 +82,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlin.math.abs
@@ -220,8 +219,11 @@ private fun LockLyricsScreen(ledger: LedgerState, onClose: () -> Unit) {
         connection.attach()
         onStopOrDispose { connection.detach() }
     }
-    val emptied by remember(core) { combine(core.ready, core.book) { ready, book -> ready && book.current == null } }.collectAsStateWithLifecycle(initialValue = false)
-    LaunchedEffect(emptied) { if (emptied) onClose() }
+    // The player's own rule: once the queues are read and nothing is loaded, never while they are read (a cold start).
+    LaunchedEffect(core) {
+        core.awaitNothingLoaded()
+        onClose()
+    }
     val ui = connection.ui.collectAsStateWithLifecycle().value
     val screen = LocalView.current
     val playing = ui?.playing == true
