@@ -29,7 +29,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.Saver
-import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -163,8 +162,33 @@ data class SongSelection(val paths: Set<String> = emptySet()) {
         list?.mapTo(HashSet()) { it.path }?.let { listed -> if (paths.all(listed::contains)) this else SongSelection(paths intersect listed) } ?: this
 
     companion object {
-        val Saver: Saver<SongSelection, Any> = listSaver(save = { it.paths.toList() }, restore = { SongSelection(it.toSet()) })
+        private val large = InMemory<SongSelection>()
+
+        /** Its paths in the saved state, up to [SAVED_SONGS_MAX]; a larger one (a select-all) stays in memory only. */
+        val Saver: Saver<SongSelection, Any> = Saver(
+            save = { if (it.paths.size <= SAVED_SONGS_MAX) ArrayList(it.paths) else large.keep(it) },
+            restore = { saved -> if (saved is Long) large.find(saved) ?: SongSelection() else SongSelection((saved as List<*>).filterIsInstance<String>().toSet()) },
+        )
     }
+}
+
+/**
+ * Songs a page keeps in its saved state, in a selection or an open sheet: that state has a size limit (about 1 MB for
+ * the whole app), so a select-all or Add all of a large library stays in memory ([InMemory]).
+ */
+const val SAVED_SONGS_MAX: Int = 500
+
+/**
+ * A page's state too large for the saved state, held in memory under a key the saved state keeps instead, so a turn of
+ * the phone finds it again. Only the latest one of each kind is held, and none after the process dies. Main thread only.
+ */
+private class InMemory<T : Any> {
+    private var held: Pair<Long, T>? = null
+    private var keys = 0L
+
+    fun keep(value: T): Long = (++keys).also { held = it to value }
+
+    fun find(key: Long): T? = held?.takeIf { it.first == key }?.second
 }
 
 /** What a song action did, as its toast says it. */
@@ -368,24 +392,40 @@ class SongSheets(open: OpenSheet? = null) {
 
 private val SHEETS_JSON = Json { ignoreUnknownKeys = true }
 
-/** A page's [SongSheets], kept across a turn of the phone; one this version cannot read is closed. */
+private val largeSheets = InMemory<OpenSheet>()
+
+/** How many songs [sheet] holds, as the saved state would. */
+private fun songsIn(sheet: OpenSheet): Int = when (sheet) {
+    is OpenSheet.AddTo -> sheet.songs.size
+    is OpenSheet.More -> sheet.songs.size
+    is OpenSheet.NewQueue -> sheet.songs.size
+    is OpenSheet.NewPlaylist -> sheet.songs.size
+    is OpenSheet.Trash -> sheet.songs.size
+    else -> 1
+}
+
+/**
+ * A page's open sheet across a turn of the phone: by its type name and fields, or in memory only when it holds more than
+ * [SAVED_SONGS_MAX] songs (Add all of a large list). One this version cannot read is closed.
+ */
+internal val SongSheetsSaver: Saver<SongSheets, Any> = Saver(
+    save = { sheets -> sheets.open?.let { if (songsIn(it) <= SAVED_SONGS_MAX) SHEETS_JSON.encodeToString(OpenSheet.serializer(), it) else largeSheets.keep(it) } },
+    restore = { saved ->
+        SongSheets(
+            try {
+                if (saved is Long) largeSheets.find(saved) else SHEETS_JSON.decodeFromString(OpenSheet.serializer(), saved as String)
+            } catch (_: SerializationException) {
+                null
+            } catch (_: IllegalArgumentException) {
+                null
+            },
+        )
+    },
+)
+
+/** A page's [SongSheets], kept across a turn of the phone ([SongSheetsSaver]). */
 @Composable
-fun rememberSongSheets(): SongSheets = rememberSaveable(
-    saver = Saver<SongSheets, String>(
-        save = { sheets -> sheets.open?.let { SHEETS_JSON.encodeToString(OpenSheet.serializer(), it) } },
-        restore = { text ->
-            SongSheets(
-                try {
-                    SHEETS_JSON.decodeFromString(OpenSheet.serializer(), text)
-                } catch (_: SerializationException) {
-                    null
-                } catch (_: IllegalArgumentException) {
-                    null
-                },
-            )
-        },
-    ),
-) { SongSheets() }
+fun rememberSongSheets(): SongSheets = rememberSaveable(saver = SongSheetsSaver) { SongSheets() }
 
 /** The app's [SongActions]: KJB's own player and `playlists.json`. */
 @Composable

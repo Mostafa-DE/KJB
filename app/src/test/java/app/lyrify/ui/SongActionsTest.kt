@@ -1,5 +1,7 @@
 package app.lyrify.ui
 
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.SaverScope
 import app.lyrify.library.CollectionKind
 import app.lyrify.library.FavouriteCollection
 import app.lyrify.library.Playlist
@@ -170,6 +172,33 @@ class SongActionsTest {
         assertEquals(picked, picked.within(null))
         assertEquals(SongSelection(setOf(lantern.path)), picked.within(listOf(lantern, water)))
         assertEquals(SongSelection(), picked.within(emptyList()))
+    }
+
+    @Test
+    fun `a large selection or sheet stays out of the saved state, and a turn of the phone still finds it`() {
+        fun <T : Any> roundTrip(saver: Saver<T, Any>, value: T): Pair<Any?, T?> {
+            val saved = with(saver) { SaverScope { true }.save(value) }
+            return saved to saved?.let(saver::restore)
+        }
+        val paths = (1..10_000).map { "Music/Made Up/Song $it.mp3" }
+
+        val some = SongSelection(paths.take(SAVED_SONGS_MAX).toSet())
+        val (savedSome, someBack) = roundTrip(SongSelection.Saver, some)
+        assertEquals(SAVED_SONGS_MAX, (savedSome as List<*>).size)
+        assertEquals(some, someBack)
+        val all = SongSelection(paths.toSet())
+        val (savedAll, allBack) = roundTrip(SongSelection.Saver, all)
+        assertFalse(savedAll is Collection<*>)
+        assertEquals(all, allBack)
+
+        val menu = OpenSheet.Menu(lantern.ref)
+        val (savedMenu, menuBack) = roundTrip(SongSheetsSaver, SongSheets(menu))
+        assertTrue(savedMenu is String)
+        assertEquals(menu, menuBack?.open)
+        val addAll = OpenSheet.AddTo(paths.map { SongRef(it) }, null, "Songs")
+        val (savedAddAll, addAllBack) = roundTrip(SongSheetsSaver, SongSheets(addAll))
+        assertFalse(savedAddAll is String)
+        assertEquals(addAll, addAllBack?.open)
     }
 
     // Toasts and Undo
