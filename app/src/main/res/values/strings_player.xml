@@ -139,4 +139,97 @@
     <string name="queue_your_place">%1$s, your place</string>
     <string name="queue_add_all">Add all %1$s</string>
     <string name="queue_gone">Queue deleted</string>
+
+    <!-- The player's extras (P2): the sleep timer -->
+    <string name="sleep_title">Sleep timer</string>
+    <string name="sleep_sentence">The music fades out over the last 10 seconds, then pauses.</string>
+    <string name="sleep_after_time">After a time</string>
+    <string name="sleep_after_songs">After songs</string>
+    <string name="sleep_minutes_chip">%1$d min</string>
+    <string name="sleep_hour">1 hour</string>
+    <string name="sleep_end_of_song">End of song</string>
+    <plurals name="sleep_songs_chip">
+        <item quantity="one">%d song</item>
+        <item quantity="other">%d songs</item>
+    </plurals>
+    <string name="sleep_custom">Custom</string>
+    <string name="sleep_turn_off">Turn off</string>
+    <string name="sleep_turned_off">Sleep timer off</string>
+    <string name="sleep_ended">Sleep timer ended. Paused.</string>
+    <string name="sleep_time_left">left</string>
+    <string name="sleep_songs_left">songs to go, this one too</string>
+    <string name="sleep_song_left">to the end of this song</string>
+    <string name="sleep_custom_time">Custom timer</string>
+    <string name="sleep_custom_songs">Stop after songs</string>
+    <string name="sleep_custom_time_sentence">Pick how long to play. The music fades out at the end.</string>
+    <string name="sleep_custom_songs_sentence">The song playing now counts as the first. The last one fades out at its end.</string>
+    <string name="sleep_less">Less</string>
+    <string name="sleep_more">More</string>
+    <string name="sleep_unit_minutes">min</string>
+    <plurals name="sleep_unit_songs">
+        <item quantity="one">song</item>
+        <item quantity="other">songs</item>
+    </plurals>
+    <string name="sleep_start">Start timer</string>
+    <plurals name="sleep_chip_minutes">
+        <item quantity="one">Sleep timer, %d minute left</item>
+        <item quantity="other">Sleep timer, %d minutes left</item>
+    </plurals>
+    <plurals name="sleep_chip_songs">
+        <item quantity="one">Sleep timer, %d song left</item>
+        <item quantity="other">Sleep timer, %d songs left</item>
+    </plurals>
+    <string name="sleep_chip_end">Sleep timer, at the end of this song</string>
+    <string name="sleep_chip_fading">%1$s, fading out</string>
+
+    <!-- Speed and pitch -->
+    <string name="speed_title">Speed</string>
+    <string name="speed_value">%1$s×</string>
+    <string name="speed_value_pitch">%1$s× · %2$s</string>
+    <string name="speed_pitch_kept">pitch kept</string>
+    <string name="speed_pitch_follows">pitch follows speed</string>
+    <string name="speed_pitch_moved">pitch %1$s</string>
+    <string name="speed_fine">Fine speed</string>
+    <string name="speed_keep_pitch">Keep pitch</string>
+    <string name="speed_keep_pitch_on">Voices sound natural</string>
+    <string name="speed_keep_pitch_off">Set pitch below</string>
+    <string name="speed_pitch">Pitch %1$s</string>
+    <string name="speed_semitones">semitones</string>
+    <string name="speed_this_song">This song only</string>
+    <string name="speed_this_song_on">Remembered next time</string>
+    <string name="speed_this_song_off">Off: every song</string>
+    <string name="speed_own_sentence">This song keeps its own speed. Other songs play at your usual speed.</string>
+    <string name="speed_usual_sentence">This speed applies to every song until you change it.</string>
+    <string name="speed_reset">Reset</string>
+    <string name="speed_done">Done</string>
+    <string name="speed_chip">Speed %1$s. Change it</string>
+
+    <!-- Repeat a part (A-B) -->
+    <string name="part_stop">Stop the part</string>
+    <string name="part_chip">A-B</string>
+    <string name="part_chip_label">Repeating a part. Stop it</string>
+    <string name="part_started">Drag A and B to pick the part</string>
+    <string name="part_stopped">Repeat a part off</string>
+    <string name="part_too_short">This song is too short to repeat a part.</string>
+    <string name="part_start">Part start, A</string>
+    <string name="part_end">Part end, B</string>
+    <string name="part_earlier">Earlier</string>
+    <string name="part_later">Later</string>
+
+    <!-- Bookmarks -->
+    <string name="bookmark_at">Bookmark at %1$s</string>
+    <string name="bookmark_note">Note (optional)</string>
+    <string name="bookmark_save">Save</string>
+    <string name="bookmark_cancel">Cancel</string>
+    <string name="bookmark_removed">Bookmark removed</string>
+    <string name="bookmark_not_saved">The bookmark could not be saved.</string>
+    <string name="bookmarks_title">Bookmarks</string>
+    <string name="bookmark_no_note">No note</string>
+    <string name="bookmark_play_from">Play from %1$s, %2$s</string>
+    <string name="bookmark_remove">Remove the bookmark at %1$s</string>
+
+    <!-- Remember my place, Play on -->
+    <string name="place_resumed">Resumed at %1$s</string>
+    <string name="place_start_over">Start over</string>
+    <string name="play_on_none">Your phone could not open its output picker.</string>
 </resources>
