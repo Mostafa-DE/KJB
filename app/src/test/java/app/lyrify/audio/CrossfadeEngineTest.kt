@@ -174,6 +174,27 @@ class CrossfadeEngineTest {
     }
 
     @Test
+    fun `a Next by hand while the next song waits lets the waiting player go, so a third is made but two at most are kept`() = runTest {
+        // The phone's case (CrossfadeDeviceTest): 8 s songs and a 6 s crossfade fade over 4 s, so the next song waits from the start.
+        val rig = FadeRig(this, crossfadeSeconds = 6, songs = tones(2, lengthMs = 8_000))
+        rig.run(500)
+        val (first, waiting) = rig.two(rig.slots)
+        assertEquals(1, waiting.index)
+        assertFalse(waiting.playWhenReady)
+        rig.engine.seek(1, 0)
+        val incoming = rig.made(2)
+        assertEquals(0f, waiting.volume, 0f)
+        rig.run(0)
+        assertTrue(waiting.released)
+        assertEquals(listOf(first, incoming), rig.live)
+        rig.run(FakeSlot.BUFFER_MS + SHORT_FADE_MS + 50)
+        assertEquals(listOf(incoming), rig.live)
+        assertEquals(1, rig.engine.index)
+        assertEquals(1f, incoming.volume, 0f)
+        assertEquals(listOf(rig.start(0), rig.start(1)), rig.heard.starts)
+    }
+
+    @Test
     fun `pausing never fades, and a pause during a fade stops both players where they are until playing again`() = runTest {
         val rig = FadeRig(this, crossfadeSeconds = 6)
         rig.run(10_000)

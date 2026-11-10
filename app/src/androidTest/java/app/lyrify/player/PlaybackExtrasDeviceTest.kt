@@ -169,13 +169,18 @@ class PlaybackExtrasDeviceTest {
         onMain { EngineExtras(built.engine).setSpeed(speed.speed, speed.pitch) }
         assertEquals(PlaybackParameters(1.25f, speed.pitch), onMain { built.engine.playbackParameters })
         assertTrue("the session never showed the speed", waitFor(3_000) { controller.playbackParameters.speed == 1.25f })
-        // At 1.25x, 2 s of playing move 2.5 s through the song.
+        // At 1.25x the song moves 1.25 s a second, measured once the speed is heard: the player fills its audio output
+        // while paused, and Media3 plays what it holds (250 to 750 ms, at 1x here) before a new speed, after the output's
+        // own start. From play, 2 s moved about 2.1 s on the phone. Within 0.1 of 1.25 tells it from 1x and from the pitch's 1.40.
         onMain { built.engine.setPlayWhenReady(true) }
-        assertTrue("never played", waitFor(5_000) { built.engine.isPlaying })
-        val from = onMain { built.engine.positionMs }
+        assertTrue("never played past the audio held at 1x", waitFor(5_000) { built.engine.isPlaying && built.engine.positionMs > 1_500 })
+        val (fromMs, fromAt) = onMain { built.engine.positionMs to SystemClock.elapsedRealtime() }
         SystemClock.sleep(2_000)
-        val moved = onMain { built.engine.positionMs } - from
-        assertTrue("moved $moved ms in 2 s", moved in 2_200L..2_800L)
+        val (toMs, toAt) = onMain { built.engine.positionMs to SystemClock.elapsedRealtime() }
+        val rate = (toMs - fromMs).toFloat() / (toAt - fromAt)
+        assertTrue("moved ${toMs - fromMs} ms in ${toAt - fromAt} ms", rate in 1.15f..1.35f)
+        // Nothing set it back while it played.
+        assertEquals(PlaybackParameters(1.25f, speed.pitch), onMain { built.engine.playbackParameters })
     }
 
     @Test

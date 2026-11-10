@@ -34,7 +34,8 @@ import kotlin.math.sin
 /**
  * Crossfade on the phone (debug build), with real ExoPlayers: made-up test tones in the app's cache, never in shared
  * storage. A natural change fades on a second player and the session's song moves at the fade's start; a Next by hand
- * fades over 300 ms; the second player plays in the first one's audio session.
+ * fades over 300 ms; the second player plays in the first one's audio session. Every player call is on the main thread,
+ * as ExoPlayer requires.
  */
 @OptIn(UnstableApi::class)
 @RunWith(AndroidJUnit4::class)
@@ -175,15 +176,22 @@ class CrossfadeDeviceTest {
         assertTrue("the fade started after $first ms", first in 5_500L..6_600L)
         assertEquals(2, built.made.size)
         assertEquals(1, onMain { built.engine.index })
-        assertEquals(built.made[0].audioSessionId, onMain { built.engine.audioSessionId })
-        assertTrue("never playing after the fade", waitFor(3_000) { built.engine.isPlaying && built.engine.positionMs > 2_000 })
+        val (firstSession, sessionNow) = onMain { built.made[0].audioSessionId to built.engine.audioSessionId }
+        assertEquals(firstSession, sessionNow)
+        // The song coming in reaches 2 s about 2 s after the fade's start; it plays 8 s, so 5 s is room, not a pass by chance.
+        assertTrue("never playing after the fade", waitFor(5_000) { built.engine.isPlaying && built.engine.positionMs > 2_000 })
         // The fade's 80 gain steps are no news for the session: a few changes in all, not one per step.
         assertTrue("the session heard $changes changes", changes < 60)
     }
 
+    /**
+     * Songs long enough that nothing waits on a second player yet at the Next (the next song loads 5 s before its 6 s fade,
+     * 9 s into a 20 s song), so the Next makes the one player it fades in on. With the next song waiting, the Next lets
+     * that player go and makes another (CrossfadeEngineTest covers it), so the count would not be the Next's alone.
+     */
     @Test
     fun aNextByHandFadesOverAShortFadeAndPlaysOn() {
-        val songs = listOf(song(tone("kjb-skip-1.wav", 8, 440.0), "Skip One", 8), song(tone("kjb-skip-2.wav", 8, 660.0), "Skip Two", 8))
+        val songs = listOf(song(tone("kjb-skip-1.wav", 20, 440.0), "Skip One", 20), song(tone("kjb-skip-2.wav", 20, 660.0), "Skip Two", 20))
         val built = build(songs, seconds = 6)
         onMain { built.engine.setPlayWhenReady(true) }
         assertTrue("never played", waitFor(3_000) { built.engine.isPlaying })

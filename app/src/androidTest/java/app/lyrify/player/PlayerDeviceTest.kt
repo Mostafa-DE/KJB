@@ -179,6 +179,15 @@ class PlayerDeviceTest {
         return { errors }
     }
 
+    /** As PlaybackService's Follower: a song the player starts (by itself or by a jump) becomes the queue's current one. */
+    private fun followSongStarts(built: Built) = onMain {
+        built.engine.addListener(object : EngineListener {
+            override fun onSongStarted(uid: Long, lap: Boolean, natural: Boolean) {
+                if (!lap) built.core.change { it.at(uid, System.currentTimeMillis()) }
+            }
+        })
+    }
+
     private fun projected(songs: List<Song>): List<Projected> = songs.mapIndexed { i, s -> Projected(i + 1L, s) }
 
     /** Plays [songs] from the first; the time from playing to the second song's start, and whether it came by itself. */
@@ -222,6 +231,8 @@ class PlayerDeviceTest {
         val songs = listOf(song(tone("kjb-tone-1.wav", 2, 440.0), "Tone One"), song(tone("kjb-tone-2.wav", 2, 660.0), "Tone Two"))
         val built = build(songs)
         assertTrue(waitFor(2_000) { built.core.ready.value })
+        // The service moves the queue model on the player's song starts (PlaybackService's Follower), so this test does too.
+        followSongStarts(built)
         val source = QueueSource(SourceKind.ALBUM, "album:tones", "Tone Album")
         onMain {
             built.core.switch { it.play(songs.map(Song::ref), 0, source, System.currentTimeMillis()) }
@@ -238,7 +249,8 @@ class PlayerDeviceTest {
         assertTrue("never played", waitFor(5_000) { controller.isPlaying })
         assertTrue("never reached the second song", waitFor(5_000) { controller.currentMediaItemIndex == 1 })
         // The queue model followed the player.
-        assertEquals(1, onMain { built.core.book.value.current!!.index })
+        val followed = waitFor(2_000) { built.core.book.value.current!!.index == 1 }
+        assertTrue("the queue stayed at song ${onMain { built.core.book.value.current!!.index }}", followed)
     }
 
     @Test
@@ -361,14 +373,8 @@ class PlayerDeviceTest {
         assertTrue(waitFor(5_000) { built.core.ready.value })
         val core = built.core
         val engine = built.engine
-        onMain {
-            core.follow { engine.loaded.getOrNull(engine.index)?.let { PlayerAt(it, engine.positionMs) } }
-            engine.addListener(object : EngineListener {
-                override fun onSongStarted(uid: Long, lap: Boolean, natural: Boolean) {
-                    if (!lap) core.change { it.at(uid, System.currentTimeMillis()) }
-                }
-            })
-        }
+        onMain { core.follow { engine.loaded.getOrNull(engine.index)?.let { PlayerAt(it, engine.positionMs) } } }
+        followSongStarts(built)
         cleanups += { core.follow(null) }
         /** A change the screens send, applied to the player as the service does, then played. */
         fun act(change: () -> Unit) = onMain {
