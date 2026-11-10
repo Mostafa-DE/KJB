@@ -162,17 +162,16 @@
         </receiver>
 
         <!-- lyrics lock -->
-        <!-- Lyrics over the lock screen (ui/LockLyricsActivity), shown without unlocking (showWhenLocked). It is the
-             player session's activity: a tap on the music notification opens it over the lock screen, or opens the
-             app on an unlocked phone. "Show when locked" also starts it when the screen turns on while KJB plays. Its
-             own task, never in recents; not exported (only KJB's own intents start it). -->
+        <!-- Lyrics over the lock screen (ui/LockLyricsActivity), shown without unlocking (showWhenLocked). A tap on the
+             music notification opens the player with it on top, in KJB's task; on an unlocked phone it closes at once.
+             "Show when locked" also starts it when the screen turns on while KJB plays, then as a task of its own,
+             never in recents (excludeFromRecents counts for the task it starts), removed when it closes. Not exported:
+             only KJB's own intents start it. -->
         <activity
             android:name=".ui.LockLyricsActivity"
             android:excludeFromRecents="true"
             android:exported="false"
-            android:launchMode="singleInstance"
-            android:showWhenLocked="true"
-            android:taskAffinity="" />
+            android:showWhenLocked="true" />
 
         <!-- widget -->
 

@@ -98,7 +98,7 @@ fun SettingsScreen(
     fun setPlayback(change: (PlaybackSettings) -> PlaybackSettings) = onChange { it.copy(playback = change(it.playback)) }
     fun setAudio(change: (AudioSettings) -> AudioSettings) = onChange { it.copy(audio = change(it.audio)) }
     fun setAdvanced(change: (AdvancedSettings) -> AdvancedSettings) = onChange { it.copy(advanced = change(it.advanced)) }
-    val showWhenLocked = rememberLockSwitch(onChange)
+    val showWhenLocked = rememberLockSwitch(settings.lyrics.showWhenLocked, onChange)
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,

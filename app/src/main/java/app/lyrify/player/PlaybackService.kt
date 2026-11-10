@@ -41,6 +41,7 @@ import app.lyrify.media.QueueSweep
 import app.lyrify.settings.Settings
 import app.lyrify.ui.DESTINATION_PLAYER
 import app.lyrify.ui.EXTRA_DESTINATION
+import app.lyrify.ui.LockLyricsActivity
 import app.lyrify.ui.LockLyricsPart
 import app.lyrify.ui.MainActivity
 import com.google.common.collect.ImmutableList
@@ -124,8 +125,11 @@ class PlaybackService : MediaLibraryService() {
         player = LyrifyPlayer(mainLooper, engine, core, skips = ::skips, sync = ::sync, beforeSeek = ::heardSoFar)
         engine.addListener(Follower())
         val built = MediaLibrarySession.Builder(this, player, Callback())
-            // A tap on the notification or the lock screen's card opens the player, over the tab the app was on.
-            .setSessionActivity(PendingIntent.getActivity(this, OPEN_PLAYER, openPlayer(), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
+            // A tap on the notification or the lock screen's card opens the player, over the tab the app was on, and the
+            // lyrics on top of it: over the lock screen they show without unlocking; on an unlocked phone they close at once (P3).
+            .setSessionActivity(
+                PendingIntent.getActivities(this, OPEN_PLAYER, arrayOf(openPlayer(), Intent(this, LockLyricsActivity::class.java)), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT),
+            )
             .setBitmapLoader(ThumbnailLoader(this))
             .build()
         session = built

@@ -38,6 +38,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -94,14 +95,25 @@ import kotlin.math.abs
 enum class LockOrigin { NOTIFICATION, SCREEN_ON }
 
 /** What opening the lock screen lyrics does. */
-enum class LockEntry { LYRICS, APP, NOTHING }
+enum class LockEntry {
+    LYRICS,
+
+    /** Over the lock screen before the queues are read (also after a restart of the app): it shows, then decides. */
+    WAIT,
+
+    /** The phone is unlocked: the player below it (the notification's tap opened it too) shows. */
+    APP,
+    NOTHING,
+}
 
 /**
- * Over the lock screen, the lyrics while a song is loaded, never when nothing plays. A tap on the notification of an
- * unlocked phone opens the app, as it always did; the screen turning on never opens the app.
+ * Over the lock screen, the lyrics while a song is loaded ([loaded]: null while the queues are not read yet), never when
+ * nothing plays. A tap on the notification of an unlocked phone shows the player; the screen turning on never opens the
+ * app.
  */
-fun lockEntry(origin: LockOrigin, locked: Boolean, loaded: Boolean): LockEntry = when {
-    locked && loaded -> LockEntry.LYRICS
+fun lockEntry(origin: LockOrigin, locked: Boolean, loaded: Boolean?): LockEntry = when {
+    locked && loaded == true -> LockEntry.LYRICS
+    locked && loaded == null -> LockEntry.WAIT
     !locked && origin == LockOrigin.NOTIFICATION -> LockEntry.APP
     else -> LockEntry.NOTHING
 }
@@ -112,6 +124,9 @@ fun lockEntry(origin: LockOrigin, locked: Boolean, loaded: Boolean): LockEntry =
  * otherwise).
  */
 fun opensOnScreenOn(setting: Boolean, overlayAllowed: Boolean, playing: Boolean, locked: Boolean): Boolean = setting && overlayAllowed && playing && locked
+
+/** "Show when locked" as it stays: off once "Display over other apps" was taken back in the phone's settings. */
+fun showWhenLockedNow(setting: Boolean, overlayAllowed: Boolean): Boolean = setting && overlayAllowed
 
 /** What turning "Show when locked" on or off does. */
 enum class LockSwitch {
@@ -140,33 +155,30 @@ private const val LOCK_LINES = 5
 private const val EXTRA_SCREEN_ON = "app.lyrify.lock.screenOn"
 
 /**
- * The lock screen lyrics, in their own task and never in recents. It is also the player session's activity: a tap on
- * the music notification of an unlocked phone goes on to the app ([lockEntry]). Over the lock screen it closes when
- * nothing is loaded any more, on a swipe, back or the chevron, when the screen turns off, and once the phone is
- * unlocked; it keeps the screen on while the song plays.
+ * The lock screen lyrics. The music notification's tap opens KJB's player with these on top, in KJB's task (the
+ * session's activities, PlaybackService): over the lock screen they show; on an unlocked phone they close at once and
+ * the player shows ([lockEntry]), without starting anything. Opened by the screen turning on, they are a task of their
+ * own, never in recents and removed when they close. Over the lock screen they wait for the queues to be read, then
+ * close when nothing is loaded, on a swipe, back or the chevron, when the screen turns off, and once the phone is
+ * unlocked; they keep the screen on while the song plays.
  */
 class LockLyricsActivity : ComponentActivity() {
     private val closer = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) = finish()
+        override fun onReceive(context: Context, intent: Intent) = close()
     }
     private var listening = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val core = PlayerGraph.core(this)
-        val loaded = core.ready.value && core.book.value.current != null
+        val loaded = if (core.ready.value) core.book.value.current != null else null
         val origin = if (intent.getBooleanExtra(EXTRA_SCREEN_ON, false)) LockOrigin.SCREEN_ON else LockOrigin.NOTIFICATION
         when (lockEntry(origin, getSystemService(KeyguardManager::class.java).isKeyguardLocked, loaded)) {
-            LockEntry.APP -> {
-                startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                finish()
+            LockEntry.APP, LockEntry.NOTHING -> {
+                close()
                 return
             }
-            LockEntry.NOTHING -> {
-                finish()
-                return
-            }
-            LockEntry.LYRICS -> Unit
+            LockEntry.LYRICS, LockEntry.WAIT -> Unit
         }
         enableEdgeToEdge(SystemBarStyle.dark(AndroidColor.TRANSPARENT), SystemBarStyle.dark(AndroidColor.TRANSPARENT))
         ContextCompat.registerReceiver(
@@ -180,7 +192,12 @@ class LockLyricsActivity : ComponentActivity() {
         )
         listening = true
         val ledger = LedgerRepository(this)
-        setContent { LyrifyTheme { LockLyricsScreen(ledger.ledger.collectAsStateWithLifecycle(initialValue = LedgerState()).value, onClose = ::finish) } }
+        setContent { LyrifyTheme { LockLyricsScreen(ledger.ledger.collectAsStateWithLifecycle(initialValue = LedgerState()).value, onClose = ::close) } }
+    }
+
+    /** Its own task (opened by the screen turning on) goes with it; in KJB's task, the player below stays. */
+    private fun close() {
+        if (isTaskRoot) finishAndRemoveTask() else finish()
     }
 
     override fun onDestroy() {
@@ -313,9 +330,17 @@ class LockLyricsPart : ServicePart {
         val screenOn = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
                 val on = settings.value?.lyrics?.showWhenLocked == true
-                if (!opensOnScreenOn(on, canDrawOverlays(service), session.player.isPlaying, keyguard.isKeyguardLocked)) return
+                val overlay = canDrawOverlays(service)
+                if (on && !showWhenLockedNow(on, overlay)) {
+                    // "Display over other apps" was taken back: the switch goes off, as it would in Settings.
+                    scope.launch { Lyrify.settings(service).update { it.copy(lyrics = it.lyrics.copy(showWhenLocked = false)) } }
+                    return
+                }
+                if (!opensOnScreenOn(on, overlay, session.player.isPlaying, keyguard.isKeyguardLocked)) return
                 try {
-                    service.startActivity(Intent(service, LockLyricsActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra(EXTRA_SCREEN_ON, true))
+                    // A task of its own, so KJB's task is not brought up behind the lock screen; removed when it closes.
+                    val flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NEW_DOCUMENT or Intent.FLAG_ACTIVITY_MULTIPLE_TASK
+                    service.startActivity(Intent(service, LockLyricsActivity::class.java).addFlags(flags).putExtra(EXTRA_SCREEN_ON, true))
                 } catch (e: RuntimeException) {
                     Log.w(LOG_TAG, "lock lyrics: not opened (${e.javaClass.simpleName})")
                 }
@@ -337,27 +362,32 @@ class LockLyricsPart : ServicePart {
 }
 
 /**
- * Settings > Lyrics > "Show when locked": switched on, it first asks for "Display over other apps" when your phone has
- * not allowed it ([lockSwitch]), with its one-line reason, then opens the phone's page for it; back from there, it is on
- * only if allowed, and says so. Returns what the switch does; its dialog shows where this is called.
+ * Settings > Lyrics > "Show when locked" ([on] as stored): switched on, it first asks for "Display over other apps" when
+ * your phone has not allowed it ([lockSwitch]), with its one-line reason, then opens the phone's page for it; back from
+ * there, it is on only if allowed, and says so. Should the permission be taken back later, it goes off
+ * ([showWhenLockedNow]). Returns what the switch does; its dialog shows where this is called.
  */
 @Composable
-fun rememberLockSwitch(onChange: ((Settings) -> Settings) -> Unit): (Boolean) -> Unit {
+fun rememberLockSwitch(on: Boolean, onChange: ((Settings) -> Settings) -> Unit): (Boolean) -> Unit {
     val context = LocalContext.current
     val toasts = LocalToasts.current
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     var asking by rememberSaveable { mutableStateOf(false) }
     var waiting by rememberSaveable { mutableStateOf(false) }
-    fun store(on: Boolean) {
-        onChange { it.copy(lyrics = it.lyrics.copy(showWhenLocked = on)) }
-        scope.launch { if (on || waiting) toasts.say(resources, if (on) R.string.lock_on else R.string.lock_denied) }
+    val stored by rememberUpdatedState(on)
+    fun store(value: Boolean, message: Int?) {
+        onChange { it.copy(lyrics = it.lyrics.copy(showWhenLocked = value)) }
+        if (message != null) scope.launch { toasts.say(resources, message) }
     }
-    // Back from the phone's page.
+    // Back from the phone's page, or from its settings with the permission taken back.
     LifecycleResumeEffect(Unit) {
+        val allowed = canDrawOverlays(context)
         if (waiting) {
-            store(canDrawOverlays(context))
             waiting = false
+            store(allowed, if (allowed) R.string.lock_on else R.string.lock_denied)
+        } else if (stored && !showWhenLockedNow(stored, allowed)) {
+            store(false, null)
         }
         onPauseOrDispose { }
     }
@@ -377,10 +407,10 @@ fun rememberLockSwitch(onChange: ((Settings) -> Settings) -> Unit): (Boolean) ->
             destructive = false,
         )
     }
-    return { on ->
-        when (lockSwitch(on, canDrawOverlays(context))) {
-            LockSwitch.STORE_OFF -> onChange { it.copy(lyrics = it.lyrics.copy(showWhenLocked = false)) }
-            LockSwitch.STORE_ON -> store(true)
+    return { switched ->
+        when (lockSwitch(switched, canDrawOverlays(context))) {
+            LockSwitch.STORE_OFF -> store(false, null)
+            LockSwitch.STORE_ON -> store(true, R.string.lock_on)
             LockSwitch.ASK -> asking = true
         }
     }
