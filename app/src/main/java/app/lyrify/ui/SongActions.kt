@@ -232,10 +232,13 @@ class SongActions(private val playback: PlaybackCommands, private val playlists:
         return Outcome(Said.Favourites(on)) { favourites.setCollection(collection, !on) }
     }
 
-    /** [songs] at the end of [playlist], even those already in it. */
+    // A playlist's Undo changes the playlist as it is then, never putting back a copy from before: a change made while the
+    // toast was up (another page, an import, songs moved to the trash) stays.
+
+    /** [songs] at the end of [playlist], even those already in it. Undo takes out what this appended. */
     suspend fun addToPlaylist(playlist: Playlist, songs: List<SongRef>): Outcome {
         if (!playlists.add(playlist.id, songs)) return Outcome(Said.NotSaved)
-        return Outcome(Said.AddedTo(playlist.name, songs.size)) { playlists.put(playlist) }
+        return Outcome(Said.AddedTo(playlist.name, songs.size)) { playlists.edit(playlist.id) { it.copy(songs = withoutAppended(it.songs, songs)) } }
     }
 
     /** "New playlist" named [name] holding [songs] (none from the Playlists tab). */
@@ -245,14 +248,22 @@ class SongActions(private val playback: PlaybackCommands, private val playlists:
         return Outcome(said) { playlists.delete(made.id) }
     }
 
-    /** "Remove from playlist": the song at [position] in [playlist]. */
+    /** "Remove from playlist": the song at [position] in [playlist]. Undo puts it back at [position]. */
     suspend fun removeFromPlaylist(playlist: Playlist, position: Int): Outcome {
         if (!playlists.removeAt(playlist.id, setOf(position))) return Outcome(Said.NotSaved)
-        return Outcome(Said.RemovedFrom(playlist.name)) { playlists.put(playlist) }
+        val removed = playlist.songs.getOrNull(position) ?: return Outcome(Said.RemovedFrom(playlist.name))
+        return Outcome(Said.RemovedFrom(playlist.name)) {
+            playlists.edit(playlist.id) { it.copy(songs = it.songs.take(position) + removed + it.songs.drop(position)) }
+        }
     }
 
+    /** Undo gives the old name back while the playlist still has [name]. */
     suspend fun rename(playlist: Playlist, name: String): Outcome =
-        if (playlists.rename(playlist.id, name)) Outcome(Said.Renamed) { playlists.put(playlist) } else Outcome(Said.NotSaved)
+        if (playlists.rename(playlist.id, name)) {
+            Outcome(Said.Renamed) { playlists.edit(playlist.id) { if (it.name == name.trim()) it.copy(name = playlist.name) else it } }
+        } else {
+            Outcome(Said.NotSaved)
+        }
 
     /** Only the playlist goes; the songs stay on the phone. */
     suspend fun delete(playlist: Playlist): Outcome =
@@ -262,6 +273,22 @@ class SongActions(private val playback: PlaybackCommands, private val playlists:
         undo()
         true
     }
+}
+
+/**
+ * [songs] without the [appended] ones: from the end, the last copy of each in turn, so copies from before stay, songs
+ * added since stay, and one already taken out is not looked for.
+ */
+private fun withoutAppended(songs: List<SongRef>, appended: List<SongRef>): List<SongRef> {
+    val kept = songs.toMutableList()
+    var end = kept.size
+    for (song in appended.asReversed()) {
+        val at = kept.subList(0, end).lastIndexOf(song)
+        if (at < 0) continue
+        kept.removeAt(at)
+        end = at
+    }
+    return kept
 }
 
 // Slots other milestones fill

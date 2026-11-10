@@ -61,6 +61,8 @@ class SongActionsTest {
 
         override suspend fun put(playlist: Playlist) = write { it.put(playlist) }
 
+        override suspend fun edit(id: String, change: (Playlist) -> Playlist) = write { state -> state.playlist(id)?.let { state.put(change(it)) } ?: state }
+
         override suspend fun forget(paths: Set<String>) = write { it.forget(paths) }
     }
 
@@ -206,6 +208,37 @@ class SongActionsTest {
         assertEquals(listOf(lantern.ref, lantern.ref, bell.ref), store.now.playlist("p1")?.songs)
         assertTrue(outcome.undo?.invoke() == true)
         assertEquals(roadTrip, store.now.playlist("p1"))
+    }
+
+    @Test
+    fun `playlist Undo takes back only its own change, on the playlist as it is now`() = runBlocking {
+        val trip = Playlist("p1", "Road trip", listOf(lantern.ref, bell.ref), createdAt = 1)
+        val store = MemoryPlaylists(PlaylistsState(listOf(trip)))
+        val actions = SongActions(NoPlayback, store)
+        fun now() = checkNotNull(store.now.playlist("p1"))
+
+        // Add: only the songs it appended go; a song added and a name given since stay.
+        val added = actions.addToPlaylist(trip, listOf(water.ref, lantern.ref))
+        store.add("p1", listOf(bell.ref))
+        store.rename("p1", "Long road")
+        assertTrue(added.undo?.invoke() == true)
+        assertEquals(Playlist("p1", "Long road", listOf(lantern.ref, bell.ref, bell.ref), createdAt = 1), now())
+
+        // Remove: the song goes back to its place, with a song added since.
+        val removed = actions.removeFromPlaylist(now(), 0)
+        store.add("p1", listOf(water.ref))
+        assertTrue(removed.undo?.invoke() == true)
+        assertEquals(listOf(lantern.ref, bell.ref, bell.ref, water.ref), now().songs)
+
+        // Rename: the old name comes back while the new one stands, and nothing else changes.
+        val renamed = actions.rename(now(), "Night drive")
+        store.add("p1", listOf(lantern.ref))
+        assertTrue(renamed.undo?.invoke() == true)
+        assertEquals(Playlist("p1", "Long road", listOf(lantern.ref, bell.ref, bell.ref, water.ref, lantern.ref), createdAt = 1), now())
+        val again = actions.rename(now(), "Night drive")
+        store.rename("p1", "Dawn drive")
+        again.undo?.invoke()
+        assertEquals("Dawn drive", now().name)
     }
 
     @Test
