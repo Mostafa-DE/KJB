@@ -1,5 +1,7 @@
 package app.lyrify.baselineprofile
 
+import android.content.Context
+import android.content.pm.PackageManager
 import android.util.Log
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
@@ -19,10 +21,10 @@ import androidx.test.uiautomator.textAsString
  * screen and what TalkBack reads, never by layout or test tags, so they keep working while screens change. A journey
  * whose screen is missing (a tab the user hid, no test folder) is skipped with a log line, never failed.
  *
- * The app is app.lyrify.bench: a release build with data of its own, beside the user's KJB. Unlike the debug build, its
- * changes to shared storage are not fenced to the test folder (data/SharedWrites.kt), and KJB looks up lyrics for its
- * own queue and writes `.lrc` files next to those songs. So these journeys never play the user's music: the only queue
- * they start is Music/KJB test/, the folder the debug build's device tests already write in.
+ * The app is app.lyrify.bench: a release build with data of its own, beside the user's KJB, fenced like KJB dev
+ * (TEST_FOLDER_ONLY, data/SharedWrites.kt): it lists and changes only Music/KJB test/, so its library, and every list
+ * these journeys scroll, holds only that folder's songs. KJB looks up lyrics for its queue and writes `.lrc` files next
+ * to those songs; the one queue these journeys start is that folder too, and the fence refuses any write outside it.
  */
 
 /** The app under test, as the Baseline Profile plugin passes it: :app's nonMinifiedRelease or benchmarkRelease build. */
@@ -31,6 +33,7 @@ val targetPackage: String
         ?: error("No $TARGET_PACKAGE_ARGUMENT argument: run these tests with the Gradle tasks in lyrify-bench/handoff/baseline-profile.md")
 
 private const val TARGET_PACKAGE_ARGUMENT = "androidx.benchmark.targetPackageName"
+private const val APP_BUILD_CONFIG = "app.lyrify.BuildConfig"
 private const val TAG = "KjbProfile"
 
 // KJB's words, as app/src/main/res/values has them (KJB is English only): change them here when the copy changes.
@@ -152,9 +155,31 @@ fun MacrobenchmarkScope.openAndCloseThePlayer() {
     }
 }
 
-/** All files access for the app under test, as the user gives it to KJB in Settings; the shell may set it. */
+/**
+ * All files access for the app under test, as the user gives it to KJB in Settings: the one grant the journeys make.
+ * KJB declares no READ_MEDIA_AUDIO, and its setup screen and library need this access. Given only once [fenced] reads
+ * the installed app's own flag as on; otherwise the run stops here, before any grant.
+ */
 private fun MacrobenchmarkScope.allowAllFiles() {
+    check(fenced()) { "$packageName is not fenced to Music/KJB test/ (BuildConfig.TEST_FOLDER_ONLY): no All files access" }
     device.executeShellCommand("appops set --uid $packageName MANAGE_EXTERNAL_STORAGE allow")
+}
+
+/**
+ * Whether the installed app under test lists and changes only Music/KJB test/: its own BuildConfig.TEST_FOLDER_ONLY
+ * (data/SharedWrites.kt), read from its APK (benchmarkRelease keeps it through R8, app/benchmark-rules.pro). False when
+ * it cannot be read.
+ */
+private fun MacrobenchmarkScope.fenced(): Boolean = try {
+    val app = InstrumentationRegistry.getInstrumentation().context
+        .createPackageContext(packageName, Context.CONTEXT_INCLUDE_CODE or Context.CONTEXT_IGNORE_SECURITY)
+    app.classLoader.loadClass(APP_BUILD_CONFIG).getField("TEST_FOLDER_ONLY").getBoolean(null)
+} catch (e: PackageManager.NameNotFoundException) {
+    false.also { Log.w(TAG, "write fence unknown: ${e.javaClass.simpleName}") }
+} catch (e: ReflectiveOperationException) {
+    false.also { Log.w(TAG, "write fence unknown: ${e.javaClass.simpleName}") }
+} catch (e: SecurityException) {
+    false.also { Log.w(TAG, "write fence unknown: ${e.javaClass.simpleName}") }
 }
 
 /** The first-run screen: Continue ends a scrolling column and works once All files access is on. */

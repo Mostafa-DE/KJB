@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- The bench build of KJB (app/build.gradle.kts), so the tests can read its write fence from its own BuildConfig
+         before they give it All files access (Journeys.kt, fenced). -->
+    <queries>
+        <package android:name="app.lyrify.bench" />
+    </queries>
+</manifest>

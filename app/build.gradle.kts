@@ -85,27 +85,35 @@ android {
             // disk work on the main thread (Lyrify.kt).
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-dev"
+            buildConfigField("boolean", "TEST_FOLDER_ONLY", "true")
         }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.findByName("release")
+            // The one build that may change the user's own files anywhere (data/SharedWrites.kt). Every other build type
+            // sets this true, and the check under androidComponents fails the build when one does not.
+            buildConfigField("boolean", "TEST_FOLDER_ONLY", "false")
         }
         // The Baseline Profile plugin's two copies of release, for the phone only (baselineprofile/): nonMinifiedRelease
         // records the profile, benchmarkRelease measures it. The plugin forces them non-debuggable and profileable, and
         // nonMinifiedRelease unminified. Declared here to give them app.lyrify.bench, beside the user's KJB and never over
-        // it (a run uninstalls its app at the end, data and all), and the debug key, so they install on any phone without
-        // the release keystore.
+        // it (a run uninstalls its app at the end, data and all), the debug key, so they install on any phone without the
+        // release keystore, and the debug build's fence: shared storage only in Music/KJB test/, listed and changed.
         create("nonMinifiedRelease") {
             initWith(getByName("release"))
             applicationIdSuffix = ".bench"
             signingConfig = signingConfigs.getByName("debug")
+            buildConfigField("boolean", "TEST_FOLDER_ONLY", "true")
         }
         create("benchmarkRelease") {
             initWith(getByName("release"))
             applicationIdSuffix = ".bench"
             signingConfig = signingConfigs.getByName("debug")
+            buildConfigField("boolean", "TEST_FOLDER_ONLY", "true")
+            // Keeps BuildConfig.TEST_FOLDER_ONLY through R8 for the tests' fence check.
+            proguardFiles("benchmark-rules.pro")
         }
     }
 
@@ -120,7 +128,42 @@ android {
     }
 }
 
+/**
+ * Fails unless a variant's BuildConfig.TEST_FOLDER_ONLY is what its build type must have: false only in release, the one
+ * build that may change the user's files anywhere, true in every other (data/SharedWrites.kt). [report] keeps the value.
+ */
+abstract class CheckWriteFence : DefaultTask() {
+    @get:Input
+    abstract val flag: Property<String>
+
+    @get:Input
+    abstract val release: Property<Boolean>
+
+    @get:OutputFile
+    abstract val report: RegularFileProperty
+
+    @TaskAction
+    fun check() {
+        val expected = (!release.get()).toString()
+        if (flag.get() != expected) {
+            throw GradleException("write fence: BuildConfig.TEST_FOLDER_ONLY is ${flag.get()} for $name, must be $expected (data/SharedWrites.kt)")
+        }
+        report.get().asFile.writeText("TEST_FOLDER_ONLY=${flag.get()}\n")
+    }
+}
+
 androidComponents {
+    // Only release may change the user's files outside Music/KJB test/: a variant without TEST_FOLDER_ONLY on, the
+    // Baseline Profile's bench builds included, fails before its BuildConfig is made, so it never reaches a phone.
+    onVariants { variant ->
+        val name = variant.name.replaceFirstChar(Char::uppercase)
+        val check = tasks.register<CheckWriteFence>("check${name}WriteFence") {
+            flag.set(variant.buildConfigFields?.getting("TEST_FOLDER_ONLY")?.map { it.value.toString() }?.orElse("missing") ?: provider { "missing" })
+            release.set(variant.buildType == "release")
+            report.set(layout.buildDirectory.file("reports/write-fence-${variant.name}.txt"))
+        }
+        tasks.matching { it.name == "generate${name}BuildConfig" }.configureEach { dependsOn(check) }
+    }
     // The release asset: KJB-<version>.apk.
     onVariants(selector().withBuildType("release")) { variant ->
         variant.outputs.forEach { output -> output.outputFileName.set(output.versionName.map { "KJB-$it.apk" }) }
