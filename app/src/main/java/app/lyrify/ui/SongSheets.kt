@@ -1,6 +1,5 @@
 package app.lyrify.ui
 
-import android.text.format.DateUtils
 import android.text.format.Formatter
 import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
@@ -24,7 +23,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -45,13 +43,11 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import app.lyrify.Lyrify
 import app.lyrify.R
 import app.lyrify.data.LedgerEntry
 import app.lyrify.data.LyricsStatus
 import app.lyrify.library.Song
 import app.lyrify.library.SongRef
-import app.lyrify.stats.SongPlays
 import app.lyrify.tones.SavedTone
 import app.lyrify.tones.ToneFiles
 import app.lyrify.tones.TonePlayer
@@ -277,12 +273,11 @@ private fun AddedTick() {
     }
 }
 
-/** Song info: its tags, length, file, format, plays (Lyrify's own player's, through [Lyrify.plays]), when it was added, and its lyrics. */
+/** Song info: its tags, length, file, format, plays and last play (KJB's own player's, as Your listening says them), when it was added, and its lyrics. */
 @Composable
 internal fun SongInfoSheet(song: Song, ui: LibraryUi, onDismiss: () -> Unit) {
     val context = LocalContext.current
-    val plays by produceState<SongPlays?>(null, song.path) { value = Lyrify.plays(context).plays(song.ref) }
-    fun date(millis: Long) = DateUtils.formatDateTime(context, millis, DateUtils.FORMAT_SHOW_DATE or DateUtils.FORMAT_SHOW_YEAR or DateUtils.FORMAT_ABBREV_MONTH)
+    val plays = songPlaysInfo(song.ref)
     val format = listOfNotNull(
         song.fileName.substringAfterLast('.', "").ifEmpty { song.mimeType?.substringAfterLast('/').orEmpty() }.uppercase(Locale.ROOT).ifEmpty { null },
         song.durationMs.takeIf { it > 0 }?.let { stringResource(R.string.lib_kbps, song.sizeBytes * BITS_PER_BYTE / it) },
@@ -299,11 +294,11 @@ internal fun SongInfoSheet(song: Song, ui: LibraryUi, onDismiss: () -> Unit) {
         InfoRow(R.drawable.ic_schedule, R.string.lib_info_length, songLength(song.durationMs))
         InfoRow(R.drawable.ic_folder_open, R.string.lib_info_file, song.folder + song.fileName, middleEllipsis = true)
         InfoRow(R.drawable.ic_graphic_eq, R.string.lib_info_format, format)
-        // S1: songPlaysInfo, lastPlayedText and dateText can take over the plays, last played and added rows here.
-        val count = plays?.count ?: 0
-        InfoRow(R.drawable.ic_bar_chart, R.string.lib_info_plays, if (count > 0) pluralStringResource(R.plurals.lib_played_times, count, count) else stringResource(R.string.lib_not_played))
-        plays?.lastPlayedAt?.let { InfoRow(R.drawable.ic_history, R.string.lib_info_last_played, date(it)) }
-        song.addedAt?.let { InfoRow(R.drawable.ic_download, R.string.lib_info_added, date(it)) }
+        plays?.let {
+            InfoRow(R.drawable.ic_bar_chart, R.string.lib_info_plays, it.plays)
+            InfoRow(R.drawable.ic_history, R.string.lib_info_last_played, it.lastPlayed)
+        }
+        song.addedAt?.let { InfoRow(R.drawable.ic_download, R.string.lib_info_added, dateText(it)) }
         InfoRow(R.drawable.ic_lyrics, R.string.lib_lyrics, ui.status(song)?.let { stringResource(it.style.label) } ?: stringResource(R.string.lib_not_looked_up))
     }
 }

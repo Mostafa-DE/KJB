@@ -106,11 +106,6 @@
     <string name="lib_recently_added">Recently added</string>
     <string name="lib_your_playlists">Your playlists</string>
     <string name="lib_new_playlist">New playlist</string>
-    <string name="lib_your_listening">Your listening</string>
-    <plurals name="lib_plays">
-        <item quantity="one">%d play</item>
-        <item quantity="other">%d plays</item>
-    </plurals>
     <string name="lib_played_empty">Play some music and it shows here.</string>
     <string name="lib_added_empty">Songs added in the last 30 days show here.</string>
     <string name="lib_playlist_empty">Use Add to on any song.</string>
@@ -178,11 +173,6 @@
     <string name="lib_info_format">Format</string>
     <string name="lib_kbps">%1$d kbps</string>
     <string name="lib_info_plays">Plays</string>
-    <plurals name="lib_played_times">
-        <item quantity="one">Played %d time</item>
-        <item quantity="other">Played %d times</item>
-    </plurals>
-    <string name="lib_not_played">Not played yet</string>
     <string name="lib_info_last_played">Last played</string>
     <string name="lib_info_added">Added</string>
     <string name="lib_not_looked_up">Not looked up yet</string>

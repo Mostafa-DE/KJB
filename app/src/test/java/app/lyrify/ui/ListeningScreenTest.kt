@@ -1,7 +1,10 @@
 package app.lyrify.ui
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 /** What Your listening shows, as pure logic. */
 class ListeningScreenTest {
@@ -23,6 +26,22 @@ class ListeningScreenTest {
         assertEquals(listOf(1, 2, 3, 4, 5) to false, topPreview((1..5).toList()))
         assertEquals(emptyList<Int>() to false, topPreview(emptyList<Int>()))
     }
+
+    @Test
+    fun `the library's pages show plays as Your listening says them, and Top songs open the song sheet`() {
+        val pages = source("CollectionScreens.kt")
+        val tabs = source("LibraryScreen.kt")
+        val sheets = source("SongSheets.kt")
+        val listening = source("ListeningScreen.kt")
+
+        listOf("ListeningCard(", "playsNote(", "lastPlayedText(", "StatsGraph.counter(context).written").forEach { assertTrue(it, pages.contains(it)) }
+        assertTrue(tabs.contains("StatsGraph.counter(context).written"))
+        listOf("songPlaysInfo(song.ref)", "dateText(").forEach { assertTrue(it, sheets.contains(it)) }
+        listOf("val sheets = rememberSongSheets()", "sheets::openSong", "SongSheetsHost(sheets)").forEach { assertTrue(it, listening.contains(it)) }
+        listOf(pages, tabs, sheets, listening).forEach { assertFalse(it.contains("S1:")) }
+    }
+
+    private fun source(name: String): String = File("src/main/java/app/lyrify/ui", name).readText()
 
     private companion object {
         const val MINUTE: Long = 60_000

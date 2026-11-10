@@ -29,6 +29,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -73,6 +74,7 @@ import app.lyrify.settings.LyricsFilter
 import app.lyrify.settings.SortAlbums
 import app.lyrify.settings.SortArtists
 import app.lyrify.settings.SortSongs
+import app.lyrify.stats.StatsGraph
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.text.Collator
@@ -482,9 +484,10 @@ private fun PlaylistsTab(ui: LibraryUi, library: Library, padding: PaddingValues
     val playlists = remember(ui.playlists.playlists) { ui.playlists.playlists.sortedWith(compareBy(Collator.getInstance()) { it.name }) }
     val favourites = remember(library, ui.playlists) { library.listed(ui.playlists.favouriteSongs) }
     val songs = remember(library, ui.playlists) { (favourites + playlists.flatMap { library.listed(it.songs) }).distinctBy { it.path } }
-    // S1: add StatsGraph.counter(context).written to these two keys, so the counts follow each play logged.
-    val most by produceState(0, library) { value = mostPlayed(Lyrify.plays(context), library).size }
-    val played by produceState(0, library) { value = recentlyPlayed(Lyrify.plays(context), library).size }
+    // Counted again on each play logged.
+    val written by remember(context) { StatsGraph.counter(context).written }.collectAsState()
+    val most by produceState(0, library, written) { value = mostPlayed(Lyrify.plays(context), library).size }
+    val played by produceState(0, library, written) { value = recentlyPlayed(Lyrify.plays(context), library).size }
     val added = remember(library) { recentlyAdded(library, System.currentTimeMillis()).size }
     val saved = ui.queues.count { it.saved }
     val source = QueueSource(SourceKind.SONGS, "tab:playlists", stringResource(R.string.library_tab_playlists))

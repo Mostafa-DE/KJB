@@ -1,6 +1,5 @@
 package app.lyrify.ui
 
-import android.text.format.DateUtils
 import androidx.annotation.StringRes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -28,6 +27,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -64,6 +64,7 @@ import app.lyrify.player.QueueSource
 import app.lyrify.player.SourceKind
 import app.lyrify.settings.SortSongs
 import app.lyrify.stats.SongPlays
+import app.lyrify.stats.StatsGraph
 import kotlinx.coroutines.launch
 import java.util.concurrent.TimeUnit
 
@@ -416,14 +417,14 @@ private fun PlaylistPage(ui: LibraryUi, library: Library, id: String) {
 /** Most played (with Your listening at its top), Recently played, or Recently added. */
 @Composable
 private fun BuiltInPage(ui: LibraryUi, library: Library, list: BuiltInList) {
-    val nav = LocalNavigator.current
     val context = LocalContext.current
     val title = stringResource(list.words)
     var byTitle by rememberSaveable { mutableStateOf(false) }
     var sorting by rememberSaveable { mutableStateOf(false) }
-    // Each song with its plays, for the note after the artist: "12 plays", or when it was played last (S1: playsNote).
-    // S1: add StatsGraph.counter(context).written to the keys, so the list follows each play logged.
-    val rows by produceState<List<Pair<Song, SongPlays?>>?>(null, library, list) {
+    // Each song with its plays, for the note after the artist: "12 plays", or when it was played last. Read again on
+    // each play logged, so the list follows it.
+    val written by remember(context) { StatsGraph.counter(context).written }.collectAsState()
+    val rows by produceState<List<Pair<Song, SongPlays?>>?>(null, library, list, written) {
         val plays = Lyrify.plays(context)
         fun found(played: List<SongPlays>) = played.mapNotNull { p -> library.resolver.find(p.song)?.takeIf(library::shows)?.let { it to p } }
         value = when (list) {
@@ -445,22 +446,17 @@ private fun BuiltInPage(ui: LibraryUi, library: Library, list: BuiltInList) {
         BuiltInList.RECENTLY_PLAYED -> R.string.lib_order_latest
         else -> R.string.lib_order_newest
     }
-    val resources = LocalResources.current
-    val now = System.currentTimeMillis()
     val notes = plays.mapValues { (_, p) ->
         when {
             p == null -> null
-            list == BuiltInList.MOST_PLAYED -> resources.getQuantityString(R.plurals.lib_plays, p.count, p.count)
-            else -> p.lastPlayedAt?.let { DateUtils.getRelativeTimeSpanString(it, now, DateUtils.MINUTE_IN_MILLIS, DateUtils.FORMAT_ABBREV_RELATIVE).toString() }
+            list == BuiltInList.MOST_PLAYED -> playsNote(p.count)
+            else -> lastPlayedText(p.lastPlayedAt)
         }
     }
     SongListFrame(ui, songs, QueueSource(kind, list.name, ""), topBar = { under, backdrop -> CollectionTopBar(title, under, backdrop, ui) }) { songList ->
         item(key = "hero") { Hero(title, songsMeta(songs), art = { BuiltInTile(list, HERO) }) }
         if (list == BuiltInList.MOST_PLAYED) {
-            // S1: ListeningCard() takes this row's place, with this month's time and plays.
-            item(key = "listening") {
-                NavRow(stringResource(R.string.lib_your_listening), null, lead = { Tile(R.drawable.ic_insights) }) { nav.open(Page.Listening) }
-            }
+            item(key = "listening") { ListeningCard(Modifier.padding(start = ScreenPadding, end = ScreenPadding, top = 8.dp, bottom = 4.dp)) }
         }
         item(key = "header") {
             ListHeader(songs.size, R.plurals.lib_noun_songs, songList::shuffle, { songList.play() }, onAddAll = songList::addAll, sort = stringResource(if (byTitle) R.string.lib_sort_title else own), onSort = { sorting = true })

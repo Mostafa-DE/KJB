@@ -88,6 +88,7 @@ fun ListeningPage(page: Page.ListeningPages) {
 private fun YourListening(onBack: () -> Unit, onOpen: (Page) -> Unit) {
     val listening = rememberListening(shownPeriod)
     val settings = rememberSettings()
+    val sheets = rememberSongSheets()
     val periods = listOf(R.string.stats_week, R.string.stats_month, R.string.stats_year, R.string.stats_all_time).map { stringResource(it) }
     ListeningFrame(stringResource(R.string.stats_title), onBack) { padding ->
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding() + 8.dp, bottom = padding.calculateBottomPadding() + 24.dp)) {
@@ -106,12 +107,13 @@ private fun YourListening(onBack: () -> Unit, onOpen: (Page) -> Unit) {
                         val (shown, more) = topPreview(tops)
                         if (shown.isEmpty()) return@forEach
                         item(key = "head $kind") { TopHead(stringResource(kind.title), tops.size, if (more) ({ onOpen(Page.TopList(kind)) }) else null) }
-                        itemsIndexed(shown, key = { _, top -> "$kind ${keyOf(top)}" }) { i, top -> TopRow(top, i + 1, settings, onOpen) }
+                        itemsIndexed(shown, key = { _, top -> "$kind ${keyOf(top)}" }) { i, top -> TopRow(top, i + 1, settings, onOpen, sheets::openSong) }
                     }
                 }
             }
         }
     }
+    SongSheetsHost(sheets)
 }
 
 /** "View all" of one top list, for the period Your listening shows. */
@@ -119,6 +121,7 @@ private fun YourListening(onBack: () -> Unit, onOpen: (Page) -> Unit) {
 private fun TopListPage(kind: TopKind, onBack: () -> Unit, onOpen: (Page) -> Unit) {
     val listening = rememberListening(shownPeriod)
     val settings = rememberSettings()
+    val sheets = rememberSongSheets()
     val tops = listening?.let { topsOf(it, kind) }.orEmpty()
     ListeningFrame(stringResource(kind.title), onBack) { padding ->
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding() + 8.dp, bottom = padding.calculateBottomPadding() + 24.dp)) {
@@ -128,9 +131,10 @@ private fun TopListPage(kind: TopKind, onBack: () -> Unit, onOpen: (Page) -> Uni
                     EmptyState(EmptyArt.Icon(R.drawable.ic_bar_chart), stringResource(R.string.stats_empty_title), text = stringResource(R.string.stats_empty_text))
                 }
             }
-            itemsIndexed(tops, key = { _, top -> keyOf(top) }) { i, top -> TopRow(top, i + 1, settings, onOpen) }
+            itemsIndexed(tops, key = { _, top -> keyOf(top) }) { i, top -> TopRow(top, i + 1, settings, onOpen, sheets::openSong) }
         }
     }
+    SongSheetsHost(sheets)
 }
 
 @Composable
@@ -186,14 +190,16 @@ private fun TopHead(title: String, count: Int, onViewAll: (() -> Unit)?) {
 }
 
 /**
- * One row of a top list: a song (its sheet opens here once L1's song sheet lands), an artist (opens their page) or an
- * album (opens its page), each with its time heard and its plays.
+ * One row of a top list: a song (opens its song sheet), an artist (opens their page) or an album (opens its page), each
+ * with its time heard and its plays.
  */
 @Composable
-private fun TopRow(top: Top<*>, rank: Int, settings: Settings, onOpen: (Page) -> Unit) {
+private fun TopRow(top: Top<*>, rank: Int, settings: Settings, onOpen: (Page) -> Unit, onSong: (SongRef) -> Unit) {
     val time = listenedText(top.heardMs)
     when (val item = top.item) {
-        is Song -> TopRowView(rank, displayTitle(item, settings.library), lineOf(item.artist, time), top.plays, SongArt(item.path), MaterialTheme.shapes.small, null, null)
+        is Song -> TopRowView(rank, displayTitle(item, settings.library), lineOf(item.artist, time), top.plays, SongArt(item.path), MaterialTheme.shapes.small, stringResource(R.string.stats_song_options)) {
+            onSong(item.ref)
+        }
         is Artist -> TopRowView(rank, item.name, time, top.plays, item.songs.firstOrNull()?.let { SongArt(it.path) }, CircleShape, stringResource(R.string.stats_open_artist)) {
             onOpen(Page.Artist(item.name))
         }
