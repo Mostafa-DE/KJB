@@ -1,8 +1,5 @@
 package app.lyrify.ui
 
-import androidx.compose.ui.unit.LayoutDirection
-import androidx.compose.ui.platform.LocalLayoutDirection
-import androidx.compose.animation.AnimatedContent
 import androidx.annotation.StringRes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -39,6 +36,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -91,7 +89,8 @@ import java.time.ZoneId
 
 /**
  * Library, the first tab, at its root: the text tabs ("Library tabs" in Settings shows, hides and orders them) over
- * Songs, Playlists, Albums, Artists, Folders and Genres. Library's icon always opens it on Songs ([NavState.libraryTab]);
+ * Songs, Playlists, Albums, Artists, Folders and Genres, as pages that follow the finger left and right ([TabsFrame]):
+ * each keeps its list and its place while another shows. Library's icon always opens it on Songs ([NavState.libraryTab]);
  * tapping it again on Songs goes to the top of its list.
  */
 @Composable
@@ -104,35 +103,27 @@ fun LibraryPage() {
     val sheets = rememberSongSheets()
     // The Playlists tab's "⋯" rows and its import sheet (B1).
     val m3u = rememberM3uActions()
+    val pager = rememberTabPager(tabs.size, tabs.indexOf(tab)) { at -> tabs.getOrNull(at)?.takeIf { it != nav.state.libraryTab }?.let(nav::pickLibraryTab) }
+    val labels = tabs.map { stringResource(it.label) }
     val topBar: @Composable (Boolean, GlassBackdrop) -> Unit = { under, backdrop ->
         Column {
             LyrifyTopBar(
                 title = { Text(stringResource(R.string.nav_library), maxLines = 1, overflow = TextOverflow.Ellipsis) },
                 under = under,
                 backdrop = backdrop,
-                actions = { if (tab == LibraryTab.PLAYLISTS) PlaylistsMenu(sheets, m3u) },
+                actions = { if (tabs.getOrNull(pager.pager.currentPage) == LibraryTab.PLAYLISTS) PlaylistsMenu(sheets, m3u) },
             )
-            TopBand(under, backdrop) {
-                LibraryTabsRow(tabs.map { stringResource(it.label) }, tabs.indexOf(tab)) { at -> nav.pickLibraryTab(tabs[at]) }
-            }
+            TopBand(under, backdrop) { PagerTabs(pager, labels) }
         }
     }
     val library = ui.library
-    val reduced = LocalReducedMotion.current
-    val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
     if (library == null) {
         PageFrame(topBar = topBar) { padding -> LibraryUnavailable(ui.state, Modifier.padding(padding)) }
     } else {
-        // A top tab's page slides in from its side as the dock's tabs do, never swapped at once.
-        AnimatedContent(
-            targetState = tab,
-            transitionSpec = { tabSwitch(tabs.indexOf(targetState).compareTo(tabs.indexOf(initialState)).coerceIn(-1, 1) * if (rtl) -1 else 1, reduced) },
-            label = "library tab",
-        ) { shown ->
-            if (shown == LibraryTab.SONGS) {
-                SongsTab(ui, library, reselect, topBar)
-            } else {
-                PageFrame(topBar = topBar) { padding ->
+        TabsFrame(pager, tabs, topBar) { at ->
+            when (val shown = tabs[at]) {
+                LibraryTab.SONGS -> SongsTab(ui, library, reselect, topBar)
+                else -> PageFrame(topBar = topBar) { padding ->
                     when (shown) {
                         LibraryTab.PLAYLISTS -> PlaylistsTab(ui, library, padding, reselect, sheets)
                         LibraryTab.ALBUMS -> AlbumsTab(ui, library, padding, reselect)
@@ -216,14 +207,18 @@ private fun LibraryUnavailable(state: LibraryState, modifier: Modifier) {
     }
 }
 
-/** Scrolls [state] to the top whenever Library is tapped again at its root ([reselect] grows); coming back keeps the place. */
+/**
+ * Scrolls [state] to the top whenever Library is tapped again at its root ([reselect] grows), on the tab shown only
+ * ([LocalTabCurrent]: the others are kept, not shown); coming back keeps the place.
+ */
 @Composable
 private fun ReselectToTop(reselect: Int, top: suspend () -> Unit) {
     var handled by rememberSaveable { mutableIntStateOf(reselect) }
+    val shown by rememberUpdatedState(LocalTabCurrent.current)
     LaunchedEffect(reselect) {
         if (reselect != handled) {
             handled = reselect
-            top()
+            if (shown) top()
         }
     }
 }

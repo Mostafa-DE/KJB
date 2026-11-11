@@ -112,6 +112,7 @@ class FavouritesPageTest {
         assertFalse("lib_hint_" in strings)
         val page = File("src/main/java/app/lyrify/ui/CollectionScreens.kt").readText()
         assertFalse("FavouritesAll" in page)
-        assertTrue("LibraryTabsRow(" in page)
+        // The same swiping top tabs as Library's.
+        assertTrue("PagerTabs(" in page && "TabPages(" in page)
     }
 }
