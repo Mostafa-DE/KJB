@@ -2,6 +2,11 @@ package app.lyrify.backup
 
 import app.lyrify.audio.EqProfiles
 import app.lyrify.audio.EqProfilesJson
+import app.lyrify.backup.SectionJson.flag
+import app.lyrify.backup.SectionJson.int
+import app.lyrify.backup.SectionJson.jsonObject
+import app.lyrify.backup.SectionJson.long
+import app.lyrify.backup.SectionJson.text
 import app.lyrify.data.LedgerJson
 import app.lyrify.data.LedgerState
 import app.lyrify.data.LyricsStatus
@@ -9,22 +14,24 @@ import app.lyrify.library.PlaylistsJson
 import app.lyrify.library.PlaylistsState
 import app.lyrify.library.Song
 import app.lyrify.library.SongRef
+import app.lyrify.player.AbPart
 import app.lyrify.player.QueueBook
 import app.lyrify.player.QueuesJson
+import app.lyrify.player.Repeat
 import app.lyrify.player.SongState
+import app.lyrify.player.Speed
 import app.lyrify.settings.BackupSettings
 import app.lyrify.settings.Settings
 import app.lyrify.settings.SettingsJson
 import app.lyrify.stats.LoggedPlay
+import app.lyrify.tags.CoversTagsMemory
+import app.lyrify.tags.NamePair
+import app.lyrify.tones.TonesState
 import kotlinx.serialization.SerializationException
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.booleanOrNull
-import kotlinx.serialization.json.intOrNull
-import kotlinx.serialization.json.longOrNull
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
@@ -39,13 +46,13 @@ enum class Section(val key: String, val version: Int) {
     /** Playlists and Favourites (songs, albums, artists, folders and playlists). */
     PLAYLISTS("playlists", 1),
 
-    /** Saved and recent queues. */
+    /** The queue playing at its song and second, the saved and recent queues, and Repeat. */
     QUEUES("queues", 1),
 
-    /** The play log (`plays.db`). */
+    /** The play log (`plays.db`): every play, so each song's play count too. */
     PLAYS("plays", 1),
 
-    /** Bookmarks and Remember my place's places (`song-state.json`). */
+    /** `song-state.json`: bookmarks, Remember my place's places, the speeds and the part repeating. */
     BOOKMARKS("bookmarks", 1),
 
     /** The equalizer's profiles, by output and Bluetooth device name, and the user's own presets. */
@@ -54,21 +61,43 @@ enum class Section(val key: String, val version: Int) {
     /** The lyrics ledger: what KJB did with each song's lyrics and what the user chose. */
     LYRICS("lyrics", 1),
 
-    /** `settings.json`, without Settings > Backup, which belongs to the phone. */
+    /**
+     * `settings.json`, without Settings > Backup and the devices picked for Start when connected (only their names), which
+     * belong to the phone; with the AI lyrics switch.
+     */
     SETTINGS("settings", 1),
+
+    /** "Your tones": how each was cut, found again on the phone by its file in Ringtones, Notifications or Alarms. */
+    TONES("tones", 1),
+
+    /** Duplicates: the groups marked "Not duplicates" and the groups opened, each by its songs. */
+    DUPLICATES("duplicates", 1),
+
+    /** Covers & tags: the albums done or skipped, and the names kept apart with "Not the same". */
+    COVERS("covers", 1),
+
+    /** Search's recent searches. */
+    SEARCHES("searches", 1),
     ;
 
     /** Its file in the zip. */
     val file: String get() = "$key.json"
 }
 
-/** A song a backup names, as the library had it when the backup was made, so another phone can find it by its tags. */
-data class BackupSong(val path: String, val title: String, val artist: String?, val album: String?, val durationMs: Long)
-
-/** A song's bookmarks (a spot and the user's note) and its place (Remember my place), as a backup keeps them. */
-data class BackupMarks(val path: String, val placeMs: Long?, val bookmarks: List<BackupBookmark>)
-
-data class BackupBookmark(val positionMs: Long, val note: String)
+/**
+ * A song a backup names, as the library had it when the backup was made, so another phone can find it ([SongMatcher]):
+ * its path below the storage root ([relativePath], "Music/Rips/01 Song.mp3"), then its tags, length and size. Backups
+ * from before 3.0's complete backup have neither [relativePath] nor [sizeBytes].
+ */
+data class BackupSong(
+    val path: String,
+    val title: String,
+    val artist: String?,
+    val album: String?,
+    val durationMs: Long,
+    val relativePath: String? = null,
+    val sizeBytes: Long? = null,
+)
 
 /** What the stores held when the backup was made; a store that could not be read is null, and its section is left out. */
 data class BackupSnapshot(
@@ -79,6 +108,15 @@ data class BackupSnapshot(
     val equalizer: EqProfiles? = null,
     val ledger: LedgerState? = null,
     val settings: Settings? = null,
+    /** Repeat, kept with the queue playing (`playback.json`). */
+    val repeat: Repeat? = null,
+    /** The AI lyrics switch, kept with the settings. */
+    val aiLyrics: Boolean? = null,
+    val tones: TonesState? = null,
+    val duplicates: DuplicateChoices? = null,
+    val coversTags: CoversTagsMemory? = null,
+    val keptApart: Set<NamePair>? = null,
+    val searches: List<String>? = null,
 )
 
 /**
@@ -92,13 +130,27 @@ data class BackupContents(
     val appVersion: String,
     val songs: List<BackupSong> = emptyList(),
     val playlists: PlaylistsState? = null,
+    /** The saved and recent queues, and the one playing ([QueueBook.currentId]) at its song and second. */
     val queues: QueueBook? = null,
+    /** Repeat, with the queues; null in a backup from before it was kept. */
+    val repeat: Repeat? = null,
     val plays: List<LoggedPlay>? = null,
-    /** Places and bookmarks, by song. */
+    /** Places, bookmarks and own speeds, by song. */
     val bookmarks: List<BackupMarks>? = null,
+    /** With the bookmarks: the speed of every other song, and the part repeating; null in a backup from before they were kept. */
+    val usualSpeed: Speed? = null,
+    val part: AbPart? = null,
     val equalizer: EqProfiles? = null,
     val lyrics: LedgerState? = null,
     val settings: Settings? = null,
+    /** With the settings: the AI lyrics switch; null in a backup from before it was kept. */
+    val aiLyrics: Boolean? = null,
+    /** With the settings: the names of the devices picked for Start when connected, to pick again on this phone. */
+    val connectNames: List<String> = emptyList(),
+    val tones: List<BackupTone>? = null,
+    val duplicates: BackupDuplicates? = null,
+    val covers: BackupCovers? = null,
+    val searches: List<String>? = null,
     /** Sections a newer KJB wrote in a form this version cannot read: skipped, and the summary says so. */
     val tooNew: List<Section> = emptyList(),
     /** How many sections this version does not know at all (a newer KJB's): skipped. */
@@ -115,6 +167,10 @@ data class BackupContents(
         Section.EQUALIZER -> equalizer != null
         Section.LYRICS -> lyrics != null
         Section.SETTINGS -> settings != null
+        Section.TONES -> tones != null
+        Section.DUPLICATES -> duplicates != null
+        Section.COVERS -> covers != null
+        Section.SEARCHES -> searches != null
     }
 }
 
@@ -150,18 +206,25 @@ data class ZipLimits(
 )
 
 /**
- * The backup zip (spec "Backup and restore"): `manifest.json` (the format version, the KJB version and when it was made,
- * nothing about the phone, and each section with its version), `songs.json` (every song a section names, with its title,
- * artist, album and length, so another phone can find it), then one JSON file per [Section] in each store's own stored
- * form. Never in it: songs, `.lrc` files, models, caches, Covers & tags' Undo backups, MediaStore ids, Bluetooth
- * addresses, the automatic backup's folder.
+ * The backup zip (spec "Backup and restore"; user feedback 2026-11-11, point 23: everything KJB knows, so a new phone
+ * shows KJB exactly as the old one did): `manifest.json` (the format version, the KJB version and when it was made,
+ * nothing about the phone, and each section with its version), `songs.json` (every song a section names, with its path
+ * below the storage root, title, artist, album, length and size, so another phone can find it), then one JSON file per
+ * [Section]: the stores' own stored forms where they name songs by path only, else the backup's own form
+ * ([SectionJson]). Never in it: the songs and their `.lrc` files (they move with the Music folder), the AI models,
+ * caches, Covers & tags' Undo copies, MediaStore ids, Bluetooth addresses and Start when connected's links, the
+ * automatic backup's folder.
+ *
+ * Format 2 added the paths below the root and sizes, the queue playing, Repeat, the speeds and the part repeating, the
+ * AI switch, and the tones, Duplicates, Covers & tags and recent searches sections, all as new keys or sections: format
+ * 1 backups read as before, and a format 1 KJB reads a format 2 backup's sections it knows.
  *
  * Read as untrusted input: only the known entry names are kept, no entry name ever becomes a path, each entry and all of
  * them together are capped unpacked ([ZipLimits]), two entries of one name make it unreadable, and every section is
  * decoded and checked before a restore writes anything.
  */
 object BackupBundle {
-    const val FORMAT: Int = 1
+    const val FORMAT: Int = 2
     const val MANIFEST: String = "manifest.json"
     const val SONGS: String = "songs.json"
     const val SONGS_VERSION: Int = 1
@@ -180,17 +243,26 @@ object BackupBundle {
      * from [library], the songs MediaStore lists), then each section a store could be read for.
      */
     fun write(snapshot: BackupSnapshot, library: List<Song>, appVersion: String, createdAt: Long, output: OutputStream) {
+        val pathOf = library.mapNotNull { song -> song.ref.mediaStoreId?.let { it to song.path } }.toMap()
         val sections = buildList {
             snapshot.playlists?.let { add(Section.PLAYLISTS to PlaylistsJson.encode(bare(it))) }
-            snapshot.queues?.let { add(Section.QUEUES to QueuesJson.encode(bare(it))) }
-            snapshot.plays?.let { add(Section.PLAYS to plays(it)) }
-            snapshot.songState?.let { add(Section.BOOKMARKS to marks(marksOf(it))) }
+            snapshot.queues?.let { add(Section.QUEUES to withKeys(QueuesJson.encode(bare(it)), REPEAT_KEY to snapshot.repeat?.name?.let(::JsonPrimitive))) }
+            snapshot.plays?.let { add(Section.PLAYS to SectionJson.plays(it)) }
+            snapshot.songState?.let { add(Section.BOOKMARKS to SectionJson.marks(it)) }
             snapshot.equalizer?.let { add(Section.EQUALIZER to EqProfilesJson.encode(it.copy(unknownProfiles = emptyMap()))) }
             snapshot.ledger?.let { add(Section.LYRICS to LedgerJson.encode(bare(it))) }
-            snapshot.settings?.let { add(Section.SETTINGS to SettingsJson.encode(it.copy(backup = BackupSettings()))) }
+            snapshot.settings?.let { add(Section.SETTINGS to settings(it, snapshot.aiLyrics)) }
+            snapshot.tones?.let { add(Section.TONES to SectionJson.tones(it)) }
+            snapshot.duplicates?.let { add(Section.DUPLICATES to SectionJson.duplicates(it, pathOf::get)) }
+            if (snapshot.coversTags != null || snapshot.keptApart != null) {
+                add(Section.COVERS to SectionJson.covers(snapshot.coversTags ?: CoversTagsMemory(), snapshot.keptApart.orEmpty()))
+            }
+            snapshot.searches?.let { add(Section.SEARCHES to SectionJson.searches(it)) }
         }
         val byPath = library.associateBy { it.path }
-        val songs = named(snapshot).mapNotNull(byPath::get).map { BackupSong(it.path, it.title, it.artist, it.album, it.durationMs) }
+        val songs = named(snapshot, pathOf::get).mapNotNull(byPath::get).map { song ->
+            BackupSong(song.path, song.title, song.artist, song.album, song.durationMs, (song.folder + song.fileName).trimStart('/'), song.sizeBytes.takeIf { it > 0 })
+        }
         ZipOutputStream(output).use { zip ->
             zip.put(MANIFEST, manifest(appVersion, createdAt, sections.map { it.first }))
             zip.put(SONGS, songs(songs))
@@ -204,12 +276,16 @@ object BackupBundle {
         closeEntry()
     }
 
-    /** Every song path a section names, in order, each once; the lyrics entries carry their own tags. */
-    private fun named(snapshot: BackupSnapshot): List<String> = buildList {
+    /** Every song path a section names, in order, each once; Duplicates' groups through [pathOf], their MediaStore ids. */
+    private fun named(snapshot: BackupSnapshot, pathOf: (Long) -> String?): List<String> = buildList {
         snapshot.playlists?.let { state -> state.playlists.forEach { playlist -> playlist.songs.forEach { add(it.path) } }; state.favouriteSongs.forEach { add(it.path) } }
-        snapshot.queues?.let { book -> bare(book).queues.forEach { queue -> queue.items.forEach { add(it.song.path) } } }
+        snapshot.queues?.let { book -> book.queues.forEach { queue -> queue.items.forEach { add(it.song.path) } } }
         snapshot.plays?.forEach { add(it.song.path) }
-        snapshot.songState?.let { state -> marksOf(state).forEach { add(it.path) } }
+        snapshot.songState?.let { state -> addAll(state.places.keys + state.bookmarks.keys + state.speeds.keys + listOfNotNull(state.part?.path)) }
+        snapshot.ledger?.let { state -> addAll(bare(state).entries.keys) }
+        snapshot.tones?.let { state -> state.tones.values.forEach { add(it.songPath) } }
+        snapshot.duplicates?.let { choices -> (choices.notDuplicates + choices.reviewed).forEach { key -> key.split(',').mapNotNull { it.toLongOrNull()?.let(pathOf) }.forEach(::add) } }
+        snapshot.coversTags?.let { memory -> memory.albums.forEach { album -> album.songs.forEach { add(it.path) } } }
     }.distinct()
 
     /** A song as a backup keeps it: by its path only, as a MediaStore id names a file on this phone alone. */
@@ -222,42 +298,35 @@ object BackupBundle {
         favouriteCollections = state.favouriteCollections,
     )
 
-    /**
-     * The saved and recent queues without ids: the queue playing first in Recent (unless it is saved), as it is the
-     * newest; nothing plays from a backup.
-     */
-    private fun bare(book: QueueBook): QueueBook {
-        val recent = (listOfNotNull(book.currentId) + book.recent).filter { it !in book.saved }.distinct().take(QueueBook.MAX_RECENT)
-        val listed = recent.toSet() + book.saved
-        return QueueBook(
-            queues = book.queues.filter { it.id in listed }.map { queue -> queue.copy(items = queue.items.map { it.copy(song = bare(it.song)) }) },
-            recent = recent,
-            saved = book.saved,
-            nextId = book.nextId,
-            nextUid = book.nextUid,
-        )
-    }
-
-    /**
-     * Each song's place and bookmarks, read through the song state's own API (its places, then [SongState.bookmarksOf]):
-     * songs with a place first, the oldest first, as it keeps them. A song is known as the song state knows it (its path
-     * and [SongState.ids] hint), kept by its path only, as every section is ([bare]). The speeds and the part repeating
-     * stay on the phone.
-     */
-    private fun marksOf(state: SongState): List<BackupMarks> = (state.places.keys + state.bookmarks.keys).distinct().map { path ->
-        val song = bare(SongRef(path, state.ids[path]))
-        BackupMarks(song.path, state.places[path], state.bookmarksOf(path).map { BackupBookmark(it.positionMs, it.note) })
-    }
+    /** Every queue as it is, the one playing at its song and second, without ids. */
+    private fun bare(book: QueueBook): QueueBook = book.copy(queues = book.queues.map { queue -> queue.copy(items = queue.items.map { it.copy(song = bare(it.song)) }) })
 
     /** The lyrics choices: no write cut short (its entry holds lyrics text), nor what only a newer version could read. */
     private fun bare(state: LedgerState): LedgerState = LedgerState(entries = state.entries.filterValues { it.status != LyricsStatus.WRITING })
+
+    /**
+     * The settings without Settings > Backup, and Start when connected's devices by their names only: Android links each
+     * device to one phone (Companion Device Manager), so the user picks them again there. With the AI switch, when known.
+     */
+    private fun settings(settings: Settings, ai: Boolean?): String {
+        val bare = settings.copy(backup = BackupSettings(), playback = settings.playback.copy(connectDevices = emptyList()))
+        return withKeys(
+            SettingsJson.encode(bare),
+            AI_KEY to ai?.let(::JsonPrimitive),
+            CONNECT_KEY to JsonArray(settings.playback.connectDevices.map { JsonPrimitive(it.name) }),
+        )
+    }
+
+    /** [text], a JSON object, with [extra] keys its store's form does not hold (those null left out). */
+    private fun withKeys(text: String, vararg extra: Pair<String, JsonElement?>): String =
+        JsonObject(checkNotNull(jsonObject(text)) + extra.mapNotNull { (key, value) -> value?.let { key to it } }).toString()
 
     private fun manifest(appVersion: String, createdAt: Long, sections: List<Section>): String = JsonObject(
         mapOf(
             FORMAT_KEY to JsonPrimitive(FORMAT),
             APP_VERSION_KEY to JsonPrimitive(appVersion),
             CREATED_AT_KEY to JsonPrimitive(createdAt),
-            SONGS_KEY to version(SONGS_VERSION),
+            SectionJson.SONGS_KEY to version(SONGS_VERSION),
             SECTIONS_KEY to JsonObject(sections.associate { it.key to version(it.version) }),
         ),
     ).toString()
@@ -266,49 +335,18 @@ object BackupBundle {
 
     private fun songs(songs: List<BackupSong>): String = JsonObject(
         mapOf(
-            SONGS_KEY to JsonArray(
+            SectionJson.SONGS_KEY to JsonArray(
                 songs.map { song ->
                     JsonObject(
                         buildMap {
-                            put(PATH_KEY, JsonPrimitive(song.path))
-                            put(TITLE_KEY, JsonPrimitive(song.title))
-                            song.artist?.let { put(ARTIST_KEY, JsonPrimitive(it)) }
+                            put(SectionJson.PATH_KEY, JsonPrimitive(song.path))
+                            put(SectionJson.TITLE_KEY, JsonPrimitive(song.title))
+                            song.artist?.let { put(SectionJson.ARTIST_KEY, JsonPrimitive(it)) }
                             song.album?.let { put(ALBUM_KEY, JsonPrimitive(it)) }
                             put(DURATION_KEY, JsonPrimitive(song.durationMs))
+                            song.relativePath?.let { put(RELATIVE_PATH_KEY, JsonPrimitive(it)) }
+                            song.sizeBytes?.let { put(SIZE_KEY, JsonPrimitive(it)) }
                         },
-                    )
-                },
-            ),
-        ),
-    ).toString()
-
-    private fun marks(marks: List<BackupMarks>): String = JsonObject(
-        mapOf(
-            SONGS_KEY to JsonArray(
-                marks.map { song ->
-                    JsonObject(
-                        buildMap {
-                            put(PATH_KEY, JsonPrimitive(song.path))
-                            song.placeMs?.let { put(PLACE_KEY, JsonPrimitive(it)) }
-                            put(BOOKMARKS_KEY, JsonArray(song.bookmarks.map { JsonObject(mapOf(POSITION_KEY to JsonPrimitive(it.positionMs), NOTE_KEY to JsonPrimitive(it.note))) }))
-                        },
-                    )
-                },
-            ),
-        ),
-    ).toString()
-
-    private fun plays(plays: List<LoggedPlay>): String = JsonObject(
-        mapOf(
-            PLAYS_KEY to JsonArray(
-                plays.map { play ->
-                    JsonObject(
-                        mapOf(
-                            PATH_KEY to JsonPrimitive(play.song.path),
-                            STARTED_AT_KEY to JsonPrimitive(play.startedAt),
-                            HEARD_KEY to JsonPrimitive(play.heardMs),
-                            COUNTED_KEY to JsonPrimitive(play.counted),
-                        ),
                     )
                 },
             ),
@@ -331,7 +369,7 @@ object BackupBundle {
         val notABackup = BackupRead.Unreadable(BackupRead.Why.NOT_A_BACKUP)
         val manifest = files[MANIFEST]?.let { jsonObject(it.decodeToString()) } ?: return notABackup
         if (manifest.int(FORMAT_KEY) == null) return notABackup
-        val songsVersion = (manifest[SONGS_KEY] as? JsonObject)?.int(VERSION_KEY)
+        val songsVersion = (manifest[SectionJson.SONGS_KEY] as? JsonObject)?.int(VERSION_KEY)
         val songs = when {
             songsVersion == null -> emptyList()
             songsVersion < 1 -> return notABackup
@@ -362,12 +400,28 @@ object BackupBundle {
     /** [contents] with [section] read from [text]; null when it is not what it says. */
     private fun section(contents: BackupContents, section: Section, text: String): BackupContents? = when (section) {
         Section.PLAYLISTS -> PlaylistsJson.decode(text)?.let { contents.copy(playlists = bare(it)) }
-        Section.QUEUES -> QueuesJson.decode(text)?.let { contents.copy(queues = it) }
-        Section.PLAYS -> plays(text)?.let { contents.copy(plays = it) }
-        Section.BOOKMARKS -> marks(text)?.let { contents.copy(bookmarks = it) }
+        Section.QUEUES -> QueuesJson.decode(text)?.let { book ->
+            contents.copy(queues = book, repeat = jsonObject(text)?.text(REPEAT_KEY)?.let { name -> Repeat.entries.firstOrNull { it.name == name } })
+        }
+        Section.PLAYS -> SectionJson.plays(text)?.let { contents.copy(plays = it) }
+        Section.BOOKMARKS -> SectionJson.marks(text)?.let { contents.copy(bookmarks = it.marks, usualSpeed = it.usual, part = it.part) }
         Section.EQUALIZER -> EqProfilesJson.decode(text)?.let { contents.copy(equalizer = it.copy(unknownProfiles = emptyMap())) }
         Section.LYRICS -> ledger(text)?.let { contents.copy(lyrics = bare(it)) }
-        Section.SETTINGS -> SettingsJson.decode(text)?.let { contents.copy(settings = it.copy(backup = BackupSettings())) }
+        Section.SETTINGS -> SettingsJson.decode(text)?.let { settings ->
+            val root = jsonObject(text)
+            // A format 1 backup kept the devices with this phone's links: their names only.
+            val names = (root?.get(CONNECT_KEY) as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.takeIf { name -> name.isString }?.content?.trim()?.takeIf(String::isNotEmpty) }
+                ?: settings.playback.connectDevices.map { it.name }
+            contents.copy(
+                settings = settings.copy(backup = BackupSettings(), playback = settings.playback.copy(connectDevices = emptyList())),
+                aiLyrics = root?.flag(AI_KEY),
+                connectNames = names.distinct(),
+            )
+        }
+        Section.TONES -> SectionJson.tones(text)?.let { contents.copy(tones = it) }
+        Section.DUPLICATES -> SectionJson.duplicates(text)?.let { contents.copy(duplicates = it) }
+        Section.COVERS -> SectionJson.covers(text)?.let { contents.copy(covers = it) }
+        Section.SEARCHES -> SectionJson.searches(text)?.let { contents.copy(searches = it) }
     }
 
     private fun ledger(text: String): LedgerState? = try {
@@ -376,42 +430,19 @@ object BackupBundle {
         null
     }
 
-    /** The songs, each read on its own: one without a path, a title or a length is left out. */
-    private fun songs(text: String): List<BackupSong>? = (jsonObject(text)?.get(SONGS_KEY) as? JsonArray)?.mapNotNull { element ->
+    /** The songs, each read on its own: one without a path, a title or a length is left out; the path below the root and the size may be missing. */
+    private fun songs(text: String): List<BackupSong>? = (jsonObject(text)?.get(SectionJson.SONGS_KEY) as? JsonArray)?.mapNotNull { element ->
         val song = element as? JsonObject ?: return@mapNotNull null
         BackupSong(
-            path = song.text(PATH_KEY)?.takeIf(String::isNotEmpty) ?: return@mapNotNull null,
-            title = song.text(TITLE_KEY) ?: return@mapNotNull null,
-            artist = song.text(ARTIST_KEY),
+            path = song.text(SectionJson.PATH_KEY)?.takeIf(String::isNotEmpty) ?: return@mapNotNull null,
+            title = song.text(SectionJson.TITLE_KEY) ?: return@mapNotNull null,
+            artist = song.text(SectionJson.ARTIST_KEY),
             album = song.text(ALBUM_KEY),
             durationMs = song.long(DURATION_KEY)?.takeIf { it >= 0 } ?: return@mapNotNull null,
+            relativePath = song.text(RELATIVE_PATH_KEY)?.trim('/')?.takeIf(String::isNotEmpty),
+            sizeBytes = song.long(SIZE_KEY)?.takeIf { it > 0 },
         )
     }?.distinctBy { it.path }
-
-    /**
-     * The places and bookmarks, each read on its own: a song without a path, a place below 0 and a bookmark without a
-     * spot are left out, and so is a song left with neither; a note may be missing.
-     */
-    private fun marks(text: String): List<BackupMarks>? = (jsonObject(text)?.get(SONGS_KEY) as? JsonArray)?.mapNotNull { element ->
-        val song = element as? JsonObject ?: return@mapNotNull null
-        val bookmarks = (song[BOOKMARKS_KEY] as? JsonArray).orEmpty().mapNotNull { stored ->
-            val mark = stored as? JsonObject ?: return@mapNotNull null
-            BackupBookmark(mark.long(POSITION_KEY)?.takeIf { it >= 0 } ?: return@mapNotNull null, mark.text(NOTE_KEY).orEmpty())
-        }
-        BackupMarks(song.text(PATH_KEY)?.takeIf(String::isNotEmpty) ?: return@mapNotNull null, song.long(PLACE_KEY)?.takeIf { it >= 0 }, bookmarks)
-            .takeIf { it.placeMs != null || it.bookmarks.isNotEmpty() }
-    }?.distinctBy { it.path }
-
-    /** The plays, each read on its own: one without a path or a start is left out. */
-    private fun plays(text: String): List<LoggedPlay>? = (jsonObject(text)?.get(PLAYS_KEY) as? JsonArray)?.mapNotNull { element ->
-        val play = element as? JsonObject ?: return@mapNotNull null
-        LoggedPlay(
-            song = SongRef(play.text(PATH_KEY)?.takeIf(String::isNotEmpty) ?: return@mapNotNull null),
-            startedAt = play.long(STARTED_AT_KEY)?.takeIf { it > 0 } ?: return@mapNotNull null,
-            heardMs = play.long(HEARD_KEY)?.coerceAtLeast(0) ?: 0,
-            counted = (play[COUNTED_KEY] as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull ?: false,
-        )
-    }
 
     private sealed interface Unzipped {
         data class Files(val files: Map<String, ByteArray>) : Unzipped
@@ -458,42 +489,21 @@ object BackupBundle {
         }
     }
 
-    private fun jsonObject(text: String): JsonObject? = try {
-        Json.parseToJsonElement(text) as? JsonObject
-    } catch (_: SerializationException) {
-        null
-    }
-
     private fun JsonObject?.orEmpty(): Map<String, JsonElement> = this ?: emptyMap()
-
-    private fun JsonArray?.orEmpty(): List<JsonElement> = this ?: emptyList()
-
-    private fun JsonObject.text(key: String): String? = (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
-
-    private fun JsonObject.long(key: String): Long? = (this[key] as? JsonPrimitive)?.takeUnless { it.isString }?.longOrNull
-
-    private fun JsonObject.int(key: String): Int? = (this[key] as? JsonPrimitive)?.takeUnless { it.isString }?.intOrNull
 
     private const val BUFFER: Int = 64 * 1024
     private const val FORMAT_KEY: String = "format"
     private const val APP_VERSION_KEY: String = "appVersion"
     private const val CREATED_AT_KEY: String = "createdAt"
-    private const val SONGS_KEY: String = "songs"
     private const val SECTIONS_KEY: String = "sections"
     private const val VERSION_KEY: String = "version"
-    private const val PATH_KEY: String = "path"
-    private const val TITLE_KEY: String = "title"
-    private const val ARTIST_KEY: String = "artist"
     private const val ALBUM_KEY: String = "album"
     private const val DURATION_KEY: String = "durationMs"
-    private const val PLAYS_KEY: String = "plays"
-    private const val PLACE_KEY: String = "placeMs"
-    private const val BOOKMARKS_KEY: String = "bookmarks"
-    private const val POSITION_KEY: String = "positionMs"
-    private const val NOTE_KEY: String = "note"
-    private const val STARTED_AT_KEY: String = "startedAt"
-    private const val HEARD_KEY: String = "heardMs"
-    private const val COUNTED_KEY: String = "counted"
+    private const val RELATIVE_PATH_KEY: String = "relativePath"
+    private const val SIZE_KEY: String = "sizeBytes"
+    private const val REPEAT_KEY: String = "repeat"
+    private const val AI_KEY: String = "aiLyrics"
+    private const val CONNECT_KEY: String = "startWhenConnected"
 
     /** The only entries read into memory. */
     private val KEPT: Set<String> = setOf(MANIFEST, SONGS) + Section.entries.map { it.file }

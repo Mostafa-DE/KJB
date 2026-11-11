@@ -6,15 +6,25 @@ import app.lyrify.data.LedgerState
 import app.lyrify.library.CollectionKind
 import app.lyrify.library.PlaylistsState
 import app.lyrify.library.Song
-import app.lyrify.library.SongClue
 import app.lyrify.library.SongRef
-import app.lyrify.library.SongResolver
+import app.lyrify.player.AbPart
 import app.lyrify.player.Bookmark
 import app.lyrify.player.Queue
 import app.lyrify.player.QueueBook
+import app.lyrify.player.Repeat
 import app.lyrify.player.SongState
+import app.lyrify.player.Speed
+import app.lyrify.settings.ConnectDevice
 import app.lyrify.settings.Settings
 import app.lyrify.stats.LoggedPlay
+import app.lyrify.tags.AlbumRecord
+import app.lyrify.tags.CoversTagsMemory
+import app.lyrify.tags.FileMark
+import app.lyrify.tags.NamePair
+import app.lyrify.tags.SongProblem
+import app.lyrify.tags.albumId
+import app.lyrify.tones.SavedTone
+import app.lyrify.tones.TonesState
 import kotlinx.coroutines.CancellationException
 import java.util.Locale
 
@@ -52,10 +62,58 @@ interface BackupStores {
     suspend fun settings(): Settings?
 
     suspend fun updateSettings(change: (Settings) -> Settings): Boolean
+
+    /** Repeat, kept with the queue playing. */
+    suspend fun repeat(): Repeat?
+
+    /** Sets Repeat and keeps the queue playing at its place with it. */
+    suspend fun replaceRepeat(repeat: Repeat): Boolean
+
+    /** The AI lyrics switch. */
+    suspend fun aiLyrics(): Boolean?
+
+    /** Turns the AI lyrics on (its models are downloaded again) or off. */
+    suspend fun replaceAiLyrics(on: Boolean): Boolean
+
+    suspend fun tones(): TonesState?
+
+    /** [tones] put in "Your tones", each by its file's MediaStore id on this phone. */
+    suspend fun addTones(tones: List<SavedTone>): Boolean
+
+    /** The tone file [fileName] of [size] bytes in the folder [folder] ("Ringtones/") on this phone: its id; null unless exactly one. */
+    suspend fun findTone(folder: String, fileName: String, size: Long): Long?
+
+    suspend fun duplicates(): DuplicateChoices?
+
+    /** [choices] added to Duplicates' own; groups marked "Not duplicates" leave the last scan's results. */
+    suspend fun addDuplicates(choices: DuplicateChoices): Boolean
+
+    suspend fun coversTags(): CoversTagsMemory?
+
+    /** [albums] settled in Covers & tags, unless one of their ids is there; the flags set when either says so. */
+    suspend fun addSettledAlbums(albums: List<AlbumRecord>, checkedOnce: Boolean, noted: Boolean): Boolean
+
+    suspend fun keptApart(): Set<NamePair>?
+
+    suspend fun addKeptApart(pairs: Set<NamePair>): Boolean
+
+    /** The recent searches, the newest first. */
+    suspend fun searches(): List<String>?
+
+    /** [searches], the newest first, added to the recent ones that are not there yet. */
+    suspend fun addSearches(searches: List<String>): Boolean
+
+    /** The file at [path] as it is now, its size and modified time; null when it is not a file. */
+    suspend fun fileMark(path: String): FileMark?
 }
 
 /** What every store holds now, for a backup; a store that cannot be read is left out. */
-suspend fun BackupStores.snapshot(): BackupSnapshot = BackupSnapshot(playlists(), queues(), plays(), songState(), equalizer(), ledger(), settings())
+suspend fun BackupStores.snapshot(): BackupSnapshot = BackupSnapshot(
+    playlists(), queues(), plays(), songState(), equalizer(), ledger(), settings(),
+    repeat = repeat(), aiLyrics = aiLyrics(), tones = tones(), duplicates = duplicates(), coversTags = coversTags(),
+    keptApart = keptApart(), searches = searches(),
+)
+
 
 /** A song a backup names that is not on this phone, as the backup knew it: the summary lists it. */
 data class MissingSong(val path: String, val title: String?, val artist: String?)
@@ -65,107 +123,133 @@ internal data class MergedMarks(val state: SongState, val placesLeftOut: Int, va
 
 /**
  * What a restore did: the sections restored and those that failed, in the summary's order, and the places and bookmarks
- * left out because the phone holds as many as it keeps (a restore never pushes out the phone's own).
+ * left out because the phone holds as many as it keeps (a restore never pushes out the phone's own). For the summary
+ * after it: how much each section brought back ([counts]: playlists, queues, plays, bookmarks, equalizer profiles,
+ * lyrics choices, tones, "Not duplicates" groups, Covers & tags albums, searches; Settings has none), the songs of the
+ * backup not on this phone ([notFound]), the tones whose files are not on it, and the devices to pick again for Start
+ * when connected.
  */
-data class RestoreResult(val restored: List<Section>, val failed: List<Section>, val placesLeftOut: Int = 0, val bookmarksLeftOut: Int = 0)
+data class RestoreResult(
+    val restored: List<Section>,
+    val failed: List<Section>,
+    val placesLeftOut: Int = 0,
+    val bookmarksLeftOut: Int = 0,
+    val counts: Map<Section, Int> = emptyMap(),
+    val notFound: Int = 0,
+    val tonesNotFound: Int = 0,
+    val pickAgain: List<String> = emptyList(),
+)
 
 /**
- * A backup matched against this phone's library: each song by its path, then by its title, artist and length within 2 s
- * ([SongResolver.BACKUP]), so a backup works on a new phone; a song found neither way (or found twice) is left out of
- * what it was in, and listed ([missing]). Songs take this phone's path and id hint. Every song is looked for once, as
- * the plan is made (off the main thread: a library and a backup of thousands of songs); nothing is written until [apply].
+ * A backup matched against this phone's songs ([phone], the library's every song): each song the backup names is found
+ * once, all together, by [SongMatcher] (the same path, then the same path below the storage root, then the same tags
+ * and length; never a guess), so a backup works on a new phone where every MediaStore id and folder differs. A song not
+ * found is left out of what it was in, and listed ([missing]). Songs take this phone's path and id hint. The matching is
+ * done as the plan is made (off the main thread: a library and a backup of thousands of songs); nothing is written
+ * until [apply].
  */
-class RestorePlan(val contents: BackupContents, resolver: SongResolver) {
-    private val songs: Map<String, BackupSong> = contents.songs.associateBy { it.path }
+class RestorePlan(val contents: BackupContents, phone: List<Song>) {
+    /** What the backup knows of each song: the songs section, else a lyrics choice's own tags. */
+    private val known: Map<String, BackupSong> = contents.lyrics?.entries?.values.orEmpty()
+        .associate { it.path to BackupSong(it.path, it.title, it.artist, it.album, it.durationMs) } + contents.songs.associateBy { it.path }
 
-    /** Each song path the sections name, and the song it is on this phone: by the songs table's tags when the path is not here. */
-    private val found: Map<String, Song?> = Section.entries.flatMap(::paths).distinct().associateWith { path ->
-        val known = songs[path]
-        resolver.find(SongClue(path, title = known?.title, artist = known?.artist, durationMs = known?.durationMs), SongResolver.BACKUP)
-    }
+    /** Each song the backup names, by its path there, and the song it is on this phone. */
+    private val found: Map<String, Song> = SongMatcher(phone).match(Section.entries.flatMap(::paths) + contents.tones.orEmpty().map { it.songPath }, known)
 
-    /** Each lyrics choice's song, by its path in the backup: its entry carries its own tags. */
-    private val foundLyrics: Map<String, Song?> = contents.lyrics?.entries?.values.orEmpty().associate { entry ->
-        entry.path to resolver.find(SongClue(entry.path, title = entry.title, artist = entry.artist, durationMs = entry.durationMs), SongResolver.BACKUP)
-    }
-
-    private fun find(path: String): Song? = found[path]
-
-    private fun find(entry: LedgerEntry): Song? = foundLyrics[entry.path]
-
-    private fun ref(ref: SongRef): SongRef? = find(ref.path)?.ref
+    private fun ref(ref: SongRef): SongRef? = found[ref.path]?.ref
 
     /** The songs the [chosen] sections name that are not on this phone, each once, in the summary's order. */
-    fun missing(chosen: Set<Section>): List<MissingSong> {
-        val missing = LinkedHashMap<String, MissingSong>()
-        chosen(chosen).forEach { section ->
-            if (section == Section.LYRICS) {
-                contents.lyrics?.entries?.values?.filter { find(it) == null }?.forEach { missing.getOrPut(it.path) { MissingSong(it.path, it.title, it.artist) } }
-            } else {
-                paths(section).filter { find(it) == null }.forEach { path -> missing.getOrPut(path) { songs[path].let { MissingSong(path, it?.title, it?.artist) } } }
-            }
-        }
-        return missing.values.toList()
-    }
+    fun missing(chosen: Set<Section>): List<MissingSong> =
+        chosen(chosen).flatMap(::paths).distinct().filter { it !in found }.map { path -> known[path].let { MissingSong(path, it?.title, it?.artist) } }
 
-    /** The song paths [section] names (the lyrics choices aside, which carry their own tags). */
+    /** The song paths [section] names and cannot restore without; a tone is its own file, so it names none. */
     private fun paths(section: Section): List<String> = when (section) {
         Section.PLAYLISTS -> contents.playlists?.let { state -> state.playlists.flatMap { it.songs } + state.favouriteSongs }.orEmpty().map { it.path }
         Section.QUEUES -> contents.queues?.queues.orEmpty().flatMap { queue -> queue.items.map { it.song.path } }
         Section.PLAYS -> contents.plays.orEmpty().map { it.song.path }
-        Section.BOOKMARKS -> contents.bookmarks.orEmpty().map { it.path }
-        Section.EQUALIZER, Section.SETTINGS, Section.LYRICS -> emptyList()
+        Section.BOOKMARKS -> contents.bookmarks.orEmpty().map { it.path } + listOfNotNull(contents.part?.path)
+        Section.LYRICS -> contents.lyrics?.entries?.keys.orEmpty().toList()
+        Section.DUPLICATES -> contents.duplicates?.let { it.notDuplicates + it.reviewed }.orEmpty().flatten()
+        Section.COVERS -> contents.covers?.albums.orEmpty().flatMap { it.paths }
+        Section.EQUALIZER, Section.SETTINGS, Section.TONES, Section.SEARCHES -> emptyList()
     }
 
     /** The [chosen] sections the backup holds, in the summary's order. */
     private fun chosen(chosen: Set<Section>): List<Section> = contents.sections.filter { it in chosen }
 
     /**
-     * Restores the [chosen] sections the backup holds, one after another, each in one write of its store: settings and
-     * the equalizer replace what is there; playlists, queues, plays, bookmarks and lyrics choices are merged in. Every
-     * section is matched to this phone before the first write. A section that fails leaves its store as it was, and the
-     * ones before it stay restored. [newId] names new playlists. The log gets section names only.
+     * Restores the [chosen] sections the backup holds, one after another, each in one write of its store (and Repeat,
+     * the AI switch and the names kept apart beside theirs): settings, Repeat and the equalizer replace what is there;
+     * the rest is merged in, and on a phone with nothing yet the result is the old phone's. Every section is matched to
+     * this phone before the first write. A section that fails leaves its store as it was, and the ones before it stay
+     * restored. [newId] names new playlists. The log gets section names and counts only.
      */
     suspend fun apply(chosen: Set<Section>, stores: BackupStores, newId: () -> String, log: (String) -> Unit = {}): RestoreResult {
         val ready = chosen(chosen).map { it to prepare(it) }
         val restored = mutableListOf<Section>()
         val failed = mutableListOf<Section>()
-        var marks: MergedMarks? = null
+        val counts = LinkedHashMap<Section, Int>()
+        val tally = Tally()
         ready.forEach { (section, prepared) ->
-            val done = try {
-                write(prepared, stores, newId) { marks = it }
+            val count = try {
+                write(prepared, stores, newId, tally)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 // A store's own failure (an IOException DataStore gave up on, SQLite's); its write did not happen.
                 log("restore: ${section.key} failed (${e.javaClass.simpleName})")
-                false
+                null
             }
-            if (done) restored += section else failed += section
+            if (count == null) {
+                failed += section
+            } else {
+                restored += section
+                counts[section] = count
+            }
         }
-        val placesLeftOut = marks?.placesLeftOut ?: 0
-        val bookmarksLeftOut = marks?.bookmarksLeftOut ?: 0
-        log("restore: ${restored.size} sections restored, ${failed.size} failed${if (failed.isEmpty()) "" else ": " + failed.joinToString { it.key }}")
+        val notFound = missing(chosen).size
+        val placesLeftOut = tally.marks?.placesLeftOut ?: 0
+        val bookmarksLeftOut = tally.marks?.bookmarksLeftOut ?: 0
+        log("restore: ${restored.size} sections restored, ${failed.size} failed${if (failed.isEmpty()) "" else ": " + failed.joinToString { it.key }}; $notFound songs not found")
         if (placesLeftOut + bookmarksLeftOut > 0) log("restore: $placesLeftOut places and $bookmarksLeftOut bookmarks left out at the limit")
-        return RestoreResult(restored, failed, placesLeftOut, bookmarksLeftOut)
+        if (tally.tonesNotFound > 0) log("restore: ${tally.tonesNotFound} tones without their files")
+        return RestoreResult(restored, failed, placesLeftOut, bookmarksLeftOut, counts, notFound, tally.tonesNotFound, tally.pickAgain)
+    }
+
+    /** What the writes tell the summary besides their counts. */
+    private class Tally {
+        var marks: MergedMarks? = null
+        var tonesNotFound: Int = 0
+        var pickAgain: List<String> = emptyList()
     }
 
     /** A section matched to this phone, ready to be written. */
     private sealed interface Prepared {
         data class Playlists(val state: PlaylistsState) : Prepared
 
-        data class Queues(val recent: List<Queue>, val saved: List<Queue>) : Prepared
+        /** The queues whose songs are here: the one playing, Recent and Saved, with the backup's counters; and Repeat. */
+        data class Queues(val book: QueueBook, val repeat: Repeat?) : Prepared
 
         data class Plays(val plays: List<LoggedPlay>) : Prepared
 
-        /** Each song's marks with the song they are for on this phone. */
-        data class Bookmarks(val marks: List<Pair<Song, BackupMarks>>) : Prepared
+        /** Each song's marks with the song they are for on this phone; the usual speed; the part repeating, on its song. */
+        data class Bookmarks(val marks: List<Pair<Song, BackupMarks>>, val usual: Speed?, val part: Pair<Song, AbPart>?) : Prepared
 
         data class Equalizer(val profiles: EqProfiles) : Prepared
 
         data class Lyrics(val entries: List<LedgerEntry>) : Prepared
 
-        data class AppSettings(val settings: Settings) : Prepared
+        data class AppSettings(val settings: Settings, val ai: Boolean?, val connectNames: List<String>) : Prepared
+
+        /** Each tone with its song's path here (its old path when the song is not here: the tone is a file of its own). */
+        data class Tones(val tones: List<BackupTone>) : Prepared
+
+        data class Duplicates(val choices: DuplicateChoices) : Prepared
+
+        /** Each album whose songs are all here, with them. */
+        data class Covers(val albums: List<Pair<BackupAlbum, List<Song>>>, val checkedOnce: Boolean, val noted: Boolean, val apart: Set<NamePair>) : Prepared
+
+        data class Searches(val searches: List<String>) : Prepared
     }
 
     private fun prepare(section: Section): Prepared = when (section) {
@@ -178,17 +262,33 @@ class RestorePlan(val contents: BackupContents, resolver: SongResolver) {
             )
         }
         Section.QUEUES -> checkNotNull(contents.queues).let { book ->
-            fun queues(ids: List<String>) = ids.mapNotNull { id -> book.queue(id)?.let(::matched) }
-            Prepared.Queues(queues(book.recent), queues(book.saved))
+            val queues = book.queues.mapNotNull(::matched)
+            val ids = queues.map { it.id }.toSet()
+            Prepared.Queues(book.copy(queues = queues, currentId = book.currentId?.takeIf { it in ids }, recent = book.recent.filter { it in ids }, saved = book.saved.filter { it in ids }), contents.repeat)
         }
         Section.PLAYS -> Prepared.Plays(checkNotNull(contents.plays).mapNotNull { play -> ref(play.song)?.let { play.copy(song = it) } })
-        Section.BOOKMARKS -> Prepared.Bookmarks(checkNotNull(contents.bookmarks).mapNotNull { marks -> find(marks.path)?.let { it to marks } })
+        Section.BOOKMARKS -> Prepared.Bookmarks(
+            checkNotNull(contents.bookmarks).mapNotNull { marks -> found[marks.path]?.let { it to marks } },
+            contents.usualSpeed,
+            contents.part?.let { part -> found[part.path]?.let { it to part } },
+        )
         Section.EQUALIZER -> Prepared.Equalizer(checkNotNull(contents.equalizer))
         Section.LYRICS -> Prepared.Lyrics(
-            checkNotNull(contents.lyrics).entries.values.mapNotNull { entry -> find(entry)?.let { entry.copy(path = it.path) } }
+            checkNotNull(contents.lyrics).entries.values.mapNotNull { entry -> found[entry.path]?.let { entry.copy(path = it.path) } }
                 .groupBy { it.path }.map { (_, entries) -> entries.maxBy { it.updatedAt } },
         )
-        Section.SETTINGS -> Prepared.AppSettings(checkNotNull(contents.settings))
+        Section.SETTINGS -> Prepared.AppSettings(checkNotNull(contents.settings), contents.aiLyrics, contents.connectNames)
+        Section.TONES -> Prepared.Tones(checkNotNull(contents.tones).map { tone -> tone.copy(songPath = found[tone.songPath]?.path ?: tone.songPath) })
+        Section.DUPLICATES -> checkNotNull(contents.duplicates).let { choices ->
+            // A group by this phone's ids, as Duplicates keys it; one with a song not here is no group here.
+            fun keys(groups: List<List<String>>) = groups.mapNotNull { paths -> paths.map { found[it]?.ref?.mediaStoreId ?: return@mapNotNull null }.sorted().joinToString(",") }.toSet()
+            Prepared.Duplicates(DuplicateChoices(keys(choices.notDuplicates), keys(choices.reviewed)))
+        }
+        Section.COVERS -> checkNotNull(contents.covers).let { covers ->
+            val albums = covers.albums.mapNotNull { album -> album.paths.map { found[it] ?: return@mapNotNull null }.let { album to it } }
+            Prepared.Covers(albums, covers.checkedOnce, covers.noted, covers.apart)
+        }
+        Section.SEARCHES -> Prepared.Searches(checkNotNull(contents.searches))
     }
 
     /** [queue] with its songs on this phone (each once), its place on the same song; null when none is here. */
@@ -206,19 +306,66 @@ class RestorePlan(val contents: BackupContents, resolver: SongResolver) {
         )
     }
 
-    /** Writes [prepared] in one change of its store; [onMarks] hears what the places and bookmarks written left out. */
-    private suspend fun write(prepared: Prepared, stores: BackupStores, newId: () -> String, onMarks: (MergedMarks) -> Unit): Boolean = when (prepared) {
-        is Prepared.Playlists -> stores.updatePlaylists { mergePlaylists(it, prepared.state, newId) }
-        is Prepared.Queues -> stores.updateQueues { mergeQueues(it, prepared.recent, prepared.saved) }
-        is Prepared.Plays -> stores.addPlays(prepared.plays)
+    /** Writes [prepared] in one change of its store; the count it restored, or null when it could not be written. */
+    private suspend fun write(prepared: Prepared, stores: BackupStores, newId: () -> String, tally: Tally): Int? = when (prepared) {
+        is Prepared.Playlists -> counted(stores.updatePlaylists { mergePlaylists(it, prepared.state, newId) }, prepared.state.playlists.size)
+        is Prepared.Queues -> {
+            // Repeat after the queues: it keeps the place of the queue playing now with it.
+            val written = stores.updateQueues { mergeQueues(it, prepared.book) } && prepared.repeat?.let { stores.replaceRepeat(it) } != false
+            counted(written, prepared.book.queues.size)
+        }
+        is Prepared.Plays -> counted(stores.addPlays(prepared.plays), prepared.plays.size)
         is Prepared.Bookmarks -> {
             var merged: MergedMarks? = null
-            stores.updateSongState { now -> mergeMarks(now, prepared.marks).also { merged = it }.state }.also { written -> if (written) merged?.let(onMarks) }
+            val written = stores.updateSongState { now -> mergeMarks(now, prepared.marks, prepared.usual, prepared.part).also { merged = it }.state }
+            if (written) tally.marks = merged
+            counted(written, prepared.marks.sumOf { it.second.bookmarks.size })
         }
-        is Prepared.Equalizer -> stores.replaceEqualizer(prepared.profiles)
-        is Prepared.Lyrics -> stores.updateLedger { mergeLedger(it, prepared.entries) }
-        // The phone keeps its own automatic backup and its first-run state.
-        is Prepared.AppSettings -> stores.updateSettings { phone -> prepared.settings.copy(backup = phone.backup, nav = prepared.settings.nav.copy(setupDone = phone.nav.setupDone)) }
+        is Prepared.Equalizer -> counted(stores.replaceEqualizer(prepared.profiles), prepared.profiles.profiles.size)
+        is Prepared.Lyrics -> counted(stores.updateLedger { mergeLedger(it, prepared.entries) }, prepared.entries.size)
+        is Prepared.AppSettings -> {
+            var own = emptyList<ConnectDevice>()
+            // The phone keeps its own automatic backup, its first-run state and the devices Android linked to it.
+            val written = stores.updateSettings { phone ->
+                own = phone.playback.connectDevices
+                prepared.settings.copy(
+                    playback = prepared.settings.playback.copy(connectDevices = phone.playback.connectDevices),
+                    backup = phone.backup,
+                    nav = prepared.settings.nav.copy(setupDone = phone.nav.setupDone),
+                )
+            } && prepared.ai?.let { stores.replaceAiLyrics(it) } != false
+            if (written) tally.pickAgain = prepared.connectNames.filter { name -> own.none { it.name.equals(name, ignoreCase = true) } }
+            counted(written, 0)
+        }
+        is Prepared.Tones -> {
+            val tones = prepared.tones.mapNotNull { tone ->
+                val id = stores.findTone("${tone.kind.folder}/", tone.fileName, tone.size) ?: return@mapNotNull null
+                SavedTone(id, tone.name, tone.kind, tone.songPath, tone.startMs, tone.lengthMs, tone.fadeInMs, tone.fadeOutMs, tone.createdAt, tone.fileName, tone.size)
+            }
+            val written = tones.isEmpty() || stores.addTones(tones)
+            if (written) tally.tonesNotFound = prepared.tones.size - tones.size
+            counted(written, tones.size)
+        }
+        is Prepared.Duplicates -> counted(stores.addDuplicates(prepared.choices), prepared.choices.notDuplicates.size)
+        is Prepared.Covers -> {
+            val albums = prepared.albums.mapNotNull { (album, songs) -> settled(album, songs, stores) }
+            val written = stores.addSettledAlbums(albums, prepared.checkedOnce, prepared.noted) && (prepared.apart.isEmpty() || stores.addKeptApart(prepared.apart))
+            counted(written, albums.size)
+        }
+        is Prepared.Searches -> counted(stores.addSearches(prepared.searches), prepared.searches.size)
+    }
+
+    private fun counted(written: Boolean, count: Int): Int? = if (written) count else null
+
+    /**
+     * [album] settled on this phone: on its [songs] here, under the id their paths give it, marked as the files are now
+     * (a file copied has another modified time), so Covers & tags leaves it settled until one changes. Its Undo stays on
+     * the old phone. Null when a song is not a file here.
+     */
+    private suspend fun settled(album: BackupAlbum, songs: List<Song>, stores: BackupStores): AlbumRecord? {
+        val marks = songs.map { stores.fileMark(it.path) ?: return null }
+        val problems = album.problems.mapNotNull { problem -> found[problem.path]?.let { SongProblem(it.path, problem.outcome) } }
+        return AlbumRecord(albumId(songs.map { it.path }), album.state, album.title, album.artist, marks, album.at, entryId = null, changed = album.changed, problems = problems)
     }
 
     companion object {
@@ -227,9 +374,9 @@ class RestorePlan(val contents: BackupContents, resolver: SongResolver) {
 
         /**
          * [now] with the backup's playlists and Favourites added. A playlist already there (the same songs, under its
-         * name or its restored name) is not added again; one whose name is taken gets [RESTORED] (then " (2)"...).
-         * Favourite songs and collections not there yet go after the phone's own; a favourite playlist follows its
-         * playlist's new id.
+         * name or its restored name) is not added again; one whose name is taken gets [RESTORED] (then " (2)"...). A
+         * playlist keeps its id unless the phone uses it, so a favourite playlist stays one. Favourite songs and
+         * collections not there yet go after the phone's own; a favourite playlist follows its playlist's id.
          */
         internal fun mergePlaylists(now: PlaylistsState, restored: PlaylistsState, newId: () -> String): PlaylistsState {
             var state = now
@@ -243,7 +390,7 @@ class RestorePlan(val contents: BackupContents, resolver: SongResolver) {
                 }
                 val taken = state.playlists.map { it.name }
                 val name = if (taken.none { it.trim().equals(playlist.name.trim(), ignoreCase = true) }) playlist.name else M3u.uniqueName(playlist.name.trim() + RESTORED, taken)
-                val made = playlist.copy(id = newId(), name = name)
+                val made = playlist.copy(id = playlist.id.takeIf { id -> state.playlists.none { it.id == id } } ?: newId(), name = name)
                 ids[playlist.id] = made.id
                 state = state.put(made)
             }
@@ -265,41 +412,53 @@ class RestorePlan(val contents: BackupContents, resolver: SongResolver) {
         }
 
         /**
-         * [now] with the backup's [recent] and [saved] queues added after its own, with new ids and uids from its
-         * counters. A saved queue is never lost: it is added unless the phone saves one with the same songs in the same
-         * order, whatever Recent holds. A recent queue is added while Recent has room, unless a queue there or a saved one
-         * restored has its songs. Nothing plays.
+         * [now] with the backup's queues ([restored], matched to this phone). On a phone with no queue at all it is the
+         * backup's book as it was: the one playing playing again, at its song and second, Recent and Saved in their
+         * order, the same ids. Else they are added after the phone's own with new ids and uids from its counters: a
+         * saved queue is never lost (added unless the phone saves one with the same songs in the same order); the one
+         * playing plays again when the phone plays none, else it goes first among the recent ones; a recent queue is
+         * added while Recent has room, unless a queue there or one restored has its songs.
          */
-        internal fun mergeQueues(now: QueueBook, recent: List<Queue>, saved: List<Queue>): QueueBook {
+        internal fun mergeQueues(now: QueueBook, restored: QueueBook): QueueBook {
+            if (now.queues.isEmpty()) return restored.copy(jumps = now.jumps, nextId = maxOf(restored.nextId, now.nextId), nextUid = maxOf(restored.nextUid, now.nextUid))
             fun songs(queue: Queue) = queue.items.map { it.song.path }
             val savedHere = now.saved.mapNotNull(now::queue).map(::songs).toMutableSet()
-            val toSaved = saved.filter { savedHere.add(songs(it)) }
+            val toSaved = restored.saved.mapNotNull(restored::queue).filter { savedHere.add(songs(it)) }
             val seen = (now.queues + toSaved).map(::songs).toMutableSet()
+            val current = restored.current
+            val playing = current?.takeIf { now.currentId == null }?.let { queue ->
+                if (queue.id in restored.saved) toSaved.firstOrNull { it.id == queue.id } else queue.takeIf { seen.add(songs(it)) }
+            }
+            val recent = listOfNotNull(current?.takeIf { playing == null && it.id !in restored.saved }) + restored.recent.mapNotNull(restored::queue)
             val toRecent = recent.filter { seen.add(songs(it)) }.take((QueueBook.MAX_RECENT - now.recent.size).coerceAtLeast(0))
-            if (toRecent.isEmpty() && toSaved.isEmpty()) return now
+            val adding = (listOfNotNull(playing?.takeIf { it.id !in restored.saved }) + toRecent + toSaved)
+            if (adding.isEmpty()) return now
             var nextId = now.nextId
             var nextUid = now.nextUid
-            val made = (toRecent + toSaved).map { queue ->
+            val made = adding.associate { queue ->
                 val uids = queue.items.associate { it.uid to nextUid++ }
-                queue.copy(id = "q${nextId++}", items = queue.items.map { it.copy(uid = uids.getValue(it.uid)) }, unshuffled = queue.unshuffled?.mapNotNull(uids::get))
+                queue.id to queue.copy(id = "q${nextId++}", items = queue.items.map { it.copy(uid = uids.getValue(it.uid)) }, unshuffled = queue.unshuffled?.mapNotNull(uids::get))
             }
             return now.copy(
-                queues = now.queues + made,
-                recent = now.recent + made.take(toRecent.size).map { it.id },
-                saved = now.saved + made.drop(toRecent.size).map { it.id },
+                queues = now.queues + made.values,
+                currentId = playing?.let { made.getValue(it.id).id } ?: now.currentId,
+                recent = now.recent + toRecent.map { made.getValue(it.id).id },
+                saved = now.saved + toSaved.map { made.getValue(it.id).id },
                 nextId = nextId,
                 nextUid = nextUid,
             )
         }
 
         /**
-         * [now] with the backup's places for songs that have none, and its bookmarks not there yet (the same spot and
-         * note in the form the song state keeps them), each on its song as this phone knows it (its path and id hint,
-         * [Song.ref]), so they follow it when it moves. Through the song state's own API ([SongState.withPlace],
-         * [SongState.withBookmark]), which gives each bookmark its new id. A restore never pushes out the phone's own: a
-         * place or a bookmark past the song state's caps is left out, and counted.
+         * [now] with the backup's places for songs that have none, its bookmarks not there yet (the same spot and note in
+         * the form the song state keeps them), its own speeds for songs without one, each on its song as this phone
+         * knows it (its path and id hint, [Song.ref]), so they follow it when it moves; the [usual] speed replaces the
+         * phone's, and the [part] repeating comes back when the phone repeats none. Through the song state's own API
+         * ([SongState.withPlace], [SongState.withBookmark]), which gives each bookmark its new id. A restore never pushes
+         * out the phone's own: a place or a bookmark past the song state's caps is left out, and counted; a speed past
+         * its cap is left out.
          */
-        internal fun mergeMarks(now: SongState, marks: List<Pair<Song, BackupMarks>>): MergedMarks {
+        internal fun mergeMarks(now: SongState, marks: List<Pair<Song, BackupMarks>>, usual: Speed? = null, part: Pair<Song, AbPart>? = null): MergedMarks {
             var state = now
             var placesLeftOut = 0
             var bookmarksLeftOut = 0
@@ -315,9 +474,17 @@ class RestorePlan(val contents: BackupContents, resolver: SongResolver) {
                         if (added == null) bookmarksLeftOut++ else state = added.first
                     }
                 }
+                if (kept.speed != null && key.path !in state.speeds && state.speeds.size < SongState.MAX_SPEEDS) {
+                    state = state.copy(speeds = state.speeds + (key.path to kept.speed.normalised())).noting(key)
+                }
             }
+            usual?.let { state = state.copy(usual = it.normalised()) }
+            if (part != null && state.part == null) state = state.copy(part = part.second.copy(path = part.first.path)).noting(part.first.ref)
             return MergedMarks(state, placesLeftOut, bookmarksLeftOut)
         }
+
+        /** [song]'s id hint kept with its state, as the song state's own changes keep it. */
+        private fun SongState.noting(song: SongRef): SongState = song.mediaStoreId?.let { copy(ids = ids + (song.path to it)) } ?: this
 
         /** [mark] as the song state would keep it (its spot to the second, its note trimmed and capped), by its own rules. */
         private fun keptForm(song: SongRef, mark: BackupBookmark): Bookmark = checkNotNull(SongState().withBookmark(song, mark.positionMs, mark.note)).second

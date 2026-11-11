@@ -12,7 +12,12 @@ import app.lyrify.backup.BackupFixtures.zip
 import app.lyrify.backup.BackupFixtures.zipOf
 import app.lyrify.data.LedgerState
 import app.lyrify.library.SongRef
+import app.lyrify.player.AbPart
+import app.lyrify.player.Repeat
+import app.lyrify.player.Speed
 import app.lyrify.settings.BackupSettings
+import app.lyrify.settings.ConnectDevice
+import app.lyrify.tags.Settled
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -43,14 +48,12 @@ class BackupBundleTest {
     }
 
     @Test
-    fun `the queue playing comes back as the newest recent queue, with Recent and Saved after it`() {
+    fun `the queues come back as they were, the one playing at its song and second, with Repeat`() {
         val read = checkNotNull(contents().queues)
 
-        assertNull(read.currentId)
-        assertEquals(listOf("q3", "q1"), read.recent)
-        assertEquals(listOf("q2"), read.saved)
-        val expected = BackupFixtures.queues.queues.map { queue -> queue.copy(items = queue.items.map { it.copy(song = noId(it.song)) }) }
-        assertEquals(expected.sortedBy { it.id }, read.queues.sortedBy { it.id })
+        val expected = BackupFixtures.queues.copy(queues = BackupFixtures.queues.queues.map { queue -> queue.copy(items = queue.items.map { it.copy(song = noId(it.song)) }) })
+        assertEquals(expected, read)
+        assertEquals(Repeat.ALL, contents().repeat)
     }
 
     @Test
@@ -59,14 +62,38 @@ class BackupBundleTest {
     }
 
     @Test
-    fun `bookmarks and places come back, without the speeds or the part repeating`() {
+    fun `bookmarks, places and speeds come back, with the usual speed and the part repeating`() {
         assertEquals(
             listOf(
-                BackupMarks(water.path, 600_000, emptyList()),
+                BackupMarks(water.path, 600_000, emptyList(), Speed(0.75f)),
                 BackupMarks(lantern.path, null, listOf(BackupBookmark(30_000, "Chorus"), BackupBookmark(95_000, ""))),
             ),
             contents().bookmarks,
         )
+        assertEquals(Speed(1.25f), contents().usualSpeed)
+        assertEquals(AbPart(lantern.path, 30_000, 60_000), contents().part)
+    }
+
+    @Test
+    fun `tones, Duplicates choices, Covers & tags and recent searches come back, by paths, never by MediaStore ids`() {
+        val read = contents()
+        val tone = BackupFixtures.tone
+
+        assertEquals(listOf(BackupTone(tone.name, tone.kind, tone.songPath, tone.startMs, tone.lengthMs, tone.fadeInMs, tone.fadeOutMs, tone.createdAt, tone.fileName, tone.size)), read.tones)
+        assertEquals(BackupDuplicates(notDuplicates = listOf(listOf(lantern.path, bell.path)), reviewed = listOf(listOf(bell.path, water.path))), read.duplicates)
+        assertEquals(
+            BackupCovers(
+                albums = listOf(
+                    BackupAlbum(Settled.DONE, "Harbour Glass", "Kit Calloway", listOf(lantern.path, bell.path), T0 + 5, changed = 2, problems = emptyList()),
+                    BackupAlbum(Settled.SKIPPED, "Night Ferry", "Mira Solen", listOf(water.path), T0 + 6, changed = 0, problems = emptyList()),
+                ),
+                checkedOnce = true,
+                noted = true,
+                apart = BackupFixtures.keptApart,
+            ),
+            read.covers,
+        )
+        assertEquals(BackupFixtures.searches, read.searches)
     }
 
     @Test
@@ -80,8 +107,19 @@ class BackupBundleTest {
     }
 
     @Test
-    fun `settings come back, without Settings, Backup, which belongs to the phone`() {
+    fun `settings come back with the AI switch, without Settings, Backup, which belongs to the phone`() {
         assertEquals(BackupFixtures.settings.copy(backup = BackupSettings()), contents().settings)
+        assertEquals(true, contents().aiLyrics)
+    }
+
+    @Test
+    fun `Start when connected keeps only its devices' names, as Android links each device to one phone`() {
+        val devices = listOf(ConnectDevice(4, "Harbour Buds"), ConnectDevice(9, "Car Kit"))
+        val settings = BackupFixtures.settings.copy(playback = BackupFixtures.settings.playback.copy(connectDevices = devices))
+        val read = contents(zip(BackupFixtures.snapshot.copy(settings = settings)))
+
+        assertEquals(emptyList<ConnectDevice>(), read.settings?.playback?.connectDevices)
+        assertEquals(listOf("Harbour Buds", "Car Kit"), read.connectNames)
     }
 
     @Test
@@ -89,7 +127,7 @@ class BackupBundleTest {
         val songs = contents().songs.associateBy { it.path }
 
         assertEquals(setOf(lantern.path, bell.path, water.path), songs.keys)
-        assertEquals(BackupSong(water.path, "Low Water", "Mira Solen", "Night Ferry", 240_000), songs[water.path])
+        assertEquals(BackupSong(water.path, "Low Water", "Mira Solen", "Night Ferry", 240_000, "Music/Night Ferry/01 Low Water.mp3", 4_000_000), songs[water.path])
         assertEquals(T0, contents().createdAt)
         assertEquals(VERSION, contents().appVersion)
     }
@@ -137,9 +175,9 @@ class BackupBundleTest {
         assertFalse(text, "A made-up line" in text)
         assertFalse(text, "\"pendingText\":\"" in text)
         assertFalse(text, Regex("([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}").containsMatchIn(text))
-        // Nor the speeds or the part repeating, which belong to how the phone plays.
-        assertFalse(text, "keepPitch" in text)
-        assertFalse(text, "startMs" in text)
+        // Nor a tone's id, nor the Undo Covers & tags keeps on the phone.
+        assertFalse(text, "\"id\":501" in text)
+        assertFalse(text, "entryId" in text)
         assertTrue(text, "Harbour Buds" in text)
     }
 

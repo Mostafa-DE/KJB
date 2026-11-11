@@ -24,6 +24,9 @@ import app.lyrify.library.PlaylistsState
 import app.lyrify.library.Song
 import app.lyrify.library.SongRef
 import app.lyrify.library.SongResolver
+import app.lyrify.player.Repeat
+import app.lyrify.tags.CoversTagsMemory
+import app.lyrify.tones.TonesState
 import app.lyrify.library.song
 import app.lyrify.player.Bookmark
 import app.lyrify.player.Queue
@@ -50,53 +53,11 @@ import org.junit.Test
  * found, a second restore, and a section that fails. Made-up names only.
  */
 class BackupRestoreTest {
-    /** The phone's stores in memory; a section in [failing] cannot be written, and its store stays as it was. */
-    class MemoryStores(
-        var playlists: PlaylistsState = PlaylistsState(),
-        var queues: QueueBook = QueueBook(),
-        val log: FakePlayLog = FakePlayLog(),
-        var songState: SongState = SongState(),
-        var equalizer: EqProfiles = EqProfiles(),
-        var ledger: LedgerState = LedgerState(),
-        var settings: Settings = Settings(),
-        val failing: MutableSet<Section> = mutableSetOf(),
-    ) : BackupStores {
-        private fun <T> change(section: Section, now: T, change: (T) -> T, set: (T) -> Unit): Boolean = (section !in failing).also { if (it) set(change(now)) }
-
-        override suspend fun playlists(): PlaylistsState = playlists
-
-        override suspend fun updatePlaylists(change: (PlaylistsState) -> PlaylistsState) = change(Section.PLAYLISTS, playlists, change) { playlists = it }
-
-        override suspend fun queues(): QueueBook = queues
-
-        override suspend fun updateQueues(change: (QueueBook) -> QueueBook) = change(Section.QUEUES, queues, change) { queues = it }
-
-        override suspend fun plays(): List<LoggedPlay>? = log.all()
-
-        override suspend fun addPlays(plays: List<LoggedPlay>): Boolean = Section.PLAYS !in failing && log.putAll(plays)
-
-        override suspend fun songState(): SongState = songState
-
-        override suspend fun updateSongState(change: (SongState) -> SongState) = change(Section.BOOKMARKS, songState, change) { songState = it }
-
-        override suspend fun equalizer(): EqProfiles = equalizer
-
-        override suspend fun replaceEqualizer(profiles: EqProfiles) = change(Section.EQUALIZER, equalizer, { profiles }) { equalizer = it }
-
-        override suspend fun ledger(): LedgerState = ledger
-
-        override suspend fun updateLedger(change: (LedgerState) -> LedgerState) = change(Section.LYRICS, ledger, change) { ledger = it }
-
-        override suspend fun settings(): Settings = settings
-
-        override suspend fun updateSettings(change: (Settings) -> Settings) = change(Section.SETTINGS, settings, change) { settings = it }
-    }
-
     private var ids = 0
     private val newId = { "new${++ids}" }
     private val all = Section.entries.toSet()
 
-    private fun plan(library: List<Song> = BackupFixtures.library, contents: BackupContents = contents()) = RestorePlan(contents, SongResolver(library))
+    private fun plan(library: List<Song> = BackupFixtures.library, contents: BackupContents = contents()) = RestorePlan(contents, library)
 
     private fun restore(stores: MemoryStores, library: List<Song> = BackupFixtures.library, chosen: Set<Section> = all): RestoreResult =
         runBlocking { plan(library).apply(chosen, stores, newId) }
@@ -104,23 +65,16 @@ class BackupRestoreTest {
     // Each section on an empty phone
 
     @Test
-    fun `on an empty phone every section comes back`() {
+    fun `on an empty phone every section comes back as it was`() {
         val stores = MemoryStores()
 
-        assertEquals(RestoreResult(Section.entries, emptyList()), restore(stores))
+        val result = restore(stores)
 
-        assertEquals(listOf("Road trip", "Night drive"), stores.playlists.playlists.map { it.name })
-        assertEquals(listOf(listOf(lantern.ref, bell.ref, lantern.ref), listOf(water.ref)), stores.playlists.playlists.map { it.songs })
-        assertEquals(listOf(water.ref, lantern.ref), stores.playlists.favouriteSongs)
-        val roadTrip = stores.playlists.playlists.first().id
-        assertEquals(listOf(FavouriteCollection(CollectionKind.ARTIST, "Mira Solen"), FavouriteCollection(CollectionKind.PLAYLIST, roadTrip)), stores.playlists.favouriteCollections)
-
-        val book = stores.queues
-        assertEquals(null, book.currentId)
-        assertEquals(listOf(listOf(bell.ref, water.ref), listOf(lantern.ref, bell.ref)), book.recent.map { id -> book.queue(id)!!.items.map { it.song } })
-        assertEquals(listOf("Ferry songs"), book.saved.map { book.queue(it)!!.name })
-        val album = book.queue(book.recent[1])!!
-        assertEquals(1 to 30_000L, album.index to album.positionMs)
+        assertEquals(Section.entries to emptyList<Section>(), result.restored to result.failed)
+        assertEquals(BackupFixtures.playlists, stores.playlists)
+        // The queue playing is playing again, at its song and second.
+        assertEquals(BackupFixtures.queues, stores.queues)
+        assertEquals(Repeat.ALL, stores.repeat)
 
         assertEquals(BackupFixtures.plays.toSet(), stores.log.plays.toSet())
         assertEquals(mapOf(water.path to 600_000L), stores.songState.places)
@@ -128,6 +82,11 @@ class BackupRestoreTest {
         assertEquals(BackupFixtures.equalizer, stores.equalizer)
         assertEquals(BackupFixtures.ledger.entries, stores.ledger.entries)
         assertEquals(BackupFixtures.settings.copy(backup = BackupSettings(), nav = NavSettings(setupDone = false)), stores.settings)
+        assertEquals(BackupFixtures.songState, stores.songState)
+        assertEquals(true, stores.aiLyrics)
+        assertEquals(BackupFixtures.duplicates, stores.duplicates)
+        assertEquals(BackupFixtures.keptApart, stores.keptApart)
+        assertEquals(BackupFixtures.searches, stores.searches)
     }
 
     // Replace and merge
@@ -249,7 +208,7 @@ class BackupRestoreTest {
         val two = restore(everywhere, chosen = setOf(Section.BOOKMARKS))
 
         assertEquals(full, perSong.songState.bookmarksOf(lantern.path))
-        assertEquals(RestoreResult(listOf(Section.BOOKMARKS), emptyList(), placesLeftOut = 0, bookmarksLeftOut = 2), one)
+        assertEquals(Triple(listOf(Section.BOOKMARKS), 0, 2), Triple(one.restored, one.placesLeftOut, one.bookmarksLeftOut))
         assertEquals(all, everywhere.songState.bookmarks)
         assertEquals(2, two.bookmarksLeftOut)
     }
@@ -334,7 +293,7 @@ class BackupRestoreTest {
 
     @Test
     fun `a song two songs of this phone could be is not guessed`() {
-        val twin = song("Music/Copies/Low Water.mp3", title = "Low Water", artist = "Mira Solen", durationMs = 240_500)
+        val twin = song("Music/Copies/Low Water.mp3", title = "Low Water", artist = "Mira Solen", album = "Night Ferry", durationMs = 240_500)
 
         assertEquals(listOf(water.path), plan(newLibrary - newWater + moved(newWater) + twin).missing(setOf(Section.PLAYLISTS)).map { it.path })
     }
@@ -351,7 +310,7 @@ class BackupRestoreTest {
     fun `sections not chosen are left as they were`() {
         val stores = MemoryStores()
 
-        assertEquals(RestoreResult(listOf(Section.PLAYS, Section.SETTINGS), emptyList()), restore(stores, chosen = setOf(Section.PLAYS, Section.SETTINGS)))
+        assertEquals(listOf(Section.PLAYS, Section.SETTINGS), restore(stores, chosen = setOf(Section.PLAYS, Section.SETTINGS)).restored)
 
         assertEquals(PlaylistsState(), stores.playlists)
         assertEquals(QueueBook(), stores.queues)
@@ -367,7 +326,8 @@ class BackupRestoreTest {
 
         val result = restore(stores)
 
-        assertEquals(RestoreResult(Section.entries - Section.QUEUES - Section.PLAYS, listOf(Section.QUEUES, Section.PLAYS)), result)
+        assertEquals(Section.entries - Section.QUEUES - Section.PLAYS, result.restored)
+        assertEquals(listOf(Section.QUEUES, Section.PLAYS), result.failed)
         assertEquals(QueueBook(), stores.queues)
         assertEquals(emptyList<LoggedPlay>(), stores.log.plays)
         assertEquals(2, stores.playlists.playlists.size)
@@ -390,7 +350,10 @@ class BackupRestoreTest {
         val stores = MemoryStores(BackupFixtures.playlists, BackupFixtures.queues, FakePlayLog(BackupFixtures.plays), BackupFixtures.songState, BackupFixtures.equalizer, BackupFixtures.ledger, BackupFixtures.settings)
 
         assertEquals(
-            BackupSnapshot(BackupFixtures.playlists, BackupFixtures.queues, BackupFixtures.plays, BackupFixtures.songState, BackupFixtures.equalizer, BackupFixtures.ledger, BackupFixtures.settings),
+            BackupSnapshot(
+                BackupFixtures.playlists, BackupFixtures.queues, BackupFixtures.plays, BackupFixtures.songState, BackupFixtures.equalizer, BackupFixtures.ledger, BackupFixtures.settings,
+                repeat = Repeat.OFF, aiLyrics = false, tones = TonesState(), duplicates = DuplicateChoices(), coversTags = CoversTagsMemory(), keptApart = emptySet(), searches = emptyList(),
+            ),
             stores.snapshot(),
         )
         stores.log.failing = true
