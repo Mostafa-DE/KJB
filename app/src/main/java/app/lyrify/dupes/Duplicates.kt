@@ -174,6 +174,29 @@ class Duplicates(
     }
 
     /**
+     * A backup's choices (backup/, a restore) added to the user's: groups marked "Not duplicates" leave the results, as
+     * [notDuplicates] does. They count only once stored: false, and nothing changed, when they could not be.
+     */
+    suspend fun restoreChoices(notDuplicates: Set<String>, reviewed: Set<String>): Boolean {
+        loading.join()
+        val change = { memory: DuplicatesMemory ->
+            memory.copy(
+                results = memory.results?.let { results -> results.copy(groups = results.groups.filter { it.key !in notDuplicates }) },
+                notDuplicates = memory.notDuplicates + notDuplicates,
+                reviewed = memory.reviewed + reviewed - notDuplicates,
+            )
+        }
+        return withContext(io) {
+            saving.withLock {
+                val stored = store.save(change(state.value.memory))
+                // Applied again to the memory as it is now: a change made while it was stored is kept.
+                if (stored) _state.update { it.copy(memory = change(it.memory)) }
+                stored
+            }
+        }
+    }
+
+    /**
      * "Move to trash" in [group]'s sheet with the files [ids] checked: KJB's own dialog asks first ([TrashStep.Confirm]).
      * Any files of a group shown now, the suggested keep too (it is only a hint), but never all of them, so one copy
      * always stays. False when [ids] are not such files: nothing is asked.

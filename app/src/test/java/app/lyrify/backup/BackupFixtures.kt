@@ -26,6 +26,7 @@ import app.lyrify.player.Queue
 import app.lyrify.player.QueueBook
 import app.lyrify.player.QueueItem
 import app.lyrify.player.QueueSource
+import app.lyrify.player.Repeat
 import app.lyrify.player.SongState
 import app.lyrify.player.SourceKind
 import app.lyrify.player.Speed
@@ -35,7 +36,19 @@ import app.lyrify.settings.Levelling
 import app.lyrify.settings.NavSettings
 import app.lyrify.settings.PlaybackSettings
 import app.lyrify.settings.Settings
+import app.lyrify.library.search.withSearch
+import app.lyrify.stats.FakePlayLog
 import app.lyrify.stats.LoggedPlay
+import app.lyrify.tags.AlbumRecord
+import app.lyrify.tags.CoversTagsMemory
+import app.lyrify.tags.FileMark
+import app.lyrify.tags.NameKind
+import app.lyrify.tags.NamePair
+import app.lyrify.tags.Settled
+import app.lyrify.tags.albumId
+import app.lyrify.tones.SavedTone
+import app.lyrify.tones.ToneKind
+import app.lyrify.tones.TonesState
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.util.zip.ZipEntry
@@ -132,7 +145,30 @@ object BackupFixtures {
         nav = NavSettings(setupDone = true),
     )
 
-    val snapshot: BackupSnapshot = BackupSnapshot(playlists, queues, plays, songState, equalizer, ledger.put(writing), settings)
+    /** One tone cut from Low Water, its file in Ringtones. */
+    val tone: SavedTone = SavedTone(501, "Low Water (KJB)", ToneKind.RINGTONE, water.path, 30_000, 30_000, 500, 1_000, T0, "Low Water (KJB).m4a", 480_000)
+
+    /** Paper Lantern and Tide Bell said not to be duplicates; the group of Tide Bell and Low Water opened. */
+    val duplicates: DuplicateChoices = DuplicateChoices(notDuplicates = setOf("11,12"), reviewed = setOf("12,13"))
+
+    /** Harbour Glass done in Covers & tags (its Undo stays here), Night Ferry skipped. */
+    val coversTags: CoversTagsMemory = CoversTagsMemory(
+        albums = listOf(
+            AlbumRecord(albumId(listOf(lantern.path, bell.path)), Settled.DONE, "Harbour Glass", "Kit Calloway", listOf(FileMark(lantern.path, 4_000_000, T0), FileMark(bell.path, 4_000_000, T0)), at = T0 + 5, entryId = 7, changed = 2),
+            AlbumRecord(albumId(listOf(water.path)), Settled.SKIPPED, "Night Ferry", "Mira Solen", listOf(FileMark(water.path, 4_000_000, T0)), at = T0 + 6),
+        ),
+        checkedOnce = true,
+        noted = true,
+        historySeen = 7,
+    )
+    val keptApart: Set<NamePair> = setOf(NamePair.of(NameKind.ARTIST, "Kit Calloway", "Kit Galloway"))
+    val searches: List<String> = listOf("harbour", "mira")
+
+    val snapshot: BackupSnapshot = BackupSnapshot(
+        playlists, queues, plays, songState, equalizer, ledger.put(writing), settings,
+        repeat = Repeat.ALL, aiLyrics = true, tones = TonesState(mapOf(tone.id to tone)), duplicates = duplicates, coversTags = coversTags,
+        keptApart = keptApart, searches = searches,
+    )
 
     const val VOLUME_SD: String = "/storage/1A2B-3C4D/"
 
@@ -169,4 +205,100 @@ object BackupFixtures {
             }
         }
     }.toByteArray()
+}
+
+/**
+ * A phone's stores in memory; a section in [failing] cannot be written, and its stores stay as they were. [toneFiles]
+ * are the tone files on the phone, by folder, name and size; [files] the songs' files as they are now. [repeatFails] and
+ * [aiFails]: the second write of the queues' and the settings' sections fails.
+ */
+class MemoryStores(
+    var playlists: PlaylistsState = PlaylistsState(),
+    var queues: QueueBook = QueueBook(),
+    val log: FakePlayLog = FakePlayLog(),
+    var songState: SongState = SongState(),
+    var equalizer: EqProfiles = EqProfiles(),
+    var ledger: LedgerState = LedgerState(),
+    var settings: Settings = Settings(),
+    val failing: MutableSet<Section> = mutableSetOf(),
+    var repeat: Repeat = Repeat.OFF,
+    var aiLyrics: Boolean = false,
+    var tones: TonesState = TonesState(),
+    val toneFiles: Map<Triple<String, String, Long>, Long> = emptyMap(),
+    var duplicates: DuplicateChoices = DuplicateChoices(),
+    var coversTags: CoversTagsMemory = CoversTagsMemory(),
+    var keptApart: Set<NamePair> = emptySet(),
+    var searches: List<String> = emptyList(),
+    val files: Map<String, FileMark> = emptyMap(),
+    var repeatFails: Boolean = false,
+    var aiFails: Boolean = false,
+) : BackupStores {
+    private fun <T> change(section: Section, now: T, change: (T) -> T, set: (T) -> Unit): Boolean = (section !in failing).also { if (it) set(change(now)) }
+
+    override suspend fun playlists(): PlaylistsState = playlists
+
+    override suspend fun updatePlaylists(change: (PlaylistsState) -> PlaylistsState) = change(Section.PLAYLISTS, playlists, change) { playlists = it }
+
+    override suspend fun queues(): QueueBook = queues
+
+    override suspend fun updateQueues(change: (QueueBook) -> QueueBook) = change(Section.QUEUES, queues, change) { queues = it }
+
+    override suspend fun plays(): List<LoggedPlay>? = log.all()
+
+    override suspend fun addPlays(plays: List<LoggedPlay>): Boolean = Section.PLAYS !in failing && log.putAll(plays)
+
+    override suspend fun songState(): SongState = songState
+
+    override suspend fun updateSongState(change: (SongState) -> SongState) = change(Section.BOOKMARKS, songState, change) { songState = it }
+
+    override suspend fun equalizer(): EqProfiles = equalizer
+
+    override suspend fun replaceEqualizer(profiles: EqProfiles) = change(Section.EQUALIZER, equalizer, { profiles }) { equalizer = it }
+
+    override suspend fun ledger(): LedgerState = ledger
+
+    override suspend fun updateLedger(change: (LedgerState) -> LedgerState) = change(Section.LYRICS, ledger, change) { ledger = it }
+
+    override suspend fun settings(): Settings = settings
+
+    override suspend fun updateSettings(change: (Settings) -> Settings) = change(Section.SETTINGS, settings, change) { settings = it }
+
+    override suspend fun repeat(): Repeat = repeat
+
+    override suspend fun replaceRepeat(repeat: Repeat): Boolean = !repeatFails && change(Section.QUEUES, this.repeat, { repeat }) { this.repeat = it }
+
+    override suspend fun aiLyrics(): Boolean = aiLyrics
+
+    override suspend fun replaceAiLyrics(on: Boolean): Boolean = !aiFails && change(Section.SETTINGS, aiLyrics, { on }) { aiLyrics = it }
+
+    override suspend fun tones(): TonesState = tones
+
+    override suspend fun addTones(tones: List<SavedTone>): Boolean = change(Section.TONES, this.tones, { now -> tones.fold(now) { list, tone -> list.put(tone) } }) { this.tones = it }
+
+    override suspend fun findTone(folder: String, fileName: String, size: Long): Long? = toneFiles[Triple(folder, fileName, size)]
+
+    override suspend fun duplicates(): DuplicateChoices = duplicates
+
+    override suspend fun addDuplicates(choices: DuplicateChoices): Boolean = change(Section.DUPLICATES, duplicates, { now ->
+        DuplicateChoices(now.notDuplicates + choices.notDuplicates, now.reviewed + choices.reviewed - choices.notDuplicates)
+    }) { duplicates = it }
+
+    override suspend fun coversTags(): CoversTagsMemory = coversTags
+
+    override suspend fun addSettledAlbums(albums: List<AlbumRecord>, checkedOnce: Boolean, noted: Boolean): Boolean = change(Section.COVERS, coversTags, { memory ->
+        val known = memory.albums.map { it.id }.toSet()
+        memory.copy(albums = memory.albums + albums.filterNot { it.id in known }, checkedOnce = memory.checkedOnce || checkedOnce, noted = memory.noted || noted)
+    }) { coversTags = it }
+
+    override suspend fun keptApart(): Set<NamePair> = keptApart
+
+    override suspend fun addKeptApart(pairs: Set<NamePair>): Boolean = change(Section.NAMES, keptApart, { it + pairs }) { keptApart = it }
+
+    override suspend fun searches(): List<String> = searches
+
+    override suspend fun addSearches(searches: List<String>): Boolean = change(Section.SEARCHES, this.searches, { now ->
+        searches.filterNot { it in now }.asReversed().fold(now, ::withSearch)
+    }) { this.searches = it }
+
+    override suspend fun fileMark(path: String): FileMark? = files[path]
 }

@@ -160,6 +160,9 @@ class ToneListStore internal constructor(private val store: DataStore<TonesState
 
     override suspend fun put(tone: SavedTone): Boolean = write { it.put(tone) }
 
+    /** [tones] put in one write, all or none (a backup's restore). */
+    suspend fun putAll(tones: List<SavedTone>): Boolean = write { state -> tones.fold(state) { list, tone -> list.put(tone) } }
+
     override suspend fun remove(id: Long): Boolean = write { it.remove(id) }
 
     override suspend fun retain(ids: Set<Long>): Boolean = write { it.retain(ids) }

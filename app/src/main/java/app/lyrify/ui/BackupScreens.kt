@@ -68,12 +68,17 @@ internal data class RestoreRow(val section: Section, val count: Int?, val more: 
 /** The summary's rows: each section the backup holds, in its order, with what it counts ("Playlists 6", "And 120 favourites"). */
 internal fun restoreRows(contents: BackupContents): List<RestoreRow> = listOfNotNull(
     contents.playlists?.let { RestoreRow(Section.PLAYLISTS, it.playlists.size, (it.favouriteSongs.size + it.favouriteCollections.size).takeIf { n -> n > 0 }) },
-    contents.queues?.let { book -> RestoreRow(Section.QUEUES, (book.recent + book.saved).distinct().count { book.queue(it) != null }, null) },
+    contents.queues?.let { book -> RestoreRow(Section.QUEUES, book.queues.size, null) },
     contents.plays?.let { RestoreRow(Section.PLAYS, it.size, null) },
     contents.bookmarks?.let { songs -> RestoreRow(Section.BOOKMARKS, songs.sumOf { it.bookmarks.size }, songs.count { it.placeMs != null }.takeIf { it > 0 }) },
     contents.equalizer?.let { RestoreRow(Section.EQUALIZER, it.profiles.size, it.presets.size.takeIf { n -> n > 0 }) },
     contents.lyrics?.let { RestoreRow(Section.LYRICS, it.entries.size, null) },
     contents.settings?.let { RestoreRow(Section.SETTINGS, null, null) },
+    contents.tones?.let { RestoreRow(Section.TONES, it.size, null) },
+    contents.duplicates?.let { RestoreRow(Section.DUPLICATES, it.notDuplicates.size, null) },
+    contents.covers?.let { RestoreRow(Section.COVERS, it.albums.size, null) },
+    contents.names?.let { RestoreRow(Section.NAMES, it.size, null) },
+    contents.searches?.let { RestoreRow(Section.SEARCHES, it.size, null) },
 )
 
 @StringRes
@@ -85,10 +90,19 @@ internal fun sectionLabel(section: Section): Int = when (section) {
     Section.EQUALIZER -> R.string.restore_section_equalizer
     Section.LYRICS -> R.string.restore_section_lyrics
     Section.SETTINGS -> R.string.restore_section_settings
+    Section.TONES -> R.string.restore_section_tones
+    Section.DUPLICATES -> R.string.restore_section_duplicates
+    Section.COVERS -> R.string.restore_section_covers
+    Section.NAMES -> R.string.restore_section_names
+    Section.SEARCHES -> R.string.restore_section_searches
 }
 
-/** Whether a restore brought back all it was asked to: else a sheet says what it did not. */
+/** Whether a restore brought back all it was asked to: else the summary after it is "Partly restored". */
 internal fun complete(result: RestoreResult): Boolean = result.failed.isEmpty() && result.placesLeftOut == 0 && result.bookmarksLeftOut == 0
+
+/** The summary's lines after a restore: each section restored with what it brought back (Settings counts nothing). */
+internal fun restoredRows(result: RestoreResult): List<Pair<Section, Int?>> =
+    result.restored.map { section -> section to result.counts[section].takeUnless { section == Section.SETTINGS } }
 
 /** The line under a row: favourites, places to resume, own presets. */
 @PluralsRes
@@ -102,11 +116,12 @@ private fun sectionMore(section: Section): Int? = when (section) {
 /** The summary lists this many songs not found, then "And 12 more". */
 private const val SHOWN: Int = 50
 
-/** What the restore sheet shows: the summary of a picked backup, or what a restore could not bring back ([complete]). */
+/** What the restore sheet shows: the summary of a picked backup, or, after the restore, what came back and what did not. */
 private sealed interface RestoreSheet {
     data class Summary(val plan: RestorePlan, val chosen: Set<Section>, val restoring: Boolean = false) : RestoreSheet
 
-    data class Done(val result: RestoreResult) : RestoreSheet
+    /** [missing]: the songs of the backup not on this phone; [ai]: the AI lyrics came back on, so their models download again. */
+    data class Done(val result: RestoreResult, val missing: List<MissingSong>, val ai: Boolean) : RestoreSheet
 }
 
 /**
@@ -213,9 +228,10 @@ fun rememberBackupActions(setAutomatic: (Boolean) -> Unit): BackupActions {
             sheet.value = summary.copy(restoring = true)
             scope.launch {
                 val result = withContext(NonCancellable) { Backups.restore(app, summary.plan, summary.chosen) }
+                val missing = withContext(Dispatchers.Default) { summary.plan.missing(summary.chosen) }
+                val ai = Section.SETTINGS in result.restored && summary.plan.contents.aiLyrics == true
                 picked.value = null
-                sheet.value = if (complete(result)) null else RestoreSheet.Done(result)
-                if (complete(result)) say(R.string.restore_done, false)
+                sheet.value = RestoreSheet.Done(result, missing, ai)
             }
         },
         onClose = {
@@ -245,8 +261,9 @@ private fun release(app: Context, tree: String) {
 /**
  * The restore sheet: the summary (when the backup was made, a check box per section with what it holds, the parts a
  * newer KJB made, the songs not on this phone, what merges and what replaces, and that Undo history isn't included),
- * then Restore; or, after a restore, the parts that failed and the places and bookmarks the limits left out. Shows
- * nothing otherwise.
+ * then Restore; then, after the restore, one summary of what came back (each part with its count), the songs not found
+ * on this phone, the tones whose files aren't here, the devices to pick again, the parts that failed and the places and
+ * bookmarks the limits left out. Shows nothing otherwise.
  */
 @Composable
 private fun RestoreSheet(state: MutableState<RestoreSheet?>, onRestore: (RestoreSheet.Summary) -> Unit, onClose: () -> Unit) {
@@ -259,10 +276,15 @@ private fun RestoreSheet(state: MutableState<RestoreSheet?>, onRestore: (Restore
         ) {
             val result = sheet.result
             Text(
-                stringResource(if (result.failed.isEmpty()) R.string.restore_done else R.string.restore_partly),
+                stringResource(if (complete(result)) R.string.restore_done else R.string.restore_partly),
                 style = MaterialTheme.typography.titleLarge,
                 modifier = Modifier.semantics { heading() },
             )
+            restoredRows(result).forEach { (section, count) -> CountRow(stringResource(sectionLabel(section)), count) }
+            if (sheet.missing.isNotEmpty()) MissingSongs(sheet.missing, after = true)
+            if (result.tonesNotFound > 0) Fact(R.drawable.ic_info, pluralStringResource(R.plurals.restore_tones_missing, result.tonesNotFound, formatCount(result.tonesNotFound)))
+            if (result.pickAgain.isNotEmpty()) Fact(R.drawable.ic_info, stringResource(R.string.restore_pick_again, result.pickAgain.joinToString(", ")))
+            if (sheet.ai) Fact(R.drawable.ic_info, stringResource(R.string.restore_ai_models))
             if (result.failed.isNotEmpty()) {
                 val names = result.failed.map { stringResource(sectionLabel(it)) }.joinToString(", ")
                 Text(stringResource(R.string.restore_failed, names), style = MaterialTheme.typography.bodyLarge, color = colors.onSurfaceVariant)
@@ -273,6 +295,7 @@ private fun RestoreSheet(state: MutableState<RestoreSheet?>, onRestore: (Restore
             if (result.bookmarksLeftOut > 0) {
                 Text(pluralStringResource(R.plurals.restore_bookmarks_full, result.bookmarksLeftOut, formatCount(result.bookmarksLeftOut)), style = MaterialTheme.typography.bodyLarge, color = colors.onSurfaceVariant)
             }
+            Text(stringResource(R.string.restore_undo), style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant)
         }
         is RestoreSheet.Summary -> {
             val contents = sheet.plan.contents
@@ -336,12 +359,30 @@ private fun SectionRow(row: RestoreRow, checked: Boolean, enabled: Boolean, onCh
     }
 }
 
-/** "Not found": how many songs of the backup aren't on this phone, then the first [SHOWN] of them and "And 12 more". */
+/** A section restored and what it brought back, 48 dp tall at least. */
 @Composable
-private fun MissingSongs(missing: List<MissingSong>) {
+private fun CountRow(label: String, count: Int?) {
     val colors = MaterialTheme.colorScheme
-    SectionTitle(stringResource(R.string.restore_missing_title))
-    Text(pluralStringResource(R.plurals.restore_missing, missing.size, formatCount(missing.size)), style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant)
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
+        Text(label, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+        count?.let { Text(formatCount(it), style = MaterialTheme.typography.bodyLarge.tabular(), color = colors.onSurfaceVariant, textAlign = TextAlign.End) }
+    }
+}
+
+/**
+ * "Not found": how many songs of the backup aren't on this phone (before a restore, what it will leave out; [after] it,
+ * "12 songs not found on your phone" and how to bring them back), then the first [SHOWN] of them and "And 12 more".
+ */
+@Composable
+private fun MissingSongs(missing: List<MissingSong>, after: Boolean = false) {
+    val colors = MaterialTheme.colorScheme
+    if (after) {
+        SectionTitle(pluralStringResource(R.plurals.restore_not_found, missing.size, formatCount(missing.size)))
+        Text(stringResource(R.string.restore_not_found_text), style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant)
+    } else {
+        SectionTitle(stringResource(R.string.restore_missing_title))
+        Text(pluralStringResource(R.plurals.restore_missing, missing.size, formatCount(missing.size)), style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant)
+    }
     missing.take(SHOWN).forEach { song ->
         val label = song.title?.let { title -> listOfNotNull(title, song.artist).joinToString(" · ") } ?: song.path.substringAfterLast('/')
         Fact(R.drawable.ic_search_off, label, middleEllipsis = true)

@@ -80,6 +80,22 @@ class RecentSearchesTest {
     }
 
     @Test
+    fun `a restore's searches count once stored, all in one write, or not at all`() = runTest {
+        RecentSearchesStore(file).save(listOf("bell"))
+        val recent = RecentSearches(RecentSearchesStore(file), backgroundScope, StandardTestDispatcher(testScheduler))
+
+        assertTrue(recent.addAll(listOf("ferry", "lantern")))
+        assertEquals(listOf("ferry", "lantern", "bell"), recent.state.value)
+        assertEquals(listOf("ferry", "lantern", "bell"), RecentSearchesStore(file).load())
+
+        // Its folder is a file: nothing can be stored.
+        val broken = File(temp.root, "not-a-folder").apply { writeText("") }
+        val failing = RecentSearches(RecentSearchesStore(File(broken, "search-history.json")), backgroundScope, StandardTestDispatcher(testScheduler))
+        assertFalse(failing.addAll(listOf("ferry")))
+        assertEquals(emptyList<String>(), failing.state.value)
+    }
+
+    @Test
     fun `changes apply in order once the stored searches are read, and are stored`() = runTest {
         RecentSearchesStore(file).save(listOf("bell"))
         val recent = RecentSearches(RecentSearchesStore(file), backgroundScope, StandardTestDispatcher(testScheduler))

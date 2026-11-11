@@ -7,7 +7,9 @@ import android.content.IntentFilter
 import android.net.Uri
 import android.os.BatteryManager
 import android.os.Environment
+import android.provider.BaseColumns
 import android.provider.DocumentsContract
+import android.provider.MediaStore
 import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
@@ -26,18 +28,30 @@ import app.lyrify.data.LedgerRepository
 import app.lyrify.data.LedgerState
 import app.lyrify.data.SharedWrite
 import app.lyrify.data.SharedWrites
+import app.lyrify.dupes.duplicates
 import app.lyrify.library.LibraryGraph
 import app.lyrify.library.LibraryState
 import app.lyrify.library.PlaylistsState
-import app.lyrify.library.SongResolver
+import app.lyrify.library.search.SearchGraph
+import app.lyrify.overnight.AiLyrics
 import app.lyrify.player.PlayerExtras
 import app.lyrify.player.PlayerGraph
 import app.lyrify.player.QueueBook
+import app.lyrify.player.Repeat
 import app.lyrify.player.SongState
 import app.lyrify.settings.BackupSettings
 import app.lyrify.settings.Settings
 import app.lyrify.stats.LoggedPlay
 import app.lyrify.stats.StatsGraph
+import app.lyrify.tags.AlbumRecord
+import app.lyrify.tags.CoversTagsMemory
+import app.lyrify.tags.FileMark
+import app.lyrify.tags.NamePair
+import app.lyrify.tags.TagsGraph
+import app.lyrify.tags.fileMark as markOf
+import app.lyrify.tones.SavedTone
+import app.lyrify.tones.ToneListStore
+import app.lyrify.tones.TonesState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
@@ -115,8 +129,9 @@ object AutoBackups {
 // The app's side: its stores, the system's documents, and the weekly run.
 
 /**
- * The app's stores as a backup and a restore see them, each through its own API. The queues and the song state live on
- * the main thread and are read once they are loaded; the rest are read and written where their stores say.
+ * The app's stores as a backup and a restore see them, each through its own API (Duplicates and Covers & tags through
+ * their engines, so a restore never writes under them). The queues, Repeat and the song state live on the main thread
+ * and are read once they are loaded; the rest are read and written where their stores say.
  */
 class AppBackupStores(context: Context) : BackupStores {
     private val app = context.applicationContext
@@ -126,10 +141,11 @@ class AppBackupStores(context: Context) : BackupStores {
 
     override suspend fun updatePlaylists(change: (PlaylistsState) -> PlaylistsState): Boolean = LibraryGraph.playlists(app).update(change)
 
+    /** The book with the place of the queue playing now folded in, so a backup holds its song and second. */
     override suspend fun queues(): QueueBook = withContext(Dispatchers.Main) {
         val core = PlayerGraph.core(app)
         core.ready.first { it }
-        core.book.value
+        core.edit { it to it } ?: core.book.value
     }
 
     override suspend fun updateQueues(change: (QueueBook) -> QueueBook): Boolean = withContext(Dispatchers.Main) {
@@ -166,6 +182,63 @@ class AppBackupStores(context: Context) : BackupStores {
     override suspend fun settings(): Settings = Lyrify.settings(app).settings.first()
 
     override suspend fun updateSettings(change: (Settings) -> Settings): Boolean = Lyrify.settings(app).update(change)
+
+    override suspend fun repeat(): Repeat = withContext(Dispatchers.Main) {
+        val core = PlayerGraph.core(app)
+        core.ready.first { it }
+        core.repeat.value
+    }
+
+    override suspend fun replaceRepeat(repeat: Repeat): Boolean = withContext(Dispatchers.Main) {
+        val core = PlayerGraph.core(app)
+        core.ready.first { it }
+        core.setRepeat(repeat)
+        true
+    }
+
+    override suspend fun aiLyrics(): Boolean = AiLyrics.enabled(app).value
+
+    override suspend fun replaceAiLyrics(on: Boolean): Boolean {
+        if (AiLyrics.enabled(app).value != on) if (on) AiLyrics.turnOn(app) else AiLyrics.turnOff(app)
+        return true
+    }
+
+    override suspend fun tones(): TonesState = ToneListStore.of(app).state.first()
+
+    override suspend fun addTones(tones: List<SavedTone>): Boolean = ToneListStore.of(app).putAll(tones)
+
+    override suspend fun findTone(folder: String, fileName: String, size: Long): Long? = withContext(Dispatchers.IO) {
+        try {
+            val audio = MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+            val selection = "${MediaStore.MediaColumns.RELATIVE_PATH} = ? AND ${MediaStore.MediaColumns.DISPLAY_NAME} = ? AND ${MediaStore.MediaColumns.SIZE} = ?"
+            app.contentResolver.query(audio, arrayOf(BaseColumns._ID), selection, arrayOf(folder, fileName, size.toString()), null)?.use { rows ->
+                buildList { while (rows.moveToNext()) add(rows.getLong(0)) }
+            }?.singleOrNull()
+        } catch (e: Exception) {
+            // SecurityException, or the provider's own.
+            Log.w(LOG_TAG, "restore: tone not looked up: ${e.javaClass.simpleName}")
+            null
+        }
+    }
+
+    override suspend fun duplicates(): DuplicateChoices = duplicates(app).state.first { it.loaded }.memory.let { DuplicateChoices(it.notDuplicates, it.reviewed) }
+
+    override suspend fun addDuplicates(choices: DuplicateChoices): Boolean = duplicates(app).restoreChoices(choices.notDuplicates, choices.reviewed)
+
+    override suspend fun coversTags(): CoversTagsMemory = TagsGraph.coversTags(app).state.first { it.loaded }.memory
+
+    override suspend fun addSettledAlbums(albums: List<AlbumRecord>, checkedOnce: Boolean, noted: Boolean): Boolean =
+        TagsGraph.coversTags(app).restoreSettled(albums, checkedOnce, noted)
+
+    override suspend fun keptApart(): Set<NamePair> = TagsGraph.keptApart(app).load()
+
+    override suspend fun addKeptApart(pairs: Set<NamePair>): Boolean = TagsGraph.keptApart(app).addAll(pairs)
+
+    override suspend fun searches(): List<String> = SearchGraph.recent(app).state.first { it != null }.orEmpty()
+
+    override suspend fun addSearches(searches: List<String>): Boolean = SearchGraph.recent(app).addAll(searches)
+
+    override suspend fun fileMark(path: String): FileMark? = withContext(Dispatchers.IO) { markOf(path) }
 }
 
 /** Making a backup of the app and reading one back. The log gets counts and section names only. */
@@ -176,7 +249,8 @@ object Backups {
         val snapshot = AppBackupStores(app).snapshot()
         val songs = library(app)?.all.orEmpty()
         val bytes = ByteArrayOutputStream().also { BackupBundle.write(snapshot, songs, BuildConfig.VERSION_NAME, System.currentTimeMillis(), it) }.toByteArray()
-        Log.i(LOG_TAG, "backup: ${bytes.size} bytes, ${listOfNotNull(snapshot.playlists, snapshot.queues, snapshot.plays, snapshot.songState, snapshot.equalizer, snapshot.ledger, snapshot.settings).size} sections")
+        val read = listOfNotNull(snapshot.playlists, snapshot.queues, snapshot.plays, snapshot.songState, snapshot.equalizer, snapshot.ledger, snapshot.settings, snapshot.tones, snapshot.duplicates, snapshot.coversTags, snapshot.searches)
+        Log.i(LOG_TAG, "backup: ${bytes.size} bytes, ${read.size} stores read, ${songs.size} songs listed")
         bytes
     }
 
@@ -198,7 +272,7 @@ object Backups {
 
     /** [contents] matched against the library as it is now (no song is found while it cannot be read). */
     suspend fun plan(context: Context, contents: BackupContents): RestorePlan = withContext(Dispatchers.Default) {
-        RestorePlan(contents, library(context.applicationContext)?.resolver ?: SongResolver(emptyList()))
+        RestorePlan(contents, library(context.applicationContext)?.all.orEmpty())
     }
 
     /** Restores the [chosen] sections of [plan] into the app's stores; the queues and the song state on the main thread. */

@@ -43,6 +43,11 @@ class BackupScreensTest {
                 RestoreRow(Section.EQUALIZER, 2, 1),
                 RestoreRow(Section.LYRICS, 3, null),
                 RestoreRow(Section.SETTINGS, null, null),
+                RestoreRow(Section.TONES, 1, null),
+                RestoreRow(Section.DUPLICATES, 1, null),
+                RestoreRow(Section.COVERS, 2, null),
+                RestoreRow(Section.NAMES, 1, null),
+                RestoreRow(Section.SEARCHES, 2, null),
             ),
             restoreRows(BackupFixtures.contents()),
         )
@@ -80,6 +85,22 @@ class BackupScreensTest {
         assertEquals("1 place not restored, the limit is reached.", plural("restore_places_full")["one"]?.format("1"))
         assertEquals("3 bookmarks not restored, the limit is reached.", plural("restore_bookmarks_full")["other"]?.format("3"))
         assertEquals("1 bookmark not restored, the limit is reached.", plural("restore_bookmarks_full")["one"]?.format("1"))
+    }
+
+    @Test
+    fun `after a restore one summary lists each part with what it brought back, and the songs not found on your phone`() {
+        val result = RestoreResult(
+            listOf(Section.PLAYLISTS, Section.QUEUES, Section.SETTINGS, Section.TONES),
+            emptyList(),
+            counts = mapOf(Section.PLAYLISTS to 6, Section.QUEUES to 4, Section.SETTINGS to 0, Section.TONES to 0),
+            notFound = 12,
+        )
+
+        assertEquals(listOf(Section.PLAYLISTS to 6, Section.QUEUES to 4, Section.SETTINGS to null, Section.TONES to 0), restoredRows(result))
+        assertEquals("12 songs not found on your phone", plural("restore_not_found")["other"]?.format("12"))
+        assertEquals("1 song not found on your phone", plural("restore_not_found")["one"]?.format("1"))
+        assertEquals("2 tones not restored: their files or their songs aren't on your phone.", plural("restore_tones_missing")["other"]?.replace("\\'", "'")?.format("2"))
+        assertEquals("Start when connected: pick Harbour Buds again in Settings. Android links each device to one phone.", strings()["restore_pick_again"]?.format("Harbour Buds"))
     }
 
     private fun plural(name: String): Map<String, String> {

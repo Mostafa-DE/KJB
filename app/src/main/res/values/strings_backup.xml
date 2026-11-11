@@ -52,6 +52,11 @@
     <string name="restore_section_equalizer">Equalizer</string>
     <string name="restore_section_lyrics">Lyrics choices</string>
     <string name="restore_section_settings">Settings</string>
+    <string name="restore_section_tones">Tones</string>
+    <string name="restore_section_duplicates">Duplicates choices</string>
+    <string name="restore_section_covers">Covers &amp; tags</string>
+    <string name="restore_section_names">Names kept apart</string>
+    <string name="restore_section_searches">Recent searches</string>
     <plurals name="restore_favourites">
         <item quantity="one">And %1$s favourite</item>
         <item quantity="other">And %1$s favourites</item>
@@ -64,7 +69,7 @@
         <item quantity="one">And %1$s own preset</item>
         <item quantity="other">And %1$s own presets</item>
     </plurals>
-    <string name="restore_merge">Playlists, queues, plays, bookmarks and lyrics choices are added to what\'s on your phone. Settings and the equalizer replace yours.</string>
+    <string name="restore_merge">Settings, Repeat and the equalizer replace yours. Everything else is added to what\'s on your phone. On a phone with no queue playing, the one that was playing comes back at its song and second.</string>
     <string name="restore_undo">Undo history from Covers &amp; tags isn\'t included.</string>
     <string name="restore_too_new">%1$s skipped: a newer KJB made this part.</string>
     <plurals name="restore_unknown">
@@ -92,4 +97,15 @@
         <item quantity="other">%1$s bookmarks not restored, the limit is reached.</item>
     </plurals>
     <string name="restore_failed">These parts couldn\'t be restored: %1$s. The others are.</string>
+    <plurals name="restore_not_found">
+        <item quantity="one">%1$s song not found on your phone</item>
+        <item quantity="other">%1$s songs not found on your phone</item>
+    </plurals>
+    <string name="restore_not_found_text">They aren\'t on your phone, so they\'re left out. Copy your whole Music folder onto your phone before you restore, so every song is found.</string>
+    <plurals name="restore_tones_missing">
+        <item quantity="one">%1$s tone not restored: its file or its song isn\'t on your phone.</item>
+        <item quantity="other">%1$s tones not restored: their files or their songs aren\'t on your phone.</item>
+    </plurals>
+    <string name="restore_pick_again">Start when connected: pick %1$s again in Settings. Android links each device to one phone.</string>
+    <string name="restore_ai_models">AI lyrics is on: KJB downloads its models again over Wi-Fi.</string>
 </resources>

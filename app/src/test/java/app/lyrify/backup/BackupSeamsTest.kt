@@ -13,6 +13,9 @@ import app.lyrify.library.PlaylistsState
 import app.lyrify.library.playlistsStore
 import app.lyrify.stats.FakePlayLog
 import app.lyrify.stats.LoggedPlay
+import app.lyrify.tones.ToneListStore
+import app.lyrify.tones.TonesJson
+import app.lyrify.tones.tonesStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -98,6 +101,19 @@ class BackupSeamsTest {
         log.failing = true
         assertEquals(null, log.all())
         assertFalse(log.putAll(listOf(first)))
+    }
+
+    @Test
+    fun `tones take a whole restore in one write, stored in their file`() = runBlocking {
+        val file = File(folder.root, "tones.json")
+        val store = ToneListStore(tonesStore(file, scope) {}) {}
+        val tone = BackupFixtures.tone
+        val other = tone.copy(id = 502, name = "Tide Bell (KJB)", fileName = "Tide Bell (KJB).m4a")
+
+        assertTrue(store.putAll(listOf(tone, other)))
+
+        assertEquals(setOf(501L, 502L), TonesJson.decode(file.readText()).tones.keys)
+        assertEquals(setOf(501L, 502L), store.state.first().tones.keys)
     }
 
     @Test
