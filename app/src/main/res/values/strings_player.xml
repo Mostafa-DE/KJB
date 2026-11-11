@@ -143,7 +143,7 @@
 
     <!-- The player's extras (P2): the sleep timer -->
     <string name="sleep_title">Sleep timer</string>
-    <string name="sleep_sentence">The music fades out over the last 10 seconds, then pauses.</string>
+    <string name="sleep_sentence">The music fades out over the last 15 seconds, then pauses.</string>
     <string name="sleep_after_time">After a time</string>
     <string name="sleep_after_songs">After songs</string>
     <string name="sleep_minutes_chip">%1$d min</string>

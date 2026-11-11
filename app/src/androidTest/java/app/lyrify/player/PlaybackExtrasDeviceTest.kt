@@ -247,12 +247,12 @@ class PlaybackExtrasDeviceTest {
             built.engine.setPlayWhenReady(true)
             val driver = SleepDriver(EngineExtras(built.engine), timer, SystemClock::elapsedRealtime)
             scope.launch { driver.run() }
-            // Five seconds to go: half way into the fade.
-            timer.value = SleepTimer.ByTime(SystemClock.elapsedRealtime() + 5_000, minutes = 1)
+            // Twelve seconds to go: inside the 15 s fade.
+            timer.value = SleepTimer.ByTime(SystemClock.elapsedRealtime() + 12_000, minutes = 1)
         }
         assertTrue("never played", waitFor(5_000) { built.engine.isPlaying })
-        assertTrue("the volume never went down", waitFor(2_000) { built.engine.volume in 0.2f..0.6f })
-        assertTrue("the music never paused", waitFor(7_000) { !built.engine.playWhenReady })
+        assertTrue("the volume never went down", waitFor(2_000) { built.engine.volume in 0.1f..0.6f })
+        assertTrue("the music never paused", waitFor(14_000) { !built.engine.playWhenReady })
         assertEquals(1f, onMain { built.engine.volume }, 0f)
         assertEquals(null, onMain { timer.value })
     }
