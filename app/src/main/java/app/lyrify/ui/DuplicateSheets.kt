@@ -114,7 +114,7 @@ private fun FileRow(file: AudioFile, keep: Boolean, checked: Boolean, onCheck: (
     ) {
         SongCover(SongArt(file.path), size = 40.dp)
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(fileLocation(file), style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.MiddleEllipsis)
+            Text(fileLocation(file), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface, maxLines = 2, overflow = TextOverflow.MiddleEllipsis)
             val format = fileFormat(file)
             Text(fileKbps(file)?.let { stringResource(R.string.dupes_file_format, format, formatCount(it)) } ?: format, style = MaterialTheme.typography.bodySmall, color = muted)
             val size = Formatter.formatShortFileSize(context, file.size)

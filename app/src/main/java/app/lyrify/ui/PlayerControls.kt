@@ -150,7 +150,7 @@ internal fun MainRow(ui: PlayerUi, settings: Settings, connection: PlayerConnect
                 .shadow(12.dp, CircleShape, ambientColor = chrome.shadowStrong, spotColor = chrome.shadowStrong)
                 .clip(CircleShape)
                 .background(chrome.action, CircleShape)
-                .clickable(role = Role.Button, onClick = connection::playPause)
+                .clickable(interactionSource = null, indication = PressIndication(tint = chrome.onAction), role = Role.Button, onClick = connection::playPause)
                 .semantics { contentDescription = label },
         ) {
             PlayPauseIcon(ui.playing, tint = chrome.onAction, modifier = Modifier.size(40.dp))

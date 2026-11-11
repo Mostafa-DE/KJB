@@ -46,6 +46,7 @@ import androidx.compose.ui.graphics.drawOutline
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.takeOrElse
 import androidx.compose.ui.node.CompositionLocalConsumerModifierNode
 import androidx.compose.ui.node.DelegatableNode
 import androidx.compose.ui.node.DrawModifierNode
@@ -127,6 +128,21 @@ internal val LightColors = lightColorScheme(
     outlineVariant = Color(0xFFCBC4D2),
     inverseSurface = Color(0xFF312F38),
     inverseOnSurface = Color(0xFFF4EFF9),
+    surfaceTint = Color(0xFF4F44A6),
+    scrim = Color(0xFF000000),
+    // The fixed roles: the same in light and dark, the palette's tones 90, 80, 10 and 30 of each hue.
+    primaryFixed = Color(0xFFE5DEFF),
+    primaryFixedDim = Color(0xFFC8BFFF),
+    onPrimaryFixed = Color(0xFF1A0F5C),
+    onPrimaryFixedVariant = Color(0xFF3F3590),
+    secondaryFixed = Color(0xFFE4DFF9),
+    secondaryFixedDim = Color(0xFFC8C3DC),
+    onSecondaryFixed = Color(0xFF1C1832),
+    onSecondaryFixedVariant = Color(0xFF474359),
+    tertiaryFixed = Color(0xFFFFDBD1),
+    tertiaryFixedDim = Color(0xFFFFB4A1),
+    onTertiaryFixed = Color(0xFF3B0A00),
+    onTertiaryFixedVariant = Color(0xFF7F2B17),
 )
 
 internal val DarkColors = darkColorScheme(
@@ -164,6 +180,21 @@ internal val DarkColors = darkColorScheme(
     outlineVariant = Color(0xFF49454F),
     inverseSurface = Color(0xFFE6E1EC),
     inverseOnSurface = Color(0xFF312F38),
+    surfaceTint = Color(0xFFC8BFFF),
+    scrim = Color(0xFF000000),
+    // The fixed roles: the same in light and dark, the palette's tones 90, 80, 10 and 30 of each hue.
+    primaryFixed = Color(0xFFE5DEFF),
+    primaryFixedDim = Color(0xFFC8BFFF),
+    onPrimaryFixed = Color(0xFF1A0F5C),
+    onPrimaryFixedVariant = Color(0xFF3F3590),
+    secondaryFixed = Color(0xFFE4DFF9),
+    secondaryFixedDim = Color(0xFFC8C3DC),
+    onSecondaryFixed = Color(0xFF1C1832),
+    onSecondaryFixedVariant = Color(0xFF474359),
+    tertiaryFixed = Color(0xFFFFDBD1),
+    tertiaryFixedDim = Color(0xFFFFB4A1),
+    onTertiaryFixed = Color(0xFF3B0A00),
+    onTertiaryFixedVariant = Color(0xFF7F2B17),
 )
 
 /** A status tone's colours: a pill is [container] with [onContainer]; [accent] marks plain surfaces (bars, dots, icons). */
@@ -339,6 +370,9 @@ fun LyrifyTheme(content: @Composable () -> Unit) {
             CompositionLocalProvider(
                 // Every plain clickable, toggleable and selectable; no ripple in the Material parts that stay.
                 LocalIndication provides PressIndication(),
+                // Material's theme gives no content colour: a word or icon outside a Surface (a dialog opened beside the
+                // page) would be drawn black, unreadable in dark. It takes the page's ink instead.
+                LocalContentColor provides colors.onBackground,
                 LocalRippleConfiguration provides null,
                 LocalChromeColors provides remember(colors, brandColors, dark) { chromeColors(colors, brandColors, dark) },
                 LocalReducedMotion provides reduced,
@@ -535,18 +569,19 @@ fun pressScale(scale: Float, reduced: Boolean): Float = if (reduced) 1f else sca
 
 /**
  * KJB's press feedback in place of the ripple: the pressed thing squashes a little toward its centre and takes a soft
- * tint of the content colour over [shape]. With [scale] 1 (rows, and always with reduced motion) only the tint shows.
+ * tint of the content colour over [shape], or of [tint], the fill's own ink, on a filled control (on the dark theme's
+ * light ink button the page's ink would not show). With [scale] 1 (rows, and always with reduced motion) only the tint shows.
  * Put the clickable before the background, so the fill squashes with the content.
  */
-class PressIndication(private val shape: Shape = RectangleShape, private val scale: Float = 1f) : IndicationNodeFactory {
-    override fun create(interactionSource: InteractionSource): DelegatableNode = PressNode(interactionSource, shape, scale)
+class PressIndication(private val shape: Shape = RectangleShape, private val scale: Float = 1f, private val tint: Color = Color.Unspecified) : IndicationNodeFactory {
+    override fun create(interactionSource: InteractionSource): DelegatableNode = PressNode(interactionSource, shape, scale, tint)
 
-    override fun equals(other: Any?): Boolean = other is PressIndication && other.shape == shape && other.scale == scale
+    override fun equals(other: Any?): Boolean = other is PressIndication && other.shape == shape && other.scale == scale && other.tint == tint
 
-    override fun hashCode(): Int = 31 * shape.hashCode() + scale.hashCode()
+    override fun hashCode(): Int = 31 * (31 * shape.hashCode() + scale.hashCode()) + tint.hashCode()
 }
 
-private class PressNode(private val source: InteractionSource, private val shape: Shape, private val pressedScale: Float) :
+private class PressNode(private val source: InteractionSource, private val shape: Shape, private val pressedScale: Float, private val tint: Color) :
     Modifier.Node(), DrawModifierNode, CompositionLocalConsumerModifierNode {
     private val pressed = Animatable(0f)
 
@@ -570,7 +605,7 @@ private class PressNode(private val source: InteractionSource, private val shape
         val squash = pressScale(pressedScale, currentValueOf(LocalReducedMotion))
         scale(1f - (1f - squash) * p) {
             this@draw.drawContent()
-            if (p > 0f) drawOutline(shape.createOutline(size, layoutDirection, this), currentValueOf(LocalContentColor).copy(alpha = PRESS_TINT * p))
+            if (p > 0f) drawOutline(shape.createOutline(size, layoutDirection, this), tint.takeOrElse { currentValueOf(LocalContentColor) }.copy(alpha = PRESS_TINT * p))
         }
     }
 }

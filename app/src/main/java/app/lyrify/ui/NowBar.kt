@@ -398,7 +398,7 @@ private fun BarRow(
                             .size(48.dp)
                             .clip(CircleShape)
                             .background(LocalChromeColors.current.action, CircleShape)
-                            .clickable(role = Role.Button, onClickLabel = null, onClick = onPlayPause)
+                            .clickable(interactionSource = null, indication = PressIndication(tint = LocalChromeColors.current.onAction), role = Role.Button, onClickLabel = null, onClick = onPlayPause)
                             .semantics { contentDescription = playLabel },
                     ) {
                         PlayPauseIcon(playing, tint = LocalChromeColors.current.onAction, modifier = Modifier.size(28.dp))
