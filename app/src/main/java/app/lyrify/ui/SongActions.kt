@@ -812,7 +812,8 @@ fun SelectionHost(selection: SongSelection, list: List<Song>, loaded: Boolean, u
         )
     }
     val current by rememberUpdatedState(bar)
-    val active = selection.active
+    // A kept root hidden behind another dock destination keeps its selection, but not the bottom chrome.
+    val active = selection.active && LocalLayerHeaded.current
     DisposableEffect(active) {
         if (active) nav.selectionBar = { current() }
         onDispose { if (active) nav.selectionBar = null }

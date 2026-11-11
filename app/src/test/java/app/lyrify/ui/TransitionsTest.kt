@@ -3,6 +3,9 @@ package app.lyrify.ui
 import androidx.activity.BackEventCompat
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.SnapSpec
+import androidx.compose.animation.core.TweenSpec
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -388,6 +391,59 @@ class TransitionsTest {
     fun `the Now bar stays in place under the growing player, which covers it and the dock from the first frame`() {
         assertFalse(containerInOverlay(bar = true))
         assertTrue(containerInOverlay(bar = false))
+    }
+
+    // Phone test 2026-11-11: each dock destination keeps its root, which moves as a page would, never rebuilt
+
+    private val searchRoot = PageLayer(DockTab.SEARCH, emptyList())
+
+    @Test
+    fun `another dock destination fades through, with no slide`() {
+        val tab = pageTransition(PageChange.Tab(1), rtl = false, reduced = false)
+        assertEquals(fadeThrough(reduced = false).targetContentEnter, tab.targetContentEnter)
+        assertEquals(fadeThrough(reduced = false).initialContentExit, tab.initialContentExit)
+    }
+
+    @Test
+    fun `a tab's root rests a tenth toward the start under its pages, in place under another tab, mirrored right to left`() {
+        assertEquals(0f, rootShift(libraryRoot, shown = libraryRoot, rtl = false), 0f)
+        assertEquals(-0.1f, rootShift(libraryRoot, shown = albumPage, rtl = false), 0.0001f)
+        assertEquals(0.1f, rootShift(libraryRoot, shown = albumPage, rtl = true), 0.0001f)
+        assertEquals(0f, rootShift(libraryRoot, shown = searchRoot, rtl = false), 0f)
+        assertEquals(1f, rootAlpha(libraryRoot, shown = libraryRoot), 0f)
+        assertEquals(0f, rootAlpha(libraryRoot, shown = albumPage), 0f)
+        assertEquals(0f, rootAlpha(libraryRoot, shown = searchRoot), 0f)
+    }
+
+    @Test
+    fun `a root comes back as a page does, leaves first under a push, and fades through on a dock change`() {
+        // Back to it: it fades in once the page leaving has faded, sliding back from its tenth.
+        assertEquals(tween<Float>(Motion.OPEN_MS - Motion.FADE_OUT_MS, delayMillis = Motion.FADE_OUT_MS), rootFade(libraryRoot, albumPage, libraryRoot, swiping = false, reduced = false))
+        assertEquals(tween<Float>(Motion.OPEN_MS, easing = Motion.Rise), rootSlide(libraryRoot, albumPage, libraryRoot, swiping = false, reduced = false))
+        // A page pushed over it: it fades out first and slides away.
+        assertEquals(tween<Float>(Motion.FADE_OUT_MS), rootFade(libraryRoot, libraryRoot, albumPage, swiping = false, reduced = false))
+        assertEquals(tween<Float>(Motion.SETTLE_MS, easing = Motion.EmphasizedOut), rootSlide(libraryRoot, libraryRoot, albumPage, swiping = false, reduced = false))
+        // Another dock destination: out, then the other in, as fadeThrough; no slide.
+        assertEquals(tween<Float>(Motion.FADE_OUT_MS), rootFade(libraryRoot, libraryRoot, searchRoot, swiping = false, reduced = false))
+        assertEquals(tween<Float>(Motion.FADE_IN_MS, delayMillis = Motion.FADE_OUT_MS), rootFade(searchRoot, libraryRoot, searchRoot, swiping = false, reduced = false))
+        assertTrue(rootSlide(searchRoot, libraryRoot, searchRoot, swiping = false, reduced = false) is SnapSpec)
+        // A root that is neither end does not move.
+        assertTrue(rootFade(searchRoot, libraryRoot, albumPage, swiping = false, reduced = false) is SnapSpec)
+    }
+
+    @Test
+    fun `under a back swipe the root gone back to shows whole at once, the one leaving holds to the end, and reduced motion only fades`() {
+        assertTrue(rootFade(libraryRoot, albumPage, libraryRoot, swiping = true, reduced = false) is SnapSpec)
+        assertEquals(tween<Float>(Motion.OPEN_MS, easing = LinearEasing), rootSlide(libraryRoot, albumPage, libraryRoot, swiping = true, reduced = false))
+        // Back across the tab history: Search's root, taken by the swipe, stays whole until the swipe's own fade has it.
+        val leaving = rootFade(searchRoot, searchRoot, libraryRoot, swiping = true, reduced = false) as TweenSpec<Float>
+        assertEquals(Motion.OPEN_MS, leaving.durationMillis)
+        assertEquals(0f, leaving.easing.transform(0.99f), 0f)
+        assertEquals(1f, leaving.easing.transform(1f), 0f)
+        listOf(albumPage to libraryRoot, libraryRoot to albumPage, libraryRoot to searchRoot).forEach { (from, to) ->
+            assertEquals(tween<Float>(Motion.REDUCED_MS), rootFade(libraryRoot, from, to, swiping = false, reduced = true))
+            assertTrue(rootSlide(libraryRoot, from, to, swiping = false, reduced = true) is SnapSpec)
+        }
     }
 
     /** Frames at 120 Hz, as fast as the test runs; [after] looks at the values each frame has drawn. */
