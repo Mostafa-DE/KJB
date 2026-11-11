@@ -40,6 +40,12 @@ import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.swipe
+import androidx.compose.ui.test.swipeWithVelocity
+import androidx.compose.ui.test.assertIsNotDisplayed
+import kotlin.math.tan
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -123,8 +129,76 @@ class TabPagerDeviceTest {
         assertEquals(mapOf("Songs" to 1, "Albums" to 1, "Artists" to 1), built)
     }
 
+    // Phone test of build 603c4bf: a fast flick sometimes did not change tabs, and had to be done twice
+
     @Test
-    fun aSidewaysDragThatBelongsToARowStaysTheRows() {
+    fun aShortQuickFlickAlwaysMovesOneTab() {
+        compose.setContent { Tabs() }
+        flick(toNext = true)
+        compose.runOnIdle { assertEquals(1, chosen) }
+        flick(toNext = true)
+        compose.runOnIdle { assertEquals(2, chosen) }
+        flick(toNext = false)
+        compose.runOnIdle { assertEquals(1, chosen) }
+        compose.onNodeWithText("Albums").assertIsSelected()
+    }
+
+    @Test
+    fun aQuickFlickSlowingBeforeTheLiftStillMovesOneTab() {
+        compose.setContent { Tabs() }
+        compose.onRoot().performTouchInput {
+            val y = height * 0.6f
+            // A third of the width, the finger slowing to a speed Compose's own pager read as a drag (under 400 dp/s).
+            swipeWithVelocity(Offset(width * 0.65f, y), Offset(width * 0.35f, y), endVelocity = SLOWING_DP_S.dp.toPx(), durationMillis = SLOWING_MS)
+        }
+        compose.waitForIdle()
+        assertEquals(1, chosen)
+    }
+
+    @Test
+    fun aSecondFlickDuringTheSettleMovesOnAgain() {
+        compose.setContent { Tabs() }
+        compose.waitForIdle()
+        compose.mainClock.autoAdvance = false
+        flick(toNext = true)
+        // The pages are still on their way to Albums when the second flick lands.
+        compose.mainClock.advanceTimeBy(SETTLING_MS)
+        flick(toNext = true)
+        compose.mainClock.advanceTimeBy(SETTLED_MS)
+        compose.runOnIdle { assertEquals(2, chosen) }
+        compose.onNodeWithText("Artists").assertIsSelected()
+    }
+
+    @Test
+    fun aFlickDriftingTwentyFiveDegreesMovesTheTabsNotTheList() {
+        compose.setContent { Tabs() }
+        compose.onRoot().performTouchInput {
+            val start = Offset(width * 0.65f, height * 0.45f)
+            val across = width * 0.3f
+            swipe(start, Offset(start.x - across, start.y + across * tan(Math.toRadians(DRIFT_DEGREES)).toFloat()), durationMillis = FLICK_MS)
+        }
+        compose.waitForIdle()
+        assertEquals(1, chosen)
+        flick(toNext = false)
+        compose.waitForIdle()
+        // Back on Songs: its list never scrolled, its first row still at the top.
+        val list = compose.onNodeWithTag(page(0)).getBoundsInRoot()
+        assertEquals(list.top.value, compose.onNodeWithText("Songs row 0").getBoundsInRoot().top.value, 1f)
+    }
+
+    @Test
+    fun anUprightDragStillScrollsTheListAndLeavesTheTabs() {
+        compose.setContent { Tabs() }
+        compose.onRoot().performTouchInput { swipe(Offset(width * 0.5f, height * 0.85f), Offset(width * 0.55f, height * 0.3f), durationMillis = UPRIGHT_MS) }
+        compose.waitForIdle()
+        assertEquals(0, chosen)
+        compose.onNodeWithText("Songs row 0").assertIsNotDisplayed()
+    }
+
+    @Test
+    fun aSidewaysFlickStartingOnARowMovesTheTabsAsAndroidsPagersDo() {
+        // The pages decide before what is on them, parent first, as ViewPager does: a row with a sideways action of
+        // its own would have to keep its gesture from them. No row in KJB's tabs has one.
         var dragged = 0f
         compose.setContent {
             Tabs(row = {
@@ -138,11 +212,10 @@ class TabPagerDeviceTest {
                 )
             })
         }
-        compose.onNodeWithTag(ROW).performTouchInput { swipeLeft() }
+        compose.onNodeWithTag(ROW).performTouchInput { swipe(Offset(width * 0.65f, centerY), Offset(width * 0.35f, centerY), durationMillis = FLICK_MS) }
         compose.waitForIdle()
-        assertTrue(dragged < 0f)
-        assertEquals(0, chosen)
-        compose.onNodeWithText("Songs").assertIsSelected()
+        assertEquals(1, chosen)
+        assertEquals(0f, dragged, 0f)
     }
 
     @Test
@@ -169,6 +242,16 @@ class TabPagerDeviceTest {
         compose.runOnIdle { assertEquals(outer.maxValue, outer.value) }
         val tabsNow = compose.onNodeWithText("Songs").getBoundsInRoot().top
         assertTrue("tabs at ${tabsNow.value}, were at ${tabsTop.value}", tabsNow < tabsTop && tabsNow.value >= 64f - 1f)
+    }
+
+    /** A quick flick across the pages, a third of the width in 80 ms, well away from the screen's edges. */
+    private fun flick(toNext: Boolean) {
+        compose.onRoot().performTouchInput {
+            val y = height * 0.6f
+            val near = width * 0.35f
+            val far = width * 0.65f
+            swipe(Offset(if (toNext) far else near, y), Offset(if (toNext) near else far, y), durationMillis = FLICK_MS)
+        }
     }
 
     /** The tabs over their pages, each page a long list (or [row] above it), counting how often each is built. */
@@ -202,5 +285,19 @@ class TabPagerDeviceTest {
         const val ROW = "row"
         const val HERO = "hero"
         const val ROWS = 100
+
+        /** A quick flick: a third of the width in this long. */
+        const val FLICK_MS = 80L
+
+        /** A flick slowing to this speed at the lift, over this long. */
+        const val SLOWING_DP_S = 150f
+        const val SLOWING_MS = 120L
+
+        /** Into the first flick's settle, and well past the second's. */
+        const val SETTLING_MS = 60L
+        const val SETTLED_MS = 2_000L
+
+        const val DRIFT_DEGREES = 25.0
+        const val UPRIGHT_MS = 300L
     }
 }
