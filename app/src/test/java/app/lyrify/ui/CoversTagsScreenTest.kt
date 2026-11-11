@@ -9,7 +9,6 @@ import app.lyrify.tags.CoversTagsMemory
 import app.lyrify.tags.CoversTagsState
 import app.lyrify.tags.FileMark
 import app.lyrify.tags.Settled
-import app.lyrify.tags.Stopped
 import app.lyrify.tags.SongOutcome
 import app.lyrify.tags.SongProblem
 import app.lyrify.tags.TagAlbum
@@ -19,11 +18,13 @@ import app.lyrify.tags.lookup.AlbumChanges
 import app.lyrify.tags.lookup.AlbumMatch
 import app.lyrify.tags.lookup.Credit
 import app.lyrify.tags.lookup.Doubt
-import app.lyrify.tags.lookup.Fit
+import app.lyrify.tags.lookup.Field
+import app.lyrify.tags.lookup.FieldChange
 import app.lyrify.tags.lookup.MbMedium
 import app.lyrify.tags.lookup.MbRelease
 import app.lyrify.tags.lookup.MbReleaseGroup
 import app.lyrify.tags.lookup.MbTrack
+import app.lyrify.tags.lookup.Part
 import app.lyrify.tags.lookup.PhoneAlbum
 import app.lyrify.tags.lookup.PhoneSong
 import app.lyrify.tags.lookup.Proposal
@@ -69,67 +70,24 @@ class CoversTagsScreenTest {
         assertEquals(ToolLine.Text(R.string.tags_line_checking), coversTagsEntry(CoversTagsState(checking = Checking(3, 84))).line)
 
         val checked = CoversTagsState(loaded = true, memory = CoversTagsMemory(checkedOnce = true))
+        // Only what has a suggestion is to review: Harbour and Kelp have none.
         val waiting = coversTagsEntry(checked.copy(waiting = listOf(waiting("Lanterns", true), waiting("Harbour", false), waiting("Kelp", false))))
-        assertEquals(EntryRow(ToolLine.Count(R.plurals.tags_to_review, 3), 3), waiting)
+        assertEquals(EntryRow(ToolLine.Count(R.plurals.tags_to_review, 1), 1), waiting)
 
         val done = checked.copy(memory = checked.memory.copy(albums = listOf(record(Settled.DONE, 2), record(Settled.DONE, 3).copy(id = "b"))))
         assertEquals(EntryRow(ToolLine.Count(R.plurals.tags_albums_changed, 2), null), coversTagsEntry(done))
         assertEquals(EntryRow(ToolLine.Text(R.string.tags_line_none), null), coversTagsEntry(checked))
     }
 
-    @Test
-    fun `sections show in order with their counts, empty ones left out`() {
-        val state = CoversTagsState(
-            waiting = listOf(waiting("Kelp", false), waiting("Lanterns", true), waiting("Harbour", false)),
-            memory = CoversTagsMemory(albums = listOf(record(Settled.SKIPPED))),
-        )
-
-        assertEquals(listOf(ReviewSection.READY to 1, ReviewSection.PICK_ONE to 2, ReviewSection.SKIPPED to 1), reviewSections(state))
-        assertEquals(emptyList<Pair<ReviewSection, Int>>(), reviewSections(CoversTagsState()))
-    }
-
     // The page's rows: each needs a key of its own, or the list crashes
 
     @Test
-    fun `an album in two sections at once, or twice in one, still gives every row a key of its own`() {
-        val pick = waiting("Lanterns", false)
-        // "Check again" placed the album in Pick one before its Skipped record went, and History rebuilt two Done records of one album.
-        val records = listOf(
-            record(Settled.SKIPPED).copy(id = pick.album.id),
-            record(Settled.DONE).copy(id = "harbour", entryId = 7),
-            record(Settled.DONE).copy(id = "harbour", entryId = 9, at = 2),
-        )
-        val state = CoversTagsState(loaded = true, waiting = listOf(pick, waiting("Kelp", true)), memory = CoversTagsMemory(albums = records, checkedOnce = true))
-
-        val keys = pageRows(state, uncheckable = 2, paused = true).map { it.key }
-        assertEquals(keys.distinct(), keys)
-    }
-
-    @Test
-    fun `an album's row keeps its key as albums come and go around it, and the song sheet finds it by its id`() {
-        val lanterns = waiting("Lanterns", true)
-        val harbour = waiting("Harbour", true)
-        fun keyOf(state: CoversTagsState, id: String) = pageRows(state, 0, false).single { it.albumId == id }.key
-
-        val alone = CoversTagsState(waiting = listOf(lanterns))
-        val after = CoversTagsState(waiting = listOf(harbour, lanterns), memory = CoversTagsMemory(albums = listOf(record(Settled.DONE).copy(id = "kelp"))))
-        assertEquals(keyOf(alone, lanterns.album.id), keyOf(after, lanterns.album.id))
-        // The first of two Done records of one album keeps its key when the second comes.
-        val done = record(Settled.DONE).copy(id = "kelp", at = 5)
-        val one = CoversTagsState(memory = CoversTagsMemory(albums = listOf(done)))
-        val two = CoversTagsState(memory = CoversTagsMemory(albums = listOf(done, done.copy(entryId = 9, at = 1))))
-        assertEquals(pageRows(one, 0, false).single { it.albumId == "kelp" }.key, pageRows(two, 0, false).first { it.albumId == "kelp" }.key)
+    fun `two rows of one id still get keys of their own, and the first keeps its key when the second comes`() {
+        assertEquals(listOf("done a", "done b", "done a#2"), rowKeys("done", listOf("a", "b", "a")))
+        assertEquals(rowKeys("done", listOf("a")).first(), rowKeys("done", listOf("a", "a")).first())
     }
 
     // Confirming
-
-    @Test
-    fun `the Apply all dialog counts the albums and the songs written, with the sync note the first time only`() {
-        val albums = listOf(changes(listOf("Quiet Ember", "Salt Road")), changes(listOf("Tin Roof", "Kelp Lights", "Brennmoor"), "Harbour"))
-
-        assertEquals(ApplyCopy(albums = 2, songs = 5, note = true), applyCopy(albums, noted = false))
-        assertEquals(ApplyCopy(albums = 2, songs = 5, note = false), applyCopy(albums, noted = true))
-    }
 
     @Test
     fun `writing is off without notification access, and while an apply runs`() {
@@ -168,40 +126,23 @@ class CoversTagsScreenTest {
 
     @Test
     fun `what the toast says after an apply`() {
-        assertEquals(Words(R.plurals.tags_applied, 2, listOf(2)), appliedWords(Applied.Done(albums = 2, songs = 10, problems = emptyList())))
         assertEquals(Words(R.plurals.tags_songs_left, 1, listOf(1)), appliedWords(Applied.Done(1, 2, listOf(SongProblem("/m/a.mp3", SongOutcome.BUSY)))))
-        assertEquals(Words(R.plurals.tags_not_applied, 1, listOf(1)), appliedWords(Applied.Done(1, 2, emptyList(), failed = 1)))
         assertEquals(Words(R.string.tags_nothing_to_change), appliedWords(Applied.Done(0, 0, emptyList())))
         assertEquals(Words(R.string.tags_need_access), appliedWords(Applied.NoAccess))
         assertEquals(Words(R.string.tags_no_space), appliedWords(Applied.NotEnoughSpace))
-        assertEquals(Words(R.string.tags_busy), appliedWords(Applied.Busy))
-        assertEquals(Words(R.string.tags_failed), appliedWords(Applied.Failed))
+        assertEquals(Words(R.string.tags_cover_failed), appliedWords(Applied.CoverFailed))
         assertEquals(Words(R.string.tags_gone), appliedWords(Applied.Gone))
         assertEquals(Words(R.string.tags_in_progress), appliedWords(Applied.InProgress))
         assertEquals(Words(R.string.tags_changed_since), appliedWords(Applied.ChangedSince))
-        // Apply all stopped after changing some: both are said.
-        assertEquals(Words(R.plurals.tags_applied_then_busy, 2, listOf(2)), appliedWords(Applied.Done(2, 9, emptyList(), stopped = Stopped.BUSY)))
-        assertEquals(Words(R.plurals.tags_applied_then_space, 1, listOf(1)), appliedWords(Applied.Done(1, 3, emptyList(), stopped = Stopped.NOT_ENOUGH_SPACE)))
-        assertEquals(Words(R.plurals.tags_applied_then_access, 1, listOf(1)), appliedWords(Applied.Done(1, 3, emptyList(), stopped = Stopped.NO_ACCESS)))
     }
 
     @Test
     fun `what the toast says after an undo, fields changed since included`() {
-        assertEquals(Words(R.string.tags_undone), undoneWords(Undone.Done(2, 0, 0, emptyList())))
         assertEquals(Words(R.plurals.tags_undone_kept, 1, listOf(1)), undoneWords(Undone.Done(2, 1, 0, emptyList())))
         assertEquals(Words(R.plurals.tags_undone_skipped, 2, listOf(2)), undoneWords(Undone.Done(1, 0, 2, emptyList())))
         assertEquals(Words(R.plurals.tags_songs_left, 1, listOf(1)), undoneWords(Undone.Done(1, 0, 0, listOf(SongProblem("/m/a.mp3", SongOutcome.BUSY)))))
         assertEquals(Words(R.string.tags_need_access), undoneWords(Undone.NoAccess))
         assertEquals(Words(R.string.tags_no_space), undoneWords(Undone.NotEnoughSpace))
-    }
-
-    @Test
-    fun `a card says how many changes, or cover only`() {
-        val renamed = changes(listOf("Quiet Ember", "Salt Road"))
-        assertEquals(Words(R.plurals.tags_changes, renamed.count, listOf(renamed.count)), summaryWords(renamed))
-        assertTrue(renamed.count > 0)
-        assertEquals(Words(R.string.tags_cover_only), summaryWords(AlbumChanges(emptyList(), emptyList(), emptyList())))
-        assertEquals(Words(R.plurals.tags_fit, 12, listOf(11, 12)), fitWords(Fit(11, 12)))
     }
 
     @Test
@@ -213,10 +154,10 @@ class CoversTagsScreenTest {
     }
 
     @Test
-    fun `a Done row says what changed and what could not, and when Undo has expired`() {
-        assertEquals(listOf(Words(R.plurals.tags_songs_changed, 11, listOf(11))), doneLine(record(Settled.DONE, changed = 11), fullCopy = true))
+    fun `a Done row says how many songs it changed, what could not, and when Undo has expired`() {
+        assertEquals(listOf(Words(R.plurals.tags_songs, 11, listOf(11))), doneLine(record(Settled.DONE, changed = 11), fullCopy = true))
         assertEquals(
-            listOf(Words(R.plurals.tags_songs_changed, 11, listOf(11)), Words(R.plurals.tags_songs_left, 1, listOf(1)), Words(R.string.tags_undo_expired)),
+            listOf(Words(R.plurals.tags_songs, 11, listOf(11)), Words(R.plurals.tags_songs_left, 1, listOf(1)), Words(R.string.tags_undo_expired)),
             doneLine(record(Settled.DONE, changed = 11, problems = 1), fullCopy = false),
         )
         assertEquals(listOf(Words(R.string.tags_nothing_to_change)), doneLine(record(Settled.DONE, entryId = null), fullCopy = false))
@@ -231,5 +172,76 @@ class CoversTagsScreenTest {
         assertNotEquals(coverKey(SongArt(path, 41)), coverKey(SongArt(path, 41, version = 1)))
         assertNotEquals(coverKey(SongArt(path, 41, version = 1)), coverKey(SongArt(path, 41, version = 2)))
         assertEquals(coverKey(SongArt(path, 41, version = 2)), coverKey(SongArt(path, null, version = 2)))
+    }
+
+    // The redesign (user feedback 2026-11-11)
+
+    @Test
+    fun `the page's top tabs are To review, Done and Skipped, always, with their counts`() {
+        val state = CoversTagsState(
+            // Two of the three have no suggestion: they are not to review.
+            waiting = listOf(waiting("Kelp", false), waiting("Lanterns", true), waiting("Harbour", false)),
+            memory = CoversTagsMemory(albums = listOf(record(Settled.SKIPPED), record(Settled.DONE).copy(id = "d1"), record(Settled.DONE).copy(id = "d2", entryId = 9))),
+        )
+
+        assertEquals(listOf(ReviewTab.TO_REVIEW to 1, ReviewTab.DONE to 2, ReviewTab.SKIPPED to 1), reviewTabs(state))
+        assertEquals(listOf(ReviewTab.TO_REVIEW to 0, ReviewTab.DONE to 0, ReviewTab.SKIPPED to 0), reviewTabs(CoversTagsState()))
+    }
+
+    @Test
+    fun `Apply names the count, and is off while no song or no field is ticked`() {
+        assertEquals(Words(R.plurals.tags_change_songs, 1, listOf(1)), applyWords(1))
+        assertEquals(Words(R.plurals.tags_change_songs, 9, listOf(9)), applyWords(9))
+        val one = setOf("/m/a.mp3")
+        assertTrue(canApply(one, setOf(Part.COVER), writable = true))
+        assertFalse(canApply(emptySet(), setOf(Part.COVER), writable = true))
+        assertFalse(canApply(one, emptySet(), writable = true))
+        assertFalse(canApply(one, setOf(Part.COVER), writable = false))
+    }
+
+    @Test
+    fun `more than one song asks once before writing, and so does the first apply ever, for its sync note`() {
+        assertFalse(asksFirst(songs = 1, noted = true))
+        assertTrue(asksFirst(songs = 1, noted = false))
+        assertTrue(asksFirst(songs = 2, noted = true))
+    }
+
+    @Test
+    fun `a card's chip says sure match, or how many choices`() {
+        assertEquals(Words(R.string.tags_sure), choiceWords(waiting("Lanterns", true).proposal))
+        val match = AlbumMatch.match(album(listOf("Quiet Ember")), release(listOf("Quiet Ember")))
+        assertEquals(Words(R.plurals.tags_choices, 3, listOf(3)), choiceWords(Proposal.PickOne(List(3) { match }, setOf(Doubt.GAP))))
+    }
+
+    @Test
+    fun `progress reads getting the cover, then the song being changed of all of them`() {
+        assertEquals(Words(R.string.tags_getting_cover), progressWords(Applying(0, 9, cover = true)))
+        assertEquals(Words(R.plurals.tags_changing, 9, listOf(1, 9)), progressWords(Applying(0, 9)))
+        assertEquals(Words(R.plurals.tags_changing, 9, listOf(3, 9)), progressWords(Applying(2, 9)))
+        assertEquals(Words(R.plurals.tags_changing, 9, listOf(9, 9)), progressWords(Applying(9, 9)))
+    }
+
+    @Test
+    fun `after an apply the toast counts the songs changed, after an Undo the songs restored`() {
+        assertEquals(Words(R.plurals.tags_changed_songs, 9, listOf(9)), appliedWords(Applied.Done(albums = 1, songs = 9, problems = emptyList())))
+        assertEquals(Words(R.plurals.tags_changed_songs, 1, listOf(1)), appliedWords(Applied.Done(albums = 1, songs = 1, problems = emptyList(), entryId = 4)))
+        assertEquals(Words(R.plurals.tags_restored, 1, listOf(1)), undoneWords(Undone.Done(1, 0, 0, emptyList())))
+        assertEquals(Words(R.plurals.tags_restored, 9, listOf(9)), undoneWords(Undone.Done(9, 0, 0, emptyList())))
+    }
+
+    @Test
+    fun `the review's rows are only what changes, each with the old and new its songs share, and the user's own ticks win`() {
+        val changes = changes(listOf("Quiet Ember", "Salt Road"))
+
+        assertEquals(
+            listOf(FieldRow(Part.ALBUM, FieldChange(Field.ALBUM, "Lanterns", "Lanterns of Ulso"), 2), FieldRow(Part.YEAR, FieldChange(Field.YEAR, null, "1998"), 2)),
+            fieldRows(changes),
+        )
+        assertEquals(setOf(Part.ALBUM, Part.YEAR), pickedParts(changes, loaded = false, overrides = emptyMap()))
+        assertEquals(setOf(Part.ALBUM, Part.YEAR, Part.COVER), pickedParts(changes, loaded = true, overrides = emptyMap()))
+        assertEquals(setOf(Part.ALBUM, Part.COVER), pickedParts(changes, loaded = true, overrides = mapOf(Part.YEAR to false)))
+        // A tick on a row not offered (no new title, no cover loaded) writes nothing.
+        assertEquals(setOf(Part.ALBUM, Part.YEAR), pickedParts(changes, loaded = false, overrides = mapOf(Part.TITLE to true, Part.COVER to true)))
+        assertEquals(listOf(FieldChange(Field.ALBUM, "Lanterns", "Lanterns of Ulso")), songLines(changes.songs.first(), setOf(Part.ALBUM, Part.TITLE)))
     }
 }

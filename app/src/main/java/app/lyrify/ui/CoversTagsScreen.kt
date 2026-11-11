@@ -1,6 +1,7 @@
 package app.lyrify.ui
 
 import android.content.res.Resources
+import android.text.format.DateUtils
 import androidx.annotation.StringRes
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -13,17 +14,18 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -38,59 +40,52 @@ import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.heading
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.lyrify.R
 import app.lyrify.library.Song
 import app.lyrify.tags.AlbumRecord
 import app.lyrify.tags.Applied
+import app.lyrify.tags.Applying
 import app.lyrify.tags.CoversTags
 import app.lyrify.tags.CoversTagsState
-import app.lyrify.tags.Settled
-import app.lyrify.tags.Stopped
+import app.lyrify.tags.Preview
 import app.lyrify.tags.SongOutcome
 import app.lyrify.tags.TagsGraph
 import app.lyrify.tags.Undone
 import app.lyrify.tags.Waiting
 import app.lyrify.tags.lookup.AlbumChanges
-import app.lyrify.tags.lookup.Cover
-import app.lyrify.tags.lookup.Fit
+import app.lyrify.tags.lookup.FieldChange
 import app.lyrify.tags.lookup.MbRelease
+import app.lyrify.tags.lookup.Part
 import app.lyrify.tags.lookup.Proposal
 import app.lyrify.tags.lookup.ReleaseMatch
+import app.lyrify.tags.lookup.SongChange
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import java.text.DateFormat
 
-// Covers & tags (covers-tags-spec.md, "Where it lives" and "Reviewing"): its page in Tools, its row on Tools, and its
-// row to History (T3's page, Page.TagHistory, where each Undo goes through undoEdit).
+// Covers & tags (covers-tags-spec.md "Where it lives", and the CT2 redesign in handoff/user-feedback-2026-11-11.md): its
+// page in Tools with the top tabs To review, Done and Skipped, its row on Tools, and its row to History (T3's page).
 
 // The page's logic, pure
 
 /** A message as the resources say it: a string, or a plural for [count]; [args] fill it in. */
 data class Words(val res: Int, val count: Int? = null, val args: List<Any> = emptyList())
 
-/** The page's sections, in order. */
-enum class ReviewSection(@StringRes val title: Int) {
-    READY(R.string.tags_ready),
-    PICK_ONE(R.string.tags_pick_one),
+/** The page's top tabs, in order: the same tab row as Favourites ([LibraryTabsRow]). */
+enum class ReviewTab(@StringRes val title: Int) {
+    TO_REVIEW(R.string.tags_to_review),
     DONE(R.string.tags_done),
     SKIPPED(R.string.tags_skipped),
 }
 
-/** The sections that have albums, in order, with their counts. */
-fun reviewSections(state: CoversTagsState): List<Pair<ReviewSection, Int>> = listOf(
-    ReviewSection.READY to state.ready.size,
-    ReviewSection.PICK_ONE to state.pickOne.size,
-    ReviewSection.DONE to state.done.size,
-    ReviewSection.SKIPPED to state.skipped.size,
-).filter { it.second > 0 }
+/** Every tab, always, with its count: what has a suggestion, one row per apply, and the albums skipped. */
+fun reviewTabs(state: CoversTagsState): List<Pair<ReviewTab, Int>> =
+    listOf(ReviewTab.TO_REVIEW to state.toReview.size, ReviewTab.DONE to state.done.size, ReviewTab.SKIPPED to state.skipped.size)
 
 /** The Covers & tags row on Tools: its line, and its badge. */
 data class EntryRow(val line: ToolLine, val badge: Int?)
@@ -100,7 +95,7 @@ fun coversTagsEntry(state: CoversTagsState): EntryRow {
     val first = !state.memory.checkedOnce && state.waiting.isEmpty() && state.memory.albums.isEmpty()
     val line = when {
         state.checking != null || state.checkingAlbums.isNotEmpty() -> ToolLine.Text(R.string.tags_line_checking)
-        state.waiting.isNotEmpty() -> ToolLine.Count(R.plurals.tags_to_review, state.waiting.size)
+        state.toReview.isNotEmpty() -> ToolLine.Count(R.plurals.tags_to_review, state.toReview.size)
         first -> ToolLine.Text(R.string.tags_line_start)
         state.done.isNotEmpty() -> ToolLine.Count(R.plurals.tags_albums_changed, state.done.size)
         else -> ToolLine.Text(R.string.tags_line_none)
@@ -108,13 +103,49 @@ fun coversTagsEntry(state: CoversTagsState): EntryRow {
     return EntryRow(line, state.badge.takeIf { it > 0 })
 }
 
-/** What an apply's dialog says: [albums] changing [songs] songs, and the backup and sync [note] on the first apply only. */
-data class ApplyCopy(val albums: Int, val songs: Int, val note: Boolean)
-
-fun applyCopy(albums: List<AlbumChanges>, noted: Boolean): ApplyCopy = ApplyCopy(albums.size, albums.sumOf { it.songs.size }, !noted)
-
 /** Writing needs notification access (plan decision 1), and one apply at a time. */
 fun canWrite(access: Boolean, state: CoversTagsState): Boolean = access && state.applying == null
+
+/** Apply is on only with a song and a field ticked, while writing is possible. */
+fun canApply(songs: Set<String>, parts: Set<Part>, writable: Boolean): Boolean = writable && songs.isNotEmpty() && parts.isNotEmpty()
+
+/** Apply names the count: "Change 1 song", "Change 9 songs". */
+fun applyWords(songs: Int): Words = Words(R.plurals.tags_change_songs, songs, listOf(songs))
+
+/** More than one song asks once before writing; so does the very first apply, for its backup and sync note. */
+fun asksFirst(songs: Int, noted: Boolean): Boolean = songs > 1 || !noted
+
+/** A card's chip: "Sure match", or how many choices. */
+fun choiceWords(proposal: Proposal): Words = when (proposal) {
+    is Proposal.Ready -> Words(R.string.tags_sure)
+    is Proposal.PickOne -> Words(R.plurals.tags_choices, proposal.candidates.size, listOf(proposal.candidates.size))
+}
+
+/** "Getting the cover" while it is fetched, then "Changing 3 of 9": the song being written of all of them. */
+fun progressWords(applying: Applying): Words =
+    if (applying.cover) Words(R.string.tags_getting_cover) else Words(R.plurals.tags_changing, applying.total, listOf(minOf(applying.done + 1, applying.total), applying.total))
+
+/** One row of "What to change": its [part], the "old → new" its songs share (null when they differ), and how many [songs] change. */
+data class FieldRow(val part: Part, val change: FieldChange?, val songs: Int)
+
+/** The field rows, in the spec's order, only for what changes: the cover's row is the review's own. */
+fun fieldRows(changes: AlbumChanges): List<FieldRow> = Part.entries.filter { it != Part.COVER && it in changes.parts }.map { part ->
+    val lines = changes.songs.flatMap { song -> song.changes.filter { it.field.part == part } }
+    FieldRow(part, lines.firstOrNull()?.takeIf { lines.map { it.old to it.new }.distinct().size == 1 }, changes.songs.count { song -> song.changes.any { it.field.part == part } })
+}
+
+/**
+ * The rows ticked now: the defaults ([AlbumChanges.ticked], the cover once it [loaded]) with the user's own ticks
+ * ([overrides]) over them, among what is offered.
+ */
+fun pickedParts(changes: AlbumChanges, loaded: Boolean, overrides: Map<Part, Boolean>): Set<Part> {
+    val offered = changes.parts + setOfNotNull(Part.COVER.takeIf { loaded })
+    val defaults = changes.ticked(cover = loaded)
+    return offered.filter { overrides[it] ?: (it in defaults) }.toSet()
+}
+
+/** A song's own "old → new" lines for the [parts] ticked. */
+fun songLines(change: SongChange, parts: Set<Part>): List<FieldChange> = change.changes.filter { it.field.part in parts }
 
 /**
  * The line for the songs whose interrupted write could not be checked at several starts (their originals kept), or
@@ -142,42 +173,28 @@ fun outcomeWords(outcome: SongOutcome): Int = when (outcome) {
     SongOutcome.PAUSED -> R.string.tags_paused
 }
 
-/**
- * The toast after Apply or Apply all: why Apply all stopped (with the albums it changed) comes first, then songs left as
- * they were, then albums with no answer.
- */
+/** The toast after an apply: songs left as they were come first, then the songs changed ("Changed 9 songs"). */
 fun appliedWords(applied: Applied): Words = when (applied) {
     is Applied.Done -> when {
-        applied.stopped != null -> Words(
-            when (applied.stopped) {
-                Stopped.BUSY -> R.plurals.tags_applied_then_busy
-                Stopped.NOT_ENOUGH_SPACE -> R.plurals.tags_applied_then_space
-                Stopped.NO_ACCESS -> R.plurals.tags_applied_then_access
-            },
-            applied.albums,
-            listOf(applied.albums),
-        )
         applied.problems.isNotEmpty() -> Words(R.plurals.tags_songs_left, applied.problems.size, listOf(applied.problems.size))
-        applied.failed > 0 -> Words(R.plurals.tags_not_applied, applied.failed, listOf(applied.failed))
-        applied.albums > 0 -> Words(R.plurals.tags_applied, applied.albums, listOf(applied.albums))
+        applied.songs > 0 -> Words(R.plurals.tags_changed_songs, applied.songs, listOf(applied.songs))
         else -> Words(R.string.tags_nothing_to_change)
     }
     Applied.NoAccess -> Words(R.string.tags_need_access)
     Applied.NotEnoughSpace -> Words(R.string.tags_no_space)
-    Applied.Busy -> Words(R.string.tags_busy)
-    Applied.Failed -> Words(R.string.tags_failed)
+    Applied.CoverFailed -> Words(R.string.tags_cover_failed)
     Applied.Gone -> Words(R.string.tags_gone)
     Applied.InProgress -> Words(R.string.tags_in_progress)
     Applied.ChangedSince -> Words(R.string.tags_changed_since)
 }
 
-/** The toast after Undo: fields changed since are kept, and it says so. */
+/** The toast after Undo: "Restored 9 songs"; fields changed since are kept, and it says so. */
 fun undoneWords(undone: Undone): Words = when (undone) {
     is Undone.Done -> when {
         undone.problems.isNotEmpty() -> Words(R.plurals.tags_songs_left, undone.problems.size, listOf(undone.problems.size))
         undone.changedSince > 0 -> Words(R.plurals.tags_undone_skipped, undone.changedSince, listOf(undone.changedSince))
         undone.skippedFields > 0 -> Words(R.plurals.tags_undone_kept, undone.skippedFields, listOf(undone.skippedFields))
-        else -> Words(R.string.tags_undone)
+        else -> Words(R.plurals.tags_restored, undone.songs, listOf(undone.songs))
     }
     Undone.NoAccess -> Words(R.string.tags_need_access)
     Undone.NotEnoughSpace -> Words(R.string.tags_no_space)
@@ -186,37 +203,51 @@ fun undoneWords(undone: Undone): Words = when (undone) {
     Undone.Failed -> Words(R.string.tags_undo_failed)
 }
 
-/** A Ready card's summary: "6 changes", or the cover only. */
-fun summaryWords(changes: AlbumChanges): Words =
-    if (changes.count > 0) Words(R.plurals.tags_changes, changes.count, listOf(changes.count)) else Words(R.string.tags_cover_only)
-
-/** "12 of 12 songs fit". */
-fun fitWords(fit: Fit): Words = Words(R.plurals.tags_fit, fit.total, listOf(fit.fitting, fit.total))
-
 /** A candidate's line: its formats and year ("CD, 2009"), then its country. */
 fun releaseLine(release: MbRelease): String {
     val made = (release.formats + listOfNotNull(release.year?.toString())).joinToString(", ")
     return listOf(made, release.country.orEmpty()).filter(String::isNotEmpty).joinToString(" · ")
 }
 
-/** A Done row's line: the songs changed, those that could not, and "Undo has expired" once the full copies are gone. */
+/** A Done row's line before its time: the songs it changed, those that could not, and "Undo has expired" once the full copies are gone. */
 fun doneLine(record: AlbumRecord, fullCopy: Boolean): List<Words> {
     if (record.entryId == null) return listOf(Words(R.string.tags_nothing_to_change))
     return listOfNotNull(
-        Words(R.plurals.tags_songs_changed, record.changed, listOf(record.changed)),
+        Words(R.plurals.tags_songs, record.changed, listOf(record.changed)),
         record.problems.size.takeIf { it > 0 }?.let { Words(R.plurals.tags_songs_left, it, listOf(it)) },
         Words(R.string.tags_undo_expired).takeUnless { fullCopy },
     )
 }
 
+/**
+ * Each row's own key, [prefix] and its id, or the list crashes: a second row of one id (a Done row an old KJB kept twice)
+ * gets "#2", so the first keeps its key as the second comes.
+ */
+internal fun rowKeys(prefix: String, ids: List<String>): List<String> {
+    val seen = HashMap<String, Int>()
+    return ids.map { id ->
+        val nth = (seen[id] ?: 0) + 1
+        seen[id] = nth
+        if (nth == 1) "$prefix $id" else "$prefix $id#$nth"
+    }
+}
+
 // Entry points
 
-/** The song sheet's "Covers & tags" asked for this song's album: the page opens its review. */
-private val asked = MutableStateFlow<String?>(null)
+/** Covers & tags asked for this song's album: the path, and whether it came from the song's own sheet. */
+private data class Asked(val path: String, val fromSong: Boolean)
 
-/** The song sheet's "Covers & tags" ([SongSheetSlots.coversTags]): Covers & tags, at the review of [song]'s album. */
+private val asked = MutableStateFlow<Asked?>(null)
+
+/** The song sheet's "Covers & tags" ([SongSheetSlots.coversTags]): the review of [song]'s album, with only [song] ticked. */
 fun openCoversTags(song: Song, nav: Navigator) {
-    asked.value = song.path
+    asked.value = Asked(song.path, fromSong = true)
+    nav.open(Page.CoversTags)
+}
+
+/** An album's "⋯" Covers & tags: the review of the album [song] is in, nothing ticked ("Select all" is one tap). */
+fun openCoversTagsForAlbum(song: Song, nav: Navigator) {
+    asked.value = Asked(song.path, fromSong = false)
     nav.open(Page.CoversTags)
 }
 
@@ -237,92 +268,34 @@ private fun Words.text(resources: Resources): String =
     if (count != null) resources.getQuantityString(res, count, *args.toTypedArray()) else resources.getString(res, *args.toTypedArray())
 
 @Composable
-private fun Words.text(): String = text(LocalResources.current)
+internal fun Words.text(): String = text(LocalResources.current)
+
+/** A release's preview as it loads (null meanwhile), and Try again. */
+@Stable
+internal class PreviewState(val preview: Preview?, val retry: () -> Unit)
+
+@Composable
+internal fun rememberPreview(tags: CoversTags, release: MbRelease?): PreviewState {
+    var tries by remember(release?.id) { mutableIntStateOf(0) }
+    val preview by produceState<Preview?>(null, release?.id, tries) {
+        value = null
+        value = release?.let { tags.preview(it) } ?: Preview.None
+    }
+    return PreviewState(preview) { tries++ }
+}
 
 // The page
 
-/**
- * What the page lists, row by row. Each row's [key] is its own on the page, or the list crashes: an album's row is keyed
- * by its section and its id ([app.lyrify.tags.TagAlbum.id], KJB's own, from its files' paths), so it keeps its key as
- * rows come and go, and a second row of one album in one section gets "#2" ([pageRows]). An album can be in two sections
- * at once ("Check again" places it before its Skipped record goes) or twice in one (History can rebuild two Done
- * records of it).
- */
-internal sealed interface PageRow {
-    val key: String
+/** The review sheet open on an album, from a song ([song]) or not. */
+private data class OpenReview(val albumId: String, val song: String?)
 
-    /** The album the row shows, by its id: the song sheet's album is scrolled to by it. */
-    val albumId: String? get() = null
-
-    data object Start : PageRow {
-        override val key = "start"
-    }
-
-    data class Section(val section: ReviewSection, val count: Int) : PageRow {
-        override val key = "section ${section.name}"
-    }
-
-    data class Ready(val waiting: Waiting, override val key: String) : PageRow {
-        override val albumId: String get() = waiting.album.id
-    }
-
-    data class Pick(val waiting: Waiting, override val key: String) : PageRow {
-        override val albumId: String get() = waiting.album.id
-    }
-
-    data object SamsungNote : PageRow {
-        override val key = "note"
-    }
-
-    data class Uncheckable(val words: Words) : PageRow {
-        override val key = "uncheckable"
-    }
-
-    data class Paused(val words: Words) : PageRow {
-        override val key = "paused"
-    }
-
-    data class Record(val record: AlbumRecord, override val key: String) : PageRow {
-        override val albumId: String get() = record.id
-    }
-
-    data object History : PageRow {
-        override val key = "history"
-    }
-}
-
-internal fun pageRows(state: CoversTagsState, uncheckable: Int, paused: Boolean): List<PageRow> = buildList {
-    val seen = HashMap<String, Int>()
-    fun key(section: ReviewSection, albumId: String): String {
-        val key = "${section.name} $albumId"
-        val nth = (seen[key] ?: 0) + 1
-        seen[key] = nth
-        return if (nth == 1) key else "$key#$nth"
-    }
-    add(PageRow.Start)
-    pausedWords(paused)?.let { add(PageRow.Paused(it)) }
-    uncheckableWords(uncheckable)?.let { add(PageRow.Uncheckable(it)) }
-    for ((section, count) in reviewSections(state)) {
-        add(PageRow.Section(section, count))
-        when (section) {
-            ReviewSection.READY -> state.ready.forEach { add(PageRow.Ready(it, key(section, it.album.id))) }
-            ReviewSection.PICK_ONE -> state.pickOne.forEach { add(PageRow.Pick(it, key(section, it.album.id))) }
-            ReviewSection.DONE -> {
-                add(PageRow.SamsungNote)
-                state.done.forEach { add(PageRow.Record(it, key(section, it.id))) }
-            }
-            ReviewSection.SKIPPED -> state.skipped.forEach { add(PageRow.Record(it, key(section, it.id))) }
-        }
-    }
-    add(PageRow.History)
-}
-
-/** An album sheet open on [albumId] with release [releaseId]. */
-private data class OpenAlbum(val albumId: String, val releaseId: String)
+/** An apply waiting for its confirmation. */
+private data class PendingApply(val albumId: String, val match: ReleaseMatch, val songs: Set<String>, val parts: Set<Part>)
 
 /**
- * Tools > Covers & tags: "Check my albums" (its ring, "Checking 12/84" and Cancel), then Ready (with Apply all), Pick
- * one, Done (each with Undo) and Skipped (each with Check again), and History. Writing is off without notification
+ * Tools > Covers & tags: the top tabs To review, Done and Skipped with their counts. To review: "Check my albums" (its
+ * ring, "Checking 12/84" and Cancel), then a card per album with a suggestion, each opening the review sheet. Done: one
+ * row per apply with its Undo, then History. Skipped: each with Check again. Writing is off without notification
  * access, with a one-line reason and a button to turn it on.
  */
 @Composable
@@ -337,38 +310,47 @@ fun CoversTagsPage() {
     val busy by tags.busy.collectAsStateWithLifecycle()
     val access = rememberNotificationAccess()
     val list = rememberLazyListState()
-    var open by remember { mutableStateOf<OpenAlbum?>(null) }
-    var confirmAll by rememberSaveable { mutableStateOf(false) }
-    var confirmOne by remember { mutableStateOf<OpenAlbum?>(null) }
+    var tab by rememberSaveable { mutableStateOf(ReviewTab.TO_REVIEW) }
+    var open by remember { mutableStateOf<OpenReview?>(null) }
+    var confirm by remember { mutableStateOf<PendingApply?>(null) }
     var searching by rememberSaveable { mutableStateOf<String?>(null) }
     var problems by rememberSaveable { mutableStateOf<String?>(null) }
     val uncheckable by produceState(0) { value = TagsGraph.uncheckable(context) }
     val paused by produceState(false) { value = TagsGraph.paused(context) }
-    val rows = remember(state, uncheckable, paused) { pageRows(state, uncheckable, paused) }
     val writable = canWrite(access, state)
 
-    fun apply(albumId: String, match: ReleaseMatch) {
-        open = null
-        scope.launch { toasts.show(appliedWords(tags.apply(albumId, match)).text(resources)) }
+    // Writes with the sheet and its progress in sight, then closes it and says what changed, with Undo.
+    fun apply(pending: PendingApply) {
+        scope.launch {
+            val applied = tags.apply(pending.albumId, pending.match, pending.songs, pending.parts)
+            open = null
+            val words = appliedWords(applied).text(resources)
+            val entry = (applied as? Applied.Done)?.takeIf { it.songs > 0 }?.entryId
+            if (entry == null) {
+                toasts.show(words)
+            } else if (toasts.show(Toast(words, action = resources.getString(R.string.tags_undo)))) {
+                toasts.show(undoneWords(tags.undo(entry)).text(resources))
+            }
+        }
     }
 
     LaunchedEffect(tags) { tags.refreshHistory() }
     LaunchedEffect(tags) {
-        asked.collect { path ->
-            if (path != null) {
+        asked.collect { ask ->
+            if (ask != null) {
                 asked.value = null
-                tags.open(path)
+                tags.open(ask.path, ask.fromSong)
             }
         }
     }
-    // The song sheet's album: a Ready one opens in its sheet, any other is scrolled to.
-    LaunchedEffect(state.focus, rows) {
+    // The song sheet's album, once checked: To review, and its review sheet.
+    LaunchedEffect(state.focus, state.waiting, state.checkingAlbums) {
         val focus = state.focus ?: return@LaunchedEffect
-        if (focus in state.checkingAlbums) return@LaunchedEffect
-        val ready = state.ready.firstOrNull { it.album.id == focus }
-        if (ready != null) open = OpenAlbum(focus, (ready.proposal as Proposal.Ready).match.release.id)
-        val at = rows.indexOfFirst { it.albumId == focus }
-        if (at >= 0) list.animateScrollToItem(at)
+        if (focus.albumId in state.checkingAlbums) return@LaunchedEffect
+        if (state.waiting.any { it.album.id == focus.albumId }) {
+            tab = ReviewTab.TO_REVIEW
+            open = OpenReview(focus.albumId, focus.song)
+        }
         tags.focused()
     }
 
@@ -383,6 +365,7 @@ fun CoversTagsPage() {
         },
     ) { padding ->
         val reduced = LocalReducedMotion.current
+        val tabs = reviewTabs(state)
         LazyColumn(
             state = list,
             modifier = Modifier.fillMaxSize(),
@@ -402,76 +385,41 @@ fun CoversTagsPage() {
                     )
                 }
             }
-            items(
-                rows,
-                key = { it.key },
-                contentType = { row ->
-                    when (row) {
-                        PageRow.Start -> "start"
-                        is PageRow.Section -> "section"
-                        is PageRow.Ready -> "ready"
-                        is PageRow.Pick -> "pick"
-                        PageRow.SamsungNote, is PageRow.Paused, is PageRow.Uncheckable -> "text"
-                        is PageRow.Record -> "record"
-                        PageRow.History -> "history"
+            listOfNotNull(pausedWords(paused), uncheckableWords(uncheckable)).forEach { words ->
+                item(key = "line ${words.res}", contentType = "text") { PageLine(words.text(), error = words.res == R.string.tags_paused) }
+            }
+            item(key = "tabs", contentType = "tabs") {
+                LibraryTabsRow(tabs.map { (it, count) -> stringResource(R.string.lib_tab_count, stringResource(it.title), formatCount(count)) }, tabs.indexOfFirst { it.first == tab }) { at ->
+                    tab = tabs[at].first
+                }
+            }
+            when (tab) {
+                ReviewTab.TO_REVIEW -> {
+                    item(key = "start", contentType = "start") { StartRow(state, busy, onCheck = tags::check, onCancel = tags::cancel) }
+                    items(state.toReview, key = { "review ${it.album.id}" }, contentType = { "card" }) { waiting ->
+                        Column(rowMotion(reduced)) { ReviewCard(tags, waiting) { open = OpenReview(waiting.album.id, null) } }
                     }
-                },
-            ) { row ->
-                Column(rowMotion(reduced)) {
-                    when (row) {
-                        PageRow.Start -> StartRow(state, busy, onCheck = tags::check, onCancel = tags::cancel)
-                        is PageRow.Section -> SectionHead(row, onApplyAll = { confirmAll = true }.takeIf { row.section == ReviewSection.READY && writable })
-                        is PageRow.Ready -> ReadyCard(tags, row.waiting) { open = OpenAlbum(row.waiting.album.id, (row.waiting.proposal as Proposal.Ready).match.release.id) }
-                        is PageRow.Pick -> PickOneAlbum(
-                            tags,
-                            row.waiting,
-                            onUse = { match -> open = OpenAlbum(row.waiting.album.id, match.release.id) },
-                            onSearch = { searching = row.waiting.album.id },
-                            onSkip = { scope.launch { tags.skip(row.waiting.album.id) } },
-                        )
-                        PageRow.SamsungNote -> Text(
-                            stringResource(R.string.tags_samsung_note),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(horizontal = ScreenPadding, vertical = 4.dp),
-                        )
-                        is PageRow.Paused -> Text(
-                            row.words.text(),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.padding(horizontal = ScreenPadding, vertical = 4.dp),
-                        )
-                        is PageRow.Uncheckable -> Text(
-                            row.words.text(),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(horizontal = ScreenPadding, vertical = 4.dp),
-                        )
-                        is PageRow.Record -> SettledRow(
-                            row.record,
-                            fullCopy = row.record.entryId in state.fullCopies,
-                            enabled = writable,
-                            onUndo = { scope.launch { toasts.show(undoneWords(tags.undoAlbum(row.record.id)).text(resources)) } },
-                            onCheckAgain = { tags.checkAgain(row.record.id) },
-                            onOpen = { problems = row.record.id }.takeIf { row.record.problems.isNotEmpty() },
-                        )
-                        PageRow.History -> {
-                            Spacer(Modifier.height(16.dp))
-                            GroupedRows {
-                                GroupedRow(
-                                    R.drawable.ic_history,
-                                    stringResource(R.string.tags_history),
-                                    tile = MaterialTheme.colorScheme.surfaceContainerHighest,
-                                    onTile = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    first = true,
-                                    supporting = {
-                                        val count = state.history.size
-                                        Text(if (count > 0) pluralStringResource(R.plurals.tags_edits, count, count) else stringResource(R.string.tags_no_edits))
-                                    },
-                                    onClick = { nav.open(Page.TagHistory) },
-                                )
-                            }
+                }
+                ReviewTab.DONE -> {
+                    if (state.done.isNotEmpty()) item(key = "note", contentType = "text") { PageLine(stringResource(R.string.tags_samsung_note)) }
+                    val keys = rowKeys("done", state.done.map { it.id })
+                    itemsIndexed(state.done, key = { at, _ -> keys[at] }, contentType = { _, _ -> "record" }) { _, record ->
+                        Column(rowMotion(reduced)) {
+                            DoneRow(
+                                record,
+                                fullCopy = record.entryId in state.fullCopies,
+                                enabled = writable,
+                                onUndo = { scope.launch { toasts.show(undoneWords(tags.undoAlbum(record.id)).text(resources)) } },
+                                onOpen = { problems = record.id }.takeIf { record.problems.isNotEmpty() },
+                            )
                         }
+                    }
+                    item(key = "history", contentType = "history") { HistoryRow(state.history.size) { nav.open(Page.TagHistory) } }
+                }
+                ReviewTab.SKIPPED -> {
+                    val keys = rowKeys("skipped", state.skipped.map { it.id })
+                    itemsIndexed(state.skipped, key = { at, _ -> keys[at] }, contentType = { _, _ -> "record" }) { _, record ->
+                        Column(rowMotion(reduced)) { SkippedRow(record) { tags.checkAgain(record.id) } }
                     }
                 }
             }
@@ -480,73 +428,51 @@ fun CoversTagsPage() {
 
     open?.let { at ->
         val waiting = state.waiting.firstOrNull { it.album.id == at.albumId }
-        val match = waiting?.let { matchOf(it, at.releaseId) }
-        // Applied, skipped or checked again meanwhile: the sheet closes.
-        if (waiting == null || match == null) {
-            LaunchedEffect(at) { open = null }
+        // Applied, skipped or checked again meanwhile: the sheet closes, unless its apply still runs.
+        if (waiting == null) {
+            if (state.applying == null) LaunchedEffect(at) { open = null }
             return@let
         }
-        AlbumSheet(
+        ReviewSheet(
             tags = tags,
             waiting = waiting,
-            match = match,
+            fromSong = at.song,
             access = access,
             writable = writable,
-            onApply = {
-                if (state.memory.noted) apply(waiting.album.id, match) else confirmOne = at
+            applying = state.applying,
+            onApply = { match, songs, parts ->
+                val pending = PendingApply(waiting.album.id, match, songs, parts)
+                if (asksFirst(songs.size, state.memory.noted)) confirm = pending else apply(pending)
             },
-            onNotThisOne = {
-                tags.notThisOne(waiting.album.id, match)
+            onStop = tags::stopApplying,
+            onSearch = {
+                searching = waiting.album.id
                 open = null
             },
+            onNotThisOne = { match -> tags.notThisOne(waiting.album.id, match) },
             onSkip = {
                 open = null
                 scope.launch { tags.skip(waiting.album.id) }
             },
-            onDismiss = { open = null },
+            onDismiss = { if (state.applying == null) open = null },
         )
     }
-    confirmOne?.let { at ->
-        val waiting = state.waiting.firstOrNull { it.album.id == at.albumId }
-        val match = waiting?.let { matchOf(it, at.releaseId) }
-        if (waiting == null || match == null) {
-            LaunchedEffect(at) { confirmOne = null }
-            return@let
-        }
-        val songs = tags.changes(waiting, match).songs.size
+    confirm?.let { pending ->
+        val songs = pending.songs.size
+        val note = !state.memory.noted
         ConfirmDialog(
-            title = stringResource(R.string.tags_apply_one_title),
-            confirm = stringResource(R.string.tags_apply),
+            title = pluralStringResource(R.plurals.tags_confirm_title, songs, songs),
+            confirm = pluralStringResource(R.plurals.tags_change_songs, songs, songs),
             dismiss = stringResource(R.string.tags_cancel),
-            text = pluralStringResource(R.plurals.tags_apply_one_text, songs, songs) + "\n\n" + stringResource(R.string.tags_sync_note),
+            text = pluralStringResource(R.plurals.tags_confirm_text, songs, songs) + if (note) "\n\n" + stringResource(R.string.tags_sync_note) else "",
             icon = R.drawable.ic_sell,
             destructive = false,
             onConfirm = {
-                confirmOne = null
-                scope.launch { tags.noted() }
-                apply(waiting.album.id, match)
+                confirm = null
+                if (note) scope.launch { tags.noted() }
+                apply(pending)
             },
-            onDismiss = { confirmOne = null },
-        )
-    }
-    if (confirmAll) {
-        val copy = applyCopy(state.ready.map { tags.changes(it, (it.proposal as Proposal.Ready).match) }, state.memory.noted)
-        ConfirmDialog(
-            title = pluralStringResource(R.plurals.tags_apply_all_title, copy.albums, copy.albums),
-            confirm = stringResource(R.string.tags_apply_all),
-            dismiss = stringResource(R.string.tags_cancel),
-            text = pluralStringResource(R.plurals.tags_apply_all_text, copy.songs, copy.songs) + if (copy.note) "\n\n" + stringResource(R.string.tags_sync_note) else "",
-            icon = R.drawable.ic_sell,
-            destructive = false,
-            confirmEnabled = copy.albums > 0 && writable,
-            onConfirm = {
-                confirmAll = false
-                scope.launch {
-                    if (copy.note) tags.noted()
-                    toasts.show(appliedWords(tags.applyAll()).text(resources))
-                }
-            },
-            onDismiss = { confirmAll = false },
+            onDismiss = { confirm = null },
         )
     }
     searching?.let { albumId ->
@@ -555,7 +481,15 @@ fun CoversTagsPage() {
             LaunchedEffect(albumId) { searching = null }
             return@let
         }
-        SearchSheet(tags, waiting, onFound = { searching = null }, onDismiss = { searching = null })
+        SearchSheet(
+            tags,
+            waiting,
+            onFound = {
+                searching = null
+                open = OpenReview(albumId, null)
+            },
+            onDismiss = { searching = null },
+        )
     }
     problems?.let { id ->
         val record = state.done.firstOrNull { it.id == id }
@@ -567,10 +501,14 @@ fun CoversTagsPage() {
     }
 }
 
-/** The release [releaseId] among [waiting]'s proposal. */
-private fun matchOf(waiting: Waiting, releaseId: String): ReleaseMatch? = when (val proposal = waiting.proposal) {
-    is Proposal.Ready -> proposal.match.takeIf { it.release.id == releaseId }
-    is Proposal.PickOne -> proposal.candidates.firstOrNull { it.release.id == releaseId }
+@Composable
+private fun PageLine(text: String, error: Boolean = false) {
+    Text(
+        text,
+        style = MaterialTheme.typography.bodyMedium,
+        color = if (error) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(horizontal = ScreenPadding, vertical = 4.dp),
+    )
 }
 
 /** Before the first check, what the page does and "Check my albums"; then the ring while checking, or the button again. */
@@ -602,24 +540,9 @@ private fun StartRow(state: CoversTagsState, busy: Boolean, onCheck: () -> Unit,
             state.checkingAlbums.size.takeIf { it > 0 }?.let { pluralStringResource(R.plurals.tags_checking_albums, it, it) },
             state.notChecked.takeIf { it > 0 && checking == null }?.let { pluralStringResource(R.plurals.tags_not_checked, it, it) },
             stringResource(R.string.tags_unreadable).takeIf { state.unreadable },
+            stringResource(R.string.tags_line_none).takeIf { !first && checking == null && state.checkingAlbums.isEmpty() && state.toReview.isEmpty() },
         )
         lines.forEach { Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center) }
-    }
-}
-
-@Composable
-private fun SectionHead(row: PageRow.Section, onApplyAll: (() -> Unit)?) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(start = ScreenPadding, end = 8.dp, top = 12.dp),
-    ) {
-        Text(stringResource(row.section.title), style = MaterialTheme.typography.titleMedium, modifier = Modifier.semantics { heading() })
-        Text(formatCount(row.count), style = MaterialTheme.typography.labelLarge.tabular(), color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.weight(1f))
-        if (row.section == ReviewSection.READY) {
-            LyrifyButton(stringResource(R.string.tags_apply_all), onClick = { onApplyAll?.invoke() }, compact = true, enabled = onApplyAll != null)
-        }
     }
 }
 
@@ -646,87 +569,95 @@ private fun ItemRow(title: String, sub: String?, lead: @Composable () -> Unit, t
     }
 }
 
-/** A release's front cover from the Cover Art Archive, fetched once it shows; the glyph until then or without one. */
+/** A suggested cover as it loads: the glyph meanwhile (and when it failed), the thumbnail once loaded; none when the release has none. */
 @Composable
-private fun NewCover(tags: CoversTags, release: MbRelease, size: Dp) {
-    val cover by produceState<Cover?>(null, release.id) { value = tags.cover(release) }
-    SongCover(cover?.jpeg, size = size, shape = MaterialTheme.shapes.medium)
+internal fun PreviewTile(state: PreviewState, size: Dp) {
+    when (val preview = state.preview) {
+        is Preview.Loaded -> SongCover(preview.image, size = size, shape = MaterialTheme.shapes.medium)
+        null, Preview.Failed -> SongCover(null, size = size, shape = MaterialTheme.shapes.medium)
+        Preview.None -> Unit
+    }
 }
 
-/** A Ready album: the new cover, the album and artist, and how many changes; a tap opens its sheet. */
+/** "Couldn't load cover" with Try again. */
 @Composable
-private fun ReadyCard(tags: CoversTags, waiting: Waiting, onOpen: () -> Unit) {
-    val match = (waiting.proposal as Proposal.Ready).match
-    val changes = remember(waiting, match) { tags.changes(waiting, match) }
-    NavRow(
-        title = match.release.title,
-        sub = listOf(match.release.artist.text, summaryWords(changes).text()).filter(String::isNotEmpty).joinToString(" · "),
-        lead = { NewCover(tags, match.release, 56.dp) },
-        onClick = onOpen,
-    )
+internal fun CoverFailedLine(onRetry: () -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(stringResource(R.string.tags_cover_failed), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+        LyrifyButton(stringResource(R.string.tags_try_again), onClick = onRetry, kind = ButtonKind.GHOST, compact = true)
+    }
 }
 
-/** A Pick one album: up to 3 candidates, each with Use; then Search myself and Skip. */
+/**
+ * An album to review: your current cover, the suggested one if found, the album and artist, "9 songs on your phone",
+ * and "Sure match" or "3 choices". A tap opens the review sheet; nothing is applied from here.
+ */
 @Composable
-private fun PickOneAlbum(tags: CoversTags, waiting: Waiting, onUse: (ReleaseMatch) -> Unit, onSearch: () -> Unit, onSkip: () -> Unit) {
+private fun ReviewCard(tags: CoversTags, waiting: Waiting, onOpen: () -> Unit) {
     val album = waiting.album.album
-    val candidates = (waiting.proposal as Proposal.PickOne).candidates
+    val first = album.songs.firstOrNull()
+    val preview = rememberPreview(tags, waiting.candidates.firstOrNull()?.release)
     LyrifyCard(Modifier.fillMaxWidth().padding(horizontal = ScreenPadding, vertical = 6.dp)) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Column {
-                Text(album.title?.takeIf(String::isNotBlank) ?: album.songs.firstOrNull()?.title.orEmpty(), style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                val songs = pluralStringResource(R.plurals.tags_songs, album.songs.size, album.songs.size)
-                Text(listOfNotNull(album.artist, songs).joinToString(" · "), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Column(Modifier.clickable(role = Role.Button, onClick = onOpen).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                SongCover(first?.let { SongArt(it.path, waiting.album.ids[it.path]) }, size = 56.dp, shape = MaterialTheme.shapes.medium)
+                PreviewTile(preview, 56.dp)
+                Column(Modifier.weight(1f)) {
+                    Text(album.title?.takeIf(String::isNotBlank) ?: first?.title.orEmpty(), style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    val songs = pluralStringResource(R.plurals.tags_on_phone, album.songs.size, album.songs.size)
+                    Text(listOfNotNull(album.artist, songs).joinToString(" · "), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
             }
-            if (candidates.isEmpty()) {
-                Text(stringResource(R.string.tags_no_match), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            candidates.forEach { match -> CandidateRow(tags, match) { onUse(match) } }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                LyrifyButton(stringResource(R.string.tags_search_myself), onClick = onSearch, kind = ButtonKind.SECONDARY, compact = true, icon = R.drawable.ic_search)
-                LyrifyButton(stringResource(R.string.tags_skip), onClick = onSkip, kind = ButtonKind.GHOST, compact = true)
-            }
+            val brand = LocalBrandColors.current
+            SmallPill(if (waiting.proposal is Proposal.Ready) R.drawable.ic_star_fill else R.drawable.ic_sell, choiceWords(waiting.proposal).text(), brand.highlightContainer, brand.onHighlightContainer)
+            if (preview.preview == Preview.Failed) CoverFailedLine(preview.retry)
         }
     }
 }
 
-/** A candidate: cover, album, artist, "CD, 2009 · XE", "12 of 12 songs fit", and Use. */
+/** A Done row, one per apply: "Lanterns of Ulso", "1 song · 03:21", and Undo (Undo fields once its full copies are gone). */
 @Composable
-private fun CandidateRow(tags: CoversTags, match: ReleaseMatch, onUse: () -> Unit) {
-    val release = match.release
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        NewCover(tags, release, 56.dp)
-        Column(Modifier.weight(1f)) {
-            Text(release.title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(release.artist.text, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            val line = listOf(releaseLine(release), fitWords(match.fit).text()).filter(String::isNotEmpty).joinToString(" · ")
-            Text(line, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        }
-        LyrifyButton(stringResource(R.string.tags_use), onClick = onUse, kind = ButtonKind.SECONDARY, compact = true)
-    }
-}
-
-/** A Done album (Undo, or Undo fields once its full copies are gone) or a Skipped one (Check again). */
-@Composable
-private fun SettledRow(record: AlbumRecord, fullCopy: Boolean, enabled: Boolean, onUndo: () -> Unit, onCheckAgain: () -> Unit, onOpen: (() -> Unit)?) {
-    val done = record.state == Settled.DONE
-    val sub = if (done) doneLine(record, fullCopy).map { it.text() }.joinToString(" · ") else pluralStringResource(R.plurals.tags_songs, record.songs.size, record.songs.size)
+private fun DoneRow(record: AlbumRecord, fullCopy: Boolean, enabled: Boolean, onUndo: () -> Unit, onOpen: (() -> Unit)?) {
+    val time = DateUtils.formatSameDayTime(record.at, System.currentTimeMillis(), DateFormat.SHORT, DateFormat.SHORT).toString()
     ItemRow(
         title = record.title,
-        sub = listOfNotNull(record.artist, sub).joinToString(" · "),
+        sub = (doneLine(record, fullCopy).map { it.text() } + time).joinToString(" · "),
         lead = { SongCover(record.songs.firstOrNull()?.let { SongArt(it.path) }, size = 48.dp) },
         trailing = {
-            when {
-                !done -> LyrifyButton(stringResource(R.string.tags_check_again), onClick = onCheckAgain, kind = ButtonKind.GHOST, compact = true)
-                record.entryId != null -> LyrifyButton(
-                    stringResource(if (fullCopy) R.string.tags_undo else R.string.tags_undo_fields),
-                    onClick = onUndo,
-                    kind = ButtonKind.GHOST,
-                    compact = true,
-                    enabled = enabled,
-                )
+            if (record.entryId != null) {
+                LyrifyButton(stringResource(if (fullCopy) R.string.tags_undo else R.string.tags_undo_fields), onClick = onUndo, kind = ButtonKind.GHOST, compact = true, enabled = enabled)
             }
         },
         onClick = onOpen,
     )
+}
+
+/** A skipped album, with Check again. */
+@Composable
+private fun SkippedRow(record: AlbumRecord, onCheckAgain: () -> Unit) {
+    ItemRow(
+        title = record.title,
+        sub = listOfNotNull(record.artist, pluralStringResource(R.plurals.tags_songs, record.songs.size, record.songs.size)).joinToString(" · "),
+        lead = { SongCover(record.songs.firstOrNull()?.let { SongArt(it.path) }, size = 48.dp) },
+        trailing = { LyrifyButton(stringResource(R.string.tags_check_again), onClick = onCheckAgain, kind = ButtonKind.GHOST, compact = true) },
+    )
+}
+
+/** History: every tag edit, Edit tags' too, with its Undo (T3's page). */
+@Composable
+private fun HistoryRow(count: Int, onOpen: () -> Unit) {
+    Column {
+        Spacer(Modifier.height(16.dp))
+        GroupedRows {
+            GroupedRow(
+                R.drawable.ic_history,
+                stringResource(R.string.tags_history),
+                tile = MaterialTheme.colorScheme.surfaceContainerHighest,
+                onTile = MaterialTheme.colorScheme.onSurfaceVariant,
+                first = true,
+                supporting = { Text(if (count > 0) pluralStringResource(R.plurals.tags_edits, count, count) else stringResource(R.string.tags_no_edits)) },
+                onClick = onOpen,
+            )
+        }
+    }
 }

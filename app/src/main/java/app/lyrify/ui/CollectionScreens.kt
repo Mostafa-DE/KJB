@@ -339,9 +339,9 @@ private fun AlbumMenu(open: Boolean, album: Album, library: Library, list: PageS
             artist?.let { nav.open(Page.Artist(it)) }
         }
 
-        // The song sheet's Covers & tags opens the review of a song's album: here, the album's first song.
+        // The review of this album, through its first song, with no song ticked: "Select all" is one tap.
         override fun coversTags() {
-            first?.let { review?.invoke(it, nav) }
+            first?.let { openCoversTagsForAlbum(it, nav) }
         }
 
         override fun editAlbum() = nav.show(FullScreen.EditAlbum(album.key, byTitle))
