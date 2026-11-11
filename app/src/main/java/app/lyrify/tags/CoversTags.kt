@@ -524,6 +524,15 @@ class CoversTags(
         return true
     }
 
+    /**
+     * A backup's settled albums (backup/, a restore): each added unless an album of its id is settled here; their Undo
+     * stays on the old phone. The flags set when either says so. False when not stored.
+     */
+    suspend fun restoreSettled(albums: List<AlbumRecord>, checkedOnce: Boolean, noted: Boolean): Boolean = commit { memory ->
+        val known = memory.albums.map { it.id }.toSet()
+        memory.copy(albums = memory.albums + albums.filterNot { it.id in known }, checkedOnce = memory.checkedOnce || checkedOnce, noted = memory.noted || noted)
+    }
+
     /** The first apply's dialog showed the backup and sync note: it does not show again. */
     suspend fun noted() {
         commit { it.copy(noted = true) }
