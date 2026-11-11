@@ -11,6 +11,7 @@ import androidx.media3.session.MediaController
 import androidx.media3.session.MediaSession
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import app.lyrify.auto.CarCovers
 import app.lyrify.library.Song
 import app.lyrify.library.SongRef
 import app.lyrify.settings.LibrarySettings
@@ -132,7 +133,7 @@ class PlaybackExtrasDeviceTest {
         val songs = (1..3).map { song(tone("kjb-extras-$it.wav", 20, 330.0 + it * 110), "Tone $it") }
         val built = onMain {
             val core = PlayerCore(MemoryStorage(), scope, System::currentTimeMillis)
-            val engine = GaplessEngine(context, { Settings() }, NoLevels) { mediaItemOf(it, LibrarySettings()) }
+            val engine = GaplessEngine(context, { Settings() }, NoLevels) { mediaItemOf(it, LibrarySettings(), CarCovers.authority(context)) }
             val bridge = QueueBridge(engine)
             val find: (SongRef) -> Song? = { ref -> songs.firstOrNull { it.path == ref.path } }
             val player = LyrifyPlayer(Looper.getMainLooper(), engine, core, { SkipAmounts(30_000, 10_000) }, { bridge.sync(core.book.value, find) })

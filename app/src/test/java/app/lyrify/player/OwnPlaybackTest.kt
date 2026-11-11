@@ -2,6 +2,9 @@ package app.lyrify.player
 
 import androidx.media3.common.C
 import androidx.media3.common.Player
+import app.lyrify.auto.DEFAULT_COVER
+import app.lyrify.auto.coverPath
+import app.lyrify.auto.nodeCover
 import app.lyrify.library.Library
 import app.lyrify.library.Playlist
 import app.lyrify.library.Song
@@ -123,6 +126,32 @@ class OwnPlaybackTest {
         val big = TreeData(Library.of(many, Settings()), QueueBook(), emptyList(), LibrarySettings()) { "" }
         assertEquals(LibraryTree.MAX_CHILDREN, LibraryTree.page(LibraryTree.children(LibraryTree.SONGS, big)!!, 0, Int.MAX_VALUE).size)
         assertEquals(LibraryTree.MAX_CHILDREN, LibraryTree.page(LibraryTree.children(LibraryTree.ARTISTS, big)!!, 0, Int.MAX_VALUE).size)
+    }
+
+    @Test
+    fun `every song and album the car is shown, and every song of the queue playing, carries a cover, the default one without an id`() {
+        val book = QueueBook().play(songs.map { it.ref }, 0, albumSource, now = 1).book
+        val tree = data(book)
+        val shown = mutableListOf<TreeNode>()
+        fun walk(id: String, depth: Int) {
+            val children = LibraryTree.children(id, tree) ?: return
+            shown += children
+            if (depth < 3) children.filter { it.browsable }.forEach { walk(it.id, depth + 1) }
+        }
+        walk(LibraryTree.ROOT, 0)
+        val songNodes = shown.filter { it.song != null }
+        assertTrue(songNodes.size > 20)
+        // "Loose Thread" has no MediaStore id: the default cover.
+        assertTrue(songNodes.any { it.song!!.ref.mediaStoreId == null })
+        (songNodes + LibraryTree.children(LibraryTree.ALBUMS, tree)!!).forEach { node ->
+            assertEquals(node.id, node.cover!!.ref.mediaStoreId?.toString() ?: DEFAULT_COVER, nodeCover(node))
+        }
+        // The top lists show the car's own icons, never a cover.
+        LibraryTree.children(LibraryTree.ROOT, tree)!!.forEach { assertNull(nodeCover(it)) }
+        // The queue playing, as the session hands it to the notification and the car.
+        val queue = projection(book.current, find)
+        assertEquals(songs.size, queue.size)
+        assertEquals(songs.map { it.ref.mediaStoreId?.toString() ?: DEFAULT_COVER }, queue.map { coverPath(it.song) })
     }
 
     // What the session shows

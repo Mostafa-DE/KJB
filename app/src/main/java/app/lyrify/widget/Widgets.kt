@@ -182,7 +182,7 @@ internal object Widgets {
             val read = context.contentResolver.loadThumbnail(uri, Size(large, large), null)
             fitted(read, coverPx(WidgetSize.SMALL, density)) to fitted(read, large)
         } catch (_: IOException) {
-            // No embedded cover, or it could not be read: the widget shows the K.
+            // No embedded cover, or it could not be read: the widget shows the default cover.
             null
         } catch (_: SecurityException) {
             null
@@ -342,7 +342,7 @@ private fun title(state: WidgetState): String = when (state) {
     WidgetState.Empty -> LocalContext.current.getString(R.string.app_name)
 }
 
-/** The song's cover, or the K on its black tile; a tap opens the player. */
+/** The song's cover, KJB's default cover for a song without one, or the K on its black tile with nothing loaded; a tap opens the player. */
 @Composable
 private fun Cover(shown: Shown, slot: WidgetSize) {
     val context = LocalContext.current
@@ -355,6 +355,8 @@ private fun Cover(shown: Shown, slot: WidgetSize) {
     val cover = if (slot == WidgetSize.SMALL) shown.small else shown.large
     if (cover != null) {
         Image(ImageProvider(cover), label, modifier, contentScale = ContentScale.Crop)
+    } else if (shown.state is WidgetState.Loaded) {
+        Image(ImageProvider(R.drawable.kjb_default_cover), label, modifier, contentScale = ContentScale.Crop)
     } else {
         Box(modifier = modifier.background(Color.Black), contentAlignment = Alignment.Center) {
             Image(ImageProvider(R.drawable.ic_brand_k), label, GlanceModifier.size(size / 2))
