@@ -127,6 +127,21 @@ internal val LightColors = lightColorScheme(
     outlineVariant = Color(0xFFCBC4D2),
     inverseSurface = Color(0xFF312F38),
     inverseOnSurface = Color(0xFFF4EFF9),
+    surfaceTint = Color(0xFF4F44A6),
+    scrim = Color(0xFF000000),
+    // The fixed roles: the same in light and dark, the palette's tones 90, 80, 10 and 30 of each hue.
+    primaryFixed = Color(0xFFE5DEFF),
+    primaryFixedDim = Color(0xFFC8BFFF),
+    onPrimaryFixed = Color(0xFF1A0F5C),
+    onPrimaryFixedVariant = Color(0xFF3F3590),
+    secondaryFixed = Color(0xFFE4DFF9),
+    secondaryFixedDim = Color(0xFFC8C3DC),
+    onSecondaryFixed = Color(0xFF1C1832),
+    onSecondaryFixedVariant = Color(0xFF474359),
+    tertiaryFixed = Color(0xFFFFDBD1),
+    tertiaryFixedDim = Color(0xFFFFB4A1),
+    onTertiaryFixed = Color(0xFF3B0A00),
+    onTertiaryFixedVariant = Color(0xFF7F2B17),
 )
 
 internal val DarkColors = darkColorScheme(
@@ -164,6 +179,21 @@ internal val DarkColors = darkColorScheme(
     outlineVariant = Color(0xFF49454F),
     inverseSurface = Color(0xFFE6E1EC),
     inverseOnSurface = Color(0xFF312F38),
+    surfaceTint = Color(0xFFC8BFFF),
+    scrim = Color(0xFF000000),
+    // The fixed roles: the same in light and dark, the palette's tones 90, 80, 10 and 30 of each hue.
+    primaryFixed = Color(0xFFE5DEFF),
+    primaryFixedDim = Color(0xFFC8BFFF),
+    onPrimaryFixed = Color(0xFF1A0F5C),
+    onPrimaryFixedVariant = Color(0xFF3F3590),
+    secondaryFixed = Color(0xFFE4DFF9),
+    secondaryFixedDim = Color(0xFFC8C3DC),
+    onSecondaryFixed = Color(0xFF1C1832),
+    onSecondaryFixedVariant = Color(0xFF474359),
+    tertiaryFixed = Color(0xFFFFDBD1),
+    tertiaryFixedDim = Color(0xFFFFB4A1),
+    onTertiaryFixed = Color(0xFF3B0A00),
+    onTertiaryFixedVariant = Color(0xFF7F2B17),
 )
 
 /** A status tone's colours: a pill is [container] with [onContainer]; [accent] marks plain surfaces (bars, dots, icons). */
@@ -339,6 +369,9 @@ fun LyrifyTheme(content: @Composable () -> Unit) {
             CompositionLocalProvider(
                 // Every plain clickable, toggleable and selectable; no ripple in the Material parts that stay.
                 LocalIndication provides PressIndication(),
+                // Material's theme gives no content colour: a word or icon outside a Surface (a dialog opened beside the
+                // page) would be drawn black, unreadable in dark. It takes the page's ink instead.
+                LocalContentColor provides colors.onBackground,
                 LocalRippleConfiguration provides null,
                 LocalChromeColors provides remember(colors, brandColors, dark) { chromeColors(colors, brandColors, dark) },
                 LocalReducedMotion provides reduced,

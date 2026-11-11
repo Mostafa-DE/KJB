@@ -512,9 +512,10 @@ fun ConfirmDialog(
                     ) {
                         Icon(painterResource(icon), contentDescription = null, tint = if (destructive) colors.onErrorContainer else colors.onSurfaceVariant, modifier = Modifier.size(28.dp))
                     }
-                    Text(title, style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 4.dp).semantics { heading() })
+                    // The card's own ink: the dialog is often opened beside a page, where no Surface hands one down.
+                    Text(title, style = MaterialTheme.typography.titleLarge, color = colors.onSurface, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 4.dp).semantics { heading() })
                     if (text != null) Text(text, style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant, textAlign = TextAlign.Center)
-                    body?.invoke(this)
+                    body?.let { CompositionLocalProvider(LocalContentColor provides colors.onSurface) { it(this) } }
                     val button: @Composable (DialogButton, Modifier) -> Unit = { which, at ->
                         when (which) {
                             DialogButton.DISMISS -> LyrifyButton(dismiss, { cancel() }, at.height(48.dp), kind = ButtonKind.SECONDARY)

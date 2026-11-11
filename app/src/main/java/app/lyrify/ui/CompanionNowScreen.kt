@@ -318,6 +318,7 @@ private fun PlayerChip(track: CurrentTrack?) {
     Surface(
         shape = CircleShape,
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
+        contentColor = MaterialTheme.colorScheme.onSurface,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.heightIn(min = 28.dp).padding(start = 6.dp, end = 12.dp)) {
