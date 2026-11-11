@@ -731,6 +731,15 @@ class KeptApart(private val file: File, private val log: (String) -> Unit = {}, 
         }
     }
 
+    /** A backup's [pairs] kept apart in one write; they count only once stored, and false leaves the pairs as they were. */
+    suspend fun addAll(pairs: Set<NamePair>): Boolean {
+        load()
+        return mutex.withLock {
+            val now = current.value + pairs
+            withContext(io) { write(now) }.also { stored -> if (stored) current.value = now }
+        }
+    }
+
     private fun read(): Set<NamePair> {
         if (!file.isFile) return emptySet()
         val root = try {

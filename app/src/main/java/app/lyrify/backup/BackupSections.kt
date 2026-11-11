@@ -68,8 +68,8 @@ data class BackupAlbum(
     val problems: List<SongProblem>,
 )
 
-/** Covers & tags in a backup: the albums settled, its two flags, and the names kept apart with "Not the same". */
-data class BackupCovers(val albums: List<BackupAlbum>, val checkedOnce: Boolean, val noted: Boolean, val apart: Set<NamePair>)
+/** Covers & tags in a backup: the albums settled and its two flags. */
+data class BackupCovers(val albums: List<BackupAlbum>, val checkedOnce: Boolean, val noted: Boolean)
 
 internal object SectionJson {
     // Plays
@@ -223,7 +223,7 @@ internal object SectionJson {
 
     // Covers & tags
 
-    fun covers(memory: CoversTagsMemory, apart: Set<NamePair>): String = JsonObject(
+    fun covers(memory: CoversTagsMemory): String = JsonObject(
         mapOf(
             ALBUMS_KEY to JsonArray(
                 memory.albums.map { album ->
@@ -242,7 +242,6 @@ internal object SectionJson {
             ),
             CHECKED_KEY to JsonPrimitive(memory.checkedOnce),
             NOTED_KEY to JsonPrimitive(memory.noted),
-            APART_KEY to JsonArray(apart.sortedWith(compareBy({ it.kind }, { it.a }, { it.b })).map { JsonObject(mapOf(KIND_KEY to JsonPrimitive(it.kind.name), A_KEY to JsonPrimitive(it.a), B_KEY to JsonPrimitive(it.b))) }),
         ),
     ).toString()
 
@@ -264,13 +263,21 @@ internal object SectionJson {
                 },
             )
         }
-        val apart = (root[APART_KEY] as? JsonArray).orEmpty().mapNotNull { element ->
-            val pair = element as? JsonObject ?: return@mapNotNull null
-            val kind = NameKind.entries.firstOrNull { it.name == pair.text(KIND_KEY) } ?: return@mapNotNull null
-            NamePair.of(kind, pair.text(A_KEY) ?: return@mapNotNull null, pair.text(B_KEY) ?: return@mapNotNull null)
-        }.toSet()
-        return BackupCovers(albums, root.flag(CHECKED_KEY) ?: false, root.flag(NOTED_KEY) ?: false, apart)
+        return BackupCovers(albums, root.flag(CHECKED_KEY) ?: false, root.flag(NOTED_KEY) ?: false)
     }
+
+    // Names kept apart
+
+    fun names(apart: Set<NamePair>): String = JsonObject(
+        mapOf(APART_KEY to JsonArray(apart.sortedWith(compareBy({ it.kind }, { it.a }, { it.b })).map { JsonObject(mapOf(KIND_KEY to JsonPrimitive(it.kind.name), A_KEY to JsonPrimitive(it.a), B_KEY to JsonPrimitive(it.b))) })),
+    ).toString()
+
+    /** The pairs, each read on its own: one of a kind this version does not know, or without both names, is left out. */
+    fun names(text: String): Set<NamePair>? = (jsonObject(text)?.get(APART_KEY) as? JsonArray)?.mapNotNull { element ->
+        val pair = element as? JsonObject ?: return@mapNotNull null
+        val kind = NameKind.entries.firstOrNull { it.name == pair.text(KIND_KEY) } ?: return@mapNotNull null
+        NamePair.of(kind, pair.text(A_KEY) ?: return@mapNotNull null, pair.text(B_KEY) ?: return@mapNotNull null)
+    }?.toSet()
 
     // Recent searches
 

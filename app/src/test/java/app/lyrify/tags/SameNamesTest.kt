@@ -106,6 +106,23 @@ class SameNamesTest {
     }
 
     @Test
+    fun `a restore's names kept apart are stored in one write, or not at all`() {
+        val io = Dispatchers.Unconfined
+        val pairs = setOf(NamePair.of(NameKind.ARTIST, "Kit Calloway", "Kit Caloway"), NamePair.of(NameKind.ALBUM, "Harbour Glass", "Harbor Glass"))
+        val file = File(folder.root, "same-names.json")
+        // Its folder is a file: nothing can be stored.
+        val broken = File(folder.root, "not-a-folder").apply { writeText("") }
+
+        runBlocking {
+            assertTrue(KeptApart(file, io = io).addAll(pairs))
+            assertEquals(pairs, KeptApart(file, io = io).load())
+            val failing = KeptApart(File(broken, "same-names.json"), io = io)
+            assertFalse(failing.addAll(pairs))
+            assertEquals(emptySet<NamePair>(), failing.pairs.value)
+        }
+    }
+
+    @Test
     fun `kept-apart pairs are stored, read back, and an unreadable item is left out`() {
         val file = File(folder.root, "same-names.json")
         val io = Dispatchers.Unconfined

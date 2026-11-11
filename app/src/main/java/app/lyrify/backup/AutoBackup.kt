@@ -205,10 +205,7 @@ class AppBackupStores(context: Context) : BackupStores {
 
     override suspend fun tones(): TonesState = ToneListStore.of(app).state.first()
 
-    override suspend fun addTones(tones: List<SavedTone>): Boolean {
-        val list = ToneListStore.of(app)
-        return tones.map { list.put(it) }.all { it }
-    }
+    override suspend fun addTones(tones: List<SavedTone>): Boolean = ToneListStore.of(app).putAll(tones)
 
     override suspend fun findTone(folder: String, fileName: String, size: Long): Long? = withContext(Dispatchers.IO) {
         try {
@@ -235,21 +232,11 @@ class AppBackupStores(context: Context) : BackupStores {
 
     override suspend fun keptApart(): Set<NamePair> = TagsGraph.keptApart(app).load()
 
-    override suspend fun addKeptApart(pairs: Set<NamePair>): Boolean {
-        val names = TagsGraph.keptApart(app)
-        val there = names.load()
-        return (pairs - there).map { names.add(it) }.all { it }
-    }
+    override suspend fun addKeptApart(pairs: Set<NamePair>): Boolean = TagsGraph.keptApart(app).addAll(pairs)
 
     override suspend fun searches(): List<String> = SearchGraph.recent(app).state.first { it != null }.orEmpty()
 
-    /** Added the oldest first, so the newest ends on top, as typed. */
-    override suspend fun addSearches(searches: List<String>): Boolean {
-        val recent = SearchGraph.recent(app)
-        val there = recent.state.first { it != null }.orEmpty().toSet()
-        searches.filterNot { it in there }.asReversed().forEach(recent::add)
-        return true
-    }
+    override suspend fun addSearches(searches: List<String>): Boolean = SearchGraph.recent(app).addAll(searches)
 
     override suspend fun fileMark(path: String): FileMark? = withContext(Dispatchers.IO) { markOf(path) }
 }

@@ -14,8 +14,8 @@ import app.lyrify.player.QueueBook
 import app.lyrify.player.Repeat
 import app.lyrify.player.SongState
 import app.lyrify.player.Speed
-import app.lyrify.settings.ConnectDevice
 import app.lyrify.settings.Settings
+import app.lyrify.settings.SettingsJson
 import app.lyrify.stats.LoggedPlay
 import app.lyrify.tags.AlbumRecord
 import app.lyrify.tags.CoversTagsMemory
@@ -171,7 +171,7 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
         Section.LYRICS -> contents.lyrics?.entries?.keys.orEmpty().toList()
         Section.DUPLICATES -> contents.duplicates?.let { it.notDuplicates + it.reviewed }.orEmpty().flatten()
         Section.COVERS -> contents.covers?.albums.orEmpty().flatMap { it.paths }
-        Section.EQUALIZER, Section.SETTINGS, Section.TONES, Section.SEARCHES -> emptyList()
+        Section.EQUALIZER, Section.SETTINGS, Section.TONES, Section.NAMES, Section.SEARCHES -> emptyList()
     }
 
     /** The [chosen] sections the backup holds, in the summary's order. */
@@ -179,7 +179,7 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
 
     /**
      * Restores the [chosen] sections the backup holds, one after another, each in one write of its store (and Repeat,
-     * the AI switch and the names kept apart beside theirs): settings, Repeat and the equalizer replace what is there;
+     * the AI switch beside theirs, all or nothing): settings, Repeat and the equalizer replace what is there;
      * the rest is merged in, and on a phone with nothing yet the result is the old phone's. Every section is matched to
      * this phone before the first write. A section that fails leaves its store as it was, and the ones before it stay
      * restored. [newId] names new playlists. The log gets section names and counts only.
@@ -239,15 +239,18 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
 
         data class Lyrics(val entries: List<LedgerEntry>) : Prepared
 
-        data class AppSettings(val settings: Settings, val ai: Boolean?, val connectNames: List<String>) : Prepared
+        /** The settings as the backup stores them, to be read over the phone's own; the AI switch; the devices' names. */
+        data class AppSettings(val stored: String, val ai: Boolean?, val connectNames: List<String>) : Prepared
 
-        /** Each tone with its song's path here (its old path when the song is not here: the tone is a file of its own). */
-        data class Tones(val tones: List<BackupTone>) : Prepared
+        /** Each tone whose song is here, on its path here, and how many are not ([songsMissing]). */
+        data class Tones(val tones: List<BackupTone>, val songsMissing: Int) : Prepared
 
         data class Duplicates(val choices: DuplicateChoices) : Prepared
 
         /** Each album whose songs are all here, with them. */
-        data class Covers(val albums: List<Pair<BackupAlbum, List<Song>>>, val checkedOnce: Boolean, val noted: Boolean, val apart: Set<NamePair>) : Prepared
+        data class Covers(val albums: List<Pair<BackupAlbum, List<Song>>>, val checkedOnce: Boolean, val noted: Boolean) : Prepared
+
+        data class Names(val pairs: Set<NamePair>) : Prepared
 
         data class Searches(val searches: List<String>) : Prepared
     }
@@ -277,8 +280,13 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
             checkNotNull(contents.lyrics).entries.values.mapNotNull { entry -> found[entry.path]?.let { entry.copy(path = it.path) } }
                 .groupBy { it.path }.map { (_, entries) -> entries.maxBy { it.updatedAt } },
         )
-        Section.SETTINGS -> Prepared.AppSettings(checkNotNull(contents.settings), contents.aiLyrics, contents.connectNames)
-        Section.TONES -> Prepared.Tones(checkNotNull(contents.tones).map { tone -> tone.copy(songPath = found[tone.songPath]?.path ?: tone.songPath) })
+        Section.SETTINGS -> Prepared.AppSettings(contents.settingsStored ?: SettingsJson.encode(checkNotNull(contents.settings)), contents.aiLyrics, contents.connectNames)
+        // A tone keeps the song it was cut from, to open it again: one whose song is not here is left out, never kept
+        // on a path of the old phone.
+        Section.TONES -> checkNotNull(contents.tones).let { tones ->
+            val here = tones.mapNotNull { tone -> found[tone.songPath]?.let { tone.copy(songPath = it.path) } }
+            Prepared.Tones(here, tones.size - here.size)
+        }
         Section.DUPLICATES -> checkNotNull(contents.duplicates).let { choices ->
             // A group by this phone's ids, as Duplicates keys it; one with a song not here is no group here.
             fun keys(groups: List<List<String>>) = groups.mapNotNull { paths -> paths.map { found[it]?.ref?.mediaStoreId ?: return@mapNotNull null }.sorted().joinToString(",") }.toSet()
@@ -286,8 +294,9 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
         }
         Section.COVERS -> checkNotNull(contents.covers).let { covers ->
             val albums = covers.albums.mapNotNull { album -> album.paths.map { found[it] ?: return@mapNotNull null }.let { album to it } }
-            Prepared.Covers(albums, covers.checkedOnce, covers.noted, covers.apart)
+            Prepared.Covers(albums, covers.checkedOnce, covers.noted)
         }
+        Section.NAMES -> Prepared.Names(checkNotNull(contents.names))
         Section.SEARCHES -> Prepared.Searches(checkNotNull(contents.searches))
     }
 
@@ -306,12 +315,19 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
         )
     }
 
-    /** Writes [prepared] in one change of its store; the count it restored, or null when it could not be written. */
+    /**
+     * Writes [prepared] in one change of its store, all or nothing: the queues with Repeat and the settings with the AI
+     * switch are two writes, and the first is taken back when the second fails. The count it restored, or null when it
+     * could not be written.
+     */
     private suspend fun write(prepared: Prepared, stores: BackupStores, newId: () -> String, tally: Tally): Int? = when (prepared) {
         is Prepared.Playlists -> counted(stores.updatePlaylists { mergePlaylists(it, prepared.state, newId) }, prepared.state.playlists.size)
         is Prepared.Queues -> {
+            var before: QueueBook? = null
             // Repeat after the queues: it keeps the place of the queue playing now with it.
-            val written = stores.updateQueues { mergeQueues(it, prepared.book) } && prepared.repeat?.let { stores.replaceRepeat(it) } != false
+            val queued = stores.updateQueues { now -> mergeQueues(now, prepared.book).also { before = now } }
+            val written = queued && (prepared.repeat == null || stores.replaceRepeat(prepared.repeat))
+            if (queued && !written) before?.let { book -> stores.updateQueues { book } }
             counted(written, prepared.book.queues.size)
         }
         is Prepared.Plays -> counted(stores.addPlays(prepared.plays), prepared.plays.size)
@@ -324,16 +340,11 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
         is Prepared.Equalizer -> counted(stores.replaceEqualizer(prepared.profiles), prepared.profiles.profiles.size)
         is Prepared.Lyrics -> counted(stores.updateLedger { mergeLedger(it, prepared.entries) }, prepared.entries.size)
         is Prepared.AppSettings -> {
-            var own = emptyList<ConnectDevice>()
-            // The phone keeps its own automatic backup, its first-run state and the devices Android linked to it.
-            val written = stores.updateSettings { phone ->
-                own = phone.playback.connectDevices
-                prepared.settings.copy(
-                    playback = prepared.settings.playback.copy(connectDevices = phone.playback.connectDevices),
-                    backup = phone.backup,
-                    nav = prepared.settings.nav.copy(setupDone = phone.nav.setupDone),
-                )
-            } && prepared.ai?.let { stores.replaceAiLyrics(it) } != false
+            var before: Settings? = null
+            val settled = stores.updateSettings { phone -> overPhone(prepared.stored, phone).also { before = phone } }
+            val written = settled && (prepared.ai == null || stores.replaceAiLyrics(prepared.ai))
+            if (settled && !written) before?.let { phone -> stores.updateSettings { phone } }
+            val own = before?.playback?.connectDevices.orEmpty()
             if (written) tally.pickAgain = prepared.connectNames.filter { name -> own.none { it.name.equals(name, ignoreCase = true) } }
             counted(written, 0)
         }
@@ -343,19 +354,30 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
                 SavedTone(id, tone.name, tone.kind, tone.songPath, tone.startMs, tone.lengthMs, tone.fadeInMs, tone.fadeOutMs, tone.createdAt, tone.fileName, tone.size)
             }
             val written = tones.isEmpty() || stores.addTones(tones)
-            if (written) tally.tonesNotFound = prepared.tones.size - tones.size
+            if (written) tally.tonesNotFound = prepared.songsMissing + prepared.tones.size - tones.size
             counted(written, tones.size)
         }
         is Prepared.Duplicates -> counted(stores.addDuplicates(prepared.choices), prepared.choices.notDuplicates.size)
         is Prepared.Covers -> {
             val albums = prepared.albums.mapNotNull { (album, songs) -> settled(album, songs, stores) }
-            val written = stores.addSettledAlbums(albums, prepared.checkedOnce, prepared.noted) && (prepared.apart.isEmpty() || stores.addKeptApart(prepared.apart))
-            counted(written, albums.size)
+            counted(stores.addSettledAlbums(albums, prepared.checkedOnce, prepared.noted), albums.size)
         }
+        is Prepared.Names -> counted(stores.addKeptApart(prepared.pairs), prepared.pairs.size)
         is Prepared.Searches -> counted(stores.addSearches(prepared.searches), prepared.searches.size)
     }
 
     private fun counted(written: Boolean, count: Int): Int? = if (written) count else null
+
+    /**
+     * The backup's [stored] settings read over the [phone]'s own, through the same steps as `settings.json` (an older
+     * version's are brought up to date, a newer one's read for what this version knows), so what the backup does not
+     * carry stays as the phone has it. The phone keeps its automatic backup, its first-run state and the devices Android
+     * linked to it.
+     */
+    private fun overPhone(stored: String, phone: Settings): Settings {
+        val read = SettingsJson.decode(stored, base = phone) ?: phone
+        return read.copy(playback = read.playback.copy(connectDevices = phone.playback.connectDevices), backup = phone.backup, nav = read.nav.copy(setupDone = phone.nav.setupDone))
+    }
 
     /**
      * [album] settled on this phone: on its [songs] here, under the id their paths give it, marked as the files are now

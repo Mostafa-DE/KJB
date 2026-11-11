@@ -32,6 +32,7 @@ import app.lyrify.settings.DockTab
 import app.lyrify.settings.FavouritesTab
 import app.lyrify.settings.Levelling
 import app.lyrify.settings.LibrarySettings
+import app.lyrify.settings.LibraryTab
 import app.lyrify.settings.LyricsAlign
 import app.lyrify.settings.LyricsFilter
 import app.lyrify.settings.LyricsSettings
@@ -481,6 +482,151 @@ class BackupNewPhoneTest {
         assertNull(SongMatcher.relativeToRoot("/storage/emulated/x/Song.mp3"))
         assertNull(SongMatcher.relativeToRoot("/sdcard/Music/Song.mp3"))
         assertNull(SongMatcher.relativeToRoot("Music/Song.mp3"))
+    }
+
+    // Review of 2026-11-11 (panel-bk): never a guess at a path, all or nothing per part, settings over the phone's own
+
+    @Test
+    fun `another song put at the same path, of about the same length, is not taken for the one that moved`() {
+        // Where Salt Road was, another song a second shorter; Salt Road itself moved to another folder.
+        val impostor = at(NEW, "Music/Night Ferry/02 Salt Road.mp3", "Harbour Lights", "Ada Querne", "Night Ferry", 198_500, 950, 4_000_000)
+        val movedRoad = at(NEW, "Music/Moved/02 Salt Road.mp3", "Salt Road", "Mira Solen", "Night Ferry", 199_000, 951, 4_400_000)
+        val phone = newPhone()
+
+        move(phone = phone, phoneLibrary = newLibrary - newRoad + impostor + movedRoad)
+
+        assertEquals(listOf(newWater.ref, movedRoad.ref), phone.playlists.playlists.first { it.name == "Night drive" }.songs)
+    }
+
+    @Test
+    fun `a song the backup has no tags for is not taken by its path alone`() {
+        // Gone from the old phone's library, still named by a playlist; another file sits at that path on the new phone.
+        val gone = SongRef(OLD + "Music/Gone/Lost Road.mp3")
+        val there = at(OLD, "Music/Gone/Lost Road.mp3", "Night Bus", "Ada Querne", null, 210_000, 950, 4_000_000)
+        val old = oldPhone().apply { playlists = PlaylistsState(listOf(Playlist("p", "Gone", listOf(gone, lantern.ref), createdAt = T0))) }
+        val phone = newPhone()
+
+        val result = move(old = old, phone = phone, phoneLibrary = newLibrary + there)
+
+        assertEquals(listOf(newLantern.ref), phone.playlists.playlists.single().songs)
+        assertEquals(1, result.notFound)
+    }
+
+    @Test
+    fun `two songs at one path, case aside, are neither taken, not even by their tags`() {
+        val twin = at(NEW, "Music/Night Ferry/01 low water.mp3", "Low Water", "Mira Solen", "Night Ferry", 240_000, 950, 5_200_000)
+        val phone = newPhone()
+
+        move(phone = phone, phoneLibrary = newLibrary + twin)
+
+        assertEquals(listOf(newRoad.ref), phone.playlists.playlists.first { it.name == "Night drive" }.songs)
+    }
+
+    @Test
+    fun `a path or a title in another Unicode form is the same`() {
+        val rue = at(OLD, "Music/Caf\u00e9 Nights/01 Rue.mp3", "Rue", "Ada Querne", "Caf\u00e9 Nights", 180_000, 20, 3_000_000)
+        val bleu = at(OLD, "Music/Bleu/Caf\u00e9.mp3", "Caf\u00e9", "Ada Querne", "Bleu", 170_000, 21, 2_900_000)
+        // The same folder, written decomposed on the new phone, and the song retagged: only its path finds it.
+        val newRue = at(NEW, "Music/Cafe\u0301 Nights/01 Rue.mp3", "Rue (Live)", "Ada Querne", "Cafe\u0301 Nights", 180_400, 960, 3_000_000)
+        // Moved, its title decomposed: its tags find it.
+        val newBleu = at(NEW, "Music/Elsewhere/Cafe\u0301.mp3", "Cafe\u0301", "Ada Querne", "Bleu", 170_000, 961, 2_900_000)
+        val old = oldPhone().apply { playlists = PlaylistsState(listOf(Playlist("p", "Nights", listOf(rue.ref, bleu.ref), createdAt = T0))) }
+        val phone = newPhone()
+
+        move(old = old, library = oldLibrary + rue + bleu, phone = phone, phoneLibrary = newLibrary + newRue + newBleu)
+
+        assertEquals(listOf(newRue.ref, newBleu.ref), phone.playlists.playlists.single().songs)
+    }
+
+    @Test
+    fun `a tone whose song is not on the phone is left out and counted, never kept on the old path`() {
+        val phone = newPhone()
+
+        val result = move(phone = phone, phoneLibrary = newLibrary - newWater)
+
+        assertEquals(emptyMap<Long, SavedTone>(), phone.tones.tones)
+        assertEquals(2, result.tonesNotFound)
+    }
+
+    @Test
+    fun `when Repeat can't be kept, the queues stay as they were and the part is named as failed`() {
+        val phone = newPhone().apply { repeatFails = true }
+
+        val result = move(phone = phone)
+
+        assertEquals(QueueBook(), phone.queues)
+        assertEquals(listOf(Section.QUEUES), result.failed)
+    }
+
+    @Test
+    fun `when the AI switch can't be set, the settings stay as they were and the part is named as failed`() {
+        val phone = newPhone().apply { aiFails = true }
+
+        val result = move(phone = phone)
+
+        assertEquals(Settings(nav = NavSettings(setupDone = true)), phone.settings)
+        assertEquals(listOf(Section.SETTINGS), result.failed)
+    }
+
+    @Test
+    fun `Covers & tags and the names kept apart are restored apart, so one failing leaves the other`() {
+        val noAlbums = newPhone().apply { failing += Section.COVERS }
+        val noNames = newPhone().apply { failing += Section.NAMES }
+
+        val one = move(phone = noAlbums)
+        val two = move(phone = noNames)
+
+        assertEquals(CoversTagsMemory() to setOf(NamePair.of(NameKind.ARTIST, "Odo Brannick", "Odo Branick")), noAlbums.coversTags to noAlbums.keptApart)
+        assertEquals(listOf(Section.COVERS), one.failed)
+        assertEquals(2 to emptySet<NamePair>(), noNames.coversTags.albums.size to noNames.keptApart)
+        assertEquals(listOf(Section.NAMES), two.failed)
+    }
+
+    // Settings over the phone's own
+
+    /** The phone's own settings, none of them the defaults. */
+    private val mine = Settings(
+        playback = PlaybackSettings(rememberPlace = RememberPlace.OFF, skipBackSeconds = 5),
+        library = LibrarySettings(foldersToSkip = listOf("Podcasts"), showFileNames = true),
+        lyrics = LyricsSettings(textSize = LyricsSize.XL),
+        nav = NavSettings(setupDone = true),
+    )
+
+    /** [settings] (a `settings.json` as some KJB wrote it) restored over [phone]'s own. */
+    private fun restoreSettings(settings: String, phone: Settings = mine): Settings {
+        val stores = MemoryStores(settings = phone)
+        val zip = zipOf(
+            listOf(
+                "manifest.json" to """{"format":2,"appVersion":"3.0.0","createdAt":$T0,"sections":{"settings":{"version":1}}}""",
+                "settings.json" to settings,
+            ).map { (name, text) -> name to text.encodeToByteArray() },
+        )
+        runBlocking { RestorePlan(BackupFixtures.contents(zip), newLibrary).apply(setOf(Section.SETTINGS), stores, newId) }
+        return stores.settings
+    }
+
+    @Test
+    fun `a backup's settings change only what they carry, the phone keeps the rest`() {
+        assertEquals(mine.copy(playback = mine.playback.copy(countPlayAfterPercent = 70)), restoreSettings("""{"version":3,"playback":{"countPlayAfterPercent":70}}"""))
+        assertEquals(mine.copy(lyrics = mine.lyrics.copy(textAlign = LyricsAlign.CENTRE)), restoreSettings("""{"version":3,"lyrics":{"textAlign":"CENTRE","textSize":"HUGE"}}"""))
+    }
+
+    @Test
+    fun `an older backup's settings go through the same steps as an older settings file`() {
+        // Before version 3 every file wrote Long songs, the old default, so it is no choice: the phone keeps its own.
+        assertEquals(RememberPlace.OFF, restoreSettings("""{"version":2,"playback":{"rememberPlace":"LONG_SONGS"}}""").playback.rememberPlace)
+        assertEquals(RememberPlace.ALL_SONGS, restoreSettings("""{"version":2,"playback":{"rememberPlace":"ALL_SONGS"}}""").playback.rememberPlace)
+        assertEquals(RememberPlace.LONG_SONGS, restoreSettings("""{"version":3,"playback":{"rememberPlace":"LONG_SONGS"}}""").playback.rememberPlace)
+        // Version 1 had Playlists last among the Library tabs: it moves right after Songs, as on disk.
+        val tabs = restoreSettings("""{"version":1,"library":{"tabs":[{"tab":"SONGS","shown":true},{"tab":"ALBUMS","shown":true},{"tab":"PLAYLISTS","shown":true}]}}""").library.tabs
+        assertEquals(listOf(LibraryTab.SONGS, LibraryTab.PLAYLISTS, LibraryTab.ALBUMS), tabs.take(3).map { it.tab })
+    }
+
+    @Test
+    fun `a newer KJB's settings are read for what this one knows, the phone keeping the rest`() {
+        val read = restoreSettings("""{"version":9,"playback":{"rememberPlace":"LONG_SONGS","laterChoice":true},"laterSection":{"x":1}}""")
+
+        assertEquals(mine.copy(playback = mine.playback.copy(rememberPlace = RememberPlace.LONG_SONGS)), read)
     }
 
     private companion object {

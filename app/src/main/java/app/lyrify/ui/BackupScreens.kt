@@ -77,6 +77,7 @@ internal fun restoreRows(contents: BackupContents): List<RestoreRow> = listOfNot
     contents.tones?.let { RestoreRow(Section.TONES, it.size, null) },
     contents.duplicates?.let { RestoreRow(Section.DUPLICATES, it.notDuplicates.size, null) },
     contents.covers?.let { RestoreRow(Section.COVERS, it.albums.size, null) },
+    contents.names?.let { RestoreRow(Section.NAMES, it.size, null) },
     contents.searches?.let { RestoreRow(Section.SEARCHES, it.size, null) },
 )
 
@@ -92,6 +93,7 @@ internal fun sectionLabel(section: Section): Int = when (section) {
     Section.TONES -> R.string.restore_section_tones
     Section.DUPLICATES -> R.string.restore_section_duplicates
     Section.COVERS -> R.string.restore_section_covers
+    Section.NAMES -> R.string.restore_section_names
     Section.SEARCHES -> R.string.restore_section_searches
 }
 

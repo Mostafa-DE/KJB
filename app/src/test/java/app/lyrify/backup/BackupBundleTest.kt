@@ -17,6 +17,9 @@ import app.lyrify.player.Repeat
 import app.lyrify.player.Speed
 import app.lyrify.settings.BackupSettings
 import app.lyrify.settings.ConnectDevice
+import app.lyrify.settings.LibrarySettings
+import app.lyrify.settings.Settings
+import app.lyrify.settings.SettingsJson
 import app.lyrify.tags.Settled
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -89,11 +92,11 @@ class BackupBundleTest {
                 ),
                 checkedOnce = true,
                 noted = true,
-                apart = BackupFixtures.keptApart,
             ),
             read.covers,
         )
         assertEquals(BackupFixtures.searches, read.searches)
+        assertEquals(BackupFixtures.keptApart, read.names)
     }
 
     @Test
@@ -190,7 +193,11 @@ class BackupBundleTest {
             name to JsonObject(json + ("addedLater" to JsonPrimitive("x"))).toString().encodeToByteArray()
         }
 
-        assertEquals(contents(), contents(zipOf(changed)))
+        val read = contents(zipOf(changed))
+        // The settings are kept as stored, to be read over the phone's own: read so, they are the same.
+        assertEquals(contents().copy(settingsStored = null), read.copy(settingsStored = null))
+        val phone = Settings(library = LibrarySettings(showFileNames = true))
+        assertEquals(SettingsJson.decode(contents().settingsStored!!, base = phone), SettingsJson.decode(read.settingsStored!!, base = phone))
     }
 
     @Test
@@ -210,6 +217,28 @@ class BackupBundleTest {
         assertEquals(listOf(Section.PLAYS), read.tooNew)
         assertNull(read.plays)
         assertEquals(Section.entries - Section.PLAYS, read.sections)
+    }
+
+    @Test
+    fun `a newer songs table still gives the songs this version can read`() {
+        val newer = zipOf(
+            entriesOf(zip()).map { (name, data) ->
+                if (name != BackupBundle.MANIFEST) return@map name to data
+                val manifest = Json.parseToJsonElement(data.decodeToString()).jsonObject
+                name to JsonObject(manifest + ("songs" to JsonObject(mapOf("version" to JsonPrimitive(BackupBundle.SONGS_VERSION + 1))))).toString().encodeToByteArray()
+            },
+        )
+
+        assertEquals(contents().songs, contents(newer).songs)
+    }
+
+    @Test
+    fun `JSON nested deeper than any backup's makes it unreadable, never a crash`() {
+        val depth = 200_000
+        val deep = "{\"plays\":" + "[".repeat(depth) + "]".repeat(depth) + "}"
+        val bytes = zipOf(entriesOf(zip()).map { (name, data) -> name to if (name == Section.PLAYS.file) deep.encodeToByteArray() else data })
+
+        assertEquals(BackupRead.Unreadable(BackupRead.Why.NOT_A_BACKUP), read(bytes))
     }
 
     @Test

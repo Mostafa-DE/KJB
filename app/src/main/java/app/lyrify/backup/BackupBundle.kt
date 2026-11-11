@@ -73,8 +73,11 @@ enum class Section(val key: String, val version: Int) {
     /** Duplicates: the groups marked "Not duplicates" and the groups opened, each by its songs. */
     DUPLICATES("duplicates", 1),
 
-    /** Covers & tags: the albums done or skipped, and the names kept apart with "Not the same". */
+    /** Covers & tags: the albums done or skipped. */
     COVERS("covers", 1),
+
+    /** The names kept apart with "Not the same" (Merge artists' suggestions). */
+    NAMES("names", 1),
 
     /** Search's recent searches. */
     SEARCHES("searches", 1),
@@ -143,6 +146,11 @@ data class BackupContents(
     val equalizer: EqProfiles? = null,
     val lyrics: LedgerState? = null,
     val settings: Settings? = null,
+    /**
+     * The settings as the backup stores them, read again over the phone's own when restored ([SettingsJson.decode]'s
+     * base), so what they do not carry stays as the phone has it; [settings] is the same read over the defaults.
+     */
+    val settingsStored: String? = null,
     /** With the settings: the AI lyrics switch; null in a backup from before it was kept. */
     val aiLyrics: Boolean? = null,
     /** With the settings: the names of the devices picked for Start when connected, to pick again on this phone. */
@@ -150,6 +158,7 @@ data class BackupContents(
     val tones: List<BackupTone>? = null,
     val duplicates: BackupDuplicates? = null,
     val covers: BackupCovers? = null,
+    val names: Set<NamePair>? = null,
     val searches: List<String>? = null,
     /** Sections a newer KJB wrote in a form this version cannot read: skipped, and the summary says so. */
     val tooNew: List<Section> = emptyList(),
@@ -170,6 +179,7 @@ data class BackupContents(
         Section.TONES -> tones != null
         Section.DUPLICATES -> duplicates != null
         Section.COVERS -> covers != null
+        Section.NAMES -> names != null
         Section.SEARCHES -> searches != null
     }
 }
@@ -216,8 +226,9 @@ data class ZipLimits(
  * automatic backup's folder.
  *
  * Format 2 added the paths below the root and sizes, the queue playing, Repeat, the speeds and the part repeating, the
- * AI switch, and the tones, Duplicates, Covers & tags and recent searches sections, all as new keys or sections: format
- * 1 backups read as before, and a format 1 KJB reads a format 2 backup's sections it knows.
+ * AI switch, and the tones, Duplicates, Covers & tags, names kept apart and recent searches sections, all as new keys or
+ * sections: format 1 backups read as before, and a format 1 KJB reads a format 2 backup's sections it knows. The queues
+ * section keeps version 1: a format 1 KJB reads its Recent and Saved queues and leaves the one playing, as before.
  *
  * Read as untrusted input: only the known entry names are kept, no entry name ever becomes a path, each entry and all of
  * them together are capped unpacked ([ZipLimits]), two entries of one name make it unreadable, and every section is
@@ -254,9 +265,8 @@ object BackupBundle {
             snapshot.settings?.let { add(Section.SETTINGS to settings(it, snapshot.aiLyrics)) }
             snapshot.tones?.let { add(Section.TONES to SectionJson.tones(it)) }
             snapshot.duplicates?.let { add(Section.DUPLICATES to SectionJson.duplicates(it, pathOf::get)) }
-            if (snapshot.coversTags != null || snapshot.keptApart != null) {
-                add(Section.COVERS to SectionJson.covers(snapshot.coversTags ?: CoversTagsMemory(), snapshot.keptApart.orEmpty()))
-            }
+            snapshot.coversTags?.let { add(Section.COVERS to SectionJson.covers(it)) }
+            snapshot.keptApart?.let { add(Section.NAMES to SectionJson.names(it)) }
             snapshot.searches?.let { add(Section.SEARCHES to SectionJson.searches(it)) }
         }
         val byPath = library.associateBy { it.path }
@@ -373,8 +383,8 @@ object BackupBundle {
         val songs = when {
             songsVersion == null -> emptyList()
             songsVersion < 1 -> return notABackup
-            // A newer form of the songs: the sections are still found by their paths.
-            songsVersion > SONGS_VERSION -> emptyList()
+            // A newer form of the songs: what this version can read of it, or none (the songs are then not found).
+            songsVersion > SONGS_VERSION -> files[SONGS]?.decodeToString()?.let(::songs).orEmpty()
             else -> songs(files[SONGS]?.decodeToString() ?: return notABackup) ?: return notABackup
         }
         var contents = BackupContents(
@@ -414,6 +424,7 @@ object BackupBundle {
                 ?: settings.playback.connectDevices.map { it.name }
             contents.copy(
                 settings = settings.copy(backup = BackupSettings(), playback = settings.playback.copy(connectDevices = emptyList())),
+                settingsStored = text,
                 aiLyrics = root?.flag(AI_KEY),
                 connectNames = names.distinct(),
             )
@@ -421,6 +432,7 @@ object BackupBundle {
         Section.TONES -> SectionJson.tones(text)?.let { contents.copy(tones = it) }
         Section.DUPLICATES -> SectionJson.duplicates(text)?.let { contents.copy(duplicates = it) }
         Section.COVERS -> SectionJson.covers(text)?.let { contents.copy(covers = it) }
+        Section.NAMES -> SectionJson.names(text)?.let { contents.copy(names = it) }
         Section.SEARCHES -> SectionJson.searches(text)?.let { contents.copy(searches = it) }
     }
 

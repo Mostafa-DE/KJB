@@ -196,7 +196,8 @@ enum class FavouritesTab { SONGS, ALBUMS, ARTISTS, FOLDERS, PLAYLISTS }
  * missing or not an object reads as its defaults. Only text that is not a JSON object at all is not settings.
  * Version 2 put Playlists right after Songs in the Library tabs. Version 3 made All songs the default of Remember my
  * place: an older file's Long songs was the old default (every file wrote it), so it reads as All songs, while Off and
- * All songs are kept. A file without a version reads as this version.
+ * All songs are kept. A file without a version reads as this version. A backup's settings are read the same way over the
+ * phone's own ([decode]'s base), so what the backup does not carry stays as the phone has it.
  */
 object SettingsJson {
     const val VERSION: Int = 3
@@ -257,25 +258,29 @@ object SettingsJson {
         ),
     )
 
-    /** The settings in [text]; null when it is not a JSON object at all. */
-    fun decode(text: String): Settings? {
+    /**
+     * The settings in [text]; null when it is not a JSON object at all. A field or section [text] does not carry, or
+     * carries in a form this version can't use, reads as [base] has it: the defaults for `settings.json`, the phone's
+     * own settings for a backup's.
+     */
+    fun decode(text: String, base: Settings = Settings()): Settings? {
         val root = try {
             Json.parseToJsonElement(text) as? JsonObject
         } catch (_: SerializationException) {
             null
         } ?: return null
         val version = (root["version"] as? JsonPrimitive)?.takeUnless { it.isString }?.intOrNull ?: VERSION
-        val d = Settings()
+        val d = base
         return Settings(
             playback = root.section("playback")?.let {
                 PlaybackSettings(
-                    rememberPlace = rememberPlace(it, version),
+                    rememberPlace = rememberPlace(it, version, d.playback.rememberPlace),
                     headsetButtons = it.flag("headsetButtons", d.playback.headsetButtons),
                     skipShortClips = it.flag("skipShortClips", d.playback.skipShortClips),
                     countPlayAfterPercent = it.number("countPlayAfterPercent", d.playback.countPlayAfterPercent, PlaybackSettings.PLAY_SHARES::contains),
                     skipBackSeconds = it.number("skipBackSeconds", d.playback.skipBackSeconds, PlaybackSettings.SKIP_SECONDS::contains),
                     skipForwardSeconds = it.number("skipForwardSeconds", d.playback.skipForwardSeconds, PlaybackSettings.SKIP_SECONDS::contains),
-                    connectDevices = connectDevices(it["connectDevices"]),
+                    connectDevices = (it["connectDevices"] as? JsonArray)?.let(::connectDevices) ?: d.playback.connectDevices,
                 )
             } ?: d.playback,
             audio = root.section("audio")?.let {
@@ -286,8 +291,8 @@ object SettingsJson {
             } ?: d.audio,
             library = root.section("library")?.let {
                 LibrarySettings(
-                    tabs = tabs(it["tabs"], version),
-                    foldersToSkip = (it["foldersToSkip"] as? JsonArray).orEmpty().mapNotNull { folder -> folder.text()?.takeIf(String::isNotBlank) }.distinct(),
+                    tabs = (it["tabs"] as? JsonArray)?.let { stored -> tabs(stored, version) } ?: d.library.tabs,
+                    foldersToSkip = (it["foldersToSkip"] as? JsonArray)?.mapNotNull { folder -> folder.text()?.takeIf(String::isNotBlank) }?.distinct() ?: d.library.foldersToSkip,
                     showFileNames = it.flag("showFileNames", d.library.showFileNames),
                     songSort = it.choice("songSort", d.library.songSort),
                     songFilter = it.choice("songFilter", d.library.songFilter),
@@ -311,7 +316,7 @@ object SettingsJson {
                 )
             } ?: d.playerUi,
             backup = root.section("backup")?.let {
-                BackupSettings(automatic = it.flag("automatic", d.backup.automatic), folderUri = it["folderUri"]?.text())
+                BackupSettings(automatic = it.flag("automatic", d.backup.automatic), folderUri = if ("folderUri" in it) it["folderUri"]?.text() else d.backup.folderUri)
             } ?: d.backup,
             advanced = root.section("advanced")?.let {
                 AdvancedSettings(
@@ -338,8 +343,7 @@ object SettingsJson {
      * last by default: it moves right after Songs, shown or hidden as stored, the others in their stored order. The
      * defaults when none is shown.
      */
-    private fun tabs(element: JsonElement?, version: Int): List<LibraryTabSetting> {
-        val stored = element as? JsonArray ?: return LibrarySettings.DEFAULT_TABS
+    private fun tabs(stored: JsonArray, version: Int): List<LibraryTabSetting> {
         val read = stored.mapNotNull { item ->
             val tab = item as? JsonObject ?: return@mapNotNull null
             val name = tab.choiceOrNull<LibraryTab>("tab") ?: return@mapNotNull null
@@ -364,15 +368,17 @@ object SettingsJson {
     /** The version from which Long songs in Remember my place is the user's choice, not the old default. */
     private const val ALL_SONGS_DEFAULT: Int = 3
 
-    /** Remember my place as stored: the old default (Long songs before [ALL_SONGS_DEFAULT]) reads as today's default. */
-    private fun rememberPlace(playback: JsonObject, version: Int): RememberPlace {
-        val default = PlaybackSettings().rememberPlace
-        val stored = playback.choice("rememberPlace", default)
-        return if (version < ALL_SONGS_DEFAULT && stored == RememberPlace.LONG_SONGS) default else stored
+    /**
+     * Remember my place as stored: the old default (Long songs before [ALL_SONGS_DEFAULT]) was no choice, so it reads as
+     * [base] (today's default for `settings.json`, the phone's own for a backup), as a missing one does.
+     */
+    private fun rememberPlace(playback: JsonObject, version: Int, base: RememberPlace): RememberPlace {
+        val stored = playback.choice("rememberPlace", base)
+        return if (version < ALL_SONGS_DEFAULT && stored == RememberPlace.LONG_SONGS) base else stored
     }
 
     /** The picked devices: entries with a whole positive id and a name, the first one of each id. */
-    private fun connectDevices(element: JsonElement?): List<ConnectDevice> = (element as? JsonArray).orEmpty().mapNotNull { item ->
+    private fun connectDevices(stored: JsonArray): List<ConnectDevice> = stored.mapNotNull { item ->
         val device = item as? JsonObject ?: return@mapNotNull null
         val id = device.number("id", 0) { it > 0 }.takeIf { it > 0 } ?: return@mapNotNull null
         val name = device["name"]?.text()?.trim()?.takeIf(String::isNotEmpty) ?: return@mapNotNull null

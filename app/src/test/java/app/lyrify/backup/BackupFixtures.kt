@@ -209,7 +209,8 @@ object BackupFixtures {
 
 /**
  * A phone's stores in memory; a section in [failing] cannot be written, and its stores stay as they were. [toneFiles]
- * are the tone files on the phone, by folder, name and size; [files] the songs' files as they are now.
+ * are the tone files on the phone, by folder, name and size; [files] the songs' files as they are now. [repeatFails] and
+ * [aiFails]: the second write of the queues' and the settings' sections fails.
  */
 class MemoryStores(
     var playlists: PlaylistsState = PlaylistsState(),
@@ -229,6 +230,8 @@ class MemoryStores(
     var keptApart: Set<NamePair> = emptySet(),
     var searches: List<String> = emptyList(),
     val files: Map<String, FileMark> = emptyMap(),
+    var repeatFails: Boolean = false,
+    var aiFails: Boolean = false,
 ) : BackupStores {
     private fun <T> change(section: Section, now: T, change: (T) -> T, set: (T) -> Unit): Boolean = (section !in failing).also { if (it) set(change(now)) }
 
@@ -262,11 +265,11 @@ class MemoryStores(
 
     override suspend fun repeat(): Repeat = repeat
 
-    override suspend fun replaceRepeat(repeat: Repeat): Boolean = change(Section.QUEUES, this.repeat, { repeat }) { this.repeat = it }
+    override suspend fun replaceRepeat(repeat: Repeat): Boolean = !repeatFails && change(Section.QUEUES, this.repeat, { repeat }) { this.repeat = it }
 
     override suspend fun aiLyrics(): Boolean = aiLyrics
 
-    override suspend fun replaceAiLyrics(on: Boolean): Boolean = change(Section.SETTINGS, aiLyrics, { on }) { aiLyrics = it }
+    override suspend fun replaceAiLyrics(on: Boolean): Boolean = !aiFails && change(Section.SETTINGS, aiLyrics, { on }) { aiLyrics = it }
 
     override suspend fun tones(): TonesState = tones
 
@@ -289,7 +292,7 @@ class MemoryStores(
 
     override suspend fun keptApart(): Set<NamePair> = keptApart
 
-    override suspend fun addKeptApart(pairs: Set<NamePair>): Boolean = change(Section.COVERS, keptApart, { it + pairs }) { keptApart = it }
+    override suspend fun addKeptApart(pairs: Set<NamePair>): Boolean = change(Section.NAMES, keptApart, { it + pairs }) { keptApart = it }
 
     override suspend fun searches(): List<String> = searches
 

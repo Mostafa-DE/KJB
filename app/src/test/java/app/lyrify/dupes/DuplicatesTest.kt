@@ -268,6 +268,34 @@ class DuplicatesTest {
         assertTrue(scanned(engine).groups.isEmpty())
     }
 
+    @Test
+    fun `a restore's choices that can't be stored change nothing, in memory either`() = runTest {
+        library(song(1, "same bytes"), song(2, "same bytes", folderName = "b"))
+        val engine = engine()
+        val group = scanned(engine).groups.single()
+        // Where the file goes is a file now: nothing can be stored.
+        val app = storeFile.parentFile!!
+        app.deleteRecursively()
+        app.writeText("")
+
+        assertFalse(engine.restoreChoices(setOf(group.key), emptySet()))
+
+        assertEquals(listOf(group.key), engine.state.value.results?.groups?.map { it.key })
+        assertEquals(1, engine.state.value.badge)
+    }
+
+    @Test
+    fun `a restore's choices are kept and stored, their groups leaving the results`() = runTest {
+        library(song(1, "same bytes"), song(2, "same bytes", folderName = "b"))
+        val engine = engine()
+        val group = scanned(engine).groups.single()
+
+        assertTrue(engine.restoreChoices(setOf(group.key), emptySet()))
+
+        assertTrue(engine.state.value.results?.groups.orEmpty().isEmpty())
+        assertTrue(scanned(engine()).groups.isEmpty())
+    }
+
     // Moving to the trash
 
     private suspend fun TestScope.trashReady(engine: Duplicates): DuplicateGroup {

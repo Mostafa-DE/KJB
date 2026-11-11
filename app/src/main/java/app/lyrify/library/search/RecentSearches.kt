@@ -1,5 +1,6 @@
 package app.lyrify.library.search
 
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -112,28 +113,53 @@ class RecentSearches(private val store: RecentSearchesStore, scope: CoroutineSco
     /** The newest first; null until the stored ones are read. */
     val state: StateFlow<List<String>?> = _state.asStateFlow()
 
-    private val changes = Channel<(List<String>) -> List<String>>(Channel.UNLIMITED)
+    /** A change, and for one that counts only once stored (a restore's), where to say whether it was. */
+    private class Change(val apply: (List<String>) -> List<String>, val stored: CompletableDeferred<Boolean>? = null)
+
+    private val changes = Channel<Change>(Channel.UNLIMITED)
 
     init {
         scope.launch {
             var searches = withContext(io) { store.load() }
             _state.value = searches
             for (change in changes) {
-                val changed = change(searches)
-                if (changed == searches) continue
-                searches = changed
-                _state.value = changed
-                withContext(io) { store.save(changed) }
+                val changed = change.apply(searches)
+                if (changed == searches) {
+                    change.stored?.complete(true)
+                    continue
+                }
+                if (change.stored == null) {
+                    searches = changed
+                    _state.value = changed
+                    withContext(io) { store.save(changed) }
+                } else {
+                    val saved = withContext(io) { store.save(changed) }
+                    if (saved) {
+                        searches = changed
+                        _state.value = changed
+                    }
+                    change.stored.complete(saved)
+                }
             }
         }
     }
 
     /** The search for [query] goes first: the keyboard's search key, or a result tapped. */
     fun add(query: String) {
-        changes.trySend { withSearch(it, query) }
+        changes.trySend(Change({ withSearch(it, query) }))
     }
 
     fun remove(query: String) {
-        changes.trySend { withoutSearch(it, query) }
+        changes.trySend(Change({ withoutSearch(it, query) }))
+    }
+
+    /**
+     * A backup's [searches] (the newest first) added to the recent ones not there yet, in one write: they count only
+     * once stored, and false leaves the recent searches as they were.
+     */
+    suspend fun addAll(searches: List<String>): Boolean {
+        val stored = CompletableDeferred<Boolean>()
+        changes.trySend(Change({ now -> searches.filterNot { it in now }.asReversed().fold(now, ::withSearch) }, stored))
+        return stored.await()
     }
 }

@@ -46,6 +46,7 @@ class BackupScreensTest {
                 RestoreRow(Section.TONES, 1, null),
                 RestoreRow(Section.DUPLICATES, 1, null),
                 RestoreRow(Section.COVERS, 2, null),
+                RestoreRow(Section.NAMES, 1, null),
                 RestoreRow(Section.SEARCHES, 2, null),
             ),
             restoreRows(BackupFixtures.contents()),
@@ -98,7 +99,7 @@ class BackupScreensTest {
         assertEquals(listOf(Section.PLAYLISTS to 6, Section.QUEUES to 4, Section.SETTINGS to null, Section.TONES to 0), restoredRows(result))
         assertEquals("12 songs not found on your phone", plural("restore_not_found")["other"]?.format("12"))
         assertEquals("1 song not found on your phone", plural("restore_not_found")["one"]?.format("1"))
-        assertEquals("2 tones not restored: their files aren't on your phone.", plural("restore_tones_missing")["other"]?.replace("\\'", "'")?.format("2"))
+        assertEquals("2 tones not restored: their files or their songs aren't on your phone.", plural("restore_tones_missing")["other"]?.replace("\\'", "'")?.format("2"))
         assertEquals("Start when connected: pick Harbour Buds again in Settings. Android links each device to one phone.", strings()["restore_pick_again"]?.format("Harbour Buds"))
     }
 
