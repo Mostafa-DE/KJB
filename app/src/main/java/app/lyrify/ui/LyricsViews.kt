@@ -599,14 +599,14 @@ private fun LyricsBackdrop(path: String) {
     }
 }
 
-/** "Aa": the lyrics text sheet. */
+/** "Aa", in the surface's ink whatever is around it: the lyrics text sheet. */
 @Composable
 fun AaButton(enabled: Boolean = true, onClick: () -> Unit) {
     val label = stringResource(R.string.player_lyrics_text)
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier.size(48.dp).clip(CircleShape).clickable(enabled = enabled, role = Role.Button, onClick = onClick).semantics { contentDescription = label },
-    ) { Text("Aa", style = AaLetters) }
+    ) { Text("Aa", style = AaLetters, color = MaterialTheme.colorScheme.onSurface) }
 }
 
 /** "⋯" with the one editor these lyrics have: Edit timing or Make synced. */

@@ -1,15 +1,30 @@
 package app.lyrify.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.SharedTransitionLayout
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.test.getBoundsInRoot
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import app.lyrify.data.LedgerState
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -17,8 +32,8 @@ import org.junit.runner.RunWith
 
 /**
  * Transitions on the phone, frame by frame with the test clock held: a dialog's action waits for its exit (decision D5),
- * a state fades through instead of cutting, and the song sheets change step inside one window, both steps drawn while
- * they cross. Made-up names only.
+ * a state fades through instead of cutting, the song sheets change step inside one window, both steps drawn while they
+ * cross, and the Now bar stays where it is while the player grows out of it and back into it. Made-up names only.
  */
 @RunWith(AndroidJUnit4::class)
 class TransitionsDeviceTest {
@@ -29,9 +44,7 @@ class TransitionsDeviceTest {
     fun aDialogsActionRunsOnlyOnceItHasLeft() {
         var confirmed = 0
         compose.setContent {
-            LyrifyTheme {
-                ConfirmDialog(title = "Delete Harbour Glass?", confirm = "Delete", dismiss = "Keep", onConfirm = { confirmed++ }, onDismiss = {})
-            }
+            Host { ConfirmDialog(title = "Delete Harbour Glass?", confirm = "Delete", dismiss = "Keep", onConfirm = { confirmed++ }, onDismiss = {}) }
         }
         compose.waitForIdle()
         compose.mainClock.autoAdvance = false
@@ -48,7 +61,7 @@ class TransitionsDeviceTest {
     @Test
     fun aStateFadesThroughTheOtherInsteadOfCutting() {
         var state by mutableStateOf("Finding lyrics")
-        compose.setContent { LyrifyTheme { FadeThrough(state) { Text(it) } } }
+        compose.setContent { Host { FadeThrough(state) { Text(it) } } }
         compose.waitForIdle()
         compose.mainClock.autoAdvance = false
         state = "No lyrics yet"
@@ -66,9 +79,7 @@ class TransitionsDeviceTest {
     fun theSongSheetsChangeStepInOneWindow() {
         var step by mutableStateOf("Paper Lantern")
         compose.setContent {
-            LyrifyTheme {
-                SheetFlow(step, onDismiss = {}) { shown -> LyrifySheet(onDismiss = {}) { Text(shown) } }
-            }
+            Host { SheetFlow(step, onDismiss = {}) { shown -> LyrifySheet(onDismiss = {}) { Text(shown) } } }
         }
         compose.waitForIdle()
         compose.mainClock.autoAdvance = false
@@ -88,7 +99,7 @@ class TransitionsDeviceTest {
         var step by mutableStateOf("Paper Lantern")
         var tapped = 0
         compose.setContent {
-            LyrifyTheme {
+            Host {
                 SheetFlow(step, onDismiss = {}) { shown ->
                     LyrifySheet(onDismiss = {}) { Text(shown, Modifier.clickable { if (shown == "Paper Lantern") tapped++ }) }
                 }
@@ -102,5 +113,52 @@ class TransitionsDeviceTest {
         // Still drawn while it fades, the old step is gone for the finger from the first frame of its exit.
         compose.onNodeWithText("Paper Lantern").performClick()
         compose.runOnIdle { assertEquals(0, tapped) }
+    }
+
+    @Test
+    fun theNowBarStaysPutWhileThePlayerGrowsOutOfItAndBackIntoIt() {
+        var open by mutableStateOf(false)
+        compose.setContent {
+            Host {
+                CompositionLocalProvider(LocalReducedMotion provides false) {
+                    SharedTransitionLayout {
+                        Box(Modifier.fillMaxSize()) {
+                            // The shell's two ends: the Now bar over the dock, and the player's card.
+                            AnimatedVisibility(!open, Modifier.align(Alignment.BottomCenter), enter = EnterTransition.None, exit = ExitTransition.None) {
+                                val bar = remember(this) { Container(this@SharedTransitionLayout, this, bar = true) }
+                                CompositionLocalProvider(LocalContainer provides bar) {
+                                    NowBar(NowBarShows.Own(OwnNow("Quiet Engines", "The Lamplighters", cover = null, playing = false, progress = 0.25f)), LedgerState(), other = null, onOpen = {}, onPlayPause = {})
+                                }
+                            }
+                            AnimatedVisibility(open, enter = EnterTransition.None, exit = ExitTransition.None) {
+                                val player = remember(this) { Container(this@SharedTransitionLayout, this, bar = false) }
+                                Box(Modifier.fillMaxSize().then(containerBounds(player)).background(Color.DarkGray))
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        val bar = compose.onNode(hasContentDescription("Quiet Engines", substring = true))
+        compose.waitForIdle()
+        val resting = bar.getBoundsInRoot()
+        compose.mainClock.autoAdvance = false
+        open = true
+        compose.mainClock.advanceTimeByFrame()
+        compose.mainClock.advanceTimeBy(Motion.CONTAINER_MS / 3L)
+        // The player grows over the bar, which neither moves nor grows with it.
+        assertEquals(resting, bar.getBoundsInRoot())
+        compose.mainClock.advanceTimeBy(Motion.CONTAINER_MS * 2L)
+        open = false
+        compose.mainClock.advanceTimeByFrame()
+        compose.mainClock.advanceTimeBy(Motion.OPEN_MS / 3L)
+        // Shrinking back, the player lands on the bar, already in its place: it never slides down into it.
+        assertEquals(resting, bar.getBoundsInRoot())
+    }
+
+    /** What the activity gives every screen: the theme and the app's messages, which a sheet's [ToastSlot] reads. */
+    @Composable
+    private fun Host(content: @Composable () -> Unit) {
+        LyrifyTheme { CompositionLocalProvider(LocalToasts provides remember { ToastState() }, content = content) }
     }
 }

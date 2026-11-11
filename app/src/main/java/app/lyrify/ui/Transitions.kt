@@ -310,9 +310,9 @@ private const val CONTAINER_COVER = "player cover"
 /**
  * The bounds a Now bar capsule or a player screen ([container]'s end) grow from and into, the content scaled to them
  * (ScaleToBounds, so the player is laid out once, not on every frame), the corners going from the capsule's to none.
- * The Now bar's end stays where it is, out of the overlay ([containerInOverlay]): it never moves or fades, and the
- * player's card, opaque from its first frame ([containerFill]), grows over it and over the dock. Nothing with reduced
- * motion.
+ * The Now bar's end is an empty stand-in of the bar's size, out of the overlay ([containerInOverlay]), so the bar never
+ * moves or fades, and the player's card, opaque from its first frame ([containerFill]), grows over it and over the dock.
+ * Nothing with reduced motion.
  */
 @Composable
 fun containerBounds(container: Container?): Modifier {

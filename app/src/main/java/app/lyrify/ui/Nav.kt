@@ -485,11 +485,11 @@ class Navigator(initial: NavState) {
 /** The shell's [Navigator]; the activity's shell provides it. */
 val LocalNavigator = staticCompositionLocalOf<Navigator> { error("No Navigator: AppShell provides it") }
 
-/** What the shell lends a page under its Now bar and dock: the glass they blur, and the room they take at the bottom. */
+/** What the shell lends a page under its Now bar and dock: the room they take at the bottom. */
 @Immutable
-data class ShellChrome(val backdrop: GlassBackdrop?, val bottom: Dp)
+data class ShellChrome(val bottom: Dp)
 
-val LocalShellChrome = compositionLocalOf { ShellChrome(backdrop = null, bottom = 0.dp) }
+val LocalShellChrome = compositionLocalOf { ShellChrome(bottom = 0.dp) }
 
 /**
  * A page with its own top bar: the bar (given whether content is under it and the glass to blur) over [content], whose
@@ -509,7 +509,9 @@ fun PageFrame(topBar: @Composable (under: Boolean, backdrop: GlassBackdrop) -> U
         contentWindowInsets = WindowInsets(0),
         topBar = { topBar(bar.contentUnder(), own) },
     ) { padding ->
-        Box(Modifier.fillMaxSize().glassSource(own, blur).then(chrome.backdrop?.let { Modifier.glassSource(it, blur) } ?: Modifier)) {
+        // Only this page's own glass takes its content: two pages drawn at once (a page moving in, a back swipe) never
+        // share a layer, so neither can show the other's content.
+        Box(Modifier.fillMaxSize().glassSource(own, blur)) {
             content(PaddingValues(top = padding.calculateTopPadding(), bottom = chrome.bottom))
         }
     }

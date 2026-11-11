@@ -284,8 +284,8 @@ fun dockItemName(vararg parts: String?): String = parts.filterNotNull().joinToSt
  * marked by the sung line; a dot on Tools when something there needs the user.
  */
 @Composable
-fun Dock(selected: DockTab, dot: Boolean, backdrop: GlassBackdrop?, onSelect: (DockTab) -> Unit, modifier: Modifier = Modifier) {
-    GlassSurface(backdrop, CircleShape, modifier.fillMaxWidth().padding(horizontal = 12.dp), solid = true) {
+fun Dock(selected: DockTab, dot: Boolean, onSelect: (DockTab) -> Unit, modifier: Modifier = Modifier) {
+    GlassSurface(null, CircleShape, modifier.fillMaxWidth().padding(horizontal = 12.dp), solid = true) {
         DockItems(selected, dot, onSelect)
     }
 }

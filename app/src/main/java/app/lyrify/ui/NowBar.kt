@@ -252,18 +252,18 @@ fun barPlayPause(bar: NowBarShows, ownPlayPause: () -> Unit, otherPlayback: Othe
  * nothing is left, keeping its last song while it leaves.
  */
 @Composable
-fun NowBar(shows: NowBarShows, ledger: LedgerState, other: OtherPlayback?, backdrop: GlassBackdrop?, onOpen: () -> Unit, onPlayPause: (() -> Unit)?, modifier: Modifier = Modifier) {
+fun NowBar(shows: NowBarShows, ledger: LedgerState, other: OtherPlayback?, onOpen: () -> Unit, onPlayPause: (() -> Unit)?, modifier: Modifier = Modifier) {
     val reduced = LocalReducedMotion.current
     val kept = remember { Kept(shows) }
     if (shows != NowBarShows.Hidden) kept.value = shows
     AnimatedVisibility(shows != NowBarShows.Hidden, modifier, enter = barEnter(reduced), exit = barExit(reduced)) {
         // The gap above the dock goes with the bar, so nothing is left where it was.
-        Box(Modifier.padding(bottom = 8.dp)) { BarFor(kept.value, ledger, other, backdrop, onOpen, onPlayPause) }
+        Box(Modifier.padding(bottom = 8.dp)) { BarFor(kept.value, ledger, other, onOpen, onPlayPause) }
     }
 }
 
 @Composable
-private fun BarFor(shows: NowBarShows, ledger: LedgerState, other: OtherPlayback?, backdrop: GlassBackdrop?, onOpen: () -> Unit, onPlayPause: (() -> Unit)?) {
+private fun BarFor(shows: NowBarShows, ledger: LedgerState, other: OtherPlayback?, onOpen: () -> Unit, onPlayPause: (() -> Unit)?) {
     val ink = barInk(MaterialTheme.colorScheme)
     when (shows) {
         NowBarShows.Hidden -> Unit
@@ -282,7 +282,6 @@ private fun BarFor(shows: NowBarShows, ledger: LedgerState, other: OtherPlayback
                 playing = now.playing,
                 openLabel = stringResource(R.string.nowbar_open_player, listOf(now.title, artist, album).joinToString(", ")),
                 playLabel = stringResource(if (now.playing) R.string.nowbar_pause else R.string.nowbar_play),
-                backdrop = backdrop,
                 onOpen = onOpen,
                 onPlayPause = onPlayPause,
                 sharedCover = true,
@@ -313,7 +312,6 @@ private fun BarFor(shows: NowBarShows, ledger: LedgerState, other: OtherPlayback
                 playing = shows.playing,
                 openLabel = stringResource(R.string.nowbar_open_other, app, orb.title),
                 playLabel = stringResource(if (shows.playing) R.string.nowbar_pause_in else R.string.nowbar_play_in, app),
-                backdrop = backdrop,
                 onOpen = onOpen,
                 onPlayPause = onPlayPause,
                 sharedCover = false,
@@ -354,7 +352,6 @@ private fun BarRow(
     playing: Boolean,
     openLabel: String,
     playLabel: String,
-    backdrop: GlassBackdrop?,
     onOpen: () -> Unit,
     onPlayPause: (() -> Unit)?,
     sharedCover: Boolean,
@@ -362,45 +359,50 @@ private fun BarRow(
     val swipe = with(LocalDensity.current) { SWIPE_UP.toPx() }
     val ink = barInk(MaterialTheme.colorScheme)
     val container = LocalContainer.current
-    GlassSurface(backdrop, CircleShape, Modifier.fillMaxWidth().padding(horizontal = 12.dp).then(containerBounds(container)), solid = true) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
-                .heightIn(min = 64.dp)
-                .pointerInput(onOpen) {
-                    var dragged = 0f
-                    detectVerticalDragGestures(onDragStart = { dragged = 0f }, onDragEnd = { if (dragged < -swipe) onOpen() }) { _, dy -> dragged += dy }
-                }
-                .padding(end = 8.dp),
-        ) {
+    Box(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+        // The player's end of the transform is an empty stand-in of the bar's size: the bar itself is never laid out at
+        // the bounds on their way, so it stays put while the player grows out of it and shrinks back into it.
+        Box(Modifier.matchParentSize().then(containerBounds(container)))
+        GlassSurface(null, CircleShape, Modifier.fillMaxWidth(), solid = true) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier
-                    .weight(1f)
-                    .clip(CircleShape)
-                    .clickable(role = Role.Button, onClick = onOpen)
-                    .semantics(mergeDescendants = true) { contentDescription = openLabel }
                     .heightIn(min = 64.dp)
-                    .padding(start = 8.dp, end = 4.dp),
+                    .pointerInput(onOpen) {
+                        var dragged = 0f
+                        detectVerticalDragGestures(onDragStart = { dragged = 0f }, onDragEnd = { if (dragged < -swipe) onOpen() }) { _, dy -> dragged += dy }
+                    }
+                    .padding(end = 8.dp),
             ) {
-                Orb(cover, status, ring, if (sharedCover) containerCover(container) else Modifier)
-                Column(Modifier.weight(1f).clearAndSetSemantics {}) {
-                    Text(title, style = MaterialTheme.typography.titleSmall, color = ink.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    line()
-                }
-            }
-            if (onPlayPause != null) {
-                Box(
-                    contentAlignment = Alignment.Center,
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
                     modifier = Modifier
-                        .size(48.dp)
+                        .weight(1f)
                         .clip(CircleShape)
-                        .background(LocalChromeColors.current.action, CircleShape)
-                        .clickable(role = Role.Button, onClickLabel = null, onClick = onPlayPause)
-                        .semantics { contentDescription = playLabel },
+                        .clickable(role = Role.Button, onClick = onOpen)
+                        .semantics(mergeDescendants = true) { contentDescription = openLabel }
+                        .heightIn(min = 64.dp)
+                        .padding(start = 8.dp, end = 4.dp),
                 ) {
-                    PlayPauseIcon(playing, tint = LocalChromeColors.current.onAction, modifier = Modifier.size(28.dp))
+                    Orb(cover, status, ring, if (sharedCover) containerCover(container) else Modifier)
+                    Column(Modifier.weight(1f).clearAndSetSemantics {}) {
+                        Text(title, style = MaterialTheme.typography.titleSmall, color = ink.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        line()
+                    }
+                }
+                if (onPlayPause != null) {
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(CircleShape)
+                            .background(LocalChromeColors.current.action, CircleShape)
+                            .clickable(role = Role.Button, onClickLabel = null, onClick = onPlayPause)
+                            .semantics { contentDescription = playLabel },
+                    ) {
+                        PlayPauseIcon(playing, tint = LocalChromeColors.current.onAction, modifier = Modifier.size(28.dp))
+                    }
                 }
             }
         }

@@ -35,18 +35,22 @@ class BackSwipeDeviceTest {
         val library = device.wait(Until.findObject(By.desc(context.getString(R.string.nav_library))), WAIT_MS)
             ?: device.wait(Until.findObject(By.text(context.getString(R.string.nav_library))), WAIT_MS)
         assumeTrue(library != null)
+        assumeKjbInFront()
         library!!.click()
         val albums = device.wait(Until.findObject(By.text(context.getString(R.string.library_tab_albums))), WAIT_MS)
         assumeTrue(albums != null)
+        assumeKjbInFront()
         albums!!.click()
         device.waitForIdle()
         // The first album card of the grid.
+        assumeKjbInFront()
         device.click(device.displayWidth / 4, device.displayHeight / 3)
         assumeTrue(device.wait(Until.hasObject(By.desc(back)), WAIT_MS))
     }
 
     @Test
     fun aBackSwipeGivenUpSlowlyLeavesTheAlbumCurrentAndWorking() {
+        assumeKjbInFront()
         // Out to 300 px, held for a second, back to the edge, lifted.
         val held = Array(HOLD_POINTS) { Point(OUT_PX, row) }
         device.swipe(arrayOf(Point(EDGE_PX, row), Point(OUT_PX, row)) + held + arrayOf(Point(EDGE_PX, row)), STEPS)
@@ -55,12 +59,14 @@ class BackSwipeDeviceTest {
 
     @Test
     fun aBackSwipeGivenUpFastLeavesTheAlbumCurrentAndWorking() {
+        assumeKjbInFront()
         device.swipe(arrayOf(Point(EDGE_PX, row), Point(OUT_PX, row), Point(EDGE_PX, row)), FAST_STEPS)
         assertAlbumStillWorks()
     }
 
     @Test
     fun aBackSwipeLetGoOutFromTheEdgeGoesBack() {
+        assumeKjbInFront()
         device.swipe(arrayOf(Point(EDGE_PX, row), Point(device.displayWidth / 2, row)), STEPS)
         assertTrue(device.wait(Until.gone(By.desc(back)), WAIT_MS))
     }
@@ -70,8 +76,14 @@ class BackSwipeDeviceTest {
         device.waitForIdle()
         val button = device.wait(Until.findObject(By.desc(back)), WAIT_MS)
         assertTrue(button != null)
+        assumeKjbInFront()
         button!!.click()
         assertTrue(device.wait(Until.gone(By.desc(back)), WAIT_MS))
+    }
+
+    /** Never a touch on another app: if KJB is not the app in front, nothing is sent and the test stops. */
+    private fun assumeKjbInFront() {
+        assumeTrue("KJB is not in front", device.currentPackageName == context.packageName)
     }
 
     private companion object {
