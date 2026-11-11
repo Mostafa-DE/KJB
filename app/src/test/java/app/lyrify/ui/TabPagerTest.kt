@@ -1,7 +1,9 @@
 package app.lyrify.ui
 
+import androidx.compose.foundation.MutatePriority
 import androidx.compose.ui.geometry.Offset
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -76,8 +78,51 @@ class TabPagerTest {
         // On their way from Songs to Albums (0.4 of the way), flicked on: Artists; flicked back: Songs.
         assertEquals(2, tabFlingPage(position = 0.4f, velocity = 900f, minVelocity = min, heading = 1, dragged = true, count = 5))
         assertEquals(0, tabFlingPage(position = 0.4f, velocity = -900f, minVelocity = min, heading = 1, dragged = true, count = 5))
-        // A finger only laid on them as they settle, or a list scrolled meanwhile: they go on to where they were going.
-        assertEquals(1, tabFlingPage(position = 0.4f, velocity = 0f, minVelocity = min, heading = 1, dragged = false, count = 5))
+        // A finger laid on them as they settle catches them; a tap, or a list scrolled meanwhile, stops them on the
+        // nearer tab (review of cef1ddc), as Android's ViewPager does.
+        assertEquals(0, tabFlingPage(position = 0.4f, velocity = 0f, minVelocity = min, heading = 1, dragged = false, count = 5))
+        assertEquals(1, tabFlingPage(position = 0.6f, velocity = 0f, minVelocity = min, heading = 1, dragged = false, count = 5))
+    }
+
+    // Review of cef1ddc
+
+    @Test
+    fun `pages restored between two tabs, after a turn of the phone or a restart mid-swipe, land on a whole tab`() {
+        assertTrue(tabNeedsLanding(offsetFraction = 0.3f, scrolling = false))
+        assertTrue(tabNeedsLanding(offsetFraction = -0.4f, scrolling = false))
+        assertFalse(tabNeedsLanding(offsetFraction = 0f, scrolling = false))
+        // Pages a finger or a settle is moving are on their way already.
+        assertFalse(tabNeedsLanding(offsetFraction = 0.3f, scrolling = true))
+    }
+
+    @Test
+    fun `a tab tapped while a finger holds the pages wins over the finger, else it glides as usual`() {
+        assertEquals(MutatePriority.PreventUserInput, tabGlidePriority(fingerOnPages = true))
+        assertEquals(MutatePriority.Default, tabGlidePriority(fingerOnPages = false))
+    }
+
+    @Test
+    fun `TalkBack's scroll actions move one tab, never past either end`() {
+        assertEquals(2, tabStep(forward = true, current = 1, count = 5))
+        assertEquals(0, tabStep(forward = false, current = 1, count = 5))
+        assertNull(tabStep(forward = true, current = 4, count = 5))
+        assertNull(tabStep(forward = false, current = 0, count = 5))
+    }
+
+    @Test
+    fun `a finger landing in the system's gesture edge is the system's back, never a tab flick`() {
+        // A 1080 px window with 72 px gesture edges.
+        assertTrue(inGestureEdge(x = 30f, width = 1080f, start = 72f, end = 72f))
+        assertTrue(inGestureEdge(x = 1050f, width = 1080f, start = 72f, end = 72f))
+        assertFalse(inGestureEdge(x = 540f, width = 1080f, start = 72f, end = 72f))
+        // Three-button navigation: no gesture edge.
+        assertFalse(inGestureEdge(x = 2f, width = 1080f, start = 0f, end = 0f))
+    }
+
+    @Test
+    fun `with reduced motion the pages jump to their tab instead of sliding there`() {
+        assertNull(tabSettleSpec(reduced = true))
+        assertTrue(tabSettleSpec(reduced = false) != null)
     }
 
     @Test

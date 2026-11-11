@@ -1,5 +1,6 @@
 package app.lyrify.ui
 
+import androidx.compose.animation.core.AnimationSpec
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.animateFloatAsState
@@ -18,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.systemGestures
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -70,9 +72,18 @@ import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.input.pointer.util.addPointerInputChange
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.ScrollAxisRange
+import androidx.compose.ui.semantics.horizontalScrollAxisRange
+import androidx.compose.ui.semantics.pageLeft
+import androidx.compose.ui.semantics.pageRight
+import androidx.compose.ui.semantics.scrollBy
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.font.lerp
 import androidx.compose.ui.unit.Constraints
@@ -136,18 +147,42 @@ fun tabMove(target: Int, reported: Int, current: Int, onScreen: Boolean): TabMov
  * Where the tab pages go once a finger lets go of them at [position] (the page shown plus the fraction of the way to the
  * next), moving at [velocity] px/s toward the next tabs (positive) or the previous ones. A flick of at least
  * [minVelocity], however short, moves one tab on from where the pages were, or from the tab a settle still running was
- * going to ([heading]), so a second flick during the settle moves on again; slower, the nearer tab. A finger only laid
- * on settling pages ([dragged] false) lets them go on to [heading]. Never past either end of [count] tabs.
+ * going to ([heading]), so a second flick during the settle moves on again; slower, the nearer tab. A finger that
+ * caught settling pages and did not drag them ([dragged] false: a tap, or a list scrolled up or down) stops them on the
+ * nearer tab, as Android's ViewPager does. Never past either end of [count] tabs.
  */
 fun tabFlingPage(position: Float, velocity: Float, minVelocity: Float, heading: Int?, dragged: Boolean, count: Int): Int {
     val page = when {
-        !dragged && heading != null -> heading
-        abs(velocity) < minVelocity -> position.roundToInt()
+        !dragged || abs(velocity) < minVelocity -> position.roundToInt()
         velocity > 0f -> (heading ?: floor(position).toInt()) + 1
         else -> (heading ?: ceil(position).toInt()) - 1
     }
     return page.coerceIn(0, (count - 1).coerceAtLeast(0))
 }
+
+/**
+ * Whether pages restored between two tabs (the phone turned, or KJB restarted, mid-swipe: the pager keeps its fraction)
+ * must land on a whole tab: they are [offsetFraction] off one and nothing is moving them ([scrolling]).
+ */
+fun tabNeedsLanding(offsetFraction: Float, scrolling: Boolean): Boolean = !scrolling && abs(offsetFraction) > LANDING_SLACK
+
+/**
+ * How firmly a tab's glide takes the pages: over a finger holding them ([fingerOnPages]), so a tap on a tab wins over
+ * the drag and its fling; else as any animation, so a finger can still catch the glide.
+ */
+fun tabGlidePriority(fingerOnPages: Boolean): MutatePriority = if (fingerOnPages) MutatePriority.PreventUserInput else MutatePriority.Default
+
+/** The tab one step [forward] (toward the next tabs) or back from [current], for TalkBack's scroll actions; null past either end of [count]. */
+fun tabStep(forward: Boolean, current: Int, count: Int): Int? = (if (forward) current + 1 else current - 1).takeIf { it in 0 until count }
+
+/**
+ * Whether a finger landing at [x] (px in a window [width] px wide) is in the system's gesture edges ([start], [end]
+ * px wide; none with three-button navigation): there it is the system's back, never a tab flick.
+ */
+fun inGestureEdge(x: Float, width: Float, start: Float, end: Float): Boolean = x < start || x > width - end
+
+/** How the pages settle on a tab: one spring without overshoot; with reduced motion they jump there (null). */
+fun tabSettleSpec(reduced: Boolean): AnimationSpec<Float>? = if (reduced) null else TabSettle
 
 /** What the tab pages make of a finger on them: [WAIT] until it has moved past the slop, then [TAKE] it, or [LEAVE] it to the list. */
 enum class TabSwipe { WAIT, TAKE, LEAVE }
@@ -188,6 +223,9 @@ class TabPager internal constructor(val pager: PagerState, private val scope: Co
     /** The tab a settle of the pages' own is going to, while it runs. */
     private var settling: Int? = null
 
+    /** Whether a finger holds the pages (its drag, before its settle): a tap on a tab then wins over it. */
+    private var fingerOnPages = false
+
     /**
      * The tab at [at] tapped: the app's record of the tab shown has it at once (so the dock tapped while the pages glide
      * still finds the tab they go to), and the pages glide to it, the line with them; with reduced motion they are there.
@@ -202,8 +240,25 @@ class TabPager internal constructor(val pager: PagerState, private val scope: Co
         chosen.value(at)
     }
 
+    /**
+     * The pages to the tab at [at]: gliding there over a page's move, or with reduced motion there at once. Over a finger
+     * holding them the glide wins ([tabGlidePriority]): the finger's drag ends there and its fling never runs.
+     */
     internal fun glide(at: Int) {
-        scope.launch { if (reduced) pager.scrollToPage(at) else pager.animateScrollToPage(at, animationSpec = tween(Motion.OPEN_MS, easing = Motion.Standard)) }
+        scope.launch {
+            pager.scroll(tabGlidePriority(fingerOnPages)) {
+                with(pager) { updateTargetPage(at) }
+                if (reduced) {
+                    with(pager) { updateCurrentPage(at) }
+                } else {
+                    val distance = (at - position) * (pager.layoutInfo.pageSize + pager.layoutInfo.pageSpacing)
+                    var done = 0f
+                    animate(0f, distance, animationSpec = tween(Motion.OPEN_MS, easing = Motion.Standard)) { value, _ ->
+                        done += scrollBy(value - done)
+                    }
+                }
+            }
+        }
     }
 
     /** Where the pages were going when a finger landed on them: a settle's or a glide's tab; null while they rest. */
@@ -219,14 +274,19 @@ class TabPager internal constructor(val pager: PagerState, private val scope: Co
         scope.launch {
             var lift: TabFinger.Lift? = null
             pager.scroll(MutatePriority.UserInput) {
-                for (event in finger) {
-                    when (event) {
-                        is TabFinger.Move -> scrollBy(event.px)
-                        is TabFinger.Lift -> {
-                            lift = event
-                            break
+                fingerOnPages = true
+                try {
+                    for (event in finger) {
+                        when (event) {
+                            is TabFinger.Move -> scrollBy(event.px)
+                            is TabFinger.Lift -> {
+                                lift = event
+                                break
+                            }
                         }
                     }
+                } finally {
+                    fingerOnPages = false
                 }
             }
             val end = lift ?: TabFinger.Lift(0f, dragged = false)
@@ -241,10 +301,15 @@ class TabPager internal constructor(val pager: PagerState, private val scope: Co
         try {
             pager.scroll(MutatePriority.Default) {
                 with(pager) { updateTargetPage(target) }
-                val distance = (target - position) * (pager.layoutInfo.pageSize + pager.layoutInfo.pageSpacing)
-                var done = 0f
-                animate(0f, distance, initialVelocity = velocity, animationSpec = if (reduced) tween(Motion.REDUCED_MS) else TabSettle) { value, _ ->
-                    done += scrollBy(value - done)
+                val spec = tabSettleSpec(reduced)
+                if (spec == null) {
+                    with(pager) { updateCurrentPage(target) }
+                } else {
+                    val distance = (target - position) * (pager.layoutInfo.pageSize + pager.layoutInfo.pageSpacing)
+                    var done = 0f
+                    animate(0f, distance, initialVelocity = velocity, animationSpec = spec) { value, _ ->
+                        done += scrollBy(value - done)
+                    }
                 }
             }
         } finally {
@@ -284,6 +349,8 @@ fun rememberTabPager(count: Int, selected: Int, onChoose: (Int) -> Unit): TabPag
     }
     SideEffect { onScreen.value = headed }
     LaunchedEffect(tabs) { snapshotFlow { pager.settledPage }.collect { tabs.report(it) } }
+    // Restored between two tabs (the phone turned, or KJB restarted, mid-swipe): on the nearer one, whole.
+    LaunchedEffect(pager) { if (tabNeedsLanding(pager.currentPageOffsetFraction, pager.isScrollInProgress)) pager.scrollToPage(pager.currentPage) }
     return tabs
 }
 
@@ -353,11 +420,31 @@ fun TabPages(state: TabPager, keys: List<Any>, modifier: Modifier = Modifier, sw
             frames++
         }
     }
-    val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
+    val direction = LocalLayoutDirection.current
+    val rtl = direction == LayoutDirection.Rtl
+    // The system's gesture edges (back), in the window, and where the pages sit in it: a finger landing there is the system's.
+    val gestures = WindowInsets.systemGestures
+    val density = LocalDensity.current
+    val window = LocalWindowInfo.current
+    val origin = remember { Kept(Offset.Zero) }
+    val edge = rememberUpdatedState { at: Offset ->
+        inGestureEdge(origin.value.x + at.x, window.containerSize.width.toFloat(), gestures.getLeft(density, direction).toFloat(), gestures.getRight(density, direction).toFloat())
+    }
     HorizontalPager(
         state = state.pager,
         // The pages take a finger themselves, before the list on the page can (tabSwipe); Compose would ask the list first.
-        modifier = modifier.then(if (swipe) Modifier.pointerInput(state, rtl) { swipes(state, rtl) } else Modifier),
+        modifier = modifier
+            .onGloballyPositioned { origin.value = it.positionInWindow() }
+            .then(if (swipe) Modifier.pointerInput(state, rtl) { swipes(state, rtl) { edge.value(it) } } else Modifier)
+            // The pager's own scroll actions go with its own touch scrolling: TalkBack's move one tab, as a tap does.
+            .semantics {
+                val count = keys.size
+                fun step(forward: Boolean): Boolean = tabStep(forward, state.pager.currentPage, count)?.let { state.pick(it) } != null
+                horizontalScrollAxisRange = ScrollAxisRange(value = { state.position }, maxValue = { (count - 1).coerceAtLeast(0).toFloat() })
+                scrollBy { x, _ -> step(if (rtl) x < 0f else x > 0f) }
+                pageRight { step(forward = !rtl) }
+                pageLeft { step(forward = rtl) }
+            },
         beyondViewportPageCount = keptBeyond(count, frames),
         verticalAlignment = Alignment.Top,
         userScrollEnabled = false,
@@ -369,50 +456,61 @@ fun TabPages(state: TabPager, keys: List<Any>, modifier: Modifier = Modifier, sw
 
 /**
  * Each finger on the tab pages, seen before anything on the pages ([PointerEventPass.Initial]): laid on settling pages,
- * it stops them, and a tap there acts on nothing under it; moved more sideways than upright past the slop ([tabSwipe]),
- * it drags the pages, and at the lift they settle on the tab its speed and place give ([tabFlingPage]); more upright, it
- * is the list's. [rtl]: the next tab is to the left.
+ * it catches them where they are, and a tap there stops them on the nearer tab and taps nothing under it; moved more
+ * sideways than upright past the slop ([tabSwipe]), it drags the pages, every finger theirs meanwhile, and at the lift
+ * they settle on the tab its speed and place give ([tabFlingPage]); more upright, it is the list's (caught pages settle
+ * on the nearer tab). A finger landing in the system's gesture [edge] is left alone. [rtl]: the next tab is to the left.
  */
-private suspend fun PointerInputScope.swipes(state: TabPager, rtl: Boolean) {
+private suspend fun PointerInputScope.swipes(state: TabPager, rtl: Boolean, edge: (Offset) -> Boolean) {
     val minVelocity = TAB_FLING.toPx()
     val maxVelocity = viewConfiguration.maximumFlingVelocity
     val slop = viewConfiguration.touchSlop
     fun forward(px: Float) = if (rtl) px else -px
     awaitEachGesture {
         val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-        val heading = state.heading()
-        var finger = heading?.let {
-            down.consume()
-            state.swipe(it, minVelocity)
-        }
+        // In the system's gesture edge it is the system's back, never a tab flick.
+        if (edge(down.position)) return@awaitEachGesture
+        // Settling pages stop under the finger, caught where they are, as ViewPager does; the finger's way decides next.
+        // Nothing is consumed yet, so the list, its rows and the header still see the finger.
+        var finger = state.heading()?.let { state.swipe(it, minVelocity) }
         val tracker = VelocityTracker().apply { addPointerInputChange(down) }
         var moved = Offset.Zero
         var dragging = false
+        var lifted = false
         try {
             while (true) {
-                val change = awaitPointerEvent(PointerEventPass.Initial).changes.firstOrNull { it.id == down.id } ?: break
+                val event = awaitPointerEvent(PointerEventPass.Initial)
+                val change = event.changes.firstOrNull { it.id == down.id } ?: break
                 tracker.addPointerInputChange(change)
-                if (!change.pressed) break
-                val delta = change.positionChange()
+                if (!change.pressed) {
+                    lifted = true
+                    // A tap on caught pages only stops them: nothing under it is tapped.
+                    if (dragging || finger != null) change.consume()
+                    break
+                }
                 if (dragging) {
-                    finger?.trySend(TabFinger.Move(forward(delta.x)))
-                } else {
-                    if (change.isConsumed) break
-                    moved += delta
-                    when (tabSwipe(moved, slop)) {
-                        TabSwipe.WAIT -> continue
-                        TabSwipe.LEAVE -> break
-                        TabSwipe.TAKE -> {
-                            dragging = true
-                            val pages = finger ?: state.swipe(null, minVelocity).also { finger = it }
-                            pages.trySend(TabFinger.Move(forward(moved.x - sign(moved.x) * slop)))
-                        }
+                    finger?.trySend(TabFinger.Move(forward(change.positionChange().x)))
+                    // While a finger drags the pages every finger is theirs: a second one taps nothing.
+                    event.changes.forEach { it.consume() }
+                    continue
+                }
+                if (change.isConsumed) break
+                moved += change.positionChange()
+                when (tabSwipe(moved, slop)) {
+                    TabSwipe.WAIT -> continue
+                    // Upright: the list's; caught pages settle on the nearer tab meanwhile.
+                    TabSwipe.LEAVE -> break
+                    TabSwipe.TAKE -> {
+                        dragging = true
+                        val pages = finger ?: state.swipe(null, minVelocity).also { finger = it }
+                        pages.trySend(TabFinger.Move(forward(moved.x - sign(moved.x) * slop)))
+                        event.changes.forEach { it.consume() }
                     }
                 }
-                change.consume()
             }
         } finally {
-            val velocity = if (dragging) forward(tracker.calculateVelocity().x).coerceIn(-maxVelocity, maxVelocity) else 0f
+            // Taken by the system or cut short, the pages settle on the nearer tab, never on a fling's.
+            val velocity = if (dragging && lifted) forward(tracker.calculateVelocity().x).coerceIn(-maxVelocity, maxVelocity) else 0f
             finger?.trySend(TabFinger.Lift(velocity, dragging))
         }
     }
@@ -423,6 +521,9 @@ private suspend fun PointerInputScope.swipes(state: TabPager, rtl: Boolean) {
  * flick slowing at the lift as a slow drag and sent the pages back), twice Android's least fling (50 dp/s).
  */
 private val TAB_FLING = 100.dp
+
+/** How far off a whole tab restored pages may be and still count as on it. */
+private const val LANDING_SLACK = 0.001f
 
 /** The pages settling on a tab: as Compose's pager settles, without overshoot. */
 private val TabSettle = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow, visibilityThreshold = 1f)
