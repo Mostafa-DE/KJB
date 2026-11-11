@@ -734,8 +734,8 @@ class SafeWriter(
         val edit = make.edit(before)
         val asked = edit?.applyTo(before)
         if (asked == null || !asked.changesSomething) return Made.Nothing
-        // A front cover goes only when the edit says Remove (Edit tags' own, or an Undo of a cover that was not there).
-        if (asked.frontBefore != null && asked.frontAfter == null && edit.cover !is CoverEdit.Remove) {
+        // A front cover goes only when the edit says so: Edit tags' Remove, or Undo taking back the picture an edit added.
+        if (asked.frontBefore != null && asked.frontAfter == null && edit.cover !is CoverEdit.Remove && edit.cover !is CoverEdit.RemovePicture) {
             return Made.Failed.also { log("tags: the edit would drop the front cover, refused") }
         }
         // U+0000 would be written as a value separator, or cut the value short: refused, never written.
@@ -818,7 +818,8 @@ class SafeWriter(
      */
     private fun refused(edit: TagEdit, kind: EditKind): Boolean {
         if ((edit.cover as? CoverEdit.Replace)?.picture?.data?.isEmpty() == true) return true
-        return kind == EditKind.COVERS_TAGS && (edit.cover == CoverEdit.Remove || edit.fields.values.any { values -> values.isEmpty() || values.any(String::isBlank) })
+        val removes = edit.cover == CoverEdit.Remove || edit.cover is CoverEdit.RemovePicture
+        return kind == EditKind.COVERS_TAGS && (removes || edit.fields.values.any { values -> values.isEmpty() || values.any(String::isBlank) })
     }
 
     /** The SHA-256 of the song's bytes now. Throws when it can't be read. */

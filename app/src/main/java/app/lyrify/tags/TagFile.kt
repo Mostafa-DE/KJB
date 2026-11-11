@@ -116,6 +116,12 @@ sealed interface CoverEdit {
 
     /** The front cover goes; every other picture stays. */
     data object Remove : CoverEdit
+
+    /**
+     * Only the picture whose SHA-256 is [sha256] goes, and no other: Undo's way to take back the cover an edit added,
+     * never another front cover added since.
+     */
+    data class RemovePicture(val sha256: String) : CoverEdit
 }
 
 /** A change to a song's tags: what Covers & tags, Edit tags and Undo ask the writer to make. */
@@ -165,6 +171,7 @@ fun TagEdit.applyTo(tags: SongTags): AppliedEdit {
             rest.toMutableList().apply { add((front ?: 0).coerceAtMost(rest.size), cover.picture) }
         }
         CoverEdit.Remove -> tags.pictures.filterIndexed { index, picture -> index != front && picture.type != FRONT_COVER }
+        is CoverEdit.RemovePicture -> tags.pictures.filterNot { it.sha256 == cover.sha256 }
     }
     val after = frontIndex(pictures)?.let(pictures::get).takeIf { cover !is CoverEdit.Remove }
     return AppliedEdit(fields, pictures, changes, pictures != tags.pictures, before, after)

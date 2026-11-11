@@ -107,7 +107,8 @@ fun SongEdit.revert(current: SongTags, oldCover: (PictureRef) -> TagPicture?): R
         val old = coverBefore?.let(oldCover)
         cover = when {
             !stillOurs -> CoverEdit.Keep.also { skipped++ }
-            coverBefore == null -> CoverEdit.Remove
+            // The cover this edit added goes, and only that picture.
+            coverBefore == null -> coverAfter?.let { CoverEdit.RemovePicture(it.sha256) } ?: CoverEdit.Keep
             old == null -> CoverEdit.Keep.also { skipped++ }
             else -> CoverEdit.Replace(old)
         }
