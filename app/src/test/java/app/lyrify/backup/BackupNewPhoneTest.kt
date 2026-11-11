@@ -348,7 +348,7 @@ class BackupNewPhoneTest {
         assertEquals(
             CoversTagsMemory(
                 albums = listOf(
-                    AlbumRecord("${albumId(listOf(newLantern.path, newBell.path))}#restored-${T0 + 5}", Settled.DONE, "Harbour Glass", "Kit Calloway", listOf(mark(newLantern), mark(newBell)), at = T0 + 5, entryId = null, changed = 2),
+                    AlbumRecord("${albumId(listOf(newLantern.path, newBell.path))}#restored-${T0 + 5}", Settled.DONE, "Harbour Glass", "Kit Calloway", listOf(mark(newLantern), mark(newBell)), at = T0 + 5, entryId = null, changed = 2, restored = true),
                     AlbumRecord(albumId(listOf(newWater.path, newRoad.path)), Settled.SKIPPED, "Night Ferry", "Mira Solen", listOf(mark(newWater), mark(newRoad)), at = T0 + 6),
                 ),
                 checkedOnce = true,
@@ -388,14 +388,38 @@ class BackupNewPhoneTest {
         assertEquals(
             CoversTagsMemory(
                 albums = listOf(
-                    AlbumRecord("$here#restored-${T0 + 5}", Settled.DONE, "Harbour Glass", "Kit Calloway", listOf(mark(newLantern), mark(newBell)), at = T0 + 5, entryId = null, changed = 2),
-                    AlbumRecord("$here#restored-${T0 + 8}", Settled.DONE, "Harbour Glass", "Kit Calloway", listOf(mark(newLantern), mark(newBell)), at = T0 + 8, entryId = null, changed = 1),
+                    AlbumRecord("$here#restored-${T0 + 5}", Settled.DONE, "Harbour Glass", "Kit Calloway", listOf(mark(newLantern), mark(newBell)), at = T0 + 5, entryId = null, changed = 2, restored = true),
+                    AlbumRecord("$here#restored-${T0 + 8}", Settled.DONE, "Harbour Glass", "Kit Calloway", listOf(mark(newLantern), mark(newBell)), at = T0 + 8, entryId = null, changed = 1, restored = true),
                     AlbumRecord(albumId(listOf(newWater.path, newRoad.path)), Settled.SKIPPED, "Night Ferry", "Mira Solen", listOf(mark(newWater), mark(newRoad)), at = T0 + 6),
                 ),
                 checkedOnce = true,
             ),
             once,
         )
+        assertEquals(once, phone.coversTags)
+    }
+
+    /** Two applies of the same songs at the same moment (or a backup without the time) still come back as two rows. */
+    @Test
+    fun `two Done rows of the same songs and time come back as two rows, and a second restore adds none`() {
+        val album = albumId(listOf(lantern.path, bell.path))
+        val songs = listOf(FileMark(lantern.path, 4_100_000, T0), FileMark(bell.path, 3_900_000, T0))
+        val old = oldPhone().also {
+            it.coversTags = CoversTagsMemory(
+                albums = listOf(
+                    AlbumRecord("$album#7", Settled.DONE, "Harbour Glass", "Kit Calloway", songs, at = T0 + 5, entryId = 7, changed = 2),
+                    AlbumRecord("$album#8", Settled.DONE, "Harbour Glass", "Kit Calloway", songs, at = T0 + 5, entryId = 8, changed = 1),
+                ),
+            )
+        }
+        val phone = newPhone()
+
+        move(old = old, phone = phone)
+        val once = phone.coversTags
+        move(old = old, phone = phone)
+
+        val here = albumId(listOf(newLantern.path, newBell.path))
+        assertEquals(listOf("$here#restored-${T0 + 5}" to 2, "$here#restored-${T0 + 5}-2" to 1), once.albums.map { it.id to it.changed })
         assertEquals(once, phone.coversTags)
     }
 

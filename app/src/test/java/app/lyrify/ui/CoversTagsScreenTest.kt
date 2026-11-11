@@ -165,6 +165,19 @@ class CoversTagsScreenTest {
         assertEquals(listOf(Words(R.string.tags_nothing_to_change)), doneLine(record(Settled.DONE, entryId = null), fullCopy = false))
     }
 
+    /** A restore brings a Done row without its Undo, which stayed on the other phone: it says what the apply did there. */
+    @Test
+    fun `a restored Done row says the songs it changed and that it was restored, never Nothing to change or Undo`() {
+        val restored = { changed: Int, problems: Int -> record(Settled.DONE, changed = changed, problems = problems, entryId = null).copy(restored = true) }
+        assertEquals(listOf(Words(R.plurals.tags_changed_songs, 3, listOf(3)), Words(R.string.tags_restored_row)), doneLine(restored(3, 0), fullCopy = false))
+        assertEquals(
+            listOf(Words(R.plurals.tags_changed_songs, 3, listOf(3)), Words(R.plurals.tags_songs_left, 1, listOf(1)), Words(R.string.tags_restored_row)),
+            doneLine(restored(3, 1), fullCopy = false, blocked = true),
+        )
+        // An apply that had nothing to change on the other phone still says so.
+        assertEquals(listOf(Words(R.string.tags_nothing_to_change), Words(R.string.tags_restored_row)), doneLine(restored(0, 0), fullCopy = false))
+    }
+
     // Covers in KJB
 
     @Test

@@ -30,7 +30,8 @@ data class SongProblem(val path: String, val outcome: SongOutcome)
 
 /**
  * An album done or skipped, by its [id]: its [songs] as they were then, and what it shows. DONE: the History entry
- * Undo takes back ([entryId], none when nothing had to change), the songs [changed], and the [problems].
+ * Undo takes back ([entryId], none when nothing had to change), the songs [changed], and the [problems]; [restored] when
+ * a restore brought it from another phone, whose History keeps its Undo.
  */
 @Serializable
 data class AlbumRecord(
@@ -43,6 +44,7 @@ data class AlbumRecord(
     val entryId: Long? = null,
     val changed: Int = 0,
     val problems: List<SongProblem> = emptyList(),
+    val restored: Boolean = false,
 )
 
 /**
