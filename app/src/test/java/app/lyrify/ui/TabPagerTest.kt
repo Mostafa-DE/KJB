@@ -1,6 +1,7 @@
 package app.lyrify.ui
 
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.text.font.FontWeight
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -12,31 +13,55 @@ import org.junit.Test
  * has settled in, so going back to a tab finds its list as it was, never rebuilt.
  */
 class TabPagerTest {
-    /** Tabs 120 px apart, centred at 60, 180, 300 and 420. */
-    private val centres: (Int) -> Float? = { at -> if (at in 0..3) 60f + 120f * at else null }
+    // The sliding pill (user decision 2026-11-11, mock handoff/tabs-design/pill-tabs.html)
+
+    /** Songs, Albums and Artists laid out from 12 px, 100, 140 and 120 px wide, 2 px apart; a fourth not laid out. */
+    private val starts = listOf(12f, 114f, 256f)
+    private val widths = listOf(100f, 140f, 120f)
+
+    private fun pill(position: Float) = tabPill(position, { starts.getOrNull(it) }, { widths.getOrNull(it) })
 
     @Test
-    fun `the line sits under a tab when the pages rest and follows them between two tabs`() {
-        assertEquals(51f..69f, tabLine(0f, centres, width = 18f))
-        assertEquals(171f..189f, tabLine(1f, centres, width = 18f))
-        // Half way, it spans between the two tabs, stretched, never past either.
-        val half = tabLine(0.5f, centres, width = 18f)!!
-        assertTrue(half.start > 51f && half.endInclusive < 189f)
-        assertTrue(half.endInclusive - half.start > 18f)
-        // Its middle moves with the pages, steadily, all the way across.
-        val middles = (0..20).map { step -> tabLine(step / 10f, centres, 18f)!!.let { (it.start + it.endInclusive) / 2 } }
-        assertEquals(middles.sorted(), middles)
-        assertEquals(180f, middles[10], 0.001f)
-        assertEquals(300f, middles[20], 0.001f)
+    fun `the pill sits on the tab when the pages rest, and slides and stretches between two tabs with them`() {
+        assertEquals(PillSpan(12f, 100f), pill(0f))
+        assertEquals(PillSpan(63f, 120f), pill(0.5f))
+        assertEquals(PillSpan(114f, 140f), pill(1f))
+        assertEquals(PillSpan(185f, 130f), pill(1.5f))
+        assertEquals(PillSpan(256f, 120f), pill(2f))
+        // Its start moves steadily with the pages.
+        val stops = (0..20).map { pill(it / 10f)!!.start }
+        assertEquals(stops.sorted(), stops)
+        // A tab it needs not laid out yet: no pill this frame.
+        assertNull(pill(2.5f))
     }
 
     @Test
-    fun `the line leads with the end it travels toward, and waits for a tab that is not laid out`() {
-        val early = tabLine(0.2f, centres, width = 18f)!!
-        // Its leading end is further along than its trailing end has come from the start.
-        assertTrue(early.endInclusive - 69f > early.start - 51f)
-        assertNull(tabLine(3.5f, centres, width = 18f))
-        assertNull(tabLine(0f, { null }, width = 18f))
+    fun `a label takes the pill's ink as the pill reaches it and gives it back as it leaves`() {
+        assertEquals(1f, tabInkShare(position = 0f, index = 0), 0f)
+        assertEquals(0f, tabInkShare(position = 0f, index = 1), 0f)
+        assertEquals(0.5f, tabInkShare(position = 0.5f, index = 0), 0.0001f)
+        assertEquals(0.5f, tabInkShare(position = 0.5f, index = 1), 0.0001f)
+        assertEquals(1f, tabInkShare(position = 1f, index = 1), 0f)
+        assertEquals(0f, tabInkShare(position = 1f, index = 0), 0f)
+        assertEquals(0f, tabInkShare(position = 3f, index = 0), 0f)
+    }
+
+    @Test
+    fun `the pill is the filled buttons' ink with its own ink on it, the others the secondary ink, at the mock's sizes`() {
+        listOf(LightColors to chromeColors(LightColors, LightBrandColors, dark = false), DarkColors to chromeColors(DarkColors, DarkBrandColors, dark = true)).forEach { (scheme, chrome) ->
+            val colors = tabColors(scheme, chrome)
+            assertEquals(chrome.action, colors.pill)
+            assertEquals(chrome.onAction, colors.on)
+            assertEquals(scheme.onSurfaceVariant, colors.off)
+            assertEquals(colors.off, tabInk(colors, 0f))
+            assertEquals(colors.on, tabInk(colors, 1f))
+            val half = tabInk(colors, 0.5f)
+            assertTrue(half != colors.on && half != colors.off)
+        }
+        assertEquals(36f, TAB_PILL_HEIGHT.value, 0f)
+        assertEquals(16f, TAB_PADDING.value, 0f)
+        assertEquals(15f, TabText.fontSize.value, 0f)
+        assertEquals(FontWeight(600), TabText.fontWeight)
     }
 
     @Test

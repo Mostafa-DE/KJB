@@ -2,6 +2,7 @@ package app.lyrify.ui
 
 import androidx.compose.material3.ColorScheme
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.toArgb
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -81,6 +82,13 @@ class ContrastTest {
             assertReads("$theme onSurface on the sheet", s.onSurface, chrome.sheet, 4.5f)
             assertReads("$theme onSurfaceVariant on the sheet", s.onSurfaceVariant, chrome.sheet, 4.5f)
             assertReads("$theme onSurface on the bar", s.onSurface, chrome.bar, 4.5f)
+            // The top tabs: the chosen one on its pill, the others on the page and on the glass band over the worst content.
+            val tabs = tabColors(s, chrome)
+            assertReads("$theme tab on its pill", tabs.on, tabs.pill, 4.5f)
+            val behind = if (theme == "dark") Color.White else Color.Black
+            listOf("page" to s.background, "glass" to chrome.glass.compositeOver(behind)).forEach { (band, under) ->
+                assertReads("$theme tab off the pill on the $band", tabs.off, under, 4.5f)
+            }
             // The switch's white knob (Controls.kt) on its off track, and on the coral one in light (dark: onHighlight).
             assertReads("$theme knob off", Color.White, s.outline, 3f)
             if (theme == "light") assertReads("light knob on", Color.White, brand.highlight, 3f)

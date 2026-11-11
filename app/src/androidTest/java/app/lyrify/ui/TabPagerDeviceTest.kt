@@ -46,6 +46,10 @@ import androidx.compose.ui.test.swipe
 import androidx.compose.ui.test.swipeWithVelocity
 import androidx.compose.ui.test.assertIsNotDisplayed
 import kotlin.math.tan
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.toPixelMap
+import androidx.compose.ui.test.captureToImage
+import kotlin.math.abs
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -111,6 +115,41 @@ class TabPagerDeviceTest {
         compose.mainClock.advanceTimeBy(Motion.OPEN_MS * 3L)
         compose.runOnIdle { assertEquals(0, chosen) }
         compose.onNodeWithText("Songs").assertIsSelected()
+    }
+
+    @Test
+    fun midSwipeThePillSitsBetweenTheTwoTabsAndAtRestOnOne() {
+        var pill = Color.Unspecified
+        compose.setContent {
+            pill = LocalChromeColors.current.action
+            Tabs()
+        }
+        compose.waitForIdle()
+        val songs = compose.onNodeWithText("Songs").getBoundsInRoot()
+        val albums = compose.onNodeWithText("Albums").getBoundsInRoot()
+        val density = compose.density
+        // The 2 dp between the two tabs, at the pill's middle height, and the middle of Songs.
+        val gap = with(density) { Offset(((songs.right + albums.left) / 2).toPx(), ((songs.top + songs.bottom) / 2).toPx()) }
+        val onSongs = with(density) { Offset(((songs.left + songs.right) / 2).toPx(), ((songs.top + songs.bottom) / 2).toPx()) }
+        fun colourAt(at: Offset): Color = compose.onRoot().captureToImage().toPixelMap()[at.x.toInt(), at.y.toInt()]
+        // At rest the pill is on Songs, the gap is the page's.
+        assertNear(pill, colourAt(onSongs), expect = true)
+        assertNear(pill, colourAt(gap), expect = false)
+        // Half a page under the finger, held: the pill spans the gap between Songs and Albums.
+        compose.onRoot().performTouchInput {
+            down(Offset(width * 0.8f, height * 0.6f))
+            moveBy(Offset(-width * 0.25f, 0f))
+            moveBy(Offset(-width * 0.25f, 0f))
+        }
+        compose.waitForIdle()
+        assertNear(pill, colourAt(gap), expect = true)
+        compose.onRoot().performTouchInput { up() }
+    }
+
+    /** Whether [actual] is the pill's colour, within what antialiasing changes. */
+    private fun assertNear(pill: Color, actual: Color, expect: Boolean) {
+        val near = abs(pill.red - actual.red) < 0.03f && abs(pill.green - actual.green) < 0.03f && abs(pill.blue - actual.blue) < 0.03f
+        assertEquals("pill ${pill.toArgb().toUInt().toString(16)}, found ${actual.toArgb().toUInt().toString(16)}", expect, near)
     }
 
     @Test

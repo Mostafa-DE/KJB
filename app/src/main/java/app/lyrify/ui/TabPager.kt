@@ -1,14 +1,15 @@
 package app.lyrify.ui
 
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animate
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.MutatePriority
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -16,8 +17,10 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyListItemInfo
+import androidx.compose.foundation.lazy.LazyListLayoutInfo
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -26,22 +29,26 @@ import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.BasicText
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.rememberTopAppBarState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -55,10 +62,11 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
@@ -73,8 +81,6 @@ import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.font.lerp
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.LayoutDirection
@@ -82,7 +88,6 @@ import androidx.compose.ui.unit.dp
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.floor
-import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sign
@@ -100,22 +105,46 @@ import kotlinx.coroutines.launch
 
 // The pure rules
 
+/** Where the pill under the top tabs is drawn: from [start] (px from the row's start), [width] px wide. */
+@Immutable
+data class PillSpan(val start: Float, val width: Float)
+
 /**
- * The sung line under top tabs whose pages are at [position] (the page shown plus the fraction of the way to the next):
- * [width] wide and centred under the tab at a whole position; between two tabs it travels between their [centres], its
- * leading end ahead of its trailing one, so it stretches on the way and lands whole (the dock's line does the same).
- * Null while a tab it needs is not laid out.
+ * The pill under top tabs whose pages are at [position] (the page shown plus the fraction of the way to the next): on
+ * the tab when the pages rest; between two tabs, its start and its width each the same share of the way from the one's
+ * to the other's, so it slides and stretches with the finger. [start] and [width] give each tab's, null while a tab is
+ * not laid out, and then there is no pill this frame.
  */
-fun tabLine(position: Float, centres: (Int) -> Float?, width: Float): ClosedFloatingPointRange<Float>? {
+fun tabPill(position: Float, start: (Int) -> Float?, width: (Int) -> Float?): PillSpan? {
     val from = floor(position).toInt()
     val way = position - from
-    val start = centres(from) ?: return null
-    if (way <= 0f) return (start - width / 2)..(start + width / 2)
-    val end = centres(from + 1) ?: return null
-    val lead = start + (end - start) * (1f - (1f - way) * (1f - way))
-    val trail = start + (end - start) * way * way
-    return (min(lead, trail) - width / 2)..(max(lead, trail) + width / 2)
+    val fromStart = start(from) ?: return null
+    val fromWidth = width(from) ?: return null
+    if (way <= 0f) return PillSpan(fromStart, fromWidth)
+    val toStart = start(from + 1) ?: return null
+    val toWidth = width(from + 1) ?: return null
+    return PillSpan(fromStart + (toStart - fromStart) * way, fromWidth + (toWidth - fromWidth) * way)
 }
+
+/**
+ * How much of the pill's ink the label of the tab at [index] takes with the pages at [position]: all of it under the
+ * resting pill, none a whole tab away, by the distance in between; so no frame shows a dark label on the pill.
+ */
+fun tabInkShare(position: Float, index: Int): Float = (1f - abs(position - index)).coerceIn(0f, 1f)
+
+/** The top tabs' colours: the [pill] (the filled buttons' ink), the label [on] it, and a label [off] it. */
+@Immutable
+data class TabColors(val pill: Color, val on: Color, val off: Color)
+
+fun tabColors(scheme: ColorScheme, chrome: ChromeColors): TabColors = TabColors(pill = chrome.action, on = chrome.onAction, off = scheme.onSurfaceVariant)
+
+/** A label's ink taking [share] of the pill's ([tabInkShare]). */
+fun tabInk(colors: TabColors, share: Float): Color = lerp(colors.off, colors.on, share)
+
+/** The pill's height, and each tab's padding at its sides (the mock's). */
+val TAB_PILL_HEIGHT = 36.dp
+
+val TAB_PADDING = 16.dp
 
 /** How the pages go to a tab chosen elsewhere: not at all, gliding there, or there at once. */
 enum class TabMove { NONE, GLIDE, JUMP }
@@ -288,55 +317,77 @@ fun rememberTabPager(count: Int, selected: Int, onChoose: (Int) -> Unit): TabPag
 }
 
 /**
- * The text tabs ([labels]) under a top bar, scrolling sideways when they do not fit. The sung line follows the pages
- * under the finger ([tabLine], read while drawing, so a swipe recomposes nothing); a tab takes the chosen look as the
- * pages pass half way, and a tap glides there.
+ * The top tabs ([labels]): the chosen one sits in a filled pill (the filled buttons' ink), the others are plain text in
+ * the secondary ink, and a hairline runs under the row (user decision 2026-11-11, the mock's "Sliding pill"). The pill
+ * follows the pages under the finger, sliding and stretching between two tabs ([tabPill]); each label's ink crossfades
+ * by its distance from it ([tabInkShare]); a tap glides there. Both are read while drawing, so a swipe recomposes
+ * nothing. Too many to fit, the row scrolls to keep the pill in view, centred where it can. Each tab is 48 dp tall to
+ * touch, keeps the Tab role and says which is chosen. With reduced motion the pill does not slide: it fades in at the
+ * tab the pages are nearest, over 100 ms.
  */
 @Composable
 fun PagerTabs(state: TabPager, labels: List<String>, modifier: Modifier = Modifier) {
-    val highlight = LocalBrandColors.current.highlight
-    val colors = MaterialTheme.colorScheme
+    val colors = tabColors(MaterialTheme.colorScheme, LocalChromeColors.current)
+    val hairline = MaterialTheme.colorScheme.outlineVariant
     val reduced = LocalReducedMotion.current
     val row = rememberLazyListState()
     val current = state.pager.currentPage
-    // The tab shown stays in view, with the one before it.
-    val kept = remember { Kept(current) }
-    LaunchedEffect(current) {
-        if (current != kept.value) row.animateScrollToItem((current - 1).coerceAtLeast(0))
-        kept.value = current
+    val nearest by remember(state) { derivedStateOf { state.position.roundToInt() } }
+    val fade = remember { Animatable(1f) }
+    LaunchedEffect(nearest, reduced) {
+        if (!reduced) return@LaunchedEffect fade.snapTo(1f)
+        fade.snapTo(0f)
+        fade.animateTo(1f, tween(Motion.REDUCED_MS))
+    }
+    // Where the pill is: with the pages, or with reduced motion at the tab they are nearest.
+    val at = { if (reduced) nearest.toFloat() else state.position }
+    val span = { laid: LazyListLayoutInfo -> tabPill(at(), { i -> laid.item(i)?.let { it.offset - laid.viewportStartOffset.toFloat() } }, { i -> laid.item(i)?.size?.toFloat() }) }
+    // The pill kept in view, centred where the row can scroll that far; a tab not laid out yet is scrolled to first.
+    LaunchedEffect(row, state, reduced) {
+        snapshotFlow { span(row.layoutInfo) to at() }.collect { (pill, position) ->
+            if (pill == null) {
+                row.scrollToItem(position.roundToInt().coerceIn(0, (labels.size - 1).coerceAtLeast(0)))
+            } else {
+                row.dispatchRawDelta(pill.start + pill.width / 2 - row.layoutInfo.viewportSize.width / 2f)
+            }
+        }
     }
     LazyRow(
         state = row,
-        contentPadding = PaddingValues(horizontal = 8.dp),
+        contentPadding = PaddingValues(start = TAB_ROW_SIDE, end = TAB_ROW_SIDE, bottom = TAB_ROW_BOTTOM),
+        horizontalArrangement = Arrangement.spacedBy(TAB_GAP),
         modifier = modifier
             .fillMaxWidth()
             .selectableGroup()
-            .drawWithContent {
-                drawContent()
-                val laid = row.layoutInfo
-                val centre: (Int) -> Float? = { at -> laid.visibleItemsInfo.firstOrNull { it.index == at }?.let { it.offset - laid.viewportStartOffset + it.size / 2f } }
-                val line = tabLine(state.position, centre, SUNG_LINE_WIDTH.toPx()) ?: return@drawWithContent
-                val height = SUNG_LINE_HEIGHT.toPx()
-                val left = if (layoutDirection == LayoutDirection.Rtl) size.width - line.endInclusive else line.start
-                drawRoundRect(highlight, Offset(left, size.height - TAB_LINE_BOTTOM.toPx() - height), Size(line.endInclusive - line.start, height), CornerRadius(height / 2))
+            .drawBehind {
+                val stroke = 1.dp.toPx()
+                drawRect(hairline, Offset(0f, size.height - stroke), Size(size.width, stroke))
+                val pill = span(row.layoutInfo) ?: return@drawBehind
+                val height = TAB_PILL_HEIGHT.toPx()
+                val top = (TAB_TOUCH.toPx() - height) / 2
+                val left = if (layoutDirection == LayoutDirection.Rtl) size.width - pill.start - pill.width else pill.start
+                drawRoundRect(colors.pill, Offset(left, top), Size(pill.width, height), CornerRadius(height / 2), alpha = fade.value)
             },
     ) {
-        itemsIndexed(labels, contentType = { _, _ -> "tab" }) { at, name ->
-            val on = at == current
-            val lit by animateFloatAsState(if (on) 1f else 0f, motion(tween(Motion.SHORT_MS, easing = Motion.Standard), reduced), label = "tab")
+        itemsIndexed(labels, contentType = { _, _ -> "tab" }) { index, name ->
             Box(
                 contentAlignment = Alignment.Center,
                 modifier = Modifier
-                    .clip(RoundedCornerShape(16.dp))
-                    .selectable(on, role = Role.Tab) { state.pick(at) }
-                    .heightIn(min = 48.dp)
-                    .padding(horizontal = 12.dp),
+                    .minimumInteractiveComponentSize()
+                    .height(TAB_PILL_HEIGHT)
+                    .clip(CircleShape)
+                    .selectable(index == current, role = Role.Tab) { state.pick(index) }
+                    .padding(horizontal = TAB_PADDING),
             ) {
-                Text(name, style = TabText, fontWeight = lerp(FontWeight.Medium, FontWeight(650), lit), color = lerp(colors.onSurfaceVariant, colors.onSurface, lit), maxLines = 1)
+                val share = { if (reduced) (if (index == nearest) fade.value else 0f) else tabInkShare(state.position, index) }
+                BasicText(name, style = TabText, maxLines = 1, color = { tabInk(colors, share()) })
             }
         }
     }
 }
+
+/** The laid-out tab at [index], or null while it is not laid out. */
+private fun LazyListLayoutInfo.item(index: Int): LazyListItemInfo? = visibleItemsInfo.firstOrNull { it.index == index }
 
 /**
  * The tabs' pages, one per [keys] (stable and saveable: the tabs themselves), each drawn by [page] and told whether it
@@ -550,7 +601,10 @@ fun CollapsingTabs(outer: ScrollState, padding: PaddingValues, header: @Composab
 }
 
 /** A tab's name (.lt): 15/20. */
-private val TabText = body(15f, 20, 500)
+internal val TabText = body(15f, 20, 600)
 
-/** The sung line sits this far above the tabs' bottom edge. */
-private val TAB_LINE_BOTTOM = 6.dp
+/** The tab row's sides and bottom (the mock's 12 and 10 dp, less the touch room under the pill), the gap between tabs, a tab's touch height. */
+private val TAB_ROW_SIDE = 12.dp
+private val TAB_ROW_BOTTOM = 4.dp
+private val TAB_GAP = 2.dp
+private val TAB_TOUCH = 48.dp
