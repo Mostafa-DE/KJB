@@ -46,6 +46,7 @@ import androidx.compose.ui.graphics.drawOutline
 import androidx.compose.ui.graphics.drawscope.ContentDrawScope
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.takeOrElse
 import androidx.compose.ui.node.CompositionLocalConsumerModifierNode
 import androidx.compose.ui.node.DelegatableNode
 import androidx.compose.ui.node.DrawModifierNode
@@ -568,18 +569,19 @@ fun pressScale(scale: Float, reduced: Boolean): Float = if (reduced) 1f else sca
 
 /**
  * KJB's press feedback in place of the ripple: the pressed thing squashes a little toward its centre and takes a soft
- * tint of the content colour over [shape]. With [scale] 1 (rows, and always with reduced motion) only the tint shows.
+ * tint of the content colour over [shape], or of [tint], the fill's own ink, on a filled control (on the dark theme's
+ * light ink button the page's ink would not show). With [scale] 1 (rows, and always with reduced motion) only the tint shows.
  * Put the clickable before the background, so the fill squashes with the content.
  */
-class PressIndication(private val shape: Shape = RectangleShape, private val scale: Float = 1f) : IndicationNodeFactory {
-    override fun create(interactionSource: InteractionSource): DelegatableNode = PressNode(interactionSource, shape, scale)
+class PressIndication(private val shape: Shape = RectangleShape, private val scale: Float = 1f, private val tint: Color = Color.Unspecified) : IndicationNodeFactory {
+    override fun create(interactionSource: InteractionSource): DelegatableNode = PressNode(interactionSource, shape, scale, tint)
 
-    override fun equals(other: Any?): Boolean = other is PressIndication && other.shape == shape && other.scale == scale
+    override fun equals(other: Any?): Boolean = other is PressIndication && other.shape == shape && other.scale == scale && other.tint == tint
 
-    override fun hashCode(): Int = 31 * shape.hashCode() + scale.hashCode()
+    override fun hashCode(): Int = 31 * (31 * shape.hashCode() + scale.hashCode()) + tint.hashCode()
 }
 
-private class PressNode(private val source: InteractionSource, private val shape: Shape, private val pressedScale: Float) :
+private class PressNode(private val source: InteractionSource, private val shape: Shape, private val pressedScale: Float, private val tint: Color) :
     Modifier.Node(), DrawModifierNode, CompositionLocalConsumerModifierNode {
     private val pressed = Animatable(0f)
 
@@ -603,7 +605,7 @@ private class PressNode(private val source: InteractionSource, private val shape
         val squash = pressScale(pressedScale, currentValueOf(LocalReducedMotion))
         scale(1f - (1f - squash) * p) {
             this@draw.drawContent()
-            if (p > 0f) drawOutline(shape.createOutline(size, layoutDirection, this), currentValueOf(LocalContentColor).copy(alpha = PRESS_TINT * p))
+            if (p > 0f) drawOutline(shape.createOutline(size, layoutDirection, this), tint.takeOrElse { currentValueOf(LocalContentColor) }.copy(alpha = PRESS_TINT * p))
         }
     }
 }

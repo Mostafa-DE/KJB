@@ -135,7 +135,7 @@ fun LyrifyButton(
         modifier = modifier
             .clickable(interactionSource = source, indication = null, enabled = enabled, role = Role.Button, onClick = onClick)
             .minimumInteractiveComponentSize()
-            .indication(source, PressIndication(CircleShape, 0.96f))
+            .indication(source, PressIndication(CircleShape, 0.96f, tint = content))
             .background(fill, CircleShape)
             .heightIn(min = if (compact) 40.dp else 52.dp)
             .padding(horizontal = if (kind == ButtonKind.GHOST) 12.dp else 16.dp, vertical = 6.dp),
@@ -220,6 +220,7 @@ fun LyrifyChip(
                 Text(
                     formatCount(count),
                     style = MaterialTheme.typography.labelLarge.tabular(),
+                    color = contentColor,
                     modifier = Modifier
                         .background(if (selected) contentColor.copy(alpha = 0.12f) else colors.surfaceContainerHighest, CircleShape)
                         .padding(horizontal = 8.dp, vertical = 2.dp),
