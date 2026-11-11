@@ -63,8 +63,11 @@ object MetaHosts {
     /** Where a request may start. */
     fun isSource(uri: URI): Boolean = secure(uri) && host(uri) in SOURCES
 
-    /** A request to the Cover Art Archive (and so its redirect hops), which never waits for MusicBrainz's [MetaGate]. */
+    /** A request that starts at the Cover Art Archive: its 503 is a cover that could not load, never "busy". */
     fun isCover(uri: URI): Boolean = host(uri) == COVER_ART_ARCHIVE
+
+    /** A hop to musicbrainz.org, wherever its request started: it waits for MusicBrainz's [MetaGate]. */
+    fun isMusicBrainz(uri: URI): Boolean = host(uri) == MUSICBRAINZ
 
     /** Where a redirect may lead. */
     fun isRedirect(uri: URI): Boolean = secure(uri) && host(uri).let { it in SOURCES || it == ARCHIVE || it.endsWith(".$ARCHIVE") }
@@ -232,7 +235,7 @@ class MetaClient(
         val key = uri.toString()
         if (!fresh) withContext(io) { cached(key, read) }?.let { return it }
         val cover = MetaHosts.isCover(uri)
-        return when (val hop = follow(uri, body, cover)) {
+        return when (val hop = follow(uri, body)) {
             is Hop.Content -> withContext<MetaAnswer<T>>(io) {
                 try {
                     read(hop.bytes).also { if (keep(it)) cache.put(key, hop.bytes) }.let { MetaAnswer.Ok(it) }
@@ -275,10 +278,10 @@ class MetaClient(
     }
 
     /** One answer from [uri], each redirect checked against [MetaHosts] before it is followed, every hop in its turn ([hop]). */
-    private suspend fun follow(uri: URI, body: Body, cover: Boolean): Hop {
+    private suspend fun follow(uri: URI, body: Body): Hop {
         var current = uri
         repeat(MAX_REDIRECTS + 1) {
-            when (val hop = hop(current, body, cover)) {
+            when (val hop = hop(current, body)) {
                 is Hop.Redirect -> {
                     val next = try {
                         current.resolve(hop.location)
@@ -295,16 +298,17 @@ class MetaClient(
     }
 
     /**
-     * One hop in its turn: a cover's among [COVER_REQUESTS] at once, MusicBrainz's through its [gate]. A hop that timed
-     * out is tried once more ([TIMEOUT_TRIES]); any other failure is the answer.
+     * One hop in its turn, by the host it goes to: musicbrainz.org through its [gate] (a cover redirect landing there
+     * included), the Cover Art Archive and archive.org among [COVER_REQUESTS] at once. A hop that timed out is tried once
+     * more ([TIMEOUT_TRIES]); any other failure is the answer.
      */
-    private suspend fun hop(uri: URI, body: Body, cover: Boolean): Hop {
+    private suspend fun hop(uri: URI, body: Body): Hop {
         var tries = 0
         while (true) {
-            val hop = if (cover) {
-                covers.withPermit { request(uri, body) }
-            } else {
+            val hop = if (MetaHosts.isMusicBrainz(uri)) {
                 gate.send({ it is Hop.Status && it.code == HttpURLConnection.HTTP_UNAVAILABLE }) { request(uri, body) }
+            } else {
+                covers.withPermit { request(uri, body) }
             }
             if (hop !is Hop.Stop || !hop.timedOut || ++tries >= TIMEOUT_TRIES) return hop
             log("tags: request timed out, trying once more")

@@ -179,5 +179,15 @@
         <item quantity="one">Restored %d song</item>
         <item quantity="other">Restored %d songs</item>
     </plurals>
+    <string name="tags_stopped">Stopped, nothing changed</string>
+    <string name="tags_undo_newer_first">Undo the newer change first</string>
+    <plurals name="tags_year_adds">
+        <item quantity="one">Adds %2$s to %1$d song</item>
+        <item quantity="other">Adds %2$s to %1$d songs</item>
+    </plurals>
+    <plurals name="tags_year_keeps">
+        <item quantity="one">%1$s, keeps %2$d</item>
+        <item quantity="other">%1$s, keeps %2$d</item>
+    </plurals>
 
 </resources>

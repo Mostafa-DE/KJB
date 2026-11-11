@@ -497,4 +497,19 @@ class MetaClientTest {
 
         assertEquals(listOf(missing.toString(), cover.toString(), archive), web.disconnected.toList())
     }
+
+    @Test
+    fun `a cover redirect onto musicbrainz org waits for its gate like any MusicBrainz request`() = runTest {
+        val web = web()
+        val landing = "https://musicbrainz.org/ws/2/release/$ID_B?fmt=json"
+        web.on(json, ok("{}"))
+        web.on(cover, redirect(307, landing))
+        web.on(landing, ok(JPEG_BYTES))
+        val client = client(web)
+        client.text(json)
+
+        assertTrue(client.image(cover) is MetaAnswer.Ok)
+
+        assertEquals(listOf(0L, 0L, 1_100L), web.requests.map { it.at })
+    }
 }

@@ -22,6 +22,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -65,9 +66,10 @@ import kotlinx.coroutines.launch
 /**
  * The review of one album or single (the CT2 redesign). "Which one is it" (when not sure): up to 3 candidate cards that
  * only SELECT, then Search myself. "What to change": a checkbox row per field with a new value (the cover only once one
- * loaded), all ticked but Year when a song has its own. "Your songs": the album's OWN files, each with its checkbox and
- * its own "old → new"; opened from a song ([fromSong]) only that song is ticked, else none. Apply names the count and is
- * off while nothing is ticked; while it writes, the footer shows "Changing 3 of 9" with Cancel ([applying]).
+ * loaded), all ticked; Year adds the album's first year only to the songs with none. "Your songs": the album's OWN
+ * files, each with its checkbox and its own "old → new"; opened from a song ([fromSong]) only that song is ticked, else
+ * none. Apply names the count and is off while nothing is ticked, or the candidate picked is gone; while it writes, the
+ * footer shows "Changing 3 of 9" with Cancel ([applying]).
  */
 @Composable
 internal fun ReviewSheet(
@@ -87,19 +89,20 @@ internal fun ReviewSheet(
     val context = LocalContext.current
     val album = waiting.album
     val candidates = waiting.candidates
-    var picked by remember(album.id) { mutableStateOf(candidates.firstOrNull()?.release?.id) }
-    val match = candidates.firstOrNull { it.release.id == picked } ?: candidates.firstOrNull()
+    // The best candidate is picked when the sheet opens; after that only the user picks (ReviewChoice).
+    var choice by remember(album.id, fromSong) { mutableStateOf(ReviewChoice(candidates.firstOrNull()?.release?.id, songs = firstTicked(album, fromSong))) }
+    val match = choice.match(candidates)
     val changes = remember(waiting, match) { match?.let { tags.changes(waiting, it) } }
     val preview = rememberPreview(tags, match?.release)
     val loaded = preview.preview is Preview.Loaded
-    var overrides by remember(album.id, match?.release?.id) { mutableStateOf(emptyMap<Part, Boolean>()) }
-    val parts = changes?.let { pickedParts(it, loaded, overrides) }.orEmpty()
-    var ticked by remember(album.id, fromSong) { mutableStateOf(firstTicked(album, fromSong)) }
+    val parts = changes?.let { pickedParts(it, loaded, choice.overrides) }.orEmpty()
     val paired = changes?.songs?.associateBy { it.song.path }.orEmpty()
-    val songs = ticked intersect paired.keys
+    val songs = choice.songs intersect paired.keys
     fun tick(part: Part, on: Boolean) {
-        overrides = overrides + (part to on)
+        choice = choice.tick(part, on)
     }
+    // The candidate picked gets its album's first year when its answer lacked it, so Year can be offered.
+    LaunchedEffect(album.id, match?.release?.id) { match?.let { tags.date(album.id, it) } }
     LyrifySheet(
         onDismiss = onDismiss,
         footer = {
@@ -131,16 +134,17 @@ internal fun ReviewSheet(
                 LyrifyButton(stringResource(R.string.tags_turn_on), onClick = { context.startFirst(notificationAccessIntents(context)) }, kind = ButtonKind.SECONDARY, compact = true)
             }
         }
-        if (match == null || changes == null) {
+        if (candidates.isEmpty()) {
             Text(stringResource(R.string.tags_no_match), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             LyrifyButton(stringResource(R.string.tags_search_myself), onClick = onSearch, kind = ButtonKind.SECONDARY, compact = true, icon = R.drawable.ic_search)
             return@LyrifySheet
         }
-        if (waiting.proposal is Proposal.PickOne) {
+        // The cards whenever there is a choice to make, or the one picked is gone: then none is picked until the user does.
+        if (waiting.proposal is Proposal.PickOne || match == null) {
             Heading(stringResource(R.string.tags_which_one))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
                 candidates.forEach { candidate ->
-                    CandidateCard(tags, candidate, selected = candidate.release.id == match.release.id) { picked = candidate.release.id }
+                    CandidateCard(tags, candidate, selected = candidate.release.id == match?.release?.id) { choice = choice.pick(candidate.release.id) }
                 }
             }
             LyrifyButton(stringResource(R.string.tags_search_myself), onClick = onSearch, kind = ButtonKind.SECONDARY, compact = true, icon = R.drawable.ic_search)
@@ -148,6 +152,7 @@ internal fun ReviewSheet(
             val brand = LocalBrandColors.current
             SmallPill(R.drawable.ic_star_fill, stringResource(R.string.tags_sure), brand.highlightContainer, brand.onHighlightContainer)
         }
+        if (match == null || changes == null) return@LyrifySheet
 
         Heading(stringResource(R.string.tags_what_to_change))
         val first = own.songs.firstOrNull { it.path in songs } ?: own.songs.firstOrNull()
@@ -166,11 +171,7 @@ internal fun ReviewSheet(
         fieldRows(changes).forEach { row ->
             CheckRow(row.part in parts, { tick(row.part, it) }) {
                 Text(stringResource(row.part.label), style = MaterialTheme.typography.bodyLarge)
-                Text(
-                    row.change?.let { oldNew(it) } ?: pluralStringResource(R.plurals.tags_field_songs, row.songs, row.songs),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Text(fieldLine(row), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
         if (changes.parts.isEmpty() && preview.preview != null && !loaded) {
@@ -180,14 +181,14 @@ internal fun ReviewSheet(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Heading(pluralStringResource(R.plurals.tags_your_songs, own.songs.size, own.songs.size), Modifier.weight(1f))
             if (songs.size < paired.size) {
-                LyrifyButton(pluralStringResource(R.plurals.tags_select_all, paired.size, paired.size), onClick = { ticked = paired.keys }, kind = ButtonKind.GHOST, compact = true)
+                LyrifyButton(pluralStringResource(R.plurals.tags_select_all, paired.size, paired.size), onClick = { choice = choice.copy(songs = paired.keys) }, kind = ButtonKind.GHOST, compact = true)
             } else {
-                LyrifyButton(stringResource(R.string.tags_select_none), onClick = { ticked = emptySet() }, kind = ButtonKind.GHOST, compact = true)
+                LyrifyButton(stringResource(R.string.tags_select_none), onClick = { choice = choice.copy(songs = emptySet()) }, kind = ButtonKind.GHOST, compact = true)
             }
         }
         own.songs.forEach { song ->
             val change = paired[song.path]
-            CheckRow(song.path in songs, { on -> ticked = if (on) ticked + song.path else ticked - song.path }, enabled = change != null) {
+            CheckRow(song.path in songs, { on -> choice = choice.tickSong(song.path, on) }, enabled = change != null) {
                 Text(song.title?.takeIf(String::isNotBlank) ?: song.path.substringAfterLast('/'), style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 val lines = change?.let { songLines(it, parts) }
                 when {
@@ -223,7 +224,21 @@ private val Field.label: Int
         Field.YEAR -> R.string.tags_field_year
     }
 
-/** "Lanterns → Lanterns of Ulso"; a year reads "1990 → 1989, first release". */
+/**
+ * A field row's line: the "old → new" its songs share, or how many songs change; Year with songs keeping their own reads
+ * "Adds 1989, first release to 3 songs, keeps 6".
+ */
+@Composable
+private fun fieldLine(row: FieldRow): String {
+    val change = row.change
+    if (row.part == Part.YEAR && row.kept > 0 && change != null) {
+        val adds = pluralStringResource(R.plurals.tags_year_adds, row.songs, row.songs, stringResource(R.string.tags_first_release, change.new))
+        return pluralStringResource(R.plurals.tags_year_keeps, row.kept, adds, row.kept)
+    }
+    return change?.let { oldNew(it) } ?: pluralStringResource(R.plurals.tags_field_songs, row.songs, row.songs)
+}
+
+/** "Lanterns → Lanterns of Ulso"; a year reads "None → 1989, first release". */
 @Composable
 private fun oldNew(change: FieldChange): String {
     val old = change.old?.takeIf(String::isNotBlank) ?: stringResource(R.string.tags_empty_value)

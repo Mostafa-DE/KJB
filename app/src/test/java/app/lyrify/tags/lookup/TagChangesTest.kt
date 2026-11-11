@@ -73,16 +73,17 @@ class TagChangesTest {
         val album = PhoneAlbum("lanterns of ulso", "Mira Solen", messy.map { it.copy(album = "lanterns of ulso") })
         val changes = changes(album)
 
+        // Every song has a year of its own (2011): it keeps it, so no year is shown.
         val album2 = FieldChange(Field.ALBUM, "lanterns of ulso", "Lanterns of Ulso")
-        val year = FieldChange(Field.YEAR, "2011", "1998")
-        assertEquals(listOf(FieldChange(Field.TITLE, "quiet ember", "Quiet Ember"), album2, year), changesOf(album, "quiet ember"))
-        assertEquals(listOf(album2, year), changesOf(album, "Salt Road"))
+        assertEquals(listOf(FieldChange(Field.TITLE, "quiet ember", "Quiet Ember"), album2), changesOf(album, "quiet ember"))
+        assertEquals(listOf(album2), changesOf(album, "Salt Road"))
         assertEquals(
-            listOf(FieldChange(Field.TITLE, "Nachtfahre", "Nachtfähre"), album2, FieldChange(Field.TRACK, null, "3"), FieldChange(Field.DISC, null, "1"), year),
+            listOf(FieldChange(Field.TITLE, "Nachtfahre", "Nachtfähre"), album2, FieldChange(Field.TRACK, null, "3"), FieldChange(Field.DISC, null, "1")),
             changesOf(album, "Nachtfahre"),
         )
-        assertEquals(listOf(album2, year), changes.album)
-        assertEquals(setOf(Part.TITLE, Part.ALBUM, Part.NUMBERS, Part.YEAR), changes.parts)
+        assertEquals(listOf(album2), changes.album)
+        assertEquals(setOf(Part.TITLE, Part.ALBUM, Part.NUMBERS), changes.parts)
+        assertEquals(5, changes.yearsKept)
         assertEquals(emptyList<PhoneSong>(), changes.unpaired)
     }
 
@@ -100,9 +101,10 @@ class TagChangesTest {
     }
 
     @Test
-    fun `the year to write is the album's first year wherever a song's own is another or none`() {
+    fun `the year to write is the album's first year only where a song has none, every song with a year keeps its own`() {
         val mixed = PhoneAlbum("Lanterns of Ulso", "Mira Solen", songs { listOf(2011, null, 1998, null, 2011)[it] })
-        assertEquals(listOf(1998, 1998, null, 1998, 1998), changes(mixed).songs.map { it.fields.year })
+        assertEquals(listOf(null, 1998, null, 1998, null), changes(mixed).songs.map { it.fields.year })
+        assertEquals(3, changes(mixed).yearsKept)
     }
 
     @Test
@@ -110,8 +112,8 @@ class TagChangesTest {
         assertEquals(2011, release.year)
         val mixed = PhoneAlbum("Lanterns of Ulso", "Mira Solen", songs { if (it < 2) 2011 else null })
 
-        assertEquals(listOf(1998, 1998, 1998, 1998, 1998), changes(mixed).songs.map { it.fields.year })
-        assertEquals(listOf(FieldChange(Field.YEAR, "2011", "1998")), changes(mixed).album)
+        assertEquals(listOf(null, null, 1998, 1998, 1998), changes(mixed).songs.map { it.fields.year })
+        assertEquals(listOf(FieldChange(Field.YEAR, null, "1998")), changes(mixed).album)
     }
 
     @Test
@@ -156,18 +158,20 @@ class TagChangesTest {
     // The review's rows (user feedback 2026-11-11): only what changes, Year unticked when a song has its own
 
     @Test
-    fun `the review offers a row only for what changes, every row ticked but Year when a song has its own`() {
+    fun `the review offers a row only for what changes, every one ticked, Year adding only to the songs with none`() {
         val dated = PhoneAlbum("Lanterns", "Mira Solen", songs { if (it == 0) 2011 else null }.map { it.copy(album = "Lanterns") })
         val changes = changes(dated)
 
         assertEquals(setOf(Part.ARTIST, Part.ALBUM, Part.YEAR), changes.parts)
-        assertEquals(setOf(Part.ARTIST, Part.ALBUM, Part.COVER), changes.ticked(cover = true))
-        assertEquals(setOf(Part.ARTIST, Part.ALBUM), changes.ticked(cover = false))
-        // Ticked, Year writes the album's first year into every song, its own year or not.
-        assertEquals(listOf(1998, 1998, 1998, 1998, 1998), changes.songs.map { it.fields.year })
+        assertEquals(setOf(Part.ARTIST, Part.ALBUM, Part.YEAR, Part.COVER), changes.ticked(cover = true))
+        assertEquals(setOf(Part.ARTIST, Part.ALBUM, Part.YEAR), changes.ticked(cover = false))
+        // Year adds the album's first year to the songs with none; the song with its own keeps it.
+        assertEquals(listOf(null, 1998, 1998, 1998, 1998), changes.songs.map { it.fields.year })
+        assertEquals(1, changes.yearsKept)
 
         val undated = changes(PhoneAlbum("Lanterns of Ulso", "Mira Solen", songs()))
         assertEquals(setOf(Part.ARTIST, Part.YEAR), undated.parts)
         assertEquals(setOf(Part.ARTIST, Part.YEAR), undated.ticked(cover = false))
+        assertEquals(0, undated.yearsKept)
     }
 }

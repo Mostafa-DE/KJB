@@ -34,7 +34,7 @@ data class SongFields(
     val discTotal: Int?,
     val musicBrainzReleaseId: String,
     val musicBrainzRecordingId: String,
-    /** The album's ORIGINAL year where it is not the song's own (written only when Year is ticked); null: nothing to write. */
+    /** The album's ORIGINAL year for a song with none (written when Year is ticked); null: the song keeps its own, or none is known. */
     val year: Int?,
 )
 
@@ -46,15 +46,17 @@ data class SongChange(val song: PhoneSong, val fields: SongFields, val changes: 
  * holds the album-wide "old → new" lines (album, album artist, year), only those that change.
  */
 data class AlbumChanges(val songs: List<SongChange>, val unpaired: List<PhoneSong>, val album: List<FieldChange>) {
+    /** The songs with a year of their own, which they keep: "keeps 6" on the Year row. */
+    val yearsKept: Int get() = songs.count { it.song.year != null }
+
     /** The rows of "What to change" with a new value for at least one song (the cover's row is the cover's own). */
     val parts: Set<Part> get() = songs.flatMap { song -> song.changes.map { it.field.part } }.toSet()
 
     /**
-     * The rows ticked when the review opens: every one that changes, and the cover when one was found ([cover]), except
-     * Year when a song already has a year of its own (it replaces "Keep my year").
+     * The rows ticked when the review opens: every one that changes, and the cover when one was found ([cover]). Year only
+     * ever adds a year to the songs with none (it replaces "Keep my year"), so it is ticked too.
      */
-    fun ticked(cover: Boolean): Set<Part> =
-        parts - setOfNotNull(Part.YEAR.takeIf { songs.any { it.song.year != null } }) + setOfNotNull(Part.COVER.takeIf { cover })
+    fun ticked(cover: Boolean): Set<Part> = parts + setOfNotNull(Part.COVER.takeIf { cover })
 }
 
 /** What a release could write into an album's songs (covers-tags-spec.md, "What is written"). Pure. */
@@ -79,7 +81,7 @@ object TagChanges {
                 discTotal = discTotal,
                 musicBrainzReleaseId = release.id,
                 musicBrainzRecordingId = track.recordingId,
-                year = original?.takeIf { it != pair.song.year },
+                year = original?.takeIf { pair.song.year == null },
             )
             SongChange(pair.song, fields, shown(pair.song, fields))
         }

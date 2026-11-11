@@ -19,16 +19,19 @@ import app.lyrify.tags.lookup.Proposal
 import app.lyrify.tags.lookup.ReleaseMatch
 import app.lyrify.tags.lookup.SongFields
 import app.lyrify.tags.lookup.TagChanges
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -52,6 +55,9 @@ interface AlbumSource {
     /** "Search myself": always Pick one. */
     suspend fun search(album: PhoneAlbum, title: String, artist: String?): Lookup
 
+    /** [match] with its album's original year, asked for when its answer did not carry it (a recording search's). */
+    suspend fun dated(match: ReleaseMatch): MetaAnswer<ReleaseMatch>
+
     /** [release]'s front cover as a card or the review shows it: the small thumbnail, as the Cover Art Archive serves it. */
     suspend fun preview(release: MbRelease): MetaAnswer<ByteArray>
 
@@ -67,6 +73,8 @@ class PhoneAlbumSource(private val lookup: AlbumLookup, private val pipeline: Co
     override suspend fun check(album: PhoneAlbum, fresh: Boolean): Lookup = lookup.check(album, fresh)
 
     override suspend fun search(album: PhoneAlbum, title: String, artist: String?): Lookup = lookup.search(album, title, artist)
+
+    override suspend fun dated(match: ReleaseMatch): MetaAnswer<ReleaseMatch> = lookup.withOriginalYear(match)
 
     override suspend fun preview(release: MbRelease): MetaAnswer<ByteArray> = lookup.thumbnail(release)
 
@@ -111,15 +119,39 @@ data class Waiting(val album: TagAlbum, val proposal: Proposal, val marks: List<
             is Proposal.PickOne -> proposal.candidates
         }
 
+    /** The candidates, by release id, with a new value for one of the songs. */
+    private val changing: Set<String> = candidates.filter { TagChanges.of(album.album, it).parts.isNotEmpty() }.map { it.release.id }.toSet()
+
     /**
-     * Whether anything could change: a candidate with a new value for one of the songs, or with a front cover. An album
-     * with none is not listed in To review.
+     * Whether anything could change: a candidate with a new value for one of the songs, or with a front cover the Cover
+     * Art Archive confirmed (its release says so) and that was not found missing since ([noCover], by release id). An
+     * album with neither is not listed in To review.
      */
-    val suggests: Boolean = candidates.any { match -> match.release.hasFront != false || TagChanges.of(album.album, match).parts.isNotEmpty() }
+    fun suggests(noCover: Set<String>): Boolean =
+        candidates.any { it.release.id in changing || (it.release.hasFront == true && it.release.id !in noCover) }
+
+    /** [proposal] with [match] in its candidate's place (the same release, its year now known). */
+    internal fun with(match: ReleaseMatch): Waiting = copy(
+        proposal = when (proposal) {
+            is Proposal.Ready -> if (proposal.match.release.id == match.release.id) Proposal.Ready(match) else proposal
+            is Proposal.PickOne -> proposal.copy(candidates = proposal.candidates.map { if (it.release.id == match.release.id) match else it })
+        },
+    )
 }
 
 /** The item the song sheet asked for, and the song it was opened from (null: the album's own menu). */
 data class Focus(val albumId: String, val song: String?)
+
+/**
+ * Whether Undo of Done row (History entry) [entryId] must wait: a newer Covers & tags apply, not undone, changed one of
+ * its songs since, so it can't go back to the state before it yet. Done rows go back newest first ("Undo the newer
+ * change first"). An Edit tags edit since does not block: its fields are kept, field by field.
+ */
+fun undoBlocked(entryId: Long, history: List<HistoryEntry>): Boolean {
+    val entry = history.firstOrNull { it.id == entryId } ?: return false
+    val songs = entry.songs.filterNot { it.undone }.map { it.mediaStoreId }.toSet()
+    return history.any { newer -> newer.id > entryId && newer.kind == EditKind.COVERS_TAGS && newer.songs.any { !it.undone && it.mediaStoreId in songs } }
+}
 
 /** The songs ticked when the review opens: the [song] it was opened from alone; none from the list or an album's menu. */
 fun firstTicked(album: TagAlbum, song: String?): Set<String> = setOfNotNull(song?.takeIf { it in album.paths })
@@ -162,6 +194,8 @@ data class CoversTagsState(
     val focus: Focus? = null,
     /** Every edit, the latest first. */
     val history: List<HistoryEntry> = emptyList(),
+    /** The releases whose front cover the Cover Art Archive turned out not to have (a preview found none), by id. */
+    val noCover: Set<String> = emptySet(),
     /** The History entries Undo can still take back from full copies; the others say "Undo has expired". */
     val fullCopies: Set<Long> = emptySet(),
 ) {
@@ -170,7 +204,7 @@ data class CoversTagsState(
     val pickOne: List<Waiting> get() = waiting.filter { it.proposal is Proposal.PickOne }
 
     /** The To review tab: what waits with something to suggest. An album with no suggestion is not listed. */
-    val toReview: List<Waiting> get() = waiting.filter { it.suggests }
+    val toReview: List<Waiting> get() = waiting.filter { it.suggests(noCover) }
 
     /** The Done tab: one row per apply, the newest first. */
     val done: List<AlbumRecord> get() = memory.albums.filter { it.state == Settled.DONE }.sortedWith(compareByDescending<AlbumRecord> { it.at }.thenByDescending { it.entryId ?: 0 })
@@ -203,6 +237,9 @@ sealed interface Applied {
     /** The cover ticked could not be fetched: nothing written. */
     data object CoverFailed : Applied
 
+    /** Cancel came before any song was written (during the cover's download, or before the first song): nothing written. */
+    data object Stopped : Applied
+
     /** The album no longer waits: nothing written. */
     data object Gone : Applied
 }
@@ -223,6 +260,9 @@ sealed interface Undone {
 
     /** History can't be read now: nothing was changed, and the album stays Done. */
     data object Failed : Undone
+
+    /** A newer change to one of its songs stands ([undoBlocked]): nothing was changed. Undo that one first. */
+    data object Blocked : Undone
 }
 
 /** What "Search myself" found. */
@@ -389,6 +429,13 @@ class CoversTags(
     private val covers = Recent<Cover>(COVERS_KEPT)
     private val previews = Recent<ByteArray>(PREVIEWS_KEPT)
 
+    /** The release groups whose original year was asked for ([date]). */
+    private val asked: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+    /** The cover download of the apply running, which Cancel stops at once. */
+    @Volatile
+    private var fetching: Job? = null
+
     // Checking
 
     /** "Check my albums": every album not done or skipped (or changed since), one at a time; unless one is running. */
@@ -536,8 +583,23 @@ class CoversTags(
         previews[release.id]?.let { return Preview.Loaded(it) }
         return when (val answer = source.preview(release)) {
             is MetaAnswer.Ok -> Preview.Loaded(answer.value).also { previews[release.id] = answer.value }
-            MetaAnswer.NotFound -> Preview.None
+            MetaAnswer.NotFound -> Preview.None.also { _state.update { it.copy(noCover = it.noCover + release.id) } }
             MetaAnswer.Busy, is MetaAnswer.Failed -> Preview.Failed
+        }
+    }
+
+    /**
+     * The candidate picked in the review, with its album's original year when its answer did not carry it (a recording
+     * search lists none): asked once per release group, then it takes its place among the album's candidates, so the
+     * Year row can be offered.
+     */
+    suspend fun date(albumId: String, match: ReleaseMatch) {
+        val group = match.release.releaseGroup ?: return
+        if (group.firstReleaseDate != null || !asked.add(group.id)) return
+        when (val answer = source.dated(match)) {
+            is MetaAnswer.Ok -> _state.update { state -> state.copy(waiting = state.waiting.map { if (it.album.id == albumId) it.with(answer.value) else it }) }
+            // Not known now: asked again the next time it is picked.
+            else -> asked.remove(group.id)
         }
     }
 
@@ -620,9 +682,11 @@ class CoversTags(
         } ?: Applied.InProgress
     }
 
-    /** "Cancel" while applying: the song being written is finished, the rest are left as they are. */
+    /** "Cancel" while applying: the cover's download stops at once; a song being written is finished, the rest left as they are. */
     fun stopApplying() {
-        if (_state.value.applying != null) stopAsked = true
+        if (_state.value.applying == null) return
+        stopAsked = true
+        fetching?.cancel()
     }
 
     private suspend fun applyOne(waiting: Waiting, match: ReleaseMatch, ticked: Set<String>, parts: Set<Part>): Applied {
@@ -635,9 +699,9 @@ class CoversTags(
         val album = waiting.album
         val changes = TagChanges.of(album.album, match)
         val (known, unknown) = changes.songs.filter { it.song.path in ticked }.partition { it.song.path in album.ids }
-        // The 1200 px cover, fetched only now, and only when Cover is ticked.
+        // The 1200 px cover, fetched only now, and only when Cover is ticked; Cancel stops its download.
         val cover = if (Part.COVER in parts) {
-            when (val answer = coverOf(match.release)) {
+            when (val answer = download(match.release) ?: return Applied.Stopped) {
                 is MetaAnswer.Ok -> answer.value
                 MetaAnswer.NotFound -> null
                 MetaAnswer.Busy, is MetaAnswer.Failed -> return Applied.CoverFailed
@@ -645,6 +709,7 @@ class CoversTags(
         } else {
             null
         }
+        if (stopAsked) return Applied.Stopped
         // Opus songs the album's cover is too big for get a smaller one, fetched only for them.
         val opus = if (cover != null && known.any { !coverFits(it.song.path, cover.jpeg.size) }) opusCover(match.release) else null
         val jobs = known.map { change ->
@@ -662,6 +727,23 @@ class CoversTags(
             // An Undo's answer only: a write never gives it.
             BatchResult.HistoryUnreadable -> Applied.CoverFailed
             is BatchResult.Done -> settled(waiting, match.release, changes, parts, result, unknown.map { SongProblem(it.song.path, SongOutcome.COULD_NOT_CHANGE) })
+        }
+    }
+
+    /** [release]'s cover to write, as [fetching], so Cancel stops it; null once Cancel did. */
+    private suspend fun download(release: MbRelease): MetaAnswer<Cover>? = coroutineScope {
+        if (stopAsked) return@coroutineScope null
+        val fetch = async { coverOf(release) }
+        fetching = fetch
+        if (stopAsked) fetch.cancel()
+        try {
+            fetch.await()
+        } catch (e: CancellationException) {
+            // Cancel stopped the download; any other cancellation goes on up.
+            if (!fetch.isCancelled || !stopAsked || !isActive) throw e
+            null
+        } finally {
+            fetching = null
         }
     }
 
@@ -715,6 +797,7 @@ class CoversTags(
             readHistory()
         }
         log("tags: applied, ${written.size} songs written, ${problems.size} left")
+        if (written.isEmpty() && problems.isEmpty() && stopAsked) return Applied.Stopped
         return Applied.Done(if (done) 1 else 0, written.size, problems, result.entryId)
     }
 
@@ -745,7 +828,10 @@ class CoversTags(
      */
     suspend fun undo(entryId: Long): Undone {
         if (!access()) return Undone.NoAccess
-        return writingAlone(null) { undoing(entryId) } ?: Undone.InProgress
+        return writingAlone(null) {
+            // Newest first: History as it is now, read again.
+            if (undoBlocked(entryId, withContext(io) { undo.memory().entries })) Undone.Blocked else undoing(entryId)
+        } ?: Undone.InProgress
     }
 
     private suspend fun undoing(entryId: Long): Undone {

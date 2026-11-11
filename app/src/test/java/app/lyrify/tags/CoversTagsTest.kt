@@ -252,26 +252,21 @@ class CoversTagsTest {
     }
 
     @Test
-    fun `with Year unticked every song keeps its own year, ticked the album's first year goes into every song`() = runTest {
+    fun `Year adds the album's first year to the songs with none, and every song with a year keeps its own`() = runTest {
         val songs = lanternsSongs(year = 2003)
         library = songs
         answers("Lanterns" to lanterns)
         val flow = flow()
         val waiting = checked(flow).waiting("Lanterns")
-        val parts = flow.changes(waiting, waiting.match()).ticked(cover = true)
-        assertFalse(Part.YEAR in parts)
+        val changes = flow.changes(waiting, waiting.match())
+        val parts = changes.ticked(cover = true)
+        assertTrue(Part.YEAR in parts)
+        assertEquals(1, changes.yearsKept)
 
         flow.apply(waiting.album.id, waiting.match(), waiting.album.paths.toSet(), parts)
 
         assertEquals(listOf("2003"), rig.fields(songs[0].target())["DATE"])
-        assertNull(rig.fields(songs[1].target())["DATE"])
-
-        val again = lanternsSongs(year = 2003)
-        library = again
-        val next = checked(flow).waiting("Lanterns")
-        flow.apply(next.album.id, next.match(), next.album.paths.toSet(), setOf(Part.YEAR))
-        assertEquals(listOf("1998"), rig.fields(again[0].target())["DATE"])
-        assertEquals(listOf("1998"), rig.fields(again[1].target())["DATE"])
+        assertEquals(listOf("1998"), rig.fields(songs[1].target())["DATE"])
     }
 
     @Test
@@ -1065,6 +1060,98 @@ class CoversTagsTest {
         assertNull(flow.state.value.applying)
     }
 
+
+    // Review findings, 2026-11-11 (Grok panel on v3/ct2-covers)
+
+    @Test
+    fun `an older Done row's Undo waits while a newer change to one of its songs stands, and the newest goes back first`() = runTest {
+        val songs = nineSongs()
+        library = songs
+        offerBest()
+        val flow = flow()
+        val song = songs[0]
+        val original = rig.fields(song.target())
+        val waiting = checked(flow).waiting.single()
+        flow.apply(waiting.album.id, waiting.candidate(), setOf(song.path), setOf(Part.COVER))
+        val again = checked(flow).waiting.single()
+        flow.apply(again.album.id, again.candidate(), setOf(song.path), setOf(Part.ARTIST))
+        advanceUntilIdle()
+        val (newer, older) = flow.state.value.done
+        val both = rig.bytes(song.target())
+
+        assertTrue(undoBlocked(checkNotNull(older.entryId), flow.state.value.history))
+        assertFalse(undoBlocked(checkNotNull(newer.entryId), flow.state.value.history))
+        assertEquals(Undone.Blocked, flow.undoAlbum(older.id))
+        assertArrayEquals(both, rig.bytes(song.target()))
+
+        // The newest first: the song is as it was before that apply, the cover of the one before kept.
+        assertTrue(flow.undoAlbum(newer.id) is Undone.Done)
+        assertEquals(original["ARTIST"], rig.fields(song.target())["ARTIST"])
+        assertArrayEquals(JPEG_BYTES, pictures(song).single().data)
+        advanceUntilIdle()
+        assertFalse(undoBlocked(checkNotNull(older.entryId), flow.state.value.history))
+        assertTrue(flow.undoAlbum(older.id) is Undone.Done)
+        assertEquals(original, rig.fields(song.target()))
+        assertEquals(emptyList<TagPicture>(), pictures(song))
+    }
+
+    @Test
+    fun `the candidate picked gets its album's first year when its answer did not carry it, once, so Year can be offered`() = runTest {
+        library = listOf(song("Lone Kestrel", 61, "Lone Kestrel", album = null))
+        val undated = release(ID_A, "Kestrel Lights", listOf("Lone Kestrel"), firstYear = null)
+        source.answer = { album -> Lookup.Done(Proposal.PickOne(listOf(AlbumMatch.match(album, undated)), setOf(Doubt.SINGLE))) }
+        source.datedOf = { match -> MetaAnswer.Ok(match.copy(release = match.release.copy(releaseGroup = MbReleaseGroup(GROUP, "1998")))) }
+        val flow = flow()
+        val waiting = checked(flow).waiting.single()
+        assertFalse(Part.YEAR in flow.changes(waiting, waiting.candidate()).parts)
+
+        flow.date(waiting.album.id, waiting.candidate())
+        flow.date(waiting.album.id, flow.state.value.waiting.single().candidate())
+
+        val dated = flow.state.value.waiting.single()
+        assertEquals(1998, dated.candidate().release.releaseGroup?.originalYear)
+        assertTrue(Part.YEAR in flow.changes(dated, dated.candidate()).parts)
+        assertEquals(listOf(ID_A), source.datedAsked)
+    }
+
+    @Test
+    fun `a cover the Cover Art Archive turns out not to have is remembered, so an album with nothing else to change leaves To review`() = runTest {
+        library = lanternsSongs()
+        answers("Lanterns" to lanterns)
+        source.previewOf = { MetaAnswer.NotFound }
+        val flow = flow()
+        val waiting = checked(flow).waiting("Lanterns")
+
+        assertEquals(Preview.None, flow.preview(waiting.match().release))
+
+        assertEquals(setOf(ID_A), flow.state.value.noCover)
+    }
+
+    @Test
+    fun `Cancel while the cover downloads stops it at once and writes nothing`() = runTest {
+        val songs = lanternsSongs()
+        library = songs
+        answers("Lanterns" to lanterns)
+        source.coverDelay = 30_000
+        val flow = flow()
+        val waiting = checked(flow).waiting("Lanterns")
+        val before = songs.map { rig.bytes(it.target()) }
+
+        val applying = async { flow.apply(waiting.album.id, waiting.match(), waiting.album.paths.toSet(), Part.entries.toSet()) }
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertEquals(Applying(0, 2, cover = true), flow.state.value.applying)
+        flow.stopApplying()
+        advanceTimeBy(1_000)
+        runCurrent()
+
+        assertTrue(applying.isCompleted)
+        assertEquals(Applied.Stopped, applying.await())
+        assertEquals(0, source.coversFetched)
+        assertEquals(emptyList<Int>(), changed(songs, before))
+        assertNull(flow.state.value.applying)
+    }
+
     private companion object {
         const val BASE: Long = 1_800_000_000_000
         const val ID_A = "0b7c1f4e-5a2d-4c3b-9e8f-1a2b3c4d5e01"
@@ -1094,17 +1181,33 @@ class FakeAlbumSource : AlbumSource {
         return searchAnswer(album, title, artist)
     }
 
-    var preview: (MbRelease) -> MetaAnswer<ByteArray> = { MetaAnswer.Ok(JPEG_BYTES) }
+    var previewOf: (MbRelease) -> MetaAnswer<ByteArray> = { MetaAnswer.Ok(JPEG_BYTES) }
     val previewed = mutableListOf<String>()
 
     override suspend fun preview(release: MbRelease): MetaAnswer<ByteArray> {
         previewed += release.id
-        return preview(release)
+        return previewOf(release)
     }
 
     var coverOf: (MbRelease) -> MetaAnswer<Cover> = { cover }
 
-    override suspend fun cover(release: MbRelease): MetaAnswer<Cover> = coverOf(release)
+    /** How long a cover takes to come, in the test's time; and how many came. */
+    var coverDelay: Long = 0
+    var coversFetched = 0
+
+    override suspend fun cover(release: MbRelease): MetaAnswer<Cover> {
+        delay(coverDelay)
+        coversFetched++
+        return coverOf(release)
+    }
+
+    var datedOf: (ReleaseMatch) -> MetaAnswer<ReleaseMatch> = { MetaAnswer.Ok(it) }
+    val datedAsked = mutableListOf<String>()
+
+    override suspend fun dated(match: ReleaseMatch): MetaAnswer<ReleaseMatch> {
+        datedAsked += match.release.id
+        return datedOf(match)
+    }
 
     override suspend fun opusCover(release: MbRelease): MetaAnswer<Cover> {
         opusCovers += release.id

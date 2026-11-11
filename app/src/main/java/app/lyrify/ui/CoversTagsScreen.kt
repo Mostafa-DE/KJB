@@ -57,6 +57,7 @@ import app.lyrify.tags.SongOutcome
 import app.lyrify.tags.TagsGraph
 import app.lyrify.tags.Undone
 import app.lyrify.tags.Waiting
+import app.lyrify.tags.undoBlocked
 import app.lyrify.tags.lookup.AlbumChanges
 import app.lyrify.tags.lookup.FieldChange
 import app.lyrify.tags.lookup.MbRelease
@@ -125,13 +126,17 @@ fun choiceWords(proposal: Proposal): Words = when (proposal) {
 fun progressWords(applying: Applying): Words =
     if (applying.cover) Words(R.string.tags_getting_cover) else Words(R.plurals.tags_changing, applying.total, listOf(minOf(applying.done + 1, applying.total), applying.total))
 
-/** One row of "What to change": its [part], the "old → new" its songs share (null when they differ), and how many [songs] change. */
-data class FieldRow(val part: Part, val change: FieldChange?, val songs: Int)
+/**
+ * One row of "What to change": its [part], the "old → new" its songs share (null when they differ), how many [songs]
+ * change, and for Year how many songs keep a year of their own ([kept]).
+ */
+data class FieldRow(val part: Part, val change: FieldChange?, val songs: Int, val kept: Int = 0)
 
 /** The field rows, in the spec's order, only for what changes: the cover's row is the review's own. */
 fun fieldRows(changes: AlbumChanges): List<FieldRow> = Part.entries.filter { it != Part.COVER && it in changes.parts }.map { part ->
     val lines = changes.songs.flatMap { song -> song.changes.filter { it.field.part == part } }
-    FieldRow(part, lines.firstOrNull()?.takeIf { lines.map { it.old to it.new }.distinct().size == 1 }, changes.songs.count { song -> song.changes.any { it.field.part == part } })
+    val kept = if (part == Part.YEAR) changes.yearsKept else 0
+    FieldRow(part, lines.firstOrNull()?.takeIf { lines.map { it.old to it.new }.distinct().size == 1 }, changes.songs.count { song -> song.changes.any { it.field.part == part } }, kept)
 }
 
 /**
@@ -142,6 +147,22 @@ fun pickedParts(changes: AlbumChanges, loaded: Boolean, overrides: Map<Part, Boo
     val offered = changes.parts + setOfNotNull(Part.COVER.takeIf { loaded })
     val defaults = changes.ticked(cover = loaded)
     return offered.filter { overrides[it] ?: (it in defaults) }.toSet()
+}
+
+/**
+ * What the user chose in the review sheet: the candidate [picked] (by release id), their own field ticks ([overrides],
+ * over the defaults) and the [songs] ticked. Nothing here changes behind their back: a candidate that goes away (a check
+ * placed others) is never swapped for another, and the field ticks stay through a new pick.
+ */
+data class ReviewChoice(val picked: String?, val overrides: Map<Part, Boolean> = emptyMap(), val songs: Set<String> = emptySet()) {
+    /** The candidate picked, among [candidates]; null when it is gone: none is picked, and Apply waits for a pick. */
+    fun match(candidates: List<ReleaseMatch>): ReleaseMatch? = candidates.firstOrNull { it.release.id == picked }
+
+    fun pick(id: String): ReviewChoice = copy(picked = id)
+
+    fun tick(part: Part, on: Boolean): ReviewChoice = copy(overrides = overrides + (part to on))
+
+    fun tickSong(path: String, on: Boolean): ReviewChoice = copy(songs = if (on) songs + path else songs - path)
 }
 
 /** A song's own "old → new" lines for the [parts] ticked. */
@@ -183,6 +204,7 @@ fun appliedWords(applied: Applied): Words = when (applied) {
     Applied.NoAccess -> Words(R.string.tags_need_access)
     Applied.NotEnoughSpace -> Words(R.string.tags_no_space)
     Applied.CoverFailed -> Words(R.string.tags_cover_failed)
+    Applied.Stopped -> Words(R.string.tags_stopped)
     Applied.Gone -> Words(R.string.tags_gone)
     Applied.InProgress -> Words(R.string.tags_in_progress)
     Applied.ChangedSince -> Words(R.string.tags_changed_since)
@@ -201,6 +223,7 @@ fun undoneWords(undone: Undone): Words = when (undone) {
     Undone.InProgress -> Words(R.string.tags_in_progress)
     Undone.Gone -> Words(R.string.tags_gone)
     Undone.Failed -> Words(R.string.tags_undo_failed)
+    Undone.Blocked -> Words(R.string.tags_undo_newer_first)
 }
 
 /** A candidate's line: its formats and year ("CD, 2009"), then its country. */
@@ -209,13 +232,17 @@ fun releaseLine(release: MbRelease): String {
     return listOf(made, release.country.orEmpty()).filter(String::isNotEmpty).joinToString(" · ")
 }
 
-/** A Done row's line before its time: the songs it changed, those that could not, and "Undo has expired" once the full copies are gone. */
-fun doneLine(record: AlbumRecord, fullCopy: Boolean): List<Words> {
+/**
+ * A Done row's line before its time: the songs it changed, those that could not, "Undo has expired" once the full copies
+ * are gone, and "Undo the newer change first" while a newer change to one of its songs stands ([blocked]).
+ */
+fun doneLine(record: AlbumRecord, fullCopy: Boolean, blocked: Boolean = false): List<Words> {
     if (record.entryId == null) return listOf(Words(R.string.tags_nothing_to_change))
     return listOfNotNull(
         Words(R.plurals.tags_songs, record.changed, listOf(record.changed)),
         record.problems.size.takeIf { it > 0 }?.let { Words(R.plurals.tags_songs_left, it, listOf(it)) },
         Words(R.string.tags_undo_expired).takeUnless { fullCopy },
+        Words(R.string.tags_undo_newer_first).takeIf { blocked },
     )
 }
 
@@ -405,10 +432,12 @@ fun CoversTagsPage() {
                     val keys = rowKeys("done", state.done.map { it.id })
                     itemsIndexed(state.done, key = { at, _ -> keys[at] }, contentType = { _, _ -> "record" }) { _, record ->
                         Column(rowMotion(reduced)) {
+                            val blocked = record.entryId?.let { undoBlocked(it, state.history) } == true
                             DoneRow(
                                 record,
                                 fullCopy = record.entryId in state.fullCopies,
-                                enabled = writable,
+                                blocked = blocked,
+                                enabled = writable && !blocked,
                                 onUndo = { scope.launch { toasts.show(undoneWords(tags.undoAlbum(record.id)).text(resources)) } },
                                 onOpen = { problems = record.id }.takeIf { record.problems.isNotEmpty() },
                             )
@@ -615,13 +644,16 @@ private fun ReviewCard(tags: CoversTags, waiting: Waiting, onOpen: () -> Unit) {
     }
 }
 
-/** A Done row, one per apply: "Lanterns of Ulso", "1 song · 03:21", and Undo (Undo fields once its full copies are gone). */
+/**
+ * A Done row, one per apply: "Lanterns of Ulso", "1 song · 03:21", and Undo (Undo fields once its full copies are gone),
+ * off with its reason while a newer change to one of its songs stands.
+ */
 @Composable
-private fun DoneRow(record: AlbumRecord, fullCopy: Boolean, enabled: Boolean, onUndo: () -> Unit, onOpen: (() -> Unit)?) {
+private fun DoneRow(record: AlbumRecord, fullCopy: Boolean, blocked: Boolean, enabled: Boolean, onUndo: () -> Unit, onOpen: (() -> Unit)?) {
     val time = DateUtils.formatSameDayTime(record.at, System.currentTimeMillis(), DateFormat.SHORT, DateFormat.SHORT).toString()
     ItemRow(
         title = record.title,
-        sub = (doneLine(record, fullCopy).map { it.text() } + time).joinToString(" · "),
+        sub = (doneLine(record, fullCopy, blocked).map { it.text() } + time).joinToString(" · "),
         lead = { SongCover(record.songs.firstOrNull()?.let { SongArt(it.path) }, size = 48.dp) },
         trailing = {
             if (record.entryId != null) {

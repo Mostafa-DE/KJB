@@ -32,6 +32,7 @@ import app.lyrify.tags.lookup.TagChanges
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -243,5 +244,48 @@ class CoversTagsScreenTest {
         // A tick on a row not offered (no new title, no cover loaded) writes nothing.
         assertEquals(setOf(Part.ALBUM, Part.YEAR), pickedParts(changes, loaded = false, overrides = mapOf(Part.TITLE to true, Part.COVER to true)))
         assertEquals(listOf(FieldChange(Field.ALBUM, "Lanterns", "Lanterns of Ulso")), songLines(changes.songs.first(), setOf(Part.ALBUM, Part.TITLE)))
+    }
+
+    // Review findings, 2026-11-11 (Grok panel on v3/ct2-covers)
+
+    @Test
+    fun `a candidate that goes away is never swapped for another, and the user's own ticks stay through a new pick`() {
+        val album = album(listOf("Quiet Ember", "Salt Road"))
+        val a = AlbumMatch.match(album, release(listOf("Quiet Ember", "Salt Road")))
+        val b = AlbumMatch.match(album, release(listOf("Quiet Ember", "Salt Road")).copy(id = "0b7c1f4e-5a2d-4c3b-9e8f-1a2b3c4d5e03"))
+        var choice = ReviewChoice(picked = a.release.id, songs = setOf("/m/Lanterns/Quiet Ember.mp3")).tick(Part.ALBUM, false)
+        assertEquals(a, choice.match(listOf(a, b)))
+
+        // A check placed other candidates: the one picked is gone, and none is picked in its place.
+        assertNull(choice.match(listOf(b)))
+        choice = choice.pick(b.release.id)
+
+        assertEquals(b, choice.match(listOf(b)))
+        assertEquals(mapOf(Part.ALBUM to false), choice.overrides)
+        assertFalse(Part.ALBUM in pickedParts(TagChanges.of(album, b), loaded = true, overrides = choice.overrides))
+    }
+
+    @Test
+    fun `an album is to review only with a field to change or a cover confirmed, and leaves once its cover turns out missing`() {
+        val album = album(listOf("Quiet Ember", "Salt Road"), "Lanterns of Ulso")
+        val bare = release(listOf("Quiet Ember", "Salt Road")).copy(releaseGroup = MbReleaseGroup("6f1e2d3c-4b5a-4968-8776-5a4b3c2d1e02", null))
+        fun waiting(front: Boolean?) = Waiting(TagAlbum(album, emptyMap()), Proposal.Ready(AlbumMatch.match(album, bare.copy(hasFront = front))))
+        assertTrue(TagChanges.of(album, AlbumMatch.match(album, bare)).parts.isEmpty())
+
+        assertEquals(emptyList<Waiting>(), CoversTagsState(waiting = listOf(waiting(null))).toReview)
+        assertEquals(1, CoversTagsState(waiting = listOf(waiting(true))).toReview.size)
+        assertEquals(emptyList<Waiting>(), CoversTagsState(waiting = listOf(waiting(true)), noCover = setOf(bare.id)).toReview)
+        // A field to change keeps it listed, cover or not.
+        val messy = album(listOf("quiet ember", "Salt Road"), "Lanterns of Ulso")
+        val renamed = Waiting(TagAlbum(messy, emptyMap()), Proposal.Ready(AlbumMatch.match(messy, bare)))
+        assertEquals(1, CoversTagsState(waiting = listOf(renamed), noCover = setOf(bare.id)).toReview.size)
+    }
+
+    @Test
+    fun `the Year row adds the year to the songs with none and says how many keep their own`() {
+        val dated = PhoneAlbum("Lanterns", "Mira Solen", album(listOf("Quiet Ember", "Salt Road", "Brennmoor")).songs.mapIndexed { i, song -> song.copy(year = if (i == 0) 2011 else null) })
+        val changes = TagChanges.of(dated, AlbumMatch.match(dated, release(listOf("Quiet Ember", "Salt Road", "Brennmoor"))))
+
+        assertEquals(FieldRow(Part.YEAR, FieldChange(Field.YEAR, null, "1998"), songs = 2, kept = 1), fieldRows(changes).single { it.part == Part.YEAR })
     }
 }
