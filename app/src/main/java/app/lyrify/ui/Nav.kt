@@ -494,11 +494,15 @@ val LocalShellChrome = compositionLocalOf { ShellChrome(bottom = 0.dp) }
 /**
  * A page with its own top bar: the bar (given whether content is under it and the glass to blur) over [content], whose
  * padding keeps it clear of the bar and of the shell's Now bar and dock. The content is what the bar's glass and the
- * dock's glass blur.
+ * dock's glass blur. A tab's page in a [TabsFrame] shares the frame's bar instead, and keeps only its own scroll.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PageFrame(topBar: @Composable (under: Boolean, backdrop: GlassBackdrop) -> Unit, content: @Composable (PaddingValues) -> Unit) {
+    LocalTabPage.current?.let { tab ->
+        tab.Frame(content)
+        return
+    }
     val chrome = LocalShellChrome.current
     val bar = TopAppBarDefaults.pinnedScrollBehavior(rememberTopAppBarState())
     val own = rememberGlassBackdrop()

@@ -6,6 +6,8 @@ import androidx.compose.animation.core.tween
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.platform.AccessibilityManager
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import app.lyrify.R
 import app.lyrify.settings.DockTab
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -83,6 +85,20 @@ class ChromeTest {
         toasts.current?.dismiss()
         runCurrent()
         assertNull(toasts.current)
+    }
+
+    // Toasts: a compact pill just above the Now bar or the dock (phone test 2026-11-11)
+
+    @Test
+    fun `a message is a one-line pill 40 dp high, centred, floating 10 dp above the bar and never over it`() {
+        assertEquals(40f, TOAST_HEIGHT.value, 0f)
+        assertEquals(10f, TOAST_GAP.value, 0f)
+        // Up from its slot (the top of the Now bar, or of the dock when nothing plays): centred, its bottom edge the gap above.
+        assertEquals(IntOffset(300, -(120 + 30)), toastPlace(ToastFloat.UP, slotWidth = 1000, size = IntSize(400, 120), gap = 30))
+        // Down from its slot (under the player's top bar): centred, its top edge the gap below.
+        assertEquals(IntOffset(300, 30), toastPlace(ToastFloat.DOWN, slotWidth = 1000, size = IntSize(400, 120), gap = 30))
+        // As wide as its slot at most, never off its start.
+        assertEquals(0, toastPlace(ToastFloat.UP, slotWidth = 1000, size = IntSize(1000, 120), gap = 30).x)
     }
 
     // Toasts: what an Undo needs is never let go sooner than its message's own time

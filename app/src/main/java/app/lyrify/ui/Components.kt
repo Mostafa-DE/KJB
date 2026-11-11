@@ -81,6 +81,18 @@ import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollDispatcher
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.input.pointer.util.VelocityTracker
+import androidx.compose.ui.input.pointer.util.addPointerInputChange
+import androidx.compose.ui.unit.Velocity
+import kotlinx.coroutines.launch
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalDensity
@@ -418,19 +430,73 @@ private fun SheetWindow(onDismiss: () -> Unit, content: @Composable ColumnScope.
     }
 }
 
-/** A sheet's scrolling content, its toast slot and its pinned footer. */
+/**
+ * A sheet's scrolling content, its toast slot and its pinned footer. A drag down from anywhere on them closes the sheet
+ * once the content is scrolled to its top ([dragDownCloses]), not only from the strip above (phone test 2026-11-11).
+ */
 @Composable
 private fun ColumnScope.SheetBody(footer: (@Composable ColumnScope.() -> Unit)?, spacing: Dp, padding: Dp, scroll: ScrollState, content: @Composable ColumnScope.() -> Unit) {
-    Column(
-        Modifier.weight(1f, fill = false).verticalScroll(scroll).padding(start = padding, end = padding, top = 2.dp, bottom = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(spacing),
-        content = content,
-    )
-    ToastSlot(Modifier.padding(horizontal = 12.dp), padding = PaddingValues(bottom = 8.dp))
-    if (footer != null) {
-        Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp), content = footer)
+    val sheet = remember { NestedScrollDispatcher() }
+    Column(Modifier.weight(1f, fill = false).nestedScroll(NoNestedScroll, sheet).dragDownCloses(sheet) { scroll.value == 0 }) {
+        Column(
+            Modifier.weight(1f, fill = false).verticalScroll(scroll).padding(start = padding, end = padding, top = 2.dp, bottom = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(spacing),
+            content = content,
+        )
+        ToastSlot(Modifier.padding(horizontal = 12.dp), padding = PaddingValues(bottom = 8.dp))
+        if (footer != null) {
+            Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp), content = footer)
+        }
     }
 }
+
+/**
+ * A drag down on a sheet's content, its cover, rows and buttons included, while the content is scrolled to its top
+ * ([atTop]): taken before anything in the content can claim it ([sheetDrag]), it is handed to the sheet as a scrolling
+ * list hands its overscroll ([sheet] dispatches it to the sheet's own nested scroll), so the sheet follows the finger,
+ * and the fling at the lift settles it back or closes it. Taps, and drags up or sideways, stay the content's.
+ */
+private fun Modifier.dragDownCloses(sheet: NestedScrollDispatcher, atTop: () -> Boolean): Modifier = pointerInput(sheet) {
+    awaitEachGesture {
+        val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+        if (!atTop()) return@awaitEachGesture
+        // Tracked from each change's own movement, not its place: the sheet, and this content with it, follows the finger.
+        val velocity = VelocityTracker().apply { addPointerInputChange(down) }
+        val slop = viewConfiguration.touchSlop
+        var moved = Offset.Zero
+        var taken = false
+        while (true) {
+            val change = awaitPointerEvent(PointerEventPass.Initial).changes.firstOrNull { it.id == down.id } ?: return@awaitEachGesture
+            velocity.addPointerInputChange(change)
+            if (!change.pressed) break
+            val delta = change.positionChange()
+            if (taken) {
+                sheet.dispatchPostScroll(Offset.Zero, Offset(0f, delta.y), NestedScrollSource.UserInput)
+            } else {
+                if (change.isConsumed) return@awaitEachGesture
+                moved += delta
+                when (sheetDrag(moved, slop, atTop())) {
+                    SheetDrag.WAIT -> continue
+                    SheetDrag.LEAVE -> return@awaitEachGesture
+                    SheetDrag.TAKE -> {
+                        taken = true
+                        sheet.dispatchPostScroll(Offset.Zero, Offset(0f, (moved.y - slop).coerceAtLeast(0f)), NestedScrollSource.UserInput)
+                    }
+                }
+            }
+            change.consume()
+        }
+        if (!taken) return@awaitEachGesture
+        val fling = Velocity(0f, velocity.calculateVelocity().y)
+        sheet.coroutineScope.launch {
+            val consumed = sheet.dispatchPreFling(fling)
+            sheet.dispatchPostFling(consumed, fling - consumed)
+        }
+    }
+}
+
+/** A nested scroll node that consumes nothing: the sheet's drag only dispatches through it. */
+private val NoNestedScroll = object : NestedScrollConnection {}
 
 /**
  * Inside a sheet's content: its window's exit ([R.style.SheetWindow]). A sheet its own button closes leaves the

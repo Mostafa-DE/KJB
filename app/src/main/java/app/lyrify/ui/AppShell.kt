@@ -15,6 +15,15 @@ import androidx.compose.animation.SharedTransitionLayout
 import androidx.compose.animation.SharedTransitionScope
 import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.SeekableTransitionState
+import androidx.compose.animation.core.Transition
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.navigationevent.compose.LocalNavigationEventDispatcherOwner
+import androidx.navigationevent.compose.rememberNavigationEventDispatcherOwner
 import androidx.compose.animation.core.rememberTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -192,32 +201,8 @@ fun AppShell(
     LaunchedEffect(checkAnswers) {
         checkAnswers.messages.collect { toasts.say(resources, it) }
     }
-    // The page layer follows every move; while a back swipe drives it, the swipe does (a swipe back into the player
-    // leaves it to move here, under the player).
-    val layer = pageLayerOf(state)
-    // Whenever no swipe drives it, the page layer converges on the page that is current, whatever a swipe left behind:
-    // a page can never stay drawn half way, nor current but hidden under another.
-    val resting = layer.takeIf { swipe.taking !is BackTaking.Page }
-    LaunchedEffect(resting) {
-        val target = resting ?: return@LaunchedEffect
-        if (pages.currentState != target || pages.targetState != target) pages.animateTo(target)
-    }
-    // Pages and the tab history; a page's own back (selection, a page's sheet) is composed later and comes first.
-    PredictiveBackHandler(enabled = state.views.isEmpty() && (state.pages.isNotEmpty() || state.history.isNotEmpty())) { events ->
-        // One swipe at a time: a new one waits for the last one's ending, so two never pull the layers two ways.
-        swipe.serial.withLock {
-            val back = backFromPages(nav, pages, swipe, reduced)
-            try {
-                events.collect { back.follow(it) }
-            } catch (e: CancellationException) {
-                // The platform cancelled it (given up, slow or fast): everything goes back to rest, nothing moves.
-                withContext(NonCancellable) { back.cancel() }
-                throw e
-            }
-            // Only the progress ending normally commits.
-            withContext(NonCancellable) { back.commit() }
-        }
-    }
+    // The page layer follows every move, and Back over it (pages and the tab history).
+    PagesBack(nav, pages, swipe, reduced)
 
     // The song KJB plays shows as playing in the lists, while the Now bar shows KJB's own song (not another app's).
     CompositionLocalProvider(LocalNavigator provides nav, LocalLyrics provides lyrics, LocalPlayingPath provides (bar as? NowBarShows.Own)?.now?.path) {
@@ -380,7 +365,7 @@ private fun SharedTransitionScope.BottomChrome(
     val lastSelection = remember { Kept(selection) }
     if (selection != null) lastSelection.value = selection
     Column(modifier.fillMaxWidth().navigationBarsPadding().imePadding().padding(bottom = 12.dp)) {
-        ToastSlot(Modifier.padding(horizontal = ScreenPadding), padding = PaddingValues(bottom = 8.dp))
+        ToastSlot(Modifier.padding(horizontal = ScreenPadding), padding = PaddingValues(bottom = TOAST_GAP))
         // While the Now bar grows into the player or the player shrinks into it, the chrome stays where it is: the bar is
         // one end of the transform, so it must not slide or fade under it; the player covers the dock meanwhile.
         AnimatedVisibility(
@@ -432,33 +417,134 @@ private fun rememberChromeStill(shown: Boolean, views: List<FullScreen>, barOnSc
 private data class ChromeMoment(val shown: Boolean, val views: List<FullScreen>, val barOnScreen: Boolean)
 
 /**
- * The page layer: the shown tab's top page, moving as [pageChange] says (a push or a pop along the screen, another tab
- * from its side, a stack emptied fading through). A back swipe ([BackTaking.Page]) seeks it toward the page it goes
- * back to, drawn under the one leaving, which shrinks; the page under it dims and lights up as the swipe goes on.
+ * The page layer's moves and Back over it: the layer follows every move of [nav]; while a back swipe drives it, the
+ * swipe does (a swipe back into the player leaves it to move here, under the player). Whenever no swipe drives it, it
+ * converges on the page that is current, whatever a swipe left behind: a page can never stay drawn half way, nor
+ * current but hidden under another. Back takes the pages and then the tab history ([backFromPages]); a page's own back
+ * (selection, a page's sheet) is composed later and comes first.
  */
 @Composable
-private fun PageLayers(pages: SeekableTransitionState<PageLayer>, swipe: BackSwipe, rtl: Boolean, reduced: Boolean, content: @Composable (PageLayer) -> Unit) {
+internal fun PagesBack(nav: Navigator, pages: SeekableTransitionState<PageLayer>, swipe: BackSwipe, reduced: Boolean) {
+    val state = nav.state
+    val resting = pageLayerOf(state).takeIf { swipe.taking !is BackTaking.Page }
+    LaunchedEffect(resting) {
+        val target = resting ?: return@LaunchedEffect
+        if (pages.currentState != target || pages.targetState != target) pages.animateTo(target)
+    }
+    PredictiveBackHandler(enabled = state.views.isEmpty() && (state.pages.isNotEmpty() || state.history.isNotEmpty())) { events ->
+        // One swipe at a time: a new one waits for the last one's ending, so two never pull the layers two ways.
+        swipe.serial.withLock {
+            val back = backFromPages(nav, pages, swipe, reduced)
+            try {
+                events.collect { back.follow(it) }
+            } catch (e: CancellationException) {
+                // The platform cancelled it (given up, slow or fast): everything goes back to rest, nothing moves.
+                withContext(NonCancellable) { back.cancel() }
+                throw e
+            }
+            // Only the progress ending normally commits; a plain Back (three buttons, a key) ends with no move at all.
+            withContext(NonCancellable) { back.commit() }
+        }
+    }
+}
+
+/**
+ * The page layer: the shown tab's top page, moving as [pageChange] says (a push or a pop along the screen, another
+ * dock destination or a stack emptied fading through). A back swipe ([BackTaking.Page]) seeks it toward the page it
+ * goes back to, drawn under the one leaving, which shrinks; the page under it dims and lights up as the swipe goes on.
+ * Each dock destination's root is drawn by [KeptRoots], under the pages, and only holds its place in the change here.
+ */
+@Composable
+internal fun PageLayers(pages: SeekableTransitionState<PageLayer>, swipe: BackSwipe, rtl: Boolean, reduced: Boolean, content: @Composable (PageLayer) -> Unit) {
     val moves = rememberTransition(pages, label = "pages")
-    moves.AnimatedContent(
-        transitionSpec = {
-            val change = pageChange(initialState, targetState)
-            if (swipe.taking is BackTaking.Page) backTransition(enterSide(change, rtl), reduced) else pageTransition(change, rtl, reduced)
-        },
-        contentKey = { it.key },
-    ) { layer ->
-        val taken = { (swipe.taking as? BackTaking.Page)?.key == layer.key }
-        val under = { (swipe.taking as? BackTaking.Page)?.let { it.key != layer.key } == true }
-        Box(
-            Modifier
-                .fillMaxSize()
-                // Only the page arriving or resting takes touches; the one leaving is gone for the finger at once.
-                .inertUnless { takesInput(headed = transition.targetState == EnterExitState.Visible, settled = true, container = false) }
-                .backPeek(swipe, taken)
-                .drawWithContent {
-                    drawContent()
-                    if (under()) drawRect(Color.Black, alpha = backPeek(swipe.progress, swipe.fromLeft, size.width).dim)
-                },
-        ) { content(layer) }
+    Box(Modifier.fillMaxSize()) {
+        // The roots in a box of their own, so their order among themselves never puts one over the pages; but a root a
+        // back swipe takes stays over the page it goes back to.
+        Box(Modifier.fillMaxSize().zIndex(if (rootsOverPages(swipe.taking)) 1f else 0f)) { KeptRoots(moves, swipe, rtl, reduced, content) }
+        moves.AnimatedContent(
+            transitionSpec = {
+                val change = pageChange(initialState, targetState)
+                val taking = swipe.taking
+                if (taking is BackTaking.Page) backTransition(enterSide(change, rtl), reduced, takenArrives = targetState.key == taking.key) else pageTransition(change, rtl, reduced)
+            },
+            contentKey = { it.key },
+        ) { layer ->
+            // A root is drawn by KeptRoots: here an empty layer as large as a page, which takes no touch.
+            if (layer.stack.isEmpty()) {
+                Box(Modifier.fillMaxSize())
+                return@AnimatedContent
+            }
+            val taken = { (swipe.taking as? BackTaking.Page)?.key == layer.key }
+            val under = { (swipe.taking as? BackTaking.Page)?.let { it.key != layer.key } == true }
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    // Only the page arriving or resting takes touches; the one leaving is gone for the finger at once.
+                    .inertUnless { takesInput(headed = transition.targetState == EnterExitState.Visible, settled = true, container = false) }
+                    .backPeek(swipe, taken)
+                    .drawWithContent {
+                        drawContent()
+                        if (under()) drawRect(Color.Black, alpha = backPeek(swipe.progress, swipe.fromLeft, size.width).dim)
+                    },
+            ) { content(layer) }
+        }
+    }
+}
+
+/**
+ * Each dock destination's root (Library with its tabs, Playlists, Search, Tools), composed once it has shown and kept
+ * so: a dock switch, or Back to a root from a page over it, never builds it again, so its lists keep their place and
+ * their rows, with nothing to load or fade in again (phone test 2026-11-11). A root is drawn and placed only while it
+ * shows or moves; it moves as a page would under the same change ([rootFade], [rootSlide]), seeks with a back swipe,
+ * and shrinks when one takes it. Hidden, it takes no touch, says nothing to TalkBack, lets go of the focus, its Back
+ * handlers stand down, and its selection leaves the bottom chrome ([LocalLayerHeaded]).
+ */
+@Composable
+private fun KeptRoots(moves: Transition<PageLayer>, swipe: BackSwipe, rtl: Boolean, reduced: Boolean, content: @Composable (PageLayer) -> Unit) {
+    val now = listOf(moves.currentState, moves.targetState).filter { it.stack.isEmpty() }.map { it.tab }
+    val shown = remember { mutableSetOf<DockTab>() }
+    SideEffect { shown += now }
+    DOCK_TABS.filter { it in shown || it in now }.forEach { tab ->
+        key(tab) { KeptRoot(PageLayer(tab, emptyList()), moves, swipe, rtl, reduced, content) }
+    }
+}
+
+@Composable
+private fun KeptRoot(root: PageLayer, moves: Transition<PageLayer>, swipe: BackSwipe, rtl: Boolean, reduced: Boolean, content: @Composable (PageLayer) -> Unit) {
+    val swiping = swipe.taking is BackTaking.Page
+    val alpha = moves.animateFloat(transitionSpec = { rootFade(root, initialState, targetState, swiping, reduced) }, label = "root fade") { rootAlpha(root, it) }
+    val shift = moves.animateFloat(transitionSpec = { rootSlide(root, initialState, targetState, swiping, reduced) }, label = "root slide") { rootShift(root, it, rtl, reduced) }
+    val headed = moves.targetState == root
+    val drawn = headed || moves.currentState == root
+    // Its Back handlers (a selection's) answer only while it is the root on its way to the screen or on it.
+    val back = rememberNavigationEventDispatcherOwner(enabled = headed)
+    val focus = LocalFocusManager.current
+    var focused by remember { mutableStateOf(false) }
+    LaunchedEffect(headed) { if (!headed && focused) focus.clearFocus(force = true) }
+    Box(
+        Modifier
+            // The root coming over the one leaving, and the one a back swipe takes over all until the swipe has ended.
+            .zIndex(rootOrder(root, moves.targetState, swipe.taking))
+            .fillMaxSize()
+            .layout { measurable, constraints ->
+                val placeable = measurable.measure(constraints)
+                layout(placeable.width, placeable.height) { if (drawn) placeable.place(0, 0) }
+            }
+            .then(if (drawn) Modifier else Modifier.clearAndSetSemantics {})
+            .graphicsLayer {
+                this.alpha = alpha.value
+                translationX = shift.value * size.width
+            }
+            .inertUnless { moves.targetState == root }
+            .onFocusChanged { focused = it.hasFocus }
+            .backPeek(swipe) { (swipe.taking as? BackTaking.Page)?.key == root.key }
+            .drawWithContent {
+                drawContent()
+                val under = (swipe.taking as? BackTaking.Page)?.let { it.key != root.key } == true
+                if (under) drawRect(Color.Black, alpha = backPeek(swipe.progress, swipe.fromLeft, size.width).dim)
+            },
+    ) {
+        CompositionLocalProvider(LocalNavigationEventDispatcherOwner provides back, LocalLayerHeaded provides headed) { content(root) }
     }
 }
 
@@ -570,7 +656,9 @@ private class PlainBack(private val nav: Navigator) : ShellBack {
 /**
  * Back from a page or across the tab history, following the finger ([PageSwipe]): the page it goes back to (or the tab)
  * is drawn under the one leaving, which shrinks and stays whole. Committed (the platform's progress ended normally), the
- * move happens at once and the page fades away while the one under it settles. Cancelled (given up, slow or fast), the
+ * move happens at once and the page carries on shrinking as it fades away ([BackSwipe.finish]) while the one under it
+ * settles and lights up. A plain Back (three buttons, a key) is a swipe committed before any move: the same motion from
+ * its start, never a cut (phone test 2026-11-11). Cancelled (given up, slow or fast), the
  * page springs back to rest, covering the screen again, while the page layer runs back to it, and only then is the page
  * under it let go of, so every layer is as it was: its offset, scale, alpha, which page is drawn, and the order they are
  * drawn in. Back to the player (or another view) a page was opened from draws that view under the page, its bar and
@@ -598,7 +686,7 @@ private fun backFromPages(nav: Navigator, pages: SeekableTransitionState<PageLay
             nav.back()
             try {
                 coroutineScope {
-                    launch { swipe.leave(taking) }
+                    launch { swipe.finish(taking) }
                     if (!intoViews) pages.animateTo(layers.current)
                 }
             } finally {

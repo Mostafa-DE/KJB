@@ -9,12 +9,8 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntSize
 import app.lyrify.library.SongRef
-import androidx.compose.ui.text.font.lerp
-import androidx.compose.ui.graphics.lerp
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.annotation.DrawableRes
@@ -40,7 +36,6 @@ import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -52,7 +47,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -196,19 +190,37 @@ fun SongListFrame(
     sheet: @Composable (PageSongs) -> Unit = {},
     content: LazyListScope.(PageSongs) -> Unit,
 ) {
+    SongPageFrame(ui, songs, source, topBar, loaded, sheet) { list, padding ->
+        LazyColumn(state = state, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = padding.calculateBottomPadding() + 16.dp)) {
+            content(list)
+        }
+    }
+}
+
+/**
+ * [SongListFrame] with a [body] of the page's own (Favourites' tabs under its hero), given the page's songs and the
+ * room the bars take. In a [TabsFrame] (Library's Songs tab) the selection's top bar takes the shared bar's place.
+ */
+@Composable
+fun SongPageFrame(
+    ui: LibraryUi,
+    songs: List<Song>,
+    source: QueueSource,
+    topBar: @Composable (under: Boolean, backdrop: GlassBackdrop) -> Unit,
+    loaded: Boolean = true,
+    sheet: @Composable (PageSongs) -> Unit = {},
+    body: @Composable (PageSongs, PaddingValues) -> Unit,
+) {
     val sheets = rememberSongSheets()
     var selection by rememberSaveable(stateSaver = SongSelection.Saver) { mutableStateOf(SongSelection()) }
     val playback = rememberPlayback()
     val name = sourceLabel(LocalResources.current, source)
     val list = PageSongs(ui, songs, source, sheets, selection, { selection = it }, playback, name)
     SelectionHost(selection, songs, loaded, ui, sheets) { selection = it }
+    LocalTabPage.current?.OwnTopBar(if (selection.active) { under, backdrop -> SelectionTopBar(selection, songs, under, backdrop) { selection = it } } else null)
     PageFrame(
         topBar = { under, backdrop -> if (selection.active) SelectionTopBar(selection, songs, under, backdrop) { selection = it } else topBar(under, backdrop) },
-    ) { padding ->
-        LazyColumn(state = state, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = padding.calculateBottomPadding() + 16.dp)) {
-            content(list)
-        }
-    }
+    ) { padding -> body(list, padding) }
     SongSheetsHost(sheets, ui) { selection = SongSelection() }
     sheet(list)
 }
@@ -721,59 +733,3 @@ fun ListHeading(title: String, count: Int? = null, onViewAll: (() -> Unit)? = nu
     }
 }
 
-/** The library's text tabs under the top bar, scrolling sideways when they do not fit; the selected one has the sung line. */
-@Composable
-fun LibraryTabsRow(tabs: List<String>, selected: Int, onSelect: (Int) -> Unit) {
-    val highlight = LocalBrandColors.current.highlight
-    val colors = MaterialTheme.colorScheme
-    val scroll = rememberLazyListState()
-    var shown by remember { mutableIntStateOf(selected) }
-    LaunchedEffect(selected) {
-        if (selected != shown) scroll.animateScrollToItem((selected - 1).coerceAtLeast(0))
-        shown = selected
-    }
-    androidx.compose.foundation.lazy.LazyRow(
-        state = scroll,
-        contentPadding = PaddingValues(horizontal = 8.dp),
-        modifier = Modifier.fillMaxWidth().selectableGroup(),
-    ) {
-        itemsIndexed(tabs, contentType = { _, _ -> "tab" }) { at, name ->
-            val on = at == selected
-            val reduced = LocalReducedMotion.current
-            val lit by animateFloatAsState(if (on) 1f else 0f, motion(tween(Motion.SHORT_MS, easing = Motion.Standard), reduced), label = "tab")
-            Box(
-                contentAlignment = Alignment.Center,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(16.dp))
-                    .selectable(on, role = Role.Tab) { onSelect(at) }
-                    .heightIn(min = 48.dp)
-                    .padding(horizontal = 12.dp),
-            ) {
-                Text(
-                    name,
-                    style = TabText,
-                    fontWeight = lerp(FontWeight.Medium, FontWeight(650), lit),
-                    color = lerp(colors.onSurfaceVariant, colors.onSurface, lit),
-                    maxLines = 1,
-                )
-                // The sung line grows and fades in under the tab chosen as it leaves the one before.
-                if (lit > 0f) {
-                    Box(
-                        Modifier
-                            .align(Alignment.BottomCenter)
-                            .padding(bottom = 6.dp)
-                            .size(SUNG_LINE_WIDTH, SUNG_LINE_HEIGHT)
-                            .graphicsLayer {
-                                alpha = lit
-                                scaleX = lit
-                            }
-                            .background(highlight, RoundedCornerShape(2.dp)),
-                    )
-                }
-            }
-        }
-    }
-}
-
-/** A library tab's name (.lt): 15/20. */
-private val TabText = body(15f, 20, 500)

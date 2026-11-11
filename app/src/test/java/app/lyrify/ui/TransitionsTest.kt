@@ -1,10 +1,16 @@
 package app.lyrify.ui
 
+import androidx.activity.BackEventCompat
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.SnapSpec
+import androidx.compose.animation.core.TweenSpec
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.runtime.MonotonicFrameClock
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.unit.Density
@@ -15,6 +21,9 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.yield
 import org.junit.Test
 
 /**
@@ -212,7 +221,7 @@ class TransitionsTest {
     fun `a pop draws the page it goes back to under the one leaving, a push over it`() {
         assertTrue(pageTransition(PageChange.Pop, rtl = false, reduced = false).targetContentZIndex < 0f)
         assertEquals(0f, pageTransition(PageChange.Push, rtl = false, reduced = false).targetContentZIndex)
-        assertTrue(backTransition(side = -1, reduced = false).targetContentZIndex < 0f)
+        assertTrue(backTransition(side = -1, reduced = false, takenArrives = false).targetContentZIndex < 0f)
     }
 
     @Test
@@ -341,9 +350,162 @@ class TransitionsTest {
         assertEquals(1f, PageSwipe(albumPage).started(libraryRoot).moved(1.6f).progress, 0f)
     }
 
+    // Phone test 2026-11-11: Back from an album or an artist page moves it away, never a cut
+
+    @Test
+    fun `a plain Back press, with no swipe at all, takes the page away through every frame of a whole swipe`() = runTest {
+        val swipe = BackSwipe()
+        val album = BackTaking.Page("LIBRARY/1")
+        // Three-button Back or KEYCODE_BACK: the platform's progress ends with no move at all.
+        swipe.start(album)
+        val frames = mutableListOf<Pair<Float, Float>>()
+        withContext(FrameClock { frames += swipe.progress to swipe.gone }) { swipe.finish(album) }
+        // About the length of a page's move, at 120 Hz: never one step from the start to the end.
+        assertTrue(frames.size >= Motion.OPEN_MS / 9)
+        assertTrue(frames.any { (shrunk, faded) -> shrunk in 0.2f..0.8f && faded in 0.2f..0.8f })
+        // It shrinks and fades all the way, steadily, and the page under it is lit by the end.
+        assertEquals(frames.map { it.first }.sorted(), frames.map { it.first })
+        assertEquals(frames.map { it.second }.sorted(), frames.map { it.second })
+        assertEquals(1f to 1f, frames.last())
+        assertEquals(0f, backPeek(frames.last().first, fromLeft = true, width = 1000f).dim, 0.0001f)
+    }
+
+    @Test
+    fun `a back swipe let go carries on from where the finger left it, the same motion to its end`() = runTest {
+        val swipe = BackSwipe()
+        val album = BackTaking.Page("LIBRARY/1")
+        swipe.start(album)
+        swipe.follow(BackEventCompat(touchX = 300f, touchY = 900f, progress = 0.4f, swipeEdge = BackEventCompat.EDGE_LEFT))
+        val frames = mutableListOf<Float>()
+        withContext(FrameClock { frames += swipe.progress }) { swipe.finish(album) }
+        assertTrue(frames.first() >= 0.4f)
+        assertEquals(frames.sorted(), frames)
+        assertEquals(1f, frames.last(), 0f)
+        // A newer swipe over the same page is never moved by the last one's ending.
+        val next = BackTaking.Page("LIBRARY/1")
+        swipe.start(next)
+        withContext(FrameClock {}) { swipe.finish(album) }
+        assertEquals(0f, swipe.progress, 0f)
+    }
+
     @Test
     fun `the Now bar stays in place under the growing player, which covers it and the dock from the first frame`() {
         assertFalse(containerInOverlay(bar = true))
         assertTrue(containerInOverlay(bar = false))
+    }
+
+    // Phone test 2026-11-11: a sheet closes on a drag down from anywhere on it, its cover included
+
+    @Test
+    fun `a sheet takes a drag down from its content once scrolled to the top, and leaves every other drag to the content`() {
+        val slop = 20f
+        // Down past the slop, mostly down: the sheet follows the finger.
+        assertEquals(SheetDrag.TAKE, sheetDrag(Offset(4f, 24f), slop, atTop = true))
+        // Not yet past the slop: wait and see.
+        assertEquals(SheetDrag.WAIT, sheetDrag(Offset(3f, 12f), slop, atTop = true))
+        // Up (the content scrolls), sideways, or with the content scrolled down: the content keeps it.
+        assertEquals(SheetDrag.LEAVE, sheetDrag(Offset(0f, -30f), slop, atTop = true))
+        assertEquals(SheetDrag.LEAVE, sheetDrag(Offset(30f, 10f), slop, atTop = true))
+        assertEquals(SheetDrag.LEAVE, sheetDrag(Offset(0f, 30f), slop, atTop = false))
+    }
+
+    // Phone test 2026-11-11: each dock destination keeps its root, which moves as a page would, never rebuilt
+
+    private val searchRoot = PageLayer(DockTab.SEARCH, emptyList())
+
+    @Test
+    fun `another dock destination fades through, with no slide`() {
+        val tab = pageTransition(PageChange.Tab(1), rtl = false, reduced = false)
+        assertEquals(fadeThrough(reduced = false).targetContentEnter, tab.targetContentEnter)
+        assertEquals(fadeThrough(reduced = false).initialContentExit, tab.initialContentExit)
+    }
+
+    @Test
+    fun `a tab's root rests a tenth toward the start under its pages, in place under another tab, mirrored right to left`() {
+        assertEquals(0f, rootShift(libraryRoot, shown = libraryRoot, rtl = false, reduced = false), 0f)
+        assertEquals(-0.1f, rootShift(libraryRoot, shown = albumPage, rtl = false, reduced = false), 0.0001f)
+        assertEquals(0.1f, rootShift(libraryRoot, shown = albumPage, rtl = true, reduced = false), 0.0001f)
+        assertEquals(0f, rootShift(libraryRoot, shown = searchRoot, rtl = false, reduced = false), 0f)
+        assertEquals(1f, rootAlpha(libraryRoot, shown = libraryRoot), 0f)
+        assertEquals(0f, rootAlpha(libraryRoot, shown = albumPage), 0f)
+        assertEquals(0f, rootAlpha(libraryRoot, shown = searchRoot), 0f)
+    }
+
+    @Test
+    fun `a root comes back as a page does, leaves first under a push, and fades through on a dock change`() {
+        // Back to it: it fades in once the page leaving has faded, sliding back from its tenth.
+        assertEquals(tween<Float>(Motion.OPEN_MS - Motion.FADE_OUT_MS, delayMillis = Motion.FADE_OUT_MS), rootFade(libraryRoot, albumPage, libraryRoot, swiping = false, reduced = false))
+        assertEquals(tween<Float>(Motion.OPEN_MS, easing = Motion.Rise), rootSlide(libraryRoot, albumPage, libraryRoot, swiping = false, reduced = false))
+        // A page pushed over it: it fades out first and slides away.
+        assertEquals(tween<Float>(Motion.FADE_OUT_MS), rootFade(libraryRoot, libraryRoot, albumPage, swiping = false, reduced = false))
+        assertEquals(tween<Float>(Motion.SETTLE_MS, easing = Motion.EmphasizedOut), rootSlide(libraryRoot, libraryRoot, albumPage, swiping = false, reduced = false))
+        // Another dock destination: out, then the other in, as fadeThrough; no slide.
+        assertEquals(tween<Float>(Motion.FADE_OUT_MS), rootFade(libraryRoot, libraryRoot, searchRoot, swiping = false, reduced = false))
+        assertEquals(tween<Float>(Motion.FADE_IN_MS, delayMillis = Motion.FADE_OUT_MS), rootFade(searchRoot, libraryRoot, searchRoot, swiping = false, reduced = false))
+        assertTrue(rootSlide(searchRoot, libraryRoot, searchRoot, swiping = false, reduced = false) is SnapSpec)
+        // A root that is neither end does not move.
+        assertTrue(rootFade(searchRoot, libraryRoot, albumPage, swiping = false, reduced = false) is SnapSpec)
+    }
+
+    @Test
+    fun `under a back swipe the root gone back to shows whole at once, the one leaving holds to the end, and reduced motion only fades`() {
+        assertTrue(rootFade(libraryRoot, albumPage, libraryRoot, swiping = true, reduced = false) is SnapSpec)
+        assertEquals(tween<Float>(Motion.OPEN_MS, easing = LinearEasing), rootSlide(libraryRoot, albumPage, libraryRoot, swiping = true, reduced = false))
+        // Back across the tab history: Search's root, taken by the swipe, stays whole until the swipe's own fade has it.
+        val leaving = rootFade(searchRoot, searchRoot, libraryRoot, swiping = true, reduced = false) as TweenSpec<Float>
+        assertEquals(Motion.OPEN_MS, leaving.durationMillis)
+        assertEquals(0f, leaving.easing.transform(0.99f), 0f)
+        assertEquals(1f, leaving.easing.transform(1f), 0f)
+        listOf(albumPage to libraryRoot, libraryRoot to albumPage, libraryRoot to searchRoot).forEach { (from, to) ->
+            assertEquals(tween<Float>(Motion.REDUCED_MS), rootFade(libraryRoot, from, to, swiping = false, reduced = true))
+            assertTrue(rootSlide(libraryRoot, from, to, swiping = false, reduced = true) is SnapSpec)
+        }
+    }
+
+    // Review of 2026-11-11: the layer a back swipe takes stays on top until the swipe has ended, whichever way
+
+    @Test
+    fun `given up, the layer the swipe takes comes back over the one it showed, never under it`() {
+        // Seeking toward the page under it, the page gone back to is drawn under the one taken.
+        assertTrue(backTransition(side = -1, reduced = false, takenArrives = false).targetContentZIndex < 0f)
+        // Given up, the platform's run back makes the taken page the target again: it stays over the other.
+        assertTrue(backTransition(side = 1, reduced = false, takenArrives = true).targetContentZIndex > 0f)
+        assertTrue(backTransition(side = 1, reduced = true, takenArrives = true).targetContentZIndex > 0f)
+        // Among the roots: the one taken over all, whether it is the target (given up) or not (seeking).
+        val taken = BackTaking.Page(searchRoot.key)
+        assertTrue(rootOrder(searchRoot, target = libraryRoot, taking = taken) > rootOrder(libraryRoot, target = libraryRoot, taking = taken))
+        assertTrue(rootOrder(searchRoot, target = searchRoot, taking = taken) > rootOrder(libraryRoot, target = searchRoot, taking = taken))
+        // With no swipe, the root arriving comes over the one leaving.
+        assertTrue(rootOrder(libraryRoot, target = libraryRoot, taking = null) > rootOrder(searchRoot, target = libraryRoot, taking = null))
+    }
+
+    @Test
+    fun `a swipe that takes a root draws the roots over the pages, so a page gone back to waits under it`() {
+        assertTrue(rootsOverPages(BackTaking.Page(searchRoot.key)))
+        assertFalse(rootsOverPages(BackTaking.Page(albumPage.key)))
+        assertFalse(rootsOverPages(null))
+        assertFalse(rootsOverPages(BackTaking.View(FullScreen.Player)))
+    }
+
+    @Test
+    fun `with reduced motion a root never shifts, it only fades`() {
+        assertEquals(0f, rootShift(libraryRoot, shown = albumPage, rtl = false, reduced = true), 0f)
+        assertEquals(0f, rootShift(libraryRoot, shown = albumPage, rtl = true, reduced = true), 0f)
+        assertEquals(-0.1f, rootShift(libraryRoot, shown = albumPage, rtl = false, reduced = false), 0.0001f)
+    }
+
+    /** Frames at 120 Hz, as fast as the test runs; [after] looks at the values each frame has drawn. */
+    private class FrameClock(private val after: () -> Unit) : MonotonicFrameClock {
+        private var time = 0L
+
+        override suspend fun <R> withFrameNanos(onFrame: (frameTimeNanos: Long) -> R): R {
+            yield()
+            time += FRAME_NANOS
+            return onFrame(time).also { after() }
+        }
+    }
+
+    private companion object {
+        const val FRAME_NANOS = 8_333_333L
     }
 }

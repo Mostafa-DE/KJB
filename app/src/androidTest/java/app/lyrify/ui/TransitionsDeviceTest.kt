@@ -8,6 +8,12 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeDown
+import androidx.compose.ui.unit.dp
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -116,6 +122,49 @@ class TransitionsDeviceTest {
     }
 
     @Test
+    fun aDragDownFromTheSheetsCoverClosesIt() {
+        var dismissed = 0
+        compose.setContent {
+            Host {
+                // As the song sheet: the cover and its words at the head, then rows that take taps.
+                LyrifySheet(onDismiss = { dismissed++ }) {
+                    Box(Modifier.size(72.dp).background(Color.Gray).testTag(COVER))
+                    Text("Harbour Glass")
+                    repeat(4) { at -> Text("Row $at", Modifier.clickable {}) }
+                }
+            }
+        }
+        compose.waitForIdle()
+        compose.onNodeWithTag(COVER).performTouchInput { swipeDown(startY = centerY, endY = centerY + DRAG_PX, durationMillis = DRAG_MS) }
+        compose.waitForIdle()
+        compose.runOnIdle { assertEquals(1, dismissed) }
+    }
+
+    @Test
+    fun aDragDownFromARowClosesTheSheetAndATapOnItStillLands() {
+        var dismissed = 0
+        var tapped = 0
+        compose.setContent {
+            Host {
+                LyrifySheet(onDismiss = { dismissed++ }) {
+                    Text("Harbour Glass")
+                    Text("Play next", Modifier.clickable { tapped++ })
+                }
+            }
+        }
+        compose.waitForIdle()
+        compose.onNodeWithText("Play next").performClick()
+        compose.runOnIdle { assertEquals(1, tapped) }
+        compose.onNodeWithText("Play next").performTouchInput { swipeDown(startY = centerY, endY = centerY + DRAG_PX, durationMillis = DRAG_MS) }
+        compose.waitForIdle()
+        compose.runOnIdle {
+            assertEquals(1, dismissed)
+            // The drag never counted as a tap.
+            assertEquals(1, tapped)
+        }
+    }
+
+    @Test
     fun theNowBarStaysPutWhileThePlayerGrowsOutOfItAndBackIntoIt() {
         var open by mutableStateOf(false)
         compose.setContent {
@@ -160,5 +209,13 @@ class TransitionsDeviceTest {
     @Composable
     private fun Host(content: @Composable () -> Unit) {
         LyrifyTheme { CompositionLocalProvider(LocalToasts provides remember { ToastState() }, content = content) }
+    }
+
+    private companion object {
+        const val COVER = "cover"
+
+        /** A drag down well past the sheet's threshold, at a finger's pace. */
+        const val DRAG_PX = 700f
+        const val DRAG_MS = 250L
     }
 }

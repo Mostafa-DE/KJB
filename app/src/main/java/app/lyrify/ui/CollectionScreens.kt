@@ -39,6 +39,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -625,8 +628,10 @@ private fun BuiltInPage(ui: LibraryUi, library: Library, list: BuiltInList) {
 /**
  * Favourites: its songs (Shuffle and Play use them), then a top tab, as Library's are, for each kind with something in
  * it ("Songs 120"), each its whole list: Songs as song rows, Albums as the grid, Artists, Folders and Playlists as rows.
- * One kind alone shows without tabs, and nothing at all the empty state. It reopens on the tab used last (kept in
- * settings.json), or on the first with something while that one is empty.
+ * The tabs' pages follow the finger left and right and each keeps its place ([TabPages]); the hero and the header scroll
+ * away above them, and then the tabs stay under the top bar ([CollapsingTabs]). One kind alone shows without tabs, and
+ * nothing at all the empty state. It reopens on the tab used last (kept in settings.json), or on the first with
+ * something while that one is empty.
  */
 @Composable
 private fun FavouritesPage(ui: LibraryUi, library: Library) {
@@ -638,31 +643,50 @@ private fun FavouritesPage(ui: LibraryUi, library: Library) {
     var picked by rememberSaveable { mutableStateOf<FavouritesTab?>(null) }
     val shown = favourites.shown(picked ?: ui.settings.nav.favouritesTab)
     val reduced = LocalReducedMotion.current
-    SongListFrame(ui, songs, QueueSource(SourceKind.FAVOURITES, "favourites", ""), topBar = { under, backdrop -> CollectionTopBar(title, under, backdrop, ui) }) { list ->
-        item(key = "hero", contentType = "hero") {
-            Box(rowMotion(reduced)) {
-                Hero(title, songsMeta(songs, null).let { if (others > 0) stringResource(R.string.lib_after, it, pluralStringResource(R.plurals.lib_more_count, others, others)) else it }, art = { BuiltInTile(BuiltInList.FAVOURITES, HERO) })
-            }
+    val tabs = favourites.tabs
+    val header = rememberScrollState()
+    // The hero gone under the top bar is content under it too.
+    val heroUnder by remember(header) { derivedStateOf { header.value > 0 } }
+    val pager = rememberTabPager(tabs.size, tabs.indexOf(shown)) { at ->
+        tabs.getOrNull(at)?.takeIf { it != shown }?.let { chosen ->
+            picked = chosen
+            change { if (it.nav.favouritesTab == chosen) it else it.copy(nav = it.nav.copy(favouritesTab = chosen)) }
         }
-        item(key = "header", contentType = "header") { Box(rowMotion(reduced)) { ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll) } }
-        val tabs = favourites.tabs
-        if (tabs.isNotEmpty()) {
-            item(key = "tabs", contentType = "tabs") {
-                Box(rowMotion(reduced)) {
-                    LibraryTabsRow(tabs.map { stringResource(R.string.lib_tab_count, stringResource(it.words), formatCount(favourites.count(it))) }, tabs.indexOf(shown)) { at ->
-                        val chosen = tabs[at]
-                        picked = chosen
-                        change { if (it.nav.favouritesTab == chosen) it else it.copy(nav = it.nav.copy(favouritesTab = chosen)) }
+    }
+    val hero: @Composable (PageSongs) -> Unit = { list ->
+        Hero(title, songsMeta(songs, null).let { if (others > 0) stringResource(R.string.lib_after, it, pluralStringResource(R.plurals.lib_more_count, others, others)) else it }, art = { BuiltInTile(BuiltInList.FAVOURITES, HERO) })
+        ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll)
+    }
+    SongPageFrame(ui, songs, QueueSource(SourceKind.FAVOURITES, "favourites", ""), topBar = { under, backdrop -> CollectionTopBar(title, under || heroUnder, backdrop, ui) }) { list, padding ->
+        val bottom = PaddingValues(bottom = padding.calculateBottomPadding() + 16.dp)
+        if (tabs.isEmpty()) {
+            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = padding.calculateBottomPadding() + 16.dp)) {
+                item(key = "hero", contentType = "hero") { Column(rowMotion(reduced)) { hero(list) } }
+                if (shown != null && shown != FavouritesTab.SONGS) {
+                    item(key = "heading", contentType = "heading") { Box(rowMotion(reduced)) { ListHeading(stringResource(shown.words), favourites.count(shown)) } }
+                }
+                when (shown) {
+                    null -> item(key = "empty", contentType = "empty") { EmptyState(EmptyArt.Icon(R.drawable.ic_favorite), stringResource(R.string.lib_fav_empty_title), rowMotion(reduced), text = stringResource(R.string.lib_fav_empty)) }
+                    FavouritesTab.SONGS -> songRows(list)
+                    else -> favouriteRows(shown, favourites, library, reduced)
+                }
+            }
+        } else {
+            CollapsingTabs(
+                outer = header,
+                padding = padding,
+                header = { hero(list) },
+                tabs = { PagerTabs(pager, tabs.map { stringResource(R.string.lib_tab_count, stringResource(it.words), formatCount(favourites.count(it))) }) },
+            ) {
+                TabPages(pager, tabs, Modifier.fillMaxSize(), swipe = !list.selection.active) { at ->
+                    LazyColumn(Modifier.fillMaxSize(), contentPadding = bottom) {
+                        when (val tab = tabs[at]) {
+                            FavouritesTab.SONGS -> songRows(list)
+                            else -> favouriteRows(tab, favourites, library, reduced)
+                        }
                     }
                 }
             }
-        } else if (shown != null && shown != FavouritesTab.SONGS) {
-            item(key = "heading", contentType = "heading") { Box(rowMotion(reduced)) { ListHeading(stringResource(shown.words), favourites.count(shown)) } }
-        }
-        when (shown) {
-            null -> item(key = "empty", contentType = "empty") { EmptyState(EmptyArt.Icon(R.drawable.ic_favorite), stringResource(R.string.lib_fav_empty_title), rowMotion(reduced), text = stringResource(R.string.lib_fav_empty)) }
-            FavouritesTab.SONGS -> songRows(list)
-            else -> favouriteRows(shown, favourites, library, reduced)
         }
     }
 }

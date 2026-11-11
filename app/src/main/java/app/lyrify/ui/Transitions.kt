@@ -17,6 +17,7 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.geometry.toRect
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.CornerRadius
@@ -29,7 +30,9 @@ import androidx.compose.animation.EnterExitState
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.SharedTransitionScope
+import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.VisibilityThreshold
 import androidx.compose.animation.core.animateDp
 import androidx.compose.animation.core.animate
@@ -66,6 +69,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import app.lyrify.settings.DockTab
+import kotlin.math.abs
 
 // How KJB's screens change, after the motion spec (handoff/motion-spec.md): the pure decisions first (what changed,
 // which way it moves, how far a drag or a back swipe has gone), tested on the JVM, then the transitions they pick. The
@@ -214,7 +218,7 @@ sealed interface BackTaking {
 /**
  * The back swipe in progress, shared by the shell's layers: what it [taking]s away, how far it has gone ([progress], 0
  * to 1) and from which edge. The layer taken draws [backPeek] of it and the one under it lights up; both read it while
- * drawing only, so a swipe never recomposes a page. [gone]: the pages fading away over the views they go back to.
+ * drawing only, so a swipe never recomposes a page. [gone]: the layer fading away once the swipe is let go ([finish]).
  */
 @Stable
 class BackSwipe {
@@ -255,9 +259,19 @@ class BackSwipe {
         animate(progress, 0f, animationSpec = tween(Motion.OPEN_MS, easing = Motion.Rise)) { value, _ -> if (owns(owner)) progress = value }
     }
 
-    /** [owner]'s swipe let go over the views: the pages fade away from where the swipe left them. */
-    suspend fun leave(owner: BackTaking) {
-        animate(0f, 1f, animationSpec = tween(Motion.SETTLE_MS, easing = Motion.EmphasizedOut)) { value, _ -> if (owns(owner)) gone = value }
+    /**
+     * [owner]'s swipe let go, or a plain Back (three buttons, a key) that never moved at all: the layer carries on from
+     * where the finger left it to the end of a whole swipe, shrinking and moving the swipe's way as it fades out, while
+     * the layer under it lights up. So Back moves the page away as the gesture does, over a page's move, never cut.
+     */
+    suspend fun finish(owner: BackTaking) {
+        val from = progress
+        animate(0f, 1f, animationSpec = tween(Motion.OPEN_MS, easing = LinearEasing)) { time, _ ->
+            if (owns(owner)) {
+                progress = from + (1f - from) * Motion.Standard.transform(time)
+                gone = time
+            }
+        }
     }
 
     /** Whether [owner] (the taking a swipe started with, by identity) is still the swipe in progress. */
@@ -274,7 +288,7 @@ class BackSwipe {
 
 /**
  * A layer as a back swipe takes it ([taken], read while drawing): [backPeek]'s shrink, shift and corners, and its fade
- * when it goes away over views ([BackSwipe.gone]). Untouched while nothing is taken.
+ * once the swipe is let go ([BackSwipe.gone]). Untouched while nothing is taken.
  */
 fun Modifier.backPeek(swipe: BackSwipe, taken: () -> Boolean): Modifier = graphicsLayer {
     if (!taken()) return@graphicsLayer
@@ -301,7 +315,10 @@ class Container(val shared: SharedTransitionScope, val visibility: AnimatedVisib
 
 val LocalContainer = compositionLocalOf<Container?> { null }
 
-/** Whether the view layer around this is headed for the screen (arriving or resting) rather than leaving it. */
+/**
+ * Whether the layer around this is headed for the screen (arriving or resting) rather than leaving it: a view, or a
+ * dock destination's kept root, which is false while another shows.
+ */
 val LocalLayerHeaded = compositionLocalOf { true }
 
 private const val CONTAINER_SURFACE = "player surface"
@@ -467,16 +484,15 @@ fun enterSide(change: PageChange, rtl: Boolean): Int {
 /**
  * How the page layer moves for [change] (shared axis X, motion spec 2.1): a push or a pop slides a tenth of the width
  * from [enterSide] as it fades in, while the old page slides the other way and fades out first, so two pages never
- * show half each; a pop draws the page it goes back to under the one leaving. Another tab is the dock's [tabSwitch];
- * a reset fades through. With [reduced] motion every change is a 100 ms fade (decision D4).
+ * show half each; a pop draws the page it goes back to under the one leaving. Another dock destination and a reset
+ * fade through, short and still (phone test 2026-11-11). With [reduced] motion every change is a 100 ms fade (D4).
  */
 fun pageTransition(change: PageChange, rtl: Boolean, reduced: Boolean): ContentTransform {
     if (change == PageChange.None) return EnterTransition.None togetherWith ExitTransition.None
     if (reduced) return fadeIn(tween(Motion.REDUCED_MS)) togetherWith fadeOut(tween(Motion.REDUCED_MS))
     val side = enterSide(change, rtl)
     return when (change) {
-        is PageChange.Tab -> tabSwitch(side, reduced = false)
-        PageChange.Reset -> fadeThrough(reduced = false)
+        is PageChange.Tab, PageChange.Reset -> fadeThrough(reduced = false)
         else -> {
             val enter = slideInHorizontally(tween(Motion.OPEN_MS, easing = Motion.Rise)) { it / PAGE_SHIFT_SHARE * side } +
                 fadeIn(tween(Motion.OPEN_MS - Motion.FADE_OUT_MS, delayMillis = Motion.FADE_OUT_MS))
@@ -489,14 +505,81 @@ fun pageTransition(change: PageChange, rtl: Boolean, reduced: Boolean): ContentT
 /**
  * The page layer under a back swipe, which seeks it by the finger's progress: the page gone back to waits under the
  * one leaving, sliding in from [side] a little as the finger moves, and the one leaving (shrunk by [backPeek]) fades
- * only toward the end, so it stays clear while the user decides. Linear in time: the finger is the easing.
+ * only toward the end, so it stays clear while the user decides. Linear in time: the finger is the easing. Given up,
+ * the run back makes the page the swipe took the target again ([takenArrives]): it stays over the other.
  */
-fun backTransition(side: Int, reduced: Boolean): ContentTransform {
-    if (reduced) return ContentTransform(fadeIn(tween(Motion.REDUCED_MS)), fadeOut(tween(Motion.REDUCED_MS)), targetContentZIndex = -1f)
+fun backTransition(side: Int, reduced: Boolean, takenArrives: Boolean): ContentTransform {
+    val order = if (takenArrives) 1f else -1f
+    if (reduced) return ContentTransform(fadeIn(tween(Motion.REDUCED_MS)), fadeOut(tween(Motion.REDUCED_MS)), targetContentZIndex = order)
     val enter = slideInHorizontally(tween(Motion.OPEN_MS, easing = LinearEasing)) { it / PAGE_SHIFT_SHARE * side }
     // The page leaving stays whole while the finger decides: its fade is the swipe's own, and only once it commits.
-    return ContentTransform(enter, fadeOut(tween(Motion.OPEN_MS, easing = HoldToEnd)), targetContentZIndex = -1f)
+    return ContentTransform(enter, fadeOut(tween(Motion.OPEN_MS, easing = HoldToEnd)), targetContentZIndex = order)
 }
+
+// Each dock destination's root, kept composed once shown (phone test 2026-11-11: a dock switch or Back to a root must
+// never rebuild its lists): it moves by these rules instead of entering and leaving the page layer's AnimatedContent,
+// as a page would move under the same change.
+
+/**
+ * Where a tab's [root] rests while [shown] is the page layer on screen, as a share of the width: in place when it is
+ * the one, a tenth toward the start under its own pages (where a push leaves it; mirrored right to left), and in place
+ * under another tab, which fades through. With [reduced] motion always in place: it only fades.
+ */
+fun rootShift(root: PageLayer, shown: PageLayer, rtl: Boolean, reduced: Boolean): Float = when {
+    reduced || shown == root || shown.tab != root.tab -> 0f
+    else -> -(if (rtl) -1f else 1f) / PAGE_SHIFT_SHARE
+}
+
+/** A tab's [root] shows only while it is the page layer [shown]. */
+fun rootAlpha(root: PageLayer, shown: PageLayer): Float = if (shown == root) 1f else 0f
+
+/**
+ * How a tab's [root] fades as the page layer moves from [from] to [to], as [pageTransition] fades a page: back to it,
+ * in once the page leaving has faded (a pop over the rest of a page's move, a dock change or a reset as [fadeThrough]);
+ * away from it, out first. Under a back swipe ([swiping]) the root gone back to shows whole at once and the one taken
+ * stays whole to the end, the swipe's own fade taking it ([BackSwipe.finish]). Reduced motion: a 100 ms fade.
+ */
+fun rootFade(root: PageLayer, from: PageLayer, to: PageLayer, swiping: Boolean, reduced: Boolean): FiniteAnimationSpec<Float> = when {
+    reduced -> tween(Motion.REDUCED_MS)
+    to == root && swiping -> snap()
+    swiping && from == root -> tween(Motion.OPEN_MS, easing = HoldToEnd)
+    to == root && pageChange(from, to) == PageChange.Pop -> tween(Motion.OPEN_MS - Motion.FADE_OUT_MS, delayMillis = Motion.FADE_OUT_MS)
+    to == root -> tween(Motion.FADE_IN_MS, delayMillis = Motion.FADE_OUT_MS)
+    from == root -> tween(Motion.FADE_OUT_MS)
+    else -> snap()
+}
+
+/**
+ * How a tab's [root] slides between its [rootShift]s from [from] to [to]: back from its tenth as a popped page's
+ * place is taken, away under a push, with the finger (linear) under a back swipe; never with reduced motion, and never
+ * on a reset or a dock change, which only fade.
+ */
+fun rootSlide(root: PageLayer, from: PageLayer, to: PageLayer, swiping: Boolean, reduced: Boolean): FiniteAnimationSpec<Float> {
+    if (reduced) return snap()
+    if (swiping) return tween(Motion.OPEN_MS, easing = LinearEasing)
+    return when {
+        to == root && pageChange(from, to) == PageChange.Pop -> tween(Motion.OPEN_MS, easing = Motion.Rise)
+        from == root && pageChange(from, to) == PageChange.Push -> tween(Motion.SETTLE_MS, easing = Motion.EmphasizedOut)
+        else -> snap()
+    }
+}
+
+/**
+ * Which of the kept roots is drawn over the others: the one a back swipe takes ([taking]), over all, as long as the
+ * swipe lasts (seeking, let go, or given up and run back, when it is the [target] again); else the one arriving.
+ */
+fun rootOrder(root: PageLayer, target: PageLayer, taking: BackTaking?): Float = when {
+    (taking as? BackTaking.Page)?.key == root.key -> 2f
+    taking !is BackTaking.Page && root == target -> 1f
+    else -> 0f
+}
+
+/**
+ * Whether the kept roots are drawn over the pages: while a back swipe takes a root (back across the tab history), so a
+ * page it goes back to (a tab left on an album) waits under it; else the pages are over the roots.
+ */
+fun rootsOverPages(taking: BackTaking?): Boolean =
+    (taking as? BackTaking.Page)?.key?.let { key -> DockTab.entries.any { pageKey(it, emptyList()) == key } } == true
 
 /** Nothing until the very end: a layer kept as it is through a seek, then gone. */
 private val HoldToEnd = Easing { if (it < 1f) 0f else 1f }
@@ -618,6 +701,21 @@ const val REDUCED_DRAG_ALPHA: Float = 0.4f
 fun reducedDragAlpha(offset: Float, height: Float): Float {
     val p = if (height > 0f) (offset.coerceAtLeast(0f) / (height * DRAG_FULL_SHARE)).coerceIn(0f, 1f) else 0f
     return 1f - (1f - REDUCED_DRAG_ALPHA) * p
+}
+
+/** What a sheet makes of a finger on its content: [WAIT] until it has moved past the slop, then [TAKE] it, or [LEAVE] it to the content. */
+enum class SheetDrag { WAIT, TAKE, LEAVE }
+
+/**
+ * A finger [moved] px on a sheet's content: past the touch [slop] and mostly down while the content is scrolled to its
+ * top ([atTop]), the sheet takes it and follows (from anywhere, its cover included); up, sideways, or with the content
+ * scrolled down, the content keeps it and scrolls.
+ */
+fun sheetDrag(moved: Offset, slop: Float, atTop: Boolean): SheetDrag = when {
+    !atTop -> SheetDrag.LEAVE
+    moved.getDistance() < slop -> SheetDrag.WAIT
+    moved.y > 0f && abs(moved.y) > abs(moved.x) -> SheetDrag.TAKE
+    else -> SheetDrag.LEAVE
 }
 
 // Dialogs
