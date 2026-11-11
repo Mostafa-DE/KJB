@@ -278,6 +278,46 @@ class ChromeTest {
         assertTrue("""<string name="nav_playlists">Playlists</string>""" in strings)
     }
 
+    // The main pages' header (user decision 2026-11-11): "KJB Music · Library" on one line
+
+    @Test
+    fun `each dock destination's header reads KJB Music then its own name, one heading for TalkBack`() {
+        val strings = java.io.File("src/main/res/values/strings.xml").readText()
+        assertTrue("""<string name="header_brand">KJB Music</string>""" in strings)
+        // The visible app name stays KJB everywhere else.
+        assertTrue("""<string name="app_name">KJB</string>""" in strings)
+        assertEquals(DOCK_TABS.map { it.label }, DOCK_TABS.map { headerPage(it) })
+        val library = headerWords("KJB Music", "Library")
+        assertEquals("KJB Music", library.brand)
+        assertEquals("· Library", library.page)
+        assertEquals("KJB Music, Library", library.spoken)
+        assertEquals("KJB Music, Tools", headerWords("KJB Music", "Tools").spoken)
+    }
+
+    @Test
+    fun `short of room, the page's name gives way first and the brand never shortens`() {
+        // Room for both: each whole.
+        assertEquals(300 to 200, headerWidths(brand = 300, page = 200, available = 600))
+        // Short: the page's name ellipsizes, the brand keeps its width.
+        assertEquals(300 to 100, headerWidths(brand = 300, page = 200, available = 400))
+        assertEquals(300 to 0, headerWidths(brand = 300, page = 200, available = 300))
+        // Not even room for the brand: it is cut, never ellipsized, and the page's name is gone.
+        assertEquals(250 to 0, headerWidths(brand = 300, page = 200, available = 250))
+    }
+
+    @Test
+    fun `only the four main pages carry the brand, every inner page keeps Back and its own title`() {
+        val ui = java.io.File("src/main/java/app/lyrify/ui").listFiles { f -> f.extension == "kt" }!!.associate { it.name to it.readText() }
+        val uses = ui.mapValues { (_, text) -> Regex("MainTopBar\\(").findAll(text).count() }.filterValues { it > 0 } - "Chrome.kt"
+        assertEquals(mapOf("LibraryScreen.kt" to 2, "SearchScreen.kt" to 1, "ToolsScreen.kt" to 1), uses)
+        // Each from its root: Library, Playlists, Search and Tools.
+        listOf("LibraryScreen.kt" to "DockTab.LIBRARY", "LibraryScreen.kt" to "DockTab.PLAYLISTS", "SearchScreen.kt" to "DockTab.SEARCH", "ToolsScreen.kt" to "DockTab.TOOLS")
+            .forEach { (file, tab) -> assertTrue("$file $tab", "MainTopBar($tab" in ui.getValue(file)) }
+        // The inner pages' bars keep their Back.
+        assertTrue(Regex("LyrifyTopBar\\(").findAll(ui.getValue("CollectionScreens.kt") + ui.getValue("SettingsScreen.kt") + ui.getValue("CoversTagsScreen.kt")).count() >= 4)
+        assertTrue("navigation = { ChromeIconButton(R.drawable.ic_arrow_back" in ui.getValue("CoversTagsScreen.kt"))
+    }
+
     @Test
     fun `Tools gets a dot when Check these, Duplicates or the AI need the user`() {
         assertFalse(toolsDot(checks = 0, duplicates = 0, aiAttention = false))

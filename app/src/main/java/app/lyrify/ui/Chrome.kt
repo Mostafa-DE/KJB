@@ -99,6 +99,7 @@ import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
@@ -392,18 +393,83 @@ fun LyrifyTopBar(
     actions: @Composable RowScope.() -> Unit = {},
 ) {
     TopBand(under, backdrop, modifier) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.statusBarsPadding().heightIn(min = BAR_HEIGHT).padding(start = if (navigation != null) 8.dp else 20.dp, end = 12.dp),
-        ) {
-            navigation?.let {
-                it()
-                Spacer(Modifier.width(4.dp))
-            }
-            Box(Modifier.weight(1f).semantics(mergeDescendants = true) { heading() }) {
-                ProvideTextStyle(MaterialTheme.typography.headlineSmall) { title() }
-            }
-            Row(verticalAlignment = Alignment.CenterVertically, content = actions)
+        Box(Modifier.statusBarsPadding()) { TopBarRow(title, navigation, actions) }
+    }
+}
+
+/** A top bar's line: maybe Back, the title (one heading, in the title style), and the actions at the end. */
+@Composable
+private fun TopBarRow(title: @Composable () -> Unit, navigation: (@Composable () -> Unit)?, actions: @Composable RowScope.() -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.heightIn(min = BAR_HEIGHT).padding(start = if (navigation != null) 8.dp else 20.dp, end = 12.dp),
+    ) {
+        navigation?.let {
+            it()
+            Spacer(Modifier.width(4.dp))
+        }
+        Box(Modifier.weight(1f).semantics(mergeDescendants = true) { heading() }) {
+            ProvideTextStyle(MaterialTheme.typography.headlineSmall) { title() }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, content = actions)
+    }
+}
+
+/**
+ * The header of the four main pages (Library, Playlists, Search, Tools), on one line: "KJB Music" in the title's ink,
+ * then "· Library" at the same size in the secondary ink, the page's own actions at the end; one heading for TalkBack,
+ * "KJB Music, Library" (user decision 2026-11-11). Short of room the page's name ellipsizes first and the brand never
+ * does ([headerWidths]). [below]: more of the band under the line, as Search's field. Inner pages keep [LyrifyTopBar]
+ * with Back and their own title.
+ */
+@Composable
+fun MainTopBar(tab: DockTab, under: Boolean, backdrop: GlassBackdrop?, actions: @Composable RowScope.() -> Unit = {}, below: (@Composable () -> Unit)? = null) {
+    val words = headerWords(stringResource(R.string.header_brand), stringResource(headerPage(tab)))
+    TopBand(under, backdrop) {
+        Column(Modifier.statusBarsPadding()) {
+            TopBarRow(title = { BrandTitle(words) }, navigation = null, actions = actions)
+            below?.invoke()
+        }
+    }
+}
+
+/** A main page's header words: [brand] and [page] as shown, and [spoken] as TalkBack reads the one heading. */
+@Immutable
+data class HeaderWords(val brand: String, val page: String, val spoken: String)
+
+/** The name a dock destination's header shows after the brand: the dock's own word for it. */
+fun headerPage(tab: DockTab): Int = tab.label
+
+fun headerWords(brand: String, page: String): HeaderWords = HeaderWords(brand = brand, page = "· $page", spoken = "$brand, $page")
+
+/**
+ * The widths the brand and the page's name get in [available] px, given the widths they want: the brand first, whole
+ * (cut, never ellipsized, only when not even it fits), then the page's name in what is left, ellipsized when short.
+ */
+fun headerWidths(brand: Int, page: Int, available: Int): Pair<Int, Int> {
+    val first = min(brand, available)
+    return first to min(page, (available - first).coerceAtLeast(0))
+}
+
+/** "KJB Music" then "· Library" on one line, laid out by [headerWidths]; one node for TalkBack, the heading around it. */
+@Composable
+private fun BrandTitle(words: HeaderWords) {
+    val colors = MaterialTheme.colorScheme
+    Layout(
+        content = {
+            Text(words.brand, color = colors.onSurface, maxLines = 1, softWrap = false, overflow = TextOverflow.Clip)
+            Text(" " + words.page, color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        },
+        modifier = Modifier.clearAndSetSemantics { contentDescription = words.spoken },
+    ) { (brand, page), constraints ->
+        val loose = constraints.copy(minWidth = 0)
+        val wanted = brand.maxIntrinsicWidth(constraints.maxHeight) to page.maxIntrinsicWidth(constraints.maxHeight)
+        val (brandWidth, pageWidth) = headerWidths(wanted.first, wanted.second, constraints.maxWidth)
+        val first = brand.measure(loose.copy(maxWidth = brandWidth))
+        val second = page.measure(loose.copy(maxWidth = pageWidth))
+        layout(first.width + second.width, max(first.height, second.height)) {
+            first.place(0, 0)
+            if (pageWidth > 0) second.place(first.width, 0)
         }
     }
 }

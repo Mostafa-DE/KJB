@@ -38,6 +38,7 @@ import app.lyrify.R
 import app.lyrify.data.LedgerState
 import app.lyrify.data.LyricsStatus
 import app.lyrify.overnight.NightStatus
+import app.lyrify.settings.DockTab
 import kotlinx.coroutines.launch
 
 /** The rows of Tools, in order: KJB's 2.0 features, Covers & tags, then Settings. */
@@ -120,7 +121,7 @@ fun ToolsScreen(rows: List<ToolRow>, onOpen: (Page) -> Unit) {
     val failed = remember(lyrics.ledger) { lyrics.ledger.counts()[LyricsStatus.ERROR] ?: 0 }
     PageFrame(
         topBar = { under, backdrop ->
-            LyrifyTopBar(title = { Text(stringResource(R.string.tools_title), maxLines = 1, overflow = TextOverflow.Ellipsis) }, under = under, backdrop = backdrop)
+            MainTopBar(DockTab.TOOLS, under, backdrop)
         },
     ) { padding ->
         val reduced = LocalReducedMotion.current
