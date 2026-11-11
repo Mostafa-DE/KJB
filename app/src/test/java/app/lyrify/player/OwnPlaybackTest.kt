@@ -1,5 +1,7 @@
 package app.lyrify.player
 
+import androidx.media3.common.C
+import androidx.media3.common.Player
 import app.lyrify.library.Library
 import app.lyrify.library.Playlist
 import app.lyrify.library.Song
@@ -140,6 +142,37 @@ class OwnPlaybackTest {
         val view = sessionView(StillPort(uids, 1, 12_000), playing = true, book = book, repeat = Repeat.ALL)
         assertEquals(SessionView(uids, 1, 12_000, playing = true, shuffled = true, repeat = Repeat.ALL), view)
         assertEquals(SessionView(emptyList(), -1, 0, playing = false, shuffled = false, repeat = Repeat.ONE), sessionView(StillPort(emptyList(), -1, 0), playing = true, book = QueueBook(), repeat = Repeat.ONE))
+    }
+
+    @Test
+    fun `a song starting by itself, a lap of Repeat one too, moves every controller's place back to where the song is`() {
+        // Repeat one: the same song again, so the session's own state sees no change; the screens' progress and lyrics
+        // would stay at the song's end.
+        assertEquals(Player.DISCONTINUITY_REASON_AUTO_TRANSITION, startedDiscontinuity(lap = true, natural = true))
+        assertEquals(Player.DISCONTINUITY_REASON_AUTO_TRANSITION, startedDiscontinuity(lap = false, natural = true))
+        // A move by the user is told by its own seek.
+        assertNull(startedDiscontinuity(lap = false, natural = false))
+    }
+
+    @Test
+    fun `Next on the last song is offered and goes to the first song of the queue, whatever Repeat says`() {
+        val uids = listOf(11L, 12L, 13L)
+        Repeat.entries.forEach { repeat ->
+            val last = SessionView(uids, 2, 90_000, playing = true, shuffled = false, repeat = repeat)
+            assertTrue("$repeat", Player.COMMAND_SEEK_TO_NEXT in sessionCommands(last))
+            assertTrue("$repeat", Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM in sessionCommands(last))
+        }
+        // Media3 finds no song after the last one (Repeat off, and Repeat one, which it reads as off for Next): no index.
+        assertEquals(0, seekIndex(C.INDEX_UNSET, Player.COMMAND_SEEK_TO_NEXT, current = 2))
+        assertEquals(0, seekIndex(C.INDEX_UNSET, Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM, current = 2))
+        // Every other seek goes where it asks, or stays in the song playing.
+        assertEquals(1, seekIndex(1, Player.COMMAND_SEEK_TO_NEXT, current = 0))
+        assertEquals(2, seekIndex(C.INDEX_UNSET, Player.COMMAND_SEEK_TO_PREVIOUS, current = 2))
+        // Nothing loaded: no seeks and no Next.
+        val none = sessionCommands(SessionView(emptyList(), -1, 0, playing = false, shuffled = false, repeat = Repeat.OFF))
+        assertFalse(Player.COMMAND_SEEK_TO_NEXT in none)
+        assertFalse(Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM in none)
+        assertTrue(Player.COMMAND_PLAY_PAUSE in none)
     }
 
     // Offload

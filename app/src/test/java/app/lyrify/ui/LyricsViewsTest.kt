@@ -226,6 +226,14 @@ class LyricsViewsTest {
         assertEquals(listOf("by -10"), near.calls)
     }
 
+    @Test
+    fun `before the first line, after a song starts again too, the lines go back to their start`() = kotlinx.coroutines.runBlocking {
+        // Repeat one: the song is back before its first line while the list still shows its last ones.
+        val list = FakeLines(firstVisibleHeight = 60, visible = mapOf(40 to (700 to 100)))
+        followLine(list, at = -1, padTop = 48, viewport = 2_000, anchor = 0.38f, smooth = true)
+        assertEquals(listOf("jump 0 0"), list.calls)
+    }
+
     /** The list as followLine sees it: line 30 is not laid out until a jump lands it 40 px off, 300 px tall. */
     private class FakeLines(private val firstVisibleHeight: Int, visible: Map<Int, Pair<Int, Int>> = emptyMap()) : LineList {
         val calls = mutableListOf<String>()

@@ -6,6 +6,7 @@ import android.os.Looper
 import android.os.SystemClock
 import androidx.annotation.OptIn
 import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaBrowser
 import androidx.media3.session.MediaController
@@ -251,6 +252,57 @@ class PlayerDeviceTest {
         // The queue model followed the player.
         val followed = waitFor(2_000) { built.core.book.value.current!!.index == 1 }
         assertTrue("the queue stayed at song ${onMain { built.core.book.value.current!!.index }}", followed)
+    }
+
+    /** [songs] as the queue playing from [start], through a session and a controller on the main thread, as the screens use it. */
+    private fun controlled(built: Built, songs: List<Song>, start: Int, id: String): MediaController {
+        assertTrue(waitFor(2_000) { built.core.ready.value })
+        followSongStarts(built)
+        val source = QueueSource(SourceKind.ALBUM, "album:tones", "Tone Album")
+        onMain {
+            built.core.switch { it.play(songs.map(Song::ref), start, source, System.currentTimeMillis()) }
+            built.bridge.sync(built.core.book.value) { ref -> songs.firstOrNull { it.path == ref.path } }
+        }
+        val session = onMain { MediaSession.Builder(context, built.player).setId(id).build() }
+        cleanups += { session.release() }
+        val controller = MediaController.Builder(context, session.token).setApplicationLooper(Looper.getMainLooper()).buildAsync().get(10, TimeUnit.SECONDS)
+        cleanups += { controller.release() }
+        return controller
+    }
+
+    /** User feedback 10: a lap of Repeat one reaches the controller, so the screens' progress and lyrics start again. */
+    @Test
+    fun underRepeatOneALapTellsTheControllerTheSongIsBackAtItsStart() {
+        val songs = listOf(song(tone("kjb-lap-1.wav", 2, 440.0), "Lap One"))
+        val built = build(songs)
+        val controller = controlled(built, songs, 0, "kjb-lap-test")
+        var laps = 0
+        onMain {
+            built.core.setRepeat(Repeat.ONE)
+            built.engine.setRepeat(Repeat.ONE)
+            controller.addListener(object : Player.Listener {
+                override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
+                    if (reason == Player.DISCONTINUITY_REASON_AUTO_TRANSITION) laps++
+                }
+            })
+            controller.play()
+        }
+        assertTrue("the controller never heard of a lap", waitFor(6_000) { laps >= 1 })
+        // The controller's place is the song's again, not its end.
+        assertTrue("the controller's place stayed at ${onMain { controller.currentPosition }} ms", waitFor(500) { controller.currentPosition < 1_500 })
+    }
+
+    /** User feedback 6: Next on the last song (Repeat off) goes to the first song of the queue and plays on. */
+    @Test
+    fun nextOnTheLastSongGoesToTheFirstAndPlaysOn() {
+        val songs = listOf(song(tone("kjb-wrap-1.wav", 3, 440.0), "Wrap One"), song(tone("kjb-wrap-2.wav", 3, 550.0), "Wrap Two"))
+        val built = build(songs)
+        val controller = controlled(built, songs, 1, "kjb-wrap-test")
+        onMain { controller.play() }
+        assertTrue("never played", waitFor(5_000) { controller.isPlaying })
+        onMain { controller.seekToNext() }
+        assertTrue("Next did not go to the first song", waitFor(3_000) { built.engine.index == 0 && controller.currentMediaItemIndex == 0 })
+        assertTrue("stopped after Next", waitFor(3_000) { controller.isPlaying })
     }
 
     @Test

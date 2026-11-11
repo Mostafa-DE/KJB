@@ -184,16 +184,16 @@ fun swipeOutcome(axis: SwipeAxis?, dx: Float, dy: Float): SwipeOutcome = when {
 }
 
 /**
- * The song whose cover slides in for a skip [way]: the one Next or Previous plays, as the player decides it (Media3's
- * rules: only Repeat all wraps round; Previous past 3 s starts this song over). Null when no other song comes: the end
- * of the queue, a queue of one, or Previous starting the song over.
+ * The song whose cover slides in for a skip [way]: the one Next or Previous plays, as the player decides it (Next on the
+ * last song goes to the first whatever Repeat says, LyrifyPlayer's seekIndex; Previous wraps round only with Repeat all,
+ * and past 3 s starts this song over). Null when no other song comes: a queue of one, the first song's Previous, or
+ * Previous starting the song over.
  */
 fun incoming(queue: Queue, way: SkipWay, repeat: Repeat, positionMs: Long): QueueItem? {
     val items = queue.items
-    val wrap = repeat == Repeat.ALL
     val at = when (way) {
-        SkipWay.NEXT -> (queue.index + 1).let { if (it < items.size) it else if (wrap) 0 else -1 }
-        SkipWay.PREVIOUS -> if (positionMs > PREVIOUS_RESTARTS_MS) -1 else (queue.index - 1).let { if (it >= 0) it else if (wrap) items.lastIndex else -1 }
+        SkipWay.NEXT -> (queue.index + 1).let { if (it < items.size) it else 0 }
+        SkipWay.PREVIOUS -> if (positionMs > PREVIOUS_RESTARTS_MS) -1 else (queue.index - 1).let { if (it >= 0) it else if (repeat == Repeat.ALL) items.lastIndex else -1 }
     }
     return items.getOrNull(at)?.takeIf { it.uid != queue.current?.uid }
 }
