@@ -458,12 +458,14 @@ internal fun PagesBack(nav: Navigator, pages: SeekableTransitionState<PageLayer>
 internal fun PageLayers(pages: SeekableTransitionState<PageLayer>, swipe: BackSwipe, rtl: Boolean, reduced: Boolean, content: @Composable (PageLayer) -> Unit) {
     val moves = rememberTransition(pages, label = "pages")
     Box(Modifier.fillMaxSize()) {
-        // The roots in a box of their own, so their order among themselves never puts one over the pages.
-        Box(Modifier.fillMaxSize()) { KeptRoots(moves, swipe, rtl, reduced, content) }
+        // The roots in a box of their own, so their order among themselves never puts one over the pages; but a root a
+        // back swipe takes stays over the page it goes back to.
+        Box(Modifier.fillMaxSize().zIndex(if (rootsOverPages(swipe.taking)) 1f else 0f)) { KeptRoots(moves, swipe, rtl, reduced, content) }
         moves.AnimatedContent(
             transitionSpec = {
                 val change = pageChange(initialState, targetState)
-                if (swipe.taking is BackTaking.Page) backTransition(enterSide(change, rtl), reduced) else pageTransition(change, rtl, reduced)
+                val taking = swipe.taking
+                if (taking is BackTaking.Page) backTransition(enterSide(change, rtl), reduced, takenArrives = targetState.key == taking.key) else pageTransition(change, rtl, reduced)
             },
             contentKey = { it.key },
         ) { layer ->
@@ -511,7 +513,7 @@ private fun KeptRoots(moves: Transition<PageLayer>, swipe: BackSwipe, rtl: Boole
 private fun KeptRoot(root: PageLayer, moves: Transition<PageLayer>, swipe: BackSwipe, rtl: Boolean, reduced: Boolean, content: @Composable (PageLayer) -> Unit) {
     val swiping = swipe.taking is BackTaking.Page
     val alpha = moves.animateFloat(transitionSpec = { rootFade(root, initialState, targetState, swiping, reduced) }, label = "root fade") { rootAlpha(root, it) }
-    val shift = moves.animateFloat(transitionSpec = { rootSlide(root, initialState, targetState, swiping, reduced) }, label = "root slide") { rootShift(root, it, rtl) }
+    val shift = moves.animateFloat(transitionSpec = { rootSlide(root, initialState, targetState, swiping, reduced) }, label = "root slide") { rootShift(root, it, rtl, reduced) }
     val headed = moves.targetState == root
     val drawn = headed || moves.currentState == root
     // Its Back handlers (a selection's) answer only while it is the root on its way to the screen or on it.
@@ -521,8 +523,8 @@ private fun KeptRoot(root: PageLayer, moves: Transition<PageLayer>, swipe: BackS
     LaunchedEffect(headed) { if (!headed && focused) focus.clearFocus(force = true) }
     Box(
         Modifier
-            // The root coming over the one leaving, but under the one a back swipe takes away.
-            .zIndex(if (!headed) 0f else if (swiping) -1f else 1f)
+            // The root coming over the one leaving, and the one a back swipe takes over all until the swipe has ended.
+            .zIndex(rootOrder(root, moves.targetState, swipe.taking))
             .fillMaxSize()
             .layout { measurable, constraints ->
                 val placeable = measurable.measure(constraints)

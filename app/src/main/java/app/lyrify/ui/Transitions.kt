@@ -505,13 +505,15 @@ fun pageTransition(change: PageChange, rtl: Boolean, reduced: Boolean): ContentT
 /**
  * The page layer under a back swipe, which seeks it by the finger's progress: the page gone back to waits under the
  * one leaving, sliding in from [side] a little as the finger moves, and the one leaving (shrunk by [backPeek]) fades
- * only toward the end, so it stays clear while the user decides. Linear in time: the finger is the easing.
+ * only toward the end, so it stays clear while the user decides. Linear in time: the finger is the easing. Given up,
+ * the run back makes the page the swipe took the target again ([takenArrives]): it stays over the other.
  */
-fun backTransition(side: Int, reduced: Boolean): ContentTransform {
-    if (reduced) return ContentTransform(fadeIn(tween(Motion.REDUCED_MS)), fadeOut(tween(Motion.REDUCED_MS)), targetContentZIndex = -1f)
+fun backTransition(side: Int, reduced: Boolean, takenArrives: Boolean): ContentTransform {
+    val order = if (takenArrives) 1f else -1f
+    if (reduced) return ContentTransform(fadeIn(tween(Motion.REDUCED_MS)), fadeOut(tween(Motion.REDUCED_MS)), targetContentZIndex = order)
     val enter = slideInHorizontally(tween(Motion.OPEN_MS, easing = LinearEasing)) { it / PAGE_SHIFT_SHARE * side }
     // The page leaving stays whole while the finger decides: its fade is the swipe's own, and only once it commits.
-    return ContentTransform(enter, fadeOut(tween(Motion.OPEN_MS, easing = HoldToEnd)), targetContentZIndex = -1f)
+    return ContentTransform(enter, fadeOut(tween(Motion.OPEN_MS, easing = HoldToEnd)), targetContentZIndex = order)
 }
 
 // Each dock destination's root, kept composed once shown (phone test 2026-11-11: a dock switch or Back to a root must
@@ -521,10 +523,10 @@ fun backTransition(side: Int, reduced: Boolean): ContentTransform {
 /**
  * Where a tab's [root] rests while [shown] is the page layer on screen, as a share of the width: in place when it is
  * the one, a tenth toward the start under its own pages (where a push leaves it; mirrored right to left), and in place
- * under another tab, which fades through.
+ * under another tab, which fades through. With [reduced] motion always in place: it only fades.
  */
-fun rootShift(root: PageLayer, shown: PageLayer, rtl: Boolean): Float = when {
-    shown == root || shown.tab != root.tab -> 0f
+fun rootShift(root: PageLayer, shown: PageLayer, rtl: Boolean, reduced: Boolean): Float = when {
+    reduced || shown == root || shown.tab != root.tab -> 0f
     else -> -(if (rtl) -1f else 1f) / PAGE_SHIFT_SHARE
 }
 
@@ -561,6 +563,23 @@ fun rootSlide(root: PageLayer, from: PageLayer, to: PageLayer, swiping: Boolean,
         else -> snap()
     }
 }
+
+/**
+ * Which of the kept roots is drawn over the others: the one a back swipe takes ([taking]), over all, as long as the
+ * swipe lasts (seeking, let go, or given up and run back, when it is the [target] again); else the one arriving.
+ */
+fun rootOrder(root: PageLayer, target: PageLayer, taking: BackTaking?): Float = when {
+    (taking as? BackTaking.Page)?.key == root.key -> 2f
+    taking !is BackTaking.Page && root == target -> 1f
+    else -> 0f
+}
+
+/**
+ * Whether the kept roots are drawn over the pages: while a back swipe takes a root (back across the tab history), so a
+ * page it goes back to (a tab left on an album) waits under it; else the pages are over the roots.
+ */
+fun rootsOverPages(taking: BackTaking?): Boolean =
+    (taking as? BackTaking.Page)?.key?.let { key -> DockTab.entries.any { pageKey(it, emptyList()) == key } } == true
 
 /** Nothing until the very end: a layer kept as it is through a seek, then gone. */
 private val HoldToEnd = Easing { if (it < 1f) 0f else 1f }

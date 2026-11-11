@@ -90,6 +90,7 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.input.pointer.util.VelocityTracker
+import androidx.compose.ui.input.pointer.util.addPointerInputChange
 import androidx.compose.ui.unit.Velocity
 import kotlinx.coroutines.launch
 import androidx.compose.ui.layout.ContentScale
@@ -459,14 +460,15 @@ private fun Modifier.dragDownCloses(sheet: NestedScrollDispatcher, atTop: () -> 
     awaitEachGesture {
         val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
         if (!atTop()) return@awaitEachGesture
-        val velocity = VelocityTracker().apply { addPosition(down.uptimeMillis, down.position) }
+        // Tracked from each change's own movement, not its place: the sheet, and this content with it, follows the finger.
+        val velocity = VelocityTracker().apply { addPointerInputChange(down) }
         val slop = viewConfiguration.touchSlop
         var moved = Offset.Zero
         var taken = false
         while (true) {
             val change = awaitPointerEvent(PointerEventPass.Initial).changes.firstOrNull { it.id == down.id } ?: return@awaitEachGesture
+            velocity.addPointerInputChange(change)
             if (!change.pressed) break
-            velocity.addPosition(change.uptimeMillis, change.position)
             val delta = change.positionChange()
             if (taken) {
                 sheet.dispatchPostScroll(Offset.Zero, Offset(0f, delta.y), NestedScrollSource.UserInput)

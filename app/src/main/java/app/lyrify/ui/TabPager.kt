@@ -33,6 +33,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
@@ -101,9 +102,9 @@ fun tabLine(position: Float, centres: (Int) -> Float?, width: Float): ClosedFloa
 enum class TabMove { NONE, GLIDE, JUMP }
 
 /**
- * The pages, showing [current], asked for [target] (-1: a tab not shown): they glide there while the page is [onScreen]
- * (Library's icon tapped again on its root lands on Songs), and are simply there when it was not (the same icon tapped
- * from another dock destination): nothing moves behind the page as it fades in.
+ * The pages, showing or going to [current], asked for [target] (-1: a tab not shown): they glide there while the page
+ * is [onScreen] (Library's icon tapped again on its root lands on Songs), and are simply there when it was not (the same
+ * icon tapped from another dock destination): nothing moves behind the page as it fades in.
  */
 fun tabMove(target: Int, current: Int, onScreen: Boolean): TabMove = when {
     target < 0 || target == current -> TabMove.NONE
@@ -125,39 +126,48 @@ fun keptBeyond(count: Int, frames: Int): Int = if (count <= 1) 0 else min(count 
  * [rememberTabPager], drawn by [PagerTabs] over [TabPages] (in a [TabsFrame], or under a header in [CollapsingTabs]).
  */
 @Stable
-class TabPager internal constructor(val pager: PagerState, private val scope: CoroutineScope, private val reduced: Boolean) {
+class TabPager internal constructor(val pager: PagerState, private val scope: CoroutineScope, private val reduced: Boolean, private val chosen: State<(Int) -> Unit>) {
     /** The page shown plus the fraction of the way to the next one; read it while drawing, as it changes with every frame. */
     val position: Float get() = pager.currentPage + pager.currentPageOffsetFraction
 
-    /** The tab at [at] tapped: the pages glide to it, the line with them; with reduced motion they are there at once. */
+    /**
+     * The tab at [at] tapped: the app's record of the tab shown has it at once (so the dock tapped while the pages glide
+     * still finds the tab they go to), and the pages glide to it, the line with them; with reduced motion they are there.
+     */
     fun pick(at: Int) {
+        chosen.value(at)
+        glide(at)
+    }
+
+    internal fun glide(at: Int) {
         scope.launch { if (reduced) pager.scrollToPage(at) else pager.animateScrollToPage(at, animationSpec = tween(Motion.OPEN_MS, easing = Motion.Standard)) }
     }
 }
 
 /**
  * Top tabs for [count] pages, kept in step both ways with the app's own record of the tab shown: [selected] chosen
- * elsewhere moves the pages ([tabMove]), and the page they settle on, after a swipe or a tap, is told to [onSettle].
+ * elsewhere moves the pages ([tabMove], from where they are going), and the tab a tap picks, or the page a swipe
+ * settles on, is told to [onChoose].
  */
 @Composable
-fun rememberTabPager(count: Int, selected: Int, onSettle: (Int) -> Unit): TabPager {
+fun rememberTabPager(count: Int, selected: Int, onChoose: (Int) -> Unit): TabPager {
     val pager = rememberPagerState(initialPage = selected.coerceIn(0, (count - 1).coerceAtLeast(0))) { count }
     val scope = rememberCoroutineScope()
     val reduced = LocalReducedMotion.current
-    val tabs = remember(pager, scope, reduced) { TabPager(pager, scope, reduced) }
+    val choose = rememberUpdatedState(onChoose)
+    val tabs = remember(pager, scope, reduced) { TabPager(pager, scope, reduced, choose) }
     // On screen in the composition before this one: a kept root behind another dock destination is not.
     val headed = LocalLayerHeaded.current
     val onScreen = remember { Kept(headed) }
     LaunchedEffect(selected) {
-        when (tabMove(selected, pager.currentPage, onScreen.value)) {
+        when (tabMove(selected, pager.targetPage, onScreen.value)) {
             TabMove.NONE -> Unit
-            TabMove.GLIDE -> tabs.pick(selected)
+            TabMove.GLIDE -> tabs.glide(selected)
             TabMove.JUMP -> pager.scrollToPage(selected)
         }
     }
     SideEffect { onScreen.value = headed }
-    val settle by rememberUpdatedState(onSettle)
-    LaunchedEffect(pager) { snapshotFlow { pager.settledPage }.collect { settle(it) } }
+    LaunchedEffect(pager) { snapshotFlow { pager.settledPage }.collect { choose.value(it) } }
     return tabs
 }
 

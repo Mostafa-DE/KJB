@@ -115,7 +115,7 @@ class PageLayersDeviceTest {
             PageLayers(pages, swipe, rtl = false, reduced = false) { layer ->
                 Box(Modifier.fillMaxSize().background(Color.White).testTag(layer.key)) {
                     if (layer.stack.isEmpty()) {
-                        remember { built[layer.tab] = (built[layer.tab] ?: 0) + 1 }
+                        remember { built.merge(layer.tab, 1, Int::plus) }
                         Text(if (layer.tab == DockTab.LIBRARY) ROOT else layer.tab.name)
                     } else {
                         Text("Harbour Glass")

@@ -221,7 +221,7 @@ class TransitionsTest {
     fun `a pop draws the page it goes back to under the one leaving, a push over it`() {
         assertTrue(pageTransition(PageChange.Pop, rtl = false, reduced = false).targetContentZIndex < 0f)
         assertEquals(0f, pageTransition(PageChange.Push, rtl = false, reduced = false).targetContentZIndex)
-        assertTrue(backTransition(side = -1, reduced = false).targetContentZIndex < 0f)
+        assertTrue(backTransition(side = -1, reduced = false, takenArrives = false).targetContentZIndex < 0f)
     }
 
     @Test
@@ -422,10 +422,10 @@ class TransitionsTest {
 
     @Test
     fun `a tab's root rests a tenth toward the start under its pages, in place under another tab, mirrored right to left`() {
-        assertEquals(0f, rootShift(libraryRoot, shown = libraryRoot, rtl = false), 0f)
-        assertEquals(-0.1f, rootShift(libraryRoot, shown = albumPage, rtl = false), 0.0001f)
-        assertEquals(0.1f, rootShift(libraryRoot, shown = albumPage, rtl = true), 0.0001f)
-        assertEquals(0f, rootShift(libraryRoot, shown = searchRoot, rtl = false), 0f)
+        assertEquals(0f, rootShift(libraryRoot, shown = libraryRoot, rtl = false, reduced = false), 0f)
+        assertEquals(-0.1f, rootShift(libraryRoot, shown = albumPage, rtl = false, reduced = false), 0.0001f)
+        assertEquals(0.1f, rootShift(libraryRoot, shown = albumPage, rtl = true, reduced = false), 0.0001f)
+        assertEquals(0f, rootShift(libraryRoot, shown = searchRoot, rtl = false, reduced = false), 0f)
         assertEquals(1f, rootAlpha(libraryRoot, shown = libraryRoot), 0f)
         assertEquals(0f, rootAlpha(libraryRoot, shown = albumPage), 0f)
         assertEquals(0f, rootAlpha(libraryRoot, shown = searchRoot), 0f)
@@ -460,6 +460,38 @@ class TransitionsTest {
             assertEquals(tween<Float>(Motion.REDUCED_MS), rootFade(libraryRoot, from, to, swiping = false, reduced = true))
             assertTrue(rootSlide(libraryRoot, from, to, swiping = false, reduced = true) is SnapSpec)
         }
+    }
+
+    // Review of 2026-11-11: the layer a back swipe takes stays on top until the swipe has ended, whichever way
+
+    @Test
+    fun `given up, the layer the swipe takes comes back over the one it showed, never under it`() {
+        // Seeking toward the page under it, the page gone back to is drawn under the one taken.
+        assertTrue(backTransition(side = -1, reduced = false, takenArrives = false).targetContentZIndex < 0f)
+        // Given up, the platform's run back makes the taken page the target again: it stays over the other.
+        assertTrue(backTransition(side = 1, reduced = false, takenArrives = true).targetContentZIndex > 0f)
+        assertTrue(backTransition(side = 1, reduced = true, takenArrives = true).targetContentZIndex > 0f)
+        // Among the roots: the one taken over all, whether it is the target (given up) or not (seeking).
+        val taken = BackTaking.Page(searchRoot.key)
+        assertTrue(rootOrder(searchRoot, target = libraryRoot, taking = taken) > rootOrder(libraryRoot, target = libraryRoot, taking = taken))
+        assertTrue(rootOrder(searchRoot, target = searchRoot, taking = taken) > rootOrder(libraryRoot, target = searchRoot, taking = taken))
+        // With no swipe, the root arriving comes over the one leaving.
+        assertTrue(rootOrder(libraryRoot, target = libraryRoot, taking = null) > rootOrder(searchRoot, target = libraryRoot, taking = null))
+    }
+
+    @Test
+    fun `a swipe that takes a root draws the roots over the pages, so a page gone back to waits under it`() {
+        assertTrue(rootsOverPages(BackTaking.Page(searchRoot.key)))
+        assertFalse(rootsOverPages(BackTaking.Page(albumPage.key)))
+        assertFalse(rootsOverPages(null))
+        assertFalse(rootsOverPages(BackTaking.View(FullScreen.Player)))
+    }
+
+    @Test
+    fun `with reduced motion a root never shifts, it only fades`() {
+        assertEquals(0f, rootShift(libraryRoot, shown = albumPage, rtl = false, reduced = true), 0f)
+        assertEquals(0f, rootShift(libraryRoot, shown = albumPage, rtl = true, reduced = true), 0f)
+        assertEquals(-0.1f, rootShift(libraryRoot, shown = albumPage, rtl = false, reduced = false), 0.0001f)
     }
 
     /** Frames at 120 Hz, as fast as the test runs; [after] looks at the values each frame has drawn. */

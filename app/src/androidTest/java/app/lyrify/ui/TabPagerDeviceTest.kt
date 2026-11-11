@@ -84,10 +84,27 @@ class TabPagerDeviceTest {
         // On its way: Songs has left its place, Artists is not there yet.
         val songs = compose.onNodeWithTag(page(0)).getBoundsInRoot()
         assertTrue(songs.left.value < 0f)
-        assertEquals(0, chosen)
+        compose.onNodeWithTag(page(2)).getBoundsInRoot().let { assertTrue(it.left.value > 0f) }
         compose.mainClock.advanceTimeBy(Motion.OPEN_MS * 2L)
         compose.runOnIdle { assertEquals(2, chosen) }
         compose.onNodeWithText("Artists").assertIsSelected()
+    }
+
+    @Test
+    fun aTabChosenElsewhereWhileThePagesGlideWins() {
+        compose.setContent { Tabs() }
+        compose.waitForIdle()
+        compose.mainClock.autoAdvance = false
+        compose.onNodeWithText("Artists").performClick()
+        // The tap is recorded at once, before the pages have arrived.
+        compose.runOnIdle { assertEquals(2, chosen) }
+        compose.mainClock.advanceTimeByFrame()
+        compose.mainClock.advanceTimeBy(Motion.OPEN_MS / 3L)
+        // Library's icon tapped meanwhile: back to Songs, from wherever the glide had got to.
+        chosen = 0
+        compose.mainClock.advanceTimeBy(Motion.OPEN_MS * 3L)
+        compose.runOnIdle { assertEquals(0, chosen) }
+        compose.onNodeWithText("Songs").assertIsSelected()
     }
 
     @Test
@@ -162,7 +179,7 @@ class TabPagerDeviceTest {
             Column {
                 PagerTabs(pager, tabs)
                 TabPages(pager, tabs, Modifier.fillMaxSize()) { at ->
-                    remember { built[tabs[at]] = (built[tabs[at]] ?: 0) + 1 }
+                    remember { built.merge(tabs[at], 1, Int::plus) }
                     Column {
                         row?.invoke()
                         Rows(at)
