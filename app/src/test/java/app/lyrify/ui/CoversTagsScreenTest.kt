@@ -35,6 +35,7 @@ import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 /** Covers & tags' page logic: the row, the sections, the dialog, the words for each outcome. Made-up names only. */
 class CoversTagsScreenTest {
@@ -187,6 +188,15 @@ class CoversTagsScreenTest {
 
         assertEquals(listOf(ReviewTab.TO_REVIEW to 1, ReviewTab.DONE to 2, ReviewTab.SKIPPED to 1), reviewTabs(state))
         assertEquals(listOf(ReviewTab.TO_REVIEW to 0, ReviewTab.DONE to 0, ReviewTab.SKIPPED to 0), reviewTabs(CoversTagsState()))
+    }
+
+    @Test
+    fun `the tabs are the swiping pager Library and Favourites use, each tab its own list, and the plain row is gone`() {
+        // Unit tests run in the module's folder.
+        val page = File("src/main/java/app/lyrify/ui/CoversTagsScreen.kt").readText()
+        assertTrue("PagerTabs(" in page && "TabPages(" in page && "CollapsingTabs(" in page)
+        assertFalse("LibraryTabsRow(" in page)
+        assertFalse("fun LibraryTabsRow" in File("src/main/java/app/lyrify/ui/TabPager.kt").readText())
     }
 
     @Test
