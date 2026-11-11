@@ -214,7 +214,7 @@ sealed interface BackTaking {
 /**
  * The back swipe in progress, shared by the shell's layers: what it [taking]s away, how far it has gone ([progress], 0
  * to 1) and from which edge. The layer taken draws [backPeek] of it and the one under it lights up; both read it while
- * drawing only, so a swipe never recomposes a page. [gone]: the pages fading away over the views they go back to.
+ * drawing only, so a swipe never recomposes a page. [gone]: the layer fading away once the swipe is let go ([finish]).
  */
 @Stable
 class BackSwipe {
@@ -255,9 +255,19 @@ class BackSwipe {
         animate(progress, 0f, animationSpec = tween(Motion.OPEN_MS, easing = Motion.Rise)) { value, _ -> if (owns(owner)) progress = value }
     }
 
-    /** [owner]'s swipe let go over the views: the pages fade away from where the swipe left them. */
-    suspend fun leave(owner: BackTaking) {
-        animate(0f, 1f, animationSpec = tween(Motion.SETTLE_MS, easing = Motion.EmphasizedOut)) { value, _ -> if (owns(owner)) gone = value }
+    /**
+     * [owner]'s swipe let go, or a plain Back (three buttons, a key) that never moved at all: the layer carries on from
+     * where the finger left it to the end of a whole swipe, shrinking and moving the swipe's way as it fades out, while
+     * the layer under it lights up. So Back moves the page away as the gesture does, over a page's move, never cut.
+     */
+    suspend fun finish(owner: BackTaking) {
+        val from = progress
+        animate(0f, 1f, animationSpec = tween(Motion.OPEN_MS, easing = LinearEasing)) { time, _ ->
+            if (owns(owner)) {
+                progress = from + (1f - from) * Motion.Standard.transform(time)
+                gone = time
+            }
+        }
     }
 
     /** Whether [owner] (the taking a swipe started with, by identity) is still the swipe in progress. */
@@ -274,7 +284,7 @@ class BackSwipe {
 
 /**
  * A layer as a back swipe takes it ([taken], read while drawing): [backPeek]'s shrink, shift and corners, and its fade
- * when it goes away over views ([BackSwipe.gone]). Untouched while nothing is taken.
+ * once the swipe is let go ([BackSwipe.gone]). Untouched while nothing is taken.
  */
 fun Modifier.backPeek(swipe: BackSwipe, taken: () -> Boolean): Modifier = graphicsLayer {
     if (!taken()) return@graphicsLayer

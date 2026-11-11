@@ -1,10 +1,12 @@
 package app.lyrify.ui
 
+import androidx.activity.BackEventCompat
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.runtime.MonotonicFrameClock
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.unit.Density
@@ -15,6 +17,9 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.yield
 import org.junit.Test
 
 /**
@@ -341,9 +346,62 @@ class TransitionsTest {
         assertEquals(1f, PageSwipe(albumPage).started(libraryRoot).moved(1.6f).progress, 0f)
     }
 
+    // Phone test 2026-11-11: Back from an album or an artist page moves it away, never a cut
+
+    @Test
+    fun `a plain Back press, with no swipe at all, takes the page away through every frame of a whole swipe`() = runTest {
+        val swipe = BackSwipe()
+        val album = BackTaking.Page("LIBRARY/1")
+        // Three-button Back or KEYCODE_BACK: the platform's progress ends with no move at all.
+        swipe.start(album)
+        val frames = mutableListOf<Pair<Float, Float>>()
+        withContext(FrameClock { frames += swipe.progress to swipe.gone }) { swipe.finish(album) }
+        // About the length of a page's move, at 120 Hz: never one step from the start to the end.
+        assertTrue(frames.size >= Motion.OPEN_MS / 9)
+        assertTrue(frames.any { (shrunk, faded) -> shrunk in 0.2f..0.8f && faded in 0.2f..0.8f })
+        // It shrinks and fades all the way, steadily, and the page under it is lit by the end.
+        assertEquals(frames.map { it.first }.sorted(), frames.map { it.first })
+        assertEquals(frames.map { it.second }.sorted(), frames.map { it.second })
+        assertEquals(1f to 1f, frames.last())
+        assertEquals(0f, backPeek(frames.last().first, fromLeft = true, width = 1000f).dim, 0.0001f)
+    }
+
+    @Test
+    fun `a back swipe let go carries on from where the finger left it, the same motion to its end`() = runTest {
+        val swipe = BackSwipe()
+        val album = BackTaking.Page("LIBRARY/1")
+        swipe.start(album)
+        swipe.follow(BackEventCompat(touchX = 300f, touchY = 900f, progress = 0.4f, swipeEdge = BackEventCompat.EDGE_LEFT))
+        val frames = mutableListOf<Float>()
+        withContext(FrameClock { frames += swipe.progress }) { swipe.finish(album) }
+        assertTrue(frames.first() >= 0.4f)
+        assertEquals(frames.sorted(), frames)
+        assertEquals(1f, frames.last(), 0f)
+        // A newer swipe over the same page is never moved by the last one's ending.
+        val next = BackTaking.Page("LIBRARY/1")
+        swipe.start(next)
+        withContext(FrameClock {}) { swipe.finish(album) }
+        assertEquals(0f, swipe.progress, 0f)
+    }
+
     @Test
     fun `the Now bar stays in place under the growing player, which covers it and the dock from the first frame`() {
         assertFalse(containerInOverlay(bar = true))
         assertTrue(containerInOverlay(bar = false))
+    }
+
+    /** Frames at 120 Hz, as fast as the test runs; [after] looks at the values each frame has drawn. */
+    private class FrameClock(private val after: () -> Unit) : MonotonicFrameClock {
+        private var time = 0L
+
+        override suspend fun <R> withFrameNanos(onFrame: (frameTimeNanos: Long) -> R): R {
+            yield()
+            time += FRAME_NANOS
+            return onFrame(time).also { after() }
+        }
+    }
+
+    private companion object {
+        const val FRAME_NANOS = 8_333_333L
     }
 }

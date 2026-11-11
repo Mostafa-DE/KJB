@@ -570,7 +570,9 @@ private class PlainBack(private val nav: Navigator) : ShellBack {
 /**
  * Back from a page or across the tab history, following the finger ([PageSwipe]): the page it goes back to (or the tab)
  * is drawn under the one leaving, which shrinks and stays whole. Committed (the platform's progress ended normally), the
- * move happens at once and the page fades away while the one under it settles. Cancelled (given up, slow or fast), the
+ * move happens at once and the page carries on shrinking as it fades away ([BackSwipe.finish]) while the one under it
+ * settles and lights up. A plain Back (three buttons, a key) is a swipe committed before any move: the same motion from
+ * its start, never a cut (phone test 2026-11-11). Cancelled (given up, slow or fast), the
  * page springs back to rest, covering the screen again, while the page layer runs back to it, and only then is the page
  * under it let go of, so every layer is as it was: its offset, scale, alpha, which page is drawn, and the order they are
  * drawn in. Back to the player (or another view) a page was opened from draws that view under the page, its bar and
@@ -598,7 +600,7 @@ private fun backFromPages(nav: Navigator, pages: SeekableTransitionState<PageLay
             nav.back()
             try {
                 coroutineScope {
-                    launch { swipe.leave(taking) }
+                    launch { swipe.finish(taking) }
                     if (!intoViews) pages.animateTo(layers.current)
                 }
             } finally {
