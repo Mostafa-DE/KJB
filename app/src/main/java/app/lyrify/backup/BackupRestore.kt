@@ -360,7 +360,7 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
         }
         is Prepared.Duplicates -> counted(stores.addDuplicates(prepared.choices), prepared.choices.notDuplicates.size)
         is Prepared.Covers -> {
-            val albums = prepared.albums.mapNotNull { (album, songs) -> settled(album, songs, stores) }
+            val albums = ownIds(prepared.albums.mapNotNull { (album, songs) -> settled(album, songs, stores) })
             counted(stores.addSettledAlbums(albums, prepared.checkedOnce, prepared.noted), albums.size)
         }
         is Prepared.Names -> counted(stores.addKeptApart(prepared.pairs), prepared.pairs.size)
@@ -383,15 +383,30 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
     /**
      * [album] settled on this phone: on its [songs] here, under the id their paths give it, marked as the files are now
      * (a file copied has another modified time), so Covers & tags leaves it settled until one changes. Its Undo stays on
-     * the old phone. A Done row is one apply's, as Covers & tags keeps them, so it gets an id of its own by when it was
-     * applied: never "#" and a History entry's number, which an apply on this phone could take, and the same on a second
-     * restore. Null when a song is not a file here.
+     * the old phone. A Done row is one apply's, as Covers & tags keeps them, so it gets an id by when it was applied
+     * ([ownIds] parts two of one time): never "#" and a History entry's number, which an apply on this phone could take,
+     * and the same on a second restore. Null when a song is not a file here.
      */
     private suspend fun settled(album: BackupAlbum, songs: List<Song>, stores: BackupStores): AlbumRecord? {
         val marks = songs.map { stores.fileMark(it.path) ?: return null }
         val problems = album.problems.mapNotNull { problem -> found[problem.path]?.let { SongProblem(it.path, problem.outcome) } }
-        val id = albumId(songs.map { it.path }).let { if (album.state == Settled.DONE) "$it#restored-${album.at}" else it }
-        return AlbumRecord(id, album.state, album.title, album.artist, marks, album.at, entryId = null, changed = album.changed, problems = problems)
+        val done = album.state == Settled.DONE
+        val id = albumId(songs.map { it.path }).let { if (done) "$it#restored-${album.at}" else it }
+        return AlbumRecord(id, album.state, album.title, album.artist, marks, album.at, entryId = null, changed = album.changed, problems = problems, restored = done)
+    }
+
+    /**
+     * [records] with each Done row's id its own: a second apply of the same songs at the same time gets "-2" (then
+     * "-3"...), by its place in the backup, so a second restore makes the same ids and adds none.
+     */
+    private fun ownIds(records: List<AlbumRecord>): List<AlbumRecord> {
+        val seen = HashMap<String, Int>()
+        return records.map { record ->
+            if (record.state != Settled.DONE) return@map record
+            val nth = (seen[record.id] ?: 0) + 1
+            seen[record.id] = nth
+            if (nth == 1) record else record.copy(id = "${record.id}-$nth")
+        }
     }
 
     companion object {

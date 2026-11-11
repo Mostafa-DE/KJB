@@ -235,9 +235,17 @@ fun releaseLine(release: MbRelease): String {
 
 /**
  * A Done row's line before its time: the songs it changed, those that could not, "Undo has expired" once the full copies
- * are gone, and "Undo the newer change first" while a newer change to one of its songs stands ([blocked]).
+ * are gone, and "Undo the newer change first" while a newer change to one of its songs stands ([blocked]). A restored
+ * row's Undo stayed on the other phone: it says what the apply did there, and "Restored".
  */
 fun doneLine(record: AlbumRecord, fullCopy: Boolean, blocked: Boolean = false): List<Words> {
+    if (record.restored) {
+        return listOfNotNull(
+            if (record.changed > 0) Words(R.plurals.tags_changed_songs, record.changed, listOf(record.changed)) else Words(R.string.tags_nothing_to_change),
+            record.problems.size.takeIf { it > 0 }?.let { Words(R.plurals.tags_songs_left, it, listOf(it)) },
+            Words(R.string.tags_restored_row),
+        )
+    }
     if (record.entryId == null) return listOf(Words(R.string.tags_nothing_to_change))
     return listOfNotNull(
         Words(R.plurals.tags_songs, record.changed, listOf(record.changed)),

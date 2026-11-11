@@ -68,6 +68,7 @@
     </plurals>
     <string name="tags_nothing_to_change">Nothing to change</string>
     <string name="tags_undo_expired">Undo has expired</string>
+    <string name="tags_restored_row">Restored</string>
     <string name="tags_two_parts">%1$s · %2$s</string>
 
     <!-- The review sheet -->

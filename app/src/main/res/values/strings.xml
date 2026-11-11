@@ -13,7 +13,6 @@
     <string name="nav_attention">Something needs you</string>
 
     <!-- Tools: each row's one-line status -->
-    <string name="tools_title">Tools</string>
     <plurals name="tools_check">
         <item quantity="one">%d to check</item>
         <item quantity="other">%d to check</item>
