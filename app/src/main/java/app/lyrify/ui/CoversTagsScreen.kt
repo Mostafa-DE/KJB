@@ -77,7 +77,7 @@ import java.text.DateFormat
 /** A message as the resources say it: a string, or a plural for [count]; [args] fill it in. */
 data class Words(val res: Int, val count: Int? = null, val args: List<Any> = emptyList())
 
-/** The page's top tabs, in order: the same tab row as Favourites ([LibraryTabsRow]). */
+/** The page's top tabs, in order: text tabs as Favourites' look, with no pages to swipe ([LibraryTabsRow]). */
 enum class ReviewTab(@StringRes val title: Int) {
     TO_REVIEW(R.string.tags_to_review),
     DONE(R.string.tags_done),
