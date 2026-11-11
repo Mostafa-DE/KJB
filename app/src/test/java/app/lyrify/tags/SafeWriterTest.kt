@@ -327,4 +327,41 @@ class SafeWriterTest {
             assertNotNull(writing.await())
         }
     }
+
+    // Nothing is ever taken away (user feedback 2026-11-11)
+
+    @Test
+    fun `the writer refuses an empty front cover, and a Covers & tags edit that would take a cover or a field away`() {
+        val song = rig.song("Paper Lantern", 41, fields, listOf(cover, back))
+        val before = rig.bytes(song)
+        fun one(edit: TagEdit, kind: EditKind) = runBlocking { rig.writer.write(listOf(WriteJob(song, edit)), kind, "Harbour Glass") }
+
+        val empty = TagEdit(cover = CoverEdit.Replace(TagPicture(ByteArray(0), "", FRONT_COVER, "image/jpeg")))
+        for (kind in listOf(EditKind.COVERS_TAGS, EditKind.SONG)) assertEquals(listOf(SongOutcome.COULD_NOT_CHANGE), outcomes(one(empty, kind)))
+        assertEquals(listOf(SongOutcome.COULD_NOT_CHANGE), outcomes(one(TagEdit(cover = CoverEdit.Remove), EditKind.COVERS_TAGS)))
+        assertEquals(listOf(SongOutcome.COULD_NOT_CHANGE), outcomes(one(TagEdit(fields = mapOf("ARTIST" to listOf(" "))), EditKind.COVERS_TAGS)))
+        assertEquals(listOf(SongOutcome.COULD_NOT_CHANGE), outcomes(one(TagEdit(fields = mapOf("COMMENT" to emptyList())), EditKind.COVERS_TAGS)))
+        assertArrayEquals(before, rig.bytes(song))
+        assertEquals(emptyList<Any>(), rig.undo.memory().entries)
+
+        // Edit tags' Remove is the user's own choice: the front cover goes, the back cover stays.
+        assertEquals(listOf(SongOutcome.WRITTEN), outcomes(one(TagEdit(cover = CoverEdit.Remove), EditKind.SONG)))
+        assertEquals(listOf(back), FakeTagFile().read(File(song.path))!!.pictures)
+    }
+
+    @Test
+    fun `a batch says each song as it is tried, and asked to stop leaves the rest untried and unchanged`() {
+        val songs = (1..4).map { rig.song("Kelp Bell $it", 40L + it, fields) }
+        val before = songs.map { rig.bytes(it) }
+        val seen = mutableListOf<Int>()
+
+        val result = runBlocking {
+            rig.writer.write(songs.map { WriteJob(it, edit) }, EditKind.COVERS_TAGS, "Harbour Glass", Progress(song = { seen += it }, stop = { seen.size >= 2 }))
+        }
+
+        assertEquals(listOf(1, 2), seen)
+        assertEquals(listOf(SongOutcome.WRITTEN, SongOutcome.WRITTEN, SongOutcome.NOT_TRIED, SongOutcome.NOT_TRIED), outcomes(result))
+        assertArrayEquals(before[2], rig.bytes(songs[2]))
+        assertArrayEquals(before[3], rig.bytes(songs[3]))
+    }
 }

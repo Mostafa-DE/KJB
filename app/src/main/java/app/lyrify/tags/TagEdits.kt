@@ -549,10 +549,10 @@ suspend fun writeEdit(context: Context, plans: List<SongPlan>, kind: EditKind, l
  * Writes [jobs] as one History entry, as [writeEdit] does plans; [changed] is each song as the library reads it now and
  * as it will once written, for the hearts. Covers & tags writes through here, its fields being its own.
  */
-suspend fun writeEdit(context: Context, jobs: List<WriteJob>, changed: List<Pair<Song, Song>>, kind: EditKind, label: String): BatchResult {
+suspend fun writeEdit(context: Context, jobs: List<WriteJob>, changed: List<Pair<Song, Song>>, kind: EditKind, label: String, progress: Progress = Progress.NONE): BatchResult {
     val app = context.applicationContext
     val library = (LibraryGraph.repository(app).state.value as? LibraryState.Ready)?.library
-    return writeEdit(withContext(Dispatchers.IO) { TagsGraph.writer(app) }, LibraryGraph.favourites(app), library, jobs, changed, kind, label)
+    return writeEdit(withContext(Dispatchers.IO) { TagsGraph.writer(app) }, LibraryGraph.favourites(app), library, jobs, changed, kind, label, progress)
 }
 
 /** [writeEdit] over its parts: [library] as it read the songs before the write. */
@@ -564,8 +564,9 @@ internal suspend fun writeEdit(
     changed: List<Pair<Song, Song>>,
     kind: EditKind,
     label: String,
+    progress: Progress = Progress.NONE,
 ): BatchResult {
-    val result = writer.write(jobs, kind, label)
+    val result = writer.write(jobs, kind, label, progress)
     if (library != null && result is BatchResult.Done) {
         val written = result.writtenPaths()
         moveHearts(favourites) { FavouriteMoves.of(changed.filter { it.first.path in written }, library, it) }
