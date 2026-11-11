@@ -80,7 +80,8 @@ class SettingsStoreTest {
     @Test
     fun `every setting starts at the default the specs give`() {
         val s = Settings()
-        assertEquals(PlaybackSettings(RememberPlace.LONG_SONGS, true, true, 50, 30, 10), s.playback)
+        // Remember my place: All songs since user feedback 2026-11-11 (it was Long songs).
+        assertEquals(PlaybackSettings(RememberPlace.ALL_SONGS, true, true, 50, 30, 10), s.playback)
         assertEquals(emptyList<ConnectDevice>(), s.playback.connectDevices)
         assertEquals(AudioSettings(Levelling.AUTO, crossfadeSeconds = 0), s.audio)
         // What Settings > Library tabs lists: Playlists right after Songs.
@@ -224,7 +225,33 @@ class SettingsStoreTest {
         // From version 2 on, Playlists stays where the user put it.
         val last = first.joinToString(",") { tab(it, true) }
         assertEquals(first, tabs(SettingsJson.VERSION, last)?.map { it.tab })
-        assertTrue(""""version":2""" in SettingsJson.encode(Settings()))
+        assertTrue(""""version":${SettingsJson.VERSION}""" in SettingsJson.encode(Settings()))
+    }
+
+    @Test
+    fun `Remember my place left at the old default reads All songs, and a choice the user made is kept`() {
+        fun place(version: Int?, stored: String?): RememberPlace? {
+            val field = stored?.let { """"rememberPlace":"$it"""" } ?: """"headsetButtons":false"""
+            val head = version?.let { """"version":$it,""" } ?: ""
+            return SettingsJson.decode("""{$head"playback":{$field}}""")?.playback?.rememberPlace
+        }
+
+        assertEquals(3, SettingsJson.VERSION)
+        // Long songs in a file from before version 3 is the old default, which every file wrote: never changed.
+        assertEquals(RememberPlace.ALL_SONGS, place(1, "LONG_SONGS"))
+        assertEquals(RememberPlace.ALL_SONGS, place(2, "LONG_SONGS"))
+        // The user's own choices from then are kept.
+        assertEquals(RememberPlace.OFF, place(2, "OFF"))
+        assertEquals(RememberPlace.ALL_SONGS, place(2, "ALL_SONGS"))
+        // From version 3, Long songs is a choice the user made.
+        assertEquals(RememberPlace.LONG_SONGS, place(3, "LONG_SONGS"))
+        assertEquals(RememberPlace.LONG_SONGS, place(null, "LONG_SONGS"))
+        // Missing or unknown: the default.
+        assertEquals(RememberPlace.ALL_SONGS, place(2, null))
+        assertEquals(RememberPlace.ALL_SONGS, place(3, "FOREVER"))
+        // Written back, a choice stays what it is.
+        val long = Settings(playback = PlaybackSettings(rememberPlace = RememberPlace.LONG_SONGS))
+        assertEquals(long, SettingsJson.decode(SettingsJson.encode(long)))
     }
 
     @Test

@@ -10,17 +10,18 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
-// The sleep timer (milestone P2): by time or by songs, the music fading out over the last 10 s and then pausing. The
-// screens set it ([PlayerExtras.sleep]); [SleepDriver] runs it in the service, on the player.
+// The sleep timer (milestone P2): by time or by songs, the music fading out over the last 15 s on an ease-out curve
+// and then pausing, its volume given back for the next play. The screens set it ([PlayerExtras.sleep]); [SleepDriver]
+// runs it in the service, on the player.
 
 /** The sleep sheet's choices: minutes after a time, songs after songs (1 is "End of song"). */
 val SLEEP_MINUTES: List<Int> = listOf(15, 30, 45, 60)
 val SLEEP_SONGS: List<Int> = listOf(1, 3, 5)
 
-/** Custom choices, and the fade at the end. */
+/** Custom choices, and the fade at the end (user feedback 2026-11-11: longer, from 10 s). */
 val SLEEP_CUSTOM_MINUTES: IntRange = 1..180
 val SLEEP_CUSTOM_SONGS: IntRange = 1..30
-const val SLEEP_FADE_MS: Long = 10_000
+const val SLEEP_FADE_MS: Long = 15_000
 
 /** How often the fade steps, and how often a last song of unknown length or end is looked at. */
 private const val FADE_STEP_MS: Long = 100
@@ -55,13 +56,27 @@ fun sleepLeftMs(timer: SleepTimer, now: Long, positionMs: Long, durationMs: Long
 
 private const val MIN_SPEED: Float = 0.1f
 
+/**
+ * The fade's volume with [leftMs] to go: full until the last [SLEEP_FADE_MS], then down on an ease-out curve, the cube
+ * of the share left, so it falls fast at first and slips gently into silence at the end, as the ear hears a smooth stop
+ * (a straight line of the player's volume sounds loud until the last seconds, then drops).
+ */
+fun sleepFadeVolume(leftMs: Long): Float {
+    val share = (leftMs.toFloat() / SLEEP_FADE_MS).coerceIn(0f, 1f)
+    return share * share * share
+}
+
 /** What the timer does now: the player's [volume], whether the music [stops], and when to look again (null: once a song ends). */
 data class SleepStep(val volume: Float, val stops: Boolean, val nextMs: Long?)
 
-fun sleepStep(timer: SleepTimer, now: Long, playing: Boolean, positionMs: Long, durationMs: Long, speed: Float): SleepStep {
+/**
+ * The timer at [now], the song at [positionMs] of [durationMs] at [speed]. Paused inside the fade, the volume holds the
+ * fade's level, so the music comes back on the curve, never at full; only the stop gives full volume back.
+ */
+fun sleepStep(timer: SleepTimer, now: Long, positionMs: Long, durationMs: Long, speed: Float): SleepStep {
     val left = sleepLeftMs(timer, now, positionMs, durationMs, speed)
     if (timer is SleepTimer.ByTime && left == 0L) return SleepStep(1f, stops = true, nextMs = null)
-    val volume = if (playing && left != null) (left.toFloat() / SLEEP_FADE_MS).coerceIn(0f, 1f) else 1f
+    val volume = if (left != null) sleepFadeVolume(left) else 1f
     val next = when {
         // Other songs first: nothing to do until one ends.
         timer is SleepTimer.BySongs && timer.left > 1 -> null
@@ -81,9 +96,12 @@ fun sleepAfterSong(timer: SleepTimer): SleepTimer? = when (timer) {
 }
 
 /**
- * The sleep timer on the player ([port]), in the service: the fade over the last 10 s and the stop. By songs it counts
- * the songs that play to their end ([songEnded]); after the last one the music stops at the start of the next song, as
- * a paused player waits. [timer] is shared with the screens; [stopped] hears each stop. Main thread.
+ * The sleep timer on the player ([port]), in the service: the fade over the last 15 s and the stop, the same for a time,
+ * "End of song" and a count of songs. By songs it counts the songs that play to their end ([songEnded]); after the last
+ * one the music stops at the start of the next song, as a paused player waits. The stop pauses first, then gives the
+ * volume back, so the next play is never silent. The fade is the player's volume only: the crossfade engine scales its
+ * own gains by it, and volume levelling works in the audio chain, so neither fights it. [timer] is shared with the
+ * screens; [stopped] hears each stop. Main thread.
  */
 class SleepDriver(
     private val port: ExtrasPort,
@@ -101,7 +119,7 @@ class SleepDriver(
                 awaitCancellation()
             }
             while (true) {
-                val step = sleepStep(running, clock(), port.playing, port.positionMs, port.durationMs, port.speed)
+                val step = sleepStep(running, clock(), port.positionMs, port.durationMs, port.speed)
                 if (step.stops) return@collectLatest stop()
                 port.volume = step.volume
                 delay(step.nextMs ?: awaitCancellation())

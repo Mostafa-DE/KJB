@@ -10,9 +10,7 @@ import android.os.Bundle
 import android.os.Environment
 import android.os.Handler
 import android.os.SystemClock
-import android.provider.MediaStore
 import android.util.Log
-import android.util.Size
 import androidx.annotation.OptIn
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
@@ -38,6 +36,7 @@ import app.lyrify.audio.MediaFocus
 import app.lyrify.audio.OutputRoutesPart
 import app.lyrify.audio.QueueFadeRules
 import app.lyrify.auto.CarBrowse
+import app.lyrify.auto.CarCovers
 import app.lyrify.auto.ControllerAccess
 import app.lyrify.library.Library
 import app.lyrify.library.LibraryGraph
@@ -219,6 +218,7 @@ class PlaybackService : MediaLibraryService() {
         heardSoFar()
         tracker.end()
         parts.forEach { it.stop() }
+        browse.release()
         session?.release()
         session = null
         // Its thread would outlive the service; a cover still loading fails, and the notification is going anyway.
@@ -239,7 +239,7 @@ class PlaybackService : MediaLibraryService() {
 
     private fun skips(): SkipAmounts = skipAmounts(settings.value.playback)
 
-    private fun mediaItem(projected: Projected): MediaItem = mediaItemOf(projected, settings.value.library)
+    private fun mediaItem(projected: Projected): MediaItem = mediaItemOf(projected, settings.value.library, CarCovers.authority(this))
 
     /** The bridge applied now, before a controller's items are matched against the engine's. */
     private fun sync() {
@@ -431,30 +431,25 @@ class PlaybackService : MediaLibraryService() {
 }
 
 /**
- * Covers for the notification, the lock screen and Bluetooth: an audio file's MediaStore uri ([metadataOf]'s artwork
- * uri) gives MediaStore's thumbnail of its embedded art; anything else goes to Media3's own loader. A song without a
- * cover fails, and the session shows none.
+ * Covers for the notification, the lock screen and Bluetooth: a uri of KJB's cover provider ([metadataOf]'s artwork
+ * uri) is read here in the process ([CarCovers.bitmap]): the song's embedded art, else KJB's default cover, at most
+ * 512 px. Anything else goes to Media3's own loader.
  */
 @OptIn(UnstableApi::class)
 private class ThumbnailLoader(private val context: Context) : BitmapLoader {
     private val fallback = DataSourceBitmapLoader.Builder(context).build()
     private val io: ListeningExecutorService = MoreExecutors.listeningDecorator(Executors.newSingleThreadExecutor())
+    private val covers = CarCovers.authority(context)
 
     override fun supportsMimeType(mimeType: String): Boolean = fallback.supportsMimeType(mimeType)
 
     override fun decodeBitmap(data: ByteArray): ListenableFuture<Bitmap> = fallback.decodeBitmap(data)
 
     override fun loadBitmap(uri: Uri): ListenableFuture<Bitmap> {
-        if (uri.scheme != ContentResolver.SCHEME_CONTENT || uri.authority != MediaStore.AUTHORITY) return fallback.loadBitmap(uri)
-        // No embedded cover: loadThumbnail throws, and the future fails.
-        return io.submit<Bitmap> { context.contentResolver.loadThumbnail(uri, Size(COVER_PX, COVER_PX), null) }
+        if (uri.scheme != ContentResolver.SCHEME_CONTENT || uri.authority != covers) return fallback.loadBitmap(uri)
+        return io.submit<Bitmap> { CarCovers.bitmap(context, uri.lastPathSegment) }
     }
 
     /** Lets the loading thread go, with the service. */
     fun shutdown() = io.shutdown()
-
-    private companion object {
-        /** The notification and the lock screen show covers at most this size. */
-        const val COVER_PX: Int = 512
-    }
 }

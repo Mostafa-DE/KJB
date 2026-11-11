@@ -82,7 +82,9 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
 import app.lyrify.Lyrify
 import app.lyrify.R
 import app.lyrify.library.Library
@@ -204,7 +206,11 @@ private fun QueueLine(queue: Queue, book: QueueBook, ui: PlayerUi?, onKeep: (() 
     }
 }
 
-/** A queue's own page: its name and place, Resume (or Play/Pause while it plays) and Play from start, then its songs. */
+/**
+ * A queue's own page: its name and place, Resume (or Play/Pause while it plays) and Play from start, then its songs.
+ * Delete sits in the top bar beside Add to; it goes back to where the page was opened from, and its toast's Undo brings
+ * the queue back and opens it again.
+ */
 @Composable
 private fun OneQueuePage(id: String) {
     // The rows sit on the page colour (.qpage .qin).
@@ -218,7 +224,9 @@ private fun OneQueuePage(id: String) {
     val toasts = LocalToasts.current
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
-    val queue = book.queue(id)
+    // Deleted here: the page keeps drawing it while it leaves.
+    var leaving by remember { mutableStateOf<Queue?>(null) }
+    val queue = book.queue(id) ?: leaving
     val names = rememberNames()
     val reorder = remember { Reorder() }
     SettleReorder(queue?.items, reorder)
@@ -280,11 +288,14 @@ private fun OneQueuePage(id: String) {
             })
         }
     }
-    QueueDialogs(dialog, queue, book, connection, onDone = { dialog = null }, onDeleted = { nav.back() })
+    QueueDialogs(dialog, queue, book, connection, onDone = { dialog = null }, onDeleting = { leaving = it })
     SongSheetsHost(sheets)
 }
 
-/** A queue page's top bar actions: Add all (the Add to sheet, L1's), and "⋯" with Rename, Keep, Save as playlist and Delete. */
+/**
+ * A queue page's top bar actions: Add all (the Add to sheet, L1's), Delete beside it (not for the queue playing), and
+ * "⋯" with Rename, Keep and Save as playlist.
+ */
 @Composable
 private fun QueueActions(
     queue: Queue,
@@ -300,6 +311,7 @@ private fun QueueActions(
     val scope = rememberCoroutineScope()
     var menu by remember { mutableStateOf(false) }
     ChromeIconButton(R.drawable.ic_playlist_add, stringResource(R.string.queue_add_all, pluralStringResource(R.plurals.queue_songs, queue.items.size, queue.items.size)), onAddAll)
+    if (queueDeletable(queue, book)) ChromeIconButton(R.drawable.ic_delete, stringResource(R.string.queue_delete_button), onDelete)
     Box {
         ChromeIconButton(R.drawable.ic_more_horiz, stringResource(R.string.queue_more), { menu = true })
         LyrifyMenu(expanded = menu, onDismiss = { menu = false }) {
@@ -318,26 +330,29 @@ private fun QueueActions(
                 menu = false
                 onSave()
             })
-            if (queue.id != book.currentId) {
-                MenuRow(stringResource(R.string.queue_delete), R.drawable.ic_delete, {
-                    menu = false
-                    onDelete()
-                }, destructive = true)
-            }
         }
     }
 }
 
+/** Whether a queue's page offers Delete: every queue but the one playing, which is never deleted. */
+fun queueDeletable(queue: Queue, book: QueueBook): Boolean = queue.id != book.currentId && book.queue(queue.id) != null
+
 private enum class QueueDialog { RENAME, DELETE, SAVE_AS_PLAYLIST }
 
-/** Rename, Delete (asks first, removes only the queue) and Save as playlist. */
+/**
+ * Rename, Delete (asks first, removes only the queue) and Save as playlist. Delete leaves the page, [onDeleting] the
+ * queue it keeps drawing as it goes; its toast runs in the activity's scope, so it and its Undo outlive the dialog and
+ * the page.
+ */
 @Composable
-private fun QueueDialogs(dialog: QueueDialog?, queue: Queue?, book: QueueBook, connection: PlayerConnection, onDone: () -> Unit, onDeleted: () -> Unit) {
+private fun QueueDialogs(dialog: QueueDialog?, queue: Queue?, book: QueueBook, connection: PlayerConnection, onDone: () -> Unit, onDeleting: (Queue) -> Unit) {
     if (dialog == null || queue == null) return
     val context = LocalContext.current
+    val nav = LocalNavigator.current
     val toasts = LocalToasts.current
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
+    val lifecycle = LocalLifecycleOwner.current.lifecycleScope
     when (dialog) {
         QueueDialog.RENAME -> NameDialog(stringResource(R.string.queue_rename_title), stringResource(R.string.queue_name_field), queueLabel(context, book, queue), stringResource(R.string.queue_rename), R.drawable.ic_edit, onDone) { name ->
             connection.rename(queue.id, name)
@@ -351,9 +366,16 @@ private fun QueueDialogs(dialog: QueueDialog?, queue: Queue?, book: QueueBook, c
             dismiss = stringResource(R.string.queue_cancel),
             onConfirm = {
                 onDone()
-                connection.delete(queue.id)
-                onDeleted()
-                scope.launch { toasts.show(Toast(resources.getString(R.string.queue_deleted), R.drawable.ic_delete)) }
+                connection.delete(queue.id)?.let { undo ->
+                    onDeleting(queue)
+                    nav.back()
+                    lifecycle.launch {
+                        if (toasts.show(Toast(resources.getString(R.string.queue_deleted), R.drawable.ic_delete, action = resources.getString(R.string.player_undo)))) {
+                            undo.undo()
+                            nav.open(Page.Queue(queue.id))
+                        }
+                    }
+                }
             },
             onDismiss = onDone,
         )

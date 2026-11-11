@@ -253,8 +253,9 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity-alias>
-        <!-- Covers for the car's lists (auto/CarBrowse.kt), by MediaStore id only, read-only. Not exported: the browse tree
-             grants each app that browses it read access to the covers. -->
+        <!-- Covers for Android Auto and the media session (auto/CarBrowse.kt, CarCovers): a song's embedded cover by
+             MediaStore id only, or KJB's default cover; read-only. Not exported: a car app that connects is granted read
+             access to the covers until it disconnects. -->
         <provider
             android:name=".auto.CarCovers"
             android:authorities="${applicationId}.covers"

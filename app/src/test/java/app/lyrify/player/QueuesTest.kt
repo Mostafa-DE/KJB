@@ -250,6 +250,49 @@ class QueuesTest {
         assertTrue(saved.saved.isEmpty())
     }
 
+    @Test
+    fun `Undo of Delete puts the queue back where it was, in Saved or in Recent, and only once`() {
+        var book = playing(0).play(folder, 0, folderSource, now = 2).book
+        val recent = book.recent.single()
+        book = book.play(listOf(song("Loose 1")), 0, QueueSource(SourceKind.SEARCH, "search:loose", "loose"), now = 3).book
+        assertEquals(2, book.recent.size)
+        val kept = book.recent.first()
+        book = book.keep(kept)
+        val before = book
+
+        val fromRecent = book.deleted(recent)!!
+        assertNull(fromRecent.book.queue(recent))
+        assertEquals(before, fromRecent.book.undelete(fromRecent))
+        val fromSaved = book.deleted(kept)!!
+        assertTrue(fromSaved.book.saved.isEmpty())
+        assertEquals(before, fromSaved.book.undelete(fromSaved))
+        // A second Undo, or one after the queue came back, changes nothing.
+        assertEquals(before, before.undelete(fromSaved))
+        // The queue playing is never deleted.
+        assertNull(book.deleted(book.currentId!!))
+        assertNull(book.deleted("q999"))
+    }
+
+    @Test
+    fun `Undo of Delete brings back exactly the queue deleted, never taking another, even once Recent has filled again`() {
+        var book = playing(0)
+        (1..QueueBook.MAX_RECENT).forEach { n -> book = book.play(listOf(song("Loose $n")), 0, QueueSource(SourceKind.SEARCH, "search:$n", "$n"), now = 1L + n).book }
+        assertEquals(QueueBook.MAX_RECENT, book.recent.size)
+        val first = book.recent.first()
+        val gone = book.deleted(first)!!
+        // Another queue joins Recent before Undo: Recent is full again.
+        val refilled = gone.book.play(listOf(song("Late")), 0, QueueSource(SourceKind.SEARCH, "search:late", "late"), now = 50).book
+        assertEquals(QueueBook.MAX_RECENT, refilled.recent.size)
+        val undone = refilled.undelete(gone)
+        assertEquals(gone.queue, undone.queue(first))
+        assertEquals(first, undone.recent.first())
+        // Every queue there was is still there, as it was.
+        refilled.queues.forEach { assertEquals(it, undone.queue(it.id)) }
+        assertEquals(refilled.recent, undone.recent - first)
+        assertEquals(refilled.saved, undone.saved)
+        assertEquals(refilled.currentId, undone.currentId)
+    }
+
     // Resume and Play from start
 
     @Test

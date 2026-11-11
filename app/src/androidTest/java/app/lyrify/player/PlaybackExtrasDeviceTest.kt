@@ -11,6 +11,7 @@ import androidx.media3.session.MediaController
 import androidx.media3.session.MediaSession
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import app.lyrify.auto.CarCovers
 import app.lyrify.library.Song
 import app.lyrify.library.SongRef
 import app.lyrify.settings.LibrarySettings
@@ -132,7 +133,7 @@ class PlaybackExtrasDeviceTest {
         val songs = (1..3).map { song(tone("kjb-extras-$it.wav", 20, 330.0 + it * 110), "Tone $it") }
         val built = onMain {
             val core = PlayerCore(MemoryStorage(), scope, System::currentTimeMillis)
-            val engine = GaplessEngine(context, { Settings() }, NoLevels) { mediaItemOf(it, LibrarySettings()) }
+            val engine = GaplessEngine(context, { Settings() }, NoLevels) { mediaItemOf(it, LibrarySettings(), CarCovers.authority(context)) }
             val bridge = QueueBridge(engine)
             val find: (SongRef) -> Song? = { ref -> songs.firstOrNull { it.path == ref.path } }
             val player = LyrifyPlayer(Looper.getMainLooper(), engine, core, { SkipAmounts(30_000, 10_000) }, { bridge.sync(core.book.value, find) })
@@ -247,12 +248,12 @@ class PlaybackExtrasDeviceTest {
             built.engine.setPlayWhenReady(true)
             val driver = SleepDriver(EngineExtras(built.engine), timer, SystemClock::elapsedRealtime)
             scope.launch { driver.run() }
-            // Five seconds to go: half way into the fade.
-            timer.value = SleepTimer.ByTime(SystemClock.elapsedRealtime() + 5_000, minutes = 1)
+            // Twelve seconds to go: inside the 15 s fade.
+            timer.value = SleepTimer.ByTime(SystemClock.elapsedRealtime() + 12_000, minutes = 1)
         }
         assertTrue("never played", waitFor(5_000) { built.engine.isPlaying })
-        assertTrue("the volume never went down", waitFor(2_000) { built.engine.volume in 0.2f..0.6f })
-        assertTrue("the music never paused", waitFor(7_000) { !built.engine.playWhenReady })
+        assertTrue("the volume never went down", waitFor(2_000) { built.engine.volume in 0.1f..0.6f })
+        assertTrue("the music never paused", waitFor(14_000) { !built.engine.playWhenReady })
         assertEquals(1f, onMain { built.engine.volume }, 0f)
         assertEquals(null, onMain { timer.value })
     }

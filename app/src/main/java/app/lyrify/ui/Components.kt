@@ -761,7 +761,7 @@ fun Fact(@DrawableRes icon: Int, text: String, modifier: Modifier = Modifier, st
  */
 data class SongArt(val path: String, val mediaStoreId: Long? = null, val version: Int = 0)
 
-/** Loads a [SongArt] through MediaStore; a song without a cover fails, and the glyph under it shows. */
+/** Loads a [SongArt] through MediaStore; a song without a cover fails, and the default cover under it shows. */
 class SongArtFetcher(private val art: SongArt, private val options: Options) : Fetcher {
     override suspend fun fetch(): FetchResult? {
         val context = options.context
@@ -770,7 +770,7 @@ class SongArtFetcher(private val art: SongArt, private val options: Options) : F
         val bitmap = try {
             context.contentResolver.loadThumbnail(uri, android.util.Size(px, px), null)
         } catch (e: IOException) {
-            // No embedded cover: the placeholder shows.
+            // No embedded cover: the default cover shows.
             return null
         }
         return ImageFetchResult(bitmap.asImage(), isSampled = true, dataSource = DataSource.DISK)
@@ -815,9 +815,10 @@ private fun audioUri(context: Context, path: String): android.net.Uri? {
 }
 
 /**
- * A song's cover ([model]: a [SongArt], the player's bitmap, or null) on the glyph: the glyph shows until the cover is
- * in, and stays when there is none. With [status], its badge sits on the bottom-end corner. Decorative: the song's name
- * and status are text next to it.
+ * A song's cover ([model]: a [SongArt], the player's bitmap, or null) on KJB's default cover ([R.drawable.kjb_default_cover],
+ * the one the widget, the notification and Android Auto show too): the default shows until the cover is in, and stays
+ * when there is none. With [status], its badge sits on the bottom-end corner. Decorative: the song's name and status
+ * are text next to it.
  */
 @Composable
 fun SongCover(model: Any?, modifier: Modifier = Modifier, size: Dp = 48.dp, shape: Shape = MaterialTheme.shapes.small, status: LyricsStatus? = null) {
@@ -825,8 +826,8 @@ fun SongCover(model: Any?, modifier: Modifier = Modifier, size: Dp = 48.dp, shap
     val versions by CoverVersions.versions.collectAsState()
     val shown = (model as? SongArt)?.let { it.copy(version = versions[it.path] ?: 0) } ?: model
     Box(modifier.size(size)) {
-        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize().clip(shape).background(MaterialTheme.colorScheme.surfaceContainerHighest)) {
-            BrandGlyph(width = size * 0.45f)
+        Box(Modifier.fillMaxSize().clip(shape)) {
+            Image(painterResource(R.drawable.kjb_default_cover), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
             if (shown != null) {
                 AsyncImage(model = shown, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
             }

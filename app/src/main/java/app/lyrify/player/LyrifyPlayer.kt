@@ -49,6 +49,67 @@ fun controllerMove(book: QueueBook, loaded: List<Long>, fromIndex: Int, toIndex:
     return moved
 }
 
+/**
+ * What the session tells its controllers when the engine says a song started: a song that started by itself (the next
+ * one, or Repeat one's lap) is an automatic transition, so a controller's place (the screens, the notification, the car)
+ * goes to where the song is now; null for a move by the user, which its seek tells already.
+ */
+fun startedDiscontinuity(lap: Boolean, natural: Boolean): Int? = if (natural || lap) Player.DISCONTINUITY_REASON_AUTO_TRANSITION else null
+
+/**
+ * Where a seek goes, and whether the facade tells controllers of it itself ([tell]): Media3 tells of the seeks it planned
+ * (an index it found), not of one that came without an index, the same song again included (Next in a queue of one).
+ */
+data class SessionSeek(val index: Int, val tell: Boolean)
+
+/**
+ * The seek for [mediaItemIndex] and [seekCommand], the song playing being [current]. Next with no song after it (the
+ * last song with Repeat off, or with Repeat one, which Media3 reads as off for Next) comes without an index
+ * ([C.INDEX_UNSET]) and goes to the first song of the queue, playing on if it played; any other seek without an index
+ * stays in the song playing. A queue playing to its end by itself still stops there (PlaybackService's onEnded).
+ */
+fun sessionSeek(mediaItemIndex: Int, seekCommand: Int, current: Int): SessionSeek {
+    val index = when {
+        mediaItemIndex != C.INDEX_UNSET -> mediaItemIndex
+        seekCommand == Player.COMMAND_SEEK_TO_NEXT || seekCommand == Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM -> 0
+        else -> current
+    }
+    return SessionSeek(index, tell = mediaItemIndex == C.INDEX_UNSET)
+}
+
+/**
+ * The player commands the session offers for [view] (Player.COMMAND_*): the seeks once a song is loaded, Next on the
+ * last song too ([sessionSeek]), so the app, the notification, a headset, the widget and the car all go round to the first.
+ */
+fun sessionCommands(view: SessionView): List<Int> = ALWAYS_OFFERED + if (view.uids.isNotEmpty()) SEEKS_OFFERED else emptyList()
+
+private val ALWAYS_OFFERED: List<Int> = listOf(
+    Player.COMMAND_PLAY_PAUSE,
+    Player.COMMAND_PREPARE,
+    Player.COMMAND_STOP,
+    Player.COMMAND_SET_SHUFFLE_MODE,
+    Player.COMMAND_SET_REPEAT_MODE,
+    Player.COMMAND_GET_CURRENT_MEDIA_ITEM,
+    Player.COMMAND_GET_TIMELINE,
+    Player.COMMAND_GET_METADATA,
+    Player.COMMAND_GET_AUDIO_ATTRIBUTES,
+    Player.COMMAND_SET_MEDIA_ITEM,
+    Player.COMMAND_CHANGE_MEDIA_ITEMS,
+    Player.COMMAND_RELEASE,
+)
+
+private val SEEKS_OFFERED: List<Int> = listOf(
+    Player.COMMAND_SEEK_TO_DEFAULT_POSITION,
+    Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM,
+    Player.COMMAND_SEEK_TO_MEDIA_ITEM,
+    Player.COMMAND_SEEK_BACK,
+    Player.COMMAND_SEEK_FORWARD,
+    Player.COMMAND_SEEK_TO_PREVIOUS,
+    Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM,
+    Player.COMMAND_SEEK_TO_NEXT,
+    Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM,
+)
+
 /** The jumps of the seek buttons ("Skip amounts"), for the session's seek back and forward. */
 data class SkipAmounts(val backMs: Long, val forwardMs: Long)
 
@@ -69,9 +130,31 @@ class LyrifyPlayer(
     /** Before a controller moves the player (Next, Previous, a seek): the play counter hears where it was. */
     private val beforeSeek: () -> Unit = {},
 ) : SimpleBasePlayer(looper) {
+    /**
+     * A jump the engine made that the session's own state cannot see, told to the controllers with the next state: the
+     * state's position is read live from the engine, so a song starting again (Repeat one, Next in a queue of one), a
+     * jump inside the song the engine makes itself (Repeat a part, a kept place) or a wrap to the first song looks to
+     * the session like no move at all.
+     */
+    private var discontinuity: Int? = null
+
+    /** A controller's seek is going on: Media3 tells of it itself. */
+    private var seeking = false
+
     init {
         engine.addListener(object : EngineListener {
             override fun onChanged() = invalidateState()
+
+            override fun onSongStarted(uid: Long, lap: Boolean, natural: Boolean) {
+                discontinuity = startedDiscontinuity(lap, natural) ?: return
+                invalidateState()
+            }
+
+            override fun onSeeked(fromMs: Long, toMs: Long) {
+                if (seeking) return
+                discontinuity = Player.DISCONTINUITY_REASON_SEEK
+                invalidateState()
+            }
         })
     }
 
@@ -97,6 +180,8 @@ class LyrifyPlayer(
             .setSeekForwardIncrementMs(skips.forwardMs)
             .setMaxSeekToPreviousPositionMs(MAX_SEEK_TO_PREVIOUS_MS)
         if (items.isEmpty() || view.index < 0) return state.setPlaybackState(Player.STATE_IDLE).build()
+        discontinuity?.let { reason -> state.setPositionDiscontinuity(reason, engine.positionMs) }
+        discontinuity = null
         val decoded = engine.durationMs
         val playlist = items.mapIndexed { i, item ->
             val length = if (i == view.index && decoded != C.TIME_UNSET) decoded else item.mediaMetadata.durationMs ?: C.TIME_UNSET
@@ -134,9 +219,16 @@ class LyrifyPlayer(
     override fun handleRelease(): ListenableFuture<*> = Futures.immediateVoidFuture()
 
     override fun handleSeek(mediaItemIndex: Int, positionMs: Long, seekCommand: Int): ListenableFuture<*> {
-        val index = if (mediaItemIndex == C.INDEX_UNSET) engine.index else mediaItemIndex
+        val seek = sessionSeek(mediaItemIndex, seekCommand, engine.index)
+        // Next from the last song (to the first, or the same song again in a queue of one): a jump Media3 did not plan.
+        if (seek.tell) discontinuity = Player.DISCONTINUITY_REASON_SEEK
         beforeSeek()
-        engine.seek(index, if (positionMs == C.TIME_UNSET) 0 else positionMs)
+        seeking = true
+        try {
+            engine.seek(seek.index, if (positionMs == C.TIME_UNSET) 0 else positionMs)
+        } finally {
+            seeking = false
+        }
         return Futures.immediateVoidFuture()
     }
 
@@ -190,35 +282,7 @@ class LyrifyPlayer(
 
     override fun handleReplaceMediaItems(fromIndex: Int, toIndex: Int, mediaItems: List<MediaItem>): ListenableFuture<*> = Futures.immediateVoidFuture()
 
-    private fun commands(view: SessionView): Player.Commands {
-        val loaded = view.uids.isNotEmpty()
-        val next = loaded && (view.index < view.uids.lastIndex || view.repeat != Repeat.OFF)
-        return Player.Commands.Builder()
-            .addAll(
-                Player.COMMAND_PLAY_PAUSE,
-                Player.COMMAND_PREPARE,
-                Player.COMMAND_STOP,
-                Player.COMMAND_SET_SHUFFLE_MODE,
-                Player.COMMAND_SET_REPEAT_MODE,
-                Player.COMMAND_GET_CURRENT_MEDIA_ITEM,
-                Player.COMMAND_GET_TIMELINE,
-                Player.COMMAND_GET_METADATA,
-                Player.COMMAND_GET_AUDIO_ATTRIBUTES,
-                Player.COMMAND_SET_MEDIA_ITEM,
-                Player.COMMAND_CHANGE_MEDIA_ITEMS,
-                Player.COMMAND_RELEASE,
-            )
-            .addIf(Player.COMMAND_SEEK_TO_DEFAULT_POSITION, loaded)
-            .addIf(Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM, loaded)
-            .addIf(Player.COMMAND_SEEK_TO_MEDIA_ITEM, loaded)
-            .addIf(Player.COMMAND_SEEK_BACK, loaded)
-            .addIf(Player.COMMAND_SEEK_FORWARD, loaded)
-            .addIf(Player.COMMAND_SEEK_TO_PREVIOUS, loaded)
-            .addIf(Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM, loaded)
-            .addIf(Player.COMMAND_SEEK_TO_NEXT, next)
-            .addIf(Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM, next)
-            .build()
-    }
+    private fun commands(view: SessionView): Player.Commands = Player.Commands.Builder().apply { sessionCommands(view).forEach(::add) }.build()
 
     private fun repeatMode(repeat: Repeat): Int = when (repeat) {
         Repeat.OFF -> Player.REPEAT_MODE_OFF

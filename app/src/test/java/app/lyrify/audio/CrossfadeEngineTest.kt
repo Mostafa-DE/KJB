@@ -25,6 +25,7 @@ import app.lyrify.player.Speed
 import app.lyrify.player.repeatWhilePlaying
 import app.lyrify.player.sessionView
 import app.lyrify.player.sleepAfter
+import app.lyrify.player.sleepFadeVolume
 import app.lyrify.settings.RememberPlace
 import app.lyrify.stats.FakePlayLog
 import app.lyrify.stats.PlayCounter
@@ -381,11 +382,13 @@ class CrossfadeEngineTest {
         backgroundScope.launch { SleepDriver(EngineExtras(rig.engine), timer, rig.clock).run() }
         rig.runToLeft(6_000 + 7_000)
         timer.value = SleepTimer.ByTime(endsAt = rig.clock() + 10_000, minutes = 1)
-        // The crossfade started 1 s ago; the timer has 2 s left, so its volume is 0.2.
+        // The crossfade started 1 s ago; the timer has 2 s left, deep in its fade: both players carry its volume.
         rig.run(8_000)
         val (first, second) = rig.two(rig.live)
-        assertEquals(0.2f * fadeOutGain(1f / 6), first.volume, 0.02f)
-        assertEquals(0.2f * fadeInGain(1f / 6), second.volume, 0.02f)
+        val sleep = rig.engine.volume
+        assertEquals(sleepFadeVolume(2_000), sleep, 0.001f)
+        assertEquals(sleep * fadeOutGain(1f / 6), first.volume, 0.0001f)
+        assertEquals(sleep * fadeInGain(1f / 6), second.volume, 0.0001f)
         rig.run(2_100)
         // Stopped: both wait paused, the fade where it was, at full volume again for later.
         assertNull(timer.value)

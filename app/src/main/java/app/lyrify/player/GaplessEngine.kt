@@ -1,10 +1,8 @@
 package app.lyrify.player
 
-import android.content.ContentUris
 import android.content.Context
 import android.net.Uri
 import android.os.Handler
-import android.provider.MediaStore
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -31,6 +29,8 @@ import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.extractor.mp4.Mp4Extractor
 import app.lyrify.audio.FadeSlot
+import app.lyrify.auto.CarCovers
+import app.lyrify.auto.coverPath
 import app.lyrify.audio.LiveEq
 import app.lyrify.library.Song
 import app.lyrify.library.displayTitle
@@ -331,22 +331,26 @@ class GaplessEngine(context: Context, settings: () -> Settings, levels: SongLeve
 
 /**
  * [projected] as a media item: its uid as the media id (the session, the bridge and the browse tree know it by that), the
- * file, and what the notification, the lock screen and Bluetooth show: the title as every surface shows it
- * ([displayTitle]), the artist, the album, the length, and the cover by its MediaStore id (no path in the URI).
+ * file, and what the notification, the lock screen, Bluetooth and the car show: the title as every surface shows it
+ * ([displayTitle]), the artist, the album, the length, and the cover from the provider at [covers] ([CarCovers]).
  */
 @OptIn(UnstableApi::class)
-fun mediaItemOf(projected: Projected, settings: LibrarySettings): MediaItem {
+fun mediaItemOf(projected: Projected, settings: LibrarySettings, covers: String): MediaItem {
     val song = projected.song
     return MediaItem.Builder()
         .setMediaId(projected.uid.toString())
         .setUri(Uri.fromFile(File(song.path)))
-        .setMediaMetadata(metadataOf(song, settings).buildUpon().setIsBrowsable(false).setIsPlayable(true).build())
+        .setMediaMetadata(metadataOf(song, settings, covers).buildUpon().setIsBrowsable(false).setIsPlayable(true).build())
         .build()
 }
 
-/** What a song shows on the session and in the browse tree. */
+/**
+ * What a song shows on the session and in the browse tree. Its cover is a uri of KJB's cover provider at [covers]
+ * ([CarCovers]): by MediaStore id, never a path, and KJB's default cover for a song without one, so Android Auto (which
+ * cannot read MediaStore's audio uris) and the notification always have one.
+ */
 @OptIn(UnstableApi::class)
-fun metadataOf(song: Song, settings: LibrarySettings): MediaMetadata = MediaMetadata.Builder()
+fun metadataOf(song: Song, settings: LibrarySettings, covers: String): MediaMetadata = MediaMetadata.Builder()
     .setTitle(displayTitle(song, settings))
     .setArtist(song.artist)
     .setAlbumTitle(song.album)
@@ -356,6 +360,6 @@ fun metadataOf(song: Song, settings: LibrarySettings): MediaMetadata = MediaMeta
     .setReleaseYear(song.year)
     .setGenre(song.genre)
     .setDurationMs(song.durationMs.takeIf { it > 0 })
-    .setArtworkUri(song.ref.mediaStoreId?.let { ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, it) })
+    .setArtworkUri(CarCovers.uri(covers, coverPath(song)))
     .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
     .build()

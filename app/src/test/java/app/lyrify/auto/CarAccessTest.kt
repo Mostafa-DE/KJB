@@ -2,12 +2,17 @@ package app.lyrify.auto
 
 import androidx.media3.common.Player
 import app.lyrify.library.Library
+import app.lyrify.library.LibraryState
 import app.lyrify.library.song
 import app.lyrify.player.Found
 import app.lyrify.player.QueueSource
 import app.lyrify.player.SourceKind
 import app.lyrify.settings.PlaybackSettings
 import app.lyrify.settings.Settings
+import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -136,33 +141,46 @@ class CarAccessTest {
     private val log = mutableListOf<String>()
     private val grants = CoverGrants<String>(
         packageOf = { it.substringBefore('#') },
-        grant = { packageName, id -> log += "grant $packageName $id" },
-        revoke = { packageName, id -> log += "revoke $packageName $id" },
+        grant = { packageName -> log += "grant $packageName" },
+        revoke = { packageName -> log += "revoke $packageName" },
     )
 
     @Test
-    fun `a car gets each cover it is shown once, and an app not connected as a car gets none`() {
+    fun `a car app may read every cover from its first connection, once, and an app not connected as a car never`() {
         grants.connected("auto#1")
-        grants.give("auto#1", listOf(4L, 5L))
-        grants.give("auto#1", listOf(5L, 6L))
-        grants.give("other#1", listOf(7L))
-        assertEquals(listOf("grant auto 4", "grant auto 5", "grant auto 6"), log)
+        grants.connected("auto#1")
+        grants.connected("auto#2")
+        grants.connected("centre#1")
+        assertEquals(listOf("grant auto", "grant centre"), log)
+        grants.disconnected("other#1")
+        assertEquals(2, log.size)
     }
 
     @Test
-    fun `a car's grants go when it disconnects, except those another connection of that app still shows`() {
+    fun `a car app's grant goes with its last connection, and comes again with a new one`() {
         grants.connected("auto#1")
         grants.connected("auto#2")
-        grants.give("auto#1", listOf(4L, 5L))
-        grants.give("auto#2", listOf(5L))
         log.clear()
         grants.disconnected("auto#1")
-        assertEquals(listOf("revoke auto 4"), log)
+        assertEquals(emptyList<String>(), log)
         grants.disconnected("auto#2")
-        assertEquals(listOf("revoke auto 4", "revoke auto 5"), log)
-        grants.give("auto#2", listOf(9L))
+        assertEquals(listOf("revoke auto"), log)
         grants.disconnected("auto#2")
-        assertEquals(2, log.size)
+        grants.connected("auto#3")
+        assertEquals(listOf("revoke auto", "grant auto"), log)
+    }
+
+    @Test
+    fun `when the service stops, every car app still connected loses its grant, and only those`() {
+        grants.connected("auto#1")
+        grants.connected("auto#2")
+        grants.connected("centre#1")
+        grants.disconnected("centre#1")
+        log.clear()
+        grants.closed()
+        assertEquals(listOf("revoke auto"), log)
+        // Grants left by a KJB that ended without its cars leaving (a crash) are taken back at the start, from every car app.
+        assertEquals(setOf(ControllerAccess.ANDROID_AUTO, "com.android.car.media"), ControllerAccess.CAR_PACKAGES)
     }
 
     // The covers the provider serves
@@ -178,6 +196,39 @@ class CarAccessTest {
         assertFalse(CarCovers.allowed(21, library))
         assertFalse(CarCovers.allowed(99, library))
         assertFalse(CarCovers.allowed(20, null))
+    }
+
+    @Test
+    fun `the provider serves a song's own cover, else the default cover, and never one of a song outside the library`() {
+        val withArt = song("Music/Rips/Loose Thread.mp3", id = 20)
+        val noArt = song("Music/Rips/Ember Road.mp3", id = 22)
+        val library = Library.of(listOf(withArt, noArt), Settings())
+        val read = mutableListOf<Long>()
+        fun serve(path: String) = coverFor(path, { CarCovers.allowed(it, library) }, { id -> read += id; if (id == 20L) "cover 20" else null }) { "default" }
+
+        assertEquals("cover 20", serve("20"))
+        // No embedded cover: the default, so the car never shows a gap.
+        assertEquals("default", serve("22"))
+        // Not a song in the library, or not an id at all: the default, and no file is read.
+        assertEquals("default", serve("99"))
+        assertEquals("default", serve(DEFAULT_COVER))
+        assertEquals("default", serve("../Music"))
+        assertEquals(listOf(20L, 22L), read)
+    }
+
+    @Test
+    fun `a cover asked for while the library is first read waits a moment at most, then the default is served`() = runTest {
+        val state = MutableStateFlow<LibraryState>(LibraryState.Loading)
+        // It runs on a binder thread: never long.
+        val waiting = async { readyLibrary(state) }
+        advanceTimeBy(301)
+        assertTrue("still waiting after 300 ms", waiting.isCompleted)
+        assertNull(waiting.await())
+        val library = Library.of(listOf(song("Music/Rips/Loose Thread.mp3", id = 20)), Settings())
+        state.value = LibraryState.Ready(library)
+        assertEquals(library, readyLibrary(state))
+        state.value = LibraryState.Unreadable
+        assertNull(readyLibrary(state))
     }
 
     // The car's searches
