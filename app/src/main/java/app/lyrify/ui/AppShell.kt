@@ -380,7 +380,7 @@ private fun SharedTransitionScope.BottomChrome(
     val lastSelection = remember { Kept(selection) }
     if (selection != null) lastSelection.value = selection
     Column(modifier.fillMaxWidth().navigationBarsPadding().imePadding().padding(bottom = 12.dp)) {
-        ToastSlot(Modifier.padding(horizontal = ScreenPadding), padding = PaddingValues(bottom = 8.dp))
+        ToastSlot(Modifier.padding(horizontal = ScreenPadding), padding = PaddingValues(bottom = TOAST_GAP))
         // While the Now bar grows into the player or the player shrinks into it, the chrome stays where it is: the bar is
         // one end of the transform, so it must not slide or fade under it; the player covers the dock meanwhile.
         AnimatedVisibility(

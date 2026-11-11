@@ -123,6 +123,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
@@ -684,12 +685,26 @@ fun messageToast(message: Int, text: String): Toast = when (message) {
 /** Which way a message floats from its [ToastSlot]: up from it (above a dock or buttons), or down from it (under a top bar). */
 enum class ToastFloat { UP, DOWN }
 
+/** A message's pill: one line, this high (the phone test of 2026-11-11 found the old two-line card too big). */
+val TOAST_HEIGHT = 40.dp
+
+/** How far the shell's message floats above the Now bar, or above the dock when nothing plays: clear of them, close to them. */
+val TOAST_GAP = 10.dp
+
 /**
- * Where the app's message floats in this window. The slot takes no space: the message is drawn over the content, up
- * from the slot ([ToastFloat.UP], its bottom edge at the slot, [padding] round it) or down from it, and nothing under it
- * moves. Each slot registers while it is composed and only the newest shows the message, so one raised under an open
- * sheet appears in the sheet. Put the slot after the content it floats over, so it draws on top. A newer message
- * replaces the one shown at once: the old one fades, the new one rises in (the prototype's toastIn).
+ * Where a message of [size] sits from its slot, [slotWidth] wide: centred, and up from the slot ([ToastFloat.UP], its
+ * bottom edge [gap] px above it) or down from it (its top edge [gap] px below it). Never off the slot's start.
+ */
+fun toastPlace(float: ToastFloat, slotWidth: Int, size: IntSize, gap: Int): IntOffset =
+    IntOffset(((slotWidth - size.width) / 2).coerceAtLeast(0), if (float == ToastFloat.UP) -(size.height + gap) else gap)
+
+/**
+ * Where the app's message floats in this window. The slot takes no space: the message, a compact pill as wide as its
+ * words, is drawn centred over the content, up from the slot ([ToastFloat.UP], its bottom edge the bottom of [padding]
+ * above it) or down from it (the top of [padding] below it), and nothing under it moves. Each slot registers while it is
+ * composed and only the newest shows the message, so one raised under an open sheet appears in the sheet. Put the slot
+ * after the content it floats over, so it draws on top. A newer message replaces the one shown at once: the old one
+ * fades, the new one rises in (the prototype's toastIn).
  */
 @Composable
 fun ToastSlot(
@@ -705,7 +720,9 @@ fun ToastSlot(
     }
     val shown = state.current?.takeIf { state.showsIn(key) }
     val reduced = LocalReducedMotion.current
-    val rise = with(LocalDensity.current) { TOAST_RISE.roundToPx() }
+    val density = LocalDensity.current
+    val rise = with(density) { TOAST_RISE.roundToPx() }
+    val gap = with(density) { (if (float == ToastFloat.UP) padding.calculateBottomPadding() else padding.calculateTopPadding()).roundToPx() }
     AnimatedContent(
         targetState = shown,
         transitionSpec = {
@@ -720,23 +737,27 @@ fun ToastSlot(
         },
         contentAlignment = if (float == ToastFloat.UP) Alignment.BottomCenter else Alignment.TopCenter,
         label = "toast",
-        modifier = modifier.fillMaxWidth().floatOver(float),
+        modifier = modifier.floatOver(float, gap),
     ) { message ->
-        if (message != null) ToastPill(message, Modifier.padding(padding))
+        if (message != null) ToastPill(message)
     }
 }
 
 /**
- * Measures the message but reports no height, and draws it up or down from this point: it never pushes the layout. Its
- * touch is where it is drawn: Compose hit-tests a child outside its parent's bounds unless a layer clips it, so no layer
- * between the message and the screen may clip at the slot (hence SizeTransform(clip = false)).
+ * Measures the message at its own width but reports the slot's width and no height, and draws it centred, [gap] px up
+ * or down from this point ([toastPlace]): it never pushes the layout. Its touch is where it is drawn: Compose hit-tests
+ * a child outside its parent's bounds unless a layer clips it, so no layer between the message and the screen may clip
+ * at the slot (hence SizeTransform(clip = false)).
  */
-private fun Modifier.floatOver(float: ToastFloat): Modifier = layout { measurable, constraints ->
-    val placeable = measurable.measure(constraints.copy(minHeight = 0, maxHeight = Constraints.Infinity))
-    layout(placeable.width, 0) { placeable.place(0, if (float == ToastFloat.UP) -placeable.height else 0) }
+private fun Modifier.floatOver(float: ToastFloat, gap: Int): Modifier = layout { measurable, constraints ->
+    val placeable = measurable.measure(constraints.copy(minWidth = 0, minHeight = 0, maxHeight = Constraints.Infinity))
+    layout(constraints.maxWidth, 0) { placeable.place(toastPlace(float, constraints.maxWidth, IntSize(placeable.width, placeable.height), gap)) }
 }
 
-/** The ink pill: its icon, up to three lines, its action; hold it to keep it, swipe it away, TalkBack can dismiss it. */
+/**
+ * The ink pill, one line high: its icon, its words (ellipsised), its action; hold it to keep it, swipe it away, TalkBack
+ * can dismiss it.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ToastPill(message: ToastState.Shown, modifier: Modifier = Modifier) {
@@ -749,7 +770,7 @@ private fun ToastPill(message: ToastState.Shown, modifier: Modifier = Modifier) 
         delay(message.millis)
         message.dismiss()
     }
-    val shape = RoundedCornerShape(26.dp)
+    val shape = CircleShape
     SwipeToDismissBox(
         state = rememberSwipeToDismissBoxState(),
         backgroundContent = {},
@@ -758,10 +779,9 @@ private fun ToastPill(message: ToastState.Shown, modifier: Modifier = Modifier) 
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier
-                .fillMaxWidth()
-                .shadow(12.dp, shape, ambientColor = chrome.shadow, spotColor = chrome.shadow)
+                .shadow(8.dp, shape, ambientColor = chrome.shadow, spotColor = chrome.shadow)
                 .background(chrome.toast, shape)
                 .then(if (chrome.toastEdge.alpha > 0f) Modifier.border(1.dp, chrome.toastEdge, shape) else Modifier)
                 .pointerInput(message) {
@@ -779,13 +799,20 @@ private fun ToastPill(message: ToastState.Shown, modifier: Modifier = Modifier) 
                         true
                     }
                 }
-                .heightIn(min = 52.dp)
-                .padding(start = if (toast.icon != null) 12.dp else 20.dp, end = if (toast.action != null) 6.dp else 20.dp, top = 8.dp, bottom = 8.dp),
+                .heightIn(min = TOAST_HEIGHT)
+                .padding(start = if (toast.icon != null) 8.dp else 16.dp, end = if (toast.action != null) 4.dp else 16.dp),
         ) {
-            toast.icon?.let { ToneCircle(it, toast.tone ?: Tone.NONE, size = 28.dp) }
-            Text(toast.text, style = MaterialTheme.typography.bodyMedium, color = chrome.onToast, maxLines = 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            toast.icon?.let { ToneCircle(it, toast.tone ?: Tone.NONE, size = 24.dp) }
+            Text(toast.text, style = MaterialTheme.typography.bodyMedium, color = chrome.onToast, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+            // The action keeps to the pill's height; Compose still widens its touch to 48 dp.
             toast.action?.let {
-                LyrifyButton(it, onClick = { message.dismiss(acted = true) }, kind = ButtonKind.GHOST, compact = true, contentColor = chrome.toastAction)
+                Text(
+                    it,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = chrome.toastAction,
+                    maxLines = 1,
+                    modifier = Modifier.clip(CircleShape).clickable(role = Role.Button) { message.dismiss(acted = true) }.padding(horizontal = 12.dp, vertical = 8.dp),
+                )
             }
         }
     }

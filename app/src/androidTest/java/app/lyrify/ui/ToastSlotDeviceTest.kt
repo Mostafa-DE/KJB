@@ -14,7 +14,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
@@ -24,6 +27,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -129,6 +133,32 @@ class ToastSlotDeviceTest {
         }
     }
 
+    @Test
+    fun aMessageIsACompactPillCentredJustAboveTheBarAndNeverOverIt() {
+        val toasts = ToastState()
+        compose.setContent {
+            LaunchedEffect(Unit) { toasts.show(Toast(MESSAGE, action = UNDO)) }
+            OverContent(onTapUnder = {}) {
+                // As the shell's: the slot over the Now bar, which sits on the dock.
+                Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth()) {
+                    ToastSlot(Modifier.padding(horizontal = 16.dp), padding = PaddingValues(bottom = TOAST_GAP), state = toasts)
+                    Spacer(Modifier.fillMaxWidth().height(64.dp).testTag(BAR))
+                    Spacer(Modifier.fillMaxWidth().height(64.dp))
+                }
+            }
+        }
+        compose.waitForIdle()
+        val bar = compose.onNodeWithTag(BAR).getBoundsInRoot()
+        val pill = compose.onNodeWithText(MESSAGE).getBoundsInRoot()
+        // One line, about 40 dp high, as wide as its words, centred over the bar.
+        assertEquals(TOAST_HEIGHT.value, (pill.bottom - pill.top).value, 1f)
+        assertTrue(pill.right - pill.left < bar.right - bar.left)
+        assertEquals(((bar.left + bar.right) / 2).value, ((pill.left + pill.right) / 2).value, 1f)
+        // Floating 8 to 12 dp above the bar, never over it.
+        val gap = (bar.top - pill.bottom).value
+        assertTrue("gap $gap", gap in 8f..12f)
+    }
+
     /** The content a message floats over: the whole window, counting the taps that reach it. */
     @Composable
     private fun OverContent(onTapUnder: () -> Unit, slot: @Composable BoxScope.() -> Unit) {
@@ -141,6 +171,7 @@ class ToastSlotDeviceTest {
     private companion object {
         const val MESSAGE = "Removed from a made-up list"
         const val UNDO = "Undo"
+        const val BAR = "bar"
 
         /** A message with an action stays 6 s. */
         const val UNDO_MS = 6_000L
