@@ -17,6 +17,7 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.geometry.toRect
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.CornerRadius
@@ -68,6 +69,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import app.lyrify.settings.DockTab
+import kotlin.math.abs
 
 // How KJB's screens change, after the motion spec (handoff/motion-spec.md): the pure decisions first (what changed,
 // which way it moves, how far a drag or a back swipe has gone), tested on the JVM, then the transitions they pick. The
@@ -680,6 +682,21 @@ const val REDUCED_DRAG_ALPHA: Float = 0.4f
 fun reducedDragAlpha(offset: Float, height: Float): Float {
     val p = if (height > 0f) (offset.coerceAtLeast(0f) / (height * DRAG_FULL_SHARE)).coerceIn(0f, 1f) else 0f
     return 1f - (1f - REDUCED_DRAG_ALPHA) * p
+}
+
+/** What a sheet makes of a finger on its content: [WAIT] until it has moved past the slop, then [TAKE] it, or [LEAVE] it to the content. */
+enum class SheetDrag { WAIT, TAKE, LEAVE }
+
+/**
+ * A finger [moved] px on a sheet's content: past the touch [slop] and mostly down while the content is scrolled to its
+ * top ([atTop]), the sheet takes it and follows (from anywhere, its cover included); up, sideways, or with the content
+ * scrolled down, the content keeps it and scrolls.
+ */
+fun sheetDrag(moved: Offset, slop: Float, atTop: Boolean): SheetDrag = when {
+    !atTop -> SheetDrag.LEAVE
+    moved.getDistance() < slop -> SheetDrag.WAIT
+    moved.y > 0f && abs(moved.y) > abs(moved.x) -> SheetDrag.TAKE
+    else -> SheetDrag.LEAVE
 }
 
 // Dialogs

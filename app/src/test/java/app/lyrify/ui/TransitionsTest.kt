@@ -10,6 +10,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.runtime.MonotonicFrameClock
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.unit.Density
@@ -391,6 +392,21 @@ class TransitionsTest {
     fun `the Now bar stays in place under the growing player, which covers it and the dock from the first frame`() {
         assertFalse(containerInOverlay(bar = true))
         assertTrue(containerInOverlay(bar = false))
+    }
+
+    // Phone test 2026-11-11: a sheet closes on a drag down from anywhere on it, its cover included
+
+    @Test
+    fun `a sheet takes a drag down from its content once scrolled to the top, and leaves every other drag to the content`() {
+        val slop = 20f
+        // Down past the slop, mostly down: the sheet follows the finger.
+        assertEquals(SheetDrag.TAKE, sheetDrag(Offset(4f, 24f), slop, atTop = true))
+        // Not yet past the slop: wait and see.
+        assertEquals(SheetDrag.WAIT, sheetDrag(Offset(3f, 12f), slop, atTop = true))
+        // Up (the content scrolls), sideways, or with the content scrolled down: the content keeps it.
+        assertEquals(SheetDrag.LEAVE, sheetDrag(Offset(0f, -30f), slop, atTop = true))
+        assertEquals(SheetDrag.LEAVE, sheetDrag(Offset(30f, 10f), slop, atTop = true))
+        assertEquals(SheetDrag.LEAVE, sheetDrag(Offset(0f, 30f), slop, atTop = false))
     }
 
     // Phone test 2026-11-11: each dock destination keeps its root, which moves as a page would, never rebuilt
