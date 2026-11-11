@@ -276,7 +276,10 @@ class PlayerConnection(
 
     fun rename(queueId: String, name: String) = core.change { it.rename(queueId, name) }
 
-    fun delete(queueId: String) = core.change { it.delete(queueId) }
+    /** "Delete": only the queue goes, never the one playing; Undo puts it back where it was. Null when nothing went. */
+    fun delete(queueId: String): Undo? = core.edit { book ->
+        book.deleted(queueId)?.let { gone -> gone.book to Undo { core.change { it.undelete(gone) } } }
+    }
 
     fun resume(queueId: String) {
         core.switch { it.resume(queueId, core.now()) }

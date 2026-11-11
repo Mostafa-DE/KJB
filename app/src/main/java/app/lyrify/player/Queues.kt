@@ -47,6 +47,12 @@ data class Added(val book: QueueBook, val queueId: String, val added: Int, val a
 /** A queue's songs before an edit, for Undo ([QueueBook.restore]). */
 data class Edited(val book: QueueBook, val queueId: String, val before: List<QueueItem>)
 
+/**
+ * [queue] deleted from [book]: kept with its place in Saved ([saved]) or Recent ([at]), and among all queues ([order],
+ * which names count by), for Undo ([QueueBook.undelete]).
+ */
+data class Deleted(val book: QueueBook, val queue: Queue, val saved: Boolean, val at: Int, val order: Int)
+
 /** [item] left queue [queueId] from [at]; [queueGone] when it was the last one and the queue went with it. */
 data class Removed(val book: QueueBook, val queueId: String, val item: QueueItem, val at: Int, val queueGone: Boolean)
 
@@ -233,6 +239,26 @@ data class QueueBook(
 
     /** "Delete": only the queue goes, never the songs; the queue playing is never deleted. */
     fun delete(queueId: String): QueueBook = if (queueId == currentId) this else dropped(setOf(queueId), evenCurrent = false, evenSaved = true)
+
+    /** [delete] with what Undo needs; null when nothing goes (the queue playing, or none of that id). */
+    fun deleted(queueId: String): Deleted? {
+        val queue = queue(queueId)?.takeIf { queueId != currentId } ?: return null
+        val inSaved = queueId in saved
+        return Deleted(delete(queueId), queue, inSaved, (if (inSaved) saved else recent).indexOf(queueId), queues.indexOf(queue))
+    }
+
+    /**
+     * Undo of [deleted]: the queue back at its place in Saved or Recent, and among the queues; nothing when it is back
+     * already. Recent keeps [MAX_RECENT]: a queue that would fall past it stays deleted.
+     */
+    fun undelete(deleted: Deleted): QueueBook {
+        val queue = deleted.queue
+        if (queue(queue.id) != null) return this
+        val back = copy(queues = queues.toMutableList().apply { add(deleted.order.coerceIn(0, size), queue) })
+        if (deleted.saved) return back.copy(saved = saved.toMutableList().apply { add(deleted.at.coerceIn(0, size), queue.id) })
+        val listed = recent.toMutableList().apply { add(deleted.at.coerceIn(0, size), queue.id) }
+        return back.copy(recent = listed.take(MAX_RECENT)).dropped(listed.drop(MAX_RECENT).toSet(), evenCurrent = false)
+    }
 
     /** "Resume": switches to [queueId] at its saved song and position. */
     fun resume(queueId: String, now: Long): Switched {

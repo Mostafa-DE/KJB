@@ -124,6 +124,7 @@
     <string name="queue_name_field">Name</string>
     <string name="queue_renamed">Renamed</string>
     <string name="queue_delete">Delete</string>
+    <string name="queue_delete_button">Delete queue</string>
     <string name="queue_delete_title">Delete this queue?</string>
     <string name="queue_delete_text">Only the queue goes. Your songs stay on your phone.</string>
     <string name="queue_deleted">Queue deleted</string>
