@@ -644,8 +644,9 @@ class CoversTags(
     }
 
     /**
-     * A backup's settled albums (backup/, a restore): each added unless an album of its id is settled here; their Undo
-     * stays on the old phone. The flags set when either says so. False when not stored.
+     * A backup's settled albums (backup/, a restore): each added unless a record of its id is here (a Done row's id is
+     * its apply's, so a second restore adds none); their Undo stays on the old phone. The flags set when either says so.
+     * False when not stored.
      */
     suspend fun restoreSettled(albums: List<AlbumRecord>, checkedOnce: Boolean, noted: Boolean): Boolean = commit { memory ->
         val known = memory.albums.map { it.id }.toSet()

@@ -348,7 +348,7 @@ class BackupNewPhoneTest {
         assertEquals(
             CoversTagsMemory(
                 albums = listOf(
-                    AlbumRecord(albumId(listOf(newLantern.path, newBell.path)), Settled.DONE, "Harbour Glass", "Kit Calloway", listOf(mark(newLantern), mark(newBell)), at = T0 + 5, entryId = null, changed = 2),
+                    AlbumRecord("${albumId(listOf(newLantern.path, newBell.path))}#restored-${T0 + 5}", Settled.DONE, "Harbour Glass", "Kit Calloway", listOf(mark(newLantern), mark(newBell)), at = T0 + 5, entryId = null, changed = 2),
                     AlbumRecord(albumId(listOf(newWater.path, newRoad.path)), Settled.SKIPPED, "Night Ferry", "Mira Solen", listOf(mark(newWater), mark(newRoad)), at = T0 + 6),
                 ),
                 checkedOnce = true,
@@ -357,6 +357,46 @@ class BackupNewPhoneTest {
             phone.coversTags,
         )
         assertEquals(setOf(NamePair.of(NameKind.ARTIST, "Odo Brannick", "Odo Branick")), phone.keptApart)
+    }
+
+    /**
+     * Covers & tags keeps a Done row per apply, "<album>#<History entry>": two applies of one album come back as two rows,
+     * each with an id of its own that no History entry of the new phone can take, and a second restore adds nothing.
+     */
+    @Test
+    fun `each Done row of Covers & tags comes back as its own row, one per apply, and a second restore adds none`() {
+        val album = albumId(listOf(lantern.path, bell.path))
+        val old = oldPhone().also {
+            it.coversTags = CoversTagsMemory(
+                albums = listOf(
+                    AlbumRecord("$album#7", Settled.DONE, "Harbour Glass", "Kit Calloway", listOf(FileMark(lantern.path, 4_100_000, T0), FileMark(bell.path, 3_900_000, T0)), at = T0 + 5, entryId = 7, changed = 2),
+                    AlbumRecord("$album#9", Settled.DONE, "Harbour Glass", "Kit Calloway", listOf(FileMark(lantern.path, 4_100_000, T0), FileMark(bell.path, 3_900_000, T0)), at = T0 + 8, entryId = 9, changed = 1),
+                    AlbumRecord(albumId(listOf(water.path, road.path)), Settled.SKIPPED, "Night Ferry", "Mira Solen", listOf(FileMark(water.path, 5_000_000, T0), FileMark(road.path, 4_400_000, T0)), at = T0 + 6),
+                ),
+                checkedOnce = true,
+                historySeen = 9,
+            )
+        }
+        val phone = newPhone()
+
+        move(old = old, phone = phone)
+        val once = phone.coversTags
+        move(old = old, phone = phone)
+
+        val mark = { song: Song -> FileMark(song.path, song.sizeBytes, T0 + 99) }
+        val here = albumId(listOf(newLantern.path, newBell.path))
+        assertEquals(
+            CoversTagsMemory(
+                albums = listOf(
+                    AlbumRecord("$here#restored-${T0 + 5}", Settled.DONE, "Harbour Glass", "Kit Calloway", listOf(mark(newLantern), mark(newBell)), at = T0 + 5, entryId = null, changed = 2),
+                    AlbumRecord("$here#restored-${T0 + 8}", Settled.DONE, "Harbour Glass", "Kit Calloway", listOf(mark(newLantern), mark(newBell)), at = T0 + 8, entryId = null, changed = 1),
+                    AlbumRecord(albumId(listOf(newWater.path, newRoad.path)), Settled.SKIPPED, "Night Ferry", "Mira Solen", listOf(mark(newWater), mark(newRoad)), at = T0 + 6),
+                ),
+                checkedOnce = true,
+            ),
+            once,
+        )
+        assertEquals(once, phone.coversTags)
     }
 
     @Test

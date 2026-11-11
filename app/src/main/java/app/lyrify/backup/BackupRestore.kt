@@ -21,6 +21,7 @@ import app.lyrify.tags.AlbumRecord
 import app.lyrify.tags.CoversTagsMemory
 import app.lyrify.tags.FileMark
 import app.lyrify.tags.NamePair
+import app.lyrify.tags.Settled
 import app.lyrify.tags.SongProblem
 import app.lyrify.tags.albumId
 import app.lyrify.tones.SavedTone
@@ -382,12 +383,15 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
     /**
      * [album] settled on this phone: on its [songs] here, under the id their paths give it, marked as the files are now
      * (a file copied has another modified time), so Covers & tags leaves it settled until one changes. Its Undo stays on
-     * the old phone. Null when a song is not a file here.
+     * the old phone. A Done row is one apply's, as Covers & tags keeps them, so it gets an id of its own by when it was
+     * applied: never "#" and a History entry's number, which an apply on this phone could take, and the same on a second
+     * restore. Null when a song is not a file here.
      */
     private suspend fun settled(album: BackupAlbum, songs: List<Song>, stores: BackupStores): AlbumRecord? {
         val marks = songs.map { stores.fileMark(it.path) ?: return null }
         val problems = album.problems.mapNotNull { problem -> found[problem.path]?.let { SongProblem(it.path, problem.outcome) } }
-        return AlbumRecord(albumId(songs.map { it.path }), album.state, album.title, album.artist, marks, album.at, entryId = null, changed = album.changed, problems = problems)
+        val id = albumId(songs.map { it.path }).let { if (album.state == Settled.DONE) "$it#restored-${album.at}" else it }
+        return AlbumRecord(id, album.state, album.title, album.artist, marks, album.at, entryId = null, changed = album.changed, problems = problems)
     }
 
     companion object {
