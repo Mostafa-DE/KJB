@@ -314,7 +314,7 @@ class MetaClientTest {
     }
 
     @Test
-    fun `cover redirects are followed to archive org, each hop through the gate, and cached under the first address`() = runTest {
+    fun `cover redirects are followed to archive org, no hop waiting for a gap, and cached under the first address`() = runTest {
         val web = web()
         web.on(cover, redirect(307, archive))
         web.on(archive, redirect(302, server))
@@ -325,7 +325,7 @@ class MetaClientTest {
 
         assertArrayEquals(JPEG_BYTES, (answer as MetaAnswer.Ok).value)
         assertEquals(listOf(cover.toString(), archive, server), web.requests.map { it.uri })
-        assertEquals(listOf(0L, 1_100L, 2_200L), web.requests.map { it.at })
+        assertEquals(listOf(0L, 0L, 0L), web.requests.map { it.at })
         assertTrue(client.image(cover) is MetaAnswer.Ok)
         assertEquals(3, web.requests.size)
     }
@@ -410,5 +410,91 @@ class MetaClientTest {
         assertTrue(logs.toString(), logs.any { "503" in it })
         assertTrue(logs.toString(), logs.any { "500" in it })
         assertTrue(logs.toString(), logs.none { "http" in it || ".org" in it || ".com" in it || "Lanterns" in it || ID_A in it })
+    }
+
+    // Covers on their own (user feedback 2026-11-11): the Cover Art Archive sets no rate limit
+    // (https://musicbrainz.org/doc/Cover_Art_Archive/API, "Rate limiting rules"), so covers never wait for MusicBrainz's gate
+
+    @Test
+    fun `cover hops never wait for MusicBrainz's gate, and several covers load at once`() = runTest {
+        val web = web()
+        val other = URI("https://coverartarchive.org/release/$ID_B/front-250")
+        web.on(json, ok("{}"))
+        web.on(cover, redirect(307, archive))
+        web.on(archive, redirect(302, server))
+        web.on(server, ok(JPEG_BYTES))
+        web.on(other, ok(JPEG_BYTES))
+        val client = client(web)
+        client.text(json)
+
+        val covers = listOf(async { client.image(cover) }, async { client.image(other) })
+        val next = async { client.text(json, fresh = true) }
+        covers.forEach { assertTrue(it.await() is MetaAnswer.Ok) }
+        next.await()
+
+        assertEquals(listOf(0L, 0L, 0L, 0L), web.requests.filterNot { "musicbrainz" in it.uri }.map { it.at })
+        assertEquals(listOf(0L, 1_100L), web.requests.filter { "musicbrainz" in it.uri }.map { it.at })
+    }
+
+    @Test
+    fun `a cover's 503 is a cover that could not load, never MusicBrainz busy, and is not waited out`() = runTest {
+        val web = web()
+        web.on(cover, status(503))
+        val client = client(web)
+
+        assertTrue(client.image(cover) is MetaAnswer.Failed)
+
+        assertEquals(1, web.count(cover))
+        assertFalse(client.busy.value)
+        assertEquals(0L, testScheduler.currentTime)
+    }
+
+    @Test
+    fun `every request gives up connecting after 10 s and reading after 20 s`() = runTest {
+        val web = web()
+        web.on(json, ok("{}"))
+        web.on(cover, ok(JPEG_BYTES))
+        val client = client(web)
+        client.text(json)
+        client.image(cover)
+
+        assertEquals(listOf(10_000 to 20_000, 10_000 to 20_000), web.requests.map { it.connectTimeout to it.readTimeout })
+    }
+
+    @Test
+    fun `a request that timed out is tried once more, then given up, and other failures are not tried again`() = runTest {
+        val web = web()
+        val slow = URI("https://musicbrainz.org/ws/2/release/$ID_B?fmt=json")
+        val dropped = URI("https://musicbrainz.org/ws/2/release/$ID_C?fmt=json")
+        web.on(json, FakeWeb.Reply(200, error = java.net.SocketTimeoutException("timed out")), ok("{}"))
+        web.on(slow, FakeWeb.Reply(200, error = java.net.SocketTimeoutException("timed out")))
+        web.on(dropped, FakeWeb.Reply(200, error = IOException("reset")))
+        web.on(cover, FakeWeb.Reply(200, error = java.net.SocketTimeoutException("timed out")), ok(JPEG_BYTES))
+        val client = client(web)
+
+        assertTrue(client.text(json) is MetaAnswer.Ok)
+        assertTrue(client.text(slow) is MetaAnswer.Failed)
+        assertTrue(client.text(dropped) is MetaAnswer.Failed)
+        assertTrue(client.image(cover) is MetaAnswer.Ok)
+
+        assertEquals(listOf(2, 2, 1, 2), listOf(json, slow, dropped, cover).map(web::count))
+    }
+
+    @Test
+    fun `an answer read to its end leaves its connection for the next request, any other is disconnected`() = runTest {
+        val web = web()
+        val missing = URI("https://musicbrainz.org/ws/2/release/$ID_B?fmt=json")
+        web.on(json, ok("{}"))
+        web.on(missing, status(404))
+        web.on(cover, redirect(307, archive))
+        web.on(archive, redirect(302, server))
+        web.on(server, ok(JPEG_BYTES))
+        val client = client(web)
+
+        client.text(json)
+        client.text(missing)
+        client.image(cover)
+
+        assertEquals(listOf(missing.toString(), cover.toString(), archive), web.disconnected.toList())
     }
 }

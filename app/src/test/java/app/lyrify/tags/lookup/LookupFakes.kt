@@ -42,8 +42,9 @@ internal val JPEG_BYTES: ByteArray = byteArrayOf(0xFF.toByte(), 0xD8.toByte(), 0
 /**
  * A scripted web: each URI answers with its replies in turn (the last one repeats); anything else is a 404. Every
  * request is recorded with its User-Agent and the time [now] gives when it was sent. No socket is ever opened.
+ * [latencyMs] blocks each answer that long in real time (the timing probe); none by default.
  */
-internal class FakeWeb(private val now: () -> Long = { 0L }) {
+internal class FakeWeb(private val now: () -> Long = { 0L }, private val latencyMs: (URI) -> Long = { 0L }) {
     class Reply(
         val code: Int,
         val body: ByteArray = ByteArray(0),
@@ -54,9 +55,12 @@ internal class FakeWeb(private val now: () -> Long = { 0L }) {
         val error: IOException? = null,
     )
 
-    data class Request(val uri: String, val userAgent: String?, val at: Long)
+    data class Request(val uri: String, val userAgent: String?, val at: Long, val connectTimeout: Int = 0, val readTimeout: Int = 0)
 
     val requests = mutableListOf<Request>()
+
+    /** The URIs whose connection was disconnected, so it could not be used again. */
+    val disconnected: MutableList<String> = java.util.Collections.synchronizedList(mutableListOf())
     private val routes = mutableMapOf<String, ArrayDeque<Reply>>()
 
     fun on(uri: URI, vararg replies: Reply) = on(uri.toString(), *replies)
@@ -65,6 +69,7 @@ internal class FakeWeb(private val now: () -> Long = { 0L }) {
         routes[uri] = ArrayDeque(replies.toList())
     }
 
+    @Synchronized
     fun open(uri: URI): HttpURLConnection {
         val queue = routes[uri.toString()]
         val reply = when {
@@ -80,7 +85,8 @@ internal class FakeWeb(private val now: () -> Long = { 0L }) {
 
     private inner class Connection(private val uri: URI, private val reply: Reply) : HttpURLConnection(uri.toURL()) {
         override fun getResponseCode(): Int {
-            requests += Request(uri.toString(), getRequestProperty("User-Agent"), now())
+            synchronized(requests) { requests += Request(uri.toString(), getRequestProperty("User-Agent"), now(), connectTimeout, readTimeout) }
+            latencyMs(uri).takeIf { it > 0 }?.let(Thread::sleep)
             reply.error?.let { throw it }
             return reply.code
         }
@@ -94,7 +100,9 @@ internal class FakeWeb(private val now: () -> Long = { 0L }) {
 
         override fun getErrorStream(): InputStream? = if (reply.code >= HTTP_BAD_REQUEST) ByteArrayInputStream(reply.body) else null
 
-        override fun disconnect() = Unit
+        override fun disconnect() {
+            disconnected += uri.toString()
+        }
 
         override fun usingProxy(): Boolean = false
 

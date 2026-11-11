@@ -13,10 +13,22 @@ import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import kotlin.math.roundToInt
 
-/** The Cover Art Archive's ready-made sizes, larger first: Covers & tags never fetches the original (it can be 30 MB). */
+/**
+ * The Cover Art Archive's ready-made sizes (https://musicbrainz.org/doc/Cover_Art_Archive/API: 250, 500 and 1200 px).
+ * Covers & tags never fetches the original (it can be 30 MB): previews take [PREVIEW], an apply [WRITTEN].
+ */
 enum class CoverSize(val path: String) {
     FRONT_1200("front-1200"),
     FRONT_500("front-500"),
+    FRONT_250("front-250");
+
+    companion object {
+        /** What a card or the review shows, smallest first. */
+        val PREVIEW: List<CoverSize> = listOf(FRONT_250, FRONT_500)
+
+        /** What an apply writes into the songs, largest first. */
+        val WRITTEN: List<CoverSize> = listOf(FRONT_1200, FRONT_500)
+    }
 }
 
 data class ImageSize(val width: Int, val height: Int)
