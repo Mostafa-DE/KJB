@@ -250,6 +250,29 @@ class QueuesTest {
         assertTrue(saved.saved.isEmpty())
     }
 
+    @Test
+    fun `Undo of Delete puts the queue back where it was, in Saved or in Recent, and only once`() {
+        var book = playing(0).play(folder, 0, folderSource, now = 2).book
+        val recent = book.recent.single()
+        book = book.play(listOf(song("Loose 1")), 0, QueueSource(SourceKind.SEARCH, "search:loose", "loose"), now = 3).book
+        assertEquals(2, book.recent.size)
+        val kept = book.recent.first()
+        book = book.keep(kept)
+        val before = book
+
+        val fromRecent = book.deleted(recent)!!
+        assertNull(fromRecent.book.queue(recent))
+        assertEquals(before, fromRecent.book.undelete(fromRecent))
+        val fromSaved = book.deleted(kept)!!
+        assertTrue(fromSaved.book.saved.isEmpty())
+        assertEquals(before, fromSaved.book.undelete(fromSaved))
+        // A second Undo, or one after the queue came back, changes nothing.
+        assertEquals(before, before.undelete(fromSaved))
+        // The queue playing is never deleted.
+        assertNull(book.deleted(book.currentId!!))
+        assertNull(book.deleted("q999"))
+    }
+
     // Resume and Play from start
 
     @Test

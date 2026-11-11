@@ -335,7 +335,6 @@ fun SyncedLyrics(
                     return@LaunchedEffect
                 }
             }
-            if (at < 0) return@LaunchedEffect
             delay(follow.waitMs(SystemClock.elapsedRealtime()))
             // A finger still on the list: its release starts the wait again.
             // A finger still on the list: its lift starts the wait again.
@@ -413,9 +412,11 @@ interface LineList {
 /**
  * Scrolls to the line [at] until its middle sits at [anchor] of the [viewport]: from where it is when laid out, else
  * to its row first (its height guessed from the first line laid out), then by what is left once its own height is
- * known. Smooth on the standard curve, or at once.
+ * known. Smooth on the standard curve, or at once. Before the first line ([at] below 0: the song's start, or the same
+ * song again for Repeat one) the list goes back to its start, as a song just begun shows it.
  */
 suspend fun followLine(list: LineList, at: Int, padTop: Int, viewport: Int, anchor: Float, smooth: Boolean) {
+    if (at < 0) return list.jumpTo(0, 0, smooth)
     if (list.laidOut(at) == null) list.jumpTo(at, followOffset(padTop, list.firstHeight(), viewport, anchor), smooth)
     val (top, size) = list.laidOut(at) ?: return
     val delta = followDelta(top, size, viewport, anchor)

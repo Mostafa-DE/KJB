@@ -39,6 +39,16 @@ class LicencesTest {
     }
 
     @Test
+    fun `the page lists KJB and the notices, with no Built with list, and the notices carry every licence in full`() {
+        // User feedback 25: the "Built with" list is gone from the page.
+        assertEquals(listOf(KJB_LICENCE, NOTICES), LICENCE_ROWS)
+        // NOTICE names every library; its page shows it, then the full text of every licence it names, each once.
+        assertEquals("NOTICE.txt", NOTICES.texts.first())
+        assertEquals(THIRD_PARTY.flatMap { it.texts }.distinct(), NOTICES.texts.drop(1))
+        assertEquals(NOTICES.texts, NOTICES.texts.distinct())
+    }
+
+    @Test
     fun `each entry has its own name, a licence and a holder`() {
         assertEquals(SHIPPED.size, SHIPPED.map { it.name }.toSet().size)
         assertTrue(SHIPPED.size > 20)

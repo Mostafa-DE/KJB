@@ -33,8 +33,8 @@ data class Settings(
 
 /** Settings > Playback. */
 data class PlaybackSettings(
-    /** "Remember my place": which songs resume where the user left them. */
-    val rememberPlace: RememberPlace = RememberPlace.LONG_SONGS,
+    /** "Remember my place": which songs resume where the user left them; All songs (user feedback 2026-11-11). */
+    val rememberPlace: RememberPlace = RememberPlace.ALL_SONGS,
     /** "Headset buttons": one press plays or pauses, two skip, three go back. "Pause when disconnected" is always on. */
     val headsetButtons: Boolean = true,
     /** "Skip short clips": songs under 30 s leave the library. */
@@ -61,7 +61,7 @@ data class PlaybackSettings(
  */
 data class ConnectDevice(val associationId: Int, val name: String)
 
-/** "Remember my place": Long songs (10 minutes or longer, the default), All songs, or Off. */
+/** "Remember my place": Long songs (10 minutes or longer, the default until version 3), All songs (the default), or Off. */
 enum class RememberPlace { LONG_SONGS, ALL_SONGS, OFF }
 
 /** Playback > Volume levelling and Crossfade: what the audio chain does, shown under Playback. */
@@ -194,10 +194,12 @@ enum class FavouritesTab { SONGS, ALBUMS, ARTISTS, FOLDERS, PLAYLISTS }
  * field by field: a key this version does not know is ignored, and a field missing, of another type, out of range or
  * naming an unknown choice reads as its default while the fields around it are read as stored. A section that is
  * missing or not an object reads as its defaults. Only text that is not a JSON object at all is not settings.
- * Version 2 put Playlists right after Songs in the Library tabs; a file without a version reads as this version.
+ * Version 2 put Playlists right after Songs in the Library tabs. Version 3 made All songs the default of Remember my
+ * place: an older file's Long songs was the old default (every file wrote it), so it reads as All songs, while Off and
+ * All songs are kept. A file without a version reads as this version.
  */
 object SettingsJson {
-    const val VERSION: Int = 2
+    const val VERSION: Int = 3
 
     fun encode(settings: Settings): String = Json.encodeToString(
         JsonObject.serializer(),
@@ -267,7 +269,7 @@ object SettingsJson {
         return Settings(
             playback = root.section("playback")?.let {
                 PlaybackSettings(
-                    rememberPlace = it.choice("rememberPlace", d.playback.rememberPlace),
+                    rememberPlace = rememberPlace(it, version),
                     headsetButtons = it.flag("headsetButtons", d.playback.headsetButtons),
                     skipShortClips = it.flag("skipShortClips", d.playback.skipShortClips),
                     countPlayAfterPercent = it.number("countPlayAfterPercent", d.playback.countPlayAfterPercent, PlaybackSettings.PLAY_SHARES::contains),
@@ -358,6 +360,16 @@ object SettingsJson {
 
     /** The version from which Playlists follows Songs in the Library tabs. */
     private const val PLAYLISTS_AFTER_SONGS: Int = 2
+
+    /** The version from which Long songs in Remember my place is the user's choice, not the old default. */
+    private const val ALL_SONGS_DEFAULT: Int = 3
+
+    /** Remember my place as stored: the old default (Long songs before [ALL_SONGS_DEFAULT]) reads as today's default. */
+    private fun rememberPlace(playback: JsonObject, version: Int): RememberPlace {
+        val default = PlaybackSettings().rememberPlace
+        val stored = playback.choice("rememberPlace", default)
+        return if (version < ALL_SONGS_DEFAULT && stored == RememberPlace.LONG_SONGS) default else stored
+    }
 
     /** The picked devices: entries with a whole positive id and a name, the first one of each id. */
     private fun connectDevices(element: JsonElement?): List<ConnectDevice> = (element as? JsonArray).orEmpty().mapNotNull { item ->

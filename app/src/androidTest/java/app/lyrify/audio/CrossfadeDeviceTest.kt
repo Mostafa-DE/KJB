@@ -8,6 +8,7 @@ import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.util.UnstableApi
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import app.lyrify.auto.CarCovers
 import app.lyrify.library.Song
 import app.lyrify.library.SongRef
 import app.lyrify.player.EngineListener
@@ -129,7 +130,7 @@ class CrossfadeDeviceTest {
     private fun build(songs: List<Song>, seconds: Int): Built = onMain {
         val made = mutableListOf<GaplessEngine>()
         val engine = CrossfadeEngine(
-            newSlot = { GaplessEngine(context, { Settings() }, NoLevels) { mediaItemOf(it, LibrarySettings()) }.also { made += it } },
+            newSlot = { GaplessEngine(context, { Settings() }, NoLevels) { mediaItemOf(it, LibrarySettings(), CarCovers.authority(context)) }.also { made += it } },
             rules = AnyFade,
             focusOf = { control -> MediaFocus(context, Looper.getMainLooper(), control) },
             scope = scope,

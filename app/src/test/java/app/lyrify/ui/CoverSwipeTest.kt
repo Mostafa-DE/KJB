@@ -57,10 +57,10 @@ class CoverSwipeTest {
     }
 
     @Test
-    fun `the next song slides in, wrapping only with Repeat all`() {
+    fun `the next song slides in, and from the last song the first one, as Next goes there whatever Repeat says`() {
         assertEquals(3L, incoming(queue(5, 2), SkipWay.NEXT, Repeat.OFF, positionMs = 60_000)?.uid)
-        assertNull(incoming(queue(5, 4), SkipWay.NEXT, Repeat.OFF, positionMs = 0))
-        assertNull(incoming(queue(5, 4), SkipWay.NEXT, Repeat.ONE, positionMs = 0))
+        assertEquals(0L, incoming(queue(5, 4), SkipWay.NEXT, Repeat.OFF, positionMs = 0)?.uid)
+        assertEquals(0L, incoming(queue(5, 4), SkipWay.NEXT, Repeat.ONE, positionMs = 0)?.uid)
         assertEquals(0L, incoming(queue(5, 4), SkipWay.NEXT, Repeat.ALL, positionMs = 0)?.uid)
         // A queue of one song has no other song to slide in.
         assertNull(incoming(queue(1, 0), SkipWay.NEXT, Repeat.ALL, positionMs = 0))
