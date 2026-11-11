@@ -185,7 +185,7 @@ fun swipeOutcome(axis: SwipeAxis?, dx: Float, dy: Float): SwipeOutcome = when {
 
 /**
  * The song whose cover slides in for a skip [way]: the one Next or Previous plays, as the player decides it (Next on the
- * last song goes to the first whatever Repeat says, LyrifyPlayer's seekIndex; Previous wraps round only with Repeat all,
+ * last song goes to the first whatever Repeat says, LyrifyPlayer's sessionSeek; Previous wraps round only with Repeat all,
  * and past 3 s starts this song over). Null when no other song comes: a queue of one, the first song's Previous, or
  * Previous starting the song over.
  */

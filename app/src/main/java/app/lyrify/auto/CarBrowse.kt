@@ -61,6 +61,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
@@ -115,6 +116,9 @@ class CarBrowse(
     )
 
     init {
+        // Grants a KJB that ended without its cars leaving (a crash, a kill) left in the system go first: a grant outlives
+        // the process until the phone restarts. One thread, in order, so before any car connecting now gets its own.
+        grantsScope.launch { ControllerAccess.CAR_PACKAGES.forEach { CarCovers.revoke(context, it) } }
         // Recent queues follows the queues: a car showing it hears when one comes or goes.
         scope.launch {
             core.book.map { (listOfNotNull(it.currentId) + it.saved + it.recent).distinct() }.distinctUntilChanged().drop(1)
@@ -128,6 +132,11 @@ class CarBrowse(
         connected[controller] = granted
         if (granted == Access.CAR) grantsScope.launch { grants.connected(controller) }
         return granted
+    }
+
+    /** The service stops: the car apps still connected lose their cover grants. */
+    fun release() {
+        grantsScope.launch { grants.closed() }
     }
 
     /** [controller] left: a car app's cover grant goes with its last connection. */
@@ -357,6 +366,9 @@ class ControllerAccess(
         /** Android Automotive's media centre (a platform app). */
         val MEDIA_CENTRES: Set<String> = setOf("com.android.car.media")
 
+        /** Every app that can connect as a car, so ever hold a cover grant. */
+        val CAR_PACKAGES: Set<String> = setOf(ANDROID_AUTO) + MEDIA_CENTRES
+
         /** Android Auto's release signing certificates, the current and the rotated one (Google's UAMP allowlist). */
         val AUTO_CERTIFICATES: Set<String> = setOf(
             "FDB00C43DBDE8B51CB312AA81D3B5FA17713ADB94B28F598D77F8EB89DACEEDF",
@@ -438,6 +450,12 @@ class CoverGrants<C : Any>(
         val app = apps.remove(car) ?: return
         if (app !in apps.values) revoke(app)
     }
+
+    /** The service stops: every car app still connected loses its grant. */
+    fun closed() {
+        apps.values.toSet().forEach(revoke)
+        apps.clear()
+    }
 }
 
 /** The path of KJB's default cover ([R.drawable.kjb_default_cover]) at [CarCovers]. */
@@ -456,6 +474,16 @@ fun nodeCover(node: TreeNode): String? = node.cover?.let(::coverPath)
  */
 fun <T : Any> coverFor(path: String, allowed: (Long) -> Boolean, embedded: (Long) -> T?, fallback: () -> T): T =
     path.toLongOrNull()?.takeIf(allowed)?.let(embedded) ?: fallback()
+
+/** How long a cover asked for during the library's first read waits for it: on a binder thread, never long. */
+private const val LIBRARY_WAIT_MS = 300L
+
+/**
+ * The library once read, waiting [LIBRARY_WAIT_MS] at most while it is first read (Auto may ask right after KJB
+ * starts); null without one, and the provider serves the default cover.
+ */
+suspend fun readyLibrary(state: Flow<LibraryState>): Library? =
+    (withTimeoutOrNull(LIBRARY_WAIT_MS) { state.first { it !is LibraryState.Loading } } as? LibraryState.Ready)?.library
 
 /** The MediaStore ids of the songs in [library]: the only covers [CarCovers] serves. */
 fun coverIds(library: Library): Set<Long> = library.songs.mapNotNull { it.ref.mediaStoreId }.toSet()
@@ -524,8 +552,6 @@ class CarCovers : ContentProvider() {
         /** Covers are at most this size: the notification's and Auto's largest; Auto's grid tiles are smaller. */
         private const val COVER_PX = 512
 
-        /** How long a cover asked for during the library's first read waits for it (a binder thread, never the main one). */
-        private const val LIBRARY_WAIT_MS = 2_000L
 
         /** The ids of the library last asked about, so a screen of covers reads the library once. */
         @Volatile
@@ -564,16 +590,22 @@ class CarCovers : ContentProvider() {
             }
         }
 
+        /**
+         * [packageName]'s grant goes. Android matches a revoke by path (every grant at or under the uri), not by the
+         * prefix flag (UriGrantsManagerService.revokeUriPermissionLocked), so the provider's root takes the prefix grant.
+         */
         fun revoke(context: Context, packageName: String) {
-            context.revokeUriPermission(packageName, root(context), Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            try {
+                context.revokeUriPermission(packageName, root(context), Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            } catch (e: RuntimeException) {
+                Log.w(LOG_TAG, "car covers not revoked: ${e.javaClass.simpleName}")
+            }
         }
 
         private fun root(context: Context): Uri = Uri.Builder().scheme(ContentResolver.SCHEME_CONTENT).authority(authority(context)).build()
 
-        /** The library, waiting a moment while it is first read (Auto may ask right after KJB starts); null without one. */
-        private fun library(context: Context): Library? = runBlocking {
-            withTimeoutOrNull(LIBRARY_WAIT_MS) { LibraryGraph.repository(context).state.first { it !is LibraryState.Loading } }
-        }.let { (it as? LibraryState.Ready)?.library }
+        /** The library, while a cover is asked for on a binder thread ([readyLibrary]). */
+        private fun library(context: Context): Library? = runBlocking { readyLibrary(LibraryGraph.repository(context).state) }
 
         /** Song [id]'s embedded cover, at most [COVER_PX] square; null without one, or when it cannot be read. */
         private fun embedded(context: Context, id: Long): Bitmap? = try {

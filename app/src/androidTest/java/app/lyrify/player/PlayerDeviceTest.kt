@@ -306,6 +306,33 @@ class PlayerDeviceTest {
         assertTrue("stopped after Next", waitFor(3_000) { controller.isPlaying })
     }
 
+    /**
+     * Review finding 1: Next in a queue of one starts the same song again, and a jump the engine makes inside the song
+     * itself (Repeat a part, a kept place) moves the controller's place too, so the progress and lyrics follow.
+     */
+    @Test
+    fun aRestartOfTheSameSongMovesTheControllersPlaceBack() {
+        val songs = listOf(song(tone("kjb-again-1.wav", 4, 440.0), "Again One"))
+        val built = build(songs)
+        val controller = controlled(built, songs, 0, "kjb-again-test")
+        var seeks = 0
+        onMain {
+            controller.addListener(object : Player.Listener {
+                override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
+                    if (reason == Player.DISCONTINUITY_REASON_SEEK) seeks++
+                }
+            })
+            controller.play()
+        }
+        assertTrue("never got past 1.5 s", waitFor(5_000) { controller.currentPosition > 1_500 })
+        onMain { controller.seekToNext() }
+        assertTrue("Next in a queue of one was not told", waitFor(2_000) { seeks >= 1 && controller.currentPosition < 1_000 })
+        assertTrue("never got past 1.5 s again", waitFor(5_000) { controller.currentPosition > 1_500 })
+        val before = onMain { seeks }
+        onMain { built.engine.seek(0, 200) }
+        assertTrue("the engine's own jump was not told", waitFor(2_000) { seeks > before && controller.currentPosition < 1_000 })
+    }
+
     @Test
     fun twoSongsPlayBackToBackWithoutAGap() {
         val (first, natural) = backToBack(listOf(song(tone("kjb-gap-1.wav", 2, 440.0), "Gap One"), song(tone("kjb-gap-2.wav", 2, 550.0), "Gap Two")))

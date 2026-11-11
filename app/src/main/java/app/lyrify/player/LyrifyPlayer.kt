@@ -57,20 +57,29 @@ fun controllerMove(book: QueueBook, loaded: List<Long>, fromIndex: Int, toIndex:
 fun startedDiscontinuity(lap: Boolean, natural: Boolean): Int? = if (natural || lap) Player.DISCONTINUITY_REASON_AUTO_TRANSITION else null
 
 /**
- * The song a seek goes to: [mediaItemIndex] as asked. Next with no song after it (the last song with Repeat off, or with
- * Repeat one, which Media3 reads as off for Next) comes without an index ([C.INDEX_UNSET]) and goes to the first song of
- * the queue, playing on if it played; any other seek without an index stays in the song playing ([current]). A queue
- * playing to its end by itself still stops there (PlaybackService's onEnded).
+ * Where a seek goes, and whether the facade tells controllers of it itself ([tell]): Media3 tells of the seeks it planned
+ * (an index it found), not of one that came without an index, the same song again included (Next in a queue of one).
  */
-fun seekIndex(mediaItemIndex: Int, seekCommand: Int, current: Int): Int = when {
-    mediaItemIndex != C.INDEX_UNSET -> mediaItemIndex
-    seekCommand == Player.COMMAND_SEEK_TO_NEXT || seekCommand == Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM -> 0
-    else -> current
+data class SessionSeek(val index: Int, val tell: Boolean)
+
+/**
+ * The seek for [mediaItemIndex] and [seekCommand], the song playing being [current]. Next with no song after it (the
+ * last song with Repeat off, or with Repeat one, which Media3 reads as off for Next) comes without an index
+ * ([C.INDEX_UNSET]) and goes to the first song of the queue, playing on if it played; any other seek without an index
+ * stays in the song playing. A queue playing to its end by itself still stops there (PlaybackService's onEnded).
+ */
+fun sessionSeek(mediaItemIndex: Int, seekCommand: Int, current: Int): SessionSeek {
+    val index = when {
+        mediaItemIndex != C.INDEX_UNSET -> mediaItemIndex
+        seekCommand == Player.COMMAND_SEEK_TO_NEXT || seekCommand == Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM -> 0
+        else -> current
+    }
+    return SessionSeek(index, tell = mediaItemIndex == C.INDEX_UNSET)
 }
 
 /**
  * The player commands the session offers for [view] (Player.COMMAND_*): the seeks once a song is loaded, Next on the
- * last song too ([seekIndex]), so the app, the notification, a headset, the widget and the car all go round to the first.
+ * last song too ([sessionSeek]), so the app, the notification, a headset, the widget and the car all go round to the first.
  */
 fun sessionCommands(view: SessionView): List<Int> = ALWAYS_OFFERED + if (view.uids.isNotEmpty()) SEEKS_OFFERED else emptyList()
 
@@ -123,10 +132,14 @@ class LyrifyPlayer(
 ) : SimpleBasePlayer(looper) {
     /**
      * A jump the engine made that the session's own state cannot see, told to the controllers with the next state: the
-     * state's position is read live from the engine, so a song starting again (Repeat one) or a wrap to the first song
-     * looks to the session like no move at all.
+     * state's position is read live from the engine, so a song starting again (Repeat one, Next in a queue of one), a
+     * jump inside the song the engine makes itself (Repeat a part, a kept place) or a wrap to the first song looks to
+     * the session like no move at all.
      */
     private var discontinuity: Int? = null
+
+    /** A controller's seek is going on: Media3 tells of it itself. */
+    private var seeking = false
 
     init {
         engine.addListener(object : EngineListener {
@@ -134,6 +147,12 @@ class LyrifyPlayer(
 
             override fun onSongStarted(uid: Long, lap: Boolean, natural: Boolean) {
                 discontinuity = startedDiscontinuity(lap, natural) ?: return
+                invalidateState()
+            }
+
+            override fun onSeeked(fromMs: Long, toMs: Long) {
+                if (seeking) return
+                discontinuity = Player.DISCONTINUITY_REASON_SEEK
                 invalidateState()
             }
         })
@@ -200,11 +219,16 @@ class LyrifyPlayer(
     override fun handleRelease(): ListenableFuture<*> = Futures.immediateVoidFuture()
 
     override fun handleSeek(mediaItemIndex: Int, positionMs: Long, seekCommand: Int): ListenableFuture<*> {
-        val index = seekIndex(mediaItemIndex, seekCommand, engine.index)
-        // Next from the last song: a jump the session did not plan, told as the user's seek.
-        if (mediaItemIndex == C.INDEX_UNSET && index != engine.index) discontinuity = Player.DISCONTINUITY_REASON_SEEK
+        val seek = sessionSeek(mediaItemIndex, seekCommand, engine.index)
+        // Next from the last song (to the first, or the same song again in a queue of one): a jump Media3 did not plan.
+        if (seek.tell) discontinuity = Player.DISCONTINUITY_REASON_SEEK
         beforeSeek()
-        engine.seek(index, if (positionMs == C.TIME_UNSET) 0 else positionMs)
+        seeking = true
+        try {
+            engine.seek(seek.index, if (positionMs == C.TIME_UNSET) 0 else positionMs)
+        } finally {
+            seeking = false
+        }
         return Futures.immediateVoidFuture()
     }
 

@@ -69,10 +69,14 @@ fun sleepFadeVolume(leftMs: Long): Float {
 /** What the timer does now: the player's [volume], whether the music [stops], and when to look again (null: once a song ends). */
 data class SleepStep(val volume: Float, val stops: Boolean, val nextMs: Long?)
 
-fun sleepStep(timer: SleepTimer, now: Long, playing: Boolean, positionMs: Long, durationMs: Long, speed: Float): SleepStep {
+/**
+ * The timer at [now], the song at [positionMs] of [durationMs] at [speed]. Paused inside the fade, the volume holds the
+ * fade's level, so the music comes back on the curve, never at full; only the stop gives full volume back.
+ */
+fun sleepStep(timer: SleepTimer, now: Long, positionMs: Long, durationMs: Long, speed: Float): SleepStep {
     val left = sleepLeftMs(timer, now, positionMs, durationMs, speed)
     if (timer is SleepTimer.ByTime && left == 0L) return SleepStep(1f, stops = true, nextMs = null)
-    val volume = if (playing && left != null) sleepFadeVolume(left) else 1f
+    val volume = if (left != null) sleepFadeVolume(left) else 1f
     val next = when {
         // Other songs first: nothing to do until one ends.
         timer is SleepTimer.BySongs && timer.left > 1 -> null
@@ -115,7 +119,7 @@ class SleepDriver(
                 awaitCancellation()
             }
             while (true) {
-                val step = sleepStep(running, clock(), port.playing, port.positionMs, port.durationMs, port.speed)
+                val step = sleepStep(running, clock(), port.positionMs, port.durationMs, port.speed)
                 if (step.stops) return@collectLatest stop()
                 port.volume = step.volume
                 delay(step.nextMs ?: awaitCancellation())

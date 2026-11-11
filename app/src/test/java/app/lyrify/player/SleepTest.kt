@@ -35,24 +35,26 @@ class SleepTest {
         assertEquals(15_000L, SLEEP_FADE_MS)
         val timer = sleepFor(15, now = 0) as SleepTimer.ByTime
         // Well before: nothing to do until the fade starts.
-        assertEquals(SleepStep(1f, stops = false, nextMs = 15 * 60_000 - SLEEP_FADE_MS), sleepStep(timer, 0, playing = true, 0, song, 1f))
-        assertEquals(1f, sleepStep(timer, timer.endsAt - 15_000, playing = true, 0, song, 1f).volume, 0.001f)
+        assertEquals(SleepStep(1f, stops = false, nextMs = 15 * 60_000 - SLEEP_FADE_MS), sleepStep(timer, 0, 0, song, 1f))
+        assertEquals(1f, sleepStep(timer, timer.endsAt - 15_000, 0, song, 1f).volume, 0.001f)
         // Ease-out: the volume falls fast at first, then ever more gently into silence (the cube of the share left).
-        assertEquals(0.421875f, sleepStep(timer, timer.endsAt - 11_250, playing = true, 0, song, 1f).volume, 0.001f)
-        val half = sleepStep(timer, timer.endsAt - 7_500, playing = true, 0, song, 1f)
+        assertEquals(0.421875f, sleepStep(timer, timer.endsAt - 11_250, 0, song, 1f).volume, 0.001f)
+        val half = sleepStep(timer, timer.endsAt - 7_500, 0, song, 1f)
         assertEquals(0.125f, half.volume, 0.001f)
         assertFalse(half.stops)
         assertTrue(half.nextMs!! in 1..1_000)
-        assertEquals(0.001f, sleepStep(timer, timer.endsAt - 1_500, playing = true, 0, song, 1f).volume, 0.0001f)
+        assertEquals(0.001f, sleepStep(timer, timer.endsAt - 1_500, 0, song, 1f).volume, 0.0001f)
         // Every step a little quieter than the one before, and each fall smaller than the last (the stop itself aside).
-        val steps = (15_000L downTo 100L step 100).map { sleepStep(timer, timer.endsAt - it, playing = true, 0, song, 1f).volume }
+        val steps = (15_000L downTo 100L step 100).map { sleepStep(timer, timer.endsAt - it, 0, song, 1f).volume }
         steps.zipWithNext().forEach { (before, after) -> assertTrue(after <= before) }
         val falls = steps.zipWithNext { before, after -> before - after }
         falls.zipWithNext().forEach { (sooner, later) -> assertTrue(later <= sooner + 1e-6f) }
-        // Paused in the fade: the volume waits at full; the time runs on.
-        assertEquals(1f, sleepStep(timer, timer.endsAt - 5_000, playing = false, 0, song, 1f).volume, 0f)
-        assertTrue(sleepStep(timer, timer.endsAt, playing = true, 0, song, 1f).stops)
-        assertTrue(sleepStep(timer, timer.endsAt + 60_000, playing = false, 0, song, 1f).stops)
+        // Paused in the fade: the volume holds the fade's level, so the music comes back on the curve, never at full;
+        // the time runs on. Before the fade a pause changes nothing.
+        assertEquals(sleepFadeVolume(5_000), sleepStep(timer, timer.endsAt - 5_000, 0, song, 1f).volume, 0f)
+        assertEquals(1f, sleepStep(timer, timer.endsAt - 60_000, 0, song, 1f).volume, 0f)
+        assertTrue(sleepStep(timer, timer.endsAt, 0, song, 1f).stops)
+        assertTrue(sleepStep(timer, timer.endsAt + 60_000, 0, song, 1f).stops)
         assertEquals(5_000L, sleepLeftMs(timer, timer.endsAt - 5_000, 0, song, 1f))
         assertEquals(0L, sleepLeftMs(timer, timer.endsAt + 9, 0, song, 1f))
     }
@@ -61,21 +63,21 @@ class SleepTest {
     fun `by songs, only the last song fades, over its last 15 s at the speed it plays`() {
         val three = sleepAfter(3)
         assertNull(sleepLeftMs(three, 0, 195_000, song, 1f))
-        assertEquals(SleepStep(1f, stops = false, nextMs = null), sleepStep(three, 0, playing = true, 195_000, song, 1f))
+        assertEquals(SleepStep(1f, stops = false, nextMs = null), sleepStep(three, 0, 195_000, song, 1f))
         val last = SleepTimer.BySongs(songs = 3, left = 1)
         assertEquals(30_000L, sleepLeftMs(last, 0, 170_000, song, 1f))
-        assertEquals(1f, sleepStep(last, 0, playing = true, 170_000, song, 1f).volume, 0f)
-        assertEquals(1f, sleepStep(last, 0, playing = true, 185_000, song, 1f).volume, 0.001f)
-        assertEquals(0.125f, sleepStep(last, 0, playing = true, 192_500, song, 1f).volume, 0.001f)
+        assertEquals(1f, sleepStep(last, 0, 170_000, song, 1f).volume, 0f)
+        assertEquals(1f, sleepStep(last, 0, 185_000, song, 1f).volume, 0.001f)
+        assertEquals(0.125f, sleepStep(last, 0, 192_500, song, 1f).volume, 0.001f)
         // Twice as fast, 15 s of the song are 7.5 s of time.
         assertEquals(7_500L, sleepLeftMs(last, 0, 185_000, song, 2f))
-        assertEquals(0.125f, sleepStep(last, 0, playing = true, 185_000, song, 2f).volume, 0.001f)
+        assertEquals(0.125f, sleepStep(last, 0, 185_000, song, 2f).volume, 0.001f)
         // A length not known yet: full volume, and a look again soon.
-        val unknown = sleepStep(last, 0, playing = true, 0, 0, 1f)
+        val unknown = sleepStep(last, 0, 0, 0, 1f)
         assertEquals(1f, unknown.volume, 0f)
         assertTrue(unknown.nextMs!! in 1..1_000)
         // The end of the song is not a stop here: the song ending is ([sleepAfterSong]).
-        assertFalse(sleepStep(last, 0, playing = true, song, song, 1f).stops)
+        assertFalse(sleepStep(last, 0, song, song, 1f).stops)
     }
 
     @Test

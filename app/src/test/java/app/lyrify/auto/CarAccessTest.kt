@@ -2,12 +2,17 @@ package app.lyrify.auto
 
 import androidx.media3.common.Player
 import app.lyrify.library.Library
+import app.lyrify.library.LibraryState
 import app.lyrify.library.song
 import app.lyrify.player.Found
 import app.lyrify.player.QueueSource
 import app.lyrify.player.SourceKind
 import app.lyrify.settings.PlaybackSettings
 import app.lyrify.settings.Settings
+import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -165,6 +170,19 @@ class CarAccessTest {
         assertEquals(listOf("revoke auto", "grant auto"), log)
     }
 
+    @Test
+    fun `when the service stops, every car app still connected loses its grant, and only those`() {
+        grants.connected("auto#1")
+        grants.connected("auto#2")
+        grants.connected("centre#1")
+        grants.disconnected("centre#1")
+        log.clear()
+        grants.closed()
+        assertEquals(listOf("revoke auto"), log)
+        // Grants left by a KJB that ended without its cars leaving (a crash) are taken back at the start, from every car app.
+        assertEquals(setOf(ControllerAccess.ANDROID_AUTO, "com.android.car.media"), ControllerAccess.CAR_PACKAGES)
+    }
+
     // The covers the provider serves
 
     @Test
@@ -196,6 +214,21 @@ class CarAccessTest {
         assertEquals("default", serve(DEFAULT_COVER))
         assertEquals("default", serve("../Music"))
         assertEquals(listOf(20L, 22L), read)
+    }
+
+    @Test
+    fun `a cover asked for while the library is first read waits a moment at most, then the default is served`() = runTest {
+        val state = MutableStateFlow<LibraryState>(LibraryState.Loading)
+        // It runs on a binder thread: never long.
+        val waiting = async { readyLibrary(state) }
+        advanceTimeBy(301)
+        assertTrue("still waiting after 300 ms", waiting.isCompleted)
+        assertNull(waiting.await())
+        val library = Library.of(listOf(song("Music/Rips/Loose Thread.mp3", id = 20)), Settings())
+        state.value = LibraryState.Ready(library)
+        assertEquals(library, readyLibrary(state))
+        state.value = LibraryState.Unreadable
+        assertNull(readyLibrary(state))
     }
 
     // The car's searches

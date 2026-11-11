@@ -273,6 +273,26 @@ class QueuesTest {
         assertNull(book.deleted("q999"))
     }
 
+    @Test
+    fun `Undo of Delete brings back exactly the queue deleted, never taking another, even once Recent has filled again`() {
+        var book = playing(0)
+        (1..QueueBook.MAX_RECENT).forEach { n -> book = book.play(listOf(song("Loose $n")), 0, QueueSource(SourceKind.SEARCH, "search:$n", "$n"), now = 1L + n).book }
+        assertEquals(QueueBook.MAX_RECENT, book.recent.size)
+        val first = book.recent.first()
+        val gone = book.deleted(first)!!
+        // Another queue joins Recent before Undo: Recent is full again.
+        val refilled = gone.book.play(listOf(song("Late")), 0, QueueSource(SourceKind.SEARCH, "search:late", "late"), now = 50).book
+        assertEquals(QueueBook.MAX_RECENT, refilled.recent.size)
+        val undone = refilled.undelete(gone)
+        assertEquals(gone.queue, undone.queue(first))
+        assertEquals(first, undone.recent.first())
+        // Every queue there was is still there, as it was.
+        refilled.queues.forEach { assertEquals(it, undone.queue(it.id)) }
+        assertEquals(refilled.recent, undone.recent - first)
+        assertEquals(refilled.saved, undone.saved)
+        assertEquals(refilled.currentId, undone.currentId)
+    }
+
     // Resume and Play from start
 
     @Test

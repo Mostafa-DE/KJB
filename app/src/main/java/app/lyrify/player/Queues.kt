@@ -248,16 +248,16 @@ data class QueueBook(
     }
 
     /**
-     * Undo of [deleted]: the queue back at its place in Saved or Recent, and among the queues; nothing when it is back
-     * already. Recent keeps [MAX_RECENT]: a queue that would fall past it stays deleted.
+     * Undo of [deleted]: exactly that queue back at its place in Saved or Recent, and among the queues; nothing when it
+     * is back already. Undo never takes another queue: when Recent filled again meanwhile, it holds one past
+     * [MAX_RECENT] until the next queue joining it ages the oldest out, as Recent always does.
      */
     fun undelete(deleted: Deleted): QueueBook {
         val queue = deleted.queue
         if (queue(queue.id) != null) return this
         val back = copy(queues = queues.toMutableList().apply { add(deleted.order.coerceIn(0, size), queue) })
         if (deleted.saved) return back.copy(saved = saved.toMutableList().apply { add(deleted.at.coerceIn(0, size), queue.id) })
-        val listed = recent.toMutableList().apply { add(deleted.at.coerceIn(0, size), queue.id) }
-        return back.copy(recent = listed.take(MAX_RECENT)).dropped(listed.drop(MAX_RECENT).toSet(), evenCurrent = false)
+        return back.copy(recent = recent.toMutableList().apply { add(deleted.at.coerceIn(0, size), queue.id) })
     }
 
     /** "Resume": switches to [queueId] at its saved song and position. */

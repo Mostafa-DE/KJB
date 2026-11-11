@@ -218,6 +218,7 @@ class PlaybackService : MediaLibraryService() {
         heardSoFar()
         tracker.end()
         parts.forEach { it.stop() }
+        browse.release()
         session?.release()
         session = null
         // Its thread would outlive the service; a cover still loading fails, and the notification is going anyway.

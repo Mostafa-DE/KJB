@@ -191,12 +191,15 @@ class OwnPlaybackTest {
             assertTrue("$repeat", Player.COMMAND_SEEK_TO_NEXT in sessionCommands(last))
             assertTrue("$repeat", Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM in sessionCommands(last))
         }
-        // Media3 finds no song after the last one (Repeat off, and Repeat one, which it reads as off for Next): no index.
-        assertEquals(0, seekIndex(C.INDEX_UNSET, Player.COMMAND_SEEK_TO_NEXT, current = 2))
-        assertEquals(0, seekIndex(C.INDEX_UNSET, Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM, current = 2))
-        // Every other seek goes where it asks, or stays in the song playing.
-        assertEquals(1, seekIndex(1, Player.COMMAND_SEEK_TO_NEXT, current = 0))
-        assertEquals(2, seekIndex(C.INDEX_UNSET, Player.COMMAND_SEEK_TO_PREVIOUS, current = 2))
+        // Media3 finds no song after the last one (Repeat off, and Repeat one, which it reads as off for Next): no index,
+        // and the facade tells controllers of the jump itself.
+        assertEquals(SessionSeek(0, tell = true), sessionSeek(C.INDEX_UNSET, Player.COMMAND_SEEK_TO_NEXT, current = 2))
+        assertEquals(SessionSeek(0, tell = true), sessionSeek(C.INDEX_UNSET, Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM, current = 2))
+        // A queue of one song: Next starts the same song again, and its progress and lyrics must start again too.
+        assertEquals(SessionSeek(0, tell = true), sessionSeek(C.INDEX_UNSET, Player.COMMAND_SEEK_TO_NEXT, current = 0))
+        // A seek Media3 planned goes where it asks, and Media3 tells of it; any other seek without an index stays.
+        assertEquals(SessionSeek(1, tell = false), sessionSeek(1, Player.COMMAND_SEEK_TO_NEXT, current = 0))
+        assertEquals(SessionSeek(2, tell = true), sessionSeek(C.INDEX_UNSET, Player.COMMAND_SEEK_TO_PREVIOUS, current = 2))
         // Nothing loaded: no seeks and no Next.
         val none = sessionCommands(SessionView(emptyList(), -1, 0, playing = false, shuffled = false, repeat = Repeat.OFF))
         assertFalse(Player.COMMAND_SEEK_TO_NEXT in none)
