@@ -17,11 +17,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
@@ -77,7 +78,7 @@ import java.text.DateFormat
 /** A message as the resources say it: a string, or a plural for [count]; [args] fill it in. */
 data class Words(val res: Int, val count: Int? = null, val args: List<Any> = emptyList())
 
-/** The page's top tabs, in order: text tabs as Favourites' look, with no pages to swipe ([LibraryTabsRow]). */
+/** The page's top tabs, in order: the same swiping tabs as Library's and Favourites' ([PagerTabs] over [TabPages]). */
 enum class ReviewTab(@StringRes val title: Int) {
     TO_REVIEW(R.string.tags_to_review),
     DONE(R.string.tags_done),
@@ -320,10 +321,12 @@ private data class OpenReview(val albumId: String, val song: String?)
 private data class PendingApply(val albumId: String, val match: ReleaseMatch, val songs: Set<String>, val parts: Set<Part>)
 
 /**
- * Tools > Covers & tags: the top tabs To review, Done and Skipped with their counts. To review: "Check my albums" (its
- * ring, "Checking 12/84" and Cancel), then a card per album with a suggestion, each opening the review sheet. Done: one
- * row per apply with its Undo, then History. Skipped: each with Check again. Writing is off without notification
- * access, with a one-line reason and a button to turn it on.
+ * Tools > Covers & tags: the top tabs To review, Done and Skipped with their counts, as Library's and Favourites' are:
+ * their pages follow the finger left and right, the tabs' line with them, and each keeps its own list and its place
+ * ([TabPages]); what sits above the tabs scrolls away first, then the tabs stay under the top bar ([CollapsingTabs]).
+ * To review: "Check my albums" (its ring, "Checking 12/84" and Cancel), then a card per album with a suggestion, each
+ * opening the review sheet. Done: one row per apply with its Undo, then History. Skipped: each with Check again.
+ * Writing is off without notification access, with a one-line reason and a button to turn it on.
  */
 @Composable
 fun CoversTagsPage() {
@@ -336,8 +339,12 @@ fun CoversTagsPage() {
     val state by tags.state.collectAsStateWithLifecycle()
     val busy by tags.busy.collectAsStateWithLifecycle()
     val access = rememberNotificationAccess()
-    val list = rememberLazyListState()
     var tab by rememberSaveable { mutableStateOf(ReviewTab.TO_REVIEW) }
+    val tabs = reviewTabs(state)
+    val pager = rememberTabPager(tabs.size, tabs.indexOfFirst { it.first == tab }) { at -> tabs.getOrNull(at)?.let { tab = it.first } }
+    val header = rememberScrollState()
+    // The lines above the tabs gone under the top bar are content under it too.
+    val headerUnder by remember(header) { derivedStateOf { header.value > 0 } }
     var open by remember { mutableStateOf<OpenReview?>(null) }
     var confirm by remember { mutableStateOf<PendingApply?>(null) }
     var searching by rememberSaveable { mutableStateOf<String?>(null) }
@@ -385,21 +392,19 @@ fun CoversTagsPage() {
         topBar = { under, backdrop ->
             LyrifyTopBar(
                 title = { Text(stringResource(R.string.tools_covers), maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                under = under,
+                under = under || headerUnder,
                 backdrop = backdrop,
                 navigation = { ChromeIconButton(R.drawable.ic_arrow_back, stringResource(R.string.check_back), { nav.back() }) },
             )
         },
     ) { padding ->
         val reduced = LocalReducedMotion.current
-        val tabs = reviewTabs(state)
-        LazyColumn(
-            state = list,
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(top = padding.calculateTopPadding() + 8.dp, bottom = padding.calculateBottomPadding() + 24.dp),
-        ) {
-            if (!access) {
-                item(key = "access", contentType = "access") {
+        CollapsingTabs(
+            outer = header,
+            padding = padding,
+            header = {
+                Spacer(Modifier.height(8.dp))
+                if (!access) {
                     val brand = LocalBrandColors.current
                     Banner(
                         R.drawable.ic_notifications,
@@ -408,47 +413,46 @@ fun CoversTagsPage() {
                         brand.highlightContainer,
                         brand.onHighlightContainer,
                         onAction = { context.startFirst(notificationAccessIntents(context)) },
-                        modifier = rowMotion(reduced).padding(start = ScreenPadding, end = ScreenPadding, bottom = 12.dp),
+                        modifier = Modifier.padding(start = ScreenPadding, end = ScreenPadding, bottom = 12.dp),
                     )
                 }
-            }
-            listOfNotNull(pausedWords(paused), uncheckableWords(uncheckable)).forEach { words ->
-                item(key = "line ${words.res}", contentType = "text") { PageLine(words.text(), error = words.res == R.string.tags_paused) }
-            }
-            item(key = "tabs", contentType = "tabs") {
-                LibraryTabsRow(tabs.map { (it, count) -> stringResource(R.string.lib_tab_count, stringResource(it.title), formatCount(count)) }, tabs.indexOfFirst { it.first == tab }) { at ->
-                    tab = tabs[at].first
-                }
-            }
-            when (tab) {
-                ReviewTab.TO_REVIEW -> {
-                    item(key = "start", contentType = "start") { StartRow(state, busy, onCheck = tags::check, onCancel = tags::cancel) }
-                    items(state.toReview, key = { "review ${it.album.id}" }, contentType = { "card" }) { waiting ->
-                        Column(rowMotion(reduced)) { ReviewCard(tags, waiting) { open = OpenReview(waiting.album.id, null) } }
-                    }
-                }
-                ReviewTab.DONE -> {
-                    if (state.done.isNotEmpty()) item(key = "note", contentType = "text") { PageLine(stringResource(R.string.tags_samsung_note)) }
-                    val keys = rowKeys("done", state.done.map { it.id })
-                    itemsIndexed(state.done, key = { at, _ -> keys[at] }, contentType = { _, _ -> "record" }) { _, record ->
-                        Column(rowMotion(reduced)) {
-                            val blocked = record.entryId?.let { undoBlocked(it, state.history) } == true
-                            DoneRow(
-                                record,
-                                fullCopy = record.entryId in state.fullCopies,
-                                blocked = blocked,
-                                enabled = writable && !blocked,
-                                onUndo = { scope.launch { toasts.show(undoneWords(tags.undoAlbum(record.id)).text(resources)) } },
-                                onOpen = { problems = record.id }.takeIf { record.problems.isNotEmpty() },
-                            )
+                listOfNotNull(pausedWords(paused), uncheckableWords(uncheckable)).forEach { words -> PageLine(words.text(), error = words.res == R.string.tags_paused) }
+            },
+            tabs = { PagerTabs(pager, tabs.map { (it, count) -> stringResource(R.string.lib_tab_count, stringResource(it.title), formatCount(count)) }) },
+        ) {
+            TabPages(pager, tabs.map { it.first }, Modifier.fillMaxSize()) { page ->
+                LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = padding.calculateBottomPadding() + 24.dp)) {
+                    when (tabs[page].first) {
+                        ReviewTab.TO_REVIEW -> {
+                            item(key = "start", contentType = "start") { StartRow(state, busy, onCheck = tags::check, onCancel = tags::cancel) }
+                            items(state.toReview, key = { "review ${it.album.id}" }, contentType = { "card" }) { waiting ->
+                                Column(rowMotion(reduced)) { ReviewCard(tags, waiting) { open = OpenReview(waiting.album.id, null) } }
+                            }
                         }
-                    }
-                    item(key = "history", contentType = "history") { HistoryRow(state.history.size) { nav.open(Page.TagHistory) } }
-                }
-                ReviewTab.SKIPPED -> {
-                    val keys = rowKeys("skipped", state.skipped.map { it.id })
-                    itemsIndexed(state.skipped, key = { at, _ -> keys[at] }, contentType = { _, _ -> "record" }) { _, record ->
-                        Column(rowMotion(reduced)) { SkippedRow(record) { tags.checkAgain(record.id) } }
+                        ReviewTab.DONE -> {
+                            if (state.done.isNotEmpty()) item(key = "note", contentType = "text") { PageLine(stringResource(R.string.tags_samsung_note)) }
+                            val keys = rowKeys("done", state.done.map { it.id })
+                            itemsIndexed(state.done, key = { at, _ -> keys[at] }, contentType = { _, _ -> "record" }) { _, record ->
+                                Column(rowMotion(reduced)) {
+                                    val blocked = record.entryId?.let { undoBlocked(it, state.history) } == true
+                                    DoneRow(
+                                        record,
+                                        fullCopy = record.entryId in state.fullCopies,
+                                        blocked = blocked,
+                                        enabled = writable && !blocked,
+                                        onUndo = { scope.launch { toasts.show(undoneWords(tags.undoAlbum(record.id)).text(resources)) } },
+                                        onOpen = { problems = record.id }.takeIf { record.problems.isNotEmpty() },
+                                    )
+                                }
+                            }
+                            item(key = "history", contentType = "history") { HistoryRow(state.history.size) { nav.open(Page.TagHistory) } }
+                        }
+                        ReviewTab.SKIPPED -> {
+                            val keys = rowKeys("skipped", state.skipped.map { it.id })
+                            itemsIndexed(state.skipped, key = { at, _ -> keys[at] }, contentType = { _, _ -> "record" }) { _, record ->
+                                Column(rowMotion(reduced)) { SkippedRow(record) { tags.checkAgain(record.id) } }
+                            }
+                        }
                     }
                 }
             }

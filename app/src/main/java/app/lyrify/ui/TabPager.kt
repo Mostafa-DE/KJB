@@ -2,7 +2,6 @@ package app.lyrify.ui
 
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.PaddingValues
@@ -11,7 +10,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -55,7 +53,6 @@ import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
@@ -220,52 +217,6 @@ fun PagerTabs(state: TabPager, labels: List<String>, modifier: Modifier = Modifi
                     .padding(horizontal = 12.dp),
             ) {
                 Text(name, style = TabText, fontWeight = lerp(FontWeight.Medium, FontWeight(650), lit), color = lerp(colors.onSurfaceVariant, colors.onSurface, lit), maxLines = 1)
-            }
-        }
-    }
-}
-
-/**
- * Text tabs with no pages to swipe (Covers & tags' own), as [PagerTabs] look: scrolling sideways when they do not fit,
- * the sung line growing and fading in under the tab chosen as it leaves the one before.
- */
-@Composable
-fun LibraryTabsRow(tabs: List<String>, selected: Int, onSelect: (Int) -> Unit) {
-    val highlight = LocalBrandColors.current.highlight
-    val colors = MaterialTheme.colorScheme
-    val reduced = LocalReducedMotion.current
-    val scroll = rememberLazyListState()
-    var shown by remember { mutableIntStateOf(selected) }
-    LaunchedEffect(selected) {
-        if (selected != shown) scroll.animateScrollToItem((selected - 1).coerceAtLeast(0))
-        shown = selected
-    }
-    LazyRow(state = scroll, contentPadding = PaddingValues(horizontal = 8.dp), modifier = Modifier.fillMaxWidth().selectableGroup()) {
-        itemsIndexed(tabs, contentType = { _, _ -> "tab" }) { at, name ->
-            val on = at == selected
-            val lit by animateFloatAsState(if (on) 1f else 0f, motion(tween(Motion.SHORT_MS, easing = Motion.Standard), reduced), label = "tab")
-            Box(
-                contentAlignment = Alignment.Center,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(16.dp))
-                    .selectable(on, role = Role.Tab) { onSelect(at) }
-                    .heightIn(min = 48.dp)
-                    .padding(horizontal = 12.dp),
-            ) {
-                Text(name, style = TabText, fontWeight = lerp(FontWeight.Medium, FontWeight(650), lit), color = lerp(colors.onSurfaceVariant, colors.onSurface, lit), maxLines = 1)
-                if (lit > 0f) {
-                    Box(
-                        Modifier
-                            .align(Alignment.BottomCenter)
-                            .padding(bottom = TAB_LINE_BOTTOM)
-                            .size(SUNG_LINE_WIDTH, SUNG_LINE_HEIGHT)
-                            .graphicsLayer {
-                                alpha = lit
-                                scaleX = lit
-                            }
-                            .background(highlight, RoundedCornerShape(2.dp)),
-                    )
-                }
             }
         }
     }
