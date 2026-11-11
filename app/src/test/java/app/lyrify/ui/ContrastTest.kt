@@ -82,12 +82,11 @@ class ContrastTest {
             assertReads("$theme onSurface on the sheet", s.onSurface, chrome.sheet, 4.5f)
             assertReads("$theme onSurfaceVariant on the sheet", s.onSurfaceVariant, chrome.sheet, 4.5f)
             assertReads("$theme onSurface on the bar", s.onSurface, chrome.bar, 4.5f)
-            // The main pages' header: "KJB Music" in the ink, "· Library" in the secondary ink, on the page at rest and on
-            // the glass band (over the worst content under it) once content scrolls under.
+            // The main pages' header title, in the ink, on the page at rest and on the glass band (over the worst content
+            // under it) once content scrolls under.
             val worst = if (theme == "dark") Color.White else Color.Black
             listOf("page" to s.background, "glass" to chrome.glass.compositeOver(worst), "solid glass" to chrome.glassSolid.compositeOver(worst)).forEach { (band, under) ->
-                assertReads("$theme header brand on the $band", s.onSurface, under, 4.5f)
-                assertReads("$theme header page on the $band", s.onSurfaceVariant, under, 4.5f)
+                assertReads("$theme header title on the $band", s.onSurface, under, 4.5f)
             }
             // The switch's white knob (Controls.kt) on its off track, and on the coral one in light (dark: onHighlight).
             assertReads("$theme knob off", Color.White, s.outline, 3f)

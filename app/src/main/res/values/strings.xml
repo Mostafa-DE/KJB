@@ -11,8 +11,6 @@
     <string name="nav_search">Search</string>
     <string name="nav_tools">Tools</string>
     <string name="nav_attention">Something needs you</string>
-    <!-- The main pages' header, "KJB Music · Library": only there; the app's name stays KJB. -->
-    <string name="header_brand">KJB Music</string>
 
     <!-- Tools: each row's one-line status -->
     <plurals name="tools_check">

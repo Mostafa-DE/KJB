@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -99,7 +100,6 @@ import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
@@ -416,62 +416,44 @@ private fun TopBarRow(title: @Composable () -> Unit, navigation: (@Composable ()
 }
 
 /**
- * The header of the four main pages (Library, Playlists, Search, Tools), on one line: "KJB Music" in the title's ink,
- * then "· Library" at the same size in the secondary ink, the page's own actions at the end; one heading for TalkBack,
- * "KJB Music, Library" (user decision 2026-11-11). Short of room the page's name ellipsizes first and the brand never
- * does ([headerWidths]). [below]: more of the band under the line, as Search's field. Inner pages keep [LyrifyTopBar]
- * with Back and their own title.
+ * The header of the four main pages (Library, Playlists, Search, Tools): the KJB logo at the start, then the page's
+ * title in the title style, the page's own actions at the end (user decision 2026-11-11). The logo is decorative, so
+ * TalkBack reads one heading, the title alone. [below]: more of the band under the line, as Search's field. Inner pages
+ * keep [LyrifyTopBar] with Back and their own title.
  */
 @Composable
 fun MainTopBar(tab: DockTab, under: Boolean, backdrop: GlassBackdrop?, actions: @Composable RowScope.() -> Unit = {}, below: (@Composable () -> Unit)? = null) {
-    val words = headerWords(stringResource(R.string.header_brand), stringResource(headerPage(tab)))
+    val title = stringResource(headerPage(tab))
     TopBand(under, backdrop) {
         Column(Modifier.statusBarsPadding()) {
-            TopBarRow(title = { BrandTitle(words) }, navigation = null, actions = actions)
+            TopBarRow(
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        HeaderLogo()
+                        Spacer(Modifier.width(12.dp))
+                        Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                },
+                navigation = null,
+                actions = actions,
+            )
             below?.invoke()
         }
     }
 }
 
-/** A main page's header words: [brand] and [page] as shown, and [spoken] as TalkBack reads the one heading. */
-@Immutable
-data class HeaderWords(val brand: String, val page: String, val spoken: String)
-
-/** The name a dock destination's header shows after the brand: the dock's own word for it. */
+/** The name a dock destination's header shows after the logo: the dock's own word for it. */
 fun headerPage(tab: DockTab): Int = tab.label
 
-fun headerWords(brand: String, page: String): HeaderWords = HeaderWords(brand = brand, page = "· $page", spoken = "$brand, $page")
+/** The header's logo: the launcher's black tile with the Note arm K, as default cover A. */
+val HEADER_LOGO = 30.dp
 
-/**
- * The widths the brand and the page's name get in [available] px, given the widths they want: the brand first, whole
- * (cut, never ellipsized, only when not even it fits), then the page's name in what is left, ellipsized when short.
- */
-fun headerWidths(brand: Int, page: Int, available: Int): Pair<Int, Int> {
-    val first = min(brand, available)
-    return first to min(page, (available - first).coerceAtLeast(0))
-}
-
-/** "KJB Music" then "· Library" on one line, laid out by [headerWidths]; one node for TalkBack, the heading around it. */
+/** The KJB logo at [HEADER_LOGO], its corners rounded as the launcher's; in dark theme a hairline keeps it off the page. Decorative. */
 @Composable
-private fun BrandTitle(words: HeaderWords) {
-    val colors = MaterialTheme.colorScheme
-    Layout(
-        content = {
-            Text(words.brand, color = colors.onSurface, maxLines = 1, softWrap = false, overflow = TextOverflow.Clip)
-            Text(" " + words.page, color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        },
-        modifier = Modifier.clearAndSetSemantics { contentDescription = words.spoken },
-    ) { (brand, page), constraints ->
-        val loose = constraints.copy(minWidth = 0)
-        val wanted = brand.maxIntrinsicWidth(constraints.maxHeight) to page.maxIntrinsicWidth(constraints.maxHeight)
-        val (brandWidth, pageWidth) = headerWidths(wanted.first, wanted.second, constraints.maxWidth)
-        val first = brand.measure(loose.copy(maxWidth = brandWidth))
-        val second = page.measure(loose.copy(maxWidth = pageWidth))
-        layout(first.width + second.width, max(first.height, second.height)) {
-            first.place(0, 0)
-            if (pageWidth > 0) second.place(first.width, 0)
-        }
-    }
+private fun HeaderLogo() {
+    val shape = RoundedCornerShape(HEADER_LOGO * 10 / 36)
+    val edge = if (LocalDarkTheme.current) Modifier.border(1.dp, BrandBlackBorder, shape) else Modifier
+    Image(painterResource(R.drawable.kjb_default_cover), contentDescription = null, modifier = Modifier.size(HEADER_LOGO).clip(shape).then(edge))
 }
 
 /** The band behind a top bar: clear at rest, glass and a hairline while content is [under] it. */
