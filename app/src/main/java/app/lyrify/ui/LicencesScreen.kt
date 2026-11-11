@@ -29,10 +29,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.IOException
 
-// Settings > About > Licences: what the APK is built with, each with its licence's full text. The list comes from the
-// release runtime classpath (`./gradlew :app:dependencies --configuration releaseRuntimeClasspath`) and the release
-// APK's lib/ and assets/ folders; LicencesTest checks it against the texts and the app's direct dependencies. NOTICE in
-// the repository says the same at more length and ships as the Notices row.
+// Settings > About > Licences: KJB's own licence, and the Notices row: the repository's NOTICE, which names everything
+// the APK is built with, then the full text of every licence it names. The page lists no third-party rows (user
+// feedback 2026-11-11: no "Built with" list); [THIRD_PARTY] stays the record of what ships. It comes from the release
+// runtime classpath (`./gradlew :app:dependencies --configuration releaseRuntimeClasspath`) and the release APK's lib/
+// and assets/ folders; LicencesTest checks it against the texts and the app's direct dependencies.
 
 /** Where the full licence texts ship: assets/licences. */
 const val LICENCE_DIR: String = "licences"
@@ -52,9 +53,6 @@ data class Shipped(val name: String, val parts: String, val licence: String, val
 
 /** KJB itself: the additional permission under GPL section 7 that ends LICENSE, then the GPL. */
 val KJB_LICENCE: Shipped = Shipped("KJB", "This app", "GPL 3.0", "KJB contributors", listOf("kjb-additional-permission.txt", "gpl-3.0.txt"))
-
-/** The repository's NOTICE: credits, every library at more length, the Apache NOTICE files and the trademarks. */
-val NOTICES: Shipped = Shipped("Notices", "Credits, trademarks and the Apache 2.0 NOTICE files", "Credits and notices", "KJB contributors", listOf("NOTICE.txt"))
 
 /** Third-party software in the APK. */
 val THIRD_PARTY: List<Shipped> = listOf(
@@ -138,8 +136,23 @@ val THIRD_PARTY: List<Shipped> = listOf(
     Shipped("Roboto Flex", "The app's text font", "OFL 1.1", "The Roboto Flex Project Authors", listOf("ofl-1.1-roboto-flex.txt")),
 )
 
-/** Every row of the Licences page. */
+/**
+ * The repository's NOTICE (credits, every library at more length, the Apache NOTICE files and the trademarks), then the
+ * full text of every licence of [THIRD_PARTY], each once: what ships beside KJB, on one page.
+ */
+val NOTICES: Shipped = Shipped(
+    "Notices",
+    "Credits, trademarks, the Apache 2.0 NOTICE files, and the full text of every licence named",
+    "Credits and licences",
+    "KJB contributors",
+    listOf("NOTICE.txt") + THIRD_PARTY.flatMap { it.texts }.distinct(),
+)
+
+/** Every licence KJB knows, each with its own page (a page kept from an older version opens too). */
 val SHIPPED: List<Shipped> = listOf(KJB_LICENCE, NOTICES) + THIRD_PARTY
+
+/** The rows of the Licences page: KJB's licence and the notices. */
+val LICENCE_ROWS: List<Shipped> = listOf(KJB_LICENCE, NOTICES)
 
 /** The row named [name]; null for a name this version does not list (a page kept from an older one). */
 fun shipped(name: String): Shipped? = SHIPPED.firstOrNull { it.name == name }
@@ -155,7 +168,7 @@ internal fun paragraphs(text: String): List<String> =
 
 private val BLANK_LINES = Regex("""\n[ \t]*\n""")
 
-/** Settings > About > Licences: KJB and its notices, then what it is built with; each row opens its licence. */
+/** Settings > About > Licences: KJB's licence and the notices; each row opens its page. */
 @Composable
 fun LicencesPage() {
     val nav = LocalNavigator.current
@@ -171,16 +184,7 @@ fun LicencesPage() {
                 )
             }
             item(key = "kjb", contentType = "group") {
-                GroupedRows(rowMotion(reduced)) {
-                    LicenceRow(KJB_LICENCE, first = true)
-                    LicenceRow(NOTICES)
-                }
-            }
-            item(key = "built", contentType = "section") {
-                Column(rowMotion(reduced)) {
-                    SectionTitle(stringResource(R.string.lic_built_with), Modifier.padding(start = ScreenPadding + 4.dp, end = ScreenPadding, top = 24.dp, bottom = 8.dp))
-                    GroupedRows { THIRD_PARTY.forEachIndexed { at, shipped -> LicenceRow(shipped, first = at == 0) } }
-                }
+                GroupedRows(rowMotion(reduced)) { LICENCE_ROWS.forEachIndexed { at, shipped -> LicenceRow(shipped, first = at == 0) } }
             }
         }
     }
