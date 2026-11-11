@@ -56,11 +56,17 @@ class AlbumLookup(
         }
     }
 
-    /** The front cover of [release]: the 1200 px image, or the 500 px one when there is no larger one. */
-    suspend fun cover(release: MbRelease, fresh: Boolean = false): MetaAnswer<ByteArray> {
+    /** The front cover of [release] to write into songs: the 1200 px image, or the 500 px one when there is no larger one. */
+    suspend fun cover(release: MbRelease, fresh: Boolean = false): MetaAnswer<ByteArray> = front(release, CoverSize.WRITTEN, fresh)
+
+    /** A preview of [release]'s front cover: the 250 px thumbnail, or the 500 px one when there is none. */
+    suspend fun thumbnail(release: MbRelease, fresh: Boolean = false): MetaAnswer<ByteArray> = front(release, CoverSize.PREVIEW, fresh)
+
+    /** [release]'s front cover at the first of [sizes] the Cover Art Archive has. */
+    private suspend fun front(release: MbRelease, sizes: List<CoverSize>, fresh: Boolean): MetaAnswer<ByteArray> {
         // The release says it has none: nothing to ask.
         if (release.hasFront == false) return MetaAnswer.NotFound
-        for (size in CoverSize.entries) {
+        for (size in sizes) {
             val answer = musicBrainz.front(release.id, size, fresh)
             if (answer != MetaAnswer.NotFound) return answer
         }

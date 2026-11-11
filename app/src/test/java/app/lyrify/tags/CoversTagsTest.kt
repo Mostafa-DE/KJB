@@ -20,6 +20,7 @@ import app.lyrify.tags.lookup.MbRelease
 import app.lyrify.tags.lookup.MbReleaseGroup
 import app.lyrify.tags.lookup.MbTrack
 import app.lyrify.tags.lookup.MetaAnswer
+import app.lyrify.tags.lookup.Part
 import app.lyrify.tags.lookup.PhoneAlbum
 import app.lyrify.tags.lookup.Proposal
 import app.lyrify.tags.lookup.ReleaseMatch
@@ -62,13 +63,16 @@ class CoversTagsTest {
 
     private val favourites = FakeFavourites(emptyList())
 
+    /** What the writer is told about its batch: the test's own hooks around the flow's. */
+    private var progress: (Progress) -> Progress = { it }
+
     /** The library as the app reads [library]; null while it is not read. */
     private fun read(): Library? = library?.let { Library.of(it, Settings()) }
 
     private fun TestScope.flow(): CoversTags = CoversTags(
         songs = { library },
         source = source,
-        write = { jobs, changed, kind, label -> writeEdit(rig.writer, favourites, read(), jobs, changed, kind, label) },
+        write = { jobs, changed, kind, label, given -> writeEdit(rig.writer, favourites, read(), jobs, changed, kind, label, progress(given)) },
         undoEntry = { undoEdit(rig.writer, rig.undo, favourites, read(), it) },
         undo = rig.undo,
         store = CoversTagsStore(storeFile),
@@ -83,7 +87,16 @@ class CoversTagsTest {
 
     // Made-up songs and releases
 
-    private fun song(name: String, id: Long, title: String, album: String?, artist: String = "Mira Solen", track: Int? = null, year: Int? = null): Song {
+    private fun song(
+        name: String,
+        id: Long,
+        title: String,
+        album: String?,
+        artist: String = "Mira Solen",
+        track: Int? = null,
+        year: Int? = null,
+        pictures: List<TagPicture> = emptyList(),
+    ): Song {
         val fields = buildMap {
             put("TITLE", listOf(title))
             put("ARTIST", listOf(artist))
@@ -91,7 +104,7 @@ class CoversTagsTest {
             track?.let { put("TRACKNUMBER", listOf(it.toString())) }
             year?.let { put("DATE", listOf(it.toString())) }
         }
-        val target = rig.song(name, id, fields)
+        val target = rig.song(name, id, fields, pictures)
         return Song(SongRef(target.path, id), title, artist, album, null, 200_000, track, 1, year, null, "Music/KJB test/", null, null, 0, "audio/mpeg")
     }
 
@@ -137,6 +150,9 @@ class CoversTagsTest {
 
     private fun Waiting.match(): ReleaseMatch = (proposal as Proposal.Ready).match
 
+    /** Apply with every song of the album ticked and every field: what the tests of the writing itself need. */
+    private suspend fun CoversTags.applyWhole(waiting: Waiting): Applied = apply(waiting.album.id, waiting.match(), waiting.album.paths.toSet(), Part.entries.toSet())
+
     // Checking
 
     @Test
@@ -149,7 +165,8 @@ class CoversTagsTest {
 
         assertEquals(listOf("Lanterns"), state.ready.map { it.album.album.title })
         assertEquals(2, state.pickOne.size)
-        assertEquals(3, state.badge)
+        // Only what has a suggestion is to review: the two with no candidate are not listed.
+        assertEquals(1, state.badge)
         assertNull(state.checking)
         assertTrue(state.memory.checkedOnce)
         assertEquals(listOf(false, false, false), source.checked.map { it.second })
@@ -205,9 +222,9 @@ class CoversTagsTest {
         val flow = flow()
         val waiting = checked(flow).waiting("Lanterns")
 
-        val applied = flow.apply(waiting.album.id, waiting.match())
+        val applied = flow.applyWhole(waiting)
 
-        assertEquals(Applied.Done(albums = 1, songs = 2, problems = emptyList()), applied)
+        assertEquals(Applied.Done(albums = 1, songs = 2, problems = emptyList()), (applied as Applied.Done).copy(entryId = null))
         val fields = rig.fields(songs[0].target())
         assertEquals(listOf("Quiet Ember"), fields["TITLE"])
         assertEquals(listOf("Mira Solen"), fields["ARTIST"])
@@ -235,42 +252,21 @@ class CoversTagsTest {
     }
 
     @Test
-    fun `the year is kept where a song has one, filled where it has none, and Keep my year off writes it everywhere`() = runTest {
+    fun `Year adds the album's first year to the songs with none, and every song with a year keeps its own`() = runTest {
         val songs = lanternsSongs(year = 2003)
         library = songs
         answers("Lanterns" to lanterns)
         val flow = flow()
         val waiting = checked(flow).waiting("Lanterns")
+        val changes = flow.changes(waiting, waiting.match())
+        val parts = changes.ticked(cover = true)
+        assertTrue(Part.YEAR in parts)
+        assertEquals(1, changes.yearsKept)
 
-        flow.apply(waiting.album.id, waiting.match())
+        flow.apply(waiting.album.id, waiting.match(), waiting.album.paths.toSet(), parts)
 
         assertEquals(listOf("2003"), rig.fields(songs[0].target())["DATE"])
         assertEquals(listOf("1998"), rig.fields(songs[1].target())["DATE"])
-
-        val again = lanternsSongs(year = 2003).map { it }
-        library = again
-        val other = flow()
-        val next = checked(other).waiting("Lanterns")
-        other.keepMyYear(next.album.id, keep = false)
-        other.apply(next.album.id, other.state.value.waiting("Lanterns").match())
-        assertEquals(listOf("1998"), rig.fields(again[0].target())["DATE"])
-    }
-
-    @Test
-    fun `Apply all applies every Ready album, one at a time, and leaves Pick one`() = runTest {
-        library = lanternsSongs() + harbourSongs() + song("Lone Kestrel", 61, "Lone Kestrel", album = null)
-        answers("Lanterns" to lanterns, "Harbour" to harbour)
-        val flow = flow()
-        checked(flow)
-
-        val applied = flow.applyAll()
-
-        assertEquals(Applied.Done(albums = 2, songs = 4, problems = emptyList()), applied)
-        assertEquals(2, flow.state.value.done.size)
-        assertEquals(1, flow.state.value.pickOne.size)
-        assertEquals(emptyList<Waiting>(), flow.state.value.ready)
-        assertNull(flow.state.value.applying)
-        assertEquals(1, rig.tags.mostAtOnce)
     }
 
     @Test
@@ -285,7 +281,7 @@ class CoversTagsTest {
         rig.journal.open(WriteIntent("left-1", songs[2].path, 43, "left-1.mp3", pending, pending))
         val before = listOf(rig.bytes(songs[0].target()), rig.bytes(songs[2].target()))
 
-        val applied = flow.apply(waiting.album.id, waiting.match()) as Applied.Done
+        val applied = flow.applyWhole(waiting) as Applied.Done
 
         assertEquals(1, applied.songs)
         assertEquals(setOf(SongOutcome.BUSY, SongOutcome.RECOVERY_PENDING), applied.problems.map { it.outcome }.toSet())
@@ -303,7 +299,7 @@ class CoversTagsTest {
         val waiting = checked(flow).waiting("Lanterns")
         rig.busy.inUse += songs.map { it.path }
 
-        val applied = flow.apply(waiting.album.id, waiting.match()) as Applied.Done
+        val applied = flow.applyWhole(waiting) as Applied.Done
 
         assertEquals(0, applied.albums)
         assertEquals(listOf(SongOutcome.BUSY, SongOutcome.BUSY), applied.problems.map { it.outcome })
@@ -321,15 +317,14 @@ class CoversTagsTest {
         val before = rig.bytes(songs[0].target())
         access = false
 
-        assertEquals(Applied.NoAccess, flow.apply(waiting.album.id, waiting.match()))
-        assertEquals(Applied.NoAccess, flow.applyAll())
+        assertEquals(Applied.NoAccess, flow.applyWhole(waiting))
         assertArrayEquals(before, rig.bytes(songs[0].target()))
         assertEquals(1, flow.state.value.ready.size)
 
         // Access on, but the sessions can't be listed after all: the writer refuses the same way.
         access = true
         rig.busy.unknown = true
-        assertEquals(Applied.NoAccess, flow.apply(waiting.album.id, waiting.match()))
+        assertEquals(Applied.NoAccess, flow.applyWhole(waiting))
         assertArrayEquals(before, rig.bytes(songs[0].target()))
         assertEquals(emptyList<HistoryEntry>(), rig.undo.memory().entries)
     }
@@ -391,7 +386,7 @@ class CoversTagsTest {
         answers("Lanterns" to lanterns)
         val flow = flow()
         val waiting = checked(flow).waiting("Lanterns")
-        flow.apply(waiting.album.id, waiting.match())
+        flow.applyWhole(waiting)
 
         flow.check()
         advanceUntilIdle()
@@ -426,7 +421,7 @@ class CoversTagsTest {
         val flow = flow()
         val waiting = checked(flow).waiting("Lanterns")
         val before = songs.map { rig.bytes(it.target()) }
-        flow.apply(waiting.album.id, waiting.match())
+        flow.applyWhole(waiting)
 
         val undone = flow.undoAlbum(flow.state.value.done.single().id)
 
@@ -444,7 +439,7 @@ class CoversTagsTest {
         val flow = flow()
         val waiting = checked(flow).waiting("Lanterns")
         val before = rig.bytes(songs[1].target())
-        flow.apply(waiting.album.id, waiting.match())
+        flow.applyWhole(waiting)
         val entry = rig.undo.memory().entries.single().id
         rig.now += 1_000
         rig.writer.write(listOf(WriteJob(songs[0].target(), TagEdit(fields = mapOf("TITLE" to listOf("Quiet Ember (Live)"))))), EditKind.SONG, "Quiet Ember")
@@ -471,7 +466,7 @@ class CoversTagsTest {
         val flow = flow()
         val waiting = checked(flow).waiting("Lanterns")
 
-        flow.apply(waiting.album.id, waiting.match())
+        flow.applyWhole(waiting)
 
         // The album is "Lanterns of Ulso" by Mira Solen now: its heart moved there.
         val written = songs.map { it.copy(album = "Lanterns of Ulso", albumArtist = "Mira Solen") }
@@ -494,7 +489,7 @@ class CoversTagsTest {
         answers("Lanterns" to lanterns)
         val flow = flow()
         val waiting = checked(flow).waiting("Lanterns")
-        flow.apply(waiting.album.id, waiting.match())
+        flow.applyWhole(waiting)
         val written = songs.map { rig.bytes(it.target()) }
         rig.dirs.undo.setReadable(false)
         rig.restart()
@@ -515,7 +510,7 @@ class CoversTagsTest {
         answers("Lanterns" to lanterns)
         val flow = flow()
         val waiting = checked(flow).waiting("Lanterns")
-        flow.apply(waiting.album.id, waiting.match())
+        flow.applyWhole(waiting)
         access = false
 
         assertEquals(Undone.NoAccess, flow.undoAlbum(flow.state.value.done.single().id))
@@ -533,7 +528,7 @@ class CoversTagsTest {
         val waiting = checked(flow).waiting("Lanterns")
         rig.busy.inUse += songs[1].path
 
-        flow.apply(waiting.album.id, waiting.match())
+        flow.applyWhole(waiting)
         assertEquals(listOf(songs[0].path), bumped)
 
         flow.undoAlbum(flow.state.value.done.single().id)
@@ -554,7 +549,7 @@ class CoversTagsTest {
         val waiting = checked(flow).waiting("Lanterns")
         rig.busy.inUse += songs[2].path
 
-        flow.apply(waiting.album.id, waiting.match())
+        flow.applyWhole(waiting)
         advanceUntilIdle()
 
         assertEquals(
@@ -584,9 +579,10 @@ class CoversTagsTest {
         val big = ByteArray(100 * 1024) { 7 }
         source.cover = MetaAnswer.Ok(Cover(big, ImageSize(1000, 1000)))
         val flow = flow()
-        checked(flow)
+        val state = checked(flow)
 
-        flow.applyAll()
+        flow.applyWhole(state.waiting("Lanterns"))
+        flow.applyWhole(state.waiting("Harbour"))
 
         assertEquals(listOf(ID_A), source.opusCovers)
         assertArrayEquals(big, FakeTagFile().read(File(songs[0].path))!!.pictures.single().data)
@@ -610,7 +606,7 @@ class CoversTagsTest {
         answers("Lanterns" to lanterns)
         val flow = flow()
         val waiting = checked(flow).waiting("Lanterns")
-        val page = launch { flow.apply(waiting.album.id, waiting.match()) }
+        val page = launch { flow.applyWhole(waiting) }
         // The page goes once the writer has started.
         rig.busy.onCheck = { page.cancel() }
 
@@ -629,29 +625,14 @@ class CoversTagsTest {
         val flow = flow()
         val waiting = checked(flow).waiting("Lanterns")
 
-        val first = async { flow.apply(waiting.album.id, waiting.match()) }
-        val second = async { flow.apply(waiting.album.id, waiting.match()) }
+        val first = async { flow.applyWhole(waiting) }
+        val second = async { flow.applyWhole(waiting) }
 
-        assertEquals(Applied.Done(albums = 1, songs = 2, problems = emptyList()), first.await())
+        assertEquals(Applied.Done(albums = 1, songs = 2, problems = emptyList()), (first.await() as Applied.Done).copy(entryId = null))
         assertEquals(Applied.InProgress, second.await())
         val done = flow.state.value.done.single()
         assertEquals(rig.undo.memory().entries.single().id, done.entryId)
         assertEquals(2, done.changed)
-    }
-
-    @Test
-    fun `Apply all stopped by a busy MusicBrainz still reports the albums it changed`() = runTest {
-        library = lanternsSongs() + harbourSongs()
-        answers("Lanterns" to lanterns, "Harbour" to harbour)
-        source.coverOf = { release -> if (release.id == ID_B) MetaAnswer.Busy else source.cover }
-        val flow = flow()
-        checked(flow)
-
-        val applied = flow.applyAll()
-
-        assertEquals(Applied.Done(albums = 1, songs = 2, problems = emptyList(), stopped = Stopped.BUSY), applied)
-        assertEquals(1, flow.state.value.done.size)
-        assertEquals(1, flow.state.value.ready.size)
     }
 
     @Test
@@ -680,7 +661,7 @@ class CoversTagsTest {
         File(songs[1].path).appendBytes(byteArrayOf(1, 2, 3))
         val before = songs.map { rig.bytes(it.target()) }
 
-        assertEquals(Applied.ChangedSince, flow.apply(waiting.album.id, waiting.match()))
+        assertEquals(Applied.ChangedSince, flow.applyWhole(waiting))
 
         songs.forEachIndexed { i, song -> assertArrayEquals(before[i], rig.bytes(song.target())) }
         assertEquals(emptyList<HistoryEntry>(), rig.undo.memory().entries)
@@ -695,13 +676,13 @@ class CoversTagsTest {
         // covers-tags.json can't be written: as if the app died right after the write.
         val blocked = File(folder.root, "not a folder").apply { writeText("") }
         val dying = CoversTags(
-            songs = { library }, source = source, write = { jobs, _, kind, label -> rig.writer.write(jobs, kind, label) }, undoEntry = rig.writer::undo,
+            songs = { library }, source = source, write = { jobs, _, kind, label, progress -> rig.writer.write(jobs, kind, label, progress) }, undoEntry = rig.writer::undo,
             undo = rig.undo, store = CoversTagsStore(File(blocked, "covers-tags.json")),
             lyrics = { _, _ -> }, coversChanged = {}, access = { true }, scope = this,
             io = StandardTestDispatcher(testScheduler), compute = StandardTestDispatcher(testScheduler), clock = { BASE },
         )
         val waiting = checked(dying).waiting("Lanterns")
-        dying.apply(waiting.album.id, waiting.match())
+        dying.applyWhole(waiting)
         val entry = rig.undo.memory().entries.single()
 
         val again = flow()
@@ -729,7 +710,7 @@ class CoversTagsTest {
         answers("Lanterns" to lanterns)
         val flow = flow()
         val waiting = checked(flow).waiting("Lanterns")
-        flow.apply(waiting.album.id, waiting.match())
+        flow.applyWhole(waiting)
         advanceUntilIdle()
         val entry = rig.undo.memory().entries.single()
         // As a file from before historySeen was kept: no such key, and no album the History entry is missing from it.
@@ -747,30 +728,31 @@ class CoversTagsTest {
     }
 
     @Test
-    fun `two History entries for one album give one Done row, the newer one, with its Undo`() = runTest {
+    fun `two History entries for one album give two Done rows, one per apply, each with its own Undo`() = runTest {
         library = lanternsSongs()
         answers("Lanterns" to lanterns)
         val flow = flow()
         val waiting = checked(flow).waiting("Lanterns")
-        flow.apply(waiting.album.id, waiting.match())
+        flow.applyWhole(waiting)
         advanceUntilIdle()
-        val newer = again(rig.undo.memory().entries.single(), later = 60_000)
+        val older = rig.undo.memory().entries.single()
+        val newer = again(older, later = 60_000)
         // Neither album record kept, nothing settled seen: both entries look lost.
         CoversTagsStore(storeFile).save(CoversTagsStore(storeFile).load().copy(albums = emptyList(), historySeen = 0))
 
         val reloaded = flow()
         advanceUntilIdle()
 
-        assertEquals(listOf(newer.id), reloaded.state.value.done.map { it.entryId })
+        assertEquals(listOf(newer.id, older.id), reloaded.state.value.done.map { it.entryId })
     }
 
     @Test
-    fun `a Done row kept for an album is never replaced by an older History entry`() = runTest {
+    fun `a Done row kept for an album is never replaced by an older History entry, which gets its own row`() = runTest {
         library = lanternsSongs()
         answers("Lanterns" to lanterns)
         val flow = flow()
         val waiting = checked(flow).waiting("Lanterns")
-        flow.apply(waiting.album.id, waiting.match())
+        flow.applyWhole(waiting)
         advanceUntilIdle()
         val older = rig.undo.memory().entries.single()
         val newer = again(older, later = 60_000)
@@ -782,7 +764,8 @@ class CoversTagsTest {
         val reloaded = flow()
         advanceUntilIdle()
 
-        assertEquals(listOf(newer.id), reloaded.state.value.done.map { it.entryId })
+        assertEquals(listOf(newer.id, older.id), reloaded.state.value.done.map { it.entryId })
+        assertEquals(record, reloaded.state.value.done.first())
     }
 
     // The song sheet
@@ -800,14 +783,14 @@ class CoversTagsTest {
         advanceUntilIdle()
 
         val album = flow.state.value.waiting.single()
-        assertEquals(album.album.id, flow.state.value.focus)
+        assertEquals(Focus(album.album.id, songs[1].path), flow.state.value.focus)
         assertEquals(listOf("Lanterns"), source.checked.map { it.first })
         flow.focused()
         assertNull(flow.state.value.focus)
 
         flow.open(songs[0].path)
         advanceUntilIdle()
-        assertEquals(album.album.id, flow.state.value.focus)
+        assertEquals(Focus(album.album.id, songs[0].path), flow.state.value.focus)
         assertEquals(1, source.checked.size)
     }
 
@@ -819,7 +802,7 @@ class CoversTagsTest {
         answers("Lanterns" to lanterns, "Harbour" to harbour)
         val flow = flow()
         val state = checked(flow)
-        flow.apply(state.waiting("Lanterns").album.id, state.waiting("Lanterns").match())
+        flow.applyWhole(state.waiting("Lanterns"))
         flow.skip(state.waiting("Harbour").album.id)
 
         val again = flow()
@@ -856,15 +839,15 @@ class CoversTagsTest {
     }
 
     @Test
-    fun `what is written for a song is the fields Covers and tags owns, with the year rule and the cover`() {
+    fun `what is written for a song is only the fields ticked, each with its side fields, never a blank, and the cover only when ticked`() {
         val fields = SongFields(
             title = "Tin Roof", artist = "Kit Calloway feat. Mira Solen", artists = listOf("Kit Calloway", "Mira Solen"), album = "Harbour Glass",
             albumArtist = "Kit Calloway", track = 3, trackTotal = 12, disc = 1, discTotal = null, musicBrainzReleaseId = ID_B,
-            musicBrainzRecordingId = "0b7c1f4e-1111-4111-8111-000000000003", year = null,
+            musicBrainzRecordingId = "0b7c1f4e-1111-4111-8111-000000000003", year = 1998,
         )
         val cover = CoverEdit.Replace(TagPicture(JPEG_BYTES, "", FRONT_COVER, "image/jpeg"))
 
-        val edit = coversTagsEdit(fields, originalYear = 1998, keepMyYear = true, cover = cover)
+        val edit = coversTagsEdit(fields, Part.entries.toSet(), cover)
 
         assertEquals(
             mapOf(
@@ -881,16 +864,299 @@ class CoversTagsTest {
             ),
             edit.fields,
         )
-        assertEquals(setOf("DATE"), edit.onlyWhereEmpty)
+        assertEquals(emptySet<String>(), edit.onlyWhereEmpty)
         assertEquals(cover, edit.cover)
-        assertEquals(emptySet<String>(), coversTagsEdit(fields, 1998, keepMyYear = false, cover = cover).onlyWhereEmpty)
-        assertFalse("DATE" in coversTagsEdit(fields, originalYear = null, keepMyYear = true, cover = cover).fields)
+
+        assertEquals(TagEdit(cover = cover), coversTagsEdit(fields, setOf(Part.COVER), cover))
+        assertEquals(mapOf("ARTIST" to listOf("Kit Calloway feat. Mira Solen"), "ARTISTS" to listOf("Kit Calloway", "Mira Solen")), coversTagsEdit(fields, setOf(Part.ARTIST), cover).fields)
+        assertEquals(CoverEdit.Keep, coversTagsEdit(fields, setOf(Part.ARTIST), cover).cover)
+        assertEquals(mapOf("ALBUM" to listOf("Harbour Glass"), "MUSICBRAINZ_ALBUMID" to listOf(ID_B)), coversTagsEdit(fields, setOf(Part.ALBUM), cover).fields)
+        assertFalse("DATE" in coversTagsEdit(fields.copy(year = null), Part.entries.toSet(), cover).fields)
+        assertEquals(emptyMap<String, List<String>>(), coversTagsEdit(fields.copy(title = " ", musicBrainzRecordingId = ""), setOf(Part.TITLE), cover).fields)
+    }
+
+    // The review, redesigned (user feedback 2026-11-11): only what you ticked changes, nothing is taken away
+
+    /** Nine songs of one artist tagged as one album, as the phone had them: one group. */
+    private val nineTitles = listOf("Ember Line", "Salt Wind", "Tin Harbour", "Kelp Bell", "Glass Pier", "Quiet Fold", "Lantern Weir", "Copper Tide", "North Gale")
+
+    private fun nineSongs(): List<Song> = nineTitles.mapIndexed { i, title -> song(title, 80L + i, title, "Best of Tobin Vale", artist = "Tobin Vale", track = i + 1) }
+
+    /** The candidate a check offers for the nine: a compilation with every one of their titles, other names around them. */
+    private val best = release(ID_C, "The Very Best of Tobin Vale", nineTitles, artist = "Tobin Vale & The Weir")
+
+    private fun offerBest() {
+        source.answer = { album -> Lookup.Done(Proposal.PickOne(listOf(AlbumMatch.match(album, best)), setOf(Doubt.ALBUM_NAME))) }
+    }
+
+    private fun Waiting.candidate(): ReleaseMatch = (proposal as Proposal.PickOne).candidates.single()
+
+    /** The indices of [songs] whose bytes are no longer [before]. */
+    private fun changed(songs: List<Song>, before: List<ByteArray>): List<Int> = songs.indices.filterNot { rig.bytes(songs[it].target()).contentEquals(before[it]) }
+
+    private val oldCover = TagPicture(ByteArray(64) { 3 }, "", FRONT_COVER, "image/jpeg")
+
+    private fun pictures(song: Song): List<TagPicture> = FakeTagFile().read(File(song.path))!!.pictures
+
+    @Test
+    fun `nine songs in one group, opened from one song's sheet, only that song is ticked, and Apply writes exactly it`() = runTest {
+        val songs = nineSongs()
+        library = songs
+        offerBest()
+        val flow = flow()
+        advanceUntilIdle()
+        val before = songs.map { rig.bytes(it.target()) }
+
+        flow.open(songs[2].path)
+        advanceUntilIdle()
+        val focus = checkNotNull(flow.state.value.focus)
+        val waiting = flow.state.value.waiting.single { it.album.id == focus.albumId }
+        assertEquals(9, waiting.album.paths.size)
+        val ticked = firstTicked(waiting.album, focus.song)
+        assertEquals(setOf(songs[2].path), ticked)
+
+        val applied = flow.apply(waiting.album.id, waiting.candidate(), ticked, Part.entries.toSet())
+
+        assertEquals(listOf(2), changed(songs, before))
+        assertEquals(1, (applied as Applied.Done).songs)
+        assertEquals(listOf("The Very Best of Tobin Vale"), rig.fields(songs[2].target())["ALBUM"])
+    }
+
+    @Test
+    fun `opened from the list nothing is ticked, and Apply with 2 of the 9 ticked writes exactly those 2`() = runTest {
+        val songs = nineSongs()
+        library = songs
+        offerBest()
+        val flow = flow()
+        val waiting = checked(flow).waiting.single()
+        val before = songs.map { rig.bytes(it.target()) }
+        assertEquals(emptySet<String>(), firstTicked(waiting.album, null))
+
+        val applied = flow.apply(waiting.album.id, waiting.candidate(), setOf(songs[0].path, songs[5].path), Part.entries.toSet())
+
+        assertEquals(listOf(0, 5), changed(songs, before))
+        assertEquals(2, (applied as Applied.Done).songs)
+    }
+
+    @Test
+    fun `only Cover ticked writes the picture and leaves every text field as it was, only Artist ticked leaves the picture`() = runTest {
+        val songs = listOf(
+            song("Quiet Embers", 41, "Quiet Embers", "Lanterns", artist = "Mira Solenn", track = 1, pictures = listOf(oldCover)),
+            song("Salt Road", 42, "Salt Road", "Lanterns", artist = "Mira Solenn", track = 2, pictures = listOf(oldCover)),
+        )
+        library = songs
+        answers("Lanterns" to lanterns)
+        val flow = flow()
+        val waiting = checked(flow).waiting("Lanterns")
+        val fieldsBefore = songs.map { rig.fields(it.target()) }
+
+        flow.apply(waiting.album.id, waiting.match(), setOf(songs[0].path), setOf(Part.COVER))
+
+        assertEquals(fieldsBefore[0], rig.fields(songs[0].target()))
+        assertArrayEquals(JPEG_BYTES, pictures(songs[0]).single().data)
+
+        val again = checked(flow).waiting("Lanterns")
+        flow.apply(again.album.id, again.match(), setOf(songs[1].path), setOf(Part.ARTIST))
+
+        assertEquals(listOf(oldCover), pictures(songs[1]))
+        assertEquals(listOf("Mira Solen"), rig.fields(songs[1].target())["ARTIST"])
+        assertEquals(fieldsBefore[1] - "ARTIST" - "ARTISTS", rig.fields(songs[1].target()) - "ARTIST" - "ARTISTS")
+    }
+
+    @Test
+    fun `with no new cover found a song keeps its own cover after an apply of its other fields`() = runTest {
+        val songs = listOf(song("Quiet Embers", 41, "Quiet Embers", "Lanterns", track = 1, pictures = listOf(oldCover)), song("Salt Road", 42, "Salt Road", "Lanterns", track = 2))
+        library = songs
+        answers("Lanterns" to lanterns)
+        source.cover = MetaAnswer.NotFound
+        val flow = flow()
+        val waiting = checked(flow).waiting("Lanterns")
+
+        val applied = flow.apply(waiting.album.id, waiting.match(), setOf(songs[0].path), Part.entries.toSet())
+
+        assertEquals(listOf(oldCover), pictures(songs[0]))
+        assertEquals(listOf("Quiet Ember"), rig.fields(songs[0].target())["TITLE"])
+        assertEquals(1, (applied as Applied.Done).songs)
+    }
+
+    @Test
+    fun `an album with no suggestion is not listed in To review`() = runTest {
+        library = lanternsSongs() + harbourSongs()
+        answers("Lanterns" to lanterns)
+
+        val state = checked(flow())
+
+        assertEquals(2, state.waiting.size)
+        assertEquals(listOf("Lanterns"), state.toReview.map { it.album.album.title })
+        assertEquals(1, state.badge)
+    }
+
+    @Test
+    fun `Undo from Done puts back exactly the songs the apply wrote, by their audio, and leaves the rest alone`() = runTest {
+        val songs = nineSongs()
+        library = songs
+        offerBest()
+        val flow = flow()
+        val waiting = checked(flow).waiting.single()
+        val before = songs.map { rig.bytes(it.target()) }
+        val payloads = songs.map { PayloadHash.of(File(it.path).toPath()) }
+
+        flow.apply(waiting.album.id, waiting.candidate(), setOf(songs[1].path, songs[7].path), Part.entries.toSet())
+        assertEquals(listOf(1, 7), changed(songs, before))
+        val done = flow.state.value.done.single()
+        assertEquals(2, done.changed)
+
+        val undone = flow.undoAlbum(done.id)
+
+        assertEquals(2, (undone as Undone.Done).songs)
+        assertEquals(emptyList<Int>(), changed(songs, before))
+        assertEquals(payloads, songs.map { PayloadHash.of(File(it.path).toPath()) })
+        assertEquals(setOf(songs[1].path, songs[7].path), bumped.toSet())
+    }
+
+    @Test
+    fun `each apply is its own Done row with its own Undo`() = runTest {
+        val songs = nineSongs()
+        library = songs
+        offerBest()
+        val flow = flow()
+        val waiting = checked(flow).waiting.single()
+        flow.apply(waiting.album.id, waiting.candidate(), setOf(songs[0].path), setOf(Part.COVER))
+        assertEquals(1, flow.state.value.done.single().changed)
+        val again = checked(flow).waiting.single()
+        flow.apply(again.album.id, again.candidate(), setOf(songs[3].path), setOf(Part.ALBUM))
+
+        val done = flow.state.value.done
+        assertEquals(2, done.size)
+        assertEquals(2, done.mapNotNull { it.entryId }.distinct().size)
+        assertEquals(listOf(listOf(songs[3].path), listOf(songs[0].path)), done.map { record -> record.songs.map { it.path } })
+    }
+
+    @Test
+    fun `applying shows each song as it goes, and Cancel stops after the song being written`() = runTest {
+        val songs = nineSongs()
+        library = songs
+        offerBest()
+        val flow = flow()
+        val waiting = checked(flow).waiting.single()
+        val before = songs.map { rig.bytes(it.target()) }
+        val seen = mutableListOf<Applying?>()
+        progress = { asked ->
+            Progress(
+                song = { done ->
+                    asked.song(done)
+                    seen += flow.state.value.applying
+                    if (done == 2) flow.stopApplying()
+                },
+                stop = asked.stop,
+            )
+        }
+
+        val applied = flow.apply(waiting.album.id, waiting.candidate(), songs.take(4).map { it.path }.toSet(), Part.entries.toSet())
+
+        assertEquals(listOf(Applying(1, 4), Applying(2, 4)), seen)
+        assertEquals(listOf(0, 1), changed(songs, before))
+        assertEquals(Applied.Done(albums = 1, songs = 2, problems = emptyList(), entryId = flow.state.value.done.single().entryId), applied)
+        assertNull(flow.state.value.applying)
+    }
+
+
+    // Review findings, 2026-11-11 (Grok panel on v3/ct2-covers)
+
+    @Test
+    fun `an older Done row's Undo waits while a newer change to one of its songs stands, and the newest goes back first`() = runTest {
+        val songs = nineSongs()
+        library = songs
+        offerBest()
+        val flow = flow()
+        val song = songs[0]
+        val original = rig.fields(song.target())
+        val waiting = checked(flow).waiting.single()
+        flow.apply(waiting.album.id, waiting.candidate(), setOf(song.path), setOf(Part.COVER))
+        val again = checked(flow).waiting.single()
+        flow.apply(again.album.id, again.candidate(), setOf(song.path), setOf(Part.ARTIST))
+        advanceUntilIdle()
+        val (newer, older) = flow.state.value.done
+        val both = rig.bytes(song.target())
+
+        assertTrue(undoBlocked(checkNotNull(older.entryId), flow.state.value.history))
+        assertFalse(undoBlocked(checkNotNull(newer.entryId), flow.state.value.history))
+        assertEquals(Undone.Blocked, flow.undoAlbum(older.id))
+        assertArrayEquals(both, rig.bytes(song.target()))
+
+        // The newest first: the song is as it was before that apply, the cover of the one before kept.
+        assertTrue(flow.undoAlbum(newer.id) is Undone.Done)
+        assertEquals(original["ARTIST"], rig.fields(song.target())["ARTIST"])
+        assertArrayEquals(JPEG_BYTES, pictures(song).single().data)
+        advanceUntilIdle()
+        assertFalse(undoBlocked(checkNotNull(older.entryId), flow.state.value.history))
+        assertTrue(flow.undoAlbum(older.id) is Undone.Done)
+        assertEquals(original, rig.fields(song.target()))
+        assertEquals(emptyList<TagPicture>(), pictures(song))
+    }
+
+    @Test
+    fun `the candidate picked gets its album's first year when its answer did not carry it, once, so Year can be offered`() = runTest {
+        library = listOf(song("Lone Kestrel", 61, "Lone Kestrel", album = null))
+        val undated = release(ID_A, "Kestrel Lights", listOf("Lone Kestrel"), firstYear = null)
+        source.answer = { album -> Lookup.Done(Proposal.PickOne(listOf(AlbumMatch.match(album, undated)), setOf(Doubt.SINGLE))) }
+        source.datedOf = { match -> MetaAnswer.Ok(match.copy(release = match.release.copy(releaseGroup = MbReleaseGroup(GROUP, "1998")))) }
+        val flow = flow()
+        val waiting = checked(flow).waiting.single()
+        assertFalse(Part.YEAR in flow.changes(waiting, waiting.candidate()).parts)
+
+        flow.date(waiting.album.id, waiting.candidate())
+        flow.date(waiting.album.id, flow.state.value.waiting.single().candidate())
+
+        val dated = flow.state.value.waiting.single()
+        assertEquals(1998, dated.candidate().release.releaseGroup?.originalYear)
+        assertTrue(Part.YEAR in flow.changes(dated, dated.candidate()).parts)
+        assertEquals(listOf(ID_A), source.datedAsked)
+    }
+
+    @Test
+    fun `a cover the Cover Art Archive turns out not to have is remembered, so an album with nothing else to change leaves To review`() = runTest {
+        library = lanternsSongs()
+        answers("Lanterns" to lanterns)
+        source.previewOf = { MetaAnswer.NotFound }
+        val flow = flow()
+        val waiting = checked(flow).waiting("Lanterns")
+
+        assertEquals(Preview.None, flow.preview(waiting.match().release))
+
+        assertEquals(setOf(ID_A), flow.state.value.noCover)
+    }
+
+    @Test
+    fun `Cancel while the cover downloads stops it at once and writes nothing`() = runTest {
+        val songs = lanternsSongs()
+        library = songs
+        answers("Lanterns" to lanterns)
+        source.coverDelay = 30_000
+        val flow = flow()
+        val waiting = checked(flow).waiting("Lanterns")
+        val before = songs.map { rig.bytes(it.target()) }
+
+        val applying = async { flow.apply(waiting.album.id, waiting.match(), waiting.album.paths.toSet(), Part.entries.toSet()) }
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertEquals(Applying(0, 2, cover = true), flow.state.value.applying)
+        flow.stopApplying()
+        advanceTimeBy(1_000)
+        runCurrent()
+
+        assertTrue(applying.isCompleted)
+        assertEquals(Applied.Stopped, applying.await())
+        assertEquals(0, source.coversFetched)
+        assertEquals(emptyList<Int>(), changed(songs, before))
+        assertNull(flow.state.value.applying)
     }
 
     private companion object {
         const val BASE: Long = 1_800_000_000_000
         const val ID_A = "0b7c1f4e-5a2d-4c3b-9e8f-1a2b3c4d5e01"
         const val ID_B = "0b7c1f4e-5a2d-4c3b-9e8f-1a2b3c4d5e03"
+        const val ID_C = "0b7c1f4e-5a2d-4c3b-9e8f-1a2b3c4d5e04"
         const val GROUP = "6f1e2d3c-4b5a-4968-8776-5a4b3c2d1e02"
     }
 }
@@ -915,11 +1181,33 @@ class FakeAlbumSource : AlbumSource {
         return searchAnswer(album, title, artist)
     }
 
-    override suspend fun dated(match: ReleaseMatch): MetaAnswer<ReleaseMatch> = MetaAnswer.Ok(match)
+    var previewOf: (MbRelease) -> MetaAnswer<ByteArray> = { MetaAnswer.Ok(JPEG_BYTES) }
+    val previewed = mutableListOf<String>()
+
+    override suspend fun preview(release: MbRelease): MetaAnswer<ByteArray> {
+        previewed += release.id
+        return previewOf(release)
+    }
 
     var coverOf: (MbRelease) -> MetaAnswer<Cover> = { cover }
 
-    override suspend fun cover(release: MbRelease): MetaAnswer<Cover> = coverOf(release)
+    /** How long a cover takes to come, in the test's time; and how many came. */
+    var coverDelay: Long = 0
+    var coversFetched = 0
+
+    override suspend fun cover(release: MbRelease): MetaAnswer<Cover> {
+        delay(coverDelay)
+        coversFetched++
+        return coverOf(release)
+    }
+
+    var datedOf: (ReleaseMatch) -> MetaAnswer<ReleaseMatch> = { MetaAnswer.Ok(it) }
+    val datedAsked = mutableListOf<String>()
+
+    override suspend fun dated(match: ReleaseMatch): MetaAnswer<ReleaseMatch> {
+        datedAsked += match.release.id
+        return datedOf(match)
+    }
 
     override suspend fun opusCover(release: MbRelease): MetaAnswer<Cover> {
         opusCovers += release.id

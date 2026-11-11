@@ -444,7 +444,7 @@ private fun CoverEditor(songs: List<Song>, opus: Map<String, Int>, cover: CoverE
         val shown: Any? = when (cover) {
             CoverEdit.Keep -> songs.first().let { SongArt(it.path, it.ref.mediaStoreId) }
             is CoverEdit.Replace -> cover.picture.data
-            CoverEdit.Remove -> null
+            CoverEdit.Remove, is CoverEdit.RemovePicture -> null
         }
         val chrome = LocalChromeColors.current
         SongCover(shown, Modifier.shadow(16.dp, RoundedCornerShape(22.dp), ambientColor = chrome.shadowStrong, spotColor = chrome.shadowStrong), size = COVER, shape = RoundedCornerShape(22.dp))
@@ -645,6 +645,8 @@ internal fun coverSaver(token: String): Saver<CoverEdit, String> = Saver(
             CoverEdit.Keep -> KEEP
             CoverEdit.Remove -> REMOVE
             is CoverEdit.Replace -> REPLACE.also { coverDrafts[token] = cover.picture }
+            // Undo's own: never an editor's choice.
+            is CoverEdit.RemovePicture -> KEEP
         }
     },
     restore = { saved ->

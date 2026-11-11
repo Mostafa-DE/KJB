@@ -11,11 +11,14 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
 import java.net.HttpURLConnection
+import java.net.SocketTimeoutException
 import java.net.URI
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
@@ -60,6 +63,12 @@ object MetaHosts {
     /** Where a request may start. */
     fun isSource(uri: URI): Boolean = secure(uri) && host(uri) in SOURCES
 
+    /** A request that starts at the Cover Art Archive: its 503 is a cover that could not load, never "busy". */
+    fun isCover(uri: URI): Boolean = host(uri) == COVER_ART_ARCHIVE
+
+    /** A hop to musicbrainz.org, wherever its request started: it waits for MusicBrainz's [MetaGate]. */
+    fun isMusicBrainz(uri: URI): Boolean = host(uri) == MUSICBRAINZ
+
     /** Where a redirect may lead. */
     fun isRedirect(uri: URI): Boolean = secure(uri) && host(uri).let { it in SOURCES || it == ARCHIVE || it.endsWith(".$ARCHIVE") }
 
@@ -72,8 +81,9 @@ object MetaHosts {
 }
 
 /**
- * One request at a time for every host Covers & tags talks to, each starting at least [SPACING_MS] after the previous
- * one ENDED. A 503 holds the gate: nobody asks again until the backoff ([BACKOFF_MS]) is over, and [busy] says so.
+ * MusicBrainz's rule (https://musicbrainz.org/doc/MusicBrainz_API/Rate_Limiting): one request at a time, each starting at
+ * least [SPACING_MS] after the previous one ENDED. A 503 holds the gate: nobody asks again until the backoff
+ * ([BACKOFF_MS]) is over, and [busy] says so. Covers never pass here ([MetaClient]).
  */
 class MetaGate(private val now: () -> Long, private val log: (String) -> Unit = {}) {
     private val mutex = Mutex()
@@ -189,9 +199,13 @@ class MetaCache(
 }
 
 /**
- * MusicBrainz and the Cover Art Archive over [HttpURLConnection]: one [gate] for every host and hop, https to [MetaHosts]
- * only, redirects followed by hand and each one checked, every body capped ([Body]), successes cached ([cache]) unless
- * [fresh][get] ("Check again"). Logs carry only status codes, exception class names and counts, never a URL or a name.
+ * MusicBrainz and the Cover Art Archive over [HttpURLConnection]: MusicBrainz through its [gate]; covers and their
+ * redirect hops [COVER_REQUESTS] at a time and never behind that gate, as the Cover Art Archive sets no rate limit
+ * (https://musicbrainz.org/doc/Cover_Art_Archive/API: "There are currently no rate limiting rules in place"), and a
+ * cover's 503 is a cover that could not load. Https to [MetaHosts] only, redirects followed by hand and each one
+ * checked, every body capped ([Body]), connect and read timeouts with one more try after a timeout, successes cached
+ * ([cache], on disk) unless [fresh][get] ("Check again"). An answer read to its end keeps its connection for the next
+ * request. Logs carry only status codes, exception class names and counts, never a URL or a name.
  */
 class MetaClient(
     private val cache: MetaCache,
@@ -205,6 +219,9 @@ class MetaClient(
     /** True while MusicBrainz is busy and a 503 is being waited out. */
     val busy: StateFlow<Boolean> get() = gate.busy
 
+    /** The cover requests running at once. */
+    private val covers = Semaphore(COVER_REQUESTS)
+
     /**
      * The answer at [uri], read by [read] (which throws [IllegalArgumentException] on an unreadable body). It is cached
      * only when [read] took it and [keep] says it is worth keeping (an empty search result is not). [fresh] skips the
@@ -217,6 +234,7 @@ class MetaClient(
         }
         val key = uri.toString()
         if (!fresh) withContext(io) { cached(key, read) }?.let { return it }
+        val cover = MetaHosts.isCover(uri)
         return when (val hop = follow(uri, body)) {
             is Hop.Content -> withContext<MetaAnswer<T>>(io) {
                 try {
@@ -228,7 +246,10 @@ class MetaClient(
             }
             is Hop.Status -> when (hop.code) {
                 HttpURLConnection.HTTP_NOT_FOUND -> MetaAnswer.NotFound
-                HttpURLConnection.HTTP_UNAVAILABLE -> {
+                HttpURLConnection.HTTP_UNAVAILABLE -> if (cover) {
+                    log("tags: cover answered HTTP 503")
+                    MetaAnswer.Failed("HTTP 503")
+                } else {
                     log("tags: MusicBrainz still busy, gave up")
                     MetaAnswer.Busy
                 }
@@ -256,11 +277,11 @@ class MetaClient(
         }
     }
 
-    /** One answer from [uri], each redirect checked against [MetaHosts] before it is followed, every hop through [gate]. */
+    /** One answer from [uri], each redirect checked against [MetaHosts] before it is followed, every hop in its turn ([hop]). */
     private suspend fun follow(uri: URI, body: Body): Hop {
         var current = uri
         repeat(MAX_REDIRECTS + 1) {
-            when (val hop = gate.send({ it is Hop.Status && it.code == HttpURLConnection.HTTP_UNAVAILABLE }) { request(current, body) }) {
+            when (val hop = hop(current, body)) {
                 is Hop.Redirect -> {
                     val next = try {
                         current.resolve(hop.location)
@@ -276,7 +297,28 @@ class MetaClient(
         return Hop.Stop("more than $MAX_REDIRECTS redirects")
     }
 
-    /** One request; a cancelled one is disconnected at once, which also frees the gate. */
+    /**
+     * One hop in its turn, by the host it goes to: musicbrainz.org through its [gate] (a cover redirect landing there
+     * included), the Cover Art Archive and archive.org among [COVER_REQUESTS] at once. A hop that timed out is tried once
+     * more ([TIMEOUT_TRIES]); any other failure is the answer.
+     */
+    private suspend fun hop(uri: URI, body: Body): Hop {
+        var tries = 0
+        while (true) {
+            val hop = if (MetaHosts.isMusicBrainz(uri)) {
+                gate.send({ it is Hop.Status && it.code == HttpURLConnection.HTTP_UNAVAILABLE }) { request(uri, body) }
+            } else {
+                covers.withPermit { request(uri, body) }
+            }
+            if (hop !is Hop.Stop || !hop.timedOut || ++tries >= TIMEOUT_TRIES) return hop
+            log("tags: request timed out, trying once more")
+        }
+    }
+
+    /**
+     * One request. An answer read to its end leaves its connection to the next request to that host (keep-alive): no
+     * new TLS handshake. Any other answer, and a cancelled request, is disconnected at once, which also frees the gate.
+     */
     private suspend fun request(uri: URI, body: Body): Hop {
         val connection = try {
             open(uri)
@@ -285,18 +327,19 @@ class MetaClient(
         }
         return coroutineScope {
             val answer = async(io) { exchange(connection, body) }
+            var reusable = false
             try {
-                answer.await()
+                answer.await().also { reusable = it is Hop.Content }
             } finally {
-                connection.disconnect()
+                if (!reusable) connection.disconnect()
             }
         }
     }
 
     /** Blocking: sends the request and reads the answer, at most [Body.maxBytes]. */
     private fun exchange(connection: HttpURLConnection, body: Body): Hop = try {
-        connection.connectTimeout = TIMEOUT_MS
-        connection.readTimeout = TIMEOUT_MS
+        connection.connectTimeout = CONNECT_TIMEOUT_MS
+        connection.readTimeout = READ_TIMEOUT_MS
         connection.useCaches = false
         connection.instanceFollowRedirects = false
         connection.setRequestProperty("User-Agent", userAgent)
@@ -316,7 +359,7 @@ class MetaClient(
         }
     } catch (e: IOException) {
         // Never the message: it can hold the address, and the address holds the names.
-        Hop.Stop(e.javaClass.simpleName)
+        Hop.Stop(e.javaClass.simpleName, timedOut = e is SocketTimeoutException)
     }
 
     private sealed interface Hop {
@@ -326,12 +369,20 @@ class MetaClient(
 
         data class Status(val code: Int) : Hop
 
-        data class Stop(val reason: String) : Hop
+        data class Stop(val reason: String, val timedOut: Boolean = false) : Hop
     }
 
     companion object {
         const val MAX_REDIRECTS: Int = 5
-        private const val TIMEOUT_MS: Int = 15_000
+
+        /** Cover requests at once: the Cover Art Archive sets no limit, so a few, to be kind to archive.org. */
+        const val COVER_REQUESTS: Int = 4
+
+        private const val CONNECT_TIMEOUT_MS: Int = 10_000
+        private const val READ_TIMEOUT_MS: Int = 20_000
+
+        /** Tries of a hop that timed out: the first, and one more. */
+        private const val TIMEOUT_TRIES: Int = 2
         private const val NANOS_PER_MILLI: Long = 1_000_000
 
         /** 301, 302, 303, 307 and 308; the Cover Art Archive answers 307, archive.org 302. */

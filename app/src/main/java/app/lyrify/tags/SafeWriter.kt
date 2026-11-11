@@ -199,6 +199,16 @@ class PhoneSongFiles(context: Context) : SongFiles {
 /** A change for one song. */
 data class WriteJob(val song: SongTarget, val edit: TagEdit)
 
+/**
+ * Who follows a batch as it goes: [song] hears how many songs were tried so far, after each one; [stop] is asked before
+ * each song, and true leaves the rest untried ([SongOutcome.NOT_TRIED]) and unchanged. A song begun is always finished.
+ */
+class Progress(val song: (Int) -> Unit = {}, val stop: () -> Boolean = { false }) {
+    companion object {
+        val NONE: Progress = Progress()
+    }
+}
+
 /** What happened to one song. */
 enum class SongOutcome {
     /** Changed and verified (for Undo: taken back). */
@@ -338,11 +348,15 @@ class SafeWriter(
     /** Whether the writer's folders were made and fsynced into the app's folder ([TagDirs.ensure]) in this process. */
     private var foldersReady = false
 
-    /** Applies each job's edit to its song, and records them as one History entry of [kind], shown as [label]. */
-    suspend fun write(jobs: List<WriteJob>, kind: EditKind, label: String): BatchResult = batch(jobs.map { it.song }) {
+    /**
+     * Applies each job's edit to its song, and records them as one History entry of [kind], shown as [label]; [progress]
+     * hears each song and may stop the rest. An edit [refused] here leaves its song unopened.
+     */
+    suspend fun write(jobs: List<WriteJob>, kind: EditKind, label: String, progress: Progress = Progress.NONE): BatchResult = batch(jobs.map { it.song }) {
         val entry = EntryInfo(undo.newEntryId(clock()), kind, label, clock())
-        val outcomes = run(jobs.map { it.song }) { song ->
+        val outcomes = run(jobs.map { it.song }, progress) { song ->
             val edit = jobs.first { it.song == song }.edit
+            if (refused(edit, kind)) return@run couldNot("refused, it would take something away")
             change(song, SharedWrite.TAG_WRITE, Make.Tags(expected = null) { edit }) { done -> record(entry, song, done) }
         }
         undo.prune(clock(), keep = entry.id)
@@ -367,7 +381,7 @@ class SafeWriter(
         val edits = entry.songs.filterNot { it.undone }.associateBy { SongTarget(it.path, it.mediaStoreId) }
         val skipped = mutableMapOf<SongTarget, Int>()
         return batch(edits.keys.toList()) {
-            val outcomes = run(edits.keys.toList()) { song ->
+            val outcomes = run(edits.keys.toList(), Progress.NONE) { song ->
                 val edit = edits.getValue(song)
                 // A snapshot or a song that can't be read now aborts this song, nothing written: never a field-level Undo
                 // in place of the full copy.
@@ -419,16 +433,22 @@ class SafeWriter(
 
     /**
      * [songs] one by one through [one]; a busy song is tried once more at the end. Once the sessions can't be listed,
-     * the rest is not tried. The outcomes come back in [songs]' order, and the counts go to the log.
+     * or [progress] says stop, the rest is not tried. [progress] hears each song of the first round. The outcomes come
+     * back in [songs]' order, and the counts go to the log.
      */
-    private suspend fun run(songs: List<SongTarget>, one: suspend (SongTarget) -> SongOutcome): List<SongResult> {
+    private suspend fun run(songs: List<SongTarget>, progress: Progress, one: suspend (SongTarget) -> SongOutcome): List<SongResult> {
         val outcomes = linkedMapOf<SongTarget, SongOutcome>()
         var stopped = false
+        var tried = 0
         for (round in 0..1) {
             for (song in songs) {
-                if (round == 1 && outcomes[song] != SongOutcome.BUSY) continue
-                outcomes[song] = if (stopped) SongOutcome.NOT_TRIED else withContext(NonCancellable) { one(song) }
-                if (outcomes[song] == SongOutcome.NOT_TRIED) stopped = true
+                if (round == 1 && (outcomes[song] != SongOutcome.BUSY || progress.stop())) continue
+                outcomes[song] = if (stopped || progress.stop()) SongOutcome.NOT_TRIED else withContext(NonCancellable) { one(song) }
+                if (outcomes[song] == SongOutcome.NOT_TRIED) {
+                    stopped = true
+                } else if (round == 0) {
+                    progress.song(++tried)
+                }
             }
         }
         val counts = outcomes.values.groupingBy { it }.eachCount().entries.joinToString { (outcome, count) -> "$count ${outcome.name.lowercase()}" }
@@ -711,8 +731,13 @@ class SafeWriter(
         copy(backup, work)
         val before = tags.read(work)
         if (before == null || before.durationMs <= 0) return Made.Failed.also { log("tags: no audio length") }
-        val asked = make.edit(before)?.applyTo(before)
+        val edit = make.edit(before)
+        val asked = edit?.applyTo(before)
         if (asked == null || !asked.changesSomething) return Made.Nothing
+        // A front cover goes only when the edit says so: Edit tags' Remove, or Undo taking back the picture an edit added.
+        if (asked.frontBefore != null && asked.frontAfter == null && edit.cover !is CoverEdit.Remove && edit.cover !is CoverEdit.RemovePicture) {
+            return Made.Failed.also { log("tags: the edit would drop the front cover, refused") }
+        }
         // U+0000 would be written as a value separator, or cut the value short: refused, never written.
         val strings = asked.fields.flatMap { (key, values) -> values + key } + asked.pictures.flatMap { listOf(it.description, it.type, it.mime) }
         if (strings.any { '\u0000' in it }) return Made.Failed.also { log("tags: a value holds U+0000, refused") }
@@ -785,6 +810,16 @@ class SafeWriter(
             null
         }
         return UndoRecord(entry, edit, snapshot)
+    }
+
+    /**
+     * Whether [edit] is refused before its song is opened: an empty picture as the front cover, whoever asks; and from
+     * Covers & tags, anything taken away (the front cover removed, a field emptied or removed), which it never does.
+     */
+    private fun refused(edit: TagEdit, kind: EditKind): Boolean {
+        if ((edit.cover as? CoverEdit.Replace)?.picture?.data?.isEmpty() == true) return true
+        val removes = edit.cover == CoverEdit.Remove || edit.cover is CoverEdit.RemovePicture
+        return kind == EditKind.COVERS_TAGS && (removes || edit.fields.values.any { values -> values.isEmpty() || values.any(String::isBlank) })
     }
 
     /** The SHA-256 of the song's bytes now. Throws when it can't be read. */

@@ -348,4 +348,24 @@ class AlbumLookupTest {
         val builders = java.io.File("src/main/java").walkTopDown().filter { it.isFile && it.extension == "kt" && it.readLines().any(::builds) }.map { it.name }.toSet()
         assertEquals(setOf("TagsGraph.kt"), builders)
     }
+
+    // Previews (user feedback 2026-11-11)
+
+    @Test
+    fun `a preview is the 250 px thumbnail, else the 500 px one, and never the 1200 px image`() = runTest {
+        val web = web()
+        val credit = Credit(listOf(Credit.Part("Mira Solen")))
+        fun release(id: String) = MbRelease(id, "Lanterns of Ulso", credit, null, trackCount = 5, hasFront = true)
+        web.on(MusicBrainzUrls.front(ID_A, CoverSize.FRONT_250), ok(JPEG_BYTES))
+        web.on(MusicBrainzUrls.front(ID_B, CoverSize.FRONT_500), ok(JPEG_BYTES))
+        web.on(MusicBrainzUrls.front(ID_B, CoverSize.FRONT_1200), ok(JPEG_BYTES))
+        val lookup = lookup(web)
+
+        assertTrue(lookup.thumbnail(release(ID_A)) is MetaAnswer.Ok)
+        assertTrue(lookup.thumbnail(release(ID_B)) is MetaAnswer.Ok)
+        assertEquals(MetaAnswer.NotFound, lookup.thumbnail(release(ID_A).copy(hasFront = false)))
+
+        val asked = listOf(MusicBrainzUrls.front(ID_A, CoverSize.FRONT_250), MusicBrainzUrls.front(ID_B, CoverSize.FRONT_250), MusicBrainzUrls.front(ID_B, CoverSize.FRONT_500))
+        assertEquals(asked.map { it.toString() }, web.requests.map { it.uri })
+    }
 }

@@ -247,4 +247,20 @@ class UndoTest {
         assertEquals(1, revert.skipped)
         assertNull(edit.revert(current.copy(fields = mapOf("ALBUM" to listOf("Glass Harbour"), "COMMENT" to listOf("other")))) { null }.edit)
     }
+
+    // Review findings, 2026-11-11 (Grok panel on v3/ct2-covers)
+
+    @Test
+    fun `undoing a cover added to a song with none takes that picture away only, never another front cover added since`() {
+        val song = rig.song("Paper Lantern", 41, fields, listOf(back))
+        val entry = write(song, TagEdit(cover = CoverEdit.Replace(newFront)))
+        // Another app adds a second front cover after this edit: the song changed since, so Undo goes field by field.
+        val other = TagPicture(ByteArray(120) { 9 }, "", FRONT_COVER, "image/jpeg")
+        File(song.path).writeBytes(FakeTagFile.song(fields, listOf(newFront, back, other), TagFixtures.mp3Audio(seed = 41)))
+
+        val result = undo(entry)
+
+        assertEquals(listOf(SongOutcome.WRITTEN), result.songs.map { it.outcome })
+        assertEquals(listOf(back, other), FakeTagFile().read(File(song.path))!!.pictures)
+    }
 }
