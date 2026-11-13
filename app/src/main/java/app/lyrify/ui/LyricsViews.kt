@@ -303,7 +303,8 @@ private fun nextStart(lines: List<LrcLine>, at: Int): Int {
  * word; word times in the file are not shown. Each line fades to its colour. The list follows the song with a smooth
  * scroll that keeps the line playing at the frame's anchor ([followLine]): after a seek or a tap on a line at once, but
  * never while a finger is on it, and for [LEAVE_ALONE_MS] after the user scrolls ([LyricsFollow]). With reduced motion
- * the list moves at once and the colours switch.
+ * the list moves at once and the colours switch. [enabled] lets the lines be tapped and, unless [scrolls] says not (the
+ * lock screen, where a swipe up or down closes), scrolled.
  */
 @Composable
 fun SyncedLyrics(
@@ -313,6 +314,7 @@ fun SyncedLyrics(
     style: TextStyle,
     frame: LyricsFrame,
     tones: LineTones = themeTones(),
+    scrolls: Boolean = enabled,
     onLine: (LrcLine) -> Unit,
 ) {
     val look = rememberLyricsLook()
@@ -345,7 +347,7 @@ fun SyncedLyrics(
         val fade = with(density) { LYRICS_FADE.toPx() }
         LazyColumn(
             state = list,
-            userScrollEnabled = enabled,
+            userScrollEnabled = scrolls,
             // The lines dissolve into the top and bottom edges instead of being cut; every frame keeps more room than
             // the fade above its first line and below its last, so each can still rest in full view.
             modifier = Modifier

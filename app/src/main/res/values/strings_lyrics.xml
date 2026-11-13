@@ -81,4 +81,6 @@
     <string name="lock_cancel">Cancel</string>
     <string name="lock_on">Lyrics show when you lock your phone</string>
     <string name="lock_denied">Not allowed, so it stays off</string>
+    <!-- The lock screen's progress bar as TalkBack reads it: the time played, then the song's length. -->
+    <string name="lock_position">%1$s of %2$s</string>
 </resources>
