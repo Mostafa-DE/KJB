@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Import from another app (lane IM1, ui/ImportScreens.kt): Settings, Backup, Import from app. Labels are three words or fewer; sentences only in the sheet. -->
+<resources>
+    <string name="import_row">Import from app</string>
+    <string name="import_row_detail">Playlists from other players</string>
+
+    <!-- The first sheet: where the files come from. -->
+    <string name="import_title">Import from app</string>
+    <string name="import_intro">Pick the files another player exported, or the folder that holds them. KJB reads m3u, m3u8, pls and xspf files, and only ever adds to what you have.</string>
+    <string name="import_pick_file">Pick file</string>
+    <string name="import_pick_folder">Pick folder</string>
+    <string name="import_phone_title">On your phone</string>
+    <plurals name="import_phone_text">
+        <item quantity="one">%1$s playlist other apps saved on your phone.</item>
+        <item quantity="other">%1$s playlists other apps saved on your phone.</item>
+    </plurals>
+    <string name="import_phone_button">From your phone</string>
+    <string name="import_where_title">Other players</string>
+    <string name="import_where_samsung">Samsung Music: Settings, Manage playlists, Export my playlists. Then pick the file in your Music folder.</string>
+    <string name="import_where_poweramp">Poweramp: Settings, Folders and Library, Export Poweramp Playlists. Then pick the folder they went to.</string>
+    <string name="import_where_musicolet">Musicolet: export each playlist as an M3U file, then pick them. Its own backups can\'t be read yet.</string>
+    <string name="import_where_aimp">AIMP: export the playlist as an XSPF file, then pick it.</string>
+    <string name="import_where_others">Other players: export your playlists as m3u, pls or xspf files. Their favourites and play counts stay in the other app, as these files don\'t hold them.</string>
+    <string name="import_reading">Reading</string>
+
+    <!-- The preview. -->
+    <string name="import_found_file">Found in file</string>
+    <string name="import_found_files">Found in files</string>
+    <string name="import_found_folder">Found in folder</string>
+    <string name="import_found_phone">On your phone</string>
+    <string name="import_kind_playlists">Playlists</string>
+    <string name="import_kind_favourites">Favourites</string>
+    <string name="import_kind_plays">Play counts</string>
+    <plurals name="import_not_read">
+        <item quantity="one">%1$s file not read</item>
+        <item quantity="other">%1$s files not read</item>
+    </plurals>
+    <string name="import_failed_line">%1$s: %2$s</string>
+    <plurals name="import_not_found">
+        <item quantity="one">%1$s song not found on your phone</item>
+        <item quantity="other">%1$s songs not found on your phone</item>
+    </plurals>
+    <string name="import_not_found_text">They aren\'t on your phone, so they\'re left out.</string>
+    <string name="import_more">And %1$s more</string>
+    <string name="import_merge">A playlist with a name you already have gets only the songs it doesn\'t hold yet, at its end. Favourites are added and play counts only go up. Nothing is removed or replaced.</string>
+    <string name="import_now">Import now</string>
+    <string name="import_cancel">Cancel</string>
+
+    <!-- Why a file was not read: a title, and the sentence when it was the only file. -->
+    <string name="import_not_recognised">Not recognised</string>
+    <string name="import_not_recognised_text">KJB cannot read this file. Try an m3u, pls or xspf file.</string>
+    <string name="import_too_big">Too big</string>
+    <string name="import_too_big_text">This file is too big to be a playlist.</string>
+    <string name="import_unreadable">Cannot read</string>
+    <string name="import_unreadable_text">The file is damaged.</string>
+    <string name="import_empty">No songs</string>
+    <string name="import_empty_text">This file lists no songs.</string>
+    <string name="import_none">Nothing found</string>
+    <string name="import_none_text">This folder holds no m3u, pls or xspf files.</string>
+    <string name="import_close">Close</string>
+
+    <!-- After the import. -->
+    <plurals name="import_done">
+        <item quantity="one">Imported %1$s playlist</item>
+        <item quantity="other">Imported %1$s playlists</item>
+    </plurals>
+    <string name="import_done_other">Import done</string>
+    <string name="import_nothing_new">Nothing new</string>
+    <string name="import_nothing_new_text">KJB already has everything in it.</string>
+    <string name="import_done_created">New playlists</string>
+    <string name="import_done_songs">Songs added</string>
+    <string name="import_done_favourites">Favourites added</string>
+    <string name="import_done_plays">Counts raised</string>
+    <string name="import_copy">Copy list</string>
+    <string name="import_copied">List copied</string>
+    <string name="import_undo">Undo</string>
+    <string name="import_failed">Couldn\'t import</string>
+    <string name="import_undone">Import undone</string>
+    <string name="import_not_undone">Couldn\'t undo the import</string>
+</resources>
