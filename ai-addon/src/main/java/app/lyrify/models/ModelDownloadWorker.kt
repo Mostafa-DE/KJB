@@ -37,6 +37,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.util.concurrent.TimeUnit
 
@@ -104,8 +105,8 @@ object ModelDownloads {
     /** Held while a download runs, so a delete waits until it has stopped writing. */
     internal val lock = Mutex()
 
-    /** Bumped after a delete: the files changed without the work changing. */
-    private val deleted = MutableStateFlow(0)
+    /** Bumped after a delete or a handover: the files changed without the work changing. */
+    private val changed = MutableStateFlow(0)
 
     /** The add-on's app-private models folder. */
     fun folder(context: Context): File = File(context.applicationContext.filesDir, MODELS)
@@ -142,6 +143,22 @@ object ModelDownloads {
         WorkManager.getInstance(context).enqueueUniqueWork(WORK, policy, request)
     }
 
+    /**
+     * [block] on the models while no download writes them (the handover of KJB 2.0's models), on IO; the card reads the
+     * files again after. Null on a phone the AI does not run on, or when a download did not let go within
+     * [LOCK_WAIT_MS] (KJB stops the download first, and tries again later).
+     */
+    suspend fun <T> withStore(context: Context, block: (ModelStore) -> T): T? {
+        val store = store(context) ?: return null
+        if (withTimeoutOrNull(LOCK_WAIT_MS) { lock.lock() } == null) return null
+        return try {
+            withContext(Dispatchers.IO) { block(store) }
+        } finally {
+            lock.unlock()
+            changed.update { it + 1 }
+        }
+    }
+
     /** Stops a download; its parts stay for the next one. */
     fun cancel(context: Context) {
         WorkManager.getInstance(context).cancelUniqueWork(WORK)
@@ -153,7 +170,7 @@ object ModelDownloads {
         val gone = lock.withLock {
             withContext(Dispatchers.IO) { store(context)?.delete() ?: ModelStore.removeRetired(folder(context)) }
         }
-        deleted.update { it + 1 }
+        changed.update { it + 1 }
         if (!gone) Log.w(LOG_TAG, "models: not every file could be deleted")
         return gone
     }
@@ -161,7 +178,7 @@ object ModelDownloads {
     /** A model that did not load: deletes that file only (see [ModelStore.discard]); the models are not ready then. True when it is gone. */
     suspend fun discard(context: Context, model: File): Boolean {
         val gone = lock.withLock { withContext(Dispatchers.IO) { store(context)?.discard(model) ?: false } }
-        deleted.update { it + 1 }
+        changed.update { it + 1 }
         if (!gone) Log.w(LOG_TAG, "models: ${model.name} could not be deleted")
         return gone
     }
@@ -172,7 +189,7 @@ object ModelDownloads {
      */
     fun state(context: Context): Flow<ModelState?> {
         val store = store(context) ?: return flowOf(null)
-        return combine(WorkManager.getInstance(context).getWorkInfosForUniqueWorkFlow(WORK), deleted) { infos, _ ->
+        return combine(WorkManager.getInstance(context).getWorkInfosForUniqueWorkFlow(WORK), changed) { infos, _ ->
             val info = infos.firstOrNull()
             modelState(
                 ready = store.isReady(),
@@ -235,6 +252,7 @@ object ModelDownloads {
     }
 
     private const val RETRY_MINUTES = 1L
+    private const val LOCK_WAIT_MS = 10_000L
     private const val MODELS = "models"
     private const val PERCENT = 100
 }

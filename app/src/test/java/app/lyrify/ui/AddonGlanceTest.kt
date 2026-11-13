@@ -48,7 +48,7 @@ class AddonGlanceTest {
 
     @Test
     fun `a user who had the AI is asked to get the add-on to keep using it, with a dot`() {
-        val ai = state(handover = HandoverState.Waiting)
+        val ai = state(handover = HandoverState.Waiting(total))
 
         val glance = aiGlance(ai, waiting = 3)
 
@@ -168,6 +168,22 @@ class AddonGlanceTest {
         assertEquals(text(R.string.ai_addon_moving), glance.line)
         assertEquals(text(R.string.ai_addon_moving_detail), glance.sheet)
         assertNull(glance.action)
+    }
+
+    @Test
+    fun `the add-on there and KJB's copies not yet moving shows the handover about to start, never Download`() {
+        val glance = aiGlance(state(addon = AddonState.Ready, handover = HandoverState.Waiting(total), models = ModelState.Missing(0, total)), waiting = 3)
+
+        assertEquals(text(R.string.ai_addon_moving), glance.line)
+        assertNull(glance.action)
+    }
+
+    @Test
+    fun `the download row shows the add-on's models, or KJB's own copies while they wait, so they can be deleted`() {
+        assertEquals(ModelState.Ready(total), aiDownloadRow(state(addon = AddonState.Ready, models = ModelState.Ready(total))))
+        assertEquals(ModelState.Ready(total), aiDownloadRow(state(handover = HandoverState.Waiting(total))))
+        assertNull(aiDownloadRow(state()))
+        assertNull("the add-on's models only once it is there", aiDownloadRow(state(addon = AddonState.Outdated(0), models = ModelState.Ready(total))))
     }
 
     // Other phones, and the Now tile

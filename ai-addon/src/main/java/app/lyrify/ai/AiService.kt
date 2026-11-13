@@ -18,6 +18,7 @@ import app.lyrify.ai.api.IAiStatusCallback
 import app.lyrify.ai.api.ImportReply
 import app.lyrify.ai.api.Wire
 import app.lyrify.models.ModelDownloads
+import app.lyrify.models.ModelImport
 import app.lyrify.models.ModelState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -289,8 +290,11 @@ class AiService : Service() {
         }
 
         override fun importModel(name: String, file: ParcelFileDescriptor, bytes: Long, sha256: String): String = checked {
-            file.close()
-            Wire.encode(ImportReply(ImportReply.Outcome.REFUSED, "not yet"))
+            val reply = ParcelFileDescriptor.AutoCloseInputStream(file).use { input ->
+                runBlocking { ModelDownloads.withStore(this@AiService) { store -> ModelImport(store).import(name, input, bytes, sha256) } }
+            } ?: ImportReply(ImportReply.Outcome.RETRY, "a download is writing the models")
+            Log.i(LOG_TAG, "handover: ${reply.outcome}")
+            Wire.encode(reply)
         }
     }
 

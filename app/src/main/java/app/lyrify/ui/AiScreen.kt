@@ -239,7 +239,9 @@ fun aiGlance(state: AiState, waiting: Int): AiGlance {
  */
 private fun addonGlance(state: AiState): AiGlance? {
     installGlance(state.install)?.let { return it }
-    (state.handover as? HandoverState.Moving)?.let { moving ->
+    // The add-on there and KJB's copies about to move: the worker starts within moments.
+    val waiting = (state.handover as? HandoverState.Waiting)?.takeIf { state.addon == AddonState.Ready }?.let { HandoverState.Moving(0, it.bytes) }
+    ((state.handover as? HandoverState.Moving) ?: waiting)?.let { moving ->
         return AiGlance(
             Ring(fraction(moving.doneBytes, moving.totalBytes), RingColor.HIGHLIGHT),
             Centre.Value(CentreValue.Percent(percent(moving.doneBytes, moving.totalBytes))),
@@ -251,7 +253,7 @@ private fun addonGlance(state: AiState): AiGlance? {
     val get = GlanceAction(AiActionKind.GET_ADDON, GlanceText(R.string.ai_addon_get))
     return when (state.addon) {
         null, AddonState.Ready -> null
-        AddonState.Missing -> if (state.handover == HandoverState.Waiting) {
+        AddonState.Missing -> if (state.handover is HandoverState.Waiting) {
             AiGlance(EMPTY_RING, Centre.Icon(R.drawable.ic_download), GlanceText(R.string.ai_addon_keep), GlanceText(R.string.ai_addon_keep_detail), get)
         } else {
             AiGlance(EMPTY_RING, Centre.Icon(R.drawable.ic_download), GlanceText(R.string.ai_addon_needed), GlanceText(R.string.ai_addon_needed_detail), get)
@@ -448,7 +450,7 @@ fun aiAttention(state: AiState, waiting: Int): Boolean {
     val addon = state.addon
     return state.install is InstallState.Failed || state.install == InstallState.NeedsPermission ||
         addon is AddonState.Outdated || addon == AddonState.Untrusted ||
-        (addon == AddonState.Missing && state.handover == HandoverState.Waiting) ||
+        (addon == AddonState.Missing && state.handover is HandoverState.Waiting) ||
         (state.night(waiting) as? NightStatus.Held)?.reason == AiHold.NOT_ALLOWED ||
         models is ModelState.Failed ||
         (models is ModelState.NoRoom && (state.enabled || models.doneBytes > 0))
@@ -681,6 +683,13 @@ private fun AiResults(results: List<Pair<LyricsStatus, Int>>, doneToday: Int, on
     }
 }
 
+/** What the AI download row shows: the add-on's models once it is there, else KJB 2.0's own copies waiting for it. */
+fun aiDownloadRow(state: AiState): ModelState? = when {
+    state.addon == AddonState.Ready -> state.models
+    state.handover is HandoverState.Waiting -> ModelState.Ready(state.handover.bytes)
+    else -> null
+}
+
 /** The AI download, battery use, the chip and how it works: grouped rows, sheets behind them. */
 @Composable
 private fun AiRows(state: AiState, onDownload: () -> Unit, onBattery: () -> Unit, onHowItWorks: () -> Unit) {
@@ -688,8 +697,7 @@ private fun AiRows(state: AiState, onDownload: () -> Unit, onBattery: () -> Unit
     val brand = LocalBrandColors.current
     val tones = LocalStatusColors.current
     val chevron: @Composable () -> Unit = { Icon(painterResource(R.drawable.ic_chevron_right), contentDescription = null) }
-    // The models are the add-on's: their row shows once it is there.
-    val models = state.models?.takeIf { state.addon == AddonState.Ready }
+    val models = aiDownloadRow(state)
     GroupedRows {
         if (models != null) {
             GroupedRow(

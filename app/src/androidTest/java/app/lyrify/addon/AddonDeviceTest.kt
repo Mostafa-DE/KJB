@@ -1,0 +1,133 @@
+package app.lyrify.addon
+
+import android.os.Environment
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
+import app.lyrify.ai.AiModels
+import app.lyrify.ai.AiResult
+import app.lyrify.ai.AiStage
+import app.lyrify.ai.api.IAiAddon
+import app.lyrify.ai.api.ImportReply
+import app.lyrify.data.SharedWrites
+import app.lyrify.lyrics.LocalTrack
+import app.lyrify.models.ModelState
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
+import org.junit.Test
+import org.junit.runner.RunWith
+import java.io.File
+import java.security.MessageDigest
+
+/**
+ * KJB dev and the AI add-on (app.lyrify.ai.debug, signed with the same debug key) on a phone: the bind with its checks and
+ * handshake, one song through the add-on, the add-on's process dying, and the handover. Needs both installed; the run
+ * also needs the add-on's models and a song in Music/KJB test/, and the real handover KJB dev's own copies of the models
+ * (each is skipped without them). Writes nothing outside KJB dev's own cache.
+ */
+@RunWith(AndroidJUnit4::class)
+class AddonDeviceTest {
+    private val context = InstrumentationRegistry.getInstrumentation().targetContext
+
+    private fun connect(): AddonSession = runBlocking {
+        when (val connection = Addon.client(context).connect()) {
+            is Connection.Open -> connection.session
+            is Connection.Closed -> throw AssertionError("the add-on is ${connection.state}: install app.lyrify.ai.debug, signed with the debug key")
+        }
+    }
+
+    @Test
+    fun bindsTheAddonAfterItsChecksAndSpeaksItsApi() {
+        assertEquals(null, Addon.client(context).peek())
+        connect().use { session ->
+            assertEquals(IAiAddon.VERSION, session.api)
+            val status = checkNotNull(session.port.status())
+            assertTrue(status.runtime, status.runtime.startsWith("ONNX Runtime"))
+            assertTrue(session.alive)
+        }
+    }
+
+    @Test
+    fun runsOneSongInTheAddon() {
+        val music = File(Environment.getExternalStorageDirectory(), SharedWrites.TEST_FOLDER)
+        val song = music.listFiles { file -> file.extension.lowercase() in setOf("mp3", "m4a", "flac", "ogg") }?.firstOrNull()
+        assumeTrue("a song in ${SharedWrites.TEST_FOLDER}", song != null)
+        connect().use { session ->
+            assumeTrue("the add-on's models", session.port.status()?.models is ModelState.Ready)
+            val stages = mutableListOf<AiStage>()
+            var chunks = 0
+            val result = RemoteSongEngine(session, notes = {}).use { engine ->
+                runBlocking { engine.run(LocalTrack(checkNotNull(song).path, "Test", null, null, durationMs = 180_000), null, stages::add) { chunks++ } }
+            }
+            assertTrue(result.toString(), result !is AiResult.Failed)
+            assertEquals(AiStage.DECODE, stages.first())
+            assertTrue("$stages", AiStage.SEPARATE in stages)
+        }
+    }
+
+    @Test
+    fun theAddonDyingIsACleanErrorAndANewBindWorks() {
+        val session = connect()
+        InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand("am force-stop app.lyrify.ai.debug").close()
+        runBlocking { withTimeout(10_000) { session.death.await() } }
+        assertFalse(session.alive)
+        assertTrue(runCatching { session.port.apiVersion() }.exceptionOrNull() is AddonDiedException)
+        session.close()
+
+        connect().use { again -> assertEquals(IAiAddon.VERSION, again.api) }
+    }
+
+    /** A made-up file under a model's name: the add-on refuses it before it writes a byte, and KJB keeps its copy. */
+    @Test
+    fun aFileThatIsNotThePinnedModelIsRefusedAndKjbKeepsItsCopy() {
+        val folder = File(context.cacheDir, "handover-test").apply { deleteRecursively(); mkdirs() }
+        File(folder, AiModels.MDX).writeBytes(ByteArray(1024) { 7 })
+        connect().use { session ->
+            val end = runBlocking {
+                Handover(folder, send = { file, sha -> session.port.importModel(file.name, file.file, sha) }, sha256 = ::sha256, markDone = {}).run()
+            }
+            assertTrue(end.toString(), end is HandoverEnd.GaveUp)
+            assertTrue(File(folder, AiModels.MDX).exists())
+            assertEquals(ImportReply.Outcome.REFUSED, session.port.importModel("../notes.txt", File(folder, AiModels.MDX), "00").outcome)
+        }
+        folder.deleteRecursively()
+    }
+
+    /**
+     * The real handover: KJB dev's own copies of the models (pushed into its files/models by the phone session) go to the
+     * add-on, which then has them in place, and only then are KJB dev's copies gone.
+     */
+    @Test
+    fun kjbsOwnModelsGoOverAndOnlyThenAreDeleted() {
+        val legacy = ModelHandover.legacyFolder(context)
+        assumeTrue("KJB dev's own models in files/models", File(legacy, AiModels.MDX).isFile)
+        connect().use { session ->
+            val end = runBlocking {
+                Handover(legacy, send = { file, sha ->
+                    assertTrue("KJB's copies are there while files go over", legacy.exists())
+                    session.port.importModel(file.name, file.file, sha)
+                }, sha256 = ::sha256, markDone = {}).run()
+            }
+            assertEquals(HandoverEnd.Done, end)
+            assertFalse(legacy.exists())
+            assertTrue(session.port.status()?.models is ModelState.Ready)
+        }
+    }
+
+    /** Streamed: Whisper's encoder is about 0.8 GB. */
+    private fun sha256(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { input ->
+            val buffer = ByteArray(1 shl 20)
+            while (true) {
+                val read = input.read(buffer)
+                if (read < 0) break
+                digest.update(buffer, 0, read)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+}

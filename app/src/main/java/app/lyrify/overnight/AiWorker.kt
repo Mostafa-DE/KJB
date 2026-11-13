@@ -322,10 +322,15 @@ object AiLyrics {
         }
     }
 
-    /** Download (or Resume, or Try again) on the AI page: the add-on downloads the models anew from what it has. */
+    /**
+     * Download (or Resume, or Try again) on the AI page: the add-on downloads the models anew from what it has; while
+     * KJB 2.0's are still to hand over, the handover goes first.
+     */
     fun download(context: Context) {
         val app = context.applicationContext
-        calls.launch { Addon.withPort(app) { it.startDownload(restart = true) } }
+        calls.launch {
+            if (ModelHandover.pending(app)) ModelHandover.startIfNeeded(app) else Addon.withPort(app) { it.startDownload(restart = true) }
+        }
     }
 
     /** Off, stored as the user's choice: a run in progress finishes the step it is on and stops. The models stay. */
@@ -355,7 +360,7 @@ object AiLyrics {
             Log.i(LOG_TAG, "AI: on; scheduled again")
             schedule(context)
         }
-        if (!ModelHandover.pending(context)) {
+        if (!withContext(Dispatchers.IO) { ModelHandover.pending(context) }) {
             Addon.withPort(context) { addon -> if (addon.status()?.models?.let { it !is ModelState.Ready } == true) addon.startDownload(restart = false) }
         }
     }

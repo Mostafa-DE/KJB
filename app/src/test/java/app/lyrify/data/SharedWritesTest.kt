@@ -397,6 +397,7 @@ class SharedWritesTest {
         /** Change only the app's own storage (files/, cache/, DataStore). */
         val APP_PRIVATE: Set<String> = setOf(
             "addon/AddonInstall.kt",
+            "addon/ModelHandover.kt",
             "audio/EqProfiles.kt",
             "data/LedgerRepository.kt",
             "dupes/DuplicatesStore.kt",
