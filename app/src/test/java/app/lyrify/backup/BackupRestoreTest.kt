@@ -124,7 +124,8 @@ class BackupRestoreTest {
         restore(stores, library)
 
         assertEquals(listOf("Kitchen", "Road trip", "Night drive"), stores.playlists.playlists.map { it.name })
-        assertEquals(listOf(other.ref, water.ref, lantern.ref), stores.playlists.favouriteSongs)
+        // The backup's favourites in its order, the phone's own after them.
+        assertEquals(listOf(water.ref, lantern.ref, other.ref), stores.playlists.favouriteSongs)
         assertEquals("q1", stores.queues.currentId)
         assertEquals(4, stores.queues.queues.size)
         assertEquals((1L..6L).toList(), stores.queues.queues.flatMap { q -> q.items.map { it.uid } }.sorted())
@@ -140,13 +141,34 @@ class BackupRestoreTest {
     @Test
     fun `a custom order made by dragging goes in the backup and comes back in that order, a playlist's and Favourites'`() {
         // Road trip with Tide Bell dragged to the top, and Favourites with Paper Lantern above Low Water.
-        val dragged = BackupFixtures.playlists.move("p1", 1, 0).moveFavourite(1, 0)
+        val dragged = BackupFixtures.playlists.arrange("p1", listOf(bell.ref, lantern.ref, lantern.ref)).arrangeFavourites(listOf(lantern.ref, water.ref))
         val stores = MemoryStores()
 
         runBlocking { RestorePlan(contents(BackupFixtures.zip(BackupFixtures.snapshot.copy(playlists = dragged))), BackupFixtures.library).apply(setOf(Section.PLAYLISTS), stores, newId) }
 
         assertEquals(listOf(bell.ref, lantern.ref, lantern.ref), stores.playlists.playlist("p1")?.songs)
         assertEquals(listOf(lantern.ref, water.ref), stores.playlists.favouriteSongs)
+    }
+
+    @Test
+    fun `on a phone that has the playlists and Favourites already, the backup's order comes back, songs only on the phone after it`() {
+        // The phone moved its songs about since the backup, and added a song to Road trip and to Favourites.
+        val other = song("Music/Salt Road/01 Salt Road.mp3", title = "Salt Road", artist = "Mira Solen", durationMs = 199_000, id = 14)
+        val library = BackupFixtures.library + other
+        val stores = MemoryStores(
+            PlaylistsState(
+                listOf(BackupFixtures.roadTrip.copy(songs = listOf(other.ref, lantern.ref, lantern.ref, bell.ref)), Playlist("p2", "Night drive", listOf(water.ref), createdAt = T0 + 1)),
+                favouriteSongs = listOf(lantern.ref, other.ref, water.ref),
+            ),
+        )
+
+        restore(stores, library, chosen = setOf(Section.PLAYLISTS))
+
+        // Road trip: Paper Lantern, Tide Bell, Paper Lantern as in the backup, then Salt Road; no second Road trip.
+        assertEquals(listOf("Road trip", "Night drive"), stores.playlists.playlists.map { it.name })
+        assertEquals(listOf(lantern.ref, bell.ref, lantern.ref, other.ref), stores.playlists.playlist("p1")?.songs)
+        // Favourites: Low Water, Paper Lantern as in the backup, then Salt Road.
+        assertEquals(listOf(water.ref, lantern.ref, other.ref), stores.playlists.favouriteSongs)
     }
 
     @Test

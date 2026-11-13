@@ -6,11 +6,13 @@ import androidx.compose.animation.core.VisibilityThreshold
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyItemScope
+import androidx.compose.foundation.lazy.LazyListItemInfo
+import androidx.compose.foundation.lazy.LazyListLayoutInfo
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -20,6 +22,7 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -54,20 +57,24 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import app.lyrify.R
 import app.lyrify.library.Song
+import app.lyrify.library.SongRef
+import app.lyrify.library.arranged
 import app.lyrify.library.songOrder
 import app.lyrify.settings.LibrarySettings
 import app.lyrify.settings.SortSongs
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlin.coroutines.coroutineContext
 import kotlin.math.abs
 
 // Custom order (user feedback 2026-11-13): Favourites' songs and every playlist list in their custom order by default,
-// the order the rows' handles change. A drag on a handle moves the song at once, no long press: the row lifts and
-// follows the finger, its neighbours slide out of its way with a light tick per place, and the list scrolls near its
-// edges. TalkBack moves a song with "Move up" and "Move down". Each move is stored at once in playlists.json, which the
-// backup carries as it is.
+// the order the rows' handles change. A drag on a handle (at the row's end, before "⋯") moves the song at once, no long
+// press: the row lifts and follows the finger, its neighbours slide out of its way with a light tick per place, and the
+// list scrolls near its edges. TalkBack moves a song with "Move up" and "Move down". Each move is stored at once in
+// playlists.json, as the whole order shown, which the backup carries as it is.
 
 /**
  * How Favourites' songs and a playlist are listed: their custom order (the one the handles change), by title, or the
@@ -131,18 +138,77 @@ fun edgeScroll(top: Float, bottom: Float, start: Float, end: Float, edge: Float,
 }
 
 /**
+ * A stored list in its custom order (a playlist's songs, Favourites' songs) as its page shows it. Each entry has a key of
+ * its own that stays with it wherever it moves ([of]), so a song there twice never swaps rows with its copy. A move shows
+ * at once ([arrange]) and is written in turn ([write]: one at a time, each the whole order shown, so what is stored ends
+ * as what shows, whatever was written or removed meanwhile); it shows over the stored list until that changes, and one
+ * that could not be stored gives way to the stored list again.
+ */
+@Stable
+class OrderedEntries {
+    private var stored: List<SongRef>? = null
+    private var entries: List<SongRef> = emptyList()
+    private var keys: List<Long> = emptyList()
+    private var next = 0L
+    private val writes = Mutex()
+
+    /** Changes with each move shown or given up, so the page reading [of] shows it. */
+    var version: Int by mutableIntStateOf(0)
+        private set
+
+    /** The entries to show while the stored list is [now] (a move not stored yet shows over it), and each one's key. */
+    fun of(now: List<SongRef>): Pair<List<SongRef>, List<Long>> {
+        if (now != stored) {
+            keys = carried(entries, keys, now) { next++ }
+            entries = now
+            stored = now
+        }
+        return entries to keys
+    }
+
+    /** The entries at [places] (of those [of] gave), in their new order, take that order; it shows at once. Gives the songs to [write]. */
+    fun arrange(places: List<Int>): List<SongRef> {
+        val order = places.map { entries[it] to keys[it] }
+        val now = arranged(entries.zip(keys), order) { it.first.path }
+        entries = now.map { it.first }
+        keys = now.map { it.second }
+        version++
+        return order.map { it.first }
+    }
+
+    /** Stores [order] once the writes before it are done, through [store] (true once stored); one not stored gives way to the stored list. */
+    suspend fun write(order: List<SongRef>, store: suspend (List<SongRef>) -> Boolean): Boolean = writes.withLock {
+        store(order).also { stored -> if (!stored) forget() }
+    }
+
+    private fun forget() {
+        val now = stored ?: return
+        keys = carried(entries, keys, now) { next++ }
+        entries = now
+        version++
+    }
+}
+
+/** Keys for [now], carried over from [before] and its [keys]: each copy of a song keeps the key of the same copy before (the first the first's), and an entry new to the list gets [fresh]. */
+fun carried(before: List<SongRef>, keys: List<Long>, now: List<SongRef>, fresh: () -> Long): List<Long> {
+    val copies = HashMap<String, ArrayDeque<Long>>()
+    before.forEachIndexed { at, ref -> copies.getOrPut(ref.path) { ArrayDeque() }.addLast(keys[at]) }
+    return now.map { ref -> copies[ref.path]?.removeFirstOrNull() ?: fresh() }
+}
+
+/**
  * A list of songs being put in another order by a row's handle, or by TalkBack ([move]). While a row is [held] the list
  * shows its songs in the drag's order ([shown]): the held row follows the finger, [offset] px from its place, and takes a
  * neighbour's place each time it passes half of it ([reorderStep], the queue's), with a [tick]. Each change of order
  * first [keepPlace]s the list, which would otherwise keep its first row on screen in view and jump. Let go ([drop]), the
- * row settles into its place and [store] gets the move, by places in the list; the order shown stays until the list
- * itself has it, so the row never jumps back while it is stored.
+ * row settles into its place and [store] gets the list's new order (places in the list shown), which the page shows from
+ * then on ([OrderedEntries]).
  */
 @Stable
 class SongReorder(
     private val tick: () -> Unit = {},
     private val keepPlace: () -> Unit = {},
-    private val store: (from: Int, to: Int) -> Unit = { _, _ -> },
+    private val store: (order: List<Int>) -> Unit = {},
 ) {
     /** The list as it was when the drag started: [order] and [held] are places in it. */
     private var base: List<Song> by mutableStateOf(emptyList())
@@ -153,7 +219,7 @@ class SongReorder(
     var held: Int? by mutableStateOf(null)
         private set
 
-    /** The held row's key ([songRowKeys], which a move keeps): it stays lifted until it has settled. */
+    /** The held row's key (its entry's, which a move keeps): it stays lifted until it has settled. */
     var heldKey: Any? by mutableStateOf(null)
         private set
 
@@ -187,19 +253,16 @@ class SongReorder(
     }
 
     /**
-     * The held row let go in [songs], the list as it is now: the move it made (from its place to where it is now), stored,
-     * or null when it is back at its place or the list changed under it.
+     * The held row let go in [songs], the list as it is now: the list's new order (places in [songs]), stored, or null
+     * when the row is back at its place or the list changed under it.
      */
-    fun drop(songs: List<Song>): Pair<Int, Int>? {
+    fun drop(songs: List<Song>): List<Int>? {
         val place = held ?: return null
         held = null
-        val to = order?.indexOf(place) ?: place
-        if (to == place || base != songs) {
-            order = null
-            return null
-        }
-        store(place, to)
-        return place to to
+        val now = order?.takeIf { it.indexOf(place) != place && base == songs }
+        order = null
+        now?.let(store)
+        return now
     }
 
     /** The row let go eases into its place, then lands. */
@@ -215,41 +278,38 @@ class SongReorder(
         }
     }
 
-    /** TalkBack's Move up or Move down: the song at [from] goes to [to], stored at once. */
-    fun move(from: Int, to: Int) = store(from, to)
-
-    /** The move could not be stored: the list's own order shows again. */
-    fun forget() {
-        order = null
-    }
+    /** TalkBack's Move up or Move down: the song at [from] of [size] goes to [to], stored at once. */
+    fun move(from: Int, to: Int, size: Int) = store((0 until size).toMutableList().apply { add(to, removeAt(from)) })
 }
 
 /**
- * A page's [SongReorder] for its list [state]: a tick per place passed and, while a row is held, the list scrolling near
- * its edges ([edgeScroll]) with the row staying under the finger. [store] stores a move, by places in the list shown,
- * and gives what to say when it could not be; then the list's own order shows again.
+ * A page's [SongReorder] for its list [state] of [entries]: a tick per place passed and, while a row is held, the list
+ * scrolling near its edges ([edgeStep]) with the row staying under the finger. A new order shows at once: [places] gives
+ * each row's place among the entries, read when the row is let go, before anything can change them; then [store] stores
+ * the songs shown in their new order, in turn, and gives what to say when it could not.
  */
 @Composable
-fun rememberSongReorder(state: LazyListState, store: suspend (from: Int, to: Int) -> Outcome?): SongReorder {
+fun rememberSongReorder(state: LazyListState, entries: OrderedEntries, places: () -> List<Int>, store: suspend (order: List<SongRef>) -> Outcome?): SongReorder {
     val haptics = LocalHapticFeedback.current
     val scope = rememberCoroutineScope()
     val toasts = LocalToasts.current
     val resources = LocalResources.current
+    val rows by rememberUpdatedState(places)
     val latest by rememberUpdatedState(store)
-    val reorder = remember(state, haptics) {
-        lateinit var made: SongReorder
+    val reorder = remember(state, haptics, entries) {
         SongReorder(
             tick = { haptics.performHapticFeedback(HapticFeedbackType.SegmentTick) },
             keepPlace = { state.requestScrollToItem(state.firstVisibleItemIndex, state.firstVisibleItemScrollOffset) },
-            store = { from, to ->
+            store = { order ->
+                val at = rows()
+                val songs = entries.arrange(order.map { at[it] })
                 scope.launch {
-                    latest(from, to)?.let { failed ->
-                        made.forget()
-                        toasts.say(resources, failed)
-                    }
+                    var failed: Outcome? = null
+                    entries.write(songs) { shown -> latest(shown).also { failed = it } == null }
+                    failed?.let { toasts.say(resources, it) }
                 }
             },
-        ).also { made = it }
+        )
     }
     val density = LocalDensity.current
     val holding = reorder.held != null
@@ -264,8 +324,7 @@ fun rememberSongReorder(state: LazyListState, store: suspend (from: Int, to: Int
             last = now
             val info = state.layoutInfo
             val row = info.visibleItemsInfo.firstOrNull { it.key == reorder.heldKey } ?: continue
-            val top = row.offset + reorder.offset
-            val step = edgeScroll(top, top + row.size, 0f, (info.viewportEndOffset - info.afterContentPadding).toFloat(), edge, fastest * seconds)
+            val step = edgeStep(info, row, reorder.offset, edge, fastest * seconds)
             if (step == 0f) continue
             val scrolled = try {
                 state.scrollBy(step)
@@ -281,9 +340,21 @@ fun rememberSongReorder(state: LazyListState, store: suspend (from: Int, to: Int
 }
 
 /**
- * A row's drag handle (a 48 dp target at its start): a drag on it moves the song, at [place] of [songs], at once, no
- * long press, through [reorder]. [row] is the row's height in px. TalkBack has the row's Move up and Move down instead,
- * so the handle is no stop of its own.
+ * How far the list of [info] scrolls this frame for its held [row], [offset] px from its place ([edgeScroll]): near the
+ * edges of the room the bars leave it. The rows' offsets start where the list's content does, after its padding at the
+ * start (the top bar: Compose places them that far down, [LazyListLayoutInfo.viewportStartOffset] being minus it), so
+ * that room runs from 0 to the end of the viewport less the padding at the end (the Now bar and the dock).
+ */
+fun edgeStep(info: LazyListLayoutInfo, row: LazyListItemInfo, offset: Float, edge: Float, most: Float): Float {
+    val top = row.offset + offset
+    return edgeScroll(top, top + row.size, 0f, (info.viewportEndOffset - info.afterContentPadding).toFloat(), edge, most)
+}
+
+/**
+ * A row's drag handle (a 48 dp target at its end, before "⋯", clear of the system's back gesture): an upright drag on it
+ * moves the song, at [place] of [songs], at once, no long press, through [reorder]; a sideways one is left to the tab
+ * pages. [row] is the row's height in px. TalkBack has the row's Move up and Move down instead, so the handle is no stop
+ * of its own.
  */
 @Composable
 fun DragHandle(reorder: SongReorder, songs: List<Song>, place: Int, key: Any, row: () -> Float) {
@@ -302,13 +373,13 @@ fun DragHandle(reorder: SongReorder, songs: List<Song>, place: Int, key: Any, ro
                     reorder.drop(list)
                     scope.launch { reorder.settle(motion(tween(Motion.SHORT_MS, easing = Motion.Standard), reduced)) }
                 }
-                detectDragGestures(
+                detectVerticalDragGestures(
                     onDragStart = { reorder.start(list, at, key) },
                     onDragEnd = { letGo() },
                     onDragCancel = { letGo() },
                 ) { change, amount ->
                     change.consume()
-                    reorder.drag(amount.y, row())
+                    reorder.drag(amount, row())
                 }
             },
     ) {

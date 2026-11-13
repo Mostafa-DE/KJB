@@ -127,15 +127,15 @@ class LibraryListsTest {
     }
 
     @Test
-    fun `song rows are keyed by path, with which copy it is only where a song can be there twice`() {
-        fun keys(list: List<Song>, repeats: Boolean = false) = songRowKeys(list, repeats)
+    fun `song rows are keyed by path, and a list that may hold a song twice by its entries`() {
+        fun keys(list: List<Song>) = songRowKeys(list)
 
         // Another sort, or a song added at the top, leaves every row's key as it was.
         assertEquals(keys(songs).toSet(), keys(songs.reversed()).toSet())
         assertTrue(keys(listOf(song("Music/Loose/New.mp3")) + songs).containsAll(keys(songs)))
-        // A playlist with a song twice: every key is still its own.
-        val twice = listOf(lantern, bell, lantern)
-        assertEquals(3, keys(twice, repeats = true).toSet().size)
+        // A playlist with a song twice keys its rows by entry: every key is still its own.
+        val twice = listOf(lantern.ref, bell.ref, lantern.ref)
+        assertEquals(3, OrderedEntries().of(twice).second.toSet().size)
     }
 
     @Test

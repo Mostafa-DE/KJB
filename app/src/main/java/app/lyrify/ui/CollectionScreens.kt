@@ -493,16 +493,18 @@ internal fun PlaylistPage(ui: LibraryUi, library: Library, id: String) {
     // Deleted here: the page keeps drawing it while it leaves.
     var leaving by remember { mutableStateOf<Playlist?>(null) }
     val playlist = ui.playlists.playlist(id) ?: leaving ?: return MissingPage(ui)
+    val ordered = remember { OrderedEntries() }
+    val (shownSongs, entryKeys) = remember(playlist.songs, ordered.version) { ordered.of(playlist.songs) }
     // Each song with its place in the playlist, for "Remove from playlist" and moves; songs gone or hidden are left out.
-    val entries = remember(playlist, library, order, ui.settings.library) {
-        val listed = playlist.songs.mapIndexedNotNull { at, ref -> library.resolver.find(ref)?.takeIf(library::shows)?.let { at to it } }
+    // The playlist's entries are [ordered]'s: a move not stored yet shows over them, and each has a key that stays with it.
+    val entries = remember(shownSongs, library, order, ui.settings.library) {
+        val listed = shownSongs.mapIndexedNotNull { at, ref -> library.resolver.find(ref)?.takeIf(library::shows)?.let { at to it } }
         inOrder(listed, order, ui.settings.library) { it.second }
     }
     val songs = remember(entries) { entries.map { it.second } }
     val reduced = LocalReducedMotion.current
     val rows = rememberLazyListState()
-    // A move between two songs shown is one between their places in the playlist, the hidden ones between staying put.
-    val reorder = rememberSongReorder(rows) { from, to -> actions.move(playlist, entries[from].first, entries[to].first) }
+    val reorder = rememberSongReorder(rows, ordered, { entries.map { it.first } }) { shown -> actions.arrange(playlist, shown) }
     SongListFrame(ui, songs, QueueSource(SourceKind.PLAYLIST, id, playlist.name), state = rows, topBar = { under, backdrop ->
         CollectionTopBar(playlist.name, under, backdrop, ui, heart = FavouriteCollection(CollectionKind.PLAYLIST, id)) {
             Box {
@@ -534,7 +536,7 @@ internal fun PlaylistPage(ui: LibraryUi, library: Library, id: String) {
                 AboveChrome { EmptyState(EmptyArt.Glyph, stringResource(R.string.songs_empty_title), rowMotion(reduced), text = stringResource(R.string.lib_playlist_empty)) }
             }
         }
-        songRows(list, place = { at -> SheetPlace.Playlist(id, entries[at].first) }, repeats = true, reorder = reorder.takeIf { order.reorders })
+        songRows(list, place = { at -> SheetPlace.Playlist(id, entries[at].first) }, keys = entries.map { "entry ${entryKeys[it.first]}" }, reorder = reorder.takeIf { order.reorders })
     }
     if (sorting) ListOrderSheet(order, { order = it }) { sorting = false }
     if (renaming) {
@@ -635,13 +637,16 @@ private fun BuiltInPage(ui: LibraryUi, library: Library, list: BuiltInList) {
 private fun FavouritesPage(ui: LibraryUi, library: Library) {
     val change = rememberSettingsChange()
     val title = stringResource(R.string.lib_favourites)
-    val favourites = remember(library, ui.playlists) { Favourites.of(ui.playlists, library) }
+    val ordered = remember { OrderedEntries() }
+    val (shownSongs, entryKeys) = remember(ui.playlists.favouriteSongs, ordered.version) { ordered.of(ui.playlists.favouriteSongs) }
+    val favourites = remember(library, ui.playlists, shownSongs) { Favourites.of(ui.playlists.copy(favouriteSongs = shownSongs), library) }
     var order by rememberSaveable { mutableStateOf(ListOrder.START) }
     var sorting by rememberSaveable { mutableStateOf(false) }
-    val songs = remember(favourites, order, ui.settings.library) { inOrder(favourites.songs, order, ui.settings.library) { it } }
+    val entries = remember(favourites, order, ui.settings.library) { inOrder(favourites.songPlaces.zip(favourites.songs), order, ui.settings.library) { it.second } }
+    val songs = remember(entries) { entries.map { it.second } }
     val actions = rememberSongActions()
     val rows = rememberLazyListState()
-    val reorder = rememberSongReorder(rows) { from, to -> actions.moveFavourite(favourites.songPlaces[from], favourites.songPlaces[to]) }.takeIf { order.reorders }
+    val reorder = rememberSongReorder(rows, ordered, { entries.map { it.first } }) { shown -> actions.arrangeFavourites(shown) }.takeIf { order.reorders }
     val others = FavouritesTab.entries.filter { it != FavouritesTab.SONGS }.sumOf { favourites.count(it) }
     var picked by rememberSaveable { mutableStateOf<FavouritesTab?>(null) }
     val shown = favourites.shown(picked ?: ui.settings.nav.favouritesTab)
@@ -670,7 +675,7 @@ private fun FavouritesPage(ui: LibraryUi, library: Library) {
                 }
                 when (shown) {
                     null -> item(key = "empty", contentType = "empty") { EmptyState(EmptyArt.Icon(R.drawable.ic_favorite), stringResource(R.string.lib_fav_empty_title), rowMotion(reduced), text = stringResource(R.string.lib_fav_empty)) }
-                    FavouritesTab.SONGS -> songRows(list, reorder = reorder)
+                    FavouritesTab.SONGS -> songRows(list, keys = entries.map { "entry ${entryKeys[it.first]}" }, reorder = reorder)
                     else -> favouriteRows(shown, favourites, library, reduced)
                 }
             }
@@ -684,7 +689,7 @@ private fun FavouritesPage(ui: LibraryUi, library: Library) {
                 TabPages(pager, tabs, Modifier.fillMaxSize(), swipe = !list.selection.active) { at ->
                     LazyColumn(Modifier.fillMaxSize(), state = if (tabs[at] == FavouritesTab.SONGS) rows else rememberLazyListState(), contentPadding = bottom) {
                         when (val tab = tabs[at]) {
-                            FavouritesTab.SONGS -> songRows(list, reorder = reorder)
+                            FavouritesTab.SONGS -> songRows(list, keys = entries.map { "entry ${entryKeys[it.first]}" }, reorder = reorder)
                             else -> favouriteRows(tab, favourites, library, reduced)
                         }
                     }
@@ -695,10 +700,9 @@ private fun FavouritesPage(ui: LibraryUi, library: Library) {
     if (sorting) ListOrderSheet(order, { order = it }) { sorting = false }
 }
 
-/** What is a favourite now: the songs and the collections, those gone from the phone or the library left out. */
+/** What is a favourite now: the songs (with [songPlaces], each one's place among those stored) and the collections, those gone from the phone or the library left out. */
 internal class Favourites(
     val songs: List<Song>,
-    /** The place of each of [songs] among the favourite songs stored, those gone or hidden counted: where a move in the custom order goes. */
     val songPlaces: List<Int>,
     val albums: List<Album>,
     val artists: List<app.lyrify.library.Artist>,

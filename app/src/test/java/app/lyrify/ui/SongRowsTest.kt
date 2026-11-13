@@ -19,6 +19,12 @@ import app.lyrify.player.QueueSource
 import app.lyrify.player.SourceKind
 import app.lyrify.settings.LibrarySettings
 import app.lyrify.settings.Settings
+import androidx.compose.foundation.lazy.LazyListItemInfo
+import androidx.compose.foundation.lazy.LazyListLayoutInfo
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -132,9 +138,9 @@ class SongRowsTest {
 
         assertEquals(listOf(kite, lantern, water), favourites.songs)
         assertEquals(listOf(0, 2, 3), favourites.songPlaces)
-        // Water dragged to the top of what shows.
-        val moved = state.moveFavourite(favourites.songPlaces[2], favourites.songPlaces[0])
-        assertEquals(listOf(water.ref, kite.ref, gone, lantern.ref), moved.favouriteSongs)
+        // Water dragged to the top of what shows: the order shown is stored, the song hidden keeping its place.
+        val moved = state.arrangeFavourites(listOf(water.ref, kite.ref, lantern.ref))
+        assertEquals(listOf(water.ref, gone, kite.ref, lantern.ref), moved.favouriteSongs)
         assertEquals(listOf(water, kite, lantern), Favourites.of(moved, library).songs)
     }
 
@@ -144,8 +150,8 @@ class SongRowsTest {
     fun `a drag on a handle moves the song past each row it passes half of, a tick a place, and the move is stored when let go`() {
         var ticks = 0
         var kept = 0
-        val stored = mutableListOf<Pair<Int, Int>>()
-        val reorder = SongReorder(tick = { ticks++ }, keepPlace = { kept++ }, store = { from, to -> stored += from to to })
+        val stored = mutableListOf<List<Int>>()
+        val reorder = SongReorder(tick = { ticks++ }, keepPlace = { kept++ }, store = { stored += it })
 
         reorder.start(songs, 0, "song ${lantern.path}")
         assertEquals(0, reorder.held)
@@ -164,18 +170,16 @@ class SongRowsTest {
         assertTrue(kept >= 2)
         assertTrue(stored.isEmpty())
 
-        assertEquals(0 to 3, reorder.drop(songs))
-        assertEquals(listOf(0 to 3), stored)
+        // Let go: the list's new order goes to be stored and shown by the page ([OrderedEntries]).
+        assertEquals(listOf(1, 2, 3, 0), reorder.drop(songs))
+        assertEquals(listOf(listOf(1, 2, 3, 0)), stored)
         assertNull(reorder.held)
-        // The order dropped shows until the list itself has it, then the list's own.
-        assertEquals(listOf(1, 2, 3, 0), reorder.shown(songs))
-        assertEquals(listOf(0, 1, 2, 3), reorder.shown(listOf(bell, water, kite, lantern)))
     }
 
     @Test
-    fun `a song dragged back to its place, or let go on a list that changed, stores nothing, and one not stored shows the list's own order again`() {
-        val stored = mutableListOf<Pair<Int, Int>>()
-        val reorder = SongReorder(store = { from, to -> stored += from to to })
+    fun `a song dragged back to its place, or let go on a list that changed, stores nothing`() {
+        val stored = mutableListOf<List<Int>>()
+        val reorder = SongReorder(store = { stored += it })
 
         reorder.start(songs, 2, "song ${water.path}")
         reorder.drag(-60f, ROW)
@@ -189,11 +193,6 @@ class SongRowsTest {
         assertNull(reorder.drop(songs.reversed()))
         assertTrue(stored.isEmpty())
 
-        reorder.start(songs, 0, "song ${lantern.path}")
-        reorder.drag(60f, ROW)
-        assertEquals(0 to 1, reorder.drop(songs))
-        reorder.forget()
-        assertEquals(listOf(0, 1, 2, 3), reorder.shown(songs))
         // Past either end the row stays at the end.
         reorder.start(songs, 3, "song ${kite.path}")
         reorder.drag(500f, ROW)
@@ -218,22 +217,109 @@ class SongRowsTest {
         assertEquals(listOf(RowMove(R.string.lib_move_up, 1)), rowMoves(2, 3))
         assertEquals(emptyList<RowMove>(), rowMoves(0, 1))
 
-        val stored = mutableListOf<Pair<Int, Int>>()
-        SongReorder(store = { from, to -> stored += from to to }).move(1, 0)
-        assertEquals(listOf(1 to 0), stored)
+        val stored = mutableListOf<List<Int>>()
+        SongReorder(store = { stored += it }).move(1, 0, 3)
+        assertEquals(listOf(listOf(1, 0, 2)), stored)
     }
 
     @Test
-    fun `a move keeps every row's key, also in a playlist holding a song twice`() {
-        val twice = listOf(lantern, bell, lantern, water)
-        val keys = songRowKeys(twice, repeats = true)
-        assertEquals(4, keys.toSet().size)
+    fun `the auto-scroll's edges are those of the room the bars leave the list, its padding not counted twice`() {
+        // A 1000 px list under a 100 px top bar and over 200 px of Now bar and dock: Compose starts the rows' offsets
+        // after the top padding (the viewport starts 100 px before them), so the room shown runs from 0 to 700.
+        val info = layout(size = 1000, before = 100, after = 200)
+        fun step(offset: Int) = edgeStep(info, row(offset), 0f, edge = 50f, most = 10f)
 
-        // Tide Bell dragged to the end: it and every other row keep their keys, the two copies theirs in turn.
-        val moved = songRowKeys(listOf(lantern, lantern, water, bell), repeats = true)
-        assertEquals(keys.toSet(), moved.toSet())
-        assertEquals(keys[1], moved[3])
-        assertEquals(keys[3], moved[2])
+        assertEquals(0f, step(300))
+        // Just under the top bar, and just over the Now bar.
+        assertEquals(-10f, step(-10))
+        assertEquals(-4f, step(30))
+        assertEquals(4f, step(610))
+        assertEquals(10f, step(640))
+    }
+
+    // Stable entries, and the writes in turn
+
+    @Test
+    fun `a song there twice keeps its own row when dragged past its copy, before and after the move is stored`() {
+        val twice = listOf(lantern.ref, bell.ref, lantern.ref)
+        val entries = OrderedEntries()
+        val (_, keys) = entries.of(twice)
+        assertEquals(3, keys.toSet().size)
+
+        // The first Paper Lantern dragged to the end.
+        val written = entries.arrange(listOf(1, 2, 0))
+        assertEquals(listOf(bell.ref, lantern.ref, lantern.ref), written)
+        val shown = entries.of(twice)
+        assertEquals(listOf(bell.ref, lantern.ref, lantern.ref), shown.first)
+        assertEquals(listOf(keys[1], keys[2], keys[0]), shown.second)
+        // Stored: the same list comes back, each copy keeping the key it had.
+        assertEquals(listOf(keys[1], keys[2], keys[0]), entries.of(listOf(bell.ref, lantern.ref, lantern.ref)).second)
+        // A song added at the end gets a key of its own, the others keep theirs.
+        val added = entries.of(listOf(bell.ref, lantern.ref, lantern.ref, water.ref)).second
+        assertEquals(listOf(keys[1], keys[2], keys[0]), added.take(3))
+        assertFalse(added[3] in keys)
+    }
+
+    @Test
+    fun `two quick moves are written in turn, each the whole order shown, so the order stored is the one shown last`() = runBlocking {
+        val entries = OrderedEntries()
+        entries.of(listOf(lantern.ref, bell.ref, water.ref))
+        val gate = CompletableDeferred<Unit>()
+        val writes = mutableListOf<List<SongRef>>()
+        val store: suspend (List<SongRef>) -> Boolean = { order ->
+            writes += order
+            if (writes.size == 1) gate.await()
+            true
+        }
+
+        // Low Water dragged to the top, then, before that is stored, Tide Bell to the end.
+        val first = launch(start = CoroutineStart.UNDISPATCHED) { entries.write(entries.arrange(listOf(2, 0, 1)), store) }
+        val second = launch(start = CoroutineStart.UNDISPATCHED) { entries.write(entries.arrange(listOf(0, 2, 1)), store) }
+        // Both show at once; the second is written only once the first is.
+        assertEquals(listOf(water.ref, bell.ref, lantern.ref), entries.of(listOf(lantern.ref, bell.ref, water.ref)).first)
+        assertEquals(1, writes.size)
+        gate.complete(Unit)
+        first.join()
+        second.join()
+
+        assertEquals(listOf(listOf(water.ref, lantern.ref, bell.ref), listOf(water.ref, bell.ref, lantern.ref)), writes)
+        assertEquals(listOf(water.ref, bell.ref, lantern.ref), entries.of(listOf(lantern.ref, bell.ref, water.ref)).first)
+    }
+
+    @Test
+    fun `a song removed while a move is written leaves the order shown, and a move not stored gives way to the stored list`() = runBlocking {
+        val entries = OrderedEntries()
+        entries.of(listOf(lantern.ref, bell.ref, water.ref))
+        val written = entries.arrange(listOf(2, 0, 1))
+        // Tide Bell removed meanwhile: the stored list is what shows, the rows keeping their keys.
+        val keys = entries.of(listOf(lantern.ref, bell.ref, water.ref)).second
+        val (shown, after) = entries.of(listOf(lantern.ref, water.ref))
+        assertEquals(listOf(lantern.ref, water.ref), shown)
+        assertEquals(listOf(keys[1], keys[0]), after)
+        assertEquals(listOf(water.ref, lantern.ref, bell.ref), written)
+
+        // A move that could not be stored: the stored list shows again.
+        entries.arrange(listOf(1, 0))
+        assertFalse(entries.write(listOf(water.ref, lantern.ref)) { false })
+        assertEquals(listOf(lantern.ref, water.ref), entries.of(listOf(lantern.ref, water.ref)).first)
+    }
+
+    /** A list's layout as Compose gives it, [size] px tall with [before] and [after] px of padding. */
+    private fun layout(size: Int, before: Int, after: Int): LazyListLayoutInfo = object : LazyListLayoutInfo {
+        override val visibleItemsInfo: List<LazyListItemInfo> = emptyList()
+        override val viewportStartOffset: Int = -before
+        override val viewportEndOffset: Int = size - before
+        override val totalItemsCount: Int = 10
+        override val beforeContentPadding: Int = before
+        override val afterContentPadding: Int = after
+    }
+
+    /** A held row 60 px tall at [offset] in its list's layout. */
+    private fun row(offset: Int): LazyListItemInfo = object : LazyListItemInfo {
+        override val index: Int = 3
+        override val key: Any = "row"
+        override val offset: Int = offset
+        override val size: Int = 60
     }
 
     private companion object {

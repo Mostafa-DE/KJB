@@ -254,9 +254,9 @@ fun AboveChrome(content: @Composable () -> Unit) {
 /**
  * The rows of [shown], the page's songs from [offset] on (all of them, a heading's, or a folder's own songs, which come
  * first), each playing [PageSongs.songs] from where it is in them. [place] says where the song sheet opens (a playlist:
- * the song's place in it); [note] adds a word after the artist ("12 plays"); [repeats]: the list may hold a song twice
- * (a playlist). With [reorder] (a list in its custom order, all of it shown) each row has a drag handle at its start and
- * TalkBack's Move up and Move down.
+ * the song's place in it); [note] adds a word after the artist ("12 plays"); [keys]: the rows' own keys, by place (the
+ * entries of a list that may hold a song twice, [OrderedEntries]), else each song's path. With [reorder] (a list in its
+ * custom order, all of it shown) each row has a drag handle at its end and TalkBack's Move up and Move down.
  */
 fun LazyListScope.songRows(
     list: PageSongs,
@@ -264,10 +264,9 @@ fun LazyListScope.songRows(
     offset: Int = 0,
     place: (Int) -> SheetPlace = { SheetPlace.List },
     note: ((Song) -> String?)? = null,
-    repeats: Boolean = false,
+    keys: List<Any> = songRowKeys(shown),
     reorder: SongReorder? = null,
 ) {
-    val keys = songRowKeys(shown, repeats)
     // Places in [shown]: while a row is dragged, in the drag's order.
     val places = reorder?.shown(shown) ?: shown.indices.toList()
     items(places, key = { keys[it] }, contentType = { "song" }) { at ->
@@ -289,7 +288,7 @@ fun LazyListScope.songRows(
             onLongPress = { list.onSelection(SongSelection(setOf(song.path))) },
             onMore = { list.sheets.show(OpenSheet.Menu(song.ref, place(index))) },
             handle = reorder?.let { { DragHandle(it, shown, at, key) { height } } },
-            moves = if (reorder == null) emptyList() else rowMoves(at, shown.size).map { move -> CustomAccessibilityAction(resources.getString(move.words)) { reorder.move(at, move.to); true } },
+            moves = if (reorder == null) emptyList() else rowMoves(at, shown.size).map { move -> CustomAccessibilityAction(resources.getString(move.words)) { reorder.move(at, move.to, shown.size); true } },
             // An extension on the list, not a composable: reduced motion is read in the row.
             modifier = if (reorder != null && lift != null) {
                 reorderMotion(reorder, key, lift, MaterialTheme.colorScheme.surfaceContainerHigh, reduced, LocalDensity.current).onSizeChanged { height = it.height.toFloat() }
@@ -301,19 +300,10 @@ fun LazyListScope.songRows(
 }
 
 /**
- * The keys of [songs]' rows, by place: a song's path, so a sort, a move or a song added at the top moves rows instead
- * of making each one new; in a list that may hold a song twice ([repeats]) with which copy it is, so each key is its own
- * and a move keeps them.
+ * The keys of [songs]' rows, by place: a song's path, so a sort or a song added at the top moves rows instead of making
+ * each one new. A list that may hold a song twice keys its rows by entry instead ([OrderedEntries]).
  */
-fun songRowKeys(songs: List<Song>, repeats: Boolean): List<String> {
-    if (!repeats) return songs.map { "song ${it.path}" }
-    val copies = HashMap<String, Int>()
-    return songs.map { song ->
-        val copy = copies.getOrDefault(song.path, 0)
-        copies[song.path] = copy + 1
-        "song ${song.path}#$copy"
-    }
-}
+fun songRowKeys(songs: List<Song>): List<Any> = songs.map { "song ${it.path}" }
 
 // The list header
 
@@ -488,7 +478,7 @@ fun <T> SortSheet(title: String, options: List<Pair<T, String>>, selected: T, on
  * row as the song changes; a tap plays, "⋯" opens the song sheet, a long press selects (none without [onLongPress]). Search passes its [shownTitle] with the match highlighted, and for a song found
  * in its lyrics the matching [line] under the artist. While selecting, a tap on the row or on its round check ([onCheck],
  * 48 dp) picks or unpicks it, and a picked row has its own rounded fill ([rowFill]). In a custom order a [handle] comes
- * first, and TalkBack gets the row's [moves].
+ * before "⋯", and TalkBack gets the row's [moves].
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -535,7 +525,6 @@ fun SongRow(
     )
     // The fill is the whole row's, inset from its sides and ends ([rowFill]), so neighbours selected read as two rows.
     Row(verticalAlignment = Alignment.CenterVertically, modifier = modifier.fillMaxWidth().drawBehind { drawRowFill(fill) }.padding(start = 8.dp, end = 4.dp)) {
-        handle?.invoke()
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(14.dp),
@@ -549,8 +538,7 @@ fun SongRow(
                     if (moves.isNotEmpty()) customActions = moves
                 }
                 .heightIn(min = 64.dp)
-                // A handle before it takes the cover's room at the start.
-                .padding(start = if (handle != null) 0.dp else 8.dp, top = 8.dp, end = 8.dp, bottom = 8.dp),
+                .padding(8.dp),
         ) {
             SongCover(SongArt(song.path, song.ref.mediaStoreId))
             Column(Modifier.weight(1f).clearAndSetSemantics {}) {
@@ -590,6 +578,8 @@ fun SongRow(
                 }
             }
         }
+        // The handle sits at the end, before "⋯", clear of the system's back gesture at the screen's edges.
+        handle?.invoke()
         // Selection starts and ends with "⋯" and the checkbox fading through each other, never swapped at once.
         Crossfade(selecting, animationSpec = tween(if (reduced) Motion.REDUCED_MS else Motion.FADE_IN_MS), label = "row end") { checking ->
             if (checking) {

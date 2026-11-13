@@ -1,6 +1,17 @@
 package app.lyrify.ui
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.swipeLeft
+import app.lyrify.library.arranged
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
@@ -42,9 +53,10 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * Song rows on the phone (user feedback 2026-11-13): a tap on a row's round check picks that song, and a drag on a
- * row's handle in a custom order moves it at once. The list is a page's own list on made-up songs; moves go to a list in
- * the test, never to playlists.json, and nothing plays (no row is tapped outside a selection). Made-up names only.
+ * Song rows on the phone (user feedback 2026-11-13): a tap on a row's round check picks that song (the row staying one
+ * TalkBack stop), and an upright drag on a row's handle in a custom order moves it at once, while a sideways one on the
+ * same handle goes to the tab pages (the real pager). The list is a page's own list on made-up songs; moves go to a list
+ * in the test, never to playlists.json, and nothing plays (no row is tapped outside a selection). Made-up names only.
  */
 @RunWith(AndroidJUnit4::class)
 class SongRowsDeviceTest {
@@ -67,9 +79,11 @@ class SongRowsDeviceTest {
         row("Paper Lantern").assertIsSelected()
         row("Tide Bell").assertIsNotSelected()
 
-        // Each row's check: a 48 dp target, in list order.
+        // Each row's check: a 48 dp target, in list order, and no TalkBack stop of its own (the row says it is selected).
         val checks = compose.onAllNodesWithTag(CHECK_TAG, useUnmergedTree = true)
         checks[1].assertWidthIsEqualTo(48.dp).assertHeightIsEqualTo(48.dp)
+        checks[1].assert(SemanticsMatcher.keyNotDefined(SemanticsActions.OnClick))
+        checks[1].assert(SemanticsMatcher.keyNotDefined(SemanticsProperties.ContentDescription))
         checks[1].performClick()
         compose.waitForIdle()
         row("Tide Bell").assertIsSelected()
@@ -83,11 +97,11 @@ class SongRowsDeviceTest {
 
     @Test
     fun aDragOnAHandleMovesTheSongAtOnceAndTheListKeepsTheMove() {
-        val moves = mutableListOf<Pair<Int, Int>>()
+        val moves = mutableListOf<List<SongRef>>()
         compose.setContent { Shell { Rows(listOf(lantern, bell, water, kite), moves) } }
         val row = with(compose.density) { 64.dp.toPx() }
 
-        // No long press: down on Paper Lantern's handle, two and a half rows down in small steps, and up.
+        // No long press: down on Paper Lantern's handle (at the row's end), two and a half rows down in small steps, and up.
         compose.onAllNodesWithTag(HANDLE_TAG, useUnmergedTree = true)[0].performTouchInput {
             down(center)
             repeat(25) { moveBy(Offset(0f, row / 10)) }
@@ -95,7 +109,7 @@ class SongRowsDeviceTest {
         }
         compose.waitForIdle()
 
-        assertEquals(listOf(0 to 2), moves)
+        assertEquals(listOf(listOf(bell, water, lantern, kite).map { it.ref }), moves)
         compose.waitUntil("the list in its new order", TIMEOUT_MS) { top("Paper Lantern") > top("Low Water") }
         assertTrue(top("Tide Bell") < top("Low Water"))
         assertTrue(top("Paper Lantern") < top("Glass Kite"))
@@ -104,18 +118,46 @@ class SongRowsDeviceTest {
     @OptIn(ExperimentalTestApi::class)
     @Test
     fun talkBacksMoveDownMovesTheSongOnePlace() {
-        val moves = mutableListOf<Pair<Int, Int>>()
+        val moves = mutableListOf<List<SongRef>>()
         compose.setContent { Shell { Rows(listOf(lantern, bell, water), moves) } }
 
         row("Tide Bell").performCustomAccessibilityActionWithLabel(context.getString(R.string.lib_move_down))
         compose.waitForIdle()
 
-        assertEquals(listOf(1 to 2), moves)
+        assertEquals(listOf(listOf(lantern, water, bell).map { it.ref }), moves)
         compose.waitUntil("Tide Bell last", TIMEOUT_MS) { top("Tide Bell") > top("Low Water") }
     }
 
     /** A song's row, as TalkBack reads it (its "⋯" says the title too). */
     private fun row(title: String) = compose.onNodeWithContentDescription("$title, Kit Calloway")
+
+    @Test
+    fun onTheTabPagesASidewaysSwipeOnAHandleTurnsThePageAndAnUprightDragMovesTheSong() {
+        val moves = mutableListOf<List<SongRef>>()
+        var chosen by mutableIntStateOf(0)
+        compose.setContent {
+            Shell {
+                val pager = rememberTabPager(2, chosen) { chosen = it }
+                TabPages(pager, listOf("Songs", "Albums"), Modifier.fillMaxSize()) { at ->
+                    if (at == 0) Rows(listOf(lantern, bell, water), moves) else Box(Modifier.fillMaxSize().testTag("albums"))
+                }
+            }
+        }
+        val row = with(compose.density) { 64.dp.toPx() }
+
+        compose.onAllNodesWithTag(HANDLE_TAG, useUnmergedTree = true)[1].performTouchInput {
+            down(center)
+            repeat(10) { moveBy(Offset(0f, row / 10)) }
+            up()
+        }
+        compose.waitForIdle()
+        assertEquals(listOf(listOf(lantern, water, bell).map { it.ref }), moves)
+
+        compose.onAllNodesWithTag(HANDLE_TAG, useUnmergedTree = true)[0].performTouchInput { swipeLeft(startX = centerX, endX = left - width) }
+        compose.waitForIdle()
+        assertEquals(1, chosen)
+        assertEquals(1, moves.size)
+    }
 
     private fun top(title: String): Float = row(title).getUnclippedBoundsInRoot().top.value
 
@@ -124,17 +166,20 @@ class SongRowsDeviceTest {
      * on the list as playlists.json would; else a plain list.
      */
     @Composable
-    private fun Rows(songs: List<Song>, moves: MutableList<Pair<Int, Int>>?) {
-        var shown by remember { mutableStateOf(songs) }
+    private fun Rows(songs: List<Song>, moves: MutableList<List<SongRef>>?) {
+        var stored by remember { mutableStateOf(songs.map { it.ref }) }
         val ui = LibraryUi(LibraryState.Ready(Library.of(songs, Settings())), Settings(), PlaylistsState(), queues = emptyList(), ledger = LedgerState())
         val rows = rememberLazyListState()
-        val reorder = rememberSongReorder(rows) { from, to ->
-            moves?.add(from to to)
-            shown = shown.toMutableList().apply { add(to, removeAt(from)) }
+        val ordered = remember { OrderedEntries() }
+        val (entries, keys) = remember(stored, ordered.version) { ordered.of(stored) }
+        val shown = entries.map { ref -> songs.first { it.ref == ref } }
+        val reorder = rememberSongReorder(rows, ordered, { shown.indices.toList() }) { order ->
+            moves?.add(order)
+            stored = arranged(stored, order, SongRef::path)
             null
         }
         SongListFrame(ui, shown, QueueSource(SourceKind.PLAYLIST, "road-trip", "Road trip"), state = rows, topBar = { _, _ -> }) { list ->
-            songRows(list, repeats = true, reorder = reorder.takeIf { moves != null })
+            songRows(list, keys = keys.map { "entry $it" }, reorder = reorder.takeIf { moves != null })
         }
     }
 
