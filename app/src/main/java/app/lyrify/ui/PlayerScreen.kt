@@ -465,7 +465,7 @@ fun PlayerView() {
                     onDownDrag = drag::follow,
                     onDownEnd = letGo,
                     onRoute = route,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).tourTarget(TourStop.LYRICS),
                 )
                 TitleAndLinks(ui, settings.library)
                 PlayerChips(ui, extras)

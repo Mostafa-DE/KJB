@@ -1,10 +1,14 @@
 package app.lyrify.ui
 
+import android.Manifest
 import android.os.Build
 import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.LocalActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -15,6 +19,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalAccessibilityManager
@@ -22,6 +27,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.core.app.ActivityCompat
 import androidx.lifecycle.lifecycleScope
 import app.lyrify.BuildConfig
 import app.lyrify.Lyrify
@@ -29,6 +35,8 @@ import app.lyrify.R
 import app.lyrify.data.LedgerRepository
 import app.lyrify.data.LedgerState
 import app.lyrify.data.LedgerStore
+import app.lyrify.library.LibraryGraph
+import app.lyrify.library.LibraryState
 import app.lyrify.logFailures
 import app.lyrify.media.NowPlaying
 import app.lyrify.models.ModelDownloads
@@ -99,11 +107,13 @@ private fun App(ledger: LedgerStore, destination: Page?, view: FullScreen?, onVi
     val store = remember(context) { Lyrify.settings(context) }
     var access by remember { mutableStateOf(Access.of(context)) }
     var unrestricted by remember { mutableStateOf(isUnrestricted(context)) }
+    var notifications by remember { mutableStateOf(notificationsAllowed(context)) }
 
     // The grants are switched in Settings; check again whenever the user comes back.
     LifecycleResumeEffect(Unit) {
         access = Access.of(context)
         unrestricted = isUnrestricted(context)
+        notifications = notificationsAllowed(context)
         // An app in the foreground gets its daily time for long media work back.
         AiLyrics.appOpened(context)
         onPauseOrDispose { }
@@ -115,19 +125,53 @@ private fun App(ledger: LedgerStore, destination: Page?, view: FullScreen?, onVi
     var setup by rememberSaveable { mutableStateOf<Boolean?>(null) }
     val showsSetup = setupShows(access, settings.nav.setupDone, setup)
     SideEffect { setup = showsSetup }
-    // Finished with Continue, or skipped by a phone that already had both grants (an update from 2.0): not shown again.
+    // Finished, or skipped by a phone that already had both grants (an update from 2.0): not shown again.
     LaunchedEffect(showsSetup, settings.nav.setupDone) {
         if (!showsSetup && !settings.nav.setupDone) store.update { it.copy(nav = it.nav.copy(setupDone = true)) }
+    }
+    // The tour, once: finished, skipped or declined on the first run, it is stored as seen.
+    val tour = rememberSaveable(saver = Tour.Saver) { Tour() }
+    LaunchedEffect(tour.ended, settings.nav.tourSeen) {
+        if (tour.ended && !settings.nav.tourSeen) store.update { it.copy(nav = it.nav.copy(tourSeen = true)) }
     }
     if (showsSetup) {
         OnboardingScreen(
             access = access,
-            onOpenNotificationAccess = { context.startFirst(notificationAccessIntents(context)) },
+            setupDone = settings.nav.setupDone,
             onOpenAllFilesAccess = { context.startFirst(allFilesAccessIntents(context)) },
+            onOpenNotificationAccess = { context.startFirst(notificationAccessIntents(context)) },
             onOpenAppInfo = { context.startFirst(appInfoIntents(context)) },
-            onContinue = { setup = false },
+            onFinish = { declinesTour ->
+                if (declinesTour) tour.decline()
+                setup = false
+            },
         )
         return
+    }
+    // It opens by itself once the library has been read, so it points at real songs.
+    val library by remember(context) { LibraryGraph.repository(context).state }.collectAsStateWithLifecycle()
+    val libraryRead = library !is LibraryState.Loading
+    LaunchedEffect(settings.nav.tourSeen, tour.ended, libraryRead) {
+        if (tourStarts(settings.nav.tourSeen, tour.ended, tour.state != null, libraryRead)) tour.start()
+    }
+    // What the AI asks for once it is switched on or its download starts: Show progress, then Keep running.
+    val activity = LocalActivity.current
+    val denied by rememberUpdatedState(settings.nav.notificationsDenied)
+    val grant = notificationGrant(Build.VERSION.SDK_INT, notifications, settings.nav.notificationsDenied)
+    var asks by remember { mutableStateOf(emptyList<AiAsk>()) }
+    var asking by remember { mutableStateOf(false) }
+    val explained = remember { booleanArrayOf(false) }
+    val askNotifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        notifications = granted
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val after = activity?.let { ActivityCompat.shouldShowRequestPermissionRationale(it, Manifest.permission.POST_NOTIFICATIONS) } == true
+            if (deniedForGood(granted, explained[0], after)) scope.launch { store.update { it.copy(nav = it.nav.copy(notificationsDenied = true)) } }
+        }
+        asking = false
+        asks = asks.drop(1)
+    }
+    val askFor: (Boolean) -> Unit = { switchedOn ->
+        asks = aiAsks(switchedOn, notificationGrant(Build.VERSION.SDK_INT, notifications, denied), unrestricted)
     }
     val state by ledger.ledger.collectAsStateWithLifecycle(initialValue = LedgerState())
     val track by NowPlaying.track.collectAsStateWithLifecycle()
@@ -150,59 +194,94 @@ private fun App(ledger: LedgerStore, destination: Page?, view: FullScreen?, onVi
             }
         }
     }
-    AppShell(
-        settings = settings,
-        onSettings = { change -> scope.launch { if (!store.update(change)) toasts.say(resources, R.string.settings_not_saved) } },
-        ledger = state,
-        track = track,
-        sweep = sweep,
-        connected = connected,
-        ai = AiState(
-            chip = remember { NpuChips.device() },
-            newEnough = Build.VERSION.SDK_INT >= ModelDownloads.MIN_SDK,
-            models = models,
-            enabled = aiEnabled,
-            progress = aiProgress,
-            hold = aiHold,
-            pluggedIn = pluggedIn,
-            unrestricted = unrestricted,
-            stopping = deletingModels,
-        ),
-        aiActions = remember(context) {
-            AiActions(
-                onSwitch = { on -> if (on) AiLyrics.turnOn(context) else AiLyrics.turnOff(context) },
-                onDownload = { ModelDownloads.start(context) },
-                onDelete = { Lyrify.deleteModels(context) },
-                onOpenAppInfo = { context.startFirst(appInfoIntents(context)) },
-                readLog = { withContext(Dispatchers.IO) { AiLyrics.runLog(context).tail(RUN_LOG_LINES).joinToString("\n") } },
+    CompositionLocalProvider(LocalTour provides tour) {
+        TourHost {
+            AppShell(
+                settings = settings,
+                onSettings = { change -> scope.launch { if (!store.update(change)) toasts.say(resources, R.string.settings_not_saved) } },
+                ledger = state,
+                track = track,
+                sweep = sweep,
+                connected = connected,
+                ai = AiState(
+                    chip = remember { NpuChips.device() },
+                    newEnough = Build.VERSION.SDK_INT >= ModelDownloads.MIN_SDK,
+                    models = models,
+                    enabled = aiEnabled,
+                    progress = aiProgress,
+                    hold = aiHold,
+                    pluggedIn = pluggedIn,
+                    unrestricted = unrestricted,
+                    stopping = deletingModels,
+                    notifications = grant,
+                ),
+                aiActions = remember(context) {
+                    AiActions(
+                        onSwitch = { on ->
+                            if (on) {
+                                AiLyrics.turnOn(context)
+                                askFor(true)
+                            } else {
+                                AiLyrics.turnOff(context)
+                            }
+                        },
+                        onDownload = {
+                            ModelDownloads.start(context)
+                            askFor(false)
+                        },
+                        onDelete = { Lyrify.deleteModels(context) },
+                        onOpenAppInfo = { context.startFirst(appInfoIntents(context)) },
+                        readLog = { withContext(Dispatchers.IO) { AiLyrics.runLog(context).tail(RUN_LOG_LINES).joinToString("\n") } },
+                        onOpenNotificationSettings = { context.startFirst(notificationSettingsIntents(context)) },
+                    )
+                },
+                aiWaiting = aiCounts.first,
+                aiDoneToday = aiCounts.second,
+                grants = Grants(
+                    access = access,
+                    unrestricted = unrestricted,
+                    onOpenNotificationAccess = { context.startFirst(notificationAccessIntents(context)) },
+                    onOpenAllFilesAccess = { context.startFirst(allFilesAccessIntents(context)) },
+                    onOpenAppInfo = { context.startFirst(appInfoIntents(context)) },
+                ),
+                versionName = BuildConfig.VERSION_NAME,
+                checkActions = remember(context) {
+                    CheckActions(
+                        choose = { path, id -> Lyrify.choose(context, path, id) },
+                        decline = { Lyrify.decline(context, it) },
+                        preview = { Lyrify.preview(context, it) },
+                        search = { track, text -> Lyrify.search(context, track, text) },
+                    )
+                },
+                checkAnswers = Lyrify.checkAnswers,
+                // Retries run in the listener's queue sweep.
+                onRetryFailed = NowPlaying::requestRetry,
+                onRemove = { Lyrify.remove(context, it) },
+                destination = destination,
+                onDestinationOpened = onDestinationOpened,
+                view = view,
+                onViewOpened = onViewOpened,
             )
+        }
+    }
+    AiAskSheets(
+        ask = asks.firstOrNull()?.takeUnless { asking },
+        onAllow = {
+            // Android's own question, Android 13 and later (Show progress is asked only there): whether it had explained
+            // before tells a lasting no apart.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                explained[0] = activity?.let { ActivityCompat.shouldShowRequestPermissionRationale(it, Manifest.permission.POST_NOTIFICATIONS) } == true
+                asking = true
+                askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+            } else {
+                asks = asks.drop(1)
+            }
         },
-        aiWaiting = aiCounts.first,
-        aiDoneToday = aiCounts.second,
-        grants = Grants(
-            access = access,
-            unrestricted = unrestricted,
-            onOpenNotificationAccess = { context.startFirst(notificationAccessIntents(context)) },
-            onOpenAllFilesAccess = { context.startFirst(allFilesAccessIntents(context)) },
-            onOpenAppInfo = { context.startFirst(appInfoIntents(context)) },
-        ),
-        versionName = BuildConfig.VERSION_NAME,
-        checkActions = remember(context) {
-            CheckActions(
-                choose = { path, id -> Lyrify.choose(context, path, id) },
-                decline = { Lyrify.decline(context, it) },
-                preview = { Lyrify.preview(context, it) },
-                search = { track, text -> Lyrify.search(context, track, text) },
-            )
+        onOpenAppInfo = {
+            asks = asks.drop(1)
+            context.startFirst(appInfoIntents(context))
         },
-        checkAnswers = Lyrify.checkAnswers,
-        // Retries run in the listener's queue sweep.
-        onRetryFailed = NowPlaying::requestRetry,
-        onRemove = { Lyrify.remove(context, it) },
-        destination = destination,
-        onDestinationOpened = onDestinationOpened,
-        view = view,
-        onViewOpened = onViewOpened,
+        onNotNow = { asks = asks.drop(1) },
     )
 }
 

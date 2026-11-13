@@ -203,6 +203,8 @@ fun AppShell(
     }
     // The page layer follows every move, and Back over it (pages and the tab history).
     PagesBack(nav, pages, swipe, reduced)
+    // The tour walks round the shell with its navigator; its lyrics step needs a song in KJB's player.
+    TourShell(nav, ownSong = bar is NowBarShows.Own)
 
     // The song KJB plays shows as playing in the lists, while the Now bar shows KJB's own song (not another app's).
     CompositionLocalProvider(LocalNavigator provides nav, LocalLyrics provides lyrics, LocalPlayingPath provides (bar as? NowBarShows.Own)?.now?.path) {

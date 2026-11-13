@@ -256,7 +256,8 @@ fun AboveChrome(content: @Composable () -> Unit) {
  * first), each playing [PageSongs.songs] from where it is in them. [place] says where the song sheet opens (a playlist:
  * the song's place in it); [note] adds a word after the artist ("12 plays"); [keys]: the rows' own keys, by place (the
  * entries of a list that may hold a song twice, [OrderedEntries]), else each song's path. With [reorder] (a list in its
- * custom order, all of it shown) each row has a drag handle at its end and TalkBack's Move up and Move down.
+ * custom order, all of it shown) each row has a drag handle at its end and TalkBack's Move up and Move down. [tour]: the
+ * tour's Play a song may point at these rows (Library's Songs).
  */
 fun LazyListScope.songRows(
     list: PageSongs,
@@ -266,6 +267,7 @@ fun LazyListScope.songRows(
     note: ((Song) -> String?)? = null,
     keys: List<Any> = songRowKeys(shown),
     reorder: SongReorder? = null,
+    tour: Boolean = false,
 ) {
     // Places in [shown]: while a row is dragged, in the drag's order.
     val places = reorder?.shown(shown) ?: shown.indices.toList()
@@ -294,7 +296,7 @@ fun LazyListScope.songRows(
                 reorderMotion(reorder, key, lift, MaterialTheme.colorScheme.surfaceContainerHigh, reduced, LocalDensity.current).onSizeChanged { height = it.height.toFloat() }
             } else {
                 rowMotion(reduced)
-            },
+            }.tourTarget(TourStop.SONG.takeIf { tour }, if (tour) stringResource(R.string.tour_play_song, list.ui.title(song)) else null) { list.tap(song, index) },
         )
     }
 }

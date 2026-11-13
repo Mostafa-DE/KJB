@@ -84,6 +84,8 @@ data class AiState(
     val unrestricted: Boolean,
     /** "Delete download" waits for the AI to stop: the button says "Stopping…", and it and the switch wait. */
     val stopping: Boolean,
+    /** Whether KJB may show the AI's progress; denied for good ([NotificationGrant.OFF]), a row opens the phone's settings. */
+    val notifications: NotificationGrant = NotificationGrant.ON,
 ) {
     /** The AI runs on this phone: its chip and its software. */
     val supported: Boolean get() = chip != null && newEnough
@@ -100,6 +102,7 @@ data class AiActions(
     val onDelete: () -> Unit,
     val onOpenAppInfo: () -> Unit,
     val readLog: suspend () -> String,
+    val onOpenNotificationSettings: () -> Unit = {},
 )
 
 // The glance: one ring, one line, at most one action
@@ -394,6 +397,7 @@ fun AiScreen(
                         state = state,
                         onDownload = { downloadSheet = true },
                         onBattery = actions.onOpenAppInfo,
+                        onNotifications = actions.onOpenNotificationSettings,
                         onHowItWorks = { howItWorks = true },
                     )
                 }
@@ -560,7 +564,7 @@ private fun AiResults(results: List<Pair<LyricsStatus, Int>>, doneToday: Int, on
 
 /** The AI download, battery use, the chip and how it works: grouped rows, sheets behind them. */
 @Composable
-private fun AiRows(state: AiState, onDownload: () -> Unit, onBattery: () -> Unit, onHowItWorks: () -> Unit) {
+private fun AiRows(state: AiState, onDownload: () -> Unit, onBattery: () -> Unit, onNotifications: () -> Unit, onHowItWorks: () -> Unit) {
     val colors = MaterialTheme.colorScheme
     val brand = LocalBrandColors.current
     val tones = LocalStatusColors.current
@@ -600,6 +604,24 @@ private fun AiRows(state: AiState, onDownload: () -> Unit, onBattery: () -> Unit
             onClick = onBattery,
             trailing = chevron,
         )
+        // Notifications denied for good: Android asks no more, so the one way back is the phone's own settings.
+        if (state.notifications == NotificationGrant.OFF) {
+            val off = tones[Tone.ERROR]
+            GroupedRow(
+                R.drawable.ic_notifications,
+                stringResource(R.string.ask_progress_title),
+                tile = off.container,
+                onTile = off.onContainer,
+                supporting = {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Icon(painterResource(R.drawable.ic_warning), contentDescription = null, tint = colors.error, modifier = Modifier.size(16.dp))
+                        Text(stringResource(R.string.ask_progress_off), color = colors.error)
+                    }
+                },
+                onClick = onNotifications,
+                trailing = chevron,
+            )
+        }
         state.chip?.let { chip ->
             GroupedRow(
                 R.drawable.ic_memory,
