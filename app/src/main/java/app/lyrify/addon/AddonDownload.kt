@@ -83,13 +83,17 @@ object AddonDownloads {
 
     /** Where KJB's download work stands, for the AI page ([withPhase]). */
     fun phase(context: Context): Flow<DownloadPhase?> =
-        WorkManager.getInstance(context).getWorkInfosForUniqueWorkFlow(WORK).map { infos -> infos.firstOrNull()?.state?.let(::phase) }.distinctUntilChanged()
+        WorkManager.getInstance(context).getWorkInfosForUniqueWorkFlow(WORK).map { infos -> phaseOf(infos.map { it.state }) }.distinctUntilChanged()
 
-    private fun phase(state: WorkInfo.State): DownloadPhase? = when (state) {
-        WorkInfo.State.ENQUEUED, WorkInfo.State.BLOCKED -> DownloadPhase.WAITING
-        WorkInfo.State.RUNNING -> DownloadPhase.RUNNING
-        WorkInfo.State.FAILED -> DownloadPhase.FAILED
-        WorkInfo.State.SUCCEEDED, WorkInfo.State.CANCELLED -> null
+    /**
+     * The phase of the unique work's rows, which WorkManager lists in no order (a REPLACE leaves the cancelled or failed
+     * row beside the new one): one running, else one waiting, else one that failed; none otherwise.
+     */
+    fun phaseOf(states: List<WorkInfo.State>): DownloadPhase? = when {
+        WorkInfo.State.RUNNING in states -> DownloadPhase.RUNNING
+        states.any { it == WorkInfo.State.ENQUEUED || it == WorkInfo.State.BLOCKED } -> DownloadPhase.WAITING
+        WorkInfo.State.FAILED in states -> DownloadPhase.FAILED
+        else -> null
     }
 
     /**
@@ -130,7 +134,7 @@ object AddonDownloads {
      */
     suspend fun follow(session: AddonSession, progress: suspend (Long, Long) -> Unit): Download {
         val events = Channel<Event>(Channel.UNLIMITED)
-        session.port.download(
+        val run = session.port.download(
             object : DownloadEvents {
                 override fun onProgress(done: Long, total: Long) {
                     events.trySend(Event.Progress(done, total))
@@ -157,7 +161,8 @@ object AddonDownloads {
                 }
                 end
             } catch (e: CancellationException) {
-                withContext(NonCancellable) { runCatching { session.port.cancelDownload() } }
+                // This run only: one another worker started goes on.
+                withContext(NonCancellable) { runCatching { session.port.cancelDownload(run) } }
                 throw e
             } finally {
                 death.cancel()

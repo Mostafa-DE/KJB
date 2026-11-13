@@ -80,10 +80,11 @@ interface AddonPort {
     /** [listener] hears the status now and at each change, on a binder thread, until the returned handle is closed. */
     fun watchStatus(listener: (AddonStatus) -> Unit): AutoCloseable
 
-    /** Starts (or follows) the add-on's model download; [events] hears its progress and end. */
-    fun download(events: DownloadEvents)
+    /** Starts a run of the add-on's model download, heard by [events]; its id. */
+    fun download(events: DownloadEvents): Long
 
-    fun cancelDownload()
+    /** Stops the download run [run], and no other. */
+    fun cancelDownload(run: Long)
 
     fun deleteModels(): Boolean
 

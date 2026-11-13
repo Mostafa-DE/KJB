@@ -7,6 +7,7 @@ import app.lyrify.ai.LOG_TAG
 import app.lyrify.ai.USER_AGENT
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -45,46 +46,72 @@ sealed interface RunState {
 }
 
 /**
- * The add-on's one model download at a time ([download]: the downloader under the store's lock), in [scope]: the bound
- * service's. KJB starts it from its own foreground service and shows its notification; the add-on runs no foreground
- * service and posts no notification. Its progress and end go to the caller ([DownloadEvents]); a start while it runs
- * only takes over its reports. Stopped ([cancel], or KJB going away), it ends as stopped and keeps its parts: the next
- * start goes on from them (HTTP Range) and checks every file's SHA-256 at the end.
+ * The add-on's model download ([download]: the downloader under the store's lock, so runs take the files one after the
+ * other), in [scope]: the bound service's. KJB starts it from its own foreground service and shows its notification; the
+ * add-on runs no foreground service and posts no notification. Each [start] is its own run with its own id and its own
+ * caller ([DownloadEvents]): only that caller hears its progress and its end, and only [cancel] with that id stops it
+ * (a run KJB replaced, still winding down, can never end or stop the one after it). Stopped, it ends as stopped and keeps
+ * its parts: the next run goes on from them (HTTP Range) and checks every file's SHA-256 at the end.
  */
 class DownloadRun(private val scope: CoroutineScope, private val download: suspend (progress: suspend (Long, Long) -> Unit) -> Download) {
     private val _state = MutableStateFlow<RunState>(RunState.Idle)
+
+    /** The newest run's state, for the status. */
     val state: StateFlow<RunState> = _state.asStateFlow()
 
-    @Volatile
-    private var listener: DownloadEvents? = null
-    private var job: Job? = null
-
-    /** Starts the download with [events] hearing it, or, while one runs, lets [events] hear that one. */
-    @Synchronized
-    fun start(events: DownloadEvents) {
-        listener = events
-        if (job?.isActive == true) return
-        _state.value = RunState.Running(null)
-        job = scope.launch {
-            val end = try {
-                download { done, total ->
-                    _state.value = RunState.Running(done)
-                    listener?.onProgress(done, total)
-                }
-            } catch (e: CancellationException) {
-                _state.value = RunState.Idle
-                listener?.onEnd(Download.Interrupted("stopped"))
-                throw e
-            }
-            _state.value = if (end is Download.Failed) RunState.Failed else RunState.Idle
-            listener?.onEnd(end)
-        }
+    private class Run(val id: Long, val events: DownloadEvents) {
+        lateinit var job: Job
     }
 
-    /** Stops the download (KJB asked, or went away); its parts stay. */
+    private val runs = HashMap<Long, Run>()
+    private var newest = 0L
+    private var nextId = 1L
+
+    /** Starts a run heard by [events]; its id. */
     @Synchronized
-    fun cancel() {
-        job?.cancel()
+    fun start(events: DownloadEvents): Long {
+        val run = Run(nextId++, events)
+        newest = run.id
+        _state.value = RunState.Running(null)
+        // ATOMIC: the body runs, and the run ends to its caller, even when the scope goes before it was dispatched.
+        run.job = scope.launch(start = CoroutineStart.ATOMIC) {
+            val end = try {
+                download { done, total ->
+                    if (isNewest(run)) _state.value = RunState.Running(done)
+                    events.onProgress(done, total)
+                }
+            } catch (e: CancellationException) {
+                finish(run, Download.Interrupted("stopped"))
+                throw e
+            }
+            finish(run, end)
+        }
+        runs[run.id] = run
+        return run.id
+    }
+
+    /** Stops run [id] (its caller asked, or went away), and no other; its parts stay. */
+    @Synchronized
+    fun cancel(id: Long) {
+        runs[id]?.job?.cancel()
+    }
+
+    /** Stops every run: KJB left, or the models are about to change (deleted, handed over). */
+    @Synchronized
+    fun cancelAll() {
+        runs.values.forEach { it.job.cancel() }
+    }
+
+    @Synchronized
+    private fun isNewest(run: Run): Boolean = run.id == newest
+
+    /** [run] ended: only the newest run sets the state, and only [run]'s own caller hears [end]. */
+    private fun finish(run: Run, end: Download) {
+        synchronized(this) {
+            runs.remove(run.id)
+            if (run.id == newest) _state.value = if (end is Download.Failed) RunState.Failed else RunState.Idle
+        }
+        run.events.onEnd(end)
     }
 }
 

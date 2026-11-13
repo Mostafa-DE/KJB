@@ -1,5 +1,6 @@
 package app.lyrify.addon
 
+import androidx.work.WorkInfo
 import app.lyrify.ai.AiResult
 import app.lyrify.ai.AiStage
 import app.lyrify.ai.AiStats
@@ -55,12 +56,13 @@ class AddonClientTest {
 
         var downloadEvents: DownloadEvents? = null
 
-        override fun download(events: DownloadEvents) {
+        override fun download(events: DownloadEvents): Long {
             call("download")
             downloadEvents = events
+            return 21
         }
 
-        override fun cancelDownload() = call("cancelDownload")
+        override fun cancelDownload(run: Long) = call("cancelDownload $run")
 
         override fun deleteModels(): Boolean = true.also { call("deleteModels") }
 
@@ -385,7 +387,20 @@ class AddonClientTest {
         runCurrent()
 
         assertTrue(end.isCancelled)
-        assertEquals("cancelDownload", host.bindings.single().port.calls.last())
+        // Its own run only: a run another worker started goes on.
+        assertEquals("cancelDownload 21", host.bindings.single().port.calls.last())
+    }
+
+    @Test
+    fun `the page's download phase comes from the work that counts, whatever order WorkManager lists its rows in`() {
+        val replaced = listOf(WorkInfo.State.CANCELLED, WorkInfo.State.ENQUEUED)
+        assertEquals(DownloadPhase.WAITING, AddonDownloads.phaseOf(replaced))
+        assertEquals(DownloadPhase.WAITING, AddonDownloads.phaseOf(replaced.reversed()))
+        assertEquals(DownloadPhase.RUNNING, AddonDownloads.phaseOf(listOf(WorkInfo.State.FAILED, WorkInfo.State.RUNNING, WorkInfo.State.ENQUEUED)))
+        assertEquals(DownloadPhase.WAITING, AddonDownloads.phaseOf(listOf(WorkInfo.State.FAILED, WorkInfo.State.BLOCKED)))
+        assertEquals(DownloadPhase.FAILED, AddonDownloads.phaseOf(listOf(WorkInfo.State.SUCCEEDED, WorkInfo.State.FAILED)))
+        assertEquals(null, AddonDownloads.phaseOf(listOf(WorkInfo.State.SUCCEEDED, WorkInfo.State.CANCELLED)))
+        assertEquals(null, AddonDownloads.phaseOf(emptyList()))
     }
 
     @Test

@@ -449,18 +449,32 @@ class ModelDownloader(
         }
         if (!hosts.isSource(source)) return Download.Failed("${spec.name}: not an allowed address")
         var startedOver = false
+        // A part an earlier run left (cut by a kill, say) may hold bytes that are not the file's: a mismatch at the end
+        // then fetches the file once whole before it is taken for a file that is not the pinned one.
+        var fromPart = part.length() > 0
         while (true) {
             val offset = RangeResume.startAt(part.length(), spec.bytes)
             if (offset == 0L && part.exists() && !part.delete()) return Download.Interrupted("${spec.name}: part could not be reset")
-            if (offset == spec.bytes) return finish(spec, part, file)
-            when (val fetched = fetch(source, spec, offset, part, onBytes)) {
-                Fetch.Complete -> return finish(spec, part, file)
-                Fetch.StartOver -> {
-                    if (startedOver || !part.delete()) return Download.Interrupted("${spec.name}: the server cannot go on from $offset")
-                    startedOver = true
+            // From 0, every byte is this download's own.
+            if (offset == 0L) fromPart = false
+            if (offset < spec.bytes) {
+                when (val fetched = fetch(source, spec, offset, part, onBytes)) {
+                    Fetch.Complete -> Unit
+                    Fetch.StartOver -> {
+                        if (startedOver || !part.delete()) return Download.Interrupted("${spec.name}: the server cannot go on from $offset")
+                        startedOver = true
+                        continue
+                    }
+                    is Fetch.Stop -> return fetched.download
                 }
-                is Fetch.Stop -> return fetched.download
             }
+            val done = finish(spec, part, file)
+            if (done is Download.Failed && fromPart && !part.exists()) {
+                log("${spec.name}: the part did not check out; fetching it whole once")
+                fromPart = false
+                continue
+            }
+            return done
         }
     }
 

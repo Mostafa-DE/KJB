@@ -235,16 +235,16 @@ private class AidlPort(private val addon: IAiAddon) : AddonPort {
         return AutoCloseable { runCatching { addon.unwatchStatus(callback) } }
     }
 
-    override fun download(events: DownloadEvents) {
+    override fun download(events: DownloadEvents): Long {
         val callback = object : IAiDownloadCallback.Stub() {
             override fun onProgress(done: Long, total: Long) = events.onProgress(done, total)
 
             override fun onEnd(end: String) = events.onEnd(Wire.download(end))
         }
-        call { addon.download(callback) }
+        return call { addon.download(callback) }
     }
 
-    override fun cancelDownload() = call { addon.cancelDownload() }
+    override fun cancelDownload(run: Long) = call { addon.cancelDownload(run) }
 
     override fun deleteModels(): Boolean = call { addon.deleteModels() }
 
