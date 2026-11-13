@@ -4,6 +4,9 @@ import app.lyrify.library.Playlist
 import app.lyrify.library.PlaylistsState
 import app.lyrify.library.Song
 import app.lyrify.library.song
+import app.lyrify.player.QueueBook
+import app.lyrify.player.QueueSource
+import app.lyrify.player.SourceKind
 import app.lyrify.stats.FakePlayLog
 import app.lyrify.stats.LoggedPlay
 import kotlinx.coroutines.test.runTest
@@ -283,6 +286,68 @@ class ImportPlanTest {
         assertEquals(undo.plays, stores.log.plays)
     }
 
+    // Queues: saved queues, never the one playing
+
+    @Test
+    fun `queues come in as saved queues named for the import, at their song and second, never playing, and not twice`() = runTest {
+        val stores = FakeStores()
+        stores.queues = QueueBook().play(listOf(road.ref), 0, QueueSource(SourceKind.SONGS, "all", "Songs"), 1).book
+        val playing = stores.queues.currentId
+        val bundle = ImportBundle(queues = listOf(ImportQueue(listOf(line(lantern), gone, line(water)), index = 2, positionMs = 42_000)))
+
+        val outcome = ImportPlan(bundle, phone).apply(setOf(ImportKind.QUEUES), stores, ids(), NOW, UNTITLED, queueName = QUEUE)!!
+
+        val made = stores.queues.queue(outcome.undo.queues.single())!!
+        assertEquals(listOf(lantern.ref, water.ref), made.items.map { it.song })
+        assertEquals(QUEUE, made.name)
+        assertEquals(1, made.index)
+        assertEquals(42_000L, made.positionMs)
+        assertTrue(made.id in stores.queues.saved)
+        assertEquals(playing, stores.queues.currentId)
+        assertEquals(1, outcome.queuesAdded)
+        assertEquals(0, ImportPlan(bundle, phone).apply(setOf(ImportKind.QUEUES), stores, ids(), NOW, UNTITLED, queueName = QUEUE)!!.queuesAdded)
+
+        assertTrue(ImportPlan.undo(outcome.undo, stores))
+        assertNull(stores.queues.queue(made.id))
+        assertEquals(playing, stores.queues.currentId)
+    }
+
+    @Test
+    fun `a queue whose song it was at is not here starts at its first song, and a queue with no song here is not made`() {
+        val (book, made) = ImportPlan.mergeQueues(QueueBook(), listOf(Triple(listOf(lantern.ref, water.ref), -1, 9_000L), Triple(emptyList(), 0, 0L)), QUEUE, NOW)
+
+        val queue = book.queue(made.single())!!
+        assertEquals(0, queue.index)
+        assertEquals(0L, queue.positionMs)
+        assertEquals(book, ImportPlan.unqueue(book, emptyList()))
+        assertEquals(QueueBook(nextId = book.nextId, nextUid = book.nextUid), ImportPlan.unqueue(book, made))
+    }
+
+    @Test
+    fun `an Undo that fails part way can be tried again without taking a song the user added since`() = runTest {
+        val stores = FakeStores(PlaylistsState(listOf(Playlist("mine", "Evening", listOf(water.ref), 1))))
+        val bundle = ImportBundle(listOf(ImportPlaylist("Evening", listOf(line(lantern)))), queues = listOf(ImportQueue(listOf(line(road)))))
+        val outcome = ImportPlan(bundle, phone).apply(ImportKind.entries.toSet(), stores, ids(), NOW, UNTITLED, queueName = QUEUE)!!
+        stores.state = stores.state.add("mine", listOf(lantern.ref))
+
+        stores.queuesFail = true
+        assertFalse(ImportPlan.undo(outcome.undo, stores))
+        stores.queuesFail = false
+        assertTrue(ImportPlan.undo(outcome.undo, stores))
+
+        assertEquals(listOf(water.ref, lantern.ref), stores.state.playlist("mine")!!.songs)
+        assertTrue(stores.queues.queues.isEmpty())
+    }
+
+    @Test
+    fun `when the queues cannot be written the playlists are taken back`() = runTest {
+        val stores = FakeStores().apply { queuesFail = true }
+        val bundle = ImportBundle(listOf(ImportPlaylist("Mix", listOf(line(lantern)))), queues = listOf(ImportQueue(listOf(line(water)))))
+
+        assertNull(ImportPlan(bundle, phone).apply(ImportKind.entries.toSet(), stores, ids(), NOW, UNTITLED, queueName = QUEUE))
+        assertEquals(PlaylistsState(), stores.state)
+    }
+
     private fun line(song: Song) = ImportSong(song.path, song.path)
 
     private fun ids(prefix: String = "p"): () -> String {
@@ -291,7 +356,9 @@ class ImportPlanTest {
     }
 
     private class FakeStores(var state: PlaylistsState = PlaylistsState(), val log: FakePlayLog = FakePlayLog()) : ImportStores {
+        var queues: QueueBook = QueueBook()
         var playlistsFail = false
+        var queuesFail = false
         var addFails = false
         var writes = 0
 
@@ -299,6 +366,12 @@ class ImportPlanTest {
             if (playlistsFail) return false
             writes++
             state = change(state)
+            return true
+        }
+
+        override suspend fun updateQueues(change: (QueueBook) -> QueueBook): Boolean {
+            if (queuesFail) return false
+            queues = change(queues)
             return true
         }
 
@@ -313,5 +386,6 @@ class ImportPlanTest {
         const val NOW: Long = 1_800_000_000_000L
         const val LAST: Long = 1_790_000_000_000L
         const val UNTITLED: String = "Imported playlist"
+        const val QUEUE: String = "Musicolet queue"
     }
 }

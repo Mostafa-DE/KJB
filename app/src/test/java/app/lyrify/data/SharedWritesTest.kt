@@ -396,6 +396,8 @@ class SharedWritesTest {
         /** Change only the app's own storage (files/, cache/, DataStore). */
         val APP_PRIVATE: Set<String> = setOf(
             "audio/EqProfiles.kt",
+            // A Musicolet backup's songs table, copied to the cache to be read, then deleted (Import from app).
+            "backup/Musicolet.kt",
             "data/LedgerRepository.kt",
             "dupes/DuplicatesStore.kt",
             "library/Playlists.kt",

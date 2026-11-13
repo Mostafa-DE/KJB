@@ -9,6 +9,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -52,16 +53,18 @@ import kotlinx.coroutines.withContext
 // import, summary with Undo), shown from here over Settings as the restore sheet is.
 
 /** One check box row of the preview: a kind the import holds, and how many. */
-internal data class ImportRow(val kind: ImportKind, val count: Int)
+internal data class ImportRow(val kind: ImportKind, val count: Int, val songs: Int? = null)
 
 /** The preview's rows: each kind the import holds, in [ImportKind]'s order. */
-internal fun importRows(plan: ImportPlan): List<ImportRow> = ImportKind.entries.mapNotNull { kind -> plan.counts[kind]?.let { ImportRow(kind, it) } }
+internal fun importRows(plan: ImportPlan): List<ImportRow> =
+    ImportKind.entries.mapNotNull { kind -> plan.counts[kind]?.let { ImportRow(kind, it, songs = plan.queueSongs.takeIf { kind == ImportKind.QUEUES }) } }
 
 @StringRes
 internal fun kindLabel(kind: ImportKind): Int = when (kind) {
     ImportKind.PLAYLISTS -> R.string.import_kind_playlists
     ImportKind.FAVOURITES -> R.string.import_kind_favourites
     ImportKind.PLAYS -> R.string.import_kind_plays
+    ImportKind.QUEUES -> R.string.import_kind_queues
 }
 
 /** A file not read: its reason in a few words. */
@@ -71,6 +74,7 @@ internal fun failureTitle(why: ImportFailure): Int = when (why) {
     ImportFailure.TOO_BIG -> R.string.import_too_big
     ImportFailure.UNREADABLE -> R.string.import_unreadable
     ImportFailure.EMPTY -> R.string.import_empty
+    ImportFailure.MUSICOLET -> R.string.import_unreadable
 }
 
 /** The only file picked, not read: its reason as a sentence. */
@@ -80,6 +84,7 @@ internal fun failureText(why: ImportFailure): Int = when (why) {
     ImportFailure.TOO_BIG -> R.string.import_too_big_text
     ImportFailure.UNREADABLE -> R.string.import_unreadable_text
     ImportFailure.EMPTY -> R.string.import_empty_text
+    ImportFailure.MUSICOLET -> R.string.import_musicolet_text
 }
 
 /** "Copy list": each song not found on its own line, as the sheet lists it. */
@@ -171,7 +176,7 @@ fun rememberImportFromApp(): () -> Unit {
             sheet.value = preview.copy(importing = true)
             scope.launch {
                 val reserved = listOf(R.string.lib_favourites, R.string.lib_most_played, R.string.lib_recently_played, R.string.lib_recently_added).map(resources::getString).toSet()
-                val outcome = withContext(NonCancellable) { Imports.apply(app, preview.plan, preview.chosen, resources.getString(R.string.m3u_untitled), reserved) }
+                val outcome = withContext(NonCancellable) { Imports.apply(app, preview.plan, preview.chosen, resources.getString(R.string.m3u_untitled), resources.getString(R.string.import_queue_name), reserved) }
                 if (outcome == null) {
                     sheet.value = preview
                     say(R.string.import_failed, true)
@@ -213,7 +218,7 @@ private suspend fun loaded(source: ImportSource, pick: ImportPick?, app: Context
     if (pick == null) return ImportSheet.Failed(emptyList(), none = true)
     if (pick.read == 0 || pick.bundle.size == 0) return ImportSheet.Failed(pick.failed, none = pick.failed.isEmpty())
     val plan = Imports.plan(app, pick.bundle)
-    return ImportSheet.Preview(source, plan, pick.failed, plan.counts.keys)
+    return ImportSheet.Preview(source, plan, pick.failed, plan.defaultChosen())
 }
 
 private fun copy(app: Context, label: String, text: String) {
@@ -321,6 +326,7 @@ private fun ImportSheetView(
                 R.string.import_done_songs to outcome.songsAdded,
                 R.string.import_done_favourites to outcome.favouritesAdded,
                 R.string.import_done_plays to outcome.countsRaised,
+                R.string.import_done_queues to outcome.queuesAdded,
             ).filter { it.second > 0 }.forEach { (label, count) -> CountLine(stringResource(label), count) }
             if (sheet.missing.isNotEmpty()) {
                 NotFound(sheet.missing)
@@ -342,7 +348,12 @@ private fun KindRow(row: ImportRow, checked: Boolean, enabled: Boolean, onChange
             .toggleable(value = checked, enabled = enabled, role = Role.Checkbox, onValueChange = onChange),
     ) {
         LyrifyCheckbox(checked)
-        Text(stringResource(kindLabel(row.kind)), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+        Column(Modifier.weight(1f)) {
+            Text(stringResource(kindLabel(row.kind)), style = MaterialTheme.typography.bodyLarge)
+            row.songs?.let { songs ->
+                Text(pluralStringResource(R.plurals.import_queue_songs, songs, formatCount(songs)), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
         Text(formatCount(row.count), style = MaterialTheme.typography.bodyLarge.tabular(), color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.End)
     }
 }

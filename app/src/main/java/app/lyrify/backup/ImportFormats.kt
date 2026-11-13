@@ -1,5 +1,7 @@
 package app.lyrify.backup
 
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
 import java.util.Locale
 import kotlin.math.roundToLong
 
@@ -21,6 +23,10 @@ data class ImportSong(
     val sizeBytes: Long? = null,
     /** "Artist - Title" in one text (m3u's `#EXTINF`, pls's `TitleN`), read two ways when matching. */
     val info: String? = null,
+    /** Where it is below its storage root ("Music/Rips/01 Song.mp3"), when the file says so apart from [path]: Musicolet's. */
+    val relativePath: String? = null,
+    /** Its MediaStore id on the phone the file was made on: Musicolet's, found again only with the same file name. */
+    val mediaStoreId: Long? = null,
 ) {
     /** How the "not found" list shows it: its title and artist, else [info], else the file's name. */
     val label: String get() = title?.let { listOfNotNull(it, artist).joinToString(" · ") } ?: info ?: location.substringAfterLast('/').substringAfterLast('\\')
@@ -32,24 +38,29 @@ data class ImportPlaylist(val name: String?, val songs: List<ImportSong>)
 /** A song's play count in the other app, and when it was last played there (wall-clock millis), when the file says. */
 data class ImportPlays(val song: ImportSong, val count: Int, val lastPlayedAt: Long? = null)
 
+/** A queue another app kept: its songs in order, the [index] of the one it was at and the [positionMs] in it. */
+data class ImportQueue(val songs: List<ImportSong>, val index: Int = 0, val positionMs: Long = 0)
+
 /** What an import read, in one neutral form whatever the file was. */
 data class ImportBundle(
     val playlists: List<ImportPlaylist> = emptyList(),
     val favourites: List<ImportSong> = emptyList(),
     val plays: List<ImportPlays> = emptyList(),
+    val queues: List<ImportQueue> = emptyList(),
 ) {
     /** Every song it names, repeats counted: what the caps count. */
-    val size: Int get() = playlists.sumOf { it.songs.size } + favourites.size + plays.size
+    val size: Int get() = playlists.sumOf { it.songs.size } + favourites.size + plays.size + queues.sumOf { it.songs.size }
 
-    operator fun plus(other: ImportBundle): ImportBundle = ImportBundle(playlists + other.playlists, favourites + other.favourites, plays + other.plays)
+    operator fun plus(other: ImportBundle): ImportBundle =
+        ImportBundle(playlists + other.playlists, favourites + other.favourites, plays + other.plays, queues + other.queues)
 }
 
 /** What a file was found to be by its content, or the playlists other apps saved on the phone. */
-enum class ImportFormat { M3U, PLS, XSPF, PHONE }
+enum class ImportFormat { M3U, PLS, XSPF, PHONE, MUSICOLET }
 
 /** Why a file was not read, as the sheet says it. */
 enum class ImportFailure {
-    /** Not a playlist KJB reads: another kind of file, or one it does not know yet (a zip). */
+    /** Not a playlist KJB reads: another kind of file, or a zip that is no Musicolet backup. */
     NOT_RECOGNISED,
 
     /** Over the caps: bytes, songs, a line, the depth of its XML, or the pick's files and songs together. */
@@ -60,6 +71,9 @@ enum class ImportFailure {
 
     /** A playlist with no song in it. */
     EMPTY,
+
+    /** A Musicolet backup whose key, checksums or contents are not what KJB knows: nothing in it is used. */
+    MUSICOLET,
 }
 
 /** One picked file read: its playlists, or why not. [name] is the file's, when its provider says. */
@@ -97,6 +111,9 @@ object ImportFormats {
 
     const val MAX_NAME_CHARS: Int = 200
 
+    /** A zip (a Musicolet backup) is read up to this size; any other file up to [MAX_BYTES]. */
+    const val MAX_ARCHIVE_BYTES: Int = 64 * 1024 * 1024
+
     /** Any file: the content says what it is, and providers name these types every way. */
     val MIME_TYPES: Array<String> = arrayOf("*/*")
 
@@ -106,13 +123,18 @@ object ImportFormats {
      * whose root is `playlist` is xspf, `#EXTM3U` is m3u, and so are lines naming songs, or any text in a file named
      * `.m3u` or `.m3u8`. Binary files (an audio file, a PDF, a database) are not recognised whatever their names.
      */
-    fun read(bytes: ByteArray, fileName: String?, folder: String?): ImportRead {
+    fun read(bytes: ByteArray, fileName: String?, folder: String?, musicolet: MusicoletDb? = null): ImportRead {
         val name = clean(fileName, MAX_NAME_CHARS)
         fun failed(why: ImportFailure) = ImportRead.Failed(name, why)
+        if (startsWith(bytes, ZIP) || startsWith(bytes, EMPTY_ZIP)) {
+            // A zip is a Musicolet backup or nothing KJB reads ([MAX_ARCHIVE_BYTES] at most, read by [musicolet]).
+            if (bytes.size > MAX_ARCHIVE_BYTES) return failed(ImportFailure.TOO_BIG)
+            return when (val read = musicolet?.let { Musicolet.read(bytes, it) } ?: MusicoletRead.Failed(ImportFailure.NOT_RECOGNISED)) {
+                is MusicoletRead.Failed -> failed(read.why)
+                is MusicoletRead.Read -> if (read.bundle.size == 0) failed(ImportFailure.EMPTY) else ImportRead.Read(name, ImportFormat.MUSICOLET, read.bundle)
+            }
+        }
         if (bytes.size > MAX_BYTES) return failed(ImportFailure.TOO_BIG)
-        // Musicolet's own backup (research step 4) is a zip by one user's account. It plugs in here, read through
-        // BackupBundle's unzip caps, once a real backup shows what it holds; until then a zip is not recognised.
-        if (startsWith(bytes, ZIP) || startsWith(bytes, EMPTY_ZIP)) return failed(ImportFailure.NOT_RECOGNISED)
         if (BINARY.any { startsWith(bytes, it) } || startsWith(bytes, MP4, at = 4)) return failed(ImportFailure.NOT_RECOGNISED)
         val extension = extension(fileName)
         val text = M3u.decode(bytes, utf8 = extension == M3u.EXTENSION).removePrefix(BOM)
@@ -121,7 +143,7 @@ object ImportFormats {
             ImportFormat.M3U -> m3u(text, folder)
             ImportFormat.PLS -> pls(text, folder)
             ImportFormat.XSPF -> xspf(text, folder)
-            ImportFormat.PHONE, null -> return failed(ImportFailure.NOT_RECOGNISED)
+            ImportFormat.PHONE, ImportFormat.MUSICOLET, null -> return failed(ImportFailure.NOT_RECOGNISED)
         }
         return when (parsed) {
             is Parsed.Failed -> failed(parsed.why)
@@ -130,6 +152,24 @@ object ImportFormats {
             } else {
                 ImportRead.Read(name, parsed.format, ImportBundle(listOf(ImportPlaylist(cleanName(parsed.title) ?: cleanName(playlistName(fileName)), parsed.songs))))
             }
+        }
+    }
+
+    /**
+     * [input] read whole into memory, or null past its cap: [MAX_ARCHIVE_BYTES] for a zip (a Musicolet backup), else
+     * [MAX_BYTES]. The first bytes decide which.
+     */
+    fun readBounded(input: InputStream): ByteArray? {
+        val bytes = ByteArrayOutputStream()
+        val chunk = ByteArray(CHUNK)
+        var cap: Int? = null
+        while (true) {
+            val read = input.read(chunk)
+            if (read < 0) return bytes.toByteArray()
+            bytes.write(chunk, 0, read)
+            // The cap is set once, as soon as the zip's magic can be seen.
+            if (cap == null && bytes.size() >= ZIP.size) cap = if (startsWith(bytes.toByteArray(), ZIP)) MAX_ARCHIVE_BYTES else MAX_BYTES
+            if (bytes.size() > (cap ?: MAX_BYTES)) return null
         }
     }
 
@@ -151,6 +191,9 @@ object ImportFormats {
         }
         return ImportPick(bundle, read, failed)
     }
+
+    /** Whether a folder's file [fileName] may be a Musicolet backup: its name ends in `.zip`. */
+    fun isArchive(fileName: String?): Boolean = extension(fileName) == ARCHIVE
 
     /** Whether a folder's file [fileName] is worth reading: its name ends in a playlist's extension. */
     fun isPlaylistFile(fileName: String?): Boolean = extension(fileName) in PLAYLIST_EXTENSIONS
@@ -343,10 +386,12 @@ object ImportFormats {
         )
     }
 
+    private const val CHUNK: Int = 64 * 1024
     private const val BOM: String = "\uFEFF"
     private const val PLS_HEADER: String = "[playlist]"
     private const val PLS_SECTION: String = "playlist"
     private const val PLS: String = "pls"
+    private const val ARCHIVE: String = "zip"
     private const val M3U: String = "m3u"
     private const val M3U_HEADER: String = "#EXTM3U"
     private const val XSPF_ROOT: String = "playlist"

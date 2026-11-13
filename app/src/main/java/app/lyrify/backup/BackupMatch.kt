@@ -32,6 +32,9 @@ class SongMatcher(phone: List<Song>) {
     private val byRelative: Map<String, List<Song>> = phone.groupBy { relativeKey(it.folder + it.fileName) }
     private val byTitle: Map<String, List<Song>> = phone.groupBy { TrackNames.normalize(it.title) }
 
+    /** By MediaStore id: a Musicolet backup's songs, for imports only. */
+    private val byId: Map<Long, List<Song>> by lazy { phone.mapNotNull { song -> song.ref.mediaStoreId?.let { it to song } }.groupBy({ it.first }, { it.second }) }
+
     /** "folder/file", case aside: m3u's rule 2, for imports only. */
     private val byNameInFolder: Map<String, List<Song>> by lazy { phone.mapNotNull { song -> nameInFolder(song.path)?.let { it to song } }.groupBy({ it.first }, { it.second }) }
 
@@ -64,24 +67,30 @@ class SongMatcher(phone: List<Song>) {
      * passes; a pass that finds several songs gives way to the next, so it is never a guess. Unlike a backup's, two
      * songs of an import may be the same song of the phone (two files, two forms of one path), and both find it.
      *
+     * 0. The same MediaStore id (a Musicolet backup from this phone), only for a file of the same name.
      * 1. The same absolute path: taken as it is when the file says nothing of the song but its length (an m3u, as m3u
      *    import always did), else only when it agrees ([fits]).
      * 2. The same path below the storage root ([relativeToRoot]); for a root this phone does not know (a computer's, a
-     *    Windows drive's), the longest end of the path, two names at least, that is a song's path below its root.
+     *    Windows drive's), the longest end of the path, two names at least, that is a song's path below its root. A
+     *    path below the root the file gives apart ([ImportSong.relativePath], Musicolet's) is taken as it is.
      * 3. The same file name in a folder of the same name, anywhere (m3u's rule 2).
      * 4. The same title, artist and album as far as the file knows them, and a length within [LENGTH_TOLERANCE_MS];
      *    the length is needed. An "Artist - Title" text is read two ways, as m3u import reads it ([M3u.findByName]).
      *    Of several, the one of the file's size when only one has it.
      *
-     * Passes 2 to 4 take a song only when it [fits]. Missing clues are skipped, never a mismatch.
+     * Passes 0 and 2 to 4 take a song only when it [fits]. Missing clues are skipped, never a mismatch.
      */
     fun find(song: ImportSong): Song? {
         val path = song.path?.let(::nfc)
-        if (path != null) {
-            byPath[path]?.takeIf { identityKnown(song).not() || fits(song, it) }?.let { return it }
-            below(path).filter { fits(song, it) }.singleOrNull()?.let { return it }
-            nameInFolder(path)?.let { byNameInFolder[it] }.orEmpty().filter { fits(song, it) }.singleOrNull()?.let { return it }
+        val relative = song.relativePath?.let(::nfc)
+        song.mediaStoreId?.let { id ->
+            val name = (relative ?: path)?.substringAfterLast('/')
+            byId[id].orEmpty().filter { nfc(it.fileName) == name && fits(song, it) }.singleOrNull()?.let { return it }
         }
+        path?.let { byPath[it] }?.takeIf { identityKnown(song).not() || fits(song, it) }?.let { return it }
+        val below = if (relative != null) byRelative[relativeKey(relative)].orEmpty() else path?.let(::below).orEmpty()
+        below.filter { fits(song, it) }.singleOrNull()?.let { return it }
+        (path ?: relative)?.let(::nameInFolder)?.let { byNameInFolder[it] }.orEmpty().filter { fits(song, it) }.singleOrNull()?.let { return it }
         return readings(song).mapNotNull { (artist, title) -> byTags(song, title, artist) }.distinct().singleOrNull()
     }
 

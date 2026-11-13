@@ -249,6 +249,17 @@ class ImportFormatsTest {
     }
 
     @Test
+    fun `a picked file is read up to 5 MB, a zip up to 64 MB, and nothing past that`() {
+        val text = ByteArray(ImportFormats.MAX_BYTES + 1) { 'a'.code.toByte() }
+        val zip = byteArrayOf(0x50, 0x4B, 3, 4) + ByteArray(ImportFormats.MAX_BYTES + 10)
+
+        assertNull(ImportFormats.readBounded(text.inputStream()))
+        assertEquals(zip.size, ImportFormats.readBounded(zip.inputStream())?.size)
+        assertEquals(3, ImportFormats.readBounded("abc".byteInputStream())?.size)
+        assertNull(ImportFormats.readBounded(java.io.SequenceInputStream(zip.inputStream(), ByteArray(ImportFormats.MAX_ARCHIVE_BYTES).inputStream())))
+    }
+
+    @Test
     fun `a file over 5 MB is too big`() {
         assertEquals(ImportFailure.TOO_BIG, (ImportFormats.read(ByteArray(ImportFormats.MAX_BYTES + 1) { 'a'.code.toByte() }, "Huge.m3u", null) as ImportRead.Failed).why)
     }

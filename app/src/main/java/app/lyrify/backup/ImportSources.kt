@@ -13,6 +13,8 @@ import app.lyrify.LOG_TAG
 import app.lyrify.library.LibraryGraph
 import app.lyrify.library.LibraryState
 import app.lyrify.library.PlaylistsState
+import app.lyrify.player.PlayerGraph
+import app.lyrify.player.QueueBook
 import app.lyrify.stats.LoggedPlay
 import app.lyrify.stats.StatsGraph
 import kotlinx.coroutines.Dispatchers
@@ -35,13 +37,19 @@ object ImportFolder {
     /** Documents listed at most, files and folders together, so a folder of thousands of songs costs little. */
     const val MAX_LISTED: Int = 5_000
 
+    /** How Musicolet names a backup: "2026-11-13 09-30-00.zip". */
+    private val BACKUP_NAME = Regex("""\d{4}-\d{2}-\d{2} \d{2}-\d{2}-\d{2}\.zip""", RegexOption.IGNORE_CASE)
+
     /**
      * The playlist files ([ImportFormats.isPlaylistFile]) in the folder [root] and in its folders [MAX_DEPTH] deep, each
-     * folder's in name order before its folders', at most [ImportFormats.MAX_FILES]; [children] lists a folder (null
-     * when it cannot), and is asked for at most [MAX_LISTED] documents in all.
+     * folder's in name order before its folders', at most [ImportFormats.MAX_FILES]; then, of the zips in the folder
+     * itself ("Musicolet/Backups"), only the newest: Musicolet names its backups by their date and time, so the last of
+     * those by name (else the last zip by name). [children] lists a folder (null when it cannot), and is asked for at
+     * most [MAX_LISTED] documents in all.
      */
     fun walk(root: String, children: (String) -> List<FolderChild>?): List<FolderChild> {
         val found = mutableListOf<FolderChild>()
+        var newest: FolderChild? = null
         var listed = 0
         val byName = compareBy(String.CASE_INSENSITIVE_ORDER) { child: FolderChild -> child.name.orEmpty() }
         fun visit(id: String, depth: Int) {
@@ -50,10 +58,14 @@ object ImportFolder {
             val listing = all.take(MAX_LISTED - listed)
             listed += listing.size
             listing.filter { !it.folder && ImportFormats.isPlaylistFile(it.name) }.sortedWith(byName).forEach { if (found.size < ImportFormats.MAX_FILES) found += it }
+            if (depth == 0) {
+                val zips = listing.filter { !it.folder && ImportFormats.isArchive(it.name) }
+                newest = zips.filter { BACKUP_NAME.matches(it.name.orEmpty()) }.maxWithOrNull(byName) ?: zips.maxWithOrNull(byName)
+            }
             if (depth < MAX_DEPTH) listing.filter { it.folder }.sortedWith(byName).forEach { visit(it.id, depth + 1) }
         }
         visit(root, 0)
-        return found
+        return found + listOfNotNull(newest?.takeIf { found.size < ImportFormats.MAX_FILES })
     }
 }
 
@@ -166,11 +178,12 @@ class MediaStorePlaylistRows(private val resolver: ContentResolver) : PhonePlayl
 }
 
 /**
- * Playlist files through the Storage Access Framework, from the files and folders the user picks in the system's
- * dialogs; no permission needed, and nothing is ever written there. A file is read whole into memory, capped at
- * [ImportFormats.MAX_BYTES], and no name a file gives ever becomes a path. The log gets counts and exception names only.
+ * Playlist files and Musicolet backups through the Storage Access Framework, from the files and folders the user picks
+ * in the system's dialogs; no permission needed, and nothing is ever written there. A file is read whole into memory,
+ * capped ([ImportFormats.readBounded]), and no name a file gives ever becomes a path. A Musicolet backup's songs table
+ * goes through [musicolet]. The log gets counts and exception names only.
  */
-class ImportDocuments(private val resolver: ContentResolver, private val log: (String) -> Unit) {
+class ImportDocuments(private val resolver: ContentResolver, private val musicolet: MusicoletDb, private val log: (String) -> Unit) {
     /** Each of the picked [documents] read, in the order picked; those past [ImportFormats.MAX_FILES] are too many to read. */
     fun files(documents: List<Uri>): List<ImportRead> = documents.mapIndexed { at, document ->
         if (at < ImportFormats.MAX_FILES) read(document) else ImportRead.Failed(displayName(document), ImportFailure.TOO_BIG)
@@ -193,15 +206,15 @@ class ImportDocuments(private val resolver: ContentResolver, private val log: (S
         var name = knownName
         return try {
             if (name == null) name = displayName(document)
-            if (knownSize != null && knownSize > ImportFormats.MAX_BYTES) return ImportRead.Failed(ImportFormats.cleanName(name), ImportFailure.TOO_BIG)
+            if (knownSize != null && knownSize > ImportFormats.MAX_ARCHIVE_BYTES) return ImportRead.Failed(ImportFormats.cleanName(name), ImportFailure.TOO_BIG)
             val folder = try {
                 M3u.documentPath(document.authority, DocumentsContract.getDocumentId(document), primaryRoot())?.substringBeforeLast('/')
             } catch (_: IllegalArgumentException) {
                 null
             }
             val input = resolver.openInputStream(document) ?: throw IOException("no stream")
-            val bytes = input.use(M3u::readBounded) ?: return ImportRead.Failed(ImportFormats.cleanName(name), ImportFailure.TOO_BIG)
-            ImportFormats.read(bytes, name, folder)
+            val bytes = input.use(ImportFormats::readBounded) ?: return ImportRead.Failed(ImportFormats.cleanName(name), ImportFailure.TOO_BIG)
+            ImportFormats.read(bytes, name, folder, musicolet)
         } catch (e: Exception) {
             // IOException, SecurityException, or the provider's own.
             log("import: file not read: ${e.javaClass.simpleName}")
@@ -248,6 +261,13 @@ class AppImportStores(context: Context) : ImportStores {
 
     override suspend fun updatePlaylists(change: (PlaylistsState) -> PlaylistsState): Boolean = LibraryGraph.playlists(app).update(change)
 
+    /** The queues on the main thread, as the player keeps them (AppBackupStores' way). */
+    override suspend fun updateQueues(change: (QueueBook) -> QueueBook): Boolean = withContext(Dispatchers.Main) {
+        val core = PlayerGraph.core(app)
+        core.ready.first { it }
+        core.edit { change(it) to Unit } != null
+    }
+
     override suspend fun plays(): List<LoggedPlay>? = StatsGraph.log(app).all()
 
     override suspend fun addPlays(plays: List<LoggedPlay>): Boolean = StatsGraph.log(app).putAll(plays)
@@ -286,16 +306,29 @@ object Imports {
         }
     }
 
-    suspend fun apply(context: Context, plan: ImportPlan, chosen: Set<ImportKind>, untitled: String, reserved: Set<String>): ImportOutcome? =
+    /** Writes [chosen] of [plan]; [untitled] names a playlist without a name, [queueName] the queues, [reserved] are KJB's own lists' names. */
+    suspend fun apply(context: Context, plan: ImportPlan, chosen: Set<ImportKind>, untitled: String, queueName: String, reserved: Set<String>): ImportOutcome? =
         withContext(Dispatchers.Default) {
-            plan.apply(chosen, AppImportStores(context), newId = { UUID.randomUUID().toString() }, now = System.currentTimeMillis(), untitled, reserved) { Log.i(LOG_TAG, it) }
+            plan.apply(
+                chosen,
+                AppImportStores(context),
+                newId = { UUID.randomUUID().toString() },
+                now = System.currentTimeMillis(),
+                untitled = untitled,
+                reserved = reserved,
+                log = { Log.i(LOG_TAG, it) },
+                queueName = queueName,
+            )
         }
 
     suspend fun undo(context: Context, undo: ImportUndo): Boolean = withContext(Dispatchers.Default) {
         ImportPlan.undo(undo, AppImportStores(context)) { Log.i(LOG_TAG, it) }
     }
 
-    private fun documents(context: Context) = ImportDocuments(context.contentResolver) { Log.w(LOG_TAG, it) }
+    private fun documents(context: Context): ImportDocuments {
+        val log: (String) -> Unit = { Log.w(LOG_TAG, it) }
+        return ImportDocuments(context.contentResolver, MusicoletSqlite(context.cacheDir, log), log)
+    }
 
     private fun logged(pick: ImportPick) {
         val kinds = pick.failed.groupingBy { it.why }.eachCount().entries.joinToString { "${it.value} ${it.key.name.lowercase()}" }

@@ -6,7 +6,7 @@
 
     <!-- The first sheet: where the files come from. -->
     <string name="import_title">Import from app</string>
-    <string name="import_intro">Pick the files another player exported, or the folder that holds them. KJB reads m3u, m3u8, pls and xspf files, and only ever adds to what you have.</string>
+    <string name="import_intro">Pick the files another player exported, or the folder that holds them. KJB reads m3u, m3u8, pls and xspf files and Musicolet backups, and only ever adds to what you have.</string>
     <string name="import_pick_file">Pick file</string>
     <string name="import_pick_folder">Pick folder</string>
     <string name="import_phone_title">On your phone</string>
@@ -18,7 +18,7 @@
     <string name="import_where_title">Other players</string>
     <string name="import_where_samsung">Samsung Music: Settings, Manage playlists, Export my playlists. Then pick the file in your Music folder.</string>
     <string name="import_where_poweramp">Poweramp: Settings, Folders and Library, Export Poweramp Playlists. Then pick the folder they went to.</string>
-    <string name="import_where_musicolet">Musicolet: export each playlist as an M3U file, then pick them. Its own backups can\'t be read yet.</string>
+    <string name="import_where_musicolet">Musicolet: Settings, Backup/Restore, Backup now. Then pick the backup in its Backups folder. It brings playlists, favourites, play counts and queues.</string>
     <string name="import_where_aimp">AIMP: export the playlist as an XSPF file, then pick it.</string>
     <string name="import_where_others">Other players: export your playlists as m3u, pls or xspf files. Their favourites and play counts stay in the other app, as these files don\'t hold them.</string>
     <string name="import_reading">Reading</string>
@@ -31,6 +31,11 @@
     <string name="import_kind_playlists">Playlists</string>
     <string name="import_kind_favourites">Favourites</string>
     <string name="import_kind_plays">Play counts</string>
+    <string name="import_kind_queues">Queues</string>
+    <plurals name="import_queue_songs">
+        <item quantity="one">%1$s song</item>
+        <item quantity="other">%1$s songs</item>
+    </plurals>
     <plurals name="import_not_read">
         <item quantity="one">%1$s file not read</item>
         <item quantity="other">%1$s files not read</item>
@@ -48,7 +53,8 @@
 
     <!-- Why a file was not read: a title, and the sentence when it was the only file. -->
     <string name="import_not_recognised">Not recognised</string>
-    <string name="import_not_recognised_text">KJB cannot read this file. Try an m3u, pls or xspf file.</string>
+    <string name="import_not_recognised_text">KJB cannot read this file. Try an m3u, pls or xspf file, or a Musicolet backup.</string>
+    <string name="import_musicolet_text">This Musicolet backup can\'t be read.</string>
     <string name="import_too_big">Too big</string>
     <string name="import_too_big_text">This file is too big to be a playlist.</string>
     <string name="import_unreadable">Cannot read</string>
@@ -56,7 +62,7 @@
     <string name="import_empty">No songs</string>
     <string name="import_empty_text">This file lists no songs.</string>
     <string name="import_none">Nothing found</string>
-    <string name="import_none_text">This folder holds no m3u, pls or xspf files.</string>
+    <string name="import_none_text">This folder holds no m3u, pls or xspf files and no Musicolet backup.</string>
     <string name="import_close">Close</string>
 
     <!-- After the import. -->
@@ -71,6 +77,8 @@
     <string name="import_done_songs">Songs added</string>
     <string name="import_done_favourites">Favourites added</string>
     <string name="import_done_plays">Counts raised</string>
+    <string name="import_done_queues">Queues added</string>
+    <string name="import_queue_name">Musicolet queue</string>
     <string name="import_copy">Copy list</string>
     <string name="import_copied">List copied</string>
     <string name="import_undo">Undo</string>

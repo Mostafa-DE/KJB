@@ -4,10 +4,13 @@ import app.lyrify.library.Playlist
 import app.lyrify.library.PlaylistsState
 import app.lyrify.library.Song
 import app.lyrify.library.SongRef
+import app.lyrify.player.QueueBook
+import app.lyrify.player.QueueSource
+import app.lyrify.player.SourceKind
 import app.lyrify.stats.LoggedPlay
 
 /** What an import can bring, each with its check box in the preview, in its order. */
-enum class ImportKind { PLAYLISTS, FAVOURITES, PLAYS }
+enum class ImportKind { PLAYLISTS, FAVOURITES, PLAYS, QUEUES }
 
 /**
  * The stores an import changes, each through its own API: the app's in ImportSources.kt ([AppImportStores]), in memory
@@ -15,6 +18,8 @@ enum class ImportKind { PLAYLISTS, FAVOURITES, PLAYS }
  */
 interface ImportStores {
     suspend fun updatePlaylists(change: (PlaylistsState) -> PlaylistsState): Boolean
+
+    suspend fun updateQueues(change: (QueueBook) -> QueueBook): Boolean
 
     /** Every play in the log; null when it cannot be read. */
     suspend fun plays(): List<LoggedPlay>?
@@ -34,8 +39,10 @@ data class ImportUndo(
     val added: Map<String, List<SongRef>> = emptyMap(),
     val favourites: List<SongRef> = emptyList(),
     val plays: List<LoggedPlay> = emptyList(),
+    /** The saved queues it made, by id. */
+    val queues: List<String> = emptyList(),
 ) {
-    val isEmpty: Boolean get() = created.isEmpty() && added.isEmpty() && favourites.isEmpty() && plays.isEmpty()
+    val isEmpty: Boolean get() = created.isEmpty() && added.isEmpty() && favourites.isEmpty() && plays.isEmpty() && queues.isEmpty()
 }
 
 /**
@@ -49,6 +56,7 @@ data class ImportOutcome(
     val favouritesAdded: Int,
     val countsRaised: Int,
     val undo: ImportUndo,
+    val queuesAdded: Int = 0,
 ) {
     /** "Imported 12 playlists". */
     val playlists: Int get() = created + extended
@@ -72,7 +80,14 @@ class ImportPlan(val bundle: ImportBundle, phone: List<Song>) {
         ImportKind.PLAYLISTS to bundle.playlists.size,
         ImportKind.FAVOURITES to bundle.favourites.distinctBy(::key).size,
         ImportKind.PLAYS to bundle.plays.filter { it.count > 0 }.distinctBy { key(it.song) }.size,
+        ImportKind.QUEUES to bundle.queues.size,
     ).filter { it.second > 0 }.toMap()
+
+    /** "1 queue, 6,863 songs": how many songs the queues hold together. */
+    val queueSongs: Int = bundle.queues.sumOf { it.songs.size }
+
+    /** The kinds ticked at first: all but the queues (stale, and seldom wanted), unless the queues are all there is. */
+    fun defaultChosen(): Set<ImportKind> = (counts.keys - ImportKind.QUEUES).ifEmpty { counts.keys }
 
     /** The songs the [chosen] kinds name that are not on this phone, each once, in their order. */
     fun missing(chosen: Set<ImportKind>): List<ImportSong> = songs(chosen).filter { it !in found }.distinctBy(::key)
@@ -82,14 +97,16 @@ class ImportPlan(val bundle: ImportBundle, phone: List<Song>) {
         if (ImportKind.PLAYLISTS in chosen) bundle.playlists.forEach { addAll(it.songs) }
         if (ImportKind.FAVOURITES in chosen) addAll(bundle.favourites)
         if (ImportKind.PLAYS in chosen) bundle.plays.forEach { add(it.song) }
+        if (ImportKind.QUEUES in chosen) bundle.queues.forEach { addAll(it.songs) }
     }
 
     /**
      * Writes the [chosen] kinds after matching, all or nothing: playlists and favourites in one write of their store,
-     * then the plays; when the plays fail, the playlists are taken back. Never wipes: see [merge] and [raised]. [now]
-     * stamps new playlists and the plays of songs whose last play is not known; [untitled] names a playlist without
-     * a name; [reserved] are the names of KJB's own lists ("Favourites"), which a playlist does not take. Null when
-     * nothing could be written. The log gets counts and exception class names only.
+     * then the queues ([mergeQueues], named [queueName]), then the plays; when a later write fails, the earlier ones are
+     * taken back. Never wipes: see [merge] and [raised]. [now] stamps new playlists and queues and the plays of songs
+     * whose last play is not known; [untitled] names a playlist without a name; [reserved] are the names of KJB's own
+     * lists ("Favourites"), which a playlist does not take. Null when nothing could be written. The log gets counts
+     * and exception class names only.
      */
     suspend fun apply(
         chosen: Set<ImportKind>,
@@ -99,6 +116,7 @@ class ImportPlan(val bundle: ImportBundle, phone: List<Song>) {
         untitled: String,
         reserved: Set<String> = emptySet(),
         log: (String) -> Unit = {},
+        queueName: String = untitled,
     ): ImportOutcome? {
         val playlists = if (ImportKind.PLAYLISTS in chosen) bundle.playlists.map { playlist -> (playlist.name ?: untitled) to playlist.songs.mapNotNull { found[it]?.ref } } else emptyList()
         val favourites = if (ImportKind.FAVOURITES in chosen) bundle.favourites.mapNotNull { found[it]?.ref } else emptyList()
@@ -118,10 +136,20 @@ class ImportPlan(val bundle: ImportBundle, phone: List<Song>) {
             log("import: playlists not written, nothing changed")
             return null
         }
-        val undo = (merged ?: ImportUndo()).copy(plays = plays)
+        var undo = (merged ?: ImportUndo()).copy(plays = plays)
+        val queues = if (ImportKind.QUEUES in chosen) bundle.queues.map(::onPhone) else emptyList()
+        if (queues.isNotEmpty()) {
+            var made = emptyList<String>()
+            if (!stores.updateQueues { book -> mergeQueues(book, queues, queueName, now).also { made = it.second }.first }) {
+                val back = stores.updatePlaylists { unmerge(it, undo) }
+                log("import: queues not written, playlists ${if (back) "taken back" else "not taken back"}")
+                return null
+            }
+            undo = undo.copy(queues = made)
+        }
         if (plays.isNotEmpty() && !stores.addPlays(plays)) {
-            val back = stores.updatePlaylists { unmerge(it, undo) }
-            log("import: plays not written, playlists ${if (back) "taken back" else "not taken back"}")
+            val back = stores.updatePlaylists { unmerge(it, undo) } && (undo.queues.isEmpty() || stores.updateQueues { unqueue(it, undo.queues) })
+            log("import: plays not written, playlists and queues ${if (back) "taken back" else "not taken back"}")
             return null
         }
         val outcome = ImportOutcome(
@@ -131,9 +159,16 @@ class ImportPlan(val bundle: ImportBundle, phone: List<Song>) {
             favouritesAdded = undo.favourites.size,
             countsRaised = plays.distinctBy { it.song.path }.size,
             undo = undo,
+            queuesAdded = undo.queues.size,
         )
-        log("import: ${outcome.created} playlists made, ${outcome.extended} added to, ${outcome.favouritesAdded} favourites, ${outcome.countsRaised} counts raised")
+        log("import: ${outcome.created} playlists made, ${outcome.extended} added to, ${outcome.favouritesAdded} favourites, ${outcome.countsRaised} counts raised, ${outcome.queuesAdded} queues")
         return outcome
+    }
+
+    /** [queue]'s songs on this phone, in order, the index among them of the one it was at (-1 when that one is not here), and the second in it. */
+    private fun onPhone(queue: ImportQueue): Triple<List<SongRef>, Int, Long> {
+        val here = queue.songs.mapIndexedNotNull { at, song -> found[song]?.let { at to it.ref } }
+        return Triple(here.map { it.second }, here.indexOfFirst { it.first == queue.index }, queue.positionMs)
     }
 
     companion object {
@@ -141,12 +176,18 @@ class ImportPlan(val bundle: ImportBundle, phone: List<Song>) {
         const val MAX_PLAYS_PER_SONG: Int = 10_000
 
         /**
-         * Takes back everything [undo] lists, the plays then the playlists and favourites, each in one write; when the
-         * playlists cannot be written the plays are put back. False when it could not.
+         * Takes back everything [undo] lists, each store in one write: the queues, then the plays, then the playlists
+         * and favourites last. The first two can be taken back again without harm, so an Undo that fails part way can
+         * be tried again; the playlists, which take one copy of each added song off the end, change only once, after
+         * the rest, and when they cannot be written the plays are put back. False when it could not.
          */
         suspend fun undo(undo: ImportUndo, stores: ImportStores, log: (String) -> Unit = {}): Boolean {
+            if (undo.queues.isNotEmpty() && !stores.updateQueues { unqueue(it, undo.queues) }) {
+                log("import undo: queues not written, nothing changed")
+                return false
+            }
             if (undo.plays.isNotEmpty() && !stores.removePlays(undo.plays)) {
-                log("import undo: plays not removed, nothing changed")
+                log("import undo: plays not removed, ${undo.queues.size} queues taken back")
                 return false
             }
             if (!stores.updatePlaylists { unmerge(it, undo) }) {
@@ -154,7 +195,7 @@ class ImportPlan(val bundle: ImportBundle, phone: List<Song>) {
                 log("import undo: playlists not written, plays ${if (back) "put back" else "not put back"}")
                 return false
             }
-            log("import undo: ${undo.created.size} playlists, ${undo.added.size} added to, ${undo.favourites.size} favourites, ${undo.plays.size} plays taken back")
+            log("import undo: ${undo.created.size} playlists, ${undo.added.size} added to, ${undo.favourites.size} favourites, ${undo.plays.size} plays, ${undo.queues.size} queues taken back")
             return true
         }
 
@@ -236,6 +277,34 @@ class ImportPlan(val bundle: ImportBundle, phone: List<Song>) {
                 generateSequence(last) { it - 1 }.filter { it !in busy }.take(missing).map { LoggedPlay(song.ref, it, 0, counted = true) }.toList()
             }
         }
+
+        /**
+         * [book] with an import's [queues] (each its songs on this phone, in order, the one it was at and the second in
+         * it) added as saved queues named [name], never the one playing: one whose songs, in that order, a saved queue
+         * holds already is not added again. The ids of those it made come back with it.
+         */
+        internal fun mergeQueues(book: QueueBook, queues: List<Triple<List<SongRef>, Int, Long>>, name: String, now: Long): Pair<QueueBook, List<String>> {
+            var state = book
+            val made = mutableListOf<String>()
+            val source = QueueSource(SourceKind.PICKED, QUEUE_KEY, name)
+            queues.forEach { (songs, index, positionMs) ->
+                val paths = songs.map { it.path }.distinct()
+                if (paths.isEmpty() || state.saved.mapNotNull(state::queue).any { saved -> saved.items.map { it.song.path } == paths }) return@forEach
+                val added = state.newQueue(name, songs, source, now)?.book ?: return@forEach
+                val id = added.saved.first()
+                // The song it was at, among the queue's songs (each once), at its second; else the first, from its start.
+                val at = songs.getOrNull(index)?.path?.let(paths::indexOf) ?: -1
+                state = added.copy(queues = added.queues.map { if (it.id == id) it.copy(index = at.coerceAtLeast(0), positionMs = if (at >= 0) positionMs else 0) else it })
+                made += id
+            }
+            return state to made
+        }
+
+        /** [book] without the saved queues [ids] an import made (one playing now stays). */
+        internal fun unqueue(book: QueueBook, ids: List<String>): QueueBook = ids.fold(book) { now, id -> now.delete(id) }
+
+        /** The key of the list an imported queue came from: its own, so a tap in another list never lands in it. */
+        private const val QUEUE_KEY: String = "import"
 
         /** The same playlist name, case and surrounding spaces aside. */
         private fun sameName(a: String, b: String): Boolean = a.trim().equals(b.trim(), ignoreCase = true)

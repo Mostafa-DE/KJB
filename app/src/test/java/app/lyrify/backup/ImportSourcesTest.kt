@@ -29,6 +29,16 @@ class ImportSourcesTest {
         assertTrue(ImportFolder.walk("root") { if (it == "root") wide else null }.size <= ImportFormats.MAX_FILES)
     }
 
+    @Test
+    fun `of a folder's Musicolet backups only the newest is read, after its playlist files`() {
+        val tree = mapOf(
+            "root" to listOf(file("2026-11-01 10-00-00.zip"), file("Mix.m3u"), file("2026-11-13 09-30-00.zip"), file("other.ZIP"), dir("old")),
+            "old" to listOf(file("2027-01-01 00-00-00.zip")),
+        )
+
+        assertEquals(listOf("Mix.m3u", "2026-11-13 09-30-00.zip"), ImportFolder.walk("root") { tree[it] }.map { it.name })
+    }
+
     // Playlists other apps saved on the phone
 
     @Test
