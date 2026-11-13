@@ -706,7 +706,8 @@ private fun QueueSongRow(
                 .fillMaxWidth()
                 .height(ROW)
                 .background(surface)
-                .background(fill, RoundedCornerShape(16.dp))
+                // The song here has its own rounded fill, inset as a selected song row's ([rowFill]).
+                .background(fill, RowFillShape)
                 .semantics {
                     customActions = listOfNotNull(
                         CustomAccessibilityAction(resources.getString(R.string.queue_remove)) { remove(); true },
@@ -779,10 +780,6 @@ private fun QueueSongRow(
 
 /** A queue row's height (.qrow, 60 dp); a drag moves a song by whole rows. */
 private val ROW = 60.dp
-
-/** A held row is lifted: a little larger, with a shadow. */
-private const val LIFT_SCALE = 0.03f
-private val LIFT = 8.dp
 
 /** How long the order a drag left waits for the queue to say the same before the queue's own order shows. */
 private const val CATCH_UP_MS = 1_500L

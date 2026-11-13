@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -239,12 +240,6 @@ private fun songsMeta(songs: List<Song>, vararg lead: String?): String {
     val minutes = TimeUnit.MILLISECONDS.toMinutes(songs.sumOf { it.durationMs.coerceAtLeast(0) }).toInt()
     return (lead.filterNotNull() + pluralStringResource(R.plurals.lib_songs, songs.size, songs.size) + pluralStringResource(R.plurals.lib_minutes, minutes, minutes))
         .joinToString(" · ")
-}
-
-/** A page's own order (Track, Your order, Newest) or by title; [byTitle] is the page's choice, kept across a turn. */
-@Composable
-private fun OrderSheet(@StringRes own: Int, byTitle: Boolean, onChoice: (Boolean) -> Unit, onDismiss: () -> Unit) {
-    SortSheet(stringResource(R.string.lib_sort), listOf(false to stringResource(own), true to stringResource(R.string.lib_sort_title)), byTitle, onChoice, onDismiss)
 }
 
 /** An album: its cover, title, the artist as a link, year, count and length; then its tracks in disc and track order. */
@@ -486,7 +481,7 @@ internal fun PlaylistPage(ui: LibraryUi, library: Library, id: String) {
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val actions = rememberSongActions()
-    var byTitle by rememberSaveable { mutableStateOf(false) }
+    var order by rememberSaveable { mutableStateOf(ListOrder.START) }
     var sorting by rememberSaveable { mutableStateOf(false) }
     var renaming by rememberSaveable { mutableStateOf(false) }
     var deleting by rememberSaveable { mutableStateOf(false) }
@@ -498,14 +493,17 @@ internal fun PlaylistPage(ui: LibraryUi, library: Library, id: String) {
     // Deleted here: the page keeps drawing it while it leaves.
     var leaving by remember { mutableStateOf<Playlist?>(null) }
     val playlist = ui.playlists.playlist(id) ?: leaving ?: return MissingPage(ui)
-    // Each song with its place in the playlist, for "Remove from playlist"; songs gone or hidden are left out.
-    val entries = remember(playlist, library, byTitle, ui.settings.library) {
+    // Each song with its place in the playlist, for "Remove from playlist" and moves; songs gone or hidden are left out.
+    val entries = remember(playlist, library, order, ui.settings.library) {
         val listed = playlist.songs.mapIndexedNotNull { at, ref -> library.resolver.find(ref)?.takeIf(library::shows)?.let { at to it } }
-        if (byTitle) listed.sortedWith(compareBy(nameOrder(java.text.Collator.getInstance())) { ui.title(it.second) }) else listed
+        inOrder(listed, order, ui.settings.library) { it.second }
     }
-    val songs = entries.map { it.second }
+    val songs = remember(entries) { entries.map { it.second } }
     val reduced = LocalReducedMotion.current
-    SongListFrame(ui, songs, QueueSource(SourceKind.PLAYLIST, id, playlist.name), topBar = { under, backdrop ->
+    val rows = rememberLazyListState()
+    // A move between two songs shown is one between their places in the playlist, the hidden ones between staying put.
+    val reorder = rememberSongReorder(rows) { from, to -> actions.move(playlist, entries[from].first, entries[to].first) }
+    SongListFrame(ui, songs, QueueSource(SourceKind.PLAYLIST, id, playlist.name), state = rows, topBar = { under, backdrop ->
         CollectionTopBar(playlist.name, under, backdrop, ui, heart = FavouriteCollection(CollectionKind.PLAYLIST, id)) {
             Box {
                 ChromeIconButton(R.drawable.ic_more_horiz, stringResource(R.string.lib_more_playlist), { menu = true })
@@ -528,7 +526,7 @@ internal fun PlaylistPage(ui: LibraryUi, library: Library, id: String) {
         }
         item(key = "header", contentType = "header") {
             Box(rowMotion(reduced)) {
-                ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll, sort = stringResource(if (byTitle) R.string.lib_sort_title else R.string.lib_your_order), onSort = { sorting = true })
+                ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll, sort = stringResource(order.chip), onSort = { sorting = true })
             }
         }
         if (songs.isEmpty()) {
@@ -536,9 +534,9 @@ internal fun PlaylistPage(ui: LibraryUi, library: Library, id: String) {
                 AboveChrome { EmptyState(EmptyArt.Glyph, stringResource(R.string.songs_empty_title), rowMotion(reduced), text = stringResource(R.string.lib_playlist_empty)) }
             }
         }
-        songRows(list, place = { at -> SheetPlace.Playlist(id, entries[at].first) }, repeats = true)
+        songRows(list, place = { at -> SheetPlace.Playlist(id, entries[at].first) }, repeats = true, reorder = reorder.takeIf { order.reorders })
     }
-    if (sorting) OrderSheet(R.string.lib_your_order, byTitle, { byTitle = it }) { sorting = false }
+    if (sorting) ListOrderSheet(order, { order = it }) { sorting = false }
     if (renaming) {
         NameDialog(stringResource(R.string.lib_rename_playlist), playlist.name, R.drawable.ic_edit, onDismiss = { renaming = false }, confirm = R.string.lib_rename) { name ->
             renaming = false
@@ -638,7 +636,12 @@ private fun FavouritesPage(ui: LibraryUi, library: Library) {
     val change = rememberSettingsChange()
     val title = stringResource(R.string.lib_favourites)
     val favourites = remember(library, ui.playlists) { Favourites.of(ui.playlists, library) }
-    val songs = favourites.songs
+    var order by rememberSaveable { mutableStateOf(ListOrder.START) }
+    var sorting by rememberSaveable { mutableStateOf(false) }
+    val songs = remember(favourites, order, ui.settings.library) { inOrder(favourites.songs, order, ui.settings.library) { it } }
+    val actions = rememberSongActions()
+    val rows = rememberLazyListState()
+    val reorder = rememberSongReorder(rows) { from, to -> actions.moveFavourite(favourites.songPlaces[from], favourites.songPlaces[to]) }.takeIf { order.reorders }
     val others = FavouritesTab.entries.filter { it != FavouritesTab.SONGS }.sumOf { favourites.count(it) }
     var picked by rememberSaveable { mutableStateOf<FavouritesTab?>(null) }
     val shown = favourites.shown(picked ?: ui.settings.nav.favouritesTab)
@@ -655,19 +658,19 @@ private fun FavouritesPage(ui: LibraryUi, library: Library) {
     }
     val hero: @Composable (PageSongs) -> Unit = { list ->
         Hero(title, songsMeta(songs, null).let { if (others > 0) stringResource(R.string.lib_after, it, pluralStringResource(R.plurals.lib_more_count, others, others)) else it }, art = { BuiltInTile(BuiltInList.FAVOURITES, HERO) })
-        ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll)
+        ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll, sort = if (songs.isEmpty()) null else stringResource(order.chip), onSort = { sorting = true })
     }
     SongPageFrame(ui, songs, QueueSource(SourceKind.FAVOURITES, "favourites", ""), topBar = { under, backdrop -> CollectionTopBar(title, under || heroUnder, backdrop, ui) }) { list, padding ->
         val bottom = PaddingValues(bottom = padding.calculateBottomPadding() + 16.dp)
         if (tabs.isEmpty()) {
-            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = padding.calculateBottomPadding() + 16.dp)) {
+            LazyColumn(Modifier.fillMaxSize(), state = rows, contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = padding.calculateBottomPadding() + 16.dp)) {
                 item(key = "hero", contentType = "hero") { Column(rowMotion(reduced)) { hero(list) } }
                 if (shown != null && shown != FavouritesTab.SONGS) {
                     item(key = "heading", contentType = "heading") { Box(rowMotion(reduced)) { ListHeading(stringResource(shown.words), favourites.count(shown)) } }
                 }
                 when (shown) {
                     null -> item(key = "empty", contentType = "empty") { EmptyState(EmptyArt.Icon(R.drawable.ic_favorite), stringResource(R.string.lib_fav_empty_title), rowMotion(reduced), text = stringResource(R.string.lib_fav_empty)) }
-                    FavouritesTab.SONGS -> songRows(list)
+                    FavouritesTab.SONGS -> songRows(list, reorder = reorder)
                     else -> favouriteRows(shown, favourites, library, reduced)
                 }
             }
@@ -679,9 +682,9 @@ private fun FavouritesPage(ui: LibraryUi, library: Library) {
                 tabs = { PagerTabs(pager, tabs.map { stringResource(R.string.lib_tab_count, stringResource(it.words), formatCount(favourites.count(it))) }) },
             ) {
                 TabPages(pager, tabs, Modifier.fillMaxSize(), swipe = !list.selection.active) { at ->
-                    LazyColumn(Modifier.fillMaxSize(), contentPadding = bottom) {
+                    LazyColumn(Modifier.fillMaxSize(), state = if (tabs[at] == FavouritesTab.SONGS) rows else rememberLazyListState(), contentPadding = bottom) {
                         when (val tab = tabs[at]) {
-                            FavouritesTab.SONGS -> songRows(list)
+                            FavouritesTab.SONGS -> songRows(list, reorder = reorder)
                             else -> favouriteRows(tab, favourites, library, reduced)
                         }
                     }
@@ -689,11 +692,14 @@ private fun FavouritesPage(ui: LibraryUi, library: Library) {
             }
         }
     }
+    if (sorting) ListOrderSheet(order, { order = it }) { sorting = false }
 }
 
 /** What is a favourite now: the songs and the collections, those gone from the phone or the library left out. */
 internal class Favourites(
     val songs: List<Song>,
+    /** The place of each of [songs] among the favourite songs stored, those gone or hidden counted: where a move in the custom order goes. */
+    val songPlaces: List<Int>,
     val albums: List<Album>,
     val artists: List<app.lyrify.library.Artist>,
     val folders: List<Folder>,
@@ -718,8 +724,10 @@ internal class Favourites(
         /** The favourites [state] names, found in [library]. */
         fun of(state: PlaylistsState, library: Library): Favourites {
             fun keys(kind: CollectionKind) = state.favouriteCollections.filter { it.kind == kind }.map { it.key }
+            val found = state.favouriteSongs.withIndex().mapNotNull { (at, ref) -> library.resolver.find(ref)?.takeIf(library::shows)?.let { at to it } }
             return Favourites(
-                songs = library.listed(state.favouriteSongs),
+                songs = found.map { it.second },
+                songPlaces = found.map { it.first },
                 albums = keys(CollectionKind.ALBUM).mapNotNull(library::album),
                 artists = keys(CollectionKind.ARTIST).mapNotNull(library::artist),
                 folders = keys(CollectionKind.FOLDER).mapNotNull(library::folder),

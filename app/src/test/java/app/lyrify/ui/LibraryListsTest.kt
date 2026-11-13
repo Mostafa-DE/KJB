@@ -127,8 +127,8 @@ class LibraryListsTest {
     }
 
     @Test
-    fun `song rows are keyed by path, with their place only where a song can be there twice`() {
-        fun keys(list: List<Song>, repeats: Boolean = false) = list.mapIndexed { at, song -> songRowKey(song, at, repeats) }
+    fun `song rows are keyed by path, with which copy it is only where a song can be there twice`() {
+        fun keys(list: List<Song>, repeats: Boolean = false) = songRowKeys(list, repeats)
 
         // Another sort, or a song added at the top, leaves every row's key as it was.
         assertEquals(keys(songs).toSet(), keys(songs.reversed()).toSet())
