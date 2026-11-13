@@ -240,11 +240,13 @@ fun rememberBackupActions(setAutomatic: (Boolean) -> Unit): BackupActions {
         },
     )
 
-    return remember(save, saveIn, open, folder) {
+    val importFromApp = rememberImportFromApp()
+    return remember(save, saveIn, open, folder, importFromApp) {
         BackupActions(
             backUpNow = { if (documents.byFolder) saveIn.launch(null) else save.launch(BackupBundle.fileName(LocalDate.now())) },
             restore = { open.launch(BackupBundle.MIME_TYPES) },
             setAutomatic = { on -> if (on) folder.launch(null) else turnOff() },
+            importFromApp = importFromApp,
         )
     }
 }

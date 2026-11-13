@@ -157,7 +157,8 @@ object M3u {
         return (if (isM3u(name)) name.substringBeforeLast('.') else name).trim().takeIf(String::isNotEmpty)
     }
 
-    private fun decode(bytes: ByteArray, utf8: Boolean): String {
+    /** [bytes] as text: a BOM decides; else UTF-8 when [utf8], else UTF-16 by its NUL bytes, UTF-8 when it reads as UTF-8, else Windows-1252. */
+    internal fun decode(bytes: ByteArray, utf8: Boolean): String {
         val bom = BOMS.firstOrNull { (mark, _) -> bytes.size >= mark.size && mark.indices.all { bytes[it] == mark[it] } }
         if (bom != null) return String(bytes, bom.first.size, bytes.size - bom.first.size, bom.second)
         if (utf8) return String(bytes, Charsets.UTF_8)
@@ -177,7 +178,7 @@ object M3u {
      * Every line not starting with `#` is an entry; an `#EXTINF` names the next one. Blank lines and other comments are
      * skipped. Lines are taken one at a time, and reading stops at the first sign the file is too big.
      */
-    private fun parse(text: String): List<M3uEntry>? {
+    internal fun parse(text: String): List<M3uEntry>? {
         val entries = mutableListOf<M3uEntry>()
         var pending: Pair<String?, Long?>? = null
         for (raw in text.lineSequence()) {
@@ -231,6 +232,40 @@ object M3u {
         }
     }
 
+    /**
+     * Where an import's [location] (an m3u or pls line, an xspf location) points, for [SongMatcher.find]: an absolute
+     * path tidied (a `file:` URL's, with one slash or two, percent-decoded; a relative one resolved against [folder]),
+     * or, when the root it is under cannot be known here, its folders and name with `/` between them ("Users/Kit/Music/
+     * 01 Song.mp3": a Windows path without its drive, a server's share, a relative path without [folder]); null for any
+     * other URL (a stream, a `content://` id), which only its tags can find.
+     */
+    fun matchPath(location: String, folder: String?): String? {
+        val line = location.trim()
+        val scheme = URL_SCHEME.find(line)?.groupValues?.get(1)?.lowercase(Locale.ROOT)
+        return when {
+            line.isEmpty() -> null
+            scheme == "file" -> filePath(percentDecoded(line.substring(FILE_URL.length)))
+            scheme != null -> null
+            // Java's File.toURI writes "file:/storage/...".
+            line.startsWith(FILE_SCHEME, ignoreCase = true) -> filePath(percentDecoded(line.substring(FILE_SCHEME.length)))
+            WINDOWS_DRIVE.containsMatchIn(line) -> belowUnknownRoot(line.substring(2))
+            line.startsWith('\\') -> belowUnknownRoot(line)
+            line.startsWith('/') -> tidy(line)
+            folder != null -> tidy("$folder/${line.replace('\\', '/')}")
+            else -> belowUnknownRoot(line)
+        }
+    }
+
+    /** A file URL's path: absolute, or a Windows drive's ("/C:/Music/...") or a server's ("nas/share/...") below an unknown root. */
+    private fun filePath(path: String): String? = when {
+        WINDOWS_URL_DRIVE.containsMatchIn(path) -> belowUnknownRoot(path.substring(3))
+        path.startsWith('/') -> tidy(path)
+        else -> belowUnknownRoot(path)
+    }
+
+    /** [path]'s folders and name, backslashes as `/`, tidied as [tidy] does, without the leading `/`; null when nothing is left. */
+    private fun belowUnknownRoot(path: String): String? = tidy(path.replace('\\', '/')).removePrefix("/").takeIf(String::isNotEmpty)
+
     /** The song [entry] names, by [SongResolver.M3U]'s ways in their order: [findByPath], then [findByName]. */
     fun find(entry: M3uEntry, resolver: SongResolver, folder: String?): Song? = findByPath(entry, resolver, folder) ?: findByName(entry, resolver)
 
@@ -279,7 +314,7 @@ object M3u {
     }
 
     /** `%XX` escapes as UTF-8 bytes; a `%` that starts no escape stays as it is. */
-    private fun percentDecoded(text: String): String {
+    internal fun percentDecoded(text: String): String {
         if ('%' !in text) return text
         val bytes = ByteArrayOutputStream()
         var at = 0
@@ -346,6 +381,7 @@ object M3u {
     private const val DOWNLOADS_AUTHORITY: String = "com.android.providers.downloads.documents"
     private const val RAW_PREFIX: String = "raw:"
     private const val FILE_URL: String = "file://"
+    private const val FILE_SCHEME: String = "file:"
     private const val NUL: Byte = 0
 
     /** Controls (CR, LF, U+0085 among them) and the line and paragraph separators. */
@@ -354,6 +390,9 @@ object M3u {
     /** "file://", "https://"; not "C:\". */
     private val URL_SCHEME = Regex("""^([A-Za-z][A-Za-z0-9+.-]+)://""")
     private val WINDOWS_DRIVE = Regex("""^[A-Za-z]:[\\/]""")
+
+    /** A Windows drive in a file URL's path: "/C:/". */
+    private val WINDOWS_URL_DRIVE = Regex("""^/[A-Za-z]:/""")
     private val WINDOWS_LATIN_1: Charset = Charset.forName("windows-1252")
     private val BOMS: List<Pair<ByteArray, Charset>> = listOf(
         byteArrayOf(0xEF.toByte(), 0xBB.toByte(), 0xBF.toByte()) to Charsets.UTF_8,

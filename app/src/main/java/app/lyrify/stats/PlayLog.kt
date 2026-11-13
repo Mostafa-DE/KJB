@@ -41,6 +41,12 @@ interface PlayLogStore {
      * same song and start is the same play, so restoring a backup twice adds nothing. False when none was written.
      */
     suspend fun putAll(plays: List<LoggedPlay>): Boolean
+
+    /**
+     * An import's Undo (backup/ImportPlan.kt): [plays] taken out of the log, each by its song and start, all in one go
+     * or none. False when none was taken out.
+     */
+    suspend fun removeAll(plays: List<LoggedPlay>): Boolean
 }
 
 /** Where a play still going stands: the song's length, its position, and the parts of it heard. */
@@ -134,6 +140,9 @@ object PlaysSchema {
     const val KEEP_OPEN: String = "INSERT OR REPLACE INTO open_plays (path, started_at, duration_ms, position_ms, spans) VALUES (?, ?, ?, ?, ?)"
 
     const val LET_GO: String = "DELETE FROM open_plays WHERE path = ? AND started_at = ?"
+
+    /** An import's Undo: its play taken out of the log ([PlayLogStore.removeAll]). */
+    const val REMOVE: String = "DELETE FROM plays WHERE path = ? AND started_at = ?"
 
     /** Per play still going: path, start, id hint, time heard, counted, length, position, parts heard ([storedPlayOf]). */
     const val OPEN_PLAYS: String = "SELECT o.path, o.started_at, p.media_id, p.heard_ms, p.counted, o.duration_ms, o.position_ms, o.spans " +
@@ -268,6 +277,22 @@ class SqlPlayLog(private val db: SQLiteOpenHelper, private val io: CoroutineDisp
             true
         } catch (e: Exception) {
             log("plays: ${plays.size} not restored (${e.javaClass.simpleName})")
+            false
+        }
+    }
+
+    override suspend fun removeAll(plays: List<LoggedPlay>): Boolean = withContext(io) {
+        try {
+            db.writableDatabase.transaction {
+                plays.forEach { play ->
+                    val key = arrayOf<Any?>(play.song.path, play.startedAt)
+                    execSQL(PlaysSchema.LET_GO, key)
+                    execSQL(PlaysSchema.REMOVE, key)
+                }
+            }
+            true
+        } catch (e: Exception) {
+            log("plays: ${plays.size} not removed (${e.javaClass.simpleName})")
             false
         }
     }

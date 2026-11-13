@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.Context
 import android.os.StrictMode
 import android.util.Log
+import app.lyrify.backup.Imports
 import app.lyrify.data.LedgerRepository
 import app.lyrify.data.PathLocks
 import app.lyrify.data.SharedWrites
@@ -71,6 +72,8 @@ class LyrifyApplication : Application() {
         SingletonImageLoader.setSafe(::songImageLoader)
         // Tag writes the app's death interrupted are settled first, in the background, before any tag write.
         TagsGraph.startRecovery(this)
+        // An import from another app the app's death cut short is taken back.
+        Imports.startRecovery(this)
     }
 }
 

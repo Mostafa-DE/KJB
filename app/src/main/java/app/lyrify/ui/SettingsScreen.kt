@@ -61,9 +61,9 @@ import app.lyrify.settings.PlaybackSettings
 import app.lyrify.settings.RememberPlace
 import app.lyrify.settings.Settings
 
-/** Settings > Backup's actions; milestone B2 fills them ([rememberBackupActions] in BackupScreens.kt). */
+/** Settings > Backup's actions; milestone B2 fills them ([rememberBackupActions] in BackupScreens.kt), lane IM1 Import from app. */
 @Immutable
-data class BackupActions(val backUpNow: () -> Unit, val restore: () -> Unit, val setAutomatic: (Boolean) -> Unit)
+data class BackupActions(val backUpNow: () -> Unit, val restore: () -> Unit, val setAutomatic: (Boolean) -> Unit, val importFromApp: () -> Unit)
 
 /** The phone's grants Settings shows, and where each is switched on. */
 @Immutable
@@ -168,6 +168,7 @@ fun SettingsScreen(
             section(R.string.settings_backup) {
                 ActionRow(R.drawable.ic_backup, R.string.set_backup_now, first = true, onClick = backup.backUpNow)
                 ActionRow(R.drawable.ic_settings_backup_restore, R.string.set_restore, onClick = backup.restore)
+                ValueRow(R.drawable.ic_download, R.string.import_row, stringResource(R.string.import_row_detail), onClick = backup.importFromApp)
                 SwitchRow(R.drawable.ic_schedule, R.string.set_auto_backup, stringResource(R.string.set_auto_backup_detail), settings.backup.automatic, onSwitch = backup.setAutomatic)
             }
             section(R.string.settings_about) {

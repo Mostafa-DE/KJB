@@ -34,6 +34,15 @@ class FakePlayLog(plays: List<LoggedPlay> = emptyList()) : PlayLogStore {
     /** Each as [put] writes it, or none when [failing]. */
     override suspend fun putAll(plays: List<LoggedPlay>): Boolean = !failing && plays.all { put(it) }
 
+    /** Each by its song and start, or none when [failing]. */
+    override suspend fun removeAll(plays: List<LoggedPlay>): Boolean {
+        if (failing) return false
+        val gone = plays.map { it.song.path to it.startedAt }.toSet()
+        this.plays.removeAll { (it.song.path to it.startedAt) in gone }
+        gone.forEach(open::remove)
+        return true
+    }
+
     override suspend fun openPlays(): List<StoredPlay> = open.map { (key, state) ->
         StoredPlay(plays.first { it.song.path == key.first && it.startedAt == key.second }, state)
     }

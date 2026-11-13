@@ -399,6 +399,10 @@ class SharedWritesTest {
             "addon/AddonInstall.kt",
             "addon/ModelHandover.kt",
             "audio/EqProfiles.kt",
+            // Import from app: a Musicolet backup's songs table, copied to the cache to be read, then deleted; the
+            // import journal in the app's files.
+            "backup/ImportSources.kt",
+            "backup/Musicolet.kt",
             "data/LedgerRepository.kt",
             "dupes/DuplicatesStore.kt",
             "library/Playlists.kt",
