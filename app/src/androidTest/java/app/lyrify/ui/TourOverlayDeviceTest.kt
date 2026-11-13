@@ -56,9 +56,9 @@ import org.junit.runner.RunWith
 /**
  * The tour's overlay on the phone, over a made-up shell with the targets a real one marks (Library's tabs, a song row,
  * the dock's Search and Tools), the test clock held (the halo breathes for ever): TalkBack through the semantics tree
- * (focus on the card's title, nothing under the dimmed layer reachable, Skip on every step), the card at font scale 2.0
- * on a short screen, a song row under the dock scrolled into view, and a stop with nothing to point at passed. Made-up
- * names only. Not run in the lane: the orchestrator runs it in a phone session.
+ * (focus on the card's title, nothing under the dimmed layer reachable, Skip on every step, the card there while a
+ * control is missing), the count of the steps that apply, the card at font scale 2.0 on a short screen, and a song row
+ * under the dock scrolled into view. Made-up names only. Not run in the lane: the orchestrator runs it in a phone session.
  */
 @RunWith(AndroidJUnit4::class)
 class TourOverlayDeviceTest {
@@ -72,7 +72,7 @@ class TourOverlayDeviceTest {
      * The tour started over [shell] (the whole screen as [phone] sets it, if given), then frames until its first stop has
      * found its control and the card faded in.
      */
-    private fun startOver(phone: DeviceConfigurationOverride? = null, shell: @Composable () -> Unit): Tour {
+    private fun startOver(phone: DeviceConfigurationOverride? = null, songs: Boolean = true, shell: @Composable () -> Unit): Tour {
         val tour = Tour()
         compose.mainClock.autoAdvance = false
         compose.setContent {
@@ -80,7 +80,7 @@ class TourOverlayDeviceTest {
                 LyrifyTheme {
                     CompositionLocalProvider(LocalToasts provides remember { ToastState() }, LocalTour provides tour) {
                         TourHost {
-                            TourShell(remember { Navigator(NavState.start(DockTab.LIBRARY)) }, ownSong = false)
+                            TourShell(remember { Navigator(NavState.start(DockTab.LIBRARY)) }, songs = songs, bar = false, ownSong = false)
                             shell()
                         }
                     }
@@ -144,6 +144,8 @@ class TourOverlayDeviceTest {
             cards++
         }
         assertEquals(3, cards)
+        // Nothing plays: Synced lyrics does not apply, so the last of four.
+        compose.onNodeWithText(words(R.string.step_count, 4, 4)).assertIsDisplayed()
         compose.onNodeWithText(words(R.string.tour_done)).assertIsDisplayed()
         compose.onNodeWithContentDescription(words(R.string.ob_skip_tour)).performClick()
         settle()
@@ -181,14 +183,35 @@ class TourOverlayDeviceTest {
     }
 
     @Test
-    fun aStopWithNothingToPointAtIsPassedNeverShownEmpty() {
-        val tour = startOver { Shell(songs = false) }
+    fun aPhoneWithNoSongsCountsOnlyTheStepsThatApply() {
+        val tour = startOver(songs = false) { Shell(songs = false) }
+        compose.onNodeWithText(words(R.string.step_count, 1, 3)).assertIsDisplayed()
         compose.onNodeWithText(words(R.string.tour_next)).performClick()
-        settle(PASS_MS)
-        // No song, no Now bar, no song in the player: from step 1 straight to Search.
+        settle()
+        // No song, no Now bar, no song in the player: from step 1 straight to Search, the second of three.
         compose.runOnIdle { assertEquals(TourStop.SEARCH, tour.state?.stop) }
         compose.onAllNodesWithText(words(R.string.tour_play_title)).fetchSemanticsNodes().let { assertTrue(it.isEmpty()) }
-        compose.onNodeWithText(words(R.string.tour_search_title)).assertIsDisplayed()
+        compose.onNodeWithText(words(R.string.step_count, 2, 3)).assertIsDisplayed()
+    }
+
+    @Test
+    fun whileAControlIsMissingTheCardStaysWithSkipAndTheFocus() {
+        // The library has songs, but no row is on screen yet.
+        val tour = startOver(songs = true) { Shell(songs = false) }
+        compose.onNodeWithText(words(R.string.tour_next)).performClick()
+        compose.mainClock.advanceTimeBy(WAITING_MS)
+        compose.waitForIdle()
+        compose.runOnIdle { assertEquals(TourStop.SONG, tour.state?.stop) }
+        compose.onNodeWithText(words(R.string.tour_play_title)).assertIsDisplayed().assertIsFocused()
+        compose.onNodeWithContentDescription(words(R.string.ob_skip_tour)).assertIsDisplayed().assertHasClickAction()
+        compose.onNodeWithText(words(R.string.tour_next)).assertIsDisplayed()
+        // The card waits in the middle of the screen.
+        val root = compose.onRoot().getUnclippedBoundsInRoot()
+        val title = compose.onNodeWithText(words(R.string.tour_play_title)).getUnclippedBoundsInRoot()
+        assertTrue("title ${title.top} in the middle of ${root.bottom}", title.top > root.bottom / 4 && title.top < root.bottom * 3 / 4)
+        // The row never comes: the stop is passed, and the Now bar, with no song played, at once.
+        settle(PASS_MS)
+        compose.runOnIdle { assertEquals(TourStop.SEARCH, tour.state?.stop) }
     }
 
     /**
@@ -227,5 +250,8 @@ class TourOverlayDeviceTest {
 
         /** Enough for stops with nothing to point at to wait and be passed. */
         const val PASS_MS = 4_000L
+
+        /** Well inside a stop's wait for its control. */
+        const val WAITING_MS = 400L
     }
 }

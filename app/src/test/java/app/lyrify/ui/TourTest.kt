@@ -203,7 +203,7 @@ class TourTest {
 
     // The card, on small screens and with large text
 
-    private fun card(target: Rect, area: Rect, wide: Boolean = false) =
+    private fun card(target: Rect?, area: Rect, wide: Boolean = false) =
         cardRoom(target, area, wide = wide, gap = 14f, edge = 16f, wideEdge = 12f, narrowMax = 300f, minHeight = 160f)
 
     @Test
@@ -212,7 +212,7 @@ class TourTest {
         val dockTab = Rect(196f, 640f, 284f, 700f)
         val above = card(dockTab, area)
         assertFalse(above.below)
-        assertFalse(above.overlaps)
+        assertFalse(above.compact)
         val top = cardTop(above, dockTab, area, gap = 14f, height = 220f)
         assertEquals(dockTab.top - 14f - 220f, top, 0.01f)
         assertTrue(top >= area.top)
@@ -259,16 +259,101 @@ class TourTest {
     }
 
     @Test
-    fun `with no room for a card on either side, it keeps to the screen's edge`() {
+    fun `with no room for the whole card on either side it goes compact on the larger side, never over its target`() {
         val short = Rect(0f, 24f, 320f, 504f)
         val player = Rect(0f, 80f, 320f, 450f)
         val room = card(player, short, wide = true)
-        assertTrue(room.overlaps)
-        assertTrue(room.maxHeight <= short.height * MAX_CARD_SHARE + 0.01f)
-        assertTrue(room.maxHeight >= 160f)
-        val top = cardTop(room, player, short, gap = 14f, height = 200f)
-        assertTrue(top >= short.top)
-        assertTrue(top + 200f <= short.bottom + 0.01f)
+        assertTrue(room.compact)
+        assertFalse(room.below)
+        // The larger side's room, less the gap: the card shrinks to it, its words scroll.
+        assertEquals(80f - 14f - 24f, room.maxHeight, 0.01f)
+        assertEquals(160f - room.maxHeight, room.short, 0.01f)
+        val top = cardTop(room, player, short, gap = 14f, height = room.maxHeight)
+        assertTrue("card bottom ${top + room.maxHeight} over the target ${player.top}", top + room.maxHeight <= player.top - 14f + 0.01f)
+        assertTrue(top >= short.top - 0.01f)
+        // Below a target near the top, the same.
+        val tall = Rect(0f, 40f, 320f, 400f)
+        val under = card(tall, short, wide = true)
+        assertTrue(under.compact)
+        assertTrue(under.below)
+        assertTrue(cardTop(under, tall, short, gap = 14f, height = under.maxHeight) >= tall.bottom + 14f - 0.01f)
+    }
+
+    @Test
+    fun `while its control is missing the card waits in the middle of the screen`() {
+        val area = Rect(0f, 24f, 360f, 716f)
+        val waiting = card(null, area)
+        assertFalse(waiting.compact)
+        assertEquals(300f, waiting.width, 0.01f)
+        assertEquals(30f, waiting.x, 0.01f)
+        assertEquals(area.height * MAX_CARD_SHARE, waiting.maxHeight, 0.01f)
+        assertEquals(area.center.y - 100f, cardTop(waiting, null, area, gap = 14f, height = 200f), 0.01f)
+        val wide = card(null, area, wide = true)
+        assertEquals(12f, wide.x, 0.01f)
+        assertEquals(336f, wide.width, 0.01f)
+    }
+
+    // The steps that apply on this phone, decided when the tour starts
+
+    @Test
+    fun `a phone with nothing playing counts four steps and never jumps`() {
+        val plan = tourPlan(songs = true, bar = false, ownSong = false)
+        assertEquals(listOf(TourStop.TABS, TourStop.SONG, TourStop.NOW_BAR, TourStop.SEARCH, TourStop.TOOLS), plan)
+        val walked = generateSequence(TourState(plan.first(), plan = plan)) { it.next() }.toList()
+        assertEquals(plan, walked.map { it.stop })
+        assertEquals(listOf(1, 2, 2, 3, 4), walked.map { it.step })
+        assertTrue(walked.all { it.steps == 4 })
+        assertTrue(walked.last().last)
+        // Back from Find anything skips the lyrics that do not apply.
+        assertEquals(TourStop.NOW_BAR, TourState(TourStop.SEARCH, plan = plan).back().stop)
+    }
+
+    @Test
+    fun `with a song in KJB's player all five steps apply, and with no songs and no bar three`() {
+        val all = tourPlan(songs = true, bar = true, ownSong = true)
+        assertEquals(TourStop.entries, all)
+        assertEquals(5, TourState(plan = all).steps)
+        assertEquals(3, TourState(TourStop.LYRICS, plan = all).step)
+        val bare = tourPlan(songs = false, bar = false, ownSong = false)
+        assertEquals(listOf(TourStop.TABS, TourStop.SEARCH, TourStop.TOOLS), bare)
+        assertEquals(listOf(1, 2, 3), generateSequence(TourState(plan = bare)) { it.next() }.map { it.step }.toList())
+        // Another app's song in the bar: Play a song points at the bar alone.
+        assertEquals(listOf(TourStop.TABS, TourStop.NOW_BAR, TourStop.SEARCH, TourStop.TOOLS), tourPlan(songs = false, bar = true, ownSong = false))
+    }
+
+    @Test
+    fun `the tour starts on its plan, and keeps it across a turn of the phone`() {
+        val plan = tourPlan(songs = true, bar = false, ownSong = false)
+        val tour = Tour()
+        tour.start(plan)
+        assertEquals(TourState(TourStop.TABS, plan = plan), tour.state)
+        tour.next()
+        tour.next()
+        tour.next()
+        assertEquals(TourStop.SEARCH, tour.state?.stop)
+        val back = Tour.Saver.restore(with(Tour.Saver) { SaverScope { true }.save(tour) }!!)!!
+        assertEquals(tour.state, back.state)
+    }
+
+    // Before a stop looks for its control
+
+    @Test
+    fun `a song that reaches KJB's player late still gets the lyrics step`() {
+        assertEquals(Ready.WAIT, stopReady(TourStop.LYRICS, ownSong = false, bar = true, played = true, waitedMs = 200))
+        assertEquals(Ready.GO, stopReady(TourStop.LYRICS, ownSong = true, bar = true, played = true, waitedMs = 400))
+        assertEquals(Ready.PASS, stopReady(TourStop.LYRICS, ownSong = false, bar = false, played = false, waitedMs = 5_000))
+    }
+
+    @Test
+    fun `the Now bar waits for a song just played, and is passed at once when none was`() {
+        assertEquals(Ready.WAIT, stopReady(TourStop.NOW_BAR, ownSong = false, bar = false, played = true, waitedMs = 300))
+        assertEquals(Ready.GO, stopReady(TourStop.NOW_BAR, ownSong = true, bar = true, played = true, waitedMs = 600))
+        assertEquals(Ready.PASS, stopReady(TourStop.NOW_BAR, ownSong = false, bar = false, played = false, waitedMs = 0))
+        assertEquals(Ready.GO, stopReady(TourStop.NOW_BAR, ownSong = false, bar = true, played = false, waitedMs = 0))
+        assertEquals(Ready.PASS, stopReady(TourStop.NOW_BAR, ownSong = false, bar = false, played = true, waitedMs = 5_000))
+        for (stop in listOf(TourStop.TABS, TourStop.SONG, TourStop.SEARCH, TourStop.TOOLS)) {
+            assertEquals(stop.name, Ready.GO, stopReady(stop, ownSong = false, bar = false, played = false, waitedMs = 0))
+        }
     }
 
     @Test

@@ -195,6 +195,8 @@ data class NavSettings(
     val tourSeen: Boolean = false,
     /** Notifications (the AI's progress) were denied for good: Android asks no more, only the phone's settings can allow them. */
     val notificationsDenied: Boolean = false,
+    /** How often a request for notifications came back no: the second no is for good. */
+    val notificationDenials: Int = 0,
 )
 
 enum class DockTab { LIBRARY, PLAYLISTS, SEARCH, TOOLS }
@@ -275,6 +277,7 @@ object SettingsJson {
                         "setupDone" to it.setupDone,
                         "tourSeen" to it.tourSeen,
                         "notificationsDenied" to it.notificationsDenied,
+                        "notificationDenials" to it.notificationDenials,
                     )
                 },
             ),
@@ -357,6 +360,7 @@ object SettingsJson {
                     setupDone = it.flag("setupDone", d.nav.setupDone),
                     tourSeen = it.flag("tourSeen", d.nav.tourSeen),
                     notificationsDenied = it.flag("notificationsDenied", d.nav.notificationsDenied),
+                    notificationDenials = it.number("notificationDenials", d.nav.notificationDenials) { count -> count >= 0 },
                 )
             } ?: d.nav,
         )

@@ -88,12 +88,40 @@ class OnboardingTest {
     }
 
     @Test
-    fun `a no is for good only once Android stops explaining`() {
-        assertTrue(deniedForGood(granted = false, rationaleBefore = true, rationaleAfter = false))
-        // The first no, or the dialog swiped away: Android may ask again.
-        assertFalse(deniedForGood(granted = false, rationaleBefore = false, rationaleAfter = true))
-        assertFalse(deniedForGood(granted = false, rationaleBefore = false, rationaleAfter = false))
-        assertFalse(deniedForGood(granted = true, rationaleBefore = true, rationaleAfter = false))
+    fun `the second no is for good`() {
+        // The usual way: the first no makes Android explain, the second ends it.
+        assertFalse(deniedForGood(granted = false, rationaleBefore = false, rationaleAfter = true, denialsBefore = 0, answeredMs = 2_000))
+        assertTrue(deniedForGood(granted = false, rationaleBefore = true, rationaleAfter = false, denialsBefore = 1, answeredMs = 2_000))
+        // A no after the dialog was swiped away once: no explanation either time, still the second no.
+        assertTrue(deniedForGood(granted = false, rationaleBefore = false, rationaleAfter = false, denialsBefore = 1, answeredMs = 2_000))
+    }
+
+    @Test
+    fun `a request that comes back at once is for good, a first swipe away is not`() {
+        // No dialog at all (turned off in the phone's settings): Android answered for the user.
+        assertTrue(deniedForGood(granted = false, rationaleBefore = false, rationaleAfter = false, denialsBefore = 0, answeredMs = 40))
+        // The first dialog swiped away: Android may ask again.
+        assertFalse(deniedForGood(granted = false, rationaleBefore = false, rationaleAfter = false, denialsBefore = 0, answeredMs = 2_000))
+        assertFalse(deniedForGood(granted = true, rationaleBefore = true, rationaleAfter = false, denialsBefore = 3, answeredMs = 40))
+    }
+
+    @Test
+    fun `the nos are counted in settings, and older settings read none`() {
+        val counted = app.lyrify.settings.Settings(nav = app.lyrify.settings.NavSettings(notificationDenials = 1))
+        assertEquals(counted, app.lyrify.settings.SettingsJson.decode(app.lyrify.settings.SettingsJson.encode(counted)))
+        assertEquals(0, app.lyrify.settings.SettingsJson.decode("""{"nav":{"notificationDenials":-2}}""")!!.nav.notificationDenials)
+        assertEquals(0, app.lyrify.settings.SettingsJson.decode("""{"version":4,"nav":{}}""")!!.nav.notificationDenials)
+        // Once for good: no more Show progress, and the AI screen's row instead.
+        assertEquals(NotificationGrant.OFF, notificationGrant(sdk = 36, granted = false, deniedForGood = true))
+        assertEquals(emptyList<AiAsk>(), aiAsks(switchedOn = false, NotificationGrant.OFF, unrestricted = true))
+    }
+
+    @Test
+    fun `the Welcome hero goes above large text`() {
+        assertTrue(heroShown(1.0f))
+        assertTrue(heroShown(LARGE_TEXT))
+        assertFalse(heroShown(1.5f))
+        assertFalse(heroShown(2.0f))
     }
 
     @Test

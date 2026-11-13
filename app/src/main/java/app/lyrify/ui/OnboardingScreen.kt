@@ -289,10 +289,10 @@ private fun Modifier.screenTitle(focus: FocusRequester): Modifier = focusRequest
 @Composable
 private fun Welcome(title: FocusRequester) {
     val colors = MaterialTheme.colorScheme
-    val large = LocalDensity.current.fontScale > LARGE_TEXT
-    // With large text the hero gives its room to the words: the lines go and the mark shrinks.
-    val shrink = if (large) LARGE_HERO else 1f
-    Hero(large, shrink)
+    val scale = LocalDensity.current.fontScale
+    // With large text the hero gives its room to the words: the mark and the lines go, and the name shrinks.
+    val shrink = if (scale > LARGE_TEXT) LARGE_HERO else 1f
+    if (heroShown(scale)) Hero()
     // The name keeps its size whatever the phone's font scale: it is the brand, and the words under it grow instead.
     val name = with(LocalDensity.current) { (NAME_SIZE * shrink).toSp() }
     Text(stringResource(R.string.app_name), style = NameText.copy(fontSize = name, lineHeight = name * 1.05f), modifier = Modifier.screenTitle(title).padding(top = 4.dp))
@@ -303,7 +303,7 @@ private fun Welcome(title: FocusRequester) {
 
 /** The hero card: a warm glow, the app's mark, and three lines with the middle one sung once. Decorative. */
 @Composable
-private fun Hero(large: Boolean, shrink: Float) {
+private fun Hero() {
     val colors = MaterialTheme.colorScheme
     val surface = colors.surface
     val reduced = LocalReducedMotion.current
@@ -327,27 +327,25 @@ private fun Hero(large: Boolean, shrink: Float) {
                 }
                 drawRect(Brush.verticalGradient(0f to surface.copy(alpha = 0.22f), 0.58f to surface.copy(alpha = 0.8f)))
             }
-            .padding(if (large) 14.dp else 20.dp),
+            .padding(20.dp),
     ) {
-        BrandMark(size = 64.dp * shrink, shape = RoundedCornerShape(18.dp * shrink))
-        if (!large) {
-            val highlight = LocalBrandColors.current.highlight
-            // Only the mask's alpha counts: the lines fade out at their end.
-            val mask = colors.onSurface
-            Column(
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-                modifier = Modifier
-                    .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
-                    .drawWithContent {
-                        drawContent()
-                        drawRect(Brush.horizontalGradient(0.9f to mask, 1f to mask.copy(alpha = 0f)), blendMode = BlendMode.DstIn)
-                    },
-            ) {
-                HeroLine(stringResource(R.string.ob_line_past), HeroLineText.copy(color = colors.outline))
-                val p = sung.value
-                HeroLine(stringResource(R.string.ob_line_now), HeroNowText.copy(brush = Brush.horizontalGradient(0f to highlight, p to highlight, p to colors.onSurface, 1f to colors.onSurface)))
-                HeroLine(stringResource(R.string.ob_line_next), HeroLineText.copy(color = colors.onSurfaceVariant))
-            }
+        BrandMark(size = 64.dp, shape = RoundedCornerShape(18.dp))
+        val highlight = LocalBrandColors.current.highlight
+        // Only the mask's alpha counts: the lines fade out at their end.
+        val mask = colors.onSurface
+        Column(
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+            modifier = Modifier
+                .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                .drawWithContent {
+                    drawContent()
+                    drawRect(Brush.horizontalGradient(0.9f to mask, 1f to mask.copy(alpha = 0f)), blendMode = BlendMode.DstIn)
+                },
+        ) {
+            HeroLine(stringResource(R.string.ob_line_past), HeroLineText.copy(color = colors.outline))
+            val p = sung.value
+            HeroLine(stringResource(R.string.ob_line_now), HeroNowText.copy(brush = Brush.horizontalGradient(0f to highlight, p to highlight, p to colors.onSurface, 1f to colors.onSurface)))
+            HeroLine(stringResource(R.string.ob_line_next), HeroLineText.copy(color = colors.onSurfaceVariant))
         }
     }
 }
@@ -585,6 +583,9 @@ private val SLIDE: Dp = 48.dp
 private const val TILE_CAMERA = 12f
 
 // The first run's rules, pure so they are tested on the JVM
+
+/** The Welcome hero (the mark and the sung lines) shows only up to large text: above it, the words get its room. */
+fun heroShown(fontScale: Float): Boolean = fontScale <= LARGE_TEXT
 
 /** The first run's screens, in order. */
 enum class SetupScreen { WELCOME, FILES, OTHER_APPS, READY }

@@ -377,7 +377,12 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
      */
     private fun overPhone(stored: String, phone: Settings): Settings {
         val read = SettingsJson.decode(stored, base = phone) ?: phone
-        val nav = read.nav.copy(setupDone = phone.nav.setupDone, tourSeen = phone.nav.tourSeen, notificationsDenied = phone.nav.notificationsDenied)
+        val nav = read.nav.copy(
+            setupDone = phone.nav.setupDone,
+            tourSeen = phone.nav.tourSeen,
+            notificationsDenied = phone.nav.notificationsDenied,
+            notificationDenials = phone.nav.notificationDenials,
+        )
         return read.copy(playback = read.playback.copy(connectDevices = phone.playback.connectDevices), backup = phone.backup, nav = nav)
     }
 

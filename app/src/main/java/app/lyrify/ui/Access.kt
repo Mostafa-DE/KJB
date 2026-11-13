@@ -121,8 +121,20 @@ fun notificationGrant(sdk: Int, granted: Boolean, deniedForGood: Boolean): Notif
     else -> NotificationGrant.ASK
 }
 
-/** A request answered no, and Android will not ask again: it would have explained before ([rationaleBefore]) and won't now. */
-fun deniedForGood(granted: Boolean, rationaleBefore: Boolean, rationaleAfter: Boolean): Boolean = !granted && rationaleBefore && !rationaleAfter
+/**
+ * A request answered no, and Android will not ask again: it would have explained before ([rationaleBefore]) and won't
+ * now; or it came back no before ([denialsBefore]), so this is the second no; or it came back at once ([answeredMs]
+ * under [AT_ONCE_MS]: no dialog was shown, as after a no in the phone's settings). A first no, or the dialog swiped away,
+ * may still be asked again.
+ */
+fun deniedForGood(granted: Boolean, rationaleBefore: Boolean, rationaleAfter: Boolean, denialsBefore: Int, answeredMs: Long): Boolean =
+    !granted && !rationaleAfter && (rationaleBefore || denialsBefore >= 1 || answeredMs < AT_ONCE_MS)
+
+/** Faster than anyone answers a dialog: Android answered for the user. */
+const val AT_ONCE_MS: Long = 500L
+
+/** A request for notifications on its way: whether Android had explained before it, and when it went (elapsed realtime). */
+data class SentRequest(val explained: Boolean, val at: Long)
 
 /** The sheets that follow the AI switched on, or its download started: Show progress, then Keep running. */
 enum class AiAsk { PROGRESS, BATTERY }

@@ -1,6 +1,13 @@
 package app.lyrify.ui
 
 import androidx.activity.compose.BackHandler
+import app.lyrify.library.LibraryState
+import app.lyrify.library.LibraryGraph
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.annotation.StringRes
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -120,32 +127,51 @@ enum class TourStop(val step: Int, @StringRes val title: Int, @StringRes val bod
     TOOLS(5, R.string.tour_tools_title, R.string.tour_tools_body, grow = 4, corner = 22),
 }
 
-/** The steps the card counts. */
+/** The tour's steps, when all of them apply. */
 const val TOUR_STEPS: Int = 5
 
 /** A corner as round as the cut-out allows. */
 const val PILL: Int = Int.MAX_VALUE
 
 /**
+ * The stops that apply on this phone, decided when the tour starts so the count never jumps: Play a song when the library
+ * has [songs] (its song) or a Now bar shows ([bar]), and Synced lyrics only when KJB's player has a song ([ownSong]).
+ */
+fun tourPlan(songs: Boolean, bar: Boolean, ownSong: Boolean): List<TourStop> = TourStop.entries.filter {
+    when (it) {
+        TourStop.TABS, TourStop.SEARCH, TourStop.TOOLS -> true
+        TourStop.SONG -> songs
+        TourStop.NOW_BAR -> songs || bar
+        TourStop.LYRICS -> ownSong
+    }
+}
+
+/**
  * Where the tour is: the [stop] shown, and whether it got there going [forward], so a stop that can't show is passed the
- * same way.
+ * same way, among the stops of its [plan].
  */
 @Immutable
-data class TourState(val stop: TourStop = TourStop.TABS, val forward: Boolean = true) {
+data class TourState(val stop: TourStop = TourStop.TABS, val forward: Boolean = true, val plan: List<TourStop> = TourStop.entries) {
+    /** The step's number among the steps that apply: "2 of 4". */
+    val step: Int get() = plan.map { it.step }.distinct().indexOf(stop.step) + 1
+
+    /** How many steps apply. */
+    val steps: Int get() = plan.map { it.step }.distinct().size
+
     /** Next, or Done on the last stop: null, the tour ends. */
-    fun next(): TourState? = TourStop.entries.getOrNull(stop.ordinal + 1)?.let { TourState(it, forward = true) }
+    fun next(): TourState? = plan.getOrNull(plan.indexOf(stop) + 1)?.let { copy(stop = it, forward = true) }
 
     /** Back: the stop before; the first has none. */
-    fun back(): TourState = TourStop.entries.getOrNull(stop.ordinal - 1)?.let { TourState(it, forward = false) } ?: this
+    fun back(): TourState = plan.getOrNull(plan.indexOf(stop) - 1)?.let { copy(stop = it, forward = false) } ?: this
 
     /** The stop can't show (its target is not on screen): on the same way, forward again from the first; null past the end. */
-    fun pass(): TourState? = if (forward || stop.ordinal == 0) next() else back()
+    fun pass(): TourState? = if (forward || plan.indexOf(stop) <= 0) next() else back()
 
     /** Back shows from step 2 on. */
-    val hasBack: Boolean get() = stop.step > 1
+    val hasBack: Boolean get() = step > 1
 
     /** The last stop: Done instead of Next. */
-    val last: Boolean get() = stop.ordinal == TourStop.entries.lastIndex
+    val last: Boolean get() = stop == plan.last()
 }
 
 /**
@@ -164,13 +190,18 @@ class Tour(state: TourState? = null, ended: Boolean = false) {
     /** The controls it can point at, as they are composed. */
     val targets: TourTargets = TourTargets()
 
-    /** The shell it walks round ([TourShell]): its navigator, and whether KJB's player has a song for the lyrics step. */
+    /**
+     * The shell it walks round ([TourShell]): its navigator, whether the library has [songs], whether a Now bar shows
+     * ([bar]) and whether KJB's player has a song ([ownSong]). Until the shell says, every step applies.
+     */
     internal var navigator: Navigator? by mutableStateOf(null)
-    internal var ownSong: Boolean by mutableStateOf(false)
+    internal var songs: Boolean by mutableStateOf(true)
+    internal var bar: Boolean by mutableStateOf(true)
+    internal var ownSong: Boolean by mutableStateOf(true)
 
-    /** From the first stop: on its own once, or again from Settings. */
-    fun start() {
-        state = TourState()
+    /** From the first stop, with the steps that apply now ([tourPlan]): on its own once, or again from Settings. */
+    fun start(plan: List<TourStop> = tourPlan(songs, bar, ownSong)) {
+        state = TourState(plan.first(), plan = plan)
     }
 
     /** "Skip tour" on the first run's last screen. */
@@ -196,12 +227,13 @@ class Tour(state: TourState? = null, ended: Boolean = false) {
     }
 
     companion object {
-        /** The stop's name and the way, or none; then whether it ended. */
+        /** The stop's name, the way and the plan's stops, or none; then whether it ended. */
         val Saver: Saver<Tour, Any> = Saver(
-            save = { tour -> listOf(tour.state?.stop?.name, tour.state?.forward, tour.ended) },
+            save = { tour -> listOf(tour.state?.stop?.name, tour.state?.forward, tour.state?.plan?.joinToString(",") { it.name }, tour.ended) },
             restore = { saved ->
-                val (stop, forward, ended) = saved as List<*>
-                val state = TourStop.entries.firstOrNull { it.name == stop }?.let { TourState(it, forward as? Boolean ?: true) }
+                val (stop, forward, plan, ended) = saved as List<*>
+                val stops = (plan as? String)?.split(',')?.mapNotNull { name -> TourStop.entries.firstOrNull { it.name == name } }.orEmpty().ifEmpty { TourStop.entries }
+                val state = stops.firstOrNull { it.name == stop }?.let { TourState(it, forward as? Boolean ?: true, stops) }
                 Tour(state, ended as? Boolean ?: false)
             },
         )
@@ -217,6 +249,27 @@ val LocalTour = staticCompositionLocalOf<Tour?> { null }
  * point at; not again once it [ended] in this session, nor while it is [showing].
  */
 fun tourStarts(seen: Boolean, ended: Boolean, showing: Boolean, libraryRead: Boolean): Boolean = !seen && !ended && !showing && libraryRead
+
+/** Whether a stop can look for its control yet: [GO], [WAIT] (what it needs may still come), or [PASS] (it won't). */
+enum class Ready { GO, WAIT, PASS }
+
+/**
+ * Before a stop looks for its control: the lyrics need a song in KJB's player ([ownSong]), which may come a moment after
+ * the song was played; the Now bar needs a bar ([bar]), which comes only once a song was [played] in the tour. Each waits
+ * at most [ARRIVE_WAIT_MS] ([waitedMs] so far).
+ */
+fun stopReady(stop: TourStop, ownSong: Boolean, bar: Boolean, played: Boolean, waitedMs: Long): Ready {
+    val late = if (waitedMs > ARRIVE_WAIT_MS) Ready.PASS else Ready.WAIT
+    return when (stop) {
+        TourStop.LYRICS -> if (ownSong) Ready.GO else late
+        TourStop.NOW_BAR -> when {
+            bar -> Ready.GO
+            played -> late
+            else -> Ready.PASS
+        }
+        else -> Ready.GO
+    }
+}
 
 /** What the tour does with a stop's target: show it, scroll it into view first, or pass the stop. */
 enum class Aim { SHOW, SCROLL, PASS }
@@ -250,12 +303,12 @@ fun targetRoom(stop: TourStop, window: Rect, tabsBottom: Float?, chromeTop: Floa
     if (stop == TourStop.SONG) Rect(window.left, tabsBottom ?: window.top, window.right, chromeTop ?: window.bottom) else window
 
 /**
- * Where the card goes beside a target, in px: [x] and [width], at most [maxHeight] tall (its body scrolls), [below] the
- * target or above it. [overlaps]: neither side has room for even a small card (a short screen, very large text), so it
- * sits at the screen's edge on the larger side and may cover part of the target.
+ * Where the card goes beside a target, in px: [x] and [width], at most [maxHeight] tall (its words scroll), [below] the
+ * target or above it, never over it. [compact]: neither side has room for the whole card (a short screen, very large
+ * text), so it keeps to one row of buttons on the larger side, [short] px less than it would like.
  */
 @Immutable
-data class CardRoom(val x: Float, val width: Float, val maxHeight: Float, val below: Boolean, val overlaps: Boolean)
+data class CardRoom(val x: Float, val width: Float, val maxHeight: Float, val below: Boolean, val compact: Boolean = false, val short: Float = 0f)
 
 /**
  * The card's room beside [target] in [area] (the window inside the system bars): on the side with more room, [gap] from
@@ -263,25 +316,38 @@ data class CardRoom(val x: Float, val width: Float, val maxHeight: Float, val be
  * [narrowMax] wide, centred on the target and [edge] from the sides; with large text ([wide]) the area's width less
  * [wideEdge] each side.
  */
-fun cardRoom(target: Rect, area: Rect, wide: Boolean, gap: Float, edge: Float, wideEdge: Float, narrowMax: Float, minHeight: Float): CardRoom {
+fun cardRoom(
+    target: Rect?,
+    area: Rect,
+    wide: Boolean,
+    gap: Float,
+    edge: Float,
+    wideEdge: Float,
+    narrowMax: Float,
+    minHeight: Float,
+    compactMin: Float = 0f,
+): CardRoom {
     val width = if (wide) area.width - 2 * wideEdge else min(narrowMax, area.width - 2 * edge)
-    val x = if (wide) area.left + wideEdge else (target.center.x - width / 2).coerceIn(area.left + edge, max(area.left + edge, area.right - edge - width))
+    val centre = (target ?: area).center.x
+    val x = if (wide) area.left + wideEdge else (centre - width / 2).coerceIn(area.left + edge, max(area.left + edge, area.right - edge - width))
+    // No control yet: the card waits in the middle, so Skip and Next are there all the time.
+    target ?: return CardRoom(x, width, area.height * MAX_CARD_SHARE, below = true)
     val above = target.top - gap - area.top
     val below = area.bottom - (target.bottom + gap)
     val under = below >= above
     val most = area.height * MAX_CARD_SHARE
     val side = if (under) below else above
     return if (side >= minHeight) {
-        CardRoom(x, width, min(side, most), below = under, overlaps = false)
+        CardRoom(x, width, min(side, most), below = under)
     } else {
-        CardRoom(x, width, most, below = under, overlaps = true)
+        // Compact, on the larger side; only below [compactMin] (Skip's row) may it reach over the target's edge.
+        CardRoom(x, width, max(side, compactMin), below = under, compact = true, short = minHeight - side)
     }
 }
 
-/** The card's top once it is measured [height] tall in [room]: beside the target, or at the screen's edge when it overlaps. */
-fun cardTop(room: CardRoom, target: Rect, area: Rect, gap: Float, height: Float): Float = when {
-    room.overlaps && room.below -> area.bottom - height
-    room.overlaps -> area.top
+/** The card's top once it is measured [height] tall in [room]: beside the target, or in the middle while there is none. */
+fun cardTop(room: CardRoom, target: Rect?, area: Rect, gap: Float, height: Float): Float = when {
+    target == null -> (area.center.y - height / 2).coerceIn(area.top, max(area.top, area.bottom - height))
     room.below -> target.bottom + gap
     else -> target.top - gap - height
 }
@@ -368,50 +434,67 @@ class TourTargets {
 
 /**
  * The shell ([content]) with the tour over it. While the tour shows, the shell takes no touch, TalkBack can't reach
- * anything under the dimmed layer, and the shell's Back handlers stand down: the phone's Back skips the tour.
+ * anything under the dimmed layer (the card is always there to take the focus), and the shell's Back handlers stand down:
+ * the phone's Back skips the tour.
  */
 @Composable
 fun TourHost(content: @Composable () -> Unit) {
     val tour = LocalTour.current
     val state = tour?.state
-    val back = rememberNavigationEventDispatcherOwner(enabled = state == null)
+    val nav = tour?.navigator
+    val showing = state != null && nav != null
+    val back = rememberNavigationEventDispatcherOwner(enabled = !showing)
     Box(Modifier.fillMaxSize()) {
-        Box(Modifier.fillMaxSize().then(if (state != null) Modifier.clearAndSetSemantics {} else Modifier)) {
+        Box(Modifier.fillMaxSize().then(if (showing) Modifier.clearAndSetSemantics {} else Modifier)) {
             CompositionLocalProvider(LocalNavigationEventDispatcherOwner provides back) { content() }
         }
-        val nav = tour?.navigator
-        if (state != null && nav != null) TourLayer(tour, state, nav, tour.ownSong)
+        if (state != null && nav != null) TourLayer(tour, state, nav)
     }
 }
 
-/** The shell lends the tour its [nav], and says whether KJB's player has a song ([ownSong]). */
+/** The shell lends the tour its [nav], and says what it has to point at: the library's songs and the Now bar ([bar]). */
 @Composable
-fun TourShell(nav: Navigator, ownSong: Boolean) {
+fun TourShell(nav: Navigator, bar: NowBarShows) {
+    val context = LocalContext.current
+    val library by remember(context) { LibraryGraph.repository(context).state }.collectAsStateWithLifecycle()
+    TourShell(nav, songs = (library as? LibraryState.Ready)?.library?.songs?.isNotEmpty() == true, bar = bar != NowBarShows.Hidden, ownSong = bar is NowBarShows.Own)
+}
+
+/** What [TourShell] lends: [songs] in the library, a Now bar showing ([bar]), a song in KJB's own player ([ownSong]). */
+@Composable
+internal fun TourShell(nav: Navigator, songs: Boolean, bar: Boolean, ownSong: Boolean) {
     val tour = LocalTour.current ?: return
     SideEffect {
         tour.navigator = nav
+        tour.songs = songs
+        tour.bar = bar
         tour.ownSong = ownSong
     }
 }
 
-/** Where [stop]'s cut-out is, and the control under it. */
-private data class Aimed(val stop: TourStop, val hole: Rect, val node: TourTargetNode)
+/** Where [stop]'s cut-out is, and the control under it; [glide]: the cut-out moves there, else it is put there. */
+private data class Aimed(val stop: TourStop, val hole: Rect, val node: TourTargetNode, val glide: Boolean)
 
 /**
  * The dimmed layer with the cut-out round the stop's control, its ring, and the card on the far side of it. Each stop
- * first goes where its control is (Library's Songs, the player, the dock), then finds it every frame: a control that
- * moves is followed, one off screen is scrolled into view once, and a stop whose control is not there is passed.
+ * first waits for what it needs ([stopReady]), goes where its control is (Library's Songs, the player, the dock), then
+ * finds it every frame: a control that moves is followed, one off screen is scrolled into view once, and a stop whose
+ * control does not come is passed. The card is there all the while, in the middle of the screen until the control is
+ * found, so Skip and Next are always in reach and the title always has the focus.
  */
 @Composable
-private fun TourLayer(tour: Tour, state: TourState, nav: Navigator, ownSong: Boolean) {
+private fun TourLayer(tour: Tour, state: TourState, nav: Navigator) {
     val density = LocalDensity.current
     val direction = LocalLayoutDirection.current
     val reduced = LocalReducedMotion.current
     val large = density.fontScale > LARGE_TEXT
     val insets = WindowInsets.safeDrawing
-    val song by rememberUpdatedState(ownSong)
     var overlay by remember { mutableStateOf<LayoutCoordinates?>(null) }
     var aimed by remember { mutableStateOf<Aimed?>(null) }
+    // Just after a move the last cut-out stays a moment, so the next one glides from it instead of flashing.
+    var grace by remember { mutableStateOf(true) }
+    // A song played from the cut-out: the Now bar it brings is waited for.
+    var played by rememberSaveable { mutableStateOf(false) }
     val hole = remember { Animatable(Rect.Zero, Rect.VectorConverter) }
     var placed by remember { mutableStateOf(false) }
     val appear = remember { Animatable(0f) }
@@ -419,18 +502,31 @@ private fun TourLayer(tour: Tour, state: TourState, nav: Navigator, ownSong: Boo
     LaunchedEffect(Unit) { appear.animateTo(1f, tween(if (reduced) Motion.REDUCED_MS else Motion.DIALOG_MS)) }
 
     LaunchedEffect(state.stop) {
-        if (!nav.arrive(state.stop, song)) {
-            tour.pass()
-            return@LaunchedEffect
+        grace = true
+        val start = withFrameMillis { it }
+        while (true) {
+            val now = withFrameMillis { it }
+            if (now - start > GRACE_MS) grace = false
+            when (stopReady(state.stop, tour.ownSong, tour.bar, played, now - start)) {
+                Ready.GO -> break
+                Ready.WAIT -> continue
+                Ready.PASS -> {
+                    tour.pass()
+                    return@LaunchedEffect
+                }
+            }
         }
+        nav.arrive(state.stop)
         var scrolled = false
-        var since = -1L
+        var roomed = false
+        var seen = -1L
         // A control still moving (the player growing out of the Now bar) is judged only once it rests.
         var last: Rect? = null
         var still = 0
         while (true) {
             val now = withFrameMillis { it }
-            if (since < 0) since = now
+            if (seen < 0) seen = now
+            if (now - start > GRACE_MS) grace = false
             val space = overlay ?: continue
             val window = with(density) {
                 Rect(
@@ -443,38 +539,50 @@ private fun TourLayer(tour: Tour, state: TourState, nav: Navigator, ownSong: Boo
             fun top(stop: TourStop) = tour.targets.of(stop).mapNotNull { it.bounds(space) }.minOfOrNull { it.top }
             val chromeTop = listOfNotNull(top(TourStop.NOW_BAR), top(TourStop.SEARCH), top(TourStop.TOOLS)).minOrNull()?.let { it - with(density) { CHROME_CLEAR.toPx() } }
             val tabsBottom = tour.targets.of(TourStop.TABS).mapNotNull { it.bounds(space) }.maxOfOrNull { it.bottom }
-            val room = targetRoom(state.stop, window, tabsBottom, chromeTop)
+            val clear = targetRoom(state.stop, window, tabsBottom, chromeTop)
             val marks = tour.targets.of(state.stop).mapNotNull { node -> node.bounds(space)?.let { node to it } }
-            val mark = pickTarget(marks, room) { it.second }
+            val mark = pickTarget(marks, clear) { it.second }
             still = if (mark?.second == last) still + 1 else 0
             last = mark?.second
-            val resting = still >= STILL_FRAMES || now - since > ARRIVE_WAIT_MS
-            when (aim(mark?.second, room, scrolled)) {
+            val resting = still >= STILL_FRAMES || now - seen > ARRIVE_WAIT_MS
+            // What a scroll must keep clear of: the tabs above a song and the bars below it.
+            val above = (clear.top - window.top).coerceAtLeast(0f)
+            val below = (window.bottom - clear.bottom).coerceAtLeast(0f)
+            when (aim(mark?.second, clear, scrolled)) {
                 Aim.SHOW -> {
                     val (node, bounds) = checkNotNull(mark)
                     val next = spot(state.stop, bounds, window, density)
-                    if (aimed?.stop != state.stop || aimed?.hole != next || aimed?.node !== node) aimed = Aimed(state.stop, next, node)
-                    since = now
+                    val current = aimed
+                    if (current?.stop != state.stop || current.hole != next || current.node !== node) {
+                        aimed = Aimed(state.stop, next, node, glide = current?.stop == state.stop || grace)
+                    }
+                    seen = now
+                    // No room for the whole card on either side: once, if its list can scroll, make that room.
+                    val room = density.roomFor(next, cardArea(space.size.width, space.size.height, insets, density, direction), large)
+                    if (room.short > 0f && !roomed && resting) {
+                        roomed = true
+                        val more = room.short + with(density) { CARD_GAP.toPx() }
+                        node.reveal { size -> if (room.below) Rect(0f, -above, size.width, size.height + below + more) else Rect(0f, -above - more, size.width, size.height + below) }
+                    }
                 }
                 Aim.SCROLL -> if (resting) {
                     scrolled = true
-                    val above = (room.top - window.top).coerceAtLeast(0f)
-                    val below = (window.bottom - room.bottom).coerceAtLeast(0f)
                     checkNotNull(mark).first.reveal { size -> Rect(0f, -above, size.width, size.height + below) }
                 }
                 // Not there yet (a page still composing, the player still opening): wait a little, then pass the stop.
-                Aim.PASS -> if ((mark != null && resting) || now - since > ARRIVE_WAIT_MS) {
+                Aim.PASS -> if ((mark != null && resting) || now - seen > ARRIVE_WAIT_MS) {
                     tour.pass()
                     return@LaunchedEffect
                 }
             }
         }
     }
-    // The cut-out glides to each new control (it fades instead with reduced motion), and follows one that moves.
-    val target = aimed?.hole
+    // The cut-out glides to each new control (it is put there with reduced motion, or after the card waited), and
+    // follows one that moves.
+    val target = aimed?.takeIf { it.stop == state.stop }
     LaunchedEffect(target) {
         target ?: return@LaunchedEffect
-        if (!placed || reduced) hole.snapTo(target) else hole.animateTo(target, tween(Motion.OPEN_MS, easing = Motion.Rise))
+        if (!placed || reduced || !target.glide) hole.snapTo(target.hole) else hole.animateTo(target.hole, tween(Motion.OPEN_MS, easing = Motion.Rise))
         placed = true
     }
 
@@ -484,43 +592,57 @@ private fun TourLayer(tour: Tour, state: TourState, nav: Navigator, ownSong: Boo
             .onPlaced { overlay = it }
             .graphicsLayer { alpha = appear.value },
     ) {
-        Scrim(if (placed) hole.value else null, aimed?.stop ?: state.stop, pulse = !reduced && !large)
-        // The card and the tap on the cut-out wait until this stop's control is found; the card fades in beside it.
-        val shown = aimed?.takeIf { it.stop == state.stop }
-        if (placed && shown != null) {
-            key(state.stop) {
-                val card = remember { Animatable(0f) }
-                LaunchedEffect(Unit) { card.animateTo(1f, tween(if (reduced) Motion.REDUCED_MS else Motion.DIALOG_MS, easing = Motion.Rise)) }
-                val tap = shown.node.onTap
-                if (tap != null) {
-                    HitArea(hole.value, shown.node.label) {
-                        tap()
-                        tour.next()
-                    }
+        // The cut-out round this stop's control, or a moment longer round the last one; else the plain dim.
+        val drawn = placed && (target != null || (grace && aimed != null))
+        Scrim(if (drawn) hole.value else null, aimed?.stop ?: state.stop, pulse = !reduced && !large)
+        key(state.stop) {
+            val card = remember { Animatable(0f) }
+            LaunchedEffect(Unit) { card.animateTo(1f, tween(if (reduced) Motion.REDUCED_MS else Motion.DIALOG_MS, easing = Motion.Rise)) }
+            // The cut-out's own tap: the song plays, the bar opens the player when the lyrics step follows.
+            val tap = target?.node?.onTap?.takeIf { state.stop != TourStop.NOW_BAR || TourStop.LYRICS in state.plan }
+            if (tap != null && placed) {
+                HitArea(hole.value, target.node.label) {
+                    if (state.stop == TourStop.SONG) played = true
+                    tap()
+                    tour.next()
                 }
-                TourCardLayout(hole.value, insets, large, Modifier.graphicsLayer { alpha = card.value }) { TourCard(tour, state) }
+            }
+            TourCardLayout({ if (drawn) hole.value else null }, target?.hole, insets, large, Modifier.graphicsLayer { alpha = card.value }) { compact ->
+                TourCard(tour, state, compact)
             }
         }
     }
 }
 
 /**
- * Goes where [stop]'s control shows: Library's Songs with nothing over it, the player for the lyrics, or just the
- * shell's own dock. False when the stop can't show here: the lyrics need a song in KJB's player ([ownSong]).
+ * Goes where [stop]'s control shows: Library's Songs with nothing over it, the player for the lyrics, or just the shell's
+ * own dock.
  */
-private fun Navigator.arrive(stop: TourStop, ownSong: Boolean): Boolean {
+private fun Navigator.arrive(stop: TourStop) {
     if (stop == TourStop.LYRICS) {
-        if (!ownSong) return false
         show(FullScreen.Player)
-        return true
+        return
     }
     state.views.firstOrNull()?.let(::close)
     if (stop == TourStop.TABS || stop == TourStop.SONG) {
         // A tap on Library's icon closes its pages and lands on Songs; once there another would scroll the list up.
         repeat(LIBRARY_STEPS) { if (state.tab != DockTab.LIBRARY || state.pages.isNotEmpty() || state.libraryTab != LibraryTab.SONGS) select(DockTab.LIBRARY) }
     }
-    return true
 }
+
+/** Where the card may go: the window inside the system bars, a little in from its top and bottom. */
+private fun cardArea(width: Int, height: Int, insets: WindowInsets, density: Density, direction: LayoutDirection): Rect = with(density) {
+    Rect(
+        insets.getLeft(this, direction).toFloat(),
+        insets.getTop(this) + CARD_EDGE_TOP.toPx(),
+        width - insets.getRight(this, direction).toFloat(),
+        height - insets.getBottom(this) - CARD_EDGE_BOTTOM.toPx(),
+    )
+}
+
+/** [cardRoom] with the card's own sizes. */
+private fun Density.roomFor(hole: Rect?, area: Rect, large: Boolean): CardRoom =
+    cardRoom(hole, area, large, CARD_GAP.toPx(), CARD_EDGE.toPx(), CARD_WIDE_EDGE.toPx(), CARD_WIDTH.toPx(), CARD_MIN_HEIGHT.toPx(), CARD_COMPACT_MIN.toPx())
 
 /** [stop]'s cut-out round a control at [bounds]: grown by its margin, kept inside the [window]'s sides, rounded. */
 private fun spot(stop: TourStop, bounds: Rect, window: Rect, density: Density): Rect = with(density) {
@@ -587,38 +709,60 @@ private fun HitArea(hole: Rect, label: String?, onTap: () -> Unit) {
     )
 }
 
-/** The card's place beside the cut-out [hole], inside the window's safe area ([cardRoom]); full width with large text. */
+/**
+ * The card's place: beside the cut-out [hole] (read while placing, so it follows the cut-out without composing again),
+ * or in the middle of the screen while there is none, inside the window's safe area ([cardRoom]); full width with large
+ * text. [target]: where the cut-out is going, which says whether the card has to be compact.
+ */
 @Composable
-private fun TourCardLayout(hole: Rect, insets: WindowInsets, large: Boolean, modifier: Modifier, card: @Composable () -> Unit) {
+private fun TourCardLayout(hole: () -> Rect?, target: Rect?, insets: WindowInsets, large: Boolean, modifier: Modifier, card: @Composable (compact: Boolean) -> Unit) {
     val direction = LocalLayoutDirection.current
-    Layout(card, modifier.fillMaxSize()) { measurables, constraints ->
-        val area = Rect(
-            insets.getLeft(this, direction).toFloat(),
-            insets.getTop(this).toFloat() + CARD_EDGE_TOP.toPx(),
-            constraints.maxWidth - insets.getRight(this, direction).toFloat(),
-            constraints.maxHeight - insets.getBottom(this).toFloat() - CARD_EDGE_BOTTOM.toPx(),
-        )
-        val gap = CARD_GAP.toPx()
-        val room = cardRoom(hole, area, large, gap, CARD_EDGE.toPx(), CARD_WIDE_EDGE.toPx(), CARD_WIDTH.toPx(), CARD_MIN_HEIGHT.toPx())
-        val width = room.width.roundToInt().coerceAtLeast(0)
-        val placeable = measurables.single().measure(Constraints(minWidth = width, maxWidth = width, maxHeight = room.maxHeight.roundToInt().coerceAtLeast(0)))
-        layout(constraints.maxWidth, constraints.maxHeight) {
-            placeable.placeRelative(room.x.roundToInt(), cardTop(room, hole, area, gap, placeable.height.toFloat()).roundToInt())
+    BoxWithConstraints(modifier.fillMaxSize()) {
+        val density = LocalDensity.current
+        val area = cardArea(constraints.maxWidth, constraints.maxHeight, insets, density, direction)
+        val compact = density.roomFor(target, area, large).compact
+        Layout({ card(compact) }) { measurables, outer ->
+            val shown = hole()
+            val room = roomFor(shown, area, large)
+            val width = room.width.roundToInt().coerceAtLeast(0)
+            val placeable = measurables.single().measure(Constraints(minWidth = width, maxWidth = width, maxHeight = room.maxHeight.roundToInt().coerceAtLeast(0)))
+            layout(outer.maxWidth, outer.maxHeight) {
+                // Absolute: the cut-out's bounds are, whatever the layout direction.
+                placeable.place(room.x.roundToInt(), cardTop(room, shown, area, CARD_GAP.toPx(), placeable.height.toFloat()).roundToInt())
+            }
         }
     }
 }
 
 /**
- * The step's card: the dots and "2 of 5" (read when they change), Skip ("Skip tour" for TalkBack), the title (which
- * takes the focus on every step, so TalkBack reads it first) and the sentence, then Back from step 2 and Next, or Done on
- * the last. The words scroll when the card is short.
+ * The step's card: "2 of 4" (read when it changes; with dots unless [compact]), Skip ("Skip tour" for TalkBack), the
+ * title (which takes the focus on every step, so TalkBack reads it first) and the sentence, then Back from step 2 and
+ * Next, or Done on the last. Compact (no room for the whole card beside its control), the buttons share one row above the
+ * words. The words scroll when the card is short.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun TourCard(tour: Tour, state: TourState) {
+private fun TourCard(tour: Tour, state: TourState, compact: Boolean) {
     val colors = MaterialTheme.colorScheme
     val chrome = LocalChromeColors.current
     val shape = RoundedCornerShape(28.dp)
+    val skipLabel = stringResource(R.string.ob_skip_tour)
+    val skip: @Composable () -> Unit = {
+        LyrifyButton(
+            stringResource(R.string.tour_skip),
+            onClick = tour::skip,
+            modifier = Modifier.semantics { contentDescription = skipLabel },
+            kind = ButtonKind.GHOST,
+            compact = true,
+            contentColor = colors.onSurfaceVariant,
+        )
+    }
+    val moves: @Composable () -> Unit = {
+        if (state.hasBack) LyrifyButton(stringResource(R.string.tour_back), onClick = tour::back, kind = ButtonKind.SECONDARY, compact = true)
+        LyrifyButton(stringResource(if (state.last) R.string.tour_done else R.string.tour_next), onClick = tour::next, compact = true)
+    }
+    val title = remember { FocusRequester() }
+    LaunchedEffect(Unit) { title.requestFocus() }
     Column(
         verticalArrangement = Arrangement.spacedBy(8.dp),
         modifier = Modifier
@@ -628,20 +772,23 @@ private fun TourCard(tour: Tour, state: TourState) {
             .border(1.dp, colors.onSurface.copy(alpha = CARD_EDGE_ALPHA), shape)
             .padding(start = 20.dp, end = 12.dp, top = 12.dp, bottom = 12.dp),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-            StepDots(state.stop.step, Modifier.weight(1f))
-            val skip = stringResource(R.string.ob_skip_tour)
-            LyrifyButton(
-                stringResource(R.string.tour_skip),
-                onClick = tour::skip,
-                modifier = Modifier.semantics { contentDescription = skip },
-                kind = ButtonKind.GHOST,
-                compact = true,
-                contentColor = colors.onSurfaceVariant,
-            )
+        if (compact) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+                itemVerticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                StepCount(state, Modifier.weight(1f))
+                skip()
+                moves()
+            }
+        } else {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                StepCount(state, Modifier.weight(1f), dots = true)
+                skip()
+            }
         }
-        val title = remember { FocusRequester() }
-        LaunchedEffect(Unit) { title.requestFocus() }
         Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()).padding(end = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(
                 stringResource(state.stop.title),
@@ -653,35 +800,36 @@ private fun TourCard(tour: Tour, state: TourState) {
             )
             Text(stringResource(state.stop.body), style = body(15f, 22), color = colors.onSurfaceVariant, modifier = Modifier.semantics { traversalIndex = -1f })
         }
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            if (state.hasBack) {
-                LyrifyButton(stringResource(R.string.tour_back), onClick = tour::back, kind = ButtonKind.SECONDARY, compact = true)
-                Spacer(Modifier.weight(1f))
+        if (!compact) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                if (state.hasBack) Spacer(Modifier.weight(1f))
+                moves()
             }
-            LyrifyButton(stringResource(if (state.last) R.string.tour_done else R.string.tour_next), onClick = tour::next, compact = true)
         }
     }
 }
 
-/** Five dots, the step's one long and in the action colour, and "2 of 5", read when it changes. */
+/** "2 of 4" among the steps that apply, read when it changes, after a dot per step ([dots]), the step's one long. */
 @Composable
-private fun StepDots(step: Int, modifier: Modifier) {
+private fun StepCount(state: TourState, modifier: Modifier, dots: Boolean = false) {
     val colors = MaterialTheme.colorScheme
     val action = LocalChromeColors.current.action
     val reduced = LocalReducedMotion.current
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = modifier) {
-        Row(Modifier.clearAndSetSemantics {}, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            (1..TOUR_STEPS).forEach { k ->
-                val width by animateDpAsState(if (k == step) 18.dp else 6.dp, motion(tween(Motion.OPEN_MS, easing = Motion.Rise), reduced), label = "dot")
-                Box(Modifier.size(width, 6.dp).background(if (k == step) action else colors.onSurface.copy(alpha = DOT_ALPHA), CircleShape))
+        if (dots) {
+            Row(Modifier.clearAndSetSemantics {}, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                (1..state.steps).forEach { k ->
+                    val width by animateDpAsState(if (k == state.step) 18.dp else 6.dp, motion(tween(Motion.OPEN_MS, easing = Motion.Rise), reduced), label = "dot")
+                    Box(Modifier.size(width, 6.dp).background(if (k == state.step) action else colors.onSurface.copy(alpha = DOT_ALPHA), CircleShape))
+                }
             }
         }
         Text(
-            stringResource(R.string.step_count, step, TOUR_STEPS),
+            stringResource(R.string.step_count, state.step, state.steps),
             style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold).tabular(),
             color = colors.onSurfaceVariant,
             maxLines = 1,
@@ -690,11 +838,14 @@ private fun StepDots(step: Int, modifier: Modifier) {
     }
 }
 
-/** How long a stop waits for its control to show (a page composing, the player opening) before it is passed. */
-private const val ARRIVE_WAIT_MS = 1200L
+/** How long a stop waits for its control to show (a page composing, the player opening, a song loading) before it is passed. */
+private const val ARRIVE_WAIT_MS = 1500L
 
 /** Frames a control's bounds stay the same before a part of it off screen counts. */
 private const val STILL_FRAMES = 3
+
+/** How long the last cut-out stays after a move while the next control is looked for. */
+private const val GRACE_MS = 250L
 
 /** At most this many taps on Library's icon reach Songs at its root, the views closed. */
 private const val LIBRARY_STEPS = 3
@@ -720,5 +871,8 @@ private val CARD_EDGE_TOP: Dp = 12.dp
 private val CARD_EDGE_BOTTOM: Dp = 12.dp
 private val CARD_WIDTH: Dp = 300.dp
 private val CARD_MIN_HEIGHT: Dp = 160.dp
+
+/** The compact card's one row of buttons, which it keeps even where that reaches over its control's edge. */
+private val CARD_COMPACT_MIN: Dp = 72.dp
 private const val CARD_EDGE_ALPHA = 0.09f
 private const val DOT_ALPHA = 0.18f

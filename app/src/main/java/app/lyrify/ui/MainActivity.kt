@@ -4,6 +4,7 @@ import android.Manifest
 import android.os.Build
 import android.content.Intent
 import android.os.Bundle
+import android.os.SystemClock
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -157,16 +158,23 @@ private fun App(ledger: LedgerStore, destination: Page?, view: FullScreen?, onVi
     // What the AI asks for once it is switched on or its download starts: Show progress, then Keep running.
     val activity = LocalActivity.current
     val denied by rememberUpdatedState(settings.nav.notificationsDenied)
+    val denials by rememberUpdatedState(settings.nav.notificationDenials)
     val grant = notificationGrant(Build.VERSION.SDK_INT, notifications, settings.nav.notificationsDenied)
     var asks by remember { mutableStateOf(emptyList<AiAsk>()) }
     var asking by remember { mutableStateOf(false) }
-    val explained = remember { booleanArrayOf(false) }
+    var sent by remember { mutableStateOf<SentRequest?>(null) }
     val askNotifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         notifications = granted
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        val request = sent
+        // Every no is counted: the second, or one Android gave at once, is for good, and Show progress is asked no more.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && request != null && !granted) {
             val after = activity?.let { ActivityCompat.shouldShowRequestPermissionRationale(it, Manifest.permission.POST_NOTIFICATIONS) } == true
-            if (deniedForGood(granted, explained[0], after)) scope.launch { store.update { it.copy(nav = it.nav.copy(notificationsDenied = true)) } }
+            val forGood = deniedForGood(granted = false, request.explained, after, denials, SystemClock.elapsedRealtime() - request.at)
+            scope.launch {
+                store.update { it.copy(nav = it.nav.copy(notificationDenials = it.nav.notificationDenials + 1, notificationsDenied = it.nav.notificationsDenied || forGood)) }
+            }
         }
+        sent = null
         asking = false
         asks = asks.drop(1)
     }
@@ -270,7 +278,8 @@ private fun App(ledger: LedgerStore, destination: Page?, view: FullScreen?, onVi
             // Android's own question, Android 13 and later (Show progress is asked only there): whether it had explained
             // before tells a lasting no apart.
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                explained[0] = activity?.let { ActivityCompat.shouldShowRequestPermissionRationale(it, Manifest.permission.POST_NOTIFICATIONS) } == true
+                val explained = activity?.let { ActivityCompat.shouldShowRequestPermissionRationale(it, Manifest.permission.POST_NOTIFICATIONS) } == true
+                sent = SentRequest(explained, SystemClock.elapsedRealtime())
                 asking = true
                 askNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
             } else {
