@@ -5,6 +5,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -285,6 +288,7 @@ class SafeWriterTest {
     @Test
     fun `one file at a time, even when two albums are applied at once`() {
         val albums = (0 until 2).map { album -> (0 until 3).map { rig.song("Song $album$it", 100L + album * 10 + it, fields) } }
+        rig.tags.holdMs = 5
 
         val results = runBlocking(Dispatchers.Default) {
             albums.map { album -> async { rig.writer.write(album.map { WriteJob(it, edit) }, EditKind.ALBUM, "Harbour Glass") } }.awaitAll()
@@ -314,13 +318,15 @@ class SafeWriterTest {
     fun `the writer waits for the start-up recovery before its first write`() {
         val song = rig.song("Paper Lantern", 41, fields)
         val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
-        val writer = SafeWriter(
-            rig.dirs, rig.tags, rig.songs, rig.busy, rig.locks, SharedWrites.ANYWHERE, rig.journal, rig.undo,
-            freeBytes = { rig.free }, clock = { rig.now }, ready = { gate.await() },
-        )
-        runBlocking {
-            val writing = async(Dispatchers.Default) { writer.write(listOf(WriteJob(song, edit)), EditKind.SONG, "Paper Lantern") }
-            Thread.sleep(100)
+        runTest {
+            // The writer's own work on the test scheduler too, so runCurrent runs the write as far as it can go: without
+            // the gate, to its end.
+            val writer = SafeWriter(
+                rig.dirs, rig.tags, rig.songs, rig.busy, rig.locks, SharedWrites.ANYWHERE, rig.journal, rig.undo,
+                freeBytes = { rig.free }, clock = { rig.now }, io = StandardTestDispatcher(testScheduler), ready = { gate.await() },
+            )
+            val writing = async { writer.write(listOf(WriteJob(song, edit)), EditKind.SONG, "Paper Lantern") }
+            runCurrent()
             assertFalse(writing.isCompleted)
             assertFalse("busy check" in rig.events)
             gate.complete(Unit)
