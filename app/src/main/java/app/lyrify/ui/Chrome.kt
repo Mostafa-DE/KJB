@@ -305,7 +305,7 @@ private fun DockItems(selected: DockTab, dot: Boolean, onSelect: (DockTab) -> Un
                 drawRoundRect(highlight, Offset(x, size.height - LINE_BOTTOM.toPx() - height), Size(right - left, height), CornerRadius(height / 2))
             },
     ) {
-        DOCK_TABS.forEach { tab -> DockItem(tab, tab == selected, dot && tab == DockTab.TOOLS, Modifier.weight(1f)) { onSelect(tab) } }
+        DOCK_TABS.forEach { tab -> DockItem(tab, tab == selected, dot && tab == DockTab.TOOLS, Modifier.weight(1f).tourTarget(dockStop(tab))) { onSelect(tab) } }
     }
 }
 

@@ -372,12 +372,18 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
     /**
      * The backup's [stored] settings read over the [phone]'s own, through the same steps as `settings.json` (an older
      * version's are brought up to date, a newer one's read for what this version knows), so what the backup does not
-     * carry stays as the phone has it. The phone keeps its automatic backup, its first-run state and the devices Android
-     * linked to it.
+     * carry stays as the phone has it. The phone keeps its automatic backup, its first-run state (setup, the tour, a
+     * notifications denial) and the devices Android linked to it.
      */
     private fun overPhone(stored: String, phone: Settings): Settings {
         val read = SettingsJson.decode(stored, base = phone) ?: phone
-        return read.copy(playback = read.playback.copy(connectDevices = phone.playback.connectDevices), backup = phone.backup, nav = read.nav.copy(setupDone = phone.nav.setupDone))
+        val nav = read.nav.copy(
+            setupDone = phone.nav.setupDone,
+            tourSeen = phone.nav.tourSeen,
+            notificationsDenied = phone.nav.notificationsDenied,
+            notificationDenials = phone.nav.notificationDenials,
+        )
+        return read.copy(playback = read.playback.copy(connectDevices = phone.playback.connectDevices), backup = phone.backup, nav = nav)
     }
 
     /**

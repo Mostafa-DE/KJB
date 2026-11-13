@@ -106,6 +106,7 @@ fun SettingsScreen(
     fun setAudio(change: (AudioSettings) -> AudioSettings) = onChange { it.copy(audio = change(it.audio)) }
     fun setAdvanced(change: (AdvancedSettings) -> AdvancedSettings) = onChange { it.copy(advanced = change(it.advanced)) }
     val showWhenLocked = rememberLockSwitch(settings.lyrics.showWhenLocked, onChange)
+    val tour = LocalTour.current
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -170,8 +171,25 @@ fun SettingsScreen(
                 SwitchRow(R.drawable.ic_schedule, R.string.set_auto_backup, stringResource(R.string.set_auto_backup_detail), settings.backup.automatic, onSwitch = backup.setAutomatic)
             }
             section(R.string.settings_about) {
+                // Show tour: Settings closes and the tour starts from its first step; setup and the grants stay as they are.
+                if (tour != null) {
+                    val brand = LocalBrandColors.current
+                    GroupedRow(
+                        R.drawable.ic_explore,
+                        stringResource(R.string.tour_show),
+                        tile = brand.highlightContainer,
+                        onTile = brand.onHighlightContainer,
+                        first = true,
+                        supporting = { Text(stringResource(R.string.tour_show_line)) },
+                        onClick = {
+                            onBack()
+                            tour.start()
+                        },
+                        trailing = { Icon(painterResource(R.drawable.ic_chevron_right), contentDescription = null, modifier = Modifier.size(20.dp)) },
+                    )
+                }
                 // The version beside the app's own mark, the Note arm K on black.
-                GroupedRow(R.drawable.ic_brand_k, stringResource(R.string.version_label, versionName), tile = BrandBlack, onTile = Color.Unspecified, first = true)
+                GroupedRow(R.drawable.ic_brand_k, stringResource(R.string.version_label, versionName), tile = BrandBlack, onTile = Color.Unspecified, first = tour == null)
                 ActionRow(R.drawable.ic_lyrics, stringResource(R.string.settings_source))
                 ActionRow(R.drawable.ic_directions_car, stringResource(R.string.set_auto)) { sheet = SettingsSheet.ANDROID_AUTO }
                 ActionRow(R.drawable.ic_description, R.string.set_licences) { onOpen(Page.Licences) }

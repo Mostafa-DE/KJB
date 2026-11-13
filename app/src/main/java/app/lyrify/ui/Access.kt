@@ -1,16 +1,40 @@
 package app.lyrify.ui
 
+import android.Manifest
 import android.content.ActivityNotFoundException
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Environment
 import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
+import androidx.annotation.DrawableRes
+import androidx.annotation.StringRes
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.dp
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
 import app.lyrify.LOG_TAG
+import app.lyrify.R
 import app.lyrify.media.NowPlayingListener
 
 /**
@@ -79,5 +103,88 @@ fun Context.startFirst(intents: List<Intent>) {
         } catch (e: ActivityNotFoundException) {
             Log.d(LOG_TAG, "no screen for ${intent.action}: ${e.javaClass.simpleName}")
         }
+    }
+}
+
+// Asked in context: what the AI needs once it is switched on
+
+/**
+ * Whether KJB may post notifications (only the AI's progress and its download's need them): [ON] (allowed, or Android 11
+ * and 12, which do not ask), [ASK] (Android 13 and later, not allowed yet), [OFF] (denied for good: Android asks no
+ * more, only the phone's settings can allow them).
+ */
+enum class NotificationGrant { ON, ASK, OFF }
+
+fun notificationGrant(sdk: Int, granted: Boolean, deniedForGood: Boolean): NotificationGrant = when {
+    sdk < Build.VERSION_CODES.TIRAMISU || granted -> NotificationGrant.ON
+    deniedForGood -> NotificationGrant.OFF
+    else -> NotificationGrant.ASK
+}
+
+/**
+ * A request answered no, and Android will not ask again: it would have explained before ([rationaleBefore]) and won't
+ * now; or it came back no before ([denialsBefore]), so this is the second no; or it came back at once ([answeredMs]
+ * under [AT_ONCE_MS]: no dialog was shown, as after a no in the phone's settings). A first no, or the dialog swiped away,
+ * may still be asked again.
+ */
+fun deniedForGood(granted: Boolean, rationaleBefore: Boolean, rationaleAfter: Boolean, denialsBefore: Int, answeredMs: Long): Boolean =
+    !granted && !rationaleAfter && (rationaleBefore || denialsBefore >= 1 || answeredMs < AT_ONCE_MS)
+
+/** Faster than anyone answers a dialog: Android answered for the user. */
+const val AT_ONCE_MS: Long = 500L
+
+/** A request for notifications on its way: whether Android had explained before it, and when it went (elapsed realtime). */
+data class SentRequest(val explained: Boolean, val at: Long)
+
+/** The sheets that follow the AI switched on, or its download started: Show progress, then Keep running. */
+enum class AiAsk { PROGRESS, BATTERY }
+
+/**
+ * What to ask, in order: Show progress while notifications can still be asked for; Keep running only when the AI was
+ * [switchedOn] (not for a download alone) and battery use is not [unrestricted].
+ */
+fun aiAsks(switchedOn: Boolean, notifications: NotificationGrant, unrestricted: Boolean): List<AiAsk> =
+    listOfNotNull(AiAsk.PROGRESS.takeIf { notifications == NotificationGrant.ASK }, AiAsk.BATTERY.takeIf { switchedOn && !unrestricted })
+
+/** True when KJB may post notifications: allowed on Android 13 and later, always on 11 and 12. */
+fun notificationsAllowed(context: Context): Boolean =
+    Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+
+/** KJB's own notification settings, else App info. */
+fun notificationSettingsIntents(context: Context): List<Intent> =
+    listOf(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)) + appInfoIntents(context)
+
+/**
+ * The sheet [ask] calls for, each in turn in one window (null: none): Show progress, whose Allow leads to Android's own
+ * question ([onAllow]), and Keep running, which opens App info, where battery use is set. Not now, or the sheet dragged
+ * away, goes on to the next ask ([onNotNow]).
+ */
+@Composable
+fun AiAskSheets(ask: AiAsk?, onAllow: () -> Unit, onOpenAppInfo: () -> Unit, onNotNow: () -> Unit) {
+    SheetFlow(ask, onDismiss = onNotNow) { at ->
+        when (at) {
+            AiAsk.PROGRESS -> AskSheet(R.drawable.ic_notifications, R.string.ask_progress_title, R.string.ask_progress_text, R.string.setup_allow, onAllow, onNotNow)
+            AiAsk.BATTERY -> AskSheet(R.drawable.ic_battery_full, R.string.setup_battery_title, R.string.ask_battery_text, R.string.open_app_info, onOpenAppInfo, onNotNow)
+        }
+    }
+}
+
+/** One ask: its tile, title and reason, then its one action and Not now. */
+@Composable
+private fun AskSheet(@DrawableRes icon: Int, @StringRes title: Int, @StringRes text: Int, @StringRes action: Int, onAction: () -> Unit, onNotNow: () -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    LyrifySheet(
+        onDismiss = onNotNow,
+        spacing = 12.dp,
+        footer = {
+            LyrifyButton(stringResource(action), onClick = onAction, modifier = Modifier.fillMaxWidth())
+            LyrifyButton(stringResource(R.string.setup_not_now), onClick = onNotNow, modifier = Modifier.fillMaxWidth(), kind = ButtonKind.GHOST, contentColor = colors.onSurface)
+        },
+    ) {
+        Box(contentAlignment = Alignment.Center, modifier = Modifier.size(44.dp).clip(RoundedCornerShape(14.dp)).background(colors.surfaceContainerHighest)) {
+            Icon(painterResource(icon), contentDescription = null, tint = colors.onSurfaceVariant, modifier = Modifier.size(22.dp))
+        }
+        Text(stringResource(title), style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { heading() })
+        Text(stringResource(text), style = MaterialTheme.typography.bodyLarge, color = colors.onSurfaceVariant)
     }
 }

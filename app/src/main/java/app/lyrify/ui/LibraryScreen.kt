@@ -108,7 +108,7 @@ fun LibraryPage() {
     val topBar: @Composable (Boolean, GlassBackdrop) -> Unit = { under, backdrop ->
         Column {
             MainTopBar(DockTab.LIBRARY, under, backdrop, actions = { if (tabs.getOrNull(pager.pager.currentPage) == LibraryTab.PLAYLISTS) PlaylistsMenu(sheets, m3u) })
-            TopBand(under, backdrop) { PagerTabs(pager, labels) }
+            TopBand(under, backdrop) { PagerTabs(pager, labels, Modifier.tourTarget(TourStop.TABS)) }
         }
     }
     val library = ui.library
@@ -252,7 +252,7 @@ private fun SongsTab(ui: LibraryUi, library: Library, reselect: Int, topBar: @Co
         }
         sections.forEach { (section, start, slice) ->
             stickyHeader(key = "section $start", contentType = "section") { SectionChip(sectionWords(section)) }
-            songRows(list, slice, offset = start)
+            songRows(list, slice, offset = start, tour = true)
         }
     }
     if (sorting) {

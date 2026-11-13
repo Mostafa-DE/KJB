@@ -456,7 +456,9 @@ fun PlayerView() {
             Column(Modifier.weight(1f).padding(horizontal = 24.dp, vertical = 4.dp)) {
                 FlipArea(
                     ui = ui,
-                    showLyrics = settings.playerUi.showLyrics,
+                    // The tour's Synced lyrics step turns the cover to the lyrics while it points at them; the side kept
+                    // stays as the user left it.
+                    showLyrics = settings.playerUi.showLyrics || LocalTour.current?.state?.stop == TourStop.LYRICS,
                     onFlip = { lyrics -> scope.launch { store.update { it.copy(playerUi = it.playerUi.copy(showLyrics = lyrics)) } } },
                     onSeek = connection::seekTo,
                     onPlay = connection::play,
@@ -654,7 +656,7 @@ private fun FlipArea(
         }
         if (lyricsShown || (reduced && fade.value > 0f)) {
             Box(
-                Modifier.fillMaxSize().graphicsLayer {
+                Modifier.fillMaxSize().tourTarget(TourStop.LYRICS).graphicsLayer {
                     rotationY = if (reduced) 0f else turn.value - 180f
                     cameraDistance = CAMERA * density
                     alpha = backAlpha

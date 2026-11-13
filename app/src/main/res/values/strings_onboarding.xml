@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The first run, the tour, and what the AI asks for when it is switched on (onboarding-research.md, section 4). The
+     promise (setup_files_detail), the privacy line (setup_privacy) and the grant names Settings shares stay in strings.xml. -->
+<resources>
+    <!-- "2 of 4" on the first run, "2 of 5" on the tour card. -->
+    <string name="step_count">%1$d of %2$d</string>
+
+    <!-- First run: Welcome. The three lines are KJB's own, written for it, from no song: the hero sings the middle one. -->
+    <string name="ob_line_past">When the night feels long and slow</string>
+    <string name="ob_line_now">Hum the tune and let it go</string>
+    <string name="ob_line_next">Morning finds us on the road</string>
+    <string name="ob_welcome_text">KJB plays your songs and shows the lyrics as they are sung. It finds your music, saves lyrics next to each song, and keeps working in the background.</string>
+    <string name="ob_get_started">Get started</string>
+
+    <!-- First run: Find your music (required). The body is setup_files_detail; %1$s is ob_files_switch, set in bold. -->
+    <string name="ob_files_title">Find your music</string>
+    <string name="ob_files_hint">Your phone opens a page. Find KJB, then turn on %1$s.</string>
+    <string name="ob_files_switch">Allow access to manage all files</string>
+    <string name="ob_files_blocked">Not showing? Your phone may block it.</string>
+    <string name="ob_files_note">Without this, KJB has no music to show.</string>
+    <string name="ob_open_settings">Open settings</string>
+
+    <!-- First run: Other music apps (optional, notification access). -->
+    <string name="ob_apps_title">Other music apps</string>
+    <string name="ob_apps_text">Turn this on to get lyrics for music you play in other apps too. KJB only sees the song title and artist. It does not read anything else.</string>
+    <string name="ob_apps_hint">Your phone opens a list. Turn on KJB.</string>
+
+    <!-- First run: You're ready. -->
+    <string name="ob_ready_title">You\'re ready</string>
+    <string name="ob_ready_text">KJB is scanning your music now. Take a short tour, or start listening.</string>
+    <string name="ob_ready_more">You can turn on more in Settings. Lock screen lyrics, headphones and the AI each ask when you use them.</string>
+    <string name="ob_take_tour">Take the tour</string>
+    <string name="ob_skip_tour">Skip tour</string>
+
+    <!-- The tour: five steps, each pointing at one control. -->
+    <string name="tour_tabs_title">Your music</string>
+    <string name="tour_tabs_body">Everything on your phone is here. Swipe sideways to move between tabs.</string>
+    <string name="tour_play_title">Play a song</string>
+    <string name="tour_play_body">Tap a song to play it. Tap the bar at the bottom to open the player.</string>
+    <string name="tour_lyrics_title">Synced lyrics</string>
+    <string name="tour_lyrics_body">Lyrics follow the song as it plays. Tap a line to jump to it.</string>
+    <string name="tour_search_title">Find anything</string>
+    <string name="tour_search_body">Search songs, albums, artists, and words in lyrics.</string>
+    <string name="tour_tools_title">More tools</string>
+    <string name="tour_tools_body">Covers and tags, duplicates, tones and the AI live here. Settings has everything else, including this tour.</string>
+    <string name="tour_skip">Skip</string>
+    <string name="tour_back">Back</string>
+    <string name="tour_next">Next</string>
+    <string name="tour_done">Done</string>
+    <!-- TalkBack names of the highlighted control while the tour points at it: a tap does it for real. -->
+    <string name="tour_play_song">Play %1$s</string>
+    <string name="tour_open_player">Open the player</string>
+    <!-- Settings > About. -->
+    <string name="tour_show">Show tour</string>
+    <string name="tour_show_line">Quick look around</string>
+
+    <!-- Asked when the AI is switched on, or its download starts. -->
+    <string name="ask_progress_title">Show progress</string>
+    <string name="ask_progress_text">Allow notifications so you can see the AI\'s progress overnight. Music never needs this.</string>
+    <string name="ask_battery_text">Your phone may stop the AI at night. Set battery use to Unrestricted so it can finish.</string>
+    <!-- The AI screen's row once notifications are denied for good: it opens the phone's notification settings for KJB. -->
+    <string name="ask_progress_off">Notifications off</string>
+</resources>

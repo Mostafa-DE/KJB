@@ -177,7 +177,10 @@ data class AdvancedSettings(
 /** "Notification buttons": a heart beside Next, or Shuffle and Repeat. */
 enum class NotificationButtons { FAVOURITE, SHUFFLE_REPEAT }
 
-/** Where the app reopens. Library itself always opens on Songs, so its tab is not kept here. */
+/**
+ * Where the app reopens, and what the first run and its asks have shown. Library itself always opens on Songs, so its tab
+ * is not kept here.
+ */
 data class NavSettings(
     /** The dock tab last open. */
     val lastTab: DockTab = DockTab.LIBRARY,
@@ -185,6 +188,15 @@ data class NavSettings(
     val favouritesTab: FavouritesTab = FavouritesTab.SONGS,
     /** The first-run screen was finished with Continue, or skipped on a phone that already had both grants. */
     val setupDone: Boolean = false,
+    /**
+     * The tour was finished or skipped. Missing in older files, so it reads false: a phone updated from an earlier
+     * version sees the tour once (user decision, 2026-11-13), and its [setupDone] stays as it was.
+     */
+    val tourSeen: Boolean = false,
+    /** Notifications (the AI's progress) were denied for good: Android asks no more, only the phone's settings can allow them. */
+    val notificationsDenied: Boolean = false,
+    /** How often a request for notifications came back no: the second no is for good. */
+    val notificationDenials: Int = 0,
 )
 
 enum class DockTab { LIBRARY, PLAYLISTS, SEARCH, TOOLS }
@@ -258,7 +270,16 @@ object SettingsJson {
                         "keepAlbumsGapless" to it.keepAlbumsGapless,
                     )
                 },
-                "nav" to settings.nav.let { obj("lastTab" to it.lastTab.name, "favouritesTab" to it.favouritesTab.name, "setupDone" to it.setupDone) },
+                "nav" to settings.nav.let {
+                    obj(
+                        "lastTab" to it.lastTab.name,
+                        "favouritesTab" to it.favouritesTab.name,
+                        "setupDone" to it.setupDone,
+                        "tourSeen" to it.tourSeen,
+                        "notificationsDenied" to it.notificationsDenied,
+                        "notificationDenials" to it.notificationDenials,
+                    )
+                },
             ),
         ),
     )
@@ -337,6 +358,9 @@ object SettingsJson {
                     lastTab = it.choice("lastTab", d.nav.lastTab),
                     favouritesTab = it.choice("favouritesTab", d.nav.favouritesTab),
                     setupDone = it.flag("setupDone", d.nav.setupDone),
+                    tourSeen = it.flag("tourSeen", d.nav.tourSeen),
+                    notificationsDenied = it.flag("notificationsDenied", d.nav.notificationsDenied),
+                    notificationDenials = it.number("notificationDenials", d.nav.notificationDenials) { count -> count >= 0 },
                 )
             } ?: d.nav,
         )

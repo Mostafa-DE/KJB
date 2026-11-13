@@ -30,6 +30,11 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROCESSING" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- Notifications, Android 13 and later: only for those two workers' progress, which without it shows in the Task
+         Manager only. Asked when the user switches the AI on or starts its download, never on the first run; after a
+         lasting no, the AI screen has one row that opens the phone's notification settings. The music notification
+         needs none (see the player's permissions). -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- player: permissions -->
     <!-- KJB's own player (player/PlaybackService): a foreground service of type mediaPlayback while music plays, as

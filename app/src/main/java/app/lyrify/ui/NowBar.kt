@@ -258,7 +258,8 @@ fun NowBar(shows: NowBarShows, ledger: LedgerState, other: OtherPlayback?, onOpe
     if (shows != NowBarShows.Hidden) kept.value = shows
     AnimatedVisibility(shows != NowBarShows.Hidden, modifier, enter = barEnter(reduced), exit = barExit(reduced)) {
         // The gap above the dock goes with the bar, so nothing is left where it was.
-        Box(Modifier.padding(bottom = 8.dp)) { BarFor(kept.value, ledger, other, onOpen, onPlayPause) }
+        // The tour's Play a song points at the bar itself, above its gap; a tap there opens the player as the bar does.
+        Box(Modifier.padding(bottom = 8.dp).tourTarget(TourStop.NOW_BAR, stringResource(R.string.tour_open_player), onOpen)) { BarFor(kept.value, ledger, other, onOpen, onPlayPause) }
     }
 }
 
