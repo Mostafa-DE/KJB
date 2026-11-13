@@ -255,6 +255,30 @@ class LyricsViewsTest {
     }
 
     @Test
+    fun `a jump of the song while a finger rests on the lines keeps them still, and they follow as it lifts`() {
+        val down = LyricsFollow().down(now = 1_000)
+        val jumped = down.moved(from = 4, to = 12)
+        // However long the finger stays, the lines stay with it.
+        assertFalse(jumped.follows(now = 1_001))
+        assertFalse(jumped.follows(now = 60_000))
+        // The song went elsewhere meanwhile: they follow as the finger lifts, without the wait.
+        assertTrue(jumped.up(now = 61_000).follows(now = 61_000))
+        // On to the next line, the lift starts the wait as before.
+        assertFalse(down.moved(from = 4, to = 5).up(now = 2_000).follows(now = 2_001))
+        assertTrue(down.moved(from = 4, to = 5).up(now = 2_000).follows(now = 2_000 + LEAVE_ALONE_MS))
+    }
+
+    @Test
+    fun `a tap on a line seeks only as the one finger on the lines, never one that stops a scroll or a fling`() {
+        assertTrue(lineTapSeeks(fingers = 1, scrolling = false))
+        // Another finger already on the lines, scrolling them or not.
+        assertFalse(lineTapSeeks(fingers = 2, scrolling = false))
+        assertFalse(lineTapSeeks(fingers = 2, scrolling = true))
+        // The lines still moving from a scroll or a fling: the touch stops them, and seeks nowhere.
+        assertFalse(lineTapSeeks(fingers = 1, scrolling = true))
+    }
+
+    @Test
     fun `in every lyrics view the first and last lines rest clear of the faded edges, even in a short list`() {
         // The smallest flip area the prototype plans for is 200 dp tall.
         val shortest = 200f

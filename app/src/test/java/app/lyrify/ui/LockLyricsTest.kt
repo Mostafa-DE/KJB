@@ -91,10 +91,57 @@ class LockLyricsTest {
         assertTrue("no page with bands", lock.contains("internal fun LockPage("))
         val page = lock.substringAfter("internal fun LockPage(").substringBefore("\n}\n")
         assertEquals(2, Regex("""\.swipeToClose\(onClose\)""").findAll(page).count())
-        assertEquals(1, Regex("""detectVerticalDragGestures\(""").findAll(lock).count())
+        assertEquals(1, Regex("""fun Modifier\.swipeToClose\(""").findAll(lock).count())
         assertTrue(lock.substringAfter("private fun LockLyricsScreen(").substringBefore("\n}\n").contains("LockPage("))
         // Clear of the system's gesture edges at the top and the bottom, whatever the navigation mode.
         assertTrue(page.contains("WindowInsets.systemGestures.only(WindowInsetsSides.Vertical)"))
+        // The controls band also clear of the side edges (Back on gesture navigation, nothing on 3 buttons), so a back
+        // swipe never drags the bar.
+        assertTrue("the bar sits in the back gesture's edge", page.contains("WindowInsets.systemGestures.only(WindowInsetsSides.Horizontal)"))
+    }
+
+    @Test
+    fun `a swipe of the close distance on a band closes, counted from where the finger touched`() {
+        assertTrue(swipeCloses(dy = 80f, closePx = 80f))
+        assertTrue(swipeCloses(dy = -80f, closePx = 80f))
+        assertTrue(swipeCloses(dy = 120f, closePx = 80f))
+        assertFalse(swipeCloses(dy = 79.9f, closePx = 80f))
+        assertFalse(swipeCloses(dy = -12f, closePx = 80f))
+    }
+
+    @Test
+    fun `on a short window the header gives up its room first, the lyrics keep a line clear of the fades, and the page scrolls`() {
+        // Lines 40 px tall fading over 28 px at the edges: the lyrics never get less than 96 px.
+        assertEquals(96, lockLyricsMinPx(linePx = 40, fadePx = 28))
+        // A tall window: the header keeps its 64 px of room, the lyrics take what the 200 px controls band leaves.
+        assertEquals(64, lockHeaderMin(heightPx = 900, roomPx = 64, bottomPx = 200, leastLyricsPx = 96))
+        assertEquals(636, lockLyricsPx(heightPx = 900, topPx = 64, bottomPx = 200, leastLyricsPx = 96))
+        assertEquals(64, lockHeaderMin(heightPx = 360, roomPx = 64, bottomPx = 200, leastLyricsPx = 96))
+        // Shorter: the header's room goes first, down to its own 48 px, and the lyrics keep more than their least.
+        assertEquals(0, lockHeaderMin(heightPx = 350, roomPx = 64, bottomPx = 200, leastLyricsPx = 96))
+        assertEquals(102, lockLyricsPx(heightPx = 350, topPx = 48, bottomPx = 200, leastLyricsPx = 96))
+        // Shorter still (split screen, a large font): the lyrics keep their least, and the page scrolls (344 px in 300).
+        assertEquals(96, lockLyricsPx(heightPx = 300, topPx = 48, bottomPx = 200, leastLyricsPx = 96))
+    }
+
+    @Test
+    fun `the lyrics frame fits the room there is, the line playing always clear of the fades`() {
+        val line = 40
+        val fade = 28
+        // Room enough: the lock screen's own frame.
+        assertEquals(LockFrame, lockFrame(viewportPx = 600, linePx = line, fadePx = fade))
+        // Short: the line playing moves to the middle, where the first line can rest too.
+        val short = lockFrame(viewportPx = 100, linePx = line, fadePx = fade)
+        assertEquals(0.5f, short.anchor)
+        assertEquals(50f, short.top * 100 + line / 2f, 0.5f)
+        // From the least height up, the line playing rests clear of both fades, and so do the first and the last.
+        listOf(lockLyricsMinPx(line, fade), 100, 110, 119, 120, 150, 300, 600).forEach { height ->
+            val frame = lockFrame(height, line, fade)
+            val middle = frame.anchor * height
+            assertTrue("$height: ${frame}", middle - line / 2f >= fade && middle + line / 2f <= height - fade)
+            assertTrue("$height: ${frame}", frame.top * height >= fade - 0.5f)
+            assertTrue("$height: ${frame}", frame.bottom * height >= fade - 0.5f)
+        }
     }
 
     // The progress bar (user feedback 2026-11-13, point 4)

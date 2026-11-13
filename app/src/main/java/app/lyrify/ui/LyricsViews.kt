@@ -2,6 +2,7 @@ package app.lyrify.ui
 
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.changedToDownIgnoreConsumed
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.material3.ColorScheme
 import androidx.compose.ui.graphics.graphicsLayer
@@ -323,6 +324,8 @@ fun SyncedLyrics(
     var follow by remember { mutableStateOf(LyricsFollow()) }
     // The line the list last went toward: a jump from it (a seek) ends the wait.
     val last = remember { Kept(at) }
+    // Whether a tap on a line seeks, decided as each finger touches ([lineTapSeeks]).
+    val taps = remember { Kept(true) }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val viewport = constraints.maxHeight
         val padTop = (viewport * frame.top).roundToInt()
@@ -354,8 +357,17 @@ fun SyncedLyrics(
                 .pointerInput(Unit) {
                     awaitPointerEventScope {
                         while (true) {
-                            val pressed = awaitPointerEvent(PointerEventPass.Initial).changes.any { it.pressed }
+                            val event = awaitPointerEvent(PointerEventPass.Initial)
+                            if (event.changes.any { it.changedToDownIgnoreConsumed() }) {
+                                taps.value = lineTapSeeks(event.changes.count { it.pressed }, list.isScrollInProgress)
+                            }
+                            val pressed = event.changes.any { it.pressed }
                             if (pressed != follow.held) follow = if (pressed) follow.down(SystemClock.elapsedRealtime()) else follow.up(SystemClock.elapsedRealtime())
+                            if (!pressed) {
+                                // Once the lift's tap, if any, is done: TalkBack's taps come without a finger.
+                                awaitPointerEvent(PointerEventPass.Final)
+                                taps.value = true
+                            }
                         }
                     }
                 }
@@ -369,8 +381,10 @@ fun SyncedLyrics(
         ) {
             itemsIndexed(lines, contentType = { _, _ -> "line" }) { i, line ->
                 LyricLine(line, lineColor(lineState(lines, at, i), tones), shown, look.align, reduced, enabled) {
-                    follow = follow.tapped()
-                    onLine(line)
+                    if (taps.value) {
+                        follow = follow.tapped()
+                        onLine(line)
+                    }
                 }
             }
         }
@@ -393,9 +407,12 @@ private fun LyricLine(line: LrcLine, tone: Color, style: TextStyle, align: TextA
             .clip(RoundedCornerShape(14.dp))
             .clickable(enabled = enabled, role = Role.Button, onClick = onTap)
             .semantics { contentDescription = label }
-            .padding(horizontal = 8.dp, vertical = 6.dp),
+            .padding(horizontal = 8.dp, vertical = LINE_PADDING_V),
     )
 }
+
+/** The room above and below a synced line's text, inside its tap area. */
+internal val LINE_PADDING_V = 6.dp
 
 /** The lines as [followLine] sees them: where a line is laid out ([laidOut]: its top and height, px), and two ways to scroll. */
 interface LineList {
@@ -470,15 +487,22 @@ internal val PanelStill = display(17, 26, weight = 560)
 internal val LyricsStateTitle = display(19, 24, -0.01)
 internal val AaLetters = display(16, 16, -0.02, weight = 650)
 
+/**
+ * Whether a finger touching the lines may seek with a tap: only as the one finger on them, and never one that stops a
+ * scroll or a fling (the lines still moving as it touched), which only stops them.
+ */
+fun lineTapSeeks(fingers: Int, scrolling: Boolean): Boolean = fingers == 1 && !scrolling
+
 /** After the user scrolls the lyrics, the list is left alone this long (the prototype's 3.5 s). */
 const val LEAVE_ALONE_MS = 3_500L
 
 /**
  * Whether the synced lines follow the song: not while the user scrolls them, nor for [LEAVE_ALONE_MS] after their
- * last touch ([touchedAt], elapsed realtime); a tap on a line follows again at once (the prototype's rule).
+ * last touch ([touchedAt], elapsed realtime); a tap on a line follows again at once (the prototype's rule). A seek
+ * while a finger rests on them ([jumped]) leaves them under it, and they follow as it lifts.
  */
 @Immutable
-data class LyricsFollow(val touchedAt: Long = NEVER, val held: Boolean = false) {
+data class LyricsFollow(val touchedAt: Long = NEVER, val held: Boolean = false, val jumped: Boolean = false) {
     /** The list was touched and let go at [now]. */
     fun touched(now: Long): LyricsFollow = copy(touchedAt = now, held = false)
 
@@ -490,11 +514,18 @@ data class LyricsFollow(val touchedAt: Long = NEVER, val held: Boolean = false) 
     /** A finger touched the list, moving or not: it stays where it is for as long as one is on it. */
     fun down(now: Long): LyricsFollow = copy(touchedAt = now, held = true)
 
-    /** The last finger lifted: the wait starts now. */
-    fun up(now: Long): LyricsFollow = copy(touchedAt = now, held = false)
+    /** The last finger lifted: the wait starts now, or, after a seek meanwhile, it follows at once. */
+    fun up(now: Long): LyricsFollow = if (jumped) tapped() else copy(touchedAt = now, held = false)
 
-    /** The line playing went [from] one line [to] another: on to the [next] (or nowhere) the wait goes on; a seek ends it. */
-    fun moved(from: Int, to: Int, next: Int = from + 1): LyricsFollow = if (to == from || to == next) this else tapped()
+    /**
+     * The line playing went [from] one line [to] another: on to the [next] (or nowhere) the wait goes on; a seek ends it,
+     * though never under a finger, where it waits for the lift.
+     */
+    fun moved(from: Int, to: Int, next: Int = from + 1): LyricsFollow = when {
+        to == from || to == next -> this
+        held -> copy(jumped = true)
+        else -> tapped()
+    }
 
     /** How long until it follows again: 0 when it does. */
     fun waitMs(now: Long): Long = (touchedAt + LEAVE_ALONE_MS - now).coerceAtLeast(0)

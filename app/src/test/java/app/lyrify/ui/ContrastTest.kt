@@ -122,6 +122,19 @@ class ContrastTest {
     }
 
     /**
+     * The lock screen's other words (the artist, the hint, "No lyrics yet") and its lines, the one playing, those sung and
+     * those to come, read 4.5:1 on the scrim over the darkest and the lightest cover too (lane LK2 review).
+     */
+    @Test
+    fun `the lock screen's words and lines read over any cover`() {
+        listOf("black" to Color.Black, "white" to Color.White).forEach { (name, cover) ->
+            val under = LockInk.copy(alpha = LOCK_SCRIM_ALPHA).compositeOver(cover.copy(alpha = LOCK_COVER_ALPHA).compositeOver(LockInk))
+            listOf("muted words" to LockMuted, "line playing" to LockTones.now, "lines sung" to LockTones.past, "lines to come" to LockTones.next)
+                .forEach { (what, ink) -> assertReads("lock $what on a $name cover", ink.compositeOver(under), under, 4.5f) }
+        }
+    }
+
+    /**
      * Every role is KJB's, none left to Material's baseline purple: the fixed roles are the palette's tones (90, 80, 10
      * and 30 of each hue), the same in light and dark as Material's fixed roles are; the tint is the primary.
      */
