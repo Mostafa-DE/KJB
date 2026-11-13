@@ -14,7 +14,11 @@ import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,7 +29,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -35,6 +41,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -46,18 +54,33 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.AwaitPointerEventScope
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerId
+import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.paneTitle
+import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.setProgress
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
@@ -71,6 +94,7 @@ import app.lyrify.R
 import app.lyrify.data.LedgerRepository
 import app.lyrify.data.LedgerState
 import app.lyrify.logFailures
+import app.lyrify.lyrics.LrcLine
 import app.lyrify.player.PlaybackService
 import app.lyrify.player.PlayerGraph
 import app.lyrify.player.ServicePart
@@ -80,15 +104,19 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlin.math.abs
+import kotlin.math.roundToInt
+import kotlin.math.roundToLong
 
 // Lyrics on the lock screen (P3): big synced lyrics and the controls over the lock screen (showWhenLocked), opened by a
 // tap on the music notification (the session activity) and, with "Show when locked", when the screen turns on while
-// KJB plays ([LockLyricsPart]). The switch's permission is asked in Settings ([rememberLockSwitch]).
+// KJB plays ([LockLyricsPart]). The switch's permission is asked in Settings ([rememberLockSwitch]). A tap on a line or a
+// drag of the progress bar seeks (user feedback 2026-11-13, point 4).
 
 /** How the lock screen lyrics were asked for. */
 enum class LockOrigin { NOTIFICATION, SCREEN_ON }
@@ -198,9 +226,20 @@ class LockLyricsActivity : ComponentActivity() {
 }
 
 /** Light text on the cover's dark blur, whatever the phone's theme: it sits over the lock screen. */
-private val LockInk = Color(0xFF0A0A0B)
-private val LockText = Color(0xFFF7F5FF)
+internal val LockInk = Color(0xFF0A0A0B)
+internal val LockText = Color(0xFFF7F5FF)
 private val LockMuted = LockText.copy(alpha = 0.55f)
+
+/** The cover under the lock screen, blurred at this opacity, and the ink over it at [LOCK_SCRIM_ALPHA]. */
+internal const val LOCK_COVER_ALPHA = 0.7f
+internal const val LOCK_SCRIM_ALPHA = 0.55f
+
+/**
+ * The progress bar's empty track, on a band of [LockInk] so it reads 3:1 over any cover with the coral played part 3:1
+ * on it, and its times, which read over the lightest cover too (ContrastTest).
+ */
+internal val LockTrack = DarkBrandColors.highlight.copy(alpha = 0.5f)
+internal val LockTimes = LockText
 
 @Composable
 private fun LockLyricsScreen(ledger: LedgerState, onClose: () -> Unit) {
@@ -237,8 +276,8 @@ private fun LockLyricsScreen(ledger: LedgerState, onClose: () -> Unit) {
     ) {
         if (ui == null) return@Box
         val path = ui.item.song.path
-        AsyncImage(model = SongArt(path), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize().blur(52.dp).alpha(0.7f))
-        Box(Modifier.fillMaxSize().background(LockInk.copy(alpha = 0.55f)))
+        AsyncImage(model = SongArt(path), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize().blur(52.dp).alpha(LOCK_COVER_ALPHA))
+        Box(Modifier.fillMaxSize().background(LockInk.copy(alpha = LOCK_SCRIM_ALPHA)))
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(horizontal = 16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp)) {
                 ChromeIconButton(R.drawable.ic_keyboard_arrow_down, stringResource(R.string.lock_close), onClose, glass = false, size = 48.dp, iconSize = 28.dp, tint = LockText)
@@ -249,9 +288,13 @@ private fun LockLyricsScreen(ledger: LedgerState, onClose: () -> Unit) {
                 }
             }
             Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
-                LockLines(rememberSongLyrics(path, ledger.entries[path]), ui.positionAt(rememberClock(playing)))
+                LockLines(rememberSongLyrics(path, ledger.entries[path]), ui.positionAt(rememberClock(playing))) { line ->
+                    val tap = lineTap(line, playing)
+                    connection.seekTo(tap.seekMs)
+                    if (tap.play) connection.play()
+                }
             }
-            LockControls(ui.positionAt(rememberClock(playing, everyMs = 500)), ui.durationMs, playing, connection::previous, connection::playPause, connection::next)
+            LockControls(ui.durationMs, playing, ui::positionAt, connection::seekTo, connection::previous, connection::playPause, connection::next)
             Text(stringResource(R.string.lock_hint), style = MaterialTheme.typography.labelMedium, color = LockMuted, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp))
         }
     }
@@ -259,14 +302,16 @@ private fun LockLyricsScreen(ledger: LedgerState, onClose: () -> Unit) {
 
 /**
  * The synced lines following the song as on the player (one size for every line, the line playing lit by its colour,
- * a smooth scroll to the anchor); plain lyrics still; or "No lyrics yet". Nothing here is tapped or scrolled.
+ * a smooth scroll to the anchor), a tap on one going there as on the player ([onLine], [lineTap]); plain lyrics still;
+ * or "No lyrics yet". The lines never scroll by hand, so a swipe up or down over them closes the screen.
  */
 @Composable
-private fun LockLines(lyrics: PanelLyrics?, positionMs: Long) {
+private fun LockLines(lyrics: PanelLyrics?, positionMs: Long, onLine: (LrcLine) -> Unit) {
     val look = rememberLyricsLook()
     val type = MaterialTheme.typography
     if (lyrics is PanelLyrics.Synced) {
-        SyncedLyrics(lyrics.lines, positionMs, enabled = false, LockLine, LockFrame, LineTones(now = DarkBrandColors.highlight, past = LockMuted, next = LockText.copy(alpha = NEXT_INK))) { }
+        val tones = LineTones(now = DarkBrandColors.highlight, past = LockMuted, next = LockText.copy(alpha = NEXT_INK))
+        SyncedLyrics(lyrics.lines, positionMs, enabled = true, LockLine, LockFrame, tones, scrolls = false, onLine = onLine)
         return
     }
     Column(verticalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.fillMaxWidth()) {
@@ -280,19 +325,18 @@ private fun LockLines(lyrics: PanelLyrics?, positionMs: Long) {
     }
 }
 
-/** The position (shown only), Previous, Play/Pause and Next. */
+/** The progress bar ([LockSeekBar]), Previous, Play/Pause and Next. */
 @Composable
-private fun LockControls(positionMs: Long, durationMs: Long, playing: Boolean, onPrevious: () -> Unit, onPlayPause: () -> Unit, onNext: () -> Unit) {
-    val share = if (durationMs > 0) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
-    Box(Modifier.fillMaxWidth().padding(top = 16.dp).height(4.dp).clip(CircleShape).background(LockMuted.copy(alpha = 0.3f))) {
-        Box(Modifier.fillMaxWidth(share).height(4.dp).background(LockText))
-    }
-    Row(Modifier.fillMaxWidth().padding(top = 6.dp)) {
-        val style = MaterialTheme.typography.bodySmall.tabular()
-        Text(clock(positionMs), style = style, color = LockMuted)
-        Box(Modifier.weight(1f))
-        Text(clock(durationMs), style = style, color = LockMuted)
-    }
+private fun LockControls(
+    durationMs: Long,
+    playing: Boolean,
+    positionAt: (now: Long) -> Long,
+    onSeek: (Long) -> Unit,
+    onPrevious: () -> Unit,
+    onPlayPause: () -> Unit,
+    onNext: () -> Unit,
+) {
+    LockSeekBar(durationMs, playing, positionAt, onSeek)
     Row(horizontalArrangement = Arrangement.spacedBy(28.dp, Alignment.CenterHorizontally), verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
         ChromeIconButton(R.drawable.ic_skip_previous_fill, stringResource(R.string.player_previous), onPrevious, glass = false, size = 56.dp, iconSize = 32.dp, tint = LockText)
         PlayPauseButton(playing, onPlayPause, size = 72.dp)
@@ -300,8 +344,154 @@ private fun LockControls(positionMs: Long, durationMs: Long, playing: Boolean, o
     }
 }
 
+/**
+ * The progress bar as the player has it (a 6 dp track in a 48 dp touch area, the knob, the time played and the song's
+ * length under it), in the lock screen's own dark colours whatever the phone's theme, the track on a band of ink as the
+ * knob has its ring. Only a deliberate sideways drag seeks ([lockSeekStarts]), to where the finger that started it lifts:
+ * a tap or a touch in a pocket never does, nor a second finger, and a swipe up or down from it still closes the screen.
+ * While the song plays it moves on about a pixel at a time ([lockBarTickMs]). TalkBack finds a slider that reads the
+ * time and seeks, and hears a drag once, where it lands.
+ */
+@Composable
+internal fun LockSeekBar(durationMs: Long, playing: Boolean, positionAt: (now: Long) -> Long, onSeek: (Long) -> Unit) {
+    var width by remember { mutableIntStateOf(0) }
+    var dragging by remember { mutableStateOf<Float?>(null) }
+    // The time TalkBack hears while a finger drags (the time before it), then where the drag landed, for a moment while
+    // the player takes the seek: a drag is announced once.
+    var held by remember { mutableStateOf<Long?>(null) }
+    LaunchedEffect(held, dragging != null) {
+        if (held != null && dragging == null) {
+            delay(LANDING_MS)
+            held = null
+        }
+    }
+    val tick = lockBarTickMs(durationMs, width)
+    val position = positionAt(key(tick) { rememberClock(playing, everyMs = tick) })
+    val shown = dragging?.let { seekMsAt(it, durationMs) } ?: position
+    val share = dragging ?: ringShare(position, durationMs)
+    // TalkBack hears the bar move on by the second, as the times do, not at every step.
+    val announced = (held ?: position).let { it - it % 1_000 }
+    val label = stringResource(R.string.player_position)
+    val state = stringResource(R.string.lock_position, clock(announced), clock(durationMs))
+    val seek by rememberUpdatedState(onSeek)
+    val now by rememberUpdatedState(position)
+    val knob by animateFloatAsState(if (dragging != null) KNOB_DRAG_SCALE else 1f, motion(tween(Motion.QUICK_MS), LocalReducedMotion.current), label = "knob")
+    Box(
+        contentAlignment = Alignment.CenterStart,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(TOUCH)
+            .onSizeChanged { width = it.width }
+            .semantics {
+                contentDescription = label
+                stateDescription = state
+                progressBarRangeInfo = ProgressBarRangeInfo(ringShare(announced, durationMs), 0f..1f)
+                setProgress { value -> seekMsAt(value, durationMs)?.also { seek(it) } != null }
+            }
+            .pointerInput(durationMs) {
+                awaitEachGesture {
+                    val start = awaitSeekStart(awaitFirstDown().id, viewConfiguration.touchSlop) ?: return@awaitEachGesture
+                    var to: Long? = null
+                    try {
+                        held = now
+                        dragging = barShare(start.position.x, size.width.toFloat())
+                        val lifted = awaitSeekLift(start.id) { dragging = barShare(it.position.x, size.width.toFloat()) }
+                        to = dragging?.takeIf { lifted }?.let { seekMsAt(it, durationMs) }
+                        to?.let(seek)
+                    } finally {
+                        held = to
+                        dragging = null
+                    }
+                }
+            },
+    ) {
+        Box(Modifier.fillMaxWidth().height(10.dp).background(LockInk, CircleShape))
+        Box(Modifier.fillMaxWidth().height(6.dp).clip(CircleShape).background(LockTrack))
+        Box(Modifier.fillMaxWidth(share).height(6.dp).clip(CircleShape).background(DarkBrandColors.highlight))
+        Box(
+            Modifier
+                .offset { IntOffset((width * share - 11.dp.toPx()).roundToInt(), 0) }
+                .size(22.dp)
+                .graphicsLayer {
+                    scaleX = knob
+                    scaleY = knob
+                }
+                .background(LockInk, CircleShape)
+                .padding(3.dp)
+                .background(DarkBrandColors.highlight, CircleShape),
+        )
+    }
+    // The slider says the time to TalkBack.
+    Row(Modifier.fillMaxWidth().clearAndSetSemantics { }) {
+        val style = MaterialTheme.typography.bodySmall.tabular()
+        Text(clock(shown), style = style, color = LockTimes)
+        Box(Modifier.weight(1f))
+        Text(clock(durationMs), style = style, color = LockTimes)
+    }
+}
+
+/**
+ * Waits for the finger [id] to start a seek ([lockSeekStarts]) and takes that move; null once it lifts first, or once
+ * something around the bar (the swipe that closes the screen) takes the move.
+ */
+private suspend fun AwaitPointerEventScope.awaitSeekStart(id: PointerId, slop: Float): PointerInputChange? {
+    var moved = Offset.Zero
+    while (true) {
+        val change = awaitPointerEvent().changes.firstOrNull { it.id == id } ?: return null
+        if (!change.pressed || change.isConsumed) return null
+        moved += change.positionChange()
+        if (lockSeekStarts(moved.x, moved.y, slop)) return change.also { it.consume() }
+        awaitPointerEvent(PointerEventPass.Final)
+        if (change.isConsumed) return null
+    }
+}
+
+/**
+ * Follows the finger [id] that started a seek, [onMove] for each of its moves, until it lifts: true then, false once
+ * something else took its move or the gesture was cancelled. Only that finger counts: another one on the bar is taken
+ * and moves nothing, and never carries the seek on once the first lifts.
+ */
+private suspend fun AwaitPointerEventScope.awaitSeekLift(id: PointerId, onMove: (PointerInputChange) -> Unit): Boolean {
+    while (true) {
+        val event = awaitPointerEvent()
+        val change = event.changes.firstOrNull { it.id == id } ?: return false
+        if (change.isConsumed) return false
+        event.changes.forEach { it.consume() }
+        if (!change.pressed) return true
+        onMove(change)
+    }
+}
+
+/** Where a finger at [x] lies along a bar [width] wide: its share, from 0 at the start to 1 at the end. */
+fun barShare(x: Float, width: Float): Float = if (width > 0f) (x / width).coerceIn(0f, 1f) else 0f
+
+/** Where [share] of a song [durationMs] long is, to the ms and within the song; null without a length to seek in. */
+fun seekMsAt(share: Float, durationMs: Long): Long? = if (durationMs > 0) (share.coerceIn(0f, 1f).toDouble() * durationMs).roundToLong() else null
+
+/**
+ * Whether a finger that moved [dx] and [dy] (px) since it touched the lock screen's bar starts a seek: only a deliberate
+ * sideways drag, past the touch [slop] and at least twice as far sideways as up or down. A touch that barely moves, as
+ * one in a pocket, never seeks, and one up or down is the swipe that closes the screen.
+ */
+fun lockSeekStarts(dx: Float, dy: Float, slop: Float): Boolean = abs(dx) > slop && abs(dx) >= SIDEWAYS * abs(dy)
+
+/**
+ * How often the lock screen's bar moves on while the song plays: about a pixel of a bar [widthPx] wide at a time, so it
+ * glides, never more often than every frame, and at least four times a second for the time shown.
+ */
+fun lockBarTickMs(durationMs: Long, widthPx: Int): Long =
+    if (durationMs > 0 && widthPx > 0) (durationMs / widthPx).coerceIn(FRAME_MS, TIME_TICK_MS) else TIME_TICK_MS
+
 private const val PLAIN_LINES = 7
 private val SWIPE_CLOSE = 80.dp
+
+/** A seek starts only on a move at least this many times as far sideways as up or down. */
+private const val SIDEWAYS = 2f
+private const val FRAME_MS = 16L
+private const val TIME_TICK_MS = 250L
+
+/** How long TalkBack's time stays where a drag landed while the player takes the seek. */
+private const val LANDING_MS = 1_000L
 
 /**
  * "Show when locked" in the playback service: while the session runs, the screen turning on over the lock screen opens

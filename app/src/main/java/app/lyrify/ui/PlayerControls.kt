@@ -260,4 +260,4 @@ private fun ToggleButton(@DrawableRes icon: Int, label: String, on: Boolean, bar
 }
 
 /** The progress knob grows this much under the finger (the prototype's scale(1.3) over 0.12 s). */
-private const val KNOB_DRAG_SCALE = 1.3f
+internal const val KNOB_DRAG_SCALE = 1.3f
