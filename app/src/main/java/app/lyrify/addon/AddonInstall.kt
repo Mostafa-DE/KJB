@@ -1,6 +1,7 @@
 package app.lyrify.addon
 
 import android.app.PendingIntent
+import android.content.ActivityNotFoundException
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -33,6 +34,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.io.IOException
 import java.net.URI
@@ -101,6 +103,59 @@ interface InstallPort {
 }
 
 /**
+ * What Android's installer reported in a status broadcast, as KJB reads it: [ourSession] is the session KJB put in its
+ * own pending intent, [session] the one the installer names (EXTRA_SESSION_ID), [packageName] the package it names, and
+ * for STATUS_PENDING_USER_ACTION the confirmation it hands over (its action, package and session).
+ */
+internal data class InstallReport(
+    val ourSession: Int,
+    val session: Int,
+    val status: Int,
+    val packageName: String?,
+    val confirmAction: String?,
+    val confirmPackage: String?,
+    val confirmSession: Int,
+) {
+    /**
+     * Only a session KJB created and still waits on ([waiting]) is heard. A confirmation is started only when it is the
+     * installer's own (PackageInstallerSession builds it from CONFIRM_INSTALL, the system installer's package and the
+     * session id, nothing else), and it is rebuilt from those three; anything else asking for the user, or a result
+     * for another package than [addonPackage], ends the install as failed, so it never waits on a dialog that cannot
+     * come.
+     */
+    fun verdict(waiting: (Int) -> Boolean, addonPackage: String): InstallVerdict {
+        if (session < 0 || session != ourSession || !waiting(session)) return InstallVerdict.Ignore
+        val failed = InstallVerdict.End(InstallOutcome.Failed(PackageInstaller.STATUS_FAILURE))
+        if (packageName != null && packageName != addonPackage) return failed
+        return when (status) {
+            PackageInstaller.STATUS_PENDING_USER_ACTION ->
+                if (confirmAction == CONFIRM_INSTALL && confirmSession == session && !confirmPackage.isNullOrEmpty()) {
+                    InstallVerdict.Confirm(confirmPackage, session)
+                } else {
+                    failed
+                }
+            PackageInstaller.STATUS_SUCCESS -> InstallVerdict.End(InstallOutcome.Installed)
+            PackageInstaller.STATUS_FAILURE_ABORTED -> InstallVerdict.End(InstallOutcome.Aborted)
+            else -> InstallVerdict.End(InstallOutcome.Failed(status))
+        }
+    }
+
+    companion object {
+        /** PackageInstaller.ACTION_CONFIRM_INSTALL, a system API (so not in the SDK), unchanged since Android 5. */
+        const val CONFIRM_INSTALL: String = "android.content.pm.action.CONFIRM_INSTALL"
+    }
+}
+
+/** What KJB does with an installer's report. */
+internal sealed interface InstallVerdict {
+    data object Ignore : InstallVerdict
+
+    data class Confirm(val installer: String, val session: Int) : InstallVerdict
+
+    data class End(val outcome: InstallOutcome) : InstallVerdict
+}
+
+/**
  * Get AI, Update, Try again: download, check, install, one at a time, in [scope]; [pinned]: this build pins an add-on.
  * The APK is checked twice before Android sees it: the download against the pinned size and SHA-256, then the file's
  * package and signing certificate. What fails a check is deleted; a download that stops keeps its part.
@@ -110,6 +165,14 @@ class AddonInstaller(private val port: InstallPort, private val pinned: Boolean,
     val state: StateFlow<InstallState> = _state.asStateFlow()
 
     private var work: Job? = null
+
+    companion object {
+        /**
+         * How long Android's install dialog may wait for the user before the install is abandoned as failed (Cancel
+         * ends it sooner): a dialog Android never showed (KJB was not in front) must not hold the page for good.
+         */
+        const val CONFIRM_TIMEOUT_MS: Long = 10 * 60_000
+    }
 
     /** Starts getting the add-on, unless that is under way. */
     @Synchronized
@@ -156,7 +219,9 @@ class AddonInstaller(private val port: InstallPort, private val pinned: Boolean,
         }
         if (!port.canInstall()) return InstallState.NeedsPermission
         _state.value = InstallState.Installing
-        return when (port.install()) {
+        // Past the timeout the install is cancelled, which abandons Android's session.
+        return when (withTimeoutOrNull(CONFIRM_TIMEOUT_MS) { port.install() }) {
+            null -> InstallState.Failed(InstallFailure.INSTALL)
             InstallOutcome.Installed -> {
                 port.discard()
                 InstallState.Idle
@@ -313,28 +378,47 @@ internal class AndroidInstallPort(private val context: Context) : InstallPort {
  */
 class InstallReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        val session = intent.getIntExtra(EXTRA_SESSION, -1)
-        when (val status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE)) {
-            PackageInstaller.STATUS_PENDING_USER_ACTION -> {
-                val confirm = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    intent.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)
-                } else {
-                    @Suppress("DEPRECATION")
-                    intent.getParcelableExtra(Intent.EXTRA_INTENT)
+        val confirm = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            intent.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            intent.getParcelableExtra(Intent.EXTRA_INTENT)
+        }
+        val report = InstallReport(
+            ourSession = intent.getIntExtra(EXTRA_SESSION, -1),
+            session = intent.getIntExtra(PackageInstaller.EXTRA_SESSION_ID, -1),
+            status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE),
+            packageName = intent.getStringExtra(PackageInstaller.EXTRA_PACKAGE_NAME),
+            confirmAction = confirm?.action,
+            confirmPackage = confirm?.`package`,
+            confirmSession = confirm?.getIntExtra(PackageInstaller.EXTRA_SESSION_ID, -1) ?: -1,
+        )
+        when (val verdict = report.verdict(outcomes::containsKey, BuildConfig.AI_ADDON_PACKAGE)) {
+            InstallVerdict.Ignore -> Log.w(LOG_TAG, "AI add-on: an install report for no session of KJB's, ignored")
+            is InstallVerdict.Confirm -> {
+                // Rebuilt from what was checked, nothing else. KJB is in front (the user just tapped Get AI), so Android
+                // lets it show the dialog; when it cannot, the install ends here instead of waiting for it.
+                val dialog = Intent(InstallReport.CONFIRM_INSTALL).setPackage(verdict.installer)
+                    .putExtra(PackageInstaller.EXTRA_SESSION_ID, verdict.session).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                try {
+                    context.startActivity(dialog)
+                } catch (e: ActivityNotFoundException) {
+                    end(verdict.session, InstallOutcome.Failed(PackageInstaller.STATUS_FAILURE), e)
+                } catch (e: SecurityException) {
+                    end(verdict.session, InstallOutcome.Failed(PackageInstaller.STATUS_FAILURE), e)
                 }
-                // KJB is in front (the user just tapped Get AI), so Android lets it show its own dialog.
-                confirm?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)?.let(context::startActivity)
             }
-            PackageInstaller.STATUS_SUCCESS -> {
-                outcomes.remove(session)?.complete(InstallOutcome.Installed)
-                AiLyrics.addonInstalled(context)
-            }
-            PackageInstaller.STATUS_FAILURE_ABORTED -> outcomes.remove(session)?.complete(InstallOutcome.Aborted)
-            else -> {
-                Log.w(LOG_TAG, "AI add-on: not installed, status $status")
-                outcomes.remove(session)?.complete(InstallOutcome.Failed(status))
+            is InstallVerdict.End -> {
+                if (verdict.outcome is InstallOutcome.Failed) Log.w(LOG_TAG, "AI add-on: not installed, status ${verdict.outcome.status}")
+                outcomes.remove(report.session)?.complete(verdict.outcome)
+                if (verdict.outcome == InstallOutcome.Installed) AiLyrics.addonInstalled(context)
             }
         }
+    }
+
+    private fun end(session: Int, outcome: InstallOutcome, e: Exception) {
+        Log.w(LOG_TAG, "AI add-on: the install dialog did not open (${e.javaClass.simpleName})")
+        outcomes.remove(session)?.complete(outcome)
     }
 
     companion object {

@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
+import android.content.pm.PermissionInfo
 import android.os.IBinder
 import android.os.ParcelFileDescriptor
 import android.os.PatternMatcher
@@ -85,13 +86,60 @@ object Addon {
     }
 }
 
+/** Who defines a permission, and whether at signature level. */
+data class PermissionDefiner(val packageName: String, val signature: Boolean)
+
+/** What KJB asks Android about the installed add-on's identity. */
+interface TrustPort {
+    fun hasCertificate(packageName: String, sha256: ByteArray): Boolean
+
+    /** Signed with the same certificate as KJB (`PackageManager.checkSignatures`). */
+    fun signedLikeKjb(packageName: String): Boolean
+
+    /** Who defines [permission]; null when no installed app does. */
+    fun definer(permission: String): PermissionDefiner?
+}
+
 /**
- * The add-on through Android: its package, its certificate against [certSha256] (hex) and KJB's own (both checks, as
- * the research advises: the pin also covers a pair of look-alike apps signed alike), and the bind of its service by
- * explicit name. KJB's manifest asks to see the package (<queries>); without that it would look not installed.
+ * Whether the installed [addonPackage] is KJB's add-on: signed with the pinned certificate ([certSha256], hex) and with
+ * KJB's own (both checks, as the research advises: the pin also covers a pair of look-alike apps signed alike), and the
+ * definer of its bind permission. Android lets the first app that defines a permission set its level, so another app
+ * defining it first could open it to any app; the bind goes through only when the add-on defines it, at signature level.
+ */
+class AddonTrust(private val addonPackage: String, private val certSha256: String, private val packages: TrustPort) {
+    fun trusted(): Boolean {
+        val pin = AddonNames.pinBytes(certSha256) ?: return false
+        val definer = packages.definer(AddonNames.permission(addonPackage)) ?: return false
+        return definer.packageName == addonPackage && definer.signature &&
+            packages.hasCertificate(addonPackage, pin) && packages.signedLikeKjb(addonPackage)
+    }
+}
+
+/**
+ * The add-on through Android: its package, whether it is KJB's ([AddonTrust]), and the bind of its service by explicit
+ * name. KJB's manifest asks to see the package (<queries>); without that it would look not installed.
  */
 internal class AndroidAddonHost(private val context: Context, private val addonPackage: String, private val certSha256: String) : AddonHost {
     private val packages: PackageManager get() = context.packageManager
+
+    private val trust = AddonTrust(
+        addonPackage,
+        certSha256,
+        object : TrustPort {
+            override fun hasCertificate(packageName: String, sha256: ByteArray): Boolean =
+                packages.hasSigningCertificate(packageName, sha256, PackageManager.CERT_INPUT_SHA256)
+
+            override fun signedLikeKjb(packageName: String): Boolean =
+                packages.checkSignatures(context.packageName, packageName) == PackageManager.SIGNATURE_MATCH
+
+            // A definer KJB cannot see (not the add-on, which its <queries> shows) is no definer it trusts.
+            override fun definer(permission: String): PermissionDefiner? = try {
+                packages.getPermissionInfo(permission, 0).let { PermissionDefiner(it.packageName, it.protection == PermissionInfo.PROTECTION_SIGNATURE) }
+            } catch (_: PackageManager.NameNotFoundException) {
+                null
+            }
+        },
+    )
 
     override fun installed(): Boolean = try {
         packages.getPackageInfo(addonPackage, 0)
@@ -100,15 +148,11 @@ internal class AndroidAddonHost(private val context: Context, private val addonP
         false
     }
 
-    override fun trusted(): Boolean {
-        val pin = AddonNames.pinBytes(certSha256) ?: return false
-        return try {
-            packages.hasSigningCertificate(addonPackage, pin, PackageManager.CERT_INPUT_SHA256) &&
-                packages.checkSignatures(context.packageName, addonPackage) == PackageManager.SIGNATURE_MATCH
-        } catch (e: IllegalArgumentException) {
-            Log.w(LOG_TAG, "AI add-on: certificate check failed (${e.javaClass.simpleName})")
-            false
-        }
+    override fun trusted(): Boolean = try {
+        trust.trusted()
+    } catch (e: IllegalArgumentException) {
+        Log.w(LOG_TAG, "AI add-on: certificate check failed (${e.javaClass.simpleName})")
+        false
     }
 
     override suspend fun bind(): AddonBinding? {

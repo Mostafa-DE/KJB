@@ -1,16 +1,19 @@
 package app.lyrify.ai
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
-import kotlinx.coroutines.withContext
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
@@ -34,6 +37,7 @@ class AiServiceTest {
         packages: Map<Int, Array<String>> = mapOf(kjb to arrayOf("app.lyrify"), other to arrayOf("com.example.other")),
         certs: Map<Int, String> = mapOf(kjb to pin, other to "CD".repeat(32)),
     ) = CallerCheck(
+        addonPackage = "app.lyrify.ai",
         kjbPackage = "app.lyrify",
         certSha256 = pinned,
         packagesFor = { uid -> packages[uid] },
@@ -70,6 +74,15 @@ class AiServiceTest {
     @Test
     fun `a uid KJB shares with other packages is KJB's`() {
         assertTrue(check(packages = mapOf(kjb to arrayOf("com.example.shared", "app.lyrify"))).allows(kjb))
+    }
+
+    @Test
+    fun `a bind is served only while the bind permission is the add-on's own, at signature level`() {
+        assertTrue(check().guardsBind(permissionOwner = "app.lyrify.ai", signatureLevel = true))
+        // Another app defined the permission first (it would set its level), or it is no longer signature level.
+        assertFalse(check().guardsBind(permissionOwner = "com.example.other", signatureLevel = true))
+        assertFalse(check().guardsBind(permissionOwner = "app.lyrify.ai", signatureLevel = false))
+        assertFalse(check().guardsBind(permissionOwner = null, signatureLevel = true))
     }
 
     // A song's job
@@ -230,12 +243,76 @@ class AiServiceTest {
         jobs.start(song, null, { heard }) { released += it }
         runCurrent()
 
-        jobs.stopAll()
+        jobs.shutDown()
         runCurrent()
 
         assertEquals("stopped", heard.events.last())
         assertEquals(1, released.size)
         assertTrue(engines.single().closed)
+    }
+
+    /** The service's own scope, which its onDestroy cancels. */
+    private fun TestScope.service() = CoroutineScope(StandardTestDispatcher(testScheduler) + Job())
+
+    @Test
+    fun `the last client leaving closes the models at once, before the service's scope goes`() = runTest {
+        val service = service()
+        val jobs = AddonJobs(service, StandardTestDispatcher(testScheduler)) { notes -> FakeEngine(notes, chunks = 0).also { engines += it } }
+        jobs.start(song, null, { Heard() }) {}
+        runCurrent()
+        assertFalse(engines.single().closed)
+
+        // onUnbind and onDestroy, back to back on the main thread: nothing else runs in between.
+        jobs.shutDown()
+        service.cancel()
+
+        assertTrue("the NPU sessions are let go before onDestroy returns", engines.single().closed)
+    }
+
+    @Test
+    fun `with a job mid-step the models close once the step ends, even though the service's scope is gone`() = runTest {
+        val service = service()
+        var closedWhileRunning: Boolean? = null
+        var running = false
+        val jobs = AddonJobs(service, StandardTestDispatcher(testScheduler)) {
+            object : JobEngine {
+                override suspend fun run(song: AiSong, plainLyrics: String?, onStage: (AiStage) -> Unit, beforeChunk: suspend () -> Unit): AiResult {
+                    running = true
+                    try {
+                        awaitCancellation()
+                    } finally {
+                        running = false
+                    }
+                }
+
+                override fun close() {
+                    closedWhileRunning = running
+                }
+            }
+        }
+        val heard = Heard()
+        jobs.start(song, null, { heard }) { released += it }
+        runCurrent()
+
+        jobs.shutDown()
+        service.cancel()
+        runCurrent()
+
+        assertEquals(false, closedWhileRunning)
+        assertEquals("stopped", heard.events.last())
+        assertEquals(1, released.size)
+    }
+
+    @Test
+    fun `a job started just before the service goes still lets go of its song`() = runTest {
+        val service = service()
+        val jobs = AddonJobs(service, StandardTestDispatcher(testScheduler)) { notes -> FakeEngine(notes) }
+
+        jobs.start(song, null, { Heard() }) { released += it }
+        service.cancel() // before the job's coroutine ever ran
+        runCurrent()
+
+        assertEquals(1, released.size)
     }
 
     @Test

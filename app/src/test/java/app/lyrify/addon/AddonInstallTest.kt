@@ -1,11 +1,13 @@
 package app.lyrify.addon
 
+import android.content.pm.PackageInstaller
 import app.lyrify.models.Download
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -210,6 +212,63 @@ class AddonInstallTest {
     }
 
     @Test
+    fun `Android never answering does not hang the page, after a while the install is abandoned as a failure`() = runTest {
+        phone.allowed = true
+        val installer = installer()
+        installer.start()
+        runCurrent()
+        assertEquals(InstallState.Installing, installer.state.value)
+
+        advanceTimeBy(AddonInstaller.CONFIRM_TIMEOUT_MS + 1)
+        runCurrent()
+
+        assertEquals(InstallState.Failed(InstallFailure.INSTALL), installer.state.value)
+    }
+
+    // What Android's installer reports
+
+    private val ours = 41
+
+    private fun report(
+        session: Int = ours,
+        status: Int = PackageInstaller.STATUS_PENDING_USER_ACTION,
+        packageName: String? = null,
+        confirmAction: String? = InstallReport.CONFIRM_INSTALL,
+        confirmPackage: String? = "com.android.packageinstaller",
+        confirmSession: Int = ours,
+    ) = InstallReport(ourSession = ours, session = session, status = status, packageName = packageName, confirmAction = confirmAction, confirmPackage = confirmPackage, confirmSession = confirmSession)
+
+    private val waiting: (Int) -> Boolean = { it == ours }
+
+    @Test
+    fun `a report for a session KJB is not waiting on is ignored`() {
+        assertEquals(InstallVerdict.Ignore, report(session = 7).verdict(waiting, ADDON))
+        assertEquals(InstallVerdict.Ignore, report(session = -1).verdict(waiting, ADDON))
+        assertEquals(InstallVerdict.Ignore, report().verdict({ false }, ADDON))
+    }
+
+    @Test
+    fun `only the installer's own confirmation for this session is started, rebuilt from its action, package and session`() {
+        assertEquals(InstallVerdict.Confirm("com.android.packageinstaller", ours), report().verdict(waiting, ADDON))
+        // Anything else asking for the user ends the install as failed, so it never waits on a dialog that cannot come.
+        val failed = InstallVerdict.End(InstallOutcome.Failed(PackageInstaller.STATUS_FAILURE))
+        assertEquals(failed, report(confirmAction = "android.intent.action.VIEW").verdict(waiting, ADDON))
+        assertEquals(failed, report(confirmSession = 7).verdict(waiting, ADDON))
+        assertEquals(failed, report(confirmPackage = null).verdict(waiting, ADDON))
+    }
+
+    @Test
+    fun `the installer's ends are the install's, and a result for another package is a failure`() {
+        assertEquals(InstallVerdict.End(InstallOutcome.Installed), report(status = PackageInstaller.STATUS_SUCCESS, packageName = ADDON).verdict(waiting, ADDON))
+        assertEquals(InstallVerdict.End(InstallOutcome.Aborted), report(status = PackageInstaller.STATUS_FAILURE_ABORTED).verdict(waiting, ADDON))
+        assertEquals(InstallVerdict.End(InstallOutcome.Failed(PackageInstaller.STATUS_FAILURE_INVALID)), report(status = PackageInstaller.STATUS_FAILURE_INVALID).verdict(waiting, ADDON))
+        assertEquals(
+            InstallVerdict.End(InstallOutcome.Failed(PackageInstaller.STATUS_FAILURE)),
+            report(status = PackageInstaller.STATUS_SUCCESS, packageName = "com.example.other").verdict(waiting, ADDON),
+        )
+    }
+
+    @Test
     fun `a second tap while it works starts nothing more`() = runTest {
         phone.downloadWaits = CompletableDeferred()
         val installer = installer()
@@ -219,5 +278,9 @@ class AddonInstallTest {
         runCurrent()
 
         assertEquals(listOf("download"), phone.calls)
+    }
+
+    private companion object {
+        const val ADDON = "app.lyrify.ai"
     }
 }

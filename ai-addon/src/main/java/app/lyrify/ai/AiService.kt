@@ -3,6 +3,7 @@ package app.lyrify.ai
 import android.app.Service
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.pm.PermissionInfo
 import android.os.Binder
 import android.os.IBinder
 import android.os.ParcelFileDescriptor
@@ -50,6 +51,7 @@ const val ENGINE_THREADS: Int = 4
  * `PackageManager.hasSigningCertificate` with CERT_INPUT_SHA256). No pin trusts nobody.
  */
 class CallerCheck(
+    private val addonPackage: String,
     private val kjbPackage: String,
     private val certSha256: String,
     private val packagesFor: (Int) -> Array<String>?,
@@ -60,6 +62,13 @@ class CallerCheck(
         val packages = packagesFor(uid) ?: return false
         return kjbPackage in packages && hasCert(uid, pin)
     }
+
+    /**
+     * Whether a bind may be served: the bind permission is this add-on's own definition, at signature level (an app that
+     * defined it first would set its level). onBind runs outside the client's transaction, so the caller itself is
+     * checked on each call ([enforce]).
+     */
+    fun guardsBind(permissionOwner: String?, signatureLevel: Boolean): Boolean = permissionOwner == addonPackage && signatureLevel
 
     /** Throws SecurityException, which reaches KJB as such, unless [uid] [allows]. */
     fun enforce(uid: Int) {
@@ -91,7 +100,8 @@ interface JobEngine : AutoCloseable {
  * The songs KJB sends, one at a time, on [context] in [scope]. The engine is opened ([openEngine], with where its notes
  * go) for the first song and kept for the next ones until [closeEngine]: one night's run loads the models once. Before
  * each Whisper chunk a job tells KJB and waits for [proceed] (KJB holds it while the phone is too warm). [cancel] stops a
- * job after the step it is on; KJB going away stops everything ([stopAll]).
+ * job after the step it is on. When the last client leaves, [shutDown] lets go of the NPU at once (or as the step under
+ * way ends), whatever happens to the service's scope after.
  */
 class AddonJobs(
     private val scope: CoroutineScope,
@@ -102,6 +112,9 @@ class AddonJobs(
     private var engine: JobEngine? = null
     private var running: Running? = null
     private var nextId = 1L
+
+    /** Set by [shutDown] while a job is mid-step: the engine closes as that job ends. */
+    private var closeAfterJob = false
 
     /** Where the engine's notes go: the job running now. */
     @Volatile
@@ -121,7 +134,8 @@ class AddonJobs(
         check(running == null) { "a job is already running" }
         val run = Running(nextId++)
         val heard = events(run.id)
-        run.job = scope.launch(context, start = CoroutineStart.LAZY) {
+        // ATOMIC: the body runs, and its finally lets go of the song, even when the scope goes before it was dispatched.
+        run.job = scope.launch(context, start = CoroutineStart.ATOMIC) {
             try {
                 val result = try {
                     val engine = engine()
@@ -139,12 +153,17 @@ class AddonJobs(
                 throw e
             } finally {
                 notesTo = null
-                synchronized(lock) { if (running === run) running = null }
+                synchronized(lock) {
+                    if (running === run) running = null
+                    if (closeAfterJob) {
+                        closeAfterJob = false
+                        closeNow()
+                    }
+                }
                 release(run.id)
             }
         }
         running = run
-        run.job.start()
         run.id
     }
 
@@ -175,18 +194,31 @@ class AddonJobs(
     /** Stops a job under way, then closes the engine; the returned job ends once it is closed. */
     fun closeEngine(): Job = scope.launch(context) {
         synchronized(lock) { running }?.job?.cancelAndJoin()
+        // A job started meanwhile keeps the engine; it closes with the next call.
+        synchronized(lock) { if (running == null) closeNow() }
+    }
+
+    /**
+     * The last client left (onUnbind, onDestroy): the NPU sessions close now, on the caller's thread, with nothing left
+     * to a scope the service is about to cancel. A job mid-step is cancelled and closes them as it ends (a native step
+     * cannot be cut short; closing under it would free what it uses).
+     */
+    fun shutDown() {
         synchronized(lock) {
-            // A job started meanwhile keeps the engine; it closes with the next call.
-            if (running == null) {
-                engine?.let { runCatching { it.close() } }
-                engine = null
+            val run = running
+            if (run == null) {
+                closeNow()
+            } else {
+                closeAfterJob = true
+                run.job.cancel()
             }
         }
     }
 
-    /** KJB went away: what it started stops, and the models are let go. */
-    fun stopAll() {
-        closeEngine()
+    /** Releases the engine's sessions. Called holding [lock]. */
+    private fun closeNow() {
+        engine?.let { runCatching { it.close() } }
+        engine = null
     }
 }
 
@@ -202,6 +234,7 @@ class AiService : Service() {
 
     private val callers by lazy {
         CallerCheck(
+            packageName,
             BuildConfig.KJB_PACKAGE,
             BuildConfig.KJB_CERT_SHA256,
             packagesFor = packageManager::getPackagesForUid,
@@ -217,16 +250,32 @@ class AiService : Service() {
     }
     private var watching: Job? = null
 
-    override fun onBind(intent: Intent): IBinder = binder
+    /**
+     * Served only while the bind permission is this add-on's own, at signature level ([CallerCheck.guardsBind]); the
+     * caller is not known here (onBind runs outside its transaction), so each call checks it.
+     */
+    override fun onBind(intent: Intent): IBinder? {
+        val permission = try {
+            packageManager.getPermissionInfo(AddonNames.permission(packageName), 0)
+        } catch (_: PackageManager.NameNotFoundException) {
+            null
+        }
+        if (!callers.guardsBind(permission?.packageName, permission?.protection == PermissionInfo.PROTECTION_SIGNATURE)) {
+            Log.w(LOG_TAG, "bind refused: the bind permission is not this add-on's own")
+            return null
+        }
+        return binder
+    }
 
-    /** KJB let go of the add-on: what it started stops, and the models are released. */
+    /** KJB let go of the add-on: what it started stops, and the NPU sessions close now. */
     override fun onUnbind(intent: Intent): Boolean {
-        jobs.stopAll()
+        jobs.shutDown()
         return false
     }
 
+    /** The sessions close before the service's scope goes ([AddonJobs.shutDown]), not in a coroutine it would cancel. */
     override fun onDestroy() {
-        jobs.stopAll()
+        jobs.shutDown()
         watchers.kill()
         scope.cancel()
         super.onDestroy()
@@ -267,7 +316,7 @@ class AiService : Service() {
             }
         }
 
-        override fun run(song: ParcelFileDescriptor, durationMs: Long, plainLyrics: String?, callback: IAiRunCallback): Long = checked {
+        override fun run(song: ParcelFileDescriptor, durationMs: Long, plainLyrics: String?, callback: IAiRunCallback): Long = checked(song) {
             // The add-on's own descriptor of the song, from the call: closed once the job has ended.
             try {
                 jobs.start(AiSong(song.fileDescriptor, durationMs), plainLyrics, { job -> RunCallback(job, callback) }) { job ->
@@ -284,12 +333,10 @@ class AiService : Service() {
 
         override fun cancel(job: Long) = checked { jobs.cancel(job) }
 
-        override fun closeEngine() = checked {
-            jobs.closeEngine()
-            Unit
-        }
+        // Returns once the sessions are closed, so KJB's unbind right after cannot outrun it.
+        override fun closeEngine() = checked { runBlocking { jobs.closeEngine().join() } }
 
-        override fun importModel(name: String, file: ParcelFileDescriptor, bytes: Long, sha256: String): String = checked {
+        override fun importModel(name: String, file: ParcelFileDescriptor, bytes: Long, sha256: String): String = checked(file) {
             val reply = ParcelFileDescriptor.AutoCloseInputStream(file).use { input ->
                 runBlocking { ModelDownloads.withStore(this@AiService) { store -> ModelImport(store).import(name, input, bytes, sha256) } }
             } ?: ImportReply(ImportReply.Outcome.RETRY, "a download is writing the models")
@@ -298,9 +345,17 @@ class AiService : Service() {
         }
     }
 
-    /** [block] for KJB only: the calling uid is checked first ([CallerCheck]), on the binder thread that carries it. */
-    private inline fun <T> checked(block: () -> T): T {
-        callers.enforce(Binder.getCallingUid())
+    /**
+     * [block] for KJB only: the calling uid is checked first ([CallerCheck]), on the binder thread that carries it. A
+     * refused call closes the descriptors it brought ([owned]), so none is left open.
+     */
+    private inline fun <T> checked(vararg owned: ParcelFileDescriptor, block: () -> T): T {
+        try {
+            callers.enforce(Binder.getCallingUid())
+        } catch (e: SecurityException) {
+            owned.forEach { runCatching { it.close() } }
+            throw e
+        }
         return block()
     }
 
