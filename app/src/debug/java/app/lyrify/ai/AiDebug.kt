@@ -16,9 +16,12 @@ import android.os.PowerManager
 import android.os.SystemClock
 import android.util.Log
 import androidx.annotation.RequiresApi
-import app.lyrify.BuildConfig
 import app.lyrify.LOG_TAG
 import app.lyrify.R
+import app.lyrify.addon.Addon
+import app.lyrify.addon.AddonDiedException
+import app.lyrify.addon.Connection
+import app.lyrify.addon.RemoteSongEngine
 import app.lyrify.logFailures
 import app.lyrify.lyrics.LocalTrack
 import app.lyrify.verbose
@@ -34,29 +37,22 @@ import java.io.File
 import java.util.Locale
 
 private const val EXTRA_PATH = "path"
-private const val EXTRA_MODELS = "models"
 private const val EXTRA_LYRICS = "lyrics"
-private const val EXTRA_THREADS = "threads"
-private const val DEFAULT_THREADS = 4
-private const val MAX_THREADS = 8
 private const val USAGE = "adb shell am broadcast --allow-fgs-start-reason 316 -n app.lyrify.debug/app.lyrify.ai.AiDebugReceiver " +
-    "--es path <song> --es models <folder> [--es lyrics <plain lyrics file>] [--ei threads 4]"
+    "--es path <song> [--es lyrics <plain lyrics file>]"
 
 /**
- * Debug builds only: runs the AI engine on one song from adb and logs each stage's time and the result, with each LRC
- * line's time and length (never its text), to logcat (tag KJB). Writes nothing: no `.lrc`, no ledger entry, no file
- * anywhere.
+ * Debug builds only: runs one song through the AI add-on (app.lyrify.ai.debug, bound as the overnight run binds it) from
+ * adb and logs each stage, the add-on's notes and the result, with each LRC line's time and length (never its text), to
+ * logcat (tag KJB). Writes nothing: no `.lrc`, no ledger entry, no file anywhere.
  *
  * ```
  * adb shell am broadcast --allow-fgs-start-reason 316 -n app.lyrify.debug/app.lyrify.ai.AiDebugReceiver \
- *     --es path "/storage/emulated/0/Music/Song.mp3" --es models /sdcard/Download/lyrify-models \
- *     [--es lyrics /sdcard/Download/plain.txt] [--ei threads 4]
+ *     --es path "/storage/emulated/0/Music/KJB test/Song.mp3" [--es lyrics /sdcard/Download/plain.txt]
  * ```
  *
- * `models` is required: the folder holding what [AiModels] names (the `whisper-npu` folder with AI Hub's five Whisper
- * files for this phone's chip, the MDX model and, to time lyrics, wav2vec2). `lyrics` is a text file with plain lyrics
- * to time (the align job); without it the song is transcribed. `threads` (CPU threads for the STFT and wav2vec2) is
- * clamped to 1-8.
+ * The add-on must be installed (signed with the debug key) and have its models. `lyrics` is a text file with plain
+ * lyrics to time (the align job); without it the song is transcribed.
  *
  * The receiver checks the arguments and starts [AiDebugService], which runs the engine. Android lets a receiver in the
  * background start a foreground service only with an exemption: `--allow-fgs-start-reason 316` makes `am` give the
@@ -70,7 +66,7 @@ class AiDebugReceiver : BroadcastReceiver() {
             return
         }
         if (AiDebugRequest.of(intent) == null) {
-            Log.w(LOG_TAG, "AI debug: give a song and a models folder. $USAGE")
+            Log.w(LOG_TAG, "AI debug: give a song. $USAGE")
             return
         }
         start(context, intent)
@@ -88,7 +84,7 @@ class AiDebugReceiver : BroadcastReceiver() {
 
 /**
  * Debug builds only: runs one [AiDebugReceiver] request as a foreground service, so the run (under a minute, plus about
- * 30 s to create the NPU sessions) keeps the process alive in the background, which a coroutine started from a receiver
+ * 30 s to create the NPU sessions) keeps KJB dev and the add-on it binds alive in the background, which a coroutine started from a receiver
  * does not (the process is cached and frozen). Type mediaProcessing, the one Android 15+ prescribes for long work on media files: the system allows 6
  * hours of it in 24, shared by all of the app's mediaProcessing services (the overnight AI worker included) and reset
  * when the user opens the app. At the limit [onTimeout] cancels the run and stops the service within the few seconds
@@ -108,7 +104,7 @@ class AiDebugService : Service() {
         when {
             run?.isActive == true -> Log.w(LOG_TAG, "AI debug: a run is already going")
             request == null -> {
-                Log.w(LOG_TAG, "AI debug: give a song and a models folder. $USAGE")
+                Log.w(LOG_TAG, "AI debug: give a song. $USAGE")
                 stop()
             }
             else -> run = scope.launch {
@@ -164,22 +160,25 @@ class AiDebugService : Service() {
         }
         val lyrics = request.lyrics?.readText()
         val mode = if (lyrics == null) "transcribe" else "align"
-        Log.i(
-            LOG_TAG,
-            "AI debug: a song of ${durationMs / 1000} s, $mode, ${request.threads} threads, " +
-                "ONNX Runtime ${BuildConfig.ORT_VERSION}, QNN EP ${BuildConfig.QNN_EP_VERSION}, " +
-                "QNN ${BuildConfig.QNN_RUNTIME_VERSION}",
-        )
-        val assets = WhisperAssets(asset("vocab.json"), asset("added_tokens.json"), asset("generation_config.json"))
+        val session = when (val connection = Addon.client(this).connect()) {
+            is Connection.Open -> connection.session
+            is Connection.Closed -> {
+                Log.w(LOG_TAG, "AI debug: the AI add-on is ${connection.state}")
+                return
+            }
+        }
         val start = SystemClock.elapsedRealtime()
         val track = LocalTrack(song.path, song.nameWithoutExtension, artist = null, album = null, durationMs = durationMs)
-        val stages = NpuStages(AiModels.inFolder(request.models), applicationInfo.nativeLibraryDir, assets, request.threads) {
-            Log.i(LOG_TAG, "AI debug: $it")
-        }
-        val result = try {
-            LyricsFromAudio(stages, SystemClock::elapsedRealtime, notes = { Log.i(LOG_TAG, "AI debug: $it") }).run(track, lyrics)
-        } finally {
-            stages.close()
+        val result = session.use {
+            Log.i(LOG_TAG, "AI debug: a song of ${durationMs / 1000} s, $mode, add-on API ${it.api}: ${it.port.status()?.runtime}")
+            RemoteSongEngine(it, notes = { line -> Log.i(LOG_TAG, "AI debug: $line") }).use { engine ->
+                try {
+                    engine.run(track, lyrics, { stage -> Log.i(LOG_TAG, "AI debug: stage ${stage.name.lowercase()}") }) {}
+                } catch (_: AddonDiedException) {
+                    Log.w(LOG_TAG, "AI debug: the AI add-on died during the run")
+                    return
+                }
+            }
         }
         Log.i(LOG_TAG, "AI debug: done in ${(SystemClock.elapsedRealtime() - start) / 1000} s: ${describe(result)}")
         // A failure's message can name the song's file: only under VERBOSE.
@@ -194,8 +193,6 @@ class AiDebugService : Service() {
             Log.i(LOG_TAG, "AI debug: ${line.substringBefore(']')}] (${line.substringAfter(']').length} characters)")
         }
     }
-
-    private fun asset(name: String): String = assets.open("whisper/$name").use { it.readBytes().toString(Charsets.UTF_8) }
 
     private fun describe(result: AiResult): String = when (result) {
         is AiResult.Transcribed -> "transcribed, ${stats(result.stats)}"
@@ -221,18 +218,12 @@ class AiDebugService : Service() {
     }
 }
 
-/** One run's arguments from the broadcast's extras; null without a song or a models folder. */
-private class AiDebugRequest(val song: File, val models: File, val lyrics: File?, val threads: Int) {
+/** One run's arguments from the broadcast's extras; null without a song. */
+private class AiDebugRequest(val song: File, val lyrics: File?) {
     companion object {
         fun of(intent: Intent): AiDebugRequest? {
             val path = intent.getStringExtra(EXTRA_PATH) ?: return null
-            val models = intent.getStringExtra(EXTRA_MODELS) ?: return null
-            return AiDebugRequest(
-                song = File(path),
-                models = File(models),
-                lyrics = intent.getStringExtra(EXTRA_LYRICS)?.let(::File),
-                threads = intent.getIntExtra(EXTRA_THREADS, DEFAULT_THREADS).coerceIn(1, MAX_THREADS),
-            )
+            return AiDebugRequest(song = File(path), lyrics = intent.getStringExtra(EXTRA_LYRICS)?.let(::File))
         }
     }
 }

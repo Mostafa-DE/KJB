@@ -1,5 +1,6 @@
 package app.lyrify.overnight
 
+import app.lyrify.addon.AddonDiedException
 import app.lyrify.ai.AiModels
 import app.lyrify.ai.AiResult
 import app.lyrify.ai.AiStage
@@ -188,7 +189,7 @@ class AiNightTest {
 
     /** What the worker holds while a run uses the models; a delete waits for it. */
     private val inUse = Mutex()
-    private val discarded = mutableListOf<File>()
+    private val discarded = mutableListOf<String>()
     private var discard: () -> Unit = {}
     private lateinit var pipeline: LyricsPipeline
     private val stats = AiStats(200.0, 0.6, 80.0, 4, 120.0, 5, 4, emptyMap())
@@ -221,6 +222,9 @@ class AiNightTest {
     private var chunkMs = 60_000L
     private var duringRun: suspend (LocalTrack) -> Unit = {}
 
+    /** The add-on's process dies at this chunk of a song's run (the engine throws as RemoteSongEngine does). */
+    private var dieAt: ((LocalTrack, Int) -> Boolean) = { _, _ -> false }
+
     private fun audio(name: String): LocalTrack {
         val file = File(folder.root, "$name.mp3")
         file.writeBytes(byteArrayOf(1, 2, 3))
@@ -244,7 +248,7 @@ class AiNightTest {
             record = pipeline::recordAi,
             // Like the real engine: each chunk waits its turn and runs to its end once started, and a stop is noticed
             // between chunks.
-            openEngine = { _ ->
+            openEngine = {
                 opened++
                 object : SongEngine {
                     override suspend fun run(track: LocalTrack, plainLyrics: String?, onStage: (AiStage) -> Unit, beforeChunk: suspend () -> Unit): AiResult {
@@ -254,6 +258,7 @@ class AiNightTest {
                         duringRun(track)
                         onStage(AiStage.TRANSCRIBE)
                         for (k in 0 until chunks) {
+                            if (dieAt(track, k)) throw AddonDiedException()
                             beforeChunk()
                             withContext(NonCancellable) { delay(chunkMs) }
                             call.chunksRun++
@@ -268,7 +273,7 @@ class AiNightTest {
                     }
                 }
             },
-            models = { if (hasModels) AiModels.inFolder(folder.root) else null },
+            ready = { hasModels },
             thermalStatus = { thermal() },
             pluggedIn = plugged,
             clock = { now + testScheduler.currentTime },
@@ -732,6 +737,55 @@ class AiNightTest {
         }
     }
 
+    // The add-on's process dies
+
+    @Test
+    fun `the add-on dying mid-song counts a death for the song in its stage, ends the run, and the next run goes on`() = runTest {
+        val first = waiting("First", updatedAt = now - 1)
+        waiting("Second", updatedAt = now - 2)
+        val before = checkNotNull(memory[first.path])
+        dieAt = { track, chunk -> track.title == "First" && chunk == 1 }
+
+        assertEquals(AiRunEnd.ADDON_DIED, runner().run())
+
+        assertEquals(before, memory[first.path]) // nothing recorded: it was not the song's result
+        assertEquals(1, guard.open(before).deaths)
+        assertEquals(AiStage.TRANSCRIBE, guard.open(before).diedIn)
+        assertEquals(opened, closed) // the dead engine was let go
+        assertTrue(logs.toString(), logs.any { "First" in it && "add-on stopped during transcribe" in it })
+
+        // The next run binds again and goes on; the song is tried again and the rest run.
+        dieAt = { _, _ -> false }
+        assertEquals(AiRunEnd.DONE, runner().run())
+        assertEquals(listOf("First", "First", "Second"), calls.map { it.title })
+        assertEquals(LyricsStatus.AI_TRANSCRIBED, memory[first.path]?.status)
+    }
+
+    @Test
+    fun `a song the add-on died in twice is given up, as one the app died in`() = runTest {
+        val first = waiting("First", updatedAt = now - 1)
+        waiting("Second", updatedAt = now - 2)
+        dieAt = { track, _ -> track.title == "First" }
+
+        assertEquals(AiRunEnd.ADDON_DIED, runner().run())
+        assertEquals(AiRunEnd.ADDON_DIED, runner().run())
+        assertEquals(AiRunEnd.DONE, runner().run())
+
+        assertEquals(LyricsStatus.AI_FAILED, memory[first.path]?.status)
+        assertEquals(listOf("First", "First", "Second"), calls.map { it.title })
+    }
+
+    @Test
+    fun `the add-on dying in one stage three times in a row holds the AI`() = runTest {
+        repeat(3) { waiting("Song $it", updatedAt = now - it) }
+        dieAt = { _, _ -> true }
+
+        val ends = List(3) { runner().run() }
+
+        assertEquals(listOf(AiRunEnd.ADDON_DIED, AiRunEnd.ADDON_DIED, AiRunEnd.CRASHED), ends)
+        assertEquals(GuardVerdict.HOLD, guard.verdict())
+    }
+
     // A model that does not load
 
     @Test
@@ -739,7 +793,7 @@ class AiNightTest {
         val first = waiting("First", updatedAt = now - 1)
         waiting("Second", updatedAt = now - 2)
         val before = memory[first.path]
-        val whisper = File(folder.root, AiModels.WHISPER)
+        val whisper = AiModels.WHISPER
         results = { AiResult.Failed("ModelLoadException: ${AiModels.WHISPER} could not be loaded", model = whisper) }
         var closedWhenDiscarded: Int? = null
         discard = { closedWhenDiscarded = closed }
@@ -758,7 +812,7 @@ class AiNightTest {
         val first = waiting("First", updatedAt = now - 1)
         waiting("Second", updatedAt = now - 2)
         val before = memory[first.path] ?: error("no entry")
-        val whisper = File(folder.root, AiModels.WHISPER)
+        val whisper = AiModels.WHISPER
         results = { AiResult.Failed("ModelLoadException: ${AiModels.WHISPER} could not be loaded", model = whisper) }
         assertEquals(AiRunEnd.BAD_MODEL, runner().run())
 
@@ -781,7 +835,7 @@ class AiNightTest {
 
     @Test
     fun `a model file that does not load is downloaded again once, then the AI pauses`() {
-        val whisper = File(folder.root, AiModels.WHISPER)
+        val whisper = AiModels.WHISPER
         assertFalse(loadFailures.paused())
 
         assertTrue(loadFailures.failed(whisper))
@@ -794,11 +848,11 @@ class AiNightTest {
 
     @Test
     fun `load failures count per model file, and start over with a new version or new models`() {
-        val whisper = File(folder.root, AiModels.WHISPER)
+        val whisper = AiModels.WHISPER
         var pin = "first"
         val failures = failures { pin }
         assertTrue(failures.failed(whisper))
-        assertTrue(failures.failed(File(folder.root, AiModels.MDX)))
+        assertTrue(failures.failed(AiModels.MDX))
         pin = "second" // another file pinned for the same model
         assertTrue(failures.failed(whisper))
         assertFalse(failures.paused())

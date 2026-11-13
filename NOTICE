@@ -6,31 +6,32 @@ terms of the GNU General Public License version 3 as published by the Free Softw
 Foundation. See LICENSE for the full text.
 
 The app shows this file, and the full text of every licence named in it, in Settings > About > Licences
-(app/src/main/assets/licences).
+(app/src/main/assets/licences). The AI add-on, KJB AI, ships the licences of what it is built with
+(ai-addon/src/main/assets/licences); KJB shows them on the same page once the add-on is installed.
 
 Credits
 
 - LRCLIB (https://lrclib.net), the free, community-built lyrics database KJB
   looks lyrics up in. Lyrics belong to their respective rights holders.
 
-Third-party software built into the app (AI lyrics)
+Third-party software built into the AI add-on, KJB AI (AI lyrics)
 
 - ONNX Runtime 1.30.0 (https://github.com/microsoft/onnxruntime), MIT License, Copyright (c)
   Microsoft Corporation. Its telemetry is switched off. Its third-party notices (ThirdPartyNotices.txt at v1.30.0)
-  ship in the app.
+  ship in the add-on.
 - Microsoft 1DS C++ SDK (https://github.com/microsoft/cpp_client_telemetry), inside ONNX Runtime's Java library
   (its META-INF/LICENSE-1DS), Apache License 2.0, Copyright Microsoft Corporation.
 - ONNX Runtime QNN Execution Provider 2.6.0 (com.qualcomm.qti:onnxruntime-android-qnn,
   https://github.com/onnxruntime/onnxruntime-qnn), MIT License, Copyright (c) Qualcomm Technologies, Inc. and/or its
   subsidiaries, Copyright (c) Microsoft Corporation. Its third-party notices (ThirdPartyNotices.txt at v2.6.0) ship in
-  the app.
+  the add-on.
 - Qualcomm AI Engine Direct (QNN) runtime 2.50.0 (com.qualcomm.qti:qnn-runtime), Copyright Qualcomm Technologies, Inc.
   Its Maven POM names the Qualcomm AI Hub Model License
   (https://softwarecenter.qualcomm.com/api/download/software/licenses/ai_model_hub/v1/LICENSE.pdf); the licence inside
   the package (LICENSE.pdf) is Qualcomm Technologies' "AI Stack License", which allows it to be distributed in object
-  code as part of an app. That licence and the package's NOTICE.txt ship in the app. Only its HTP backend and Hexagon
+  code as part of an app. That licence and the package's NOTICE.txt ship in the add-on. Only its HTP backend and Hexagon
   v69, v75, v79 and v81 libraries are packaged.
-- The Whisper tokenizer files in app/src/main/assets/whisper (vocab.json, added_tokens.json,
+- The Whisper tokenizer files in ai-addon/src/main/assets/whisper (vocab.json, added_tokens.json,
   generation_config.json) are openai/whisper-large-v3-turbo's (https://huggingface.co/openai/whisper-large-v3-turbo),
   MIT License, Copyright (c) OpenAI.
 

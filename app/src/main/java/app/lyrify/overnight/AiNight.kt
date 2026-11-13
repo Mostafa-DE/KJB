@@ -1,6 +1,6 @@
 package app.lyrify.overnight
 
-import app.lyrify.ai.AiModels
+import app.lyrify.addon.AddonDiedException
 import app.lyrify.ai.AiResult
 import app.lyrify.ai.AiStage
 import app.lyrify.data.LedgerEntry
@@ -33,14 +33,20 @@ import java.util.Locale
 import kotlin.coroutines.CoroutineContext
 
 /**
- * CPU threads for the engine: the MDX STFT and iSTFT (the spike's measured 4) and wav2vec2. The models themselves run
- * on the NPU.
+ * CPU threads the engine uses in the AI add-on (its ENGINE_THREADS): the MDX STFT and iSTFT (the spike's measured 4) and
+ * wav2vec2. The models themselves run on the NPU. For the run log.
  */
 const val AI_THREADS: Int = 4
 
-/** The engine of one run: its models stay loaded from the first song until it is closed, at the end of the run. */
+/**
+ * The engine of one run, in the AI add-on ([app.lyrify.addon.RemoteSongEngine]): its models stay loaded from the first
+ * song until it is closed, at the end of the run.
+ */
 interface SongEngine : AutoCloseable {
-    /** One song (see [app.lyrify.ai.LyricsFromAudio.run]). */
+    /**
+     * One song (the add-on's LyricsFromAudio.run): [onStage] hears each stage it enters, [beforeChunk] is awaited before
+     * each Whisper chunk. Throws [AddonDiedException] when the add-on's process dies meanwhile.
+     */
     suspend fun run(track: LocalTrack, plainLyrics: String?, onStage: (AiStage) -> Unit, beforeChunk: suspend () -> Unit): AiResult
 }
 
@@ -122,6 +128,9 @@ enum class AiRunEnd {
     /** The app died in the same stage too often in a row ([GuardVerdict.HOLD]): the AI waits for the next version. */
     CRASHED,
 
+    /** The AI add-on's process died during a song (counted for the song like a crash); the next run binds it again. */
+    ADDON_DIED,
+
     /** The phone's NPU could not be used at all (no QNN execution provider or NPU device); the next period tries again. */
     NO_NPU,
 }
@@ -138,9 +147,12 @@ enum class AiRunEnd {
  *
  * The crash guard ([CrashGuard]): a song the app died in [CrashGuard.MAX_DEATHS] times is recorded as failed (and tried
  * again after the failed-run wait) instead of killing every run; deaths in a row in the align stage leave the songs to
- * time waiting, in another stage they stop the AI ([AiRunEnd.CRASHED]), until the next version of the app. A model that
- * does not load counts as a death of the song in its stage too; it is downloaded again once, then the AI pauses
- * ([ModelLoadFailures]). A song whose audio file was replaced during its run is abandoned: nothing is recorded.
+ * time waiting, in another stage they stop the AI ([AiRunEnd.CRASHED]), until the next version of the app. The engine
+ * runs in the AI add-on's process: when that dies during a song (a native crash, out of memory, killed), KJB lives on,
+ * counts the death of the song in its stage as the next run would have counted its own, and ends the run
+ * ([AiRunEnd.ADDON_DIED]). A model that does not load counts as a death of the song in its stage too; it is downloaded
+ * again once, then the AI pauses ([ModelLoadFailures]). A song whose audio file was replaced during its run is
+ * abandoned: nothing is recorded.
  * [runLog] gets one line per event: titles, stages, times, counts, never lyrics. It is the AI's run log ([AiRunLog]), in
  * the app's own files and shown on the phone; logcat repeats it only under VERBOSE, as it names songs.
  */
@@ -149,10 +161,10 @@ class AiRunner(
     /** LRCLIB's plain lyrics of a record, fetched when a song is timed. */
     private val plainLyrics: suspend (Long) -> PlainLyrics,
     private val record: suspend (LocalTrack, AiResult) -> LyricsStatus?,
-    /** The engine for these models, opened for the first song that runs and closed at the end of the run. */
-    private val openEngine: (AiModels) -> SongEngine,
-    /** The models, while they are all in place. */
-    private val models: () -> AiModels?,
+    /** The engine in the add-on, opened for the first song that runs and closed at the end of the run. */
+    private val openEngine: suspend () -> SongEngine,
+    /** Whether the add-on has every model in place. */
+    private val ready: suspend () -> Boolean,
     /** `PowerManager.currentThermalStatus`. */
     private val thermalStatus: () -> Int,
     private val pluggedIn: Flow<Boolean>,
@@ -168,8 +180,8 @@ class AiRunner(
     private val aiPaths: AiPaths = AiPaths(),
     /** Held by the run while it may use the models (the process's one, so a cancelled run's engine is waited for). */
     private val inUse: Mutex = Mutex(),
-    /** A model that did not load for the first time ([loadFailures]): deleted, to be downloaded again. */
-    private val badModel: suspend (File) -> Unit = {},
+    /** A model (its AiModels name) that did not load for the first time ([loadFailures]): deleted, to be downloaded again. */
+    private val badModel: suspend (String) -> Unit = {},
     private val onProgress: suspend (AiProgress) -> Unit = {},
     private val runLog: (String) -> Unit = {},
 ) {
@@ -215,7 +227,7 @@ class AiRunner(
             if (!pluggedIn.first() || coolDown(AiProgress(done, jobs.size, current = null, hot = true), "before the next song") == null) {
                 return AiRunEnd.UNPLUGGED
             }
-            val models = models() ?: return AiRunEnd.NO_MODELS
+            if (!ready()) return AiRunEnd.NO_MODELS
             aiPaths.hold(job.track.path)
             try {
                 // The song may have changed since the queue was made: lyrics found or removed, the file gone.
@@ -246,7 +258,7 @@ class AiRunner(
                 onProgress(working)
                 runLog("AI: $title: ${if (plain == null) "transcribing" else "timing known lyrics"}")
                 val started = clock()
-                val songEngine = engine ?: openEngine(models).also { engine = it }
+                val songEngine = engine ?: openEngine().also { engine = it }
                 val result = try {
                     unlessUnplugged {
                         songEngine.run(current.track, plain, song::entering) { beforeChunk(working) }
@@ -254,6 +266,13 @@ class AiRunner(
                 } catch (e: CancellationException) {
                     runLog("AI: $title: stopped")
                     throw e
+                } catch (_: AddonDiedException) {
+                    // As if the app had died there before the AI moved out: the song's death in its stage is counted now.
+                    song.died()
+                    closeEngine()
+                    val held = guard.verdict() == GuardVerdict.HOLD
+                    runLog("AI: $title: the AI add-on stopped during ${song.diedIn?.label() ?: "a run"} (${song.deaths} of ${CrashGuard.MAX_DEATHS} for this song)")
+                    return if (held) AiRunEnd.CRASHED else AiRunEnd.ADDON_DIED
                 } finally {
                     song.ended()
                 }
@@ -266,18 +285,19 @@ class AiRunner(
                     runLog("AI: the phone's NPU could not be used (${result.message}); trying again later")
                     return AiRunEnd.NO_NPU
                 }
-                if (result is AiResult.Failed && result.model != null) {
+                val model = (result as? AiResult.Failed)?.model
+                if (result is AiResult.Failed && model != null) {
                     // Not the song's fault: it keeps its status, and without that model nothing else can run. It counts as
                     // a death in the stage it was in all the same, so a song is not run forever.
                     song.died()
-                    if (loadFailures.failed(result.model)) {
-                        runLog("AI: ${result.model.name} did not load (${result.message}); deleted, to be downloaded again")
+                    if (loadFailures.failed(model)) {
+                        runLog("AI: $model did not load (${result.message}); deleted, to be downloaded again")
                         closeEngine()
-                        badModel(result.model)
+                        badModel(model)
                         return AiRunEnd.BAD_MODEL
                     }
                     runLog(
-                        "AI: ${result.model.name} did not load again after it was downloaded again (${result.message}); kept, " +
+                        "AI: $model did not load again after it was downloaded again (${result.message}); kept, " +
                             "and the AI is paused until the next version of KJB or until the models are deleted",
                     )
                     return AiRunEnd.MODEL_FAILED
@@ -376,22 +396,22 @@ class AiRunner(
 }
 
 /**
- * How often each model file failed to load, per model and SHA-256 ([pinned]: a file in place is the pinned one, checked
- * when it was downloaded), under app version [version], kept across runs in app-private storage ([read] and [write] one
- * string, null for none). A file that does not load is deleted and downloaded again once; the same file failing again
+ * How often each model file failed to load, per model (its AiModels name) and SHA-256 ([pinned]: a file in place is the
+ * pinned one, checked when it was downloaded; the add-on tells the pins), under app version [version], kept across runs
+ * in app-private storage ([read] and [write] one string, null for none). A file that does not load is deleted and downloaded again once; the same file failing again
  * would only fail again (the phone cannot run it: its memory, the runtime), so the AI pauses instead ([paused]) until
  * the next version of the app or until the user deletes the models ([clear]).
  */
 class ModelLoadFailures(
     private val version: Int,
-    private val pinned: (File) -> String?,
+    private val pinned: (String) -> String?,
     private val read: () -> String?,
     private val write: (String?) -> Unit,
 ) {
     /** Counts a load failure of [model]: true when it is its file's first (download it again), false when not (pause). */
-    fun failed(model: File): Boolean {
+    fun failed(model: String): Boolean {
         val state = state()
-        val key = "${model.name} ${pinned(model)}"
+        val key = "$model ${pinned(model)}"
         val count = (state.counts[key] ?: 0) + 1
         write(json.encodeToString(State.serializer(), state.copy(counts = state.counts + (key to count))))
         return count < MAX_LOAD_FAILURES

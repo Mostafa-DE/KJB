@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The AI add-on, "KJB AI" (addon/, ui/AiScreen.kt): getting it, updating it, and moving the AI files over to it. -->
+<resources>
+    <string name="ai_addon_get">Get AI</string>
+    <string name="ai_addon_needed">Needs the AI add-on</string>
+    <string name="ai_addon_needed_detail">AI lyrics run in an add-on called KJB AI. KJB downloads it, then your phone asks you to allow and confirm the install. The add-on has no icon of its own.</string>
+    <string name="ai_addon_keep">Get the AI add-on to keep using it</string>
+    <string name="ai_addon_keep_detail">AI lyrics now run in an add-on called KJB AI. The AI files already on your phone move over to it, so nothing big downloads again.</string>
+    <string name="ai_addon_update">Update the AI add-on</string>
+    <string name="ai_addon_update_detail">This version of KJB needs a newer AI add-on. KJB downloads it, then your phone asks you to confirm.</string>
+    <string name="ai_addon_update_action">Update</string>
+    <string name="ai_addon_untrusted">AI add-on not recognised</string>
+    <string name="ai_addon_untrusted_detail">The app called KJB AI on your phone isn\'t KJB\'s own. Uninstall it, then get the AI add-on again.</string>
+    <string name="ai_addon_unreachable">AI add-on not responding</string>
+    <string name="ai_addon_unreachable_detail">KJB tries again in a moment.</string>
+    <string name="ai_addon_downloading">Getting the add-on · %1$s of %2$s</string>
+    <string name="ai_addon_allow">Allow installs from KJB</string>
+    <string name="ai_addon_allow_detail">Your phone asks once to let KJB install the AI add-on. Turn on Allow from this source, then come back to KJB.</string>
+    <string name="ai_addon_open_settings">Open settings</string>
+    <string name="ai_addon_confirm">Confirm the install</string>
+    <string name="ai_addon_confirm_detail">Your phone asks you to confirm. KJB AI has no icon of its own: it shows in your phone\'s settings, under Apps.</string>
+    <string name="ai_addon_cancel">Cancel</string>
+    <string name="ai_addon_failed">Couldn\'t get the AI add-on</string>
+    <string name="ai_addon_failed_not_published">This version of KJB has no AI add-on to download.</string>
+    <string name="ai_addon_failed_network">The download stopped. Trying again goes on from where it stopped.</string>
+    <string name="ai_addon_failed_download">The add-on couldn\'t be downloaded as it should be. Try again later.</string>
+    <string name="ai_addon_failed_not_kjbs">The downloaded file isn\'t KJB\'s AI add-on, so KJB deleted it.</string>
+    <string name="ai_addon_failed_install">Your phone didn\'t install the add-on. Try again.</string>
+    <string name="ai_addon_moving">Moving the AI files</string>
+    <string name="ai_addon_moving_detail">The AI files already on your phone move over to the AI add-on. Nothing is downloaded.</string>
+    <string name="ai_tile_addon">AI add-on</string>
+</resources>

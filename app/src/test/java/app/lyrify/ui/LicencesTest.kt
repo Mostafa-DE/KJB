@@ -1,6 +1,7 @@
 package app.lyrify.ui
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -17,7 +18,7 @@ class LicencesTest {
     @Test
     fun `every licence text named ships, and every text that ships is named`() {
         assertTrue("run from the app module: ${folder.absolutePath}", folder.isDirectory)
-        val named = SHIPPED.flatMap { it.texts }.toSet()
+        val named = SHIPPED.filterNot { it.inAddon }.flatMap { it.texts }.toSet()
         val shipped = folder.list().orEmpty().toSet()
         assertEquals(shipped, named)
         shipped.forEach { assertTrue(it, File(folder, it).length() > 0) }
@@ -26,6 +27,22 @@ class LicencesTest {
     @Test
     fun `the notices in the app are the repository's NOTICE`() {
         assertEquals(File("../NOTICE").readText(), File(folder, "NOTICE.txt").readText())
+    }
+
+    @Test
+    fun `the AI's own software is the add-on's, its texts ship in the add-on, and KJB lists it only with the add-on there`() {
+        val addonFolder = File("../ai-addon/src/main/assets/$LICENCE_DIR")
+        val named = ADDON_THIRD_PARTY.flatMap { it.texts }.toSet()
+        assertEquals(addonFolder.list().orEmpty().toSet(), named)
+        listOf("ONNX Runtime", "ONNX Runtime QNN", "Qualcomm AI Engine Direct", "Microsoft 1DS SDK", "Whisper tokenizer").forEach { name ->
+            assertTrue(name, ADDON_THIRD_PARTY.any { it.name == name })
+            assertFalse("$name is not in KJB", THIRD_PARTY.any { it.name == name })
+        }
+        assertTrue(ADDON_THIRD_PARTY.all { it.inAddon } && ADDON_NOTICES.inAddon && THIRD_PARTY.none { it.inAddon })
+        assertEquals(ADDON_THIRD_PARTY.flatMap { it.texts }.distinct(), ADDON_NOTICES.texts)
+        assertEquals(listOf(KJB_LICENCE, NOTICES), licenceRows(addonInstalled = false))
+        assertEquals(listOf(KJB_LICENCE, NOTICES, ADDON_NOTICES), licenceRows(addonInstalled = true))
+        assertEquals(ADDON_NOTICES, shipped(ADDON_NOTICES.name))
     }
 
     @Test

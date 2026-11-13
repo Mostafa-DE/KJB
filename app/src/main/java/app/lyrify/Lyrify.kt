@@ -16,7 +16,8 @@ import app.lyrify.lyrics.LyricsPipeline
 import app.lyrify.lyrics.LyricsPreview
 import app.lyrify.lyrics.Removal
 import app.lyrify.lyrics.Searched
-import app.lyrify.models.ModelDownloads
+import app.lyrify.addon.Addon
+import app.lyrify.addon.ModelHandover
 import app.lyrify.overnight.AiLyrics
 import app.lyrify.player.PlaybackCommands
 import app.lyrify.player.PlayerGraph
@@ -168,7 +169,13 @@ object Lyrify {
         if (!_deletingModels.compareAndSet(expect = false, update = true)) return
         background.launch {
             try {
-                if (AiLyrics.afterStopping(app) { ModelDownloads.delete(app).also { AiLyrics.modelsDeleted(app) } } == null) {
+                // The add-on's models, and the copies KJB 2.0 kept that it has not taken yet.
+                val deleted = AiLyrics.afterStopping(app) {
+                    Addon.withPort(app) { it.deleteModels() }
+                    ModelHandover.deleteLegacy(app)
+                    AiLyrics.modelsDeleted(app)
+                }
+                if (deleted == null) {
                     Log.w(LOG_TAG, "models: the AI did not stop in time; nothing deleted")
                 }
             } finally {
