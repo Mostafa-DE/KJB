@@ -79,6 +79,24 @@ class LockLyricsTest {
         assertEquals(LockSwitch.STORE_OFF, lockSwitch(on = false, overlayAllowed = true))
     }
 
+    // Scrolling and closing (user feedback 2026-11-13, lane LK2)
+
+    @Test
+    fun `the lyrics scroll by finger as on the player, and only the bands around them close the screen`() {
+        val lock = File("src/main/java/app/lyrify/ui/LockLyricsActivity.kt").readText()
+        // The synced lines scroll as the player's do (SyncedLyrics' own follow), and the plain ones scroll whole.
+        assertFalse("the synced lines are held still", lock.contains("scrolls = false"))
+        assertFalse("the plain lines are cut short", lock.contains(".take(PLAIN_LINES)"))
+        // The page: one swipe that closes, on its header band and its controls band, never over the lyrics.
+        assertTrue("no page with bands", lock.contains("internal fun LockPage("))
+        val page = lock.substringAfter("internal fun LockPage(").substringBefore("\n}\n")
+        assertEquals(2, Regex("""\.swipeToClose\(onClose\)""").findAll(page).count())
+        assertEquals(1, Regex("""detectVerticalDragGestures\(""").findAll(lock).count())
+        assertTrue(lock.substringAfter("private fun LockLyricsScreen(").substringBefore("\n}\n").contains("LockPage("))
+        // Clear of the system's gesture edges at the top and the bottom, whatever the navigation mode.
+        assertTrue(page.contains("WindowInsets.systemGestures.only(WindowInsetsSides.Vertical)"))
+    }
+
     // The progress bar (user feedback 2026-11-13, point 4)
 
     @Test
