@@ -36,6 +36,9 @@
     <!-- Tools > AI lyrics > Get AI: KJB downloads the add-on from its GitHub release (pinned SHA-256, certificate checked)
          and installs it with Android's installer, after the user allows "Install unknown apps" for KJB and confirms. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- Android 12+: an update of the add-on KJB installed may go through without the confirm dialog (a normal
+         permission; the first install always asks). -->
+    <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
 
     <!-- player: permissions -->
     <!-- KJB's own player (player/PlaybackService): a foreground service of type mediaPlayback while music plays, as
@@ -128,6 +131,13 @@
             android:foregroundServiceType="mediaProcessing"
             tools:node="merge"
             tools:targetApi="35" />
+
+        <!-- ai add-on -->
+        <!-- Android's installer reports the add-on's install here (addon/AddonInstall.kt), through KJB's own pending
+             intent: not exported. -->
+        <receiver
+            android:name=".addon.InstallReceiver"
+            android:exported="false" />
 
         <!-- Bound by the system while notification access is granted (sample manifest in the
              NotificationListenerService reference uses exported="false"). -->

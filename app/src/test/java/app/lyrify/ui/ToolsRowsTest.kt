@@ -74,9 +74,10 @@ class ToolsRowsTest {
     }
 
     @Test
-    fun `AI lyrics says off, not supported or an update needed, else what its tile says`() {
-        assertEquals(ToolLine.Text(R.string.tools_ai_no_chip), rows(ai = ai(chip = null)).getValue(Tool.AI).line)
-        assertEquals(ToolLine.Text(R.string.tools_ai_update), rows(ai = ai(newEnough = false)).getValue(Tool.AI).line)
+    fun `AI lyrics says off, else what its tile says, and is not there on a phone the AI does not run on`() {
+        // The AI add-on design (2026-11-13): on other phones Tools shows nothing about the AI, no dead button.
+        assertFalse(Tool.AI in rows(ai = ai(chip = null)))
+        assertFalse(Tool.AI in rows(ai = ai(newEnough = false)))
         assertEquals(ToolLine.Text(R.string.tools_ai_off), rows(ai = ai(enabled = false)).getValue(Tool.AI).line)
         assertEquals(
             ToolLine.Ai(TileValue.Fraction(12, 40), R.string.ai_tile_tonight),

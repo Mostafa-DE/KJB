@@ -308,6 +308,20 @@ object AiLyrics {
         WorkManager.getInstance(context).enqueueUniquePeriodicWork(WORK, ExistingPeriodicWorkPolicy.UPDATE, request)
     }
 
+    /**
+     * The add-on was just installed (or updated): the models KJB 2.0 kept go to it, else, with the AI on, it downloads
+     * the models it lacks.
+     */
+    fun addonInstalled(context: Context) {
+        val app = context.applicationContext
+        calls.launch {
+            ModelHandover.startIfNeeded(app)
+            if (enabled(app).value && !ModelHandover.pending(app)) {
+                Addon.withPort(app) { addon -> if (addon.status()?.models?.let { it !is ModelState.Ready } == true) addon.startDownload(restart = false) }
+            }
+        }
+    }
+
     /** Download (or Resume, or Try again) on the AI page: the add-on downloads the models anew from what it has. */
     fun download(context: Context) {
         val app = context.applicationContext

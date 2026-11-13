@@ -61,6 +61,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.lyrify.R
 import app.lyrify.addon.AddonState
+import app.lyrify.addon.HandoverState
+import app.lyrify.addon.InstallFailure
+import app.lyrify.addon.InstallState
 import app.lyrify.data.LyricsStatus
 import app.lyrify.models.ModelState
 import app.lyrify.models.NpuChip
@@ -87,15 +90,25 @@ data class AiState(
     val stopping: Boolean,
     /** The AI add-on, which runs the AI ([AddonState]); null until it was looked at. */
     val addon: AddonState? = AddonState.Ready,
+    /** Getting the add-on (Get AI, Update). */
+    val install: InstallState = InstallState.Idle,
+    /** The models KJB 2.0 kept, on their way to the add-on. */
+    val handover: HandoverState = HandoverState.None,
 ) {
     /** The AI runs on this phone: its chip and its software. */
     val supported: Boolean get() = chip != null && newEnough
+
+    /** The switch shows once the add-on is there to run the AI. */
+    val showsSwitch: Boolean get() = supported && addon == AddonState.Ready
 
     /** Tonight, from the run, the files, the charger and holds ([waiting] songs from the ledger). */
     fun night(waiting: Int): NightStatus = nightStatus(enabled, models is ModelState.Ready, progress, hold, pluggedIn, waiting)
 }
 
-/** What the AI tab can do. [readLog]: the last lines of the AI's run log. */
+/**
+ * What the AI tab can do. [readLog]: the last lines of the AI's run log. The add-on: get or update it, cancel that, open
+ * the phone's "Install unknown apps" switch for KJB, or the add-on's own app info (to uninstall one that is not KJB's).
+ */
 @Immutable
 data class AiActions(
     val onSwitch: (Boolean) -> Unit,
@@ -103,6 +116,10 @@ data class AiActions(
     val onDelete: () -> Unit,
     val onOpenAppInfo: () -> Unit,
     val readLog: suspend () -> String,
+    val onGetAddon: () -> Unit = {},
+    val onCancelInstall: () -> Unit = {},
+    val onOpenInstallSettings: () -> Unit = {},
+    val onOpenAddonInfo: () -> Unit = {},
 )
 
 // The glance: one ring, one line, at most one action
@@ -145,7 +162,7 @@ sealed interface Centre {
     data class Value(val value: CentreValue, @StringRes val label: Int? = null) : Centre
 }
 
-enum class AiActionKind { DOWNLOAD, RESUME, TRY_AGAIN, OPEN_APP_INFO }
+enum class AiActionKind { DOWNLOAD, RESUME, TRY_AGAIN, OPEN_APP_INFO, GET_ADDON, CANCEL_INSTALL, OPEN_INSTALL_SETTINGS, OPEN_ADDON_INFO }
 
 data class GlanceAction(val kind: AiActionKind, val label: GlanceText)
 
@@ -161,6 +178,7 @@ fun aiGlance(state: AiState, waiting: Int): AiGlance {
     if (!state.newEnough) {
         return AiGlance(null, Centre.Icon(R.drawable.ic_system_update), GlanceText(R.string.ai_unsupported), GlanceText(R.string.ai_unsupported_detail), null)
     }
+    addonGlance(state)?.let { return it }
     if (!state.enabled) return AiGlance(null, Centre.Glyph, GlanceText(R.string.ai_off), GlanceText(R.string.ai_intro), null)
     return when (val night = state.night(waiting)) {
         NightStatus.Off, NightStatus.NeedsModels -> downloadGlance(state.models)
@@ -213,6 +231,94 @@ fun aiGlance(state: AiState, waiting: Int): AiGlance {
             null,
         )
     }
+}
+
+/**
+ * The AI add-on while it is not ready to run the AI: being got (or updated), missing, out of date, not KJB's, not
+ * answering, or taking over the models KJB 2.0 kept. Null once it is ready: the page is the AI's own again.
+ */
+private fun addonGlance(state: AiState): AiGlance? {
+    installGlance(state.install)?.let { return it }
+    (state.handover as? HandoverState.Moving)?.let { moving ->
+        return AiGlance(
+            Ring(fraction(moving.doneBytes, moving.totalBytes), RingColor.HIGHLIGHT),
+            Centre.Value(CentreValue.Percent(percent(moving.doneBytes, moving.totalBytes))),
+            GlanceText(R.string.ai_addon_moving),
+            GlanceText(R.string.ai_addon_moving_detail),
+            null,
+        )
+    }
+    val get = GlanceAction(AiActionKind.GET_ADDON, GlanceText(R.string.ai_addon_get))
+    return when (state.addon) {
+        null, AddonState.Ready -> null
+        AddonState.Missing -> if (state.handover == HandoverState.Waiting) {
+            AiGlance(EMPTY_RING, Centre.Icon(R.drawable.ic_download), GlanceText(R.string.ai_addon_keep), GlanceText(R.string.ai_addon_keep_detail), get)
+        } else {
+            AiGlance(EMPTY_RING, Centre.Icon(R.drawable.ic_download), GlanceText(R.string.ai_addon_needed), GlanceText(R.string.ai_addon_needed_detail), get)
+        }
+        is AddonState.Outdated -> AiGlance(
+            Ring(1f, RingColor.OUTLINE),
+            Centre.Icon(R.drawable.ic_system_update),
+            GlanceText(R.string.ai_addon_update),
+            GlanceText(R.string.ai_addon_update_detail),
+            GlanceAction(AiActionKind.GET_ADDON, GlanceText(R.string.ai_addon_update_action)),
+        )
+        AddonState.Untrusted -> AiGlance(
+            Ring(1f, RingColor.ERROR),
+            Centre.Icon(R.drawable.ic_block, tint = RingColor.ERROR),
+            GlanceText(R.string.ai_addon_untrusted),
+            GlanceText(R.string.ai_addon_untrusted_detail),
+            GlanceAction(AiActionKind.OPEN_ADDON_INFO, GlanceText(R.string.open_app_info)),
+        )
+        AddonState.Unreachable -> AiGlance(
+            Ring(1f, RingColor.OUTLINE),
+            Centre.Icon(R.drawable.ic_schedule),
+            GlanceText(R.string.ai_addon_unreachable),
+            GlanceText(R.string.ai_addon_unreachable_detail),
+            null,
+        )
+    }
+}
+
+/** Getting the add-on: its download with Cancel, the phone's install switch, Android's dialog, or why it failed. */
+private fun installGlance(install: InstallState): AiGlance? = when (install) {
+    InstallState.Idle -> null
+    is InstallState.Downloading -> AiGlance(
+        Ring(fraction(install.doneBytes, install.totalBytes), RingColor.HIGHLIGHT),
+        Centre.Value(CentreValue.Percent(percent(install.doneBytes, install.totalBytes))),
+        GlanceText(R.string.ai_addon_downloading, listOf(GlanceArg.Bytes(install.doneBytes), GlanceArg.Bytes(install.totalBytes))),
+        null,
+        GlanceAction(AiActionKind.CANCEL_INSTALL, GlanceText(R.string.ai_addon_cancel)),
+    )
+    InstallState.NeedsPermission -> AiGlance(
+        Ring(1f, RingColor.OUTLINE),
+        Centre.Icon(R.drawable.ic_lock),
+        GlanceText(R.string.ai_addon_allow),
+        GlanceText(R.string.ai_addon_allow_detail),
+        GlanceAction(AiActionKind.OPEN_INSTALL_SETTINGS, GlanceText(R.string.ai_addon_open_settings)),
+    )
+    InstallState.Installing -> AiGlance(
+        Ring(1f, RingColor.HIGHLIGHT),
+        Centre.Icon(R.drawable.ic_system_update),
+        GlanceText(R.string.ai_addon_confirm),
+        GlanceText(R.string.ai_addon_confirm_detail),
+        GlanceAction(AiActionKind.CANCEL_INSTALL, GlanceText(R.string.ai_addon_cancel)),
+    )
+    is InstallState.Failed -> AiGlance(
+        Ring(1f, RingColor.ERROR),
+        Centre.Icon(R.drawable.ic_error, tint = RingColor.ERROR),
+        GlanceText(R.string.ai_addon_failed),
+        GlanceText(
+            when (install.reason) {
+                InstallFailure.NOT_PUBLISHED -> R.string.ai_addon_failed_not_published
+                InstallFailure.NETWORK -> R.string.ai_addon_failed_network
+                InstallFailure.DOWNLOAD -> R.string.ai_addon_failed_download
+                InstallFailure.NOT_KJBS -> R.string.ai_addon_failed_not_kjbs
+                InstallFailure.INSTALL -> R.string.ai_addon_failed_install
+            },
+        ),
+        GlanceAction(AiActionKind.GET_ADDON, GlanceText(R.string.ai_try_again)),
+    )
 }
 
 private fun held(color: RingColor, @DrawableRes icon: Int, @StringRes line: Int, @StringRes sheet: Int) =
@@ -290,6 +396,11 @@ data class AiTile(val ring: Ring?, val value: TileValue, @StringRes val label: I
 fun aiTile(state: AiState, waiting: Int): AiTile? {
     if (!state.supported || !state.enabled) return null
     val ring = aiGlance(state, waiting).ring
+    when (state.addon) {
+        AddonState.Missing, AddonState.Untrusted -> return AiTile(ring, TileValue.Text(R.string.ai_tile_get), R.string.ai_tile_addon)
+        is AddonState.Outdated -> return AiTile(ring, TileValue.Text(R.string.ai_addon_update_action), R.string.ai_tile_addon)
+        null, AddonState.Unreachable, AddonState.Ready -> Unit
+    }
     return when (val night = state.night(waiting)) {
         NightStatus.Off, NightStatus.NeedsModels -> {
             val done = when (val models = state.models) {
@@ -328,12 +439,17 @@ fun aiResults(counts: Map<LyricsStatus, Int>): List<Pair<LyricsStatus, Int>> = A
 
 /**
  * The dot on the AI tab: the phone refused to start the AI (battery use can fix it), or the download failed or has no
- * room; a full phone counts only once the user asked for the AI.
+ * room; a full phone counts only once the user asked for the AI. And the add-on: getting it failed or waits for the
+ * phone's install switch, it is out of date or not KJB's, or a user who had the AI needs it to keep using it.
  */
 fun aiAttention(state: AiState, waiting: Int): Boolean {
     if (!state.supported) return false
     val models = state.models
-    return (state.night(waiting) as? NightStatus.Held)?.reason == AiHold.NOT_ALLOWED ||
+    val addon = state.addon
+    return state.install is InstallState.Failed || state.install == InstallState.NeedsPermission ||
+        addon is AddonState.Outdated || addon == AddonState.Untrusted ||
+        (addon == AddonState.Missing && state.handover == HandoverState.Waiting) ||
+        (state.night(waiting) as? NightStatus.Held)?.reason == AiHold.NOT_ALLOWED ||
         models is ModelState.Failed ||
         (models is ModelState.NoRoom && (state.enabled || models.doneBytes > 0))
 }
@@ -376,7 +492,7 @@ fun AiScreen(
         item(key = "switch", contentType = "switch") {
             Column(rowMotion(reduced)) {
                 banner()
-                if (state.supported) AiSwitchBar(state.enabled, enabled = !state.stopping, actions.onSwitch)
+                if (state.showsSwitch) AiSwitchBar(state.enabled, enabled = !state.stopping, actions.onSwitch)
             }
         }
         item(key = "glance", contentType = "glance") {
@@ -385,6 +501,10 @@ fun AiScreen(
                     when (it) {
                         AiActionKind.DOWNLOAD, AiActionKind.RESUME, AiActionKind.TRY_AGAIN -> actions.onDownload()
                         AiActionKind.OPEN_APP_INFO -> actions.onOpenAppInfo()
+                        AiActionKind.GET_ADDON -> actions.onGetAddon()
+                        AiActionKind.CANCEL_INSTALL -> actions.onCancelInstall()
+                        AiActionKind.OPEN_INSTALL_SETTINGS -> actions.onOpenInstallSettings()
+                        AiActionKind.OPEN_ADDON_INFO -> actions.onOpenAddonInfo()
                     }
                 }
             }
@@ -568,7 +688,8 @@ private fun AiRows(state: AiState, onDownload: () -> Unit, onBattery: () -> Unit
     val brand = LocalBrandColors.current
     val tones = LocalStatusColors.current
     val chevron: @Composable () -> Unit = { Icon(painterResource(R.drawable.ic_chevron_right), contentDescription = null) }
-    val models = state.models
+    // The models are the add-on's: their row shows once it is there.
+    val models = state.models?.takeIf { state.addon == AddonState.Ready }
     GroupedRows {
         if (models != null) {
             GroupedRow(

@@ -35,6 +35,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.lyrify.R
+import app.lyrify.addon.AddonState
 import app.lyrify.data.LedgerState
 import app.lyrify.data.LyricsStatus
 import app.lyrify.overnight.NightStatus
@@ -69,14 +70,15 @@ data class ToolRow(val tool: Tool, val line: ToolLine?, val badge: Int? = null, 
 /**
  * The rows of Tools for what each feature says now: [checks] songs to check, Duplicates' [dupes] view and [dupesBadge]
  * groups not opened yet, [tones] made, Covers & tags' line and badge ([coversTags], from its milestone), and the AI's
- * state with [aiWaiting] songs waiting for it.
+ * state with [aiWaiting] songs waiting for it. On a phone the AI does not run on there is no AI row at all, no dead
+ * button (the AI add-on design).
  */
-fun toolRows(checks: Int, dupes: DupesView, dupesBadge: Int, tones: Int, coversTags: EntryRow?, ai: AiState, aiWaiting: Int): List<ToolRow> = listOf(
+fun toolRows(checks: Int, dupes: DupesView, dupesBadge: Int, tones: Int, coversTags: EntryRow?, ai: AiState, aiWaiting: Int): List<ToolRow> = listOfNotNull(
     ToolRow(Tool.CHECK, if (checks > 0) ToolLine.Count(R.plurals.tools_check, checks) else ToolLine.Text(R.string.tools_check_none), badge = checks.takeIf { it > 0 }),
     ToolRow(Tool.DUPLICATES, dupesLine(dupes), badge = dupesBadge.takeIf { it > 0 }),
     ToolRow(Tool.TONES, if (tones > 0) ToolLine.Count(R.plurals.tools_tones, tones) else ToolLine.Text(R.string.tools_tones_none)),
     ToolRow(Tool.COVERS_TAGS, coversTags?.line, badge = coversTags?.badge),
-    ToolRow(Tool.AI, aiLine(ai, aiWaiting), dot = aiAttention(ai, aiWaiting)),
+    ToolRow(Tool.AI, aiLine(ai, aiWaiting), dot = aiAttention(ai, aiWaiting)).takeIf { ai.supported },
     ToolRow(Tool.SETTINGS, null),
 )
 
@@ -89,12 +91,12 @@ private fun dupesLine(dupes: DupesView): ToolLine? = when (dupes) {
     is DupesView.Results -> dupes.results.groups.size.let { if (it > 0) ToolLine.Count(R.plurals.dupes_groups, it) else ToolLine.Text(R.string.tools_dupes_none) }
 }
 
-/** The phone it can't run on, off, all done, or what the Companion Now tile would say ("12/40 · AI tonight"). */
+/** Get AI or its update, off, all done, or what the Companion Now tile would say ("12/40 · AI tonight"). */
 private fun aiLine(ai: AiState, waiting: Int): ToolLine {
     val tile = aiTile(ai, waiting)
     return when {
-        ai.chip == null -> ToolLine.Text(R.string.tools_ai_no_chip)
-        !ai.newEnough -> ToolLine.Text(R.string.tools_ai_update)
+        ai.addon == AddonState.Missing || ai.addon == AddonState.Untrusted -> ToolLine.Text(R.string.ai_addon_get)
+        ai.addon is AddonState.Outdated -> ToolLine.Text(R.string.tools_ai_update)
         tile == null -> ToolLine.Text(R.string.tools_ai_off)
         ai.night(waiting) == NightStatus.AllDone -> ToolLine.Text(R.string.ai_all_done)
         else -> ToolLine.Ai(tile.value, tile.label)

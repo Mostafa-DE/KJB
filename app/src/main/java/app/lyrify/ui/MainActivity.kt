@@ -32,6 +32,9 @@ import app.lyrify.data.LedgerStore
 import app.lyrify.logFailures
 import app.lyrify.media.NowPlaying
 import app.lyrify.addon.Addon
+import app.lyrify.addon.AddonInstalls
+import app.lyrify.addon.HandoverState
+import app.lyrify.addon.ModelHandover
 import app.lyrify.models.NpuChips
 import app.lyrify.overnight.AiLyrics
 import app.lyrify.overnight.AiQueue
@@ -106,6 +109,8 @@ private fun App(ledger: LedgerStore, destination: Page?, view: FullScreen?, onVi
         unrestricted = isUnrestricted(context)
         // An app in the foreground gets its daily time for long media work back.
         AiLyrics.appOpened(context)
+        // Back from the phone's "Install unknown apps" switch: the add-on's install goes on.
+        AddonInstalls.installer(context).resume()
         onPauseOrDispose { }
     }
 
@@ -135,6 +140,8 @@ private fun App(ledger: LedgerStore, destination: Page?, view: FullScreen?, onVi
     val connected by NowPlaying.connected.collectAsStateWithLifecycle()
     // The AI add-on and its models, bound while KJB shows (on a phone the AI runs on only).
     val addon by remember(context) { if (NpuChips.supported() != null) Addon.views(context) else flowOf(null) }.collectAsStateWithLifecycle(initialValue = null)
+    val install by remember(context) { AddonInstalls.installer(context).state }.collectAsStateWithLifecycle()
+    val handover by remember(context) { ModelHandover.state(context) }.collectAsStateWithLifecycle(initialValue = HandoverState.None)
     val aiEnabled by remember(context) { AiLyrics.enabled(context) }.collectAsStateWithLifecycle()
     val deletingModels by Lyrify.deletingModels.collectAsStateWithLifecycle()
     val aiProgress by AiLyrics.progress.collectAsStateWithLifecycle()
@@ -163,6 +170,8 @@ private fun App(ledger: LedgerStore, destination: Page?, view: FullScreen?, onVi
             newEnough = Build.VERSION.SDK_INT >= NpuChips.MIN_SDK,
             models = addon?.status?.models,
             addon = addon?.state,
+            install = install,
+            handover = handover,
             enabled = aiEnabled,
             progress = aiProgress,
             hold = aiHold,
@@ -177,6 +186,10 @@ private fun App(ledger: LedgerStore, destination: Page?, view: FullScreen?, onVi
                 onDelete = { Lyrify.deleteModels(context) },
                 onOpenAppInfo = { context.startFirst(appInfoIntents(context)) },
                 readLog = { withContext(Dispatchers.IO) { AiLyrics.runLog(context).tail(RUN_LOG_LINES).joinToString("\n") } },
+                onGetAddon = { AddonInstalls.installer(context).start() },
+                onCancelInstall = { AddonInstalls.installer(context).cancel() },
+                onOpenInstallSettings = { context.startFirst(listOf(AddonInstalls.installSettings(context))) },
+                onOpenAddonInfo = { context.startFirst(listOf(AddonInstalls.addonInfo())) },
             )
         },
         aiWaiting = aiCounts.first,
