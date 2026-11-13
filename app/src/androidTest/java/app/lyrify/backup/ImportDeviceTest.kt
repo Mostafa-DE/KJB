@@ -81,9 +81,23 @@ class ImportDeviceTest {
 
             val lantern = ImportSong(LANTERN_REL, null, "Paper Lantern", "Kit Calloway", "Harbour Glass", 201_000, relativePath = LANTERN_REL, mediaStoreId = 11)
             assertEquals(listOf(ImportPlays(lantern, 4, T0)), bundle.plays)
-            assertEquals(listOf(ImportQueue(listOf(lantern, ImportSong(BELL_REL, null, "Tide Bell", durationMs = 185_000, relativePath = BELL_REL, mediaStoreId = 12)), index = 1)), bundle.queues)
+            assertEquals(listOf(ImportQueue(listOf(lantern, ImportSong(BELL_REL, null, "Tide Bell", durationMs = 185_000, relativePath = BELL_REL, mediaStoreId = 12)), index = 1, name = "q")), bundle.queues)
             assertTrue(File(dir, "musicolet-import").listFiles().orEmpty().isEmpty())
         }
+    }
+
+    @Test
+    fun aViewInPlaceOfTheSongsTableIsNotRead() {
+        val file = File(dir, "made-view.db")
+        SQLiteDatabase.openOrCreateDatabase(file, null).use { db ->
+            db.execSQL(
+                "CREATE VIEW TABLE_SONGS AS SELECT hex(randomblob(4000)) AS COL_PATH, 'a' AS COL_TITLE, 'b' AS COL_ARTIST, 'c' AS COL_ALBUM, " +
+                    "1000 AS COL_DURATION, 1 AS COL_NUM_PLAYED, 0 AS COL_LAST_PLAYED",
+            )
+        }
+
+        assertEquals(null, MusicoletSqlite(dir) {}.songs(file.readBytes()))
+        assertTrue(File(dir, "musicolet-import").listFiles().orEmpty().isEmpty())
     }
 
     @Test

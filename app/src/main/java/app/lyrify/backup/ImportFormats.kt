@@ -38,8 +38,8 @@ data class ImportPlaylist(val name: String?, val songs: List<ImportSong>)
 /** A song's play count in the other app, and when it was last played there (wall-clock millis), when the file says. */
 data class ImportPlays(val song: ImportSong, val count: Int, val lastPlayedAt: Long? = null)
 
-/** A queue another app kept: its songs in order, the [index] of the one it was at and the [positionMs] in it. */
-data class ImportQueue(val songs: List<ImportSong>, val index: Int = 0, val positionMs: Long = 0)
+/** A queue another app kept: its songs in order, the [index] of the one it was at, the [positionMs] in it, and its [name] there. */
+data class ImportQueue(val songs: List<ImportSong>, val index: Int = 0, val positionMs: Long = 0, val name: String? = null)
 
 /** What an import read, in one neutral form whatever the file was. */
 data class ImportBundle(

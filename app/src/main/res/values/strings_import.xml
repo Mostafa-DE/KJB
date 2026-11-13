@@ -2,7 +2,7 @@
 <!-- Import from another app (lane IM1, ui/ImportScreens.kt): Settings, Backup, Import from app. Labels are three words or fewer; sentences only in the sheet. -->
 <resources>
     <string name="import_row">Import from app</string>
-    <string name="import_row_detail">Playlists from other players</string>
+    <string name="import_row_detail">Playlists and favourites from other players</string>
 
     <!-- The first sheet: where the files come from. -->
     <string name="import_title">Import from app</string>
@@ -79,10 +79,13 @@
     <string name="import_done_plays">Counts raised</string>
     <string name="import_done_queues">Queues added</string>
     <string name="import_queue_name">Musicolet queue</string>
+    <string name="import_queue_named">Musicolet: %1$s</string>
     <string name="import_copy">Copy list</string>
     <string name="import_copied">List copied</string>
     <string name="import_undo">Undo</string>
     <string name="import_failed">Couldn\'t import</string>
     <string name="import_undone">Import undone</string>
-    <string name="import_not_undone">Couldn\'t undo the import</string>
+    <string name="import_not_undone">Undo failed</string>
+    <string name="import_not_undone_text">KJB couldn\'t take all of this import back yet. Try Undo again; if it still fails, KJB finishes taking it back the next time it starts.</string>
+    <string name="import_partly_text">Part of this import was written before something failed. Undo takes it back; if you leave it, KJB takes it back the next time it starts.</string>
 </resources>

@@ -70,6 +70,19 @@ class ImportMatchTest {
     }
 
     @Test
+    fun `a path is not taken when the line's own text names another song (review panel-im1, finding 2)`() {
+        // An m3u line at Paper Lantern's path whose #EXTINF names Salt Road: the tags find Salt Road.
+        assertEquals(road, matcher.find(hint(lantern.path, info = "Mira Solen - Salt Road", durationMs = 199_000)))
+        // A pls line whose title names a song this phone does not have: none, never the file at that path.
+        assertNull(matcher.find(hint(lantern.path, info = "Odo Brannick - Glass Steps")))
+        // A title that agrees but an artist that does not: not that file either.
+        assertNull(matcher.find(hint(lantern.path, title = "Paper Lantern", artist = "Odo Brannick")))
+        // The text in any order, or the title alone, still agrees.
+        assertEquals(lantern, matcher.find(hint(lantern.path, info = "Paper Lantern - Kit Calloway")))
+        assertEquals(lantern, matcher.find(hint(lantern.path, info = "Paper Lantern", durationMs = 201_000)))
+    }
+
+    @Test
     fun `pass 2, the same path below the storage root, from another phone's root name or its SD card`() {
         assertEquals(lantern, matcher.find(hint("/sdcard/Music/Harbour Glass/01 Paper Lantern.mp3")))
         assertEquals(water, matcher.find(hint("/storage/emulated/0/Music/Night Ferry/01 Low Water.mp3")))

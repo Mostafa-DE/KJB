@@ -456,19 +456,18 @@ object BackupBundle {
         )
     }?.distinctBy { it.path }
 
-    internal sealed interface Unzipped {
+    private sealed interface Unzipped {
         data class Files(val files: Map<String, ByteArray>) : Unzipped
 
         data class Refused(val why: BackupRead.Why) : Unzipped
     }
 
     /**
-     * Every entry of [input] unpacked, counted against [limits] as it goes; only the names [keep] takes ([KEPT] for a
-     * backup; an import of another app's backup takes its own) are kept, in memory, and no name ever becomes a path. A
-     * damaged or cut zip is [BackupRead.Why.CORRUPT]: the entries' CRCs are checked, and a cut that loses an entry
-     * leaves a section the manifest lists missing.
+     * Every entry of [input] unpacked, counted against [limits] as it goes; only [KEPT] names are kept, in memory, and
+     * no name ever becomes a path. A damaged or cut zip is [BackupRead.Why.CORRUPT]: the entries' CRCs are checked, and a
+     * cut that loses an entry leaves a section the manifest lists missing.
      */
-    internal fun unzip(input: InputStream, limits: ZipLimits, keep: (String) -> Boolean = KEPT::contains): Unzipped {
+    private fun unzip(input: InputStream, limits: ZipLimits): Unzipped {
         val kept = mutableMapOf<String, ByteArray>()
         val seen = mutableSetOf<String>()
         var total = 0L
@@ -479,7 +478,7 @@ object BackupBundle {
                     val entry = zip.nextEntry ?: break
                     if (seen.size == limits.entries) return Unzipped.Refused(BackupRead.Why.TOO_BIG)
                     if (!seen.add(entry.name)) return Unzipped.Refused(BackupRead.Why.DUPLICATE)
-                    val bytes = if (keep(entry.name)) ByteArrayOutputStream() else null
+                    val bytes = if (entry.name in KEPT) ByteArrayOutputStream() else null
                     var size = 0L
                     while (true) {
                         val read = zip.read(buffer)

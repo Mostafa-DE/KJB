@@ -78,6 +78,10 @@ class ImportScreensTest {
         assertEquals("Imported 12 playlists", plural("import_done").getValue("other").format("12"))
         assertEquals("3 playlists other apps saved on your phone.", plural("import_phone_text").getValue("other").format("3"))
         assertEquals("6,863 songs", plural("import_queue_songs").getValue("other").format("6,863"))
+        assertEquals("Musicolet: Morning", strings().getValue("import_queue_named").format("Morning"))
+        assertEquals("Playlists and favourites from other players", strings().getValue("import_row_detail"))
+        assertEquals("Undo failed", strings().getValue("import_not_undone"))
+        assertTrue(strings().getValue("import_not_undone_text").endsWith("."))
     }
 
     @Test
@@ -87,7 +91,7 @@ class ImportScreensTest {
             "import_found_file", "import_found_files", "import_found_folder", "import_found_phone", "import_kind_playlists", "import_kind_favourites", "import_kind_plays",
             "import_now", "import_cancel", "import_not_recognised", "import_too_big", "import_unreadable", "import_empty", "import_none", "import_close",
             "import_done_other", "import_nothing_new", "import_done_created", "import_done_songs", "import_done_favourites", "import_done_plays",
-            "import_copy", "import_copied", "import_undo", "import_failed", "import_undone", "import_kind_queues", "import_done_queues", "import_queue_name",
+            "import_copy", "import_copied", "import_undo", "import_failed", "import_undone", "import_kind_queues", "import_done_queues", "import_queue_name", "import_not_undone",
         )
         labels.forEach { assertTrue(it, strings().getValue(it).split(' ').size <= 3) }
         val text = FILE.readText()

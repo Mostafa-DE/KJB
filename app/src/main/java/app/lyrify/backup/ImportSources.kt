@@ -17,10 +17,18 @@ import app.lyrify.player.PlayerGraph
 import app.lyrify.player.QueueBook
 import app.lyrify.stats.LoggedPlay
 import app.lyrify.stats.StatsGraph
+import app.lyrify.logFailures
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.io.IOException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import java.nio.file.StandardOpenOption
 import java.util.UUID
 
 // Where an import's files come from (lane IM1): the files and folders the user picks in the system's dialogs, and the
@@ -273,6 +281,39 @@ class AppImportStores(context: Context) : ImportStores {
     override suspend fun addPlays(plays: List<LoggedPlay>): Boolean = StatsGraph.log(app).putAll(plays)
 
     override suspend fun removePlays(plays: List<LoggedPlay>): Boolean = StatsGraph.log(app).removeAll(plays)
+
+    /** `files/import-journal.json`, written whole (a temp file moved over it), or deleted for null. */
+    override suspend fun journal(undo: ImportUndo?): Boolean = withContext(Dispatchers.IO) {
+        try {
+            if (undo == null || undo.isEmpty) {
+                Files.deleteIfExists(journalFile.toPath())
+            } else {
+                val temp = File(app.filesDir, JOURNAL + TEMP)
+                Files.write(temp.toPath(), ImportJournal.encode(undo).encodeToByteArray(), StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE, StandardOpenOption.SYNC)
+                Files.move(temp.toPath(), journalFile.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+            }
+            true
+        } catch (e: IOException) {
+            Log.w(LOG_TAG, "import: journal not written (${e.javaClass.simpleName})")
+            false
+        }
+    }
+
+    override suspend fun journaled(): ImportUndo? = withContext(Dispatchers.IO) {
+        try {
+            if (journalFile.isFile) ImportJournal.decode(journalFile.readText()) else null
+        } catch (e: IOException) {
+            Log.w(LOG_TAG, "import: journal not read (${e.javaClass.simpleName})")
+            null
+        }
+    }
+
+    private val journalFile: File get() = File(app.filesDir, JOURNAL)
+
+    private companion object {
+        const val JOURNAL: String = "import-journal.json"
+        const val TEMP: String = ".tmp"
+    }
 }
 
 /** Import from app's steps for its sheet, each off the main thread; the log gets counts and kinds only. */
@@ -307,7 +348,7 @@ object Imports {
     }
 
     /** Writes [chosen] of [plan]; [untitled] names a playlist without a name, [queueName] the queues, [reserved] are KJB's own lists' names. */
-    suspend fun apply(context: Context, plan: ImportPlan, chosen: Set<ImportKind>, untitled: String, queueName: String, reserved: Set<String>): ImportOutcome? =
+    suspend fun apply(context: Context, plan: ImportPlan, chosen: Set<ImportKind>, untitled: String, queueName: (String?) -> String, reserved: Set<String>): ImportOutcome? =
         withContext(Dispatchers.Default) {
             plan.apply(
                 chosen,
@@ -323,6 +364,14 @@ object Imports {
 
     suspend fun undo(context: Context, undo: ImportUndo): Boolean = withContext(Dispatchers.Default) {
         ImportPlan.undo(undo, AppImportStores(context)) { Log.i(LOG_TAG, it) }
+    }
+
+    private val background: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO + logFailures)
+
+    /** On start: an import or an Undo the app's death cut short is taken back ([ImportPlan.recover]), in the background. */
+    fun startRecovery(context: Context) {
+        val app = context.applicationContext
+        background.launch { ImportPlan.recover(AppImportStores(app)) { Log.i(LOG_TAG, it) } }
     }
 
     private fun documents(context: Context): ImportDocuments {

@@ -2,6 +2,7 @@ package app.lyrify.backup
 
 import app.lyrify.library.song
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -41,10 +42,40 @@ class MusicoletTest {
                 playlists = listOf(ImportPlaylist("Evening", listOf(lantern, water))),
                 favourites = listOf(bell),
                 plays = listOf(ImportPlays(lantern, 3, LAST)),
-                queues = listOf(ImportQueue(listOf(lantern, bell, water, gone), index = 1, positionMs = 42_000)),
+                queues = listOf(ImportQueue(listOf(lantern, bell, water, gone), index = 1, positionMs = 42_000, name = "Queue one")),
             ),
             read.bundle,
         )
+    }
+
+    @Test
+    fun `a queue keeps its name (review panel-im1, finding 7)`() {
+        assertEquals("Queue one", (Musicolet.read(backup(standard()), db) as MusicoletRead.Read).bundle.queues.single().name)
+    }
+
+    @Test
+    fun `only a plain songs table is read, never a view, a virtual table or computed columns (finding 3)`() {
+        assertTrue(SongsTable.plain("table", "CREATE TABLE TABLE_SONGS ( COL_PATH TEXT primary key, COL_TITLE TEXT COLLATE NOCASE )"))
+        assertFalse(SongsTable.plain("view", "CREATE VIEW TABLE_SONGS AS SELECT hex(randomblob(700000)) AS COL_PATH"))
+        assertFalse(SongsTable.plain("table", "CREATE VIRTUAL TABLE TABLE_SONGS USING fts4(COL_PATH)"))
+        assertFalse(SongsTable.plain("table", "CREATE TABLE TABLE_SONGS ( COL_PATH TEXT, COL_TITLE TEXT GENERATED ALWAYS AS (hex(randomblob(9))) )"))
+        assertFalse(SongsTable.plain("table", "CREATE TABLE TABLE_SONGS ( COL_PATH TEXT, COL_TITLE TEXT AS(upper(COL_PATH)) )"))
+        assertFalse(SongsTable.plain(null, null))
+    }
+
+    @Test
+    fun `a read of the songs table stops at a field too long, at too much text in all, and at its time (finding 3)`() {
+        var now = 0L
+        val budget = TextBudget(maxField = 10, maxTotal = 25, deadline = 100) { now }
+
+        assertTrue(budget.take("0123456789"))
+        assertTrue(budget.take(null))
+        assertFalse(TextBudget(maxField = 10, maxTotal = 25, deadline = 100) { now }.take("01234567890"))
+        assertTrue(budget.take("0123456789"))
+        assertFalse(budget.take("0123456789"))
+        val timed = TextBudget(maxField = 10, maxTotal = 25, deadline = 100) { now }
+        now = 101
+        assertFalse(timed.take("a"))
     }
 
     @Test

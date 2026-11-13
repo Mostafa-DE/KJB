@@ -68,8 +68,8 @@ class SongMatcher(phone: List<Song>) {
      * songs of an import may be the same song of the phone (two files, two forms of one path), and both find it.
      *
      * 0. The same MediaStore id (a Musicolet backup from this phone), only for a file of the same name.
-     * 1. The same absolute path: taken as it is when the file says nothing of the song but its length (an m3u, as m3u
-     *    import always did), else only when it agrees ([fits]).
+     * 1. The same absolute path: taken as it is when the file says nothing of the song but its length (an m3u line
+     *    without `#EXTINF`, as m3u import always did), else only when it agrees ([fits]).
      * 2. The same path below the storage root ([relativeToRoot]); for a root this phone does not know (a computer's, a
      *    Windows drive's), the longest end of the path, two names at least, that is a song's path below its root. A
      *    path below the root the file gives apart ([ImportSong.relativePath], Musicolet's) is taken as it is.
@@ -123,17 +123,27 @@ class SongMatcher(phone: List<Song>) {
         return fits.singleOrNull { it.sizeBytes == size }
     }
 
-    /** Whether the file says who or what [song] is (its title, artist or size), not only its length. */
-    private fun identityKnown(song: ImportSong): Boolean = song.title != null || song.artist != null || song.sizeBytes != null
+    /** Whether the file says who or what [song] is (its title, artist, size, or an `#EXTINF` or `TitleN` text), not only its length. */
+    private fun identityKnown(song: ImportSong): Boolean = song.title != null || song.artist != null || song.sizeBytes != null || song.info != null
 
     /**
-     * Whether [phone] can be [song], as far as the file knows it: the same length within [LENGTH_TOLERANCE_MS], and the
-     * same title, or artist, or size in bytes ([samePlace]'s rule for a backup).
+     * Whether [phone] can be [song], as far as the file knows it: the same length within [LENGTH_TOLERANCE_MS], and no
+     * clue the file gives against it: its title, artist and size, each when known, are [phone]'s, and an "Artist -
+     * Title" text without them names [phone]'s title, in whatever order or form ([names]). A path whose line names
+     * another song is not that song's (review panel-im1): the tags then decide.
      */
     private fun fits(song: ImportSong, phone: Song): Boolean {
         if (song.durationMs != null && abs(song.durationMs - phone.durationMs) > LENGTH_TOLERANCE_MS) return false
-        if (!identityKnown(song)) return true
-        return (song.title != null && same(song.title, phone.title)) || (song.artist != null && same(song.artist, phone.artist)) || (song.sizeBytes != null && song.sizeBytes == phone.sizeBytes)
+        if (song.title != null && !same(song.title, phone.title)) return false
+        if (song.artist != null && !same(song.artist, phone.artist)) return false
+        if (song.sizeBytes != null && song.sizeBytes != phone.sizeBytes) return false
+        return song.title != null || song.info == null || names(song.info, phone)
+    }
+
+    /** Whether [info] ("Artist - Title", "Title - Artist", the title alone) holds [phone]'s title as whole words, case, accents and punctuation aside. */
+    private fun names(info: String, phone: Song): Boolean {
+        val title = TrackNames.normalize(phone.title).takeIf(String::isNotEmpty) ?: return false
+        return " ${TrackNames.normalize(info)} ".contains(" $title ")
     }
 
     /** The songs with [song]'s title, artist, album and length; of several, the one of its size when only one has it. */

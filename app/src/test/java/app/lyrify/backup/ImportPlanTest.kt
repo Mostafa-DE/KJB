@@ -3,6 +3,7 @@ package app.lyrify.backup
 import app.lyrify.library.Playlist
 import app.lyrify.library.PlaylistsState
 import app.lyrify.library.Song
+import app.lyrify.library.SongRef
 import app.lyrify.library.song
 import app.lyrify.player.QueueBook
 import app.lyrify.player.QueueSource
@@ -88,7 +89,7 @@ class ImportPlanTest {
         val (state, undo) = ImportPlan.merge(PlaylistsState(), listOf("Road Trip" to listOf(lantern.ref, water.ref, lantern.ref)), emptyList(), ids(), NOW)
 
         assertEquals(listOf(Playlist("p1", "Road Trip", listOf(lantern.ref, water.ref, lantern.ref), NOW)), state.playlists)
-        assertEquals(ImportUndo(created = listOf("p1")), undo)
+        assertEquals(ImportUndo(created = mapOf("p1" to listOf(lantern.ref, water.ref, lantern.ref))), undo)
     }
 
     @Test
@@ -122,8 +123,8 @@ class ImportPlanTest {
         val (state, undo) = ImportPlan.merge(PlaylistsState(), listOf("Mix" to listOf(lantern.ref), "MIX" to listOf(lantern.ref, bell.ref)), emptyList(), ids(), NOW)
 
         assertEquals(listOf(Playlist("p1", "Mix", listOf(lantern.ref, bell.ref), NOW)), state.playlists)
-        // Made by the import: Undo deletes it whole, so the songs added to it are not listed again.
-        assertEquals(ImportUndo(created = listOf("p1")), undo)
+        // Made by the import: every song in it is the import's.
+        assertEquals(ImportUndo(created = mapOf("p1" to listOf(lantern.ref, bell.ref))), undo)
     }
 
     @Test
@@ -275,15 +276,19 @@ class ImportPlanTest {
     }
 
     @Test
-    fun `Undo removes only what is still there, and a failed Undo puts the plays back`() = runTest {
-        val undo = ImportUndo(created = listOf("gone"), added = mapOf("mine" to listOf(lantern.ref, road.ref)), plays = listOf(LoggedPlay(road.ref, NOW, 0, true)))
+    fun `Undo removes only what is still there, and a failed Undo keeps what is left for a retry or the next start`() = runTest {
+        val undo = ImportUndo(created = mapOf("gone" to listOf(bell.ref)), added = mapOf("mine" to listOf(lantern.ref, road.ref)), plays = listOf(LoggedPlay(road.ref, NOW, 0, true)))
         val state = PlaylistsState(listOf(Playlist("mine", "Evening", listOf(water.ref, road.ref), 1)))
 
         assertEquals(PlaylistsState(listOf(Playlist("mine", "Evening", listOf(water.ref), 1))), ImportPlan.unmerge(state, undo))
 
         val stores = FakeStores(state).apply { log.plays += undo.plays; playlistsFail = true }
         assertFalse(ImportPlan.undo(undo, stores))
-        assertEquals(undo.plays, stores.log.plays)
+        assertEquals(undo.copy(plays = emptyList()), stores.journal)
+        stores.playlistsFail = false
+        assertTrue(ImportPlan.recover(stores))
+        assertEquals(PlaylistsState(listOf(Playlist("mine", "Evening", listOf(water.ref), 1))), stores.state)
+        assertNull(stores.journal)
     }
 
     // Queues: saved queues, never the one playing
@@ -295,9 +300,9 @@ class ImportPlanTest {
         val playing = stores.queues.currentId
         val bundle = ImportBundle(queues = listOf(ImportQueue(listOf(line(lantern), gone, line(water)), index = 2, positionMs = 42_000)))
 
-        val outcome = ImportPlan(bundle, phone).apply(setOf(ImportKind.QUEUES), stores, ids(), NOW, UNTITLED, queueName = QUEUE)!!
+        val outcome = ImportPlan(bundle, phone).apply(setOf(ImportKind.QUEUES), stores, ids(), NOW, UNTITLED, queueName = { QUEUE })!!
 
-        val made = stores.queues.queue(outcome.undo.queues.single())!!
+        val made = stores.queues.queue(outcome.undo.queues.keys.single())!!
         assertEquals(listOf(lantern.ref, water.ref), made.items.map { it.song })
         assertEquals(QUEUE, made.name)
         assertEquals(1, made.index)
@@ -305,7 +310,7 @@ class ImportPlanTest {
         assertTrue(made.id in stores.queues.saved)
         assertEquals(playing, stores.queues.currentId)
         assertEquals(1, outcome.queuesAdded)
-        assertEquals(0, ImportPlan(bundle, phone).apply(setOf(ImportKind.QUEUES), stores, ids(), NOW, UNTITLED, queueName = QUEUE)!!.queuesAdded)
+        assertEquals(0, ImportPlan(bundle, phone).apply(setOf(ImportKind.QUEUES), stores, ids(), NOW, UNTITLED, queueName = { QUEUE })!!.queuesAdded)
 
         assertTrue(ImportPlan.undo(outcome.undo, stores))
         assertNull(stores.queues.queue(made.id))
@@ -314,12 +319,12 @@ class ImportPlanTest {
 
     @Test
     fun `a queue whose song it was at is not here starts at its first song, and a queue with no song here is not made`() {
-        val (book, made) = ImportPlan.mergeQueues(QueueBook(), listOf(Triple(listOf(lantern.ref, water.ref), -1, 9_000L), Triple(emptyList(), 0, 0L)), QUEUE, NOW)
+        val (book, made) = ImportPlan.mergeQueues(QueueBook(), listOf(PlacedQueue(QUEUE, listOf(lantern.ref, water.ref), -1, 9_000L), PlacedQueue(QUEUE, emptyList(), 0, 0L)), NOW)
 
-        val queue = book.queue(made.single())!!
+        val queue = book.queue(made.keys.single())!!
         assertEquals(0, queue.index)
         assertEquals(0L, queue.positionMs)
-        assertEquals(book, ImportPlan.unqueue(book, emptyList()))
+        assertEquals(book, ImportPlan.unqueue(book, emptyMap()))
         assertEquals(QueueBook(nextId = book.nextId, nextUid = book.nextUid), ImportPlan.unqueue(book, made))
     }
 
@@ -327,7 +332,7 @@ class ImportPlanTest {
     fun `an Undo that fails part way can be tried again without taking a song the user added since`() = runTest {
         val stores = FakeStores(PlaylistsState(listOf(Playlist("mine", "Evening", listOf(water.ref), 1))))
         val bundle = ImportBundle(listOf(ImportPlaylist("Evening", listOf(line(lantern)))), queues = listOf(ImportQueue(listOf(line(road)))))
-        val outcome = ImportPlan(bundle, phone).apply(ImportKind.entries.toSet(), stores, ids(), NOW, UNTITLED, queueName = QUEUE)!!
+        val outcome = ImportPlan(bundle, phone).apply(ImportKind.entries.toSet(), stores, ids(), NOW, UNTITLED, queueName = { QUEUE })!!
         stores.state = stores.state.add("mine", listOf(lantern.ref))
 
         stores.queuesFail = true
@@ -344,8 +349,136 @@ class ImportPlanTest {
         val stores = FakeStores().apply { queuesFail = true }
         val bundle = ImportBundle(listOf(ImportPlaylist("Mix", listOf(line(lantern)))), queues = listOf(ImportQueue(listOf(line(water)))))
 
-        assertNull(ImportPlan(bundle, phone).apply(ImportKind.entries.toSet(), stores, ids(), NOW, UNTITLED, queueName = QUEUE))
+        assertNull(ImportPlan(bundle, phone).apply(ImportKind.entries.toSet(), stores, ids(), NOW, UNTITLED, queueName = { QUEUE }))
         assertEquals(PlaylistsState(), stores.state)
+    }
+
+
+    // Undo takes back the import's own songs only (review panel-im1, finding 1)
+
+    @Test
+    fun `Undo takes off the import's own copy of a song, so the songs the user added since stay in their order`() = runTest {
+        val stores = FakeStores(PlaylistsState(listOf(Playlist("mine", "Evening", listOf(water.ref), 1))))
+        val outcome = ImportPlan(ImportBundle(listOf(ImportPlaylist("Evening", listOf(line(lantern))))), phone).apply(setOf(ImportKind.PLAYLISTS), stores, ids(), NOW, UNTITLED)!!
+        stores.state = stores.state.add("mine", listOf(bell.ref, lantern.ref))
+
+        assertTrue(ImportPlan.undo(outcome.undo, stores))
+
+        assertEquals(listOf(water.ref, bell.ref, lantern.ref), stores.state.playlist("mine")!!.songs)
+    }
+
+    @Test
+    fun `a playlist the import made keeps what the user put in it since, and goes only when nothing of the user's is left`() = runTest {
+        val stores = FakeStores()
+        val bundle = ImportBundle(listOf(ImportPlaylist("Mix", listOf(line(lantern), line(water))), ImportPlaylist("Other", listOf(line(road)))))
+        val outcome = ImportPlan(bundle, phone).apply(setOf(ImportKind.PLAYLISTS), stores, ids(), NOW, UNTITLED)!!
+        val mix = outcome.undo.created.keys.first()
+        stores.state = stores.state.add(mix, listOf(bell.ref)).removeAt(mix, setOf(1)).rename(mix, "My mix")
+
+        assertTrue(ImportPlan.undo(outcome.undo, stores))
+
+        assertEquals(listOf(Playlist(mix, "My mix", listOf(bell.ref), NOW)), stores.state.playlists)
+    }
+
+    @Test
+    fun `a queue the import made keeps the songs the user added to it, an untouched one goes, and one playing stays`() = runTest {
+        val stores = FakeStores()
+        val bundle = ImportBundle(queues = listOf(ImportQueue(listOf(line(lantern), line(water))), ImportQueue(listOf(line(road))), ImportQueue(listOf(line(bell)))))
+        val outcome = ImportPlan(bundle, phone).apply(setOf(ImportKind.QUEUES), stores, ids(), NOW, UNTITLED, queueName = { QUEUE })!!
+        val (first, second, third) = outcome.undo.queues.keys.toList()
+        stores.queues = stores.queues.addTo(first, listOf(road.ref))!!.book.resume(third, NOW).book
+
+        assertTrue(ImportPlan.undo(outcome.undo, stores))
+
+        assertEquals(listOf(road.ref), stores.queues.queue(first)!!.items.map { it.song })
+        assertNull(stores.queues.queue(second))
+        assertEquals(listOf(bell.ref), stores.queues.queue(third)!!.items.map { it.song })
+    }
+
+    // Play counts: a cap on them all (finding 4)
+
+    @Test
+    fun `play counts stop at 200,000 plays in all, a whole song at a time, and never before the first millisecond`() {
+        val many = List(30) { at -> song("Music/Many/$at.mp3", title = "Song $at", id = 1_000L + at) }
+        val added = ImportPlan.raised(emptyList(), many.map { it to ImportPlays(line(it), 10_000) }, NOW)
+
+        assertEquals(ImportPlan.MAX_IMPORTED_PLAYS, added.size)
+        assertEquals(20, added.distinctBy { it.song.path }.size)
+        assertTrue(ImportPlan.raised(emptyList(), listOf(lantern to ImportPlays(line(lantern), 10, lastPlayedAt = 4)), NOW).all { it.startedAt >= 1 })
+    }
+
+    // All or nothing across the stores, through a journal kept on storage (finding 5)
+
+    @Test
+    fun `an import keeps what it wrote in a journal until it is done, so one the app's death cuts short is taken back on the next start`() = runTest {
+        val before = PlaylistsState(listOf(Playlist("mine", "Evening", listOf(water.ref), 1)))
+        val stores = FakeStores(before).apply { dieAtQueues = true }
+        val bundle = ImportBundle(listOf(ImportPlaylist("Evening", listOf(line(bell)))), queues = listOf(ImportQueue(listOf(line(road)))))
+
+        assertTrue(runCatching { ImportPlan(bundle, phone).apply(ImportKind.entries.toSet(), stores, ids(), NOW, UNTITLED, queueName = { QUEUE }) }.isFailure)
+        assertEquals(ImportUndo(added = mapOf("mine" to listOf(bell.ref))), stores.journal)
+
+        stores.dieAtQueues = false
+        assertTrue(ImportPlan.recover(stores))
+        assertEquals(before, stores.state)
+        assertNull(stores.journal)
+    }
+
+    @Test
+    fun `a finished import leaves no journal, and a failed one that cannot be taken back returns what is left to Undo`() = runTest {
+        val done = FakeStores()
+        ImportPlan(ImportBundle(listOf(ImportPlaylist("Mix", listOf(line(lantern))))), phone).apply(ImportKind.entries.toSet(), done, ids(), NOW, UNTITLED)
+        assertNull(done.journal)
+
+        val stores = FakeStores().apply { addFails = true; playlistsFailAfter = 1 }
+        val bundle = ImportBundle(listOf(ImportPlaylist("Mix", listOf(line(lantern)))), plays = listOf(ImportPlays(line(road), 2)))
+        val outcome = ImportPlan(bundle, phone).apply(ImportKind.entries.toSet(), stores, ids(), NOW, UNTITLED)!!
+
+        assertFalse(outcome.complete)
+        assertEquals(ImportUndo(created = mapOf("p1" to listOf(lantern.ref))), outcome.undo)
+        assertEquals(outcome.undo, stores.journal)
+    }
+
+    @Test
+    fun `an Undo the app's death cuts short is finished on the next start`() = runTest {
+        val stores = FakeStores()
+        val bundle = ImportBundle(listOf(ImportPlaylist("Mix", listOf(line(lantern)))), plays = listOf(ImportPlays(line(road), 2)))
+        val outcome = ImportPlan(bundle, phone).apply(ImportKind.entries.toSet(), stores, ids(), NOW, UNTITLED)!!
+        stores.dieAtPlaylists = true
+
+        assertTrue(runCatching { ImportPlan.undo(outcome.undo, stores) }.isFailure)
+        stores.dieAtPlaylists = false
+        assertTrue(ImportPlan.recover(stores))
+
+        assertEquals(PlaylistsState(), stores.state)
+        assertEquals(emptyList<LoggedPlay>(), stores.log.plays)
+        assertNull(stores.journal)
+    }
+
+    @Test
+    fun `the journal keeps an Undo whole on storage, and what is not one reads as none`() {
+        val undo = ImportUndo(
+            created = mapOf("p1" to listOf(lantern.ref, SongRef("/storage/emulated/0/Music/x.mp3"))),
+            added = mapOf("mine" to listOf(bell.ref)),
+            favourites = listOf(road.ref),
+            plays = listOf(LoggedPlay(road.ref, NOW, 0, counted = true)),
+            queues = mapOf("q3" to listOf(7L, 8L)),
+        )
+
+        assertEquals(undo, ImportJournal.decode(ImportJournal.encode(undo)))
+        listOf("", "not json", "[]", """{"created":"x"}""").forEach { assertNull(it, ImportJournal.decode(it)) }
+    }
+
+    // Musicolet queue names (finding 7)
+
+    @Test
+    fun `a queue keeps its name in the other app when it has one`() = runTest {
+        val stores = FakeStores()
+        val bundle = ImportBundle(queues = listOf(ImportQueue(listOf(line(lantern)), name = "Morning"), ImportQueue(listOf(line(road)))))
+
+        val outcome = ImportPlan(bundle, phone).apply(setOf(ImportKind.QUEUES), stores, ids(), NOW, UNTITLED, queueName = { name -> name?.let { "Musicolet: $it" } ?: QUEUE })!!
+
+        assertEquals(listOf("Musicolet: Morning", QUEUE), outcome.undo.queues.keys.map { stores.queues.queue(it)!!.name })
     }
 
     private fun line(song: Song) = ImportSong(song.path, song.path)
@@ -357,23 +490,38 @@ class ImportPlanTest {
 
     private class FakeStores(var state: PlaylistsState = PlaylistsState(), val log: FakePlayLog = FakePlayLog()) : ImportStores {
         var queues: QueueBook = QueueBook()
+        var journal: ImportUndo? = null
         var playlistsFail = false
+        /** Playlist writes that work before they fail. */
+        var playlistsFailAfter = Int.MAX_VALUE
         var queuesFail = false
         var addFails = false
+        /** The app dies at this store's next write. */
+        var dieAtQueues = false
+        var dieAtPlaylists = false
         var writes = 0
 
         override suspend fun updatePlaylists(change: (PlaylistsState) -> PlaylistsState): Boolean {
-            if (playlistsFail) return false
+            if (dieAtPlaylists) throw IllegalStateException("the app died")
+            if (playlistsFail || writes >= playlistsFailAfter) return false
             writes++
             state = change(state)
             return true
         }
 
         override suspend fun updateQueues(change: (QueueBook) -> QueueBook): Boolean {
+            if (dieAtQueues) throw IllegalStateException("the app died")
             if (queuesFail) return false
             queues = change(queues)
             return true
         }
+
+        override suspend fun journal(undo: ImportUndo?): Boolean {
+            journal = undo?.takeUnless { it.isEmpty }
+            return true
+        }
+
+        override suspend fun journaled(): ImportUndo? = journal
 
         override suspend fun plays(): List<LoggedPlay>? = log.all()
 

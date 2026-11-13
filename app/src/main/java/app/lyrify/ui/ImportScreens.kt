@@ -111,8 +111,16 @@ private sealed interface ImportSheet {
     /** Nothing could be read: each file and why; [none] when a folder held no playlist file at all. */
     data class Failed(val failed: List<ImportRead.Failed>, val none: Boolean) : ImportSheet
 
-    /** What the import did and the songs not found, with Copy list and Undo. */
-    data class Done(val outcome: ImportOutcome, val missing: List<ImportSong>, val undoing: Boolean = false) : ImportSheet
+    /** What the import did and the songs not found, with Copy list and Undo; [undoFailed] after an Undo that failed. */
+    data class Done(val outcome: ImportOutcome, val missing: List<ImportSong>, val undoing: Boolean = false, val undoFailed: Boolean = false) : ImportSheet
+}
+
+/**
+ * The summary while it is open, kept for the process: a turn of the phone makes the activity again, and the summary
+ * holds the only Undo of the import.
+ */
+private object ShownSummary {
+    var done: ImportSheet.Done? = null
 }
 
 /** The sheet lists this many songs or files of a kind, then "And 12 more". */
@@ -135,7 +143,7 @@ fun rememberImportFromApp(): () -> Unit {
     val resources = LocalResources.current
     val toasts = LocalToasts.current
     val scope = rememberCoroutineScope()
-    val sheet = remember { mutableStateOf<ImportSheet?>(null) }
+    val sheet = remember { mutableStateOf<ImportSheet?>(ShownSummary.done) }
     val picked = rememberSaveable { mutableStateOf(emptyList<String>()) }
     val say = { text: Int, failed: Boolean ->
         scope.launch { toasts.show(if (failed) Toast(resources.getString(text), R.drawable.ic_error, Tone.ERROR) else Toast(resources.getString(text))) }
@@ -164,7 +172,12 @@ fun rememberImportFromApp(): () -> Unit {
     }
     val close = {
         sheet.value = null
+        ShownSummary.done = null
         picked.value = emptyList()
+    }
+    val show = { done: ImportSheet.Done ->
+        ShownSummary.done = done
+        sheet.value = done
     }
 
     ImportSheetView(
@@ -176,13 +189,19 @@ fun rememberImportFromApp(): () -> Unit {
             sheet.value = preview.copy(importing = true)
             scope.launch {
                 val reserved = listOf(R.string.lib_favourites, R.string.lib_most_played, R.string.lib_recently_played, R.string.lib_recently_added).map(resources::getString).toSet()
-                val outcome = withContext(NonCancellable) { Imports.apply(app, preview.plan, preview.chosen, resources.getString(R.string.m3u_untitled), resources.getString(R.string.import_queue_name), reserved) }
-                if (outcome == null) {
+                val named = { name: String? -> name?.let { resources.getString(R.string.import_queue_named, it) } ?: resources.getString(R.string.import_queue_name) }
+                val done = withContext(NonCancellable) {
+                    // Kept for the process at once, so the summary and its Undo outlive a turn of the phone meanwhile.
+                    Imports.apply(app, preview.plan, preview.chosen, resources.getString(R.string.m3u_untitled), named, reserved)
+                        ?.let { ImportSheet.Done(it, preview.plan.missing(preview.chosen)).also { done -> ShownSummary.done = done } }
+                }
+                if (done == null) {
                     sheet.value = preview
                     say(R.string.import_failed, true)
                 } else {
                     picked.value = emptyList()
-                    sheet.value = ImportSheet.Done(outcome, preview.plan.missing(preview.chosen))
+                    show(done)
+                    if (!done.outcome.complete) say(R.string.import_failed, true)
                 }
             }
         },
@@ -190,7 +209,7 @@ fun rememberImportFromApp(): () -> Unit {
             sheet.value = done.copy(undoing = true)
             scope.launch {
                 val undone = withContext(NonCancellable) { Imports.undo(app, done.outcome.undo) }
-                if (undone) close() else sheet.value = done
+                if (undone) close() else show(done.copy(undoFailed = true))
                 say(if (undone) R.string.import_undone else R.string.import_not_undone, !undone)
             }
         },
@@ -315,12 +334,15 @@ private fun ImportSheetView(
         ) {
             val outcome = sheet.outcome
             val title = when {
+                !outcome.complete -> stringResource(R.string.import_failed)
                 !outcome.changed -> stringResource(R.string.import_nothing_new)
                 outcome.playlists > 0 -> pluralStringResource(R.plurals.import_done, outcome.playlists, formatCount(outcome.playlists))
                 else -> stringResource(R.string.import_done_other)
             }
             Text(title, style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { heading() })
+            if (!outcome.complete) Text(stringResource(R.string.import_partly_text), style = MaterialTheme.typography.bodyLarge, color = colors.onSurfaceVariant)
             if (!outcome.changed) Text(stringResource(R.string.import_nothing_new_text), style = MaterialTheme.typography.bodyLarge, color = colors.onSurfaceVariant)
+            if (sheet.undoFailed) Text(stringResource(R.string.import_not_undone_text), style = MaterialTheme.typography.bodyLarge, color = colors.onSurfaceVariant)
             listOf(
                 R.string.import_done_created to outcome.created,
                 R.string.import_done_songs to outcome.songsAdded,

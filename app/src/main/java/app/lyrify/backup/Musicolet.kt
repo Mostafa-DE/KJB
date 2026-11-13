@@ -3,6 +3,7 @@ package app.lyrify.backup
 import android.annotation.SuppressLint
 import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
+import android.os.CancellationSignal
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -11,12 +12,17 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.IOException
 import java.security.GeneralSecurityException
 import java.security.MessageDigest
 import java.util.Locale
+import java.util.Timer
+import java.util.zip.ZipInputStream
 import javax.crypto.Cipher
 import javax.crypto.spec.SecretKeySpec
+import kotlin.concurrent.timerTask
 
 /** A row of Musicolet's library (`TABLE_SONGS` in `DB_SONGS_LOG`): its song reference, tags, length and plays. */
 data class MusicoletSong(
@@ -50,9 +56,10 @@ sealed interface MusicoletRead {
  * `<name>.mpl` the playlists and `0.favs` the favourites (JSON). Every song is a reference,
  * `musicolet://media-store?p_v=<volume>&p_rp=<folder>&p_dn=<file>&p_id=<MediaStore id>`, never opened.
  *
- * Read as untrusted input, in memory: the zip under [LIMITS] ([BackupBundle.unzip]), nothing trusted before the hash
- * and every md5 agree and every member is listed, the songs table only through [MusicoletDb], the settings and the
- * search history (`SSP`) checked but never read. Anything not as known makes the whole backup unusable.
+ * Read as untrusted input, in memory, one entry at a time under [LIMITS], each decrypted as it is unpacked and kept
+ * only when KJB reads it; nothing trusted before the hash and every md5 agree and every member is listed; the songs
+ * table only through [MusicoletDb]; the settings and the search history (`SSP`) checked but never held. Anything not
+ * as known makes the whole backup unusable.
  */
 object Musicolet {
     const val MANIFEST: String = "0.musicolet.backup"
@@ -65,7 +72,8 @@ object Musicolet {
     /** Musicolet's fixed key, the same in every backup. */
     const val KEY: String = "JSTMUSIC_2"
     const val CIPHER: String = "Blowfish/ECB/PKCS5Padding"
-    const val MAX_SONGS: Int = 200_000
+    /** The songs table is read only up to this many rows; past it the backup is not read. */
+    const val MAX_SONGS: Int = 100_000
 
     /** A song Musicolet marks as gone from its phone (`COL_VIS_FLAGS`). */
     const val GONE: Long = 64
@@ -75,33 +83,92 @@ object Musicolet {
 
     /** What the zip [bytes] hold when they are a Musicolet backup; [MusicoletRead.Failed] with why otherwise. */
     fun read(bytes: ByteArray, db: MusicoletDb, limits: ZipLimits = LIMITS): MusicoletRead {
-        val files = when (val unzipped = BackupBundle.unzip(ByteArrayInputStream(bytes), limits) { true }) {
-            is BackupBundle.Unzipped.Files -> unzipped.files
-            is BackupBundle.Unzipped.Refused -> return MusicoletRead.Failed(if (unzipped.why == BackupRead.Why.TOO_BIG) ImportFailure.TOO_BIG else ImportFailure.UNREADABLE)
+        val members = when (val read = members(bytes, limits)) {
+            is Members.Refused -> return MusicoletRead.Failed(read.why)
+            is Members.Read -> read
         }
-        val manifestBytes = files[MANIFEST]
-        val hash = files[HASH]
-        if (manifestBytes == null || hash == null) return MusicoletRead.Failed(ImportFailure.NOT_RECOGNISED)
+        val hash = members.kept[HASH]
+        if (MANIFEST !in members.names || hash == null) return MusicoletRead.Failed(ImportFailure.NOT_RECOGNISED)
         val unusable = MusicoletRead.Failed(ImportFailure.MUSICOLET)
-        val manifest = decrypt(manifestBytes)?.takeIf { md5(it) == hash.decodeToString().trim().lowercase(Locale.ROOT) } ?: return unusable
+        val manifest = members.kept[MANIFEST]?.takeIf { md5(it) == hash.decodeToString().trim().lowercase(Locale.ROOT) } ?: return unusable
         val sums = (jsonObject(manifest)?.get(MD5_KEY) as? JsonObject)?.mapValues { (_, sum) -> sum.text()?.lowercase(Locale.ROOT) ?: return unusable } ?: return unusable
-        if (files.keys - MANIFEST - HASH != sums.keys) return unusable
-        // Every member checked; only those read are kept.
-        val used = HashMap<String, ByteArray>()
-        sums.forEach { (name, sum) ->
-            val plain = decrypt(files.getValue(name))?.takeIf { md5(it) == sum } ?: return unusable
-            if (name == SONGS || name == QUEUES || name == FAVOURITES || name.endsWith(PLAYLIST)) used[name] = plain
-        }
-        val rows = used[SONGS]?.let(db::songs) ?: return unusable
+        if (members.names - MANIFEST - HASH != sums.keys || sums.any { (name, sum) -> members.sums[name] != sum }) return unusable
+        val rows = members.kept[SONGS]?.let(db::songs) ?: return unusable
         val library = rows.associateBy { it.uri }
-        val playlists = used.keys.filter { it.endsWith(PLAYLIST) }.sorted().map { name ->
-            ImportPlaylist(ImportFormats.cleanName(name.removeSuffix(PLAYLIST)), list(used.getValue(name), library) ?: return unusable)
+        val playlists = members.kept.keys.filter { it.endsWith(PLAYLIST) }.sorted().map { name ->
+            ImportPlaylist(ImportFormats.cleanName(name.removeSuffix(PLAYLIST)), list(members.kept.getValue(name), library) ?: return unusable)
         }
-        val favourites = used[FAVOURITES]?.let { list(it, library) ?: return unusable }.orEmpty()
-        val queues = used[QUEUES]?.let { queues(it, library) ?: return unusable }.orEmpty()
+        val favourites = members.kept[FAVOURITES]?.let { list(it, library) ?: return unusable }.orEmpty()
+        val queues = members.kept[QUEUES]?.let { queues(it, library) ?: return unusable }.orEmpty()
         val plays = rows.filter { it.playCount > 0 && it.flags and GONE == 0L }.map { row -> ImportPlays(song(row.uri, library), row.playCount, row.lastPlayedAt?.takeIf { it > 0 }) }
         return MusicoletRead.Read(ImportBundle(playlists, favourites, plays, queues))
     }
+
+    /** A backup's members as read: every name, each decrypted member's md5, and the plain bytes of those KJB reads. */
+    private sealed interface Members {
+        data class Read(val names: Set<String>, val sums: Map<String, String>, val kept: Map<String, ByteArray>) : Members
+
+        data class Refused(val why: ImportFailure) : Members
+    }
+
+    /**
+     * The zip [bytes] read one entry at a time, each decrypted as it is unpacked: its md5 taken, its plain bytes kept
+     * only when KJB reads it (the manifest, `hash` as it is, the songs table, the queues, playlists and favourites), so
+     * the settings and search history are checked and never held. Counted against [limits] as it goes; two entries of
+     * one name, or a damaged zip, make it unreadable. A member that does not decrypt has no md5, so it fails its check.
+     */
+    private fun members(bytes: ByteArray, limits: ZipLimits): Members {
+        val names = HashSet<String>()
+        val sums = HashMap<String, String>()
+        val kept = HashMap<String, ByteArray>()
+        val buffer = ByteArray(BUFFER)
+        var total = 0L
+        return try {
+            ZipInputStream(ByteArrayInputStream(bytes)).use { zip ->
+                while (true) {
+                    val entry = zip.nextEntry ?: break
+                    val name = entry.name
+                    if (names.size == limits.entries) return Members.Refused(ImportFailure.TOO_BIG)
+                    if (!names.add(name)) return Members.Refused(ImportFailure.UNREADABLE)
+                    val out = if (name == HASH || name == MANIFEST || read(name)) ByteArrayOutputStream() else null
+                    val cipher = if (name == HASH) null else decryptor()
+                    val digest = MessageDigest.getInstance("MD5")
+                    var size = 0L
+                    while (true) {
+                        val count = zip.read(buffer)
+                        if (count < 0) break
+                        size += count
+                        total += count
+                        if (size > limits.entryBytes || total > limits.totalBytes) return Members.Refused(ImportFailure.TOO_BIG)
+                        if (name == HASH) out?.write(buffer, 0, count) else cipher?.update(buffer, 0, count)?.let { plain -> digest.update(plain); out?.write(plain) }
+                    }
+                    if (name == HASH) {
+                        out?.let { kept[name] = it.toByteArray() }
+                        continue
+                    }
+                    val last = try {
+                        cipher?.doFinal()
+                    } catch (_: GeneralSecurityException) {
+                        // Padding that does not check: another key, or not Musicolet's.
+                        null
+                    } ?: continue
+                    digest.update(last)
+                    sums[name] = digest.digest().joinToString("") { "%02x".format(it) }
+                    out?.let { it.write(last); kept[name] = it.toByteArray() }
+                }
+            }
+            Members.Read(names, sums, kept)
+        } catch (_: IOException) {
+            // A ZipException (a bad CRC, a bad entry name), or an EOFException: cut short.
+            Members.Refused(ImportFailure.UNREADABLE)
+        } catch (_: IllegalArgumentException) {
+            // An entry name that is not UTF-8.
+            Members.Refused(ImportFailure.UNREADABLE)
+        }
+    }
+
+    /** Whether KJB reads the member [name]: the songs table, the queues, the favourites and the playlists. */
+    private fun read(name: String): Boolean = name == SONGS || name == QUEUES || name == FAVOURITES || name.endsWith(PLAYLIST)
 
     /** A playlist or the favourites: the `S_P` references in order, with their own tags (`S_T`, `S_AR`, `S_AL`, `S_D`) for a song the library does not list. */
     private fun list(bytes: ByteArray, library: Map<String, MusicoletSong>): List<ImportSong>? = songs(jsonObject(bytes) ?: return null, library)
@@ -117,7 +184,7 @@ object Musicolet {
         }
     }
 
-    /** `0.qstk`: each queue's songs, the one it was at (`S0_PQ_CPS`) and the second in it (`S0_PQ_LKP`). */
+    /** `0.qstk`: each queue's songs, the one it was at (`S0_PQ_CPS`), the second in it (`S0_PQ_LKP`) and its name (`S0_PQ_T`). */
     private fun queues(bytes: ByteArray, library: Map<String, MusicoletSong>): List<ImportQueue>? {
         val root = jsonObject(bytes) ?: return null
         val queues = root[QUEUES_KEY] ?: return emptyList()
@@ -125,7 +192,12 @@ object Musicolet {
         return queues.map { element ->
             val queue = element as? JsonObject ?: return null
             val songs = songs(queue[QUEUE_SONGS_KEY] as? JsonObject ?: return null, library) ?: return null
-            ImportQueue(songs, queue.number(QUEUE_INDEX_KEY)?.toInt()?.takeIf { it >= 0 } ?: 0, queue.number(QUEUE_PLACE_KEY)?.takeIf { it >= 0 } ?: 0)
+            ImportQueue(
+                songs,
+                queue.number(QUEUE_INDEX_KEY)?.toInt()?.takeIf { it >= 0 } ?: 0,
+                queue.number(QUEUE_PLACE_KEY)?.takeIf { it >= 0 } ?: 0,
+                ImportFormats.cleanName(queue[QUEUE_NAME_KEY]?.text()),
+            )
         }
     }
 
@@ -162,18 +234,14 @@ object Musicolet {
     private fun known(text: String?): String? = ImportFormats.clean(text)?.takeUnless { it.equals(UNKNOWN, ignoreCase = true) }
 
     /**
-     * [data] decrypted with Musicolet's key; null when it is not (a length no block fits, padding that does not check).
-     * ECB is Musicolet's choice, not KJB's: it is only ever read here, and protects nothing of KJB's.
+     * A cipher that decrypts with Musicolet's key; null on a phone without Blowfish, and then nothing decrypts. ECB is
+     * Musicolet's choice, not KJB's: it is only ever read here, and protects nothing of KJB's.
      */
     @SuppressLint("GetInstance")
-    private fun decrypt(data: ByteArray): ByteArray? {
-        if (data.isEmpty() || data.size % BLOCK != 0) return null
-        return try {
-            Cipher.getInstance(CIPHER).apply { init(Cipher.DECRYPT_MODE, SecretKeySpec(KEY.encodeToByteArray(), "Blowfish")) }.doFinal(data)
-        } catch (_: GeneralSecurityException) {
-            // A wrong key's padding, or a phone without Blowfish: unusable either way.
-            null
-        }
+    private fun decryptor(): Cipher? = try {
+        Cipher.getInstance(CIPHER).apply { init(Cipher.DECRYPT_MODE, SecretKeySpec(KEY.encodeToByteArray(), "Blowfish")) }
+    } catch (_: GeneralSecurityException) {
+        null
     }
 
     private fun md5(bytes: ByteArray): String = MessageDigest.getInstance("MD5").digest(bytes).joinToString("") { "%02x".format(it) }
@@ -188,7 +256,7 @@ object Musicolet {
 
     private fun JsonObject.number(key: String): Long? = (this[key] as? JsonPrimitive)?.takeUnless { it.isString }?.longOrNull
 
-    private const val BLOCK: Int = 8
+    private const val BUFFER: Int = 64 * 1024
     private const val UNKNOWN: String = "<unknown>"
     private const val MD5_KEY: String = "md5"
     private const val SONGS_KEY: String = "S_P"
@@ -198,6 +266,7 @@ object Musicolet {
     private const val LENGTHS_KEY: String = "S_D"
     private const val QUEUES_KEY: String = "S0_PQ"
     private const val QUEUE_SONGS_KEY: String = "S0_PQ_OQS"
+    private const val QUEUE_NAME_KEY: String = "S0_PQ_T"
     private const val QUEUE_INDEX_KEY: String = "S0_PQ_CPS"
     private const val QUEUE_PLACE_KEY: String = "S0_PQ_LKP"
     private const val FOLDER_PARAM: String = "p_rp"
@@ -205,10 +274,40 @@ object Musicolet {
     private const val ID_PARAM: String = "p_id"
 }
 
+/** The rules [MusicoletSqlite] reads the songs table by, apart so they are tested on the JVM. */
+internal object SongsTable {
+    /** Whether `sqlite_master`'s [type] and [sql] for the songs table are a plain table's: no view, virtual table or computed column. */
+    fun plain(type: String?, sql: String?): Boolean {
+        if (type != "table" || sql == null) return false
+        val upper = sql.uppercase(Locale.ROOT)
+        return "VIRTUAL" !in upper && "GENERATED" !in upper && !COMPUTED.containsMatchIn(upper)
+    }
+
+    /** A computed column, "AS (expression)": its rows are made when read, not stored. */
+    private val COMPUTED = Regex("""\bAS\s*\(""")
+}
+
+/**
+ * What one read of the songs table may take: each text at most [maxField] chars, all of them [maxTotal], and the time
+ * until [deadline] on [clock]. Past any of them the file is not read.
+ */
+internal class TextBudget(private val maxField: Int, private val maxTotal: Long, private val deadline: Long, private val clock: () -> Long) {
+    private var total = 0L
+
+    /** Takes [text] from the budget; false when it is spent. */
+    fun take(text: String?): Boolean {
+        if (clock() > deadline) return false
+        val length = text?.length ?: 0
+        if (length > maxField) return false
+        total += length
+        return total <= maxTotal
+    }
+}
+
 /**
  * [MusicoletDb] on the phone: Android's SQLite on a private copy in the app's cache, opened read only and deleted
- * (with any journal beside it) before it returns, whatever happens. Only `TABLE_SONGS` is read, by a fixed query, and
- * only when it has the columns KJB knows; at most [Musicolet.MAX_SONGS] rows. The log gets exception class names only.
+ * (with any journal beside it) before it returns, whatever happens. Only `TABLE_SONGS` is read, by a fixed query
+ * ([rows]). The log gets exception class names only.
  */
 class MusicoletSqlite(private val cacheDir: File, private val log: (String) -> Unit) : MusicoletDb {
     override fun songs(bytes: ByteArray): List<MusicoletSong>? {
@@ -234,28 +333,46 @@ class MusicoletSqlite(private val cacheDir: File, private val log: (String) -> U
         }
     }
 
+    /**
+     * The rows of `TABLE_SONGS`, or null unless it is a plain table ([SongsTable.plain]: never a view, which could
+     * make rows far past the zip's caps, nor a virtual table or computed columns) with the columns KJB knows; the
+     * connection is query-only. The read stops, and the file is not read, past [Musicolet.MAX_SONGS] rows, a text
+     * longer than a line or [MAX_TEXT] chars in all, or [TIMEOUT_MS] ([TextBudget]); the query itself is cancelled at
+     * that time too.
+     */
     private fun rows(db: SQLiteDatabase): List<MusicoletSong>? {
+        val table = db.rawQuery(MASTER, null).use { rows -> if (rows.count == 1 && rows.moveToFirst()) rows.text(0) to rows.text(1) else null }
+        if (table == null || !SongsTable.plain(table.first, table.second)) return null
+        db.rawQuery(QUERY_ONLY, null).use { it.moveToFirst() }
         val columns = db.rawQuery(COLUMNS, null).use { rows -> buildSet { while (rows.moveToNext()) rows.getString(1)?.let(::add) } }
         if (!columns.containsAll(REQUIRED)) return null
-        val query = if (FLAGS in columns) SONGS_WITH_FLAGS else SONGS
-        return db.rawQuery(query, null).use { rows ->
-            buildList {
-                while (size < Musicolet.MAX_SONGS && rows.moveToNext()) {
-                    val uri = rows.getString(0) ?: continue
-                    add(
-                        MusicoletSong(
-                            uri = uri,
-                            title = rows.text(1),
-                            artist = rows.text(2),
-                            album = rows.text(3),
-                            durationMs = rows.number(4),
-                            playCount = rows.number(5)?.coerceIn(0, Int.MAX_VALUE.toLong())?.toInt() ?: 0,
-                            lastPlayedAt = rows.number(6),
-                            flags = rows.number(7) ?: 0,
-                        ),
+        val clock = { System.nanoTime() / 1_000_000 }
+        val budget = TextBudget(ImportFormats.MAX_LINE_CHARS, MAX_TEXT, clock() + TIMEOUT_MS, clock)
+        val signal = CancellationSignal()
+        val timer = Timer(TIMER, true).apply { schedule(timerTask { signal.cancel() }, TIMEOUT_MS) }
+        try {
+            return db.rawQuery(if (FLAGS in columns) SONGS_WITH_FLAGS else SONGS, null, signal).use { rows ->
+                val songs = ArrayList<MusicoletSong>()
+                while (rows.moveToNext()) {
+                    if (songs.size == Musicolet.MAX_SONGS) return null
+                    val texts = (0..3).map { rows.text(it) }
+                    if (!texts.all(budget::take)) return null
+                    val uri = texts[0] ?: continue
+                    songs += MusicoletSong(
+                        uri = uri,
+                        title = texts[1],
+                        artist = texts[2],
+                        album = texts[3],
+                        durationMs = rows.number(4),
+                        playCount = rows.number(5)?.coerceIn(0, Int.MAX_VALUE.toLong())?.toInt() ?: 0,
+                        lastPlayedAt = rows.number(6),
+                        flags = rows.number(7) ?: 0,
                     )
                 }
+                songs
             }
+        } finally {
+            timer.cancel()
         }
     }
 
@@ -272,6 +389,13 @@ class MusicoletSqlite(private val cacheDir: File, private val log: (String) -> U
         const val LEGACY: Byte = 1
         const val FLAGS: String = "COL_VIS_FLAGS"
         const val COLUMNS: String = "PRAGMA table_info(TABLE_SONGS)"
+        const val MASTER: String = "SELECT type, sql FROM sqlite_master WHERE name = 'TABLE_SONGS'"
+        const val QUERY_ONLY: String = "PRAGMA query_only = 1"
+        const val TIMER: String = "musicolet-read"
+        const val TIMEOUT_MS: Long = 15_000
+
+        /** All the text a songs table may hold: 7,302 songs held about 1.5 million chars. */
+        const val MAX_TEXT: Long = 20_000_000
         const val PICKED: String = "COL_PATH, COL_TITLE, COL_ARTIST, COL_ALBUM, COL_DURATION, COL_NUM_PLAYED, COL_LAST_PLAYED"
         const val SONGS: String = "SELECT $PICKED, 0 FROM TABLE_SONGS"
         const val SONGS_WITH_FLAGS: String = "SELECT $PICKED, COL_VIS_FLAGS FROM TABLE_SONGS"
