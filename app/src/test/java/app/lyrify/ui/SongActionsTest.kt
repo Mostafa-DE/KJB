@@ -65,6 +65,10 @@ class SongActionsTest {
 
         override suspend fun delete(id: String) = write { it.delete(id) }
 
+        override suspend fun move(id: String, from: Int, to: Int) = write { it.move(id, from, to) }
+
+        override suspend fun moveFavourite(from: Int, to: Int) = write { it.moveFavourite(from, to) }
+
         override suspend fun put(playlist: Playlist) = write { it.put(playlist) }
 
         override suspend fun edit(id: String, change: (Playlist) -> Playlist) = write { state -> state.playlist(id)?.let { state.put(change(it)) } ?: state }
@@ -512,6 +516,22 @@ class SongActionsTest {
             assertEquals(Said.NotSaved, it.said)
             assertNull(it.undo)
         }
+    }
+
+    @Test
+    fun `a move in a custom order is stored at once with no toast, and says when it could not be`() = runBlocking {
+        val store = MemoryPlaylists(PlaylistsState(listOf(roadTrip.copy(songs = listOf(lantern.ref, bell.ref, water.ref))), favouriteSongs = listOf(water.ref, bell.ref)))
+        val actions = SongActions(NoPlayback, store)
+
+        assertNull(actions.move(roadTrip, 2, 0))
+        assertNull(actions.moveFavourite(1, 0))
+        assertEquals(listOf(water.ref, lantern.ref, bell.ref), store.now.playlist("p1")?.songs)
+        assertEquals(listOf(bell.ref, water.ref), store.now.favouriteSongs)
+
+        store.fail = true
+        assertEquals(Said.NotSaved, actions.move(roadTrip, 0, 1)?.said)
+        assertEquals(Said.NotSaved, actions.moveFavourite(0, 1)?.said)
+        assertEquals(listOf(water.ref, lantern.ref, bell.ref), store.now.playlist("p1")?.songs)
     }
 
     // The hearts

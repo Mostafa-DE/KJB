@@ -197,11 +197,14 @@ fun displayTitle(song: Song, settings: LibrarySettings): String = if (settings.s
  * by album, then album artist and track; or the latest added first. Names in [nameOrder]; missing tags go last; ties keep
  * path order.
  */
-fun sortSongs(songs: List<Song>, sort: SortSongs, settings: LibrarySettings): List<Song> {
+fun sortSongs(songs: List<Song>, sort: SortSongs, settings: LibrarySettings): List<Song> = songs.sortedWith(songOrder(sort, settings))
+
+/** [sortSongs]'s order, for lists that sort more than the songs (a playlist's songs with their places). */
+fun songOrder(sort: SortSongs, settings: LibrarySettings): Comparator<Song> {
     val collator = collator()
     val names = nameOrder(collator)
     val byTitle = compareBy<Song, String>(names) { displayTitle(it, settings) }
-    val order = when (sort) {
+    return when (sort) {
         SortSongs.TITLE -> byTitle
         SortSongs.ARTIST -> compareBy<Song, String?>(nullsLast(names)) { text(it.artist) }
             .thenBy(nullsLast(reverseOrder())) { it.year }
@@ -212,7 +215,6 @@ fun sortSongs(songs: List<Song>, sort: SortSongs, settings: LibrarySettings): Li
             .then(trackOrder(collator))
         SortSongs.RECENTLY_ADDED -> compareBy<Song, Long?>(nullsLast(reverseOrder())) { it.addedAt }.then(byTitle)
     }
-    return songs.sortedWith(order)
 }
 
 /** [albums] by title, by artist (then title), or the newest year first (then title), names in [nameOrder]; missing ones go last. */

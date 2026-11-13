@@ -62,6 +62,31 @@ class PlaylistsTest {
     }
 
     @Test
+    fun `a playlist's custom order moves a song by its place, up or down, a copy of it elsewhere keeping its own`() {
+        val state = PlaylistsState().put(roadTrip.copy(songs = listOf(lantern, bell, water, lantern)))
+
+        assertEquals(listOf(bell, water, lantern, lantern), state.move("p1", 0, 2).playlist("p1")?.songs)
+        assertEquals(listOf(lantern, lantern, bell, water), state.move("p1", 3, 1).playlist("p1")?.songs)
+        // A place the playlist does not have, a move to where it is, or a playlist that is gone changes nothing.
+        assertEquals(state, state.move("p1", 0, 4))
+        assertEquals(state, state.move("p1", -1, 0))
+        assertEquals(state, state.move("p1", 2, 2))
+        assertEquals(state, state.move("gone", 0, 1))
+    }
+
+    @Test
+    fun `Favourites' songs move the same way, their collections staying as they are`() {
+        val state = PlaylistsState(favouriteSongs = listOf(water, lantern, bell), favouriteCollections = listOf(artist, album))
+
+        assertEquals(listOf(lantern, bell, water), state.moveFavourite(0, 2).favouriteSongs)
+        assertEquals(listOf(bell, water, lantern), state.moveFavourite(2, 0).favouriteSongs)
+        assertEquals(listOf(artist, album), state.moveFavourite(2, 0).favouriteCollections)
+        assertEquals(state, state.moveFavourite(1, 3))
+        // A song made a favourite later still comes first.
+        assertEquals(listOf(SongRef(VOLUME + "Music/New/Kite.mp3"), lantern, bell, water), state.moveFavourite(0, 2).favourite(listOf(SongRef(VOLUME + "Music/New/Kite.mp3")), true).favouriteSongs)
+    }
+
+    @Test
     fun `rename, delete, and put back for Undo`() {
         val state = PlaylistsState().put(roadTrip).put(roadTrip.copy(id = "p2", name = "Night drive", createdAt = NOW + 1))
 
@@ -209,6 +234,22 @@ class PlaylistsTest {
         assertEquals(emptyList<Playlist>(), store.state.first().playlists)
         assertTrue(store.setSongs(listOf(bell), favourite = false))
         assertEquals(emptyList<SongRef>(), store.songs.first())
+    }
+
+    @Test
+    fun `a move is stored at once, in a playlist and in Favourites`() = runBlocking {
+        val file = File(folder.root, "playlists.json")
+        val store = repository(file)
+        assertTrue(store.put(roadTrip.copy(songs = listOf(lantern, bell, water))))
+        assertTrue(store.setSongs(listOf(water, bell), favourite = true))
+
+        assertTrue(store.move("p1", 2, 0))
+        assertTrue(store.moveFavourite(0, 1))
+
+        val stored = checkNotNull(PlaylistsJson.decode(file.readText()))
+        assertEquals(listOf(water, lantern, bell), stored.playlist("p1")?.songs)
+        assertEquals(listOf(bell, water), stored.favouriteSongs)
+        assertEquals(listOf(bell, water), store.songs.first())
     }
 
     @Test

@@ -138,6 +138,18 @@ class BackupRestoreTest {
     }
 
     @Test
+    fun `a custom order made by dragging goes in the backup and comes back in that order, a playlist's and Favourites'`() {
+        // Road trip with Tide Bell dragged to the top, and Favourites with Paper Lantern above Low Water.
+        val dragged = BackupFixtures.playlists.move("p1", 1, 0).moveFavourite(1, 0)
+        val stores = MemoryStores()
+
+        runBlocking { RestorePlan(contents(BackupFixtures.zip(BackupFixtures.snapshot.copy(playlists = dragged))), BackupFixtures.library).apply(setOf(Section.PLAYLISTS), stores, newId) }
+
+        assertEquals(listOf(bell.ref, lantern.ref, lantern.ref), stores.playlists.playlist("p1")?.songs)
+        assertEquals(listOf(lantern.ref, water.ref), stores.playlists.favouriteSongs)
+    }
+
+    @Test
     fun `a playlist with a name already there gets (restored), and the next one a number`() {
         val stores = MemoryStores(
             PlaylistsState(

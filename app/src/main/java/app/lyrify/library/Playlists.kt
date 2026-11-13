@@ -65,6 +65,12 @@ data class PlaylistsState(
     /** Only the playlist goes; the songs stay on the phone. */
     fun delete(id: String): PlaylistsState = copy(playlists = playlists.filterNot { it.id == id })
 
+    /** Its custom order: the song at place [from] of the playlist [id] moved to place [to]; a place it does not have changes nothing. */
+    fun move(id: String, from: Int, to: Int): PlaylistsState = edit(id) { it.copy(songs = it.songs.moved(from, to)) }
+
+    /** Favourites' custom order: the song at place [from] of [favouriteSongs] moved to place [to]. */
+    fun moveFavourite(from: Int, to: Int): PlaylistsState = copy(favouriteSongs = favouriteSongs.moved(from, to))
+
     /** [songs] made favourites, each once and before the earlier ones, or not; a song is known by its path. */
     fun favourite(songs: List<SongRef>, favourite: Boolean): PlaylistsState {
         val paths = songs.map { it.path }.toSet()
@@ -87,6 +93,10 @@ data class PlaylistsState(
 
     private fun edit(id: String, change: (Playlist) -> Playlist): PlaylistsState = copy(playlists = playlists.map { if (it.id == id) change(it) else it })
 }
+
+/** The list with its item at [from] moved to [to], the others closing up and making room; itself when either place is not in it. */
+private fun <T> List<T>.moved(from: Int, to: Int): List<T> =
+    if (from !in indices || to !in indices || from == to) this else toMutableList().apply { add(to, removeAt(from)) }
 
 /**
  * The stored form of [PlaylistsState]: JSON with a schema version. Read leniently, item by item, as the ledger is: keys
@@ -209,6 +219,12 @@ interface PlaylistStore : FavouritesPort {
 
     suspend fun delete(id: String): Boolean
 
+    /** A drag or TalkBack's Move in the playlist's custom order ([PlaylistsState.move]). */
+    suspend fun move(id: String, from: Int, to: Int): Boolean
+
+    /** The same in Favourites' songs ([PlaylistsState.moveFavourite]). */
+    suspend fun moveFavourite(from: Int, to: Int): Boolean
+
     /** Undo: [playlist] as it was before a change, or back after a delete. */
     suspend fun put(playlist: Playlist): Boolean
 
@@ -325,6 +341,10 @@ class PlaylistsRepository internal constructor(
     override suspend fun removeAt(id: String, positions: Set<Int>): Boolean = write { it.removeAt(id, positions) }
 
     override suspend fun delete(id: String): Boolean = write { it.delete(id) }
+
+    override suspend fun move(id: String, from: Int, to: Int): Boolean = write { it.move(id, from, to) }
+
+    override suspend fun moveFavourite(from: Int, to: Int): Boolean = write { it.moveFavourite(from, to) }
 
     override suspend fun put(playlist: Playlist): Boolean = write { it.put(playlist) }
 
