@@ -33,8 +33,8 @@ data class Settings(
 
 /** Settings > Playback. */
 data class PlaybackSettings(
-    /** "Remember my place": which songs resume where the user left them; All songs (user feedback 2026-11-11). */
-    val rememberPlace: RememberPlace = RememberPlace.ALL_SONGS,
+    /** "Remember my place": which songs resume where the user left them; Long songs (user, 2026-11-12). */
+    val rememberPlace: RememberPlace = RememberPlace.LONG_SONGS,
     /** "Headset buttons": one press plays or pauses, two skip, three go back. "Pause when disconnected" is always on. */
     val headsetButtons: Boolean = true,
     /** "Skip short clips": songs under 30 s leave the library. */
@@ -61,7 +61,10 @@ data class PlaybackSettings(
  */
 data class ConnectDevice(val associationId: Int, val name: String)
 
-/** "Remember my place": Long songs (10 minutes or longer, the default until version 3), All songs (the default), or Off. */
+/**
+ * "Remember my place": Long songs (10 minutes or longer, the default; All songs was in version 3, dev builds only), All
+ * songs, or Off.
+ */
 enum class RememberPlace { LONG_SONGS, ALL_SONGS, OFF }
 
 /** Playback > Volume levelling and Crossfade: what the audio chain does, shown under Playback. */
@@ -194,13 +197,15 @@ enum class FavouritesTab { SONGS, ALBUMS, ARTISTS, FOLDERS, PLAYLISTS }
  * field by field: a key this version does not know is ignored, and a field missing, of another type, out of range or
  * naming an unknown choice reads as its default while the fields around it are read as stored. A section that is
  * missing or not an object reads as its defaults. Only text that is not a JSON object at all is not settings.
- * Version 2 put Playlists right after Songs in the Library tabs. Version 3 made All songs the default of Remember my
- * place: an older file's Long songs was the old default (every file wrote it), so it reads as All songs, while Off and
- * All songs are kept. A file without a version reads as this version. A backup's settings are read the same way over the
+ * Version 2 put Playlists right after Songs in the Library tabs. Remember my place was written into every file, so a
+ * value that was its version's default is no choice: Long songs before version 3, and All songs in version 3 (the
+ * default in dev builds only, user feedback 2026-11-11, until Long songs came back: user, 2026-11-12). Such a value reads
+ * as a missing one does (the default, Long songs), while the other values are kept; from version 4 every value is kept.
+ * A file without a version reads as this version. A backup's settings are read the same way over the
  * phone's own ([decode]'s base), so what the backup does not carry stays as the phone has it.
  */
 object SettingsJson {
-    const val VERSION: Int = 3
+    const val VERSION: Int = 4
 
     fun encode(settings: Settings): String = Json.encodeToString(
         JsonObject.serializer(),
@@ -365,16 +370,25 @@ object SettingsJson {
     /** The version from which Playlists follows Songs in the Library tabs. */
     private const val PLAYLISTS_AFTER_SONGS: Int = 2
 
-    /** The version from which Long songs in Remember my place is the user's choice, not the old default. */
+    /** The version that made All songs the default of Remember my place, in dev builds only. */
     private const val ALL_SONGS_DEFAULT: Int = 3
 
+    /** The version from which every value of Remember my place is the user's choice, Long songs the default again. */
+    private const val LONG_SONGS_AGAIN: Int = 4
+
     /**
-     * Remember my place as stored: the old default (Long songs before [ALL_SONGS_DEFAULT]) was no choice, so it reads as
-     * [base] (today's default for `settings.json`, the phone's own for a backup), as a missing one does.
+     * Remember my place as stored: the default of the file's [version] (Long songs before [ALL_SONGS_DEFAULT], All songs
+     * until [LONG_SONGS_AGAIN]) was no choice, so it reads as [base] (today's default, Long songs, for `settings.json`;
+     * the phone's own for a backup), as a missing one does.
      */
     private fun rememberPlace(playback: JsonObject, version: Int, base: RememberPlace): RememberPlace {
         val stored = playback.choice("rememberPlace", base)
-        return if (version < ALL_SONGS_DEFAULT && stored == RememberPlace.LONG_SONGS) base else stored
+        val written = when {
+            version < ALL_SONGS_DEFAULT -> RememberPlace.LONG_SONGS
+            version < LONG_SONGS_AGAIN -> RememberPlace.ALL_SONGS
+            else -> null
+        }
+        return if (stored == written) base else stored
     }
 
     /** The picked devices: entries with a whole positive id and a name, the first one of each id. */

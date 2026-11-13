@@ -681,6 +681,12 @@ class BackupNewPhoneTest {
         assertEquals(RememberPlace.OFF, restoreSettings("""{"version":2,"playback":{"rememberPlace":"LONG_SONGS"}}""").playback.rememberPlace)
         assertEquals(RememberPlace.ALL_SONGS, restoreSettings("""{"version":2,"playback":{"rememberPlace":"ALL_SONGS"}}""").playback.rememberPlace)
         assertEquals(RememberPlace.LONG_SONGS, restoreSettings("""{"version":3,"playback":{"rememberPlace":"LONG_SONGS"}}""").playback.rememberPlace)
+        // Version 3 wrote All songs, its default then, into every file: no choice either. A phone at today's default
+        // reads Long songs, one with a choice of its own keeps it; from version 4 All songs is the user's.
+        assertEquals(RememberPlace.LONG_SONGS, restoreSettings("""{"version":3,"playback":{"rememberPlace":"ALL_SONGS"}}""", phone = Settings()).playback.rememberPlace)
+        assertEquals(RememberPlace.OFF, restoreSettings("""{"version":3,"playback":{"rememberPlace":"ALL_SONGS"}}""").playback.rememberPlace)
+        assertEquals(RememberPlace.ALL_SONGS, restoreSettings("""{"version":4,"playback":{"rememberPlace":"ALL_SONGS"}}""", phone = Settings()).playback.rememberPlace)
+        assertEquals(RememberPlace.LONG_SONGS, restoreSettings("""{"version":4,"playback":{"rememberPlace":"LONG_SONGS"}}""").playback.rememberPlace)
         // Version 1 had Playlists last among the Library tabs: it moves right after Songs, as on disk.
         val tabs = restoreSettings("""{"version":1,"library":{"tabs":[{"tab":"SONGS","shown":true},{"tab":"ALBUMS","shown":true},{"tab":"PLAYLISTS","shown":true}]}}""").library.tabs
         assertEquals(listOf(LibraryTab.SONGS, LibraryTab.PLAYLISTS, LibraryTab.ALBUMS), tabs.take(3).map { it.tab })
