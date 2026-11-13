@@ -12,6 +12,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.getBoundsInRoot
+import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
@@ -60,7 +62,8 @@ class LockPageDeviceTest {
     @Test
     fun aSwipeOverTheLyricsScrollsThemAndNeverClosesNorSeeks() {
         page()
-        val list = compose.onNode(SemanticsMatcher.keyIsDefined(SemanticsProperties.VerticalScrollAxisRange))
+        // The lyrics' own list: the page scrolls too (to the controls, on a short window), so it has its own range.
+        val list = compose.onNode(SemanticsMatcher.keyIsDefined(SemanticsProperties.VerticalScrollAxisRange) and hasAnyAncestor(hasTestTag(LYRICS)))
         assertEquals(0f, list.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value())
         compose.onNodeWithTag(LYRICS).performTouchInput { swipeUp() }
         compose.runOnIdle {
@@ -121,9 +124,10 @@ class LockPageDeviceTest {
     @Test
     fun aSwipeUpOrDownOnEitherBandCloses() {
         page()
-        compose.onNodeWithTag(TOP).performTouchInput { swipeDown() }
+        // Started inside each band and carried well past the close distance, whatever the band's height.
+        compose.onNodeWithTag(TOP).performTouchInput { swipe(center, center + Offset(0f, BAND_SWIPE.toPx()), durationMillis = BAND_SWIPE_MS) }
         compose.runOnIdle { assertEquals(1, closes) }
-        compose.onNodeWithTag(BOTTOM).performTouchInput { swipeUp() }
+        compose.onNodeWithTag(BOTTOM).performTouchInput { swipe(center, center - Offset(0f, BAND_SWIPE.toPx()), durationMillis = BAND_SWIPE_MS) }
         compose.runOnIdle {
             assertEquals(2, closes)
             assertEquals(emptyList<LrcLine>(), taps)
@@ -134,5 +138,9 @@ class LockPageDeviceTest {
         const val TOP = "top"
         const val LYRICS = "lyrics"
         const val BOTTOM = "bottom"
+
+        /** A swipe on a band: half again the 80 dp that closes, in this long. */
+        val BAND_SWIPE = 120.dp
+        const val BAND_SWIPE_MS = 300L
     }
 }
