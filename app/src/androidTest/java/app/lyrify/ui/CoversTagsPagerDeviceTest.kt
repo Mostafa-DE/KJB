@@ -3,7 +3,6 @@ package app.lyrify.ui
 import androidx.annotation.StringRes
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
@@ -13,7 +12,6 @@ import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performTouchInput
-import androidx.compose.ui.test.swipe
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import app.lyrify.R
@@ -33,11 +31,13 @@ class CoversTagsPagerDeviceTest {
     val compose = createComposeRule()
 
     private val context = InstrumentationRegistry.getInstrumentation().targetContext
+    private val edges = GestureEdges()
 
     @Test
     fun aSwipeMovesBetweenToReviewDoneAndSkippedAndToReviewKeepsItsList() {
         compose.setContent {
             LyrifyTheme {
+                ReadGestureEdges(edges)
                 CompositionLocalProvider(
                     LocalToasts provides remember { ToastState() },
                     LocalNavigator provides remember { Navigator(NavState.start(DockTab.TOOLS).open(Page.CoversTags)) },
@@ -61,19 +61,13 @@ class CoversTagsPagerDeviceTest {
     /** The top tab named [title], whatever its count. */
     private fun tab(@StringRes title: Int): SemanticsNodeInteraction = compose.onNode(hasText(context.getString(title), substring = true) and isSelectable())
 
-    /** A finger across the pages, low on the screen, well under the tabs. */
+    /** A finger across the pages, low on the screen, well under the tabs, clear of the system's gesture edges. */
     private fun swipePages(toNext: Boolean) {
-        compose.onRoot().performTouchInput {
-            val y = height * 0.75f
-            val start = if (toNext) right - EDGE else left + EDGE
-            val end = if (toNext) left + EDGE else right - EDGE
-            swipe(Offset(start, y), Offset(end, y), durationMillis = SWIPE_MS)
-        }
+        compose.onRoot().performTouchInput { swipeAcross(edges, toNext, y = height * 0.75f, durationMillis = SWIPE_MS) }
         compose.waitForIdle()
     }
 
     private companion object {
-        const val EDGE = 40f
         const val SWIPE_MS = 300L
     }
 }

@@ -28,6 +28,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.getBoundsInRoot
+import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -35,7 +36,6 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeLeft
-import androidx.compose.ui.test.swipeRight
 import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -58,7 +58,6 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.junit4.StateRestorationTester
-import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.unit.LayoutDirection
 import org.junit.Assume.assumeTrue
@@ -82,15 +81,20 @@ class TabPagerDeviceTest {
     private val built = mutableMapOf<String, Int>()
     private var chosen by mutableIntStateOf(0)
 
+    /** Read inside the theme the tabs are drawn in, light or dark as the phone is: the pill's colour, and the edges. */
+    private var pill = Color.Unspecified
+    private val edges = GestureEdges()
+    private lateinit var tabPager: TabPager
+
     @Test
     fun aSwipeMovesToTheNextTabAndBackAndTheTabsFollow() {
         compose.setContent { Tabs() }
-        compose.onNodeWithTag(page(0)).performTouchInput { swipeLeft() }
+        compose.onRoot().performTouchInput { swipeAcross(edges, toNext = true) }
         compose.waitForIdle()
         assertEquals(1, chosen)
         compose.onNodeWithText("Albums").assertIsSelected()
         compose.onNodeWithText("Songs").assertIsNotSelected()
-        compose.onNodeWithTag(page(1)).performTouchInput { swipeRight() }
+        compose.onRoot().performTouchInput { swipeAcross(edges, toNext = false) }
         compose.waitForIdle()
         assertEquals(0, chosen)
         compose.onNodeWithText("Songs").assertIsSelected()
@@ -103,11 +107,13 @@ class TabPagerDeviceTest {
         compose.mainClock.autoAdvance = false
         compose.onNodeWithText("Artists").performClick()
         compose.mainClock.advanceTimeByFrame()
-        compose.mainClock.advanceTimeBy(Motion.OPEN_MS / 2L)
-        // On its way: Songs has left its place, Artists is not there yet.
-        val songs = compose.onNodeWithTag(page(0)).getBoundsInRoot()
-        assertTrue(songs.left.value < 0f)
-        compose.onNodeWithTag(page(2)).getBoundsInRoot().let { assertTrue(it.left.value > 0f) }
+        compose.mainClock.advanceTimeBy(Motion.OPEN_MS / 4L)
+        val early = compose.runOnUiThread { tabPager.position }
+        compose.mainClock.advanceTimeBy(Motion.OPEN_MS / 4L)
+        val halfway = compose.runOnUiThread { tabPager.position }
+        // On its way, through the pages between: Songs left behind, still moving, Artists not reached yet. A glide that
+        // never starts stays at 0, and a jump is at 2 already. (The pager clips its pages, so their bounds cannot say.)
+        assertTrue("pages at $early, then $halfway", early > 0f && halfway > early && halfway < 2f)
         compose.mainClock.advanceTimeBy(Motion.OPEN_MS * 2L)
         compose.runOnIdle { assertEquals(2, chosen) }
         compose.onNodeWithText("Artists").assertIsSelected()
@@ -132,18 +138,14 @@ class TabPagerDeviceTest {
 
     @Test
     fun midSwipeThePillSitsBetweenTheTwoTabsAndAtRestOnOne() {
-        var pill = Color.Unspecified
-        compose.setContent {
-            pill = LocalChromeColors.current.action
-            Tabs()
-        }
+        compose.setContent { Tabs() }
         compose.waitForIdle()
         val songs = compose.onNodeWithText("Songs").getBoundsInRoot()
         val albums = compose.onNodeWithText("Albums").getBoundsInRoot()
         val density = compose.density
-        // The 2 dp between the two tabs, at the pill's middle height, and the middle of Songs.
+        // The 2 dp between the two tabs, at the pill's middle height, and Songs' own padding, clear of its letters.
         val gap = with(density) { Offset(((songs.right + albums.left) / 2).toPx(), ((songs.top + songs.bottom) / 2).toPx()) }
-        val onSongs = with(density) { Offset(((songs.left + songs.right) / 2).toPx(), ((songs.top + songs.bottom) / 2).toPx()) }
+        val onSongs = with(density) { Offset((songs.left + 6.dp).toPx(), ((songs.top + songs.bottom) / 2).toPx()) }
         fun colourAt(at: Offset): Color = compose.onRoot().captureToImage().toPixelMap()[at.x.toInt(), at.y.toInt()]
         // At rest the pill is on Songs, the gap is the page's.
         assertNear(pill, colourAt(onSongs), expect = true)
@@ -170,8 +172,9 @@ class TabPagerDeviceTest {
         compose.setContent { Tabs() }
         compose.onNodeWithTag(page(0)).performScrollToIndex(40)
         compose.onNodeWithText("Songs row 40").assertIsDisplayed()
-        compose.onNodeWithTag(page(0)).performTouchInput { swipeLeft() }
+        compose.onRoot().performTouchInput { swipeAcross(edges, toNext = true) }
         compose.waitForIdle()
+        assertEquals(1, chosen)
         compose.onNodeWithText("Artists").performClick()
         compose.waitForIdle()
         compose.onNodeWithText("Songs").performClick()
@@ -235,7 +238,7 @@ class TabPagerDeviceTest {
         compose.waitForIdle()
         // Back on Songs: its list never scrolled, its first row still at the top.
         val list = compose.onNodeWithTag(page(0)).getBoundsInRoot()
-        assertEquals(list.top.value, compose.onNodeWithText("Songs row 0").getBoundsInRoot().top.value, 1f)
+        assertEquals(list.top.value, compose.onNodeWithText("Songs row 0").getUnclippedBoundsInRoot().top.value, 1f)
     }
 
     @Test
@@ -262,16 +265,16 @@ class TabPagerDeviceTest {
         compose.waitForIdle()
         // Caught, then left to the list: the pages rest on a whole tab, and that tab's list scrolled.
         val shown = chosen
-        assertEquals(0f, compose.onNodeWithTag(page(shown)).getBoundsInRoot().left.value, 1f)
+        assertEquals(0f, compose.onNodeWithTag(page(shown)).getUnclippedBoundsInRoot().left.value, 1f)
         compose.onNodeWithText("${tabs[shown]} row 0").assertIsNotDisplayed()
     }
 
     @Test
     fun aTapDuringTheSettleStopsItOnTheNearerTabAndTapsNothingUnderIt() {
         var tapped = 0
-        compose.setContent { Tabs(row = { Box(Modifier.fillMaxWidth().height(64.dp).testTag(ROW).clickable { tapped++ }) }) }
+        compose.setContent { Tabs(row = { at -> Box(Modifier.fillMaxWidth().height(64.dp).testTag(rowTag(at)).clickable { tapped++ }) }) }
         compose.waitForIdle()
-        val rowY = compose.onAllNodesWithTag(ROW)[0].getBoundsInRoot().let { (it.top + it.bottom) / 2 }
+        val rowY = compose.onNodeWithTag(rowTag(chosen)).getBoundsInRoot().let { (it.top + it.bottom) / 2 }
         compose.mainClock.autoAdvance = false
         flick(toNext = true)
         compose.mainClock.advanceTimeBy(SETTLING_MS)
@@ -280,7 +283,7 @@ class TabPagerDeviceTest {
         compose.mainClock.autoAdvance = true
         compose.waitForIdle()
         assertEquals(0, tapped)
-        assertEquals(0f, compose.onNodeWithTag(page(chosen)).getBoundsInRoot().left.value, 1f)
+        assertEquals(0f, compose.onNodeWithTag(page(chosen)).getUnclippedBoundsInRoot().left.value, 1f)
     }
 
     @Test
@@ -296,7 +299,7 @@ class TabPagerDeviceTest {
         }
         restore.emulateSavedInstanceStateRestore()
         compose.waitForIdle()
-        assertEquals(0f, compose.onNodeWithTag(page(0)).getBoundsInRoot().left.value, 1f)
+        assertEquals(0f, compose.onNodeWithTag(page(0)).getUnclippedBoundsInRoot().left.value, 1f)
         compose.onNodeWithText("Songs").assertIsSelected()
     }
 
@@ -323,11 +326,7 @@ class TabPagerDeviceTest {
 
     @Test
     fun talkBackPagesTheTabsOneAtATime() {
-        var pill = Color.Unspecified
-        compose.setContent {
-            pill = LocalChromeColors.current.action
-            Tabs()
-        }
+        compose.setContent { Tabs() }
         val pages = compose.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.PageRight))
         pages.performSemanticsAction(SemanticsActions.PageRight)
         compose.waitForIdle()
@@ -347,9 +346,9 @@ class TabPagerDeviceTest {
     @Test
     fun aSecondFingerTapsNothingWhileTheFirstDragsThePages() {
         var tapped = 0
-        compose.setContent { Tabs(row = { Box(Modifier.fillMaxWidth().height(64.dp).testTag(ROW).clickable { tapped++ }) }) }
+        compose.setContent { Tabs(row = { at -> Box(Modifier.fillMaxWidth().height(64.dp).testTag(rowTag(at)).clickable { tapped++ }) }) }
         compose.waitForIdle()
-        val row = compose.onAllNodesWithTag(ROW)[0].getBoundsInRoot()
+        val row = compose.onNodeWithTag(rowTag(chosen)).getBoundsInRoot()
         compose.onRoot().performTouchInput {
             down(0, Offset(width * 0.8f, height * 0.7f))
             moveBy(0, Offset(-width * 0.2f, 0f))
@@ -385,18 +384,19 @@ class TabPagerDeviceTest {
         // its own would have to keep its gesture from them. No row in KJB's tabs has one.
         var dragged = 0f
         compose.setContent {
-            Tabs(row = {
+            Tabs(row = { at ->
                 Box(
                     Modifier
                         .fillMaxWidth()
                         .height(64.dp)
                         .background(Color.Gray)
-                        .testTag(ROW)
+                        .testTag(rowTag(at))
                         .draggable(rememberDraggableState { dragged += it }, Orientation.Horizontal),
                 )
             })
         }
-        compose.onNodeWithTag(ROW).performTouchInput { swipe(Offset(width * 0.65f, centerY), Offset(width * 0.35f, centerY), durationMillis = FLICK_MS) }
+        // Every page stays composed, each with its row: the one on the page shown.
+        compose.onNodeWithTag(rowTag(chosen)).performTouchInput { swipe(Offset(width * 0.65f, centerY), Offset(width * 0.35f, centerY), durationMillis = FLICK_MS) }
         compose.waitForIdle()
         assertEquals(1, chosen)
         assertEquals(0f, dragged, 0f)
@@ -406,20 +406,24 @@ class TabPagerDeviceTest {
     fun aTabRowScrolledByHandStaysThereUntilThePagesMove() {
         compose.setContent { Tabs(MANY) }
         compose.waitForIdle()
-        val atRest = compose.onNodeWithText("Songs").getBoundsInRoot().left
+        val atRest = compose.onNodeWithText("Songs").getUnclippedBoundsInRoot().left
         // The row scrolled by hand toward its end, then left alone: it stays where the finger left it.
         compose.onNodeWithTag(TAB_ROW).performTouchInput { swipeLeft(startX = width * 0.9f, endX = width * 0.3f) }
         compose.waitForIdle()
-        val scrolled = compose.onNodeWithText("Songs").getBoundsInRoot().left
+        val scrolled = compose.onNodeWithText("Songs").getUnclippedBoundsInRoot().left
         assertTrue("Songs at ${scrolled.value}, was at ${atRest.value}", scrolled < atRest)
         compose.mainClock.advanceTimeBy(SETTLED_MS)
         compose.waitForIdle()
-        assertEquals(scrolled, compose.onNodeWithText("Songs").getBoundsInRoot().left)
-        // The pages move: the row brings the pill back to the middle, as far as it goes.
+        assertEquals(scrolled, compose.onNodeWithText("Songs").getUnclippedBoundsInRoot().left)
+        // The pages move: the row brings the pill, on Albums now, back to the middle, or as near as the row goes.
         flick(toNext = true)
         compose.waitForIdle()
         compose.runOnIdle { assertEquals(1, chosen) }
-        assertEquals(atRest, compose.onNodeWithText("Songs").getBoundsInRoot().left)
+        val row = compose.onNodeWithTag(TAB_ROW).getBoundsInRoot()
+        val albums = compose.onNodeWithText("Albums").getUnclippedBoundsInRoot()
+        val offMiddle = abs(((albums.left + albums.right) / 2 - (row.left + row.right) / 2).value)
+        val songsNow = compose.onNodeWithText("Songs").getUnclippedBoundsInRoot().left
+        assertTrue("Albums ${"%.1f".format(offMiddle)} dp off the middle, Songs at ${songsNow.value}", offMiddle < 1f || abs((songsNow - atRest).value) < 1f)
     }
 
     @Test
@@ -432,7 +436,7 @@ class TabPagerDeviceTest {
         chosen = MANY.lastIndex
         compose.waitForIdle()
         val row = compose.onNodeWithTag(TAB_ROW).getBoundsInRoot()
-        val last = compose.onNodeWithText(MANY.last()).getBoundsInRoot()
+        val last = compose.onNodeWithText(MANY.last()).getUnclippedBoundsInRoot()
         assertTrue("${MANY.last()} from ${last.left.value} to ${last.right.value}, row to ${row.right.value}", last.left >= row.left && last.right <= row.right)
     }
 
@@ -472,17 +476,23 @@ class TabPagerDeviceTest {
         }
     }
 
-    /** The tabs ([names]) over their pages, each page a long list (or [row] above it), counting how often each is built. */
+    /**
+     * The tabs ([names]) over their pages, each page a long list (or the page's [row] above it), counting how often each
+     * is built; the pill's colour and the gesture edges read in the same theme and window.
+     */
     @Composable
-    private fun Tabs(names: List<String> = tabs, row: (@Composable () -> Unit)? = null) {
+    private fun Tabs(names: List<String> = tabs, row: (@Composable (Int) -> Unit)? = null) {
         LyrifyTheme {
+            pill = LocalChromeColors.current.action
+            ReadGestureEdges(edges)
             val pager = rememberTabPager(names.size, chosen) { chosen = it }
+            tabPager = pager
             Column {
                 PagerTabs(pager, names, Modifier.testTag(TAB_ROW))
                 TabPages(pager, names, Modifier.fillMaxSize()) { at ->
                     remember { built.merge(names[at], 1, Int::plus) }
                     Column {
-                        row?.invoke()
+                        row?.invoke(at)
                         Rows(names[at], page(at))
                     }
                 }
@@ -499,12 +509,14 @@ class TabPagerDeviceTest {
 
     private fun page(at: Int) = "page $at"
 
+    /** The row on the page at [at]: every page stays composed, each with its own. */
+    private fun rowTag(at: Int) = "row $at"
+
     private companion object {
-        const val ROW = "row"
         const val TAB_ROW = "tab row"
 
-        /** More tabs than fit across a phone. */
-        val MANY = listOf("Songs", "Albums", "Artists", "Folders", "Genres", "Years", "Composers", "Playlists")
+        /** More tabs than fit across any phone, held either way up. */
+        val MANY = listOf("Songs", "Albums", "Artists", "Folders", "Genres", "Years", "Composers", "Playlists", "Moods", "Decades", "Languages", "Ratings")
         const val HERO = "hero"
         const val ROWS = 100
 
