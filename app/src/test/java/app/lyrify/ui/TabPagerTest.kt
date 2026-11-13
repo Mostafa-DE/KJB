@@ -8,6 +8,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.math.abs
 
 /**
  * Top tabs that swipe (phone test 2026-11-11, points 2 and 4): the sung line follows the pages under the finger, a tab
@@ -33,12 +34,40 @@ class TabPagerTest {
         // Its start moves steadily with the pages.
         val stops = (0..20).map { pill(it / 10f)!!.start }
         assertEquals(stops.sorted(), stops)
-        // A tab it needs not laid out yet: no pill this frame.
-        assertNull(pill(2.5f))
+        // A tab it needs not measured yet (review of 5b488d2): never a frame without a pill, the nearest known one.
+        assertEquals(PillSpan(256f, 120f), pill(2.5f))
+        assertEquals(PillSpan(12f, 100f), tabPill(-0.5f, { starts.getOrNull(it) }, { widths.getOrNull(it) }))
     }
 
     @Test
-    fun `a label takes the pill's ink as the pill reaches it and gives it back as it leaves`() {
+    fun `each tab starts after the ones before it, every tab measured, so the pill always has both ends`() {
+        assertEquals(listOf(12f, 114f, 256f), tabStarts(widths, start = 12f, gap = 2f))
+        assertEquals(emptyList<Float>(), tabStarts(emptyList(), start = 12f, gap = 2f))
+    }
+
+    @Test
+    fun `the row scrolls the pill to its middle, as far as it can scroll`() {
+        assertEquals(200, tabRowScroll(centre = 300f, viewport = 200, max = 500))
+        assertEquals(0, tabRowScroll(centre = 50f, viewport = 200, max = 500))
+        assertEquals(500, tabRowScroll(centre = 900f, viewport = 200, max = 500))
+    }
+
+    @Test
+    fun `a label's ink reads on what is under most of it all through a swipe, but for the moment it crosses the pill's edge`() {
+        listOf(LightColors to chromeColors(LightColors, LightBrandColors, dark = false), DarkColors to chromeColors(DarkColors, DarkBrandColors, dark = true)).forEach { (scheme, chrome) ->
+            val colors = tabColors(scheme, chrome)
+            (0..100).map { it / 100f }.forEach { position ->
+                val share = tabInkShare(position, index = 0)
+                val under = if (share >= 0.5f) colors.pill else scheme.background
+                val ratio = contrast(tabInk(colors, share), under)
+                // Only within a few hundredths of the swipe's midpoint, where the pill's edge crosses the label.
+                assertTrue("at $position, share $share: ${"%.2f".format(ratio)}:1", ratio >= 4.5f || abs(position - 0.5f) < CROSSING)
+            }
+        }
+    }
+
+    @Test
+    fun `a label takes the pill's ink as the pill reaches it and gives it back as it leaves, crossing over quickly`() {
         assertEquals(1f, tabInkShare(position = 0f, index = 0), 0f)
         assertEquals(0f, tabInkShare(position = 0f, index = 1), 0f)
         assertEquals(0.5f, tabInkShare(position = 0.5f, index = 0), 0.0001f)
@@ -46,6 +75,9 @@ class TabPagerTest {
         assertEquals(1f, tabInkShare(position = 1f, index = 1), 0f)
         assertEquals(0f, tabInkShare(position = 1f, index = 0), 0f)
         assertEquals(0f, tabInkShare(position = 3f, index = 0), 0f)
+        // Most of the way it keeps one ink or the other; it crosses over near the middle.
+        assertTrue(tabInkShare(position = 0.2f, index = 0) > 0.95f)
+        assertTrue(tabInkShare(position = 0.8f, index = 0) < 0.05f)
     }
 
     @Test
@@ -179,5 +211,10 @@ class TabPagerTest {
         assertEquals(5, keptBeyond(count = 6, frames = 40))
         assertEquals(0, keptBeyond(count = 1, frames = 3))
         assertEquals(1, keptBeyond(count = 2, frames = 0))
+    }
+
+    private companion object {
+        /** How close to the midpoint of a swipe a label may be while its ink reads under 4.5:1. */
+        const val CROSSING = 0.06f
     }
 }

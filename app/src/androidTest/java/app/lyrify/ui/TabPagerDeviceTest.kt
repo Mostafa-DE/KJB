@@ -18,6 +18,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -402,6 +403,40 @@ class TabPagerDeviceTest {
     }
 
     @Test
+    fun aTabRowScrolledByHandStaysThereUntilThePagesMove() {
+        compose.setContent { Tabs(MANY) }
+        compose.waitForIdle()
+        val atRest = compose.onNodeWithText("Songs").getBoundsInRoot().left
+        // The row scrolled by hand toward its end, then left alone: it stays where the finger left it.
+        compose.onNodeWithTag(TAB_ROW).performTouchInput { swipeLeft(startX = width * 0.9f, endX = width * 0.3f) }
+        compose.waitForIdle()
+        val scrolled = compose.onNodeWithText("Songs").getBoundsInRoot().left
+        assertTrue("Songs at ${scrolled.value}, was at ${atRest.value}", scrolled < atRest)
+        compose.mainClock.advanceTimeBy(SETTLED_MS)
+        compose.waitForIdle()
+        assertEquals(scrolled, compose.onNodeWithText("Songs").getBoundsInRoot().left)
+        // The pages move: the row brings the pill back to the middle, as far as it goes.
+        flick(toNext = true)
+        compose.waitForIdle()
+        compose.runOnIdle { assertEquals(1, chosen) }
+        assertEquals(atRest, compose.onNodeWithText("Songs").getBoundsInRoot().left)
+    }
+
+    @Test
+    fun tabsAddedLaterStillBringThePillIntoView() {
+        var names by mutableStateOf(tabs)
+        compose.setContent { Tabs(names) }
+        compose.waitForIdle()
+        names = MANY
+        compose.waitForIdle()
+        chosen = MANY.lastIndex
+        compose.waitForIdle()
+        val row = compose.onNodeWithTag(TAB_ROW).getBoundsInRoot()
+        val last = compose.onNodeWithText(MANY.last()).getBoundsInRoot()
+        assertTrue("${MANY.last()} from ${last.left.value} to ${last.right.value}, row to ${row.right.value}", last.left >= row.left && last.right <= row.right)
+    }
+
+    @Test
     fun underAHeroTheHeroScrollsAwayFirstThenTheTabsStay() {
         lateinit var outer: ScrollState
         compose.setContent {
@@ -414,7 +449,7 @@ class TabPagerDeviceTest {
                     header = { Box(Modifier.fillMaxWidth().height(300.dp).testTag(HERO)) },
                     tabs = { PagerTabs(pager, tabs) },
                 ) {
-                    TabPages(pager, tabs, Modifier.fillMaxSize()) { at -> Rows(at) }
+                    TabPages(pager, tabs, Modifier.fillMaxSize()) { at -> Rows(tabs[at], page(at)) }
                 }
             }
         }
@@ -437,18 +472,18 @@ class TabPagerDeviceTest {
         }
     }
 
-    /** The tabs over their pages, each page a long list (or [row] above it), counting how often each is built. */
+    /** The tabs ([names]) over their pages, each page a long list (or [row] above it), counting how often each is built. */
     @Composable
-    private fun Tabs(row: (@Composable () -> Unit)? = null) {
+    private fun Tabs(names: List<String> = tabs, row: (@Composable () -> Unit)? = null) {
         LyrifyTheme {
-            val pager = rememberTabPager(tabs.size, chosen) { chosen = it }
+            val pager = rememberTabPager(names.size, chosen) { chosen = it }
             Column {
-                PagerTabs(pager, tabs)
-                TabPages(pager, tabs, Modifier.fillMaxSize()) { at ->
-                    remember { built.merge(tabs[at], 1, Int::plus) }
+                PagerTabs(pager, names, Modifier.testTag(TAB_ROW))
+                TabPages(pager, names, Modifier.fillMaxSize()) { at ->
+                    remember { built.merge(names[at], 1, Int::plus) }
                     Column {
                         row?.invoke()
-                        Rows(at)
+                        Rows(names[at], page(at))
                     }
                 }
             }
@@ -456,16 +491,20 @@ class TabPagerDeviceTest {
     }
 
     @Composable
-    private fun Rows(at: Int) {
-        LazyColumn(Modifier.fillMaxSize().testTag(page(at))) {
-            items((0 until ROWS).toList(), key = { it }) { Text("${tabs[at]} row $it", Modifier.height(48.dp)) }
+    private fun Rows(name: String, tag: String) {
+        LazyColumn(Modifier.fillMaxSize().testTag(tag)) {
+            items((0 until ROWS).toList(), key = { it }) { Text("$name row $it", Modifier.height(48.dp)) }
         }
     }
 
-    private fun page(at: Int) = "page ${tabs[at]}"
+    private fun page(at: Int) = "page $at"
 
     private companion object {
         const val ROW = "row"
+        const val TAB_ROW = "tab row"
+
+        /** More tabs than fit across a phone. */
+        val MANY = listOf("Songs", "Albums", "Artists", "Folders", "Genres", "Years", "Composers", "Playlists")
         const val HERO = "hero"
         const val ROWS = 100
 
