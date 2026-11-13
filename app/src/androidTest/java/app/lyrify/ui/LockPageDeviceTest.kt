@@ -64,10 +64,14 @@ class LockPageDeviceTest {
         page()
         // The lyrics' own list: the page scrolls too (to the controls, on a short window), so it has its own range.
         val list = compose.onNode(SemanticsMatcher.keyIsDefined(SemanticsProperties.VerticalScrollAxisRange) and hasAnyAncestor(hasTestTag(LYRICS)))
-        assertEquals(0f, list.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value())
+        fun scrolled(): Float = list.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value()
+        assertEquals(0f, scrolled())
         compose.onNodeWithTag(LYRICS).performTouchInput { swipeUp() }
+        // Read once the swipe has settled, outside runOnIdle (Compose forbids finding nodes in it): still at 0 fails.
+        compose.waitForIdle()
+        val after = scrolled()
+        assertTrue("lyrics scrolled to $after", after > 0f)
         compose.runOnIdle {
-            assertTrue(list.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value() > 0f)
             assertEquals(0, closes)
             assertEquals(emptyList<LrcLine>(), taps)
         }
