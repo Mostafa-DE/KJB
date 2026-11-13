@@ -65,6 +65,12 @@ data class PlaylistsState(
     /** Only the playlist goes; the songs stay on the phone. */
     fun delete(id: String): PlaylistsState = copy(playlists = playlists.filterNot { it.id == id })
 
+    /** Its custom order: the playlist [id] with the songs of [order] put in that order ([arranged]), the others where they are. */
+    fun arrange(id: String, order: List<SongRef>): PlaylistsState = edit(id) { it.copy(songs = arranged(it.songs, order, SongRef::path)) }
+
+    /** Favourites' custom order: [favouriteSongs] with the songs of [order] put in that order ([arranged]). */
+    fun arrangeFavourites(order: List<SongRef>): PlaylistsState = copy(favouriteSongs = arranged(favouriteSongs, order, SongRef::path))
+
     /** [songs] made favourites, each once and before the earlier ones, or not; a song is known by its path. */
     fun favourite(songs: List<SongRef>, favourite: Boolean): PlaylistsState {
         val paths = songs.map { it.path }.toSet()
@@ -86,6 +92,31 @@ data class PlaylistsState(
     )
 
     private fun edit(id: String, change: (Playlist) -> Playlist): PlaylistsState = copy(playlists = playlists.map { if (it.id == id) change(it) else it })
+}
+
+/**
+ * [stored] with the entries of [order] (those shown of it, in the order the user put them) in that order, in the places
+ * they take in [stored]; the others (hidden songs, songs added meanwhile) stay where they are. An entry is known by its
+ * song's [path], a song there twice by its copies: the first copies of [order] take its first places. An entry of
+ * [order] no longer in [stored] (removed meanwhile) is left out. So a move is never a place that a change made meanwhile
+ * shifted: the order stored is the order shown, whichever moves and changes come first.
+ */
+fun <T> arranged(stored: List<T>, order: List<T>, path: (T) -> String): List<T> {
+    // The copies of each song there are to place: as many as both have.
+    val copies = order.groupingBy(path).eachCount().mapValues { (song, count) -> minOf(count, stored.count { path(it) == song }) }
+    val slots = copies.toMutableMap()
+    val places = stored.indices.filter { at -> takeOne(slots, path(stored[at])) }
+    val left = copies.toMutableMap()
+    val placed = order.filter { takeOne(left, path(it)) }
+    return stored.toMutableList().apply { places.forEachIndexed { i, at -> set(at, placed[i]) } }
+}
+
+/** One of [song]'s copies counted in [copies] taken: false when none is left. */
+private fun takeOne(copies: MutableMap<String, Int>, song: String): Boolean {
+    val left = copies[song] ?: 0
+    if (left == 0) return false
+    copies[song] = left - 1
+    return true
 }
 
 /**
@@ -209,6 +240,12 @@ interface PlaylistStore : FavouritesPort {
 
     suspend fun delete(id: String): Boolean
 
+    /** A drag or TalkBack's Move in the playlist's custom order: the songs shown, in their new order ([PlaylistsState.arrange]). */
+    suspend fun arrange(id: String, order: List<SongRef>): Boolean
+
+    /** The same in Favourites' songs ([PlaylistsState.arrangeFavourites]). */
+    suspend fun arrangeFavourites(order: List<SongRef>): Boolean
+
     /** Undo: [playlist] as it was before a change, or back after a delete. */
     suspend fun put(playlist: Playlist): Boolean
 
@@ -325,6 +362,10 @@ class PlaylistsRepository internal constructor(
     override suspend fun removeAt(id: String, positions: Set<Int>): Boolean = write { it.removeAt(id, positions) }
 
     override suspend fun delete(id: String): Boolean = write { it.delete(id) }
+
+    override suspend fun arrange(id: String, order: List<SongRef>): Boolean = write { it.arrange(id, order) }
+
+    override suspend fun arrangeFavourites(order: List<SongRef>): Boolean = write { it.arrangeFavourites(order) }
 
     override suspend fun put(playlist: Playlist): Boolean = write { it.put(playlist) }
 

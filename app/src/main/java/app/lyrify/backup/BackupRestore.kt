@@ -414,19 +414,21 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
         const val RESTORED: String = " (restored)"
 
         /**
-         * [now] with the backup's playlists and Favourites added. A playlist already there (the same songs, under its
-         * name or its restored name) is not added again; one whose name is taken gets [RESTORED] (then " (2)"...). A
-         * playlist keeps its id unless the phone uses it, so a favourite playlist stays one. Favourite songs and
-         * collections not there yet go after the phone's own; a favourite playlist follows its playlist's id.
+         * [now] with the backup's playlists and Favourites added. A playlist already there (every song of the backup's in
+         * it, under its name or its restored name) is not added again: it takes the backup's order, the songs only the
+         * phone has after them in theirs ([backupFirst]). One whose name is taken gets [RESTORED] (then " (2)"...). A
+         * playlist keeps its id unless the phone uses it, so a favourite playlist stays one. Favourite songs take the
+         * backup's order the same way, those not there yet with them; collections not there yet go after the phone's
+         * own; a favourite playlist follows its playlist's id.
          */
         internal fun mergePlaylists(now: PlaylistsState, restored: PlaylistsState, newId: () -> String): PlaylistsState {
             var state = now
             val ids = mutableMapOf<String, String>()
             restored.playlists.forEach { playlist ->
-                val paths = playlist.songs.map { it.path }
-                val there = state.playlists.firstOrNull { it.songs.map(SongRef::path) == paths && sameName(it.name, playlist.name) }
+                val there = state.playlists.firstOrNull { sameName(it.name, playlist.name) && holds(it.songs, playlist.songs) }
                 if (there != null) {
                     ids[playlist.id] = there.id
+                    state = state.put(there.copy(songs = backupFirst(there.songs, playlist.songs)))
                     return@forEach
                 }
                 val taken = state.playlists.map { it.name }
@@ -435,14 +437,32 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
                 ids[playlist.id] = made.id
                 state = state.put(made)
             }
-            val known = state.favouriteSongs.map { it.path }.toSet()
             val collections = restored.favouriteCollections.mapNotNull { collection ->
                 if (collection.kind == CollectionKind.PLAYLIST) ids[collection.key]?.let { collection.copy(key = it) } else collection
             }
             return state.copy(
-                favouriteSongs = state.favouriteSongs + restored.favouriteSongs.filterNot { it.path in known },
+                favouriteSongs = backupFirst(state.favouriteSongs, restored.favouriteSongs),
                 favouriteCollections = (state.favouriteCollections + collections).distinct(),
             )
+        }
+
+        /** [phone] holds every song of [backup], each as often (a song twice, twice). */
+        private fun holds(phone: List<SongRef>, backup: List<SongRef>): Boolean {
+            val there = phone.groupingBy(SongRef::path).eachCount()
+            return backup.groupingBy(SongRef::path).eachCount().all { (path, count) -> (there[path] ?: 0) >= count }
+        }
+
+        /**
+         * A custom order restored (user rule 2026-11-13): [backup]'s songs in its order, then those only [phone] has (the
+         * copies beyond the backup's of a song there twice too), in their order.
+         */
+        private fun backupFirst(phone: List<SongRef>, backup: List<SongRef>): List<SongRef> {
+            val taken = backup.groupingBy(SongRef::path).eachCount().toMutableMap()
+            return backup + phone.filter { ref ->
+                val left = taken[ref.path] ?: 0
+                if (left > 0) taken[ref.path] = left - 1
+                left == 0
+            }
         }
 
         /** [name], or what a restore names it ("Road trip (restored)", "Road trip (restored) (2)"), case aside. */

@@ -1,6 +1,15 @@
 package app.lyrify.ui
 
 import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.indication
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.lazy.items
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.ui.geometry.Rect
@@ -34,7 +43,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
@@ -171,6 +179,9 @@ class PageSongs(
 
     /** A tap on [song] at [at] in [songs]: it plays from there, or while selecting, it is picked or unpicked. */
     fun tap(song: Song, at: Int) = if (selection.active) onSelection(selection.toggle(song)) else play(at)
+
+    /** A tap on [song]'s round check: it is picked or unpicked, as a tap on its row while selecting; it never plays. */
+    fun check(song: Song) = onSelection(selection.toggle(song))
 }
 
 /**
@@ -243,8 +254,9 @@ fun AboveChrome(content: @Composable () -> Unit) {
 /**
  * The rows of [shown], the page's songs from [offset] on (all of them, a heading's, or a folder's own songs, which come
  * first), each playing [PageSongs.songs] from where it is in them. [place] says where the song sheet opens (a playlist:
- * the song's place in it); [note] adds a word after the artist ("12 plays"); [repeats]: the list may hold a song twice
- * (a playlist).
+ * the song's place in it); [note] adds a word after the artist ("12 plays"); [keys]: the rows' own keys, by place (the
+ * entries of a list that may hold a song twice, [OrderedEntries]), else each song's path. With [reorder] (a list in its
+ * custom order, all of it shown) each row has a drag handle at its end and TalkBack's Move up and Move down.
  */
 fun LazyListScope.songRows(
     list: PageSongs,
@@ -252,10 +264,19 @@ fun LazyListScope.songRows(
     offset: Int = 0,
     place: (Int) -> SheetPlace = { SheetPlace.List },
     note: ((Song) -> String?)? = null,
-    repeats: Boolean = false,
+    keys: List<Any> = songRowKeys(shown),
+    reorder: SongReorder? = null,
 ) {
-    itemsIndexed(shown, key = { at, song -> songRowKey(song, offset + at, repeats) }, contentType = { _, _ -> "song" }) { at, song ->
+    // Places in [shown]: while a row is dragged, in the drag's order.
+    val places = reorder?.shown(shown) ?: shown.indices.toList()
+    items(places, key = { keys[it] }, contentType = { "song" }) { at ->
+        val song = shown[at]
         val index = offset + at
+        val reduced = LocalReducedMotion.current
+        val key = keys[at]
+        val lift = reorder?.let { animateFloatAsState(if (it.heldKey == key) 1f else 0f, motion(Motion.press, reduced), label = "row lift") }
+        var height by remember { mutableFloatStateOf(0f) }
+        val resources = LocalResources.current
         SongRow(
             song = song,
             ui = list.ui,
@@ -263,19 +284,26 @@ fun LazyListScope.songRows(
             selected = song.path in list.selection.paths,
             note = note?.invoke(song),
             onTap = { list.tap(song, index) },
+            onCheck = { list.check(song) },
             onLongPress = { list.onSelection(SongSelection(setOf(song.path))) },
             onMore = { list.sheets.show(OpenSheet.Menu(song.ref, place(index))) },
+            handle = reorder?.let { { DragHandle(it, shown, at, key) { height } } },
+            moves = if (reorder == null) emptyList() else rowMoves(at, shown.size).map { move -> CustomAccessibilityAction(resources.getString(move.words)) { reorder.move(at, move.to, shown.size); true } },
             // An extension on the list, not a composable: reduced motion is read in the row.
-            modifier = rowMotion(LocalReducedMotion.current),
+            modifier = if (reorder != null && lift != null) {
+                reorderMotion(reorder, key, lift, MaterialTheme.colorScheme.surfaceContainerHigh, reduced, LocalDensity.current).onSizeChanged { height = it.height.toFloat() }
+            } else {
+                rowMotion(reduced)
+            },
         )
     }
 }
 
 /**
- * A song row's key: its path, so a sort or a song added at the top moves rows instead of making each one new; with its
- * place [at] too in a list that may hold a song twice ([repeats]).
+ * The keys of [songs]' rows, by place: a song's path, so a sort or a song added at the top moves rows instead of making
+ * each one new. A list that may hold a song twice keys its rows by entry instead ([OrderedEntries]).
  */
-fun songRowKey(song: Song, at: Int, repeats: Boolean): String = if (repeats) "song ${song.path}#$at" else "song ${song.path}"
+fun songRowKeys(songs: List<Song>): List<Any> = songs.map { "song ${it.path}" }
 
 // The list header
 
@@ -448,7 +476,9 @@ fun <T> SortSheet(title: String, options: List<Pair<T, String>>, selected: T, on
  * A song's row: its cover, title and artist, the lyrics icon after the artist for a song with lyrics, and for the song
  * playing its coral title, the equalizer mark and the green dot before the artist ([rowMarks]), which fade from row to
  * row as the song changes; a tap plays, "⋯" opens the song sheet, a long press selects (none without [onLongPress]). Search passes its [shownTitle] with the match highlighted, and for a song found
- * in its lyrics the matching [line] under the artist.
+ * in its lyrics the matching [line] under the artist. While selecting, a tap on the row or on its round check ([onCheck],
+ * 48 dp) picks or unpicks it, and a picked row has its own rounded fill ([rowFill]). In a custom order a [handle] comes
+ * before "⋯", and TalkBack gets the row's [moves].
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -461,6 +491,9 @@ fun SongRow(
     onLongPress: (() -> Unit)?,
     onMore: () -> Unit,
     modifier: Modifier = Modifier,
+    onCheck: () -> Unit = onTap,
+    handle: (@Composable () -> Unit)? = null,
+    moves: List<CustomAccessibilityAction> = emptyList(),
     note: String? = null,
     shownTitle: AnnotatedString? = null,
     line: AnnotatedString? = null,
@@ -490,18 +523,19 @@ fun SongRow(
         motion(tween(Motion.OPEN_MS), reduced),
         label = "row title",
     )
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = modifier.fillMaxWidth().padding(start = 8.dp, end = 4.dp)) {
+    // The fill is the whole row's, inset from its sides and ends ([rowFill]), so neighbours selected read as two rows.
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = modifier.fillMaxWidth().drawBehind { drawRowFill(fill) }.padding(start = 8.dp, end = 4.dp)) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(14.dp),
             modifier = Modifier
                 .weight(1f)
-                .clip(RoundedCornerShape(16.dp))
-                .background(fill)
+                .clip(RoundedCornerShape(ROW_FILL_CORNER))
                 .combinedClickable(onClickLabel = tapLabel, onLongClickLabel = holdLabel, onLongClick = onLongPress?.takeUnless { selecting }, onClick = onTap)
                 .semantics {
                     contentDescription = description
                     if (selecting) this.selected = selected
+                    if (moves.isNotEmpty()) customActions = moves
                 }
                 .heightIn(min = 64.dp)
                 .padding(8.dp),
@@ -544,10 +578,21 @@ fun SongRow(
                 }
             }
         }
+        // The handle sits at the end, before "⋯", clear of the system's back gesture at the screen's edges.
+        handle?.invoke()
         // Selection starts and ends with "⋯" and the checkbox fading through each other, never swapped at once.
         Crossfade(selecting, animationSpec = tween(if (reduced) Motion.REDUCED_MS else Motion.FADE_IN_MS), label = "row end") { checking ->
             if (checking) {
-                Box(contentAlignment = Alignment.Center, modifier = Modifier.size(48.dp).clearAndSetSemantics {}) { LyrifyCheckbox(selected) }
+                // A tap on the check picks or unpicks the song, as a tap on the row does; TalkBack has it on the row.
+                val press = remember { MutableInteractionSource() }
+                Box(
+                    contentAlignment = Alignment.Center,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .testTag(CHECK_TAG)
+                        .clearAndSetSemantics {}
+                        .clickable(interactionSource = press, indication = null, onClick = onCheck),
+                ) { LyrifyCheckbox(selected, Modifier.indication(press, PressIndication(CircleShape, 0.9f))) }
             } else {
                 ChromeIconButton(R.drawable.ic_more_horiz, stringResource(R.string.lib_more_for, title), onMore, glass = false, tint = colors.onSurfaceVariant)
             }
@@ -564,6 +609,7 @@ val LocalPlayingPath = staticCompositionLocalOf<String?> { null }
 
 /** A selected row's fill: the brand's container at 62% (.srow.sel). */
 private const val SELECTED_ALPHA = 0.62f
+
 
 /** A list header's count (.cnt b): Bricolage 19/22. */
 private val CountNumber = display(19, 22, -0.01)

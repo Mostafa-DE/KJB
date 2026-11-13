@@ -338,6 +338,12 @@ class SongActions(private val playback: PlaybackCommands, private val playlists:
         }
     }
 
+    /** A drag or TalkBack's Move in [playlist]'s custom order, the songs shown in their new order: no toast unless it was not stored. */
+    suspend fun arrange(playlist: Playlist, order: List<SongRef>): Outcome? = if (playlists.arrange(playlist.id, order)) null else Outcome(Said.NotSaved)
+
+    /** The same in Favourites' songs. */
+    suspend fun arrangeFavourites(order: List<SongRef>): Outcome? = if (playlists.arrangeFavourites(order)) null else Outcome(Said.NotSaved)
+
     /** Undo gives the old name back while the playlist still has [name]. */
     suspend fun rename(playlist: Playlist, name: String): Outcome =
         if (playlists.rename(playlist.id, name)) {

@@ -66,7 +66,8 @@
     <string name="lib_sort_most_songs">Most songs</string>
     <string name="lib_sort_track">Track</string>
     <string name="lib_sort_recent_short">Recent</string>
-    <string name="lib_your_order">Your order</string>
+    <!-- Favourites' songs and a playlist in the order the user put them in, the one the drag handles change. -->
+    <string name="lib_sort_custom">Custom order</string>
     <string name="lib_order_plays">Most plays</string>
     <string name="lib_order_latest">Latest</string>
     <string name="lib_order_newest">Newest</string>
@@ -88,6 +89,9 @@
     <!-- TalkBack name of a row's "⋯". -->
     <string name="lib_more_for">More for %1$s</string>
     <string name="lib_select">Select</string>
+    <!-- TalkBack actions of a row in a custom order, where a drag handle moves it. -->
+    <string name="lib_move_up">Move up</string>
+    <string name="lib_move_down">Move down</string>
 
     <!-- The tabs and their pages -->
     <string name="lib_no_songs">Songs on your phone show here.</string>
