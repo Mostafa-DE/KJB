@@ -1,10 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Its name in Settings > Apps: KJB's AI add-on. No launcher icon. -->
+    <!-- Its name in Settings > Apps: KJB's AI add-on. No launcher icon, no notification: KJB shows its download. -->
     <string name="app_name">KJB AI</string>
-
-    <!-- The model download's notification. -->
-    <string name="ai_title">AI lyrics</string>
-    <string name="ai_models_channel">AI download</string>
-    <string name="ai_models_downloading">%1$d%% (%2$s of %3$s)</string>
 </resources>

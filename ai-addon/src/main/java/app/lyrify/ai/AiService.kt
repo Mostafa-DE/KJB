@@ -14,10 +14,14 @@ import android.util.Log
 import app.lyrify.ai.api.AddonNames
 import app.lyrify.ai.api.AddonStatus
 import app.lyrify.ai.api.IAiAddon
+import app.lyrify.ai.api.IAiDownloadCallback
 import app.lyrify.ai.api.IAiRunCallback
 import app.lyrify.ai.api.IAiStatusCallback
 import app.lyrify.ai.api.ImportReply
 import app.lyrify.ai.api.Wire
+import app.lyrify.models.Download
+import app.lyrify.models.DownloadEvents
+import app.lyrify.models.DownloadRun
 import app.lyrify.models.ModelDownloads
 import app.lyrify.models.ModelImport
 import app.lyrify.models.ModelState
@@ -244,6 +248,9 @@ class AiService : Service() {
 
     private val jobs by lazy { AddonJobs(scope, Dispatchers.Default, ::engine) }
 
+    /** The model download, run while KJB keeps the add-on bound from its foreground service (which shows its notification). */
+    private val downloads by lazy { DownloadRun(scope) { progress -> ModelDownloads.download(this, progress) } }
+
     /** KJB's status watchers ([IAiAddon.watchStatus]); the status is collected only while there is one. */
     private val watchers = object : RemoteCallbackList<IAiStatusCallback>() {
         override fun onCallbackDied(callback: IAiStatusCallback) = watchedLess()
@@ -270,6 +277,8 @@ class AiService : Service() {
     /** KJB let go of the add-on: what it started stops, and the NPU sessions close now. */
     override fun onUnbind(intent: Intent): Boolean {
         jobs.shutDown()
+        // KJB went away (swiped, killed): the download pauses, and goes on from its parts at the next bind.
+        downloads.cancel()
         return false
     }
 
@@ -284,7 +293,7 @@ class AiService : Service() {
     private val binder = object : IAiAddon.Stub() {
         override fun apiVersion(): Int = checked { IAiAddon.VERSION }
 
-        override fun status(): String = checked { Wire.encode(runBlocking { statusOf(ModelDownloads.state(this@AiService).first()) }) }
+        override fun status(): String = checked { Wire.encode(runBlocking { statusOf(ModelDownloads.state(this@AiService, downloads.state).first()) }) }
 
         override fun watchStatus(callback: IAiStatusCallback) = checked {
             watchers.register(callback)
@@ -296,13 +305,21 @@ class AiService : Service() {
             watchedLess()
         }
 
-        override fun startDownload(restart: Boolean) = checked {
-            if (restart) ModelDownloads.start(this@AiService) else ModelDownloads.startIfIdle(this@AiService)
+        override fun download(callback: IAiDownloadCallback) = checked {
+            val events = DownloadCallback(callback)
+            // KJB's process dying (its binder) stops the download as its unbind would.
+            try {
+                callback.asBinder().linkToDeath({ downloads.cancel() }, 0)
+            } catch (_: RemoteException) {
+                return@checked
+            }
+            downloads.start(events)
         }
 
-        override fun cancelDownload() = checked { ModelDownloads.cancel(this@AiService) }
+        override fun cancelDownload() = checked { downloads.cancel() }
 
         override fun deleteModels(): Boolean = checked {
+            downloads.cancel()
             runBlocking {
                 jobs.closeEngine().join()
                 ModelDownloads.delete(this@AiService)
@@ -310,6 +327,7 @@ class AiService : Service() {
         }
 
         override fun discardModel(name: String): Boolean = checked {
+            downloads.cancel()
             runBlocking {
                 jobs.closeEngine().join()
                 ModelDownloads.discard(this@AiService, File(ModelDownloads.folder(this@AiService), name))
@@ -357,6 +375,22 @@ class AiService : Service() {
             throw e
         }
         return block()
+    }
+
+    /** The download's progress and end to KJB, by binder. KJB gone stops the download. */
+    private inner class DownloadCallback(private val callback: IAiDownloadCallback) : DownloadEvents {
+        override fun onProgress(done: Long, total: Long) = send { callback.onProgress(done, total) }
+
+        override fun onEnd(end: Download) = send { callback.onEnd(Wire.encode(end)) }
+
+        private inline fun send(call: () -> Unit) {
+            try {
+                call()
+            } catch (e: RemoteException) {
+                Log.w(LOG_TAG, "KJB is gone (${e.javaClass.simpleName}); stopping the download")
+                downloads.cancel()
+            }
+        }
     }
 
     /** A job's events to KJB, by binder. KJB gone (its process died) stops the job. */
@@ -422,7 +456,7 @@ class AiService : Service() {
     private fun watch() {
         watching?.cancel()
         watching = scope.launch {
-            ModelDownloads.state(this@AiService).collect { models -> broadcast(Wire.encode(statusOf(models))) }
+            ModelDownloads.state(this@AiService, downloads.state).collect { models -> broadcast(Wire.encode(statusOf(models))) }
         }
     }
 

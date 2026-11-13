@@ -1,20 +1,16 @@
 package app.lyrify.ai.api
 
 import app.lyrify.ai.AiResult
+import app.lyrify.models.Download
 import app.lyrify.models.ModelState
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
-/** The add-on's bound service and its permission, as KJB binds it (IAiAddon), and KJB's AI page, as the add-on opens it. */
+/** The add-on's bound service and its permission, as KJB binds it (IAiAddon). */
 object AddonNames {
     /** The bound service's class in the add-on. */
     const val SERVICE: String = "app.lyrify.ai.AiService"
-
-    /** KJB's activity, and the extra that opens its AI page (app.lyrify.ui.EXTRA_DESTINATION and DESTINATION_AI). */
-    const val KJB_ACTIVITY: String = "app.lyrify.ui.MainActivity"
-    const val EXTRA_DESTINATION: String = "app.lyrify.destination"
-    const val DESTINATION_AI: String = "ai"
 
     /** The signature permission only the add-on declares and only KJB, signed with the same key, holds. */
     fun permission(addonPackage: String): String = "$addonPackage.permission.BIND_AI"
@@ -75,6 +71,11 @@ object Wire {
 
     /** [text] as a status; null when it cannot be read. */
     fun status(text: String): AddonStatus? = read(text, AddonStatus.serializer())
+
+    fun encode(end: Download): String = json.encodeToString(Download.serializer(), end)
+
+    /** [text] as a download's end; one that cannot be read is a stop, to try again. */
+    fun download(text: String): Download = read(text, Download.serializer()) ?: Download.Interrupted("unreadable end")
 
     fun encode(reply: ImportReply): String = json.encodeToString(ImportReply.serializer(), reply)
 

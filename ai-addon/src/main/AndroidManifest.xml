@@ -10,18 +10,11 @@
         android:name="${applicationId}.permission.BIND_AI"
         android:protectionLevel="signature" />
 
-    <!-- The one-time model download (models/ModelDownloadWorker): a WorkManager worker in a foreground service of type
-         dataSync, at most 6 hours in 24 from Android 15, on unmetered networks only (WorkManager adds
-         ACCESS_NETWORK_STATE, WAKE_LOCK and RECEIVE_BOOT_COMPLETED). It talks to Qualcomm AI Hub, GitHub and Hugging
-         Face only (models/ModelStore.kt). The AI itself never goes online. -->
+    <!-- The one-time model download (models/ModelDownloads), run while KJB keeps the add-on bound from its own
+         foreground service, which shows the progress: the add-on has no foreground service and posts no notification.
+         It talks to Qualcomm AI Hub, GitHub and Hugging Face only (models/ModelStore.kt). The AI itself never goes
+         online. -->
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
-
-    <!-- KJB, for the download notification's tap, which opens KJB's AI page. -->
-    <queries>
-        <package android:name="${kjbPackage}" />
-    </queries>
 
     <!-- No activity and no launcher icon: the add-on shows only in Settings > Apps. largeHeap: the engine streams a song's
          44.1 kHz mix and vocals through the separation and keeps only the 16 kHz vocal stem, wav2vec2's emissions and the
@@ -51,17 +44,12 @@
             android:authorities="${applicationId}.onnxruntime_telemetry_initializer"
             tools:node="remove" />
 
-        <!-- KJB binds it by its explicit name while the AI works or its page shows. Exported for KJB only: the signature
-             permission above, and every call checks the caller's uid and certificate (ai/AiService.kt). -->
+        <!-- KJB binds it by its explicit name while the AI works, the models download or its page shows. Exported for
+             KJB only: the signature permission above, and every call checks the caller's uid and certificate
+             (ai/AiService.kt). -->
         <service
             android:name=".AiService"
             android:exported="true"
             android:permission="${applicationId}.permission.BIND_AI" />
-
-        <!-- WorkManager's foreground service, dataSync for the model download. -->
-        <service
-            android:name="androidx.work.impl.foreground.SystemForegroundService"
-            android:foregroundServiceType="dataSync"
-            tools:node="merge" />
     </application>
 </manifest>

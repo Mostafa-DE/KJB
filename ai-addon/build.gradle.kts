@@ -77,7 +77,6 @@ android {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-dev"
             buildConfigField("String", "KJB_PACKAGE", "\"app.lyrify.debug\"")
-            manifestPlaceholders["kjbPackage"] = "app.lyrify.debug"
             buildConfigField("String", "KJB_CERT_SHA256", "\"${certPins.getValue("debug")}\"")
         }
         release {
@@ -86,7 +85,6 @@ android {
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.findByName("release")
             buildConfigField("String", "KJB_PACKAGE", "\"app.lyrify\"")
-            manifestPlaceholders["kjbPackage"] = "app.lyrify"
             buildConfigField("String", "KJB_CERT_SHA256", "\"${certPins.getValue("release")}\"")
         }
     }
@@ -118,7 +116,6 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.android)
-    implementation(libs.androidx.work.runtime)
     implementation(libs.onnxruntime.android)
     implementation(libs.onnxruntime.qnn.ep)
     implementation(libs.qnn.runtime)

@@ -5,6 +5,7 @@ import app.lyrify.ai.AiStage
 import app.lyrify.ai.api.AddonStatus
 import app.lyrify.ai.api.ImportReply
 import app.lyrify.lyrics.LocalTrack
+import app.lyrify.models.Download
 import app.lyrify.overnight.SongEngine
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Deferred
@@ -59,6 +60,13 @@ interface RunEvents {
     fun onStopped()
 }
 
+/** The add-on's model download as it goes (IAiDownloadCallback, as Kotlin). Called on binder threads. */
+interface DownloadEvents {
+    fun onProgress(done: Long, total: Long)
+
+    fun onEnd(end: Download)
+}
+
 /**
  * The add-on's calls (IAiAddon), as Kotlin: each throws [AddonDiedException] once its process is gone, and
  * SecurityException when it refuses KJB.
@@ -72,7 +80,8 @@ interface AddonPort {
     /** [listener] hears the status now and at each change, on a binder thread, until the returned handle is closed. */
     fun watchStatus(listener: (AddonStatus) -> Unit): AutoCloseable
 
-    fun startDownload(restart: Boolean)
+    /** Starts (or follows) the add-on's model download; [events] hears its progress and end. */
+    fun download(events: DownloadEvents)
 
     fun cancelDownload()
 

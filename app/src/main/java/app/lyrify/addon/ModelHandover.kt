@@ -153,7 +153,7 @@ class HandoverWorker(context: Context, params: WorkerParameters) : CoroutineWork
         return when (end) {
             HandoverEnd.Done -> {
                 Log.i(LOG_TAG, "AI: the models KJB kept are the add-on's now")
-                if (AiLyrics.enabled(app).value && addon.status()?.models?.let { it !is ModelState.Ready } == true) addon.startDownload(restart = false)
+                if (AiLyrics.enabled(app).value) AddonDownloads.startIfIdle(app)
                 Result.success()
             }
             is HandoverEnd.Retry -> {
@@ -163,7 +163,7 @@ class HandoverWorker(context: Context, params: WorkerParameters) : CoroutineWork
             is HandoverEnd.GaveUp -> {
                 Log.w(LOG_TAG, "AI: the add-on did not take a model KJB kept (${end.reason}); it downloads the models instead")
                 ModelHandover.markGaveUp(app)
-                if (AiLyrics.enabled(app).value) addon.startDownload(restart = true)
+                if (AiLyrics.enabled(app).value) AddonDownloads.start(app)
                 Result.success()
             }
         }

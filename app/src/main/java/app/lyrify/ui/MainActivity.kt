@@ -41,6 +41,7 @@ import app.lyrify.library.LibraryState
 import app.lyrify.logFailures
 import app.lyrify.media.NowPlaying
 import app.lyrify.addon.Addon
+import app.lyrify.addon.AddonDownloads
 import app.lyrify.addon.AddonInstalls
 import app.lyrify.addon.HandoverState
 import app.lyrify.addon.ModelHandover
@@ -193,6 +194,8 @@ private fun App(ledger: LedgerStore, destination: Page?, view: FullScreen?, onVi
     // The AI add-on and its models, bound while KJB shows (on a phone the AI runs on only).
     val addon by remember(context) { if (NpuChips.supported() != null) Addon.views(context) else flowOf(null) }.collectAsStateWithLifecycle(initialValue = null)
     val install by remember(context) { AddonInstalls.installer(context).state }.collectAsStateWithLifecycle()
+    // KJB runs the add-on's download: whether it waits for Wi-Fi, or failed, is KJB's to say.
+    val downloadPhase by remember(context) { AddonDownloads.phase(context) }.collectAsStateWithLifecycle(initialValue = null)
     val handover by remember(context) { ModelHandover.state(context) }.collectAsStateWithLifecycle(initialValue = HandoverState.None)
     val aiEnabled by remember(context) { AiLyrics.enabled(context) }.collectAsStateWithLifecycle()
     val deletingModels by Lyrify.deletingModels.collectAsStateWithLifecycle()
@@ -222,7 +225,7 @@ private fun App(ledger: LedgerStore, destination: Page?, view: FullScreen?, onVi
                 ai = AiState(
                     chip = remember { NpuChips.device() },
                     newEnough = Build.VERSION.SDK_INT >= NpuChips.MIN_SDK,
-                    models = addon?.status?.models,
+                    models = AddonDownloads.withPhase(addon?.status?.models, downloadPhase),
                     addon = addon?.state,
                     install = install,
                     handover = handover,

@@ -6,6 +6,7 @@ import app.lyrify.ai.AiStage
 import app.lyrify.ai.AiStats
 import app.lyrify.ai.RejectReason
 import app.lyrify.lyrics.LrcProblem
+import app.lyrify.models.Download
 import app.lyrify.models.ModelState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -84,6 +85,14 @@ class WireTest {
 
         for (reply in replies) assertEquals(reply, Wire.reply(Wire.encode(reply)))
         assertEquals(ImportReply.Outcome.RETRY, Wire.reply("[]").outcome)
+    }
+
+    @Test
+    fun `a download's end goes over, and one that cannot be read is a stop to try again`() {
+        for (end in listOf(Download.Done, Download.Interrupted("connection closed at 10 of 20 bytes"), Download.Failed("checksum mismatch"))) {
+            assertEquals(end, Wire.download(Wire.encode(end)))
+        }
+        assertTrue(Wire.download("{") is Download.Interrupted)
     }
 
     @Test
