@@ -50,6 +50,18 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.test.captureToImage
 import kotlin.math.abs
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.systemGestures
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.click
+import androidx.compose.ui.test.junit4.StateRestorationTester
+import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.unit.LayoutDirection
+import org.junit.Assume.assumeTrue
+import androidx.compose.foundation.clickable
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -232,6 +244,138 @@ class TabPagerDeviceTest {
         compose.waitForIdle()
         assertEquals(0, chosen)
         compose.onNodeWithText("Songs row 0").assertIsNotDisplayed()
+    }
+
+    // Review of cef1ddc
+
+    @Test
+    fun anUprightDragDuringTheSettleScrollsTheListAndThePagesStopOnTheNearerTab() {
+        compose.setContent { Tabs() }
+        compose.waitForIdle()
+        compose.mainClock.autoAdvance = false
+        flick(toNext = true)
+        compose.mainClock.advanceTimeBy(SETTLING_MS)
+        compose.onRoot().performTouchInput { swipe(Offset(width * 0.5f, height * 0.85f), Offset(width * 0.5f, height * 0.35f), durationMillis = UPRIGHT_MS) }
+        compose.mainClock.advanceTimeBy(SETTLED_MS)
+        compose.mainClock.autoAdvance = true
+        compose.waitForIdle()
+        // Caught, then left to the list: the pages rest on a whole tab, and that tab's list scrolled.
+        val shown = chosen
+        assertEquals(0f, compose.onNodeWithTag(page(shown)).getBoundsInRoot().left.value, 1f)
+        compose.onNodeWithText("${tabs[shown]} row 0").assertIsNotDisplayed()
+    }
+
+    @Test
+    fun aTapDuringTheSettleStopsItOnTheNearerTabAndTapsNothingUnderIt() {
+        var tapped = 0
+        compose.setContent { Tabs(row = { Box(Modifier.fillMaxWidth().height(64.dp).testTag(ROW).clickable { tapped++ }) }) }
+        compose.waitForIdle()
+        val rowY = compose.onAllNodesWithTag(ROW)[0].getBoundsInRoot().let { (it.top + it.bottom) / 2 }
+        compose.mainClock.autoAdvance = false
+        flick(toNext = true)
+        compose.mainClock.advanceTimeBy(SETTLING_MS)
+        compose.onRoot().performTouchInput { click(Offset(width * 0.5f, rowY.toPx())) }
+        compose.mainClock.advanceTimeBy(SETTLED_MS)
+        compose.mainClock.autoAdvance = true
+        compose.waitForIdle()
+        assertEquals(0, tapped)
+        assertEquals(0f, compose.onNodeWithTag(page(chosen)).getBoundsInRoot().left.value, 1f)
+    }
+
+    @Test
+    fun pagesRestoredBetweenTwoTabsLandOnAWholeTab() {
+        val restore = StateRestorationTester(compose)
+        restore.setContent { Tabs() }
+        compose.waitForIdle()
+        // Held a third of the way to Albums, then the phone turns.
+        compose.onRoot().performTouchInput {
+            down(Offset(width * 0.8f, height * 0.6f))
+            moveBy(Offset(-width * 0.17f, 0f))
+            moveBy(Offset(-width * 0.17f, 0f))
+        }
+        restore.emulateSavedInstanceStateRestore()
+        compose.waitForIdle()
+        assertEquals(0f, compose.onNodeWithTag(page(0)).getBoundsInRoot().left.value, 1f)
+        compose.onNodeWithText("Songs").assertIsSelected()
+    }
+
+    @Test
+    fun aTabTappedWhileAFingerDragsThePagesWinsOverTheFinger() {
+        compose.setContent { Tabs() }
+        compose.waitForIdle()
+        compose.onRoot().performTouchInput {
+            down(0, Offset(width * 0.8f, height * 0.6f))
+            moveBy(0, Offset(-width * 0.2f, 0f))
+        }
+        compose.onNodeWithText("Artists").performTouchInput {
+            down(1, center)
+            up(1)
+        }
+        compose.onRoot().performTouchInput {
+            moveBy(0, Offset(-width * 0.1f, 0f))
+            up(0)
+        }
+        compose.waitForIdle()
+        assertEquals(2, chosen)
+        compose.onNodeWithText("Artists").assertIsSelected()
+    }
+
+    @Test
+    fun talkBackPagesTheTabsOneAtATime() {
+        var pill = Color.Unspecified
+        compose.setContent {
+            pill = LocalChromeColors.current.action
+            Tabs()
+        }
+        val pages = compose.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.PageRight))
+        pages.performSemanticsAction(SemanticsActions.PageRight)
+        compose.waitForIdle()
+        assertEquals(1, chosen)
+        // The pill went with it, as for any other change of tab: it sits on Albums now.
+        val albums = compose.onNodeWithText("Albums").getBoundsInRoot()
+        val onAlbums = with(compose.density) { Offset((albums.left + 6.dp).toPx(), ((albums.top + albums.bottom) / 2).toPx()) }
+        assertNear(pill, compose.onRoot().captureToImage().toPixelMap()[onAlbums.x.toInt(), onAlbums.y.toInt()], expect = true)
+        pages.performSemanticsAction(SemanticsActions.ScrollBy) { it(500f, 0f) }
+        compose.waitForIdle()
+        assertEquals(2, chosen)
+        pages.performSemanticsAction(SemanticsActions.PageLeft)
+        compose.waitForIdle()
+        assertEquals(1, chosen)
+    }
+
+    @Test
+    fun aSecondFingerTapsNothingWhileTheFirstDragsThePages() {
+        var tapped = 0
+        compose.setContent { Tabs(row = { Box(Modifier.fillMaxWidth().height(64.dp).testTag(ROW).clickable { tapped++ }) }) }
+        compose.waitForIdle()
+        val row = compose.onAllNodesWithTag(ROW)[0].getBoundsInRoot()
+        compose.onRoot().performTouchInput {
+            down(0, Offset(width * 0.8f, height * 0.7f))
+            moveBy(0, Offset(-width * 0.2f, 0f))
+            down(1, Offset(width * 0.2f, ((row.top + row.bottom) / 2).toPx()))
+            up(1)
+            moveBy(0, Offset(-width * 0.2f, 0f))
+            up(0)
+        }
+        compose.waitForIdle()
+        assertEquals(0, tapped)
+        assertEquals(1, chosen)
+    }
+
+    @Test
+    fun aSwipeFromTheSystemsGestureEdgeIsNoTabFlick() {
+        var edge = 0
+        chosen = 1
+        compose.setContent {
+            edge = WindowInsets.systemGestures.getLeft(LocalDensity.current, LayoutDirection.Ltr)
+            Tabs()
+        }
+        compose.waitForIdle()
+        // Only with gesture navigation, where the edge belongs to the system's back.
+        assumeTrue(edge > 0)
+        compose.onRoot().performTouchInput { swipe(Offset(edge / 2f, height * 0.6f), Offset(width * 0.6f, height * 0.6f), durationMillis = FLICK_MS) }
+        compose.waitForIdle()
+        assertEquals(1, chosen)
     }
 
     @Test
