@@ -31,6 +31,7 @@ import app.lyrify.LOG_TAG
 import app.lyrify.Lyrify
 import app.lyrify.R
 import app.lyrify.addon.Addon
+import app.lyrify.addon.AddonDownloads
 import app.lyrify.addon.AddonDiedException
 import app.lyrify.addon.AddonPort
 import app.lyrify.addon.AddonSession
@@ -110,7 +111,7 @@ class AiWorker(context: Context, params: WorkerParameters) : CoroutineWorker(con
         if (status.models !is ModelState.Ready) {
             // Not all in place (an update can pin another file): the download goes on by itself, over Wi-Fi, once the
             // models KJB 2.0 kept are handed over.
-            if (AiLyrics.enabled(context).value && !ModelHandover.pending(context)) addon.startDownload(restart = false)
+            if (AiLyrics.enabled(context).value && !ModelHandover.pending(context)) AddonDownloads.startIfIdle(context)
             return Result.success()
         }
         val loadFailures = AiLyrics.loadFailures(context, status.pins)
@@ -200,10 +201,10 @@ class AiWorker(context: Context, params: WorkerParameters) : CoroutineWorker(con
         }
     }
 
-    /** A model that did not load: the add-on deletes it, and downloads it again while the AI is on. */
+    /** A model that did not load: the add-on deletes it, and it is downloaded again while the AI is on. */
     private fun discard(addon: AddonPort, model: String) {
         addon.discardModel(model)
-        if (AiLyrics.enabled(applicationContext).value) addon.startDownload(restart = true)
+        if (AiLyrics.enabled(applicationContext).value) AddonDownloads.start(applicationContext)
     }
 
     /** Runs (or keeps running) in the foreground showing [progress] (null: getting ready); false when the phone does not allow it now. */
@@ -280,7 +281,7 @@ object AiLyrics {
     fun turnOn(context: Context) {
         choose(context, true)
         val app = context.applicationContext
-        calls.launch { if (!ModelHandover.pending(app)) Addon.withPort(app) { it.startDownload(restart = true) } }
+        calls.launch { if (!ModelHandover.pending(app)) AddonDownloads.start(app) }
         schedule(context)
     }
 
@@ -316,9 +317,7 @@ object AiLyrics {
         val app = context.applicationContext
         calls.launch {
             ModelHandover.startIfNeeded(app)
-            if (enabled(app).value && !ModelHandover.pending(app)) {
-                Addon.withPort(app) { addon -> if (addon.status()?.models?.let { it !is ModelState.Ready } == true) addon.startDownload(restart = false) }
-            }
+            if (enabled(app).value && !ModelHandover.pending(app)) AddonDownloads.startIfIdle(app)
         }
     }
 
@@ -329,7 +328,7 @@ object AiLyrics {
     fun download(context: Context) {
         val app = context.applicationContext
         calls.launch {
-            if (ModelHandover.pending(app)) ModelHandover.startIfNeeded(app) else Addon.withPort(app) { it.startDownload(restart = true) }
+            if (ModelHandover.pending(app)) ModelHandover.startIfNeeded(app) else AddonDownloads.start(app)
         }
     }
 
@@ -360,9 +359,8 @@ object AiLyrics {
             Log.i(LOG_TAG, "AI: on; scheduled again")
             schedule(context)
         }
-        if (!withContext(Dispatchers.IO) { ModelHandover.pending(context) }) {
-            Addon.withPort(context) { addon -> if (addon.status()?.models?.let { it !is ModelState.Ready } == true) addon.startDownload(restart = false) }
-        }
+        // Models in place: the worker sees so and ends at once, without a foreground service.
+        if (!withContext(Dispatchers.IO) { ModelHandover.pending(context) }) AddonDownloads.startIfIdle(context)
     }
 
     /**

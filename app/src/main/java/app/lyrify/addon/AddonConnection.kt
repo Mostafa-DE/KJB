@@ -19,6 +19,7 @@ import app.lyrify.LOG_TAG
 import app.lyrify.ai.api.AddonNames
 import app.lyrify.ai.api.AddonStatus
 import app.lyrify.ai.api.IAiAddon
+import app.lyrify.ai.api.IAiDownloadCallback
 import app.lyrify.ai.api.IAiRunCallback
 import app.lyrify.ai.api.IAiStatusCallback
 import app.lyrify.ai.api.ImportReply
@@ -234,7 +235,14 @@ private class AidlPort(private val addon: IAiAddon) : AddonPort {
         return AutoCloseable { runCatching { addon.unwatchStatus(callback) } }
     }
 
-    override fun startDownload(restart: Boolean) = call { addon.startDownload(restart) }
+    override fun download(events: DownloadEvents) {
+        val callback = object : IAiDownloadCallback.Stub() {
+            override fun onProgress(done: Long, total: Long) = events.onProgress(done, total)
+
+            override fun onEnd(end: String) = events.onEnd(Wire.download(end))
+        }
+        call { addon.download(callback) }
+    }
 
     override fun cancelDownload() = call { addon.cancelDownload() }
 

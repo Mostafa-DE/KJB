@@ -1,6 +1,5 @@
 package app.lyrify.ui
 
-import app.lyrify.ai.api.AddonNames
 import app.lyrify.data.LyricsStatus
 import app.lyrify.library.SongRef
 import app.lyrify.settings.DockTab
@@ -469,13 +468,10 @@ class NavTest {
     @Test
     fun `the AI run's and the model download's notifications carry the AI as their destination`() {
         // Unit tests run in the module's folder.
-        assertTrue(java.io.File("src/main/java/app/lyrify/overnight/AiWorker.kt").readText().contains(".putExtra(EXTRA_DESTINATION, DESTINATION_AI)"))
-        // The model download is the AI add-on's: it opens KJB's AI page by the names KJB reads.
-        val download = java.io.File("../ai-addon/src/main/java/app/lyrify/models/ModelDownloadWorker.kt").readText()
-        assertTrue(download.contains(".putExtra(AddonNames.EXTRA_DESTINATION, AddonNames.DESTINATION_AI)"))
-        assertEquals(EXTRA_DESTINATION, AddonNames.EXTRA_DESTINATION)
-        assertEquals(DESTINATION_AI, AddonNames.DESTINATION_AI)
-        assertEquals(MainActivity::class.java.name, AddonNames.KJB_ACTIVITY)
+        // The download runs in the AI add-on, but KJB shows its notification.
+        listOf("src/main/java/app/lyrify/overnight/AiWorker.kt", "src/main/java/app/lyrify/addon/AddonDownload.kt").forEach { path ->
+            assertTrue(path, java.io.File(path).readText().contains(".putExtra(EXTRA_DESTINATION, DESTINATION_AI)"))
+        }
     }
 
     // What shows

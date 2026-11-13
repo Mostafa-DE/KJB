@@ -149,9 +149,7 @@ class VectorIconsTest {
         assertEquals(NOTE_ARM_SMALL, paths(small).map { it.first.attr("pathData") })
         assertTrue(paths(small).all { (path, _) -> path.attr("fillColor") == "#FFFFFFFF" && gradient(path) == null })
 
-        // The AI add-on's model download shows KJB's icon too, from its own copy of the drawable.
-        assertEquals(File(drawables, "ic_stat_kjb.xml").readText(), File("../ai-addon/src/main/res/drawable/ic_stat_kjb.xml").readText())
-        val calls = listOf("src/main/java", "src/debug/java", "../ai-addon/src/main/java").flatMap { root ->
+        val calls = listOf("src/main/java", "src/debug/java").flatMap { root ->
             File(root).walkTopDown().filter { it.isFile && it.extension == "kt" }.flatMap { SMALL_ICON.findAll(it.readText()).map { call -> call.groupValues[1] } }.toList()
         }
         // The AI's night run, the model download, the debug build's AI notice, and the player's media notification.

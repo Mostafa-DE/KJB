@@ -6,6 +6,8 @@ import app.lyrify.ai.AiStats
 import app.lyrify.ai.api.AddonStatus
 import app.lyrify.ai.api.ImportReply
 import app.lyrify.lyrics.LocalTrack
+import app.lyrify.models.Download
+import app.lyrify.models.DownloadPhase
 import app.lyrify.models.ModelState
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Deferred
@@ -51,7 +53,12 @@ class AddonClientTest {
             return AutoCloseable { statusListener = null }
         }
 
-        override fun startDownload(restart: Boolean) = call("startDownload $restart")
+        var downloadEvents: DownloadEvents? = null
+
+        override fun download(events: DownloadEvents) {
+            call("download")
+            downloadEvents = events
+        }
 
         override fun cancelDownload() = call("cancelDownload")
 
@@ -332,6 +339,68 @@ class AddonClientTest {
 
         assertEquals(AiResult.Failed("FileNotFoundException"), result)
         session.close()
+    }
+
+    // The models' download, run by the add-on while KJB keeps it bound
+
+    @Test
+    fun `the add-on's download progress reaches KJB's notification, and its end ends KJB's worker`() = runTest {
+        val host = FakeHost()
+        val session = session(host)
+        val port = host.bindings.single().port
+        val shown = mutableListOf<Pair<Long, Long>>()
+
+        val end = async { AddonDownloads.follow(session) { done, total -> shown += done to total } }
+        runCurrent()
+        assertEquals("download", port.calls.last())
+        port.downloadEvents!!.onProgress(400, 980)
+        port.downloadEvents!!.onProgress(980, 980)
+        port.downloadEvents!!.onEnd(Download.Done)
+
+        assertEquals(Download.Done, end.await())
+        assertEquals(listOf(400L to 980L, 980L to 980L), shown)
+    }
+
+    @Test
+    fun `the add-on dying mid-download is a clean error, for the worker to try again`() = runTest {
+        val host = FakeHost()
+        val session = session(host)
+        val end = async { runCatching { AddonDownloads.follow(session) { _, _ -> } } }
+        runCurrent()
+
+        host.bindings.single().kill()
+        runCurrent()
+
+        assertTrue(end.await().exceptionOrNull() is AddonDiedException)
+    }
+
+    @Test
+    fun `KJB's worker stopped tells the add-on to stop, and what it got stays`() = runTest {
+        val host = FakeHost()
+        val session = session(host)
+        val end = async { AddonDownloads.follow(session) { _, _ -> } }
+        runCurrent()
+
+        end.cancel()
+        runCurrent()
+
+        assertTrue(end.isCancelled)
+        assertEquals("cancelDownload", host.bindings.single().port.calls.last())
+    }
+
+    @Test
+    fun `KJB's own work tells the page when the download waits for Wi-Fi or failed, the add-on tells the rest`() {
+        val missing = ModelState.Missing(300, 980)
+        assertEquals(ModelState.Downloading(300, 980, waiting = true), AddonDownloads.withPhase(missing, DownloadPhase.WAITING))
+        assertEquals(ModelState.Failed(300, 980), AddonDownloads.withPhase(missing, DownloadPhase.FAILED))
+        assertEquals(ModelState.Downloading(300, 980, waiting = false), AddonDownloads.withPhase(missing, DownloadPhase.RUNNING))
+        // The add-on's own word wins while it downloads, or once the models are in place, or when there is no room.
+        val running = ModelState.Downloading(450, 980, waiting = false)
+        assertEquals(running, AddonDownloads.withPhase(running, DownloadPhase.RUNNING))
+        assertEquals(ModelState.Ready(980), AddonDownloads.withPhase(ModelState.Ready(980), DownloadPhase.FAILED))
+        assertEquals(ModelState.NoRoom(0, 980, 1_800), AddonDownloads.withPhase(ModelState.NoRoom(0, 980, 1_800), DownloadPhase.WAITING))
+        assertEquals(missing, AddonDownloads.withPhase(missing, null))
+        assertEquals(null, AddonDownloads.withPhase(null, DownloadPhase.WAITING))
     }
 
     // What the AI page shows

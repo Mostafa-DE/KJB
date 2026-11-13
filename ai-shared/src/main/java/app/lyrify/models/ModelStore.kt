@@ -342,14 +342,21 @@ class ModelStore(
     }
 }
 
-/** How a download run ended. */
+/** How a download run ended. The add-on tells KJB as JSON (app.lyrify.ai.api.Wire). */
+@Serializable
 sealed interface Download {
+    @Serializable
+    @SerialName("done")
     data object Done : Download
 
     /** Worth trying again later: the network, a busy server, no room yet. What was downloaded stays. */
+    @Serializable
+    @SerialName("interrupted")
     data class Interrupted(val reason: String) : Download
 
     /** Will not get better by itself: a file that is not the pinned one (its part is deleted), a link gone or off Hugging Face. */
+    @Serializable
+    @SerialName("failed")
     data class Failed(val reason: String) : Download
 }
 
@@ -371,8 +378,8 @@ suspend fun retryWhileProgressing(bytes: () -> Long, attempt: suspend () -> Down
  * telling [refused], when the phone does not allow it now. WorkManager's setForeground throws IllegalStateException then
  * (ForegroundServiceStartNotAllowedException, Android 12+, is one). Coroutine cancellation is an IllegalStateException
  * too (kotlinx's CancellationException is java.util.concurrent's): a worker cancelled meanwhile is rethrown as cancelled,
- * never taken for a refusal. Both workers go into the foreground through this: the add-on's model download and KJB's
- * overnight run.
+ * never taken for a refusal. KJB's workers go into the foreground through this: the model download it runs the add-on's
+ * download from, and the overnight run.
  */
 suspend fun inForeground(setForeground: suspend () -> Unit, refused: (IllegalStateException) -> Unit): Boolean = try {
     setForeground()

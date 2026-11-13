@@ -23,13 +23,17 @@
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
 
     <!-- The overnight AI lyrics run (overnight/AiWorker): a WorkManager worker in a foreground service of type
-         mediaProcessing (Android 15+), at most 6 hours in 24, which keeps the AI add-on bound while it works. WorkManager
-         itself adds FOREGROUND_SERVICE, WAKE_LOCK, ACCESS_NETWORK_STATE and RECEIVE_BOOT_COMPLETED. -->
+         mediaProcessing (Android 15+), at most 6 hours in 24, which keeps the AI add-on bound while it works. The
+         models' download (addon/AddonDownload.kt): the add-on downloads them while KJB keeps it bound from a WorkManager
+         worker in a foreground service of type dataSync (also 6 hours in 24 from Android 15), on unmetered networks only,
+         and KJB shows its progress. WorkManager itself adds FOREGROUND_SERVICE, WAKE_LOCK, ACCESS_NETWORK_STATE and
+         RECEIVE_BOOT_COMPLETED. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROCESSING" />
-    <!-- Notifications, Android 13 and later: only for the overnight AI worker's progress, which without it shows in the
-         Task Manager only (the models' download is the AI add-on's, in its own app). Asked when the user switches the AI
-         on or starts its download, never on the first run; after a lasting no, the AI screen has one row that opens the
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- Notifications, Android 13 and later: only for the overnight AI worker's and the models' download's progress (KJB
+         shows the add-on's download: the add-on posts nothing), which without it show in the Task Manager only. Asked
+         when the user switches the AI on or starts its download, never on the first run; after a lasting no, the AI screen has one row that opens the
          phone's notification settings. The music notification needs none (see the player's permissions). -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
@@ -130,10 +134,11 @@
         </activity>
 
         <!-- WorkManager's foreground service: mediaProcessing for the AI worker (long work on media files), known from
-             Android 15 (targetApi); the worker does not run on older versions. The model download is the AI add-on's. -->
+             Android 15 (targetApi); the worker does not run on older versions. dataSync for the models' download, which
+             the add-on runs while KJB keeps it bound. -->
         <service
             android:name="androidx.work.impl.foreground.SystemForegroundService"
-            android:foregroundServiceType="mediaProcessing"
+            android:foregroundServiceType="mediaProcessing|dataSync"
             tools:node="merge"
             tools:targetApi="35" />
 

@@ -4,6 +4,7 @@
 // its uid and signing certificate. The strings carry JSON (app.lyrify.ai.api.Wire): AiResult, AddonStatus, ImportReply.
 package app.lyrify.ai.api;
 
+import app.lyrify.ai.api.IAiDownloadCallback;
 import app.lyrify.ai.api.IAiRunCallback;
 import app.lyrify.ai.api.IAiStatusCallback;
 
@@ -20,8 +21,10 @@ interface IAiAddon {
     void watchStatus(IAiStatusCallback callback) = 3;
     void unwatchStatus(IAiStatusCallback callback) = 4;
 
-    // Starts the model download (Wi-Fi only). With restart, one under way starts anew from its parts; without, it is kept.
-    void startDownload(boolean restart) = 5;
+    // Downloads the models the add-on lacks, from the parts it has, and tells the callback its progress and end. KJB runs
+    // it from its own foreground service and shows the notification (the add-on has neither), on the networks it allows.
+    // One at a time: a call while one runs only takes over its reports. It stops when KJB goes away (its parts stay).
+    void download(IAiDownloadCallback callback) = 5;
 
     // Stops the model download; what it got so far stays for the next one.
     void cancelDownload() = 6;
