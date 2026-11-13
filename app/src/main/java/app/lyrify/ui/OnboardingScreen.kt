@@ -224,12 +224,13 @@ private fun SetupTop(screens: List<SetupScreen>, at: SetupScreen, onBack: () -> 
         ChromeIconButton(R.drawable.ic_arrow_back, stringResource(R.string.check_back), onBack, glass = false)
         if (screens.size > 1) {
             FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(16.dp, Alignment.Start),
+                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterVertically),
                 itemVerticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.weight(1f).padding(start = 8.dp),
             ) {
-                Row(Modifier.weight(1f).widthIn(min = 96.dp, max = 140.dp).clearAndSetSemantics {}, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                // 96 to 140 dp of segments, and at least 16 dp before the count.
+                Row(Modifier.weight(1f).widthIn(min = 112.dp, max = 156.dp).padding(end = 16.dp).clearAndSetSemantics {}, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     screens.indices.forEach { k ->
                         val lit by animateColorAsState(if (k < number) action else colors.outlineVariant, motion(tween(Motion.OPEN_MS), reduced), label = "segment")
                         Box(Modifier.weight(1f).height(4.dp).background(lit, CircleShape))
@@ -295,7 +296,7 @@ private fun Welcome(title: FocusRequester) {
     // The name keeps its size whatever the phone's font scale: it is the brand, and the words under it grow instead.
     val name = with(LocalDensity.current) { (NAME_SIZE * shrink).toSp() }
     Text(stringResource(R.string.app_name), style = NameText.copy(fontSize = name, lineHeight = name * 1.05f), modifier = Modifier.screenTitle(title).padding(top = 4.dp))
-    Text(stringResource(R.string.setup_intro), style = display(18, 24, weight = 600), color = colors.onSurfaceVariant, modifier = Modifier.offset(y = (-8).dp))
+    Text(stringResource(R.string.setup_intro), style = SubText, color = colors.onSurfaceVariant, modifier = Modifier.offset(y = (-8).dp))
     Text(stringResource(R.string.ob_welcome_text), style = BodyText)
     SmallFact(R.drawable.ic_lock, stringResource(R.string.setup_privacy))
 }
@@ -541,6 +542,7 @@ private fun SmallFact(@DrawableRes icon: Int, text: String) {
 // The mock's type and art
 
 private val NameText = display(44, 46, tracking = -0.03, weight = 700)
+private val SubText = display(18, 24, weight = 600)
 private val TitleText = display(28, 33, tracking = -0.02, weight = 650)
 private val BodyText = body(16f, 24)
 private val HintText = body(14f, 20)
