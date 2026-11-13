@@ -170,6 +170,12 @@ androidComponents {
     }
 }
 
+// Unit tests run in parallel JVMs, each test class whole in one of them: a quarter of the cores (4 on a 16-core
+// machine), so two or three builds on one machine still fit. Not a cache input, so cached results stay shared.
+tasks.withType<Test>().configureEach {
+    maxParallelForks = (Runtime.getRuntime().availableProcessors() / 4).coerceAtLeast(1)
+}
+
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)
