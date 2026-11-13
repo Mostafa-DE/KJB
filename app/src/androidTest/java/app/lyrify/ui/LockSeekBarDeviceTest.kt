@@ -7,6 +7,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -34,8 +37,9 @@ import kotlin.math.abs
 
 /**
  * The lock screen's progress bar (user feedback 2026-11-13, point 4) under a real finger: only a deliberate sideways drag
- * seeks, to where the finger lifts; a tap, a touch that barely moves, or a swipe up (which closes the screen) never does.
- * TalkBack finds a slider that reads the time and seeks. The bar sits under a swipe that closes, as on the screen.
+ * seeks, to where the finger lifts; a tap, a touch that barely moves, or a swipe up (which closes the screen) never does,
+ * and a second finger never moves it. TalkBack finds a slider that reads the time and seeks, and hears a drag once, where
+ * it lands. The bar sits under a swipe that closes, as on the screen, and the song goes where it seeks.
  */
 @RunWith(AndroidJUnit4::class)
 class LockSeekBarDeviceTest {
@@ -44,6 +48,7 @@ class LockSeekBarDeviceTest {
 
     private val seeks = mutableListOf<Long>()
     private var swipes = 0
+    private var played by mutableLongStateOf(PLAYED)
 
     private fun bar(): SemanticsNodeInteraction {
         compose.setContent { OnTheLockScreen() }
@@ -93,10 +98,40 @@ class LockSeekBarDeviceTest {
     }
 
     @Test
+    fun onlyTheFingerThatStartedTheSeekMovesIt() {
+        bar().performTouchInput {
+            down(0, Offset(width * 0.1f, centerY))
+            moveTo(0, Offset(width * 0.3f, centerY))
+            down(1, Offset(width * 0.9f, centerY))
+            moveTo(1, Offset(width * 0.95f, centerY))
+            up(0)
+            moveTo(1, Offset(width * 0.6f, centerY))
+            up(1)
+        }
+        compose.runOnIdle {
+            assertEquals(1, seeks.size)
+            assertEquals(LENGTH * 0.3, seeks.single().toDouble(), LENGTH * 0.02)
+        }
+    }
+
+    @Test
+    fun aDragIsAnnouncedWhereItLandsNotOnTheWay() {
+        val bar = bar()
+        bar.performTouchInput {
+            down(Offset(width * 0.1f, centerY))
+            moveTo(Offset(width * 0.5f, centerY))
+            moveTo(Offset(width * 0.75f, centerY))
+        }
+        bar.assert(state("1:00 of 4:00"))
+        bar.performTouchInput { up() }
+        bar.assert(state("3:00 of 4:00"))
+    }
+
+    @Test
     fun talkBackFindsASliderThatReadsTheTimeAndSeeks() {
         bar()
             .assert(hasContentDescription("Position"))
-            .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "1:00 of 4:00"))
+            .assert(state("1:00 of 4:00"))
             .assert(hasProgressBarRangeInfo(ProgressBarRangeInfo(0.25f, 0f..1f)))
             .performSemanticsAction(SemanticsActions.SetProgress) { it(0.5f) }
         compose.runOnIdle { assertEquals(listOf(LENGTH / 2), seeks) }
@@ -114,10 +149,15 @@ class LockSeekBarDeviceTest {
                 },
         ) {
             Column(Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(horizontal = 16.dp, vertical = 96.dp)) {
-                LockSeekBar(durationMs = LENGTH, playing = false, positionAt = { PLAYED }, onSeek = { seeks += it })
+                LockSeekBar(durationMs = LENGTH, playing = false, positionAt = { played }) {
+                    seeks += it
+                    played = it
+                }
             }
         }
     }
+
+    private fun state(time: String) = SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, time)
 
     private companion object {
         const val LENGTH: Long = 240_000

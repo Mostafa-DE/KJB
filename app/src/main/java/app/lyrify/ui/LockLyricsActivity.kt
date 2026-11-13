@@ -20,7 +20,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
-import androidx.compose.foundation.gestures.horizontalDrag
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -105,6 +104,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
@@ -226,9 +226,20 @@ class LockLyricsActivity : ComponentActivity() {
 }
 
 /** Light text on the cover's dark blur, whatever the phone's theme: it sits over the lock screen. */
-private val LockInk = Color(0xFF0A0A0B)
-private val LockText = Color(0xFFF7F5FF)
+internal val LockInk = Color(0xFF0A0A0B)
+internal val LockText = Color(0xFFF7F5FF)
 private val LockMuted = LockText.copy(alpha = 0.55f)
+
+/** The cover under the lock screen, blurred at this opacity, and the ink over it at [LOCK_SCRIM_ALPHA]. */
+internal const val LOCK_COVER_ALPHA = 0.7f
+internal const val LOCK_SCRIM_ALPHA = 0.55f
+
+/**
+ * The progress bar's empty track, on a band of [LockInk] so it reads 3:1 over any cover with the coral played part 3:1
+ * on it, and its times, which read over the lightest cover too (ContrastTest).
+ */
+internal val LockTrack = DarkBrandColors.highlight.copy(alpha = 0.5f)
+internal val LockTimes = LockText
 
 @Composable
 private fun LockLyricsScreen(ledger: LedgerState, onClose: () -> Unit) {
@@ -265,8 +276,8 @@ private fun LockLyricsScreen(ledger: LedgerState, onClose: () -> Unit) {
     ) {
         if (ui == null) return@Box
         val path = ui.item.song.path
-        AsyncImage(model = SongArt(path), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize().blur(52.dp).alpha(0.7f))
-        Box(Modifier.fillMaxSize().background(LockInk.copy(alpha = 0.55f)))
+        AsyncImage(model = SongArt(path), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize().blur(52.dp).alpha(LOCK_COVER_ALPHA))
+        Box(Modifier.fillMaxSize().background(LockInk.copy(alpha = LOCK_SCRIM_ALPHA)))
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(horizontal = 16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp)) {
                 ChromeIconButton(R.drawable.ic_keyboard_arrow_down, stringResource(R.string.lock_close), onClose, glass = false, size = 48.dp, iconSize = 28.dp, tint = LockText)
@@ -334,25 +345,36 @@ private fun LockControls(
 }
 
 /**
- * The progress bar as the player has it (a 6 dp track in a 48 dp touch area, the knob, the times under it), in the lock
- * screen's own dark colours whatever the phone's theme, with the time played and the time left. Only a deliberate
- * sideways drag seeks ([lockSeekStarts]), to where the finger lifts: a tap or a touch in a pocket never does, and a swipe
- * up or down from it still closes the screen. While the song plays it moves on about a pixel at a time
- * ([lockBarTickMs]). TalkBack finds a slider that reads the time and seeks.
+ * The progress bar as the player has it (a 6 dp track in a 48 dp touch area, the knob, the time played and the song's
+ * length under it), in the lock screen's own dark colours whatever the phone's theme, the track on a band of ink as the
+ * knob has its ring. Only a deliberate sideways drag seeks ([lockSeekStarts]), to where the finger that started it lifts:
+ * a tap or a touch in a pocket never does, nor a second finger, and a swipe up or down from it still closes the screen.
+ * While the song plays it moves on about a pixel at a time ([lockBarTickMs]). TalkBack finds a slider that reads the
+ * time and seeks, and hears a drag once, where it lands.
  */
 @Composable
 internal fun LockSeekBar(durationMs: Long, playing: Boolean, positionAt: (now: Long) -> Long, onSeek: (Long) -> Unit) {
     var width by remember { mutableIntStateOf(0) }
     var dragging by remember { mutableStateOf<Float?>(null) }
+    // The time TalkBack hears while a finger drags (the time before it), then where the drag landed, for a moment while
+    // the player takes the seek: a drag is announced once.
+    var held by remember { mutableStateOf<Long?>(null) }
+    LaunchedEffect(held, dragging != null) {
+        if (held != null && dragging == null) {
+            delay(LANDING_MS)
+            held = null
+        }
+    }
     val tick = lockBarTickMs(durationMs, width)
     val position = positionAt(key(tick) { rememberClock(playing, everyMs = tick) })
     val shown = dragging?.let { seekMsAt(it, durationMs) } ?: position
     val share = dragging ?: ringShare(position, durationMs)
     // TalkBack hears the bar move on by the second, as the times do, not at every step.
-    val second = position - position % 1_000
+    val announced = (held ?: position).let { it - it % 1_000 }
     val label = stringResource(R.string.player_position)
-    val state = stringResource(R.string.lock_position, clock(position), clock(durationMs))
+    val state = stringResource(R.string.lock_position, clock(announced), clock(durationMs))
     val seek by rememberUpdatedState(onSeek)
+    val now by rememberUpdatedState(position)
     val knob by animateFloatAsState(if (dragging != null) KNOB_DRAG_SCALE else 1f, motion(tween(Motion.QUICK_MS), LocalReducedMotion.current), label = "knob")
     Box(
         contentAlignment = Alignment.CenterStart,
@@ -363,27 +385,28 @@ internal fun LockSeekBar(durationMs: Long, playing: Boolean, positionAt: (now: L
             .semantics {
                 contentDescription = label
                 stateDescription = state
-                progressBarRangeInfo = ProgressBarRangeInfo(ringShare(second, durationMs), 0f..1f)
+                progressBarRangeInfo = ProgressBarRangeInfo(ringShare(announced, durationMs), 0f..1f)
                 setProgress { value -> seekMsAt(value, durationMs)?.also { seek(it) } != null }
             }
             .pointerInput(durationMs) {
                 awaitEachGesture {
                     val start = awaitSeekStart(awaitFirstDown().id, viewConfiguration.touchSlop) ?: return@awaitEachGesture
+                    var to: Long? = null
                     try {
+                        held = now
                         dragging = barShare(start.position.x, size.width.toFloat())
-                        val lifted = horizontalDrag(start.id) { change ->
-                            dragging = barShare(change.position.x, size.width.toFloat())
-                            change.consume()
-                        }
-                        val to = dragging?.let { seekMsAt(it, durationMs) }
-                        if (lifted && to != null) seek(to)
+                        val lifted = awaitSeekLift(start.id) { dragging = barShare(it.position.x, size.width.toFloat()) }
+                        to = dragging?.takeIf { lifted }?.let { seekMsAt(it, durationMs) }
+                        to?.let(seek)
                     } finally {
+                        held = to
                         dragging = null
                     }
                 }
             },
     ) {
-        Box(Modifier.fillMaxWidth().height(6.dp).clip(CircleShape).background(DarkBrandColors.highlight.copy(alpha = 0.16f)))
+        Box(Modifier.fillMaxWidth().height(10.dp).background(LockInk, CircleShape))
+        Box(Modifier.fillMaxWidth().height(6.dp).clip(CircleShape).background(LockTrack))
         Box(Modifier.fillMaxWidth(share).height(6.dp).clip(CircleShape).background(DarkBrandColors.highlight))
         Box(
             Modifier
@@ -401,9 +424,9 @@ internal fun LockSeekBar(durationMs: Long, playing: Boolean, positionAt: (now: L
     // The slider says the time to TalkBack.
     Row(Modifier.fillMaxWidth().clearAndSetSemantics { }) {
         val style = MaterialTheme.typography.bodySmall.tabular()
-        Text(clock(shown), style = style, color = LockMuted)
+        Text(clock(shown), style = style, color = LockTimes)
         Box(Modifier.weight(1f))
-        Text(remainingClock(shown, durationMs), style = style, color = LockMuted)
+        Text(clock(durationMs), style = style, color = LockTimes)
     }
 }
 
@@ -423,6 +446,22 @@ private suspend fun AwaitPointerEventScope.awaitSeekStart(id: PointerId, slop: F
     }
 }
 
+/**
+ * Follows the finger [id] that started a seek, [onMove] for each of its moves, until it lifts: true then, false once
+ * something else took its move or the gesture was cancelled. Only that finger counts: another one on the bar is taken
+ * and moves nothing, and never carries the seek on once the first lifts.
+ */
+private suspend fun AwaitPointerEventScope.awaitSeekLift(id: PointerId, onMove: (PointerInputChange) -> Unit): Boolean {
+    while (true) {
+        val event = awaitPointerEvent()
+        val change = event.changes.firstOrNull { it.id == id } ?: return false
+        if (change.isConsumed) return false
+        event.changes.forEach { it.consume() }
+        if (!change.pressed) return true
+        onMove(change)
+    }
+}
+
 /** Where a finger at [x] lies along a bar [width] wide: its share, from 0 at the start to 1 at the end. */
 fun barShare(x: Float, width: Float): Float = if (width > 0f) (x / width).coerceIn(0f, 1f) else 0f
 
@@ -435,10 +474,6 @@ fun seekMsAt(share: Float, durationMs: Long): Long? = if (durationMs > 0) (share
  * one in a pocket, never seeks, and one up or down is the swipe that closes the screen.
  */
 fun lockSeekStarts(dx: Float, dy: Float, slop: Float): Boolean = abs(dx) > slop && abs(dx) >= SIDEWAYS * abs(dy)
-
-/** The time left as the bar shows it, "−3:00", in whole seconds so that it and the time played add up to the length. */
-fun remainingClock(positionMs: Long, durationMs: Long): String =
-    if (durationMs > 0) "−" + clock((durationMs / 1_000 - positionMs / 1_000).coerceAtLeast(0) * 1_000) else clock(0)
 
 /**
  * How often the lock screen's bar moves on while the song plays: about a pixel of a bar [widthPx] wide at a time, so it
@@ -454,6 +489,9 @@ private val SWIPE_CLOSE = 80.dp
 private const val SIDEWAYS = 2f
 private const val FRAME_MS = 16L
 private const val TIME_TICK_MS = 250L
+
+/** How long TalkBack's time stays where a drag landed while the player takes the seek. */
+private const val LANDING_MS = 1_000L
 
 /**
  * "Show when locked" in the playback service: while the session runs, the screen turning on over the lock screen opens

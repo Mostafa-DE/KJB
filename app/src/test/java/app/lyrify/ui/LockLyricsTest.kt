@@ -119,18 +119,6 @@ class LockLyricsTest {
     }
 
     @Test
-    fun `the bar shows the time played and the time left, which add up to the song's length`() {
-        assertEquals("−3:00", remainingClock(positionMs = 60_000, durationMs = 240_000))
-        // 1:00 played of 4:00: 3:00 left, never 2:59.
-        assertEquals("−3:00", remainingClock(60_900, 240_000))
-        assertEquals("−0:00", remainingClock(240_000, 240_000))
-        assertEquals("−1:00:01", remainingClock(1_000, 3_602_000))
-        // Never less than nothing left; without a length, nothing to count down.
-        assertEquals("−0:00", remainingClock(250_000, 240_000))
-        assertEquals("0:00", remainingClock(5_000, 0))
-    }
-
-    @Test
     fun `the bar moves on about a pixel at a time while the song plays`() {
         // Four minutes over 1080 px: a pixel every 222 ms.
         assertEquals(222L, lockBarTickMs(durationMs = 240_000, widthPx = 1_080))

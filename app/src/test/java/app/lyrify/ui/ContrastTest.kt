@@ -2,6 +2,7 @@ package app.lyrify.ui
 
 import androidx.compose.material3.ColorScheme
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.toArgb
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -84,6 +85,27 @@ class ContrastTest {
             // The switch's white knob (Controls.kt) on its off track, and on the coral one in light (dark: onHighlight).
             assertReads("$theme knob off", Color.White, s.outline, 3f)
             if (theme == "light") assertReads("light knob on", Color.White, brand.highlight, 3f)
+        }
+    }
+
+    /**
+     * The lock screen is dark whatever the phone's theme, over the song's cover blurred under an ink scrim (lane LK
+     * review). Its bar's empty track reads 3:1 on the ink band it sits on, whatever the cover, and the coral played part
+     * 3:1 on the track.
+     */
+    @Test
+    fun `the lock screen's progress bar reads on its band`() {
+        val track = LockTrack.compositeOver(LockInk)
+        assertReads("lock track on its band", track, LockInk, 3f)
+        assertReads("lock played part on the track", DarkBrandColors.highlight, track, 3f)
+    }
+
+    /** The lock screen bar's times read 4.5:1 on the scrim over the darkest and the lightest cover. */
+    @Test
+    fun `the lock screen's times read over any cover`() {
+        listOf("black" to Color.Black, "white" to Color.White).forEach { (name, cover) ->
+            val under = LockInk.copy(alpha = LOCK_SCRIM_ALPHA).compositeOver(cover.copy(alpha = LOCK_COVER_ALPHA).compositeOver(LockInk))
+            assertReads("lock times on a $name cover", LockTimes.compositeOver(under), under, 4.5f)
         }
     }
 
@@ -218,7 +240,7 @@ class ContrastTest {
         val ownPalette = mapOf("LockLyricsActivity.kt" to setOf("LockInk", "LockText"), "QueueScreens.kt" to setOf("QueueOverlay"))
         src.lines().forEachIndexed { i, line ->
             if (Regex("Color\\(0x[0-9A-Fa-f]+\\)").containsMatchIn(line)) {
-                val named = Regex("^\\s*private val (\\w+) = Color\\(0x").find(line)?.groupValues?.get(1)
+                val named = Regex("^\\s*(?:private|internal) val (\\w+) = Color\\(0x").find(line)?.groupValues?.get(1)
                 if (named == null || named !in ownPalette[name].orEmpty()) found += "$name:${i + 1} literal colour: ${line.trim()}"
             }
             if (Regex("Color\\.(Black|White|DarkGray|Gray|LightGray)\\b").containsMatchIn(line) && blackOrWhite[name]?.containsMatchIn(line) != true) {
