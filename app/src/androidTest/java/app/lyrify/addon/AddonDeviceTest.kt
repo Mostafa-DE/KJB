@@ -17,8 +17,10 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
+import org.junit.FixMethodOrder
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.junit.runners.MethodSorters
 import java.io.File
 import java.security.MessageDigest
 
@@ -27,8 +29,12 @@ import java.security.MessageDigest
  * handshake, one song through the add-on, the add-on's process dying, and the handover. Needs both installed; the run
  * also needs the add-on's models and a song in Music/KJB test/, and the real handover KJB dev's own copies of the models
  * (each is skipped without them). Writes nothing outside KJB dev's own cache.
+ *
+ * The run needs the add-on's models, which the real handover gives it: in the class the handover runs first (by name),
+ * and the run, run alone, hands KJB dev's models over itself while they are still KJB dev's.
  */
 @RunWith(AndroidJUnit4::class)
+@FixMethodOrder(MethodSorters.NAME_ASCENDING)
 class AddonDeviceTest {
     private val context = InstrumentationRegistry.getInstrumentation().targetContext
 
@@ -56,6 +62,7 @@ class AddonDeviceTest {
         val song = music.listFiles { file -> file.extension.lowercase() in setOf("mp3", "m4a", "flac", "ogg") }?.firstOrNull()
         assumeTrue("a song in ${SharedWrites.TEST_FOLDER}", song != null)
         connect().use { session ->
+            if (File(ModelHandover.legacyFolder(context), AiModels.MDX).isFile) handOverKjbsModels(session)
             assumeTrue("the add-on's models", session.port.status()?.models is ModelState.Ready)
             val stages = mutableListOf<AiStage>()
             var chunks = 0
@@ -102,19 +109,22 @@ class AddonDeviceTest {
      */
     @Test
     fun kjbsOwnModelsGoOverAndOnlyThenAreDeleted() {
+        assumeTrue("KJB dev's own models in files/models", File(ModelHandover.legacyFolder(context), AiModels.MDX).isFile)
+        connect().use(::handOverKjbsModels)
+    }
+
+    /** KJB dev's own models to the add-on: KJB's copies stay while the files go over, and go once all are taken. */
+    private fun handOverKjbsModels(session: AddonSession) {
         val legacy = ModelHandover.legacyFolder(context)
-        assumeTrue("KJB dev's own models in files/models", File(legacy, AiModels.MDX).isFile)
-        connect().use { session ->
-            val end = runBlocking {
-                Handover(legacy, send = { file, sha ->
-                    assertTrue("KJB's copies are there while files go over", legacy.exists())
-                    session.port.importModel(file.name, file.file, sha)
-                }, sha256 = ::sha256, markDone = {}).run()
-            }
-            assertEquals(HandoverEnd.Done, end)
-            assertFalse(legacy.exists())
-            assertTrue(session.port.status()?.models is ModelState.Ready)
+        val end = runBlocking {
+            Handover(legacy, send = { file, sha ->
+                assertTrue("KJB's copies are there while files go over", legacy.exists())
+                session.port.importModel(file.name, file.file, sha)
+            }, sha256 = ::sha256, markDone = {}).run()
         }
+        assertEquals(HandoverEnd.Done, end)
+        assertFalse(legacy.exists())
+        assertTrue(session.port.status()?.models is ModelState.Ready)
     }
 
     /** Streamed: Whisper's encoder is about 0.8 GB. */
