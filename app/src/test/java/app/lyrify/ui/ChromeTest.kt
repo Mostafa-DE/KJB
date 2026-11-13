@@ -278,6 +278,35 @@ class ChromeTest {
         assertTrue("""<string name="nav_playlists">Playlists</string>""" in strings)
     }
 
+    // The main pages' header (user decision 2026-11-11, changed the same day): the KJB logo, then the page's title
+
+    @Test
+    fun `each dock destination's header is the KJB logo then its own name, the logo silent, the heading only the title`() {
+        assertEquals(DOCK_TABS.map { it.label }, DOCK_TABS.map { headerPage(it) })
+        val chrome = java.io.File("src/main/java/app/lyrify/ui/Chrome.kt").readText()
+        val logo = chrome.substringAfter("private fun HeaderLogo(").substringBefore("\n}\n")
+        // The launcher's black tile with the Note arm K, default cover A, decorative.
+        assertTrue(logo, "R.drawable.kjb_default_cover" in logo && "contentDescription = null" in logo)
+        val strings = java.io.File("src/main/res/values/strings.xml").readText()
+        // No brand words in the header any more, and the visible app name stays KJB.
+        assertFalse("header_brand" in strings)
+        assertTrue("""<string name="app_name">KJB</string>""" in strings)
+        assertTrue(HEADER_LOGO.value in 28f..32f)
+    }
+
+    @Test
+    fun `only the four main pages carry the logo, every inner page keeps Back and its own title`() {
+        val ui = java.io.File("src/main/java/app/lyrify/ui").listFiles { f -> f.extension == "kt" }!!.associate { it.name to it.readText() }
+        val uses = ui.mapValues { (_, text) -> Regex("MainTopBar\\(").findAll(text).count() }.filterValues { it > 0 } - "Chrome.kt"
+        assertEquals(mapOf("LibraryScreen.kt" to 2, "SearchScreen.kt" to 1, "ToolsScreen.kt" to 1), uses)
+        // Each from its root: Library, Playlists, Search and Tools.
+        listOf("LibraryScreen.kt" to "DockTab.LIBRARY", "LibraryScreen.kt" to "DockTab.PLAYLISTS", "SearchScreen.kt" to "DockTab.SEARCH", "ToolsScreen.kt" to "DockTab.TOOLS")
+            .forEach { (file, tab) -> assertTrue("$file $tab", "MainTopBar($tab" in ui.getValue(file)) }
+        // The inner pages' bars keep their Back.
+        assertTrue(Regex("LyrifyTopBar\\(").findAll(ui.getValue("CollectionScreens.kt") + ui.getValue("SettingsScreen.kt") + ui.getValue("CoversTagsScreen.kt")).count() >= 4)
+        assertTrue("navigation = { ChromeIconButton(R.drawable.ic_arrow_back" in ui.getValue("CoversTagsScreen.kt"))
+    }
+
     @Test
     fun `Tools gets a dot when Check these, Duplicates or the AI need the user`() {
         assertFalse(toolsDot(checks = 0, duplicates = 0, aiAttention = false))

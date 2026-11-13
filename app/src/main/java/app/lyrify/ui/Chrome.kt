@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -392,20 +393,67 @@ fun LyrifyTopBar(
     actions: @Composable RowScope.() -> Unit = {},
 ) {
     TopBand(under, backdrop, modifier) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.statusBarsPadding().heightIn(min = BAR_HEIGHT).padding(start = if (navigation != null) 8.dp else 20.dp, end = 12.dp),
-        ) {
-            navigation?.let {
-                it()
-                Spacer(Modifier.width(4.dp))
-            }
-            Box(Modifier.weight(1f).semantics(mergeDescendants = true) { heading() }) {
-                ProvideTextStyle(MaterialTheme.typography.headlineSmall) { title() }
-            }
-            Row(verticalAlignment = Alignment.CenterVertically, content = actions)
+        Box(Modifier.statusBarsPadding()) { TopBarRow(title, navigation, actions) }
+    }
+}
+
+/** A top bar's line: maybe Back, the title (one heading, in the title style), and the actions at the end. */
+@Composable
+private fun TopBarRow(title: @Composable () -> Unit, navigation: (@Composable () -> Unit)?, actions: @Composable RowScope.() -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.heightIn(min = BAR_HEIGHT).padding(start = if (navigation != null) 8.dp else 20.dp, end = 12.dp),
+    ) {
+        navigation?.let {
+            it()
+            Spacer(Modifier.width(4.dp))
+        }
+        Box(Modifier.weight(1f).semantics(mergeDescendants = true) { heading() }) {
+            ProvideTextStyle(MaterialTheme.typography.headlineSmall) { title() }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, content = actions)
+    }
+}
+
+/**
+ * The header of the four main pages (Library, Playlists, Search, Tools): the KJB logo at the start, then the page's
+ * title in the title style, the page's own actions at the end (user decision 2026-11-11). The logo is decorative, so
+ * TalkBack reads one heading, the title alone. [below]: more of the band under the line, as Search's field. Inner pages
+ * keep [LyrifyTopBar] with Back and their own title.
+ */
+@Composable
+fun MainTopBar(tab: DockTab, under: Boolean, backdrop: GlassBackdrop?, actions: @Composable RowScope.() -> Unit = {}, below: (@Composable () -> Unit)? = null) {
+    val title = stringResource(headerPage(tab))
+    TopBand(under, backdrop) {
+        Column(Modifier.statusBarsPadding()) {
+            TopBarRow(
+                title = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        HeaderLogo()
+                        Spacer(Modifier.width(12.dp))
+                        Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                },
+                navigation = null,
+                actions = actions,
+            )
+            below?.invoke()
         }
     }
+}
+
+/** The name a dock destination's header shows after the logo: the dock's own word for it. */
+fun headerPage(tab: DockTab): Int = tab.label
+
+/** The header's logo: the launcher's black tile with the Note arm K, as default cover A. */
+val HEADER_LOGO = 30.dp
+
+/** The KJB logo at [HEADER_LOGO], its corners rounded as the launcher's; in dark theme a hairline keeps it off the page. Decorative. */
+@Composable
+private fun HeaderLogo() {
+    val shape = RoundedCornerShape(HEADER_LOGO * 10 / 36)
+    val edge = if (LocalDarkTheme.current) Modifier.border(1.dp, BrandBlackBorder, shape) else Modifier
+    Image(painterResource(R.drawable.kjb_default_cover), contentDescription = null, modifier = Modifier.size(HEADER_LOGO).clip(shape).then(edge))
 }
 
 /** The band behind a top bar: clear at rest, glass and a hairline while content is [under] it. */
