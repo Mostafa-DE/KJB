@@ -1,6 +1,7 @@
 // The AI add-on's bound service (app.lyrify.ai.AiService), as KJB calls it (lyrify-bench handoff/ai-addon-design.md).
-// Versioned: a method keeps its transaction code for good, new ones are only added at the end with VERSION raised, and
-// KJB asks apiVersion() before anything else (app.lyrify.addon.AddonClient). Every call checks that the caller is KJB, by
+// Versioned: KJB asks apiVersion() before anything else (app.lyrify.addon.AddonClient). The wire is frozen from the
+// first public release (KJB 3.0.0, VERSION 1): from then on a method keeps its transaction code and signature for good,
+// and new ones are only added at the end with VERSION raised. Until that release, VERSION 1 is still being shaped. Every call checks that the caller is KJB, by
 // its uid and signing certificate. The strings carry JSON (app.lyrify.ai.api.Wire): AiResult, AddonStatus, ImportReply.
 package app.lyrify.ai.api;
 
@@ -23,11 +24,12 @@ interface IAiAddon {
 
     // Downloads the models the add-on lacks, from the parts it has, and tells the callback its progress and end. KJB runs
     // it from its own foreground service and shows the notification (the add-on has neither), on the networks it allows.
-    // One at a time: a call while one runs only takes over its reports. It stops when KJB goes away (its parts stay).
-    void download(IAiDownloadCallback callback) = 5;
+    // Returns the run's id. Each call is its own run, heard by its own callback; runs take the files one after the other.
+    // A run stops when its caller goes away (its parts stay).
+    long download(IAiDownloadCallback callback) = 5;
 
-    // Stops the model download; what it got so far stays for the next one.
-    void cancelDownload() = 6;
+    // Stops the model download run started by that download() call (its id), and no other; its parts stay.
+    void cancelDownload(long run) = 6;
 
     // Stops a download and deletes the models and their parts, after closing the engine. True when none is left.
     boolean deleteModels() = 7;

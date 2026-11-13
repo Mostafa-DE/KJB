@@ -201,10 +201,13 @@ class AiWorker(context: Context, params: WorkerParameters) : CoroutineWorker(con
         }
     }
 
-    /** A model that did not load: the add-on deletes it, and it is downloaded again while the AI is on. */
+    /**
+     * A model that did not load: the add-on deletes it. It is downloaded again from the next hourly look, which starts the
+     * download before it goes into the foreground: never from here, inside this run's mediaProcessing service, where a
+     * second foreground type on WorkManager's one service could take that type from the run.
+     */
     private fun discard(addon: AddonPort, model: String) {
         addon.discardModel(model)
-        if (AiLyrics.enabled(applicationContext).value) AddonDownloads.start(applicationContext)
     }
 
     /** Runs (or keeps running) in the foreground showing [progress] (null: getting ready); false when the phone does not allow it now. */

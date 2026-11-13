@@ -551,6 +551,34 @@ class ModelStoreTest {
     }
 
     @Test
+    fun `a part a run left that does not match is fetched once whole before the download fails`() {
+        val base = start()
+        files["/first.bin"] = first
+        files["/second.onnx"] = second
+        models.mkdirs()
+        File(models, "first.bin.part").writeBytes(bytes(150_000, 99)) // torn: the right size so far, the wrong bytes
+
+        assertEquals(Download.Done, download(base))
+
+        assertArrayEquals(first, File(models, "first.bin").readBytes())
+        assertEquals(listOf("/repo/first.bin bytes=150000-", "/repo/first.bin", "/repo/second.onnx"), requests)
+    }
+
+    @Test
+    fun `a file that does not match even when fetched whole fails for good`() {
+        val base = start()
+        files["/first.bin"] = bytes(first.size, 99) // not the pinned file
+        files["/second.onnx"] = second
+        models.mkdirs()
+        File(models, "first.bin.part").writeBytes(bytes(150_000, 99))
+
+        assertTrue(download(base) is Download.Failed)
+
+        assertFalse(File(models, "first.bin.part").exists())
+        assertEquals(listOf("/repo/first.bin bytes=150000-", "/repo/first.bin"), requests)
+    }
+
+    @Test
     fun `a file of another size fails before it is kept`() {
         val base = start()
         files["/first.bin"] = first.copyOf(first.size + 10)

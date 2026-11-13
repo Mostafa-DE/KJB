@@ -80,26 +80,56 @@ class ModelDownloadsTest {
         assertEquals(RunState.Idle, run.state.value)
     }
 
+    /** A download that waits at its own gate, one per run, after saying it got 1 byte. */
+    private val gates = mutableListOf<CompletableDeferred<Unit>>()
+    private val gated: suspend (suspend (Long, Long) -> Unit) -> Download = { progress ->
+        val gate = CompletableDeferred<Unit>().also { gates += it }
+        progress(1, 100)
+        gate.await()
+        Download.Done
+    }
+
     @Test
-    fun `asked again while it runs it does not start a second download, and the new caller hears it`() = runTest {
-        var started = 0
-        val gate = CompletableDeferred<Unit>()
-        val run = DownloadRun(backgroundScope.plus(StandardTestDispatcher(testScheduler))) {
-            started++
-            gate.await()
-            Download.Done
-        }
+    fun `a run cancelled as the next one starts tells only its own caller, and leaves the next run alone`() = runTest {
+        val run = DownloadRun(backgroundScope.plus(StandardTestDispatcher(testScheduler)), gated)
         val first = Heard()
         val second = Heard()
-
-        run.start(first)
+        val a = run.start(first)
         runCurrent()
+
+        // KJB's worker replaced: the old one stops its run, the new one starts before the old run has wound down.
+        run.cancel(a)
+        val b = run.start(second)
+        runCurrent()
+
+        assertTrue(a != b)
+        assertEquals(1, first.events.count { it.startsWith("end Interrupted") })
+        assertFalse(second.events.toString(), second.events.any { it.startsWith("end") })
+        assertTrue(run.state.value is RunState.Running)
+        gates.last().complete(Unit)
+        runCurrent()
+        assertEquals("end Done", second.events.last())
+        assertEquals(1, first.events.count { it.startsWith("end") })
+        assertEquals(RunState.Idle, run.state.value)
+    }
+
+    @Test
+    fun `each start is its own run, and cancelling one leaves the other going`() = runTest {
+        val run = DownloadRun(backgroundScope.plus(StandardTestDispatcher(testScheduler)), gated)
+        val first = Heard()
+        val second = Heard()
+        val a = run.start(first)
         run.start(second)
-        gate.complete(Unit)
         runCurrent()
 
-        assertEquals(1, started)
-        assertEquals(listOf("end Done"), second.events)
+        run.cancel(a)
+        runCurrent()
+
+        assertTrue(first.events.last().startsWith("end Interrupted"))
+        assertFalse(second.events.any { it.startsWith("end") })
+        gates.last().complete(Unit)
+        runCurrent()
+        assertEquals("end Done", second.events.last())
     }
 
     @Test
@@ -110,10 +140,10 @@ class ModelDownloadsTest {
             Download.Done
         }
         val heard = Heard()
-        run.start(heard)
+        val id = run.start(heard)
         runCurrent()
 
-        run.cancel()
+        run.cancel(id)
         runCurrent()
 
         assertTrue(heard.events.toString(), heard.events.last().startsWith("end Interrupted"))
@@ -143,8 +173,10 @@ class ModelDownloadsTest {
     private val requests: MutableList<String> = Collections.synchronizedList(mutableListOf())
     private var server: HttpServer? = null
 
-    /** The first request stops after half the file until [released]; later ones get the rest as asked (HTTP Range). */
+    /** With [cutFirst], the first whole-file request stops after half the file until [released]; others get what they ask. */
     private val released = CountDownLatch(1)
+    @Volatile
+    private var cutFirst = true
 
     private fun serve(): String {
         val created = HttpServer.create(InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0)
@@ -156,7 +188,8 @@ class ModelDownloadsTest {
                 val from = range?.removePrefix("bytes=")?.removeSuffix("-")?.toInt() ?: 0
                 if (range != null) exchange.responseHeaders.add("Content-Range", "bytes $from-${body.size - 1}/${body.size}")
                 exchange.sendResponseHeaders(if (range != null) 206 else 200, (body.size - from).toLong())
-                if (range == null) {
+                if (range == null && cutFirst) {
+                    cutFirst = false
                     exchange.responseBody.write(body, 0, body.size / 2)
                     exchange.responseBody.flush()
                     released.await(30, TimeUnit.SECONDS)
@@ -202,7 +235,7 @@ class ModelDownloadsTest {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         val halfway = CompletableDeferred<Unit>()
         val first = run(scope, store)
-        first.start(object : DownloadEvents {
+        val id = first.start(object : DownloadEvents {
             override fun onProgress(done: Long, total: Long) {
                 if (done >= body.size / 2) halfway.complete(Unit)
             }
@@ -212,7 +245,7 @@ class ModelDownloadsTest {
         withTimeout(30_000) { halfway.await() }
 
         // KJB swiped away: its binding goes, and the add-on stops the download.
-        first.cancel()
+        first.cancel(id)
         scope.cancel()
         released.countDown()
         withTimeout(30_000) { first.state.first { it == RunState.Idle } }
@@ -230,8 +263,9 @@ class ModelDownloadsTest {
     }
 
     @Test
-    fun `a part that is not what it should be fails the check at the end and is deleted`() = runBlocking {
+    fun `a part torn when KJB was killed fails the check at the end, and is fetched once whole before giving up`() = runBlocking {
         val base = serve()
+        cutFirst = false
         val store = store(base)
         val part = store.part(store.specs.single())
         part.parentFile?.mkdirs()
@@ -240,10 +274,9 @@ class ModelDownloadsTest {
         val heard = Heard()
         run(CoroutineScope(SupervisorJob() + Dispatchers.IO), store).start(heard)
 
-        val end = withTimeout(30_000) { heard.ended.await() }
-        assertTrue(end.toString(), end is Download.Failed)
-        assertFalse(part.exists())
-        assertFalse(store.isReady())
+        assertEquals(Download.Done, withTimeout(30_000) { heard.ended.await() })
+        assertEquals(listOf("bytes=${body.size / 2}-", ""), requests)
+        assertArrayEquals(body, store.file(store.specs.single()).readBytes())
     }
 
     // The add-on itself shows nothing

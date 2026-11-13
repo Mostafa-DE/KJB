@@ -474,6 +474,17 @@ class NavTest {
         }
     }
 
+    @Test
+    fun `the night run never starts the models' download from its own foreground service`() {
+        // A second foreground type on WorkManager's one service could take mediaProcessing from the run: a model that did
+        // not load is fetched again at the next hourly look, which starts the download before it goes into the foreground.
+        val worker = java.io.File("src/main/java/app/lyrify/overnight/AiWorker.kt").readText()
+        val discard = worker.substringAfter("private fun discard(").substringBefore("\n    }")
+        assertFalse(discard, "AddonDownloads.start" in discard)
+        val beforeForeground = worker.substringAfter("private suspend fun night(session: AddonSession)").substringBefore("if (!foreground(null))")
+        assertTrue("AddonDownloads.startIfIdle" in beforeForeground)
+    }
+
     // What shows
 
     @Test

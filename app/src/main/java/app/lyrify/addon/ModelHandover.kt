@@ -141,7 +141,6 @@ class HandoverWorker(context: Context, params: WorkerParameters) : CoroutineWork
 
     private suspend fun hand(addon: AddonPort): Result {
         val app = applicationContext
-        addon.cancelDownload()
         val handover = Handover(
             ModelHandover.legacyFolder(app),
             send = { file, sha -> addon.importModel(file.name, file.file, sha) },

@@ -278,7 +278,7 @@ class AiService : Service() {
     override fun onUnbind(intent: Intent): Boolean {
         jobs.shutDown()
         // KJB went away (swiped, killed): the download pauses, and goes on from its parts at the next bind.
-        downloads.cancel()
+        downloads.cancelAll()
         return false
     }
 
@@ -305,21 +305,16 @@ class AiService : Service() {
             watchedLess()
         }
 
-        override fun download(callback: IAiDownloadCallback) = checked {
+        override fun download(callback: IAiDownloadCallback): Long = checked {
             val events = DownloadCallback(callback)
-            // KJB's process dying (its binder) stops the download as its unbind would.
-            try {
-                callback.asBinder().linkToDeath({ downloads.cancel() }, 0)
-            } catch (_: RemoteException) {
-                return@checked
-            }
-            downloads.start(events)
-        }
+            events.run = downloads.start(events)
+            events
+        }.run
 
-        override fun cancelDownload() = checked { downloads.cancel() }
+        override fun cancelDownload(run: Long) = checked { downloads.cancel(run) }
 
         override fun deleteModels(): Boolean = checked {
-            downloads.cancel()
+            downloads.cancelAll()
             runBlocking {
                 jobs.closeEngine().join()
                 ModelDownloads.delete(this@AiService)
@@ -327,7 +322,7 @@ class AiService : Service() {
         }
 
         override fun discardModel(name: String): Boolean = checked {
-            downloads.cancel()
+            downloads.cancelAll()
             runBlocking {
                 jobs.closeEngine().join()
                 ModelDownloads.discard(this@AiService, File(ModelDownloads.folder(this@AiService), name))
@@ -355,6 +350,8 @@ class AiService : Service() {
         override fun closeEngine() = checked { runBlocking { jobs.closeEngine().join() } }
 
         override fun importModel(name: String, file: ParcelFileDescriptor, bytes: Long, sha256: String): String = checked(file) {
+            // The handover beats a download: KJB starts none meanwhile, and one left over stops (its parts stay).
+            downloads.cancelAll()
             val reply = ParcelFileDescriptor.AutoCloseInputStream(file).use { input ->
                 runBlocking { ModelDownloads.withStore(this@AiService) { store -> ModelImport(store).import(name, input, bytes, sha256) } }
             } ?: ImportReply(ImportReply.Outcome.RETRY, "a download is writing the models")
@@ -377,18 +374,37 @@ class AiService : Service() {
         return block()
     }
 
-    /** The download's progress and end to KJB, by binder. KJB gone stops the download. */
+    /**
+     * One download run's progress and end to its caller, by binder. That caller's process dying stops that run (its death
+     * link is made before the run starts, and let go when the run ends), never another one.
+     */
     private inner class DownloadCallback(private val callback: IAiDownloadCallback) : DownloadEvents {
+        /** The run's id, once it has one; until then its caller dying has nothing to stop yet. */
+        @Volatile
+        var run: Long = 0
+
+        private val death = IBinder.DeathRecipient { downloads.cancel(run) }
+        private val linked = try {
+            callback.asBinder().linkToDeath(death, 0)
+            true
+        } catch (_: RemoteException) {
+            // Already gone: the run's first report fails and stops it.
+            false
+        }
+
         override fun onProgress(done: Long, total: Long) = send { callback.onProgress(done, total) }
 
-        override fun onEnd(end: Download) = send { callback.onEnd(Wire.encode(end)) }
+        override fun onEnd(end: Download) {
+            send { callback.onEnd(Wire.encode(end)) }
+            if (linked) runCatching { callback.asBinder().unlinkToDeath(death, 0) }
+        }
 
         private inline fun send(call: () -> Unit) {
             try {
                 call()
             } catch (e: RemoteException) {
-                Log.w(LOG_TAG, "KJB is gone (${e.javaClass.simpleName}); stopping the download")
-                downloads.cancel()
+                Log.w(LOG_TAG, "KJB is gone (${e.javaClass.simpleName}); stopping its download")
+                downloads.cancel(run)
             }
         }
     }
