@@ -78,6 +78,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.testTagsAsResourceId
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -735,7 +736,10 @@ fun ArtistAvatar(artist: Artist, size: Dp = 48.dp) {
     }
 }
 
-/** An album as a card: its cover filling the width, its title and a line under it ([sub]: the artist, or the year). */
+/**
+ * An album as a card: its cover filling the width, its title and a line under it ([sub]: the artist, or the year). Its
+ * [ALBUM_CARD_TAG] reaches UiAutomator as a resource id, so a device test opens an album without knowing any.
+ */
 @Composable
 fun AlbumCard(title: String, sub: String?, cover: Song?, modifier: Modifier = Modifier, onClick: () -> Unit) {
     val words = listOfNotNull(title, sub).joinToString(", ")
@@ -743,7 +747,11 @@ fun AlbumCard(title: String, sub: String?, cover: Song?, modifier: Modifier = Mo
         modifier
             .clip(RoundedCornerShape(22.dp))
             .clickable(role = Role.Button, onClick = onClick)
-            .semantics(mergeDescendants = true) { contentDescription = words }
+            .semantics(mergeDescendants = true) {
+                contentDescription = words
+                testTagsAsResourceId = true
+            }
+            .testTag(ALBUM_CARD_TAG)
             .padding(bottom = 8.dp),
     ) {
         BoxWithConstraints(Modifier.fillMaxWidth()) {
@@ -753,6 +761,9 @@ fun AlbumCard(title: String, sub: String?, cover: Song?, modifier: Modifier = Mo
         if (sub != null) Text(sub, style = CardLine, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.clearAndSetSemantics {})
     }
 }
+
+/** An album card's test tag. */
+const val ALBUM_CARD_TAG: String = "album card"
 
 /** An album card's title (.acard .at, 15/20 medium) and line (.aa, 13/18). */
 private val CardTitle = body(15f, 20, 500)
