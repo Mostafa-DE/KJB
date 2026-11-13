@@ -350,7 +350,8 @@ class SharedWritesTest {
      */
     @Test
     fun `every writer is known, and every writer to shared storage asks the checkpoint`() {
-        val roots = listOf("src/main/java/app/lyrify", "src/debug/java/app/lyrify").map(::File)
+        // KJB's own code, and what it ships of the code it shares with the AI add-on (which writes only its own storage).
+        val roots = listOf("src/main/java/app/lyrify", "src/debug/java/app/lyrify", "../ai-shared/src/main/java/app/lyrify").map(::File)
         assertTrue("run from the app module: ${File("").absolutePath}", roots[0].isDirectory)
         val writers = roots.flatMap { root ->
             root.walkTopDown().filter { it.isFile && it.extension == "kt" && WRITE_CALLS.containsMatchIn(it.readText()) }
@@ -400,7 +401,6 @@ class SharedWritesTest {
             "dupes/DuplicatesStore.kt",
             "library/Playlists.kt",
             "library/search/RecentSearches.kt",
-            "models/ModelDownloadWorker.kt",
             "models/ModelStore.kt",
             "overnight/AiRunLog.kt",
             "overnight/AiWorker.kt",

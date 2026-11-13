@@ -30,16 +30,16 @@ import app.lyrify.BuildConfig
 import app.lyrify.LOG_TAG
 import app.lyrify.Lyrify
 import app.lyrify.R
-import app.lyrify.ai.AiModels
-import app.lyrify.ai.AiResult
-import app.lyrify.ai.AiStage
-import app.lyrify.ai.LyricsFromAudio
-import app.lyrify.ai.NpuStages
-import app.lyrify.ai.WhisperAssets
+import app.lyrify.addon.Addon
+import app.lyrify.addon.AddonDiedException
+import app.lyrify.addon.AddonPort
+import app.lyrify.addon.AddonSession
+import app.lyrify.addon.Connection
+import app.lyrify.addon.ModelHandover
+import app.lyrify.addon.RemoteSongEngine
 import app.lyrify.data.LedgerRepository
-import app.lyrify.lyrics.LocalTrack
-import app.lyrify.models.ModelDownloads
-import app.lyrify.models.ModelSpec
+import app.lyrify.logFailures
+import app.lyrify.models.ModelState
 import app.lyrify.models.ModelStore
 import app.lyrify.models.NpuChips
 import app.lyrify.models.inForeground
@@ -48,7 +48,10 @@ import app.lyrify.ui.EXTRA_DESTINATION
 import app.lyrify.ui.MainActivity
 import app.lyrify.verbose
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -67,13 +70,16 @@ import java.util.concurrent.TimeUnit
 /**
  * The overnight AI run ([AiRunner]): a long-running WorkManager worker, looked at every hour while the battery is not
  * low and storage is not low, that runs only while the phone is plugged in (charging or not, see [AiLyrics.schedule]),
- * in a foreground service of type mediaProcessing, the type Android 15+ prescribes for long work on media files. That
+ * in a foreground service of type mediaProcessing, the type Android 15+ prescribes for long work on media files. The AI
+ * itself runs in the AI add-on (app.lyrify.addon), bound from here for the whole run: the add-on runs at this
+ * service's priority, needs no foreground service of its own, and the mediaProcessing time limit stays KJB's. That
  * type may run 6 hours in 24 (the time resets when the user opens the app); at the limit WorkManager's service gets
  * `onTimeout` and stops this worker ([WorkInfo.STOP_REASON_FOREGROUND_SERVICE_TIMEOUT]), and the AI then holds off for a
  * day or until the app is opened. Unplugged ([AiRunner] watches the cable) or cancelled, the engine finishes the step it
  * is on and stops; nothing is recorded for that song. It goes into the foreground before it looks at any song's files.
  * The engine's NPU sessions stay loaded for the whole run and are released at its end. What happens goes to the AI's
- * run log ([AiLyrics.runLog]) as well as logcat. Android 15+ only, on the supported chips ([NpuChips]) only.
+ * run log ([AiLyrics.runLog]) as well as logcat. Android 15+ only, on the supported chips ([NpuChips]) only, with the
+ * add-on installed: without it (or with one too old to speak to) nothing runs, and the AI page offers to get it.
  */
 class AiWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result =
@@ -83,14 +89,31 @@ class AiWorker(context: Context, params: WorkerParameters) : CoroutineWorker(con
     private suspend fun night(): Result {
         val context = applicationContext
         // A phone whose chip the AI does not run on: nothing to do.
-        val store = ModelDownloads.store(context) ?: return Result.success()
+        if (NpuChips.supported() == null) return Result.success()
+        // No add-on, or one KJB cannot use: the AI page says so; the next period looks again.
+        val session = (Addon.client(context).connect() as? Connection.Open)?.session ?: return Result.success()
+        return try {
+            session.use { night(it) }
+        } catch (_: AddonDiedException) {
+            // Died between songs, or before the first one: the next attempt binds it again.
+            AiLyrics.runLog(context).append("AI: the AI add-on stopped; trying again later")
+            Result.retry()
+        }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.VANILLA_ICE_CREAM)
+    private suspend fun night(session: AddonSession): Result {
+        val context = applicationContext
+        val addon = session.port
+        val status = addon.status() ?: return Result.retry()
         val now = System.currentTimeMillis()
-        if (!store.isReady()) {
-            // Not all in place (an update can pin another file): the download goes on by itself, over Wi-Fi.
-            if (AiLyrics.enabled(context).value) ModelDownloads.startIfIdle(context)
+        if (status.models !is ModelState.Ready) {
+            // Not all in place (an update can pin another file): the download goes on by itself, over Wi-Fi, once the
+            // models KJB 2.0 kept are handed over.
+            if (AiLyrics.enabled(context).value && !ModelHandover.pending(context)) addon.startDownload(restart = false)
             return Result.success()
         }
-        val loadFailures = AiLyrics.loadFailures(context)
+        val loadFailures = AiLyrics.loadFailures(context, status.pins)
         if (loadFailures.paused()) {
             // A model did not load again after it was downloaded again: nothing runs until the next version or new models.
             Log.i(LOG_TAG, "AI: paused, a model did not load again after it was downloaded again")
@@ -123,8 +146,7 @@ class AiWorker(context: Context, params: WorkerParameters) : CoroutineWorker(con
         val power = context.getSystemService(PowerManager::class.java)
         runLog.append(
             "AI: run started: ${AiLyrics.battery(context)}, thermal status ${power.currentThermalStatus}, " +
-                "${NpuChips.device()?.socModel} NPU, ONNX Runtime ${BuildConfig.ORT_VERSION}, QNN EP ${BuildConfig.QNN_EP_VERSION}, " +
-                "QNN ${BuildConfig.QNN_RUNTIME_VERSION}, $AI_THREADS CPU threads, KJB ${BuildConfig.VERSION_NAME}",
+                "${NpuChips.device()?.socModel} NPU, ${status.runtime}, $AI_THREADS CPU threads, KJB ${BuildConfig.VERSION_NAME}",
         )
         // The run log names the songs; logcat (which bug reports carry) gets its lines only under VERBOSE.
         val log: (String) -> Unit = {
@@ -136,8 +158,9 @@ class AiWorker(context: Context, params: WorkerParameters) : CoroutineWorker(con
             ledger = ledger,
             plainLyrics = pipeline::plainLyrics,
             record = pipeline::recordAi,
-            openEngine = { models -> engine(context, models, runLog) },
-            models = store::models,
+            // The engine's notes (stages, times, counts) come from the add-on.
+            openEngine = { RemoteSongEngine(session, notes = { runLog.append("AI:   $it") }) },
+            ready = { addon.status()?.models is ModelState.Ready },
             thermalStatus = { power.currentThermalStatus },
             pluggedIn = AiLyrics.pluggedIn(context),
             clock = System::currentTimeMillis,
@@ -148,10 +171,7 @@ class AiWorker(context: Context, params: WorkerParameters) : CoroutineWorker(con
             // A song the tag writer or its start-up recovery holds is left for the next run.
             canTake = { path -> path !in Lyrify.locks && audioWithoutLyrics(path) },
             inUse = AiLyrics.inUse,
-            badModel = { model ->
-                ModelDownloads.discard(context, model)
-                if (AiLyrics.enabled(context).value) ModelDownloads.start(context)
-            },
+            badModel = { model -> discard(addon, model) },
             onProgress = { progress ->
                 AiLyrics.show(progress)
                 foreground(progress)
@@ -165,8 +185,9 @@ class AiWorker(context: Context, params: WorkerParameters) : CoroutineWorker(con
             if (end == AiRunEnd.CRASHED) AiLyrics.held(AiHold.CRASHED)
             if (end == AiRunEnd.MODEL_FAILED) AiLyrics.held(AiHold.MODEL_FAILED)
             if (end == AiRunEnd.NO_NPU) AiLyrics.held(AiHold.NO_NPU)
-            // Each end waits for the next period: unplugged, the next hourly look finds the cable again.
-            Result.success()
+            // Each end waits for the next period (unplugged, the next hourly look finds the cable again); an add-on that
+            // died is bound again sooner, after WorkManager's backoff.
+            if (end == AiRunEnd.ADDON_DIED) Result.retry() else Result.success()
         } catch (e: CancellationException) {
             runLog.append("AI: run stopped by the system after ${(SystemClock.elapsedRealtime() - started) / 60_000} min (WorkManager stop reason $stopReason)")
             throw e
@@ -179,6 +200,12 @@ class AiWorker(context: Context, params: WorkerParameters) : CoroutineWorker(con
         }
     }
 
+    /** A model that did not load: the add-on deletes it, and downloads it again while the AI is on. */
+    private fun discard(addon: AddonPort, model: String) {
+        addon.discardModel(model)
+        if (AiLyrics.enabled(applicationContext).value) addon.startDownload(restart = true)
+    }
+
     /** Runs (or keeps running) in the foreground showing [progress] (null: getting ready); false when the phone does not allow it now. */
     @RequiresApi(Build.VERSION_CODES.VANILLA_ICE_CREAM)
     private suspend fun foreground(progress: AiProgress?): Boolean =
@@ -187,33 +214,6 @@ class AiWorker(context: Context, params: WorkerParameters) : CoroutineWorker(con
             // work used up. A cancelled run is rethrown, not taken for this.
             Log.w(LOG_TAG, "AI: not allowed to start in the background: ${e.javaClass.simpleName}")
         }
-
-    /**
-     * The engine on the NPU for [models]: [NpuStages] (the QNN EP and its sessions, created on first use and released
-     * by [SongEngine.close]) under [LyricsFromAudio]. Its notes go to the run log: stages, times, counts.
-     */
-    private fun engine(context: Context, models: AiModels, runLog: AiRunLog): SongEngine {
-        val stages = NpuStages(
-            models,
-            context.applicationInfo.nativeLibraryDir,
-            AiLyrics.whisperAssets(context),
-            AI_THREADS,
-            log = { runLog.append("AI:   $it") },
-        )
-        val lyrics = LyricsFromAudio(
-            stages,
-            SystemClock::elapsedRealtime,
-            log = { Log.d(LOG_TAG, "AI: $it") },
-            notes = { runLog.append("AI:   $it") },
-            verbose = verbose(),
-        )
-        return object : SongEngine {
-            override suspend fun run(track: LocalTrack, plainLyrics: String?, onStage: (AiStage) -> Unit, beforeChunk: suspend () -> Unit): AiResult =
-                lyrics.run(track, plainLyrics, onStage, beforeChunk)
-
-            override fun close() = stages.close()
-        }
-    }
 }
 
 /**
@@ -244,6 +244,9 @@ object AiLyrics {
     /** Held by a run while it may use the models ([AiRunner]); a delete waits for it ([afterStopping]). */
     internal val inUse = Mutex()
 
+    /** Calls to the AI add-on that outlive the screen that asked (the switch, the start-up look). */
+    private val calls = CoroutineScope(SupervisorJob() + Dispatchers.IO + logFailures)
+
     private var stored: MutableStateFlow<Boolean>? = null
 
     private var runLog: AiRunLog? = null
@@ -269,13 +272,15 @@ object AiLyrics {
     }
 
     /**
-     * On: stored as the user's choice, downloads the models if needed (over Wi-Fi; models in place are not fetched
-     * again) and schedules the run, looked at every hour while the battery is not low and storage is not low; it runs
-     * when the phone is plugged in.
+     * On: stored as the user's choice, has the AI add-on download the models if needed (over Wi-Fi; models in place are
+     * not fetched again; not while KJB 2.0's are being handed over) and schedules the run, looked at every hour while the
+     * battery is not low and storage is not low; it runs when the phone is plugged in. Without the add-on, the choice is
+     * kept and the AI page offers to get it.
      */
     fun turnOn(context: Context) {
         choose(context, true)
-        ModelDownloads.start(context)
+        val app = context.applicationContext
+        calls.launch { if (!ModelHandover.pending(app)) Addon.withPort(app) { it.startDownload(restart = true) } }
         schedule(context)
     }
 
@@ -303,6 +308,12 @@ object AiLyrics {
         WorkManager.getInstance(context).enqueueUniquePeriodicWork(WORK, ExistingPeriodicWorkPolicy.UPDATE, request)
     }
 
+    /** Download (or Resume, or Try again) on the AI page: the add-on downloads the models anew from what it has. */
+    fun download(context: Context) {
+        val app = context.applicationContext
+        calls.launch { Addon.withPort(app) { it.startDownload(restart = true) } }
+    }
+
     /** Off, stored as the user's choice: a run in progress finishes the step it is on and stops. The models stay. */
     fun turnOff(context: Context) {
         choose(context, false)
@@ -314,13 +325,14 @@ object AiLyrics {
 
     /**
      * When the app starts: on, with nothing scheduled (the schedule was lost) or a schedule an earlier version made
-     * (waiting for charging, see [schedule]), the run is scheduled again; models not all in place (a new version can
-     * pin another file) are downloaded unless a download is under way. A schedule from before the choice was stored (an
-     * earlier build) counts as on.
+     * (waiting for charging, see [schedule]), the run is scheduled again; models not all in place in the AI add-on (a
+     * new version can pin another file) are downloaded unless a download is under way, once KJB 2.0's are handed over
+     * ([ModelHandover]). A schedule from before the choice was stored (an earlier build) counts as on.
      */
     suspend fun reconcile(context: Context) {
         withContext(Dispatchers.IO) { removeOldFiles(context) }
-        val store = ModelDownloads.store(context) ?: return
+        if (NpuChips.supported() == null) return
+        ModelHandover.startIfNeeded(context)
         val pending = WorkManager.getInstance(context).getWorkInfosForUniqueWorkFlow(WORK).first().filterNot { it.state.isFinished }
         if (pending.isNotEmpty() && !preferences(context).contains(ENABLED)) choose(context, true)
         if (!choice(context).value) return
@@ -329,16 +341,18 @@ object AiLyrics {
             Log.i(LOG_TAG, "AI: on; scheduled again")
             schedule(context)
         }
-        if (!withContext(Dispatchers.IO) { store.isReady() }) ModelDownloads.startIfIdle(context)
+        if (!ModelHandover.pending(context)) {
+            Addon.withPort(context) { addon -> if (addon.status()?.models?.let { it !is ModelState.Ready } == true) addon.startDownload(restart = false) }
+        }
     }
 
     /**
-     * What earlier versions left in app-private storage and this one no longer uses: the models they downloaded
-     * ([ModelSpec.RETIRED], and on this phone's chip a Whisper folder of another archive, [ModelStore.removeRetired]) and
-     * 2.0's per-song checkpoints in the cache. Nothing else.
+     * What earlier versions left in app-private storage and this one no longer uses: the models they downloaded before the
+     * ones KJB 2.0 kept ([ModelStore.removeRetired]; those go to the add-on, [ModelHandover]) and 2.0's per-song
+     * checkpoints in the cache. Nothing else.
      */
     private fun removeOldFiles(context: Context) {
-        val gone = ModelDownloads.store(context)?.removeRetired() ?: ModelStore.removeRetired(ModelDownloads.folder(context))
+        val gone = ModelStore.removeRetired(ModelHandover.legacyFolder(context))
         if (!gone) Log.w(LOG_TAG, "AI: a model an earlier version used could not be deleted")
         val checkpoints = File(context.cacheDir, OLD_RESUME_CACHE)
         if (checkpoints.exists() && !checkpoints.deleteRecursively()) Log.w(LOG_TAG, "AI: the old checkpoints could not all be deleted")
@@ -347,12 +361,6 @@ object AiLyrics {
     /** The crash guard's records (app-private files, see [CrashGuard]). */
     internal fun crashGuard(context: Context, log: (String) -> Unit): CrashGuard =
         CrashGuard(File(context.applicationContext.filesDir, CRASH_GUARD), System::currentTimeMillis, BuildConfig.VERSION_CODE, log)
-
-    /** The Whisper tokenizer's files from the app's assets. */
-    internal fun whisperAssets(context: Context): WhisperAssets {
-        fun asset(name: String) = context.assets.open("whisper/$name").use { it.readBytes().toString(Charsets.UTF_8) }
-        return WhisperAssets(asset("vocab.json"), asset("added_tokens.json"), asset("generation_config.json"))
-    }
 
     /**
      * Off, then [block] once the AI has actually stopped: WorkManager no longer runs it and its engine has let go of
@@ -435,13 +443,15 @@ object AiLyrics {
         return at > 0 && now - at < DAY_MS
     }
 
-    /** The models' load failures ([ModelLoadFailures]), in the AI's preferences, written at once (commit). */
-    internal fun loadFailures(context: Context): ModelLoadFailures {
-        val store = ModelDownloads.store(context)
+    /**
+     * The models' load failures ([ModelLoadFailures]), in the AI's preferences, written at once (commit); [pins]: each
+     * model's pinned SHA-256, as the add-on tells them (AddonStatus.pins).
+     */
+    internal fun loadFailures(context: Context, pins: Map<String, String> = emptyMap()): ModelLoadFailures {
         val preferences = preferences(context)
         return ModelLoadFailures(
             version = BuildConfig.VERSION_CODE,
-            pinned = { model -> store?.specs?.firstOrNull { store.file(it) == model }?.sha256 },
+            pinned = { model -> pins[model] },
             read = { preferences.getString(LOAD_FAILURES, null) },
             write = { value -> preferences.edit(commit = true) { if (value == null) remove(LOAD_FAILURES) else putString(LOAD_FAILURES, value) } },
         )

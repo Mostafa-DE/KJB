@@ -7,17 +7,22 @@ plugins {
     alias(libs.plugins.androidx.baselineprofile)
 }
 
+/** Release signing (the root build file reads it), shared with the AI add-on, which is signed with the same key. */
+val releaseKeystore = rootProject.extra["releaseKeystore"] as Properties?
+
+/** The certificate each build type signs with (root build file): the AI add-on must be signed with it too. */
+@Suppress("UNCHECKED_CAST")
+val certPins = rootProject.extra["certPins"] as Map<String, String>
+
 /**
- * Release signing, kept outside the repo: storeFile, storePassword, keyAlias, keyPassword.
- * Read from LYRIFY_KEYSTORE_PROPS, else ~/.android-keys/lyrify-keystore.properties.
- * Without it the release build is simply unsigned, so the project builds anywhere.
+ * The AI add-on's APK that KJB downloads (Tools > AI lyrics > Get AI): KJB-AI-<version>.apk, the release asset beside
+ * KJB's own on the GitHub release, its SHA-256 (hex) and size. PLACEHOLDER: the release lane pins the published file
+ * here. With no SHA-256 nothing is downloaded and Get AI says it could not get the add-on. -PaiAddonUrl,
+ * -PaiAddonSha256 and -PaiAddonBytes point a test build at another file (GitHub only, and signed with this build's key).
  */
-val releaseKeystore: Properties? = run {
-    val path = providers.environmentVariable("LYRIFY_KEYSTORE_PROPS").orNull
-        ?: "${System.getProperty("user.home")}/.android-keys/lyrify-keystore.properties"
-    val file = File(path)
-    if (file.isFile) Properties().apply { file.inputStream().use { load(it) } } else null
-}
+val aiAddonUrl = findProperty("aiAddonUrl")?.toString() ?: "https://github.com/Mostafa-DE/Lyrify/releases/download/v3.0.0/KJB-AI-3.0.0.apk"
+val aiAddonSha256 = findProperty("aiAddonSha256")?.toString() ?: "" // PLACEHOLDER: the release asset's SHA-256
+val aiAddonBytes = findProperty("aiAddonBytes")?.toString() ?: "0" // PLACEHOLDER: the release asset's size in bytes
 
 android {
     namespace = "app.lyrify"
@@ -32,14 +37,13 @@ android {
         versionName = "3.0.0"
 
         ndk {
-            // The AI runs on Snapdragon phones only, all arm64; the QNN libraries are arm64 only.
+            // TagLib's library is built for arm64 only (taglib/), as the AI add-on's QNN libraries are.
             abiFilters += "arm64-v8a"
         }
 
-        // The run log names the stack the AI ran on.
-        buildConfigField("String", "ORT_VERSION", "\"${libs.versions.onnxruntime.get()}\"")
-        buildConfigField("String", "QNN_EP_VERSION", "\"${libs.versions.qnnEp.get()}\"")
-        buildConfigField("String", "QNN_RUNTIME_VERSION", "\"${libs.versions.qnnRuntime.get()}\"")
+        buildConfigField("String", "AI_ADDON_URL", "\"$aiAddonUrl\"")
+        buildConfigField("String", "AI_ADDON_SHA256", "\"$aiAddonSha256\"")
+        buildConfigField("long", "AI_ADDON_BYTES", "${aiAddonBytes}L")
 
         // Device tests (app/src/androidTest) run on the debug build, beside the release app.
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -47,29 +51,16 @@ android {
 
     packaging {
         jniLibs {
-            // Extracted to nativeLibraryDir on install, as in the measured spike: the QNN EP plugin is registered by
-            // file path, and the Hexagon DSP loads its skel library from a folder listed in ADSP_LIBRARY_PATH.
+            // Compressed in the APK and extracted on install, as before the AI moved out: a smaller download. The AI's
+            // ONNX Runtime and QNN libraries are in the AI add-on (ai-addon/), never in KJB.
             useLegacyPackaging = true
-            // qnn-runtime ships every Hexagon generation plus the DSP and GPU backends. Only HTP is used, on the
-            // supported chips' Hexagon versions (models/NpuChips): v69 (8 Gen 1), v75 (8 Gen 3), v79 (8 Elite),
-            // v81 (8 Elite Gen 5). The rest stays out of the APK.
-            excludes += listOf(
-                "**/libQnnDsp.so",
-                "**/libQnnDspV66Skel.so",
-                "**/libQnnDspV66Stub.so",
-                "**/libQnnGpu.so",
-                "**/libQnnHtpV68Skel.so",
-                "**/libQnnHtpV68Stub.so",
-                "**/libQnnHtpV73Skel.so",
-                "**/libQnnHtpV73Stub.so",
-            )
         }
     }
 
     signingConfigs {
         if (releaseKeystore != null) {
             create("release") {
-                storeFile = file(releaseKeystore.getProperty("storeFile"))
+                storeFile = rootProject.file(releaseKeystore.getProperty("storeFile"))
                 storePassword = releaseKeystore.getProperty("storePassword")
                 keyAlias = releaseKeystore.getProperty("keyAlias")
                 keyPassword = releaseKeystore.getProperty("keyPassword")
@@ -86,6 +77,10 @@ android {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-dev"
             buildConfigField("boolean", "TEST_FOLDER_ONLY", "true")
+            // The AI add-on beside KJB dev: app.lyrify.ai.debug, signed with the debug key (ai-addon/).
+            buildConfigField("String", "AI_ADDON_PACKAGE", "\"app.lyrify.ai.debug\"")
+            buildConfigField("String", "AI_CERT_SHA256", "\"${certPins.getValue("debug")}\"")
+            manifestPlaceholders["aiAddonPackage"] = "app.lyrify.ai.debug"
         }
         release {
             isMinifyEnabled = true
@@ -95,6 +90,11 @@ android {
             // The one build that may change the user's own files anywhere (data/SharedWrites.kt). Every other build type
             // sets this true, and the check under androidComponents fails the build when one does not.
             buildConfigField("boolean", "TEST_FOLDER_ONLY", "false")
+            // The AI add-on, app.lyrify.ai, signed with KJB's release key (the bench builds below keep these: they bind
+            // nothing, being signed with the debug key).
+            buildConfigField("String", "AI_ADDON_PACKAGE", "\"app.lyrify.ai\"")
+            buildConfigField("String", "AI_CERT_SHA256", "\"${certPins.getValue("release")}\"")
+            manifestPlaceholders["aiAddonPackage"] = "app.lyrify.ai"
         }
         // The Baseline Profile plugin's two copies of release, for the phone only (baselineprofile/): nonMinifiedRelease
         // records the profile, benchmarkRelease measures it. The plugin forces them non-debuggable and profileable, and
@@ -186,9 +186,8 @@ dependencies {
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.material3)
-    implementation(libs.onnxruntime.android)
-    implementation(libs.onnxruntime.qnn.ep)
-    implementation(libs.qnn.runtime)
+    // What KJB and the AI add-on share: the add-on's AIDL and wire types, the chip table, the downloader, the decoder.
+    implementation(project(":ai-shared"))
     implementation(libs.androidx.work.runtime)
     implementation(libs.coil.compose)
     implementation(libs.media3.exoplayer)
@@ -202,7 +201,6 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
-    testImplementation(libs.onnxruntime.jvm)
 
     androidTestImplementation(libs.androidx.test.core)
     androidTestImplementation(libs.androidx.test.runner)

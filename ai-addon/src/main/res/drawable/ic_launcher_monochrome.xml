@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Themed-icon (Android 13+) version of the foreground (blade-k-note-monochrome.svg): the same shapes in one colour,
+     which the system tints. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M30.61,33.37L33.78,29.32L40.75,35.04L40.75,74.63L37.57,78.68L30.61,72.96ZM42.86,63.39L51.02,57.28L60.16,72.51L66.33,78.68L52.04,78.68Z" />
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M54.93,47.42C56,49.82 54.24,52.94 50.99,54.38C47.74,55.83 44.24,55.05 43.17,52.65C42.1,50.25 43.87,47.13 47.12,45.68C50.36,44.24 53.86,45.01 54.93,47.42Z" />
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M49.39,50.29L65.53,29.32L70.87,29.32L52.74,52.87Z" />
+    <path
+        android:fillColor="#FF000000"
+        android:pathData="M65.53,29.32L70.87,29.32L76.86,31.61L77.39,44.3L64.42,37.69Z" />
+</vector>

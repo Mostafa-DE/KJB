@@ -1,0 +1,393 @@
+package app.lyrify.ai
+
+import android.app.Service
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Binder
+import android.os.IBinder
+import android.os.ParcelFileDescriptor
+import android.os.RemoteCallbackList
+import android.os.RemoteException
+import android.os.SystemClock
+import android.util.Log
+import app.lyrify.ai.api.AddonNames
+import app.lyrify.ai.api.AddonStatus
+import app.lyrify.ai.api.IAiAddon
+import app.lyrify.ai.api.IAiRunCallback
+import app.lyrify.ai.api.IAiStatusCallback
+import app.lyrify.ai.api.ImportReply
+import app.lyrify.ai.api.Wire
+import app.lyrify.models.ModelDownloads
+import app.lyrify.models.ModelState
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import java.io.File
+import kotlin.coroutines.CoroutineContext
+
+/** Logcat's tag for the add-on. Its lines carry counts, stages and exception classes, never a song, a path or lyrics. */
+const val LOG_TAG: String = "KJB-AI"
+
+/** How the add-on's model downloads introduce themselves. */
+val USER_AGENT: String = "KJB-AI/${BuildConfig.VERSION_NAME} ( https://github.com/Mostafa-DE/Lyrify )"
+
+/** CPU threads for the engine: the MDX STFT and iSTFT (the spike's measured 4) and wav2vec2. The models run on the NPU. */
+const val ENGINE_THREADS: Int = 4
+
+/**
+ * Who may call the add-on: KJB of this build type ([kjbPackage]) signed with the pinned certificate ([certSha256], hex),
+ * by the calling uid's packages ([packagesFor], `PackageManager.getPackagesForUid`) and certificate ([hasCert],
+ * `PackageManager.hasSigningCertificate` with CERT_INPUT_SHA256). No pin trusts nobody.
+ */
+class CallerCheck(
+    private val kjbPackage: String,
+    private val certSha256: String,
+    private val packagesFor: (Int) -> Array<String>?,
+    private val hasCert: (Int, ByteArray) -> Boolean,
+) {
+    fun allows(uid: Int): Boolean {
+        val pin = AddonNames.pinBytes(certSha256) ?: return false
+        val packages = packagesFor(uid) ?: return false
+        return kjbPackage in packages && hasCert(uid, pin)
+    }
+
+    /** Throws SecurityException, which reaches KJB as such, unless [uid] [allows]. */
+    fun enforce(uid: Int) {
+        if (!allows(uid)) throw SecurityException("the caller is not KJB")
+    }
+}
+
+/** What one song's job tells its caller: IAiRunCallback, as Kotlin. */
+interface JobEvents {
+    fun onStage(stage: AiStage)
+
+    fun onNote(line: String)
+
+    /** The next Whisper chunk waits for [AddonJobs.proceed]. */
+    fun onChunk()
+
+    fun onResult(result: AiResult)
+
+    /** Stopped by [AddonJobs.cancel]: nothing to record. */
+    fun onStopped()
+}
+
+/** The AI for songs ([LyricsFromAudio] on [NpuStages]): its models stay loaded from the first song until [close]. */
+interface JobEngine : AutoCloseable {
+    suspend fun run(song: AiSong, plainLyrics: String?, onStage: (AiStage) -> Unit, beforeChunk: suspend () -> Unit): AiResult
+}
+
+/**
+ * The songs KJB sends, one at a time, on [context] in [scope]. The engine is opened ([openEngine], with where its notes
+ * go) for the first song and kept for the next ones until [closeEngine]: one night's run loads the models once. Before
+ * each Whisper chunk a job tells KJB and waits for [proceed] (KJB holds it while the phone is too warm). [cancel] stops a
+ * job after the step it is on; KJB going away stops everything ([stopAll]).
+ */
+class AddonJobs(
+    private val scope: CoroutineScope,
+    private val context: CoroutineContext,
+    private val openEngine: (notes: (String) -> Unit) -> JobEngine,
+) {
+    private val lock = Any()
+    private var engine: JobEngine? = null
+    private var running: Running? = null
+    private var nextId = 1L
+
+    /** Where the engine's notes go: the job running now. */
+    @Volatile
+    private var notesTo: JobEvents? = null
+
+    /** The job under way, and the chunk it waits at for [proceed]. */
+    private class Running(val id: Long) {
+        lateinit var job: Job
+        var waiting: CompletableDeferred<Unit>? = null
+    }
+
+    /**
+     * Starts [song]; [events] makes the job's events from its id, [release] lets go of the song once the job has ended.
+     * IllegalStateException while another job runs.
+     */
+    fun start(song: AiSong, plainLyrics: String?, events: (Long) -> JobEvents, release: (Long) -> Unit): Long = synchronized(lock) {
+        check(running == null) { "a job is already running" }
+        val run = Running(nextId++)
+        val heard = events(run.id)
+        run.job = scope.launch(context, start = CoroutineStart.LAZY) {
+            try {
+                val result = try {
+                    val engine = engine()
+                    notesTo = heard
+                    engine.run(song, plainLyrics, heard::onStage) { atChunk(run, heard) }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    // The engine did not open (its models are gone): a failed run, as one the engine itself reports.
+                    AiResult.Failed(e.javaClass.simpleName)
+                }
+                heard.onResult(result)
+            } catch (e: CancellationException) {
+                heard.onStopped()
+                throw e
+            } finally {
+                notesTo = null
+                synchronized(lock) { if (running === run) running = null }
+                release(run.id)
+            }
+        }
+        running = run
+        run.job.start()
+        run.id
+    }
+
+    /** Before a Whisper chunk: tells KJB and waits for its go-ahead (or for the job to be cancelled). */
+    private suspend fun atChunk(run: Running, heard: JobEvents) {
+        val gate = CompletableDeferred<Unit>()
+        synchronized(lock) { run.waiting = gate }
+        heard.onChunk()
+        gate.await()
+    }
+
+    private fun engine(): JobEngine = synchronized(lock) {
+        engine ?: openEngine { line -> notesTo?.onNote(line) }.also { engine = it }
+    }
+
+    fun proceed(job: Long) {
+        synchronized(lock) {
+            val run = running?.takeIf { it.id == job } ?: return
+            run.waiting?.complete(Unit)
+            run.waiting = null
+        }
+    }
+
+    fun cancel(job: Long) {
+        synchronized(lock) { running?.takeIf { it.id == job } }?.job?.cancel()
+    }
+
+    /** Stops a job under way, then closes the engine; the returned job ends once it is closed. */
+    fun closeEngine(): Job = scope.launch(context) {
+        synchronized(lock) { running }?.job?.cancelAndJoin()
+        synchronized(lock) {
+            // A job started meanwhile keeps the engine; it closes with the next call.
+            if (running == null) {
+                engine?.let { runCatching { it.close() } }
+                engine = null
+            }
+        }
+    }
+
+    /** KJB went away: what it started stops, and the models are let go. */
+    fun stopAll() {
+        closeEngine()
+    }
+}
+
+/**
+ * The add-on's one service, bound by KJB only ([CallerCheck] on every call, behind the signature permission): the AI
+ * ([AddonJobs]), the model download ([ModelDownloads]) and the handover of KJB 2.0's models. KJB binds it while the AI
+ * works, from its own foreground service, and while its AI page shows; the add-on has no foreground service of its own
+ * for the AI (a bound service runs at least at its client's priority). Nothing here touches ONNX Runtime until a song's
+ * engine opens, so the QNN EP registers its library path before any HTP library loads in this process ([QnnEp]).
+ */
+class AiService : Service() {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    private val callers by lazy {
+        CallerCheck(
+            BuildConfig.KJB_PACKAGE,
+            BuildConfig.KJB_CERT_SHA256,
+            packagesFor = packageManager::getPackagesForUid,
+            hasCert = { uid, sha -> packageManager.hasSigningCertificate(uid, sha, PackageManager.CERT_INPUT_SHA256) },
+        )
+    }
+
+    private val jobs by lazy { AddonJobs(scope, Dispatchers.Default, ::engine) }
+
+    /** KJB's status watchers ([IAiAddon.watchStatus]); the status is collected only while there is one. */
+    private val watchers = object : RemoteCallbackList<IAiStatusCallback>() {
+        override fun onCallbackDied(callback: IAiStatusCallback) = watchedLess()
+    }
+    private var watching: Job? = null
+
+    override fun onBind(intent: Intent): IBinder = binder
+
+    /** KJB let go of the add-on: what it started stops, and the models are released. */
+    override fun onUnbind(intent: Intent): Boolean {
+        jobs.stopAll()
+        return false
+    }
+
+    override fun onDestroy() {
+        jobs.stopAll()
+        watchers.kill()
+        scope.cancel()
+        super.onDestroy()
+    }
+
+    private val binder = object : IAiAddon.Stub() {
+        override fun apiVersion(): Int = checked { IAiAddon.VERSION }
+
+        override fun status(): String = checked { Wire.encode(runBlocking { statusOf(ModelDownloads.state(this@AiService).first()) }) }
+
+        override fun watchStatus(callback: IAiStatusCallback) = checked {
+            watchers.register(callback)
+            watch()
+        }
+
+        override fun unwatchStatus(callback: IAiStatusCallback) = checked {
+            watchers.unregister(callback)
+            watchedLess()
+        }
+
+        override fun startDownload(restart: Boolean) = checked {
+            if (restart) ModelDownloads.start(this@AiService) else ModelDownloads.startIfIdle(this@AiService)
+        }
+
+        override fun cancelDownload() = checked { ModelDownloads.cancel(this@AiService) }
+
+        override fun deleteModels(): Boolean = checked {
+            runBlocking {
+                jobs.closeEngine().join()
+                ModelDownloads.delete(this@AiService)
+            }
+        }
+
+        override fun discardModel(name: String): Boolean = checked {
+            runBlocking {
+                jobs.closeEngine().join()
+                ModelDownloads.discard(this@AiService, File(ModelDownloads.folder(this@AiService), name))
+            }
+        }
+
+        override fun run(song: ParcelFileDescriptor, durationMs: Long, plainLyrics: String?, callback: IAiRunCallback): Long = checked {
+            // The add-on's own descriptor of the song, from the call: closed once the job has ended.
+            try {
+                jobs.start(AiSong(song.fileDescriptor, durationMs), plainLyrics, { job -> RunCallback(job, callback) }) { job ->
+                    runCatching { song.close() }
+                    Log.d(LOG_TAG, "job $job ended")
+                }
+            } catch (e: IllegalStateException) {
+                song.close()
+                throw e
+            }
+        }
+
+        override fun proceed(job: Long) = checked { jobs.proceed(job) }
+
+        override fun cancel(job: Long) = checked { jobs.cancel(job) }
+
+        override fun closeEngine() = checked {
+            jobs.closeEngine()
+            Unit
+        }
+
+        override fun importModel(name: String, file: ParcelFileDescriptor, bytes: Long, sha256: String): String = checked {
+            file.close()
+            Wire.encode(ImportReply(ImportReply.Outcome.REFUSED, "not yet"))
+        }
+    }
+
+    /** [block] for KJB only: the calling uid is checked first ([CallerCheck]), on the binder thread that carries it. */
+    private inline fun <T> checked(block: () -> T): T {
+        callers.enforce(Binder.getCallingUid())
+        return block()
+    }
+
+    /** A job's events to KJB, by binder. KJB gone (its process died) stops the job. */
+    private inner class RunCallback(private val job: Long, private val callback: IAiRunCallback) : JobEvents {
+        override fun onStage(stage: AiStage) = send { callback.onStage(job, stage.name) }
+
+        override fun onNote(line: String) = send { callback.onNote(job, line) }
+
+        override fun onChunk() = send { callback.onChunk(job) }
+
+        override fun onResult(result: AiResult) = send { callback.onResult(job, Wire.encode(result)) }
+
+        override fun onStopped() = send { callback.onStopped(job) }
+
+        private inline fun send(call: () -> Unit) {
+            try {
+                call()
+            } catch (e: RemoteException) {
+                Log.w(LOG_TAG, "KJB is gone (${e.javaClass.simpleName}); stopping job $job")
+                jobs.cancel(job)
+            }
+        }
+    }
+
+    /** The engine on the NPU with this add-on's models; its notes go to KJB's run log. */
+    private fun engine(notes: (String) -> Unit): JobEngine {
+        val models = checkNotNull(ModelDownloads.store(this)?.models()) { "the models are not in place" }
+        val stages = NpuStages(models, applicationInfo.nativeLibraryDir, whisperAssets(), ENGINE_THREADS, log = notes)
+        val lyrics = LyricsFromAudio(
+            stages,
+            SystemClock::elapsedRealtime,
+            log = { Log.d(LOG_TAG, it) },
+            notes = notes,
+            verbose = Log.isLoggable(LOG_TAG, Log.VERBOSE),
+        )
+        return object : JobEngine {
+            override suspend fun run(song: AiSong, plainLyrics: String?, onStage: (AiStage) -> Unit, beforeChunk: suspend () -> Unit): AiResult =
+                lyrics.run(song, plainLyrics, onStage, beforeChunk)
+
+            override fun close() = stages.close()
+        }
+    }
+
+    /** The Whisper tokenizer's files from the add-on's assets. */
+    private fun whisperAssets(): WhisperAssets {
+        fun asset(name: String) = assets.open("whisper/$name").use { it.readBytes().toString(Charsets.UTF_8) }
+        return WhisperAssets(asset("vocab.json"), asset("added_tokens.json"), asset("generation_config.json"))
+    }
+
+    private fun statusOf(models: ModelState?): AddonStatus {
+        val store = ModelDownloads.store(this)
+        return AddonStatus(
+            supported = store != null,
+            models = models,
+            pins = store?.specs?.associate { it.name to it.sha256 }.orEmpty(),
+            runtime = "ONNX Runtime ${BuildConfig.ORT_VERSION}, QNN EP ${BuildConfig.QNN_EP_VERSION}, QNN ${BuildConfig.QNN_RUNTIME_VERSION}, " +
+                "KJB AI ${BuildConfig.VERSION_NAME}",
+        )
+    }
+
+    /** (Re)starts collecting the status for the watchers: each one hears it now, then at each change. */
+    @Synchronized
+    private fun watch() {
+        watching?.cancel()
+        watching = scope.launch {
+            ModelDownloads.state(this@AiService).collect { models -> broadcast(Wire.encode(statusOf(models))) }
+        }
+    }
+
+    /** A watcher left: with none left, the status is no longer collected. */
+    @Synchronized
+    private fun watchedLess() {
+        if (watchers.registeredCallbackCount == 0) {
+            watching?.cancel()
+            watching = null
+        }
+    }
+
+    private fun broadcast(status: String) = synchronized(watchers) {
+        val count = watchers.beginBroadcast()
+        try {
+            for (i in 0 until count) {
+                try {
+                    watchers.getBroadcastItem(i).onStatus(status)
+                } catch (_: RemoteException) {
+                    // A watcher that died: RemoteCallbackList drops it.
+                }
+            }
+        } finally {
+            watchers.finishBroadcast()
+        }
+    }
+}

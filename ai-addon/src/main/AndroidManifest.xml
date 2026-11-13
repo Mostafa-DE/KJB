@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- The one way in: AiService below, bound only by an app holding this permission. Signature level: Android grants it,
+         without asking, only to apps signed with this add-on's key, which is KJB's. KJB only uses it, so either can be
+         installed first. The name carries the add-on's own id, so a debug and a release add-on never declare the same
+         one. -->
+    <permission
+        android:name="${applicationId}.permission.BIND_AI"
+        android:protectionLevel="signature" />
+
+    <!-- The one-time model download (models/ModelDownloadWorker): a WorkManager worker in a foreground service of type
+         dataSync, at most 6 hours in 24 from Android 15, on unmetered networks only (WorkManager adds
+         ACCESS_NETWORK_STATE, WAKE_LOCK and RECEIVE_BOOT_COMPLETED). It talks to Qualcomm AI Hub, GitHub and Hugging
+         Face only (models/ModelStore.kt). The AI itself never goes online. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
+    <!-- KJB, for the download notification's tap, which opens KJB's AI page. -->
+    <queries>
+        <package android:name="${kjbPackage}" />
+    </queries>
+
+    <!-- No activity and no launcher icon: the add-on shows only in Settings > Apps. largeHeap: the engine streams a song's
+         44.1 kHz mix and vocals through the separation and keeps only the 16 kHz vocal stem, wav2vec2's emissions and the
+         aligner's back-pointers (at most 64 MB): about 92 MB of Java heap at its peak for a 6-minute song, 156 MB for a
+         20-minute one (ai/LyricsFromAudio.kt, AiMemory). A song that would not fit the heap this gives is not started. -->
+    <application
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:largeHeap="true"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        tools:ignore="DataExtractionRules">
+
+        <!-- The QNN HTP backend reaches the phone's NPU (the Hexagon DSP) through FastRPC, the vendor public library
+             libcdsprpc.so. Apps targeting Android 12+ get only the vendor public libraries they declare; without it the
+             HTP device fails (QNN_DEVICE_ERROR_INVALID_CONFIG, the spike's phone run of 2026-11-13). Not required: a
+             phone without it has no AI. -->
+        <uses-native-library
+            android:name="libcdsprpc.so"
+            android:required="false" />
+
+        <!-- onnxruntime-android's ContentProvider that starts its 1DS telemetry client: removed, and telemetry is also
+             switched off in code (ai/Npu.kt). -->
+        <provider
+            android:name="ai.onnxruntime.TelemetryInitializer"
+            android:authorities="${applicationId}.onnxruntime_telemetry_initializer"
+            tools:node="remove" />
+
+        <!-- KJB binds it by its explicit name while the AI works or its page shows. Exported for KJB only: the signature
+             permission above, and every call checks the caller's uid and certificate (ai/AiService.kt). -->
+        <service
+            android:name=".AiService"
+            android:exported="true"
+            android:permission="${applicationId}.permission.BIND_AI" />
+
+        <!-- WorkManager's foreground service, dataSync for the model download. -->
+        <service
+            android:name="androidx.work.impl.foreground.SystemForegroundService"
+            android:foregroundServiceType="dataSync"
+            tools:node="merge" />
+    </application>
+</manifest>

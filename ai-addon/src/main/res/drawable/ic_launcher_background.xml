@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The Note arm K's ground (blade-k-note-background.svg): true black, its edge lifting toward the mask so the tile
+     keeps a faint rim on a black home screen. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path android:pathData="M0,0L108,0L108,108L0,108Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:centerX="54"
+                android:centerY="54"
+                android:gradientRadius="52"
+                android:type="radial">
+                <item
+                    android:color="#FF0A0A0B"
+                    android:offset="0" />
+                <item
+                    android:color="#FF0A0A0B"
+                    android:offset="0.58" />
+                <item
+                    android:color="#FF161618"
+                    android:offset="0.74" />
+                <item
+                    android:color="#FF232326"
+                    android:offset="1" />
+            </gradient>
+        </aapt:attr>
+    </path>
+</vector>

@@ -31,7 +31,7 @@ import app.lyrify.data.LedgerState
 import app.lyrify.data.LedgerStore
 import app.lyrify.logFailures
 import app.lyrify.media.NowPlaying
-import app.lyrify.models.ModelDownloads
+import app.lyrify.addon.Addon
 import app.lyrify.models.NpuChips
 import app.lyrify.overnight.AiLyrics
 import app.lyrify.overnight.AiQueue
@@ -133,7 +133,8 @@ private fun App(ledger: LedgerStore, destination: Page?, view: FullScreen?, onVi
     val track by NowPlaying.track.collectAsStateWithLifecycle()
     val sweep by NowPlaying.sweep.collectAsStateWithLifecycle()
     val connected by NowPlaying.connected.collectAsStateWithLifecycle()
-    val models by remember(context) { ModelDownloads.state(context) }.collectAsStateWithLifecycle(initialValue = null)
+    // The AI add-on and its models, bound while KJB shows (on a phone the AI runs on only).
+    val addon by remember(context) { if (NpuChips.supported() != null) Addon.views(context) else flowOf(null) }.collectAsStateWithLifecycle(initialValue = null)
     val aiEnabled by remember(context) { AiLyrics.enabled(context) }.collectAsStateWithLifecycle()
     val deletingModels by Lyrify.deletingModels.collectAsStateWithLifecycle()
     val aiProgress by AiLyrics.progress.collectAsStateWithLifecycle()
@@ -159,8 +160,9 @@ private fun App(ledger: LedgerStore, destination: Page?, view: FullScreen?, onVi
         connected = connected,
         ai = AiState(
             chip = remember { NpuChips.device() },
-            newEnough = Build.VERSION.SDK_INT >= ModelDownloads.MIN_SDK,
-            models = models,
+            newEnough = Build.VERSION.SDK_INT >= NpuChips.MIN_SDK,
+            models = addon?.status?.models,
+            addon = addon?.state,
             enabled = aiEnabled,
             progress = aiProgress,
             hold = aiHold,
@@ -171,7 +173,7 @@ private fun App(ledger: LedgerStore, destination: Page?, view: FullScreen?, onVi
         aiActions = remember(context) {
             AiActions(
                 onSwitch = { on -> if (on) AiLyrics.turnOn(context) else AiLyrics.turnOff(context) },
-                onDownload = { ModelDownloads.start(context) },
+                onDownload = { AiLyrics.download(context) },
                 onDelete = { Lyrify.deleteModels(context) },
                 onOpenAppInfo = { context.startFirst(appInfoIntents(context)) },
                 readLog = { withContext(Dispatchers.IO) { AiLyrics.runLog(context).tail(RUN_LOG_LINES).joinToString("\n") } },

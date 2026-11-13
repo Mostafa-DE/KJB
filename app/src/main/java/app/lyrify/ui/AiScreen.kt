@@ -60,6 +60,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.lyrify.R
+import app.lyrify.addon.AddonState
 import app.lyrify.data.LyricsStatus
 import app.lyrify.models.ModelState
 import app.lyrify.models.NpuChip
@@ -84,6 +85,8 @@ data class AiState(
     val unrestricted: Boolean,
     /** "Delete download" waits for the AI to stop: the button says "Stopping…", and it and the switch wait. */
     val stopping: Boolean,
+    /** The AI add-on, which runs the AI ([AddonState]); null until it was looked at. */
+    val addon: AddonState? = AddonState.Ready,
 ) {
     /** The AI runs on this phone: its chip and its software. */
     val supported: Boolean get() = chip != null && newEnough
