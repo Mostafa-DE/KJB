@@ -544,7 +544,8 @@ class BackupNewPhoneTest {
         assertEquals("Music/Rips/01 Song.mp3", SongMatcher.relativeToRoot("/storage/7F3A-11C2/Music/Rips/01 Song.mp3"))
         assertEquals("Song.mp3", SongMatcher.relativeToRoot("/storage/emulated/10/Song.mp3"))
         assertNull(SongMatcher.relativeToRoot("/storage/emulated/x/Song.mp3"))
-        assertNull(SongMatcher.relativeToRoot("/sdcard/Music/Song.mp3"))
+        // Import from app (lane IM1) taught it the storage root's other names.
+        assertEquals("Music/Song.mp3", SongMatcher.relativeToRoot("/sdcard/Music/Song.mp3"))
         assertNull(SongMatcher.relativeToRoot("Music/Song.mp3"))
     }
 

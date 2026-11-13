@@ -23,11 +23,17 @@ import kotlin.math.abs
  * by its tags. Never a guess: a pass that finds several songs, or a song of the phone that two songs of the backup would
  * take, matches none of them, and those songs of the phone are out of the later passes too. A song found neither way is
  * listed as not found.
+ *
+ * An import from another app ([find]) knows less of each song and may name one song twice, so it is matched song by
+ * song, see [find].
  */
 class SongMatcher(phone: List<Song>) {
     private val byPath: Map<String, Song> = phone.associateBy { nfc(it.path) }
     private val byRelative: Map<String, List<Song>> = phone.groupBy { relativeKey(it.folder + it.fileName) }
     private val byTitle: Map<String, List<Song>> = phone.groupBy { TrackNames.normalize(it.title) }
+
+    /** "folder/file", case aside: m3u's rule 2, for imports only. */
+    private val byNameInFolder: Map<String, List<Song>> by lazy { phone.mapNotNull { song -> nameInFolder(song.path)?.let { it to song } }.groupBy({ it.first }, { it.second }) }
 
     /**
      * Each of [paths] (as the backup names its songs) with the song it is on this phone; a path not found is left out.
@@ -51,6 +57,74 @@ class SongMatcher(phone: List<Song>) {
         pass { path, song -> byRelative[relativeKey(song.relativePath ?: relativeToRoot(path) ?: return@pass emptyList())].orEmpty().filter { samePlace(song, it) } }
         pass { _, song -> byTags(song, out) }
         return found
+    }
+
+    /**
+     * The one song of the phone an import's [song] names (an m3u, pls or xspf line, a phone playlist's song), in four
+     * passes; a pass that finds several songs gives way to the next, so it is never a guess. Unlike a backup's, two
+     * songs of an import may be the same song of the phone (two files, two forms of one path), and both find it.
+     *
+     * 1. The same absolute path: taken as it is when the file says nothing of the song but its length (an m3u, as m3u
+     *    import always did), else only when it agrees ([fits]).
+     * 2. The same path below the storage root ([relativeToRoot]); for a root this phone does not know (a computer's, a
+     *    Windows drive's), the longest end of the path, two names at least, that is a song's path below its root.
+     * 3. The same file name in a folder of the same name, anywhere (m3u's rule 2).
+     * 4. The same title, artist and album as far as the file knows them, and a length within [LENGTH_TOLERANCE_MS];
+     *    the length is needed. An "Artist - Title" text is read two ways, as m3u import reads it ([M3u.findByName]).
+     *    Of several, the one of the file's size when only one has it.
+     *
+     * Passes 2 to 4 take a song only when it [fits]. Missing clues are skipped, never a mismatch.
+     */
+    fun find(song: ImportSong): Song? {
+        val path = song.path?.let(::nfc)
+        if (path != null) {
+            byPath[path]?.takeIf { identityKnown(song).not() || fits(song, it) }?.let { return it }
+            below(path).filter { fits(song, it) }.singleOrNull()?.let { return it }
+            nameInFolder(path)?.let { byNameInFolder[it] }.orEmpty().filter { fits(song, it) }.singleOrNull()?.let { return it }
+        }
+        return readings(song).mapNotNull { (artist, title) -> byTags(song, title, artist) }.distinct().singleOrNull()
+    }
+
+    /** Pass 2: the songs at [path] below the storage root, or at the longest end of a path whose root is unknown. */
+    private fun below(path: String): List<Song> {
+        val relative = if (path.startsWith('/')) relativeToRoot(path) else null
+        if (relative != null) return byRelative[relativeKey(relative)].orEmpty()
+        val names = path.split('/').filter(String::isNotEmpty)
+        return (names.size downTo 2).asSequence().map { byRelative[relativeKey(names.takeLast(it).joinToString("/"))].orEmpty() }.firstOrNull { it.isNotEmpty() }.orEmpty()
+    }
+
+    /** The (artist, title) pairs [song] may mean: its own, else its "Artist - Title" text read two ways. */
+    private fun readings(song: ImportSong): List<Pair<String?, String>> {
+        song.title?.let { return listOf(song.artist to it) }
+        val info = song.info ?: return emptyList()
+        val dash = info.indexOf(DASH)
+        val split = if (dash < 0) null else info.substring(0, dash).trim() to info.substring(dash + DASH.length).trim()
+        return listOfNotNull(split, null to info)
+    }
+
+    /** Pass 4 for one reading: the one song with its title, its artist and album when known, and its length; the size settles a tie. */
+    private fun byTags(song: ImportSong, title: String, artist: String?): Song? {
+        val length = song.durationMs ?: return null
+        val key = TrackNames.normalize(title).takeIf(String::isNotEmpty) ?: return null
+        val fits = byTitle[key].orEmpty().filter { phone ->
+            abs(length - phone.durationMs) <= LENGTH_TOLERANCE_MS && (artist == null || same(artist, phone.artist)) && (song.album == null || same(song.album, phone.album))
+        }
+        if (fits.size < 2) return fits.singleOrNull()
+        val size = song.sizeBytes?.takeIf { it > 0 } ?: return null
+        return fits.singleOrNull { it.sizeBytes == size }
+    }
+
+    /** Whether the file says who or what [song] is (its title, artist or size), not only its length. */
+    private fun identityKnown(song: ImportSong): Boolean = song.title != null || song.artist != null || song.sizeBytes != null
+
+    /**
+     * Whether [phone] can be [song], as far as the file knows it: the same length within [LENGTH_TOLERANCE_MS], and the
+     * same title, or artist, or size in bytes ([samePlace]'s rule for a backup).
+     */
+    private fun fits(song: ImportSong, phone: Song): Boolean {
+        if (song.durationMs != null && abs(song.durationMs - phone.durationMs) > LENGTH_TOLERANCE_MS) return false
+        if (!identityKnown(song)) return true
+        return (song.title != null && same(song.title, phone.title)) || (song.artist != null && same(song.artist, phone.artist)) || (song.sizeBytes != null && song.sizeBytes == phone.sizeBytes)
     }
 
     /** The songs with [song]'s title, artist, album and length; of several, the one of its size when only one has it. */
@@ -77,19 +151,39 @@ class SongMatcher(phone: List<Song>) {
         const val LENGTH_TOLERANCE_MS: Long = 2_000
 
         /**
-         * [path] below its storage root, as MediaStore's RELATIVE_PATH and the file name make it: `/storage/emulated/0/` or
-         * `/storage/<volume>/` taken off ("Music/Rips/01 Song.mp3"); null for any other form of path.
+         * [path] below its storage root, as MediaStore's RELATIVE_PATH and the file name make it: `/storage/emulated/0/`
+         * (any user), `/storage/<volume>/` (an SD card, whatever its id), or the other names the phone's own storage goes
+         * by (`/sdcard/`, `/mnt/sdcard/`, `/storage/self/primary/`, `/storage/emulated/legacy/`) taken off ("Music/Rips/01
+         * Song.mp3"); null for any other form of path.
          */
         fun relativeToRoot(path: String): String? {
             val names = path.split('/')
-            if (names.size < 5 || names[0].isNotEmpty() || names[1] != "storage") return null
-            val skip = when (names[2]) {
-                "emulated" -> if (names[3].isNotEmpty() && names[3].all(Char::isDigit)) 4 else return null
-                "", "self" -> return null
-                else -> 3
+            if (names.size < 3 || names[0].isNotEmpty()) return null
+            val skip = when (names[1]) {
+                "storage" -> when (names.getOrNull(2)) {
+                    "emulated" -> if (names.getOrNull(3)?.let { it == LEGACY || (it.isNotEmpty() && it.all(Char::isDigit)) } == true) 4 else return null
+                    "self" -> if (names.getOrNull(3) == PRIMARY) 4 else return null
+                    "", null -> return null
+                    else -> 3
+                }
+                // The names older Android and other apps give the phone's own storage.
+                SDCARD -> 2
+                "mnt" -> if (names[2] == SDCARD) 3 else return null
+                else -> return null
             }
-            return names.drop(skip).joinToString("/").takeIf(String::isNotEmpty)
+            return names.drop(skip).joinToString("/").takeIf { names.size > skip && it.isNotEmpty() }
         }
+
+        /** "folder/file" in lower case, NFC, from a path with `/` separators; null without a folder. */
+        private fun nameInFolder(path: String): String? {
+            val names = path.split('/').filter(String::isNotEmpty)
+            return if (names.size < 2) null else relativeKey("${names[names.size - 2]}/${names.last()}")
+        }
+
+        private const val DASH: String = " - "
+        private const val SDCARD: String = "sdcard"
+        private const val LEGACY: String = "legacy"
+        private const val PRIMARY: String = "primary"
 
         /** A path below the root as compared: in one Unicode form (NFC), case aside. */
         private fun relativeKey(path: String): String = nfc(path).trim('/').lowercase(Locale.ROOT)
