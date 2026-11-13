@@ -105,6 +105,20 @@ class BackupRestoreTest {
     }
 
     @Test
+    fun `a restore keeps the phone's own tour and notifications state, so a new phone sees the tour once`() {
+        val seen = BackupFixtures.settings.copy(nav = NavSettings(setupDone = true, tourSeen = true, notificationsDenied = true))
+        val backup = BackupFixtures.contents(BackupFixtures.zip(BackupFixtures.snapshot.copy(settings = seen)))
+        val fresh = MemoryStores(settings = Settings())
+        val toured = MemoryStores(settings = Settings(nav = NavSettings(tourSeen = true, notificationsDenied = true)))
+
+        runBlocking { plan(contents = backup).apply(setOf(Section.SETTINGS), fresh, newId) }
+        restore(toured, chosen = setOf(Section.SETTINGS))
+
+        assertEquals(NavSettings(), fresh.settings.nav)
+        assertEquals(NavSettings(setupDone = false, tourSeen = true, notificationsDenied = true), toured.settings.nav)
+    }
+
+    @Test
     fun `playlists, queues, plays, bookmarks and lyrics choices are added to what is there`() {
         val other = song("Music/Salt Road/01 Salt Road.mp3", title = "Salt Road", artist = "Mira Solen", durationMs = 199_000, id = 14)
         val library = BackupFixtures.library + other
