@@ -43,6 +43,9 @@ class FakeTagFile(private val events: MutableList<String> = Collections.synchron
 
     /** The ID3v2 version of the last write. */
     var lastVersion: Id3Version? = null
+
+    /** Real milliseconds each write takes, so two writes at once overlap and show in [mostAtOnce]. 0 for every other test. */
+    var holdMs = 0L
     var running = 0
     var mostAtOnce = 0
 
@@ -73,7 +76,7 @@ class FakeTagFile(private val events: MutableList<String> = Collections.synchron
     override fun write(file: File, fields: Map<String, List<String>>, pictures: List<TagPicture>?, id3: Id3Version): Boolean {
         synchronized(this) { running++; mostAtOnce = maxOf(mostAtOnce, running) }
         try {
-            Thread.sleep(5)
+            if (holdMs > 0) Thread.sleep(holdMs)
             events += "tags write"
             given += file
             lastVersion = id3
