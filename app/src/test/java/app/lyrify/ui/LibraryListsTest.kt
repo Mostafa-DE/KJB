@@ -226,4 +226,12 @@ class LibraryListsTest {
         assertEquals("Paper Lantern, Tin Roof, Synced lyrics, Playing", songRowWords("Paper Lantern", "Tin Roof", "Synced lyrics", note = null, line = null, playing = "Playing"))
         assertEquals("Paper Lantern, Tin Roof", songRowWords("Paper Lantern", "Tin Roof", null, note = null, line = null, playing = null))
     }
+
+    @Test
+    fun `album cards carry a tag a device test finds them by, never their album's name`() {
+        // UiAutomator sees a Compose test tag only as a resource id, and only where the tree asks for that.
+        val card = File("src/main/java/app/lyrify/ui/LibraryParts.kt").readText().substringAfter("fun AlbumCard(").substringBefore("\n}\n")
+        assertTrue(card.contains(".testTag(ALBUM_CARD_TAG)"))
+        assertTrue(card.contains("testTagsAsResourceId = true"))
+    }
 }

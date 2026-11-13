@@ -16,7 +16,6 @@ import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
-import java.util.regex.Pattern
 import kotlin.math.roundToInt
 
 /**
@@ -93,10 +92,9 @@ class BackSwipeDeviceTest {
     }
 
     /**
-     * The first album card of the grid, top left, found by what it says it is rather than where this phone draws it: a
-     * button read as its album (a description, no text of its own), wholly on screen under the tabs ending at [under],
-     * and taller than wide (its cover with its lines under it), which no icon button or bar is. Retried while the pages
-     * glide to Albums.
+     * The first album card of the grid, top left, by its test tag ([ALBUM_CARD_TAG], a resource id to UiAutomator),
+     * never by an album's name nor by where this phone draws it: wholly on screen across, its top under the tabs ending
+     * at [under]. Retried while the pages glide to Albums.
      */
     private fun firstAlbumCard(under: Int): UiObject2? {
         if (!device.wait(Until.hasObject(CARD), WAIT_MS)) return null
@@ -104,8 +102,8 @@ class BackSwipeDeviceTest {
             device.waitForIdle()
             // Each read once: a card moving with the pages can be gone by the next read.
             val card = device.findObjects(CARD)
-                .mapNotNull { button -> runCatching { button.takeIf { it.text.isNullOrEmpty() }?.let { it to it.visibleBounds } }.getOrNull() }
-                .filter { (_, b) -> b.top >= under && b.left >= 0 && b.right <= device.displayWidth && b.height() > b.width() }
+                .mapNotNull { found -> runCatching { found to found.visibleBounds }.getOrNull() }
+                .filter { (_, b) -> !b.isEmpty && b.top >= under && b.left >= 0 && b.right <= device.displayWidth }
                 .minWithOrNull(compareBy({ it.second.top }, { it.second.left }))
             if (card != null) return card.first
         }
@@ -143,8 +141,7 @@ class BackSwipeDeviceTest {
         /** Android's own value for gesture navigation (3-button is 0, 2-button 1). */
         const val GESTURAL_NAVIGATION = 2
 
-        /** A button with a description: every album card is one. */
-        val CARD: BySelector = By.clazz("android.widget.Button").clickable(true).desc(Pattern.compile(".+", Pattern.DOTALL))
+        val CARD: BySelector = By.res(ALBUM_CARD_TAG)
         const val CARD_TRIES = 10
     }
 }
