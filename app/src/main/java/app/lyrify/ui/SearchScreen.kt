@@ -21,7 +21,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
@@ -489,13 +488,14 @@ fun focusDue(opens: Int, handled: Int): Boolean = opens != handled
 /** Half a second of frames at 120 Hz. */
 private const val FOCUS_TRIES = 60
 
-/** The field in its band: Clear while there is text; the keyboard's search key calls [onSearch]. */
+/** The header, then the field in the same band: Clear while there is text; the keyboard's search key calls [onSearch]. */
 @Composable
 private fun SearchBar(query: String, onQuery: (String) -> Unit, focus: FocusRequester, onSearch: () -> Unit, under: Boolean, backdrop: GlassBackdrop) {
-    TopBand(under, backdrop) {
+    // The main pages' header, "KJB Music · Search", with the field under it in the same band.
+    MainTopBar(DockTab.SEARCH, under, backdrop) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.statusBarsPadding().heightIn(min = 68.dp).padding(horizontal = ScreenPadding, vertical = 8.dp),
+            modifier = Modifier.heightIn(min = 68.dp).padding(horizontal = ScreenPadding, vertical = 8.dp),
         ) {
             LyrifySearchField(
                 value = query,

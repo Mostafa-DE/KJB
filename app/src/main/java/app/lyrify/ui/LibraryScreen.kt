@@ -107,12 +107,7 @@ fun LibraryPage() {
     val labels = tabs.map { stringResource(it.label) }
     val topBar: @Composable (Boolean, GlassBackdrop) -> Unit = { under, backdrop ->
         Column {
-            LyrifyTopBar(
-                title = { Text(stringResource(R.string.nav_library), maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                under = under,
-                backdrop = backdrop,
-                actions = { if (tabs.getOrNull(pager.pager.currentPage) == LibraryTab.PLAYLISTS) PlaylistsMenu(sheets, m3u) },
-            )
+            MainTopBar(DockTab.LIBRARY, under, backdrop, actions = { if (tabs.getOrNull(pager.pager.currentPage) == LibraryTab.PLAYLISTS) PlaylistsMenu(sheets, m3u) })
             TopBand(under, backdrop) { PagerTabs(pager, labels) }
         }
     }
@@ -153,12 +148,7 @@ fun PlaylistsPage() {
     val library = ui.library
     PageFrame(
         topBar = { under, backdrop ->
-            LyrifyTopBar(
-                title = { Text(stringResource(R.string.nav_playlists), maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                under = under,
-                backdrop = backdrop,
-                actions = { PlaylistsMenu(sheets, m3u) },
-            )
+            MainTopBar(DockTab.PLAYLISTS, under, backdrop, actions = { PlaylistsMenu(sheets, m3u) })
         },
     ) { padding ->
         FadeThrough(library, Modifier.fillMaxSize(), kind = { it == null }) { shown ->
