@@ -19,22 +19,34 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.gestures.awaitVerticalTouchSlopOrCancellation
+import androidx.compose.foundation.gestures.verticalDrag
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.exclude
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.systemGestures
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -64,6 +76,7 @@ import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -80,6 +93,7 @@ import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -110,13 +124,15 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlin.math.abs
+import kotlin.math.max
 import kotlin.math.roundToInt
 import kotlin.math.roundToLong
 
 // Lyrics on the lock screen (P3): big synced lyrics and the controls over the lock screen (showWhenLocked), opened by a
 // tap on the music notification (the session activity) and, with "Show when locked", when the screen turns on while
 // KJB plays ([LockLyricsPart]). The switch's permission is asked in Settings ([rememberLockSwitch]). A tap on a line or a
-// drag of the progress bar seeks (user feedback 2026-11-13, point 4).
+// drag of the progress bar seeks (user feedback 2026-11-13, point 4); the lyrics scroll by finger, and a swipe on the
+// bands above and below them closes ([LockPage]).
 
 /** How the lock screen lyrics were asked for. */
 enum class LockOrigin { NOTIFICATION, SCREEN_ON }
@@ -228,11 +244,14 @@ class LockLyricsActivity : ComponentActivity() {
 /** Light text on the cover's dark blur, whatever the phone's theme: it sits over the lock screen. */
 internal val LockInk = Color(0xFF0A0A0B)
 internal val LockText = Color(0xFFF7F5FF)
-private val LockMuted = LockText.copy(alpha = 0.55f)
+internal val LockMuted = LockText.copy(alpha = 0.55f)
 
-/** The cover under the lock screen, blurred at this opacity, and the ink over it at [LOCK_SCRIM_ALPHA]. */
+/**
+ * The cover under the lock screen, blurred at this opacity, and the ink over it at [LOCK_SCRIM_ALPHA]: dark enough that
+ * the muted words and the lines read 4.5:1 over a white cover (ContrastTest).
+ */
 internal const val LOCK_COVER_ALPHA = 0.7f
-internal const val LOCK_SCRIM_ALPHA = 0.55f
+internal const val LOCK_SCRIM_ALPHA = 0.75f
 
 /**
  * The progress bar's empty track, on a band of [LockInk] so it reads 3:1 over any cover with the coral played part 3:1
@@ -262,66 +281,131 @@ private fun LockLyricsScreen(ledger: LedgerState, onClose: () -> Unit) {
         screen.keepScreenOn = playing
         onDispose { screen.keepScreenOn = false }
     }
-    val swipe = with(LocalDensity.current) { SWIPE_CLOSE.toPx() }
     val title = stringResource(R.string.lock_title)
-    Box(
-        Modifier
-            .fillMaxSize()
-            .background(LockInk)
-            .semantics { paneTitle = title }
-            .pointerInput(onClose) {
-                var dragged = 0f
-                detectVerticalDragGestures(onDragStart = { dragged = 0f }, onDragEnd = { if (abs(dragged) > swipe) onClose() }) { _, drag -> dragged += drag }
-            },
-    ) {
+    Box(Modifier.fillMaxSize().background(LockInk).semantics { paneTitle = title }) {
         if (ui == null) return@Box
         val path = ui.item.song.path
         AsyncImage(model = SongArt(path), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize().blur(52.dp).alpha(LOCK_COVER_ALPHA))
         Box(Modifier.fillMaxSize().background(LockInk.copy(alpha = LOCK_SCRIM_ALPHA)))
-        Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().padding(horizontal = 16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp)) {
+        LockPage(
+            onClose = onClose,
+            top = {
                 ChromeIconButton(R.drawable.ic_keyboard_arrow_down, stringResource(R.string.lock_close), onClose, glass = false, size = 48.dp, iconSize = 28.dp, tint = LockText)
                 SongCover(SongArt(path), size = 44.dp, shape = RoundedCornerShape(10.dp))
                 Column(Modifier.weight(1f)) {
                     Text(ui.song?.title ?: path.substringAfterLast('/'), style = MaterialTheme.typography.titleSmall, color = LockText, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     ui.song?.artist?.takeIf(String::isNotBlank)?.let { Text(it, style = body(13f, 18), color = LockMuted, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                 }
-            }
-            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
+            },
+            lyrics = {
                 LockLines(rememberSongLyrics(path, ledger.entries[path]), ui.positionAt(rememberClock(playing))) { line ->
                     val tap = lineTap(line, playing)
                     connection.seekTo(tap.seekMs)
                     if (tap.play) connection.play()
                 }
+            },
+            bottom = {
+                LockControls(ui.durationMs, playing, ui::positionAt, connection::seekTo, connection::previous, connection::playPause, connection::next)
+                Text(stringResource(R.string.lock_hint), style = MaterialTheme.typography.labelMedium, color = LockMuted, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp))
+            },
+        )
+    }
+}
+
+/**
+ * The page of the lock screen lyrics, over the cover: the [top] band (Back to the lock screen, the song), the [lyrics]
+ * between, which scroll by finger as the player's do, and the [bottom] band (the progress bar, the controls, the hint).
+ * A swipe up or down of [SWIPE_CLOSE] on either band closes ([onClose]), as do the chevron, Back and unlocking; over the
+ * lyrics it scrolls them. The page keeps clear of the system bars and the cutout, and at the top and the bottom of the
+ * system's gesture edges too, whatever the navigation mode, so a swipe there stays the system's; the controls band
+ * keeps clear of the side edges as well (Back on gesture navigation), so a back swipe never drags the bar. On a short
+ * window (a small phone, split screen, a large font) the header gives up its room first, the lyrics keep at least one
+ * line clear of their fades ([lockLyricsMinPx]), and the page scrolls.
+ */
+@Composable
+internal fun LockPage(onClose: () -> Unit, top: @Composable RowScope.() -> Unit, lyrics: @Composable BoxScope.() -> Unit, bottom: @Composable ColumnScope.() -> Unit) {
+    val insets = WindowInsets.safeDrawing.union(WindowInsets.systemGestures.only(WindowInsetsSides.Vertical))
+    // Beyond the page's own margin: none with 3 buttons, the back gesture's edge on gesture navigation.
+    val barSides = WindowInsets.systemGestures.only(WindowInsetsSides.Horizontal).exclude(WindowInsets(left = PAGE_MARGIN, right = PAGE_MARGIN))
+    val leastLyrics = lockLyricsMinPx(rememberLockLinePx(), with(LocalDensity.current) { LYRICS_FADE.roundToPx() })
+    BoxWithConstraints(Modifier.fillMaxSize().windowInsetsPadding(insets)) {
+        val height = constraints.maxHeight
+        Layout(
+            contents = listOf(
+                {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        modifier = Modifier.fillMaxWidth().swipeToClose(onClose),
+                        content = top,
+                    )
+                },
+                { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.CenterStart, content = lyrics) },
+                { Column(Modifier.fillMaxWidth().windowInsetsPadding(barSides).swipeToClose(onClose), content = bottom) },
+            ),
+            modifier = Modifier.verticalScroll(rememberScrollState()).padding(horizontal = PAGE_MARGIN),
+        ) { (header, words, controls), constraints ->
+            val width = constraints.maxWidth
+            val band = controls.single().measure(Constraints.fixedWidth(width))
+            val least = lockHeaderMin(height, HEADER_ROOM.roundToPx(), band.height, leastLyrics)
+            val head = header.single().measure(Constraints(minWidth = width, maxWidth = width, minHeight = least))
+            val lyricsHeight = lockLyricsPx(height, head.height, band.height, leastLyrics)
+            val lines = words.single().measure(Constraints.fixed(width, lyricsHeight))
+            layout(width, head.height + lyricsHeight + band.height) {
+                head.place(0, 0)
+                lines.place(0, head.height)
+                band.place(0, head.height + lyricsHeight)
             }
-            LockControls(ui.durationMs, playing, ui::positionAt, connection::seekTo, connection::previous, connection::playPause, connection::next)
-            Text(stringResource(R.string.lock_hint), style = MaterialTheme.typography.labelMedium, color = LockMuted, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp))
         }
     }
 }
 
 /**
- * The synced lines following the song as on the player (one size for every line, the line playing lit by its colour,
- * a smooth scroll to the anchor), a tap on one going there as on the player ([onLine], [lineTap]); plain lyrics still;
- * or "No lyrics yet". The lines never scroll by hand, so a swipe up or down over them closes the screen.
+ * A swipe up or down here closes the lock screen lyrics as it lifts, once it went [SWIPE_CLOSE] from where the finger
+ * touched ([swipeCloses]); a sideways drag (the progress bar's) is not one.
+ */
+private fun Modifier.swipeToClose(onClose: () -> Unit): Modifier = pointerInput(onClose) {
+    awaitEachGesture {
+        val down = awaitFirstDown(requireUnconsumed = false)
+        val start = awaitVerticalTouchSlopOrCancellation(down.id) { change, _ -> change.consume() } ?: return@awaitEachGesture
+        var last = start.position
+        val lifted = verticalDrag(start.id) { change ->
+            last = change.position
+            change.consume()
+        }
+        if (lifted && swipeCloses(last.y - down.position.y, SWIPE_CLOSE.toPx())) onClose()
+    }
+}
+
+/** The height of one line of the lock screen's lyrics in the "Aa" size, with its own room above and below, px. */
+@Composable
+private fun rememberLockLinePx(): Int {
+    val style = rememberLyricsLook().style(LockLine, playing = false)
+    return with(LocalDensity.current) { (style.lineHeight.toPx() + 2 * LINE_PADDING_V.toPx()).roundToInt() }
+}
+
+/**
+ * The lyrics as on the player: synced lines following the song (one size for every line, the line playing lit by its
+ * colour, a smooth scroll to the anchor), which scroll by finger, the follow waiting while a finger is on them and a
+ * while after, and a tap on one going there ([onLine], [lineTap]), a scroll never; plain lyrics still, scrolling whole;
+ * or "No lyrics yet".
  */
 @Composable
-private fun LockLines(lyrics: PanelLyrics?, positionMs: Long, onLine: (LrcLine) -> Unit) {
+internal fun LockLines(lyrics: PanelLyrics?, positionMs: Long, onLine: (LrcLine) -> Unit) {
     val look = rememberLyricsLook()
-    val type = MaterialTheme.typography
-    if (lyrics is PanelLyrics.Synced) {
-        val tones = LineTones(now = DarkBrandColors.highlight, past = LockMuted, next = LockText.copy(alpha = NEXT_INK))
-        SyncedLyrics(lyrics.lines, positionMs, enabled = true, LockLine, LockFrame, tones, scrolls = false, onLine = onLine)
-        return
-    }
-    Column(verticalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.fillMaxWidth()) {
-        when (lyrics) {
-            is PanelLyrics.Plain -> lyrics.lines.take(PLAIN_LINES).forEach {
+    when (lyrics) {
+        is PanelLyrics.Synced -> BoxWithConstraints(Modifier.fillMaxSize()) {
+            val frame = lockFrame(constraints.maxHeight, rememberLockLinePx(), with(LocalDensity.current) { LYRICS_FADE.roundToPx() })
+            SyncedLyrics(lyrics.lines, positionMs, enabled = true, LockLine, frame, LockTones, onLine)
+        }
+        is PanelLyrics.Plain -> Column(verticalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
+            lyrics.lines.forEach {
                 Text(it, style = look.style(LockStill, playing = false, still = true), textAlign = look.align, color = LockText, modifier = Modifier.fillMaxWidth())
             }
-            PanelLyrics.Finding, PanelLyrics.None -> Text(stringResource(R.string.player_no_lyrics), style = type.titleLarge, color = LockMuted, textAlign = look.align, modifier = Modifier.fillMaxWidth())
-            is PanelLyrics.Synced, null -> Unit
         }
+        PanelLyrics.Finding, PanelLyrics.None ->
+            Text(stringResource(R.string.player_no_lyrics), style = MaterialTheme.typography.titleLarge, color = LockMuted, textAlign = look.align, modifier = Modifier.fillMaxWidth())
+        null -> Unit
     }
 }
 
@@ -482,8 +566,46 @@ fun lockSeekStarts(dx: Float, dy: Float, slop: Float): Boolean = abs(dx) > slop 
 fun lockBarTickMs(durationMs: Long, widthPx: Int): Long =
     if (durationMs > 0 && widthPx > 0) (durationMs / widthPx).coerceIn(FRAME_MS, TIME_TICK_MS) else TIME_TICK_MS
 
-private const val PLAIN_LINES = 7
 private val SWIPE_CLOSE = 80.dp
+
+/** The lock screen's lines: the one playing in the coral, those sung muted, those to come dimmer than the text. */
+internal val LockTones = LineTones(now = DarkBrandColors.highlight, past = LockMuted, next = LockText.copy(alpha = NEXT_INK))
+
+/** The page's side margin, and the header's room while the window has it (the prototype's .ll-top). */
+private val PAGE_MARGIN = 16.dp
+private val HEADER_ROOM = 64.dp
+
+/** A swipe up or down that went [dy] px from where the finger touched closes once it reaches [closePx]. */
+fun swipeCloses(dy: Float, closePx: Float): Boolean = abs(dy) >= closePx
+
+/** The least height of the lock screen's lyrics: one line ([linePx]) clear of the fades ([fadePx]) above and below it. */
+fun lockLyricsMinPx(linePx: Int, fadePx: Int): Int = linePx + 2 * fadePx
+
+/**
+ * The least height of the page's header in a window [heightPx] tall: its [roomPx] while the lyrics keep their least
+ * ([leastLyricsPx]) between it and the controls band ([bottomPx]); none on a shorter window, so it shrinks to its own
+ * height before the lyrics shrink.
+ */
+fun lockHeaderMin(heightPx: Int, roomPx: Int, bottomPx: Int, leastLyricsPx: Int): Int =
+    if (heightPx - roomPx - bottomPx >= leastLyricsPx) roomPx else 0
+
+/** The lyrics' height: what the header ([topPx]) and the controls band ([bottomPx]) leave, never under [leastLyricsPx]. */
+fun lockLyricsPx(heightPx: Int, topPx: Int, bottomPx: Int, leastLyricsPx: Int): Int = max(leastLyricsPx, heightPx - topPx - bottomPx)
+
+/**
+ * [LockFrame] fitted to lyrics [viewportPx] tall whose lines are [linePx] tall and fade [fadePx] at the edges: as it is
+ * while its lines rest clear of the fades; on a shorter window the line playing moves to the middle, and the room above
+ * the first line and below the last shrinks to let them rest there too.
+ */
+fun lockFrame(viewportPx: Int, linePx: Int, fadePx: Int): LyricsFrame {
+    val height = viewportPx.toFloat()
+    val half = linePx / 2f
+    val anchor = LockFrame.anchor * height
+    val fits = anchor - half >= fadePx && anchor + half <= height - fadePx && LockFrame.top * height >= fadePx && LockFrame.bottom * height >= fadePx
+    if (fits) return LockFrame
+    val edge = ((height / 2 - half) / height).coerceAtLeast(0f)
+    return LockFrame.copy(top = edge, anchor = 0.5f, bottom = edge)
+}
 
 /** A seek starts only on a move at least this many times as far sideways as up or down. */
 private const val SIDEWAYS = 2f
