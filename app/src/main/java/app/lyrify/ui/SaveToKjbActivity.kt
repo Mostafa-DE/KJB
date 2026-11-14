@@ -20,8 +20,8 @@ import app.lyrify.downloads.ShareLinks
  */
 class SaveToKjbActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
-        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
         val url = links(intent).firstOrNull()
         if (url == null) {
             Toast.makeText(this, R.string.dl_no_link, Toast.LENGTH_SHORT).show()

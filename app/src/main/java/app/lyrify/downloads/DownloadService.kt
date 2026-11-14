@@ -174,9 +174,9 @@ object Downloads {
         }
     }
 
-    fun settings(context: Context, change: (DownloadSettings) -> DownloadSettings) {
+    fun settings(context: Context, edit: (DownloadSettings) -> DownloadSettings) {
         val app = context.applicationContext
-        scope.launch { change(app) { it.copy(settings = change(it.settings)) } }
+        scope.launch { change(app) { it.copy(settings = edit(it.settings)) } }
     }
 
     /**
@@ -210,6 +210,9 @@ object Downloads {
     internal fun progress(key: String, progress: DlProgress) = _state.update { it.copy(progress = it.progress + (key to progress)) }
 
     internal fun wasCancelled(key: String): Boolean = cancelled.remove(key)
+
+    /** Cancelled before the service got to run it (Cancel came as it was picked): it is stopped at once. */
+    internal fun isCancelled(key: String): Boolean = key in cancelled
 
     internal suspend fun ended(context: Context, key: String, outcome: DownloadOutcome) = change(context) { memory ->
         val state = when (outcome) {
@@ -322,6 +325,7 @@ class DownloadService : Service() {
                 coroutineScope {
                     val run = async { DownloadRunner(session.port, session.death, saver).run(item) { progress -> shown(item, progress) } }
                     Downloads.running(item.key, run)
+                    if (Downloads.isCancelled(item.key)) run.cancel()
                     try {
                         run.await()
                     } catch (e: CancellationException) {

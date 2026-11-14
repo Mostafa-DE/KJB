@@ -705,8 +705,9 @@ fun SaveSheet(url: String, onDismiss: () -> Unit, onStarted: () -> Unit) {
     var copyOf by remember { mutableStateOf<AudioFile?>(null) }
     var pending by remember { mutableStateOf<(() -> Unit)?>(null) }
     val askNotifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
-        pending?.invoke()
+        val next = pending
         pending = null
+        next?.invoke()
     }
 
     /** Starts the download (asking for notifications first on Android 13+, once), then closes the sheet. */
@@ -784,8 +785,10 @@ fun SaveSheet(url: String, onDismiss: () -> Unit, onStarted: () -> Unit) {
             dismiss = stringResource(R.string.dl_cancel),
             onConfirm = {
                 copyOf = null
-                pending?.invoke()
+                // Taken first: the download it starts may set its own (the notifications ask).
+                val next = pending
                 pending = null
+                next?.invoke()
             },
             onDismiss = {
                 copyOf = null
