@@ -413,6 +413,8 @@ class SharedWritesTest {
             "overnight/AiRunLog.kt",
             "overnight/AiWorker.kt",
             "overnight/CrashGuard.kt",
+            // Files another app opened that the library lacks: copied into the cache to play, never into shared storage.
+            "player/OpenedFiles.kt",
             "player/QueueStore.kt",
             "player/SongStateStore.kt",
             "settings/SettingsStore.kt",

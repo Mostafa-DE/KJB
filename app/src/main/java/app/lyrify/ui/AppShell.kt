@@ -111,8 +111,9 @@ val LocalLyrics = compositionLocalOf<LyricsUi> { error("No LyricsUi: AppShell pr
  * and the dock over Library, Playlists, Search and Tools' root, Tools pages as full screens, and the full-screen views
  * over everything. Every page and view is drawn by its entry composable in its owner's file; this file only routes. Back
  * closes a sheet, dialog or menu first (their own windows), then a view, then a page, then walks back through the tab
- * history. The app reopens on the last tab ([Settings.nav]), or on the page a notification names ([destination]). What
- * [checkAnswers] say shows here, also once Check these has closed or the phone has turned.
+ * history. The app reopens on the last tab ([Settings.nav]), on the page a notification names ([destination]), or on the
+ * tab a launcher shortcut names ([tab]). What [checkAnswers] say shows here, also once Check these has closed or the phone
+ * has turned.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -137,6 +138,8 @@ fun AppShell(
     onDestinationOpened: () -> Unit,
     view: FullScreen? = null,
     onViewOpened: () -> Unit = {},
+    tab: DockTab? = null,
+    onTabOpened: () -> Unit = {},
 ) {
     val lastTab = settings.nav.lastTab
     val nav = rememberSaveable(saver = NavState.saver(lastTab)) { Navigator(NavState.start(lastTab)) }
@@ -196,6 +199,13 @@ fun AppShell(
         view?.let {
             nav.show(it)
             onViewOpened()
+        }
+    }
+    // A launcher shortcut's tab (Search, its field focused), also on a cold start.
+    LaunchedEffect(tab) {
+        tab?.let {
+            nav.select(it)
+            onTabOpened()
         }
     }
     LaunchedEffect(checkAnswers) {

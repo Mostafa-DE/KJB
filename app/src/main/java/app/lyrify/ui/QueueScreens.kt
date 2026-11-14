@@ -651,7 +651,7 @@ private fun QueueSongRow(
     val here = index == queue.index
     val sub = when {
         here && !playing -> stringResource(R.string.queue_left_at, clock(queue.positionMs))
-        song == null && library != null -> stringResource(R.string.player_not_on_phone)
+        song == null && library != null -> stringResource(if (queue.source.kind == SourceKind.OPENED) R.string.open_queue else R.string.player_not_on_phone)
         else -> song?.artist ?: ""
     }
     val rowPx = with(LocalDensity.current) { ROW.toPx() }

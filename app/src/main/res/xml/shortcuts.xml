@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The launcher's shortcuts (a long press on KJB's icon), static so they work before KJB first runs and from a cold start.
+     Each opens MainActivity at its action (ui/Launches.kt, Shortcut). The package is the release build's; the debug build
+     has its own copy (src/debug/res/xml/shortcuts.xml) for app.lyrify.debug. LaunchesTest keeps the two in step. -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:enabled="true"
+        android:icon="@drawable/shortcut_shuffle"
+        android:shortcutId="shuffle_all"
+        android:shortcutLongLabel="@string/shortcut_shuffle_long"
+        android:shortcutShortLabel="@string/shortcut_shuffle">
+        <intent
+            android:action="app.lyrify.action.SHUFFLE_ALL"
+            android:targetClass="app.lyrify.ui.MainActivity"
+            android:targetPackage="app.lyrify" />
+    </shortcut>
+    <shortcut
+        android:enabled="true"
+        android:icon="@drawable/shortcut_resume"
+        android:shortcutId="resume"
+        android:shortcutLongLabel="@string/shortcut_resume_long"
+        android:shortcutShortLabel="@string/shortcut_resume">
+        <intent
+            android:action="app.lyrify.action.RESUME"
+            android:targetClass="app.lyrify.ui.MainActivity"
+            android:targetPackage="app.lyrify" />
+    </shortcut>
+    <shortcut
+        android:enabled="true"
+        android:icon="@drawable/shortcut_search"
+        android:shortcutId="search"
+        android:shortcutLongLabel="@string/shortcut_search_long"
+        android:shortcutShortLabel="@string/shortcut_search">
+        <intent
+            android:action="app.lyrify.action.SEARCH"
+            android:targetClass="app.lyrify.ui.MainActivity"
+            android:targetPackage="app.lyrify" />
+    </shortcut>
+    <shortcut
+        android:enabled="true"
+        android:icon="@drawable/shortcut_favourites"
+        android:shortcutId="favourites"
+        android:shortcutLongLabel="@string/shortcut_favourites_long"
+        android:shortcutShortLabel="@string/shortcut_favourites">
+        <intent
+            android:action="app.lyrify.action.FAVOURITES"
+            android:targetClass="app.lyrify.ui.MainActivity"
+            android:targetPackage="app.lyrify" />
+    </shortcut>
+</shortcuts>

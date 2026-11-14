@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- KJB and the phone (lane F1): audio files opened from other apps (ui/Launches.kt, player/OpenedFiles.kt), the
+     launcher shortcuts (res/xml/shortcuts.xml), the update check (update/Updates.kt) and the crash log (crash/CrashLog.kt),
+     with their rows in Settings > About (ui/AboutSheets.kt). -->
+<resources>
+    <!-- Opened files -->
+    <string name="open_queue">Opened file</string>
+    <string name="open_failed">KJB couldn\'t play that file</string>
+
+    <!-- Shortcuts: a short label for the launcher's list, a longer one where there is room -->
+    <string name="shortcut_shuffle">Shuffle all</string>
+    <string name="shortcut_shuffle_long">Shuffle all songs</string>
+    <string name="shortcut_resume">Resume</string>
+    <string name="shortcut_resume_long">Resume your queue</string>
+    <string name="shortcut_search">Search</string>
+    <string name="shortcut_search_long">Search your music</string>
+    <string name="shortcut_favourites">Favourites</string>
+    <string name="shortcut_favourites_long">Your favourites</string>
+    <string name="launch_no_songs">No songs on your phone yet</string>
+    <string name="launch_no_queue">No queue to resume yet</string>
+
+</resources>
