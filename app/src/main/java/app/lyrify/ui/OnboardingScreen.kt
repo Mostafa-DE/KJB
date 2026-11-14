@@ -475,8 +475,8 @@ private fun CoverFan(shrink: Float) {
     val surface = MaterialTheme.colorScheme.surface
     val wait = MaterialTheme.colorScheme.surfaceContainerHighest
     val covers = fanCovers()
-    val shimmer = rememberInfiniteTransition(label = "waiting cover")
-    val sweep by shimmer.animateFloat(-1f, 1f, infiniteRepeatable(tween(SHIMMER_MS, easing = LinearEasing), RepeatMode.Restart), label = "sweep")
+    // With reduced motion no transition runs at all, not just its drawing (phone session 9).
+    val sweep = if (reduced) null else rememberInfiniteTransition(label = "waiting cover").animateFloat(-1f, 1f, infiniteRepeatable(tween(SHIMMER_MS, easing = LinearEasing), RepeatMode.Restart), label = "sweep")
     Box(Modifier.padding(top = 8.dp, bottom = 4.dp).widthIn(max = FAN_WIDTH * shrink).clearAndSetSemantics {}) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             covers.chunked(FAN_COLUMNS).forEachIndexed { row, line ->
@@ -500,8 +500,8 @@ private fun CoverFan(shrink: Float) {
                                 .drawBehind {
                                     if (cover == null) {
                                         drawRect(wait)
-                                        if (!reduced) {
-                                            val x = sweep * size.width
+                                        if (sweep != null) {
+                                            val x = sweep.value * size.width
                                             drawRect(Brush.horizontalGradient(listOf(Color.Transparent, surface.copy(alpha = 0.7f), Color.Transparent), startX = x, endX = x + size.width))
                                         }
                                     } else {

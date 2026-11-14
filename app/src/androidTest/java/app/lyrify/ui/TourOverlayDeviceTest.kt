@@ -5,11 +5,14 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
@@ -30,7 +33,9 @@ import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isHeading
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
@@ -129,7 +134,10 @@ class TourOverlayDeviceTest {
         startOver { Shell() }
         compose.onNodeWithText(words(R.string.tour_tabs_title)).assert(SemanticsMatcher.expectValue(SemanticsProperties.TraversalIndex, -1f))
         compose.onNodeWithText(words(R.string.tour_tabs_body)).assert(SemanticsMatcher.expectValue(SemanticsProperties.TraversalIndex, -1f))
-        compose.onNode(SemanticsMatcher.expectValue(SemanticsProperties.IsTraversalGroup, true)).assertExists()
+        // The card is one group, the one holding its title, Skip and Next (its scrolling words are a group inside it).
+        val card = SemanticsMatcher.expectValue(SemanticsProperties.IsTraversalGroup, true) and
+            hasAnyDescendant(hasText(words(R.string.tour_tabs_title))) and hasAnyDescendant(hasText(words(R.string.tour_next)))
+        compose.onNode(card).assertExists()
     }
 
     @Test
@@ -161,7 +169,7 @@ class TourOverlayDeviceTest {
     fun atFontScale2OnAShortScreenTheCardFitsBesideItsTarget() {
         startOver(DeviceConfigurationOverride.FontScale(2f) then DeviceConfigurationOverride.ForcedSize(DpSize(320.dp, 480.dp))) { Shell() }
         val root = compose.onRoot().getUnclippedBoundsInRoot()
-        val tabs = compose.onNodeWithTag(TABS).getUnclippedBoundsInRoot()
+        val tabs = compose.onNodeWithTag(TABS, useUnmergedTree = true).getUnclippedBoundsInRoot()
         val title = compose.onNodeWithText(words(R.string.tour_tabs_title)).getUnclippedBoundsInRoot()
         val next = compose.onNodeWithText(words(R.string.tour_next)).assertIsDisplayed().getUnclippedBoundsInRoot()
         // Below the tabs, never over them, and inside the screen with its button in reach.
@@ -176,8 +184,8 @@ class TourOverlayDeviceTest {
         compose.onNodeWithText(words(R.string.tour_next)).performClick()
         settle(PASS_MS)
         compose.onNodeWithText(words(R.string.tour_play_title)).assertIsDisplayed()
-        val song = compose.onNodeWithTag(SONG).getUnclippedBoundsInRoot()
-        val dock = compose.onNodeWithTag(SEARCH).getUnclippedBoundsInRoot()
+        val song = compose.onNodeWithTag(SONG, useUnmergedTree = true).getUnclippedBoundsInRoot()
+        val dock = compose.onNodeWithTag(SEARCH, useUnmergedTree = true).getUnclippedBoundsInRoot()
         assertTrue("song ${song.bottom} above the dock ${dock.top}", song.bottom <= dock.top)
         compose.runOnIdle { assertEquals(TourStop.SONG, tour.state?.stop) }
     }
@@ -216,12 +224,13 @@ class TourOverlayDeviceTest {
 
     /**
      * A made-up shell: Library's tabs at the top, words and a button behind, maybe a song row (or one far down a list,
-     * under the dock), and the dock's Search and Tools at the bottom.
+     * under the dock), and the dock's Search and Tools at the bottom; clear of the system's bars, as the real shell's
+     * are, since the tour points only at controls clear of them.
      */
     @Composable
     private fun Shell(songs: Boolean = true, songsBelowFold: Boolean = false) {
         Box(Modifier.fillMaxSize()) {
-            Column(Modifier.fillMaxSize()) {
+            Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
                 Row(Modifier.fillMaxWidth().padding(top = 48.dp).height(48.dp).testTag(TABS).tourTarget(TourStop.TABS)) { Text("Songs") }
                 Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState())) {
                     Text(BEHIND, Modifier.padding(16.dp))
