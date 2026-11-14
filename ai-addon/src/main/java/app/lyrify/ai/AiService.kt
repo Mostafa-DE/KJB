@@ -181,7 +181,11 @@ class AddonJobs(
         // ATOMIC: the body runs, and its finally lets go of the song, even when the scope goes before it was dispatched.
         run.job = scope.launch(context, start = CoroutineStart.ATOMIC) {
             try {
-                val result = try {
+                val result = if (stepLeftBehind) {
+                    // A step left behind holds the NPU until the process ends: no session is made beside it, and the
+                    // song is tried again later, as for any NPU another app holds.
+                    AiResult.Failed(STEP_LEFT_BEHIND, npu = true)
+                } else try {
                     val engine = engine()
                     notesTo = heard
                     engine.run(song, plainLyrics, { entered(run, heard, it) }, { done, total -> progressed(run, heard, done, total) }) {
@@ -309,8 +313,9 @@ class AddonJobs(
 
     /**
      * A native step was left on its thread past its deadline ([NativeDeadline]: an NPU that did not answer): it holds the
-     * NPU and its memory until the process ends. The job goes on and tells KJB (the NPU busy, try later); the process ends
-     * when the last client leaves ([shutDown]), or [ABANDONED_END_MS] later while one stays bound.
+     * NPU and its memory until the process ends. The job goes on and tells KJB (the NPU busy, try later), and every song
+     * started after it is refused the same way; the process ends when the last client leaves ([shutDown]), or
+     * [ABANDONED_END_MS] later while one stays bound.
      */
     fun abandoned() {
         stepLeftBehind = true
@@ -356,6 +361,9 @@ class AddonJobs(
          * (the NPU busy) long before, and ends its run and lets go at once.
          */
         const val ABANDONED_END_MS: Long = 30_000
+
+        /** What a song started after a step was left behind ([abandoned]) ends with: the NPU busy, until the process restarts. */
+        private const val STEP_LEFT_BEHIND = "NpuBusyException: an earlier step still holds the NPU until the add-on restarts"
     }
 }
 
