@@ -481,6 +481,22 @@ class AiServiceTest {
     }
 
     @Test
+    fun `after a native step was left behind, new songs are refused as the NPU busy until the process restarts`() = runTest {
+        val jobs = jobs(chunks = 0)
+        jobs.abandoned()
+        val heard = Heard()
+
+        val job = jobs.start(song, null, { heard }) { released += it }
+        runCurrent()
+
+        val result = jobs.result(job)
+        assertTrue("$result", result is AiResult.Failed && result.npu && result.message.startsWith("NpuBusyException"))
+        assertEquals(listOf("result Failed"), heard.events)
+        assertTrue("no session is made beside the stuck one", engines.isEmpty())
+        assertEquals(listOf(job), released)
+    }
+
+    @Test
     fun `a native step left behind ends the process when the last client leaves, or soon after while one stays`() = runTest {
         val jobs = AddonJobs(
             backgroundScope,
