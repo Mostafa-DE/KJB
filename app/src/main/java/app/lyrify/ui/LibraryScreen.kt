@@ -68,6 +68,7 @@ import app.lyrify.library.sortAlbums
 import app.lyrify.library.sortArtists
 import app.lyrify.library.sortSongs
 import app.lyrify.player.QueueSource
+import app.lyrify.player.SongsTabSource
 import app.lyrify.player.SourceKind
 import app.lyrify.settings.DockTab
 import app.lyrify.settings.LibrarySettings
@@ -228,7 +229,7 @@ private fun SongsTab(ui: LibraryUi, library: Library, reselect: Int, topBar: @Co
     val state = rememberLazyListState()
     var sorting by rememberSaveable { mutableStateOf(false) }
     ReselectToTop(reselect) { state.animateScrollToItem(0) }
-    val source = QueueSource(SourceKind.SONGS, "songs:${settings.songSort}:${settings.songFilter}", "")
+    val source = SongsTabSource
     val reduced = LocalReducedMotion.current
     SongListFrame(ui, songs, source, topBar, state, loaded = listed != null) { list ->
         item(key = "favourites", contentType = "favourites") { Box(rowMotion(reduced)) { FavouritesRowView(ui, library) } }

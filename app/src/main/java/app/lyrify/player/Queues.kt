@@ -34,8 +34,19 @@ data class Queue(
 
     val current: QueueItem? get() = items.getOrNull(index)
 
-    /** Whether this queue came from the list [other] names: the same kind and key, whatever the name says now. */
+    /** Whether this queue came from the place [other] names: the same kind and key, whatever the name says now. */
     fun from(other: QueueSource): Boolean = source.kind == other.kind && source.key == other.key
+
+    /**
+     * Whether [songs], a list as shown now, is still the list this queue was made from: the same songs in the same order,
+     * whatever the queue's own changes since (moves, Shuffle, Play next and added songs). Another sort, filter or search
+     * of the same place is another list, and so is the list after a song of it was taken out of the queue.
+     */
+    fun madeFrom(songs: List<SongRef>): Boolean {
+        val listed = items.filter { it.sourceIndex != null }.sortedBy { it.sourceIndex }
+        val shown = songs.distinctBy { it.path }
+        return listed.size == shown.size && listed.indices.all { listed[it].song.path == shown[it].path }
+    }
 }
 
 /** A change that may have moved the queue left into Recent ([toRecent]), for the one-time "Your last queue is in Recent". */
@@ -77,14 +88,16 @@ data class QueueBook(
     fun queue(id: String): Queue? = queues.firstOrNull { it.id == id }
 
     /**
-     * A tap on [songs]`[start]` in a list from [source]: inside the current queue when it came from that list and is not
-     * saved (songs added with Play next stay), else a new queue from the list, starting at the tapped song, the old one
-     * kept in Recent, or in Saved at its place: a saved queue is kept for later, so a tap never moves it.
+     * A tap on [songs]`[start]` in a list from [source]: inside the current queue when it came from that place and the
+     * place still shows the list it was made from ([Queue.madeFrom]), and it is not saved (songs added with Play next
+     * stay); else a new queue from the list as shown, starting at the tapped song. The old one is kept in Recent, where a
+     * queue from the same place replaces it (one recent queue per place), or in Saved at its place: a saved queue is kept
+     * for later, so a tap never moves it.
      */
     fun play(songs: List<SongRef>, start: Int, source: QueueSource, now: Long): Switched {
         val song = songs.getOrNull(start) ?: return Switched(this, toRecent = false)
         val playing = current?.takeUnless { it.id in saved }
-        if (playing != null && playing.from(source)) {
+        if (playing != null && playing.from(source) && playing.madeFrom(songs)) {
             val items = playing.items
             val at = items.getOrNull(start)?.takeIf { it.song.path == song.path && !it.playNext }?.let { start }
                 ?: items.indexOfFirst { it.song.path == song.path && !it.playNext }.takeIf { it >= 0 }

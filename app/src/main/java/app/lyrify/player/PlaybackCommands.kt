@@ -9,11 +9,18 @@ import kotlinx.serialization.Serializable
 enum class SourceKind { SONGS, ALBUM, ARTIST, FOLDER, GENRE, PLAYLIST, FAVOURITES, MOST_PLAYED, RECENTLY_PLAYED, RECENTLY_ADDED, SEARCH, PICKED }
 
 /**
- * The list a queue was made from. [kind] and [key] tell one list from another, so a tap in the list the current queue
- * came from jumps inside that queue; [name] is shown after the kind ("Album · Harbour Glass").
+ * The place in the app a queue was made from. [kind] and [key] tell one place from another: Recent keeps one queue per
+ * place, and a tap there jumps inside the current queue while the place still shows the same list ([Queue.madeFrom]).
+ * [name] is shown after the kind ("Album · Harbour Glass").
  */
 @Serializable
 data class QueueSource(val kind: SourceKind, val key: String, val name: String)
+
+/** The Songs tab, the app's and the car's, whatever its sort and filter: one place (a new order is a new list there). */
+val SongsTabSource: QueueSource = QueueSource(SourceKind.SONGS, "songs", "")
+
+/** Songs picked by hand (a selection's Play, Play next or Add to queue without a queue), [name] ("3 songs"): one place. */
+fun pickedSource(name: String): QueueSource = QueueSource(SourceKind.PICKED, "picked", name)
 
 /** Takes one change to a queue back: the toast's Undo. */
 fun interface Undo {

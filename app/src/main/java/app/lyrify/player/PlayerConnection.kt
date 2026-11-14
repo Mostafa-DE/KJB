@@ -312,7 +312,7 @@ class PlayerConnection(
         scope.launch { done(LibraryGraph.playlists(context).create(name, songs)?.name) }
     }
 
-    private fun picked(): QueueSource = QueueSource(SourceKind.PICKED, "picked:${core.now()}", "")
+    private fun picked(): QueueSource = pickedSource("")
 
     // The controller
 

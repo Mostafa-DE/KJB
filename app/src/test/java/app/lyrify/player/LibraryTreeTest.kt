@@ -182,7 +182,7 @@ class LibraryTreeTest {
         val inList = children(children(LibraryTree.PLAYLISTS).single { it.title == "Road trip" }.id)
         assertEquals(QueueSource(SourceKind.PLAYLIST, "p1", "Road trip"), (LibraryTree.play(inList[0].id, data()) as TreePlay.FromList).source)
         // The Songs tab's key for the same order (by title) and the same songs (all).
-        assertEquals(QueueSource(SourceKind.SONGS, "songs:TITLE:ALL", ""), (LibraryTree.play(children(LibraryTree.SONGS)[1].id, data()) as TreePlay.FromList).source)
+        assertEquals(QueueSource(SourceKind.SONGS, "songs", ""), (LibraryTree.play(children(LibraryTree.SONGS)[1].id, data()) as TreePlay.FromList).source)
     }
 
     @Test

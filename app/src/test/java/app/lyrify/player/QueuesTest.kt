@@ -1,6 +1,7 @@
 package app.lyrify.player
 
 import app.lyrify.library.SongRef
+import app.lyrify.library.search.searchSource
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -65,6 +66,74 @@ class QueuesTest {
         assertEquals(before.copy(updatedAt = 5), tapped.book.queue(kept))
         assertEquals(listOf(kept), tapped.book.saved)
         assertFalse(kept in tapped.book.recent)
+    }
+
+    // One recent queue per place
+
+    /** The songs of each queue in Recent from a list of [kind], newest first. */
+    private fun recentFrom(book: QueueBook, kind: SourceKind) = book.recent.mapNotNull(book::queue).filter { it.source.kind == kind }.map(::paths)
+
+    @Test
+    fun `a new sort of the Songs tab starts a new queue in the order shown, and it replaces the old one`() {
+        val byArtist = album.reversed()
+        val sorted = QueueBook().play(album, 0, SongsTabSource, now = 1).book.play(byArtist, 2, SongsTabSource, now = 2)
+        assertEquals(byArtist.map { it.path }, sorted.book.current!!.items.map { it.song.path })
+        assertEquals("Harbour Glass 4", currentName(sorted.book))
+        assertFalse(sorted.toRecent)
+        assertEquals(1, sorted.book.queues.size)
+        val later = sorted.book.play(folder, 0, folderSource, now = 3).book
+        assertEquals(listOf(paths(sorted.book.current)), recentFrom(later, SourceKind.SONGS))
+    }
+
+    @Test
+    fun `a new filter of the Songs tab starts a new queue of the songs shown, and it replaces the old one`() {
+        val synced = album.filterIndexed { i, _ -> i % 2 == 0 }
+        val filtered = QueueBook().play(album, 1, SongsTabSource, now = 1).book.play(synced, 1, SongsTabSource, now = 2).book
+        assertEquals(listOf("Harbour Glass 1", "Harbour Glass 3", "Harbour Glass 5"), paths(filtered.current))
+        assertEquals("Harbour Glass 3", currentName(filtered))
+        val later = filtered.play(folder, 0, folderSource, now = 3).book
+        assertEquals(listOf(listOf("Harbour Glass 1", "Harbour Glass 3", "Harbour Glass 5")), recentFrom(later, SourceKind.SONGS))
+    }
+
+    @Test
+    fun `two different searches leave one search queue in Recent, the newest`() {
+        var book = QueueBook().play(album.take(2), 0, searchSource("harbour"), now = 1).book
+        book = book.play(folder.take(3), 1, searchSource("rips"), now = 2).book
+        assertEquals(listOf("Rips 1", "Rips 2", "Rips 3"), paths(book.current))
+        book = book.play(album, 0, albumSource, now = 3).book
+        assertEquals(listOf(listOf("Rips 1", "Rips 2", "Rips 3")), recentFrom(book, SourceKind.SEARCH))
+    }
+
+    @Test
+    fun `two multi-select Plays leave one picked queue in Recent, the newest`() {
+        var book = QueueBook().play(listOf(album[0], album[3]), 0, pickedSource("2 songs"), now = 1).book
+        book = book.play(listOf(folder[2], folder[0], album[1]), 0, pickedSource("3 songs"), now = 2).book
+        assertEquals(listOf("Rips 3", "Rips 1", "Harbour Glass 2"), paths(book.current))
+        book = book.play(album, 0, albumSource, now = 3).book
+        assertEquals(listOf(listOf("Rips 3", "Rips 1", "Harbour Glass 2")), recentFrom(book, SourceKind.PICKED))
+    }
+
+    @Test
+    fun `a tap in the Songs tab in the same order still jumps inside its queue, whatever the queue's own changes`() {
+        var book = QueueBook().play(album, 0, SongsTabSource, now = 1).book
+        book = book.playNext(listOf(folder[0]), picked, now = 2)!!.book.toggleShuffle(Random(7)).move(book.currentId!!, 5, 4)
+        val id = book.currentId
+        val tapped = book.play(album, 3, SongsTabSource, now = 3)
+        assertEquals(id, tapped.book.currentId)
+        assertEquals("Harbour Glass 4", currentName(tapped.book))
+        assertTrue("Rips 1" in paths(tapped.book.current))
+        assertEquals(book.jumps + 1, tapped.book.jumps)
+        // The same songs with one more (a song added to the library) are another list: a new queue.
+        val grown = tapped.book.play(album + song("Harbour Glass 7"), 0, SongsTabSource, now = 4)
+        assertNotEquals(id, grown.book.currentId)
+        assertEquals(7, grown.book.current!!.items.size)
+    }
+
+    @Test
+    fun `the keys name the place, not its sort, filter, words or time`() {
+        assertEquals(searchSource("harbour").key, searchSource("rips").key)
+        assertEquals(pickedSource("2 songs").key, pickedSource("3 songs").key)
+        assertEquals(QueueSource(SourceKind.SONGS, "songs", ""), SongsTabSource)
     }
 
     @Test
