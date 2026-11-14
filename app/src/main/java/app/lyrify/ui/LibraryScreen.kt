@@ -23,7 +23,6 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -57,15 +56,13 @@ import app.lyrify.library.FolderRow
 import app.lyrify.library.Library
 import app.lyrify.library.LibraryGraph
 import app.lyrify.library.LibraryState
-import app.lyrify.library.RECENTLY_ADDED_DAYS
 import app.lyrify.library.Song
-import app.lyrify.library.displayTitle
 import app.lyrify.library.mostPlayed
-import app.lyrify.library.nameLetter
 import app.lyrify.library.recentlyAdded
 import app.lyrify.library.recentlyPlayed
 import app.lyrify.library.sortAlbums
 import app.lyrify.library.sortArtists
+import app.lyrify.library.needsPlays
 import app.lyrify.library.sortSongs
 import app.lyrify.player.QueueSource
 import app.lyrify.player.SourceKind
@@ -75,13 +72,14 @@ import app.lyrify.settings.LibraryTab
 import app.lyrify.settings.LyricsFilter
 import app.lyrify.settings.SortAlbums
 import app.lyrify.settings.SortArtists
+import app.lyrify.settings.SongList
 import app.lyrify.settings.SortSongs
+import app.lyrify.stats.SongPlays
 import app.lyrify.stats.StatsGraph
 import app.lyrify.tags.NameKind
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.text.Collator
-import java.time.Instant
 import java.time.ZoneId
 
 // Library's pages: its root with the tabs, the Playlists tab's root, Library > Songs with a lyrics filter, and Settings >
@@ -219,16 +217,19 @@ private fun SongsTab(ui: LibraryUi, library: Library, reselect: Int, topBar: @Co
     val settings = ui.settings.library
     val ledger = ui.ledger
     val change = rememberSettingsChange()
-    val listed by produceState<List<Song>?>(null, library, ledger, settings) {
-        value = withContext(Dispatchers.Default) { songsTab(library.songs, { ledger.entries[it.path]?.status }, settings) }
+    val plays = rememberPlays(settings.songSort.needsPlays)
+    // A sort by plays waits for them: never shown first in the order of a list without any.
+    val listed by produceState<List<Song>?>(null, library, ledger, settings, plays) {
+        val known = plays ?: return@produceState
+        value = withContext(Dispatchers.Default) { songsTab(library.songs, { ledger.entries[it.path]?.status }, settings, known) }
     }
     val songs = listed.orEmpty()
     val now = remember(library) { System.currentTimeMillis() }
-    val sections = remember(songs, settings) { sectionsOf(songs, settings, now, ZoneId.systemDefault()) }
+    val sections = remember(songs, settings, plays) { sectionsOf(songs, settings, now, ZoneId.systemDefault(), plays.orEmpty()) }
     val state = rememberLazyListState()
     var sorting by rememberSaveable { mutableStateOf(false) }
     ReselectToTop(reselect) { state.animateScrollToItem(0) }
-    val source = QueueSource(SourceKind.SONGS, "songs:${settings.songSort}:${settings.songFilter}", "")
+    val source = QueueSource(SourceKind.SONGS, "songs:${settings.songSort}${if (settings.songReversed) REVERSED_KEY else ""}:${settings.songFilter}", "")
     val reduced = LocalReducedMotion.current
     SongListFrame(ui, songs, source, topBar, state, loaded = listed != null) { list ->
         item(key = "favourites", contentType = "favourites") { Box(rowMotion(reduced)) { FavouritesRowView(ui, library) } }
@@ -251,7 +252,7 @@ private fun SongsTab(ui: LibraryUi, library: Library, reselect: Int, topBar: @Co
             }
         }
         sections.forEach { (section, start, slice) ->
-            stickyHeader(key = "section $start", contentType = "section") { SectionChip(sectionWords(section)) }
+            if (section != ListSection.None) stickyHeader(key = "section $start", contentType = "section") { SectionChip(sectionWords(section)) }
             songRows(list, slice, offset = start, tour = true)
         }
     }
@@ -261,9 +262,10 @@ private fun SongsTab(ui: LibraryUi, library: Library, reselect: Int, topBar: @Co
             title = stringResource(R.string.lib_sort_filter),
             options = SortSongs.entries.map { it to stringResource(it.words) },
             selected = settings.songSort,
-            onSelect = { sort -> change { it.copy(library = it.library.copy(songSort = sort)) } },
+            onSelect = { sort -> if (sort != settings.songSort) change { it.copy(library = it.library.copy(songSort = sort, songReversed = false)) } },
             onDismiss = { sorting = false },
         ) {
+            SortWayChips(settings.songSort.ways, settings.songReversed) { reversed -> change { it.copy(library = it.library.copy(songReversed = reversed)) } }
             SectionTitle(stringResource(R.string.lib_show), Modifier.padding(top = 16.dp, bottom = 8.dp))
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 LyricsFilter.entries.forEach { filter ->
@@ -290,13 +292,13 @@ private fun FavouritesRowView(ui: LibraryUi, library: Library) {
 }
 
 /** The Songs tab's rows by heading: each heading, where its songs start in [songs], and its songs. */
-private fun sectionsOf(songs: List<Song>, settings: LibrarySettings, now: Long, zone: ZoneId): List<Triple<ListSection, Int, List<Song>>> {
+private fun sectionsOf(songs: List<Song>, settings: LibrarySettings, now: Long, zone: ZoneId, plays: Map<String, SongPlays>): List<Triple<ListSection, Int, List<Song>>> {
     val out = ArrayList<Triple<ListSection, Int, List<Song>>>()
     var start = 0
     while (start < songs.size) {
-        val section = listSection(songs[start], settings.songSort, settings, now, zone)
+        val section = listSection(songs[start], settings.songSort, settings, now, zone, plays)
         var end = start + 1
-        while (end < songs.size && listSection(songs[end], settings.songSort, settings, now, zone) == section) end++
+        while (end < songs.size && listSection(songs[end], settings.songSort, settings, now, zone, plays) == section) end++
         out += Triple(section, start, songs.subList(start, end))
         start = end
     }
@@ -308,15 +310,20 @@ private fun sectionsOf(songs: List<Song>, settings: LibrarySettings, now: Long, 
 private fun sectionWords(section: ListSection): String = when (section) {
     is ListSection.Letter -> section.letter
     is ListSection.Name -> section.name ?: stringResource(R.string.lib_no_name)
-    is ListSection.Added -> stringResource(
-        when (section.time) {
-            AddedWhen.TODAY -> R.string.header_today
-            AddedWhen.THIS_WEEK -> R.string.header_week
-            AddedWhen.THIS_MONTH -> R.string.lib_this_month
-            AddedWhen.EARLIER -> R.string.header_earlier
-        },
-    )
+    is ListSection.Added -> stringResource(section.time.words)
+    is ListSection.Year -> section.year?.toString() ?: stringResource(R.string.lib_no_year)
+    is ListSection.Played -> stringResource(section.time?.words ?: R.string.lib_not_played)
+    ListSection.None -> ""
 }
+
+@get:StringRes
+private val AddedWhen.words: Int
+    get() = when (this) {
+        AddedWhen.TODAY -> R.string.header_today
+        AddedWhen.THIS_WEEK -> R.string.header_week
+        AddedWhen.THIS_MONTH -> R.string.lib_this_month
+        AddedWhen.EARLIER -> R.string.header_earlier
+    }
 
 /** A heading over the rows as they scroll under it: a small capsule at the start. */
 @Composable
@@ -333,21 +340,15 @@ private fun SectionChip(text: String) {
     }
 }
 
-/** The Songs tab's chip: "Title", or "Title · Synced" while a filter is on. */
+/** The Songs tab's chip: "Title", "Year · Oldest first" reversed, or "Title · Synced" while a filter is on. */
 @Composable
 private fun songsOrder(settings: LibrarySettings): String {
-    val sort = stringResource(if (settings.songSort == SortSongs.RECENTLY_ADDED) R.string.lib_sort_recent_short else settings.songSort.words)
+    val sort = sortChip(settings.songSort.words, settings.songSort.ways, settings.songReversed)
     return if (settings.songFilter == LyricsFilter.ALL) sort else stringResource(R.string.lib_after, sort, stringResource(settings.songFilter.short))
 }
 
-@get:StringRes
-private val SortSongs.words: Int
-    get() = when (this) {
-        SortSongs.TITLE -> R.string.lib_sort_title
-        SortSongs.ARTIST -> R.string.lib_sort_artist
-        SortSongs.ALBUM -> R.string.lib_sort_album
-        SortSongs.RECENTLY_ADDED -> R.string.lib_recently_added
-    }
+/** The Songs tab's queue key of a list the other way round, so it is another list than the same sort's first way. */
+private const val REVERSED_KEY: String = "-reversed"
 
 @get:StringRes
 private val LyricsFilter.words: Int
@@ -372,7 +373,9 @@ private fun AlbumsTab(ui: LibraryUi, library: Library, padding: PaddingValues, r
     val playback = rememberPlayback()
     val change = rememberSettingsChange()
     val order = ui.settings.library.albumSort
-    val albums = remember(library, order) { sortAlbums(library.albums, order) }
+    val reversed = ui.settings.library.albumReversed
+    val plays = rememberPlays(order == SortAlbums.PLAY_COUNT || order == SortAlbums.LAST_PLAYED)
+    val albums = rememberSorted(plays, library, order, reversed) { sortAlbums(library.albums, order, reversed, it) }.orEmpty()
     val songs = remember(albums, library) { albums.flatMap { it.songs } + library.unknownAlbum }
     val source = QueueSource(SourceKind.SONGS, "tab:albums", stringResource(R.string.library_tab_albums))
     val state = rememberLazyGridState()
@@ -390,12 +393,12 @@ private fun AlbumsTab(ui: LibraryUi, library: Library, padding: PaddingValues, r
         item(key = "header", span = { GridItemSpan(maxLineSpan) }, contentType = "header") {
             Box(rowMotion(reduced)) {
                 ListHeader(
-                    albums.size + if (library.unknownAlbum.isEmpty()) 0 else 1,
+                    library.albums.size + if (library.unknownAlbum.isEmpty()) 0 else 1,
                     R.plurals.lib_noun_albums,
                     onShuffle = { playback.shuffle(songs.map { it.ref }, source) },
                     onPlay = { playback.play(songs.map { it.ref }, 0, source) },
                     songs = songs.size,
-                    sort = stringResource(order.words),
+                    sort = sortChip(order.words, order.ways, reversed),
                     onSort = { sorting = true },
                     gutter = 0.dp,
                 )
@@ -417,9 +420,11 @@ private fun AlbumsTab(ui: LibraryUi, library: Library, padding: PaddingValues, r
             stringResource(R.string.lib_sort_albums),
             SortAlbums.entries.map { it to stringResource(it.words) },
             order,
-            onSelect = { sort -> change { it.copy(library = it.library.copy(albumSort = sort)) } },
+            onSelect = { sort -> if (sort != order) change { it.copy(library = it.library.copy(albumSort = sort, albumReversed = false)) } },
             onDismiss = { sorting = false },
-        )
+        ) {
+            SortWayChips(order.ways, reversed) { way -> change { it.copy(library = it.library.copy(albumReversed = way)) } }
+        }
     }
 }
 
@@ -429,6 +434,35 @@ private val SortAlbums.words: Int
         SortAlbums.TITLE -> R.string.lib_sort_title
         SortAlbums.ARTIST -> R.string.lib_sort_artist
         SortAlbums.YEAR -> R.string.lib_sort_year
+        SortAlbums.RECENTLY_ADDED -> R.string.lib_sort_date_added
+        SortAlbums.PLAY_COUNT -> R.string.lib_sort_play_count
+        SortAlbums.LAST_PLAYED -> R.string.lib_sort_last_played
+        SortAlbums.DURATION -> R.string.lib_sort_length
+    }
+
+private val SortAlbums.ways: SortWays
+    get() = when (this) {
+        SortAlbums.TITLE, SortAlbums.ARTIST -> SortWays.NAMES
+        SortAlbums.YEAR, SortAlbums.RECENTLY_ADDED, SortAlbums.LAST_PLAYED -> SortWays.TIMES
+        SortAlbums.PLAY_COUNT -> SortWays.COUNTS
+        SortAlbums.DURATION -> SortWays.LENGTHS
+    }
+
+@get:StringRes
+private val SortArtists.words: Int
+    get() = when (this) {
+        SortArtists.NAME -> R.string.lib_sort_name
+        SortArtists.MOST_SONGS -> R.string.lib_sort_most_songs
+        SortArtists.RECENTLY_ADDED -> R.string.lib_sort_date_added
+        SortArtists.PLAY_COUNT -> R.string.lib_sort_play_count
+        SortArtists.LAST_PLAYED -> R.string.lib_sort_last_played
+    }
+
+private val SortArtists.ways: SortWays
+    get() = when (this) {
+        SortArtists.NAME -> SortWays.NAMES
+        SortArtists.MOST_SONGS, SortArtists.PLAY_COUNT -> SortWays.COUNTS
+        SortArtists.RECENTLY_ADDED, SortArtists.LAST_PLAYED -> SortWays.TIMES
     }
 
 /** Artists: each with a round image, how many albums and songs; by name or the most songs first. */
@@ -438,7 +472,9 @@ private fun ArtistsTab(ui: LibraryUi, library: Library, padding: PaddingValues, 
     val playback = rememberPlayback()
     val change = rememberSettingsChange()
     val order = ui.settings.library.artistSort
-    val artists = remember(library, order) { sortArtists(library.artists, order) }
+    val reversed = ui.settings.library.artistReversed
+    val plays = rememberPlays(order == SortArtists.PLAY_COUNT || order == SortArtists.LAST_PLAYED)
+    val artists = rememberSorted(plays, library, order, reversed) { sortArtists(library.artists, order, reversed, it) }.orEmpty()
     val songs = remember(artists) { artists.flatMap { it.songs }.distinctBy { it.path } }
     val source = QueueSource(SourceKind.SONGS, "tab:artists", stringResource(R.string.library_tab_artists))
     val state = rememberLazyListState()
@@ -449,12 +485,12 @@ private fun ArtistsTab(ui: LibraryUi, library: Library, padding: PaddingValues, 
         item(key = "header", contentType = "header") {
             Box(rowMotion(reduced)) {
                 ListHeader(
-                    artists.size,
+                    library.artists.size,
                     R.plurals.lib_noun_artists,
                     onShuffle = { playback.shuffle(songs.map { it.ref }, source) },
                     onPlay = { playback.play(songs.map { it.ref }, 0, source) },
                     songs = songs.size,
-                    sort = stringResource(if (order == SortArtists.NAME) R.string.lib_sort_name else R.string.lib_sort_most_songs),
+                    sort = sortChip(order.words, order.ways, reversed),
                     onSort = { sorting = true },
                 )
             }
@@ -468,11 +504,13 @@ private fun ArtistsTab(ui: LibraryUi, library: Library, padding: PaddingValues, 
     if (sorting) {
         SortSheet(
             stringResource(R.string.lib_sort_artists),
-            listOf(SortArtists.NAME to stringResource(R.string.lib_sort_name), SortArtists.MOST_SONGS to stringResource(R.string.lib_sort_most_songs)),
+            SortArtists.entries.map { it to stringResource(it.words) },
             order,
-            onSelect = { sort -> change { it.copy(library = it.library.copy(artistSort = sort)) } },
+            onSelect = { sort -> if (sort != order) change { it.copy(library = it.library.copy(artistSort = sort, artistReversed = false)) } },
             onDismiss = { sorting = false },
-        )
+        ) {
+            SortWayChips(order.ways, reversed) { way -> change { it.copy(library = it.library.copy(artistReversed = way)) } }
+        }
     }
 }
 
@@ -502,7 +540,10 @@ private fun FoldersTab(library: Library, padding: PaddingValues, reselect: Int) 
     }
 }
 
-/** A folder list's rows: "Music › Rips" for a collapsed chain, with how many songs it holds below it. */
+/**
+ * A folder list's rows: "Music › Rips" for a collapsed chain, with how many songs it holds below it, and its "⋯" with
+ * Hide folder ([FolderMenu]).
+ */
 internal fun LazyListScope.folderRows(rows: List<FolderRow>, reduced: Boolean) {
     items(rows, key = { "folder ${it.folder.path}" }, contentType = { "row" }) { row ->
         val nav = LocalNavigator.current
@@ -512,6 +553,7 @@ internal fun LazyListScope.folderRows(rows: List<FolderRow>, reduced: Boolean) {
             pluralStringResource(R.plurals.lib_songs, count, count),
             rowMotion(reduced),
             lead = { Tile(R.drawable.ic_folder_fill) },
+            trailing = { FolderMenu(row.folder) },
         ) { nav.open(Page.Folder(row.folder.path)) }
     }
 }
@@ -590,6 +632,15 @@ internal val BuiltInList.words: Int
         BuiltInList.RECENTLY_ADDED -> R.string.lib_recently_added
     }
 
+/** Where a Built for you list's order is remembered. */
+internal val BuiltInList.songList: SongList
+    get() = when (this) {
+        BuiltInList.FAVOURITES -> SongList.FAVOURITES
+        BuiltInList.MOST_PLAYED -> SongList.MOST_PLAYED
+        BuiltInList.RECENTLY_PLAYED -> SongList.RECENTLY_PLAYED
+        BuiltInList.RECENTLY_ADDED -> SongList.RECENTLY_ADDED
+    }
+
 /** Genres (off by default): each with how many songs it has. */
 @Composable
 private fun GenresTab(library: Library, padding: PaddingValues, reselect: Int) {
@@ -643,68 +694,6 @@ internal fun BackTopBar(title: String, under: Boolean, backdrop: GlassBackdrop, 
         navigation = { ChromeIconButton(R.drawable.ic_arrow_back, stringResource(R.string.check_back), onBack) },
         actions = actions,
     )
-}
-
-/**
- * Settings > Folders to skip: every folder of the Folders tree for every song on the phone (skipped ones too, so they
- * can come back), and any other folder skipped, each with a switch ([skipChoices]). Songs in a skipped folder or below
- * it stay on the phone but leave the library.
- */
-@Composable
-fun FoldersToSkipPage() {
-    val nav = LocalNavigator.current
-    val ui = rememberLibraryUi() ?: return
-    val change = rememberSettingsChange()
-    val skipped = ui.settings.library.foldersToSkip
-    val folders = remember(ui.library, skipped) { skipChoices(ui.library?.all.orEmpty(), skipped) }
-    PageFrame(topBar = { under, backdrop -> BackTopBar(stringResource(R.string.set_skip), under, backdrop) { nav.back() } }) { padding ->
-        val reduced = LocalReducedMotion.current
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = padding.calculateBottomPadding() + 24.dp)) {
-            item(key = "sentence", contentType = "sentence") {
-                Text(
-                    stringResource(R.string.lib_skip_sentence),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = rowMotion(reduced).padding(start = ScreenPadding + 4.dp, end = ScreenPadding, top = 4.dp, bottom = 12.dp),
-                )
-            }
-            item(key = "folders", contentType = "group") {
-                GroupedRows(rowMotion(reduced)) {
-                    folders.forEachIndexed { at, (folder, count) ->
-                        val on = skipped.any { it.trim('/').equals(folder, ignoreCase = true) }
-                        GroupedRow(
-                            if (on) R.drawable.ic_folder_off else R.drawable.ic_folder_open,
-                            folder,
-                            tile = MaterialTheme.colorScheme.surfaceContainerHighest,
-                            onTile = MaterialTheme.colorScheme.onSurfaceVariant,
-                            first = at == 0,
-                            supporting = { Text(pluralStringResource(R.plurals.lib_songs, count, count)) },
-                            modifier = Modifier.toggleable(on, role = Role.Switch) { skip ->
-                                change { current ->
-                                    val others = current.library.foldersToSkip.filterNot { it.trim('/').equals(folder, ignoreCase = true) }
-                                    current.copy(library = current.library.copy(foldersToSkip = if (skip) others + folder else others))
-                                }
-                            },
-                            trailing = { LyrifySwitch(on) },
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-/**
- * The folders "Folders to skip" offers, each with how many of [all] songs are in it or below: every folder of the
- * Folders tree, by path, skipped ones too (so they can come back), and any other folder [skipped].
- */
-internal fun skipChoices(all: List<Song>, skipped: List<String>): List<Pair<String, Int>> {
-    // A song counts in its folder and in each folder above it.
-    val counts = all.flatMap { song ->
-        val names = song.folder.split('/').filter(String::isNotEmpty)
-        names.indices.map { last -> names.subList(0, last + 1).joinToString("/") }
-    }.groupingBy { it }.eachCount()
-    return (counts.keys + skipped.map { it.trim('/') }).distinctBy { it.lowercase() }.sortedWith(compareBy(Collator.getInstance()) { it }).map { it to (counts[it] ?: 0) }
 }
 
 /** 2.0's song list over the ledger, with its status bar and chips, for Library and Search until L1 and L2. */
@@ -767,49 +756,15 @@ fun LyricsFilter.shows(mark: LyricsMark): Boolean = when (this) {
     LyricsFilter.NONE -> mark == LyricsMark.NONE
 }
 
-/** The Songs tab: [songs] that pass the filter, in the sort ([LibrarySettings.songFilter], [LibrarySettings.songSort]). */
-fun songsTab(songs: List<Song>, statuses: (Song) -> LyricsStatus?, settings: LibrarySettings): List<Song> =
-    sortSongs(songs.filter { settings.songFilter.shows(lyricsMark(statuses(it))) }, settings.songSort, settings)
+/**
+ * The Songs tab: [songs] that pass the filter, in the sort, either way round ([LibrarySettings.songFilter],
+ * [LibrarySettings.songSort], [LibrarySettings.songReversed]); [plays] by path for the plays' keys.
+ */
+fun songsTab(songs: List<Song>, statuses: (Song) -> LyricsStatus?, settings: LibrarySettings, plays: Map<String, SongPlays> = emptyMap()): List<Song> =
+    sortSongs(songs.filter { settings.songFilter.shows(lyricsMark(statuses(it))) }, settings.songSort, settings, settings.songReversed, plays)
 
 /** How many of [songs] each "Show" filter shows, for the sort and filter sheet. */
 fun filterCounts(songs: List<Song>, statuses: (Song) -> LyricsStatus?): Map<LyricsFilter, Int> {
     val marks = songs.groupingBy { lyricsMark(statuses(it)) }.eachCount()
     return LyricsFilter.entries.associateWith { filter -> marks.filterKeys(filter::shows).values.sum() }
 }
-
-/** When a song was added, as the Songs tab groups it in "Recently added". */
-enum class AddedWhen { TODAY, THIS_WEEK, THIS_MONTH, EARLIER }
-
-/** A heading over the Songs tab's rows: the first letter by title, the artist, the album, or when it was added. */
-sealed interface ListSection {
-    /** A letter, or "#" for digits and nothing ([nameLetter]). */
-    data class Letter(val letter: String) : ListSection
-
-    /** An artist or album name; null for songs without one. */
-    data class Name(val name: String?) : ListSection
-
-    data class Added(val time: AddedWhen) : ListSection
-}
-
-/** [song]'s heading under [sort], with "Recently added" by [now]'s day in [zone]. */
-fun listSection(song: Song, sort: SortSongs, settings: LibrarySettings, now: Long, zone: ZoneId): ListSection = when (sort) {
-    SortSongs.TITLE -> ListSection.Letter(nameLetter(displayTitle(song, settings)))
-    SortSongs.ARTIST -> ListSection.Name(song.artist?.trim()?.takeIf(String::isNotEmpty))
-    SortSongs.ALBUM -> ListSection.Name(song.album?.trim()?.takeIf(String::isNotEmpty))
-    SortSongs.RECENTLY_ADDED -> {
-        val today = Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
-        val day = song.addedAt?.let { Instant.ofEpochMilli(it).atZone(zone).toLocalDate() }
-        ListSection.Added(
-            when {
-                day == null -> AddedWhen.EARLIER
-                !day.isBefore(today) -> AddedWhen.TODAY
-                !day.isBefore(today.minusDays(WEEK_DAYS - 1)) -> AddedWhen.THIS_WEEK
-                !day.isBefore(today.minusDays(RECENTLY_ADDED_DAYS - 1)) -> AddedWhen.THIS_MONTH
-                else -> AddedWhen.EARLIER
-            },
-        )
-    }
-}
-
-/** "This week": today and the six days before. */
-private const val WEEK_DAYS = 7L

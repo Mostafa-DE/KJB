@@ -1,5 +1,6 @@
 package app.lyrify.settings
 
+import app.lyrify.library.SongRef
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -58,9 +59,19 @@ class SettingsStoreTest {
             foldersToSkip = listOf("Recordings/Calls", "Music/Voice Notes"),
             showFileNames = true,
             songSort = SortSongs.RECENTLY_ADDED,
+            songReversed = true,
             songFilter = LyricsFilter.PLAIN,
             albumSort = SortAlbums.YEAR,
+            albumReversed = true,
             artistSort = SortArtists.MOST_SONGS,
+            artistReversed = true,
+            listSorts = mapOf(
+                SongList.ALBUM to ListSort(SortSongs.FILE_NAME, reversed = true),
+                SongList.PLAYLIST to ListSort(SortSongs.PLAY_COUNT),
+                SongList.MOST_PLAYED to ListSort(SortSongs.TITLE),
+                SongList.FAVOURITES to ListSort.OWN,
+            ),
+            hiddenSongs = listOf(SongRef("/storage/emulated/0/Music/Odds/Glass Steps.mp3", 13), SongRef("/storage/emulated/0/Music/Singles/Copper Moon.mp3")),
         ),
         lyrics = LyricsSettings(showWhenLocked = true, textSize = LyricsSize.XL, textWeight = LyricsWeight.REGULAR, textAlign = LyricsAlign.CENTRE),
         playerUi = PlayerUiSettings(showLyrics = true, flipHintShown = true, recentQueueHintShown = true),
@@ -73,6 +84,7 @@ class SettingsStoreTest {
             keepAlbumsGapless = false,
         ),
         nav = NavSettings(lastTab = DockTab.PLAYLISTS, favouritesTab = FavouritesTab.ARTISTS),
+        display = DisplaySettings(theme = ThemeChoice.DARK, pureBlack = true),
     )
 
     // Defaults
@@ -97,6 +109,12 @@ class SettingsStoreTest {
         assertEquals(BackupSettings(automatic = false, folderUri = null), s.backup)
         assertEquals(AdvancedSettings(true, false, NotificationButtons.FAVOURITE, levellingBoostDb = 0, keepAlbumsGapless = true), s.advanced)
         assertEquals(NavSettings(DockTab.LIBRARY, FavouritesTab.SONGS, setupDone = false), s.nav)
+        // Theme as the phone is, Pure black off (features 2026-11-15, item 3).
+        assertEquals(DisplaySettings(ThemeChoice.SYSTEM, pureBlack = false), s.display)
+        // Every list in its usual direction, the song pages in their own order or default key; nothing hidden.
+        assertEquals(listOf(false, false, false), listOf(s.library.songReversed, s.library.albumReversed, s.library.artistReversed))
+        assertEquals(SongList.entries.associateWith { it.default }, SongList.entries.associateWith { s.library.sortOf(it) })
+        assertEquals(emptyList<SongRef>(), s.library.hiddenSongs)
         assertEquals((10..100 step 10).toList(), PlaybackSettings.PLAY_SHARES)
         assertEquals(listOf(5, 10, 15, 30), PlaybackSettings.SKIP_SECONDS)
     }
@@ -317,6 +335,68 @@ class SettingsStoreTest {
         // Written back, the old switch is gone and the devices are stored.
         assertFalse("startWhenConnected" in SettingsJson.encode(expected))
         assertTrue("connectDevices" in SettingsJson.encode(expected))
+    }
+
+    // Theme, sorts and hidden songs (features 2026-11-15, items 3, 5 and 6)
+
+    @Test
+    fun `the theme and Pure black are stored, and a theme this version does not know reads as the phone's`() = runBlocking {
+        val file = File(folder.root, "settings.json")
+        val store = store(file)
+        store.updateData { it.copy(display = DisplaySettings(ThemeChoice.LIGHT, pureBlack = true)) }
+
+        assertEquals(DisplaySettings(ThemeChoice.LIGHT, pureBlack = true), SettingsJson.decode(file.readText())?.display)
+        assertEquals(DisplaySettings(ThemeChoice.LIGHT, pureBlack = true), store.data.first().display)
+        fun display(json: String) = SettingsJson.decode("""{"display":$json}""")?.display
+        assertEquals(DisplaySettings(ThemeChoice.DARK), display("""{"theme":"DARK"}"""))
+        assertEquals(DisplaySettings(ThemeChoice.SYSTEM, pureBlack = true), display("""{"theme":"SEPIA","pureBlack":true}"""))
+        assertEquals(DisplaySettings(ThemeChoice.DARK), display("""{"theme":"DARK","pureBlack":"yes"}"""))
+        assertEquals(DisplaySettings(), display("[]"))
+        // A file from before the choice reads as the phone's theme.
+        assertEquals(DisplaySettings(), SettingsJson.decode("""{"version":4,"library":{"showFileNames":true}}""")?.display)
+    }
+
+    @Test
+    fun `each list keeps its sort and direction, and a stored order this version cannot use reads as that list's default`() {
+        val text = """{"library":{"songSort":"PLAY_COUNT","songReversed":true,"albumSort":"DURATION","albumReversed":"no",""" +
+            """"artistSort":"LAST_PLAYED","artistReversed":true,"listSorts":{"ALBUM":{"key":"OWN"},"ARTIST":{"key":"TITLE","reversed":true},""" +
+            """"GENRE":{"key":"LOUDNESS"},"FOLDER":{"key":"OWN","reversed":true},"PLAYLIST":{"key":"OWN","reversed":true},""" +
+            """"FAVOURITES":{"key":"YEAR"},"MOST_PLAYED":{"reversed":true},"RADIO":{"key":"TITLE"},"RECENTLY_ADDED":"TITLE"}}}"""
+        val library = SettingsJson.decode(text)!!.library
+
+        assertEquals(SortSongs.PLAY_COUNT to true, library.songSort to library.songReversed)
+        assertEquals(SortAlbums.DURATION to false, library.albumSort to library.albumReversed)
+        assertEquals(SortArtists.LAST_PLAYED to true, library.artistSort to library.artistReversed)
+        assertEquals(ListSort.OWN, library.sortOf(SongList.ALBUM))
+        assertEquals(ListSort(SortSongs.TITLE, reversed = true), library.sortOf(SongList.ARTIST))
+        // An unknown key, an own order the page does not have, or no key at all: the page's default.
+        assertEquals(SongList.GENRE.default, library.sortOf(SongList.GENRE))
+        assertEquals(SongList.FOLDER.default, library.sortOf(SongList.FOLDER))
+        assertEquals(SongList.MOST_PLAYED.default, library.sortOf(SongList.MOST_PLAYED))
+        assertEquals(SongList.RECENTLY_ADDED.default, library.sortOf(SongList.RECENTLY_ADDED))
+        // The own order is never reversed.
+        assertEquals(ListSort.OWN, library.sortOf(SongList.PLAYLIST))
+        assertEquals(ListSort(SortSongs.YEAR), library.sortOf(SongList.FAVOURITES))
+        assertEquals(setOf(SongList.ALBUM, SongList.ARTIST, SongList.PLAYLIST, SongList.FAVOURITES), library.listSorts.keys)
+    }
+
+    @Test
+    fun `a sort stored before the new keys still reads, Recently added among them`() {
+        val library = SettingsJson.decode("""{"version":4,"library":{"songSort":"RECENTLY_ADDED","albumSort":"YEAR","artistSort":"MOST_SONGS"}}""")!!.library
+
+        assertEquals(LibrarySettings(songSort = SortSongs.RECENTLY_ADDED, albumSort = SortAlbums.YEAR, artistSort = SortArtists.MOST_SONGS), library)
+    }
+
+    @Test
+    fun `hidden songs keep each path once with its id hint, in the order hidden, and only whole entries`() {
+        val b = "/storage/emulated/0/Music/b.mp3"
+        val a = "/storage/emulated/0/Music/a.mp3"
+        val text = """{"library":{"hiddenSongs":[{"path":"$b","id":7},4,{"path":""},{"id":9},"$a",{"path":"$b","id":8},null,""" +
+            """{"path":"/storage/emulated/0/Music/c.mp3","id":"x"}]}}"""
+
+        assertEquals(listOf(SongRef(b, 7), SongRef(a), SongRef("/storage/emulated/0/Music/c.mp3")), SettingsJson.decode(text)?.library?.hiddenSongs)
+        assertEquals(emptyList<SongRef>(), SettingsJson.decode("""{"library":{"hiddenSongs":"a.mp3"}}""")?.library?.hiddenSongs)
+        assertTrue(""""hiddenSongs":[{"path":"$b","id":7}]""" in SettingsJson.encode(Settings(library = LibrarySettings(hiddenSongs = listOf(SongRef(b, 7))))))
     }
 
     // A file that is not settings at all

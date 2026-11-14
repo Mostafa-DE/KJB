@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- More sort keys (features 2026-11-15, item 5): each list's sheet offers them, and which way round. -->
+    <string name="lib_sort_date_added">Date added</string>
+    <string name="lib_sort_play_count">Play count</string>
+    <string name="lib_sort_last_played">Last played</string>
+    <string name="lib_sort_length">Length</string>
+    <string name="lib_sort_file_name">File name</string>
+    <string name="lib_sort_album_order">Album order</string>
+    <string name="lib_sort_way">Order</string>
+    <string name="lib_way_a_z">A to Z</string>
+    <string name="lib_way_z_a">Z to A</string>
+    <string name="lib_way_newest">Newest first</string>
+    <string name="lib_way_oldest">Oldest first</string>
+    <string name="lib_way_most">Most first</string>
+    <string name="lib_way_fewest">Fewest first</string>
+    <string name="lib_way_longest">Longest first</string>
+    <string name="lib_way_shortest">Shortest first</string>
+    <string name="lib_no_year">No year</string>
+    <string name="lib_not_played">Not played</string>
+
+    <!-- Hide a song or a folder (features 2026-11-15, item 6). -->
+    <string name="lib_hide">Hide</string>
+    <string name="lib_hidden">Hidden</string>
+    <plurals name="lib_hidden_songs">
+        <item quantity="one">%1$d song hidden</item>
+        <item quantity="other">%1$d songs hidden</item>
+    </plurals>
+    <string name="lib_unhide">Unhide</string>
+    <string name="lib_unhide_song">Unhide %1$s</string>
+    <string name="lib_shown_again">Back in your library</string>
+    <plurals name="lib_shown_again_songs">
+        <item quantity="one">%1$d song back in your library</item>
+        <item quantity="other">%1$d songs back in your library</item>
+    </plurals>
+    <string name="lib_hide_folder">Hide folder</string>
+    <string name="lib_folder_hidden">Folder hidden</string>
+    <string name="lib_more_folder">More for this folder</string>
+    <string name="set_hidden">Hidden songs</string>
+    <string name="set_hidden_none">None</string>
+    <plurals name="set_hidden_value">
+        <item quantity="one">%1$d song</item>
+        <item quantity="other">%1$d songs</item>
+    </plurals>
+    <string name="lib_hidden_sentence">Hidden songs stay on your phone and keep their plays, but no list, search, shuffle or stats shows them.</string>
+    <string name="lib_hidden_empty_title">No hidden songs</string>
+    <string name="lib_hidden_empty">Hide a song from its ⋯ menu and it waits here until you unhide it.</string>
+</resources>

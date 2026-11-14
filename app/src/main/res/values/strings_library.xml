@@ -65,12 +65,8 @@
     <string name="lib_sort_name">Name</string>
     <string name="lib_sort_most_songs">Most songs</string>
     <string name="lib_sort_track">Track</string>
-    <string name="lib_sort_recent_short">Recent</string>
     <!-- Favourites' songs and a playlist in the order the user put them in, the one the drag handles change. -->
     <string name="lib_sort_custom">Custom order</string>
-    <string name="lib_order_plays">Most plays</string>
-    <string name="lib_order_latest">Latest</string>
-    <string name="lib_order_newest">Newest</string>
     <string name="lib_show">Show</string>
     <string name="lib_filter_all">All</string>
     <string name="lib_filter_plain">Plain lyrics</string>

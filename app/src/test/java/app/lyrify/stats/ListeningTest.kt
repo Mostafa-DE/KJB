@@ -191,7 +191,7 @@ class ListeningTest {
     }
 
     @Test
-    fun `a song moved or renamed keeps its plays through its id, and one gone or hidden leaves the top lists but not the totals`() {
+    fun `a song moved or renamed keeps its plays through its id, one gone leaves the top lists but not the totals, and one hidden leaves both`() {
         val moved = alder.copy(ref = SongRef(VOLUME + "Music/Harbour Glass/Alder Smoke (live).mp3", 1))
         val hidden = Library.of(listOf(moved, birch, ember, salt), Settings(library = LibrarySettings(foldersToSkip = listOf("Music/Night Ferry"))))
         val totals = listOf(
@@ -203,8 +203,10 @@ class ListeningTest {
         val listening = listeningOf(totals, hidden)
 
         assertEquals(listOf(Top(moved, 3, 90_000, 400)), listening.songs)
-        assertEquals(12, listening.plays)
-        assertEquals(280_000, listening.heardMs)
+        // The library's filters (Folders to skip here, Hidden songs too) take a song out of the headline as out of the
+        // lists below it (review F2, finding 8); a song gone from the phone stays in it, as its listening happened.
+        assertEquals(8, listening.plays)
+        assertEquals(190_000, listening.heardMs)
     }
 
     @Test

@@ -328,6 +328,7 @@ private fun PageContent(
     when (page) {
         is Page.Songs -> SongsPage(page)
         Page.FoldersToSkip -> FoldersToSkipPage()
+        Page.HiddenSongs -> HiddenSongsPage()
         is Page.CollectionPages -> CollectionPage(page)
         is Page.QueuePages -> QueuePage(page)
         is Page.ListeningPages -> ListeningPage(page)

@@ -63,20 +63,23 @@ fun dayOf(now: Long, zone: ZoneId): Day {
 data class Top<T>(val item: T, val plays: Int, val heardMs: Long, val lastPlayedAt: Long?)
 
 /**
- * Your listening for one period: the time heard and the plays that counted, songs gone or hidden included, then the top
- * songs, artists and albums of the library, the most played first.
+ * Your listening for one period: the time heard and the plays that counted, songs gone from the phone included and
+ * songs the library hides left out, then the top songs, artists and albums of the library, the most played first.
  */
 data class Listening(val heardMs: Long, val plays: Int, val songs: List<Top<Song>>, val artists: List<Top<Artist>>, val albums: List<Top<Album>>)
 
 /**
  * Your listening from a period's [totals], joined with [library] now, so a song moved or renamed keeps its plays (found
- * again by its path, then its id hint) and artists and albums follow today's tags. Songs gone or hidden leave the top
- * lists; songs only heard (no play counted) add time but no row. Ties go to the latest played, then by name, then by
+ * again by its path, then its id hint) and artists and albums follow today's tags. Songs gone leave the top lists, songs
+ * hidden the totals too; songs only heard (no play counted) add time but no row. Ties go to the latest played, then by name, then by
  * path or key, so the order never changes between two looks. Without a library (not read yet) only the totals are known.
  */
 fun listeningOf(totals: List<SongPlays>, library: Library?): Listening {
-    val heard = totals.sumOf { it.heardMs }
-    val plays = totals.sumOf { it.count.toLong() }.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+    // The headline counts what the lists below it may show: a song the library's filters hide (Hidden songs, Folders to
+    // skip, short clips) is left out, while one gone from the phone stays, as its listening happened.
+    val counted = if (library == null) totals else totals.filter { total -> library.resolver.find(total.song)?.let(library::shows) != false }
+    val heard = counted.sumOf { it.heardMs }
+    val plays = counted.sumOf { it.count.toLong() }.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
     if (library == null) return Listening(heard, plays, emptyList(), emptyList(), emptyList())
     val collator = Collator.getInstance()
     val songs = bySong(totals, library, shownOnly = true)
@@ -151,6 +154,15 @@ class PlayStats(
                 bySong(totals, library, shownOnly = false).filter { it.item.path == song.path }.map { Top(song, it.plays, it.heardMs, it.lastPlayedAt) }
             }
             mine.singleOrNull()?.takeIf { it.plays > 0 }?.let { SongPlays(song, it.plays, it.lastPlayedAt, it.heardMs) }
+        }
+    }
+
+    /** Every song played, hidden or not, under its path in the library now. */
+    override suspend fun everySong(): Map<String, SongPlays> {
+        val totals = store.totals()
+        return withContext(compute) {
+            val library = library() ?: return@withContext emptyMap()
+            bySong(totals, library, shownOnly = false).associate { it.item.path to songPlays(it) }
         }
     }
 

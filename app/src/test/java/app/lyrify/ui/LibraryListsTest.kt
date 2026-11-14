@@ -8,6 +8,7 @@ import app.lyrify.settings.DockTab
 import app.lyrify.settings.LibrarySettings
 import app.lyrify.settings.LyricsFilter
 import app.lyrify.settings.SortSongs
+import app.lyrify.stats.SongPlays
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -82,6 +83,31 @@ class LibraryListsTest {
         assertEquals(ListSection.Added(AddedWhen.THIS_MONTH), added(29))
         assertEquals(ListSection.Added(AddedWhen.EARLIER), added(31))
         assertEquals(ListSection.Added(AddedWhen.EARLIER), listSection(clock, SortSongs.RECENTLY_ADDED, settings, now, zone))
+    }
+
+    @Test
+    fun `the new keys head their runs by year, by when last played, by the file's first letter, and length and plays by none`() {
+        val settings = LibrarySettings()
+        val now = LocalDateTime.of(2026, 11, 10, 12, 0).toInstant(ZoneOffset.UTC).toEpochMilli()
+        val zone = ZoneId.of("UTC")
+        assertEquals(ListSection.Year(2019), listSection(song("Music/a/x.mp3", year = 2019), SortSongs.YEAR, settings, now, zone))
+        assertEquals(ListSection.Year(null), listSection(clock, SortSongs.YEAR, settings, now, zone))
+        assertEquals(ListSection.Letter("T"), listSection(song("Music/a/track 2.mp3", title = "Low Water"), SortSongs.FILE_NAME, settings, now, zone))
+        assertEquals(ListSection.None, listSection(water, SortSongs.PLAY_COUNT, settings, now, zone))
+        assertEquals(ListSection.None, listSection(water, SortSongs.DURATION, settings, now, zone))
+
+        val played = mapOf(lantern.path to SongPlays(lantern.ref, 3, now - 2 * DAY, 0), bell.path to SongPlays(bell.ref, 1, now - 40 * DAY, 0))
+        assertEquals(ListSection.Played(AddedWhen.THIS_WEEK), listSection(lantern, SortSongs.LAST_PLAYED, settings, now, zone, played))
+        assertEquals(ListSection.Played(AddedWhen.EARLIER), listSection(bell, SortSongs.LAST_PLAYED, settings, now, zone, played))
+        assertEquals(ListSection.Played(null), listSection(water, SortSongs.LAST_PLAYED, settings, now, zone, played))
+    }
+
+    @Test
+    fun `the Songs tab goes the other way round when reversed, and sorts by plays it is given`() {
+        assertEquals(listOf(clock, water, lantern, bell).reversed(), songsTab(songs, status, LibrarySettings(songSort = SortSongs.TITLE, songReversed = true)))
+        assertEquals(listOf(bell, water, lantern, clock), songsTab(songs, status, LibrarySettings(songSort = SortSongs.RECENTLY_ADDED, songReversed = true)))
+        val plays = mapOf(bell.path to SongPlays(bell.ref, 7, 5, 0), water.path to SongPlays(water.ref, 2, 6, 0))
+        assertEquals(listOf(bell, water), songsTab(songs, status, LibrarySettings(songSort = SortSongs.PLAY_COUNT), plays).take(2))
     }
 
     @Test

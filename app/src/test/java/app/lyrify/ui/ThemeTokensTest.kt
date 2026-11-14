@@ -1,5 +1,6 @@
 package app.lyrify.ui
 
+import android.app.UiModeManager
 import androidx.compose.material3.ColorScheme
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
@@ -9,11 +10,14 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
+import app.lyrify.settings.DisplaySettings
+import app.lyrify.settings.ThemeChoice
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 /**
  * The theme equals the prototype's design tokens (player-design/lyrify-prototype.html, lines 6 to 119; the table in
@@ -23,6 +27,8 @@ class ThemeTokensTest {
     private fun hex(color: Color): String = String.format("#%08X", color.toArgb())
 
     private fun assertColor(name: String, expected: String, actual: Color) = assertEquals(name, expected, hex(actual))
+
+    private fun source(name: String): String = File("src/main/java/app/lyrify/ui/$name").readText()
 
     /** The prototype's app scheme, as name to #AARRGGBB, with the ColorScheme field it maps to. */
     private fun scheme(s: ColorScheme) = mapOf(
@@ -223,5 +229,75 @@ class ThemeTokensTest {
         assertTrue(source("LyricsViews.kt").contains("Text(\"Aa\", style = AaLetters, color = MaterialTheme.colorScheme.onSurface)"))
         assertTrue(source("PlayerScreen.kt").contains("AaButton(enabled)"))
         listOf(LightColors, DarkColors).forEach { scheme -> assertTrue(contrast(scheme.onSurface, scheme.surfaceContainerLow) >= 4.5f) }
+    }
+    // Theme: System, Light, Dark and Pure black (features 2026-11-15, item 3)
+
+    @Test
+    fun `the theme follows the phone, or is light or dark whatever the phone, and Pure black only darkens a dark theme`() {
+        fun variant(theme: ThemeChoice, pureBlack: Boolean, phoneDark: Boolean) = themeVariant(DisplaySettings(theme, pureBlack), phoneDark)
+
+        assertEquals(ThemeVariant.LIGHT, variant(ThemeChoice.SYSTEM, false, phoneDark = false))
+        assertEquals(ThemeVariant.DARK, variant(ThemeChoice.SYSTEM, false, phoneDark = true))
+        assertEquals(ThemeVariant.PURE_BLACK, variant(ThemeChoice.SYSTEM, true, phoneDark = true))
+        assertEquals(ThemeVariant.LIGHT, variant(ThemeChoice.SYSTEM, true, phoneDark = false))
+        assertEquals(ThemeVariant.LIGHT, variant(ThemeChoice.LIGHT, true, phoneDark = true))
+        assertEquals(ThemeVariant.DARK, variant(ThemeChoice.DARK, false, phoneDark = false))
+        assertEquals(ThemeVariant.PURE_BLACK, variant(ThemeChoice.DARK, true, phoneDark = false))
+        // Light and dark are the prototype's schemes, as before.
+        assertSame(LightColors, ThemeVariant.LIGHT.colors)
+        assertSame(DarkColors, ThemeVariant.DARK.colors)
+        assertEquals(listOf(false, true, true), ThemeVariant.entries.map { it.dark })
+    }
+
+    @Test
+    fun `the choice is handed to Android as the app's own night mode, so its starting window follows it from Android 12 on`() {
+        assertEquals(UiModeManager.MODE_NIGHT_AUTO, nightModeOf(ThemeChoice.SYSTEM))
+        assertEquals(UiModeManager.MODE_NIGHT_NO, nightModeOf(ThemeChoice.LIGHT))
+        assertEquals(UiModeManager.MODE_NIGHT_YES, nightModeOf(ThemeChoice.DARK))
+    }
+
+    /**
+     * No frame in the wrong theme at start: the window behind KJB's first frame is the theme's page colour, light or night,
+     * and KJB draws nothing until the stored choice is read, then its first frame in that theme, with the system bars'
+     * icons to match. A change of the phone's theme or of the choice reaches the page without the activity being made
+     * again (no blink).
+     */
+    @Test
+    fun `the theme is known before the first frame, and the window behind it is the theme's page`() {
+        fun color(file: String): String = Regex("""<color name="kjb_window">(#[0-9A-Fa-f]{6,8})</color>""").find(File(file).readText())!!.groupValues[1].uppercase()
+        assertEquals(hex(LightColors.background).takeLast(6), color("src/main/res/values/themes.xml").takeLast(6))
+        assertEquals(hex(DarkColors.background).takeLast(6), color("src/main/res/values-night/themes.xml").takeLast(6))
+        val manifest = File("src/main/AndroidManifest.xml").readText()
+        val main = manifest.substring(manifest.indexOf("android:name=\".ui.MainActivity\""), manifest.indexOf("</activity>", manifest.indexOf("android:name=\".ui.MainActivity\"")))
+        assertTrue(main, "android:theme=\"@style/Theme.Lyrify.Main\"" in main)
+        assertTrue(main, "android:configChanges=\"uiMode\"" in main)
+        val activity = source("MainActivity.kt")
+        val content = activity.substring(activity.indexOf("setContent {"))
+        val read = content.indexOf("?: return@setContent")
+        assertTrue("MainActivity waits for the stored theme", read > 0 && read < content.indexOf("LyrifyTheme(display"))
+        assertTrue(activity.contains("ThemeWindow(variant, chosen)"))
+    }
+
+    /**
+     * Review F2, finding 3: the window before KJB's first frame is the last theme drawn, Pure black too, on every Android
+     * version: a small copy of the choice is kept beside settings.json and read before anything is drawn.
+     */
+    @Test
+    fun `the window before the first frame takes the last theme drawn, Pure black too, from a copy read at once`() {
+        assertEquals(DisplaySettings(ThemeChoice.DARK, pureBlack = true), storedDisplay("DARK", pureBlack = true))
+        assertEquals(DisplaySettings(ThemeChoice.SYSTEM, pureBlack = true), storedDisplay("SEPIA", pureBlack = true))
+        assertEquals(DisplaySettings(), storedDisplay(null, pureBlack = false))
+        assertEquals(ThemeVariant.PURE_BLACK, themeVariant(storedDisplay("SYSTEM", pureBlack = true), phoneDark = true))
+        val activity = source("MainActivity.kt")
+        val create = activity.substring(activity.indexOf("override fun onCreate("))
+        assertTrue("the window is painted before setContent", create.indexOf("paintWindow(") in 0 until create.indexOf("setContent {"))
+        assertTrue(activity.contains("ThemeCopy.write("))
+    }
+
+    /** Review F2, finding 6: a new theme redraws the home-screen widgets, which take the app's night mode when drawn. */
+    @Test
+    fun `a change of theme redraws the home-screen widgets`() {
+        val night = source("MainActivity.kt").substringAfter("private fun NightMode(").substringBefore("\n}\n")
+        assertTrue(night.contains("Widgets.refresh(context)"))
     }
 }

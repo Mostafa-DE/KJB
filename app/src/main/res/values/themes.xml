@@ -2,6 +2,15 @@
 <resources>
     <style name="Theme.Lyrify" parent="android:Theme.Material.NoActionBar" />
 
+    <!-- The app's main window: the theme's page colour behind KJB's first frame, light here and night in values-night. With
+         a theme chosen in Settings, Android 12 and later start KJB in it (setApplicationNightMode). -->
+    <style name="Theme.Lyrify.Main">
+        <item name="android:windowBackground">@color/kjb_window</item>
+    </style>
+
+    <!-- The light theme's page (ui/Theme.kt LightColors.background). -->
+    <color name="kjb_window">#FFFCF8FF</color>
+
     <!-- A sheet's window: no arrival of its own (the sheet slides itself), and an exit for when it is closed in code. -->
     <style name="SheetWindow">
         <item name="android:windowEnterAnimation">@null</item>

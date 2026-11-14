@@ -55,12 +55,32 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.material3.Text
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.produceState
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import app.lyrify.Lyrify
+import app.lyrify.library.needsPlays
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import app.lyrify.settings.SongList
+import app.lyrify.stats.StatsGraph
 import app.lyrify.R
+import app.lyrify.library.RECENTLY_ADDED_DAYS
 import app.lyrify.library.Song
+import app.lyrify.library.displayTitle
+import app.lyrify.library.nameLetter
 import app.lyrify.library.SongRef
 import app.lyrify.library.arranged
 import app.lyrify.library.songOrder
 import app.lyrify.settings.LibrarySettings
+import app.lyrify.settings.ListSort
+import app.lyrify.stats.SongPlays
 import app.lyrify.settings.SortSongs
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ensureActive
@@ -69,6 +89,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlin.coroutines.coroutineContext
 import kotlin.math.abs
+import java.time.Instant
+import java.time.ZoneId
 
 // Custom order (user feedback 2026-11-13): Favourites' songs and every playlist list in their custom order by default,
 // the order the rows' handles change. A drag on a handle (at the row's end, before "⋯") moves the song at once, no long
@@ -76,46 +98,198 @@ import kotlin.math.abs
 // list scrolls near its edges. TalkBack moves a song with "Move up" and "Move down". Each move is stored at once in
 // playlists.json, as the whole order shown, which the backup carries as it is.
 
+// Sort keys (features 2026-11-15, item 5): every list of songs, the Albums and the Artists tabs sort by more keys, each
+// either way round, remembered per list in settings.json. Favourites' songs and the playlists keep their custom order
+// as their own, first in their sheet; an album page its track order.
+
 /**
- * How Favourites' songs and a playlist are listed: their custom order (the one the handles change), by title, or the
- * songs added to the phone last first. [words] in the sort sheet, [chip] on the list header's chip.
+ * [entries] (each a song, [song] of it, with what goes with it, such as its place in a playlist) in [sort]: their own
+ * order (an album's tracks, the custom order) as they are; else by its key ([songOrder], [plays] by path), ties in
+ * their own order.
  */
-enum class ListOrder(@StringRes val words: Int, @StringRes val chip: Int) {
-    CUSTOM(R.string.lib_sort_custom, R.string.lib_sort_custom),
-    TITLE(R.string.lib_sort_title, R.string.lib_sort_title),
-    RECENTLY_ADDED(R.string.lib_recently_added, R.string.lib_sort_recent_short),
-    ;
+fun <T> inOrder(entries: List<T>, sort: ListSort, settings: LibrarySettings, plays: Map<String, SongPlays> = emptyMap(), song: (T) -> Song): List<T> {
+    val key = sort.key ?: return entries
+    return entries.sortedWith(compareBy(songOrder(key, settings, sort.reversed, plays), song))
+}
 
-    /** Only the custom order shows the handles: it is the order they change. */
-    val reorders: Boolean get() = this == CUSTOM
+/**
+ * [inOrder] once the [plays] its key needs are read; null while they are not (null), so a list sorted by plays is never
+ * shown first in the order of a list without any. The own order and the other keys need none.
+ */
+fun <T> inOrderOnce(entries: List<T>, sort: ListSort, settings: LibrarySettings, plays: Map<String, SongPlays>?, song: (T) -> Song): List<T>? {
+    if (sort.key?.needsPlays == true && plays == null) return null
+    return inOrder(entries, sort, settings, plays.orEmpty(), song)
+}
 
-    companion object {
-        /** Where both lists open, for everyone, those with playlists and Favourites from before too: the custom order. */
-        val START: ListOrder = CUSTOM
+/**
+ * [entries] (each a song, [song] of it) in [sort], worked out off the main thread, as natural order compares names piece
+ * by piece. The own order at once; a key's order once it and the plays it needs are ready, the order shown before
+ * meanwhile (null before the first).
+ */
+@Composable
+fun <T> rememberInOrder(entries: List<T>, sort: ListSort, settings: LibrarySettings, song: (T) -> Song): List<T>? {
+    val plays = rememberPlays(sort.key?.needsPlays == true)
+    val sorted by produceState<List<T>?>(null, entries, sort, settings, plays) {
+        val ready = withContext(Dispatchers.Default) { inOrderOnce(entries, sort, settings, plays, song) }
+        if (ready != null) value = ready
+    }
+    return if (sort.key == null) entries else sorted
+}
+
+/** Only the custom order shows the handles: it is the order they change. */
+val ListSort.reorders: Boolean get() = key == null
+
+/** A key's two ways round, each as the sort sheet says it: its first way, then the other ([SortSongs]). */
+enum class SortWays(@StringRes val first: Int, @StringRes val other: Int) {
+    NAMES(R.string.lib_way_a_z, R.string.lib_way_z_a),
+    TIMES(R.string.lib_way_newest, R.string.lib_way_oldest),
+    COUNTS(R.string.lib_way_most, R.string.lib_way_fewest),
+    LENGTHS(R.string.lib_way_longest, R.string.lib_way_shortest),
+}
+
+@get:StringRes
+internal val SortSongs.words: Int
+    get() = when (this) {
+        SortSongs.TITLE -> R.string.lib_sort_title
+        SortSongs.ARTIST -> R.string.lib_sort_artist
+        SortSongs.ALBUM -> R.string.lib_sort_album
+        SortSongs.YEAR -> R.string.lib_sort_year
+        SortSongs.RECENTLY_ADDED -> R.string.lib_sort_date_added
+        SortSongs.PLAY_COUNT -> R.string.lib_sort_play_count
+        SortSongs.LAST_PLAYED -> R.string.lib_sort_last_played
+        SortSongs.DURATION -> R.string.lib_sort_length
+        SortSongs.FILE_NAME -> R.string.lib_sort_file_name
+    }
+
+internal val SortSongs.ways: SortWays
+    get() = when (this) {
+        SortSongs.TITLE, SortSongs.ARTIST, SortSongs.ALBUM, SortSongs.FILE_NAME -> SortWays.NAMES
+        SortSongs.YEAR, SortSongs.RECENTLY_ADDED, SortSongs.LAST_PLAYED -> SortWays.TIMES
+        SortSongs.PLAY_COUNT -> SortWays.COUNTS
+        SortSongs.DURATION -> SortWays.LENGTHS
+    }
+
+/** The list header's chip for [words] [reversed] or not on [ways]: "Year", or "Year · Oldest first". */
+@Composable
+internal fun sortChip(@StringRes words: Int, ways: SortWays?, reversed: Boolean): String =
+    if (ways != null && reversed) stringResource(R.string.lib_after, stringResource(words), stringResource(ways.other)) else stringResource(words)
+
+/** The chip of a song page in [sort], its own order called [own]. */
+@Composable
+internal fun sortChip(sort: ListSort, @StringRes own: Int): String = sort.key?.let { sortChip(it.words, it.ways, sort.reversed) } ?: stringResource(own)
+
+/** The sort sheet's "Order": the key's two [ways] round, the chosen one [reversed] or not. */
+@Composable
+internal fun SortWayChips(ways: SortWays, reversed: Boolean, onReversed: (Boolean) -> Unit) {
+    SectionTitle(stringResource(R.string.lib_sort_way), Modifier.padding(top = 16.dp, bottom = 8.dp))
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.selectableGroup()) {
+        listOf(false to ways.first, true to ways.other).forEach { (way, words) ->
+            LyrifyChip(selected = reversed == way, onClick = { onReversed(way) }, role = Role.RadioButton) { Text(stringResource(words), maxLines = 1) }
+        }
     }
 }
 
 /**
- * [entries] (each a song, [song] of it, with what goes with it, such as its place in a playlist) in [order]: the custom
- * order as they are; else as Library's Songs tab sorts them ([songOrder]), ties in their custom order.
+ * A song page's sort sheet: its own order ([own], when [list] has one) first, then every key, and the way round of the
+ * key chosen. A key chosen anew starts its first way round.
  */
-fun <T> inOrder(entries: List<T>, order: ListOrder, settings: LibrarySettings, song: (T) -> Song): List<T> = when (order) {
-    ListOrder.CUSTOM -> entries
-    ListOrder.TITLE -> entries.sortedWith(compareBy(songOrder(SortSongs.TITLE, settings), song))
-    ListOrder.RECENTLY_ADDED -> entries.sortedWith(compareBy(songOrder(SortSongs.RECENTLY_ADDED, settings), song))
+@Composable
+fun ListSortSheet(list: SongList, sort: ListSort, @StringRes own: Int, onSort: (ListSort) -> Unit, onDismiss: () -> Unit) {
+    val keys = (if (list.own) listOf<SortSongs?>(null) else emptyList()) + SortSongs.entries
+    SortSheet(
+        stringResource(R.string.lib_sort),
+        keys.map { key -> key to stringResource(key?.words ?: own) },
+        sort.key,
+        onSelect = { key -> if (key != sort.key) onSort(ListSort(key)) },
+        onDismiss = onDismiss,
+    ) {
+        sort.key?.let { key -> SortWayChips(key.ways, sort.reversed) { reversed -> onSort(sort.copy(reversed = reversed)) } }
+    }
 }
 
-/** The sort sheet of Favourites' songs and of a playlist. */
+/** A song page's order, remembered for its kind of page in settings.json, and how its sheet changes it. */
 @Composable
-fun ListOrderSheet(order: ListOrder, onChoice: (ListOrder) -> Unit, onDismiss: () -> Unit) {
-    SortSheet(stringResource(R.string.lib_sort), ListOrder.entries.map { it to stringResource(it.words) }, order, onChoice, onDismiss)
+fun rememberListSort(ui: LibraryUi, list: SongList): Pair<ListSort, (ListSort) -> Unit> {
+    val change = rememberSettingsChange()
+    return ui.settings.library.sortOf(list) to { sort -> change { it.copy(library = it.library.copy(listSorts = it.library.listSorts + (list to sort))) } }
 }
 
-/** A page's own order (Track, Newest) or by title; [byTitle] is the page's choice, kept across a turn. */
+/**
+ * What [sort] gives once [plays] are ready (null: still read), worked out again when they or [keys] change; the order
+ * shown before meanwhile, nothing before the first. For the Albums and Artists tabs, sorted where they are drawn.
+ */
 @Composable
-fun OrderSheet(@StringRes own: Int, byTitle: Boolean, onChoice: (Boolean) -> Unit, onDismiss: () -> Unit) {
-    SortSheet(stringResource(R.string.lib_sort), listOf(false to stringResource(own), true to stringResource(R.string.lib_sort_title)), byTitle, onChoice, onDismiss)
+fun <T> rememberSorted(plays: Map<String, SongPlays>?, vararg keys: Any?, sort: (Map<String, SongPlays>) -> List<T>): List<T>? {
+    val sorted by produceState(remember { plays?.let(sort) }, plays, *keys) { plays?.let { value = sort(it) } }
+    return sorted
 }
+
+/**
+ * Each song's plays by its path while [needed] (a list sorted by plays), read again on each play logged; null until the
+ * first read is done. None otherwise, so the other lists never wait for them.
+ */
+@Composable
+fun rememberPlays(needed: Boolean): Map<String, SongPlays>? {
+    val context = LocalContext.current
+    val written by remember(context) { StatsGraph.counter(context).written }.collectAsState()
+    val read by produceState<Map<String, SongPlays>?>(null, needed, written) { if (needed) value = Lyrify.plays(context).everySong() }
+    return if (needed) read else emptyMap()
+}
+
+// Headings: the Songs tab heads each run of songs by its sort.
+
+/** When a song was added, as the Songs tab groups it in "Recently added". */
+enum class AddedWhen { TODAY, THIS_WEEK, THIS_MONTH, EARLIER }
+
+/**
+ * A heading over the Songs tab's rows: the first letter by title or file name, the artist, the album, the year, when it
+ * was added or last played; none by plays or length.
+ */
+sealed interface ListSection {
+    /** A letter, or "#" for digits and nothing ([nameLetter]). */
+    data class Letter(val letter: String) : ListSection
+
+    /** An artist or album name; null for songs without one. */
+    data class Name(val name: String?) : ListSection
+
+    data class Added(val time: AddedWhen) : ListSection
+
+    /** A year; null for songs without one. */
+    data class Year(val year: Int?) : ListSection
+
+    /** When last played; null for songs never played. */
+    data class Played(val time: AddedWhen?) : ListSection
+
+    /** No heading: the plays and the lengths run on without one. */
+    data object None : ListSection
+}
+
+/** [song]'s heading under [sort], with "Recently added" and "Last played" by [now]'s day in [zone], the plays from [plays]. */
+fun listSection(song: Song, sort: SortSongs, settings: LibrarySettings, now: Long, zone: ZoneId, plays: Map<String, SongPlays> = emptyMap()): ListSection = when (sort) {
+    SortSongs.TITLE -> ListSection.Letter(nameLetter(displayTitle(song, settings)))
+    SortSongs.FILE_NAME -> ListSection.Letter(nameLetter(song.fileName))
+    SortSongs.ARTIST -> ListSection.Name(song.artist?.trim()?.takeIf(String::isNotEmpty))
+    SortSongs.ALBUM -> ListSection.Name(song.album?.trim()?.takeIf(String::isNotEmpty))
+    SortSongs.YEAR -> ListSection.Year(song.year)
+    SortSongs.RECENTLY_ADDED -> ListSection.Added(song.addedAt?.let { sinceWhen(it, now, zone) } ?: AddedWhen.EARLIER)
+    SortSongs.LAST_PLAYED -> ListSection.Played(plays[song.path]?.lastPlayedAt?.let { sinceWhen(it, now, zone) })
+    SortSongs.PLAY_COUNT, SortSongs.DURATION -> ListSection.None
+}
+
+/** Whether [at] is today, this week, this month (the last 30 days) or earlier, by [now]'s day in [zone]. */
+private fun sinceWhen(at: Long, now: Long, zone: ZoneId): AddedWhen {
+    val today = Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
+    val day = Instant.ofEpochMilli(at).atZone(zone).toLocalDate()
+    return when {
+        !day.isBefore(today) -> AddedWhen.TODAY
+        !day.isBefore(today.minusDays(WEEK_DAYS - 1)) -> AddedWhen.THIS_WEEK
+        !day.isBefore(today.minusDays(RECENTLY_ADDED_DAYS - 1)) -> AddedWhen.THIS_MONTH
+        else -> AddedWhen.EARLIER
+    }
+}
+
+/** "This week": today and the six days before. */
+private const val WEEK_DAYS = 7L
 
 /** One of TalkBack's moves on a row in a custom order: its [words], and the place the song goes to. */
 data class RowMove(@StringRes val words: Int, val to: Int)

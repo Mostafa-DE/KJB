@@ -18,7 +18,11 @@ import app.lyrify.player.PlaybackCommands
 import app.lyrify.player.QueueSource
 import app.lyrify.player.SourceKind
 import app.lyrify.settings.LibrarySettings
+import app.lyrify.settings.ListSort
 import app.lyrify.settings.Settings
+import app.lyrify.settings.SongList
+import app.lyrify.settings.SortSongs
+import app.lyrify.stats.SongPlays
 import androidx.compose.foundation.lazy.LazyListItemInfo
 import androidx.compose.foundation.lazy.LazyListLayoutInfo
 import kotlinx.coroutines.CompletableDeferred
@@ -103,26 +107,60 @@ class SongRowsTest {
 
     @Test
     fun `Favourites and playlists open in their custom order, which shows what was stored before as it was`() {
-        assertEquals(ListOrder.CUSTOM, ListOrder.START)
+        assertEquals(ListSort.OWN, SongList.PLAYLIST.default)
+        assertEquals(ListSort.OWN, SongList.FAVOURITES.default)
         // A file as KJB wrote it before: the playlist in the order its songs were added, Favourites the latest first.
         val before = """{"schemaVersion":1,"playlists":[{"id":"p1","name":"Road trip","createdAt":5,"songs":[{"path":"${water.path}"},{"path":"${lantern.path}"},{"path":"${bell.path}"}]}],
             "favourites":{"songs":[{"path":"${kite.path}"},{"path":"${lantern.path}"}],"collections":[]}}"""
         val state = checkNotNull(PlaylistsJson.decode(before))
 
         val playlist = library.listed(checkNotNull(state.playlist("p1")).songs)
-        assertEquals(listOf(water, lantern, bell), inOrder(playlist, ListOrder.START, LibrarySettings()) { it })
-        assertEquals(listOf(kite, lantern), inOrder(Favourites.of(state, library).songs, ListOrder.START, LibrarySettings()) { it })
+        assertEquals(listOf(water, lantern, bell), inOrder(playlist, SongList.PLAYLIST.default, LibrarySettings()) { it })
+        assertEquals(listOf(kite, lantern), inOrder(Favourites.of(state, library).songs, SongList.FAVOURITES.default, LibrarySettings()) { it })
+    }
+
+    @Test
+    fun `a list sorted by plays waits for them, never drawn first in the order of a list without any`() {
+        val entries = songs.mapIndexed { at, song -> at to song }
+        val plays = mapOf(water.path to SongPlays(water.ref, 4, 9, 0), lantern.path to SongPlays(lantern.ref, 2, 8, 0))
+
+        assertNull(inOrderOnce(entries, ListSort(SortSongs.PLAY_COUNT), LibrarySettings(), plays = null) { it.second })
+        assertNull(inOrderOnce(entries, ListSort(SortSongs.LAST_PLAYED, reversed = true), LibrarySettings(), plays = null) { it.second })
+        assertEquals(listOf(water, lantern), inOrderOnce(entries, ListSort(SortSongs.PLAY_COUNT), LibrarySettings(), plays) { it.second }!!.map { it.second }.take(2))
+        // The other keys and the own order need no plays.
+        assertEquals(entries, inOrderOnce(entries, ListSort.OWN, LibrarySettings(), plays = null) { it.second })
+        assertEquals(listOf(kite, water, lantern, bell), inOrderOnce(entries, ListSort(SortSongs.TITLE), LibrarySettings(), plays = null) { it.second }!!.map { it.second })
+        // The Songs tab and every page sort off the main thread, and only once the plays they need are read.
+        val custom = File("src/main/java/app/lyrify/ui/CustomOrder.kt").readText()
+        assertTrue(custom.contains("withContext(Dispatchers.Default) { inOrderOnce("))
+        val collections = File("src/main/java/app/lyrify/ui/CollectionScreens.kt").readText()
+        assertTrue("rememberInOrder(" in collections)
+        assertFalse(Regex("""(?<![A-Za-z])inOrder\(""").containsMatchIn(collections))
+        val library = File("src/main/java/app/lyrify/ui/LibraryScreen.kt").readText()
+        assertTrue(library.substringAfter("private fun SongsTab(").substringBefore("\n}\n").contains("val known = plays ?: return@produceState"))
+    }
+
+    @Test
+    fun `an artist's page opens in its album order, the newest album first, which its sheet offers first`() {
+        assertEquals(ListSort.OWN, SongList.ARTIST.default)
+        assertTrue(SongList.ARTIST.own)
+        val strings = File("src/main/res/values/strings_library_extras.xml").readText()
+        assertTrue("""<string name="lib_sort_album_order">Album order</string>""" in strings)
     }
 
     @Test
     fun `the other orders sort by title or the latest added first, places going with their songs, and only the custom order has handles`() {
         val entries = songs.mapIndexed { at, song -> at to song }
 
-        assertEquals(listOf(kite, water, lantern, bell), inOrder(entries, ListOrder.TITLE, LibrarySettings()) { it.second }.map { it.second })
-        assertEquals(listOf(3, 2, 0, 1), inOrder(entries, ListOrder.TITLE, LibrarySettings()) { it.second }.map { it.first })
-        assertEquals(listOf(kite, bell, water, lantern), inOrder(entries, ListOrder.RECENTLY_ADDED, LibrarySettings()) { it.second }.map { it.second })
-        assertEquals(entries, inOrder(entries, ListOrder.CUSTOM, LibrarySettings()) { it.second })
-        assertEquals(listOf(true, false, false), ListOrder.entries.map { it.reorders })
+        assertEquals(listOf(kite, water, lantern, bell), inOrder(entries, ListSort(SortSongs.TITLE), LibrarySettings()) { it.second }.map { it.second })
+        assertEquals(listOf(3, 2, 0, 1), inOrder(entries, ListSort(SortSongs.TITLE), LibrarySettings()) { it.second }.map { it.first })
+        assertEquals(listOf(kite, bell, water, lantern), inOrder(entries, ListSort(SortSongs.RECENTLY_ADDED), LibrarySettings()) { it.second }.map { it.second })
+        assertEquals(listOf(lantern, water, bell, kite), inOrder(entries, ListSort(SortSongs.RECENTLY_ADDED, reversed = true), LibrarySettings()) { it.second }.map { it.second })
+        assertEquals(entries, inOrder(entries, ListSort.OWN, LibrarySettings()) { it.second })
+        // Every key a page offers sorts, the plays too; only the custom order has handles.
+        val plays = mapOf(water.path to SongPlays(water.ref, 4, 9, 0), lantern.path to SongPlays(lantern.ref, 2, 8, 0))
+        assertEquals(listOf(water, lantern), inOrder(entries, ListSort(SortSongs.PLAY_COUNT), LibrarySettings(), plays) { it.second }.map { it.second }.take(2))
+        assertEquals(listOf(true, false, false), listOf(ListSort.OWN, ListSort(SortSongs.TITLE), ListSort(SortSongs.TITLE, reversed = true)).map { it.reorders })
         // The words: labels of three words or fewer.
         val strings = File("src/main/res/values/strings_library.xml").readText()
         assertTrue("""<string name="lib_sort_custom">Custom order</string>""" in strings)

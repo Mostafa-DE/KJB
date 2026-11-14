@@ -63,6 +63,8 @@ import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import app.lyrify.R
+import app.lyrify.settings.DisplaySettings
+import app.lyrify.settings.ThemeChoice
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlin.math.max
@@ -195,6 +197,18 @@ internal val DarkColors = darkColorScheme(
     tertiaryFixedDim = Color(0xFFFFB4A1),
     onTertiaryFixed = Color(0xFF3B0A00),
     onTertiaryFixedVariant = Color(0xFF7F2B17),
+)
+
+/**
+ * Pure black (features 2026-11-15, item 3): the dark scheme with its pages black, for OLED screens. Cards, sheets and
+ * the bars keep their lift above the page, so they still show; every ink stays the dark theme's (ContrastTest).
+ */
+internal val PureBlackColors: ColorScheme = DarkColors.copy(
+    background = Color.Black,
+    surface = Color.Black,
+    surfaceDim = Color.Black,
+    surfaceContainerLowest = Color.Black,
+    surfaceContainerLow = Color(0xFF0E0D14),
 )
 
 /** A status tone's colours: a pill is [container] with [onContainer]; [accent] marks plain surfaces (bars, dots, icons). */
@@ -342,18 +356,54 @@ private val AppShapes = Shapes(
 /** The scheme for a light or [dark] phone: the prototype's, the same on every Android version and wallpaper. */
 fun appColors(dark: Boolean): ColorScheme = if (dark) DarkColors else LightColors
 
+/** The themes KJB draws: each one's [colors], status tones and brand colours, and whether it is [dark]. */
+enum class ThemeVariant(val colors: ColorScheme, val status: StatusColors, val brand: BrandColors, val dark: Boolean) {
+    LIGHT(LightColors, LightStatusColors, LightBrandColors, dark = false),
+    DARK(DarkColors, DarkStatusColors, DarkBrandColors, dark = true),
+    PURE_BLACK(PureBlackColors, DarkStatusColors, DarkBrandColors, dark = true),
+}
+
 /**
- * The KJB palette (the prototype's tokens), light or dark as the phone is. KJB's chrome on top: its colours, its press
- * feedback in place of the ripple, reduced motion and the glass switch, read again each time the app comes back.
+ * The theme for [display] (Settings > Display) on a phone whose own theme is dark or not ([phoneDark]): System follows
+ * the phone, Light and Dark do not; Pure black turns a dark theme's pages black and leaves a light one as it is.
+ */
+fun themeVariant(display: DisplaySettings, phoneDark: Boolean): ThemeVariant {
+    val dark = when (display.theme) {
+        ThemeChoice.SYSTEM -> phoneDark
+        ThemeChoice.LIGHT -> false
+        ThemeChoice.DARK -> true
+    }
+    return when {
+        !dark -> ThemeVariant.LIGHT
+        display.pureBlack -> ThemeVariant.PURE_BLACK
+        else -> ThemeVariant.DARK
+    }
+}
+
+/**
+ * [choice] as Android's own night mode for KJB (UiModeManager.setApplicationNightMode, Android 12 and later), which Android
+ * keeps and applies before KJB starts, its starting window too. Auto follows the phone.
+ */
+fun nightModeOf(choice: ThemeChoice): Int = when (choice) {
+    ThemeChoice.SYSTEM -> UiModeManager.MODE_NIGHT_AUTO
+    ThemeChoice.LIGHT -> UiModeManager.MODE_NIGHT_NO
+    ThemeChoice.DARK -> UiModeManager.MODE_NIGHT_YES
+}
+
+/**
+ * The KJB palette (the prototype's tokens), light, dark or Pure black as [display] and the phone say ([themeVariant]).
+ * KJB's chrome on top: its colours, its press feedback in place of the ripple, reduced motion and the glass switch, read
+ * again each time the app comes back.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun LyrifyTheme(content: @Composable () -> Unit) {
-    val dark = isSystemInDarkTheme()
+fun LyrifyTheme(display: DisplaySettings = DisplaySettings(), content: @Composable () -> Unit) {
+    val variant = themeVariant(display, isSystemInDarkTheme())
+    val dark = variant.dark
     val context = LocalContext.current
-    val colors = appColors(dark)
-    val status = if (dark) DarkStatusColors else LightStatusColors
-    val brandColors = if (dark) DarkBrandColors else LightBrandColors
+    val colors = variant.colors
+    val status = variant.status
+    val brandColors = variant.brand
     var reduced by remember { mutableStateOf(!ValueAnimator.areAnimatorsEnabled()) }
     var glass by remember { mutableStateOf(glassOn(context)) }
     LifecycleResumeEffect(context) {

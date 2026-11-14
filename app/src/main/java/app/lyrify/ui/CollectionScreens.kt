@@ -81,12 +81,11 @@ import app.lyrify.library.PLAYED_LIST_SIZE
 import app.lyrify.library.Playlist
 import app.lyrify.library.PlaylistsState
 import app.lyrify.library.Song
-import app.lyrify.library.nameOrder
 import app.lyrify.library.recentlyAdded
-import app.lyrify.library.sortSongs
 import app.lyrify.player.QueueSource
 import app.lyrify.player.SourceKind
 import app.lyrify.settings.FavouritesTab
+import app.lyrify.settings.SongList
 import app.lyrify.settings.SortSongs
 import app.lyrify.stats.SongPlays
 import app.lyrify.stats.StatsGraph
@@ -251,13 +250,15 @@ private fun songsMeta(songs: List<Song>, vararg lead: String?): String {
 private fun AlbumPage(ui: LibraryUi, library: Library, key: String) {
     val nav = LocalNavigator.current
     val album = library.album(key) ?: return MissingPage(ui)
-    var byTitle by rememberSaveable { mutableStateOf(false) }
+    val (sort, onSort) = rememberListSort(ui, SongList.ALBUM)
+    val byTitle = sort.key == SortSongs.TITLE
     var sorting by rememberSaveable { mutableStateOf(false) }
     var menu by rememberSaveable { mutableStateOf(false) }
-    val songs = remember(album, byTitle, ui.settings.library) { if (byTitle) sortSongs(album.songs, SortSongs.TITLE, ui.settings.library) else album.songs }
+    val sorted = rememberInOrder(album.songs, sort, ui.settings.library) { it }
+    val songs = sorted.orEmpty()
     val source = QueueSource(SourceKind.ALBUM, key, album.title)
     val reduced = LocalReducedMotion.current
-    SongListFrame(ui, songs, source, topBar = { under, backdrop ->
+    SongListFrame(ui, songs, source, loaded = sorted != null, topBar = { under, backdrop ->
         CollectionTopBar(album.title, under, backdrop, ui, heart = FavouriteCollection(CollectionKind.ALBUM, key)) {
             ChromeIconButton(R.drawable.ic_more_horiz, stringResource(R.string.lib_more_album), { menu = true })
         }
@@ -275,12 +276,12 @@ private fun AlbumPage(ui: LibraryUi, library: Library, key: String) {
         }
         item(key = "header", contentType = "header") {
             Box(rowMotion(reduced)) {
-                ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll, sort = stringResource(if (byTitle) R.string.lib_sort_title else R.string.lib_sort_track), onSort = { sorting = true })
+                ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll, sort = sortChip(sort, R.string.lib_sort_track), onSort = { sorting = true })
             }
         }
         songRows(list)
     }
-    if (sorting) OrderSheet(R.string.lib_sort_track, byTitle, { byTitle = it }) { sorting = false }
+    if (sorting) ListSortSheet(SongList.ALBUM, sort, R.string.lib_sort_track, onSort) { sorting = false }
 }
 
 /** An artist: their image, name and counts, a row of their albums, then their songs. */
@@ -288,13 +289,14 @@ private fun AlbumPage(ui: LibraryUi, library: Library, key: String) {
 private fun ArtistPage(ui: LibraryUi, library: Library, name: String) {
     val nav = LocalNavigator.current
     val artist = library.artist(name) ?: return MissingPage(ui)
-    var byTitle by rememberSaveable { mutableStateOf(false) }
+    val (sort, onSort) = rememberListSort(ui, SongList.ARTIST)
     var sorting by rememberSaveable { mutableStateOf(false) }
     var menu by rememberSaveable { mutableStateOf(false) }
-    val songs = remember(artist, byTitle, ui.settings.library) { if (byTitle) sortSongs(artist.songs, SortSongs.TITLE, ui.settings.library) else artist.songs }
+    val sorted = rememberInOrder(artist.songs, sort, ui.settings.library) { it }
+    val songs = sorted.orEmpty()
     val source = QueueSource(SourceKind.ARTIST, name, name)
     val reduced = LocalReducedMotion.current
-    SongListFrame(ui, songs, source, topBar = { under, backdrop ->
+    SongListFrame(ui, songs, source, loaded = sorted != null, topBar = { under, backdrop ->
         CollectionTopBar(name, under, backdrop, ui, heart = FavouriteCollection(CollectionKind.ARTIST, name)) {
             ChromeIconButton(R.drawable.ic_more_horiz, stringResource(R.string.lib_more_artist), { menu = true })
         }
@@ -309,12 +311,12 @@ private fun ArtistPage(ui: LibraryUi, library: Library, name: String) {
         }
         item(key = "header", contentType = "header") {
             Box(rowMotion(reduced)) {
-                ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll, sort = stringResource(if (byTitle) R.string.lib_sort_title else R.string.lib_sort_album), onSort = { sorting = true })
+                ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll, sort = sortChip(sort, R.string.lib_sort_album_order), onSort = { sorting = true })
             }
         }
         songRows(list)
     }
-    if (sorting) OrderSheet(R.string.lib_sort_album, byTitle, { byTitle = it }) { sorting = false }
+    if (sorting) ListSortSheet(SongList.ARTIST, sort, R.string.lib_sort_album_order, onSort) { sorting = false }
     ArtistEditHost(library, name)
 }
 
@@ -425,12 +427,20 @@ private fun AlbumsRow(albums: List<Album>) {
 /** A folder: where it is, then its subfolders, then its own songs; Play plays it and its subfolders in path order. */
 @Composable
 private fun FolderPage(ui: LibraryUi, library: Library, path: String) {
+    val nav = LocalNavigator.current
     val folder = library.folder(path)?.takeIf { path.isNotEmpty() } ?: return MissingPage(ui)
-    val songs = folder.allSongs
+    val (sort, onSort) = rememberListSort(ui, SongList.FOLDER)
+    var sorting by rememberSaveable { mutableStateOf(false) }
+    // Its own songs in the order chosen, first; then its subfolders' in path order, as Play plays them.
+    val sorted = rememberInOrder(folder.songs, sort, ui.settings.library) { it }
+    val own = sorted.orEmpty()
+    val songs = remember(folder, own) { own + folder.folders.flatMap { it.allSongs } }
     val source = QueueSource(SourceKind.FOLDER, path, folder.name)
     val reduced = LocalReducedMotion.current
-    SongListFrame(ui, songs, source, topBar = { under, backdrop ->
-        CollectionTopBar(folder.name, under, backdrop, ui, heart = FavouriteCollection(CollectionKind.FOLDER, path), alwaysTitle = true)
+    SongListFrame(ui, songs, source, loaded = sorted != null, topBar = { under, backdrop ->
+        CollectionTopBar(folder.name, under, backdrop, ui, heart = FavouriteCollection(CollectionKind.FOLDER, path), alwaysTitle = true) {
+            FolderMenu(folder) { nav.back() }
+        }
     }) { list ->
         item(key = "path", contentType = "path") {
             Text(
@@ -442,36 +452,53 @@ private fun FolderPage(ui: LibraryUi, library: Library, path: String) {
                 modifier = rowMotion(reduced).padding(horizontal = ScreenPadding + 4.dp),
             )
         }
-        item(key = "header", contentType = "header") { Box(rowMotion(reduced)) { ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll) } }
+        item(key = "header", contentType = "header") {
+            Box(rowMotion(reduced)) { ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll, sort = sortChip(sort, R.string.lib_sort_file_name), onSort = { sorting = true }) }
+        }
         folderRows(folder.rows, reduced)
-        songRows(list, folder.songs)
+        songRows(list, own)
     }
+    if (sorting) ListSortSheet(SongList.FOLDER, sort, R.string.lib_sort_file_name, onSort) { sorting = false }
 }
 
 /** A genre (when the Genres tab is on): its songs. */
 @Composable
 private fun GenrePage(ui: LibraryUi, library: Library, name: String) {
     val genre = library.genre(name) ?: return MissingPage(ui)
+    val (sort, onSort) = rememberListSort(ui, SongList.GENRE)
+    var sorting by rememberSaveable { mutableStateOf(false) }
+    val sorted = rememberInOrder(genre.songs, sort, ui.settings.library) { it }
+    val songs = sorted.orEmpty()
     val reduced = LocalReducedMotion.current
-    SongListFrame(ui, genre.songs, QueueSource(SourceKind.GENRE, name, name), topBar = { under, backdrop ->
+    SongListFrame(ui, songs, QueueSource(SourceKind.GENRE, name, name), loaded = sorted != null, topBar = { under, backdrop ->
         CollectionTopBar(name, under, backdrop, ui, alwaysTitle = true)
     }) { list ->
-        item(key = "header", contentType = "header") { Box(rowMotion(reduced)) { ListHeader(genre.songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll) } }
+        item(key = "header", contentType = "header") {
+            Box(rowMotion(reduced)) { ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll, sort = sortChip(sort, R.string.lib_sort_title), onSort = { sorting = true }) }
+        }
         songRows(list)
     }
+    if (sorting) ListSortSheet(SongList.GENRE, sort, R.string.lib_sort_title, onSort) { sorting = false }
 }
 
 /** "Unknown album": the songs without an album tag. */
 @Composable
 private fun UnknownAlbumPage(ui: LibraryUi, library: Library) {
     val title = stringResource(R.string.lib_unknown_album)
+    val (sort, onSort) = rememberListSort(ui, SongList.UNKNOWN_ALBUM)
+    var sorting by rememberSaveable { mutableStateOf(false) }
+    val sorted = rememberInOrder(library.unknownAlbum, sort, ui.settings.library) { it }
+    val songs = sorted.orEmpty()
     val reduced = LocalReducedMotion.current
-    SongListFrame(ui, library.unknownAlbum, QueueSource(SourceKind.ALBUM, "", title), topBar = { under, backdrop ->
+    SongListFrame(ui, songs, QueueSource(SourceKind.ALBUM, "", title), loaded = sorted != null, topBar = { under, backdrop ->
         CollectionTopBar(title, under, backdrop, ui, alwaysTitle = true)
     }) { list ->
-        item(key = "header", contentType = "header") { Box(rowMotion(reduced)) { ListHeader(library.unknownAlbum.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll) } }
+        item(key = "header", contentType = "header") {
+            Box(rowMotion(reduced)) { ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll, sort = sortChip(sort, R.string.lib_sort_title), onSort = { sorting = true }) }
+        }
         songRows(list)
     }
+    if (sorting) ListSortSheet(SongList.UNKNOWN_ALBUM, sort, R.string.lib_sort_title, onSort) { sorting = false }
 }
 
 /**
@@ -485,7 +512,7 @@ internal fun PlaylistPage(ui: LibraryUi, library: Library, id: String) {
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val actions = rememberSongActions()
-    var order by rememberSaveable { mutableStateOf(ListOrder.START) }
+    val (order, onOrder) = rememberListSort(ui, SongList.PLAYLIST)
     var sorting by rememberSaveable { mutableStateOf(false) }
     var renaming by rememberSaveable { mutableStateOf(false) }
     var deleting by rememberSaveable { mutableStateOf(false) }
@@ -501,15 +528,14 @@ internal fun PlaylistPage(ui: LibraryUi, library: Library, id: String) {
     val (shownSongs, entryKeys) = remember(playlist.songs, ordered.version) { ordered.of(playlist.songs) }
     // Each song with its place in the playlist, for "Remove from playlist" and moves; songs gone or hidden are left out.
     // The playlist's entries are [ordered]'s: a move not stored yet shows over them, and each has a key that stays with it.
-    val entries = remember(shownSongs, library, order, ui.settings.library) {
-        val listed = shownSongs.mapIndexedNotNull { at, ref -> library.resolver.find(ref)?.takeIf(library::shows)?.let { at to it } }
-        inOrder(listed, order, ui.settings.library) { it.second }
-    }
+    val listed = remember(shownSongs, library) { shownSongs.mapIndexedNotNull { at, ref -> library.resolver.find(ref)?.takeIf(library::shows)?.let { at to it } } }
+    val sorted = rememberInOrder(listed, order, ui.settings.library) { it.second }
+    val entries = sorted.orEmpty()
     val songs = remember(entries) { entries.map { it.second } }
     val reduced = LocalReducedMotion.current
     val rows = rememberLazyListState()
     val reorder = rememberSongReorder(rows, ordered, { entries.map { it.first } }) { shown -> actions.arrange(playlist, shown) }
-    SongListFrame(ui, songs, QueueSource(SourceKind.PLAYLIST, id, playlist.name), state = rows, topBar = { under, backdrop ->
+    SongListFrame(ui, songs, QueueSource(SourceKind.PLAYLIST, id, playlist.name), state = rows, loaded = sorted != null, topBar = { under, backdrop ->
         CollectionTopBar(playlist.name, under, backdrop, ui, heart = FavouriteCollection(CollectionKind.PLAYLIST, id)) {
             Box {
                 ChromeIconButton(R.drawable.ic_more_horiz, stringResource(R.string.lib_more_playlist), { menu = true })
@@ -532,17 +558,17 @@ internal fun PlaylistPage(ui: LibraryUi, library: Library, id: String) {
         }
         item(key = "header", contentType = "header") {
             Box(rowMotion(reduced)) {
-                ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll, sort = stringResource(order.chip), onSort = { sorting = true })
+                ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll, sort = sortChip(order, R.string.lib_sort_custom), onSort = { sorting = true })
             }
         }
-        if (songs.isEmpty()) {
+        if (sorted != null && songs.isEmpty()) {
             item(key = "empty", contentType = "empty") {
                 AboveChrome { EmptyState(EmptyArt.Glyph, stringResource(R.string.songs_empty_title), rowMotion(reduced), text = stringResource(R.string.lib_playlist_empty)) }
             }
         }
         songRows(list, place = { at -> SheetPlace.Playlist(id, entries[at].first) }, keys = entries.map { "entry ${entryKeys[it.first]}" }, reorder = reorder.takeIf { order.reorders })
     }
-    if (sorting) ListOrderSheet(order, { order = it }) { sorting = false }
+    if (sorting) ListSortSheet(SongList.PLAYLIST, order, R.string.lib_sort_custom, onOrder) { sorting = false }
     if (renaming) {
         NameDialog(stringResource(R.string.lib_rename_playlist), playlist.name, R.drawable.ic_edit, onDismiss = { renaming = false }, confirm = R.string.lib_rename) { name ->
             renaming = false
@@ -574,8 +600,9 @@ internal fun PlaylistPage(ui: LibraryUi, library: Library, id: String) {
 private fun BuiltInPage(ui: LibraryUi, library: Library, list: BuiltInList) {
     val context = LocalContext.current
     val title = stringResource(list.words)
-    var byTitle by rememberSaveable { mutableStateOf(false) }
+    val (order, onOrder) = rememberListSort(ui, list.songList)
     var sorting by rememberSaveable { mutableStateOf(false) }
+    // Most played and Recently played bring each song's plays; Recently added reads them when sorted by them.
     // Each song with its plays, for the note after the artist: "12 plays", or when it was played last. Read again on
     // each play logged, so the list follows it.
     val written by remember(context) { StatsGraph.counter(context).written }.collectAsState()
@@ -588,18 +615,14 @@ private fun BuiltInPage(ui: LibraryUi, library: Library, list: BuiltInList) {
             else -> recentlyAdded(library, System.currentTimeMillis()).map { it to null }
         }
     }
-    val ordered = remember(rows, byTitle, ui.settings.library) { rows.orEmpty().let { all -> if (byTitle) all.sortedWith(compareBy(nameOrder(java.text.Collator.getInstance())) { ui.title(it.first) }) else all } }
+    val sorted = rememberInOrder(rows.orEmpty(), order, ui.settings.library) { it.first }
+    val ordered = sorted.orEmpty()
     val songs = ordered.map { it.first }
     val plays = ordered.associate { it.first.path to it.second }
     val kind = when (list) {
         BuiltInList.MOST_PLAYED -> SourceKind.MOST_PLAYED
         BuiltInList.RECENTLY_PLAYED -> SourceKind.RECENTLY_PLAYED
         else -> SourceKind.RECENTLY_ADDED
-    }
-    val own = when (list) {
-        BuiltInList.MOST_PLAYED -> R.string.lib_order_plays
-        BuiltInList.RECENTLY_PLAYED -> R.string.lib_order_latest
-        else -> R.string.lib_order_newest
     }
     val notes = plays.mapValues { (_, p) ->
         when {
@@ -609,24 +632,24 @@ private fun BuiltInPage(ui: LibraryUi, library: Library, list: BuiltInList) {
         }
     }
     val reduced = LocalReducedMotion.current
-    SongListFrame(ui, songs, QueueSource(kind, list.name, ""), topBar = { under, backdrop -> CollectionTopBar(title, under, backdrop, ui) }, loaded = rows != null) { songList ->
+    SongListFrame(ui, songs, QueueSource(kind, list.name, ""), topBar = { under, backdrop -> CollectionTopBar(title, under, backdrop, ui) }, loaded = rows != null && sorted != null) { songList ->
         item(key = "hero", contentType = "hero") { Box(rowMotion(reduced)) { Hero(title, songsMeta(songs), art = { BuiltInTile(list, HERO) }) } }
         if (list == BuiltInList.MOST_PLAYED) {
             item(key = "listening", contentType = "listening") { ListeningCard(rowMotion(reduced).padding(start = ScreenPadding, end = ScreenPadding, top = 8.dp, bottom = 4.dp)) }
         }
         item(key = "header", contentType = "header") {
             Box(rowMotion(reduced)) {
-                ListHeader(songs.size, R.plurals.lib_noun_songs, songList::shuffle, { songList.play() }, onAddAll = songList::addAll, sort = stringResource(if (byTitle) R.string.lib_sort_title else own), onSort = { sorting = true })
+                ListHeader(songs.size, R.plurals.lib_noun_songs, songList::shuffle, { songList.play() }, onAddAll = songList::addAll, sort = sortChip(order, R.string.lib_sort_title), onSort = { sorting = true })
             }
         }
-        if (rows != null && songs.isEmpty()) {
+        if (rows != null && sorted != null && songs.isEmpty()) {
             item(key = "empty", contentType = "empty") {
                 EmptyState(EmptyArt.Glyph, stringResource(R.string.songs_empty_title), rowMotion(reduced), text = stringResource(if (list == BuiltInList.RECENTLY_ADDED) R.string.lib_added_empty else R.string.lib_played_empty))
             }
         }
         songRows(songList, note = { notes[it.path] })
     }
-    if (sorting) OrderSheet(own, byTitle, { byTitle = it }) { sorting = false }
+    if (sorting) ListSortSheet(list.songList, order, R.string.lib_sort_title, onOrder) { sorting = false }
 }
 
 /**
@@ -644,9 +667,10 @@ private fun FavouritesPage(ui: LibraryUi, library: Library) {
     val ordered = remember { OrderedEntries() }
     val (shownSongs, entryKeys) = remember(ui.playlists.favouriteSongs, ordered.version) { ordered.of(ui.playlists.favouriteSongs) }
     val favourites = remember(library, ui.playlists, shownSongs) { Favourites.of(ui.playlists.copy(favouriteSongs = shownSongs), library) }
-    var order by rememberSaveable { mutableStateOf(ListOrder.START) }
+    val (order, onOrder) = rememberListSort(ui, SongList.FAVOURITES)
     var sorting by rememberSaveable { mutableStateOf(false) }
-    val entries = remember(favourites, order, ui.settings.library) { inOrder(favourites.songPlaces.zip(favourites.songs), order, ui.settings.library) { it.second } }
+    val placed = remember(favourites) { favourites.songPlaces.zip(favourites.songs) }
+    val entries = rememberInOrder(placed, order, ui.settings.library) { it.second }.orEmpty()
     val songs = remember(entries) { entries.map { it.second } }
     val actions = rememberSongActions()
     val rows = rememberLazyListState()
@@ -667,7 +691,7 @@ private fun FavouritesPage(ui: LibraryUi, library: Library) {
     }
     val hero: @Composable (PageSongs) -> Unit = { list ->
         FavouritesHead(title, songsMeta(songs, null).let { if (others > 0) stringResource(R.string.lib_after, it, pluralStringResource(R.plurals.lib_more_count, others, others)) else it }) {
-            ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll, sort = if (songs.isEmpty()) null else stringResource(order.chip), onSort = { sorting = true }, gutter = 0.dp)
+            ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll, sort = if (songs.isEmpty()) null else sortChip(order, R.string.lib_sort_custom), onSort = { sorting = true }, gutter = 0.dp)
         }
     }
     SongPageFrame(ui, songs, QueueSource(SourceKind.FAVOURITES, "favourites", ""), topBar = { under, backdrop -> CollectionTopBar(title, under || heroUnder, backdrop, ui) }) { list, padding ->
@@ -702,7 +726,7 @@ private fun FavouritesPage(ui: LibraryUi, library: Library) {
             }
         }
     }
-    if (sorting) ListOrderSheet(order, { order = it }) { sorting = false }
+    if (sorting) ListSortSheet(SongList.FAVOURITES, order, R.string.lib_sort_custom, onOrder) { sorting = false }
 }
 
 /** What is a favourite now: the songs (with [songPlaces], each one's place among those stored) and the collections, those gone from the phone or the library left out. */

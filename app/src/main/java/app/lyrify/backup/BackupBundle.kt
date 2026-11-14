@@ -296,6 +296,8 @@ object BackupBundle {
         snapshot.tones?.let { state -> state.tones.values.forEach { add(it.songPath) } }
         snapshot.duplicates?.let { choices -> (choices.notDuplicates + choices.reviewed).forEach { key -> key.split(',').mapNotNull { it.toLongOrNull()?.let(pathOf) }.forEach(::add) } }
         snapshot.coversTags?.let { memory -> memory.albums.forEach { album -> album.songs.forEach { add(it.path) } } }
+        // Hidden songs, so another phone finds them and keeps them hidden.
+        snapshot.settings?.let { settings -> settings.library.hiddenSongs.forEach { add(it.path) } }
     }.distinct()
 
     /** A song as a backup keeps it: by its path only, as a MediaStore id names a file on this phone alone. */
@@ -316,10 +318,16 @@ object BackupBundle {
 
     /**
      * The settings without Settings > Backup, and Start when connected's devices by their names only: Android links each
-     * device to one phone (Companion Device Manager), so the user picks them again there. With the AI switch, when known.
+     * device to one phone (Companion Device Manager), so the user picks them again there. Hidden songs without their ids.
+     * With the AI switch, when known.
      */
     private fun settings(settings: Settings, ai: Boolean?): String {
-        val bare = settings.copy(backup = BackupSettings(), playback = settings.playback.copy(connectDevices = emptyList()))
+        val bare = settings.copy(
+            backup = BackupSettings(),
+            playback = settings.playback.copy(connectDevices = emptyList()),
+            // Hidden songs by their paths only, as a MediaStore id names a file on this phone alone.
+            library = settings.library.copy(hiddenSongs = settings.library.hiddenSongs.map(::bare)),
+        )
         return withKeys(
             SettingsJson.encode(bare),
             AI_KEY to ai?.let(::JsonPrimitive),
