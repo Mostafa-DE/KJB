@@ -142,6 +142,9 @@ class AddonJobs(
     /** Set by [shutDown] while a job is mid-step: the engine closes as that job ends. */
     private var closeAfterJob = false
 
+    /** The last job that ended with a result, and that result ([result]): for a callback lost or too long. */
+    private var kept: Pair<Long, AiResult>? = null
+
     /** Where the engine's notes go: the job running now. */
     @Volatile
     private var notesTo: JobEvents? = null
@@ -184,6 +187,7 @@ class AddonJobs(
                     AiResult.Failed(e.javaClass.simpleName)
                 }
                 debug("job ${run.id}: ${label(result)} at ${run.at()} ms")
+                synchronized(lock) { kept = run.id to result }
                 heard.onResult(result)
             } catch (e: CancellationException) {
                 debug("job ${run.id}: stopped in ${run.where} at ${run.at()} ms")
@@ -248,6 +252,9 @@ class AddonJobs(
     fun cancel(job: Long) {
         synchronized(lock) { running?.takeIf { it.id == job } }?.let { stop(it, "KJB cancelled it") }
     }
+
+    /** The result of [job], kept from its end until the next job's; null for a job unknown, running, stopped or replaced. */
+    fun result(job: Long): AiResult? = synchronized(lock) { kept?.takeIf { it.first == job }?.second }
 
     /** Stops a job under way, then closes the engine; the returned job ends once it is closed. */
     fun closeEngine(): Job = scope.launch(context) {
@@ -452,6 +459,8 @@ class AiService : Service() {
         // Returns once the sessions are closed, so KJB's unbind right after cannot outrun it.
         override fun closeEngine() = checked { runBlocking { jobs.closeEngine().join() } }
 
+        override fun result(job: Long, part: Int): String? = checked { jobs.result(job)?.let { Wire.part(Wire.encode(it), part) } }
+
         override fun importModel(name: String, file: ParcelFileDescriptor, bytes: Long, sha256: String): String = checked(file) {
             // The handover beats a download: KJB starts none meanwhile, and one left over stops (its parts stay).
             downloads.cancelAll()
@@ -520,7 +529,8 @@ class AiService : Service() {
 
         override fun onChunk() = send { callback.onChunk(job) }
 
-        override fun onResult(result: AiResult) = send { callback.onResult(job, Wire.encode(result)) }
+        // One too long for a oneway call waits in the add-on: KJB reads it in parts (IAiAddon.result).
+        override fun onResult(result: AiResult) = send { callback.onResult(job, Wire.encode(result).takeIf { it.length <= Wire.RESULT_PART_CHARS }) }
 
         override fun onStopped() = send { callback.onStopped(job) }
 

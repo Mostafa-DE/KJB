@@ -18,6 +18,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -357,6 +358,33 @@ class AiServiceTest {
 
         assertEquals(false, closedWhileRunning)
         assertEquals("stopped", heard.events.last())
+    }
+
+    @Test
+    fun `a job's result stays with the add-on until the next job ends with one, to be fetched by its id`() = runTest {
+        val jobs = jobs(chunks = 1)
+        val first = jobs.start(song, null, { Heard() }) {}
+        runCurrent()
+        assertNull("still running", jobs.result(first))
+
+        jobs.proceed(first)
+        runCurrent()
+        assertEquals(done, jobs.result(first))
+        assertNull(jobs.result(first + 7))
+
+        val second = jobs.start(song, null, { Heard() }) {}
+        runCurrent()
+        jobs.cancel(second)
+        runCurrent()
+        assertNull("stopped: nothing to keep", jobs.result(second))
+        assertEquals(done, jobs.result(first))
+
+        val third = jobs.start(song, null, { Heard() }) {}
+        runCurrent()
+        jobs.proceed(third)
+        runCurrent()
+        assertEquals(done, jobs.result(third))
+        assertNull("replaced by the next job's", jobs.result(first))
     }
 
     // KJB's watchdog hears the job move; a stop the job's step never takes ends the process

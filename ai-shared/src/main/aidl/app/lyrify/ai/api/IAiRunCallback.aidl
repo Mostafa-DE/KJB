@@ -11,7 +11,8 @@ oneway interface IAiRunCallback {
     // The next Whisper chunk waits for IAiAddon.proceed (KJB holds it while the phone is too warm).
     void onChunk(long job) = 3;
 
-    // The job's end: its AiResult as JSON.
+    // The job's end: its AiResult as JSON; null when longer than Wire.RESULT_PART_CHARS, for a oneway call: KJB reads it
+    // with IAiAddon.result. The add-on keeps it either way, for a callback that is lost.
     void onResult(long job, String result) = 4;
 
     // The job's end after IAiAddon.cancel: nothing to record.

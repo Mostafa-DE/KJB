@@ -82,6 +82,31 @@ object Wire {
     /** [text] as a reply; one that cannot be read asks to try again. */
     fun reply(text: String): ImportReply = read(text, ImportReply.serializer()) ?: ImportReply(ImportReply.Outcome.RETRY, "unreadable reply")
 
+    /**
+     * The longest result JSON a oneway onResult carries (64 KB in a Parcel, well inside the binder's buffer for oneway
+     * calls, which they share), and the size of each part IAiAddon.result serves of a longer one.
+     */
+    const val RESULT_PART_CHARS: Int = 32 * 1024
+
+    /** Part [part] of [json], as IAiAddon.result serves it: [RESULT_PART_CHARS] characters, "" past the end. */
+    fun part(json: String, part: Int): String {
+        val from = part.toLong() * RESULT_PART_CHARS
+        return if (part < 0 || from >= json.length) "" else json.substring(from.toInt(), minOf(json.length.toLong(), from + RESULT_PART_CHARS).toInt())
+    }
+
+    /** The parts [read] gives (part 0, 1, ...), joined until one shorter than [RESULT_PART_CHARS]; null when part 0 is. */
+    fun joined(read: (Int) -> String?): String? {
+        val text = StringBuilder(read(0) ?: return null)
+        var last = text.length
+        var part = 1
+        while (last == RESULT_PART_CHARS) {
+            val piece = read(part++) ?: break
+            text.append(piece)
+            last = piece.length
+        }
+        return text.toString()
+    }
+
     /** SerializationException, malformed JSON included, is an IllegalArgumentException. */
     private fun <T> read(text: String, serializer: KSerializer<T>): T? = try {
         json.decodeFromString(serializer, text)

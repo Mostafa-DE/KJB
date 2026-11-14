@@ -53,4 +53,9 @@ interface IAiAddon {
     // The handover of KJB 2.0's models: one file under its name in the models folder, with its size and SHA-256. JSON
     // ImportReply; a file the add-on already holds as given is not read again.
     String importModel(String name, in ParcelFileDescriptor file, long bytes, String sha256) = 13;
+
+    // The end of a job that finished with a result, kept by the add-on until the next job finishes: its AiResult as JSON,
+    // part by part (Wire.RESULT_PART_CHARS each, "" past the end), for a result too long for onResult or whose callback
+    // was lost. Null when the add-on keeps no result for that job (unknown, still running, stopped, or replaced).
+    String result(long job, int part) = 14;
 }

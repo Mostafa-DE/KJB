@@ -79,6 +79,11 @@ class AddonClientTest {
 
         override fun cancel(job: Long) = call("cancel $job")
 
+        /** The result the add-on keeps of the job that ended last. */
+        var kept: AiResult? = null
+
+        override fun result(job: Long): AiResult? = kept.also { call("result $job") }
+
         override fun closeEngine() = call("closeEngine")
 
         override fun importModel(name: String, file: File, sha256: String): ImportReply = ImportReply(ImportReply.Outcome.IMPORTED).also { call("import $name") }
@@ -432,6 +437,62 @@ class AddonClientTest {
 
         assertEquals(transcribed, run.await().getOrThrow())
         assertFalse("cancel 7" in port.calls)
+    }
+
+    @Test
+    fun `a result that arrives just as the silence limit runs out is the song's end, not a stall`() = runTest {
+        val host = FakeHost()
+        val engine = RemoteSongEngine(session(host), notes = {})
+        val binding = host.bindings.single()
+        val run = async { runCatching { engine.run(track, null, {}) {} } }
+        runCurrent()
+        val events = checkNotNull(binding.port.events)
+        events.onStage("SEPARATE")
+        events.onProgress(1, 40)
+        runCurrent()
+
+        advanceTimeBy(RemoteSongEngine.STEP_MS) // the limit is now: its timeout is queued, not yet run
+        events.onResult(transcribed) // and the result reaches the receive at the same moment, after it
+        runCurrent()
+
+        assertEquals(transcribed, run.await().getOrThrow())
+        assertFalse("not cancelled", "cancel 7" in binding.port.calls)
+        assertFalse("not let go of", binding.closed)
+    }
+
+    @Test
+    fun `a result whose callback was lost is read from the add-on before a stall is declared`() = runTest {
+        val host = FakeHost()
+        val engine = RemoteSongEngine(session(host), notes = {})
+        val binding = host.bindings.single()
+        val run = async { runCatching { engine.run(track, null, {}) {} } }
+        runCurrent()
+        binding.port.events!!.onStage("TRANSCRIBE")
+        runCurrent()
+        binding.port.kept = transcribed // the job ended, its onResult never arrived
+
+        advanceTimeBy(RemoteSongEngine.STEP_MS + 1)
+        runCurrent()
+
+        assertEquals(transcribed, run.await().getOrThrow())
+        assertEquals("result 7", binding.port.calls.last())
+        assertFalse(binding.closed)
+    }
+
+    @Test
+    fun `a result too long for the callback is read from the add-on`() = runTest {
+        val host = FakeHost()
+        val engine = RemoteSongEngine(session(host), notes = {})
+        val port = host.bindings.single().port
+        val run = async { runCatching { engine.run(track, null, {}) {} } }
+        runCurrent()
+        port.kept = transcribed
+
+        port.events!!.onResult(null)
+        runCurrent()
+
+        assertEquals(transcribed, run.await().getOrThrow())
+        assertEquals("result 7", port.calls.last())
     }
 
     @Test

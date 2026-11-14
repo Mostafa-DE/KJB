@@ -13,6 +13,22 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class WireTest {
+    @Test
+    fun `a long result is served in parts that join back, one of an exact multiple ending on an empty part`() {
+        val n = Wire.RESULT_PART_CHARS
+        for (length in listOf(0, 1, n - 1, n, n + 1, 3 * n)) {
+            val json = "x".repeat(length)
+            val asked = mutableListOf<Int>()
+
+            val joined = Wire.joined { part -> asked += part; Wire.part(json, part) }
+
+            assertEquals("$length", json, joined)
+            assertEquals("$length", (0..length / n).toList(), asked)
+            assertTrue("$length", (0..length / n).all { Wire.part(json, it).length <= n })
+        }
+        assertEquals("nothing kept", null, Wire.joined { null })
+    }
+
     private val stats = AiStats(
         audioSec = 200.5,
         vocalShare = 0.62,

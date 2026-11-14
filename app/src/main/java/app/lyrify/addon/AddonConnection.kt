@@ -16,6 +16,7 @@ import android.util.Log
 import androidx.core.content.ContextCompat
 import app.lyrify.BuildConfig
 import app.lyrify.LOG_TAG
+import app.lyrify.ai.AiResult
 import app.lyrify.ai.api.AddonNames
 import app.lyrify.ai.api.AddonStatus
 import app.lyrify.ai.api.IAiAddon
@@ -258,7 +259,7 @@ private class AidlPort(private val addon: IAiAddon) : AddonPort {
 
             override fun onChunk(job: Long) = events.onChunk()
 
-            override fun onResult(job: Long, result: String) = events.onResult(Wire.result(result))
+            override fun onResult(job: Long, result: String?) = events.onResult(result?.let(Wire::result))
 
             override fun onStopped(job: Long) = events.onStopped()
 
@@ -273,6 +274,8 @@ private class AidlPort(private val addon: IAiAddon) : AddonPort {
     override fun proceed(job: Long) = call { addon.proceed(job) }
 
     override fun cancel(job: Long) = call { addon.cancel(job) }
+
+    override fun result(job: Long): AiResult? = call { Wire.joined { part -> addon.result(job, part) }?.let(Wire::result) }
 
     override fun closeEngine() = call { addon.closeEngine() }
 

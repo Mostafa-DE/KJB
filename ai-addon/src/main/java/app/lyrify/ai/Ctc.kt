@@ -343,14 +343,22 @@ object Ctc {
      * usable letters, or a window not run or too short for its text), as `npu_timing.py` `windowed` gives S2. With
      * [context] > 0, that many lines before and after each window's group are aligned in the same window too, so the
      * singing in its margins is explained by its own text; their times are discarded. [emissions] holds one entry per
-     * window of [windows], null for windows not run.
+     * window of [windows], null for windows not run. [progress] hears each window done and may throw to stop the pass.
      */
-    fun placed(lines: List<String>, windows: List<CtcWindow>, emissions: List<Emissions?>, context: Int = 0): List<Double?> {
+    fun placed(
+        lines: List<String>,
+        windows: List<CtcWindow>,
+        emissions: List<Emissions?>,
+        context: Int = 0,
+        progress: Progress = Progress { _, _ -> },
+    ): List<Double?> {
         require(windows.size == emissions.size) { "${windows.size} windows, ${emissions.size} emissions" }
-        val placed: Map<Int, Double> = windows.zip(emissions).flatMap { (window, em) ->
+        val placed: Map<Int, Double> = windows.zip(emissions).withIndex().flatMap { (w, pair) ->
+            val (window, em) = pair
             val lo = max(0, window.firstLine - context)
             val hi = min(lines.size, window.endLine + context)
             val starts = em?.let { alignLines(it, lines.subList(lo, hi)) }.orEmpty()
+            progress.step(w + 1, windows.size)
             starts.mapIndexedNotNull { k, start ->
                 start?.takeIf { lo + k in window.firstLine until window.endLine }?.let { lo + k to it + window.startSec }
             }
@@ -361,15 +369,15 @@ object Ctc {
     /**
      * [placed] on slices of the whole song's emissions ([wholeSong]) instead of a wav2vec2 run per window
      * (`npu_timing.py` `windowed_on`): a window of at least [MIN_WINDOW_SEC] gets the frames `round(start / 0.02)` until
-     * `round(end / 0.02)` (within the song), and its lines' times count from its first frame.
+     * `round(end / 0.02)` (within the song), and its lines' times count from its first frame. [progress] as [placed]'s.
      */
-    fun placedOn(whole: Emissions, lines: List<String>, windows: List<CtcWindow>, context: Int): List<Double?> {
+    fun placedOn(whole: Emissions, lines: List<String>, windows: List<CtcWindow>, context: Int, progress: Progress = Progress { _, _ -> }): List<Double?> {
         val sliced = windows.map { w ->
             if (w.durationSec < MIN_WINDOW_SEC) return@map w to null
             val f0 = Math.rint(w.startSec / FRAME_SEC).toInt()
             val f1 = min(whole.frames, Math.rint(w.endSec / FRAME_SEC).toInt())
             w.copy(startSec = f0 * FRAME_SEC) to whole.slice(f0, f1)
         }
-        return placed(lines, sliced.map { it.first }, sliced.map { it.second }, context)
+        return placed(lines, sliced.map { it.first }, sliced.map { it.second }, context, progress)
     }
 }

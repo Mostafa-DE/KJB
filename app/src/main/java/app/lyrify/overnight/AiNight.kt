@@ -225,7 +225,9 @@ class AiRunner(
             runLog("AI: the song list cannot be read; nothing runs")
             return AiRunEnd.DONE
         }
-        val jobs = AiQueue.of(state, clock(), canTake, align = verdict != GuardVerdict.NO_ALIGN)
+        // Timing known lyrics can be turned off during the run too (its stage stalled too often in a row).
+        var align = verdict != GuardVerdict.NO_ALIGN
+        val jobs = AiQueue.of(state, clock(), canTake, align = align)
         guard.prune(state)
         runLog("AI: ${jobs.size} songs waiting")
         var done = 0
@@ -244,6 +246,10 @@ class AiRunner(
                 }
                 val current = AiQueue.job(entry)
                 val title = current.track.title
+                if (!align && current.lrclibId != null) {
+                    runLog("AI: $title waits, timing known lyrics is off")
+                    continue
+                }
                 val song = guard.open(entry)
                 if (song.deaths >= CrashGuard.MAX_DEATHS) {
                     val stage = song.diedIn?.label() ?: "a run"
@@ -282,13 +288,25 @@ class AiRunner(
                 } catch (e: AddonStalledException) {
                     // The add-on stopped answering: its job was cancelled and the add-on let go of (it ends its own
                     // process if the step never ends). The song fails with the reason, tried again after the failed
-                    // runs' wait; it counts as a death in its stage too, so a stage that always hangs holds the AI. The
-                    // next song binds the add-on anew.
-                    song.died()
+                    // runs' wait; it counts as a death in its stage too, so a stage that always hangs holds the AI (or,
+                    // timing lyrics, turns timing off). The next song binds the add-on anew. A song whose audio file
+                    // was replaced meanwhile is another recording: nothing is recorded or counted for it.
                     closeEngine()
+                    val during = e.stage?.label() ?: "its start"
+                    if (song.audioChanged()) {
+                        song.ended()
+                        guard.drop(entry.path)
+                        runLog("AI: $title: the AI add-on stopped answering during $during, and its audio file changed; nothing recorded, it starts over in a later run")
+                        continue
+                    }
+                    song.died()
                     val status = record(current.track, AiResult.Failed("${e.javaClass.simpleName}: ${e.message}"))
-                    runLog("AI: $title: the AI add-on stopped answering during ${e.stage?.label() ?: "its start"} (nothing for ${seconds(e.silentMs)}); now $status")
-                    if (guard.verdict() == GuardVerdict.HOLD) return AiRunEnd.CRASHED
+                    runLog("AI: $title: the AI add-on stopped answering during $during (nothing for ${seconds(e.silentMs)}); now $status")
+                    when (guard.verdict()) {
+                        GuardVerdict.HOLD -> return AiRunEnd.CRASHED
+                        GuardVerdict.NO_ALIGN -> align = false
+                        GuardVerdict.NONE -> {}
+                    }
                     continue
                 } finally {
                     song.ended()

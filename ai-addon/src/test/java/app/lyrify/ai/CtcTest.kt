@@ -112,6 +112,18 @@ class CtcTest {
     }
 
     @Test
+    fun `the windowed pass tells each window done, so a stop reaches it between windows`() {
+        val lines = listOf("a", "b", "c")
+        val windows = listOf(CtcWindow(0, 2, 0.5, 4.0), CtcWindow(2, 3, 25.0, 35.0))
+        val first = confident(intArrayOf(0, 7, 0, Ctc.SEPARATOR, 24, 0))
+        val heard = mutableListOf<Pair<Int, Int>>()
+
+        Ctc.placed(lines, windows, listOf(first, null), progress = { done, total -> heard += done to total })
+
+        assertEquals(listOf(1 to 2, 2 to 2), heard)
+    }
+
+    @Test
     fun `with context lines a window also aligns its neighbours' text, and keeps only its own lines' times`() {
         val lines = listOf("a", "b", "c")
         val windows = listOf(CtcWindow(1, 2, 0.5, 4.0))
