@@ -130,6 +130,7 @@ fun sourceLabel(context: Context, source: QueueSource, songs: Int): String {
         SourceKind.GENRE -> R.string.queue_source_genre
         SourceKind.PLAYLIST -> R.string.queue_source_playlist
         SourceKind.SEARCH -> R.string.queue_source_search
+        SourceKind.BOOK -> R.string.queue_source_book
     }
     return context.getString(R.string.queue_source_named, context.getString(kind), source.name)
 }
@@ -229,6 +230,17 @@ class PlayerConnection(
 
     override fun play(songs: List<SongRef>, start: Int, source: QueueSource) {
         core.switch { it.play(songs, start, source, core.now()) }
+        send { it.play() }
+    }
+
+    /**
+     * A book's queue ([source], books/BookPlayback.kt) from part [start] at [positionMs]: "Continue" and a tap on a book.
+     * The queue playing when it is that book's already plays on where it is.
+     */
+    fun playFrom(songs: List<SongRef>, start: Int, positionMs: Long, source: QueueSource) {
+        if (core.book.value.current?.from(source) != true) {
+            core.switch { book -> book.play(songs, start, source, core.now()).let { it.copy(book = it.book.place(start, positionMs)) } }
+        }
         send { it.play() }
     }
 

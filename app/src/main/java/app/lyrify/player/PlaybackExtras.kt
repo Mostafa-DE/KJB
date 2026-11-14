@@ -8,6 +8,9 @@ import androidx.media3.common.PlaybackParameters
 import androidx.media3.session.MediaLibraryService
 import app.lyrify.LOG_TAG
 import app.lyrify.Lyrify
+import app.lyrify.books.BooksGraph
+import app.lyrify.books.bookSpeeds
+import app.lyrify.books.playingBook
 import app.lyrify.library.LibraryGraph
 import app.lyrify.library.LibraryState
 import app.lyrify.library.SongRef
@@ -34,6 +37,8 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -405,8 +410,11 @@ class PlayerExtras(private val storage: SongStateStorage, private val scope: Cor
     }
 }
 
-/** A song the player holds: its queue item's [uid], the song as the library has it now, and its length (0 when unknown). */
-data class Playing(val uid: Long, val song: SongRef, val durationMs: Long) {
+/**
+ * A song the player holds: its queue item's [uid], the song as the library has it now, and its length (0 when unknown).
+ * [inBook] while it plays in a book's queue: `books.json` keeps its place and speed (books/BookPlayback.kt).
+ */
+data class Playing(val uid: Long, val song: SongRef, val durationMs: Long, val inBook: Boolean = false) {
     val path: String get() = song.path
 }
 
@@ -420,6 +428,8 @@ class ExtrasDriver(
     private val port: ExtrasPort,
     private val extras: PlayerExtras,
     private val songOf: (Long) -> Playing?,
+    /** The speed of the book playing, null while music plays: a book plays at its own speed (books/BookPlayback.kt). */
+    private val bookSpeed: Flow<Speed?> = flowOf(null),
     private val mode: () -> RememberPlace,
 ) {
     private var current: Playing? = null
@@ -431,7 +441,7 @@ class ExtrasDriver(
 
     /** Runs until cancelled. */
     suspend fun run() = coroutineScope {
-        launch { combine(path, extras.state) { song, state -> state.speedOf(song) }.distinctUntilChanged().collect { port.setSpeed(it.speed, it.pitch) } }
+        launch { combine(path, extras.state, bookSpeed) { song, state, book -> book ?: state.speedOf(song) }.distinctUntilChanged().collect { port.setSpeed(it.speed, it.pitch) } }
         // A part set or moved while its song plays takes the player into it; the loop runs while the song plays.
         val part = combine(path, extras.state.map { it.part }.distinctUntilChanged()) { song, part -> part?.takeIf { it.path == song } }
         launch {
@@ -484,8 +494,9 @@ class ExtrasDriver(
         if (extras.state.value.part?.let { it.path != song.path } == true) extras.change { it.copy(part = null) }
         val jump = extras.jumpingTo == song.path
         extras.jumpingTo = null
-        // Not a new play: a lap, a bookmark's jump, a park at the start, or a song held by its part.
-        if (lap || jump || parked || extras.state.value.part?.path == song.path) return
+        // Not a new play: a lap, a bookmark's jump, a park at the start, or a song held by its part. A book's part
+        // starts where its book's place says (books/BookPlayback.kt), never at a place of its own.
+        if (lap || jump || parked || song.inBook || extras.state.value.part?.path == song.path) return
         val kept = extras.state.value.places[song.path] ?: return
         // Come in at its place already (crossfade loads the next song there): nothing to move, only the toast.
         if (natural && startedAtPlace(mode(), song.durationMs, kept, port.positionMs)) return extras.say(ExtrasSaid.Resumed(song.path, kept))
@@ -522,8 +533,9 @@ class ExtrasDriver(
         current?.let { keep(it, port.positionMs) }
     }
 
-    /** The place of [song] left at [positionMs], or none, when that changes anything. */
+    /** The place of [song] left at [positionMs], or none, when that changes anything; never for a book's part. */
     private fun keep(song: Playing, positionMs: Long) {
+        if (song.inBook) return
         val place = placeToKeep(mode(), song.durationMs, positionMs)
         if (extras.state.value.places[song.path] != place) extras.change { it.withPlace(song.song, place) }
     }
@@ -566,10 +578,12 @@ internal fun partScope(): CoroutineScope = CoroutineScope(SupervisorJob() + Disp
 
 /** The song [uid] of the queue playing, as the library has it now (a moved file's new path, its length). */
 internal fun playingOf(uid: Long, core: PlayerCore, library: StateFlow<LibraryState>, engine: PlaybackEngine): Playing? {
-    val ref = core.book.value.current?.items?.firstOrNull { it.uid == uid }?.song ?: return null
-    val song = (library.value as? LibraryState.Ready)?.library?.resolver?.find(ref)
+    val queue = core.book.value.current
+    val ref = queue?.items?.firstOrNull { it.uid == uid }?.song ?: return null
+    val read = (library.value as? LibraryState.Ready)?.library
+    val song = read?.resolver?.find(ref)
     val decoded = engine.durationMs.takeIf { it != C.TIME_UNSET && engine.loaded.getOrNull(engine.index) == uid } ?: 0
-    return Playing(uid, song?.ref ?: ref, song?.durationMs?.takeIf { it > 0 } ?: decoded)
+    return Playing(uid, song?.ref ?: ref, song?.durationMs?.takeIf { it > 0 } ?: decoded, inBook = playingBook(queue, read, uid) != null)
 }
 
 /** Speeds, the part repeating and Remember my place in the service ([ExtrasDriver] on the engine). */
@@ -583,7 +597,8 @@ class ExtrasPart : ServicePart {
         val core = PlayerGraph.core(service)
         val library = LibraryGraph.repository(service).state
         val settings = Lyrify.settings(service).settings.stateIn(scope, SharingStarted.Eagerly, Settings())
-        val made = ExtrasDriver(EngineExtras(engine), PlayerExtras.of(service), { uid -> playingOf(uid, core, library, engine) }) { settings.value.playback.rememberPlace }
+        val books = bookSpeeds(core, library, BooksGraph.store(service))
+        val made = ExtrasDriver(EngineExtras(engine), PlayerExtras.of(service), { uid -> playingOf(uid, core, library, engine) }, books) { settings.value.playback.rememberPlace }
         driver = made
         engine.addListener(object : EngineListener {
             override fun onSongStarted(uid: Long, lap: Boolean, natural: Boolean) = made.songStarted(uid, lap, natural)

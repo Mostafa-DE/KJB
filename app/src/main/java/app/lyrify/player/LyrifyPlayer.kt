@@ -8,11 +8,15 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.SimpleBasePlayer
 import androidx.media3.common.util.UnstableApi
+import app.lyrify.books.inBook
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 
-/** What the media session shows: the songs the player holds (by uid), the current one and its position, and the toggles. */
-data class SessionView(val uids: List<Long>, val index: Int, val positionMs: Long, val playing: Boolean, val shuffled: Boolean, val repeat: Repeat)
+/**
+ * What the media session shows: the songs the player holds (by uid), the current one and its position, and the toggles;
+ * [book] while a book's queue plays (book mode, books/BookPlayback.kt).
+ */
+data class SessionView(val uids: List<Long>, val index: Int, val positionMs: Long, val playing: Boolean, val shuffled: Boolean, val repeat: Repeat, val book: Boolean = false)
 
 /**
  * The session's view of KJB's player: the songs and place come from the player ([port]), Shuffle from the queue playing
@@ -22,7 +26,7 @@ fun sessionView(port: PlayerPort, playing: Boolean, book: QueueBook, repeat: Rep
     if (port.loaded.isEmpty()) {
         SessionView(emptyList(), -1, 0, playing = false, shuffled = false, repeat = repeat)
     } else {
-        SessionView(port.loaded, port.index, port.positionMs, playing, book.current?.shuffled == true, repeat)
+        SessionView(port.loaded, port.index, port.positionMs, playing, book.current?.shuffled == true, repeat, book = inBook(book.current))
     }
 
 /**
@@ -80,8 +84,22 @@ fun sessionSeek(mediaItemIndex: Int, seekCommand: Int, current: Int): SessionSee
 /**
  * The player commands the session offers for [view] (Player.COMMAND_*): the seeks once a song is loaded, Next on the
  * last song too ([sessionSeek]), so the app, the notification, a headset, the widget and the car all go round to the first.
+ * In a book, 30 s back and forward take the place of Previous and Next, and a book never shuffles or repeats.
  */
-fun sessionCommands(view: SessionView): List<Int> = ALWAYS_OFFERED + if (view.uids.isNotEmpty()) SEEKS_OFFERED else emptyList()
+fun sessionCommands(view: SessionView): List<Int> {
+    val offered = ALWAYS_OFFERED + if (view.uids.isNotEmpty()) SEEKS_OFFERED else emptyList()
+    return if (view.book) offered - NOT_IN_A_BOOK else offered
+}
+
+/** What a book's session leaves out ([sessionCommands]). */
+private val NOT_IN_A_BOOK: Set<Int> = setOf(
+    Player.COMMAND_SEEK_TO_PREVIOUS,
+    Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM,
+    Player.COMMAND_SEEK_TO_NEXT,
+    Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM,
+    Player.COMMAND_SET_SHUFFLE_MODE,
+    Player.COMMAND_SET_REPEAT_MODE,
+)
 
 private val ALWAYS_OFFERED: List<Int> = listOf(
     Player.COMMAND_PLAY_PAUSE,

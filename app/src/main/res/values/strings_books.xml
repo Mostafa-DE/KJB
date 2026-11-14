@@ -7,4 +7,12 @@
     <string name="book_marked">Marked as a book</string>
     <string name="book_unmarked">Back in your music</string>
     <string name="book_folder_menu">Folder menu</string>
+
+    <!-- A book's queue, as the player's "From" line and the queue pages name it. -->
+    <string name="book_source">Book · %1$s</string>
+    <string name="queue_source_book">Book</string>
+
+    <!-- A book's buttons in the notification, on the lock screen and in the car. -->
+    <string name="book_back_30">Back 30 s</string>
+    <string name="book_forward_30">Forward 30 s</string>
 </resources>

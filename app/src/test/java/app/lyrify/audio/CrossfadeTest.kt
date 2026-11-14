@@ -127,6 +127,14 @@ class CrossfadeTest {
     private val listSource = QueueSource(SourceKind.PLAYLIST, "playlist:road", "Road trip")
 
     @Test
+    fun `a book's parts never fade into each other, whatever the settings`() {
+        val parts = (1..3).map { song("Audiobooks/Folder Book/%02d.mp3".format(it), album = "Folder Book") }
+        val queue = QueueBook().play(parts.map { it.ref }, 0, QueueSource(SourceKind.BOOK, "book", "Folder Book"), now = 1).book.current!!
+        val (a, b) = queue.items.map { it.uid }
+        assertFalse(mayCrossfade(queue, a, b, keepAlbumsGapless = false, part = null, sleep = null))
+    }
+
+    @Test
     fun `Keep albums gapless - songs of one album in track order never fade into each other`() {
         val book = QueueBook().play(album.map { it.ref }, 0, albumSource, now = 1).book
         val queue = book.current!!

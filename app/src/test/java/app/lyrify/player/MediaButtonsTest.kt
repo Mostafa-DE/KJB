@@ -128,6 +128,30 @@ class MediaButtonsTest {
         assertEquals(emptyList<Press>(), acted)
     }
 
+    @Test
+    fun `in a book, two presses and Next go forward 30 s, three and Previous go back, one still plays or pauses`() {
+        assertEquals(true, bookPress(Press.NEXT))
+        assertEquals(false, bookPress(Press.PREVIOUS))
+        assertEquals(null, bookPress(Press.PLAY_PAUSE))
+        assertEquals(true, bookSeek(KeyEvent.KEYCODE_MEDIA_NEXT))
+        assertEquals(true, bookSeek(KeyEvent.KEYCODE_MEDIA_FAST_FORWARD))
+        assertEquals(false, bookSeek(KeyEvent.KEYCODE_MEDIA_PREVIOUS))
+        assertEquals(false, bookSeek(KeyEvent.KEYCODE_MEDIA_REWIND))
+        assertEquals(null, bookSeek(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE))
+        assertEquals(null, bookSeek(KeyEvent.KEYCODE_HEADSETHOOK))
+    }
+
+    @Test
+    fun `a book's notification, lock screen and car show back 30 s where Previous is and forward 30 s where Next is`() {
+        assertEquals(
+            listOf(
+                BookButton(androidx.media3.common.Player.COMMAND_SEEK_BACK, CommandButton.ICON_SKIP_BACK_30, R.string.book_back_30, CommandButton.SLOT_BACK),
+                BookButton(androidx.media3.common.Player.COMMAND_SEEK_FORWARD, CommandButton.ICON_SKIP_FORWARD_30, R.string.book_forward_30, CommandButton.SLOT_FORWARD),
+            ),
+            bookButtons(),
+        )
+    }
+
     // The notification's extra buttons
 
     @Test

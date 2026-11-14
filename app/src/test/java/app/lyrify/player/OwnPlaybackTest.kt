@@ -207,6 +207,24 @@ class OwnPlaybackTest {
         assertTrue(Player.COMMAND_PLAY_PAUSE in none)
     }
 
+    @Test
+    fun `a book's session offers 30 s back and forward in place of Previous and Next, and no Shuffle or Repeat`() {
+        val bookSource = QueueSource(SourceKind.BOOK, "/storage/emulated/0/Audiobooks/Folder Book/|Folder Book", "Folder Book")
+        val queues = QueueBook().play(songs.take(3).map { it.ref }, 0, bookSource, now = 1).book
+        val uids = queues.current!!.items.map { it.uid }
+        val view = sessionView(StillPort(uids, 0, 5_000), playing = true, book = queues, repeat = Repeat.ALL)
+        assertTrue(view.book)
+        val offered = sessionCommands(view)
+        listOf(Player.COMMAND_SEEK_BACK, Player.COMMAND_SEEK_FORWARD, Player.COMMAND_SEEK_TO_MEDIA_ITEM, Player.COMMAND_SEEK_IN_CURRENT_MEDIA_ITEM, Player.COMMAND_PLAY_PAUSE)
+            .forEach { assertTrue("$it", it in offered) }
+        listOf(
+            Player.COMMAND_SEEK_TO_PREVIOUS, Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM, Player.COMMAND_SEEK_TO_NEXT, Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM,
+            Player.COMMAND_SET_SHUFFLE_MODE, Player.COMMAND_SET_REPEAT_MODE,
+        ).forEach { assertFalse("$it", it in offered) }
+        // Music keeps them all.
+        assertFalse(sessionView(StillPort(uids, 0, 5_000), playing = true, book = QueueBook().play(songs.take(3).map { it.ref }, 0, albumSource, now = 1).book, repeat = Repeat.ALL).book)
+    }
+
     // Offload
 
     @Test

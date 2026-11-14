@@ -89,6 +89,22 @@ class SleepTest {
         assertEquals(byTime, sleepAfterSong(byTime))
     }
 
+    @Test
+    fun `End of chapter fades and stops at the chapter's end at the speed it plays, and a seek moves it to the chapter landed in`() {
+        val timer = SleepTimer.ByChapter(endMs = 600_000, ends = listOf(300_000, 600_000, 900_000))
+        assertEquals(100_000L, sleepLeftMs(timer, 0, 500_000, 900_000, 1f))
+        assertEquals(50_000L, sleepLeftMs(timer, 0, 500_000, 900_000, 2f))
+        assertEquals(1f, sleepStep(timer, 0, 500_000, 900_000, 1f).volume, 0f)
+        assertEquals(0.125f, sleepStep(timer, 0, 592_500, 900_000, 1f).volume, 0.001f)
+        assertFalse(sleepStep(timer, 0, 592_500, 900_000, 1f).stops)
+        assertTrue(sleepStep(timer, 0, 600_000, 900_000, 1f).stops)
+        assertEquals(900_000L, timer.seekedTo(650_000).endMs)
+        assertEquals(300_000L, timer.seekedTo(10_000).endMs)
+        assertEquals(900_000L, timer.seekedTo(950_000).endMs)
+        // The file played to its end: the timer is done.
+        assertNull(sleepAfterSong(timer))
+    }
+
     // The driver, on a fake player
 
     private class Run(val port: FakeExtrasPort, val timer: MutableStateFlow<SleepTimer?>, val driver: SleepDriver, var stops: Int = 0, var parks: Int = 0)
@@ -179,6 +195,20 @@ class SleepTest {
         assertEquals(1, run.stops)
         // That song waits at its start: parked, so it does not resume at a place kept for it.
         assertEquals(1, run.parks)
+    }
+
+    @Test
+    fun `End of chapter stops the music at the chapter's end, and a seek past it waits for the next chapter's`() = runTest {
+        val run = driving(SleepTimer.ByChapter(endMs = 100_000, ends = listOf(100_000, 200_000)))
+        run.port.positionMs = 150_000
+        run.driver.seeked(150_000)
+        assertEquals(200_000L, (run.timer.value as SleepTimer.ByChapter).endMs)
+        run.port.positionMs = 200_000
+        advanceTimeBy(1_100)
+        runCurrent()
+        assertFalse(run.port.playing)
+        assertNull(run.timer.value)
+        assertEquals(1, run.stops)
     }
 
     @Test
