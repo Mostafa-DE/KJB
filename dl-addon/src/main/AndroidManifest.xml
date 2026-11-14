@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- The one way in: DlService below, bound only by an app holding this permission. Signature level: Android grants it,
+         without asking, only to apps signed with this add-on's key, which is KJB's. KJB only uses it, so either can be
+         installed first. The name carries the add-on's own id, so a debug and a release add-on never declare the same
+         one. -->
+    <permission
+        android:name="${applicationId}.permission.BIND_DL"
+        android:protectionLevel="signature" />
+
+    <!-- Its only permission: yt-dlp looks up links and downloads from the sites the user shares, YouTube's oEmbed gives
+         the quick info, and yt-dlp updates itself from its GitHub releases. No storage permission: the add-on works in its
+         own cache and streams the finished file into a descriptor KJB opened. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- youtubedl-android's library and ffmpeg modules ask for nothing more; this keeps it so if a later one does. -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        tools:node="remove" />
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        tools:node="remove" />
+
+    <!-- No activity and no launcher icon: the add-on shows only in Settings > Apps. -->
+    <application
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        tools:ignore="DataExtractionRules">
+
+        <!-- KJB binds it by its explicit name while it looks up a link or downloads. Exported for KJB only: the signature
+             permission above, and every call checks the caller's uid and certificate (DlService.kt). -->
+        <service
+            android:name=".DlService"
+            android:exported="true"
+            android:permission="${applicationId}.permission.BIND_DL" />
+    </application>
+</manifest>

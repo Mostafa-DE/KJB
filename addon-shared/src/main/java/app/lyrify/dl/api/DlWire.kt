@@ -42,10 +42,13 @@ data class DlRequest(
     val originalLanguage: Boolean = true,
 ) {
     /** A key the add-on may name a folder after, a web link, and a sane height: anything else is refused. */
-    val valid: Boolean get() = REQUEST_KEY.matches(key) && isWebLink(url) && (height == null || height in 1..MAX_HEIGHT)
+    val valid: Boolean get() = isDownloadKey(key) && isWebLink(url) && (height == null || height in 1..MAX_HEIGHT)
 }
 
-private val REQUEST_KEY = Regex("[A-Za-z0-9-]{1,64}")
+/** A download's key: letters, digits and dashes, at most 64, so the add-on can name a folder after it and nothing else. */
+fun isDownloadKey(key: String): Boolean = DOWNLOAD_KEY.matches(key)
+
+private val DOWNLOAD_KEY = Regex("[A-Za-z0-9-]{1,64}")
 private const val MAX_HEIGHT = 10_000
 
 /**
@@ -166,10 +169,13 @@ sealed interface DlEnd {
     data object Stopped : DlEnd
 }
 
-/** An update of yt-dlp (IDlAddon.update): a newer one in place, already the newest, or not done (offline). */
+/**
+ * An update of yt-dlp (IDlAddon.update): a newer one in place, already the newest, not done (offline), or not now (a
+ * download is using yt-dlp: it is never swapped under a running one).
+ */
 @Serializable
 data class DlUpdate(val outcome: Outcome, val version: String? = null) {
-    enum class Outcome { UPDATED, CURRENT, FAILED }
+    enum class Outcome { UPDATED, CURRENT, FAILED, BUSY }
 }
 
 /**

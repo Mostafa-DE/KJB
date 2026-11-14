@@ -27,3 +27,4 @@ include(":ai-addon")
 // What KJB and every add-on share: the trust both ways and the Downloads add-on's contract; and the Downloads add-on, its
 // own APK (KJB Downloads, app.lyrify.dl) with yt-dlp (lyrify-bench handoff/downloads-addon-design.md).
 include(":addon-shared")
+include(":dl-addon")
