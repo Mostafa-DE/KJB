@@ -12,6 +12,7 @@ import app.lyrify.ai.api.IAiAddon
 import app.lyrify.ai.api.ImportReply
 import app.lyrify.data.SharedWrites
 import app.lyrify.lyrics.LocalTrack
+import app.lyrify.lyrics.LrcFormat
 import app.lyrify.models.ModelState
 import app.lyrify.tags.TagLibFile
 import kotlinx.coroutines.runBlocking
@@ -131,19 +132,17 @@ class AddonDeviceTest {
     }
 
     /**
-     * [song]'s plain lyrics: a `.txt` beside it, else a synced `.lrc` beside it, else its lyrics tag; LRC times and tag
-     * lines (`[ar:...]`) taken off. Null when it has none.
+     * [song]'s plain lyrics: a `.txt` beside it, else a synced `.lrc` beside it, else its lyrics tag. Synced lyrics give
+     * one line per time, in playing order ([LrcFormat.parseLrclib]), so a line with several times (a chorus) is there
+     * each time it is sung; word times and tag lines (`[ar:...]`) are taken off. Null when it has none.
      */
     private fun plainLyrics(song: File, music: File): String? {
         fun beside(extension: String) = File(song.parentFile, "${song.nameWithoutExtension}.$extension").takeIf { it.isFile }?.readText()
         val text = beside("txt") ?: beside("lrc")
             ?: runCatching { TagLibFile(music).read(song)?.fields }.getOrNull()?.let { it["LYRICS"] ?: it["UNSYNCEDLYRICS"] }?.firstOrNull()
-        return text?.lines()
-            ?.filterNot { LRC_TAG.matches(it.trim()) }
-            ?.map { it.replace(LRC_TIME, "").replace(LRC_WORD_TIME, "").trim() }
-            ?.filter { it.isNotEmpty() }
-            ?.joinToString("\n")
-            ?.takeIf { it.isNotEmpty() }
+            ?: return null
+        val lines = if (LrcFormat.timed(text)) LrcFormat.parseLrclib(text).map { it.text } else text.lines().filterNot { LRC_TAG.matches(it.trim()) }
+        return lines.map { it.replace(LRC_WORD_TIME, "").trim() }.filter { it.isNotEmpty() }.joinToString("\n").takeIf { it.isNotEmpty() }
     }
 
     /** [song]'s length as its file says, for the LRC's check; 3 minutes when it does not say. */
@@ -224,9 +223,6 @@ class AddonDeviceTest {
         const val TAG = "AddonDeviceTest"
 
         val SONGS = setOf("mp3", "m4a", "flac", "ogg")
-
-        /** The LRC times at a line's start, `[mm:ss.xx]`, one or more. */
-        val LRC_TIME = Regex("""^(?:\[\d+:\d+(?:[.:]\d+)?])+""")
 
         /** An enhanced LRC's word times, `<mm:ss.xx>`. */
         val LRC_WORD_TIME = Regex("""<\d+:\d+(?:[.:]\d+)?>""")
