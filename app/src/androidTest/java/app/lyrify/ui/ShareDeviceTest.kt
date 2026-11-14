@@ -19,18 +19,21 @@ import java.io.File
 /**
  * Share on the phone, with no other app launched: the chooser intent each share builds (the files in EXTRA_STREAM and in
  * ClipData with the read grant, which the chooser carries on), 500 songs inside the Binder buffer, and KJB's FileProvider
- * serving a `.lrc` copy from its cache as a file. Made-up names and lines only; nothing is written to shared storage.
+ * serving a `.lrc` copy from its cache as a file: the copy goes where a real share puts it, the provider's one folder
+ * (cache/share/), and only the test's own copy is removed. Made-up names and lines only; nothing goes to shared storage.
  */
 @RunWith(AndroidJUnit4::class)
 class ShareDeviceTest {
     private val context = InstrumentationRegistry.getInstrumentation().targetContext
     private val dir = File(context.filesDir, "share-device-test")
-    private val cache = File(context.cacheDir, "share-device-test")
+
+    /** The folders this test's copies went to, each its own under cache/share/ ([lrcCopy]). */
+    private val copies = mutableListOf<File>()
 
     @After
     fun cleanUp() {
         dir.deleteRecursively()
-        cache.deleteRecursively()
+        copies.forEach(File::deleteRecursively)
     }
 
     private fun song(id: Long, type: String?, title: String) = SharedSong("content://media/external/audio/media/$id", type, title)
@@ -107,8 +110,10 @@ class ShareDeviceTest {
         dir.mkdirs()
         val bytes = "[00:01.000]First made-up line\n[00:04.000]Second made-up line\n".toByteArray()
         File(dir, "01 Paper Lantern.lrc").writeBytes(bytes)
-        val copy = checkNotNull(lrcCopy(cache, File(dir, "01 Paper Lantern.mp3").path, System.currentTimeMillis())) { "no copy" }
+        val copy = checkNotNull(lrcCopy(context.cacheDir, File(dir, "01 Paper Lantern.mp3").path, System.currentTimeMillis())) { "no copy" }
+        copies += copy.parentFile!!
         assertEquals("01 Paper Lantern.lrc", copy.name)
+        assertEquals(File(context.cacheDir, "share").canonicalPath, copy.parentFile!!.parentFile!!.canonicalPath)
         val uri = FileProvider.getUriForFile(context, context.packageName + ".share", copy)
         assertEquals(LRC_TYPE, context.contentResolver.getType(uri))
         assertArrayEquals(bytes, context.contentResolver.openInputStream(uri)!!.use { it.readBytes() })
@@ -125,7 +130,7 @@ class ShareDeviceTest {
     fun plainLyricsHaveNoFileToShare() {
         dir.mkdirs()
         File(dir, "02 Tide Bell.lrc").writeText("First made-up line\nSecond made-up line\n")
-        assertNull(lrcCopy(cache, File(dir, "02 Tide Bell.mp3").path, System.currentTimeMillis()))
-        assertNull(lrcCopy(cache, File(dir, "03 Low Water.mp3").path, System.currentTimeMillis()))
+        assertNull(lrcCopy(context.cacheDir, File(dir, "02 Tide Bell.mp3").path, System.currentTimeMillis()))
+        assertNull(lrcCopy(context.cacheDir, File(dir, "03 Low Water.mp3").path, System.currentTimeMillis()))
     }
 }

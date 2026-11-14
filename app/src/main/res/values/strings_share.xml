@@ -16,5 +16,8 @@
         <item quantity="other">%d songs aren\'t on your phone now</item>
     </plurals>
     <string name="share_no_lyrics">Couldn\'t read the lyrics. Try again.</string>
-    <string name="share_failed">Couldn\'t share. Try again.</string>
+    <plurals name="share_failed">
+        <item quantity="one">Couldn\'t share that song</item>
+        <item quantity="other">Couldn\'t share those songs</item>
+    </plurals>
 </resources>

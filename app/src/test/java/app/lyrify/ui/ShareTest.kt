@@ -65,6 +65,21 @@ class ShareTest {
         assertThrows(IllegalArgumentException::class.java) { songsShare(emptyList(), several) }
     }
 
+    // Starting the share sheet
+
+    @Test
+    fun `a read grant Android rejects ends as a failed share of those songs, never a crash`() {
+        // A song deleted, trashed or on a card taken out after it was found: the grant check throws SecurityException.
+        val rejected = runCatching { launchShare(3) { throw SecurityException("no read access to a made-up uri") } }
+        assertEquals(Result.success(Shared.Failed(3)), rejected)
+        assertEquals(Shared.Opened, launchShare(1) {})
+    }
+
+    @Test
+    fun `any other error while starting is not hidden`() {
+        assertThrows(IllegalStateException::class.java) { launchShare(1) { throw IllegalStateException("a made-up bug") } }
+    }
+
     // Which lyrics a song can share
 
     @Test
