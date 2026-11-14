@@ -102,6 +102,25 @@ class SharedWritesTest {
     }
 
     @Test
+    fun `a debug build lists the books in its Audiobooks test folder but changes nothing there`() {
+        val books = listOf(
+            "/storage/emulated/0/Audiobooks/KJB test/Lantern Keeper/01.mp3",
+            "/storage/1A2B-3C4D/Audiobooks/KJB test/Quiet Orchard.m4b",
+        )
+        books.forEach { path ->
+            assertTrue(path, debug.lists(path))
+            assertFalse(path, SharedWrites.inTestFolder(path))
+            SharedWrite.entries.forEach { write -> assertFalse("$write $path", debug.allows(write, path)) }
+        }
+        listOf(
+            "/storage/emulated/0/Audiobooks/Quiet Orchard.m4b",
+            "/storage/emulated/0/Audiobooks/KJB testing/Quiet Orchard.m4b",
+            "/storage/emulated/0/Audiobooks/KJB test/../Quiet Orchard.m4b",
+            "/storage/emulated/0/Music/Audiobooks/KJB test/Quiet Orchard.m4b",
+        ).forEach { assertFalse(it, debug.lists(it)) }
+    }
+
+    @Test
     fun `a release build changes and lists everything, as 2_0 did`() {
         val release = SharedWrites(testFolderOnly = false) { logs += it }
         (inTestFolder + elsewhere).forEach { path ->
@@ -403,6 +422,8 @@ class SharedWritesTest {
             // import journal in the app's files.
             "backup/ImportSources.kt",
             "backup/Musicolet.kt",
+            // books.json, and a copy of an unreadable one.
+            "books/BookStore.kt",
             "data/LedgerRepository.kt",
             "dupes/DuplicatesStore.kt",
             "library/Playlists.kt",

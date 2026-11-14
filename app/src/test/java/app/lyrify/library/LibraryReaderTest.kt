@@ -170,6 +170,21 @@ class LibraryReaderTest {
     }
 
     @Test
+    fun `audiobooks are listed, marked by MediaStore or in an Audiobooks folder, and podcasts stay out`() {
+        val rows = listOf(
+            row("Audiobooks/Lantern Keeper/1.mp3", MediaStore.Audio.Media.IS_MUSIC to 0, MediaStore.Audio.AudioColumns.IS_AUDIOBOOK to 1, id = 1),
+            row("Books/Quiet Orchard.m4b", MediaStore.Audio.Media.IS_MUSIC to 0, MediaStore.Audio.AudioColumns.IS_AUDIOBOOK to 1, id = 2),
+            row("Download/audiobooks/Tin Roof.mp3", MediaStore.Audio.Media.IS_MUSIC to 0, id = 3),
+            row("Podcasts/Glass Talk/Episode 4.mp3", MediaStore.Audio.Media.IS_MUSIC to 0, MediaStore.Audio.AudioColumns.IS_PODCAST to 1, id = 4),
+            row("Music/A/song.mp3", id = 5),
+        )
+
+        val read = songs(reader(rows).read())
+        assertEquals(listOf(1L, 2L, 3L, 5L), read.map { it.ref.mediaStoreId })
+        assertEquals(listOf(true, true, false, false), read.map { it.isAudiobook })
+    }
+
+    @Test
     fun `a debug build lists only the songs in its test folder`() {
         val root = folder.root.toPath()
         val debug = SharedWrites(testFolderOnly = true, root = root)

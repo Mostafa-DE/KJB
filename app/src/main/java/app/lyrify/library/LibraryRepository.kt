@@ -5,6 +5,8 @@ import android.util.Log
 import androidx.datastore.dataStoreFile
 import app.lyrify.LOG_TAG
 import app.lyrify.Lyrify
+import app.lyrify.books.BookMarks
+import app.lyrify.books.BooksGraph
 import app.lyrify.logFailures
 import app.lyrify.settings.Settings
 import kotlinx.coroutines.CoroutineDispatcher
@@ -47,7 +49,7 @@ sealed interface LibraryState {
  * The current [Library] for every screen, the player and the play counter. Songs are read on [io] once, then again
  * only when MediaStore reports a change to them, after [DEBOUNCE_MS] without another (it reports a burst while it scans),
  * and only if its version and generation moved ([LibrarySource.stamp]). The library is regrouped on [compute] when the
- * songs or the user's filters ("Skip short clips", "Folders to skip") change; other settings change nothing here. A read
+ * songs, the user's filters ("Skip short clips", "Folders to skip") or their book marks change; other settings change nothing here. A read
  * that fails keeps the library as it was. The log gets counts, times and exception names only.
  */
 @OptIn(FlowPreview::class, ExperimentalCoroutinesApi::class)
@@ -57,6 +59,8 @@ class LibraryRepository(
     scope: CoroutineScope,
     private val io: CoroutineDispatcher = Dispatchers.IO,
     private val compute: CoroutineDispatcher = Dispatchers.Default,
+    /** The user's "Mark as book" and "Not a book" (`books.json`), once read: the library regroups when they change. */
+    marks: Flow<BookMarks> = flowOf(BookMarks()),
     private val log: (String) -> Unit = {},
 ) {
     private val asked = MutableSharedFlow<Unit>(extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST)
@@ -88,8 +92,9 @@ class LibraryRepository(
     val state: StateFlow<LibraryState> = combine(
         songs,
         settings.distinctUntilChanged { a, b -> a.playback.skipShortClips == b.playback.skipShortClips && a.library.foldersToSkip == b.library.foldersToSkip },
-    ) { all, filters -> all to filters }
-        .mapLatest { (all, filters) -> if (all == null) LibraryState.Unreadable else LibraryState.Ready(withContext(compute) { Library.of(all, filters) }) }
+        marks.distinctUntilChanged(),
+    ) { all, filters, books -> Triple(all, filters, books) }
+        .mapLatest { (all, filters, books) -> if (all == null) LibraryState.Unreadable else LibraryState.Ready(withContext(compute) { Library.of(all, filters, books) }) }
         .stateIn(scope, SharingStarted.Eagerly, LibraryState.Loading)
 
     /** Reads the songs again even if MediaStore says nothing changed: after All files access is granted, say. */
@@ -115,6 +120,7 @@ object LibraryGraph {
         source = LibraryReader(context.applicationContext, Lyrify.writes),
         settings = Lyrify.settings(context).settings,
         scope = scope,
+        marks = BooksGraph.store(context).marks,
         log = { Log.i(LOG_TAG, it) },
     ).also { repository = it }
 

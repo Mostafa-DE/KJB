@@ -1,5 +1,6 @@
 package app.lyrify.library
 
+import app.lyrify.books.BookMarks
 import app.lyrify.settings.LibrarySettings
 import app.lyrify.settings.PlaybackSettings
 import app.lyrify.settings.Settings
@@ -167,5 +168,22 @@ class LibraryRepositoryTest {
         assertTrue(logs.toString(), logs.any { "2 songs" in it })
         assertTrue(logs.toString(), logs.any { "SecurityException" in it })
         assertFalse(logs.toString(), logs.any { "Lantern" in it || "Harbour" in it || "/storage" in it || "Kit" in it })
+    }
+
+    @Test
+    fun `the user's book marks regroup the library without reading MediaStore again`() = runTest {
+        val parts = listOf("01", "02").map { song("Music/Rips/Lantern Keeper/$it.mp3", album = "Lantern Keeper") }
+        source.result = SongsRead.Songs(parts + lantern)
+        val marks = MutableStateFlow(BookMarks())
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val repository = LibraryRepository(source, settings, backgroundScope, io = dispatcher, compute = dispatcher, marks = marks) { logs += it }
+        runCurrent()
+        assertTrue(repository.library().books.isEmpty())
+
+        marks.value = BookMarks(folders = setOf("Music/Rips/Lantern Keeper"))
+        runCurrent()
+        assertEquals(parts, repository.library().books.single().parts)
+        assertEquals(listOf(lantern), repository.library().songs)
+        assertEquals(1, source.reads)
     }
 }

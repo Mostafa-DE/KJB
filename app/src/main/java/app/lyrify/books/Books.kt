@@ -1,0 +1,221 @@
+package app.lyrify.books
+
+import app.lyrify.library.Song
+import java.util.Locale
+import kotlin.math.ceil
+
+// Audiobook mode (features 2026-11-15, item 13): what makes a song or a folder a book, the books grouped from the
+// library's songs, their chapters, and where a listener is in one. Pure: the library builds its books with [booksOf],
+// the Books tab and the player read the rest. Research: handoff/audiobook-research.md, sections 2 and 6.
+
+/**
+ * What the user said in the song and folder menus. "Mark as book" on a song ([songs], by path) makes it a book of its
+ * own; on a folder ([folders], relative to its volume without the last slash, as [app.lyrify.library.Folder.path] has
+ * it) it makes the folder's own files books, grouped by album. "Not a book" ([notSongs], [notFolders]) keeps them music
+ * whatever the automatic signals say. A song's own mark wins over its folder's.
+ */
+data class BookMarks(
+    val songs: Set<String> = emptySet(),
+    val folders: Set<String> = emptySet(),
+    val notSongs: Set<String> = emptySet(),
+    val notFolders: Set<String> = emptySet(),
+)
+
+/** A book of one file (its chapters inside it, or none), or of the files of one folder and album (a file per chapter). */
+enum class BookKind { SINGLE, FOLDER }
+
+/**
+ * A book in the library. [id] never changes while its files stay: the file's path for a single file, the folder's
+ * path and the album for a folder book ([folderBookId]). [parts] are in play order ([partOrder]); a single file has one.
+ * [title] is the file's title or the folder book's album (else the folder's name); [author] the album artist or artist.
+ */
+data class Book(val id: String, val kind: BookKind, val title: String, val author: String?, val parts: List<Song>) {
+    /** The whole book's length; a part MediaStore could not measure counts 0. */
+    val durationMs: Long get() = parts.sumOf { it.durationMs.coerceAtLeast(0) }
+
+    /** Where part [index] starts in the whole book. */
+    fun partStartMs(index: Int): Long = parts.take(index.coerceAtLeast(0)).sumOf { it.durationMs.coerceAtLeast(0) }
+
+    /** The folder its files are in, relative to the volume without the last slash: what a folder mark names. */
+    val folder: String get() = folderKey(parts.first())
+}
+
+/** A chapter, in the book's own time: from [startMs] until [endMs]. [title] null when the file names none. */
+data class Chapter(val startMs: Long, val endMs: Long, val title: String?)
+
+/** The genre tags that make a song a book on their own, compared trimmed and without case. */
+val BOOK_GENRES: Set<String> = setOf("audiobook", "audiobooks", "audio book", "spoken word")
+
+/**
+ * Whether [song] is a book by a signal of its own: MediaStore's IS_AUDIOBOOK, a folder named Audiobooks on the way
+ * (where Android's scanner sets that flag, checked here too as phones differ), the `.m4b` extension, or a book genre.
+ * Podcasts and long files only suggest "Mark as book"; they never make a book on their own.
+ */
+fun autoBook(song: Song): Boolean =
+    song.isAudiobook ||
+        inAudiobooksFolder(song.folder) ||
+        song.path.endsWith(M4B, ignoreCase = true) ||
+        song.genre?.trim()?.lowercase(Locale.ROOT) in BOOK_GENRES
+
+/** Whether [folder] (relative to its volume) is in a folder named Audiobooks, at any depth and in any case. */
+fun inAudiobooksFolder(folder: String): Boolean = folder.split('/').any { it.equals(AUDIOBOOKS, ignoreCase = true) }
+
+/** The folder a mark names for [song]: its folder relative to the volume, without the slashes at the ends. */
+fun folderKey(song: Song): String = song.folder.trim('/')
+
+/** What the user said of [song]: true "Mark as book", false "Not a book", null nothing. Its own mark wins over its folder's. */
+fun userMark(song: Song, marks: BookMarks): Boolean? = when {
+    song.path in marks.notSongs -> false
+    song.path in marks.songs -> true
+    folderKey(song) in marks.notFolders -> false
+    folderKey(song) in marks.folders -> true
+    else -> null
+}
+
+/** The id of the folder book of the files in folder [dir] (an absolute path) with album [album]. */
+fun folderBookId(dir: String, album: String?): String = "$dir/|${album.orEmpty()}"
+
+/**
+ * The books among [songs] (the library's, already filtered), by [marks] and the automatic signals, by title. A song
+ * marked "Mark as book" is a book of its own. The rest are grouped by folder (their absolute folder) and album tag (the
+ * same, or none for all): a group of two or more files is one folder book when its folder is marked or any of its files
+ * has an automatic signal ([autoBook]); an `.m4b` is always a book of its own, never a part. A lone file is a book when
+ * it has a signal of its own or its folder is marked. "Not a book" on a song or its folder keeps it out.
+ */
+fun booksOf(songs: List<Song>, marks: BookMarks): List<Book> {
+    val books = ArrayList<Book>()
+    val grouped = ArrayList<Song>()
+    songs.forEach { song ->
+        when {
+            song.path in marks.notSongs || folderKey(song) in marks.notFolders && song.path !in marks.songs -> Unit
+            song.path in marks.songs || song.path.endsWith(M4B, ignoreCase = true) -> books += single(song)
+            else -> grouped += song
+        }
+    }
+    grouped.groupBy { it.path.substringBeforeLast('/') to it.album?.trim()?.takeIf(String::isNotEmpty) }.forEach { (key, group) ->
+        val folderMarked = folderKey(group.first()) in marks.folders
+        if (!folderMarked && group.none(::autoBook)) return@forEach
+        if (group.size == 1) {
+            books += single(group.single())
+            return@forEach
+        }
+        val (dir, album) = key
+        books += Book(folderBookId(dir, album), BookKind.FOLDER, album ?: dir.substringAfterLast('/'), authorOf(group), partOrder(group))
+    }
+    return books.sortedWith(compareBy<Book, String>(::naturalCompare) { it.title }.thenBy { it.id })
+}
+
+/** A book of [song] alone. */
+private fun single(song: Song): Book = Book(song.path, BookKind.SINGLE, song.title, authorOf(listOf(song)), listOf(song))
+
+/** The album artist, else the artist, of the first part that has one. */
+private fun authorOf(parts: List<Song>): String? =
+    parts.firstNotNullOfOrNull { it.albumArtist?.trim()?.takeIf(String::isNotEmpty) } ?: parts.firstNotNullOfOrNull { it.artist?.trim()?.takeIf(String::isNotEmpty) }
+
+/**
+ * The order of a folder book's [parts]: by disc and track number when every part has a track number, else by file name
+ * with each run of digits by its value, so `2.mp3` comes before `10.mp3`.
+ */
+fun partOrder(parts: List<Song>): List<Song> {
+    val byName = compareBy<Song, String>(::naturalCompare) { it.fileName }.thenBy { it.path }
+    return if (parts.all { it.track != null }) parts.sortedWith(compareBy<Song> { it.disc ?: 1 }.thenBy { it.track }.then(byName)) else parts.sortedWith(byName)
+}
+
+/** [a] and [b] with each run of digits compared by its value, the rest without case. */
+fun naturalCompare(a: String, b: String): Int {
+    var i = 0
+    var j = 0
+    while (i < a.length && j < b.length) {
+        val digits = a[i].isDigit()
+        if (digits != b[j].isDigit()) return a[i].lowercaseChar().compareTo(b[j].lowercaseChar())
+        var endA = i
+        while (endA < a.length && a[endA].isDigit() == digits) endA++
+        var endB = j
+        while (endB < b.length && b[endB].isDigit() == digits) endB++
+        val runA = a.substring(i, endA)
+        val runB = b.substring(j, endB)
+        val order = if (digits) {
+            val valueA = runA.trimStart('0')
+            val valueB = runB.trimStart('0')
+            // The longer number is the bigger; of equal length, digit by digit; of one value, fewer leading zeros first.
+            valueA.length.compareTo(valueB.length).takeIf { it != 0 } ?: valueA.compareTo(valueB).takeIf { it != 0 } ?: runA.length.compareTo(runB.length)
+        } else {
+            runA.compareTo(runB, ignoreCase = true)
+        }
+        if (order != 0) return order
+        i = endA
+        j = endB
+    }
+    return (a.length - i).compareTo(b.length - j).takeIf { it != 0 } ?: a.compareTo(b)
+}
+
+/** A folder book's chapter title for its part [song]: its title tag, or its file name without the number in front and the extension; null when that leaves nothing. */
+fun partTitle(song: Song): String? {
+    val name = song.fileName.substringBeforeLast('.')
+    if (song.title != name) return song.title.trim().takeIf(String::isNotEmpty)
+    return name.replace(LEADING_NUMBER, "").trim().takeIf(String::isNotEmpty)
+}
+
+/** A file name's number in front and what follows it: "01 ", "01 - ", "1. ", "01_". */
+private val LEADING_NUMBER = Regex("""^\d+[\s._-]*""")
+
+/** A folder book's chapters: one per part, each as long as its file. */
+fun partChapters(book: Book): List<Chapter> {
+    var start = 0L
+    return book.parts.map { part ->
+        val end = start + part.durationMs.coerceAtLeast(0)
+        Chapter(start, end, partTitle(part)).also { start = end }
+    }
+}
+
+/** Where a listener is in a book: part [partIndex] (0 for a single file), [positionMs] into it. */
+data class BookPlace(val partIndex: Int = 0, val positionMs: Long = 0)
+
+/** [place] in [book]'s own time: the parts before it, then the position in its part; within the book. */
+fun bookMs(book: Book, place: BookPlace): Long {
+    val index = place.partIndex.coerceIn(0, book.parts.lastIndex)
+    val length = book.parts[index].durationMs.coerceAtLeast(0)
+    return book.partStartMs(index) + place.positionMs.coerceIn(0, length)
+}
+
+/** The chapter playing at [ms] of the book: the last one starting at or before it; -1 before the first or without chapters. */
+fun chapterAt(chapters: List<Chapter>, ms: Long): Int {
+    var low = 0
+    var high = chapters.lastIndex
+    var found = -1
+    while (low <= high) {
+        val mid = (low + high) ushr 1
+        if (chapters[mid].startMs <= ms) {
+            found = mid
+            low = mid + 1
+        } else {
+            high = mid - 1
+        }
+    }
+    return found
+}
+
+/** The time left from [ms] to the end of a book [durationMs] long at [speed]: what the card's "2 h 10 m left" says. */
+fun leftMs(durationMs: Long, ms: Long, speed: Float): Long = ((durationMs - ms).coerceAtLeast(0) / speed.coerceAtLeast(MIN_SPEED)).toLong()
+
+/** [ms] in whole hours and minutes for "2 h 10 m": rounded up to the next minute, so a book with seconds left still says 1 m. */
+fun hoursAndMinutes(ms: Long): Pair<Int, Int> {
+    val minutes = ceil(ms.coerceAtLeast(0) / MINUTE_MS.toDouble()).toLong()
+    return (minutes / 60).toInt() to (minutes % 60).toInt()
+}
+
+/** What a book's card says under its author. */
+sealed interface BookStatus {
+    /** Never played: the whole length. */
+    data class NotStarted(val totalMs: Long) : BookStatus
+
+    /** Played: chapter [chapter] (1 up) of [chapters] when it has chapters, else null, and the time [leftMs] at its speed. */
+    data class Listening(val chapter: Int?, val chapters: Int, val leftMs: Long, val progress: Float) : BookStatus
+
+    data object Finished : BookStatus
+}
+
+private const val M4B: String = ".m4b"
+private const val AUDIOBOOKS: String = "Audiobooks"
+private const val MINUTE_MS: Long = 60_000
+private const val MIN_SPEED: Float = 0.1f

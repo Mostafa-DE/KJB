@@ -93,7 +93,7 @@ sealed interface SheetPlace {
 }
 
 /** The song sheet's rows, in the order they show. Move to trash sits apart at the bottom. */
-enum class SheetRow { PLAY_NEXT, ADD_TO, FAVOURITE, LYRICS, MAKE_TONE, SHARE, SHARE_LYRICS, SONG_INFO, EDIT_TAGS, COVERS_TAGS, REMOVE_FROM_QUEUE, REMOVE_FROM_PLAYLIST, MOVE_TO_TRASH }
+enum class SheetRow { PLAY_NEXT, ADD_TO, FAVOURITE, LYRICS, MAKE_TONE, SHARE, SHARE_LYRICS, SONG_INFO, EDIT_TAGS, BOOK, COVERS_TAGS, REMOVE_FROM_QUEUE, REMOVE_FROM_PLAYLIST, MOVE_TO_TRASH }
 
 /**
  * The rows the song sheet shows when opened at [place]. [coversTags] and [removeFromQueue]: their slots are filled
@@ -666,6 +666,11 @@ fun SongSheetsHost(sheets: SongSheets, ui: LibraryUi, onActed: () -> Unit = {}) 
                             ui.playlists.playlist(place.id)?.let { playlist -> doneLater { actions.removeFromPlaylist(playlist, place.position) } }
                         }
                         SheetRow.MOVE_TO_TRASH -> sheets.show(OpenSheet.Trash(listOf(song.ref)))
+                        SheetRow.BOOK -> {
+                            sheets.close()
+                            val book = library.bookOf(song.path)
+                            scope.launch { toasts.markBooks(context, resources, marked = book == null) { it.toggled(song, book) } }
+                        }
                     }
                 }
             }

@@ -430,7 +430,10 @@ private fun FolderPage(ui: LibraryUi, library: Library, path: String) {
     val source = QueueSource(SourceKind.FOLDER, path, folder.name)
     val reduced = LocalReducedMotion.current
     SongListFrame(ui, songs, source, topBar = { under, backdrop ->
-        CollectionTopBar(folder.name, under, backdrop, ui, heart = FavouriteCollection(CollectionKind.FOLDER, path), alwaysTitle = true)
+        CollectionTopBar(folder.name, under, backdrop, ui, heart = FavouriteCollection(CollectionKind.FOLDER, path), alwaysTitle = true) {
+            // Audiobooks: Mark as book and Not a book for the folder's own files (BooksScreen.kt).
+            BookFolderMenu(folder, library)
+        }
     }) { list ->
         item(key = "path", contentType = "path") {
             Text(

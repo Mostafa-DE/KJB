@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Audiobook mode (books/, ui/BooksScreen.kt). Labels of 3 words or fewer; sentences only in sheets and dialogs. -->
+<resources>
+    <!-- The song and folder menus. -->
+    <string name="book_mark">Mark as book</string>
+    <string name="book_not">Not a book</string>
+    <string name="book_marked">Marked as a book</string>
+    <string name="book_unmarked">Back in your music</string>
+    <string name="book_folder_menu">Folder menu</string>
+</resources>

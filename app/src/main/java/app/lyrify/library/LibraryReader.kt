@@ -5,6 +5,7 @@ import android.content.Context
 import android.database.ContentObserver
 import android.database.Cursor
 import android.provider.MediaStore
+import app.lyrify.books.inAudiobooksFolder
 import app.lyrify.data.SharedWrites
 import app.lyrify.dupes.MediaStoreLibrary
 import kotlinx.coroutines.channels.awaitClose
@@ -38,8 +39,8 @@ interface LibrarySource {
 
 /**
  * The phone's songs from MediaStore, in one query with every column the library needs: the music Duplicates lists
- * ([MediaStoreLibrary.inScope]), without trashed and pending files (MediaStore leaves them out by default). A debug
- * build lists only the songs in its test folder ([SharedWrites.lists]).
+ * ([MediaStoreLibrary.inScope]) and the audiobooks ([inScope]), without trashed and pending files (MediaStore leaves them
+ * out by default). A debug build lists only the songs in its test folders ([SharedWrites.lists]).
  */
 class LibraryReader(
     /** MediaStore's audio rows with [PROJECTION]'s columns; a fake in tests. */
@@ -85,13 +86,15 @@ class LibraryReader(
         val size = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
         val mimeType = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.MIME_TYPE)
         val isMusic = cursor.getColumnIndexOrThrow(MediaStore.Audio.AudioColumns.IS_MUSIC)
+        val isAudiobook = cursor.getColumnIndexOrThrow(MediaStore.Audio.AudioColumns.IS_AUDIOBOOK)
         fun text(column: Int): String? = cursor.getString(column)?.trim()?.takeIf { it.isNotEmpty() && it != UNKNOWN }
         fun long(column: Int): Long? = if (cursor.isNull(column)) null else cursor.getLong(column)
         return buildList {
             while (cursor.moveToNext()) {
                 val path = cursor.getString(data) ?: continue
                 val folder = cursor.getString(relativePath)
-                if (!writes.lists(path) || !MediaStoreLibrary.inScope(cursor.getInt(isMusic) != 0, folder)) continue
+                val book = cursor.getInt(isAudiobook) != 0
+                if (!writes.lists(path) || !inScope(cursor.getInt(isMusic) != 0, book, folder)) continue
                 add(
                     Song(
                         ref = SongRef(path, cursor.getLong(id)),
@@ -110,6 +113,7 @@ class LibraryReader(
                         sizeBytes = cursor.getLong(size),
                         mimeType = cursor.getString(mimeType),
                         albumId = long(albumId)?.takeIf { it > 0 },
+                        isAudiobook = book,
                     ),
                 )
             }
@@ -142,7 +146,16 @@ class LibraryReader(
             MediaStore.MediaColumns.SIZE,
             MediaStore.MediaColumns.MIME_TYPE,
             MediaStore.Audio.AudioColumns.IS_MUSIC,
+            MediaStore.Audio.AudioColumns.IS_AUDIOBOOK,
         )
+
+        /**
+         * Whether a row is the library's: the music Duplicates lists ([MediaStoreLibrary.inScope]: marked as music, or in a
+         * Music folder), and audiobooks, marked by MediaStore ([isAudiobook]) or in an Audiobooks folder. Podcasts, ringtones
+         * and recordings stay out.
+         */
+        fun inScope(isMusic: Boolean, isAudiobook: Boolean, relativePath: String?): Boolean =
+            MediaStoreLibrary.inScope(isMusic, relativePath) || isAudiobook || relativePath?.let(::inAudiobooksFolder) == true
 
         /** A track or disc number as the tag has it ("3", "03", "3/12"); null for none, 0 or anything else. */
         private fun number(tag: String?): Int? = tag?.trim()?.takeWhile(Char::isDigit)?.toIntOrNull()?.takeIf { it > 0 }

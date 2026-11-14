@@ -94,6 +94,7 @@ internal fun SongMenuSheet(
                     SheetRow.SHARE_LYRICS -> ActionRow(R.drawable.ic_share, stringResource(R.string.share_lyrics), chevron = true) { onRow(row) }
                     SheetRow.SONG_INFO -> ActionRow(R.drawable.ic_info, stringResource(R.string.lib_song_info)) { onRow(row) }
                     SheetRow.EDIT_TAGS -> ActionRow(R.drawable.ic_sell, stringResource(R.string.lib_edit_tags)) { onRow(row) }
+                    SheetRow.BOOK -> ActionRow(R.drawable.ic_auto_stories, stringResource(if (ui.library?.bookOf(song.path) != null) R.string.book_not else R.string.book_mark)) { onRow(row) }
                     SheetRow.COVERS_TAGS -> ActionRow(R.drawable.ic_album, stringResource(R.string.tools_covers)) { onRow(row) }
                     SheetRow.REMOVE_FROM_QUEUE -> ActionRow(R.drawable.ic_playlist_remove, stringResource(R.string.lib_remove_from_queue)) { onRow(row) }
                     SheetRow.REMOVE_FROM_PLAYLIST -> ActionRow(R.drawable.ic_playlist_remove, stringResource(R.string.lib_remove_from_playlist)) { onRow(row) }

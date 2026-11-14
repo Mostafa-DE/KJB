@@ -98,12 +98,15 @@ class SharedWrites(
         return false
     }
 
-    /** Whether a library reader lists the song at the absolute [path]: a fenced build lists only [TEST_FOLDER]. */
-    fun lists(path: String): Boolean = !testFolderOnly || onDiskOrRefused(path)
+    /**
+     * Whether a library reader lists the song at the absolute [path]: a fenced build lists only [TEST_FOLDER], and the books
+     * in [TEST_BOOKS_FOLDER].
+     */
+    fun lists(path: String): Boolean = !testFolderOnly || onDiskOrRefused(path) || onDiskOrRefused(path, TEST_BOOKS_FOLDER_NAMES)
 
     /** [onDisk], false when the disk can't say: for what a refusal keeps safe (a write not made, a song not listed). */
-    private fun onDiskOrRefused(path: String): Boolean = try {
-        onDisk(path)
+    private fun onDiskOrRefused(path: String, folder: List<String> = TEST_FOLDER_NAMES): Boolean = try {
+        onDisk(path, folder)
     } catch (_: IOException) {
         false // safe: a refusal: nothing is written or listed
     }
@@ -114,8 +117,8 @@ class SharedWrites(
      * link only to a file there). A link would let a create or a delete reach a file elsewhere. Throws when the disk
      * cannot say.
      */
-    private fun onDisk(path: String): Boolean {
-        if (!inTestFolder(path)) return false
+    private fun onDisk(path: String, folder: List<String> = TEST_FOLDER_NAMES): Boolean {
+        if (!inFolder(path, folder)) return false
         return try {
             val base = root.toRealPath()
             val names = Paths.get(path).normalize().map(Path::toString)
@@ -134,7 +137,7 @@ class SharedWrites(
                 below = names.drop(index + 1)
             }
             val real = below.fold(found.toRealPath()) { at, name -> at.resolve(name) }
-            real.startsWith(base) && inTestFolder("/" + base.relativize(real).joinToString("/"))
+            real.startsWith(base) && inFolder("/" + base.relativize(real).joinToString("/"), folder)
         } catch (e: SecurityException) {
             throw IOException("the disk could not be asked", e)
         }
@@ -143,6 +146,12 @@ class SharedWrites(
     companion object {
         /** The folder a fenced build may change, relative to a volume's root (as MediaStore's RELATIVE_PATH has it). */
         const val TEST_FOLDER: String = "Music/KJB test/"
+
+        /**
+         * The audiobooks a fenced build lists besides [TEST_FOLDER], never changes: books in an Audiobooks folder are only
+         * found outside the Music folder (books/Books.kt).
+         */
+        const val TEST_BOOKS_FOLDER: String = "Audiobooks/KJB test/"
 
         /** Everywhere, as 2.0: release builds, and tests of writers that are not about this rule. */
         val ANYWHERE: SharedWrites = SharedWrites(testFolderOnly = false)
@@ -158,7 +167,10 @@ class SharedWrites(
          * or `/storage/<volume id>/`, the paths MediaStore gives. Judged by the text, with `.` and `..` resolved and the
          * folder's spelling exact; any other form of path (`/sdcard/`, `/storage/self/`, relative) is outside.
          */
-        fun inTestFolder(path: String): Boolean {
+        fun inTestFolder(path: String): Boolean = inFolder(path, TEST_FOLDER_NAMES)
+
+        /** Whether the absolute [path] names a file in the folder of [folder]'s names, or below it, on any volume. */
+        private fun inFolder(path: String, folder: List<String>): Boolean {
             val normal = try {
                 Paths.get(path).normalize()
             } catch (_: InvalidPathException) {
@@ -174,9 +186,10 @@ class SharedWrites(
                 else -> 2
             }
             val inVolume = names.drop(root)
-            return inVolume.size > TEST_FOLDER_NAMES.size && inVolume.take(TEST_FOLDER_NAMES.size) == TEST_FOLDER_NAMES
+            return inVolume.size > folder.size && inVolume.take(folder.size) == folder
         }
 
         private val TEST_FOLDER_NAMES: List<String> = TEST_FOLDER.trimEnd('/').split('/')
+        private val TEST_BOOKS_FOLDER_NAMES: List<String> = TEST_BOOKS_FOLDER.trimEnd('/').split('/')
     }
 }
