@@ -403,6 +403,8 @@ class SharedWritesTest {
             // import journal in the app's files.
             "backup/ImportSources.kt",
             "backup/Musicolet.kt",
+            // The crash reports in the app's files.
+            "crash/CrashLog.kt",
             "data/LedgerRepository.kt",
             "dupes/DuplicatesStore.kt",
             "library/Playlists.kt",

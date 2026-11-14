@@ -5,6 +5,7 @@ import android.content.Context
 import android.os.StrictMode
 import android.util.Log
 import app.lyrify.backup.Imports
+import app.lyrify.crash.CrashLog
 import app.lyrify.data.LedgerRepository
 import app.lyrify.data.PathLocks
 import app.lyrify.data.SharedWrites
@@ -67,6 +68,8 @@ val logFailures: CoroutineExceptionHandler = CoroutineExceptionHandler { _, e ->
 class LyrifyApplication : Application() {
     override fun onCreate() {
         super.onCreate()
+        // Crashes are kept on the phone from here on (Settings > About > Crash reports), never sent.
+        CrashLog.install(this)
         if (BuildConfig.DEBUG) {
             StrictMode.setThreadPolicy(StrictMode.ThreadPolicy.Builder().detectDiskReads().detectDiskWrites().penaltyLog().build())
         }
