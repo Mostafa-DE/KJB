@@ -27,7 +27,7 @@
     <string name="dl_addon_needed">Downloads needs a small add-on, about 54 MB, from KJB\'s own release. Your phone asks once to confirm the install.</string>
     <string name="dl_addon_update">Update add-on</string>
     <string name="dl_addon_outdated">This Downloads add-on is older than this KJB. Get the new one to keep downloading.</string>
-    <string name="dl_addon_untrusted">The Downloads add-on on your phone is not KJB\'s. Uninstall it from its app info, then get KJB\'s.</string>
+    <string name="dl_addon_untrusted">The Downloads add-on installed here is not KJB\'s. Uninstall it from its app info, then get KJB\'s.</string>
     <string name="dl_addon_unreachable">The Downloads add-on is not answering right now. KJB tries again when you come back.</string>
     <string name="dl_addon_downloading">Getting the add-on: %1$s of %2$s.</string>
     <string name="dl_addon_allow">Your phone needs to let KJB install apps, once.</string>
