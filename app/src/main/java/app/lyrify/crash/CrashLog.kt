@@ -44,41 +44,37 @@ data class CrashReport(val at: Long, val app: String, val android: String, val d
 data class CrashEntry(val id: String, val at: Long, val app: String, val headline: String)
 
 /**
- * What a crash keeps of its exceptions: each one's class and frames (code, never data), and of its message only what
- * cannot name a song: the first line, with quoted text, addresses and paths taken out, and nothing at all when it names an
- * audio or lyrics file. Strict on purpose: a message can quote a file, a tag or a line of lyrics.
+ * What a crash keeps of its exceptions: each one's class and frames (code, never data), and no message text at all, as a
+ * message can quote a file, a tag or a line of lyrics. Only a few framework messages that hold no text of their own
+ * stay: Android's reason a file did not open (its path dropped), an index out of bounds, and a null reference's method.
  */
 object CrashScrub {
-    /** The longest message kept. */
-    private const val MAX_MESSAGE: Int = 300
-
     /** Frames kept of one exception; a deep recursion's thousands say no more than these. */
     private const val MAX_FRAMES: Int = 64
 
     /** Causes followed. */
     private const val MAX_CAUSES: Int = 8
 
-    private val QUOTED = Regex("\"[^\"]*\"|“[^”]*”")
-    private val ADDRESS = Regex("""\b[A-Za-z][A-Za-z0-9+.-]*://\S*""")
+    /** The reason libcore gives after the path when a file does not open: kept, the path not. */
+    private val OPEN_FAILED = Regex(""": open failed: ([A-Z0-9]{2,16}) \(([A-Za-z ]{1,60})\)$""")
 
-    /** A path: the start of the first word holding a slash. It runs to the end of the line, as a file's name may hold spaces. */
-    private val PATH = Regex("""\S*/""")
+    /**
+     * Framework messages made only of numbers and code, kept whole: an index out of bounds, and the member a null
+     * reference was used for, as ART names it (a type, then a dotted name of two dots or more, maybe with its parameters).
+     */
+    private val SAFE = listOf(
+        Regex("""Index -?\d+ out of bounds for length \d+"""),
+        Regex(
+            """Attempt to (?:invoke (?:virtual|interface|static|direct|super) method|read from field|write to field) """ +
+                """'[\w.$<>\[\]]+ [\w$]+(?:\.[\w$<>]+){2,}(?:\([\w.$<>\[\], ]*\))?' on a null object reference""",
+        ),
+    )
 
-    /** The reason Android's file calls give after a path: kept. */
-    private val OPEN_FAILED = Regex(""": open failed: [A-Z0-9]+ \([^()/]*\)$""")
-    private val MEDIA_FILE = Regex("""\.(mp3|flac|m4a|mp4|aac|ogg|oga|opus|wav|wma|aiff?|ape|alac|lrc|m3u8?)\b""", RegexOption.IGNORE_CASE)
-
-    /** [text], an exception's message, as a crash keeps it; null without one. */
+    /** [text], an exception's message, as a crash keeps it: one of the framework messages above, else null. */
     fun message(text: String?): String? {
-        var line = text?.lineSequence()?.firstOrNull()?.trim() ?: return null
-        line = QUOTED.replace(line, "\"<text>\"")
-        line = ADDRESS.replace(line, "<uri>")
-        PATH.find(line)?.let { start ->
-            val tail = OPEN_FAILED.find(line, start.range.first)?.value.orEmpty()
-            line = line.substring(0, start.range.first) + "<path>" + tail
-        }
-        if (MEDIA_FILE.containsMatchIn(line)) return "<file>"
-        return line.take(MAX_MESSAGE)
+        val line = text?.lineSequence()?.firstOrNull()?.trim() ?: return null
+        OPEN_FAILED.find(line)?.let { return "open failed: ${it.groupValues[1]} (${it.groupValues[2]})" }
+        return line.takeIf { kept -> SAFE.any { it.matches(kept) } }
     }
 
     /**
@@ -115,7 +111,7 @@ object CrashScrub {
 }
 
 /**
- * The crash reports in app-private [folder], one text file each (`crash-<millis>-<n>.txt`), the [keep] newest kept.
+ * The crash reports in app-private [folder], one text file each (`crash-<millis>-<sequence>.txt`), the [keep] newest kept.
  * Written whole or not at all (aside, then moved). Blocking; [write] runs on the thread that is dying.
  */
 class CrashStore(private val folder: File, private val keep: Int = KEEP) {
@@ -123,7 +119,12 @@ class CrashStore(private val folder: File, private val keep: Int = KEEP) {
 
     fun write(report: CrashReport) {
         folder.mkdirs()
-        val name = "$PREFIX${report.at.toString().padStart(MILLIS_DIGITS, '0')}-${System.nanoTime() % NANO_PART}-${sequence.incrementAndGet()}$SUFFIX"
+        // Zero-padded, so the names sort by time and, within one millisecond, in the order written.
+        val time = report.at.coerceAtLeast(0).toString().padStart(MILLIS_DIGITS, '0')
+        var name: String
+        do {
+            name = "$PREFIX$time-${(sequence.incrementAndGet() % MAX_SEQUENCE).toString().padStart(SEQUENCE_DIGITS, '0')}$SUFFIX"
+        } while (File(folder, name).exists())
         val aside = File(folder, name + PART)
         aside.writeText(report.text())
         Files.move(aside.toPath(), File(folder, name).toPath(), StandardCopyOption.ATOMIC_MOVE)
@@ -165,8 +166,9 @@ class CrashStore(private val folder: File, private val keep: Int = KEEP) {
         private const val SUFFIX = ".txt"
         private const val PART = ".part"
         private const val MILLIS_DIGITS = 13
-        private const val NANO_PART = 1_000_000_000L
-        private val NAME = Regex("""crash-\d{13}-\d+-\d+\.txt""")
+        private const val SEQUENCE_DIGITS = 6
+        private const val MAX_SEQUENCE = 1_000_000
+        private val NAME = Regex("""crash-\d{13}-\d{6}\.txt""")
     }
 }
 

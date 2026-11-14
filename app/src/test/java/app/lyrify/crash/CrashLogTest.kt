@@ -19,37 +19,41 @@ class CrashLogTest {
     private fun report(at: Long, trace: String = "java.lang.IllegalStateException: broken\n\tat app.lyrify.Made.up(Made.kt:1)") =
         CrashReport(at = at, app = "3.0.0 (10)", android = "17 (SDK 37)", device = "Maker Phone 1", mainThread = true, trace = trace)
 
-    // Scrubbing
+    // Scrubbing: no message text, but for a few framework messages that hold none
 
     @Test
-    fun `a path in a message goes, the reason Android gives stays`() {
+    fun `a message keeps no text of its own, quoted or not`() {
+        assertNull(CrashScrub.message("no lyrics for 'Paper Lantern'"))
+        assertNull(CrashScrub.message("Paper Lantern"))
+        assertNull(CrashScrub.message("could not open Paper Lantern at /storage/emulated/0/Music/a.mp3"))
+        assertNull(CrashScrub.message("no answer from https://lrclib.net/api/get?track_name=Paper+Lantern"))
+        assertNull(CrashScrub.message("Unexpected JSON token at offset 4: \"Paper Lantern\""))
+        assertNull(CrashScrub.message("bad folder Music\\Harbour Glass"))
+        assertNull(CrashScrub.message(null))
+    }
+
+    @Test
+    fun `Android's file errors, bounds and null references keep their framework text only`() {
         assertEquals(
-            "<path>: open failed: ENOENT (No such file or directory)",
+            "open failed: ENOENT (No such file or directory)",
             CrashScrub.message("/storage/emulated/0/Music/Harbour Glass/01 Paper Lantern (Live).mp3: open failed: ENOENT (No such file or directory)"),
         )
-        assertEquals("cannot read <path>", CrashScrub.message("cannot read /data/user/0/app.lyrify/cache/opened/1/Paper Lantern.flac now"))
-        assertEquals("bad folder <path>", CrashScrub.message("bad folder Music/Harbour Glass/01 Paper Lantern"))
-    }
-
-    @Test
-    fun `addresses, quoted text, file names and every line after the first go`() {
-        assertEquals("no answer from <uri>", CrashScrub.message("no answer from https://lrclib.net/api/get?track_name=Paper+Lantern&artist_name=Kit"))
-        assertEquals("no access to <uri> here", CrashScrub.message("no access to content://media/external/audio/media/42 here"))
-        assertEquals("Unexpected JSON token at offset 4: \"<text>\"", CrashScrub.message("Unexpected JSON token at offset 4: \"Paper Lantern\"\nJSON input: {\"title\":\"Paper Lantern\"}"))
-        assertEquals("<file>", CrashScrub.message("can't decode Paper Lantern.FLAC"))
         assertEquals("Index 5 out of bounds for length 3", CrashScrub.message("Index 5 out of bounds for length 3"))
-        assertNull(CrashScrub.message(null))
-        assertTrue(CrashScrub.message("x".repeat(1000))!!.length <= 300)
+        assertEquals(
+            "Attempt to invoke virtual method 'int java.lang.String.length()' on a null object reference",
+            CrashScrub.message("Attempt to invoke virtual method 'int java.lang.String.length()' on a null object reference"),
+        )
+        assertNull("a title in the method's place", CrashScrub.message("Attempt to invoke virtual method 'Paper Lantern by Kit' on a null object reference"))
     }
 
     @Test
-    fun `a trace keeps every exception's class and frames, with each message scrubbed`() {
+    fun `a trace keeps every exception's class and frames, and no message text`() {
         val cause = FileNotFoundException("/storage/emulated/0/Music/Paper Lantern.mp3: open failed: EACCES (Permission denied)")
-        val error = IllegalStateException("could not open \"Paper Lantern\"", cause)
+        val error = IllegalStateException("could not open Paper Lantern", cause)
         val trace = CrashScrub.trace(error)
 
-        assertTrue(trace, trace.startsWith("java.lang.IllegalStateException: could not open \"<text>\"\n\tat "))
-        assertTrue(trace, "Caused by: java.io.FileNotFoundException: <path>: open failed: EACCES (Permission denied)" in trace)
+        assertTrue(trace, trace.startsWith("java.lang.IllegalStateException\n\tat "))
+        assertTrue(trace, "Caused by: java.io.FileNotFoundException: open failed: EACCES (Permission denied)" in trace)
         assertTrue(trace, "CrashLogTest" in trace)
         assertFalse(trace, "Paper" in trace)
         assertFalse(trace, "storage" in trace)
@@ -60,7 +64,8 @@ class CrashLogTest {
         val error = IOException("first")
         error.addSuppressed(IllegalArgumentException("Paper Lantern.ogg"))
         val trace = CrashScrub.trace(error)
-        assertTrue(trace, "Suppressed: java.lang.IllegalArgumentException: <file>" in trace)
+        assertTrue(trace, "\tSuppressed: java.lang.IllegalArgumentException\n" in trace)
+        assertFalse(trace, "Paper" in trace)
 
         fun dig(depth: Int): Nothing = if (depth == 0) throw IllegalStateException("deep") else dig(depth - 1)
         val deep = try {
@@ -104,11 +109,15 @@ class CrashLogTest {
     }
 
     @Test
-    fun `two crashes in the same millisecond are both kept`() {
+    fun `crashes in the same millisecond keep their order, so the oldest goes first`() {
         val store = CrashStore(temp.newFolder("crashes"))
-        store.write(report(at = 7_000))
-        store.write(report(at = 7_000))
-        assertEquals(2, store.list().size)
+        (1..12).forEach { store.write(report(at = 7_000, trace = "java.lang.IllegalStateException\n\tat app.lyrify.Made.up$it(Made.kt:1)")) }
+
+        val kept = store.list()
+
+        assertEquals(10, kept.size)
+        assertTrue(kept.map { it.id }.toString(), kept.all { Regex("""crash-\d{13}-\d{6}\.txt""").matches(it.id) })
+        assertEquals((12 downTo 3).map { "Made.up$it(" }, kept.map { entry -> store.read(entry.id)!!.substringAfter("at app.lyrify.").substringBefore("Made.kt") })
     }
 
     // The handler
