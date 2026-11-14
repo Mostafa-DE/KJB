@@ -188,7 +188,8 @@ sealed interface Shared {
     /** The lyrics could not be read (the `.lrc` changed, or LRCLIB could not be asked). */
     data object NoLyrics : Shared
 
-    data object Failed : Shared
+    /** The share of [songs] songs (1 for lyrics) could not start: MediaStore gave no answer, or nothing opens a share sheet. */
+    data class Failed(val songs: Int) : Shared
 }
 
 suspend fun ToastState.say(resources: Resources, shared: Shared) {
@@ -197,7 +198,7 @@ suspend fun ToastState.say(resources: Resources, shared: Shared) {
         Shared.TooMany -> resources.getQuantityString(R.plurals.share_too_many, SHARE_SONGS_MAX, SHARE_SONGS_MAX)
         is Shared.NotFound -> resources.getQuantityString(R.plurals.share_not_found, shared.songs, shared.songs)
         Shared.NoLyrics -> resources.getString(R.string.share_no_lyrics)
-        Shared.Failed -> resources.getString(R.string.share_failed)
+        is Shared.Failed -> resources.getQuantityString(R.plurals.share_failed, shared.songs, shared.songs)
     }
     show(Toast(text, R.drawable.ic_error, Tone.ERROR))
 }
@@ -207,12 +208,12 @@ suspend fun ToastState.say(resources: Resources, shared: Shared) {
  * meanwhile never shares another file, and a song moved to the trash is not shared. [title]: each song's name.
  */
 suspend fun shareSongs(context: Context, songs: List<Song>, title: (Song) -> String): Shared {
-    if (!fitsOneShare(songs.size)) return if (songs.isEmpty()) Shared.Failed else Shared.TooMany
-    val found = withContext(Dispatchers.IO) { audioFiles(context.contentResolver, songs.map(Song::path)) } ?: return Shared.Failed
+    if (!fitsOneShare(songs.size)) return if (songs.isEmpty()) Shared.Failed(0) else Shared.TooMany
+    val found = withContext(Dispatchers.IO) { audioFiles(context.contentResolver, songs.map(Song::path)) } ?: return Shared.Failed(songs.size)
     val missing = songs.count { it.path !in found }
     if (missing > 0) return Shared.NotFound(missing)
     val shared = songs.map { song -> found.getValue(song.path).let { SharedSong(it.uri, it.mimeType, title(song)) } }
-    return startShare(context, songsShare(shared) { count -> context.resources.getQuantityString(R.plurals.lib_songs, count, count) })
+    return launchShare(songs.size) { context.startActivity(shareSheet(songsShare(shared) { count -> context.resources.getQuantityString(R.plurals.lib_songs, count, count) })) }
 }
 
 /** "As text": the song's `.lrc` as words ([lyricsText]), else LRCLIB's plain lyrics the player shows ([plainRecord]). */
@@ -221,21 +222,26 @@ suspend fun shareLyricsText(context: Context, song: Song, title: String, entry: 
     val text = lrc?.let { lyricsText(title, song.artist, it) }
         ?: plainRecord(entry)?.let { plainText(context, it) }?.let { lyricsText(title, song.artist, it) }
         ?: return Shared.NoLyrics
-    return startShare(context, lyricsTextShare(title, text))
+    return launchShare(1) { context.startActivity(shareSheet(lyricsTextShare(title, text))) }
 }
 
 /** "Lyrics file": the song's synced `.lrc` as it is on disk, through a copy in KJB's cache ([lrcCopy]). */
 suspend fun shareLyricsFile(context: Context, song: Song, title: String): Shared {
     val file = withContext(Dispatchers.IO) { lrcCopy(context.cacheDir, song.path, System.currentTimeMillis()) } ?: return Shared.NoLyrics
     val uri = FileProvider.getUriForFile(context, context.packageName + SHARE_AUTHORITY, file)
-    return startShare(context, lyricsFileShare(uri.toString(), title))
+    return launchShare(1) { context.startActivity(shareSheet(lyricsFileShare(uri.toString(), title))) }
 }
 
-private fun startShare(context: Context, request: ShareRequest): Shared = try {
-    context.startActivity(shareSheet(request))
+/** Starts the share sheet of [songs] songs ([start]): how it went. */
+internal inline fun launchShare(songs: Int, start: () -> Unit): Shared = try {
+    start()
     Shared.Opened
 } catch (_: ActivityNotFoundException) {
-    Shared.Failed
+    Shared.Failed(songs)
+} catch (_: SecurityException) {
+    // Android checks the read grant as the share starts: a song deleted, trashed or on a card taken out since it was
+    // found (MediaProvider's checkUriPermission finds no row) fails here.
+    Shared.Failed(songs)
 } catch (e: RuntimeException) {
     // More than one Binder transaction can carry: Android throws it wrapped (RemoteException.rethrowFromSystemServer).
     if (e.cause !is TransactionTooLargeException) throw e
