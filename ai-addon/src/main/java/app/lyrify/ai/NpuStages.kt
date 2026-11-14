@@ -41,6 +41,11 @@ class NpuStages(
      * creating a session, a song's first read of the mix and its first MDX segment on the NPU), with times only.
      */
     private val debug: (String) -> Unit = {},
+    /**
+     * The NPU steps' deadline: registering the QNN EP and creating the sessions run on their own thread, and one another
+     * app's hold on the NPU blocks past its time is [NpuBusyException] (the add-on's process then ends).
+     */
+    private val deadline: NativeDeadline = NativeDeadline(abandoned = {}),
 ) : AiStages, AutoCloseable {
     private var contract: WhisperContract? = null
     private var qnn: QnnEp? = null
@@ -116,10 +121,12 @@ class NpuStages(
         try {
             if (needsUint16) IoTensors.requireUint16()
             debug("QNN EP: registering")
-            QnnEp.register(nativeLibDir).also {
+            deadline.within("QNN EP", NPU_STEP_MS) { QnnEp.register(nativeLibDir) }.also {
                 qnn = it
                 debug("QNN EP: registered")
             }
+        } catch (e: NpuBusyException) {
+            throw e
         } catch (e: Exception) {
             throw NpuUnavailableException(e)
         }
@@ -127,7 +134,7 @@ class NpuStages(
 
     private fun mdx(): Mdx = mdx ?: run {
         val ep = qnn()
-        timed("MDX") { loading(models.mdx) { Mdx(ep, models.mdx, threads, debug) } }.also { mdx = it }
+        timed("MDX") { deadline.within("MDX session", MDX_CREATE_MS) { loading(models.mdx) { Mdx(ep, models.mdx, threads, debug) } } }.also { mdx = it }
     }
 
     private fun whisper(): Whisper = whisper ?: run {
@@ -136,7 +143,7 @@ class NpuStages(
         val tokenizer = WhisperTokenizer.fromJson(assets.vocabJson, assets.addedTokensJson)
         val suppression = Suppression.fromGenerationConfig(assets.generationConfigJson)
         timed("Whisper ${contract.modelId} ${contract.precision}") {
-            loading(models.whisper) { Whisper(ep, models, contract, tokenizer, suppression) }
+            deadline.within("Whisper sessions", NPU_STEP_MS) { loading(models.whisper) { Whisper(ep, models, contract, tokenizer, suppression) } }
         }.also { whisper = it }
     }
 
@@ -245,6 +252,22 @@ class NpuStages(
                 return session
             }
         }
+    }
+
+    companion object {
+        /**
+         * How long the MDX session may take to be made before the NPU counts as busy. Seen: 50 to 83 s in the add-on
+         * spike, 107 to 164 s in KJB 2.0's nights, 49.8 s in phone session 8, all on the fastest supported chip; its graph
+         * is prepared on the CPU, about twice as slow on the oldest supported chips. Under KJB's 10 minutes for a first
+         * load, so the add-on's clear answer comes before KJB's watchdog.
+         */
+        const val MDX_CREATE_MS: Long = 8 * 60_000
+
+        /**
+         * The other NPU steps: registering the QNN EP (under 0.1 s seen) and Whisper's precompiled sessions (2 to 3 s);
+         * under KJB's 3 minutes for a step.
+         */
+        const val NPU_STEP_MS: Long = 2 * 60_000
     }
 }
 

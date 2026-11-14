@@ -312,4 +312,31 @@ class NpuContractTest {
         failing.ensure("/lib/a.so")
         assertEquals(2, tries)
     }
+
+    // A deadline for native NPU work
+
+    @Test
+    fun `NPU work that ends in time gives its value, and its own failure is thrown as it is`() {
+        val inline = NativeDeadline(abandoned = { error("not abandoned") }, start = { it.run() })
+
+        assertEquals(42, inline.within("MDX", 0) { 42 })
+        val failure = assertThrows(ModelLoadException::class.java) {
+            inline.within("MDX", 0) { throw ModelLoadException(File("model.onnx"), IllegalStateException("graph finalize failed")) }
+        }
+        assertEquals("model.onnx", failure.model.name)
+    }
+
+    @Test
+    fun `NPU work past its deadline is left to its thread and told as the NPU busy`() {
+        var abandoned = 0
+        val started = mutableListOf<Runnable>()
+        // The thread never gets anywhere: a creation another app's hold on the NPU blocks.
+        val deadline = NativeDeadline(abandoned = { abandoned++ }, start = { started += it })
+
+        val busy = assertThrows(NpuBusyException::class.java) { deadline.within("MDX session", 0) { 1 } }
+
+        assertEquals(1, started.size)
+        assertEquals(1, abandoned)
+        assertTrue("${busy.message}", busy.message.orEmpty().startsWith("MDX session: no answer from the NPU"))
+    }
 }

@@ -39,8 +39,8 @@ sealed interface AiResult {
      * short: the exception's class and message, every absolute path cut to its file name. It can name the song's file, so
      * it goes to the AI's run log, never to logcat (which has the exception's class only).
      * [model] is the model that did not load ([AiModels.WHISPER], [AiModels.MDX] or [AiModels.WAV2VEC2]), when that was the
-     * failure; [npu] is set when the phone's NPU could not be used at all (no QNN execution provider or NPU device). Neither
-     * is the song's fault.
+     * failure; [npu] is set when the phone's NPU could not be used (no QNN execution provider or NPU device, or no answer
+     * from it in time: another app holding it, NpuBusyException). Neither is the song's fault: KJB tries again later.
      */
     @Serializable
     @SerialName("failed")

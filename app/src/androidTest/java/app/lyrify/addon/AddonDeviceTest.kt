@@ -38,20 +38,20 @@ import java.util.concurrent.TimeUnit
  *
  * The run needs the add-on's models, which the real handover gives it: in the class the handover runs first (by name),
  * and the run, run alone, hands KJB dev's models over itself while they are still KJB dev's. The run takes the song
- * `-e song "<path in Music/KJB test>"` names, else the first one with plain lyrics, so that Whisper and the timing run
- * ([pick]); logcat says how it was picked, never its name or path.
+ * `-e song "<path in Music/KJB test>"` names, else the first one with lyrics (a `.txt`, a synced `.lrc`, a tag), so that
+ * Whisper and the timing run ([pick]); logcat says how it was picked, never its name or path.
  */
 @RunWith(AndroidJUnit4::class)
 @FixMethodOrder(MethodSorters.NAME_ASCENDING)
 class AddonDeviceTest {
     /**
-     * A hang fails the test instead of holding a phone session (session 7 of 2026-11-13 waited 12 minutes), with the
-     * stuck thread's stack. The run's first song loads the models: about 5.6 minutes at the slowest seen (KJB 2.0's
-     * nights: the MDX session in 164 s, its separation 261 s with it, the transcription 76 s); the other tests take
-     * seconds.
+     * A hang fails the test instead of holding a phone session, with the stuck thread's stack. Longer than the run's own
+     * limits, so that they are what ends a blocked run (session 9: the MDX session blocked while another app held the
+     * NPU): the add-on's 8 minutes for the MDX session (NpuStages.MDX_CREATE_MS) and KJB's 10 minutes for a first load
+     * (RemoteSongEngine.FIRST_LOAD_MS). The slowest first song seen took about 5.6 minutes; the other tests take seconds.
      */
     @get:Rule
-    val timeout: Timeout = Timeout.builder().withTimeout(8, TimeUnit.MINUTES).withLookingForStuckThread(true).build()
+    val timeout: Timeout = Timeout.builder().withTimeout(12, TimeUnit.MINUTES).withLookingForStuckThread(true).build()
 
     private val context = InstrumentationRegistry.getInstrumentation().targetContext
 
@@ -88,9 +88,18 @@ class AddonDeviceTest {
             val result = RemoteSongEngine(session, notes = { Log.i(TAG, it) }).use { engine ->
                 runBlocking { engine.run(LocalTrack(song.file.path, "Test", null, null, song.durationMs), song.lyrics, stages::add) { chunks++ } }
             }
+            Log.i(TAG, "result: ${result.javaClass.simpleName}, stages $stages, $chunks chunks")
+            if (result is AiResult.Failed && result.npu) {
+                // The NPU did not answer in time (another app holding it): the add-on's deadline ended the run cleanly,
+                // an NPU failure KJB records nothing for (the song is tried again later), and once KJB lets go the add-on
+                // ends its process, the step it left behind with it.
+                assertTrue(result.message, result.message.startsWith("NpuBusyException"))
+                session.close()
+                runBlocking { withTimeout(15_000) { session.death.await() } }
+                return
+            }
             // A failure's message holds no lyrics; a result's kind and the stages are all said of the others.
             assertTrue(result.toString(), result !is AiResult.Failed)
-            Log.i(TAG, "result: ${result.javaClass.simpleName}, stages $stages, $chunks chunks")
             assertEquals(AiStage.DECODE, stages.first())
             assertTrue("$stages", AiStage.SEPARATE in stages)
             if (song.lyrics != null) {
@@ -106,8 +115,8 @@ class AddonDeviceTest {
 
     /**
      * The song `-e song "<path in [music]>"` names (refused when it is not a song file inside [music]), else the first
-     * song by name with plain lyrics (a `.txt` beside it, or a lyrics tag), so that the vocal path runs, else the first
-     * song; null when there is none.
+     * song by name with lyrics (a `.txt` or a synced `.lrc` beside it, or a lyrics tag), so that the vocal path runs, else
+     * the first song; null when there is none.
      */
     private fun pick(music: File): Pick? {
         val named = InstrumentationRegistry.getArguments().getString("song")
@@ -117,15 +126,24 @@ class AddonDeviceTest {
             return Pick(file, durationMs(file), plainLyrics(file, music), "named by -e song")
         }
         val songs = music.listFiles { file -> file.isFile && file.extension.lowercase() in SONGS }?.sortedBy { it.name }.orEmpty()
-        songs.firstNotNullOfOrNull { file -> plainLyrics(file, music)?.let { Pick(file, durationMs(file), it, "the first with plain lyrics") } }?.let { return it }
+        songs.firstNotNullOfOrNull { file -> plainLyrics(file, music)?.let { Pick(file, durationMs(file), it, "the first with lyrics") } }?.let { return it }
         return songs.firstOrNull()?.let { Pick(it, durationMs(it), null, "the first song, none has plain lyrics") }
     }
 
-    /** [song]'s plain lyrics: a `.txt` beside it, else its lyrics tag, with any LRC times taken off; null when it has none. */
+    /**
+     * [song]'s plain lyrics: a `.txt` beside it, else a synced `.lrc` beside it, else its lyrics tag; LRC times and tag
+     * lines (`[ar:...]`) taken off. Null when it has none.
+     */
     private fun plainLyrics(song: File, music: File): String? {
-        val text = File(song.parentFile, "${song.nameWithoutExtension}.txt").takeIf { it.isFile }?.readText()
+        fun beside(extension: String) = File(song.parentFile, "${song.nameWithoutExtension}.$extension").takeIf { it.isFile }?.readText()
+        val text = beside("txt") ?: beside("lrc")
             ?: runCatching { TagLibFile(music).read(song)?.fields }.getOrNull()?.let { it["LYRICS"] ?: it["UNSYNCEDLYRICS"] }?.firstOrNull()
-        return text?.lines()?.map { it.replace(LRC_TIME, "").trim() }?.filter { it.isNotEmpty() }?.joinToString("\n")?.takeIf { it.isNotEmpty() }
+        return text?.lines()
+            ?.filterNot { LRC_TAG.matches(it.trim()) }
+            ?.map { it.replace(LRC_TIME, "").replace(LRC_WORD_TIME, "").trim() }
+            ?.filter { it.isNotEmpty() }
+            ?.joinToString("\n")
+            ?.takeIf { it.isNotEmpty() }
     }
 
     /** [song]'s length as its file says, for the LRC's check; 3 minutes when it does not say. */
@@ -209,5 +227,11 @@ class AddonDeviceTest {
 
         /** The LRC times at a line's start, `[mm:ss.xx]`, one or more. */
         val LRC_TIME = Regex("""^(?:\[\d+:\d+(?:[.:]\d+)?])+""")
+
+        /** An enhanced LRC's word times, `<mm:ss.xx>`. */
+        val LRC_WORD_TIME = Regex("""<\d+:\d+(?:[.:]\d+)?>""")
+
+        /** An LRC tag line, `[ar:...]`, `[offset:...]`: not lyrics. */
+        val LRC_TAG = Regex("""\[[A-Za-z#]+:[^\]]*]""")
     }
 }
