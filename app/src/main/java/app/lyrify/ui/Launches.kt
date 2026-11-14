@@ -5,7 +5,6 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.util.Log
-import androidx.annotation.StringRes
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -154,8 +153,7 @@ private val ALL_SONGS = QueueSource(SourceKind.SONGS, "songs:${SortSongs.TITLE}:
 /** How long a cold start waits for the library or the queues. */
 private const val READ_WAIT_MS: Long = 10_000
 
-/** Starts what [launch] asks; null once it plays, else why it cannot. Main thread. */
-@StringRes
+/** Starts what [launch] asks; null once it plays, else why it cannot (a string resource). Main thread. */
 private suspend fun play(context: Context, launch: Launch.Plays): Int? = when (launch) {
     is Launch.Open -> if (OpenedFiles.play(context, launch.uris) > 0) null else R.string.open_failed
     Launch.ShuffleAll -> {

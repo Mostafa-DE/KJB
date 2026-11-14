@@ -10,6 +10,7 @@ import android.content.pm.PackageInstaller
 import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
+import androidx.core.content.edit
 import app.lyrify.BuildConfig
 import app.lyrify.LOG_TAG
 import app.lyrify.USER_AGENT
@@ -380,11 +381,11 @@ private class AndroidUpdatePort(private val context: Context) : UpdatePort {
 
     override suspend fun lastCheck(): Long? = withContext(Dispatchers.IO) { prefs.getLong(LAST_CHECK, -1).takeIf { it >= 0 } }
 
-    override suspend fun setLastCheck(at: Long) = withContext(Dispatchers.IO) { prefs.edit().putLong(LAST_CHECK, at).apply() }
+    override suspend fun setLastCheck(at: Long) = withContext(Dispatchers.IO) { prefs.edit { putLong(LAST_CHECK, at) } }
 
     override suspend fun dismissed(): String? = withContext(Dispatchers.IO) { prefs.getString(DISMISSED, null) }
 
-    override suspend fun setDismissed(offer: String) = withContext(Dispatchers.IO) { prefs.edit().putString(DISMISSED, offer).apply() }
+    override suspend fun setDismissed(offer: String) = withContext(Dispatchers.IO) { prefs.edit { putString(DISMISSED, offer) } }
 
     /** The add-on's version, when it is installed and signed with KJB's key (an add-on that is not KJB's is never updated). */
     override fun addonInstalled(): String? {

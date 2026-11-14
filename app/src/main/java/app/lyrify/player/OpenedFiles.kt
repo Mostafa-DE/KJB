@@ -8,6 +8,7 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.util.Log
+import androidx.core.net.toUri
 import app.lyrify.LOG_TAG
 import app.lyrify.Lyrify
 import app.lyrify.library.LibraryGraph
@@ -162,14 +163,14 @@ object OpenedFiles {
         var budget = MAX_COPIED_BYTES
         val refs = uris.mapIndexedNotNull { index, uri ->
             val clue = clueOf(uri, primary)
-            val facts = if (uri.startsWith("content://", ignoreCase = true)) facts(context.contentResolver, Uri.parse(uri)) else OpenedClue()
+            val facts = if (uri.startsWith("content://", ignoreCase = true)) facts(context.contentResolver, uri.toUri()) else OpenedClue()
             val path = clue.path ?: facts.path
             val full = OpenedClue(path, clue.mediaStoreId, facts.name ?: path?.substringAfterLast('/'), facts.bytes)
             matchOpened(full, library)?.let { return@mapIndexedNotNull it.ref }
             // Never a file of KJB's own data, whatever an address claims.
             val readable = path?.let(::File)?.takeIf { it.isFile && it.canRead() && !inside(it, own) }
             val file = readable ?: if (uri.startsWith("content://", ignoreCase = true)) {
-                copy(context.contentResolver, Uri.parse(uri), File(batch, index.toString()), full.name, budget)?.also { budget -= it.length() }
+                copy(context.contentResolver, uri.toUri(), File(batch, index.toString()), full.name, budget)?.also { budget -= it.length() }
             } else {
                 null
             }
