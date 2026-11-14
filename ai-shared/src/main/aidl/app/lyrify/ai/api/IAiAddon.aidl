@@ -37,8 +37,8 @@ interface IAiAddon {
     // Deletes one model that did not load (an AiModels name), so that the download fetches it again.
     boolean discardModel(String name) = 8;
 
-    // Starts one song and returns its job at once; the callback hears its stages, notes and chunks, then its end. The
-    // song is read from the descriptor only; the add-on never learns its path.
+    // Starts one song and returns its job at once; the callback hears its stages, notes, progress and chunks, then its
+    // end. The song is read from the descriptor only; the add-on never learns its path.
     long run(in ParcelFileDescriptor song, long durationMs, String plainLyrics, IAiRunCallback callback) = 9;
 
     // After callback.onChunk: the next Whisper chunk may start.

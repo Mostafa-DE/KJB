@@ -270,6 +270,18 @@ class LyricsFromAudioTest {
     }
 
     @Test
+    fun `each piece of a stage reaches the caller as progress`() = runTest {
+        val stages = FakeStages(4..27, sung, ctcTimes = heard.map { it + 0.4 }, lyrics = lyrics, separatePieces = 3)
+        val pieces = mutableListOf<Pair<Int, Int>>()
+
+        val result = engine(stages).run(track, lyrics.joinToString("\n"), onProgress = { done, total -> pieces += done to total })
+
+        assertTrue(result.toString(), result is AiResult.Aligned)
+        assertEquals(listOf(1 to 3, 2 to 3, 3 to 3), pieces.take(3))
+        assertTrue("the aligner's blocks too: $pieces", pieces.size > 3)
+    }
+
+    @Test
     fun `the notes for the run log hold no lyrics`() = runTest {
         val notes = mutableListOf<String>()
         var now = 0L
@@ -317,6 +329,8 @@ class LyricsFromAudioTest {
         /** What the decoder finds wrong with the audio: too long, or in a form it cannot use. */
         private val unfit: UnfitAudioException? = null,
         seconds: Int = 30,
+        /** MDX segments the separation tells its progress for. */
+        private val separatePieces: Int = 0,
     ) : AiStages {
         val calls = mutableListOf<String>()
         val chunks = mutableListOf<VocalChunk>()
@@ -354,6 +368,7 @@ class LyricsFromAudioTest {
                 vocals.accept(l, r, n)
                 at += n
             }
+            for (k in 1..separatePieces) progress.step(k, separatePieces)
         }
 
         override fun transcribe(stem: FloatArray, chunk: VocalChunk): List<Segment> {

@@ -116,13 +116,14 @@ class LyricsFromAudio(
     /**
      * [knownPlainLyrics]: LRCLIB's plain lyrics of this recording (duration matched), or null to transcribe. Lyrics with
      * no line to time (see [LyricsText.lines]) are transcribed too. [onStage] hears each stage the run enters (the crash
-     * guard keeps it); [beforeChunk] is called before each Whisper chunk (the overnight run waits there while the phone
-     * is warm).
+     * guard keeps it); [onProgress] each piece of a stage done (an MDX segment, a wav2vec2 window, an aligner block);
+     * [beforeChunk] is called before each Whisper chunk (the overnight run waits there while the phone is warm).
      */
     suspend fun run(
         track: AiSong,
         knownPlainLyrics: String?,
         onStage: (AiStage) -> Unit = {},
+        onProgress: (done: Int, total: Int) -> Unit = { _, _ -> },
         beforeChunk: suspend () -> Unit = {},
     ): AiResult {
         val lyrics = knownPlainLyrics?.let(LyricsText::lines).orEmpty()
@@ -133,7 +134,7 @@ class LyricsFromAudio(
             return AiResult.Rejected(RejectReason.TOO_LONG, agreement = null)
         }
         return try {
-            Run(track, lyrics, job, onStage, beforeChunk).result()
+            Run(track, lyrics, job, onStage, onProgress, beforeChunk).result()
         } catch (e: CancellationException) {
             throw e
         } catch (e: UnfitAudioException) {
@@ -186,11 +187,15 @@ class LyricsFromAudio(
         private val lyrics: List<String>,
         private val job: Job?,
         private val onStage: (AiStage) -> Unit,
+        private val onProgress: (done: Int, total: Int) -> Unit,
         private val beforeChunk: suspend () -> Unit,
     ) {
         private val stageMs = linkedMapOf<AiStage, Long>()
 
-        private val progress = Progress { _, _ -> job?.ensureActive() }
+        private val progress = Progress { done, total ->
+            job?.ensureActive()
+            onProgress(done, total)
+        }
 
         suspend fun result(): AiResult {
             val vocals = listen()

@@ -16,4 +16,8 @@ oneway interface IAiRunCallback {
 
     // The job's end after IAiAddon.cancel: nothing to record.
     void onStopped(long job) = 5;
+
+    // A piece of the stage the job is in is done (an MDX segment, a wav2vec2 window, an aligner block): the first of each
+    // stage at once, then at most every few seconds. KJB's watchdog hears the job move through its long stages.
+    void onProgress(long job, int done, int total) = 6;
 }

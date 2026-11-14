@@ -1,6 +1,8 @@
 package app.lyrify.overnight
 
 import app.lyrify.addon.AddonDiedException
+import app.lyrify.addon.AddonStalledException
+import app.lyrify.addon.RemoteSongEngine
 import app.lyrify.ai.AiModels
 import app.lyrify.ai.AiResult
 import app.lyrify.ai.AiStage
@@ -225,6 +227,9 @@ class AiNightTest {
     /** The add-on's process dies at this chunk of a song's run (the engine throws as RemoteSongEngine does). */
     private var dieAt: ((LocalTrack, Int) -> Boolean) = { _, _ -> false }
 
+    /** The add-on says nothing at this chunk of a song's run until RemoteSongEngine's watchdog gives up on it. */
+    private var stallAt: ((LocalTrack, Int) -> Boolean) = { _, _ -> false }
+
     private fun audio(name: String): LocalTrack {
         val file = File(folder.root, "$name.mp3")
         file.writeBytes(byteArrayOf(1, 2, 3))
@@ -259,6 +264,7 @@ class AiNightTest {
                         onStage(AiStage.TRANSCRIBE)
                         for (k in 0 until chunks) {
                             if (dieAt(track, k)) throw AddonDiedException()
+                            if (stallAt(track, k)) throw AddonStalledException(AiStage.TRANSCRIBE, RemoteSongEngine.STEP_MS)
                             beforeChunk()
                             withContext(NonCancellable) { delay(chunkMs) }
                             call.chunksRun++
@@ -783,6 +789,34 @@ class AiNightTest {
         val ends = List(3) { runner().run() }
 
         assertEquals(listOf(AiRunEnd.ADDON_DIED, AiRunEnd.ADDON_DIED, AiRunEnd.CRASHED), ends)
+        assertEquals(GuardVerdict.HOLD, guard.verdict())
+    }
+
+    // The add-on stops answering
+
+    @Test
+    fun `an add-on that stops answering fails that song with the reason, and the run goes on with a new engine`() = runTest {
+        val first = waiting("First", updatedAt = now - 1)
+        val second = waiting("Second", updatedAt = now - 2)
+        stallAt = { track, chunk -> track.title == "First" && chunk == 1 }
+
+        assertEquals(AiRunEnd.DONE, runner().run())
+
+        assertEquals(LyricsStatus.AI_FAILED, memory[first.path]?.status) // tried again after the failed runs' wait
+        assertEquals(LyricsStatus.AI_TRANSCRIBED, memory[second.path]?.status)
+        assertEquals("the stalled engine was let go of, the next song got its own", 2, opened)
+        assertEquals(opened, closed)
+        assertTrue(logs.toString(), logs.any { "First" in it && "stopped answering during transcribe" in it })
+    }
+
+    @Test
+    fun `the add-on stopping answering in one stage three times in a row holds the AI`() = runTest {
+        repeat(4) { waiting("Song $it", updatedAt = now - it) }
+        stallAt = { _, _ -> true }
+
+        assertEquals(AiRunEnd.CRASHED, runner().run())
+
+        assertEquals(3, calls.size)
         assertEquals(GuardVerdict.HOLD, guard.verdict())
     }
 

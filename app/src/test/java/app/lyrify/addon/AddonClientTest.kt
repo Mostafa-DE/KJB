@@ -15,6 +15,7 @@ import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceTimeBy
@@ -341,6 +342,118 @@ class AddonClientTest {
 
         assertEquals(AiResult.Failed("FileNotFoundException"), result)
         session.close()
+    }
+
+    // The watchdog: an add-on that goes quiet mid-song is never waited for forever
+
+    @Test
+    fun `an add-on silent for 3 minutes once its models are loaded is cancelled and let go of, and the song fails`() = runTest {
+        val host = FakeHost()
+        val session = session(host)
+        val binding = host.bindings.single()
+        val engine = RemoteSongEngine(session, notes = {})
+        val run = async { runCatching { engine.run(track, null, {}) {} } }
+        runCurrent()
+        val events = checkNotNull(binding.port.events)
+        events.onStage("DECODE")
+        events.onStage("SEPARATE")
+        events.onProgress(1, 40) // the MDX model is loaded: its first segment ran
+        runCurrent()
+
+        advanceTimeBy(RemoteSongEngine.STEP_MS - 1)
+        runCurrent()
+        assertFalse("silent for less than a step's limit", run.isCompleted || "cancel 7" in binding.port.calls)
+        advanceTimeBy(2)
+        runCurrent()
+        assertEquals("cancel 7", binding.port.calls.last())
+        assertFalse("waits a moment for the job to stop", binding.closed)
+
+        advanceTimeBy(RemoteSongEngine.STALL_STOP_MS)
+        runCurrent()
+
+        val error = run.await().exceptionOrNull()
+        assertTrue(error.toString(), error is AddonStalledException && error.stage == AiStage.SEPARATE && error.silentMs == RemoteSongEngine.STEP_MS)
+        assertTrue("let go of", binding.closed && session.closed)
+        engine.close()
+        assertFalse("nothing more is asked of it", "closeEngine" in binding.port.calls)
+    }
+
+    @Test
+    fun `before the models have loaded the add-on gets the first load's longer limit`() = runTest {
+        val host = FakeHost()
+        val engine = RemoteSongEngine(session(host), notes = {})
+        val binding = host.bindings.single()
+        val port = binding.port
+        val run = async { runCatching { engine.run(track, null, {}) {} } }
+        runCurrent()
+        port.events!!.onStage("DECODE")
+        port.events!!.onStage("SEPARATE")
+        runCurrent()
+
+        advanceTimeBy(RemoteSongEngine.STEP_MS + 1)
+        runCurrent()
+        assertFalse("creating the MDX session takes minutes", "cancel 7" in port.calls)
+        advanceTimeBy(RemoteSongEngine.FIRST_LOAD_MS - RemoteSongEngine.STEP_MS)
+        runCurrent()
+        assertEquals("cancel 7", port.calls.last())
+        port.events!!.onStopped() // the job did stop: the add-on is let go of all the same
+        runCurrent()
+
+        val error = run.await().exceptionOrNull()
+        assertTrue(error.toString(), error is AddonStalledException && error.stage == AiStage.SEPARATE && error.silentMs == RemoteSongEngine.FIRST_LOAD_MS)
+        assertTrue(binding.closed)
+    }
+
+    @Test
+    fun `the pieces of a long stage, and KJB's own hold before a chunk, are no silence`() = runTest {
+        val host = FakeHost()
+        val engine = RemoteSongEngine(session(host), notes = {})
+        val port = host.bindings.single().port
+        val run = async { runCatching { engine.run(track, null, {}) { delay(30 * 60_000L) } } } // the phone is warm for 30 minutes
+        runCurrent()
+        port.events!!.onStage("SEPARATE")
+        port.events!!.onProgress(1, 200)
+        runCurrent()
+        // A 15-minute separation, a piece told every few minutes.
+        for (k in 2..6) {
+            advanceTimeBy(RemoteSongEngine.STEP_MS - 1_000)
+            port.events!!.onProgress(k, 200)
+            runCurrent()
+        }
+        port.events!!.onStage("TRANSCRIBE")
+        port.events!!.onChunk()
+        runCurrent()
+
+        advanceTimeBy(30 * 60_000L + 1)
+        runCurrent()
+        assertEquals("proceed 7", port.calls.last())
+        port.events!!.onResult(transcribed)
+        runCurrent()
+
+        assertEquals(transcribed, run.await().getOrThrow())
+        assertFalse("cancel 7" in port.calls)
+    }
+
+    @Test
+    fun `after a stall the night's next song binds the add-on anew, a dead one is not bound again`() = runTest {
+        val host = FakeHost()
+        val client = AddonClient(host)
+        val lease = AddonLease(client, (client.connect() as Connection.Open).session)
+        val first = lease.session()
+        assertTrue("kept while it is in use", first === lease.session())
+
+        first.close() // what a stall does
+        val second = lease.session()
+
+        assertFalse(first === second)
+        assertEquals(2, host.bindings.size)
+        host.bindings.last().kill()
+        assertTrue("its calls end the run, as before", second === lease.session())
+        second.close()
+        host.refuses = true
+        assertTrue(runCatching { lease.session() }.exceptionOrNull() is AddonDiedException)
+        lease.close()
+        assertTrue(host.bindings.all { it.closed })
     }
 
     // The models' download, run by the add-on while KJB keeps it bound

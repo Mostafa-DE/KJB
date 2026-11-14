@@ -1,6 +1,7 @@
 package app.lyrify.overnight
 
 import app.lyrify.addon.AddonDiedException
+import app.lyrify.addon.AddonStalledException
 import app.lyrify.ai.AiResult
 import app.lyrify.ai.AiStage
 import app.lyrify.data.LedgerEntry
@@ -125,7 +126,10 @@ enum class AiRunEnd {
     /** The same model file did not load again after it was downloaded again: it is kept, and the AI pauses ([ModelLoadFailures]). */
     MODEL_FAILED,
 
-    /** The app died in the same stage too often in a row ([GuardVerdict.HOLD]): the AI waits for the next version. */
+    /**
+     * The app died, or the AI add-on died or stopped answering, in the same stage too often in a row ([GuardVerdict.HOLD]):
+     * the AI waits for the next version.
+     */
     CRASHED,
 
     /** The AI add-on's process died during a song (counted for the song like a crash); the next run binds it again. */
@@ -150,7 +154,9 @@ enum class AiRunEnd {
  * time waiting, in another stage they stop the AI ([AiRunEnd.CRASHED]), until the next version of the app. The engine
  * runs in the AI add-on's process: when that dies during a song (a native crash, out of memory, killed), KJB lives on,
  * counts the death of the song in its stage as the next run would have counted its own, and ends the run
- * ([AiRunEnd.ADDON_DIED]). A model that does not load counts as a death of the song in its stage too; it is downloaded
+ * ([AiRunEnd.ADDON_DIED]). When it stops answering during a song ([AddonStalledException], the engine's watchdog), that
+ * song is recorded as failed with the reason and counted as a death in its stage, and the run goes on with the add-on
+ * bound anew. A model that does not load counts as a death of the song in its stage too; it is downloaded
  * again once, then the AI pauses ([ModelLoadFailures]). A song whose audio file was replaced during its run is
  * abandoned: nothing is recorded.
  * [runLog] gets one line per event: titles, stages, times, counts, never lyrics. It is the AI's run log ([AiRunLog]), in
@@ -273,6 +279,17 @@ class AiRunner(
                     val held = guard.verdict() == GuardVerdict.HOLD
                     runLog("AI: $title: the AI add-on stopped during ${song.diedIn?.label() ?: "a run"} (${song.deaths} of ${CrashGuard.MAX_DEATHS} for this song)")
                     return if (held) AiRunEnd.CRASHED else AiRunEnd.ADDON_DIED
+                } catch (e: AddonStalledException) {
+                    // The add-on stopped answering: its job was cancelled and the add-on let go of (it ends its own
+                    // process if the step never ends). The song fails with the reason, tried again after the failed
+                    // runs' wait; it counts as a death in its stage too, so a stage that always hangs holds the AI. The
+                    // next song binds the add-on anew.
+                    song.died()
+                    closeEngine()
+                    val status = record(current.track, AiResult.Failed("${e.javaClass.simpleName}: ${e.message}"))
+                    runLog("AI: $title: the AI add-on stopped answering during ${e.stage?.label() ?: "its start"} (nothing for ${seconds(e.silentMs)}); now $status")
+                    if (guard.verdict() == GuardVerdict.HOLD) return AiRunEnd.CRASHED
+                    continue
                 } finally {
                     song.ended()
                 }

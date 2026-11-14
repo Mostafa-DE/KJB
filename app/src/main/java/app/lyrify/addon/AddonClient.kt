@@ -46,6 +46,14 @@ sealed interface AddonState {
 /** The add-on's process is gone (DeadObjectException): what it was doing ended, and a new bind starts it again. */
 class AddonDiedException(cause: Throwable? = null) : Exception("the AI add-on is gone", cause)
 
+/**
+ * A song's job in the add-on said nothing for [silentMs] in [stage] (null: before its first stage), longer than any step
+ * takes ([RemoteSongEngine]'s watchdog): it was cancelled and the add-on let go of, so a step that never ends ends the
+ * add-on's process and frees the NPU. The song fails; the next one binds the add-on anew.
+ */
+class AddonStalledException(val stage: AiStage?, val silentMs: Long) :
+    Exception("the AI add-on said nothing for ${silentMs / 1000} s during ${stage?.name?.lowercase() ?: "its start"}")
+
 /** One song's job as the add-on tells it (IAiRunCallback, as Kotlin). Called on binder threads. */
 interface RunEvents {
     /** An AiStage name; a later add-on may name one this KJB does not know. */
@@ -58,6 +66,9 @@ interface RunEvents {
     fun onResult(result: AiResult)
 
     fun onStopped()
+
+    /** [done] of [total] pieces of the stage the job is in (the first of each stage, then every few seconds at most). */
+    fun onProgress(done: Int, total: Int)
 }
 
 /** The add-on's model download as it goes (IAiDownloadCallback, as Kotlin). Called on binder threads. */
@@ -134,7 +145,32 @@ class AddonSession internal constructor(private val binding: AddonBinding, val a
     /** False once its process died. */
     val alive: Boolean get() = !binding.death.isCompleted
 
-    override fun close() = binding.close()
+    /** True once let go of ([close]). */
+    @Volatile
+    var closed: Boolean = false
+        private set
+
+    override fun close() {
+        closed = true
+        binding.close()
+    }
+}
+
+/**
+ * The add-on for one night's run: its [session], bound again once the last one was let go of (a song's job stalled,
+ * [AddonStalledException]). A session whose process died is not bound again here: its calls throw [AddonDiedException]
+ * and the run ends, as before.
+ */
+class AddonLease(private val client: AddonClient, private var current: AddonSession) : AutoCloseable {
+    /** The session to use now; [AddonDiedException] when the add-on cannot be bound again. */
+    suspend fun session(): AddonSession {
+        if (!current.closed) return current
+        val again = client.connect() as? Connection.Open ?: throw AddonDiedException()
+        current = again.session
+        return current
+    }
+
+    override fun close() = current.close()
 }
 
 /** What [AddonClient.connect] got: a [session] to use, or why there is none. */
@@ -229,6 +265,11 @@ class AddonClient(private val host: AddonHost, private val minApi: Int = MIN_ADD
  * guard ([run]'s onStage), whose notes go to the run log ([notes]), and whose Whisper chunks each wait for KJB's
  * beforeChunk (the heat). Cancelled, it tells the add-on and waits up to [stopTimeoutMs] for it to stop after the step it
  * is on, as the engine did in KJB's own process. The add-on dying is [AddonDiedException].
+ *
+ * Never waited for forever: a job that says nothing (no stage, note, piece of a stage, chunk or end) for longer than any
+ * step takes is cancelled, given [STALL_STOP_MS] to stop, and the session let go of: [AddonStalledException]. Without a
+ * client, an add-on whose step never ends ends its own process, which frees the NPU. The time KJB itself holds a chunk
+ * (the heat) is not the add-on's silence.
  */
 class RemoteSongEngine(
     private val session: AddonSession,
@@ -241,6 +282,8 @@ class RemoteSongEngine(
 
         data class Note(val line: String) : Event
 
+        data object Progress : Event
+
         data object Chunk : Event
 
         /** The job's end: its result, or null when it stopped. */
@@ -248,6 +291,12 @@ class RemoteSongEngine(
 
         data object Died : Event
     }
+
+    /** Set once a song's separation moved: the add-on's models are loaded, and each silence gets [STEP_MS]. */
+    private var loaded = false
+
+    /** Set by a stall: the session was let go of, and nothing more is asked of the add-on. */
+    private var stalled = false
 
     override suspend fun run(track: LocalTrack, plainLyrics: String?, onStage: (AiStage) -> Unit, beforeChunk: suspend () -> Unit): AiResult {
         val events = Channel<Event>(Channel.UNLIMITED)
@@ -271,6 +320,10 @@ class RemoteSongEngine(
             override fun onStopped() {
                 events.trySend(Event.End(null))
             }
+
+            override fun onProgress(done: Int, total: Int) {
+                events.trySend(Event.Progress)
+            }
         }
         val port = session.port
         val job = try {
@@ -288,15 +341,14 @@ class RemoteSongEngine(
                 follow(events, job, onStage, beforeChunk)
             } catch (e: CancellationException) {
                 // The step under way finishes in the add-on; wait for it to stop, as the engine in KJB's process did.
-                withContext(NonCancellable) {
-                    runCatching { port.cancel(job) }
-                    withTimeoutOrNull(stopTimeoutMs) {
-                        while (true) {
-                            val event = events.receive()
-                            if (event is Event.End || event == Event.Died) break
-                        }
-                    }
-                }
+                withContext(NonCancellable) { stop(job, events, stopTimeoutMs) }
+                throw e
+            } catch (e: AddonStalledException) {
+                // Cancelled, then let go of whether it stopped or not: with no client left, an add-on whose step never
+                // ends ends its own process.
+                stalled = true
+                withContext(NonCancellable) { stop(job, events, STALL_STOP_MS) }
+                session.close()
                 throw e
             } finally {
                 death.cancel()
@@ -304,13 +356,35 @@ class RemoteSongEngine(
         }
     }
 
-    /** The job's events until its end: stages to the crash guard, notes to the run log, each chunk after beforeChunk. */
+    /** Asks the add-on to stop [job] and waits up to [timeoutMs] for its end or its death. */
+    private suspend fun stop(job: Long, events: ReceiveChannel<Event>, timeoutMs: Long) {
+        runCatching { session.port.cancel(job) }
+        withTimeoutOrNull(timeoutMs) {
+            while (true) {
+                val event = events.receive()
+                if (event is Event.End || event == Event.Died) break
+            }
+        }
+    }
+
+    /**
+     * The job's events until its end: stages to the crash guard, notes to the run log, each chunk after beforeChunk. No
+     * event within [silenceLimit] is a stall ([AddonStalledException]).
+     */
     private suspend fun follow(events: ReceiveChannel<Event>, job: Long, onStage: (AiStage) -> Unit, beforeChunk: suspend () -> Unit): AiResult {
+        var stage: AiStage? = null
         while (true) {
-            when (val event = events.receive()) {
+            val limit = silenceLimit(stage)
+            val event = withTimeoutOrNull(limit) { events.receive() } ?: throw AddonStalledException(stage, limit)
+            when (event) {
                 // A stage a later add-on names is not one this crash guard knows.
-                is Event.Stage -> AiStage.entries.firstOrNull { it.name == event.stage }?.let(onStage)
+                is Event.Stage -> AiStage.entries.firstOrNull { it.name == event.stage }?.let {
+                    stage = it
+                    onStage(it)
+                }
                 is Event.Note -> notes(event.line)
+                // The separation's first piece: the MDX model is loaded.
+                Event.Progress -> if (stage == AiStage.SEPARATE) loaded = true
                 Event.Chunk -> {
                     beforeChunk()
                     session.port.proceed(job)
@@ -322,8 +396,16 @@ class RemoteSongEngine(
         }
     }
 
-    /** Releases the add-on's NPU sessions; quiet when it is gone. */
+    /**
+     * How long the add-on may say nothing in [stage]: [FIRST_LOAD_MS] until this engine's first separation moved (the
+     * MDX model loads after the decoder starts), else [STEP_MS].
+     */
+    private fun silenceLimit(stage: AiStage?): Long =
+        if (!loaded && (stage == null || stage == AiStage.DECODE || stage == AiStage.SEPARATE)) FIRST_LOAD_MS else STEP_MS
+
+    /** Releases the add-on's NPU sessions; quiet when it is gone. After a stall nothing is asked: it could wait on the step that never ends. */
     override fun close() {
+        if (stalled) return
         try {
             session.port.closeEngine()
         } catch (_: AddonDiedException) {
@@ -332,8 +414,25 @@ class RemoteSongEngine(
     }
 
     companion object {
-        /** A step (an MDX segment, a Whisper chunk) takes seconds; creating the MDX session, about 30 s. */
+        /** A step (an MDX segment, a Whisper chunk) takes seconds; creating the MDX session, minutes at most. */
         const val STOP_TIMEOUT_MS: Long = 2 * 60_000
+
+        /**
+         * The silence allowed while the MDX model may be loading: its session was created in 50 to 83 s in the add-on
+         * spike and in 107 to 164 s in KJB 2.0's nights (2026-11-06 run log), on the fastest supported chip; the graph is
+         * prepared on the CPU, slower on the older supported chips, so about 3.5 times the longest seen.
+         */
+        const val FIRST_LOAD_MS: Long = 10 * 60_000
+
+        /**
+         * The silence allowed once the models are loaded. With a piece of each long stage told every few seconds, the
+         * longest silent steps are a Whisper chunk (3.6 s at most in KJB 2.0's nights), an MDX segment with its decoding
+         * (about 1.5 s) and loading Whisper (3 s) or wav2vec2; this is 50 times the longest, for a hot or slower phone.
+         */
+        const val STEP_MS: Long = 3 * 60_000
+
+        /** After a stall, how long the add-on gets to stop: its own limit for a stopped step (10 s), then a margin. */
+        const val STALL_STOP_MS: Long = 15_000
 
         private const val STOPPED = "Stopped"
     }
