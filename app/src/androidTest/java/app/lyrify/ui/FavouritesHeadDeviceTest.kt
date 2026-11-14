@@ -50,7 +50,9 @@ class FavouritesHeadDeviceTest {
     fun onANarrowScreenAtFontScaleOneTheHeadStaysWithin120DpWithShuffleAndPlayUnderIt() {
         head(width = 320.dp, fontScale = 1f, dark = false)
         val page = compose.onNodeWithTag(PAGE).getUnclippedBoundsInRoot()
-        assertTrue("head ${page.bottom - page.top} tall", page.bottom - page.top <= 120.dp)
+        // Within a pixel: each part is laid out on whole pixels (120 dp can be 337.5 px, laid out as 338).
+        val pixel = with(compose.density) { 1.toDp() }
+        assertTrue("head ${page.bottom - page.top} tall", page.bottom - page.top <= 120.dp + pixel)
         assertBesideTheTile()
         assertUnderTheWords(placed(play))
         assertUnderTheWords(placed(shuffle))

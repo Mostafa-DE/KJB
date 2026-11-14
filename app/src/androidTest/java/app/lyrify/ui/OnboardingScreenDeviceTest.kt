@@ -27,9 +27,10 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * The first run on the phone, the test clock held (the waiting cover shimmers for ever): its button stays in reach at font
- * scale 2.0 on a short screen while the words scroll, Find your music has no Not now, each screen's title takes the focus,
- * and the walk to the tour's choice. Not run in the lane: the orchestrator runs it in a phone session.
+ * The first run on the phone, the test clock held where a walk reaches You're ready (its waiting cover shimmers for ever):
+ * its button stays in reach at font scale 2.0 on a short screen while the words scroll, Find your music has no Not now,
+ * each screen's title takes the focus, and the walk to the tour's choice. Not run in the lane: the orchestrator runs it in
+ * a phone session.
  */
 @RunWith(AndroidJUnit4::class)
 class OnboardingScreenDeviceTest {
@@ -42,8 +43,9 @@ class OnboardingScreenDeviceTest {
     private val none = Access(notifications = false, allFiles = false)
     private val files = Access(notifications = false, allFiles = true)
 
-    private fun show(access: Access, setupDone: Boolean = false, phone: DeviceConfigurationOverride? = null, onFinish: (Boolean) -> Unit = {}) {
-        compose.mainClock.autoAdvance = false
+    /** [holdClock]: a scroll by the test only moves while the clock runs, so a test that scrolls lets it run. */
+    private fun show(access: Access, setupDone: Boolean = false, phone: DeviceConfigurationOverride? = null, holdClock: Boolean = true, onFinish: (Boolean) -> Unit = {}) {
+        compose.mainClock.autoAdvance = !holdClock
         compose.setContent {
             val screen: @Composable () -> Unit = {
                 LyrifyTheme {
@@ -69,7 +71,9 @@ class OnboardingScreenDeviceTest {
 
     @Test
     fun atFontScale2OnAShortScreenTheButtonStaysInReachAndTheWordsScroll() {
-        show(none, phone = DeviceConfigurationOverride.FontScale(2f) then DeviceConfigurationOverride.ForcedSize(DpSize(320.dp, 480.dp)))
+        // Welcome and Find your music have nothing that moves for ever, so the clock runs: performScrollTo's scroll is
+        // animated, and with the clock held it never moved and the test spun (phone session 9).
+        show(none, phone = DeviceConfigurationOverride.FontScale(2f) then DeviceConfigurationOverride.ForcedSize(DpSize(320.dp, 480.dp)), holdClock = false)
         val root = compose.onRoot().getUnclippedBoundsInRoot()
         val button = compose.onNodeWithText(words(R.string.ob_get_started)).assertIsDisplayed().getUnclippedBoundsInRoot()
         assertTrue("Get started ${button.bottom} on screen ${root.bottom}", button.bottom <= root.bottom)
