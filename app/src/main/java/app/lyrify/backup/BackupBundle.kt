@@ -296,6 +296,8 @@ object BackupBundle {
         snapshot.tones?.let { state -> state.tones.values.forEach { add(it.songPath) } }
         snapshot.duplicates?.let { choices -> (choices.notDuplicates + choices.reviewed).forEach { key -> key.split(',').mapNotNull { it.toLongOrNull()?.let(pathOf) }.forEach(::add) } }
         snapshot.coversTags?.let { memory -> memory.albums.forEach { album -> album.songs.forEach { add(it.path) } } }
+        // Hidden songs, so another phone finds them and keeps them hidden.
+        snapshot.settings?.let { settings -> addAll(settings.library.hiddenSongs) }
     }.distinct()
 
     /** A song as a backup keeps it: by its path only, as a MediaStore id names a file on this phone alone. */

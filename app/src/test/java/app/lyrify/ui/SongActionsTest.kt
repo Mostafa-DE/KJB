@@ -19,9 +19,13 @@ import app.lyrify.player.QueueSource
 import app.lyrify.player.QueueTarget
 import app.lyrify.player.SourceKind
 import app.lyrify.player.Undo
+import app.lyrify.settings.LibrarySettings
+import app.lyrify.settings.Settings
+import app.lyrify.settings.SettingsStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -29,6 +33,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 /** The one door: the song sheet's rows, Add to, selection, and every change's toast with its Undo. Made-up names only. */
 class SongActionsTest {
@@ -103,20 +108,20 @@ class SongActionsTest {
     // The song sheet
 
     @Test
-    fun `the song sheet shows every row for a song in a list, and the rows of its place`() {
+    fun `the song sheet shows every row for a song in a list, and the rows of its place, Hide and Move to trash last`() {
         val common = listOf(SheetRow.PLAY_NEXT, SheetRow.ADD_TO, SheetRow.FAVOURITE, SheetRow.LYRICS, SheetRow.MAKE_TONE, SheetRow.SONG_INFO, SheetRow.EDIT_TAGS)
-        assertEquals(common + SheetRow.MOVE_TO_TRASH, sheetRows(SheetPlace.List, coversTags = false, removeFromQueue = false))
-        assertEquals(common + SheetRow.COVERS_TAGS + SheetRow.MOVE_TO_TRASH, sheetRows(SheetPlace.List, coversTags = true, removeFromQueue = true))
+        assertEquals(common + SheetRow.HIDE + SheetRow.MOVE_TO_TRASH, sheetRows(SheetPlace.List, coversTags = false, removeFromQueue = false))
+        assertEquals(common + SheetRow.COVERS_TAGS + SheetRow.HIDE + SheetRow.MOVE_TO_TRASH, sheetRows(SheetPlace.List, coversTags = true, removeFromQueue = true))
         assertEquals(
-            common + SheetRow.REMOVE_FROM_PLAYLIST + SheetRow.MOVE_TO_TRASH,
+            common + SheetRow.REMOVE_FROM_PLAYLIST + SheetRow.HIDE + SheetRow.MOVE_TO_TRASH,
             sheetRows(SheetPlace.Playlist("p1", 0), coversTags = false, removeFromQueue = true),
         )
         assertEquals(
-            common + SheetRow.COVERS_TAGS + SheetRow.REMOVE_FROM_QUEUE + SheetRow.MOVE_TO_TRASH,
+            common + SheetRow.COVERS_TAGS + SheetRow.REMOVE_FROM_QUEUE + SheetRow.HIDE + SheetRow.MOVE_TO_TRASH,
             sheetRows(SheetPlace.Queue("q1", 3), coversTags = true, removeFromQueue = true),
         )
         // Until P2 fills its slot, a queue's song has no Remove from queue.
-        assertEquals(common + SheetRow.MOVE_TO_TRASH, sheetRows(SheetPlace.Queue("q1", 3), coversTags = false, removeFromQueue = false))
+        assertEquals(common + SheetRow.HIDE + SheetRow.MOVE_TO_TRASH, sheetRows(SheetPlace.Queue("q1", 3), coversTags = false, removeFromQueue = false))
     }
 
     // An album's or an artist's "⋯"
@@ -425,6 +430,70 @@ class SongActionsTest {
         store.rename("p1", "Dawn drive")
         again.undo?.invoke()
         assertEquals("Dawn drive", now().name)
+    }
+
+    // Hide (features 2026-11-15, item 6)
+
+    /** settings.json in memory; [fail] makes every write fail. */
+    private class MemorySettings(var now: Settings = Settings(), var fail: Boolean = false) : SettingsStore {
+        override val settings: Flow<Settings> get() = flowOf(now)
+
+        override suspend fun update(change: (Settings) -> Settings): Boolean = !fail && run {
+            now = change(now)
+            true
+        }
+    }
+
+    @Test
+    fun `Hide hides the songs, says Hidden, and Undo shows again only those it hid`() = runBlocking {
+        val store = MemorySettings(Settings(library = LibrarySettings(hiddenSongs = listOf(water.path))))
+        val actions = SongActions(NoPlayback, MemoryPlaylists())
+
+        val hidden = actions.hide(listOf(lantern.ref, water.ref, lantern.ref), store)
+        assertEquals(Said.Hidden(2), hidden.said)
+        assertEquals(listOf(water.path, lantern.path), store.now.library.hiddenSongs)
+        // Another song hidden while the toast is up stays hidden; so does the one hidden before.
+        actions.hide(listOf(bell.ref), store)
+        assertTrue(hidden.undo?.invoke() == true)
+        assertEquals(listOf(water.path, bell.path), store.now.library.hiddenSongs)
+    }
+
+    @Test
+    fun `Unhide in Settings shows the songs again, with Undo, and a write that fails changes nothing`() = runBlocking {
+        val store = MemorySettings(Settings(library = LibrarySettings(hiddenSongs = listOf(water.path, lantern.path))))
+        val actions = SongActions(NoPlayback, MemoryPlaylists())
+
+        val shown = actions.unhide(listOf(lantern.path), store)
+        assertEquals(Said.Unhidden(1), shown.said)
+        assertEquals(listOf(water.path), store.now.library.hiddenSongs)
+        assertTrue(shown.undo?.invoke() == true)
+        assertEquals(listOf(water.path, lantern.path), store.now.library.hiddenSongs)
+
+        store.fail = true
+        assertEquals(Said.NotSaved, actions.hide(listOf(bell.ref), store).said)
+        assertEquals(listOf(water.path, lantern.path), store.now.library.hiddenSongs)
+    }
+
+    @Test
+    fun `Hide folder adds it to Folders to skip, says so, and Undo takes it out again`() = runBlocking {
+        val store = MemorySettings(Settings(library = LibrarySettings(foldersToSkip = listOf("Recordings"))))
+        val actions = SongActions(NoPlayback, MemoryPlaylists())
+
+        val hidden = actions.hideFolder("Music/Night Ferry", store)
+        assertEquals(Said.FolderHidden, hidden.said)
+        assertEquals(listOf("Recordings", "Music/Night Ferry"), store.now.library.foldersToSkip)
+        assertTrue(hidden.undo?.invoke() == true)
+        assertEquals(listOf("Recordings"), store.now.library.foldersToSkip)
+    }
+
+    @Test
+    fun `the toasts say Hidden, how many songs, and Hidden songs is a short label`() {
+        val strings = File("src/main/res/values/strings_library_extras.xml").readText()
+        assertTrue("""<string name="lib_hidden">Hidden</string>""" in strings)
+        assertTrue("""<string name="lib_hide">Hide</string>""" in strings)
+        assertTrue("""<string name="set_hidden">Hidden songs</string>""" in strings)
+        assertTrue("""<string name="lib_hide_folder">Hide folder</string>""" in strings)
+        assertTrue("""<string name="lib_unhide">Unhide</string>""" in strings)
     }
 
     @Test

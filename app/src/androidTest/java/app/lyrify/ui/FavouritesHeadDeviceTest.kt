@@ -88,7 +88,7 @@ class FavouritesHeadDeviceTest {
             LyrifyTheme {
                 Box(Modifier.requiredWidth(width).testTag(PAGE)) {
                     FavouritesHead(title, META) {
-                        ListHeader(COUNT, R.plurals.lib_noun_songs, {}, {}, onAddAll = {}, sort = context.getString(ListOrder.START.chip), gutter = 0.dp)
+                        ListHeader(COUNT, R.plurals.lib_noun_songs, {}, {}, onAddAll = {}, sort = context.getString(R.string.lib_sort_custom), gutter = 0.dp)
                     }
                 }
             }

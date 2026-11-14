@@ -29,6 +29,7 @@ data class Settings(
     val backup: BackupSettings = BackupSettings(),
     val advanced: AdvancedSettings = AdvancedSettings(),
     val nav: NavSettings = NavSettings(),
+    val display: DisplaySettings = DisplaySettings(),
 )
 
 /** Settings > Playback. */
@@ -94,12 +95,25 @@ data class LibrarySettings(
     val foldersToSkip: List<String> = emptyList(),
     /** "Show file names": file names instead of titles everywhere. */
     val showFileNames: Boolean = false,
-    /** Library > Songs: its sort, and which songs it shows by their lyrics. */
+    /** Library > Songs: its sort, the other way round or not ([SortSongs]), and which songs it shows by their lyrics. */
     val songSort: SortSongs = SortSongs.TITLE,
+    val songReversed: Boolean = false,
     val songFilter: LyricsFilter = LyricsFilter.ALL,
     val albumSort: SortAlbums = SortAlbums.TITLE,
+    val albumReversed: Boolean = false,
     val artistSort: SortArtists = SortArtists.NAME,
+    val artistReversed: Boolean = false,
+    /** Each song page's order, remembered per kind of page; a page not here has its [SongList.default]. */
+    val listSorts: Map<SongList, ListSort> = emptyMap(),
+    /**
+     * "Hidden songs": the paths of songs that leave every list, search, shuffle and stats view; their files stay on the
+     * phone and their plays stay counted. In the order hidden, each once.
+     */
+    val hiddenSongs: List<String> = emptyList(),
 ) {
+    /** [list]'s order: as the user left it, else its default. */
+    fun sortOf(list: SongList): ListSort = listSorts[list] ?: list.default
+
     companion object {
         /** Songs, Playlists, Albums, Artists and Folders shown; Genres hidden. */
         val DEFAULT_TABS: List<LibraryTabSetting> = LibraryTab.entries.map { LibraryTabSetting(it, shown = it != LibraryTab.GENRES) }
@@ -110,14 +124,48 @@ enum class LibraryTab { SONGS, PLAYLISTS, ALBUMS, ARTISTS, FOLDERS, GENRES }
 
 data class LibraryTabSetting(val tab: LibraryTab, val shown: Boolean)
 
-enum class SortSongs { TITLE, ARTIST, ALBUM, RECENTLY_ADDED }
+/**
+ * What a list of songs is sorted by, each first in its own direction: title, artist, album and file name A to Z (in
+ * natural number order, "Track 2" before "Track 10"); year, date added and last played the newest first; play count the
+ * most first; length the longest first. Reversed, each goes the other way; songs without a value go last either way.
+ */
+enum class SortSongs { TITLE, ARTIST, ALBUM, YEAR, RECENTLY_ADDED, PLAY_COUNT, LAST_PLAYED, DURATION, FILE_NAME }
 
 /** Songs with synced lyrics, plain lyrics, none, or all of them. */
 enum class LyricsFilter { ALL, SYNCED, PLAIN, NONE }
 
-enum class SortAlbums { TITLE, ARTIST, YEAR }
+/** What the Albums tab is sorted by, each first in its direction as [SortSongs]; an album was added when its last song was. */
+enum class SortAlbums { TITLE, ARTIST, YEAR, RECENTLY_ADDED, PLAY_COUNT, LAST_PLAYED, DURATION }
 
-enum class SortArtists { NAME, MOST_SONGS }
+/** What the Artists tab is sorted by, each first in its direction as [SortSongs]; the most songs first. */
+enum class SortArtists { NAME, MOST_SONGS, RECENTLY_ADDED, PLAY_COUNT, LAST_PLAYED }
+
+/**
+ * A song page's order: its own while [key] is null (an album's track order, a playlist's custom order, which the handles
+ * change), else by [key], [reversed] or not. The own order is never reversed.
+ */
+data class ListSort(val key: SortSongs? = null, val reversed: Boolean = false) {
+    companion object {
+        val OWN: ListSort = ListSort()
+    }
+}
+
+/**
+ * The song pages that remember their order, each kind once (every album shares one): those with an own order ([own])
+ * open in it; the others by their [default] key. Every page offers every [SortSongs] key.
+ */
+enum class SongList(val own: Boolean, val default: ListSort) {
+    ALBUM(true, ListSort.OWN),
+    ARTIST(false, ListSort(SortSongs.YEAR)),
+    FOLDER(false, ListSort(SortSongs.FILE_NAME)),
+    GENRE(false, ListSort(SortSongs.TITLE)),
+    UNKNOWN_ALBUM(false, ListSort(SortSongs.TITLE)),
+    PLAYLIST(true, ListSort.OWN),
+    FAVOURITES(true, ListSort.OWN),
+    MOST_PLAYED(false, ListSort(SortSongs.PLAY_COUNT)),
+    RECENTLY_PLAYED(false, ListSort(SortSongs.LAST_PLAYED)),
+    RECENTLY_ADDED(false, ListSort(SortSongs.RECENTLY_ADDED)),
+}
 
 /** Settings > Lyrics, and the "Aa" choices of full lyrics. */
 data class LyricsSettings(
@@ -201,6 +249,16 @@ data class NavSettings(
 
 enum class DockTab { LIBRARY, PLAYLISTS, SEARCH, TOOLS }
 
+/** Settings > Display. */
+data class DisplaySettings(
+    /** "Theme": as the phone is (the default), or always light, or always dark. */
+    val theme: ThemeChoice = ThemeChoice.SYSTEM,
+    /** "Pure black": the dark theme's pages on black, for OLED screens; nothing changes while the theme is light. */
+    val pureBlack: Boolean = false,
+)
+
+enum class ThemeChoice { SYSTEM, LIGHT, DARK }
+
 /** The Favourites page's tabs: the favourite songs, then the albums, artists, folders and playlists with a heart. */
 enum class FavouritesTab { SONGS, ALBUMS, ARTISTS, FOLDERS, PLAYLISTS }
 
@@ -214,7 +272,9 @@ enum class FavouritesTab { SONGS, ALBUMS, ARTISTS, FOLDERS, PLAYLISTS }
  * default in dev builds only, user feedback 2026-11-11, until Long songs came back: user, 2026-11-12). Such a value reads
  * as a missing one does (the default, Long songs), while the other values are kept; from version 4 every value is kept.
  * A file without a version reads as this version. A backup's settings are read the same way over the
- * phone's own ([decode]'s base), so what the backup does not carry stays as the phone has it.
+ * phone's own ([decode]'s base), so what the backup does not carry stays as the phone has it. The sort keys, the song
+ * pages' orders, the hidden songs and Display came later as new keys (features 2026-11-15): a file without them reads
+ * as the defaults, a page order this version cannot use as that page's default.
  */
 object SettingsJson {
     const val VERSION: Int = 4
@@ -243,9 +303,16 @@ object SettingsJson {
                             "foldersToSkip" to JsonArray(it.foldersToSkip.map(::JsonPrimitive)),
                             "showFileNames" to JsonPrimitive(it.showFileNames),
                             "songSort" to JsonPrimitive(it.songSort.name),
+                            "songReversed" to JsonPrimitive(it.songReversed),
                             "songFilter" to JsonPrimitive(it.songFilter.name),
                             "albumSort" to JsonPrimitive(it.albumSort.name),
+                            "albumReversed" to JsonPrimitive(it.albumReversed),
                             "artistSort" to JsonPrimitive(it.artistSort.name),
+                            "artistReversed" to JsonPrimitive(it.artistReversed),
+                            "listSorts" to JsonObject(
+                                it.listSorts.entries.associate { (list, sort) -> list.name to obj("key" to (sort.key?.name ?: OWN_ORDER), "reversed" to sort.reversed) },
+                            ),
+                            "hiddenSongs" to JsonArray(it.hiddenSongs.map(::JsonPrimitive)),
                         ),
                     )
                 },
@@ -280,6 +347,7 @@ object SettingsJson {
                         "notificationDenials" to it.notificationDenials,
                     )
                 },
+                "display" to settings.display.let { obj("theme" to it.theme.name, "pureBlack" to it.pureBlack) },
             ),
         ),
     )
@@ -321,9 +389,14 @@ object SettingsJson {
                     foldersToSkip = (it["foldersToSkip"] as? JsonArray)?.mapNotNull { folder -> folder.text()?.takeIf(String::isNotBlank) }?.distinct() ?: d.library.foldersToSkip,
                     showFileNames = it.flag("showFileNames", d.library.showFileNames),
                     songSort = it.choice("songSort", d.library.songSort),
+                    songReversed = it.flag("songReversed", d.library.songReversed),
                     songFilter = it.choice("songFilter", d.library.songFilter),
                     albumSort = it.choice("albumSort", d.library.albumSort),
+                    albumReversed = it.flag("albumReversed", d.library.albumReversed),
                     artistSort = it.choice("artistSort", d.library.artistSort),
+                    artistReversed = it.flag("artistReversed", d.library.artistReversed),
+                    listSorts = (it["listSorts"] as? JsonObject)?.let(::listSorts) ?: d.library.listSorts,
+                    hiddenSongs = (it["hiddenSongs"] as? JsonArray)?.mapNotNull { path -> path.text()?.takeIf(String::isNotBlank) }?.distinct() ?: d.library.hiddenSongs,
                 )
             } ?: d.library,
             lyrics = root.section("lyrics")?.let {
@@ -363,8 +436,29 @@ object SettingsJson {
                     notificationDenials = it.number("notificationDenials", d.nav.notificationDenials) { count -> count >= 0 },
                 )
             } ?: d.nav,
+            display = root.section("display")?.let {
+                DisplaySettings(theme = it.choice("theme", d.display.theme), pureBlack = it.flag("pureBlack", d.display.pureBlack))
+            } ?: d.display,
         )
     }
+
+    /**
+     * The song pages' orders as stored, each page once: a page this version does not know, a key it does not know, an own
+     * order on a page without one, or an entry without a key is left out, so the page opens in its default. The own order
+     * is never reversed.
+     */
+    private fun listSorts(stored: JsonObject): Map<SongList, ListSort> = stored.entries.mapNotNull { (name, value) ->
+        val list = SongList.entries.firstOrNull { it.name == name } ?: return@mapNotNull null
+        val sort = value as? JsonObject ?: return@mapNotNull null
+        val key = sort["key"]?.text() ?: return@mapNotNull null
+        list to when (key) {
+            OWN_ORDER -> ListSort.OWN.takeIf { list.own } ?: return@mapNotNull null
+            else -> ListSort(SortSongs.entries.firstOrNull { it.name == key } ?: return@mapNotNull null, sort.flag("reversed", false))
+        }
+    }.toMap()
+
+    /** A page's own order (an album's tracks, a playlist's custom order) as stored. */
+    private const val OWN_ORDER: String = "OWN"
 
     /**
      * The stored tabs in their order: unknown and repeated ones dropped, a missing "shown" read as the tab's default, and

@@ -93,7 +93,7 @@ sealed interface SheetPlace {
 }
 
 /** The song sheet's rows, in the order they show. Move to trash sits apart at the bottom. */
-enum class SheetRow { PLAY_NEXT, ADD_TO, FAVOURITE, LYRICS, MAKE_TONE, SONG_INFO, EDIT_TAGS, COVERS_TAGS, REMOVE_FROM_QUEUE, REMOVE_FROM_PLAYLIST, MOVE_TO_TRASH }
+enum class SheetRow { PLAY_NEXT, ADD_TO, FAVOURITE, LYRICS, MAKE_TONE, SONG_INFO, EDIT_TAGS, COVERS_TAGS, REMOVE_FROM_QUEUE, REMOVE_FROM_PLAYLIST, HIDE, MOVE_TO_TRASH }
 
 /**
  * The rows the song sheet shows when opened at [place]. [coversTags] and [removeFromQueue]: their slots are filled
@@ -269,6 +269,15 @@ sealed interface Said {
 
     data object PlaylistDeleted : Said
 
+    /** [count] songs hidden. */
+    data class Hidden(val count: Int) : Said
+
+    /** [count] songs shown again. */
+    data class Unhidden(val count: Int) : Said
+
+    /** A folder added to Folders to skip. */
+    data object FolderHidden : Said
+
     /** The change could not be stored: nothing changed. */
     data object NotSaved : Said
 }
@@ -415,7 +424,7 @@ sealed interface OpenSheet {
     @Serializable @SerialName("info")
     data class Info(val song: SongRef) : OpenSheet
 
-    /** The selection's More: Song info (one song), Edit tags, Move to trash. */
+    /** The selection's More: Song info (one song), Edit tags, Hide, Move to trash. */
     @Serializable @SerialName("more")
     data class More(val songs: List<SongRef>) : OpenSheet
 
@@ -525,6 +534,10 @@ fun saidText(resources: Resources, said: Said): String = when (said) {
     Said.RemovedFromQueue -> resources.getString(R.string.lib_removed_from_queue)
     Said.Renamed -> resources.getString(R.string.lib_renamed)
     Said.PlaylistDeleted -> resources.getString(R.string.lib_playlist_deleted)
+    is Said.Hidden -> if (said.count == 1) resources.getString(R.string.lib_hidden) else resources.getQuantityString(R.plurals.lib_hidden_songs, said.count, said.count)
+    is Said.Unhidden ->
+        if (said.count == 1) resources.getString(R.string.lib_shown_again) else resources.getQuantityString(R.plurals.lib_shown_again_songs, said.count, said.count)
+    Said.FolderHidden -> resources.getString(R.string.lib_folder_hidden)
     Said.NotSaved -> resources.getString(R.string.lib_not_saved)
 }
 
@@ -537,6 +550,8 @@ private fun saidIcon(said: Said): Int = when (said) {
     is Said.RemovedFrom, Said.RemovedFromQueue -> R.drawable.ic_playlist_remove
     Said.Renamed -> R.drawable.ic_edit
     Said.PlaylistDeleted -> R.drawable.ic_delete
+    is Said.Hidden, Said.FolderHidden -> R.drawable.ic_visibility_off
+    is Said.Unhidden -> R.drawable.ic_visibility
     Said.NotSaved -> R.drawable.ic_error
 }
 
@@ -599,6 +614,7 @@ fun SongSheetsHost(sheets: SongSheets, ui: LibraryUi, onActed: () -> Unit = {}) 
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val actions = rememberSongActions()
+    val settings = rememberSettingsStore()
     val trash = rememberDuplicates().trash
     val phoneTrash = rememberPhoneTrash(trash, toasts)
     // This host's place in the composition, which is the same when its page comes back, as rememberSaveable's keys are.
@@ -653,6 +669,7 @@ fun SongSheetsHost(sheets: SongSheets, ui: LibraryUi, onActed: () -> Unit = {}) 
                         SheetRow.REMOVE_FROM_PLAYLIST -> (step.place as? SheetPlace.Playlist)?.let { place ->
                             ui.playlists.playlist(place.id)?.let { playlist -> doneLater { actions.removeFromPlaylist(playlist, place.position) } }
                         }
+                        SheetRow.HIDE -> doneLater { actions.hide(listOf(song.ref), settings) }
                         SheetRow.MOVE_TO_TRASH -> sheets.show(OpenSheet.Trash(listOf(song.ref)))
                     }
                 }
@@ -683,6 +700,7 @@ fun SongSheetsHost(sheets: SongSheets, ui: LibraryUi, onActed: () -> Unit = {}) 
                         onActed()
                         nav.show(FullScreen.EditTags(songs.map { it.ref }))
                     },
+                    onHide = { doneLater { actions.hide(songs.map { it.ref }, settings) } },
                     onTrash = { sheets.show(OpenSheet.Trash(songs.map { it.ref })) },
                     onDismiss = sheets::close,
                 )

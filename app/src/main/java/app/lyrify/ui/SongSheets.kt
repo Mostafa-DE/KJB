@@ -95,15 +95,15 @@ internal fun SongMenuSheet(
                     SheetRow.COVERS_TAGS -> ActionRow(R.drawable.ic_album, stringResource(R.string.tools_covers)) { onRow(row) }
                     SheetRow.REMOVE_FROM_QUEUE -> ActionRow(R.drawable.ic_playlist_remove, stringResource(R.string.lib_remove_from_queue)) { onRow(row) }
                     SheetRow.REMOVE_FROM_PLAYLIST -> ActionRow(R.drawable.ic_playlist_remove, stringResource(R.string.lib_remove_from_playlist)) { onRow(row) }
-                    SheetRow.MOVE_TO_TRASH -> Unit
+                    SheetRow.HIDE, SheetRow.MOVE_TO_TRASH -> Unit
                 }
             }
         }
         bookmarks?.invoke()
-        if (SheetRow.MOVE_TO_TRASH in rows) {
-            HorizontalDivider(Modifier.padding(horizontal = 8.dp), color = MaterialTheme.colorScheme.outlineVariant)
-            ActionRow(R.drawable.ic_delete, stringResource(R.string.lib_move_to_trash), danger = true) { onRow(SheetRow.MOVE_TO_TRASH) }
-        }
+        // Hide and Move to trash apart at the bottom: both take the song out of the lists, one only from KJB's.
+        if (SheetRow.HIDE in rows || SheetRow.MOVE_TO_TRASH in rows) HorizontalDivider(Modifier.padding(horizontal = 8.dp), color = MaterialTheme.colorScheme.outlineVariant)
+        if (SheetRow.HIDE in rows) ActionRow(R.drawable.ic_visibility_off, stringResource(R.string.lib_hide)) { onRow(SheetRow.HIDE) }
+        if (SheetRow.MOVE_TO_TRASH in rows) ActionRow(R.drawable.ic_delete, stringResource(R.string.lib_move_to_trash), danger = true) { onRow(SheetRow.MOVE_TO_TRASH) }
     }
 }
 
@@ -397,7 +397,7 @@ private fun InfoRow(@DrawableRes icon: Int, @StringRes label: Int, value: String
 
 /** The selection's More: Song info (one song only), Edit tags and Move to trash. */
 @Composable
-internal fun SelectionMoreSheet(count: Int, onInfo: (() -> Unit)?, onEditTags: () -> Unit, onTrash: () -> Unit, onDismiss: () -> Unit) {
+internal fun SelectionMoreSheet(count: Int, onInfo: (() -> Unit)?, onEditTags: () -> Unit, onHide: () -> Unit, onTrash: () -> Unit, onDismiss: () -> Unit) {
     LyrifySheet(onDismiss = onDismiss, spacing = 8.dp, padding = 12.dp) {
         Text(
             pluralStringResource(R.plurals.lib_selected, count, count),
@@ -407,6 +407,7 @@ internal fun SelectionMoreSheet(count: Int, onInfo: (() -> Unit)?, onEditTags: (
         Column {
             onInfo?.let { ActionRow(R.drawable.ic_info, stringResource(R.string.lib_song_info), onClick = it) }
             ActionRow(R.drawable.ic_sell, stringResource(R.string.lib_edit_tags), onClick = onEditTags)
+            ActionRow(R.drawable.ic_visibility_off, stringResource(R.string.lib_hide), onClick = onHide)
             ActionRow(R.drawable.ic_delete, stringResource(R.string.lib_move_to_trash), danger = true, onClick = onTrash)
         }
     }

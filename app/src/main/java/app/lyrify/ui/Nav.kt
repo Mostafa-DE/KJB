@@ -50,9 +50,13 @@ sealed interface Page {
     @Serializable @SerialName("songs")
     data class Songs(val group: SongGroup? = null, val status: LyricsStatus? = null) : Page
 
-    /** Settings > Folders to skip, which lists the library's folders (LibraryScreen.kt, L1). */
+    /** Settings > Folders to skip, which lists the library's folders (LibraryHiding.kt). */
     @Serializable @SerialName("foldersToSkip")
     data object FoldersToSkip : Page
+
+    /** Settings > Hidden songs, with Unhide (LibraryHiding.kt, lane F2). */
+    @Serializable @SerialName("hiddenSongs")
+    data object HiddenSongs : Page
 
     /** A collection's page (CollectionScreens.kt, L1). */
     sealed interface CollectionPages : Page
@@ -424,7 +428,7 @@ fun homeOf(page: Page, from: DockTab, viewOpen: Boolean): DockTab {
         is Page.CollectionPages -> here?.takeIf { it == DockTab.SEARCH || it == DockTab.PLAYLISTS } ?: DockTab.LIBRARY
         is Page.SearchAll -> DockTab.SEARCH
         is Page.Songs -> DockTab.LIBRARY
-        is Page.Check, Page.Duplicates, Page.Tones, Page.Ai, Page.CoversTags, Page.TagHistory, Page.Settings, Page.LibraryTabs, Page.FoldersToSkip,
+        is Page.Check, Page.Duplicates, Page.Tones, Page.Ai, Page.CoversTags, Page.TagHistory, Page.Settings, Page.LibraryTabs, Page.FoldersToSkip, Page.HiddenSongs,
         Page.Licences, is Page.Licence -> DockTab.TOOLS
     }
 }

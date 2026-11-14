@@ -32,6 +32,12 @@ interface PlaysQuery {
 
     /** [song]'s plays; null when it was never played. */
     suspend fun plays(song: SongRef): SongPlays?
+
+    /**
+     * Every song played, hidden ones too, by its path in the library now: what the lists sorted by plays go by. None
+     * where a counter keeps no plays per song.
+     */
+    suspend fun everySong(): Map<String, SongPlays> = emptyMap()
 }
 
 /** No song has been played: tests. */

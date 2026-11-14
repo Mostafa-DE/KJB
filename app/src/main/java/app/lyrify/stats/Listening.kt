@@ -154,6 +154,15 @@ class PlayStats(
         }
     }
 
+    /** Every song played, hidden or not, under its path in the library now. */
+    override suspend fun everySong(): Map<String, SongPlays> {
+        val totals = store.totals()
+        return withContext(compute) {
+            val library = library() ?: return@withContext emptyMap()
+            bySong(totals, library, shownOnly = false).associate { it.item.path to songPlays(it) }
+        }
+    }
+
     /** Your listening for [period] as of [now], in the phone's [zone] and with its [firstDayOfWeek]. */
     suspend fun listening(period: ListeningPeriod, now: Long, zone: ZoneId, firstDayOfWeek: DayOfWeek): Listening {
         val bounds = periodOf(period, now, zone, firstDayOfWeek)
