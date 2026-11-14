@@ -29,6 +29,7 @@ data class Settings(
     val backup: BackupSettings = BackupSettings(),
     val advanced: AdvancedSettings = AdvancedSettings(),
     val nav: NavSettings = NavSettings(),
+    val about: AboutSettings = AboutSettings(),
 )
 
 /** Settings > Playback. */
@@ -174,6 +175,12 @@ data class AdvancedSettings(
     }
 }
 
+/** Settings > About. */
+data class AboutSettings(
+    /** "Check for updates": once a day when KJB opens, one request to KJB's latest release on github.com (update/). */
+    val checkForUpdates: Boolean = true,
+)
+
 /** "Notification buttons": a heart beside Next, or Shuffle and Repeat. */
 enum class NotificationButtons { FAVOURITE, SHUFFLE_REPEAT }
 
@@ -280,6 +287,7 @@ object SettingsJson {
                         "notificationDenials" to it.notificationDenials,
                     )
                 },
+                "about" to settings.about.let { obj("checkForUpdates" to it.checkForUpdates) },
             ),
         ),
     )
@@ -363,6 +371,7 @@ object SettingsJson {
                     notificationDenials = it.number("notificationDenials", d.nav.notificationDenials) { count -> count >= 0 },
                 )
             } ?: d.nav,
+            about = root.section("about")?.let { AboutSettings(checkForUpdates = it.flag("checkForUpdates", d.about.checkForUpdates)) } ?: d.about,
         )
     }
 

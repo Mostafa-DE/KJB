@@ -424,6 +424,8 @@ class SharedWritesTest {
             "tags/UndoStore.kt",
             "tags/lookup/MetaClient.kt",
             "tones/ToneAudio.kt",
+            // KJB's own update: its APK downloaded into the cache, and the check's times in the app's preferences.
+            "update/Updates.kt",
         )
     }
 }

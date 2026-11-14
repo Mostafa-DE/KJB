@@ -48,6 +48,7 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.lyrify.R
 import app.lyrify.models.ModelState
 import app.lyrify.player.StartWhenConnected
@@ -60,6 +61,7 @@ import app.lyrify.settings.NotificationButtons
 import app.lyrify.settings.PlaybackSettings
 import app.lyrify.settings.RememberPlace
 import app.lyrify.settings.Settings
+import app.lyrify.update.Updates
 
 /** Settings > Backup's actions; milestone B2 fills them ([rememberBackupActions] in BackupScreens.kt), lane IM1 Import from app. */
 @Immutable
@@ -76,7 +78,7 @@ data class Grants(
 )
 
 /** The sheet open over Settings. */
-private enum class SettingsSheet { REMEMBER, PLAY_SHARE, SKIPS, LEVELLING, CROSSFADE, ANDROID_AUTO, NOTIFICATION_BUTTONS, BOOST, START_WHEN_CONNECTED }
+private enum class SettingsSheet { REMEMBER, PLAY_SHARE, SKIPS, LEVELLING, CROSSFADE, ANDROID_AUTO, NOTIFICATION_BUTTONS, BOOST, START_WHEN_CONNECTED, CRASHES }
 
 /**
  * Tools > Settings: every option of 3.0 in its section (Playback, Library, Lyrics, AI, Backup, About), engine detail
@@ -106,6 +108,8 @@ fun SettingsScreen(
     fun setAudio(change: (AudioSettings) -> AudioSettings) = onChange { it.copy(audio = change(it.audio)) }
     fun setAdvanced(change: (AdvancedSettings) -> AdvancedSettings) = onChange { it.copy(advanced = change(it.advanced)) }
     val showWhenLocked = rememberLockSwitch(settings.lyrics.showWhenLocked, onChange)
+    val updates by remember(context) { Updates.checker(context).state }.collectAsStateWithLifecycle()
+    val checkNow = rememberCheckNow()
     val tour = LocalTour.current
 
     Scaffold(
@@ -191,6 +195,12 @@ fun SettingsScreen(
                 }
                 // The version beside the app's own mark, the Note arm K on black.
                 GroupedRow(R.drawable.ic_brand_k, stringResource(R.string.version_label, versionName), tile = BrandBlack, onTile = Color.Unspecified, first = tour == null)
+                // The update check and the crash reports (AboutSheets.kt): nothing leaves the phone but the daily check's one request.
+                SwitchRow(R.drawable.ic_system_update, R.string.set_updates, stringResource(R.string.set_updates_detail), settings.about.checkForUpdates) { on ->
+                    onChange { it.copy(about = it.about.copy(checkForUpdates = on)) }
+                }
+                ValueRow(R.drawable.ic_refresh, R.string.set_updates_now, updateLine(updates), onClick = checkNow)
+                ValueRow(R.drawable.ic_error, R.string.set_crashes, crashLine(sheet)) { sheet = SettingsSheet.CRASHES }
                 ActionRow(R.drawable.ic_lyrics, stringResource(R.string.settings_source))
                 ActionRow(R.drawable.ic_directions_car, stringResource(R.string.set_auto)) { sheet = SettingsSheet.ANDROID_AUTO }
                 ActionRow(R.drawable.ic_description, R.string.set_licences) { onOpen(Page.Licences) }
@@ -255,6 +265,7 @@ fun SettingsScreen(
         }
         SettingsSheet.ANDROID_AUTO -> HelpSheet(stringResource(R.string.set_auto), stringResource(R.string.set_auto_sheet), onDismiss = close)
         SettingsSheet.START_WHEN_CONNECTED -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) StartWhenConnectedSheet(playback.connectDevices, close)
+        SettingsSheet.CRASHES -> CrashReportsSheet(close)
         null -> Unit
     }
 }

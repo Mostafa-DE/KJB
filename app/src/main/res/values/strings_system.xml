@@ -19,4 +19,49 @@
     <string name="launch_no_songs">No songs on your phone yet</string>
     <string name="launch_no_queue">No queue to resume yet</string>
 
+    <!-- Updates -->
+    <string name="set_updates">Check for updates</string>
+    <string name="set_updates_detail">Once a day, from github.com</string>
+    <string name="set_updates_now">Check now</string>
+    <string name="update_line_idle">Not checked yet</string>
+    <string name="update_line_checking">Checking…</string>
+    <string name="update_line_latest">KJB %1$s is the latest</string>
+    <string name="update_line_failed">Couldn\'t check</string>
+    <string name="update_title">KJB %1$s is out</string>
+    <string name="update_detail">You have %1$s. KJB downloads the update from github.com and checks it is signed like this KJB, then your phone asks you to confirm.</string>
+    <string name="update_no_file">This release has no file KJB can check. Get it from KJB\'s release page instead.</string>
+    <string name="update_notes">What\'s new</string>
+    <string name="update_install">Install</string>
+    <string name="update_not_now">Not now</string>
+    <string name="update_cancel">Cancel</string>
+    <string name="update_try_again">Try again</string>
+    <string name="update_downloading">Downloading · %1$s of %2$s</string>
+    <string name="update_allow_detail">Your phone asks once to let KJB install updates. Turn on Allow from this source, then come back to KJB.</string>
+    <string name="update_open_settings">Open settings</string>
+    <string name="update_confirm">Confirm the update in the dialog. KJB closes while it updates.</string>
+    <string name="update_failed_not_published">This release has no file KJB can check.</string>
+    <string name="update_failed_network">The download stopped. Trying again goes on from where it stopped.</string>
+    <string name="update_failed_download">The file didn\'t match the release, so KJB deleted it.</string>
+    <string name="update_failed_not_kjbs">The file isn\'t signed like this KJB, so KJB deleted it.</string>
+    <string name="update_failed_install">Your phone didn\'t install the update. Try again.</string>
+    <string name="update_addon_title">AI add-on %1$s</string>
+    <string name="update_addon_detail">This KJB comes with a newer AI add-on. KJB downloads it, then your phone asks you to confirm.</string>
+    <string name="update_addon_action">Update</string>
+    <string name="update_up_to_date">KJB is up to date</string>
+    <string name="update_check_failed">Couldn\'t check for updates</string>
+
+    <!-- Crash reports -->
+    <string name="set_crashes">Crash reports</string>
+    <string name="crashes_none">None</string>
+    <plurals name="crashes_kept">
+        <item quantity="one">%d kept</item>
+        <item quantity="other">%d kept</item>
+    </plurals>
+    <string name="crashes_sentence">KJB keeps the last 10 crashes on your phone, without song names, paths or lyrics. Nothing is sent unless you share one.</string>
+    <string name="crashes_empty">No crashes so far.</string>
+    <string name="crashes_clear">Clear</string>
+    <string name="crashes_clear_title">Clear crash reports?</string>
+    <string name="crashes_share">Share</string>
+    <string name="crashes_back">Back</string>
+    <string name="crashes_row">%1$s · KJB %2$s</string>
 </resources>

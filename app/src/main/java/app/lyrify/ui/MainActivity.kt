@@ -50,6 +50,7 @@ import app.lyrify.overnight.AiLyrics
 import app.lyrify.overnight.AiQueue
 import app.lyrify.overnight.audioWithoutLyrics
 import app.lyrify.settings.DockTab
+import app.lyrify.update.Updates
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
@@ -324,6 +325,9 @@ private fun App(ledger: LedgerStore, destination: Page?, view: FullScreen?, onVi
     }
     // Files another app opened, Shuffle all and Resume: they play, then the player shows.
     LaunchWork(opened.launch, opened.onLaunchDone, opened.onPlayer)
+    // KJB's update, when the check finds one; the check runs once a day when KJB opens, unless switched off.
+    UpdateHost()
+    LaunchedEffect(Unit) { Updates.checker(context).checkIfDue(settings.about.checkForUpdates) }
     AiAskSheets(
         ask = asks.firstOrNull()?.takeUnless { asking },
         onAllow = {
