@@ -33,8 +33,8 @@ import app.lyrify.R
 import app.lyrify.addon.Addon
 import app.lyrify.addon.AddonDownloads
 import app.lyrify.addon.AddonDiedException
+import app.lyrify.addon.AddonLease
 import app.lyrify.addon.AddonPort
-import app.lyrify.addon.AddonSession
 import app.lyrify.addon.Connection
 import app.lyrify.addon.ModelHandover
 import app.lyrify.addon.RemoteSongEngine
@@ -92,9 +92,11 @@ class AiWorker(context: Context, params: WorkerParameters) : CoroutineWorker(con
         // A phone whose chip the AI does not run on: nothing to do.
         if (NpuChips.supported() == null) return Result.success()
         // No add-on, or one KJB cannot use: the AI page says so; the next period looks again.
-        val session = (Addon.client(context).connect() as? Connection.Open)?.session ?: return Result.success()
+        val client = Addon.client(context)
+        val session = (client.connect() as? Connection.Open)?.session ?: return Result.success()
         return try {
-            session.use { night(it) }
+            // Bound again for the next song after one whose job stalled (the stalled one was let go of).
+            AddonLease(client, session).use { night(it) }
         } catch (_: AddonDiedException) {
             // Died between songs, or before the first one: the next attempt binds it again.
             AiLyrics.runLog(context).append("AI: the AI add-on stopped; trying again later")
@@ -103,10 +105,9 @@ class AiWorker(context: Context, params: WorkerParameters) : CoroutineWorker(con
     }
 
     @RequiresApi(Build.VERSION_CODES.VANILLA_ICE_CREAM)
-    private suspend fun night(session: AddonSession): Result {
+    private suspend fun night(lease: AddonLease): Result {
         val context = applicationContext
-        val addon = session.port
-        val status = addon.status() ?: return Result.retry()
+        val status = lease.session().port.status() ?: return Result.retry()
         val now = System.currentTimeMillis()
         if (status.models !is ModelState.Ready) {
             // Not all in place (an update can pin another file): the download goes on by itself, over Wi-Fi, once the
@@ -160,8 +161,8 @@ class AiWorker(context: Context, params: WorkerParameters) : CoroutineWorker(con
             plainLyrics = pipeline::plainLyrics,
             record = pipeline::recordAi,
             // The engine's notes (stages, times, counts) come from the add-on.
-            openEngine = { RemoteSongEngine(session, notes = { runLog.append("AI:   $it") }) },
-            ready = { addon.status()?.models is ModelState.Ready },
+            openEngine = { RemoteSongEngine(lease.session(), notes = { runLog.append("AI:   $it") }) },
+            ready = { lease.session().port.status()?.models is ModelState.Ready },
             thermalStatus = { power.currentThermalStatus },
             pluggedIn = AiLyrics.pluggedIn(context),
             clock = System::currentTimeMillis,
@@ -172,7 +173,7 @@ class AiWorker(context: Context, params: WorkerParameters) : CoroutineWorker(con
             // A song the tag writer or its start-up recovery holds is left for the next run.
             canTake = { path -> path !in Lyrify.locks && audioWithoutLyrics(path) },
             inUse = AiLyrics.inUse,
-            badModel = { model -> discard(addon, model) },
+            badModel = { model -> discard(lease.session().port, model) },
             onProgress = { progress ->
                 AiLyrics.show(progress)
                 foreground(progress)

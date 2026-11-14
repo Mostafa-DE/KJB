@@ -36,6 +36,11 @@ class NpuStages(
     private val threads: Int,
     /** One line per Whisper window (tokens, stop reason, time) and per session created; no lyrics. */
     private val log: (String) -> Unit = {},
+    /**
+     * Debug builds' logcat: a line before and after each step that could stall in native code (registering the QNN EP,
+     * creating a session, a song's first read of the mix and its first MDX segment on the NPU), with times only.
+     */
+    private val debug: (String) -> Unit = {},
 ) : AiStages, AutoCloseable {
     private var contract: WhisperContract? = null
     private var qnn: QnnEp? = null
@@ -46,8 +51,23 @@ class NpuStages(
     override fun decode(audio: FileDescriptor): MixSource = MixDecoder(audio)
 
     override fun separateVocals(mix: MixSource, vocals: VocalSink, progress: Progress) {
-        val out = mdx().separator.separate(mix, vocals, progress)
+        val mdx = mdx()
+        mdx.segments.watchNext = true
+        val out = mdx.separator.separate(firstReadWatched(mix), vocals, progress)
         if (out.nonFinite > 0) log("MDX: ${out.nonFinite} NaN or infinite values zeroed in ${out.segments} segments")
+    }
+
+    /** [mix], its first read told to [debug] before and after (the decoder's first output). */
+    private fun firstReadWatched(mix: MixSource): MixSource = object : MixSource by mix {
+        private var first = true
+
+        override fun read(left: FloatArray, right: FloatArray, offset: Int, count: Int): Int {
+            if (!first) return mix.read(left, right, offset, count)
+            first = false
+            debug("mix: first read")
+            val start = System.nanoTime()
+            return mix.read(left, right, offset, count).also { debug("mix: first $it frames in ${(System.nanoTime() - start) / 1_000_000} ms") }
+        }
     }
 
     override fun transcribe(stem: FloatArray, chunk: VocalChunk): List<Segment> {
@@ -69,7 +89,7 @@ class NpuStages(
     }
 
     override fun emissions(stem: FloatArray, progress: Progress): Emissions {
-        val model = ctc ?: loading(models.wav2vec2) { CtcModel(models.wav2vec2, threads) }.also { ctc = it }
+        val model = ctc ?: timed("wav2vec2") { loading(models.wav2vec2) { CtcModel(models.wav2vec2, threads) } }.also { ctc = it }
         return Ctc.wholeSong(stem, progress, model::emissions)
     }
 
@@ -95,7 +115,11 @@ class NpuStages(
         val needsUint16 = contract().needsUint16
         try {
             if (needsUint16) IoTensors.requireUint16()
-            QnnEp.register(nativeLibDir).also { qnn = it }
+            debug("QNN EP: registering")
+            QnnEp.register(nativeLibDir).also {
+                qnn = it
+                debug("QNN EP: registered")
+            }
         } catch (e: Exception) {
             throw NpuUnavailableException(e)
         }
@@ -103,7 +127,7 @@ class NpuStages(
 
     private fun mdx(): Mdx = mdx ?: run {
         val ep = qnn()
-        timed("MDX") { loading(models.mdx) { Mdx(ep, models.mdx, threads) } }.also { mdx = it }
+        timed("MDX") { loading(models.mdx) { Mdx(ep, models.mdx, threads, debug) } }.also { mdx = it }
     }
 
     private fun whisper(): Whisper = whisper ?: run {
@@ -117,8 +141,13 @@ class NpuStages(
     }
 
     private inline fun <T> timed(what: String, create: () -> T): T {
+        debug("$what: creating the sessions")
         val start = System.nanoTime()
-        return create().also { log("$what sessions created in ${(System.nanoTime() - start) / 1_000_000} ms") }
+        return create().also {
+            val line = "$what sessions created in ${(System.nanoTime() - start) / 1_000_000} ms"
+            log(line)
+            debug(line)
+        }
     }
 
     /** [load] of [model]; whatever it throws (ONNX Runtime's or QNN's error, a model not as expected) is [loadFailure]. */
@@ -132,13 +161,13 @@ class NpuStages(
      * The MDX session on the NPU with the separation stage's options (spike README "QNN EP options"): graph
      * finalization mode 3 (about 30 s to create, once a night) and the fp16 overflow clamp of plugin 2.5.0+.
      */
-    private class Mdx(qnn: QnnEp, model: File, threads: Int) : AutoCloseable {
+    private class Mdx(qnn: QnnEp, model: File, threads: Int, debug: (String) -> Unit) : AutoCloseable {
         private val session: OrtSession = qnn.createSession(
             model,
             qnn.providerOptions(mapOf("htp_graph_finalization_optimization_mode" to "3", "enable_htp_fp16_clamp_overflow" to "1")),
             MdxSpec.VOC_FT.freeDimensionOverrides,
         )
-        private val segmentModel: OrtSegmentModel
+        val segments: OrtSegmentModel
         val separator: MdxSeparator
 
         init {
@@ -153,8 +182,8 @@ class NpuStages(
                 require(input.shape.size == 4 && input.shape.indices.all { input.shape[it] == shape[it] || input.shape[it] < 0 }) {
                     "MDX input ${input.shape}, expected $shape"
                 }
-                segmentModel = OrtSegmentModel(session, spec.inputName, shape.toLongArray(), spec.outputName)
-                separator = MdxSeparator(segmentModel, spec, threads)
+                segments = OrtSegmentModel(session, spec.inputName, shape.toLongArray(), spec.outputName, debug)
+                separator = MdxSeparator(segments, spec, threads)
             } catch (e: Exception) {
                 session.close()
                 throw e
@@ -163,7 +192,7 @@ class NpuStages(
 
         override fun close() {
             runCatching { separator.close() }
-            runCatching { segmentModel.close() }
+            runCatching { segments.close() }
             session.close()
         }
     }
@@ -219,12 +248,16 @@ class NpuStages(
     }
 }
 
-/** One MDX segment through ONNX Runtime: a direct input buffer shared with one tensor, refilled for every run. */
+/**
+ * One MDX segment through ONNX Runtime: a direct input buffer shared with one tensor, refilled for every run. The run
+ * after [watchNext] is set (a song's first) is told to [debug] before and after.
+ */
 private class OrtSegmentModel(
     private val session: OrtSession,
     private val inputName: String,
     override val inputShape: LongArray,
     private val outputName: String,
+    private val debug: (String) -> Unit,
 ) : SegmentModel, AutoCloseable {
     override val input: FloatBuffer = ByteBuffer
         .allocateDirect(inputShape.fold(1L) { a, b -> a * b }.toInt() * Float.SIZE_BYTES)
@@ -232,8 +265,17 @@ private class OrtSegmentModel(
         .asFloatBuffer()
     private val tensor = OnnxTensor.createTensor(Ort.env, input, inputShape)
 
-    override fun run(): FloatBuffer =
-        session.run(mapOf(inputName to tensor), setOf(outputName)).use { (it.get(0) as OnnxTensor).floatBuffer }
+    var watchNext = false
+
+    override fun run(): FloatBuffer {
+        val watched = watchNext
+        watchNext = false
+        if (watched) debug("MDX: a song's first segment on the NPU")
+        val start = System.nanoTime()
+        val out = session.run(mapOf(inputName to tensor), setOf(outputName)).use { (it.get(0) as OnnxTensor).floatBuffer }
+        if (watched) debug("MDX: its first segment ran in ${(System.nanoTime() - start) / 1_000_000} ms")
+        return out
+    }
 
     override fun close() = tensor.close()
 }

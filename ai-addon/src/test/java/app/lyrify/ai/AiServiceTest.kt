@@ -8,10 +8,12 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -113,6 +115,10 @@ class AiServiceTest {
         override fun onStopped() {
             events += "stopped"
         }
+
+        override fun onProgress(done: Int, total: Int) {
+            events += "progress $done/$total"
+        }
     }
 
     /** An engine that decodes, then runs [chunks] Whisper chunks, each after the caller's go-ahead; it notes each one. */
@@ -120,7 +126,7 @@ class AiServiceTest {
         var closed = false
         var runs = 0
 
-        override suspend fun run(song: AiSong, plainLyrics: String?, onStage: (AiStage) -> Unit, beforeChunk: suspend () -> Unit): AiResult {
+        override suspend fun run(song: AiSong, plainLyrics: String?, onStage: (AiStage) -> Unit, onProgress: (Int, Int) -> Unit, beforeChunk: suspend () -> Unit): AiResult {
             check(!closed) { "the engine was closed" }
             runs++
             onStage(AiStage.DECODE)
@@ -276,7 +282,7 @@ class AiServiceTest {
         var running = false
         val jobs = AddonJobs(service, StandardTestDispatcher(testScheduler)) {
             object : JobEngine {
-                override suspend fun run(song: AiSong, plainLyrics: String?, onStage: (AiStage) -> Unit, beforeChunk: suspend () -> Unit): AiResult {
+                override suspend fun run(song: AiSong, plainLyrics: String?, onStage: (AiStage) -> Unit, onProgress: (Int, Int) -> Unit, beforeChunk: suspend () -> Unit): AiResult {
                     running = true
                     try {
                         awaitCancellation()
@@ -325,7 +331,7 @@ class AiServiceTest {
             openEngine = {
                 object : JobEngine {
                     var running = false
-                    override suspend fun run(song: AiSong, plainLyrics: String?, onStage: (AiStage) -> Unit, beforeChunk: suspend () -> Unit): AiResult {
+                    override suspend fun run(song: AiSong, plainLyrics: String?, onStage: (AiStage) -> Unit, onProgress: (Int, Int) -> Unit, beforeChunk: suspend () -> Unit): AiResult {
                         running = true
                         opened.complete(Unit)
                         try {
@@ -351,5 +357,138 @@ class AiServiceTest {
 
         assertEquals(false, closedWhileRunning)
         assertEquals("stopped", heard.events.last())
+    }
+
+    // KJB's watchdog hears the job move; a stop the job's step never takes ends the process
+
+    @Test
+    fun `a job's progress reaches KJB, each stage's first piece at once, then at most every 5 s`() = runTest {
+        val heard = Heard()
+        val jobs = AddonJobs(backgroundScope, StandardTestDispatcher(testScheduler), clock = { testScheduler.currentTime }) {
+            object : JobEngine {
+                override suspend fun run(song: AiSong, plainLyrics: String?, onStage: (AiStage) -> Unit, onProgress: (Int, Int) -> Unit, beforeChunk: suspend () -> Unit): AiResult {
+                    onStage(AiStage.SEPARATE)
+                    for (k in 1..10) {
+                        delay(2_000) // an MDX segment
+                        onProgress(k, 10)
+                    }
+                    onStage(AiStage.ALIGN)
+                    onProgress(1, 3)
+                    return done
+                }
+
+                override fun close() {}
+            }
+        }
+
+        jobs.start(song, null, { heard }) {}
+        advanceTimeBy(60_000)
+        runCurrent()
+
+        // Pieces at 2, 4, ... 20 s: the first at once, then none closer than 5 s to the last one sent.
+        assertEquals(
+            listOf("stage SEPARATE", "progress 1/10", "progress 4/10", "progress 7/10", "progress 10/10", "stage ALIGN", "progress 1/3", "result Transcribed"),
+            heard.events,
+        )
+    }
+
+    /** The stops' checks, as the main thread's Handler would run them later, and the stages the process ended in. */
+    private val checks = mutableListOf<Pair<Long, () -> Unit>>()
+    private val ended = mutableListOf<AiStage?>()
+
+    /** An engine stuck in a native step of [stage] that no stop reaches; it returns once [step] completes, if ever. */
+    private fun TestScope.stuckJobs(step: CompletableDeferred<Unit>, stage: AiStage = AiStage.SEPARATE) = AddonJobs(
+        backgroundScope,
+        StandardTestDispatcher(testScheduler),
+        later = { ms, check -> checks += ms to check },
+        endProcess = { ended += it },
+    ) {
+        object : JobEngine {
+            override suspend fun run(song: AiSong, plainLyrics: String?, onStage: (AiStage) -> Unit, onProgress: (Int, Int) -> Unit, beforeChunk: suspend () -> Unit): AiResult {
+                onStage(stage)
+                withContext(NonCancellable) { step.await() }
+                currentCoroutineContext().ensureActive()
+                return done
+            }
+
+            override fun close() {}
+        }
+    }
+
+    @Test
+    fun `a job whose step does not end 10 s after the last client left ends the add-on's process`() = runTest {
+        val step = CompletableDeferred<Unit>()
+        val jobs = stuckJobs(step)
+        jobs.start(song, null, { Heard() }) {}
+        runCurrent()
+
+        jobs.shutDown()
+        runCurrent()
+
+        assertEquals(listOf(AddonJobs.STEP_END_MS), checks.map { it.first })
+        assertEquals("not before the 10 s", emptyList<AiStage?>(), ended)
+        checks.single().second()
+        assertEquals(listOf<AiStage?>(AiStage.SEPARATE), ended)
+        step.complete(Unit)
+    }
+
+    @Test
+    fun `a stop KJB asks for, or closing the engine, ends the process when the step has not ended 10 s later`() = runTest {
+        val step = CompletableDeferred<Unit>()
+        val jobs = stuckJobs(step, AiStage.TRANSCRIBE)
+        val job = jobs.start(song, null, { Heard() }) {}
+        runCurrent()
+
+        jobs.cancel(job)
+        jobs.closeEngine()
+        runCurrent()
+        checks.forEach { it.second() }
+
+        assertEquals(listOf(AddonJobs.STEP_END_MS, AddonJobs.STEP_END_MS), checks.map { it.first })
+        assertEquals(listOf<AiStage?>(AiStage.TRANSCRIBE, AiStage.TRANSCRIBE), ended)
+        step.complete(Unit)
+    }
+
+    @Test
+    fun `a stopped job whose step ends in time leaves the process alone`() = runTest {
+        val step = CompletableDeferred<Unit>()
+        val jobs = stuckJobs(step)
+        val heard = Heard()
+        val job = jobs.start(song, null, { heard }) {}
+        runCurrent()
+
+        jobs.cancel(job)
+        step.complete(Unit) // the step returns within the 10 s, and the stop takes
+        runCurrent()
+        assertEquals(listOf(AddonJobs.STEP_END_MS), checks.map { it.first })
+        checks.single().second()
+
+        assertEquals("stopped", heard.events.last())
+        assertEquals(emptyList<AiStage?>(), ended)
+    }
+
+    @Test
+    fun `debug lines follow a job's stages, chunks and end, with counts and times only`() = runTest {
+        val lines = mutableListOf<String>()
+        val jobs = AddonJobs(backgroundScope, StandardTestDispatcher(testScheduler), clock = { testScheduler.currentTime }, debug = { lines += it }) { notes ->
+            FakeEngine(notes, chunks = 1)
+        }
+
+        val job = jobs.start(song, null, { Heard() }) {}
+        runCurrent()
+        jobs.proceed(job)
+        runCurrent()
+
+        assertEquals(
+            listOf(
+                "job 1: started",
+                "job 1: decode at 0 ms",
+                "job 1: transcribe at 0 ms",
+                "job 1: chunk 1 waits for KJB at 0 ms",
+                "job 1: chunk 1 goes on at 0 ms",
+                "job 1: transcribed at 0 ms",
+            ),
+            lines,
+        )
     }
 }

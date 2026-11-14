@@ -5,8 +5,11 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.PermissionInfo
 import android.os.Binder
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.ParcelFileDescriptor
+import android.os.Process
 import android.os.RemoteCallbackList
 import android.os.RemoteException
 import android.os.SystemClock
@@ -33,7 +36,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -93,23 +95,43 @@ interface JobEvents {
 
     /** Stopped by [AddonJobs.cancel]: nothing to record. */
     fun onStopped()
+
+    /** [done] of [total] pieces of the stage it is in: the first of each stage, then at most every [AddonJobs.PROGRESS_EVERY_MS]. */
+    fun onProgress(done: Int, total: Int)
 }
 
 /** The AI for songs ([LyricsFromAudio] on [NpuStages]): its models stay loaded from the first song until [close]. */
 interface JobEngine : AutoCloseable {
-    suspend fun run(song: AiSong, plainLyrics: String?, onStage: (AiStage) -> Unit, beforeChunk: suspend () -> Unit): AiResult
+    suspend fun run(
+        song: AiSong,
+        plainLyrics: String?,
+        onStage: (AiStage) -> Unit,
+        onProgress: (done: Int, total: Int) -> Unit,
+        beforeChunk: suspend () -> Unit,
+    ): AiResult
 }
 
 /**
  * The songs KJB sends, one at a time, on [context] in [scope]. The engine is opened ([openEngine], with where its notes
- * go) for the first song and kept for the next ones until [closeEngine]: one night's run loads the models once. Before
- * each Whisper chunk a job tells KJB and waits for [proceed] (KJB holds it while the phone is too warm). [cancel] stops a
- * job after the step it is on. When the last client leaves, [shutDown] lets go of the NPU at once (or as the step under
- * way ends), whatever happens to the service's scope after.
+ * go) for the first song and kept for the next ones until [closeEngine]: one night's run loads the models once. A job
+ * tells KJB each stage it enters and the pieces of a stage done (the first at once, then at most every
+ * [PROGRESS_EVERY_MS]), so KJB's watchdog hears it move. Before each Whisper chunk a job tells KJB and waits for
+ * [proceed] (KJB holds it while the phone is too warm). [cancel] stops a job after the step it is on. When the last client
+ * leaves, [shutDown] lets go of the NPU at once (or as the step under way ends), whatever happens to the service's scope
+ * after. A stopped job whose step has not ended [STEP_END_MS] later is stuck in native work no stop reaches (the NPU, a
+ * codec): the add-on's process ends ([endProcess]), the only way to free what that step holds.
  */
 class AddonJobs(
     private val scope: CoroutineScope,
     private val context: CoroutineContext,
+    /** Monotonic milliseconds: the progress's pace and the debug lines' times. */
+    private val clock: () -> Long = { System.nanoTime() / 1_000_000 },
+    /** Runs [check] [delayMs] later, outside [scope] (the service's, which onDestroy cancels): the main thread on the phone. */
+    private val later: (delayMs: Long, check: () -> Unit) -> Unit = { _, _ -> },
+    /** Ends the add-on's process, a job's step stuck in [stage]: the only way to free a native step that never returns. */
+    private val endProcess: (stage: AiStage?) -> Unit = {},
+    /** Debug builds' logcat: jobs, stages, counts and times, never a song, a path or lyrics. */
+    private val debug: (String) -> Unit = {},
     private val openEngine: (notes: (String) -> Unit) -> JobEngine,
 ) {
     private val lock = Any()
@@ -124,10 +146,17 @@ class AddonJobs(
     @Volatile
     private var notesTo: JobEvents? = null
 
-    /** The job under way, and the chunk it waits at for [proceed]. */
-    private class Running(val id: Long) {
+    /** The job under way: the chunk it waits at for [proceed], the stage it is in, when it last told its progress. */
+    private class Running(val id: Long, val started: Long) {
         lateinit var job: Job
         var waiting: CompletableDeferred<Unit>? = null
+
+        @Volatile
+        var stage: AiStage? = null
+        var progressAt: Long? = null
+        var chunks = 0
+
+        val where: String get() = stage?.name?.lowercase() ?: "its start"
     }
 
     /**
@@ -136,23 +165,28 @@ class AddonJobs(
      */
     fun start(song: AiSong, plainLyrics: String?, events: (Long) -> JobEvents, release: (Long) -> Unit): Long = synchronized(lock) {
         check(running == null) { "a job is already running" }
-        val run = Running(nextId++)
+        val run = Running(nextId++, clock())
         val heard = events(run.id)
+        debug("job ${run.id}: started")
         // ATOMIC: the body runs, and its finally lets go of the song, even when the scope goes before it was dispatched.
         run.job = scope.launch(context, start = CoroutineStart.ATOMIC) {
             try {
                 val result = try {
                     val engine = engine()
                     notesTo = heard
-                    engine.run(song, plainLyrics, heard::onStage) { atChunk(run, heard) }
+                    engine.run(song, plainLyrics, { entered(run, heard, it) }, { done, total -> progressed(run, heard, done, total) }) {
+                        atChunk(run, heard)
+                    }
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
                     // The engine did not open (its models are gone): a failed run, as one the engine itself reports.
                     AiResult.Failed(e.javaClass.simpleName)
                 }
+                debug("job ${run.id}: ${label(result)} at ${run.at()} ms")
                 heard.onResult(result)
             } catch (e: CancellationException) {
+                debug("job ${run.id}: stopped in ${run.where} at ${run.at()} ms")
                 heard.onStopped()
                 throw e
             } finally {
@@ -171,12 +205,32 @@ class AddonJobs(
         run.id
     }
 
+    private fun entered(run: Running, heard: JobEvents, stage: AiStage) {
+        run.stage = stage
+        run.progressAt = null
+        debug("job ${run.id}: ${run.where} at ${run.at()} ms")
+        heard.onStage(stage)
+    }
+
+    /** A piece of the stage done: told to KJB when it is the stage's first, or [PROGRESS_EVERY_MS] after the last one told. */
+    private fun progressed(run: Running, heard: JobEvents, done: Int, total: Int) {
+        val now = clock()
+        val last = run.progressAt
+        if (last != null && now - last < PROGRESS_EVERY_MS) return
+        run.progressAt = now
+        debug("job ${run.id}: ${run.where} $done of $total at ${now - run.started} ms")
+        heard.onProgress(done, total)
+    }
+
     /** Before a Whisper chunk: tells KJB and waits for its go-ahead (or for the job to be cancelled). */
     private suspend fun atChunk(run: Running, heard: JobEvents) {
         val gate = CompletableDeferred<Unit>()
         synchronized(lock) { run.waiting = gate }
+        val chunk = ++run.chunks
+        debug("job ${run.id}: chunk $chunk waits for KJB at ${run.at()} ms")
         heard.onChunk()
         gate.await()
+        debug("job ${run.id}: chunk $chunk goes on at ${run.at()} ms")
     }
 
     private fun engine(): JobEngine = synchronized(lock) {
@@ -192,12 +246,15 @@ class AddonJobs(
     }
 
     fun cancel(job: Long) {
-        synchronized(lock) { running?.takeIf { it.id == job } }?.job?.cancel()
+        synchronized(lock) { running?.takeIf { it.id == job } }?.let { stop(it, "KJB cancelled it") }
     }
 
     /** Stops a job under way, then closes the engine; the returned job ends once it is closed. */
     fun closeEngine(): Job = scope.launch(context) {
-        synchronized(lock) { running }?.job?.cancelAndJoin()
+        synchronized(lock) { running }?.let { run ->
+            stop(run, "closing the engine")
+            run.job.join()
+        }
         // A job started meanwhile keeps the engine; it closes with the next call.
         synchronized(lock) { if (running == null) closeNow() }
     }
@@ -205,17 +262,24 @@ class AddonJobs(
     /**
      * The last client left (onUnbind, onDestroy): the NPU sessions close now, on the caller's thread, with nothing left
      * to a scope the service is about to cancel. A job mid-step is cancelled and closes them as it ends (a native step
-     * cannot be cut short; closing under it would free what it uses).
+     * cannot be cut short; closing under it would free what it uses), or the process ends ([stop]).
      */
     fun shutDown() {
-        synchronized(lock) {
-            val run = running
-            if (run == null) {
-                closeNow()
-            } else {
-                closeAfterJob = true
-                run.job.cancel()
-            }
+        val run = synchronized(lock) {
+            running.also { if (it == null) closeNow() else closeAfterJob = true }
+        } ?: return
+        stop(run, "the last client left")
+    }
+
+    /**
+     * Cancels [run]'s job, which ends after the step it is on. A step that has not ended [STEP_END_MS] later is native
+     * work no stop reaches, which would hold the NPU and the memory for good: the process ends instead ([endProcess]).
+     */
+    private fun stop(run: Running, why: String) {
+        debug("job ${run.id}: $why in ${run.where} at ${run.at()} ms")
+        run.job.cancel()
+        later(STEP_END_MS) {
+            if (!run.job.isCompleted) endProcess(run.stage)
         }
     }
 
@@ -223,6 +287,27 @@ class AddonJobs(
     private fun closeNow() {
         engine?.let { runCatching { it.close() } }
         engine = null
+    }
+
+    private fun Running.at(): Long = clock() - started
+
+    /** A result for the debug lines: its kind, and a failure's exception class or a rejection's reason. */
+    private fun label(result: AiResult): String = when (result) {
+        is AiResult.Failed -> "failed (${result.kind})"
+        is AiResult.Rejected -> "rejected (${result.reason})"
+        else -> result.javaClass.simpleName.lowercase()
+    }
+
+    companion object {
+        /** A job's progress goes to KJB at most this often: the aligner moves every few milliseconds. */
+        const val PROGRESS_EVERY_MS: Long = 5_000
+
+        /**
+         * How long a stopped job's step may take to end before the process ends instead. Every step but one takes
+         * seconds at most (an MDX segment, a Whisper chunk, a wav2vec2 window); creating the MDX session takes minutes,
+         * and a job stopped then has nothing to keep: its process ending sooner only frees the NPU sooner.
+         */
+        const val STEP_END_MS: Long = 10_000
     }
 }
 
@@ -246,7 +331,25 @@ class AiService : Service() {
         )
     }
 
-    private val jobs by lazy { AddonJobs(scope, Dispatchers.Default, ::engine) }
+    /** Debug builds only: each step of a job in logcat (stages, counts, times), so a phone run shows where a job stands. */
+    private val debug: (String) -> Unit = if (BuildConfig.DEBUG) { line -> Log.d(LOG_TAG, line) } else { _ -> }
+
+    private val jobs by lazy {
+        val main = Handler(Looper.getMainLooper())
+        AddonJobs(
+            scope,
+            Dispatchers.Default,
+            clock = SystemClock::elapsedRealtime,
+            // The main thread outlives the service's scope (onDestroy cancels it) for as long as the process lives.
+            later = { ms, check -> main.postDelayed(check, ms) },
+            endProcess = { stage ->
+                Log.w(LOG_TAG, "a stopped job's step (${stage?.name?.lowercase() ?: "its start"}) did not end within ${AddonJobs.STEP_END_MS} ms: the process ends to free the NPU")
+                Process.killProcess(Process.myPid())
+            },
+            debug = debug,
+            openEngine = ::engine,
+        )
+    }
 
     /** The model download, run while KJB keeps the add-on bound from its foreground service (which shows its notification). */
     private val downloads by lazy { DownloadRun(scope) { progress -> ModelDownloads.download(this, progress) } }
@@ -421,6 +524,8 @@ class AiService : Service() {
 
         override fun onStopped() = send { callback.onStopped(job) }
 
+        override fun onProgress(done: Int, total: Int) = send { callback.onProgress(job, done, total) }
+
         private inline fun send(call: () -> Unit) {
             try {
                 call()
@@ -434,7 +539,7 @@ class AiService : Service() {
     /** The engine on the NPU with this add-on's models; its notes go to KJB's run log. */
     private fun engine(notes: (String) -> Unit): JobEngine {
         val models = checkNotNull(ModelDownloads.store(this)?.models()) { "the models are not in place" }
-        val stages = NpuStages(models, applicationInfo.nativeLibraryDir, whisperAssets(), ENGINE_THREADS, log = notes)
+        val stages = NpuStages(models, applicationInfo.nativeLibraryDir, whisperAssets(), ENGINE_THREADS, log = notes, debug = debug)
         val lyrics = LyricsFromAudio(
             stages,
             SystemClock::elapsedRealtime,
@@ -443,8 +548,13 @@ class AiService : Service() {
             verbose = Log.isLoggable(LOG_TAG, Log.VERBOSE),
         )
         return object : JobEngine {
-            override suspend fun run(song: AiSong, plainLyrics: String?, onStage: (AiStage) -> Unit, beforeChunk: suspend () -> Unit): AiResult =
-                lyrics.run(song, plainLyrics, onStage, beforeChunk)
+            override suspend fun run(
+                song: AiSong,
+                plainLyrics: String?,
+                onStage: (AiStage) -> Unit,
+                onProgress: (done: Int, total: Int) -> Unit,
+                beforeChunk: suspend () -> Unit,
+            ): AiResult = lyrics.run(song, plainLyrics, onStage, onProgress, beforeChunk)
 
             override fun close() = stages.close()
         }

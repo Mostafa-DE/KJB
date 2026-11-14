@@ -261,6 +261,8 @@ private class AidlPort(private val addon: IAiAddon) : AddonPort {
             override fun onResult(job: Long, result: String) = events.onResult(Wire.result(result))
 
             override fun onStopped(job: Long) = events.onStopped()
+
+            override fun onProgress(job: Long, done: Int, total: Int) = events.onProgress(done, total)
         }
         // Binder hands the add-on its own descriptor during the call: KJB's is closed right after.
         return ParcelFileDescriptor.open(song, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->

@@ -1,6 +1,7 @@
 package app.lyrify.addon
 
 import android.os.Environment
+import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import app.lyrify.ai.AiModels
@@ -18,11 +19,14 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.FixMethodOrder
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.Timeout
 import org.junit.runner.RunWith
 import org.junit.runners.MethodSorters
 import java.io.File
 import java.security.MessageDigest
+import java.util.concurrent.TimeUnit
 
 /**
  * KJB dev and the AI add-on (app.lyrify.ai.debug, signed with the same debug key) on a phone: the bind with its checks and
@@ -36,6 +40,15 @@ import java.security.MessageDigest
 @RunWith(AndroidJUnit4::class)
 @FixMethodOrder(MethodSorters.NAME_ASCENDING)
 class AddonDeviceTest {
+    /**
+     * A hang fails the test instead of holding a phone session (session 7 of 2026-11-13 waited 12 minutes), with the
+     * stuck thread's stack. The run's first song loads the models: about 5.6 minutes at the slowest seen (KJB 2.0's
+     * nights: the MDX session in 164 s, its separation 261 s with it, the transcription 76 s); the other tests take
+     * seconds.
+     */
+    @get:Rule
+    val timeout: Timeout = Timeout.builder().withTimeout(8, TimeUnit.MINUTES).withLookingForStuckThread(true).build()
+
     private val context = InstrumentationRegistry.getInstrumentation().targetContext
 
     private fun connect(): AddonSession = runBlocking {
@@ -66,7 +79,8 @@ class AddonDeviceTest {
             assumeTrue("the add-on's models", session.port.status()?.models is ModelState.Ready)
             val stages = mutableListOf<AiStage>()
             var chunks = 0
-            val result = RemoteSongEngine(session, notes = {}).use { engine ->
+            // The add-on's notes (stages, times, counts; no lyrics) in logcat: a run that stalls shows its last step.
+            val result = RemoteSongEngine(session, notes = { Log.i(TAG, it) }).use { engine ->
                 runBlocking { engine.run(LocalTrack(checkNotNull(song).path, "Test", null, null, durationMs = 180_000), null, stages::add) { chunks++ } }
             }
             assertTrue(result.toString(), result !is AiResult.Failed)
@@ -139,5 +153,9 @@ class AddonDeviceTest {
             }
         }
         return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    private companion object {
+        const val TAG = "AddonDeviceTest"
     }
 }
