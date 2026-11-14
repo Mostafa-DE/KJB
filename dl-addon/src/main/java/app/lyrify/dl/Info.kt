@@ -29,7 +29,7 @@ object Info {
     private val JUNK = Regex("""(?i)\s*[\(\[][^\)\]]*\b(official|lyrics?|video|audio|visuali[sz]er|hd|hq|4k|mv|ncs|copyright|music)\b[^\)\]]*[\)\]]""")
 
     /** "Artist - Title", with a hyphen, an en dash or an em dash (written as escapes: KJB's copy rule). */
-    private val ARTIST_TITLE = Regex("^(.+?)\\s+[-–—]\\s+(.+)$")
+    private val ARTIST_TITLE = Regex("^(.+?)\\s+[-\u2013\u2014]\\s+(.+)$")
     private val TOPIC = Regex("""\s*-\s*Topic$""")
     private val TAIL = Regex("""\s*\|.*$""")
 

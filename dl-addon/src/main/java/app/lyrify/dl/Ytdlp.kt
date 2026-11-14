@@ -77,8 +77,8 @@ object DlArgs {
     /** Seconds before yt-dlp gives up on a stalled connection (and retries it, then fails). */
     private const val SOCKET_TIMEOUT = "30"
 
-    /** "Artist - Title", " - ", " – " or " — ": VidGrab's pattern, its two dashes written as escapes. */
-    private const val DASHES = "-–—"
+    /** "Artist - Title" with a hyphen, an en dash or an em dash: VidGrab's pattern, the two dashes written as escapes. */
+    private const val DASHES = "-\u2013\u2014"
 
     /**
      * VidGrab's tags for audio: title and artist from the site's tags or "Artist - Title", junk words, "| ..." tails and

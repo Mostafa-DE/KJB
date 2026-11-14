@@ -28,7 +28,7 @@ class YtdlpTest {
      * its en and em dash are written there as \u escapes (KJB's copy rule), read back as the characters here.
      */
     private val tested: List<String> = javaClass.getResource("/mp3-args-tested.txt")!!.readText()
-        .replace("\\u2013", "–").replace("\\u2014", "—")
+        .replace("\\u2013", "\u2013").replace("\\u2014", "\u2014")
         .removeSuffix("\n").split("\n")
 
     private fun replaced(args: List<String>, from: String, to: List<String>): List<String> {
