@@ -130,6 +130,24 @@ class QueuesTest {
     }
 
     @Test
+    fun `songs taken out of the queue keep it the list's own, so a tap there still jumps and Play next songs stay`() {
+        var book = QueueBook().play(album, 0, SongsTabSource, now = 1).book.playNext(listOf(folder[0]), picked, now = 2)!!.book
+        val id = book.currentId!!
+        fun uid(song: SongRef) = book.queue(id)!!.items.first { it.song.path == song.path }.uid
+        // One from the middle, then the last one.
+        book = book.remove(id, uid(album[2]))!!.book
+        book = book.remove(id, uid(album[5]))!!.book
+        val tapped = book.play(album, 4, SongsTabSource, now = 3)
+        assertEquals(id, tapped.book.currentId)
+        assertEquals("Harbour Glass 5", currentName(tapped.book))
+        assertTrue("Rips 1" in paths(tapped.book.current))
+        assertFalse("Harbour Glass 3" in paths(tapped.book.current))
+        // A song gone from the list itself (the library changed) makes it another list: a new queue.
+        val shrunk = tapped.book.play(album - album[1], 0, SongsTabSource, now = 4)
+        assertNotEquals(id, shrunk.book.currentId)
+    }
+
+    @Test
     fun `the keys name the place, not its sort, filter, words or time`() {
         assertEquals(searchSource("harbour").key, searchSource("rips").key)
         assertEquals(pickedSource("2 songs").key, pickedSource("3 songs").key)

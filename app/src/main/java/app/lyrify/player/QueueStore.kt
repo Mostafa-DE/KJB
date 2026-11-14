@@ -99,6 +99,7 @@ object QueuesJson {
             put(POSITION_KEY, JsonPrimitive(queue.positionMs))
             put(UPDATED_AT_KEY, JsonPrimitive(queue.updatedAt))
             put(STARTED_AT_KEY, JsonPrimitive(queue.startedAt))
+            queue.listSize?.let { put(LIST_SIZE_KEY, JsonPrimitive(it)) }
             queue.unshuffled?.let { put(UNSHUFFLED_KEY, JsonArray(it.map(::JsonPrimitive))) }
             put(ITEMS_KEY, JsonArray(queue.items.map(::item)))
         },
@@ -138,6 +139,8 @@ object QueuesJson {
             updatedAt = stored.long(UPDATED_AT_KEY) ?: 0,
             // Queues stored before start times were kept: their last play is as near as is known.
             startedAt = stored.long(STARTED_AT_KEY) ?: stored.long(UPDATED_AT_KEY) ?: 0,
+            // A size that could not be the list's (shorter than a song's place in it) reads as unknown.
+            listSize = stored.int(LIST_SIZE_KEY)?.takeIf { size -> items.all { (it.sourceIndex ?: -1) < size } },
         )
     }
 
@@ -172,6 +175,7 @@ object QueuesJson {
     private const val POSITION_KEY: String = "positionMs"
     private const val UPDATED_AT_KEY: String = "updatedAt"
     private const val STARTED_AT_KEY: String = "startedAt"
+    private const val LIST_SIZE_KEY: String = "listSize"
     private const val UNSHUFFLED_KEY: String = "unshuffled"
     private const val ITEMS_KEY: String = "items"
     private const val UID_KEY: String = "uid"
