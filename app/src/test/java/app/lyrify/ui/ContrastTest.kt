@@ -15,7 +15,10 @@ import java.io.File
  * from the source, as ThemeTokensTest does, since the JVM tests have no Compose renderer (no Robolectric here).
  */
 class ContrastTest {
-    private val schemes = listOf("light" to LightColors, "dark" to DarkColors)
+    /** Every theme KJB draws: light, dark and Pure black (features 2026-11-15, item 3). */
+    private val schemes = ThemeVariant.entries.map { it.label to it.colors }
+
+    private val ThemeVariant.label: String get() = name.lowercase().replace('_', ' ')
 
     private fun hex(color: Color): String = String.format("#%08X", color.toArgb())
 
@@ -72,8 +75,11 @@ class ContrastTest {
 
     @Test
     fun `KJB's own pairs read too, the brand coral, the ink buttons, the toast and the sheet card, light and dark`() {
-        listOf(Triple("light", LightColors, LightBrandColors), Triple("dark", DarkColors, DarkBrandColors)).forEach { (theme, s, brand) ->
-            val chrome = chromeColors(s, brand, dark = theme == "dark")
+        ThemeVariant.entries.forEach { variant ->
+            val theme = variant.label
+            val s = variant.colors
+            val brand = variant.brand
+            val chrome = chromeColors(s, brand, variant.dark)
             assertReads("$theme onHighlight", brand.onHighlight, brand.highlight, 4.5f)
             assertReads("$theme onHighlightContainer", brand.onHighlightContainer, brand.highlightContainer, 4.5f)
             assertReads("$theme onAction", chrome.onAction, chrome.action, 4.5f)
@@ -84,7 +90,7 @@ class ContrastTest {
             assertReads("$theme onSurface on the bar", s.onSurface, chrome.bar, 4.5f)
             // The main pages' header title, in the ink, on the page at rest and on the glass band (over the worst content
             // under it) once content scrolls under.
-            val worst = if (theme == "dark") Color.White else Color.Black
+            val worst = if (variant.dark) Color.White else Color.Black
             listOf("page" to s.background, "glass" to chrome.glass.compositeOver(worst), "solid glass" to chrome.glassSolid.compositeOver(worst)).forEach { (band, under) ->
                 assertReads("$theme header title on the $band", s.onSurface, under, 4.5f)
             }
@@ -100,8 +106,29 @@ class ContrastTest {
             assertReads("$theme Favourites counts on the page", s.onSurfaceVariant, s.background, 4.5f)
             // The switch's white knob (Controls.kt) on its off track, and on the coral one in light (dark: onHighlight).
             assertReads("$theme knob off", Color.White, s.outline, 3f)
-            if (theme == "light") assertReads("light knob on", Color.White, brand.highlight, 3f)
+            if (!variant.dark) assertReads("$theme knob on", Color.White, brand.highlight, 3f)
         }
+    }
+
+    /**
+     * Every theme is checked, Pure black among them (features 2026-11-15, item 3): its pages are black, its cards and bars
+     * stay a step above them so they still show, and its status tones read on black as on the dark theme's page.
+     */
+    @Test
+    fun `Pure black is checked like the others, its pages black and its cards and bars still lifted`() {
+        assertEquals(listOf("light", "dark", "pure black"), schemes.map { it.first })
+        val black = ThemeVariant.PURE_BLACK.colors
+        listOf(black.background, black.surface, black.surfaceDim, black.surfaceContainerLowest).forEach { assertEquals(hex(Color.Black), hex(it)) }
+        listOf(black.surfaceContainerLow, black.surfaceContainer, black.surfaceContainerHigh, black.surfaceContainerHighest).forEach { lifted ->
+            assertTrue("${hex(lifted)} shows on black", contrast(lifted, Color.Black) > 1.05f)
+        }
+        // The status tones' accents read 3:1 on the black page, their words 7:1 on their pills.
+        val status = ThemeVariant.PURE_BLACK.status
+        Tone.entries.forEach { tone ->
+            assertReads("pure black $tone accent", status[tone].accent, black.background, 3f)
+            assertReads("pure black $tone pill", status[tone].onContainer, status[tone].container, 7f)
+        }
+        assertTrue(ThemeVariant.PURE_BLACK.dark)
     }
 
     /**
@@ -184,8 +211,10 @@ class ContrastTest {
     @Test
     fun `the theme hands every word without a colour of its own the page's ink, never black`() {
         assertTrue(source("Theme.kt").contains("LocalContentColor provides colors.onBackground,"))
-        listOf(Triple("light", LightColors, LightBrandColors), Triple("dark", DarkColors, DarkBrandColors)).forEach { (theme, s, brand) ->
-            val chrome = chromeColors(s, brand, dark = theme == "dark")
+        ThemeVariant.entries.forEach { variant ->
+            val theme = variant.label
+            val s = variant.colors
+            val chrome = chromeColors(s, variant.brand, variant.dark)
             // The fills the guard below lets a word without a colour sit on.
             listOf(
                 s.background, s.surface, s.surfaceVariant, s.surfaceDim, s.surfaceBright, s.surfaceContainerLowest, s.surfaceContainerLow,

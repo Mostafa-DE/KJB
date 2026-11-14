@@ -124,9 +124,13 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Lyrify">
 
+        <!-- The theme (Settings > Display) is drawn by KJB: a change of the phone's or KJB's night mode reaches the page
+             without the activity being made again (configChanges uiMode). -->
         <activity
             android:name=".ui.MainActivity"
-            android:exported="true">
+            android:configChanges="uiMode"
+            android:exported="true"
+            android:theme="@style/Theme.Lyrify.Main">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

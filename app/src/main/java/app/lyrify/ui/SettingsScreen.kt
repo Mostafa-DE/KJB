@@ -60,6 +60,7 @@ import app.lyrify.settings.NotificationButtons
 import app.lyrify.settings.PlaybackSettings
 import app.lyrify.settings.RememberPlace
 import app.lyrify.settings.Settings
+import app.lyrify.settings.ThemeChoice
 
 /** Settings > Backup's actions; milestone B2 fills them ([rememberBackupActions] in BackupScreens.kt), lane IM1 Import from app. */
 @Immutable
@@ -76,10 +77,10 @@ data class Grants(
 )
 
 /** The sheet open over Settings. */
-private enum class SettingsSheet { REMEMBER, PLAY_SHARE, SKIPS, LEVELLING, CROSSFADE, ANDROID_AUTO, NOTIFICATION_BUTTONS, BOOST, START_WHEN_CONNECTED }
+private enum class SettingsSheet { REMEMBER, PLAY_SHARE, SKIPS, LEVELLING, CROSSFADE, ANDROID_AUTO, NOTIFICATION_BUTTONS, BOOST, START_WHEN_CONNECTED, THEME }
 
 /**
- * Tools > Settings: every option of 3.0 in its section (Playback, Library, Lyrics, AI, Backup, About), engine detail
+ * Tools > Settings: every option of 3.0 in its section (Playback, Library, Display, Lyrics, AI, Backup, About), engine detail
  * under a collapsed Advanced. Each row stores its value in [settings] through [onChange], also for features still to
  * come; the grants open the phone's own switches; AI lyrics keeps its own switch ([ai], [aiActions]).
  */
@@ -142,9 +143,26 @@ fun SettingsScreen(
                 ValueRow(R.drawable.ic_folder_off, R.string.set_skip, if (skipped > 0) pluralStringResource(R.plurals.set_skip_value, skipped, skipped) else stringResource(R.string.set_skip_none)) {
                     onOpen(Page.FoldersToSkip)
                 }
+                val hidden = library.hiddenSongs.size
+                ValueRow(R.drawable.ic_visibility_off, R.string.set_hidden, if (hidden > 0) pluralStringResource(R.plurals.set_hidden_value, hidden, hidden) else stringResource(R.string.set_hidden_none)) {
+                    onOpen(Page.HiddenSongs)
+                }
                 SwitchRow(R.drawable.ic_description, R.string.set_filenames, stringResource(R.string.set_filenames_detail), library.showFileNames) { on ->
                     onChange { it.copy(library = it.library.copy(showFileNames = on)) }
                 }
+            }
+            section(R.string.settings_display) {
+                val display = settings.display
+                ValueRow(R.drawable.ic_dark_mode, R.string.set_theme, stringResource(display.theme.label), first = true) { sheet = SettingsSheet.THEME }
+                // Pure black darkens a dark theme only: with Light chosen it waits, switched off.
+                val light = display.theme == ThemeChoice.LIGHT
+                SwitchRow(
+                    R.drawable.ic_contrast,
+                    R.string.set_pure_black,
+                    stringResource(if (light) R.string.set_pure_black_light else R.string.set_pure_black_detail),
+                    display.pureBlack && !light,
+                    enabled = !light,
+                ) { on -> onChange { it.copy(display = it.display.copy(pureBlack = on)) } }
             }
             section(R.string.settings_lyrics) {
                 GrantRow(R.drawable.ic_notifications, R.string.setup_notifications_title, R.string.set_notifications_detail, grants.access.notifications, R.string.setup_done, R.string.settings_turn_on, grants.onOpenNotificationAccess, first = true)
@@ -252,6 +270,9 @@ fun SettingsScreen(
         ) { choice -> setAdvanced { it.copy(notificationButtons = choice) } }
         SettingsSheet.BOOST -> OptionsSheet(R.string.set_boost, R.string.set_boost_sheet, close) {
             Options(AdvancedSettings.LEVELLING_BOOST_DB.toList(), settings.advanced.levellingBoostDb, { stringResource(R.string.set_boost_value, it) }) { db -> setAdvanced { it.copy(levellingBoostDb = db) } }
+        }
+        SettingsSheet.THEME -> ChoiceSheet(R.string.set_theme, R.string.set_theme_sheet, ThemeChoice.entries, settings.display.theme, { it.label }, { it.detail }, close) { choice ->
+            onChange { it.copy(display = it.display.copy(theme = choice)) }
         }
         SettingsSheet.ANDROID_AUTO -> HelpSheet(stringResource(R.string.set_auto), stringResource(R.string.set_auto_sheet), onDismiss = close)
         SettingsSheet.START_WHEN_CONNECTED -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) StartWhenConnectedSheet(playback.connectDevices, close)
@@ -498,6 +519,22 @@ private fun ChoiceRow(label: String, detail: String, selected: Boolean, onClick:
 }
 
 // Values as words
+
+@get:StringRes
+private val ThemeChoice.label: Int
+    get() = when (this) {
+        ThemeChoice.SYSTEM -> R.string.set_theme_system
+        ThemeChoice.LIGHT -> R.string.set_theme_light
+        ThemeChoice.DARK -> R.string.set_theme_dark
+    }
+
+@get:StringRes
+private val ThemeChoice.detail: Int
+    get() = when (this) {
+        ThemeChoice.SYSTEM -> R.string.set_theme_system_detail
+        ThemeChoice.LIGHT -> R.string.set_theme_light_detail
+        ThemeChoice.DARK -> R.string.set_theme_dark_detail
+    }
 
 private val RememberPlace.label: Int
     get() = when (this) {
