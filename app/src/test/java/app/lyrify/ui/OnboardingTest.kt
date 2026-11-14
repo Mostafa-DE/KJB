@@ -191,4 +191,12 @@ class OnboardingTest {
         assertTrue(body, body.startsWith("KJB needs to see the music on your phone to build your library."))
         assertTrue("Open App info, tap the three dots" in string("setup_restricted_detail", shared))
     }
+
+    @Test
+    fun `with reduced motion the waiting cover runs no endless shimmer`() {
+        // Phone session 9: the shimmer's infinite transition ran on with reduced motion, only its drawing was off.
+        val fan = File("src/main/java/app/lyrify/ui/OnboardingScreen.kt").readText().substringAfter("private fun CoverFan(").substringBefore("\n}\n")
+        assertTrue(Regex("""if \(reduced\) null else rememberInfiniteTransition""").containsMatchIn(fan))
+    }
+
 }
