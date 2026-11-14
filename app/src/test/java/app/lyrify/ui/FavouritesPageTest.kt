@@ -115,4 +115,51 @@ class FavouritesPageTest {
         // The same swiping top tabs as Library's.
         assertTrue("PagerTabs(" in page && "TabPages(" in page)
     }
+
+    // The compact head (user 2026-11-14: "the heart cover is too big and pushes everything down")
+
+    @Test
+    fun `the head is the small heart tile beside the title and its counts, not the big hero`() {
+        val page = File("src/main/java/app/lyrify/ui/CollectionScreens.kt").readText()
+        val favourites = page.substringAfter("private fun FavouritesPage(").substringBefore("\n}\n")
+        assertTrue("FavouritesHead(" in favourites)
+        assertFalse("Hero(" in favourites)
+        val head = page.substringAfter("internal fun FavouritesHead(").substringBefore("\n}\n")
+        assertTrue("BuiltInTile(BuiltInList.FAVOURITES, FAV_TILE)" in head)
+        assertTrue("heading()" in head)
+        assertEquals(56f, FAV_TILE.value)
+    }
+
+    @Test
+    fun `at font scale 1 the head is the tile's height and the whole header stays within 120 dp`() {
+        val words = AppTypography.titleLarge.lineHeight.value + FavouritesMeta.lineHeight.value
+        assertTrue("title and counts, $words dp, beside a ${FAV_TILE.value} dp tile", words <= FAV_TILE.value)
+        val stacked = favouritesHeadHeight(FAV_TILE.value, words, LIST_HEADER_HEIGHT.value, side = false, top = FAV_HEAD_TOP.value)
+        assertEquals(FAV_HEAD_TOP.value + FAV_TILE.value + LIST_HEADER_HEIGHT.value, stacked)
+        assertTrue("$stacked dp", stacked <= 120f)
+        val side = favouritesHeadHeight(FAV_TILE.value, words, LIST_HEADER_HEIGHT.value, side = true, top = FAV_HEAD_TOP.value)
+        assertEquals(FAV_HEAD_TOP.value + LIST_HEADER_HEIGHT.value, side)
+    }
+
+    @Test
+    fun `at font scale 2 the head grows with its words, never cutting them under the tile`() {
+        val words = 2f * (AppTypography.titleLarge.lineHeight.value + FavouritesMeta.lineHeight.value)
+        val stacked = favouritesHeadHeight(FAV_TILE.value, words, LIST_HEADER_HEIGHT.value, side = false, top = FAV_HEAD_TOP.value)
+        assertEquals(FAV_HEAD_TOP.value + words + LIST_HEADER_HEIGHT.value, stacked)
+    }
+
+    @Test
+    fun `Shuffle and Play go beside the head only where what is left of the row holds the list header`() {
+        val gap = FAV_HEAD_GAP.value.toInt()
+        val beside = FAV_BUTTONS_BESIDE.value.toInt()
+        // A phone held upright (360 to 411 dp, less the page's sides): under the head, at either font scale.
+        assertFalse(favouritesSideBySide(width = 328, head = 248, gap = gap, beside = beside))
+        assertFalse(favouritesSideBySide(width = 379, head = 248, gap = gap, beside = beside))
+        assertFalse(favouritesSideBySide(width = 379, head = 379, gap = gap, beside = beside))
+        // A wide window: beside it, unless large words leave too little.
+        assertTrue(favouritesSideBySide(width = 808, head = 248, gap = gap, beside = beside))
+        assertTrue(favouritesSideBySide(width = 620, head = 248, gap = gap, beside = beside))
+        assertFalse(favouritesSideBySide(width = 619, head = 248, gap = gap, beside = beside))
+        assertFalse(favouritesSideBySide(width = 808, head = 480, gap = gap, beside = beside))
+    }
 }

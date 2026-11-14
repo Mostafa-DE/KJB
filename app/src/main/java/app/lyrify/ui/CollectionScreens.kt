@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.graphicsLayer
@@ -89,6 +90,7 @@ import app.lyrify.stats.SongPlays
 import app.lyrify.stats.StatsGraph
 import kotlinx.coroutines.launch
 import java.util.concurrent.TimeUnit
+import kotlin.math.roundToInt
 
 // Collection pages: an album, artist, folder, genre or playlist, Built for you, Unknown album, and Favourites.
 
@@ -628,8 +630,8 @@ private fun BuiltInPage(ui: LibraryUi, library: Library, list: BuiltInList) {
 /**
  * Favourites: its songs (Shuffle and Play use them), then a top tab, as Library's are, for each kind with something in
  * it ("Songs 120"), each its whole list: Songs as song rows, Albums as the grid, Artists, Folders and Playlists as rows.
- * The tabs' pages follow the finger left and right and each keeps its place ([TabPages]); the hero and the header scroll
- * away above them, and then the tabs stay under the top bar ([CollapsingTabs]). One kind alone shows without tabs, and
+ * The tabs' pages follow the finger left and right and each keeps its place ([TabPages]); the compact head ([FavouritesHead])
+ * scrolls away above them, and then the tabs stay under the top bar ([CollapsingTabs]). One kind alone shows without tabs, and
  * nothing at all the empty state. It reopens on the tab used last (kept in settings.json), or on the first with
  * something while that one is empty.
  */
@@ -662,8 +664,9 @@ private fun FavouritesPage(ui: LibraryUi, library: Library) {
         }
     }
     val hero: @Composable (PageSongs) -> Unit = { list ->
-        Hero(title, songsMeta(songs, null).let { if (others > 0) stringResource(R.string.lib_after, it, pluralStringResource(R.plurals.lib_more_count, others, others)) else it }, art = { BuiltInTile(BuiltInList.FAVOURITES, HERO) })
-        ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll, sort = if (songs.isEmpty()) null else stringResource(order.chip), onSort = { sorting = true })
+        FavouritesHead(title, songsMeta(songs, null).let { if (others > 0) stringResource(R.string.lib_after, it, pluralStringResource(R.plurals.lib_more_count, others, others)) else it }) {
+            ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll, sort = if (songs.isEmpty()) null else stringResource(order.chip), onSort = { sorting = true }, gutter = 0.dp)
+        }
     }
     SongPageFrame(ui, songs, QueueSource(SourceKind.FAVOURITES, "favourites", ""), topBar = { under, backdrop -> CollectionTopBar(title, under || heroUnder, backdrop, ui) }) { list, padding ->
         val bottom = PaddingValues(bottom = padding.calculateBottomPadding() + 16.dp)
@@ -701,6 +704,46 @@ private fun FavouritesPage(ui: LibraryUi, library: Library) {
 }
 
 /** What is a favourite now: the songs (with [songPlaces], each one's place among those stored) and the collections, those gone from the phone or the library left out. */
+/**
+ * Favourites' head (user 2026-11-14: the 200 dp heart pushed everything down): the heart on a 56 dp tile beside the
+ * title and its counts line, then [buttons], the list header (Shuffle, Play, Add all, the sort), under them; on the same
+ * row where the width leaves it room ([favouritesSideBySide]). Large words wrap and the row grows with them, the tile
+ * beside their middle ([favouritesHeadHeight]). TalkBack hears the title as the page's heading; the tile is decorative.
+ */
+@Composable
+internal fun FavouritesHead(title: String, meta: String, buttons: @Composable () -> Unit) {
+    Layout(
+        content = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                BuiltInTile(BuiltInList.FAVOURITES, FAV_TILE)
+                Column(Modifier.padding(start = FAV_HEAD_GAP)) {
+                    Text(title, style = MaterialTheme.typography.titleLarge, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.semantics { heading() })
+                    Text(meta, style = FavouritesMeta.tabular(), color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                }
+            }
+            Box { buttons() }
+        },
+        modifier = Modifier.fillMaxWidth().padding(start = ScreenPadding, end = ScreenPadding, top = FAV_HEAD_TOP),
+    ) { (head, row), constraints ->
+        val width = constraints.maxWidth
+        val gap = FAV_HEAD_GAP.roundToPx()
+        val headPart = head.measure(Constraints(maxWidth = width))
+        val side = favouritesSideBySide(width, headPart.width, gap, FAV_BUTTONS_BESIDE.roundToPx())
+        val buttonsPart = row.measure(Constraints(maxWidth = if (side) width - headPart.width - gap else width))
+        // The head's row is already as tall as its words where they outgrow the tile.
+        val height = favouritesHeadHeight(FAV_TILE.toPx(), headPart.height.toFloat(), buttonsPart.height.toFloat(), side, top = 0f).roundToInt()
+        layout(width, height) {
+            if (side) {
+                headPart.placeRelative(0, (height - headPart.height) / 2)
+                buttonsPart.placeRelative(headPart.width + gap, (height - buttonsPart.height) / 2)
+            } else {
+                headPart.placeRelative(0, 0)
+                buttonsPart.placeRelative(0, headPart.height)
+            }
+        }
+    }
+}
+
 internal class Favourites(
     val songs: List<Song>,
     val songPlaces: List<Int>,
@@ -784,6 +827,32 @@ private val FavouritesTab.words: Int
     }
 
 private val HERO = 200.dp
+
+/** Favourites' compact head (user 2026-11-14): its heart tile, the space above it, and between it and its words. */
+val FAV_TILE = 56.dp
+val FAV_HEAD_TOP = 4.dp
+val FAV_HEAD_GAP = 12.dp
+
+/** The width left beside Favourites' head that the list header needs to sit on the same row: it fits 360 dp ([headerFit]). */
+val FAV_BUTTONS_BESIDE = 360.dp
+
+/** The counts line under Favourites' title, as a hero's line of facts. */
+internal val FavouritesMeta = body(13.5f, 19)
+
+/**
+ * Whether Favourites' list header sits on the same row as its head, [head] wide in a row [width] wide with [gap] between:
+ * only where what is left holds [beside], so a phone held upright, or large words, put it under the head.
+ */
+fun favouritesSideBySide(width: Int, head: Int, gap: Int, beside: Int): Boolean = width - head - gap >= beside
+
+/**
+ * Favourites' head's height: [top], then the heart [tile] beside the title and counts ([words], however tall the font
+ * scale makes them, so they are never cut under the tile), with the list header ([buttons]) under it or beside it ([side]).
+ */
+fun favouritesHeadHeight(tile: Float, words: Float, buttons: Float, side: Boolean, top: Float): Float {
+    val head = maxOf(tile, words)
+    return top + if (side) maxOf(head, buttons) else head + buttons
+}
 
 /** The hero's glow (.abg): 312 dp tall, its blurred cover at 150% and 62%; the page's top bar it starts under. */
 private val GLOW_HEIGHT = 312.dp
