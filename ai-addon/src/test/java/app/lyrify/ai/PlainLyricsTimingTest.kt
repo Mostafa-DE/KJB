@@ -118,6 +118,24 @@ class PlainLyricsTimingTest {
     }
 
     @Test
+    fun `the windowed pass tells its progress, each window, after the whole-song one`() {
+        val song = timing.getValue("songs").jsonArray.first().jsonObject
+        val segments = song.getValue("segments").jsonArray.map { s ->
+            val o = s.jsonObject
+            Segment(o.getValue("start").jsonPrimitive.double, o.getValue("end").jsonPrimitive.double, o.getValue("text").jsonPrimitive.content)
+        }
+        val heard = mutableListOf<Pair<Int, Int>>()
+
+        PlainLyricsTiming.time(segments, song.getValue("duration_sec").jsonPrimitive.double, song.texts("lines"), progress = { done, total -> heard += done to total }) {
+            emissionsOf(song)
+        }
+
+        val (last, windows) = heard.last()
+        assertEquals("$heard", windows, last)
+        assertEquals((1..windows).map { it to windows }, heard.takeLast(windows))
+    }
+
+    @Test
     fun `a long song's S4 made a block at a time gives the same times and verdict, to the bit`() {
         timing.getValue("songs").jsonArray.map { it.jsonObject }.forEach { song ->
             val (lines, segments, duration) = inputs(song)

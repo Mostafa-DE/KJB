@@ -22,6 +22,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.io.IOException
+import java.util.concurrent.atomic.AtomicReference
 
 /** The lowest add-on API (IAiAddon.VERSION) this KJB speaks; an add-on that answers less needs an update. */
 const val MIN_ADDON_API: Int = 1
@@ -63,7 +64,8 @@ interface RunEvents {
 
     fun onChunk()
 
-    fun onResult(result: AiResult)
+    /** The job's end; null when its result was too long for the callback and waits in the add-on ([AddonPort.result]). */
+    fun onResult(result: AiResult?)
 
     fun onStopped()
 
@@ -108,6 +110,9 @@ interface AddonPort {
     fun proceed(job: Long)
 
     fun cancel(job: Long)
+
+    /** The result the add-on keeps of [job], which ended with one; null when it keeps none for that job. */
+    fun result(job: Long): AiResult?
 
     fun closeEngine()
 
@@ -269,7 +274,9 @@ class AddonClient(private val host: AddonHost, private val minApi: Int = MIN_ADD
  * Never waited for forever: a job that says nothing (no stage, note, piece of a stage, chunk or end) for longer than any
  * step takes is cancelled, given [STALL_STOP_MS] to stop, and the session let go of: [AddonStalledException]. Without a
  * client, an add-on whose step never ends ends its own process, which frees the NPU. The time KJB itself holds a chunk
- * (the heat) is not the add-on's silence.
+ * (the heat) is not the add-on's silence. Before a stall is declared, the job's end is looked for where it cannot be
+ * lost: the end told meanwhile (kept apart from the channel, which a cancelled receive can drop an event from), then the
+ * result the add-on keeps ([AddonPort.result]: its callback lost). A result too long for the callback is read there too.
  */
 class RemoteSongEngine(
     private val session: AddonSession,
@@ -289,6 +296,9 @@ class RemoteSongEngine(
         /** The job's end: its result, or null when it stopped. */
         data class End(val result: AiResult?) : Event
 
+        /** The job's end, its result too long for the callback: it waits in the add-on ([AddonPort.result]). */
+        data object Kept : Event
+
         data object Died : Event
     }
 
@@ -300,6 +310,8 @@ class RemoteSongEngine(
 
     override suspend fun run(track: LocalTrack, plainLyrics: String?, onStage: (AiStage) -> Unit, beforeChunk: suspend () -> Unit): AiResult {
         val events = Channel<Event>(Channel.UNLIMITED)
+        // The job's end, also kept apart from the channel: a receive the silence limit cancels can lose what it took.
+        val ended = AtomicReference<Event?>(null)
         val heard = object : RunEvents {
             override fun onStage(stage: String) {
                 events.trySend(Event.Stage(stage))
@@ -313,12 +325,13 @@ class RemoteSongEngine(
                 events.trySend(Event.Chunk)
             }
 
-            override fun onResult(result: AiResult) {
-                events.trySend(Event.End(result))
-            }
+            override fun onResult(result: AiResult?) = end(if (result == null) Event.Kept else Event.End(result))
 
-            override fun onStopped() {
-                events.trySend(Event.End(null))
+            override fun onStopped() = end(Event.End(null))
+
+            private fun end(event: Event) {
+                ended.compareAndSet(null, event)
+                events.trySend(event)
             }
 
             override fun onProgress(done: Int, total: Int) {
@@ -338,16 +351,16 @@ class RemoteSongEngine(
                 events.trySend(Event.Died)
             }
             try {
-                follow(events, job, onStage, beforeChunk)
+                follow(events, ended, job, onStage, beforeChunk)
             } catch (e: CancellationException) {
                 // The step under way finishes in the add-on; wait for it to stop, as the engine in KJB's process did.
-                withContext(NonCancellable) { stop(job, events, stopTimeoutMs) }
+                withContext(NonCancellable) { stop(job, events, ended, stopTimeoutMs) }
                 throw e
             } catch (e: AddonStalledException) {
                 // Cancelled, then let go of whether it stopped or not: with no client left, an add-on whose step never
                 // ends ends its own process.
                 stalled = true
-                withContext(NonCancellable) { stop(job, events, STALL_STOP_MS) }
+                withContext(NonCancellable) { stop(job, events, ended, STALL_STOP_MS) }
                 session.close()
                 throw e
             } finally {
@@ -357,12 +370,12 @@ class RemoteSongEngine(
     }
 
     /** Asks the add-on to stop [job] and waits up to [timeoutMs] for its end or its death. */
-    private suspend fun stop(job: Long, events: ReceiveChannel<Event>, timeoutMs: Long) {
+    private suspend fun stop(job: Long, events: ReceiveChannel<Event>, ended: AtomicReference<Event?>, timeoutMs: Long) {
         runCatching { session.port.cancel(job) }
         withTimeoutOrNull(timeoutMs) {
-            while (true) {
+            while (ended.get() == null) {
                 val event = events.receive()
-                if (event is Event.End || event == Event.Died) break
+                if (event is Event.End || event == Event.Kept || event == Event.Died) break
             }
         }
     }
@@ -371,11 +384,17 @@ class RemoteSongEngine(
      * The job's events until its end: stages to the crash guard, notes to the run log, each chunk after beforeChunk. No
      * event within [silenceLimit] is a stall ([AddonStalledException]).
      */
-    private suspend fun follow(events: ReceiveChannel<Event>, job: Long, onStage: (AiStage) -> Unit, beforeChunk: suspend () -> Unit): AiResult {
+    private suspend fun follow(
+        events: ReceiveChannel<Event>,
+        ended: AtomicReference<Event?>,
+        job: Long,
+        onStage: (AiStage) -> Unit,
+        beforeChunk: suspend () -> Unit,
+    ): AiResult {
         var stage: AiStage? = null
         while (true) {
             val limit = silenceLimit(stage)
-            val event = withTimeoutOrNull(limit) { events.receive() } ?: throw AddonStalledException(stage, limit)
+            val event = withTimeoutOrNull(limit) { events.receive() } ?: afterSilence(job, ended, stage, limit)
             when (event) {
                 // A stage a later add-on names is not one this crash guard knows.
                 is Event.Stage -> AiStage.entries.firstOrNull { it.name == event.stage }?.let {
@@ -391,10 +410,18 @@ class RemoteSongEngine(
                 }
                 // Stopped without KJB asking: no result to record.
                 is Event.End -> return event.result ?: AiResult.Failed(STOPPED)
+                Event.Kept -> return session.port.result(job) ?: AiResult.Failed(LOST)
                 Event.Died -> throw AddonDiedException()
             }
         }
     }
+
+    /**
+     * Nothing heard for [limit] in [stage]: the end told meanwhile (a receive the limit cancelled can lose the event it
+     * took), else the result the add-on keeps (its callback lost), else a stall.
+     */
+    private fun afterSilence(job: Long, ended: AtomicReference<Event?>, stage: AiStage?, limit: Long): Event =
+        ended.get() ?: session.port.result(job)?.let { Event.End(it) } ?: throw AddonStalledException(stage, limit)
 
     /**
      * How long the add-on may say nothing in [stage]: [FIRST_LOAD_MS] until this engine's first separation moved (the
@@ -435,5 +462,8 @@ class RemoteSongEngine(
         const val STALL_STOP_MS: Long = 15_000
 
         private const val STOPPED = "Stopped"
+
+        /** The add-on said its result waits for KJB, then kept none: not the song's verdict, tried again later. */
+        private const val LOST = "ResultLost"
     }
 }

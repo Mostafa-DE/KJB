@@ -59,7 +59,7 @@ data class TimingParams(
  * Long songs (not in the recommendation): its fallback for a song whose back-pointer table is past the memory budget
  * ("use the S2c times, keep the gate") cannot keep the gate, which is S4's agreement with S2c. So S4 is made for every
  * song: past [Ctc.Budget.tableCells] its table is made a block of frames at a time, the same path ([Ctc.forcedAlign]).
- * [progress] hears the whole-song alignment as it goes and may throw to stop it (a stopped run).
+ * [progress] hears the whole-song alignment and the windowed one as they go and may throw to stop them (a stopped run).
  * Past [Ctc.Budget.maxCells] (the CPU cap) the song is rejected ([RejectReason.TOO_LONG]).
  */
 object PlainLyricsTiming {
@@ -105,7 +105,7 @@ object PlainLyricsTiming {
         // A song too short for its text has no path.
         val global = Ctc.align(whole, target, budget, progress) ?: return rejected(RejectReason.NO_ALIGNMENT)
         val s4 = filled(global).map { it + params.offsetSec }
-        val s2c = Ctc.placedOn(whole, lines, Ctc.windows(s1.starts, durationSec), params.contextLines)
+        val s2c = Ctc.placedOn(whole, lines, Ctc.windows(s1.starts, durationSec), params.contextLines, progress)
             .mapIndexed { k, t -> t ?: s1.starts[k] }
         return gate(s4, s2c, params).copy(trellis = trellis)
     }

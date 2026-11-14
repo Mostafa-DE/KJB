@@ -227,8 +227,9 @@ class AiNightTest {
     /** The add-on's process dies at this chunk of a song's run (the engine throws as RemoteSongEngine does). */
     private var dieAt: ((LocalTrack, Int) -> Boolean) = { _, _ -> false }
 
-    /** The add-on says nothing at this chunk of a song's run until RemoteSongEngine's watchdog gives up on it. */
+    /** The add-on says nothing at this chunk of a song's run, in [stallIn], until RemoteSongEngine's watchdog gives up on it. */
     private var stallAt: ((LocalTrack, Int) -> Boolean) = { _, _ -> false }
+    private var stallIn = AiStage.TRANSCRIBE
 
     private fun audio(name: String): LocalTrack {
         val file = File(folder.root, "$name.mp3")
@@ -264,7 +265,10 @@ class AiNightTest {
                         onStage(AiStage.TRANSCRIBE)
                         for (k in 0 until chunks) {
                             if (dieAt(track, k)) throw AddonDiedException()
-                            if (stallAt(track, k)) throw AddonStalledException(AiStage.TRANSCRIBE, RemoteSongEngine.STEP_MS)
+                            if (stallAt(track, k)) {
+                                onStage(stallIn)
+                                throw AddonStalledException(stallIn, RemoteSongEngine.STEP_MS)
+                            }
                             beforeChunk()
                             withContext(NonCancellable) { delay(chunkMs) }
                             call.chunksRun++
@@ -807,6 +811,40 @@ class AiNightTest {
         assertEquals("the stalled engine was let go of, the next song got its own", 2, opened)
         assertEquals(opened, closed)
         assertTrue(logs.toString(), logs.any { "First" in it && "stopped answering during transcribe" in it })
+    }
+
+    @Test
+    fun `after three stalls in a row while timing lyrics, this run leaves the other songs to time waiting and runs the rest`() = runTest {
+        repeat(4) { waiting("Timed $it", LyricsStatus.PLAIN_ONLY, updatedAt = now - it, id = 10L + it) }
+        val heard = waiting("Heard", updatedAt = now - 10)
+        client.onId = { LrclibResult.Found(listOf(LrclibRecord(it, "Timed", "Artist", plainLyrics = "placeholder one\nplaceholder two"))) }
+        stallAt = { track, _ -> track.title.startsWith("Timed") }
+        stallIn = AiStage.ALIGN
+
+        assertEquals(AiRunEnd.DONE, runner().run())
+
+        assertEquals(listOf("Timed 0", "Timed 1", "Timed 2", "Heard"), calls.map { it.title })
+        assertEquals(LyricsStatus.PLAIN_ONLY, memory[File(folder.root, "Timed 3.mp3").path]?.status)
+        assertEquals(LyricsStatus.AI_TRANSCRIBED, memory[heard.path]?.status)
+        assertEquals(GuardVerdict.NO_ALIGN, guard.verdict())
+    }
+
+    @Test
+    fun `songs whose audio file is replaced while the add-on stalls on them are neither recorded nor counted`() = runTest {
+        val songs = List(3) { waiting("Song $it", updatedAt = now - it) }
+        val next = waiting("Next", updatedAt = now - 10)
+        val before = songs.map { memory[it.path] }
+        stallAt = { track, chunk ->
+            (track.title.startsWith("Song") && chunk == 1).also { if (it) File(track.path).writeBytes(byteArrayOf(4, 5, 6, 7)) }
+        }
+
+        assertEquals(AiRunEnd.DONE, runner().run())
+
+        assertEquals(before, songs.map { memory[it.path] })
+        assertEquals(LyricsStatus.AI_TRANSCRIBED, memory[next.path]?.status)
+        assertEquals(emptySet<String>(), guard.paths())
+        assertEquals("three stalls counted would hold the AI", GuardVerdict.NONE, guard.verdict())
+        assertTrue(logs.toString(), logs.any { "Song 0" in it && "audio file changed" in it })
     }
 
     @Test
