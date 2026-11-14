@@ -135,13 +135,13 @@
             </intent-filter>
             <!-- open files -->
             <!-- Audio files from other apps (ui/Launches.kt, player/OpenedFiles.kt): a file manager's View, and its Share of
-                 one or several files; they play at once as one queue. Audio only, so these never take shared text: that is
-                 the Downloads add-on's "Save to KJB", through its own text/plain filter. -->
+                 one or several files; they play at once as one queue. content: addresses only, read through the opening
+                 app's grant: never a file: path, which KJB would read with its own All files access. Audio only, so these
+                 never take shared text: that is the Downloads add-on's "Save to KJB", through its own text/plain filter. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:scheme="content" />
-                <data android:scheme="file" />
                 <data android:mimeType="audio/*" />
                 <data android:mimeType="application/ogg" />
                 <data android:mimeType="application/x-ogg" />

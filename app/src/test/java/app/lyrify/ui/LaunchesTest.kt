@@ -1,7 +1,13 @@
 package app.lyrify.ui
 
 import android.content.Intent
+import app.lyrify.R
+import app.lyrify.library.Library
+import app.lyrify.library.LibraryState
+import app.lyrify.library.song
+import app.lyrify.settings.Settings
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -15,13 +21,14 @@ class LaunchesTest {
     private val other = "content://media/external/audio/media/42"
 
     @Test
-    fun `a file manager's View plays the file, by content or file address`() {
+    fun `a file manager's View plays the file it grants`() {
         assertEquals(Launch.Open(listOf(song)), launchOf(LaunchIntent(Intent.ACTION_VIEW, "audio/mpeg", song)))
-        assertEquals(Launch.Open(listOf("file:///storage/emulated/0/Music/a.flac")), launchOf(LaunchIntent(Intent.ACTION_VIEW, null, "file:///storage/emulated/0/Music/a.flac")))
     }
 
     @Test
-    fun `a View of anything but a content or file address is not KJB's to play`() {
+    fun `a View of anything but a content address is not KJB's to play, a file path least of all`() {
+        assertNull("KJB's own access would read it", launchOf(LaunchIntent(Intent.ACTION_VIEW, null, "file:///storage/emulated/0/Music/a.flac")))
+        assertNull(launchOf(LaunchIntent(Intent.ACTION_VIEW, "audio/mpeg", "FILE:///storage/emulated/0/Music/a.flac")))
         assertNull(launchOf(LaunchIntent(Intent.ACTION_VIEW, "audio/mpeg", "https://example.com/a.mp3")))
         assertNull(launchOf(LaunchIntent(Intent.ACTION_VIEW, "audio/mpeg", null)))
     }
@@ -32,11 +39,12 @@ class LaunchesTest {
         assertEquals(Launch.Open(listOf(song)), launchOf(LaunchIntent(Intent.ACTION_SEND, "application/ogg", streams = listOf(song))))
         assertNull(launchOf(LaunchIntent(Intent.ACTION_SEND, "text/plain", streams = listOf(song))))
         assertNull(launchOf(LaunchIntent(Intent.ACTION_SEND, "audio/mpeg")))
+        assertNull(launchOf(LaunchIntent(Intent.ACTION_SEND, "audio/mpeg", streams = listOf("file:///storage/emulated/0/x.mp3"))))
     }
 
     @Test
     fun `Share with several files plays them as one queue, each once, in their order`() {
-        val sent = LaunchIntent(Intent.ACTION_SEND_MULTIPLE, "audio/*", streams = listOf(song, other, song, "https://example.com/x.mp3"))
+        val sent = LaunchIntent(Intent.ACTION_SEND_MULTIPLE, "audio/*", streams = listOf(song, other, song, "https://example.com/x.mp3", "file:///storage/emulated/0/x.mp3"))
         assertEquals(Launch.Open(listOf(song, other)), launchOf(sent))
         assertNull(launchOf(LaunchIntent(Intent.ACTION_SEND_MULTIPLE, "audio/*")))
         assertNull(launchOf(LaunchIntent(Intent.ACTION_SEND_MULTIPLE, "image/*", streams = listOf(song))))
@@ -95,6 +103,19 @@ class LaunchesTest {
         assertTrue(manifest, "android:resource=\"@xml/shortcuts\"" in manifest)
         assertTrue(manifest, "<action android:name=\"android.intent.action.SEND_MULTIPLE\" />" in manifest)
         assertTrue(manifest, "android:mimeType=\"audio/*\"" in manifest)
+        assertFalse("no file addresses", "android:scheme=\"file\"" in manifest)
+    }
+
+    // Shuffle all on a cold start
+
+    @Test
+    fun `Shuffle all plays the library's songs, and never says there are none while it is still reading`() {
+        val songs = Library.of(listOf(song("Music/Harbour Glass/01 Paper Lantern.mp3", id = 1)), Settings())
+        assertNull(shuffleAllProblem(LibraryState.Ready(songs)))
+        assertEquals(R.string.launch_no_songs, shuffleAllProblem(LibraryState.Ready(Library.of(emptyList(), Settings()))))
+        assertEquals(R.string.launch_still_reading, shuffleAllProblem(LibraryState.Loading))
+        assertEquals("still reading when the wait ran out", R.string.launch_still_reading, shuffleAllProblem(null))
+        assertEquals(R.string.launch_unreadable, shuffleAllProblem(LibraryState.Unreadable))
     }
 
     private fun shortcutsIn(file: File): List<Element> {

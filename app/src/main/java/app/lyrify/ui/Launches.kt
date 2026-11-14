@@ -23,6 +23,7 @@ import app.lyrify.player.SourceKind
 import app.lyrify.settings.LyricsFilter
 import app.lyrify.settings.SortSongs
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
@@ -40,7 +41,7 @@ sealed interface Launch {
     /** What starts playing, then shows the player ([LaunchWork]). */
     sealed interface Plays : Launch
 
-    /** Play these files at once, in this order, as one queue ("Opened file"): `content:` or `file:` addresses. */
+    /** Play these files at once, in this order, as one queue ("Opened file"): `content:` addresses the opening app grants. */
     data class Open(val uris: List<String>) : Plays
 
     /** All the library's songs, shuffled. */
@@ -74,9 +75,10 @@ const val MAX_OPENED: Int = 500
 private val AUDIO_TYPES = setOf("application/ogg", "application/x-ogg", "application/flac", "application/x-flac")
 
 /**
- * What [intent] asks: a View of a `content:` or `file:` address (its type is the filter's to check: Android resolves it
- * without putting it in the intent), a Share of audio files (each once, in their order, at most [MAX_OPENED]), or a
- * shortcut. Null for anything else, the launcher icon itself and shared text included.
+ * What [intent] asks: a View of a `content:` address (its type is the filter's to check: Android resolves it without
+ * putting it in the intent), a Share of audio files (each once, in their order, at most [MAX_OPENED]), or a shortcut.
+ * Null for anything else, the launcher icon itself and shared text included. Never a `file:` address: KJB would read it
+ * with its own All files access, so any app could make it read a file that app cannot.
  */
 fun launchOf(intent: LaunchIntent): Launch? = when (intent.action) {
     Intent.ACTION_VIEW -> intent.data?.takeIf(::openable)?.let { Launch.Open(listOf(it)) }
@@ -86,7 +88,7 @@ fun launchOf(intent: LaunchIntent): Launch? = when (intent.action) {
     else -> Shortcut.entries.firstOrNull { it.action == intent.action }?.launch
 }
 
-private fun openable(uri: String): Boolean = uri.startsWith("content://", ignoreCase = true) || uri.startsWith("file://", ignoreCase = true)
+private fun openable(uri: String): Boolean = uri.startsWith("content://", ignoreCase = true)
 
 private fun audio(type: String?): Boolean = type != null && (type.startsWith("audio/", ignoreCase = true) || type.lowercase() in AUDIO_TYPES)
 
@@ -136,33 +138,52 @@ fun LaunchWork(launch: Launch.Plays?, onDone: () -> Unit, onPlayer: () -> Unit) 
     val done by rememberUpdatedState(onDone)
     LaunchedEffect(launch) {
         val asked = launch ?: return@LaunchedEffect
+        // While the library is still being read on a cold start, "Reading your music…" shows until Shuffle all plays.
+        val reading = if (asked == Launch.ShuffleAll && LibraryGraph.repository(context).state.value is LibraryState.Loading) {
+            launch { while (true) toasts.say(resources, R.string.launch_reading) }
+        } else {
+            null
+        }
         try {
-            when (val problem = withContext(NonCancellable) { play(context.applicationContext, asked) }) {
+            val problem = withContext(NonCancellable) { play(context.applicationContext, asked) }
+            reading?.cancel()
+            when (problem) {
                 null -> player()
                 else -> toasts.say(resources, problem)
             }
         } finally {
+            reading?.cancel()
             done()
         }
     }
 }
 
+/**
+ * Why Shuffle all cannot play the library as read ([state]; null when the wait for it ran out); null when it plays. A
+ * library still being read is never taken for an empty one.
+ */
+fun shuffleAllProblem(state: LibraryState?): Int? = when (state) {
+    null, LibraryState.Loading -> R.string.launch_still_reading
+    LibraryState.Unreadable -> R.string.launch_unreadable
+    is LibraryState.Ready -> if (state.library.songs.isEmpty()) R.string.launch_no_songs else null
+}
+
 /** The key of a Songs queue in the default order: a tap in Library > Songs then plays inside the shuffled queue. */
 private val ALL_SONGS = QueueSource(SourceKind.SONGS, "songs:${SortSongs.TITLE}:${LyricsFilter.ALL}", "")
 
-/** How long a cold start waits for the library or the queues. */
+/** How long a cold start waits for the queues. */
 private const val READ_WAIT_MS: Long = 10_000
+
+/** How long Shuffle all waits for the library on a cold start (a large one on a slow phone takes a while), "Reading" shown. */
+private const val LIBRARY_WAIT_MS: Long = 120_000
 
 /** Starts what [launch] asks; null once it plays, else why it cannot (a string resource). Main thread. */
 private suspend fun play(context: Context, launch: Launch.Plays): Int? = when (launch) {
     is Launch.Open -> if (OpenedFiles.play(context, launch.uris) > 0) null else R.string.open_failed
     Launch.ShuffleAll -> {
-        val state = withTimeoutOrNull(READ_WAIT_MS) { LibraryGraph.repository(context).state.first { it !is LibraryState.Loading } }
-        val songs = (state as? LibraryState.Ready)?.library?.songs.orEmpty()
-        if (songs.isEmpty()) {
-            R.string.launch_no_songs
-        } else {
-            Lyrify.playback(context).shuffle(songs.map { it.ref }, ALL_SONGS)
+        val state = withTimeoutOrNull(LIBRARY_WAIT_MS) { LibraryGraph.repository(context).state.first { it !is LibraryState.Loading } }
+        shuffleAllProblem(state) ?: run {
+            Lyrify.playback(context).shuffle((state as LibraryState.Ready).library.songs.map { it.ref }, ALL_SONGS)
             null
         }
     }

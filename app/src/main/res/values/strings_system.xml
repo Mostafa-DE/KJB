@@ -18,6 +18,9 @@
     <string name="shortcut_favourites_long">Your favourites</string>
     <string name="launch_no_songs">No songs on your phone yet</string>
     <string name="launch_no_queue">No queue to resume yet</string>
+    <string name="launch_reading">Reading your music…</string>
+    <string name="launch_still_reading">KJB is still reading your music. Try again in a moment.</string>
+    <string name="launch_unreadable">KJB can\'t read your music yet</string>
 
     <!-- Updates -->
     <string name="set_updates">Check for updates</string>

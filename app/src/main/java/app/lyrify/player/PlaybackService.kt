@@ -137,6 +137,8 @@ class PlaybackService : MediaLibraryService() {
     override fun onCreate() {
         super.onCreate()
         core = PlayerGraph.core(this)
+        // Copies of files other apps opened go once no queue holds them.
+        OpenedFiles.watch(this, core.book, scope)
         settings = Lyrify.settings(this).settings.stateIn(scope, SharingStarted.Eagerly, Settings())
         library = LibraryGraph.repository(this).state.map { (it as? LibraryState.Ready)?.library }.stateIn(scope, SharingStarted.Eagerly, null)
         val levels = Levels()
