@@ -325,6 +325,8 @@ enum class PlayerRoute {
     BOOKMARK,
     PLAY_ON,
     MAKE_TONE,
+    SHARE,
+    SHARE_LYRICS,
     SONG_INFO,
     SLEEP,
     SEARCH_LYRICS,
@@ -412,11 +414,12 @@ fun PlayerView() {
     LaunchedEffect(headed) { if (headed) drag.reset() }
     var lyricsRoute by remember { mutableStateOf<PlayerRoute?>(null) }
     val extras = rememberPlayerExtras()
+    val lyricsShare = rememberLyricsShare(ui.item.song.path, LocalLyrics.current.ledger.entries[ui.item.song.path])
     val route: (PlayerRoute) -> Unit = { route ->
         when (route) {
             // The lyrics panel's Search and "Aa" (LyricsViews.kt).
             PlayerRoute.SEARCH_LYRICS, PlayerRoute.LYRICS_TEXT -> lyricsRoute = route
-            else -> extras.route(route, ui, settings.library)
+            else -> extras.route(route, ui, settings.library, lyricsShare)
         }
     }
     var queueSheet by remember { mutableStateOf(false) }
@@ -452,7 +455,7 @@ fun PlayerView() {
     ) {
         Backdrop(ui.item.song.path)
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
-            PlayerTopBar(ui, onClose = close, onRoute = route, onDrag = drag::follow, onDragEnd = letGo)
+            PlayerTopBar(ui, lyricsShare, onClose = close, onRoute = route, onDrag = drag::follow, onDragEnd = letGo)
             Column(Modifier.weight(1f).padding(horizontal = 24.dp, vertical = 4.dp)) {
                 FlipArea(
                     ui = ui,
@@ -564,9 +567,12 @@ private fun Backdrop(path: String) {
     }
 }
 
-/** The chevron, "From Album · Name", and "⋯" with every item of the menu. Dragged down, the player follows ([onDrag]). */
+/**
+ * The chevron, "From Album · Name", and "⋯" with every item of the menu; Share and Share lyrics ([lyricsShare]) for a song
+ * of the library. Dragged down, the player follows ([onDrag]).
+ */
 @Composable
-private fun PlayerTopBar(ui: PlayerUi, onClose: () -> Unit, onRoute: (PlayerRoute) -> Unit, onDrag: (PointerInputChange, Float) -> Unit, onDragEnd: () -> Unit) {
+private fun PlayerTopBar(ui: PlayerUi, lyricsShare: LyricsShare?, onClose: () -> Unit, onRoute: (PlayerRoute) -> Unit, onDrag: (PointerInputChange, Float) -> Unit, onDragEnd: () -> Unit) {
     val context = LocalContext.current
     val nav = LocalNavigator.current
     var menu by remember { mutableStateOf(false) }
@@ -605,6 +611,8 @@ private fun PlayerTopBar(ui: PlayerUi, onClose: () -> Unit, onRoute: (PlayerRout
                 // KJB's equalizer (AudioScreens.kt); the phone's own sound effects open from inside it.
                 MenuRow(stringResource(R.string.player_menu_equalizer), R.drawable.ic_equalizer, pick { nav.show(FullScreen.Equalizer) })
                 MenuRow(stringResource(R.string.player_menu_tone), R.drawable.ic_ring_volume, pick { onRoute(PlayerRoute.MAKE_TONE) })
+                if (song != null) MenuRow(stringResource(R.string.share), R.drawable.ic_share, pick { onRoute(PlayerRoute.SHARE) })
+                if (song != null && lyricsShare != null) MenuRow(stringResource(R.string.share_lyrics), R.drawable.ic_share, pick { onRoute(PlayerRoute.SHARE_LYRICS) })
                 MenuRow(stringResource(R.string.player_menu_info), R.drawable.ic_info, pick { onRoute(PlayerRoute.SONG_INFO) })
             }
         }

@@ -93,14 +93,15 @@ sealed interface SheetPlace {
 }
 
 /** The song sheet's rows, in the order they show. Move to trash sits apart at the bottom. */
-enum class SheetRow { PLAY_NEXT, ADD_TO, FAVOURITE, LYRICS, MAKE_TONE, SONG_INFO, EDIT_TAGS, COVERS_TAGS, REMOVE_FROM_QUEUE, REMOVE_FROM_PLAYLIST, MOVE_TO_TRASH }
+enum class SheetRow { PLAY_NEXT, ADD_TO, FAVOURITE, LYRICS, MAKE_TONE, SHARE, SHARE_LYRICS, SONG_INFO, EDIT_TAGS, COVERS_TAGS, REMOVE_FROM_QUEUE, REMOVE_FROM_PLAYLIST, MOVE_TO_TRASH }
 
 /**
  * The rows the song sheet shows when opened at [place]. [coversTags] and [removeFromQueue]: their slots are filled
- * ([SongSheetSlots]); an empty slot's row does not show.
+ * ([SongSheetSlots]); an empty slot's row does not show. Share lyrics only for a song with [lyrics] ([lyricsShare]).
  */
-fun sheetRows(place: SheetPlace, coversTags: Boolean, removeFromQueue: Boolean): List<SheetRow> = SheetRow.entries.filter { row ->
+fun sheetRows(place: SheetPlace, coversTags: Boolean, removeFromQueue: Boolean, lyrics: Boolean): List<SheetRow> = SheetRow.entries.filter { row ->
     when (row) {
+        SheetRow.SHARE_LYRICS -> lyrics
         SheetRow.COVERS_TAGS -> coversTags
         SheetRow.REMOVE_FROM_QUEUE -> removeFromQueue && place is SheetPlace.Queue
         SheetRow.REMOVE_FROM_PLAYLIST -> place is SheetPlace.Playlist
@@ -432,11 +433,15 @@ sealed interface OpenSheet {
     /** Today's Tone editor with the song. */
     @Serializable @SerialName("tone")
     data class MakeTone(val song: SongRef) : OpenSheet
+
+    /** Share lyrics: as text, and as the `.lrc` for [synced] lyrics. */
+    @Serializable @SerialName("shareLyrics")
+    data class ShareLyrics(val song: SongRef, val synced: Boolean) : OpenSheet
 }
 
 /** Whether [this] is a sheet of the song sheets' one window ([SheetFlow]); the name dialogs, Move to trash and the Tone editor are their own windows. */
 val OpenSheet.inSheet: Boolean
-    get() = this is OpenSheet.Menu || this is OpenSheet.AddTo || this is OpenSheet.Lyrics || this is OpenSheet.Info || this is OpenSheet.More
+    get() = this is OpenSheet.Menu || this is OpenSheet.AddTo || this is OpenSheet.Lyrics || this is OpenSheet.Info || this is OpenSheet.More || this is OpenSheet.ShareLyrics
 
 /** Which sheet a page has open ([SongSheetsHost] draws it). Main thread only. */
 @Stable
@@ -595,6 +600,7 @@ fun SongSheetsHost(sheets: SongSheets) {
 @Composable
 fun SongSheetsHost(sheets: SongSheets, ui: LibraryUi, onActed: () -> Unit = {}) {
     val nav = LocalNavigator.current
+    val context = LocalContext.current
     val toasts = LocalToasts.current
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
@@ -622,7 +628,8 @@ fun SongSheetsHost(sheets: SongSheets, ui: LibraryUi, onActed: () -> Unit = {}) 
         when (step) {
             is OpenSheet.Menu -> {
                 val song = songOf(step.song) ?: return@SheetFlow Gone(sheets)
-                val rows = sheetRows(step.place, SongSheetSlots.coversTags != null, SongSheetSlots.removeFromQueue != null)
+                val lyrics = rememberLyricsShare(song.path, ui.ledger.entries[song.path])
+                val rows = sheetRows(step.place, SongSheetSlots.coversTags != null, SongSheetSlots.removeFromQueue != null, lyrics = lyrics != null)
                 SongMenuSheet(
                     song = song,
                     ui = ui,
@@ -638,6 +645,11 @@ fun SongSheetsHost(sheets: SongSheets, ui: LibraryUi, onActed: () -> Unit = {}) 
                         SheetRow.FAVOURITE -> scope.launch { toasts.say(resources, actions.favourite(listOf(song.ref), ui.playlists.favouriteSongs)) }
                         SheetRow.LYRICS -> sheets.show(OpenSheet.Lyrics(song.ref))
                         SheetRow.MAKE_TONE -> sheets.show(OpenSheet.MakeTone(song.ref))
+                        SheetRow.SHARE -> {
+                            sheets.close()
+                            scope.launch { toasts.say(resources, shareSongs(context, listOf(song), ui::title)) }
+                        }
+                        SheetRow.SHARE_LYRICS -> lyrics?.let { sheets.show(OpenSheet.ShareLyrics(song.ref, it == LyricsShare.SYNCED)) }
                         SheetRow.SONG_INFO -> sheets.show(OpenSheet.Info(song.ref))
                         SheetRow.EDIT_TAGS -> {
                             sheets.close()
@@ -684,6 +696,21 @@ fun SongSheetsHost(sheets: SongSheets, ui: LibraryUi, onActed: () -> Unit = {}) 
                         nav.show(FullScreen.EditTags(songs.map { it.ref }))
                     },
                     onTrash = { sheets.show(OpenSheet.Trash(songs.map { it.ref })) },
+                    onDismiss = sheets::close,
+                )
+            }
+            is OpenSheet.ShareLyrics -> {
+                val song = songOf(step.song) ?: return@SheetFlow Gone(sheets)
+                val title = ui.title(song)
+                fun share(how: suspend () -> Shared) {
+                    sheets.close()
+                    scope.launch { toasts.say(resources, how()) }
+                }
+                ShareLyricsSheet(
+                    title = title,
+                    synced = step.synced,
+                    onText = { share { shareLyricsText(context, song, title, ui.ledger.entries[song.path]) } },
+                    onFile = { share { shareLyricsFile(context, song, title) } },
                     onDismiss = sheets::close,
                 )
             }
@@ -785,8 +812,8 @@ fun SelectionTopBar(selection: SongSelection, list: List<Song>, under: Boolean, 
 
 /**
  * A page's selection: back leaves it, songs that leave [list] leave it once the list is [loaded] (a selection kept across
- * a turn of the phone is not cleared by the empty list before), and while it is on, its bar of four verbs (Play, Add,
- * Favourite, More) stands in for the Now bar and the dock.
+ * a turn of the phone is not cleared by the empty list before), and while it is on, its bar of five verbs (Play, Add,
+ * Favourite, Share, More) stands in for the Now bar and the dock.
  */
 @Composable
 fun SelectionHost(selection: SongSelection, list: List<Song>, loaded: Boolean, ui: LibraryUi, sheets: SongSheets, onChange: (SongSelection) -> Unit) {
@@ -814,6 +841,14 @@ fun SelectionHost(selection: SongSelection, list: List<Song>, loaded: Boolean, u
                 onChange(SongSelection())
                 scope.launch { toasts.say(resources, actions.favourite(refs, ui.playlists.favouriteSongs)) }
             },
+            // The selection stays when nothing was shared (too many songs), so it can be made smaller.
+            onShare = {
+                scope.launch {
+                    val shared = shareSongs(context, picked, ui::title)
+                    if (shared == Shared.Opened) onChange(SongSelection())
+                    toasts.say(resources, shared)
+                }
+            },
             onMore = { sheets.show(OpenSheet.More(refs)) },
         )
     }
@@ -826,14 +861,15 @@ fun SelectionHost(selection: SongSelection, list: List<Song>, loaded: Boolean, u
     }
 }
 
-/** The selection's bar in place of the Now bar and the dock: Play, Add, Favourite and More, each an icon over its word. */
+/** The selection's bar in place of the Now bar and the dock: Play, Add, Favourite, Share and More, each an icon over its word. */
 @Composable
-private fun SelectionBar(onPlay: () -> Unit, onAdd: () -> Unit, onFavourite: () -> Unit, onMore: () -> Unit) {
+private fun SelectionBar(onPlay: () -> Unit, onAdd: () -> Unit, onFavourite: () -> Unit, onShare: () -> Unit, onMore: () -> Unit) {
     GlassSurface(null, CircleShape, Modifier.fillMaxWidth().padding(horizontal = 12.dp), solid = true) {
         Row(Modifier.heightIn(min = 64.dp).padding(horizontal = 4.dp)) {
             SelectionVerb(R.drawable.ic_play_arrow_fill, R.string.lib_play, Modifier.weight(1f), onPlay)
             SelectionVerb(R.drawable.ic_playlist_add, R.string.lib_add, Modifier.weight(1f), onAdd)
             SelectionVerb(R.drawable.ic_favorite, R.string.lib_favourite, Modifier.weight(1f), onFavourite)
+            SelectionVerb(R.drawable.ic_share, R.string.share, Modifier.weight(1f), onShare)
             SelectionVerb(R.drawable.ic_more_horiz, R.string.lib_more, Modifier.weight(1f), onMore)
         }
     }

@@ -104,19 +104,28 @@ class SongActionsTest {
 
     @Test
     fun `the song sheet shows every row for a song in a list, and the rows of its place`() {
-        val common = listOf(SheetRow.PLAY_NEXT, SheetRow.ADD_TO, SheetRow.FAVOURITE, SheetRow.LYRICS, SheetRow.MAKE_TONE, SheetRow.SONG_INFO, SheetRow.EDIT_TAGS)
-        assertEquals(common + SheetRow.MOVE_TO_TRASH, sheetRows(SheetPlace.List, coversTags = false, removeFromQueue = false))
-        assertEquals(common + SheetRow.COVERS_TAGS + SheetRow.MOVE_TO_TRASH, sheetRows(SheetPlace.List, coversTags = true, removeFromQueue = true))
+        val common = listOf(SheetRow.PLAY_NEXT, SheetRow.ADD_TO, SheetRow.FAVOURITE, SheetRow.LYRICS, SheetRow.MAKE_TONE, SheetRow.SHARE, SheetRow.SONG_INFO, SheetRow.EDIT_TAGS)
+        assertEquals(common + SheetRow.MOVE_TO_TRASH, sheetRows(SheetPlace.List, coversTags = false, removeFromQueue = false, lyrics = false))
+        assertEquals(common + SheetRow.COVERS_TAGS + SheetRow.MOVE_TO_TRASH, sheetRows(SheetPlace.List, coversTags = true, removeFromQueue = true, lyrics = false))
         assertEquals(
             common + SheetRow.REMOVE_FROM_PLAYLIST + SheetRow.MOVE_TO_TRASH,
-            sheetRows(SheetPlace.Playlist("p1", 0), coversTags = false, removeFromQueue = true),
+            sheetRows(SheetPlace.Playlist("p1", 0), coversTags = false, removeFromQueue = true, lyrics = false),
         )
         assertEquals(
             common + SheetRow.COVERS_TAGS + SheetRow.REMOVE_FROM_QUEUE + SheetRow.MOVE_TO_TRASH,
-            sheetRows(SheetPlace.Queue("q1", 3), coversTags = true, removeFromQueue = true),
+            sheetRows(SheetPlace.Queue("q1", 3), coversTags = true, removeFromQueue = true, lyrics = false),
         )
         // Until P2 fills its slot, a queue's song has no Remove from queue.
-        assertEquals(common + SheetRow.MOVE_TO_TRASH, sheetRows(SheetPlace.Queue("q1", 3), coversTags = false, removeFromQueue = false))
+        assertEquals(common + SheetRow.MOVE_TO_TRASH, sheetRows(SheetPlace.Queue("q1", 3), coversTags = false, removeFromQueue = false, lyrics = false))
+    }
+
+    @Test
+    fun `the song sheet has Share for every song, and Share lyrics right after it only for a song with lyrics`() {
+        val with = sheetRows(SheetPlace.List, coversTags = false, removeFromQueue = false, lyrics = true)
+        assertEquals(listOf(SheetRow.MAKE_TONE, SheetRow.SHARE, SheetRow.SHARE_LYRICS, SheetRow.SONG_INFO), with.subList(with.indexOf(SheetRow.MAKE_TONE), with.indexOf(SheetRow.SONG_INFO) + 1))
+        val without = sheetRows(SheetPlace.Playlist("p1", 0), coversTags = true, removeFromQueue = false, lyrics = false)
+        assertTrue(SheetRow.SHARE in without)
+        assertFalse(SheetRow.SHARE_LYRICS in without)
     }
 
     // An album's or an artist's "⋯"
