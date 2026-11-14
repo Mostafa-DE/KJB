@@ -305,31 +305,53 @@ internal class TextBudget(private val maxField: Int, private val maxTotal: Long,
 }
 
 /**
- * [MusicoletDb] on the phone: Android's SQLite on a private copy in the app's cache, opened read only and deleted
- * (with any journal beside it) before it returns, whatever happens. Only `TABLE_SONGS` is read, by a fixed query
+ * The private folders the songs table is read in, under [root] (in the app's cache), empty after every read however
+ * it ends (phone run 2026-11-15: a file that was no database left a file there that a list of names did not know).
+ * Reads go one at a time, process-wide; each first clears what an earlier one left when the app died, then gets a
+ * folder of its own, deleted whole afterwards, whatever is in it. [log] gets counts only.
+ */
+internal class ScratchDir(private val root: File, private val log: (String) -> Unit = {}) {
+    /** Runs [read] in a new, empty folder of its own, and deletes that folder and all in it afterwards. */
+    fun <T> use(read: (File) -> T): T = synchronized(LOCK) {
+        if (root.exists() && !root.deleteRecursively()) log("musicolet: earlier scratch files not all deleted")
+        val dir = File(root, "read-${System.nanoTime()}")
+        try {
+            if (!dir.mkdirs()) throw IOException("no scratch folder")
+            read(dir)
+        } finally {
+            if (!dir.deleteRecursively()) log("musicolet: scratch files not all deleted")
+        }
+    }
+
+    private companion object {
+        val LOCK: Any = Any()
+    }
+}
+
+/**
+ * [MusicoletDb] on the phone: Android's SQLite on a private copy in the app's cache, opened read only, in a folder of
+ * its own deleted whole before it returns, whatever happens ([ScratchDir]). Only `TABLE_SONGS` is read, by a fixed query
  * ([rows]). The log gets exception class names only.
  */
 class MusicoletSqlite(private val cacheDir: File, private val log: (String) -> Unit) : MusicoletDb {
     override fun songs(bytes: ByteArray): List<MusicoletSong>? {
         if (bytes.size < HEADER.size || !HEADER.indices.all { bytes[it] == HEADER[it] }) return null
-        val dir = File(cacheDir, DIR)
-        val file = File(dir, "songs-${System.nanoTime()}.db")
         return try {
-            dir.mkdirs()
-            val copy = bytes.copyOf()
-            // A WAL database (header bytes 18 and 19 are 2) opens read only as a rollback one: no -wal file comes with it.
-            if (copy[WRITE_VERSION] == WAL && copy[READ_VERSION] == WAL) {
-                copy[WRITE_VERSION] = LEGACY
-                copy[READ_VERSION] = LEGACY
+            ScratchDir(File(cacheDir, DIR), log).use { dir ->
+                val file = File(dir, SONGS_FILE)
+                val copy = bytes.copyOf()
+                // A WAL database (header bytes 18 and 19 are 2) opens read only as a rollback one: no -wal file comes with it.
+                if (copy[WRITE_VERSION] == WAL && copy[READ_VERSION] == WAL) {
+                    copy[WRITE_VERSION] = LEGACY
+                    copy[READ_VERSION] = LEGACY
+                }
+                file.writeBytes(copy)
+                SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READONLY or SQLiteDatabase.NO_LOCALIZED_COLLATORS).use(::rows)
             }
-            file.writeBytes(copy)
-            SQLiteDatabase.openDatabase(file.path, null, SQLiteDatabase.OPEN_READONLY or SQLiteDatabase.NO_LOCALIZED_COLLATORS).use(::rows)
         } catch (e: Exception) {
             // SQLiteException (not a database, damaged), IOException (the cache full).
             log("musicolet: songs not read (${e.javaClass.simpleName})")
             null
-        } finally {
-            listOf("", "-journal", "-wal", "-shm").forEach { File(file.path + it).delete() }
         }
     }
 
@@ -383,6 +405,7 @@ class MusicoletSqlite(private val cacheDir: File, private val log: (String) -> U
 
     private companion object {
         const val DIR: String = "musicolet-import"
+        const val SONGS_FILE: String = "songs.db"
         const val WRITE_VERSION: Int = 18
         const val READ_VERSION: Int = 19
         const val WAL: Byte = 2
