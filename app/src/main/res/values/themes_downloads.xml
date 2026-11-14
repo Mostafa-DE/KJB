@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- "Save to KJB" (ui/SaveToKjbActivity): a see-through window over the sharing app, which only its sheet draws on. -->
+    <style name="Theme.Lyrify.Share" parent="Theme.Lyrify">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:windowAnimationStyle">@null</item>
+    </style>
+</resources>

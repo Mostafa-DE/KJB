@@ -1,0 +1,144 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Downloads (downloads/, ui/DownloadsScreen.kt, ui/SaveToKjbActivity.kt): links saved with the Downloads add-on,
+         VidGrab folded into KJB. Labels are 3 words or fewer; sentences only in sheets and dialogs. -->
+    <string name="dl_title">Downloads</string>
+    <!-- The share target's name in other apps' share sheets. -->
+    <string name="dl_share_label">Save to KJB</string>
+    <string name="dl_channel">Downloads</string>
+
+    <!-- Tools row -->
+    <string name="dl_get">Get Downloads</string>
+    <string name="dl_nothing_yet">Nothing yet</string>
+    <plurals name="dl_active">
+        <item quantity="one">%d downloading</item>
+        <item quantity="other">%d downloading</item>
+    </plurals>
+    <plurals name="dl_saved_count">
+        <item quantity="one">%d saved</item>
+        <item quantity="other">%d saved</item>
+    </plurals>
+    <plurals name="dl_failed_count">
+        <item quantity="one">%d not saved</item>
+        <item quantity="other">%d not saved</item>
+    </plurals>
+
+    <!-- The add-on card on the Downloads page -->
+    <string name="dl_addon_needed">Downloads needs a small add-on, about 54 MB, from KJB\'s own release. Your phone asks once to confirm the install.</string>
+    <string name="dl_addon_update">Update add-on</string>
+    <string name="dl_addon_outdated">This Downloads add-on is older than this KJB. Get the new one to keep downloading.</string>
+    <string name="dl_addon_untrusted">The Downloads add-on on your phone is not KJB\'s. Uninstall it from its app info, then get KJB\'s.</string>
+    <string name="dl_addon_unreachable">The Downloads add-on is not answering right now. KJB tries again when you come back.</string>
+    <string name="dl_addon_downloading">Getting the add-on: %1$s of %2$s.</string>
+    <string name="dl_addon_allow">Your phone needs to let KJB install apps, once.</string>
+    <string name="dl_addon_allow_action">Allow installs</string>
+    <string name="dl_addon_confirm">Confirm the install on your phone.</string>
+    <string name="dl_addon_failed">KJB could not get the add-on. Check your connection and try again.</string>
+    <string name="dl_try_again">Try again</string>
+    <string name="dl_app_info">App info</string>
+
+    <!-- The page -->
+    <string name="dl_link">Link</string>
+    <string name="dl_link_hint">Paste a link</string>
+    <string name="dl_paste">Paste</string>
+    <string name="dl_look_up">Look up</string>
+    <string name="dl_now">Now</string>
+    <string name="dl_done">Done</string>
+    <string name="dl_empty">Share a link to KJB from any app, or paste one here. Save only what you have the right to save.</string>
+    <string name="dl_files_access">KJB needs All files access to save downloads on your phone.</string>
+    <string name="dl_files_access_action">Turn on</string>
+    <string name="dl_cancel">Cancel</string>
+    <string name="dl_retry">Retry</string>
+    <string name="dl_remove">Remove from list</string>
+    <string name="dl_open">Open</string>
+    <string name="dl_play">Play</string>
+    <string name="dl_waiting">Waiting</string>
+    <string name="dl_saved">Saved</string>
+    <string name="dl_maybe_copy">Maybe a copy</string>
+    <string name="dl_copy_of">KJB found a song like this one on your phone: %1$s. Duplicates can show both.</string>
+    <string name="dl_not_saved">Not saved: %1$s</string>
+
+    <!-- Where a download is -->
+    <string name="dl_updating">Updating downloader</string>
+    <string name="dl_starting">Starting</string>
+    <string name="dl_downloading">Downloading</string>
+    <string name="dl_converting">Converting</string>
+    <string name="dl_merging">Merging</string>
+    <string name="dl_tagging">Adding tags</string>
+    <string name="dl_retrying">Trying again</string>
+    <string name="dl_percent">%1$d%%</string>
+    <string name="dl_left">%1$s left</string>
+
+    <!-- Why it did not save -->
+    <string name="dl_failed_offline">No connection</string>
+    <string name="dl_failed_not_found">Nothing found</string>
+    <string name="dl_failed_site">Site changed</string>
+    <string name="dl_failed_room">Phone is full</string>
+    <string name="dl_failed_hand_off">Not saved whole</string>
+    <string name="dl_failed_stalled">Stopped answering</string>
+    <string name="dl_failed_addon">Add-on stopped</string>
+    <string name="dl_failed_no_addon">Add-on missing</string>
+    <string name="dl_failed_not_allowed">Can\'t save there</string>
+    <string name="dl_failed_unknown">Didn\'t work</string>
+    <string name="dl_failed_offline_detail">Your phone is offline, or the site can\'t be reached. Retry once you are back online.</string>
+    <string name="dl_failed_not_found_detail">There is no video at that link: it was removed, it is private, or the site is not one KJB can save from.</string>
+    <string name="dl_failed_site_detail">The site changed. KJB updated the downloader and tried again; Retry later, when the downloader has caught up.</string>
+    <string name="dl_failed_room_detail">Your phone has no room left for it. Free some space, then Retry.</string>
+    <string name="dl_failed_hand_off_detail">The file did not reach KJB whole, so nothing was kept. Retry goes on from what was downloaded.</string>
+    <string name="dl_failed_stalled_detail">The download stopped moving, so KJB stopped it. Retry goes on from what was downloaded.</string>
+    <string name="dl_failed_addon_detail">The Downloads add-on stopped. Retry goes on from what was downloaded.</string>
+    <string name="dl_failed_no_addon_detail">Downloads needs its add-on. Get it on the Downloads page, then Retry.</string>
+    <string name="dl_failed_not_allowed_detail">KJB may not save in that folder. Check All files access, or pick another folder in Settings.</string>
+    <string name="dl_failed_unknown_detail">Something went wrong. Retry, or update the downloader in Settings.</string>
+
+    <!-- The share sheet -->
+    <string name="dl_audio">Audio</string>
+    <string name="dl_video">Video</string>
+    <string name="dl_quality">Quality</string>
+    <string name="dl_best">Best</string>
+    <string name="dl_looking_up">Looking it up</string>
+    <string name="dl_lookup_failed">KJB could not look this link up. You can still try: the download looks it up again.</string>
+    <string name="dl_no_link">No link found</string>
+    <string name="dl_started">Downloading</string>
+    <string name="dl_copy_title">On your phone</string>
+    <string name="dl_save_anyway">Save anyway</string>
+    <string name="dl_get_first">Downloads needs its add-on first. Get it in KJB, on the Downloads page under Tools.</string>
+    <string name="dl_open_kjb">Open KJB</string>
+    <string name="dl_video_quality">Video quality</string>
+    <string name="dl_video_quality_sheet">Sizes are estimates from the site.</string>
+    <string name="dl_audio_quality_sheet">How this download is saved. Settings keeps the one KJB uses by default.</string>
+    <string name="dl_best_detail">%1$s, about %2$s</string>
+
+    <!-- Settings > Downloads -->
+    <string name="settings_downloads">Downloads</string>
+    <string name="set_dl_quality">Audio quality</string>
+    <string name="set_dl_quality_sheet">How songs are saved, unless the share sheet picks another.</string>
+    <string name="dl_q_mp3_320">MP3 320 kbps</string>
+    <string name="dl_q_mp3_v0">MP3 V0</string>
+    <string name="dl_q_mp3_192">MP3 192 kbps</string>
+    <string name="dl_q_original">No conversion</string>
+    <string name="dl_q_mp3_320_detail">The best MP3, at a steady 320 kbps.</string>
+    <string name="dl_q_mp3_v0_detail">Variable bitrate, about 245 kbps, smaller files.</string>
+    <string name="dl_q_mp3_192_detail">Smaller files that still sound good.</string>
+    <string name="dl_q_original_detail">M4A or Opus as the site has it, never converted.</string>
+    <string name="set_dl_language">Original language</string>
+    <string name="set_dl_language_detail">Never a dubbed track</string>
+    <string name="set_dl_audio_folder">Audio folder</string>
+    <string name="set_dl_video_folder">Video folder</string>
+    <string name="set_dl_audio_folder_sheet">Where KJB saves songs on your phone. It starts with Music, Download, Podcasts or Audiobooks. Songs already saved stay where they are.</string>
+    <string name="set_dl_video_folder_sheet">Where KJB saves videos on your phone. It starts with Movies, Download or DCIM. Videos already saved stay where they are.</string>
+    <string name="set_dl_folder">Folder</string>
+    <string name="set_dl_folder_save">Save</string>
+    <string name="set_dl_folder_invalid">Use a folder in one of those, with plain names and no signs like : ? or *.</string>
+    <string name="set_dl_copies">Warn about copies</string>
+    <string name="set_dl_copies_detail">When a song is on your phone</string>
+    <string name="set_dl_clipboard">Check clipboard</string>
+    <string name="set_dl_clipboard_detail">Offer a copied link</string>
+    <string name="set_dl_update">Update downloader</string>
+    <string name="set_dl_update_value">yt-dlp %1$s</string>
+    <string name="set_dl_update_none">Get Downloads first</string>
+    <string name="dl_updated">Downloader updated</string>
+    <string name="dl_up_to_date">Already up to date</string>
+    <string name="dl_update_failed">Couldn\'t update</string>
+    <string name="dl_update_busy">Busy downloading</string>
+</resources>

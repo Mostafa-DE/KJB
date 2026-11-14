@@ -120,6 +120,10 @@ sealed interface Page {
     @Serializable @SerialName("ai")
     data object Ai : Page
 
+    /** Downloads: links saved with the Downloads add-on (DownloadsScreen.kt, DL1). */
+    @Serializable @SerialName("downloads")
+    data object Downloads : Page
+
     /** Covers & tags (CoversTagsScreen.kt, T2). */
     @Serializable @SerialName("coversTags")
     data object CoversTags : Page
@@ -387,9 +391,13 @@ const val EXTRA_DESTINATION: String = "app.lyrify.destination"
 /** The AI's notifications (the night's run, the model download) open Tools > AI lyrics. */
 const val DESTINATION_AI: String = "ai"
 
+/** The downloads' notifications open Tools > Downloads. */
+const val DESTINATION_DOWNLOADS: String = "downloads"
+
 /** The page [destination] names; null for none, or one this version does not know. */
 fun destinationPage(destination: String?): Page? = when (destination) {
     DESTINATION_AI -> Page.Ai
+    DESTINATION_DOWNLOADS -> Page.Downloads
     else -> null
 }
 
@@ -424,7 +432,7 @@ fun homeOf(page: Page, from: DockTab, viewOpen: Boolean): DockTab {
         is Page.CollectionPages -> here?.takeIf { it == DockTab.SEARCH || it == DockTab.PLAYLISTS } ?: DockTab.LIBRARY
         is Page.SearchAll -> DockTab.SEARCH
         is Page.Songs -> DockTab.LIBRARY
-        is Page.Check, Page.Duplicates, Page.Tones, Page.Ai, Page.CoversTags, Page.TagHistory, Page.Settings, Page.LibraryTabs, Page.FoldersToSkip,
+        is Page.Check, Page.Duplicates, Page.Tones, Page.Ai, Page.Downloads, Page.CoversTags, Page.TagHistory, Page.Settings, Page.LibraryTabs, Page.FoldersToSkip,
         Page.Licences, is Page.Licence -> DockTab.TOOLS
     }
 }

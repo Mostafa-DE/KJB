@@ -49,6 +49,12 @@ enum class SharedWrite {
 
     /** Songs taken back out of the phone's trash, through its own dialog. */
     UNTRASH,
+
+    /** A download's hidden part file in its folder, written by the Downloads add-on, then renamed to the song or video (downloads/). */
+    DOWNLOAD_SAVE,
+
+    /** A download's part file deleted when it did not finish (downloads/). */
+    DOWNLOAD_DELETE,
 }
 
 /**

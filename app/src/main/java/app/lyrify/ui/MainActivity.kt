@@ -45,6 +45,7 @@ import app.lyrify.addon.AddonDownloads
 import app.lyrify.addon.AddonInstalls
 import app.lyrify.addon.HandoverState
 import app.lyrify.addon.ModelHandover
+import app.lyrify.downloads.Downloads
 import app.lyrify.models.NpuChips
 import app.lyrify.overnight.AiLyrics
 import app.lyrify.overnight.AiQueue
@@ -123,6 +124,8 @@ private fun App(ledger: LedgerStore, destination: Page?, view: FullScreen?, onVi
         AiLyrics.appOpened(context)
         // Back from the phone's "Install unknown apps" switch: the add-on's install goes on.
         AddonInstalls.installer(context).resume()
+        // Downloads Android paused (its daily limit for long work) or KJB's process left go on.
+        Downloads.resume(context)
         onPauseOrDispose { }
     }
 
