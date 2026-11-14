@@ -170,13 +170,18 @@ class PlayerExtrasUi internal constructor(
     var bookmarkAt: Long by mutableLongStateOf(0)
         private set
 
-    /** P2's routes of the player's "⋯" and the sleep button; false for a route it does not fill. [names]: "Show file names". */
-    fun route(route: PlayerRoute, ui: PlayerUi, names: LibrarySettings): Boolean {
+    /**
+     * P2's routes of the player's "⋯" and the sleep button, and Share's; false for a route it does not fill. [names]: "Show
+     * file names"; [lyrics]: what the song's lyrics can be shared as.
+     */
+    fun route(route: PlayerRoute, ui: PlayerUi, names: LibrarySettings, lyrics: LyricsShare?): Boolean {
         val song = ui.song?.ref ?: ui.item.song
         when (route) {
             PlayerRoute.ADD_TO -> songSheets.show(OpenSheet.AddTo(listOf(song), null, ui.song?.let { displayTitle(it, names) } ?: song.path.substringAfterLast('/')))
             PlayerRoute.SONG_INFO -> songSheets.show(OpenSheet.Info(song))
             PlayerRoute.MAKE_TONE -> songSheets.show(OpenSheet.MakeTone(song))
+            PlayerRoute.SHARE -> scope.launch { toasts.say(resources, shareSongs(context, listOfNotNull(ui.song)) { displayTitle(it, names) }) }
+            PlayerRoute.SHARE_LYRICS -> lyrics?.let { songSheets.show(OpenSheet.ShareLyrics(song, it == LyricsShare.SYNCED)) }
             PlayerRoute.SPEED -> open = ExtrasSheet.SPEED
             PlayerRoute.SLEEP -> open = ExtrasSheet.SLEEP
             PlayerRoute.REPEAT_PART -> togglePart(ui)

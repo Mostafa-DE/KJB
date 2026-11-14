@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Share: a song's file, or its lyrics as text or as the .lrc, through your phone's share sheet (ui/Share.kt). -->
+<resources>
+    <string name="share">Share</string>
+    <string name="share_lyrics">Share lyrics</string>
+    <string name="share_as_text">As text</string>
+    <string name="share_as_text_line">The words, without times</string>
+    <string name="share_lyrics_file">Lyrics file</string>
+    <string name="share_lyrics_file_line">The synced .lrc, as it is</string>
+    <plurals name="share_too_many">
+        <item quantity="one">Share up to %d song at once</item>
+        <item quantity="other">Share up to %d songs at once</item>
+    </plurals>
+    <plurals name="share_not_found">
+        <item quantity="one">%d song isn\'t on your phone now</item>
+        <item quantity="other">%d songs aren\'t on your phone now</item>
+    </plurals>
+    <string name="share_no_lyrics">Couldn\'t read the lyrics. Try again.</string>
+    <string name="share_failed">Couldn\'t share. Try again.</string>
+</resources>
