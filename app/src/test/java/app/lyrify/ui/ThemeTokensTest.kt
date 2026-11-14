@@ -275,6 +275,29 @@ class ThemeTokensTest {
         val content = activity.substring(activity.indexOf("setContent {"))
         val read = content.indexOf("?: return@setContent")
         assertTrue("MainActivity waits for the stored theme", read > 0 && read < content.indexOf("LyrifyTheme(display"))
-        assertTrue(activity.contains("ThemeWindow(variant)"))
+        assertTrue(activity.contains("ThemeWindow(variant, chosen)"))
+    }
+
+    /**
+     * Review F2, finding 3: the window before KJB's first frame is the last theme drawn, Pure black too, on every Android
+     * version: a small copy of the choice is kept beside settings.json and read before anything is drawn.
+     */
+    @Test
+    fun `the window before the first frame takes the last theme drawn, Pure black too, from a copy read at once`() {
+        assertEquals(DisplaySettings(ThemeChoice.DARK, pureBlack = true), storedDisplay("DARK", pureBlack = true))
+        assertEquals(DisplaySettings(ThemeChoice.SYSTEM, pureBlack = true), storedDisplay("SEPIA", pureBlack = true))
+        assertEquals(DisplaySettings(), storedDisplay(null, pureBlack = false))
+        assertEquals(ThemeVariant.PURE_BLACK, themeVariant(storedDisplay("SYSTEM", pureBlack = true), phoneDark = true))
+        val activity = source("MainActivity.kt")
+        val create = activity.substring(activity.indexOf("override fun onCreate("))
+        assertTrue("the window is painted before setContent", create.indexOf("paintWindow(") in 0 until create.indexOf("setContent {"))
+        assertTrue(activity.contains("ThemeCopy.write("))
+    }
+
+    /** Review F2, finding 6: a new theme redraws the home-screen widgets, which take the app's night mode when drawn. */
+    @Test
+    fun `a change of theme redraws the home-screen widgets`() {
+        val night = source("MainActivity.kt").substringAfter("private fun NightMode(").substringBefore("\n}\n")
+        assertTrue(night.contains("Widgets.refresh(context)"))
     }
 }

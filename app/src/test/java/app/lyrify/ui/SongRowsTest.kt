@@ -120,6 +120,35 @@ class SongRowsTest {
     }
 
     @Test
+    fun `a list sorted by plays waits for them, never drawn first in the order of a list without any`() {
+        val entries = songs.mapIndexed { at, song -> at to song }
+        val plays = mapOf(water.path to SongPlays(water.ref, 4, 9, 0), lantern.path to SongPlays(lantern.ref, 2, 8, 0))
+
+        assertNull(inOrderOnce(entries, ListSort(SortSongs.PLAY_COUNT), LibrarySettings(), plays = null) { it.second })
+        assertNull(inOrderOnce(entries, ListSort(SortSongs.LAST_PLAYED, reversed = true), LibrarySettings(), plays = null) { it.second })
+        assertEquals(listOf(water, lantern), inOrderOnce(entries, ListSort(SortSongs.PLAY_COUNT), LibrarySettings(), plays) { it.second }!!.map { it.second }.take(2))
+        // The other keys and the own order need no plays.
+        assertEquals(entries, inOrderOnce(entries, ListSort.OWN, LibrarySettings(), plays = null) { it.second })
+        assertEquals(listOf(kite, water, lantern, bell), inOrderOnce(entries, ListSort(SortSongs.TITLE), LibrarySettings(), plays = null) { it.second }!!.map { it.second })
+        // The Songs tab and every page sort off the main thread, and only once the plays they need are read.
+        val custom = File("src/main/java/app/lyrify/ui/CustomOrder.kt").readText()
+        assertTrue(custom.contains("withContext(Dispatchers.Default) { inOrderOnce("))
+        val collections = File("src/main/java/app/lyrify/ui/CollectionScreens.kt").readText()
+        assertTrue("rememberInOrder(" in collections)
+        assertFalse(Regex("""(?<![A-Za-z])inOrder\(""").containsMatchIn(collections))
+        val library = File("src/main/java/app/lyrify/ui/LibraryScreen.kt").readText()
+        assertTrue(library.substringAfter("private fun SongsTab(").substringBefore("\n}\n").contains("val known = plays ?: return@produceState"))
+    }
+
+    @Test
+    fun `an artist's page opens in its album order, the newest album first, which its sheet offers first`() {
+        assertEquals(ListSort.OWN, SongList.ARTIST.default)
+        assertTrue(SongList.ARTIST.own)
+        val strings = File("src/main/res/values/strings_library_extras.xml").readText()
+        assertTrue("""<string name="lib_sort_album_order">Album order</string>""" in strings)
+    }
+
+    @Test
     fun `the other orders sort by title or the latest added first, places going with their songs, and only the custom order has handles`() {
         val entries = songs.mapIndexed { at, song -> at to song }
 

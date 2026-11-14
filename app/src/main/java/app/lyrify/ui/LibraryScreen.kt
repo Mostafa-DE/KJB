@@ -218,12 +218,14 @@ private fun SongsTab(ui: LibraryUi, library: Library, reselect: Int, topBar: @Co
     val ledger = ui.ledger
     val change = rememberSettingsChange()
     val plays = rememberPlays(settings.songSort.needsPlays)
+    // A sort by plays waits for them: never shown first in the order of a list without any.
     val listed by produceState<List<Song>?>(null, library, ledger, settings, plays) {
-        value = withContext(Dispatchers.Default) { songsTab(library.songs, { ledger.entries[it.path]?.status }, settings, plays) }
+        val known = plays ?: return@produceState
+        value = withContext(Dispatchers.Default) { songsTab(library.songs, { ledger.entries[it.path]?.status }, settings, known) }
     }
     val songs = listed.orEmpty()
     val now = remember(library) { System.currentTimeMillis() }
-    val sections = remember(songs, settings, plays) { sectionsOf(songs, settings, now, ZoneId.systemDefault(), plays) }
+    val sections = remember(songs, settings, plays) { sectionsOf(songs, settings, now, ZoneId.systemDefault(), plays.orEmpty()) }
     val state = rememberLazyListState()
     var sorting by rememberSaveable { mutableStateOf(false) }
     ReselectToTop(reselect) { state.animateScrollToItem(0) }
@@ -373,7 +375,7 @@ private fun AlbumsTab(ui: LibraryUi, library: Library, padding: PaddingValues, r
     val order = ui.settings.library.albumSort
     val reversed = ui.settings.library.albumReversed
     val plays = rememberPlays(order == SortAlbums.PLAY_COUNT || order == SortAlbums.LAST_PLAYED)
-    val albums = remember(library, order, reversed, plays) { sortAlbums(library.albums, order, reversed, plays) }
+    val albums = rememberSorted(plays, library, order, reversed) { sortAlbums(library.albums, order, reversed, it) }.orEmpty()
     val songs = remember(albums, library) { albums.flatMap { it.songs } + library.unknownAlbum }
     val source = QueueSource(SourceKind.SONGS, "tab:albums", stringResource(R.string.library_tab_albums))
     val state = rememberLazyGridState()
@@ -391,7 +393,7 @@ private fun AlbumsTab(ui: LibraryUi, library: Library, padding: PaddingValues, r
         item(key = "header", span = { GridItemSpan(maxLineSpan) }, contentType = "header") {
             Box(rowMotion(reduced)) {
                 ListHeader(
-                    albums.size + if (library.unknownAlbum.isEmpty()) 0 else 1,
+                    library.albums.size + if (library.unknownAlbum.isEmpty()) 0 else 1,
                     R.plurals.lib_noun_albums,
                     onShuffle = { playback.shuffle(songs.map { it.ref }, source) },
                     onPlay = { playback.play(songs.map { it.ref }, 0, source) },
@@ -472,7 +474,7 @@ private fun ArtistsTab(ui: LibraryUi, library: Library, padding: PaddingValues, 
     val order = ui.settings.library.artistSort
     val reversed = ui.settings.library.artistReversed
     val plays = rememberPlays(order == SortArtists.PLAY_COUNT || order == SortArtists.LAST_PLAYED)
-    val artists = remember(library, order, reversed, plays) { sortArtists(library.artists, order, reversed, plays) }
+    val artists = rememberSorted(plays, library, order, reversed) { sortArtists(library.artists, order, reversed, it) }.orEmpty()
     val songs = remember(artists) { artists.flatMap { it.songs }.distinctBy { it.path } }
     val source = QueueSource(SourceKind.SONGS, "tab:artists", stringResource(R.string.library_tab_artists))
     val state = rememberLazyListState()
@@ -483,7 +485,7 @@ private fun ArtistsTab(ui: LibraryUi, library: Library, padding: PaddingValues, 
         item(key = "header", contentType = "header") {
             Box(rowMotion(reduced)) {
                 ListHeader(
-                    artists.size,
+                    library.artists.size,
                     R.plurals.lib_noun_artists,
                     onShuffle = { playback.shuffle(songs.map { it.ref }, source) },
                     onPlay = { playback.play(songs.map { it.ref }, 0, source) },

@@ -1,5 +1,6 @@
 package app.lyrify.settings
 
+import app.lyrify.library.SongRef
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -9,6 +10,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.longOrNull
 
 /**
  * Everything the user sets in the app from 3.0 on, one section per feature, every field with its default (from
@@ -109,7 +111,7 @@ data class LibrarySettings(
      * "Hidden songs": the paths of songs that leave every list, search, shuffle and stats view; their files stay on the
      * phone and their plays stay counted. In the order hidden, each once.
      */
-    val hiddenSongs: List<String> = emptyList(),
+    val hiddenSongs: List<SongRef> = emptyList(),
 ) {
     /** [list]'s order: as the user left it, else its default. */
     fun sortOf(list: SongList): ListSort = listSorts[list] ?: list.default
@@ -156,7 +158,8 @@ data class ListSort(val key: SortSongs? = null, val reversed: Boolean = false) {
  */
 enum class SongList(val own: Boolean, val default: ListSort) {
     ALBUM(true, ListSort.OWN),
-    ARTIST(false, ListSort(SortSongs.YEAR)),
+    /** Its own order: the newest album first, each in track order, songs without an album last. */
+    ARTIST(true, ListSort.OWN),
     FOLDER(false, ListSort(SortSongs.FILE_NAME)),
     GENRE(false, ListSort(SortSongs.TITLE)),
     UNKNOWN_ALBUM(false, ListSort(SortSongs.TITLE)),
@@ -312,7 +315,7 @@ object SettingsJson {
                             "listSorts" to JsonObject(
                                 it.listSorts.entries.associate { (list, sort) -> list.name to obj("key" to (sort.key?.name ?: OWN_ORDER), "reversed" to sort.reversed) },
                             ),
-                            "hiddenSongs" to JsonArray(it.hiddenSongs.map(::JsonPrimitive)),
+                            "hiddenSongs" to JsonArray(it.hiddenSongs.map { song -> obj("path" to song.path, "id" to song.mediaStoreId?.let(::JsonPrimitive)).withoutNulls() }),
                         ),
                     )
                 },
@@ -396,7 +399,7 @@ object SettingsJson {
                     artistSort = it.choice("artistSort", d.library.artistSort),
                     artistReversed = it.flag("artistReversed", d.library.artistReversed),
                     listSorts = (it["listSorts"] as? JsonObject)?.let(::listSorts) ?: d.library.listSorts,
-                    hiddenSongs = (it["hiddenSongs"] as? JsonArray)?.mapNotNull { path -> path.text()?.takeIf(String::isNotBlank) }?.distinct() ?: d.library.hiddenSongs,
+                    hiddenSongs = (it["hiddenSongs"] as? JsonArray)?.let(::hiddenSongs) ?: d.library.hiddenSongs,
                 )
             } ?: d.library,
             lyrics = root.section("lyrics")?.let {
@@ -456,6 +459,16 @@ object SettingsJson {
             else -> ListSort(SortSongs.entries.firstOrNull { it.name == key } ?: return@mapNotNull null, sort.flag("reversed", false))
         }
     }.toMap()
+
+    /**
+     * The hidden songs as stored, each by its path with MediaStore's id as a hint (the library finds a song renamed or
+     * moved by it, as it finds a playlist's), the first entry of each path; a bare path reads as one without an id.
+     */
+    private fun hiddenSongs(stored: JsonArray): List<SongRef> = stored.mapNotNull { item ->
+        val song = item as? JsonObject ?: return@mapNotNull item.text()?.takeIf(String::isNotBlank)?.let(::SongRef)
+        val path = song["path"]?.text()?.takeIf(String::isNotBlank) ?: return@mapNotNull null
+        SongRef(path, (song["id"] as? JsonPrimitive)?.takeUnless { it.isString }?.longOrNull)
+    }.distinctBy { it.path }
 
     /** A page's own order (an album's tracks, a playlist's custom order) as stored. */
     private const val OWN_ORDER: String = "OWN"
@@ -518,6 +531,9 @@ object SettingsJson {
     }.distinctBy { it.associationId }
 
     private fun JsonObject.section(key: String): JsonObject? = this[key] as? JsonObject
+
+    /** [this] without its null values: a hidden song without an id hint has no "id". */
+    private fun JsonObject.withoutNulls(): JsonObject = JsonObject(filterValues { it !is JsonNull })
 
     private fun JsonObject.flag(key: String, default: Boolean): Boolean = (this[key] as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull ?: default
 

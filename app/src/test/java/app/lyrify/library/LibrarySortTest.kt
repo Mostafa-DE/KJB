@@ -44,6 +44,19 @@ class LibrarySortTest {
         assertEquals(listOf("Part 1", "Part 9", "Part 10"), titles(folder.songs))
     }
 
+    @Test
+    fun `an album's songs without track numbers and an artist's albums of one year go in natural order too`() {
+        val ten = song("Music/Vols/b.mp3", title = "Vol. 10", album = "Volumes", artist = "Kit Calloway", year = 2020)
+        val two = song("Music/Vols/a.mp3", title = "Vol. 2", album = "Volumes", artist = "Kit Calloway", year = 2020)
+        val later = song("Music/Vols 10/a.mp3", title = "Opening", album = "Part 10", artist = "Mira Solen", year = 2021)
+        val earlier = song("Music/Vols 2/a.mp3", title = "Closing", album = "Part 2", artist = "Mira Solen", year = 2021)
+        val library = Library.of(listOf(ten, two, later, earlier), Settings())
+
+        assertEquals(listOf("Vol. 2", "Vol. 10"), titles(library.album(albumKey(ten)!!)!!.songs))
+        assertEquals(listOf("Part 2", "Part 10"), library.artist("Mira Solen")!!.albums.map { it.title })
+        assertEquals(listOf("Closing", "Opening"), titles(library.artist("Mira Solen")!!.songs))
+    }
+
     // Each key: first direction, reversed, ties, and no value last
 
     @Test

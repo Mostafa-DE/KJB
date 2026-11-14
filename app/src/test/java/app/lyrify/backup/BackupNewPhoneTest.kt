@@ -321,17 +321,19 @@ class BackupNewPhoneTest {
 
     @Test
     fun `hidden songs come back hidden on their new paths, with the new phone's own hidden songs kept, and none counts as not found`() {
-        val old = oldPhone().apply { this.settings = this.settings.copy(library = this.settings.library.copy(hiddenSongs = listOf(steps.path, moon.path, VOLUME_GONE))) }
-        val phone = newPhone().apply { this.settings = this.settings.copy(library = LibrarySettings(hiddenSongs = listOf(stranger.path))) }
+        val old = oldPhone().apply { this.settings = this.settings.copy(library = this.settings.library.copy(hiddenSongs = listOf(steps.ref, moon.ref, VOLUME_GONE))) }
+        val phone = newPhone().apply { this.settings = this.settings.copy(library = LibrarySettings(hiddenSongs = listOf(stranger.ref))) }
 
         val result = move(old = old, phone = phone)
 
-        // Glass Steps found by its tags in another folder, Copper Moon by its path below the root; the one gone is let go.
-        assertEquals(listOf(stranger.path, newSteps.path, newMoon.path), phone.settings.library.hiddenSongs)
+        // Glass Steps found by its tags in another folder, Copper Moon by its path below the root, each with this phone's
+        // id; the one gone is let go.
+        assertEquals(listOf(stranger.ref, newSteps.ref, newMoon.ref), phone.settings.library.hiddenSongs)
         assertEquals(0, result.notFound)
-        // The songs file of the backup names them, so another phone can find them.
+        // The songs file of the backup names them, so another phone can find them; the old phone's ids stay behind.
         val bytes = ByteArrayOutputStream().also { BackupBundle.write(runBlocking { old.snapshot() }, oldLibrary, VERSION, T0, it) }.toByteArray()
         assertEquals(true, BackupFixtures.contents(bytes).songs.map { it.path }.containsAll(listOf(steps.path, moon.path)))
+        assertEquals(listOf(SongRef(steps.path), SongRef(moon.path), SongRef(VOLUME_GONE.path)), BackupFixtures.contents(bytes).settings?.library?.hiddenSongs)
     }
 
     @Test
@@ -720,7 +722,7 @@ class BackupNewPhoneTest {
         const val NEW: String = "/storage/7F3A-11C2/"
 
         /** A song hidden on the old phone that is on neither phone any more. */
-        const val VOLUME_GONE: String = OLD + "Music/Gone/Ash Road.mp3"
+        val VOLUME_GONE: SongRef = SongRef(OLD + "Music/Gone/Ash Road.mp3", 99)
 
         /** A made-up song at [relative] below [root]. */
         fun at(root: String, relative: String, title: String, artist: String?, album: String?, durationMs: Long, id: Long, size: Long): Song = Song(

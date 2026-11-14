@@ -1,5 +1,6 @@
 package app.lyrify.settings
 
+import app.lyrify.library.SongRef
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -70,7 +71,7 @@ class SettingsStoreTest {
                 SongList.MOST_PLAYED to ListSort(SortSongs.TITLE),
                 SongList.FAVOURITES to ListSort.OWN,
             ),
-            hiddenSongs = listOf("/storage/emulated/0/Music/Odds/Glass Steps.mp3", "/storage/emulated/0/Music/Singles/Copper Moon.mp3"),
+            hiddenSongs = listOf(SongRef("/storage/emulated/0/Music/Odds/Glass Steps.mp3", 13), SongRef("/storage/emulated/0/Music/Singles/Copper Moon.mp3")),
         ),
         lyrics = LyricsSettings(showWhenLocked = true, textSize = LyricsSize.XL, textWeight = LyricsWeight.REGULAR, textAlign = LyricsAlign.CENTRE),
         playerUi = PlayerUiSettings(showLyrics = true, flipHintShown = true, recentQueueHintShown = true),
@@ -113,7 +114,7 @@ class SettingsStoreTest {
         // Every list in its usual direction, the song pages in their own order or default key; nothing hidden.
         assertEquals(listOf(false, false, false), listOf(s.library.songReversed, s.library.albumReversed, s.library.artistReversed))
         assertEquals(SongList.entries.associateWith { it.default }, SongList.entries.associateWith { s.library.sortOf(it) })
-        assertEquals(emptyList<String>(), s.library.hiddenSongs)
+        assertEquals(emptyList<SongRef>(), s.library.hiddenSongs)
         assertEquals((10..100 step 10).toList(), PlaybackSettings.PLAY_SHARES)
         assertEquals(listOf(5, 10, 15, 30), PlaybackSettings.SKIP_SECONDS)
     }
@@ -387,11 +388,15 @@ class SettingsStoreTest {
     }
 
     @Test
-    fun `hidden songs keep each path once, in the order hidden, and only paths`() {
-        val s = SettingsJson.decode("""{"library":{"hiddenSongs":["/storage/emulated/0/Music/b.mp3",4,"","/storage/emulated/0/Music/a.mp3","/storage/emulated/0/Music/b.mp3",null]}}""")
+    fun `hidden songs keep each path once with its id hint, in the order hidden, and only whole entries`() {
+        val b = "/storage/emulated/0/Music/b.mp3"
+        val a = "/storage/emulated/0/Music/a.mp3"
+        val text = """{"library":{"hiddenSongs":[{"path":"$b","id":7},4,{"path":""},{"id":9},"$a",{"path":"$b","id":8},null,""" +
+            """{"path":"/storage/emulated/0/Music/c.mp3","id":"x"}]}}"""
 
-        assertEquals(listOf("/storage/emulated/0/Music/b.mp3", "/storage/emulated/0/Music/a.mp3"), s?.library?.hiddenSongs)
-        assertEquals(emptyList<String>(), SettingsJson.decode("""{"library":{"hiddenSongs":"a.mp3"}}""")?.library?.hiddenSongs)
+        assertEquals(listOf(SongRef(b, 7), SongRef(a), SongRef("/storage/emulated/0/Music/c.mp3")), SettingsJson.decode(text)?.library?.hiddenSongs)
+        assertEquals(emptyList<SongRef>(), SettingsJson.decode("""{"library":{"hiddenSongs":"a.mp3"}}""")?.library?.hiddenSongs)
+        assertTrue(""""hiddenSongs":[{"path":"$b","id":7}]""" in SettingsJson.encode(Settings(library = LibrarySettings(hiddenSongs = listOf(SongRef(b, 7))))))
     }
 
     // A file that is not settings at all

@@ -159,7 +159,7 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
      * one not here is no song missing: it was not in any list.
      */
     private val found: Map<String, Song> = SongMatcher(phone).match(
-        Section.entries.flatMap(::paths) + contents.tones.orEmpty().map { it.songPath } + contents.settings?.library?.hiddenSongs.orEmpty(),
+        Section.entries.flatMap(::paths) + contents.tones.orEmpty().map { it.songPath } + contents.settings?.library?.hiddenSongs.orEmpty().map { it.path },
         known,
     )
 
@@ -250,7 +250,7 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
          * The settings as the backup stores them, to be read over the phone's own; the AI switch; the devices' names; the
          * hidden songs found on this phone, by their paths here.
          */
-        data class AppSettings(val stored: String, val ai: Boolean?, val connectNames: List<String>, val hidden: List<String>) : Prepared
+        data class AppSettings(val stored: String, val ai: Boolean?, val connectNames: List<String>, val hidden: List<SongRef>) : Prepared
 
         /** Each tone whose song is here, on its path here, and how many are not ([songsMissing]). */
         data class Tones(val tones: List<BackupTone>, val songsMissing: Int) : Prepared
@@ -294,7 +294,7 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
             contents.settingsStored ?: SettingsJson.encode(checkNotNull(contents.settings)),
             contents.aiLyrics,
             contents.connectNames,
-            contents.settings?.library?.hiddenSongs.orEmpty().mapNotNull { found[it]?.path },
+            contents.settings?.library?.hiddenSongs.orEmpty().mapNotNull { found[it.path]?.ref },
         )
         // A tone keeps the song it was cut from, to open it again: one whose song is not here is left out, never kept
         // on a path of the old phone.
@@ -390,7 +390,7 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
      * notifications denial) and the devices Android linked to it. Its hidden songs stay hidden, and the backup's [hidden]
      * ones (on their paths here) join them.
      */
-    private fun overPhone(stored: String, phone: Settings, hidden: List<String>): Settings {
+    private fun overPhone(stored: String, phone: Settings, hidden: List<SongRef>): Settings {
         val read = SettingsJson.decode(stored, base = phone) ?: phone
         val nav = read.nav.copy(
             setupDone = phone.nav.setupDone,
@@ -398,7 +398,7 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
             notificationsDenied = phone.nav.notificationsDenied,
             notificationDenials = phone.nav.notificationDenials,
         )
-        val library = read.library.copy(hiddenSongs = (phone.library.hiddenSongs + hidden).distinct())
+        val library = read.library.copy(hiddenSongs = (phone.library.hiddenSongs + hidden).distinctBy { it.path })
         return read.copy(playback = read.playback.copy(connectDevices = phone.playback.connectDevices), backup = phone.backup, nav = nav, library = library)
     }
 

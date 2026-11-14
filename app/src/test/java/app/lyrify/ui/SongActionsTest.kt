@@ -446,32 +446,34 @@ class SongActionsTest {
 
     @Test
     fun `Hide hides the songs, says Hidden, and Undo shows again only those it hid`() = runBlocking {
-        val store = MemorySettings(Settings(library = LibrarySettings(hiddenSongs = listOf(water.path))))
+        val store = MemorySettings(Settings(library = LibrarySettings(hiddenSongs = listOf(water.ref))))
         val actions = SongActions(NoPlayback, MemoryPlaylists())
 
         val hidden = actions.hide(listOf(lantern.ref, water.ref, lantern.ref), store)
         assertEquals(Said.Hidden(2), hidden.said)
-        assertEquals(listOf(water.path, lantern.path), store.now.library.hiddenSongs)
+        // Each with its MediaStore id, so a rename or a move keeps it hidden.
+        assertEquals(listOf(water.ref, lantern.ref), store.now.library.hiddenSongs)
+        assertEquals(11L, store.now.library.hiddenSongs.last().mediaStoreId)
         // Another song hidden while the toast is up stays hidden; so does the one hidden before.
         actions.hide(listOf(bell.ref), store)
         assertTrue(hidden.undo?.invoke() == true)
-        assertEquals(listOf(water.path, bell.path), store.now.library.hiddenSongs)
+        assertEquals(listOf(water.ref, bell.ref), store.now.library.hiddenSongs)
     }
 
     @Test
     fun `Unhide in Settings shows the songs again, with Undo, and a write that fails changes nothing`() = runBlocking {
-        val store = MemorySettings(Settings(library = LibrarySettings(hiddenSongs = listOf(water.path, lantern.path))))
+        val store = MemorySettings(Settings(library = LibrarySettings(hiddenSongs = listOf(water.ref, lantern.ref))))
         val actions = SongActions(NoPlayback, MemoryPlaylists())
 
-        val shown = actions.unhide(listOf(lantern.path), store)
+        val shown = actions.unhide(listOf(lantern.ref), store)
         assertEquals(Said.Unhidden(1), shown.said)
-        assertEquals(listOf(water.path), store.now.library.hiddenSongs)
+        assertEquals(listOf(water.ref), store.now.library.hiddenSongs)
         assertTrue(shown.undo?.invoke() == true)
-        assertEquals(listOf(water.path, lantern.path), store.now.library.hiddenSongs)
+        assertEquals(listOf(water.ref, lantern.ref), store.now.library.hiddenSongs)
 
         store.fail = true
         assertEquals(Said.NotSaved, actions.hide(listOf(bell.ref), store).said)
-        assertEquals(listOf(water.path, lantern.path), store.now.library.hiddenSongs)
+        assertEquals(listOf(water.ref, lantern.ref), store.now.library.hiddenSongs)
     }
 
     @Test

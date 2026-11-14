@@ -65,6 +65,9 @@ import androidx.compose.runtime.produceState
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import app.lyrify.Lyrify
+import app.lyrify.library.needsPlays
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import app.lyrify.settings.SongList
 import app.lyrify.stats.StatsGraph
 import app.lyrify.R
@@ -107,6 +110,30 @@ import java.time.ZoneId
 fun <T> inOrder(entries: List<T>, sort: ListSort, settings: LibrarySettings, plays: Map<String, SongPlays> = emptyMap(), song: (T) -> Song): List<T> {
     val key = sort.key ?: return entries
     return entries.sortedWith(compareBy(songOrder(key, settings, sort.reversed, plays), song))
+}
+
+/**
+ * [inOrder] once the [plays] its key needs are read; null while they are not (null), so a list sorted by plays is never
+ * shown first in the order of a list without any. The own order and the other keys need none.
+ */
+fun <T> inOrderOnce(entries: List<T>, sort: ListSort, settings: LibrarySettings, plays: Map<String, SongPlays>?, song: (T) -> Song): List<T>? {
+    if (sort.key?.needsPlays == true && plays == null) return null
+    return inOrder(entries, sort, settings, plays.orEmpty(), song)
+}
+
+/**
+ * [entries] (each a song, [song] of it) in [sort], worked out off the main thread, as natural order compares names piece
+ * by piece. The own order at once; a key's order once it and the plays it needs are ready, the order shown before
+ * meanwhile (null before the first).
+ */
+@Composable
+fun <T> rememberInOrder(entries: List<T>, sort: ListSort, settings: LibrarySettings, song: (T) -> Song): List<T>? {
+    val plays = rememberPlays(sort.key?.needsPlays == true)
+    val sorted by produceState<List<T>?>(null, entries, sort, settings, plays) {
+        val ready = withContext(Dispatchers.Default) { inOrderOnce(entries, sort, settings, plays, song) }
+        if (ready != null) value = ready
+    }
+    return if (sort.key == null) entries else sorted
 }
 
 /** Only the custom order shows the handles: it is the order they change. */
@@ -188,15 +215,25 @@ fun rememberListSort(ui: LibraryUi, list: SongList): Pair<ListSort, (ListSort) -
 }
 
 /**
- * Each song's plays by its path while [needed] (a list sorted by plays), read again on each play logged; none
- * otherwise, so the other lists never wait for them.
+ * What [sort] gives once [plays] are ready (null: still read), worked out again when they or [keys] change; the order
+ * shown before meanwhile, nothing before the first. For the Albums and Artists tabs, sorted where they are drawn.
  */
 @Composable
-fun rememberPlays(needed: Boolean): Map<String, SongPlays> {
+fun <T> rememberSorted(plays: Map<String, SongPlays>?, vararg keys: Any?, sort: (Map<String, SongPlays>) -> List<T>): List<T>? {
+    val sorted by produceState(remember { plays?.let(sort) }, plays, *keys) { plays?.let { value = sort(it) } }
+    return sorted
+}
+
+/**
+ * Each song's plays by its path while [needed] (a list sorted by plays), read again on each play logged; null until the
+ * first read is done. None otherwise, so the other lists never wait for them.
+ */
+@Composable
+fun rememberPlays(needed: Boolean): Map<String, SongPlays>? {
     val context = LocalContext.current
     val written by remember(context) { StatsGraph.counter(context).written }.collectAsState()
-    val plays by produceState(emptyMap<String, SongPlays>(), needed, written) { value = if (needed) Lyrify.plays(context).everySong() else emptyMap() }
-    return plays
+    val read by produceState<Map<String, SongPlays>?>(null, needed, written) { if (needed) value = Lyrify.plays(context).everySong() }
+    return if (needed) read else emptyMap()
 }
 
 // Headings: the Songs tab heads each run of songs by its sort.

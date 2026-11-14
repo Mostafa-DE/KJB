@@ -73,7 +73,7 @@ data class FolderRow(val names: List<String>, val folder: Folder)
 class Library private constructor(
     /** Every song MediaStore lists (a debug build: its test folder only), short clips and skipped folders too. */
     val all: List<Song>,
-    /** The library's songs, in path order ([Folder.allSongs]): [all] without short clips and skipped folders. */
+    /** The library's songs, in path order ([Folder.allSongs]): [all] without hidden songs, short clips and skipped folders. */
     val songs: List<Song>,
     /** By title. */
     val albums: List<Album>,
@@ -85,14 +85,13 @@ class Library private constructor(
     val genres: List<Genre>,
     /** The Folders tab: [Folder.rows] of the root. */
     val root: Folder,
+    /** Finds songs again among [all], hidden ones too: a queue or playlist keeps a song the filters hide. */
+    val resolver: SongResolver,
 ) {
     private val byPath: Map<String, Song> = songs.associateBy { it.path }
     private val albumsByKey: Map<String, Album> = albums.associateBy { it.key }
     private val artistsByName: Map<String, Artist> = artists.associateBy { it.name }
     private val genresByName: Map<String, Genre> = genres.associateBy { it.name }
-
-    /** Finds songs again among [all], hidden ones too: a queue or playlist keeps a song the filters hide. */
-    val resolver: SongResolver by lazy { SongResolver(all) }
 
     fun album(key: String): Album? = albumsByKey[key]
 
@@ -120,7 +119,10 @@ class Library private constructor(
         /** The library of [all] under [settings]' "Hidden songs", "Skip short clips" and "Folders to skip". */
         fun of(all: List<Song>, settings: Settings): Library {
             val collator = collator()
-            val hidden = settings.library.hiddenSongs.toHashSet()
+            val resolver = SongResolver(all)
+            // A hidden song is found as a playlist's is: by its path, then by its id on the same volume, so a rename or a
+            // move in place keeps it hidden.
+            val hidden = settings.library.hiddenSongs.mapNotNullTo(HashSet()) { resolver.find(it)?.path }
             val root = folderOf("", "", all.filter { inLibrary(it, settings, hidden) }, collator)
             val songs = root.allSongs
             val byAlbum = songs.groupBy(::albumKey)
@@ -143,17 +145,17 @@ class Library private constructor(
                     name = name,
                     songs = its.sortedWith(
                         compareBy<Song, Int?>(nullsLast(reverseOrder())) { albumOf[it.path]?.year ?: it.year }
-                            .thenBy(nullsLast(collator)) { albumOf[it.path]?.title }
+                            .thenBy(nullsLast(nameOrder(collator))) { albumOf[it.path]?.title }
                             .then(trackOrder(collator)),
                     ),
                     albums = albums.filter { it.artist == name }
-                        .sortedWith(compareBy<Album, Int?>(nullsLast(reverseOrder())) { it.year }.thenBy(collator) { it.title }),
+                        .sortedWith(compareBy<Album, Int?>(nullsLast(reverseOrder())) { it.year }.thenBy(nameOrder(collator)) { it.title }),
                 )
             }.let { sortArtists(it, SortArtists.NAME) }
             val genres = songs.groupBy { text(it.genre) }
                 .mapNotNull { (name, its) -> name?.let { Genre(it, its) } }
                 .sortedWith(compareBy(nameOrder(collator)) { it.name })
-            return Library(all, songs, albums, byAlbum[null].orEmpty(), artists, genres, root)
+            return Library(all, songs, albums, byAlbum[null].orEmpty(), artists, genres, root, resolver)
         }
 
         /** The folder [name] at [path] holding [songs] at or below it ([Song.folder] relative to its volume). */
@@ -185,7 +187,7 @@ fun albumKey(song: Song): String? {
  * Whether [song] is in the library under [settings]: not hidden ([hidden], "Hidden songs" by path), not a short clip
  * (unless shown) and not in a folder to skip.
  */
-fun inLibrary(song: Song, settings: Settings, hidden: Set<String> = settings.library.hiddenSongs.toHashSet()): Boolean {
+fun inLibrary(song: Song, settings: Settings, hidden: Set<String> = settings.library.hiddenSongs.mapTo(HashSet()) { it.path }): Boolean {
     if (song.path in hidden) return false
     // MediaStore gives 0 when it could not read the length: that is not a short clip.
     if (settings.playback.skipShortClips && song.durationMs in 1 until Library.SHORT_CLIP_MS) return false
@@ -200,16 +202,16 @@ private fun skips(skip: String, folder: String): Boolean {
 }
 
 /** [this] with [paths] hidden too, each once, after the songs hidden before. */
-fun LibrarySettings.hiding(paths: Collection<String>): LibrarySettings {
-    val known = hiddenSongs.toHashSet()
-    val more = paths.filter { it !in known }.distinct()
+fun LibrarySettings.hiding(songs: Collection<SongRef>): LibrarySettings {
+    val known = hiddenSongs.mapTo(HashSet()) { it.path }
+    val more = songs.filter { it.path !in known }.distinctBy { it.path }
     return if (more.isEmpty()) this else copy(hiddenSongs = hiddenSongs + more)
 }
 
 /** [this] with [paths] no longer hidden. */
-fun LibrarySettings.unhiding(paths: Collection<String>): LibrarySettings {
-    val shown = paths.toHashSet()
-    return if (hiddenSongs.none { it in shown }) this else copy(hiddenSongs = hiddenSongs.filterNot { it in shown })
+fun LibrarySettings.unhiding(songs: Collection<SongRef>): LibrarySettings {
+    val shown = songs.mapTo(HashSet()) { it.path }
+    return if (hiddenSongs.none { it.path in shown }) this else copy(hiddenSongs = hiddenSongs.filterNot { it.path in shown })
 }
 
 /** [this] with "Folders to skip" taking [folder] (a [Folder.path]) too, unless it or a folder above it is skipped already. */
@@ -219,11 +221,12 @@ fun LibrarySettings.skipping(folder: String): LibrarySettings {
     return copy(foldersToSkip = foldersToSkip + path)
 }
 
-/** Settings > Hidden songs: the songs of [all] that [hidden] names, the latest hidden first; those gone from the phone left out. */
-fun hiddenSongs(all: List<Song>, hidden: List<String>): List<Song> {
-    val byPath = all.associateBy { it.path }
-    return hidden.asReversed().mapNotNull(byPath::get)
-}
+/**
+ * Settings > Hidden songs: each of the [hidden] songs as kept, with the song it is on the phone now ([Library.resolver]:
+ * the path, then the id on the same volume), the latest hidden first; those gone from the phone left out.
+ */
+fun hiddenSongs(library: Library, hidden: List<SongRef>): List<Pair<SongRef, Song>> =
+    hidden.asReversed().mapNotNull { kept -> library.resolver.find(kept)?.let { kept to it } }
 
 /** What every surface shows for [song]'s title: its file name under "Show file names", else its title. */
 fun displayTitle(song: Song, settings: LibrarySettings): String = if (settings.showFileNames) song.fileName else song.title
@@ -329,7 +332,7 @@ private fun trackOrder(collator: Collator): Comparator<Song> =
     compareBy<Song> { it.disc ?: 1 }
         .thenBy(numericOrder(collator)) { it.folder }
         .thenBy { it.track ?: Int.MAX_VALUE }
-        .thenBy(collator) { it.title }
+        .thenBy(nameOrder(collator)) { it.title }
 
 /** The album artist, or the artist without one. */
 private fun albumArtistOf(song: Song): String? = text(song.albumArtist) ?: text(song.artist)
@@ -383,7 +386,12 @@ fun compareNatural(collator: Collator, a: String, b: String): Int {
         val digitsB = Character.isDigit(b[j])
         val endA = runEnd(a, i, digitsA)
         val endB = runEnd(b, j, digitsB)
-        val order = if (digitsA && digitsB) compareNumbers(a, i, endA, b, j, endB) else collator.compare(a.substring(i, endA), b.substring(j, endB))
+        val order = when {
+            digitsA && digitsB -> compareNumbers(a, i, endA, b, j, endB)
+            // The same words, as most runs are ("Track " and "Track "): equal, without a copy for the collator.
+            endA - i == endB - j && a.regionMatches(i, b, j, endA - i) -> 0
+            else -> collator.compare(a.substring(i, endA), b.substring(j, endB))
+        }
         if (order != 0) return order
         i = endA
         j = endB

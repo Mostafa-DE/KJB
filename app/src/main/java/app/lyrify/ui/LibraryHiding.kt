@@ -54,22 +54,24 @@ import java.text.Collator
 
 /** "Hide": [songs] leave every list, search, shuffle and stats view; their files and plays stay. Undo shows again only those this hid. */
 suspend fun SongActions.hide(songs: List<SongRef>, settings: SettingsStore): Outcome {
-    val paths = songs.map { it.path }.distinct()
-    var hid = emptyList<String>()
+    val asked = songs.distinctBy { it.path }
+    var hid = emptyList<SongRef>()
     val stored = settings.update { now ->
-        hid = paths.filter { it !in now.library.hiddenSongs }
-        now.copy(library = now.library.hiding(paths))
+        val before = now.library.hiddenSongs.mapTo(HashSet()) { it.path }
+        hid = asked.filter { it.path !in before }
+        now.copy(library = now.library.hiding(asked))
     }
     if (!stored) return Outcome(Said.NotSaved)
-    return Outcome(Said.Hidden(paths.size)) { settings.update { it.copy(library = it.library.unhiding(hid)) } }
+    return Outcome(Said.Hidden(asked.size)) { settings.update { it.copy(library = it.library.unhiding(hid)) } }
 }
 
-/** "Unhide" in Settings > Hidden songs: the songs at [paths] are back in the library. Undo hides them again. */
-suspend fun SongActions.unhide(paths: List<String>, settings: SettingsStore): Outcome {
-    val asked = paths.distinct()
-    var shown = emptyList<String>()
+/** "Unhide" in Settings > Hidden songs: the [songs] as Hidden songs keeps them are back in the library. Undo hides them again. */
+suspend fun SongActions.unhide(songs: List<SongRef>, settings: SettingsStore): Outcome {
+    val asked = songs.distinctBy { it.path }
+    var shown = emptyList<SongRef>()
     val stored = settings.update { now ->
-        shown = asked.filter { it in now.library.hiddenSongs }
+        val kept = asked.mapTo(HashSet()) { it.path }
+        shown = now.library.hiddenSongs.filter { it.path in kept }
         now.copy(library = now.library.unhiding(asked))
     }
     if (!stored) return Outcome(Said.NotSaved)
@@ -176,7 +178,7 @@ fun HiddenSongsPage() {
     val actions = rememberSongActions()
     val settings = rememberSettingsStore()
     val hidden = ui.settings.library.hiddenSongs
-    val songs = remember(ui.library, hidden) { hiddenSongs(ui.library?.all.orEmpty(), hidden) }
+    val songs = remember(ui.library, hidden) { ui.library?.let { hiddenSongs(it, hidden) }.orEmpty() }
     PageFrame(topBar = { under, backdrop -> BackTopBar(stringResource(R.string.set_hidden), under, backdrop) { nav.back() } }) { padding ->
         val reduced = LocalReducedMotion.current
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = padding.calculateBottomPadding() + 24.dp)) {
@@ -193,9 +195,9 @@ fun HiddenSongsPage() {
                     EmptyState(EmptyArt.Icon(R.drawable.ic_visibility), stringResource(R.string.lib_hidden_empty_title), rowMotion(reduced), text = stringResource(R.string.lib_hidden_empty))
                 }
             }
-            items(songs, key = { "hidden ${it.path}" }, contentType = { "row" }) { song ->
+            items(songs, key = { "hidden ${it.first.path}" }, contentType = { "row" }) { (kept, song) ->
                 HiddenRow(song, ui.title(song), rowMotion(reduced)) {
-                    scope.launch { toasts.say(resources, actions.unhide(listOf(song.path), settings)) }
+                    scope.launch { toasts.say(resources, actions.unhide(listOf(kept), settings)) }
                 }
             }
         }

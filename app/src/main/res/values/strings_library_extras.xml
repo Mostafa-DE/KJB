@@ -6,6 +6,7 @@
     <string name="lib_sort_last_played">Last played</string>
     <string name="lib_sort_length">Length</string>
     <string name="lib_sort_file_name">File name</string>
+    <string name="lib_sort_album_order">Album order</string>
     <string name="lib_sort_way">Order</string>
     <string name="lib_way_a_z">A to Z</string>
     <string name="lib_way_z_a">Z to A</string>
