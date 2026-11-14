@@ -148,6 +148,22 @@ class FavouritesPageTest {
         assertEquals(FAV_HEAD_TOP.value + words + LIST_HEADER_HEIGHT.value, stacked)
     }
 
+    // Phone session 9: at font scale 2 the title was cut.
+
+    @Test
+    fun `a one-word title shrinks onto one line instead of breaking inside the word, longer ones wrap onto two`() {
+        assertEquals(1, favouritesTitleLines("Favourites"))
+        assertEquals(1, favouritesTitleLines(" Favoriten "))
+        assertEquals(2, favouritesTitleLines("Mes favoris"))
+    }
+
+    @Test
+    fun `the title shrinks to fit its lines rather than being cut, at any font scale or width`() {
+        val head = File("src/main/java/app/lyrify/ui/CollectionScreens.kt").readText().substringAfter("internal fun FavouritesHead(").substringBefore("\n}\n")
+        assertTrue("autoSize = TextAutoSize.StepBased(" in head)
+        assertTrue("maxLines = favouritesTitleLines(title)" in head)
+    }
+
     @Test
     fun `Shuffle and Play go beside the head only where what is left of the row holds the list header`() {
         val gap = FAV_HEAD_GAP.value.toInt()

@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.ContentScale
@@ -66,6 +67,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.lifecycleScope
 import app.lyrify.Lyrify
@@ -717,7 +719,15 @@ internal fun FavouritesHead(title: String, meta: String, buttons: @Composable ()
             Row(verticalAlignment = Alignment.CenterVertically) {
                 BuiltInTile(BuiltInList.FAVOURITES, FAV_TILE)
                 Column(Modifier.padding(start = FAV_HEAD_GAP)) {
-                    Text(title, style = MaterialTheme.typography.titleLarge, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.semantics { heading() })
+                    // Shrunk to fit its lines where large words would not (phone session 9: it was cut at font scale 2).
+                    val style = MaterialTheme.typography.titleLarge
+                    Text(
+                        title,
+                        style = style,
+                        maxLines = favouritesTitleLines(title),
+                        autoSize = TextAutoSize.StepBased(minFontSize = FAV_TITLE_SMALLEST, maxFontSize = style.fontSize),
+                        modifier = Modifier.semantics { heading() },
+                    )
                     Text(meta, style = FavouritesMeta.tabular(), color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 3, overflow = TextOverflow.Ellipsis)
                 }
             }
@@ -836,6 +846,9 @@ val FAV_HEAD_GAP = 12.dp
 /** The width left beside Favourites' head that the list header needs to sit on the same row: it fits 360 dp ([headerFit]). */
 val FAV_BUTTONS_BESIDE = 360.dp
 
+/** The smallest Favourites' title shrinks to, before the font scale. */
+val FAV_TITLE_SMALLEST = 11.sp
+
 /** The counts line under Favourites' title, as a hero's line of facts. */
 internal val FavouritesMeta = body(13.5f, 19)
 
@@ -849,6 +862,12 @@ fun favouritesSideBySide(width: Int, head: Int, gap: Int, beside: Int): Boolean 
  * Favourites' head's height: [top], then the heart [tile] beside the title and counts ([words], however tall the font
  * scale makes them, so they are never cut under the tile), with the list header ([buttons]) under it or beside it ([side]).
  */
+/**
+ * How many lines Favourites' title may take: one for a single word (it shrinks to fit rather than break inside the word),
+ * two for more, so large words wrap between them.
+ */
+fun favouritesTitleLines(title: String): Int = if (title.trim().contains(' ')) 2 else 1
+
 fun favouritesHeadHeight(tile: Float, words: Float, buttons: Float, side: Boolean, top: Float): Float {
     val head = maxOf(tile, words)
     return top + if (side) maxOf(head, buttons) else head + buttons
