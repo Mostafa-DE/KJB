@@ -231,6 +231,13 @@ class LyricsFromAudioTest {
     }
 
     @Test
+    fun `an NPU that does not answer in time fails the run as the phone's NPU, not the song's or a model's`() = runTest {
+        val result = engine(FakeStages(4..27, sung, npuBusy = true)).run(track, null)
+
+        assertTrue(result.toString(), result is AiResult.Failed && result.npu && result.model == null && result.message.startsWith("NpuBusyException"))
+    }
+
+    @Test
     fun `ONNX Runtime internals that fail while Whisper runs fail closed through the same NPU path`() = runTest {
         // What NpuStages throws when IoTensors cannot make a uint16 tensor (the w8a16 mel, mask): never a crash, never
         // the song's failure, never a model deleted; the night's run stops and the hold says the NPU was not usable.
@@ -331,6 +338,8 @@ class LyricsFromAudioTest {
         seconds: Int = 30,
         /** MDX segments the separation tells its progress for. */
         private val separatePieces: Int = 0,
+        /** The MDX session's creation gets no answer from the NPU in time. */
+        private val npuBusy: Boolean = false,
     ) : AiStages {
         val calls = mutableListOf<String>()
         val chunks = mutableListOf<VocalChunk>()
@@ -352,6 +361,7 @@ class LyricsFromAudioTest {
         override fun separateVocals(mix: MixSource, vocals: VocalSink, progress: Progress) {
             calls += "separate"
             if (noNpu) throw NpuUnavailableException(IllegalStateException("the QNN EP registered but offers no NPU device"))
+            if (npuBusy) throw NpuBusyException("MDX session", 480_000)
             failLoad?.let { throw ModelLoadException(it, IllegalStateException("QNN graph finalize failed")) }
             unfit?.let { throw it }
             val l = FloatArray(7_000)

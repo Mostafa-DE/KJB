@@ -541,6 +541,20 @@ class AiNightTest {
         assertEquals(1, closed)
     }
 
+    @Test
+    fun `an NPU another app holds leaves the song for later, with nothing recorded, no death and no hold`() = runTest {
+        val song = waiting("Song", updatedAt = now - 1)
+        val before = memory[song.path]
+        results = { AiResult.Failed("NpuBusyException: MDX session: no answer from the NPU within 480 s; another app may be using it", npu = true) }
+
+        assertEquals(AiRunEnd.NO_NPU, runner().run())
+
+        assertEquals(before, memory[song.path])
+        assertEquals(0, guard.open(checkNotNull(before)).deaths)
+        assertEquals(GuardVerdict.NONE, guard.verdict())
+        assertTrue(logs.toString(), logs.any { "NPU could not be used" in it && "trying again later" in it })
+    }
+
     // Songs the app died in
 
     @Test

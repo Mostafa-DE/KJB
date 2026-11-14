@@ -39,6 +39,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import kotlin.coroutines.CoroutineContext
 
@@ -132,6 +133,8 @@ class AddonJobs(
     private val endProcess: (stage: AiStage?) -> Unit = {},
     /** Debug builds' logcat: jobs, stages, counts and times, never a song, a path or lyrics. */
     private val debug: (String) -> Unit = {},
+    /** Waits up to [ms] for [job] to end, blocking (the main thread, in onUnbind); whether it did. */
+    private val waitForEnd: (job: Job, ms: Long) -> Boolean = { _, _ -> false },
     private val openEngine: (notes: (String) -> Unit) -> JobEngine,
 ) {
     private val lock = Any()
@@ -141,6 +144,10 @@ class AddonJobs(
 
     /** Set by [shutDown] while a job is mid-step: the engine closes as that job ends. */
     private var closeAfterJob = false
+
+    /** Set by [abandoned]: a native step was left on its thread, holding the NPU until the process ends. */
+    @Volatile
+    private var stepLeftBehind = false
 
     /** The last job that ended with a result, and that result ([result]): for a callback lost or too long. */
     private var kept: Pair<Long, AiResult>? = null
@@ -269,13 +276,23 @@ class AddonJobs(
     /**
      * The last client left (onUnbind, onDestroy): the NPU sessions close now, on the caller's thread, with nothing left
      * to a scope the service is about to cancel. A job mid-step is cancelled and closes them as it ends (a native step
-     * cannot be cut short; closing under it would free what it uses), or the process ends ([stop]).
+     * cannot be cut short; closing under it would free what it uses), waited for up to [SHUTDOWN_WAIT_MS]; a step that
+     * has not ended by then, or a native step left behind ([abandoned]), ends the process. Decided here, during the
+     * unbind: an add-on no client binds is cached, and Android 14+ freezes a cached process 10 s later, so a check made
+     * later might never run.
      */
     fun shutDown() {
         val run = synchronized(lock) {
             running.also { if (it == null) closeNow() else closeAfterJob = true }
-        } ?: return
-        stop(run, "the last client left")
+        }
+        if (run != null) {
+            stop(run, "the last client left")
+            if (!waitForEnd(run.job, SHUTDOWN_WAIT_MS)) {
+                endProcess(run.stage)
+                return
+            }
+        }
+        if (stepLeftBehind) endProcess(run?.stage)
     }
 
     /**
@@ -288,6 +305,18 @@ class AddonJobs(
         later(STEP_END_MS) {
             if (!run.job.isCompleted) endProcess(run.stage)
         }
+    }
+
+    /**
+     * A native step was left on its thread past its deadline ([NativeDeadline]: an NPU that did not answer): it holds the
+     * NPU and its memory until the process ends. The job goes on and tells KJB (the NPU busy, try later); the process ends
+     * when the last client leaves ([shutDown]), or [ABANDONED_END_MS] later while one stays bound.
+     */
+    fun abandoned() {
+        stepLeftBehind = true
+        val stage = synchronized(lock) { running?.stage }
+        debug("a native step in ${stage?.name?.lowercase() ?: "no job"} was left behind: the process ends when KJB lets go")
+        later(ABANDONED_END_MS) { endProcess(stage) }
     }
 
     /** Releases the engine's sessions. Called holding [lock]. */
@@ -315,6 +344,18 @@ class AddonJobs(
          * and a job stopped then has nothing to keep: its process ending sooner only frees the NPU sooner.
          */
         const val STEP_END_MS: Long = 10_000
+
+        /**
+         * How long the last client leaving waits (on the main thread, in onUnbind) for a stopped job's step to end before
+         * the process ends instead: an MDX segment or a Whisper chunk (3.6 s at most seen) ends within it.
+         */
+        const val SHUTDOWN_WAIT_MS: Long = 5_000
+
+        /**
+         * How long a process with a native step left behind lives on while a client stays bound: KJB has the job's end
+         * (the NPU busy) long before, and ends its run and lets go at once.
+         */
+        const val ABANDONED_END_MS: Long = 30_000
     }
 }
 
@@ -354,6 +395,8 @@ class AiService : Service() {
                 Process.killProcess(Process.myPid())
             },
             debug = debug,
+            // In onUnbind, on the main thread: the job runs on Dispatchers.Default.
+            waitForEnd = { job, ms -> runBlocking { withTimeoutOrNull(ms) { job.join() } } != null },
             openEngine = ::engine,
         )
     }
@@ -549,7 +592,15 @@ class AiService : Service() {
     /** The engine on the NPU with this add-on's models; its notes go to KJB's run log. */
     private fun engine(notes: (String) -> Unit): JobEngine {
         val models = checkNotNull(ModelDownloads.store(this)?.models()) { "the models are not in place" }
-        val stages = NpuStages(models, applicationInfo.nativeLibraryDir, whisperAssets(), ENGINE_THREADS, log = notes, debug = debug)
+        val stages = NpuStages(
+            models,
+            applicationInfo.nativeLibraryDir,
+            whisperAssets(),
+            ENGINE_THREADS,
+            log = notes,
+            debug = debug,
+            deadline = NativeDeadline(abandoned = jobs::abandoned),
+        )
         val lyrics = LyricsFromAudio(
             stages,
             SystemClock::elapsedRealtime,

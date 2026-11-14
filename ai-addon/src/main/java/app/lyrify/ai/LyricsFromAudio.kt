@@ -150,6 +150,10 @@ class LyricsFromAudio(
             log("the NPU is not available: ${e.javaClass.simpleName}")
             trace(e)
             failed(e).copy(npu = true)
+        } catch (e: NpuBusyException) {
+            // Another app holding the NPU: the phone's, for now, as an NPU not available; the song is tried again later.
+            log("the NPU is busy: ${e.javaClass.simpleName}")
+            failed(e).copy(npu = true)
         } catch (e: Exception) {
             log("AI failed: ${e.javaClass.simpleName}")
             trace(e)

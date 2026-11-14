@@ -430,6 +430,7 @@ class AiServiceTest {
         StandardTestDispatcher(testScheduler),
         later = { ms, check -> checks += ms to check },
         endProcess = { ended += it },
+        waitForEnd = waitingFor(),
     ) {
         object : JobEngine {
             override suspend fun run(song: AiSong, plainLyrics: String?, onStage: (AiStage) -> Unit, onProgress: (Int, Int) -> Unit, beforeChunk: suspend () -> Unit): AiResult {
@@ -443,21 +444,61 @@ class AiServiceTest {
         }
     }
 
+    /** The main thread's wait in onUnbind, in virtual time: what is due runs, then whether the job has ended. */
+    private fun TestScope.waitingFor(): (Job, Long) -> Boolean = { job, _ ->
+        testScheduler.runCurrent()
+        job.isCompleted
+    }
+
     @Test
-    fun `a job whose step does not end 10 s after the last client left ends the add-on's process`() = runTest {
+    fun `the last client leaving while a job's step does not end ends the process before onUnbind returns`() = runTest {
         val step = CompletableDeferred<Unit>()
         val jobs = stuckJobs(step)
         jobs.start(song, null, { Heard() }) {}
         runCurrent()
 
         jobs.shutDown()
-        runCurrent()
 
-        assertEquals(listOf(AddonJobs.STEP_END_MS), checks.map { it.first })
-        assertEquals("not before the 10 s", emptyList<AiStage?>(), ended)
-        checks.single().second()
+        // Decided there and then: a process cached for 10 s is frozen (Android 14+), and a later check would never run.
         assertEquals(listOf<AiStage?>(AiStage.SEPARATE), ended)
         step.complete(Unit)
+    }
+
+    @Test
+    fun `the last client leaving while a job waits at a chunk stops it and closes the models, keeping the process`() = runTest {
+        val jobs = AddonJobs(backgroundScope, StandardTestDispatcher(testScheduler), endProcess = { ended += it }, waitForEnd = waitingFor()) { notes ->
+            FakeEngine(notes).also { engines += it }
+        }
+        val heard = Heard()
+        jobs.start(song, null, { heard }) {}
+        runCurrent()
+
+        jobs.shutDown()
+
+        assertEquals("stopped", heard.events.last())
+        assertTrue(engines.single().closed)
+        assertEquals(emptyList<AiStage?>(), ended)
+    }
+
+    @Test
+    fun `a native step left behind ends the process when the last client leaves, or soon after while one stays`() = runTest {
+        val jobs = AddonJobs(
+            backgroundScope,
+            StandardTestDispatcher(testScheduler),
+            later = { ms, check -> checks += ms to check },
+            endProcess = { ended += it },
+            waitForEnd = waitingFor(),
+        ) { notes -> FakeEngine(notes, chunks = 0) }
+        jobs.start(song, null, { Heard() }) {}
+        runCurrent()
+
+        jobs.abandoned()
+        assertEquals(listOf(AddonJobs.ABANDONED_END_MS), checks.map { it.first })
+        checks.single().second()
+        assertEquals(1, ended.size)
+
+        jobs.shutDown()
+        assertEquals(2, ended.size)
     }
 
     @Test

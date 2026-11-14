@@ -21,6 +21,10 @@ import java.lang.reflect.Modifier
 import java.nio.Buffer
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.FutureTask
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
 
 /*
  * The NPU side of the engine, ported from lyrify-npu-spike (npu/WhisperNpu.kt), which measured it on the phone: the QNN
@@ -124,6 +128,37 @@ class QnnEp private constructor(private val npuDevices: List<OrtEpDevice>, priva
             val npu = Ort.env.epDevices.filter { it.epName == NAME && it.device.type == OrtHardwareDevice.OrtHardwareDeviceType.NPU }
             check(npu.isNotEmpty()) { "the QNN EP registered but offers no NPU device" }
             return QnnEp(npu, nativeLibDir)
+        }
+    }
+}
+
+/**
+ * [what] got no answer from the NPU within [ms]: it is held, most likely by another app running a model on it. The step's
+ * thread is left behind (native work cannot be stopped) and the add-on's process ends ([NativeDeadline]); the song is tried
+ * again later. The message holds the step's name and the time only.
+ */
+class NpuBusyException(what: String, ms: Long) : Exception("$what: no answer from the NPU within ${ms / 1000} s; another app may be using it")
+
+/**
+ * A deadline for native NPU work no stop reaches (creating a session on the HTP): another app holding the NPU can block it
+ * for good, using no CPU. [within] runs the work on its own thread ([start]) and waits; past the deadline it tells
+ * [abandoned] (the thread holds the NPU and its memory until the process ends) and throws [NpuBusyException].
+ */
+class NativeDeadline(
+    private val abandoned: () -> Unit,
+    private val start: (Runnable) -> Unit = { work -> Thread(work, "KJB-npu").apply { isDaemon = true }.start() },
+) {
+    fun <T> within(what: String, ms: Long, work: () -> T): T {
+        val task = FutureTask(work)
+        start(task)
+        return try {
+            task.get(ms, TimeUnit.MILLISECONDS)
+        } catch (_: TimeoutException) {
+            abandoned()
+            throw NpuBusyException(what, ms)
+        } catch (e: ExecutionException) {
+            // The work's own failure (a model that did not load), as it would have thrown on this thread.
+            throw e.cause ?: e
         }
     }
 }
