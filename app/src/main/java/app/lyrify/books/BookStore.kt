@@ -438,6 +438,7 @@ class BookStore(private val storage: BookStorage, private val scope: CoroutineSc
 /** The books' objects, built by hand, one of each per process. */
 object BooksGraph {
     private var store: BookStore? = null
+    private var chapters: BookChapters? = null
 
     /** `books.json` in app-private `files/datastore/`, a copy of an unreadable one in `files`. */
     @Synchronized
@@ -447,4 +448,12 @@ object BooksGraph {
         val files = booksStore(app.dataStoreFile("books.json"), app.filesDir, CoroutineScope(Dispatchers.IO + SupervisorJob()), System::currentTimeMillis, log)
         BookStore(BookFiles(files, Dispatchers.IO, log), CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + logFailures), log)
     }.also { store = it }
+
+    /** The single files' chapters, read by Media3 and kept in `books.json`. */
+    @Synchronized
+    fun chapters(context: Context): BookChapters = chapters ?: run {
+        val app = context.applicationContext
+        val log: (String) -> Unit = { Log.w(LOG_TAG, it) }
+        BookChapters(store(app), Media3Chapters(app, log), CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + logFailures), log)
+    }.also { chapters = it }
 }
