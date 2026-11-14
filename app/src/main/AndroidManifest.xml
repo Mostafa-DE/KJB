@@ -267,5 +267,19 @@
             android:authorities="${applicationId}.covers"
             android:exported="false"
             android:grantUriPermissions="true" />
+
+        <!-- share -->
+        <!-- Share lyrics > Lyrics file (ui/Share.kt): the .lrc goes as a copy in KJB's cache, the one folder this provider
+             serves (xml/share_paths.xml). Not exported: the app the user picks in the share sheet may read that one file.
+             Songs go as MediaStore's own content URIs and need no provider. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.share"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/share_paths" />
+        </provider>
     </application>
 </manifest>

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Share (ui/Share.kt): the one folder KJB's FileProvider serves, its cache's share/, where a .lrc is copied to be shared.
+     Songs go as MediaStore's content URIs, so no folder of your phone's storage is served. -->
+<paths>
+    <cache-path name="lyrics" path="share/" />
+</paths>
