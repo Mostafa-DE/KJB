@@ -110,6 +110,11 @@
         <package android:name="com.google.android.deskclock" />
         <!-- The AI add-on: without it Android would show it to KJB as not installed, and refuse the bind. -->
         <package android:name="${aiAddonPackage}" />
+        <!-- KJB's own update (update/Updates.kt): the phone's package installer, whatever its name, so KJB can check that
+             the install confirmation it starts is that installer's own. -->
+        <intent>
+            <action android:name="android.content.pm.action.CONFIRM_INSTALL" />
+        </intent>
     </queries>
 
     <!-- largeHeap: was for the AI lyrics engine, which now runs in the AI add-on (its own process, its own large heap).

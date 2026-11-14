@@ -1,5 +1,9 @@
 package app.lyrify.update
 
+import android.content.pm.PackageInstaller
+import android.content.pm.PackageManager
+import app.lyrify.addon.InstallOutcome
+import app.lyrify.addon.InstallVerdict
 import app.lyrify.settings.AboutSettings
 import app.lyrify.settings.Settings
 import app.lyrify.settings.SettingsJson
@@ -11,17 +15,23 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.IOException
 import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URI
+import java.security.MessageDigest
 
 /** KJB's update check: GitHub's latest release read, compared, checked and asked at most once a day, against fakes. */
 @OptIn(ExperimentalCoroutinesApi::class)
 class UpdatesTest {
+    @get:Rule
+    val temp = TemporaryFolder()
+
     private val sha = "AB".repeat(32)
 
     private fun asset(name: String, size: Long = 81_000_000, digest: String? = "sha256:$sha", state: String = "uploaded", url: String? = null): String {
@@ -62,7 +72,7 @@ class UpdatesTest {
 
     @Test
     fun `the latest release is read with KJB's own APK, its size and its SHA-256`() {
-        val read = Releases.parse(release())!!
+        val read = Releases.parse(release(), REPO)!!
         assertEquals("3.0.1", read.version)
         assertEquals(ReleaseApk("https://github.com/Mostafa-DE/Lyrify/releases/download/v3.0.1/KJB-3.0.1.apk", 81_000_000, sha.lowercase()), read.apk)
         assertEquals("New\n• Made-up change one\n• Made-up change two", read.notes)
@@ -70,16 +80,18 @@ class UpdatesTest {
 
     @Test
     fun `a draft, a pre-release, a tag that is no version or text that is no release is no release`() {
-        assertNull(Releases.parse(release(draft = true)))
-        assertNull(Releases.parse(release(prerelease = true)))
-        assertNull(Releases.parse(release(tag = "nightly")))
-        assertNull(Releases.parse("<html>"))
-        assertNull(Releases.parse("[]"))
+        assertNull(Releases.parse(release(draft = true), REPO))
+        assertNull(Releases.parse(release(prerelease = true), REPO))
+        assertNull(Releases.parse(release(tag = "nightly"), REPO))
+        assertNull(Releases.parse("<html>", REPO))
+        assertNull(Releases.parse("[]", REPO))
     }
 
     @Test
     fun `an APK KJB cannot check is no APK to install`() {
-        fun apkOf(vararg assets: String) = Releases.parse(release(assets = assets.toList()))!!.apk
+        fun apkOf(vararg assets: String) = Releases.parse(release(assets = assets.toList()), REPO)!!.apk
+        assertNull("another repository's", apkOf(asset("KJB-3.0.1.apk", url = "https://github.com/Someone/Else/releases/download/v3.0.1/KJB-3.0.1.apk")))
+        assertNull("not a release download", apkOf(asset("KJB-3.0.1.apk", url = "https://github.com/Mostafa-DE/Lyrify/raw/main/releases/download/KJB-3.0.1.apk")))
         assertNull("no SHA-256 published", apkOf(asset("KJB-3.0.1.apk", digest = null)))
         assertNull("another digest", apkOf(asset("KJB-3.0.1.apk", digest = "sha512:$sha")))
         assertNull("too large", apkOf(asset("KJB-3.0.1.apk", size = Releases.MAX_APK_BYTES + 1)))
@@ -118,6 +130,69 @@ class UpdatesTest {
         assertFalse("another key", isKjbUpdate(own, ApkSigning("app.lyrify", 11, setOf("bb"))))
         assertFalse("another key besides", isKjbUpdate(own, ApkSigning("app.lyrify", 11, setOf("aa", "bb"))))
         assertFalse("unsigned", isKjbUpdate(ApkSigning("app.lyrify", 10, emptySet()), ApkSigning("app.lyrify", 11, emptySet())))
+    }
+
+    @Suppress("DEPRECATION")
+    @Test
+    fun `before Android 13 the archive's certificates are asked for the older way too`() {
+        assertEquals(PackageManager.GET_SIGNING_CERTIFICATES or PackageManager.GET_SIGNATURES, archiveSigningFlags(32))
+        assertEquals(PackageManager.GET_SIGNING_CERTIFICATES or PackageManager.GET_SIGNATURES, archiveSigningFlags(30))
+        assertEquals(PackageManager.GET_SIGNING_CERTIFICATES, archiveSigningFlags(33))
+    }
+
+    @Test
+    fun `the signers are the current certificates, else the older field's, as SHA-256`() {
+        val a = byteArrayOf(1, 2)
+        val b = byteArrayOf(3)
+        val aHex = MessageDigest.getInstance("SHA-256").digest(a).joinToString("") { "%02x".format(it) }
+        val bHex = MessageDigest.getInstance("SHA-256").digest(b).joinToString("") { "%02x".format(it) }
+        assertEquals(setOf(aHex), signerDigests(current = listOf(a), legacy = listOf(b)))
+        assertEquals("no signing info: the signatures field", setOf(bHex), signerDigests(current = null, legacy = listOf(b)))
+        assertEquals(setOf(bHex), signerDigests(current = emptyList(), legacy = listOf(b)))
+        assertEquals(emptySet<String>(), signerDigests(current = null, legacy = null))
+    }
+
+    @Test
+    fun `an APK is checked whole against the release's SHA-256 before its signing, downloaded now or before`() {
+        val file = temp.newFile("KJB.apk").apply { writeBytes(byteArrayOf(7, 7, 7)) }
+        val right = MessageDigest.getInstance("SHA-256").digest(byteArrayOf(7, 7, 7)).joinToString("") { "%02x".format(it) }
+        val own = ApkSigning("app.lyrify", 10, setOf("aa"))
+        var read = 0
+        val update: (File) -> ApkSigning? = { read++; ApkSigning("app.lyrify", 11, setOf("aa")) }
+
+        assertFalse("same size, other bytes", verifiedUpdate(file, "00".repeat(32), own, update))
+        assertEquals("the signing is not even read", 0, read)
+        assertTrue(verifiedUpdate(file, right, own, update))
+        assertTrue(verifiedUpdate(file, right.uppercase(), own, update))
+        assertFalse("signed by another key", verifiedUpdate(file, right, own) { ApkSigning("app.lyrify", 11, setOf("bb")) })
+        assertFalse("gone", verifiedUpdate(File(temp.root, "gone.apk"), right, own, update))
+    }
+
+    // One update at a time
+
+    @Test
+    fun `one update install at a time, the one before cancelled when another release is asked for`() {
+        val cancelled = mutableListOf<String>()
+        val made = mutableListOf<String>()
+        val one = SingleInstall(make = { key: String -> made += key; "installer $key" }, cancel = { cancelled += it })
+
+        assertEquals("installer a", one.get("a"))
+        assertEquals("installer a", one.get("a"))
+        assertEquals("installer b", one.get("b"))
+
+        assertEquals(listOf("a", "b"), made)
+        assertEquals(listOf("installer a"), cancelled)
+    }
+
+    // The confirmation
+
+    @Test
+    fun `the install dialog opens only when the phone's own installer asks`() {
+        val asks = InstallVerdict.Confirm("com.example.installer", 7)
+        assertEquals(asks, confirmFrom(asks) { it == "com.example.installer" })
+        assertEquals(InstallVerdict.End(InstallOutcome.Failed(PackageInstaller.STATUS_FAILURE)), confirmFrom(asks) { false })
+        val ends = InstallVerdict.End(InstallOutcome.Installed)
+        assertEquals(ends, confirmFrom(ends) { false })
     }
 
     // Once a day
@@ -232,7 +307,7 @@ class UpdatesTest {
     }
 
     private var now = 100 * DAY
-    private val newer = Releases.parse(release())!!
+    private val newer = Releases.parse(release(), REPO)!!
 
     private fun TestScope.checker(port: FakePort, installed: String = "3.0.0", addonOffered: String? = null) =
         UpdateChecker(port, installed, addonOffered, { now }, backgroundScope)
@@ -345,6 +420,7 @@ class UpdatesTest {
     }
 
     private companion object {
+        const val REPO: String = "Mostafa-DE/Lyrify"
         const val HOUR: Long = 60 * 60_000L
         const val DAY: Long = 24 * HOUR
     }

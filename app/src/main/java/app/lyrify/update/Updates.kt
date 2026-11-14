@@ -85,9 +85,10 @@ object Releases {
     /**
      * The release in [json] (GitHub's `releases/latest`); null when it is not one, a draft or a pre-release, or its tag
      * is not a version ("v3.0.1"). Its APK is the asset named `KJB-<version>.apk` (the build's own name for it), uploaded,
-     * of a size up to [MAX_APK_BYTES], with a published SHA-256, on github.com over https; else none.
+     * of a size up to [MAX_APK_BYTES], with a published SHA-256, a release download of [repo] ("owner/name") on github.com
+     * over https; else none.
      */
-    fun parse(json: String): Release? {
+    fun parse(json: String, repo: String): Release? {
         val root = try {
             JSON.parseToJsonElement(json) as? JsonObject
         } catch (_: SerializationException) {
@@ -96,23 +97,23 @@ object Releases {
         if (root.flag("draft") || root.flag("prerelease")) return null
         val version = root.text("tag_name")?.let(TAG::matchEntire)?.groupValues?.get(1) ?: return null
         val assets = (root["assets"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
-        val apk = assets.firstOrNull { it.text("name") == "KJB-$version.apk" }?.let(::apkOf)
+        val apk = assets.firstOrNull { it.text("name") == "KJB-$version.apk" }?.let { apkOf(it, repo) }
         return Release(version, plainNotes(root.text("body").orEmpty()), apk)
     }
 
-    private fun apkOf(asset: JsonObject): ReleaseApk? {
+    private fun apkOf(asset: JsonObject, repo: String): ReleaseApk? {
         if (asset.text("state") != "uploaded") return null
         val bytes = (asset["size"] as? JsonPrimitive)?.takeUnless { it.isString }?.longOrNull?.takeIf { it in 1..MAX_APK_BYTES } ?: return null
         val sha = sha256(asset.text("digest")) ?: return null
-        val url = asset.text("browser_download_url")?.takeIf(::onGitHub) ?: return null
+        val url = asset.text("browser_download_url")?.takeIf { onGitHub(it, repo) } ?: return null
         return ReleaseApk(url, bytes, sha)
     }
 
-    /** A release download on github.com over https (the downloader checks every redirect again). */
-    private fun onGitHub(url: String): Boolean = try {
+    /** A release download of [repo] on github.com over https (the downloader checks every redirect again). */
+    private fun onGitHub(url: String, repo: String): Boolean = try {
         val uri = URI(url)
         uri.scheme == "https" && uri.host.equals("github.com", ignoreCase = true) && (uri.port == -1 || uri.port == HTTPS_PORT) &&
-            uri.rawUserInfo == null && "/releases/download/" in uri.path.orEmpty()
+            uri.rawUserInfo == null && uri.rawPath.orEmpty().startsWith("/$repo/releases/download/", ignoreCase = true) && "/../" !in uri.rawPath
     } catch (_: URISyntaxException) {
         false
     }
@@ -149,6 +150,72 @@ object Releases {
 
     private const val HTTPS_PORT = 443
 }
+
+/**
+ * The flags that read an APK file's signing certificates ([PackageManager.getPackageArchiveInfo]) on [sdk]. Before
+ * Android 13 the deprecated GET_SIGNATURES is asked for too, so the certificates are there for [signerDigests]' older
+ * field on any build of those versions. (AOSP's own Android 11 and 12 collect them for either flag and fill signingInfo
+ * for GET_SIGNING_CERTIFICATES, android11-release PackageManager.getPackageArchiveInfo and android12-release
+ * ApplicationPackageManager.getPackageArchiveInfo; the review of lane F1 found builds that do not, 2026-11-15.)
+ */
+fun archiveSigningFlags(sdk: Int): Int =
+    @Suppress("DEPRECATION")
+    if (sdk < Build.VERSION_CODES.TIRAMISU) PackageManager.GET_SIGNING_CERTIFICATES or PackageManager.GET_SIGNATURES else PackageManager.GET_SIGNING_CERTIFICATES
+
+/**
+ * The SHA-256 (hex) of each signing certificate: [current] (SigningInfo's, the certificates the APK is signed with now),
+ * else, when a build leaves SigningInfo empty, [legacy] (PackageInfo.signatures). Empty without either, which no check passes.
+ */
+fun signerDigests(current: List<ByteArray>?, legacy: List<ByteArray>?): Set<String> =
+    (current?.takeIf { it.isNotEmpty() } ?: legacy.orEmpty()).map { cert -> hex(MessageDigest.getInstance("SHA-256").digest(cert)) }.toSet()
+
+/**
+ * The downloaded [file] may be installed over the KJB running ([own]): all of it is the release's [sha256] (hex, any case),
+ * whether it was downloaded now or found from before, and only then its signing, read by [archive], is checked
+ * ([isKjbUpdate]). A file that cannot be read is no update. Blocking.
+ */
+fun verifiedUpdate(file: File, sha256: String, own: ApkSigning, archive: (File) -> ApkSigning?): Boolean {
+    val whole = try {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { input ->
+            val buffer = ByteArray(HASH_BUFFER_BYTES)
+            while (true) {
+                val read = input.read(buffer)
+                if (read < 0) break
+                digest.update(buffer, 0, read)
+            }
+        }
+        hex(digest.digest())
+    } catch (_: IOException) {
+        return false
+    }
+    return whole.equals(sha256, ignoreCase = true) && isKjbUpdate(own, archive(file))
+}
+
+private fun hex(bytes: ByteArray): String = bytes.joinToString("") { "%02x".format(it) }
+
+private const val HASH_BUFFER_BYTES = 1024 * 1024
+
+/**
+ * One update install at a time: the one for [key] (a release's APK), the same while it is asked for again; another
+ * release's cancels the one before ([cancel]), so two never share the download folder.
+ */
+internal class SingleInstall<K : Any, T : Any>(private val make: (K) -> T, private val cancel: (T) -> Unit) {
+    private var current: Pair<K, T>? = null
+
+    @Synchronized
+    fun get(key: K): T {
+        current?.let { (held, installer) -> if (held == key) return installer else cancel(installer) }
+        return make(key).also { current = key to it }
+    }
+}
+
+/**
+ * [verdict] as KJB acts on it: a confirmation ([InstallReport.verdict] has checked its action and session) starts only
+ * when [isSystemInstaller] says its package is the phone's own installer; any other ends the install as failed.
+ */
+internal fun confirmFrom(verdict: InstallVerdict, isSystemInstaller: (String) -> Boolean): InstallVerdict =
+    if (verdict is InstallVerdict.Confirm && !isSystemInstaller(verdict.installer)) InstallVerdict.End(InstallOutcome.Failed(PackageInstaller.STATUS_FAILURE)) else verdict
 
 /** A day, the daily check's spacing. */
 private const val DAY_MS: Long = 24 * 60 * 60_000L
@@ -207,7 +274,7 @@ class GitHubLatest(
                 connection.setRequestProperty("Accept", "application/vnd.github+json")
                 connection.setRequestProperty("X-GitHub-Api-Version", API_VERSION)
                 when (connection.responseCode) {
-                    HttpURLConnection.HTTP_OK -> return body(connection)?.let(Releases::parse)?.let { Fetched.Answer(it) } ?: Fetched.NoAnswer
+                    HttpURLConnection.HTTP_OK -> return body(connection)?.let { Releases.parse(it, repo) }?.let { Fetched.Answer(it) } ?: Fetched.NoAnswer
                     HttpURLConnection.HTTP_NOT_FOUND -> return Fetched.Answer(null)
                     HttpURLConnection.HTTP_MOVED_PERM, HttpURLConnection.HTTP_MOVED_TEMP, TEMPORARY_REDIRECT, PERMANENT_REDIRECT -> {
                         uri = connection.getHeaderField("Location")?.let { resolve(uri, it) } ?: return Fetched.NoAnswer
@@ -356,16 +423,18 @@ class UpdateChecker(
         if (checked.release == null && checked.addon == null) null else "kjb:${checked.release?.version}/addon:${checked.addon}"
 }
 
-/** The SHA-256 (hex) of each of [info]'s signing certificates; empty without them. */
+/** The SHA-256 (hex) of each of [info]'s signing certificates ([signerDigests]); empty without them. */
 private fun signers(info: PackageInfo?): Set<String> =
-    info?.signingInfo?.apkContentsSigners.orEmpty().map { cert -> MessageDigest.getInstance("SHA-256").digest(cert.toByteArray()).joinToString("") { "%02x".format(it) } }.toSet()
+    @Suppress("DEPRECATION")
+    signerDigests(info?.signingInfo?.apkContentsSigners?.map { it.toByteArray() }, info?.signatures?.map { it.toByteArray() })
 
+/** An installed package with its signing certificates, read the same way as an APK file's ([archiveSigningFlags]). */
 private fun PackageManager.signed(packageName: String): PackageInfo? = try {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-        getPackageInfo(packageName, PackageManager.PackageInfoFlags.of(PackageManager.GET_SIGNING_CERTIFICATES.toLong()))
+        getPackageInfo(packageName, PackageManager.PackageInfoFlags.of(archiveSigningFlags(Build.VERSION.SDK_INT).toLong()))
     } else {
         @Suppress("DEPRECATION")
-        getPackageInfo(packageName, PackageManager.GET_SIGNING_CERTIFICATES)
+        getPackageInfo(packageName, archiveSigningFlags(Build.VERSION.SDK_INT))
     }
 } catch (_: PackageManager.NameNotFoundException) {
     null
@@ -406,32 +475,32 @@ private class AndroidUpdatePort(private val context: Context) : UpdatePort {
  * running ([isKjbUpdate]), and installed with a PackageInstaller session; Android's word comes back to [UpdateReceiver].
  * The install replaces KJB, so a successful one ends this process.
  */
-internal class SelfInstallPort(private val context: Context, apk: ReleaseApk) : InstallPort {
-    private val folder = File(context.cacheDir, FOLDER)
-    private val spec = ModelSpec("KJB-${apk.sha256.take(PIN_IN_NAME)}.apk", apk.url, apk.sha256, apk.bytes)
+internal class SelfInstallPort(private val context: Context, private val apk: ReleaseApk) : InstallPort {
+    /** Each release in a folder of its own, named by its whole SHA-256 ([Updates.installer] runs one at a time). */
+    private val root = File(context.cacheDir, FOLDER)
+    private val folder = File(root, apk.sha256)
+    private val spec = ModelSpec(APK, apk.url, apk.sha256, apk.bytes)
     private val store = ModelStore(folder, listOf(spec), folder)
     private val file: File get() = store.file(spec)
 
     override suspend fun download(progress: suspend (Long, Long) -> Unit): Download {
-        // What was downloaded for another release goes first.
-        val keep = setOf(file.name, store.part(spec).name)
-        withContext(Dispatchers.IO) { folder.listFiles()?.filter { it.name !in keep }?.forEach { it.delete() } }
+        // What was downloaded for another release goes first: its install was cancelled when this one began.
+        withContext(Dispatchers.IO) { root.listFiles()?.filter { it != folder }?.forEach { it.deleteRecursively() } }
         return ModelDownloader(store, USER_AGENT, hosts = GitHubReleases, log = { Log.d(LOG_TAG, "update: $it") }).downloadAll(progress)
     }
 
     override fun verified(): Boolean {
         val packages = context.packageManager
         val own = packages.signed(context.packageName) ?: return false
-        val archive = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            packages.getPackageArchiveInfo(file.path, PackageManager.PackageInfoFlags.of(PackageManager.GET_SIGNING_CERTIFICATES.toLong()))
-        } else {
-            @Suppress("DEPRECATION")
-            packages.getPackageArchiveInfo(file.path, PackageManager.GET_SIGNING_CERTIFICATES)
+        return verifiedUpdate(file, apk.sha256, ApkSigning(own.packageName, own.longVersionCode, signers(own))) { apkFile ->
+            val archive = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                packages.getPackageArchiveInfo(apkFile.path, PackageManager.PackageInfoFlags.of(archiveSigningFlags(Build.VERSION.SDK_INT).toLong()))
+            } else {
+                @Suppress("DEPRECATION")
+                packages.getPackageArchiveInfo(apkFile.path, archiveSigningFlags(Build.VERSION.SDK_INT))
+            }
+            archive?.let { ApkSigning(it.packageName, it.longVersionCode, signers(it)) }
         }
-        return isKjbUpdate(
-            ApkSigning(own.packageName, own.longVersionCode, signers(own)),
-            archive?.let { ApkSigning(it.packageName, it.longVersionCode, signers(it)) },
-        )
     }
 
     override fun discard() {
@@ -486,8 +555,8 @@ internal class SelfInstallPort(private val context: Context, apk: ReleaseApk) : 
 
     private companion object {
         const val FOLDER = "kjb-update"
+        const val APK = "KJB.apk"
         const val INSTALL_NAME = "kjb.apk"
-        const val PIN_IN_NAME = 16
     }
 }
 
@@ -513,7 +582,7 @@ class UpdateReceiver : BroadcastReceiver() {
             confirmPackage = confirm?.`package`,
             confirmSession = confirm?.getIntExtra(PackageInstaller.EXTRA_SESSION_ID, -1) ?: -1,
         )
-        when (val verdict = report.verdict(outcomes::containsKey, context.packageName)) {
+        when (val verdict = confirmFrom(report.verdict(outcomes::containsKey, context.packageName)) { systemInstaller(context, it) }) {
             InstallVerdict.Ignore -> Log.w(LOG_TAG, "update: an install report for no session of KJB's, ignored")
             is InstallVerdict.Confirm -> {
                 // Rebuilt from what was checked, nothing else; KJB is in front (the user just tapped Install).
@@ -532,6 +601,21 @@ class UpdateReceiver : BroadcastReceiver() {
                 outcomes.remove(report.session)?.complete(verdict.outcome)
             }
         }
+    }
+
+    /**
+     * [packageName] is the phone's own package installer: a system app with the activity for Android's confirm action
+     * (KJB's manifest queries it, so the installer is visible whatever its name on this phone).
+     */
+    private fun systemInstaller(context: Context, packageName: String): Boolean {
+        val confirm = Intent(InstallReport.CONFIRM_INSTALL).setPackage(packageName)
+        val found = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            context.packageManager.resolveActivity(confirm, PackageManager.ResolveInfoFlags.of(PackageManager.MATCH_SYSTEM_ONLY.toLong()))
+        } else {
+            @Suppress("DEPRECATION")
+            context.packageManager.resolveActivity(confirm, PackageManager.MATCH_SYSTEM_ONLY)
+        }
+        return found?.activityInfo?.packageName == packageName
     }
 
     private fun end(session: Int, e: Exception) {
@@ -563,16 +647,27 @@ object Updates {
     @Volatile
     private var checker: UpdateChecker? = null
 
-    private val installers = ConcurrentHashMap<String, AddonInstaller>()
+    @Volatile
+    private var installs: SingleInstall<ReleaseApk, AddonInstaller>? = null
 
     fun checker(context: Context): UpdateChecker = checker ?: synchronized(this) {
         checker ?: UpdateChecker(AndroidUpdatePort(context.applicationContext), BuildConfig.VERSION_NAME, addonOffered(), System::currentTimeMillis, scope)
             .also { checker = it }
     }
 
-    /** Installs [apk], a newer KJB; the same installer for the same file, so its download and state carry on. */
-    fun installer(context: Context, apk: ReleaseApk): AddonInstaller =
-        installers.getOrPut(apk.sha256) { AddonInstaller(SelfInstallPort(context.applicationContext, apk), pinned = true, scope) }
+    /**
+     * Installs [apk], a newer KJB: the same installer for the same file, so its download and state carry on; another
+     * release's cancels the one before.
+     */
+    fun installer(context: Context, apk: ReleaseApk): AddonInstaller {
+        val one = installs ?: synchronized(this) {
+            installs ?: SingleInstall<ReleaseApk, AddonInstaller>(
+                make = { release -> AddonInstaller(SelfInstallPort(context.applicationContext, release), pinned = true, scope) },
+                cancel = AddonInstaller::cancel,
+            ).also { installs = it }
+        }
+        return one.get(apk)
+    }
 
     /** The AI add-on version this KJB brings: its pinned file's, when this build pins one. */
     private fun addonOffered(): String? =
