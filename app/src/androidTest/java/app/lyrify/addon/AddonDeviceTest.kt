@@ -1,5 +1,6 @@
 package app.lyrify.addon
 
+import android.media.MediaMetadataRetriever
 import android.os.Environment
 import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -12,6 +13,7 @@ import app.lyrify.ai.api.ImportReply
 import app.lyrify.data.SharedWrites
 import app.lyrify.lyrics.LocalTrack
 import app.lyrify.models.ModelState
+import app.lyrify.tags.TagLibFile
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
@@ -35,7 +37,9 @@ import java.util.concurrent.TimeUnit
  * (each is skipped without them). Writes nothing outside KJB dev's own cache.
  *
  * The run needs the add-on's models, which the real handover gives it: in the class the handover runs first (by name),
- * and the run, run alone, hands KJB dev's models over itself while they are still KJB dev's.
+ * and the run, run alone, hands KJB dev's models over itself while they are still KJB dev's. The run takes the song
+ * `-e song "<path in Music/KJB test>"` names, else the first one with plain lyrics, so that Whisper and the timing run
+ * ([pick]); logcat says how it was picked, never its name or path.
  */
 @RunWith(AndroidJUnit4::class)
 @FixMethodOrder(MethodSorters.NAME_ASCENDING)
@@ -71,9 +75,10 @@ class AddonDeviceTest {
 
     @Test
     fun runsOneSongInTheAddon() {
-        val music = File(Environment.getExternalStorageDirectory(), SharedWrites.TEST_FOLDER)
-        val song = music.listFiles { file -> file.extension.lowercase() in setOf("mp3", "m4a", "flac", "ogg") }?.firstOrNull()
+        val song = pick(File(Environment.getExternalStorageDirectory(), SharedWrites.TEST_FOLDER))
         assumeTrue("a song in ${SharedWrites.TEST_FOLDER}", song != null)
+        checkNotNull(song)
+        Log.i(TAG, "song: ${song.how}, ${song.lyrics?.lines()?.size ?: 0} lines of plain lyrics")
         connect().use { session ->
             if (File(ModelHandover.legacyFolder(context), AiModels.MDX).isFile) handOverKjbsModels(session)
             assumeTrue("the add-on's models", session.port.status()?.models is ModelState.Ready)
@@ -81,13 +86,55 @@ class AddonDeviceTest {
             var chunks = 0
             // The add-on's notes (stages, times, counts; no lyrics) in logcat: a run that stalls shows its last step.
             val result = RemoteSongEngine(session, notes = { Log.i(TAG, it) }).use { engine ->
-                runBlocking { engine.run(LocalTrack(checkNotNull(song).path, "Test", null, null, durationMs = 180_000), null, stages::add) { chunks++ } }
+                runBlocking { engine.run(LocalTrack(song.file.path, "Test", null, null, song.durationMs), song.lyrics, stages::add) { chunks++ } }
             }
+            // A failure's message holds no lyrics; a result's kind and the stages are all said of the others.
             assertTrue(result.toString(), result !is AiResult.Failed)
+            Log.i(TAG, "result: ${result.javaClass.simpleName}, stages $stages, $chunks chunks")
             assertEquals(AiStage.DECODE, stages.first())
             assertTrue("$stages", AiStage.SEPARATE in stages)
+            if (song.lyrics != null) {
+                // A song with lyrics is sung: Whisper runs on its vocal chunks, and the lyrics are timed unless it is heard as an instrumental.
+                assertTrue("$stages, $chunks chunks", AiStage.TRANSCRIBE in stages && chunks > 0)
+                assertTrue("${result.javaClass.simpleName}, $stages", result is AiResult.Instrumental || AiStage.ALIGN in stages)
+            }
         }
     }
+
+    /** The song the run takes, its length, and its plain lyrics if it has any. [how] it was picked is all logcat gets. */
+    private class Pick(val file: File, val durationMs: Long, val lyrics: String?, val how: String)
+
+    /**
+     * The song `-e song "<path in [music]>"` names (refused when it is not a song file inside [music]), else the first
+     * song by name with plain lyrics (a `.txt` beside it, or a lyrics tag), so that the vocal path runs, else the first
+     * song; null when there is none.
+     */
+    private fun pick(music: File): Pick? {
+        val named = InstrumentationRegistry.getArguments().getString("song")
+        if (named != null) {
+            val file = File(music, named).canonicalFile
+            check(file.isFile && file.path.startsWith(music.canonicalPath + File.separator)) { "-e song names no song file inside the test folder" }
+            return Pick(file, durationMs(file), plainLyrics(file, music), "named by -e song")
+        }
+        val songs = music.listFiles { file -> file.isFile && file.extension.lowercase() in SONGS }?.sortedBy { it.name }.orEmpty()
+        songs.firstNotNullOfOrNull { file -> plainLyrics(file, music)?.let { Pick(file, durationMs(file), it, "the first with plain lyrics") } }?.let { return it }
+        return songs.firstOrNull()?.let { Pick(it, durationMs(it), null, "the first song, none has plain lyrics") }
+    }
+
+    /** [song]'s plain lyrics: a `.txt` beside it, else its lyrics tag, with any LRC times taken off; null when it has none. */
+    private fun plainLyrics(song: File, music: File): String? {
+        val text = File(song.parentFile, "${song.nameWithoutExtension}.txt").takeIf { it.isFile }?.readText()
+            ?: runCatching { TagLibFile(music).read(song)?.fields }.getOrNull()?.let { it["LYRICS"] ?: it["UNSYNCEDLYRICS"] }?.firstOrNull()
+        return text?.lines()?.map { it.replace(LRC_TIME, "").trim() }?.filter { it.isNotEmpty() }?.joinToString("\n")?.takeIf { it.isNotEmpty() }
+    }
+
+    /** [song]'s length as its file says, for the LRC's check; 3 minutes when it does not say. */
+    private fun durationMs(song: File): Long = MediaMetadataRetriever().use { retriever ->
+        runCatching {
+            retriever.setDataSource(song.path)
+            retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
+        }.getOrNull()
+    } ?: 180_000L
 
     @Test
     fun theAddonDyingIsACleanErrorAndANewBindWorks() {
@@ -157,5 +204,10 @@ class AddonDeviceTest {
 
     private companion object {
         const val TAG = "AddonDeviceTest"
+
+        val SONGS = setOf("mp3", "m4a", "flac", "ogg")
+
+        /** The LRC times at a line's start, `[mm:ss.xx]`, one or more. */
+        val LRC_TIME = Regex("""^(?:\[\d+:\d+(?:[.:]\d+)?])+""")
     }
 }
