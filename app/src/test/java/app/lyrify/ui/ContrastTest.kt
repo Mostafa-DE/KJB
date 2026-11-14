@@ -94,6 +94,10 @@ class ContrastTest {
             listOf("page" to s.background, "glass" to chrome.glass.compositeOver(worst)).forEach { (band, under) ->
                 assertReads("$theme tab off the pill on the $band", tabs.off, under, 4.5f)
             }
+            // Favourites' compact head: the heart on its tile (a graphic, 3 to 1), the title and its counts on the page.
+            assertReads("$theme heart on its tile", brand.highlight, brand.highlightContainer, 3f)
+            assertReads("$theme Favourites title on the page", s.onSurface, s.background, 4.5f)
+            assertReads("$theme Favourites counts on the page", s.onSurfaceVariant, s.background, 4.5f)
             // The switch's white knob (Controls.kt) on its off track, and on the coral one in light (dark: onHighlight).
             assertReads("$theme knob off", Color.White, s.outline, 3f)
             if (theme == "light") assertReads("light knob on", Color.White, brand.highlight, 3f)

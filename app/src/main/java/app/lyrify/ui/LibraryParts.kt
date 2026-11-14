@@ -328,7 +328,7 @@ fun ListHeader(
     gutter: Dp = ScreenPadding,
 ) {
     val any = songs > 0
-    SubcomposeLayout(Modifier.fillMaxWidth().padding(horizontal = gutter).heightIn(min = 60.dp)) { constraints ->
+    SubcomposeLayout(Modifier.fillMaxWidth().padding(horizontal = gutter).heightIn(min = LIST_HEADER_HEIGHT)) { constraints ->
         val loose = constraints.copy(minWidth = 0, minHeight = 0)
         fun measure(slot: String, content: @Composable () -> Unit) = subcompose(slot, content).map { it.measure(loose) }
         val gap = 8.dp.roundToPx()
@@ -363,6 +363,9 @@ fun ListHeader(
         }
     }
 }
+
+/** The list header's least height. */
+val LIST_HEADER_HEIGHT = 60.dp
 
 /** A list header part's width in pixels: with its word, and as its icon alone. */
 data class PartWidth(val label: Int, val icon: Int) {
