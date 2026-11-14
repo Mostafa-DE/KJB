@@ -280,7 +280,41 @@ class AddonInstallTest {
         assertEquals(listOf("download"), phone.calls)
     }
 
+    @Test
+    fun `a session KJB started for one add-on takes no result for the other`() {
+        // The Downloads add-on's session hears an install of the AI add-on's package: a failure, never an install.
+        assertEquals(
+            InstallVerdict.End(InstallOutcome.Failed(PackageInstaller.STATUS_FAILURE)),
+            report(status = PackageInstaller.STATUS_SUCCESS, packageName = ADDON).verdict(waiting, DOWNLOADS),
+        )
+        assertEquals(InstallVerdict.End(InstallOutcome.Installed), report(status = PackageInstaller.STATUS_SUCCESS, packageName = DOWNLOADS).verdict(waiting, DOWNLOADS))
+    }
+
+    // The APK this KJB pins for each add-on
+
+    @Test
+    fun `an add-on is pinned only with a whole SHA-256 and a size`() {
+        val sha = "0123456789abcdef".repeat(4)
+        assertTrue(AddonApk("KJB-Downloads", "https://github.com/x/y/releases/download/v1/KJB-Downloads-1.apk", sha, 54_000_000).pinned)
+        assertFalse(AddonApk("KJB-Downloads", "https://github.com/x", "", 54_000_000).pinned)
+        assertFalse(AddonApk("KJB-Downloads", "https://github.com/x", sha.drop(1), 54_000_000).pinned)
+        assertFalse(AddonApk("KJB-Downloads", "https://github.com/x", sha, 0).pinned)
+    }
+
+    @Test
+    fun `each add-on's download is kept under a name of its own pin, so neither is taken for the other or for an older one`() {
+        val ai = AddonApk("KJB-AI", "https://github.com/x/a.apk", "AB".repeat(32), 70_000_000).spec
+        val downloads = AddonApk("KJB-Downloads", "https://github.com/x/d.apk", "AB".repeat(32), 54_000_000).spec
+        val newer = AddonApk("KJB-Downloads", "https://github.com/x/d.apk", "CD".repeat(32), 54_000_000).spec
+
+        assertEquals("KJB-Downloads-abababababababab.apk", downloads.name)
+        assertEquals("ab".repeat(32), downloads.sha256)
+        assertEquals(54_000_000, downloads.bytes)
+        assertEquals(3, setOf(ai.name, downloads.name, newer.name).size)
+    }
+
     private companion object {
         const val ADDON = "app.lyrify.ai"
+        const val DOWNLOADS = "app.lyrify.dl"
     }
 }

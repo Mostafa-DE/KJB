@@ -24,3 +24,6 @@ include(":baselineprofile")
 // and what the two share: the AIDL contract and its wire types, the chip table, the verified downloader, the audio decoder.
 include(":ai-shared")
 include(":ai-addon")
+// What KJB and every add-on share: the trust both ways and the Downloads add-on's contract; and the Downloads add-on, its
+// own APK (KJB Downloads, app.lyrify.dl) with yt-dlp (lyrify-bench handoff/downloads-addon-design.md).
+include(":addon-shared")

@@ -113,6 +113,8 @@ tasks.withType<Test>().configureEach {
 
 dependencies {
     implementation(project(":ai-shared"))
+    // The caller check every add-on runs on every call.
+    implementation(project(":addon-shared"))
     implementation(libs.androidx.core.ktx)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.android)

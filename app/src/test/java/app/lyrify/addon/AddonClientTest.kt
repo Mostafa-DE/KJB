@@ -176,44 +176,6 @@ class AddonClientTest {
         assertTrue(host.bindings.single().closed)
     }
 
-    // Whether the installed add-on is KJB's, as Android tells it
-
-    private val pin = "AB".repeat(32)
-
-    private class FakePackages(
-        var certificate: String = "AB".repeat(32),
-        var signedLikeKjb: Boolean = true,
-        var definer: PermissionDefiner? = PermissionDefiner("app.lyrify.ai", signature = true),
-    ) : TrustPort {
-        override fun hasCertificate(packageName: String, sha256: ByteArray): Boolean =
-            certificate.chunked(2).map { it.toInt(16).toByte() }.toByteArray().contentEquals(sha256)
-
-        override fun signedLikeKjb(packageName: String): Boolean = signedLikeKjb
-
-        override fun definer(permission: String): PermissionDefiner? = definer
-    }
-
-    private fun trust(packages: FakePackages, pinned: String = pin) = AddonTrust("app.lyrify.ai", pinned, packages)
-
-    @Test
-    fun `the add-on is KJB's when signed with the pinned certificate, like KJB, and the bind permission is its own`() {
-        assertTrue(trust(FakePackages()).trusted())
-    }
-
-    @Test
-    fun `another certificate, another signer than KJB, or no pin is not KJB's add-on`() {
-        assertFalse(trust(FakePackages(certificate = "CD".repeat(32))).trusted())
-        assertFalse(trust(FakePackages(signedLikeKjb = false)).trusted())
-        assertFalse(trust(FakePackages(), pinned = "").trusted())
-    }
-
-    @Test
-    fun `a bind permission another app defined first, or one not at signature level, is never bound through`() {
-        assertFalse(trust(FakePackages(definer = PermissionDefiner("com.example.other", signature = true))).trusted())
-        assertFalse(trust(FakePackages(definer = PermissionDefiner("app.lyrify.ai", signature = false))).trusted())
-        assertFalse(trust(FakePackages(definer = null)).trusted())
-    }
-
     // One song
 
     private suspend fun session(host: FakeHost = FakeHost()): AddonSession = (AddonClient(host).connect() as Connection.Open).session
