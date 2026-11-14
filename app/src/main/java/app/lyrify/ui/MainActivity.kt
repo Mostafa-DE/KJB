@@ -2,7 +2,7 @@ package app.lyrify.ui
 
 import android.Manifest
 import android.app.UiModeManager
-import android.graphics.drawable.ColorDrawable
+import androidx.core.graphics.drawable.toDrawable
 import android.os.Build
 import android.content.Intent
 import android.os.Bundle
@@ -338,7 +338,7 @@ private fun ThemeWindow(variant: ThemeVariant) {
     val view = LocalView.current
     val page = variant.colors.background.toArgb()
     SideEffect {
-        window.setBackgroundDrawable(ColorDrawable(page))
+        window.setBackgroundDrawable(page.toDrawable())
         WindowCompat.getInsetsController(window, view).apply {
             isAppearanceLightStatusBars = !variant.dark
             isAppearanceLightNavigationBars = !variant.dark
