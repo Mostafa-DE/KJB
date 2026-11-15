@@ -106,6 +106,18 @@ class ShareDeviceTest {
     }
 
     @Test
+    fun aCrashReportGoesAsPlainTextWithKjbsSubjectAndNoFile() {
+        val report = "java.lang.IllegalStateException\n\tat app.lyrify.Made.up(Made.kt:1)"
+        val send = target(shareSheet(crashReportShare(report)))
+        assertEquals(Intent.ACTION_SEND, send.action)
+        assertEquals("text/plain", send.type)
+        assertEquals(report, send.getStringExtra(Intent.EXTRA_TEXT))
+        assertEquals("KJB crash report", send.getStringExtra(Intent.EXTRA_SUBJECT))
+        assertNull(send.clipData)
+        assertEquals(0, send.flags and Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+
+    @Test
     fun theLyricsFileIsServedFromTheCacheAsAFileWithItsOwnName() {
         dir.mkdirs()
         val bytes = "[00:01.000]First made-up line\n[00:04.000]Second made-up line\n".toByteArray()

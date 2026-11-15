@@ -9,8 +9,12 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
-/** Share: songs as their files, lyrics as text or as the `.lrc`, as the share sheet gets them. Made-up names and lines only. */
+/**
+ * Share: songs as their files, lyrics as text or as the `.lrc`, a crash report as text, as the share sheet gets them.
+ * Made-up names and lines only.
+ */
 class ShareTest {
     private fun shared(id: Long, type: String?, title: String) = SharedSong("content://media/external/audio/media/$id", type, title)
 
@@ -166,5 +170,24 @@ class ShareTest {
         assertEquals(Intent.FLAG_GRANT_READ_URI_PERMISSION, request.flags)
         assertEquals("Paper Lantern", request.subject)
         assertNull(request.text)
+    }
+
+    // A crash report
+
+    @Test
+    fun `a crash report goes as ACTION_SEND text plain with its text and KJB's subject, and no file`() {
+        val request = crashReportShare("java.lang.IllegalStateException\n\tat app.lyrify.Made.up(Made.kt:1)")
+        assertEquals(Intent.ACTION_SEND, request.action)
+        assertEquals("text/plain", request.type)
+        assertEquals("java.lang.IllegalStateException\n\tat app.lyrify.Made.up(Made.kt:1)", request.text)
+        assertEquals("KJB crash report", request.subject)
+        assertEquals(emptyList<String>(), request.streams)
+        assertEquals(0, request.flags)
+    }
+
+    @Test
+    fun `every share sheet KJB opens is the share helper's`() {
+        val choosers = File("src/main/java").walkTopDown().filter { it.isFile && it.extension == "kt" && "createChooser(" in it.readText() }.map { it.name }.toList()
+        assertEquals(listOf("Share.kt"), choosers)
     }
 }

@@ -1,7 +1,6 @@
 package app.lyrify.crash
 
 import android.content.Context
-import android.content.Intent
 import android.os.Build
 import android.os.Looper
 import app.lyrify.BuildConfig
@@ -211,14 +210,5 @@ object CrashLog {
                 crashes.write(CrashReport(System.currentTimeMillis(), app, android, device, thread === Looper.getMainLooper().thread, CrashScrub.trace(error)))
             },
         )
-    }
-
-    /**
-     * Share: one crash's text through Android's share sheet, only when the user taps Share. A plain text intent until the
-     * shared share helper (lane SH1) is merged; then this one function moves to it.
-     */
-    fun share(context: Context, text: String) {
-        val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_SUBJECT, "KJB crash report").putExtra(Intent.EXTRA_TEXT, text)
-        context.startActivity(Intent.createChooser(send, null).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     }
 }

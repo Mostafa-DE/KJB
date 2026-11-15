@@ -299,11 +299,19 @@ private fun CrashList(entries: List<CrashEntry>?, onOpen: (CrashEntry) -> Unit, 
 @Composable
 private fun CrashOne(entry: CrashEntry, read: suspend (String) -> String?, onBack: () -> Unit, onDismiss: () -> Unit) {
     val context = LocalContext.current
+    val resources = LocalResources.current
+    val toasts = LocalToasts.current
+    val scope = rememberCoroutineScope()
     val text by produceState<String?>(null, entry) { value = read(entry.id) }
+    val share = { report: String ->
+        if (shareCrashReport(context, report) != Shared.Opened) {
+            scope.launch { toasts.show(Toast(resources.getString(R.string.crashes_share_failed), R.drawable.ic_error, Tone.ERROR)) }
+        }
+    }
     LyrifySheet(
         onDismiss = onDismiss,
         footer = {
-            LyrifyButton(stringResource(R.string.crashes_share), onClick = { text?.let { CrashLog.share(context, it) } }, enabled = text != null, modifier = Modifier.fillMaxWidth())
+            LyrifyButton(stringResource(R.string.crashes_share), onClick = { text?.let(share) }, enabled = text != null, modifier = Modifier.fillMaxWidth())
             LyrifyButton(stringResource(R.string.crashes_back), onClick = onBack, kind = ButtonKind.GHOST, modifier = Modifier.fillMaxWidth())
         },
     ) {

@@ -67,6 +67,7 @@
     <string name="crashes_clear">Clear</string>
     <string name="crashes_clear_title">Clear crash reports?</string>
     <string name="crashes_share">Share</string>
+    <string name="crashes_share_failed">Couldn\'t share the report</string>
     <string name="crashes_back">Back</string>
     <string name="crashes_row">%1$s · KJB %2$s</string>
 </resources>

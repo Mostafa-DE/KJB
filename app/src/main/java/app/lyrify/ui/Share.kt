@@ -36,11 +36,12 @@ import java.io.File
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
-// Share: songs as their files, and lyrics as text or as the `.lrc`, through your phone's share sheet. Songs go as
-// MediaStore's content URIs: KJB may hand on read access to them because it can read them itself (MediaProvider's
-// checkUriPermission), they work on every storage volume, and the app picked gets the file's real name, size and type.
-// No song is copied. A `.lrc` is not a MediaStore audio row, so it goes as a byte copy in KJB's cache, served by a
-// FileProvider limited to that one folder (res/xml/share_paths.xml).
+// Share: songs as their files, lyrics as text or as the `.lrc`, and a crash report as text, through your phone's share
+// sheet; every share sheet KJB opens is this file's [shareSheet]. Songs go as MediaStore's content URIs: KJB may hand on
+// read access to them because it can read them itself (MediaProvider's checkUriPermission), they work on every storage
+// volume, and the app picked gets the file's real name, size and type. No song is copied. A `.lrc` is not a MediaStore
+// audio row, so it goes as a byte copy in KJB's cache, served by a FileProvider limited to that one folder
+// (res/xml/share_paths.xml).
 
 /**
  * The most songs one share carries: each costs about 0.3 KB in the intent and its ClipData, so 500 stay well inside the
@@ -150,6 +151,11 @@ fun lyricsTextShare(title: String, text: String): ShareRequest =
 /** "Lyrics file" as a share: ACTION_SEND of the `.lrc` at [uri] as a file ([LRC_TYPE]), the title as the subject. */
 fun lyricsFileShare(uri: String, title: String): ShareRequest = ShareRequest(Intent.ACTION_SEND, LRC_TYPE, listOf(uri), subject = title)
 
+/** A crash report as a share (Settings > About > Crash reports): ACTION_SEND text/plain with its text, KJB's subject. */
+fun crashReportShare(text: String): ShareRequest = ShareRequest(Intent.ACTION_SEND, TEXT_TYPE, subject = CRASH_SUBJECT, text = text)
+
+private const val CRASH_SUBJECT: String = "KJB crash report"
+
 // Your phone's share sheet
 
 /**
@@ -231,6 +237,9 @@ suspend fun shareLyricsFile(context: Context, song: Song, title: String): Shared
     val uri = FileProvider.getUriForFile(context, context.packageName + SHARE_AUTHORITY, file)
     return launchShare(1) { context.startActivity(shareSheet(lyricsFileShare(uri.toString(), title))) }
 }
+
+/** Share on one crash: its report as text ([crashReportShare]); it leaves the phone only where the user sends it. */
+fun shareCrashReport(context: Context, text: String): Shared = launchShare(1) { context.startActivity(shareSheet(crashReportShare(text))) }
 
 /** Starts the share sheet of [songs] songs ([start]): how it went. */
 internal inline fun launchShare(songs: Int, start: () -> Unit): Shared = try {
