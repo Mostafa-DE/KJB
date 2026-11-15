@@ -159,6 +159,23 @@ class ImportMatchTest {
     }
 
     @Test
+    fun `pass 5 takes a line's text only when it is the song's title, whole or on one side of its dash, never a title inside a longer one`() {
+        val ember = at("/storage/emulated/0/Music/Rips/05 Ember.mp3", "Ember", "Mira Solen", "Night Ferry", 230_000, 4_700_000)
+        val matcher = SongMatcher(listOf(lantern, bell, water, road, ember))
+        val moved = "/storage/emulated/0/Download/05 Ember.mp3"
+
+        assertEquals(ember, matcher.byUniqueName(hint(moved, info = "Mira Solen - Ember")))
+        assertEquals(ember, matcher.byUniqueName(hint(moved, info = "Ember - Mira Solen")))
+        assertEquals(ember, matcher.byUniqueName(hint(moved, info = "EMBER!")))
+        // Another song, whose title only holds this one's.
+        assertNull(matcher.byUniqueName(hint(moved, info = "Mira Solen - Ember Gate")))
+        assertNull(matcher.byUniqueName(hint(moved, info = "Ember Gate")))
+        assertNull(matcher.byUniqueName(hint(moved, info = "Old Ember - Mira Solen")))
+        // The length still has its say.
+        assertNull(matcher.byUniqueName(hint(moved, info = "Mira Solen - Ember", durationMs = 90_000)))
+    }
+
+    @Test
     fun `a backup still finds its songs as before`() {
         val known = mapOf(lantern.path to BackupSong(lantern.path, "Paper Lantern", "Kit Calloway", "Harbour Glass", 201_000))
         assertEquals(mapOf(lantern.path to lantern), matcher.match(listOf(lantern.path), known))
