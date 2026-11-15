@@ -8,7 +8,8 @@
 # --install  "adb install -r" the debug build and its test APK from app/build/outputs first (build them with the lane
 #            gate, which runs assembleDebug and assembleDebugAndroidTest). install -r keeps KJB dev's data and grants.
 # With no TEST_CLASS it runs BookChaptersDeviceTest, then LibriVoxBooksDeviceTest. A TEST_CLASS can name one method,
-# such as app.lyrify.books.LibriVoxBooksDeviceTest#bookBIsOneFolderBookOf25PartsInOrder.
+# such as app.lyrify.books.LibriVoxBooksDeviceTest#bookBIsOneFolderBookOf25PartsInOrder. Anything else (the phone's
+# shell would read it, and it names the log file) is refused: dotted Java names only, with one optional #method.
 #
 # Each class runs on its own with
 #   adb shell am instrument -w -r -e class <TEST_CLASS> app.lyrify.debug.test/androidx.test.runner.AndroidJUnitRunner
@@ -32,7 +33,13 @@ while [ $# -gt 0 ]; do
     -h | --help) sed -n '2,20p' "$0"; exit 0 ;;
     --install) install=1 ;;
     -*) echo "unknown option: $1" >&2; exit 2 ;;
-    *) classes+=("$1") ;;
+    *)
+      if [[ ! "$1" =~ ^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*(#[A-Za-z_][A-Za-z0-9_]*)?$ ]]; then
+        echo "not a test class: $1" >&2
+        exit 2
+      fi
+      classes+=("$1")
+      ;;
   esac
   shift
 done
