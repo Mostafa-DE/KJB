@@ -296,6 +296,23 @@ class CrossfadeEngineTest {
         assertEquals(rig.start(3, natural = true), rig.heard.starts.last())
     }
 
+    /** CR1: the bridge hands one change as several edits; the song waiting loads again once for all of them, not once each. */
+    @Test
+    fun `several queue edits as one change while the next song waits load one new next song`() = runTest {
+        val rig = FadeRig(this, crossfadeSeconds = 6, songs = tones(6))
+        rig.runToLeft(6_000 + 2_000)
+        val stale = rig.made(1)
+        rig.engine.applyAll(listOf(Edit.Move(3, 1), Edit.Move(5, 2), Edit.Remove(4)))
+        rig.run(0)
+        assertTrue(stale.released)
+        assertEquals("players made", 3, rig.slots.size)
+        val fresh = rig.made(2)
+        assertEquals(listOf(rig.uids[0], rig.uids[3], rig.uids[5], rig.uids[1], rig.uids[4]), fresh.loaded)
+        assertEquals(1, fresh.index)
+        rig.run(3_000)
+        assertEquals(rig.start(3, natural = true), rig.heard.starts.last())
+    }
+
     // Plays
 
     /** As PlaybackService's Follower feeds the play counter. */
