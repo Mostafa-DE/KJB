@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import androidx.annotation.OptIn
 import androidx.media3.common.C
+import androidx.media3.common.Label
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Metadata
 import androidx.media3.common.util.UnstableApi
@@ -20,14 +21,19 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
+import java.nio.ByteBuffer
+import java.nio.channels.SeekableByteChannel
+import java.nio.file.Files
+import java.nio.file.StandardOpenOption
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 import androidx.media3.extractor.metadata.Chapter as Media3Chapter
 
-// A book's chapters (research section 1): Media3's MetadataRetriever reads them from the file, MP4's Nero chpl and
-// QuickTime chapter tracks and ID3 CHAP frames ordered by CTOC; Ogg Vorbis and Opus CHAPTERxxx comments are KJB's own
-// parser here; a folder book's chapters are its files ([partChapters]). A book without marks has none: no made-up parts.
+// A book's chapters (research section 1): MP4 QuickTime chapter tracks are KJB's own reader here ([quickTimeChapters]),
+// as Media3's MetadataRetriever leaves them out; it reads the rest, MP4's Nero chpl and ID3 CHAP frames ordered by CTOC;
+// Ogg Vorbis and Opus CHAPTERxxx comments are KJB's own parser here; a folder book's chapters are its files
+// ([partChapters]). A book without marks has none: no made-up parts.
 
 /**
  * Ogg Vorbis and Opus chapters from the file's comments ([comments], key and value as written): `CHAPTER001` is a start
@@ -105,6 +111,267 @@ private fun titleOf(mark: Media3Chapter): String? {
     return (0 until frame.subFrameCount).map(frame::getSubFrame).filterIsInstance<TextInformationFrame>().firstOrNull { it.id == "TIT2" }?.values?.firstOrNull()?.trim()?.takeIf(String::isNotEmpty)
 }
 
+/**
+ * The chapters of an MP4's QuickTime chapter track, the shape most m4b books have (LibriVox's among them): the text track a
+ * `moov/trak/tref/chap` box names, the audio track's first, one chapter a sample, starting at its `stts` time in that
+ * track's own `mdhd` timescale and lasting its duration; the sample's place from `stsz` or `stz2`, `stsc` and `stco` or
+ * `co64`; its text a 16-bit length, then UTF-8, or UTF-16 after its byte order mark. As Media3 chapters, so [chaptersOf]
+ * orders and limits them as any other. Media3's MetadataRetriever never gives these: it reads an MP4 without sample
+ * tables, and Media3 reads a chapter track only with every track's table built (a 6 h book's half million audio samples)
+ * and its text as UTF-8 only. Empty for a file that is no MP4 or has no such track. Bounded for any file: at most
+ * [BookState.MAX_CHAPTERS] samples and [Mp4Boxes.MAX_BOXES] box headers, every table read only as far as its box and
+ * those samples, nothing past the file's end. The [file] is only read: a channel opened for reading.
+ */
+@OptIn(UnstableApi::class)
+fun quickTimeChapters(file: SeekableByteChannel): List<Media3Chapter> {
+    val boxes = Mp4Boxes(file)
+    val moov = boxes.children(0, file.size()).firstOrNull { it.type == MOOV } ?: return emptyList()
+    val tracks = boxes.children(moov).filter { it.type == TRAK }.map { trak ->
+        val inside = boxes.children(trak)
+        val chapters = inside.firstOrNull { it.type == TREF }?.let(boxes::children)?.firstOrNull { it.type == CHAP }?.let(boxes::trackIds).orEmpty()
+        val media = inside.firstOrNull { it.type == MDIA }
+        Mp4Track(inside.firstOrNull { it.type == TKHD }?.let(boxes::trackId), chapters, media, sound = media?.let { boxes.handler(boxes.children(it)) } == SOUN)
+    }
+    // The audio track's references first: they name the book's chapters. Another track's chap box (a subtitle track's,
+    // naming itself, say) is tried only after them, as Media3 takes one from any track.
+    return tracks.sortedByDescending { it.sound }.flatMap { it.chapters }.distinct().asSequence()
+        .mapNotNull { id -> tracks.firstOrNull { it.id == id }?.media }
+        .map(boxes::chapterTrack)
+        .firstOrNull { it.isNotEmpty() }
+        .orEmpty()
+}
+
+/** A track as [quickTimeChapters] needs it: its id, the ids its `tref/chap` names, its `mdia` box, and whether it is [sound]. */
+private class Mp4Track(val id: Long?, val chapters: List<Long>, val media: Mp4Box?, val sound: Boolean)
+
+/** A box's [type] and its body, from [start] to [end] in the file. */
+private class Mp4Box(val type: Int, val start: Long, val end: Long) {
+    val size: Long get() = end - start
+}
+
+/** [quickTimeChapters]'s reads: box headers inside their parent and the file, at most [MAX_BOXES] of them; tables capped. */
+@OptIn(UnstableApi::class)
+private class Mp4Boxes(private val file: SeekableByteChannel) {
+    private val length = file.size()
+    private var headersLeft = MAX_BOXES
+
+    /** The boxes in [start] to [end], in order, until one that does not fit there (a broken or cut file) or the cap. */
+    fun children(start: Long, end: Long): List<Mp4Box> {
+        val found = ArrayList<Mp4Box>()
+        var at = start
+        while (end - at >= 8 && headersLeft-- > 0) {
+            val head = bytes(at, minOf(16L, end - at).toInt()) ?: break
+            val type = head.int(4)
+            val (header, size) = when (val small = head.u32(0)) {
+                0L -> 8 to end - at
+                1L -> if (head.size < 16) break else 16 to head.long(8)
+                else -> 8 to small
+            }
+            if (size < header || size > end - at) break
+            found += Mp4Box(type, at + header, at + size)
+            at += size
+        }
+        return found
+    }
+
+    fun children(box: Mp4Box): List<Mp4Box> = children(box.start, box.end)
+
+    /** A `tkhd`'s track id, after the creation and change times of its version. */
+    fun trackId(tkhd: Mp4Box): Long? = body(tkhd, 0, 1)?.let { version -> body(tkhd, if (version[0].toInt() == 1) 20 else 12, 4)?.u32(0) }
+
+    /** The track ids a `chap` box names, at most [MAX_REFERENCES]. */
+    fun trackIds(chap: Mp4Box): List<Long> {
+        val count = minOf(chap.size / 4, MAX_REFERENCES.toLong()).toInt()
+        val ids = body(chap, 0, count * 4) ?: return emptyList()
+        return List(count) { ids.u32(it * 4) }
+    }
+
+    /** The handler of the track whose `mdia` holds the boxes [inside] (`soun`, `text`, `vide`...); null without one. */
+    fun handler(inside: List<Mp4Box>): Int? = inside.firstOrNull { it.type == HDLR }?.let { body(it, 8, 4) }?.int(0)
+
+    /** The chapters of the track whose `mdia` is [media]: none unless it is a text track with every table it needs. */
+    fun chapterTrack(media: Mp4Box): List<Media3Chapter> {
+        val inside = children(media)
+        if (handler(inside) !in TEXT_HANDLERS) return emptyList()
+        val timescale = inside.firstOrNull { it.type == MDHD }?.let(::timescale)?.takeIf { it > 0 } ?: return emptyList()
+        val tables = inside.firstOrNull { it.type == MINF }?.let(::children)?.firstOrNull { it.type == STBL }?.let(::children) ?: return emptyList()
+        fun table(type: Int) = tables.firstOrNull { it.type == type }
+        val times = table(STTS)?.let(::times) ?: return emptyList()
+        val sizes = table(STSZ)?.let(::sizes) ?: table(STZ2)?.let(::compactSizes) ?: return emptyList()
+        val runs = table(STSC)?.let { entries(it, 0, 12) } ?: return emptyList()
+        val chunks = table(STCO)?.let { offsets(it, 4) } ?: table(CO64)?.let { offsets(it, 8) } ?: return emptyList()
+        val places = places(runs, chunks, sizes, minOf(times.size, sizes.size))
+        return places.indices.mapNotNull { at ->
+            val text = text(places[at], sizes[at]) ?: return@mapNotNull null
+            val (start, duration) = times[at]
+            // At most MAX_CHAPTERS samples of at most 2^32 ticks each: in milliseconds, far inside a Long.
+            Media3Chapter.Builder()
+                .setStartTimeMs(start * 1_000 / timescale)
+                .setEndTimeMs((start + duration) * 1_000 / timescale)
+                .setTitle(text.takeIf(String::isNotEmpty)?.let { Label(null, it) })
+                .build()
+        }
+    }
+
+    /** An `mdhd`'s timescale, after the creation and change times of its version. */
+    private fun timescale(mdhd: Mp4Box): Long? = body(mdhd, 0, 1)?.let { version -> body(mdhd, if (version[0].toInt() == 1) 20 else 12, 4)?.u32(0) }
+
+    /** Each sample's start and duration in ticks, from `stts`'s runs of equal durations, at most [BookState.MAX_CHAPTERS]. */
+    private fun times(stts: Mp4Box): List<Pair<Long, Long>> {
+        val runs = entries(stts, 0, 8) ?: return emptyList()
+        val times = ArrayList<Pair<Long, Long>>()
+        var start = 0L
+        for (run in runs.indices step 2) {
+            val duration = runs[run + 1]
+            repeat(minOf(runs[run], (BookState.MAX_CHAPTERS - times.size).toLong()).toInt()) {
+                times += start to duration
+                start += duration
+            }
+        }
+        return times
+    }
+
+    /** `stsz`: one size for every sample, or each sample's; at most [BookState.MAX_CHAPTERS]. */
+    private fun sizes(stsz: Mp4Box): LongArray? {
+        val fixed = body(stsz, 4, 8) ?: return null
+        val same = fixed.u32(0)
+        if (same != 0L) return LongArray(minOf(fixed.u32(4), BookState.MAX_CHAPTERS.toLong()).toInt()) { same }
+        return entries(stsz, 4, 4)
+    }
+
+    /** `stz2`: each sample's size in 4, 8 or 16 bits (4-bit ones two to a byte, the first in the high half). */
+    private fun compactSizes(stz2: Mp4Box): LongArray? {
+        val head = body(stz2, 4, 8) ?: return null
+        val bits = head[3].toInt()
+        if (bits != 4 && bits != 8 && bits != 16) return null
+        val count = minOf(head.u32(4), (stz2.size - 12) * 8 / bits, BookState.MAX_CHAPTERS.toLong()).toInt()
+        val packed = body(stz2, 12, (count * bits + 7) / 8) ?: return null
+        return LongArray(count) { at ->
+            when (bits) {
+                16 -> packed.u16(at * 2).toLong()
+                8 -> packed[at].toLong() and 0xFF
+                else -> (packed[at / 2].toInt() shr (if (at % 2 == 0) 4 else 0) and 0xF).toLong()
+            }
+        }
+    }
+
+    /** `stco` or `co64`: each chunk's place in the file, [width] bytes each. */
+    private fun offsets(box: Mp4Box, width: Int): LongArray? {
+        val table = entries(box, 0, width) ?: return null
+        return if (width == 4) table else LongArray(table.size / 2) { table[it * 2] shl 32 or table[it * 2 + 1] }
+    }
+
+    /**
+     * A full box's table, its count after the version, flags and [skip] more bytes: each entry's 32-bit fields in a row
+     * ([width] bytes an entry), only as many entries as the count says, the box holds and [BookState.MAX_CHAPTERS].
+     */
+    private fun entries(box: Mp4Box, skip: Int, width: Int): LongArray? {
+        val count = body(box, 4 + skip, 4)?.u32(0) ?: return null
+        val entries = minOf(count, (box.size - 8 - skip) / width, BookState.MAX_CHAPTERS.toLong()).toInt()
+        val table = body(box, 8 + skip, entries * width) ?: return null
+        return LongArray(table.size / 4) { table.u32(it * 4) }
+    }
+
+    /**
+     * Where each of the first [count] samples starts: chunk after chunk, the `stsc` [runs] (first chunk, samples in each,
+     * description) saying how many samples each holds, one after another inside it. Fewer when the chunks run out.
+     */
+    private fun places(runs: LongArray, chunks: LongArray, sizes: LongArray, count: Int): LongArray {
+        val places = LongArray(count)
+        var sample = 0
+        var run = -1
+        for (chunk in chunks.indices) {
+            while (run + 1 < runs.size / 3 && runs[(run + 1) * 3] <= chunk + 1L) run++
+            var left = if (run >= 0) runs[run * 3 + 1] else 0L
+            var at = chunks[chunk]
+            while (left-- > 0 && sample < count) {
+                places[sample] = at
+                at += sizes[sample++]
+            }
+            if (sample == count) break
+        }
+        return places.copyOf(sample)
+    }
+
+    /** The text of the sample of [size] bytes at [offset], "" when it has none; null when the sample is not inside the file. */
+    private fun text(offset: Long, size: Long): String? {
+        if (size < 2 || offset < 0 || offset > length - size) return null
+        val sample = bytes(offset, minOf(size, 2L + MAX_TEXT_BYTES).toInt()) ?: return null
+        return chapterText(sample.copyOfRange(2, 2 + minOf(sample.u16(0), sample.size - 2)))
+    }
+
+    /** [count] bytes from [offset] into [box]'s body; null when they are not all inside it. */
+    private fun body(box: Mp4Box, offset: Int, count: Int): ByteArray? = if (count < 0 || offset + count > box.size) null else bytes(box.start + offset, count)
+
+    /**
+     * [count] bytes of the file from [at]; null when they are not all inside it (or it was cut short meanwhile), or a read
+     * gives none: a channel may give 0 bytes, and one that kept doing so would be asked forever.
+     */
+    private fun bytes(at: Long, count: Int): ByteArray? {
+        if (at < 0 || count < 0 || at > length - count) return null
+        val read = ByteBuffer.allocate(count)
+        file.position(at)
+        while (read.hasRemaining()) if (file.read(read) <= 0) return null
+        return read.array()
+    }
+
+    companion object {
+        /** Box headers read in one file: a book has a few dozen. */
+        const val MAX_BOXES: Int = 1_024
+
+        /** Tracks one `chap` box may name: a text track, and pictures. */
+        const val MAX_REFERENCES: Int = 16
+
+        /** A title's bytes read, past [BookState.MAX_TITLE] characters in any encoding. */
+        const val MAX_TEXT_BYTES: Int = 1_024
+    }
+}
+
+/** A chapter sample's text: UTF-16 after its byte order mark, else UTF-8 (its own mark dropped); up to a NUL, trimmed. */
+private fun chapterText(bytes: ByteArray): String {
+    fun marked(vararg mark: Int) = bytes.size >= mark.size && mark.indices.all { bytes[it].toInt() and 0xFF == mark[it] }
+    val text = when {
+        marked(0xFE, 0xFF) -> String(bytes, 2, bytes.size - 2, Charsets.UTF_16BE)
+        marked(0xFF, 0xFE) -> String(bytes, 2, bytes.size - 2, Charsets.UTF_16LE)
+        marked(0xEF, 0xBB, 0xBF) -> String(bytes, 3, bytes.size - 3, Charsets.UTF_8)
+        else -> String(bytes, Charsets.UTF_8)
+    }
+    return text.substringBefore('\u0000').trim()
+}
+
+private fun ByteArray.u16(at: Int): Int = (this[at].toInt() and 0xFF shl 8) or (this[at + 1].toInt() and 0xFF)
+
+private fun ByteArray.int(at: Int): Int = (u16(at) shl 16) or u16(at + 2)
+
+private fun ByteArray.u32(at: Int): Long = int(at).toLong() and 0xFFFF_FFFFL
+
+private fun ByteArray.long(at: Int): Long = u32(at) shl 32 or u32(at + 4)
+
+private fun fourcc(type: String): Int = type.fold(0) { code, char -> code shl 8 or char.code }
+
+private val MOOV = fourcc("moov")
+private val TRAK = fourcc("trak")
+private val TKHD = fourcc("tkhd")
+private val TREF = fourcc("tref")
+private val CHAP = fourcc("chap")
+private val MDIA = fourcc("mdia")
+private val MDHD = fourcc("mdhd")
+private val HDLR = fourcc("hdlr")
+private val MINF = fourcc("minf")
+private val STBL = fourcc("stbl")
+private val STTS = fourcc("stts")
+private val STSZ = fourcc("stsz")
+private val STZ2 = fourcc("stz2")
+private val STSC = fourcc("stsc")
+private val STCO = fourcc("stco")
+private val CO64 = fourcc("co64")
+
+/** The handlers of a track that holds chapter titles: QuickTime text, and Apple's subtitle tracks. */
+private val TEXT_HANDLERS = setOf(fourcc("text"), fourcc("sbtl"), fourcc("subt"))
+
+/** The handler of an audio track, whose `tref/chap` names the book's chapter track. */
+private val SOUN = fourcc("soun")
+
 /** What makes a single file's kept chapters still its own: its size and change time ([BookEntry.chaptersStamp]). */
 fun chaptersStamp(song: Song): String = "${song.sizeBytes}:${song.modifiedAt ?: 0}"
 
@@ -151,19 +418,18 @@ class BookChapters(private val store: BookStore, private val reader: ChapterRead
     }
 }
 
-/** [ChapterReader] with Media3's MetadataRetriever, on its own thread. */
+/**
+ * [ChapterReader] on its own thread: an MP4's QuickTime chapter track ([quickTimeChapters]), else what Media3's
+ * MetadataRetriever reads (an MP4's Nero chpl, ID3 CHAP, Ogg comments). An m4b with both has its QuickTime chapters,
+ * even when its chpl says otherwise: they are the ones Apple's players show and its tools write, with no 255-byte titles,
+ * and a chpl is most often a copy written beside them.
+ */
 @OptIn(UnstableApi::class)
 class Media3Chapters(private val context: Context, private val log: (String) -> Unit = {}) : ChapterReader {
     override suspend fun read(path: String, durationMs: Long): List<Chapter>? = withContext(Dispatchers.IO) {
         try {
-            MetadataRetriever.Builder(context, MediaItem.fromUri(Uri.fromFile(File(path)))).build().use { retriever ->
-                val groups = retriever.retrieveTrackGroups().get(READ_WAIT_S, TimeUnit.SECONDS)
-                val entries = (0 until groups.length).flatMap { g ->
-                    val group = groups[g]
-                    (0 until group.length).flatMap { f -> group.getFormat(f).metadata?.let { metadata -> (0 until metadata.length()).map(metadata::get) }.orEmpty() }
-                }
-                chaptersOf(entries, durationMs)
-            }
+            val quickTime = Files.newByteChannel(File(path).toPath(), StandardOpenOption.READ).use(::quickTimeChapters)
+            chaptersOf(quickTime.ifEmpty { media3Entries(path) }, durationMs)
         } catch (e: ExecutionException) {
             log("books: chapters not read (${(e.cause ?: e).javaClass.simpleName})")
             null
@@ -175,6 +441,16 @@ class Media3Chapters(private val context: Context, private val log: (String) -> 
             null
         }
     }
+
+    /** Every track's metadata entries, as Media3's MetadataRetriever reads them. */
+    private fun media3Entries(path: String): List<Metadata.Entry> =
+        MetadataRetriever.Builder(context, MediaItem.fromUri(Uri.fromFile(File(path)))).build().use { retriever ->
+            val groups = retriever.retrieveTrackGroups().get(READ_WAIT_S, TimeUnit.SECONDS)
+            (0 until groups.length).flatMap { g ->
+                val group = groups[g]
+                (0 until group.length).flatMap { f -> group.getFormat(f).metadata?.let { metadata -> (0 until metadata.length()).map(metadata::get) }.orEmpty() }
+            }
+        }
 
     private companion object {
         /** A file of hundreds of chapters is read in well under this. */

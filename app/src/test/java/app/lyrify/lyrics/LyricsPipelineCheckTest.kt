@@ -37,6 +37,9 @@ class LyricsPipelineCheckTest {
     private val ledger = MemoryLedger()
     private val logs = mutableListOf<String>()
 
+    /** The paths that are books' parts now (books/): they never get lyrics. */
+    private val books = mutableSetOf<String>()
+
     /** Placeholder words, never real lyrics. */
     private val synced = "[00:01.00]w0001\n[00:02.00]w0002\n[00:03.00]w0003\n[00:04.00]w0004\n[00:05.00]w0005\n[00:06.00]w0006"
     private val plain = "w0001\nw0002\nw0003"
@@ -60,6 +63,7 @@ class LyricsPipelineCheckTest {
         writes = SharedWrites.ANYWHERE,
         random = MiddleRandom,
         log = { logs += it },
+        isBook = { it in books },
     )
 
     private val audioBytes = byteArrayOf(0x49, 0x44, 0x33, 4, 0, 0, 5, 6, 7)
@@ -247,6 +251,19 @@ class LyricsPipelineCheckTest {
         val requests = client.requests
         assertEquals(0, pipeline.compareStored())
         assertEquals(requests, client.requests)
+    }
+
+    @Test
+    fun `a book's part left on the check list from before is never compared at start, and LRCLIB is not asked`() = runTest {
+        val track = untagged()
+        val stored = storedUncompared(track)
+        books += track.path
+        val pipeline = pipeline()
+
+        assertEquals(0, pipeline.compareStored())
+
+        assertEquals(0, client.requests)
+        assertEquals(stored, ledger[track.path])
     }
 
     @Test

@@ -7,7 +7,8 @@
 #
 # --install  "adb install -r" the debug build and its test APK from app/build/outputs first (build them with the lane
 #            gate, which runs assembleDebug and assembleDebugAndroidTest). install -r keeps KJB dev's data and grants.
-# With no TEST_CLASS it runs BookChaptersDeviceTest, then LibriVoxBooksDeviceTest. A TEST_CLASS can name one method,
+# With no TEST_CLASS it runs BookChaptersDeviceTest, LibriVoxBooksDeviceTest, then BookLyricsDeviceTest (a book's
+# "No lyrics for books" at font scale 2.0, no files needed). A TEST_CLASS can name one method,
 # such as app.lyrify.books.LibriVoxBooksDeviceTest#bookBIsOneFolderBookOf25PartsInOrder. Anything else (the phone's
 # shell would read it, and it names the log file) is refused: dotted Java names only, with one optional #method.
 #
@@ -24,13 +25,13 @@ ADB="${ADB:-adb}"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="${OUT:-$REPO/build/book-device-tests}"
 RUNNER="app.lyrify.debug.test/androidx.test.runner.AndroidJUnitRunner"
-DEFAULT_CLASSES=(app.lyrify.books.BookChaptersDeviceTest app.lyrify.books.LibriVoxBooksDeviceTest)
+DEFAULT_CLASSES=(app.lyrify.books.BookChaptersDeviceTest app.lyrify.books.LibriVoxBooksDeviceTest app.lyrify.ui.BookLyricsDeviceTest)
 
 install=0
 classes=()
 while [ $# -gt 0 ]; do
   case "$1" in
-    -h | --help) sed -n '2,20p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,21p' "$0"; exit 0 ;;
     --install) install=1 ;;
     -*) echo "unknown option: $1" >&2; exit 2 ;;
     *)

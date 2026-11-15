@@ -26,6 +26,9 @@ class LyricsPipelineRetagTest {
     private val client = FakeLrclib()
     private val ledger = MemoryLedger()
 
+    /** The paths that are books' parts now (books/): they never get lyrics. */
+    private val books = mutableSetOf<String>()
+
     /** Placeholder words, never real lyrics. */
     private val synced = "[00:01.00]w0001\n[00:02.00]w0002\n[00:03.00]w0003"
     private val otherSynced = "[00:01.00]w0101\n[00:02.00]w0102\n[00:03.00]w0103"
@@ -56,6 +59,7 @@ class LyricsPipelineRetagTest {
             }
             SidecarFile.writeFully(channel, buffer)
         },
+        isBook = { it in books },
     )
 
     private fun audio(title: String = "Salt Road", artist: String? = "Mira Solen"): LocalTrack {
@@ -242,6 +246,22 @@ class LyricsPipelineRetagTest {
 
         assertFalse(sidecar(track).exists())
         assertEquals(LyricsStatus.NOT_FOUND, ledger[track.path]?.status)
+    }
+
+    @Test
+    fun `none of these on a file that became a book changes nothing, and its lyrics file stays`() = runTest {
+        val pipeline = pipeline()
+        val track = audio()
+        val lyrics = pipeline.withLyrics(track)
+        pipeline.retagged(track.copy(title = "Salt Roads"), namesChanged = true)
+        val waiting = ledger[track.path]
+        books += track.path
+
+        assertEquals(Checked.Changed, pipeline.decline(track.path))
+
+        assertEquals(lyrics, sidecar(track).readText())
+        assertEquals(waiting, ledger[track.path])
+        assertEquals(0, client.requests)
     }
 
     // Review D: the user's own choice is never touched
