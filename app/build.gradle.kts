@@ -50,9 +50,9 @@ android {
         applicationId = "app.lyrify"
         minSdk = 30
         targetSdk = 36
-        // 10, not 9: a private 2.0.2 used 9 on the user's phone, and 3.0.0 installs over it as an update.
-        versionCode = 10
-        versionName = "3.0.0"
+        // 3.0.0 was 10, not 9: a private 2.0.2 used 9 on the user's phone, and 3.0.0 installed over it as an update.
+        versionCode = 11
+        versionName = "3.0.1"
 
         ndk {
             // TagLib's library is built for arm64 only (taglib/), as the AI add-on's QNN libraries are.
