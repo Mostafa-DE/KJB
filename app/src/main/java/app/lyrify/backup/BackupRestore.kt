@@ -3,6 +3,7 @@ package app.lyrify.backup
 import app.lyrify.audio.EqProfiles
 import app.lyrify.books.BookEntry
 import app.lyrify.books.BookMarks
+import app.lyrify.books.BookPlace
 import app.lyrify.books.BookState
 import app.lyrify.books.folderBookId
 import app.lyrify.data.LedgerEntry
@@ -338,13 +339,16 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
     /**
      * [entry] on this phone: its parts here, in its order (those not here left out), the part it was in when that is
      * here, and its id as the library gives it to these files: a single file's path, or the folder of its first part
-     * here with its album ([folderBookId]). Null when none of its files is here.
+     * here with its album ([folderBookId]). When the part it was in is not here, it starts again: its place never goes to
+     * whichever file now has that number. Null when none of its files is here.
      */
     private fun matched(entry: BookEntry): BookEntry? {
         val parts = entry.parts.mapNotNull { found[it]?.path }
         val first = parts.firstOrNull() ?: return null
         val id = if (FOLDER_BOOK in entry.id) folderBookId(first.substringBeforeLast('/'), entry.id.substringAfter(FOLDER_BOOK)) else first
-        return entry.copy(id = id, parts = parts, partPath = entry.partPath?.let { found[it]?.path })
+        val part = entry.partPath?.let { found[it]?.path }
+        val place = if (part == null) BookPlace() else entry.place.copy(partIndex = parts.indexOf(part))
+        return entry.copy(id = id, parts = parts, place = place, partPath = part)
     }
 
     /**

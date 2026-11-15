@@ -11,6 +11,7 @@ import app.lyrify.backup.BackupFixtures.contents
 import app.lyrify.backup.BackupFixtures.archive
 import app.lyrify.backup.BackupFixtures.keeperId
 import app.lyrify.backup.BackupFixtures.keeperOne
+import app.lyrify.backup.BackupFixtures.keeperTwo
 import app.lyrify.backup.BackupFixtures.lantern
 import app.lyrify.backup.BackupFixtures.newArchive
 import app.lyrify.backup.BackupFixtures.newBell
@@ -298,6 +299,18 @@ class BackupRestoreTest {
         assertEquals(BackupFixtures.booksKept.books + (shelf to mine), stores.books.books)
         // The phone said Low Water is no book, the backup that it is one: the phone's word stays.
         assertEquals(BookMarks(folders = setOf("Spoken/Ada Quill"), notSongs = setOf(water.path), notFolders = setOf("Music/Night Ferry")), stores.books.marks)
+    }
+
+    @Test
+    fun `a book whose part playing is not on this phone starts again, never at that place in another file`() {
+        val stores = MemoryStores()
+
+        restore(stores, library = BackupFixtures.library - keeperTwo, chosen = setOf(Section.BOOKS))
+
+        val keeper = stores.books.books.values.single { it.title == "Lantern Keeper" }
+        assertEquals(listOf(keeperOne.path), keeper.parts)
+        assertEquals(BookPlace(), keeper.place)
+        assertEquals(null, keeper.partPath)
     }
 
     @Test

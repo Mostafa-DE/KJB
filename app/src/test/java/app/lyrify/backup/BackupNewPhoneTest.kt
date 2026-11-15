@@ -522,7 +522,8 @@ class BackupNewPhoneTest {
 
         assertEquals(setOf(newArchive.path), gone.books.books.keys)
         assertEquals(2 to 1, all.notFound to all.counts[Section.BOOKS])
-        assertEquals(keeper.copy(id = keeperHere, parts = listOf(newKeeperTwo.path), partPath = newKeeperTwo.path), half.books.books[keeperHere])
+        // The place stays in its file, now the book's first part here.
+        assertEquals(keeper.copy(id = keeperHere, parts = listOf(newKeeperTwo.path), place = keeper.place.copy(partIndex = 0), partPath = newKeeperTwo.path), half.books.books[keeperHere])
         assertEquals(1 to 2, one.notFound to one.counts[Section.BOOKS])
     }
 
