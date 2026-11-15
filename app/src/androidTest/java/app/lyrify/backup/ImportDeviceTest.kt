@@ -50,7 +50,7 @@ class ImportDeviceTest {
     }
 
     @Test
-    fun undoTakesOutOnlyTheImportedPlays() = runBlocking {
+    fun undoTakesOutOnlyTheImportedPlays() = runBlocking<Unit> {
         val store = open()
         val own = LoggedPlay(SongRef(LANTERN, 11), T0, 120_000, counted = true)
         val imported = listOf(LoggedPlay(SongRef(LANTERN), T0 - 1, 0, counted = true), LoggedPlay(SongRef(BELL), T0, 0, counted = true))

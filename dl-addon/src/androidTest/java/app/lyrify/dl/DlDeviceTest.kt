@@ -76,7 +76,7 @@ class DlDeviceTest {
     }
 
     @Test
-    fun oneShortClipDownloadsAsMp3AndArrivesWhole() = runBlocking {
+    fun oneShortClipDownloadsAsMp3AndArrivesWhole() = runBlocking<Unit> {
         val heard = Heard()
         val run = runs.start(DlRequest("device-test-1", SAMPLE, DlKind.AUDIO, AudioQuality.MP3_192), heard)
 
@@ -96,7 +96,7 @@ class DlDeviceTest {
     }
 
     @Test
-    fun cancelLeavesNoYtdlpOrFfmpegBehind() = runBlocking {
+    fun cancelLeavesNoYtdlpOrFfmpegBehind() = runBlocking<Unit> {
         val heard = Heard()
         val run = runs.start(DlRequest("device-test-2", SAMPLE, DlKind.AUDIO, AudioQuality.MP3_320), heard)
         // Cancel as soon as yt-dlp says anything.

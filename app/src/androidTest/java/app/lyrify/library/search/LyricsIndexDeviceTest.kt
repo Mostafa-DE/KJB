@@ -53,7 +53,7 @@ class LyricsIndexDeviceTest {
     }
 
     @Test
-    fun linesAreFoundAtTheStartOfWordsWithTheirTime() = runBlocking {
+    fun linesAreFoundAtTheStartOfWordsWithTheirTime() = runBlocking<Unit> {
         store.put(listOf(song("/made/up/Paper Lantern.mp3", 1, "[00:01.50]Paper boats on the river\n[00:07.25]Lanterns low and bright\n[00:12.00]Hold the lantern, hold the line\n")))
         store.put(listOf(song("/made/up/Ember Road.flac", 1, "Ember on the water\nPaper skies above the road\n")))
 
@@ -70,7 +70,7 @@ class LyricsIndexDeviceTest {
     }
 
     @Test
-    fun aSongStoredAgainLosesItsOldLinesAndARemovedOneLeaves() = runBlocking {
+    fun aSongStoredAgainLosesItsOldLinesAndARemovedOneLeaves() = runBlocking<Unit> {
         store.put(listOf(song("/made/up/Paper Lantern.mp3", 1, "[00:01.50]Paper boats on the river\n")))
         store.put(listOf(song("/made/up/Paper Lantern.mp3", 2, "[00:03.00]Harbour lights are calling\n")))
 
@@ -85,7 +85,7 @@ class LyricsIndexDeviceTest {
 
     /** A search reads one page of songs, by path, and counts them all with a query of its own. */
     @Test
-    fun aSearchReadsOnePageByPathAndCountsApart() = runBlocking {
+    fun aSearchReadsOnePageByPathAndCountsApart() = runBlocking<Unit> {
         (9 downTo 1).forEach { n -> store.put(listOf(song("/made/up/Song $n.mp3", 1, "[00:01.00]Paper boats on the river\n"))) }
 
         assertEquals(9, store.count(listOf("p")))
@@ -97,7 +97,7 @@ class LyricsIndexDeviceTest {
 
     /** Other scripts are words to the unicode61 tokenizer, and nothing typed reaches MATCH as its syntax. */
     @Test
-    fun otherScriptsAreFoundAndQuerySyntaxNeverFails() = runBlocking {
+    fun otherScriptsAreFoundAndQuerySyntaxNeverFails() = runBlocking<Unit> {
         val path = "/made/up/Harbour Light.mp3"
         store.put(listOf(song(path, 1, "[00:01.00]Ο φάρος μετρά τα κύματα\n[00:02.00]灯台が波を数える\n[00:03.00]Near the harbour or the hill\n")))
         val greek = StoredLine(path, 1_000, "Ο φάρος μετρά τα κύματα")
@@ -119,7 +119,7 @@ class LyricsIndexDeviceTest {
      * the time, the size and the counts.
      */
     @Test
-    fun buildTimeAndSize() = runBlocking {
+    fun buildTimeAndSize() = runBlocking<Unit> {
         val random = Random(7)
         val words = (1..3_000).map { n -> (0..(n % 3)).joinToString("") { SYLLABLES[random.nextInt(SYLLABLES.size)] } }
         fun line() = (1..random.nextInt(4, 10)).joinToString(" ") { words[(random.nextDouble().let { it * it * it } * words.size).toInt()] }
