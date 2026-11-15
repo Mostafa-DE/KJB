@@ -39,6 +39,7 @@ import androidx.core.net.toUri
 import app.lyrify.LOG_TAG
 import app.lyrify.Lyrify
 import app.lyrify.R
+import app.lyrify.backup.ImportFormats
 import app.lyrify.backup.M3u
 import app.lyrify.backup.M3uDocuments
 import app.lyrify.backup.M3uImport
@@ -81,6 +82,14 @@ internal fun importResult(document: String, read: M3uRead, resolver: SongResolve
         is M3uRead.NotM3u -> ImportResult.Failed(document, name, R.string.m3u_not_m3u)
     }
 }
+
+/**
+ * The [picked] files (each its document and what it read) that go to Import from app's sheet instead ([ImportHandoff]):
+ * Samsung Music's favourites file ([ImportFormats.isSamsungFavourites]), so its songs go to Favourites as Import from
+ * app takes them, never into a playlist of its name. Every other file stays in this sheet.
+ */
+internal fun forImportSheet(picked: List<Pair<String, M3uRead>>): List<String> =
+    picked.filter { (_, file) -> ImportFormats.isSamsungFavourites(file.name) }.map { it.first }
 
 /** The sheet lists this many songs of a kind (missing, or matched by name), then "And 12 more". */
 private const val SHOWN: Int = 50
@@ -135,7 +144,13 @@ fun rememberM3uActions(): M3uActions {
     val say = { text: String, failed: Boolean -> scope.launch { toasts.show(if (failed) Toast(text, R.drawable.ic_error, Tone.ERROR) else Toast(text)) } }
     val load = { documents: List<String> ->
         scope.launch {
-            val read = withContext(Dispatchers.IO) { documents.map { it to files.read(it.toUri()) } }
+            val picked = withContext(Dispatchers.IO) { documents.map { it to files.read(it.toUri()) } }
+            val handed = forImportSheet(picked).toSet()
+            if (handed.isNotEmpty()) {
+                pending.value -= handed
+                ImportHandoff.files.send(handed.toList())
+            }
+            val read = picked.filter { it.first !in handed }
             val resolver = library.resolver()
             val fresh = withContext(Dispatchers.Default) { read.map { (document, file) -> importResult(document, file, resolver, untitled()) } }
             val imports = fresh.filterIsInstance<ImportResult.Found>().map { it.import }

@@ -46,6 +46,7 @@ import app.lyrify.backup.ImportRead
 import app.lyrify.backup.ImportSong
 import app.lyrify.backup.Imports
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -150,6 +151,15 @@ private object ShownSummary {
     var done: ImportSheet.Done? = null
 }
 
+/**
+ * Picked files another page hands to the import sheet, which lives once, in the shell's backup actions: the Playlists
+ * tab's Import sends Samsung Music's favourites file ([forImportSheet]), so it is read as Pick file reads it. Kept
+ * until the sheet takes them.
+ */
+internal object ImportHandoff {
+    val files: Channel<List<String>> = Channel(Channel.UNLIMITED)
+}
+
 /** The sheet lists this many songs or files of a kind, then "And 12 more". */
 private const val SHOWN: Int = 50
 
@@ -190,6 +200,9 @@ fun rememberImportFromApp(): () -> Unit {
     }
     LaunchedEffect(Unit) {
         if (sheet.value == null && picked.value.isNotEmpty()) load(picked.value)
+    }
+    LaunchedEffect(ImportHandoff) {
+        for (documents in ImportHandoff.files) load(listOf(PICKED_FILES) + documents)
     }
     val files = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { documents ->
         if (documents.isNotEmpty()) load(listOf(PICKED_FILES) + documents.map(Uri::toString).distinct())

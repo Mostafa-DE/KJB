@@ -47,6 +47,27 @@ class M3uScreensTest {
     }
 
     @Test
+    fun `Samsung Music's favourites file goes to Import from app, never to a playlist of its name, and the rest of the pick stays here`() {
+        val favourites = DOC to M3uRead.Entries("!#SamsungMusic_favorites#!.m3u", null, listOf(M3uEntry(lantern.path)))
+        val mix = OTHER to M3uRead.Entries("Mix.m3u8", null, listOf(M3uEntry(ferry.path)))
+
+        assertEquals(listOf(DOC), forImportSheet(listOf(mix, favourites)))
+        assertEquals(listOf(DOC), forImportSheet(listOf(DOC to M3uRead.TooBig("!#samsungmusic_FAVORITES#!.M3U8"))))
+        // Every other pick stays here, a near name too.
+        assertEquals(emptyList<String>(), forImportSheet(listOf(mix, DOC to M3uRead.Entries("!#SamsungMusic_favorites#! (1).m3u", null, emptyList()), DOC to M3uRead.Unreadable(null))))
+    }
+
+    @Test
+    fun `the Playlists tab's Import hands those files to the one import sheet, which reads them as Pick file does`() {
+        val m3u = File("src/main/java/app/lyrify/ui/M3uScreens.kt").readText()
+        val import = File("src/main/java/app/lyrify/ui/ImportScreens.kt").readText()
+
+        assertTrue(m3u.contains("ImportHandoff.files.send(handed.toList())"))
+        assertTrue(m3u.contains("val read = picked.filter { it.first !in handed }"))
+        assertTrue(import.contains("for (documents in ImportHandoff.files) load(listOf(PICKED_FILES) + documents)"))
+    }
+
+    @Test
     fun `the summary reads 18 of 20 songs found, and 1 of 1 song found`() {
         val found = plural("m3u_found")
 
@@ -80,5 +101,6 @@ class M3uScreensTest {
 
         /** A picked file, as the sheet keeps it. */
         const val DOC: String = "content://com.android.externalstorage.documents/document/primary%3AMusic%2FRoad%20Trip.m3u8"
+        const val OTHER: String = "content://com.android.externalstorage.documents/document/primary%3AMusic%2FMix.m3u8"
     }
 }
