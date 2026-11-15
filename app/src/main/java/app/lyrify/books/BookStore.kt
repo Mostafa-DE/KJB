@@ -74,10 +74,10 @@ data class BookEntry(
 /** Everything `books.json` holds: the books by [BookEntry.id] and the user's [marks]. */
 data class BookState(val books: Map<String, BookEntry> = emptyMap(), val marks: BookMarks = BookMarks()) {
     /**
-     * [book]'s entry: the one played last of those under its id and under its files' paths (the id a lone file had before
-     * its folder and album named it), so an older one never wins over a newer place, speed or finished; they all go to
-     * its id at the book's next change. A single file's chapters only while they are that file's, as another file of its
-     * folder and album may stand in it now.
+     * [book]'s entry: the one played last of those under its id, its id before PF10 ([oldFolderBookId]), and its files'
+     * paths (the id a lone file had before its folder and album named it), so an older one never wins over a newer place,
+     * speed or finished; they all go to its id at the book's next change. A single file's chapters only while they are
+     * that file's, as another file of its folder and album may stand in it now.
      */
     fun entryOf(book: Book): BookEntry? {
         val entry = keysOf(book).mapNotNull(books::get).maxByOrNull { it.lastPlayedAt ?: Long.MIN_VALUE } ?: return null
@@ -85,8 +85,16 @@ data class BookState(val books: Map<String, BookEntry> = emptyMap(), val marks: 
         return if (own) entry else entry.copy(chapters = null, chaptersStamp = null)
     }
 
-    /** Where `books.json` may keep [book]: its id first (the one kept when none played later), then its files' paths. */
-    private fun keysOf(book: Book): List<String> = (listOf(book.id) + book.parts.map { it.path }).distinct()
+    /**
+     * Where `books.json` may keep [book]: its id first (the one kept when none played later), its id before PF10 when that
+     * entry holds one of its files (another folder's book could have had that id too), then its files' paths.
+     */
+    private fun keysOf(book: Book): List<String> {
+        val paths = book.parts.map { it.path }
+        val files = paths.toHashSet()
+        val old = oldFolderBookId(book.id)?.takeIf { id -> books[id]?.parts?.any(files::contains) == true }
+        return (listOfNotNull(book.id, old) + paths).distinct()
+    }
 
     /**
      * Where [book] stands: its kept part found by path, else by number within the parts; its start when never played.

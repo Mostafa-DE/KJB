@@ -229,6 +229,28 @@ class BookStateTest {
     }
 
     @Test
+    fun `a book kept under its folder id as written before PF10 is found and moved, never by a book whose files it does not hold`() {
+        val book = shelf(road).books.single()
+        val old = road[0].path.substringBeforeLast('/') + "/|Lantern Road"
+        val state = BookState(books = mapOf(old to BookEntry(old, "Lantern Road", parts = road.map { it.path }, place = BookPlace(1, 5_000), partPath = road[1].path, lastPlayedAt = 9)))
+        assertEquals(BookPlace(1, 5_000), state.placeOf(book))
+        assertEquals(setOf(book.id), state.withSpeed(book, Speed(1.5f)).books.keys)
+        // Its queue, kept with that id, still names it.
+        assertEquals(book, shelf(road).book(old))
+        // Two books that had one id then: folder A with album "B/|C", and folder A/|B with album "C". The entry is the one whose files it holds.
+        val first = (1..2).map { song("Audiobooks/A/0$it.mp3", album = "B/|C", durationMs = 60_000, id = 60L + it) }
+        val second = (1..2).map { song("Audiobooks/A/|B/0$it.mp3", album = "C", durationMs = 60_000, id = 70L + it) }
+        val both = shelf(first + second)
+        val shared = first[0].path.substringBeforeLast('/') + "/|B/|C"
+        val kept = BookState(books = mapOf(shared to BookEntry(shared, "C", parts = second.map { it.path }, place = BookPlace(1, 7_000), partPath = second[1].path, lastPlayedAt = 4)))
+        assertEquals(BookPlace(), kept.placeOf(both.bookOf(first[0].path)!!))
+        assertEquals(BookPlace(1, 7_000), kept.placeOf(both.bookOf(second[0].path)!!))
+        assertEquals(setOf(shared), kept.withSpeed(both.bookOf(first[0].path)!!, Speed(2f)).books.keys - both.bookOf(first[0].path)!!.id)
+        // A queue kept with it named both: it names neither now.
+        assertNull(both.book(shared))
+    }
+
+    @Test
     fun `a book down to one file never shows another file's chapters`() {
         val two = road.take(2)
         val first = shelf(two, hidden = listOf(two[1])).books.single()

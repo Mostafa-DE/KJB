@@ -104,8 +104,25 @@ fun userMark(song: Song, marks: BookMarks): Boolean? = when {
     else -> null
 }
 
-/** The id of the folder book of the files in folder [dir] (an absolute path) with album [album]. */
-fun folderBookId(dir: String, album: String?): String = "$dir/|${album.orEmpty()}"
+/**
+ * The id of the folder book of the files in folder [dir] (an absolute path) with album [album]: the two apart by a NUL,
+ * which no path holds, so the id is never a file's path, nor another folder's book's.
+ */
+fun folderBookId(dir: String, album: String?): String = "$dir$FOLDER_BOOK${album.orEmpty()}"
+
+/**
+ * The id [folderBookId] gave the same book before PF10, the folder and the album apart by "/|", which a file's path or
+ * another folder's book could have too: what `books.json`, queues and backups written then name it by. Null for an id
+ * that is no folder book's.
+ */
+fun oldFolderBookId(id: String): String? = id.takeIf { FOLDER_BOOK in it }?.replaceFirst(FOLDER_BOOK, OLD_FOLDER_BOOK)
+
+/** The album folder book [id] names ([folderBookId], or [oldFolderBookId] as a backup made before PF10 has it); null for a path. */
+fun folderBookAlbum(id: String): String? = when {
+    FOLDER_BOOK in id -> id.substringAfter(FOLDER_BOOK)
+    OLD_FOLDER_BOOK in id -> id.substringAfter(OLD_FOLDER_BOOK)
+    else -> null
+}
 
 /**
  * The books among [songs] (the library's, already filtered), by [marks] and the automatic signals, by title. A song
@@ -113,7 +130,8 @@ fun folderBookId(dir: String, album: String?): String = "$dir/|${album.orEmpty()
  * same, or none for all): a group of two or more files is one folder book when its folder is marked or every one of its
  * files has an automatic signal ([autoBook]), so one track tagged Spoken Word never takes its album out of the music; an
  * `.m4b` is always a book of its own, never a part. A lone file is a book when it has a signal of its own or its folder
- * is marked. "Not a book" on a song or its folder keeps it out.
+ * is marked. "Not a book" on a song or its folder keeps it out. Never two books with one id: a file listed twice is
+ * one book, as two books would share one place.
  */
 fun booksOf(songs: List<Song>, marks: BookMarks): List<Book> {
     val books = ArrayList<Book>()
@@ -136,7 +154,7 @@ fun booksOf(songs: List<Song>, marks: BookMarks): List<Book> {
             Book(folderBookId(dir, album), BookKind.FOLDER, album ?: dir.substringAfterLast('/'), authorOf(group), partOrder(group))
         }
     }
-    return books.sortedWith(compareBy<Book, String>(::naturalCompare) { it.title }.thenBy { it.id })
+    return books.distinctBy { it.id }.sortedWith(compareBy<Book, String>(::naturalCompare) { it.title }.thenBy { it.id })
 }
 
 /** What the files of one folder book share: their absolute folder and their album tag (or none). */
@@ -252,6 +270,9 @@ sealed interface BookStatus {
     data object Finished : BookStatus
 }
 
+/** What sets a folder book's folder and album apart in its id ([folderBookId]), and what did before PF10 ([oldFolderBookId]). */
+private const val FOLDER_BOOK: String = "\u0000"
+private const val OLD_FOLDER_BOOK: String = "/|"
 private const val M4B: String = ".m4b"
 private const val M4A: String = ".m4a"
 private const val AUDIOBOOKS: String = "Audiobooks"

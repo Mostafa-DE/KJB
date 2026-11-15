@@ -530,6 +530,16 @@ class BackupNewPhoneTest {
     }
 
     @Test
+    fun `a folder book a backup named the way KJB did before PF10 comes back under its id here`() {
+        val phone = newPhone()
+        val old = OLD + "Audiobooks/Lantern Keeper/|Lantern Keeper"
+
+        move(old = oldPhone().apply { books = BookState(mapOf(old to keeper.copy(id = old))) }, library = oldLibrary + keeperOne + keeperTwo, phone = phone, phoneLibrary = newLibrary + newKeeperOne + newKeeperTwo)
+
+        assertEquals(keeper.copy(id = keeperHere, parts = listOf(newKeeperOne.path, newKeeperTwo.path), partPath = newKeeperTwo.path), phone.books.books[keeperHere])
+    }
+
+    @Test
     fun `a book whose files are all gone is left out and its songs counted as not found, one with a file gone keeps the rest`() {
         val gone = newPhone()
         val half = newPhone()

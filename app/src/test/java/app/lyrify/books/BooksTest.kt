@@ -68,6 +68,23 @@ class BooksTest {
         assertEquals(3_600_000L, book.durationMs)
     }
 
+    /** PF10 review: the id was "<folder>/|<album>", which a file named "|<album>" or a folder named "|..." could have too. */
+    @Test
+    fun `a folder book's id is never a file's path nor another folder's book's, and a file listed twice is one book`() {
+        val road = (1..2).map { song("Audiobooks/Lantern Road/0$it.mp3", album = "Harbour") }
+        val marked = song("Audiobooks/Lantern Road/|Harbour")
+        val nested = (1..2).map { song("Audiobooks/A/0$it.mp3", album = "B/|C") } + (1..2).map { song("Audiobooks/A/|B/0$it.mp3", album = "C") }
+        val songs = road + marked + nested
+
+        val books = booksOf(songs, BookMarks(songs = setOf(marked.path)))
+
+        assertEquals(4, books.size)
+        assertEquals(4, books.map { it.id }.toSet().size)
+        assertTrue(books.filter { it.parts.size > 1 }.none { book -> songs.any { it.path == book.id } })
+        val keeper = song("Audiobooks/Lantern Keeper.m4b")
+        assertEquals(listOf(keeper.path), booksOf(listOf(keeper, keeper), BookMarks()).map { it.id })
+    }
+
     @Test
     fun `a folder of parts with one album makes one folder book in natural order`() {
         val parts = listOf("10", "2", "1").map { n -> song("Audiobooks/Folder Book/$n.mp3", title = n, artist = "Ada Quill", album = "Folder Book", durationMs = 60_000) }
