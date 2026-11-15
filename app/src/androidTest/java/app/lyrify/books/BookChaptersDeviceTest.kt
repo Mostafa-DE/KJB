@@ -28,9 +28,10 @@ import java.io.File
 import java.util.concurrent.TimeUnit
 
 /**
- * Media3 1.11's chapter reading on the phone, through KJB's reader ([Media3Chapters]), on the fixtures in
- * app/src/androidTest/assets/books (silent, made-up names, made by tools/make_book_fixtures.py): an m4b with Nero chpl
- * only, with QuickTime chapters only (the shape LibriVox files have), with both, with none; an mp3 with ID3 CHAP and
+ * Chapter reading on the phone, through KJB's reader ([Media3Chapters]: its QuickTime chapter track reader, then Media3
+ * 1.11's MetadataRetriever), on the fixtures in app/src/androidTest/assets/books (silent, made-up names, made by
+ * tools/make_book_fixtures.py): an m4b with Nero chpl only, with QuickTime chapters only (the shape LibriVox files have),
+ * with both (agreeing, and made to disagree here), with none; an mp3 with ID3 CHAP and
  * CTOC; Ogg Vorbis and Opus with CHAPTER comments; a single mp3 without chapters; and a folder book read back through
  * MediaStore and KJB's library. Each fixture is 12 s with chapters at 0, 4 and 8 s.
  */
@@ -48,8 +49,9 @@ class BookChaptersDeviceTest {
             assets.open("books/$name").use { input -> outputStream().use { input.copyTo(it) } }
         }
 
-    private fun chapters(name: String): List<Chapter> {
-        val file = fixture(name)
+    private fun chapters(name: String): List<Chapter> = chapters(fixture(name))
+
+    private fun chapters(file: File): List<Chapter> {
         val started = System.nanoTime()
         val read = runBlocking { Media3Chapters(context).read(file.path, FIXTURE_MS) }
         Log.i(LOG_TAG, "books device test: ${read?.size} chapters read in ${TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)} ms")
@@ -73,6 +75,36 @@ class BookChaptersDeviceTest {
 
     @Test
     fun anM4bWithBothKindsHasThemOnce() = assertThree(chapters("lantern-both.m4b"))
+
+    /**
+     * lantern-both.m4b with its chpl's titles in capitals (same length, so every box keeps its size): Media3 reads the
+     * capitals, and KJB the QuickTime track's own titles, which win when the two kinds disagree.
+     */
+    @androidx.annotation.OptIn(UnstableApi::class)
+    @Test
+    fun anM4bWhoseTwoKindsDisagreeHasItsQuickTimeChapters() {
+        val file = fixture("lantern-both.m4b")
+        val bytes = file.readBytes()
+        val chpl = (0..bytes.size - 4).single { at -> "chpl".indices.all { bytes[at + it] == "chpl"[it].code.toByte() } }
+        // After the type: version and flags, 4 reserved bytes, the count; then each chapter's 8-byte start, length, title.
+        var at = chpl + 4 + 8
+        repeat(bytes[at++].toInt()) {
+            at += 8
+            val length = bytes[at++].toInt() and 0xFF
+            String(bytes, at, length).uppercase().toByteArray().copyInto(bytes, at)
+            at += length
+        }
+        file.writeBytes(bytes)
+        val media3 = MetadataRetriever.Builder(context, MediaItem.fromUri(Uri.fromFile(file))).build().use { retriever ->
+            val groups = retriever.retrieveTrackGroups().get(30, TimeUnit.SECONDS)
+            (0 until groups.length).flatMap { g -> (0 until groups[g].length).mapNotNull { groups[g].getFormat(it).metadata } }
+                .flatMap { metadata -> (0 until metadata.length()).map(metadata::get) }
+                .filterIsInstance<androidx.media3.extractor.metadata.Chapter>()
+                .map { it.title?.value }
+        }
+        assertEquals(three.map { it.uppercase() }, media3)
+        assertThree(chapters(file))
+    }
 
     @Test
     fun anM4bWithoutChaptersHasNone() = assertEquals(emptyList<Chapter>(), chapters("lantern-no-chapters.m4b"))
