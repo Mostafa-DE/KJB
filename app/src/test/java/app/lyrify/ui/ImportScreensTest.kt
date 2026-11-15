@@ -4,11 +4,13 @@ import app.lyrify.R
 import app.lyrify.backup.ImportBundle
 import app.lyrify.backup.ImportFailure
 import app.lyrify.backup.ImportKind
+import app.lyrify.backup.ImportOutcome
 import app.lyrify.backup.ImportPlan
 import app.lyrify.backup.ImportPlaylist
 import app.lyrify.backup.ImportPlays
 import app.lyrify.backup.ImportQueue
 import app.lyrify.backup.ImportSong
+import app.lyrify.backup.ImportUndo
 import app.lyrify.library.song
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -82,6 +84,31 @@ class ImportScreensTest {
         assertEquals("Playlists and favourites from other players", strings().getValue("import_row_detail"))
         assertEquals("Undo failed", strings().getValue("import_not_undone"))
         assertTrue(strings().getValue("import_not_undone_text").endsWith("."))
+    }
+
+    @Test
+    fun `a summary of favourites alone reads Added N songs to Favourites, and says it once`() {
+        val favourites = ImportOutcome(created = 0, extended = 0, songsAdded = 0, favouritesAdded = 12, countsRaised = 0, undo = ImportUndo(favourites = List(12) { lantern.ref }))
+        val both = favourites.copy(created = 2, undo = favourites.undo.copy(created = mapOf("p1" to listOf(lantern.ref), "p2" to listOf(lantern.ref))))
+
+        assertEquals(SummaryTitle(R.plurals.import_done_to_favourites, 12), summaryTitle(favourites))
+        assertEquals(emptyList<Pair<Int, Int>>(), summaryLines(favourites))
+        assertEquals("Added 12 songs to Favourites", plural("import_done_to_favourites").getValue("other").format("12"))
+        assertEquals("Added 1 song to Favourites", plural("import_done_to_favourites").getValue("one").format("1"))
+        // With playlists, the title counts them and a line the favourites.
+        assertEquals(SummaryTitle(R.plurals.import_done, 2), summaryTitle(both))
+        assertEquals(listOf(R.string.import_done_created to 2, R.string.import_done_favourites to 12), summaryLines(both))
+        assertEquals(SummaryTitle(R.string.import_nothing_new), summaryTitle(favourites.copy(favouritesAdded = 0, undo = ImportUndo())))
+        assertEquals(SummaryTitle(R.string.import_failed), summaryTitle(favourites.copy(complete = false)))
+        assertEquals(listOf(R.string.import_done_favourites to 12), summaryLines(favourites.copy(complete = false)))
+    }
+
+    @Test
+    fun `the Samsung Music hint says its favourites come in too`() {
+        val hint = strings().getValue("import_where_samsung")
+
+        assertTrue(hint, hint.startsWith("Samsung Music: Settings, Manage playlists, Export"))
+        assertTrue(hint, hint.contains("favourites", ignoreCase = true))
     }
 
     @Test

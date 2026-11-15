@@ -87,6 +87,33 @@ internal fun failureText(why: ImportFailure): Int = when (why) {
     ImportFailure.MUSICOLET -> R.string.import_musicolet_text
 }
 
+/** The summary's title: the string [text], or the plural [text] of [count] when it has one. */
+internal data class SummaryTitle(val text: Int, val count: Int? = null)
+
+/**
+ * What the summary's title says the import did: Couldn't import, Nothing new, Imported 12 playlists, Added 340 songs to
+ * Favourites (Samsung Music's favourites file, with no playlist), Import done.
+ */
+internal fun summaryTitle(outcome: ImportOutcome): SummaryTitle = when {
+    !outcome.complete -> SummaryTitle(R.string.import_failed)
+    !outcome.changed -> SummaryTitle(R.string.import_nothing_new)
+    outcome.playlists > 0 -> SummaryTitle(R.plurals.import_done, outcome.playlists)
+    outcome.favouritesAdded > 0 -> SummaryTitle(R.plurals.import_done_to_favourites, outcome.favouritesAdded)
+    else -> SummaryTitle(R.string.import_done_other)
+}
+
+/** The summary's count lines, each its label and count, those at none left out, and the favourites when the title says them. */
+internal fun summaryLines(outcome: ImportOutcome): List<Pair<Int, Int>> {
+    val favouritesInTitle = summaryTitle(outcome).text == R.plurals.import_done_to_favourites
+    return listOf(
+        R.string.import_done_created to outcome.created,
+        R.string.import_done_songs to outcome.songsAdded,
+        R.string.import_done_favourites to if (favouritesInTitle) 0 else outcome.favouritesAdded,
+        R.string.import_done_plays to outcome.countsRaised,
+        R.string.import_done_queues to outcome.queuesAdded,
+    ).filter { it.second > 0 }
+}
+
 /** "Copy list": each song not found on its own line, as the sheet lists it. */
 internal fun missingList(missing: List<ImportSong>): String = missing.joinToString("\n") { it.label }
 
@@ -333,23 +360,12 @@ private fun ImportSheetView(
             },
         ) {
             val outcome = sheet.outcome
-            val title = when {
-                !outcome.complete -> stringResource(R.string.import_failed)
-                !outcome.changed -> stringResource(R.string.import_nothing_new)
-                outcome.playlists > 0 -> pluralStringResource(R.plurals.import_done, outcome.playlists, formatCount(outcome.playlists))
-                else -> stringResource(R.string.import_done_other)
-            }
+            val title = summaryTitle(outcome).let { (text, count) -> if (count == null) stringResource(text) else pluralStringResource(text, count, formatCount(count)) }
             Text(title, style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { heading() })
             if (!outcome.complete) Text(stringResource(R.string.import_partly_text), style = MaterialTheme.typography.bodyLarge, color = colors.onSurfaceVariant)
             if (!outcome.changed) Text(stringResource(R.string.import_nothing_new_text), style = MaterialTheme.typography.bodyLarge, color = colors.onSurfaceVariant)
             if (sheet.undoFailed) Text(stringResource(R.string.import_not_undone_text), style = MaterialTheme.typography.bodyLarge, color = colors.onSurfaceVariant)
-            listOf(
-                R.string.import_done_created to outcome.created,
-                R.string.import_done_songs to outcome.songsAdded,
-                R.string.import_done_favourites to outcome.favouritesAdded,
-                R.string.import_done_plays to outcome.countsRaised,
-                R.string.import_done_queues to outcome.queuesAdded,
-            ).filter { it.second > 0 }.forEach { (label, count) -> CountLine(stringResource(label), count) }
+            summaryLines(outcome).forEach { (label, count) -> CountLine(stringResource(label), count) }
             if (sheet.missing.isNotEmpty()) {
                 NotFound(sheet.missing)
                 LyrifyButton(stringResource(R.string.import_copy), onClick = { onCopy(sheet.missing) }, modifier = Modifier.fillMaxWidth(), kind = ButtonKind.SECONDARY, icon = R.drawable.ic_content_copy)
