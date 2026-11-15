@@ -131,6 +131,15 @@ class QuickTimeChaptersTest {
     }
 
     @Test
+    fun `the audio track's chap names the chapters, ahead of a chap box on a track before it`() {
+        val titles = listOf(sample("Lantern One"), sample("Lantern Two"))
+        // A subtitle track ahead of the audio, naming itself: its one long line is no chapter list.
+        assertEquals(listOf("Lantern One", "Lantern Two"), read(book(titles, subtitle = listOf(4))).map { it.title?.value })
+        // Named only from another track, the chapter track is still read.
+        assertEquals(listOf("Lantern One", "Lantern Two"), read(book(titles, references = emptyList(), subtitle = listOf(2))).map { it.title?.value })
+    }
+
+    @Test
     fun `at most the chapters a book may keep are read`() {
         val many = List(BookState.MAX_CHAPTERS + 50) { sample("Part $it", encd = false) }
         val read = read(book(many, ticks = List(many.size) { TIMESCALE }))
@@ -305,7 +314,8 @@ private fun stsc(chunks: List<Int>): ByteArray {
  * names [references], track 2 the chapters' text track, with the [handler] given), then mdat; or mdat first ([moovLast],
  * as ffmpeg writes). The text track's [samples] last [ticks] each in its [timescale], stored after the audio [chunks]
  * of them at a time. [wide]: a 64-bit mdat size and co64 offsets. [version]: tkhd and mdhd of version 1. [extraVideo]: a
- * track 3 with a video handler, as chapter pictures have.
+ * track 3 with a video handler, as chapter pictures have. [subtitle]: a subtitle track 4 ahead of the audio, its one
+ * sample the first one lasting the whole book, its chap box naming these.
  */
 private fun book(
     samples: List<ByteArray>,
@@ -320,6 +330,7 @@ private fun book(
     references: List<Int> = listOf(2),
     extraVideo: Boolean = false,
     chpl: ByteArray? = null,
+    subtitle: List<Int>? = null,
 ): ByteArray {
     require(chunks.sum() == samples.size)
     val ftyp = box("ftyp", fourcc("M4B "), u32(0x200), fourcc("M4B "), fourcc("mp42"), fourcc("isom"))
@@ -339,7 +350,11 @@ private fun book(
         )
         val textTrack = box("trak", tkhd(version, 2), box("mdia", mdhd(version, timescale, ticks.sum()), hdlr(handler), box("minf", box("gmhd", ByteArray(8)), stbl)))
         val videoTrack = if (extraVideo) box("trak", tkhd(version, 3), box("mdia", mdhd(version, 600, 0), hdlr("vide"), box("minf", box("stbl", stts(listOf(600)), stsz(listOf(4)), stsc(listOf(1)), full("stco", 0, u32(1), u32(mdatAt + mdatHeader)))))) else ByteArray(0)
-        return box("moov", full("mvhd", 0, ByteArray(96)), audioTrack, textTrack, videoTrack, chpl?.let { box("udta", it) } ?: ByteArray(0))
+        val subtitleTrack = subtitle?.let { names ->
+            val table = box("stbl", full("stsd", 0, u32(1), box("text", ByteArray(51))), stts(listOf(ticks.sum())), stsz(listOf(samples.first().size)), stsc(listOf(1)), full("stco", 0, u32(1), u32(offsets.first())))
+            box("trak", tkhd(version, 4), box("tref", box("chap", *names.map { u32(it.toLong()) }.toTypedArray())), box("mdia", mdhd(version, timescale, ticks.sum()), hdlr("sbtl"), box("minf", box("gmhd", ByteArray(8)), table)))
+        } ?: ByteArray(0)
+        return box("moov", full("mvhd", 0, ByteArray(96)), subtitleTrack, audioTrack, textTrack, videoTrack, chpl?.let { box("udta", it) } ?: ByteArray(0))
     }
     val mdatBox = if (wide) cat(listOf(u32(1), fourcc("mdat"), u64(16L + mdat.size), mdat)) else box("mdat", mdat)
     if (moovLast) return cat(listOf(ftyp, mdatBox, moov(ftyp.size.toLong())))

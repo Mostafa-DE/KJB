@@ -113,14 +113,14 @@ private fun titleOf(mark: Media3Chapter): String? {
 
 /**
  * The chapters of an MP4's QuickTime chapter track, the shape most m4b books have (LibriVox's among them): the text track a
- * `moov/trak/tref/chap` box names, one chapter a sample, starting at its `stts` time in that track's own `mdhd` timescale
- * and lasting its duration; the sample's place from `stsz` or `stz2`, `stsc` and `stco` or `co64`; its text a 16-bit
- * length, then UTF-8, or UTF-16 after its byte order mark. As Media3 chapters, so [chaptersOf] orders and limits them as
- * any other. Media3's MetadataRetriever never gives these: it reads an MP4 without sample tables, and Media3 reads a
- * chapter track only with every track's table built (a 6 h book's half million audio samples) and its text as UTF-8 only.
- * Empty for a file that is no MP4 or has no such track. Bounded for any file: at most [BookState.MAX_CHAPTERS] samples and
- * [Mp4Boxes.MAX_BOXES] box headers, every table read only as far as its box and those samples, nothing past the file's end.
- * The [file] is only read: a channel opened for reading.
+ * `moov/trak/tref/chap` box names, the audio track's first, one chapter a sample, starting at its `stts` time in that
+ * track's own `mdhd` timescale and lasting its duration; the sample's place from `stsz` or `stz2`, `stsc` and `stco` or
+ * `co64`; its text a 16-bit length, then UTF-8, or UTF-16 after its byte order mark. As Media3 chapters, so [chaptersOf]
+ * orders and limits them as any other. Media3's MetadataRetriever never gives these: it reads an MP4 without sample
+ * tables, and Media3 reads a chapter track only with every track's table built (a 6 h book's half million audio samples)
+ * and its text as UTF-8 only. Empty for a file that is no MP4 or has no such track. Bounded for any file: at most
+ * [BookState.MAX_CHAPTERS] samples and [Mp4Boxes.MAX_BOXES] box headers, every table read only as far as its box and
+ * those samples, nothing past the file's end. The [file] is only read: a channel opened for reading.
  */
 @OptIn(UnstableApi::class)
 fun quickTimeChapters(file: SeekableByteChannel): List<Media3Chapter> {
@@ -129,17 +129,20 @@ fun quickTimeChapters(file: SeekableByteChannel): List<Media3Chapter> {
     val tracks = boxes.children(moov).filter { it.type == TRAK }.map { trak ->
         val inside = boxes.children(trak)
         val chapters = inside.firstOrNull { it.type == TREF }?.let(boxes::children)?.firstOrNull { it.type == CHAP }?.let(boxes::trackIds).orEmpty()
-        Mp4Track(inside.firstOrNull { it.type == TKHD }?.let(boxes::trackId), chapters, inside.firstOrNull { it.type == MDIA })
+        val media = inside.firstOrNull { it.type == MDIA }
+        Mp4Track(inside.firstOrNull { it.type == TKHD }?.let(boxes::trackId), chapters, media, sound = media?.let { boxes.handler(boxes.children(it)) } == SOUN)
     }
-    return tracks.flatMap { it.chapters }.distinct().asSequence()
+    // The audio track's references first: they name the book's chapters. Another track's chap box (a subtitle track's,
+    // naming itself, say) is tried only after them, as Media3 takes one from any track.
+    return tracks.sortedByDescending { it.sound }.flatMap { it.chapters }.distinct().asSequence()
         .mapNotNull { id -> tracks.firstOrNull { it.id == id }?.media }
         .map(boxes::chapterTrack)
         .firstOrNull { it.isNotEmpty() }
         .orEmpty()
 }
 
-/** A track as [quickTimeChapters] needs it: its id, the ids its `tref/chap` names, and its `mdia` box. */
-private class Mp4Track(val id: Long?, val chapters: List<Long>, val media: Mp4Box?)
+/** A track as [quickTimeChapters] needs it: its id, the ids its `tref/chap` names, its `mdia` box, and whether it is [sound]. */
+private class Mp4Track(val id: Long?, val chapters: List<Long>, val media: Mp4Box?, val sound: Boolean)
 
 /** A box's [type] and its body, from [start] to [end] in the file. */
 private class Mp4Box(val type: Int, val start: Long, val end: Long) {
@@ -183,11 +186,13 @@ private class Mp4Boxes(private val file: SeekableByteChannel) {
         return List(count) { ids.u32(it * 4) }
     }
 
+    /** The handler of the track whose `mdia` holds the boxes [inside] (`soun`, `text`, `vide`...); null without one. */
+    fun handler(inside: List<Mp4Box>): Int? = inside.firstOrNull { it.type == HDLR }?.let { body(it, 8, 4) }?.int(0)
+
     /** The chapters of the track whose `mdia` is [media]: none unless it is a text track with every table it needs. */
     fun chapterTrack(media: Mp4Box): List<Media3Chapter> {
         val inside = children(media)
-        val handler = inside.firstOrNull { it.type == HDLR }?.let { body(it, 8, 4) }?.int(0)
-        if (handler !in TEXT_HANDLERS) return emptyList()
+        if (handler(inside) !in TEXT_HANDLERS) return emptyList()
         val timescale = inside.firstOrNull { it.type == MDHD }?.let(::timescale)?.takeIf { it > 0 } ?: return emptyList()
         val tables = inside.firstOrNull { it.type == MINF }?.let(::children)?.firstOrNull { it.type == STBL }?.let(::children) ?: return emptyList()
         fun table(type: Int) = tables.firstOrNull { it.type == type }
@@ -363,6 +368,9 @@ private val CO64 = fourcc("co64")
 
 /** The handlers of a track that holds chapter titles: QuickTime text, and Apple's subtitle tracks. */
 private val TEXT_HANDLERS = setOf(fourcc("text"), fourcc("sbtl"), fourcc("subt"))
+
+/** The handler of an audio track, whose `tref/chap` names the book's chapter track. */
+private val SOUN = fourcc("soun")
 
 /** What makes a single file's kept chapters still its own: its size and change time ([BookEntry.chaptersStamp]). */
 fun chaptersStamp(song: Song): String = "${song.sizeBytes}:${song.modifiedAt ?: 0}"
