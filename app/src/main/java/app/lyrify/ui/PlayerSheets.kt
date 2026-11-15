@@ -81,7 +81,6 @@ import app.lyrify.player.PlayerConnection
 import app.lyrify.player.PlayerExtras
 import app.lyrify.player.PlayerGraph
 import app.lyrify.player.PlayerUi
-import app.lyrify.player.QueueSource
 import app.lyrify.player.SEMITONES
 import app.lyrify.player.SLEEP_CUSTOM_MINUTES
 import app.lyrify.player.SLEEP_CUSTOM_SONGS
@@ -91,12 +90,12 @@ import app.lyrify.player.SPEEDS
 import app.lyrify.player.SPEED_STEPS_PER_X
 import app.lyrify.player.SleepTimer
 import app.lyrify.player.SongState
-import app.lyrify.player.SourceKind
 import app.lyrify.player.Speed
 import app.lyrify.player.abPart
 import app.lyrify.player.sleepAfter
 import app.lyrify.player.sleepFor
 import app.lyrify.player.sleepLeftMs
+import app.lyrify.player.pickedSource
 import app.lyrify.player.toSpot
 import app.lyrify.settings.LibrarySettings
 import java.math.BigDecimal
@@ -639,7 +638,7 @@ internal fun jumpTo(context: Context, song: SongRef, positionMs: Long) {
     }
     val core = PlayerGraph.core(context)
     PlayerExtras.of(context).jumpingTo = song.path
-    core.switch { it.toSpot(song, positionMs, QueueSource(SourceKind.PICKED, "picked:${core.now()}", ""), core.now()) }
+    core.switch { it.toSpot(song, positionMs, pickedSource(""), core.now()) }
     connection.play()
 }
 

@@ -107,6 +107,12 @@ object LibraryTree {
     private const val SEARCH = "search:"
     private const val SONG = '|'
 
+    /**
+     * The car's Songs: every song by title, never the Songs tab's sort and filter, so a place of its own: a tap in the car
+     * never replaces the phone's Songs queue.
+     */
+    private val CAR_SONGS = QueueSource(SourceKind.SONGS, "car-songs", "")
+
     /** The lists whose children are songs: these, and those named by one of [SONG_LIST_PREFIXES]. */
     private val SONG_LISTS = setOf(SONGS, FAVOURITES, MOST_PLAYED, RECENTLY_PLAYED, RECENTLY_ADDED)
     private val SONG_LIST_PREFIXES = listOf(QUEUE, PLAYLIST, ALBUM, ARTIST, SEARCH)
@@ -220,7 +226,7 @@ object LibraryTree {
 
     /** The queue list [id] plays as: the kind and key of the same list in the app (its pages and tabs). */
     private fun source(id: String, data: TreeData): QueueSource? = when {
-        id == SONGS -> SongsTabSource
+        id == SONGS -> CAR_SONGS
         id == FAVOURITES -> QueueSource(SourceKind.FAVOURITES, "favourites", "")
         id == MOST_PLAYED -> QueueSource(SourceKind.MOST_PLAYED, "MOST_PLAYED", "")
         id == RECENTLY_PLAYED -> QueueSource(SourceKind.RECENTLY_PLAYED, "RECENTLY_PLAYED", "")

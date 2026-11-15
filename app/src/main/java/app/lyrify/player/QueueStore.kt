@@ -6,6 +6,7 @@ import androidx.datastore.core.DataStoreFactory
 import androidx.datastore.core.Serializer
 import androidx.datastore.core.handlers.ReplaceFileCorruptionHandler
 import app.lyrify.library.SongRef
+import app.lyrify.library.search.searchSource
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
@@ -130,7 +131,7 @@ object QueuesJson {
         val uids = items.map { it.uid }.toSet()
         return Queue(
             id = id,
-            source = QueueSource(kind, source[KEY_KEY]?.text().orEmpty(), source[NAME_KEY]?.text().orEmpty()),
+            source = QueueSource(kind, placeKey(kind, source[KEY_KEY]?.text().orEmpty()), source[NAME_KEY]?.text().orEmpty()),
             items = items,
             index = if (inRange) index!! else items.lastIndex.takeIf { index != null } ?: 0,
             positionMs = if (inRange) stored.long(POSITION_KEY)?.coerceAtLeast(0) ?: 0 else 0,
@@ -143,6 +144,24 @@ object QueuesJson {
             listSize = stored.int(LIST_SIZE_KEY)?.takeIf { size -> items.all { (it.sourceIndex ?: -1) < size } },
         )
     }
+
+    /**
+     * [key] of a list of [kind] as its place is named now: queues stored before one recent queue per place had a key per
+     * sort and filter of the Songs tab (songs:<sort>:<filter>), per search (search:<words>) and per selection
+     * (picked:<time>). A new queue's own key from Add to (ending #q<n>) and every other key stay as they are.
+     */
+    private fun placeKey(kind: SourceKind, key: String): String = when {
+        OWN_KEY.containsMatchIn(key) -> key
+        kind == SourceKind.SONGS && OLD_SONGS_KEY.matches(key) -> SongsTabSource.key
+        kind == SourceKind.SEARCH && OLD_SEARCH_KEY.containsMatchIn(key) -> searchSource("").key
+        kind == SourceKind.PICKED && OLD_PICKED_KEY.matches(key) -> pickedSource("").key
+        else -> key
+    }
+
+    private val OWN_KEY = Regex("""#q\d+$""")
+    private val OLD_SONGS_KEY = Regex("""^songs:[A-Z_]+:[A-Z_]+$""")
+    private val OLD_SEARCH_KEY = Regex("""^search:""")
+    private val OLD_PICKED_KEY = Regex("""^picked:\d+$""")
 
     private fun item(element: JsonElement): QueueItem? {
         val stored = element as? JsonObject ?: return null

@@ -16,7 +16,7 @@ enum class SourceKind { SONGS, ALBUM, ARTIST, FOLDER, GENRE, PLAYLIST, FAVOURITE
 @Serializable
 data class QueueSource(val kind: SourceKind, val key: String, val name: String)
 
-/** The Songs tab, the app's and the car's, whatever its sort and filter: one place (a new order is a new list there). */
+/** The Songs tab, whatever its sort and filter: one place (a new order is a new list there). The car's Songs is its own. */
 val SongsTabSource: QueueSource = QueueSource(SourceKind.SONGS, "songs", "")
 
 /** Songs picked by hand (a selection's Play, Play next or Add to queue without a queue), [name] ("3 songs"): one place. */

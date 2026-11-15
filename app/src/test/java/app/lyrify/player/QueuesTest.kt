@@ -8,6 +8,7 @@ import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 import kotlin.random.Random
 
 class QueuesTest {
@@ -145,6 +146,56 @@ class QueuesTest {
         // A song gone from the list itself (the library changed) makes it another list: a new queue.
         val shrunk = tapped.book.play(album - album[1], 0, SongsTabSource, now = 4)
         assertNotEquals(id, shrunk.book.currentId)
+    }
+
+    /** The uid of [song] in the current queue of [book]. */
+    private fun uidOf(book: QueueBook, song: SongRef) = book.current!!.items.first { it.song.path == song.path }.uid
+
+    @Test
+    fun `a tap on a song taken out of the queue puts it back at its place in the list and plays it, keeping the rest`() {
+        var book = QueueBook().play(album, 0, SongsTabSource, now = 1).book.playNext(listOf(folder[0]), picked, now = 2)!!.book
+        val id = book.currentId!!
+        book = book.remove(id, uidOf(book, album[3]))!!.book
+        val tapped = book.play(album, 3, SongsTabSource, now = 3)
+        assertEquals(id, tapped.book.currentId)
+        assertEquals("Harbour Glass 4", currentName(tapped.book))
+        assertEquals(
+            listOf("Harbour Glass 1", "Rips 1", "Harbour Glass 2", "Harbour Glass 3", "Harbour Glass 4", "Harbour Glass 5", "Harbour Glass 6"),
+            paths(tapped.book.current),
+        )
+        assertEquals(book.jumps + 1, tapped.book.jumps)
+    }
+
+    @Test
+    fun `in a shuffled queue the song put back keeps its list place for when Shuffle goes off`() {
+        var book = QueueBook().play(album, 0, SongsTabSource, now = 1).book.toggleShuffle(Random(3))
+        val id = book.currentId!!
+        book = book.remove(id, uidOf(book, album[4]))!!.book
+        val tapped = book.play(album, 4, SongsTabSource, now = 2).book
+        assertEquals(id, tapped.currentId)
+        assertEquals("Harbour Glass 5", currentName(tapped))
+        assertEquals(album.map { it.path }, tapped.toggleShuffle(Random(3)).current!!.items.map { it.song.path })
+    }
+
+    @Test
+    fun `a queue stored before the list's length was kept still jumps after its last song is taken out, and learns the length`() {
+        val made = QueueBook().play(album, 0, albumSource, now = 1).book
+        var book = made.copy(queues = made.queues.map { it.copy(listSize = null) })
+        val id = book.currentId!!
+        book = book.remove(id, uidOf(book, album[5]))!!.book
+        val tapped = book.play(album, 2, albumSource, now = 2).book
+        assertEquals(id, tapped.currentId)
+        assertEquals("Harbour Glass 3", currentName(tapped))
+        assertEquals(6, tapped.current!!.listSize)
+        // The length known, a song added to the list (the library changed) makes it another list.
+        assertNotEquals(id, tapped.play(album + song("Harbour Glass 7"), 0, albumSource, now = 3).book.currentId)
+    }
+
+    @Test
+    fun `no place mints its own picked key, so songs picked by hand are one place`() {
+        // Unit tests run in the module's folder.
+        val minted = File("src/main/java").walk().filter { it.extension == "kt" && it.readText().contains("\"picked:") }.map { it.name }.toList()
+        assertEquals(emptyList<String>(), minted)
     }
 
     @Test

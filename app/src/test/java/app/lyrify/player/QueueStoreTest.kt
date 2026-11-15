@@ -52,7 +52,7 @@ class QueueStoreTest {
         var book = QueueBook().play(album, 1, albumSource, now = 10).book
         book = book.play(folderSongs, 0, folderSource, now = 20).book.place(0, 4_000)
         book = book.keep(book.recent.single()).rename(book.recent.single(), "Sunday chores")
-        book = book.play(listOf(song("Loose")), 0, QueueSource(SourceKind.SEARCH, "search:loose", "loose"), now = 30).book
+        book = book.play(listOf(song("Loose")), 0, QueueSource(SourceKind.SEARCH, "search", "loose"), now = 30).book
         book = book.resume(book.saved.single(), now = 40).book.toggleShuffle(Random(5))
         return book.playNext(listOf(song("Loose")), picked, now = 50)!!.book.place(1, 75_000)
     }
@@ -70,6 +70,22 @@ class QueueStoreTest {
         val read = QueuesJson.decode(old)!!
         assertEquals(book().queues.size, read.queues.size)
         assertTrue(read.queues.all { it.startedAt == it.updatedAt && it.startedAt > 0 })
+    }
+
+    @Test
+    fun `queues stored with the old keys per sort, per search and per selection read as their one place`() {
+        fun queue(id: Int, kind: String, key: String) =
+            """{"id":"q$id","source":{"kind":"$kind","key":"$key","name":""},"items":[{"uid":$id,"path":"/storage/emulated/0/Music/$id.mp3","sourceIndex":0}]}"""
+        val keys = listOf(
+            "SONGS" to "songs:ARTIST:SYNCED", "SEARCH" to "search:paper lantern", "PICKED" to "picked:1731600000000",
+            // New queues from Add to keep their own keys, and other lists keep theirs.
+            "PICKED" to "picked:1731600000000#q4", "SEARCH" to "search:paper#q5", "SONGS" to "tab:albums", "SONGS" to "status:SYNCED:x",
+        )
+        val text = """{"schemaVersion":1,"recent":[${keys.indices.joinToString(",") { "\"q${it + 1}\"" }}],"queues":[${keys.mapIndexed { i, (kind, key) -> queue(i + 1, kind, key) }.joinToString(",")}]}"""
+        assertEquals(
+            listOf("songs", "search", "picked", "picked:1731600000000#q4", "search:paper#q5", "tab:albums", "status:SYNCED:x"),
+            QueuesJson.decode(text)!!.queues.map { it.source.key },
+        )
     }
 
     @Test
