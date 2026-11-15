@@ -205,7 +205,7 @@ class GaplessEngine(context: Context, settings: () -> Settings, levels: SongLeve
 
     override fun apply(edit: Edit) {
         when (edit) {
-            is Edit.Remove -> player.removeMediaItem(edit.at)
+            is Edit.Remove -> player.removeMediaItems(edit.at, edit.at + edit.count)
             is Edit.Insert -> player.addMediaItems(edit.at, edit.items.map(itemOf))
             is Edit.Move -> player.moveMediaItem(edit.from, edit.to)
             is Edit.Replace -> {
