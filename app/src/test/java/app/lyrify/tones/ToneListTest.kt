@@ -17,6 +17,7 @@ import org.junit.Assert.fail
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import java.io.File
 
 class ToneListTest {
     @get:Rule
@@ -114,20 +115,51 @@ class ToneListTest {
 
     // The DataStore file
 
+    private val logs = mutableListOf<String>()
+
+    /** The app's `files` folder, where a copy of a list that is not one at all goes. */
+    private val backupDir: File by lazy { folder.newFolder("files") }
+
+    private fun store(file: File, now: Long = NOW) = ToneListStore(tonesStore(file, backupDir, scope, clock = { now }) { synchronized(logs) { logs += it } }) { logs += it }
+
     @Test
-    fun `the store keeps tones in its file and starts empty when the file is damaged`() = runBlocking {
+    fun `the store keeps tones in its file`() = runBlocking {
         val file = folder.root.resolve("tones.json")
-        val logs = mutableListOf<String>()
-        val store = ToneListStore(tonesStore(file, scope) { logs += it }) { logs += it }
+        val store = store(file)
         assertTrue(store.put(tone(41)))
         assertEquals(setOf(41L), store.state.first().tones.keys)
         assertTrue(file.readText().contains("\"41\""))
         assertTrue(store.remove(41))
         assertTrue(store.state.first().tones.isEmpty())
+    }
 
-        val damaged = folder.root.resolve("damaged.json").apply { writeText("not json") }
-        val other = ToneListStore(tonesStore(damaged, scope) { logs += it }) { logs += it }
-        assertEquals(TonesState(), other.state.first())
+    @Test
+    fun `a file that is not a tones list is kept aside before the list starts over`() = runBlocking {
+        val broken = """{"schemaVersion":1,"tones":{"41":{"id":41,"name":"Paper Lantern (KJB)","ki"""
+        val file = folder.root.resolve("tones.json").apply { writeText(broken) }
+
+        assertEquals(TonesState(), store(file).state.first())
+
+        assertEquals(listOf("tones-corrupt-$NOW.json"), backupDir.list()?.toList())
+        assertEquals(broken, File(backupDir, "tones-corrupt-$NOW.json").readText())
+        // The log names the copy and its size, never what the list holds.
+        assertTrue(logs.toString(), logs.any { "tones-corrupt-$NOW.json" in it && "${broken.length} bytes" in it })
         logs.forEach { assertTrue(it, !it.contains("Paper")) }
+    }
+
+    @Test
+    fun `only the newest copy of an unreadable list is kept`() = runBlocking {
+        val first = folder.root.resolve("first.json").apply { writeText("not json") }
+        store(first, now = NOW).state.first()
+        val second = folder.root.resolve("second.json").apply { writeText("not json either") }
+
+        store(second, now = NOW + 1).state.first()
+
+        assertEquals(listOf("tones-corrupt-${NOW + 1}.json"), backupDir.list()?.toList())
+        assertEquals("not json either", File(backupDir, "tones-corrupt-${NOW + 1}.json").readText())
+    }
+
+    private companion object {
+        const val NOW = 1_762_800_000_000L
     }
 }

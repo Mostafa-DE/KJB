@@ -50,12 +50,36 @@ class DuplicatesStoreTest {
     }
 
     @Test
-    fun `a file that is not a memory at all starts over, logging no content`() {
+    fun `a file that is not a memory at all is kept aside, the newest copy only, before the tab starts over, logging no content`() {
         val stored = File(folder.root, "duplicates.json")
         stored.writeText("Lanterns, The Quiet Ferns")
-        assertEquals(DuplicatesMemory(), DuplicatesStore(stored) { logs += it }.load())
-        assertTrue(logs.single().startsWith("duplicates: stored file unreadable"))
-        assertFalse(logs.single().contains("Lanterns"))
+        File(folder.root, "duplicates-corrupt-1.json").writeText("an older one")
+        val store = DuplicatesStore(stored, clock = { NOW }) { logs += it }
+
+        assertEquals(DuplicatesMemory(), store.load())
+        assertTrue(store.save(memory))
+
+        assertEquals(listOf("duplicates-corrupt-$NOW.json", "duplicates.json"), folder.root.list()?.sorted())
+        assertEquals("Lanterns, The Quiet Ferns", File(folder.root, "duplicates-corrupt-$NOW.json").readText())
+        assertTrue(logs.toString(), logs.any { it.startsWith("duplicates: stored file unreadable") && "duplicates-corrupt-$NOW.json" in it })
+        assertFalse(logs.toString(), logs.any { "Lanterns" in it })
+    }
+
+    @Test
+    fun `a file that cannot be read is never written over, and once it reads again it is saved as usual`() {
+        val stored = File(folder.root, "duplicates.json")
+        val store = DuplicatesStore(stored) { logs += it }
+        assertTrue(store.save(memory))
+        assumeTrue(stored.setReadable(false) && !stored.canRead())
+        try {
+            assertEquals(DuplicatesMemory(), store.load())
+            assertFalse(store.save(DuplicatesMemory()))
+        } finally {
+            stored.setReadable(true)
+        }
+
+        assertEquals(memory, store.load())
+        assertTrue(store.save(memory))
     }
 
     @Test
@@ -181,5 +205,9 @@ class DuplicatesStoreTest {
         assertNull(DuplicatesJson.decode("[1,2]"))
         assertNull(DuplicatesJson.decode("{"))
         assertEquals(DuplicatesMemory(), DuplicatesJson.decode("{}"))
+    }
+
+    private companion object {
+        const val NOW = 1_762_800_000_000L
     }
 }
