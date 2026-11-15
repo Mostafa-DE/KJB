@@ -17,15 +17,33 @@ class InfoTest {
 
     private fun names(info: DlInfo) = info.artist to info.title
 
+    /**
+     * The site's own artist and track first; else "A - B" is split only when A is the uploader or the channel (phone
+     * session 10: VidGrab's rule split every "A - B", so a trailer named "A - B" got artist A); else the whole title, by
+     * the uploader. The names are compared without case, spaces, or a trailing " - Topic", VEVO or Official.
+     */
     @Test
-    fun `artist and title come from the site's tags, else "Artist - Title", else the uploader without its Topic`() {
+    fun `artist and title come from the site's tags, else "Artist - Title" by that artist's own channel, else the whole title by the uploader`() {
         val cases = listOf(
-            json("title" to "The Quiet Hours - Paper Lantern (Official Video)", "uploader" to "thequiethoursVEVO") to ("The Quiet Hours" to "Paper Lantern"),
-            json("title" to "Neon Orchard - Glass Tide | Deep House | Free Music", "uploader" to "Free Sounds") to ("Neon Orchard" to "Glass Tide"),
-            json("title" to "Saffron Coast – Low Tide Lights [Official Music Video]", "uploader" to "Saffron Coast") to ("Saffron Coast" to "Low Tide Lights"),
-            json("title" to "Paper Lantern (Lyrics)", "uploader" to "The Quiet Hours - Topic") to ("The Quiet Hours" to "Paper Lantern"),
+            // The site's own artist and track.
             json("title" to "Paper Lantern", "artist" to "The Quiet Hours", "track" to "Paper Lantern (Remastered)", "uploader" to "The Quiet Hours - Topic") to
                 ("The Quiet Hours" to "Paper Lantern (Remastered)"),
+            json("title" to "Glass Label Mix - Whatever Else", "artist" to "Mira Solen", "track" to "Paper Harbour", "uploader" to "Glass Label") to ("Mira Solen" to "Paper Harbour"),
+            // "Artist - Title" by the artist's own channel: as written, in another case, run together, or with VEVO, " - Topic" or Official after it.
+            json("title" to "Saffron Coast \u2013 Low Tide Lights [Official Music Video]", "uploader" to "Saffron Coast") to ("Saffron Coast" to "Low Tide Lights"),
+            json("title" to "The Quiet Hours - Paper Lantern (Official Video)", "uploader" to "thequiethoursVEVO") to ("The Quiet Hours" to "Paper Lantern"),
+            json("title" to "Mira Solen - Paper Harbour", "uploader" to "MIRA SOLEN - Topic") to ("Mira Solen" to "Paper Harbour"),
+            json("title" to "Mira Solen - Paper Harbour", "uploader" to "Mira Solen Official") to ("Mira Solen" to "Paper Harbour"),
+            // The channel's name when the uploader is someone else.
+            json("title" to "Mira Solen - Paper Harbour", "uploader" to "Harbour Uploads", "channel" to "Mira Solen") to ("Mira Solen" to "Paper Harbour"),
+            // Anyone else's "A - B" stays whole, by the uploader.
+            json("title" to "Neon Orchard - Glass Tide | Deep House | Free Music", "uploader" to "Free Sounds") to ("Free Sounds" to "Neon Orchard - Glass Tide"),
+            json("title" to "Tidewater Films - Behind the Scenes Trailer", "uploader" to "Glass Harbour Studio") to ("Glass Harbour Studio" to "Tidewater Films - Behind the Scenes Trailer"),
+            json("title" to "Mira - Paper Harbour", "uploader" to "Mira Solen") to ("Mira Solen" to "Mira - Paper Harbour"),
+            json("title" to "Paper Comet - Teaser") to ("" to "Paper Comet - Teaser"),
+            // No dash: the whole title, by the uploader without its Topic or VEVO.
+            json("title" to "Paper Lantern (Lyrics)", "uploader" to "The Quiet Hours - Topic") to ("The Quiet Hours" to "Paper Lantern"),
+            json("title" to "Paper Lantern", "uploader" to "thequiethoursVEVO") to ("thequiethours" to "Paper Lantern"),
         )
         cases.forEach { (text, want) -> assertEquals(text, want, names(Info.full("https://video.example.com/v", text)!!)) }
     }
