@@ -72,6 +72,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.lyrify.LOG_TAG
 import app.lyrify.R
+import app.lyrify.books.isBookPart
+import app.lyrify.data.LedgerEntry
 import app.lyrify.logFailures
 import app.lyrify.library.Song
 import app.lyrify.lyrics.LocalTrack
@@ -244,6 +246,17 @@ data class SyncEdit(
     }
 }
 
+/**
+ * The editor for the file at [path]: its `.lrc` ([lrc] reads it), else the plain lyrics LRCLIB has for its ledger
+ * [entry] ([plainRecord], [plain] asks), as [SyncEdit.from] tells them. Null for a [book]'s part: books never have
+ * lyrics, so nothing beside it is read and LRCLIB is never asked, whatever its ledger still says from before.
+ */
+suspend fun editorLyrics(path: String, entry: LedgerEntry?, book: Boolean, lrc: suspend (String) -> String?, plain: suspend (Long) -> String?): SyncEdit? {
+    if (book) return null
+    val read = lrc(path)
+    return SyncEdit.from(read, if (read == null) plainRecord(entry)?.let { plain(it) } else null)
+}
+
 /** The editor's lines across a turn of the phone: as JSON in the saved state (the lines stay in memory, never in a log). */
 private val EDIT_SAVER: Saver<SyncEdit?, String> = Saver(
     save = { edit -> edit?.let { Json.encodeToString(SyncEdit.serializer(), it) } },
@@ -278,6 +291,7 @@ fun SyncEditorView(view: FullScreen.SyncEditor) {
     val close = { nav.close(view) }
     val library by remember(context) { PlayerGraph.connection(context) }.library.collectAsStateWithLifecycle()
     val song = library?.resolver?.find(view.song)
+    val book = song != null && isBookPart(song.path, library)
     val entry = song?.let { LocalLyrics.current.ledger.entries[it.path] }
     var edit by rememberSaveable(view, stateSaver = EDIT_SAVER) { mutableStateOf(null) }
     var nothing by remember { mutableStateOf(false) }
@@ -292,13 +306,12 @@ fun SyncEditorView(view: FullScreen.SyncEditor) {
     val player = remember(context) { EditorPlayer(context) }
     var ready by remember { mutableStateOf(false) }
 
-    // The lines, once: what the file or the ledger do later never replaces the user's work here.
+    // The lines, once: what the file or the ledger do later never replaces the user's work here. A book's part has none
+    // ([editorLyrics]), not even lines kept from before it was a book: nothing plays, and nothing can be saved beside it.
     LaunchedEffect(song?.path) {
         val path = song?.path ?: return@LaunchedEffect
-        if (edit == null) {
-            val lrc = withContext(Dispatchers.IO) { readLrc(path) }
-            val plain = if (lrc == null) plainRecord(entry)?.let { plainText(context, it) } else null
-            edit = SyncEdit.from(lrc, plain)
+        if (edit == null || book) {
+            edit = editorLyrics(path, entry, book, { withContext(Dispatchers.IO) { readLrc(it) } }) { plainText(context, it) }
             nothing = edit == null
         }
         if (edit != null && player.open(path)) {
@@ -372,7 +385,7 @@ fun SyncEditorView(view: FullScreen.SyncEditor) {
         }
     }
 
-    val current = edit
+    val current = edit.takeUnless { book }
     val colors = MaterialTheme.colorScheme
     Column(Modifier.fillMaxSize().background(colors.background).statusBarsPadding().navigationBarsPadding()) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp).padding(start = 8.dp, end = 12.dp)) {
@@ -394,6 +407,7 @@ fun SyncEditorView(view: FullScreen.SyncEditor) {
         }
         when {
             library != null && song == null -> EmptyState(EmptyArt.Glyph, stringResource(R.string.player_not_on_phone))
+            book -> EmptyState(EmptyArt.Icon(R.drawable.ic_lyrics, Tone.NONE), stringResource(R.string.book_no_lyrics))
             nothing -> EmptyState(EmptyArt.Icon(R.drawable.ic_lyrics, Tone.NONE), stringResource(R.string.sync_nothing), text = stringResource(R.string.sync_nothing_text))
             current == null || song == null -> Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) { BrandGlyph(width = 28.dp, sweeping = true) }
             else -> {

@@ -1,8 +1,11 @@
 package app.lyrify.ui
 
+import app.lyrify.data.LedgerEntry
+import app.lyrify.data.LyricsStatus
 import app.lyrify.lyrics.LrcFormat
 import app.lyrify.lyrics.LrcLine
 import app.lyrify.lyrics.LrcProblem
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -44,6 +47,22 @@ class SyncEditorTest {
 
         assertNull(SyncEdit.from(null, plain = null))
         assertNull(SyncEdit.from("  \n", plain = " \n"))
+    }
+
+    @Test
+    fun `a book's part opens with nothing to sync, its lrc never read and LRCLIB never asked, whatever the ledger says`() = runTest {
+        val path = "/storage/emulated/0/Audiobooks/Lantern Keeper/Lantern Keeper.m4b"
+        // Looked up as a song before it became a book: LRCLIB has plain lyrics for it.
+        val entry = LedgerEntry(path = path, title = "Lantern Keeper", durationMs = 200_000, status = LyricsStatus.PLAIN_ONLY, lrclibId = 42, updatedAt = 1)
+        var reads = 0
+        var asks = 0
+        val lrc: suspend (String) -> String? = { reads++; null }
+        val ask: suspend (Long) -> String? = { asks++; "Paper lanterns rise\nOver the harbour glass" }
+        assertNull(editorLyrics(path, entry, book = true, lrc, ask))
+        assertEquals(0 to 0, reads to asks)
+        // The same file as a song: its lrc read, and without one LRCLIB's plain lyrics, for Make synced.
+        assertEquals(SyncEdit(SyncMode.MAKE, listOf(EditLine("Paper lanterns rise"), EditLine("Over the harbour glass"))), editorLyrics(path, entry, book = false, lrc, ask))
+        assertEquals(1 to 1, reads to asks)
     }
 
     @Test
