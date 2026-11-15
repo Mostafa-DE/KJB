@@ -1,6 +1,7 @@
 package app.lyrify.addon
 
 import android.os.Environment
+import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import app.lyrify.Lyrify
@@ -41,7 +42,9 @@ import java.io.File
  * bind with its checks and handshake, a lookup, one real short download streamed into KJB dev's test folder (Music/KJB
  * test/, the debug build's fence), tagged by KJB's tag engine and scanned, and a Cancel that leaves no part behind. Needs
  * both installed and All files access for KJB dev (each download test is skipped without it). The clip is Wikimedia
- * Commons' public-domain sample "Example.ogg", a few seconds long. The lyrics step is recorded, not run.
+ * Commons' public-domain sample "Example.ogg", a few seconds long. The lyrics step is recorded, not run. The lookup and the
+ * download each check, from `dumpsys activity services`, that the add-on works in its own foreground service (dataSync)
+ * while it has the link, that KJB binds it with BIND_IMPORTANT, and that it leaves the foreground after (AD9).
  */
 @RunWith(AndroidJUnit4::class)
 class DownloadsDeviceTest {
@@ -84,7 +87,7 @@ class DownloadsDeviceTest {
         val full = CompletableDeferred<DlInfo>()
         val failed = CompletableDeferred<DlEnd.Failed>()
         connect().use { session ->
-            session.port.info(
+            val lookup = session.port.info(
                 SAMPLE,
                 object : DlLookupEvents {
                     override fun onInfo(info: DlInfo) {
@@ -96,13 +99,26 @@ class DownloadsDeviceTest {
                     }
                 },
             )
+            // As the save sheet does: the add-on's own foreground service once it took the link.
+            assertTrue("the phone let KJB start the add-on's foreground service", session.foreground())
+            val during = AddonServices.once(KjbAddons.DOWNLOADS, foreground = true)
+            Log.i(TAG, "the add-on during the lookup $lookup: ${AddonServices.summary(during)}")
             runBlocking {
                 withTimeout(TIMEOUT_MS) {
                     while (!full.isCompleted && !failed.isCompleted) delay(100)
                 }
             }
             assertTrue("$failed", full.isCompleted)
+            assertWorkedInTheForeground(during)
         }
+    }
+
+    /** [during]: the add-on's service while it had the link; it is out of the foreground once it has none. */
+    private fun assertWorkedInTheForeground(during: String) {
+        assertTrue(during, "isForeground=true" in during && "types=${AddonServices.DATA_SYNC}" in during)
+        assertTrue("bound with BIND_AUTO_CREATE and BIND_IMPORTANT: $during", "CR IMP " in during)
+        val after = AddonServices.once(KjbAddons.DOWNLOADS, foreground = false)
+        assertFalse("out of the foreground once the work ended: $after", "isForeground=true" in after)
     }
 
     @Test
@@ -110,7 +126,16 @@ class DownloadsDeviceTest {
         assumeTrue("All files access for KJB dev", Environment.isExternalStorageManager())
         val steps = Steps(PhoneSteps(context))
         connect().use { session ->
-            val outcome = runBlocking { withTimeout(TIMEOUT_MS) { DownloadRunner(session.port, session.death, finish(steps)).run(item("devtest${System.nanoTime()}")) {} } }
+            // The add-on's service as the download's first progress comes, once KJB started it for the foreground.
+            var during: String? = null
+            val runner = DownloadRunner(session.port, session.death, finish(steps), foreground = session::foreground)
+            val outcome = runBlocking {
+                withTimeout(TIMEOUT_MS) {
+                    runner.run(item("devtest${System.nanoTime()}")) { if (during == null) during = AddonServices.once(KjbAddons.DOWNLOADS, foreground = true) }
+                }
+            }
+            Log.i(TAG, "the add-on during the download: ${during?.let(AddonServices::summary)}")
+            assertWorkedInTheForeground(checkNotNull(during) { "no progress came: $outcome" })
 
             assertTrue("$outcome", outcome is DownloadOutcome.Saved)
             val saved = File((outcome as DownloadOutcome.Saved).path)
@@ -145,6 +170,7 @@ class DownloadsDeviceTest {
     }
 
     private companion object {
+        const val TAG = "DownloadsDeviceTest"
         const val SAMPLE = "https://upload.wikimedia.org/wikipedia/commons/c/c8/Example.ogg"
         const val TIMEOUT_MS = 180_000L
         const val CANCEL_AFTER_MS = 1_500L

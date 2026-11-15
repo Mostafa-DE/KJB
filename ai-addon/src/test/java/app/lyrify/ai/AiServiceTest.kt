@@ -609,142 +609,14 @@ class AiServiceTest {
         assertEquals("result Transcribed", heard.events.last())
     }
 
-    // The add-on's own foreground service while a job works, which a phone's app freezer leaves alone
-
-    /** What a tap on the notification opens, as its creator's uid: KJB's PendingIntent on the phone. */
-    private data class Tap(val uid: Int)
-
-    private class FakeForeground(private val refuses: Boolean = false) : ForegroundPort<Tap> {
-        val calls = mutableListOf<String>()
-
-        override fun startForeground(type: Int, tap: Tap?) {
-            val name = when (type) {
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING -> "mediaProcessing"
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC -> "dataSync"
-                else -> "type $type"
-            }
-            calls += "start $name ${tap?.uid}"
-            // ForegroundServiceStartNotAllowedException is one: Android 12+ refusing it now, or Android 15+ after the day's time ran out.
-            if (refuses) throw IllegalStateException("not allowed now")
-        }
-
-        override fun stopForeground() {
-            calls += "stopForeground"
-        }
-
-        override fun stopSelf(startId: Int?) {
-            calls += "stopSelf ${startId ?: "all"}"
-        }
-    }
-
-    private val kjb = Tap(KJB_UID)
-    private var busy = true
-    private var jobsEnded = 0
-
-    private fun foreground(port: FakeForeground, sdk: Int = 36) =
-        JobForeground(sdk, port, busy = { busy }, fromKjb = { it.uid == KJB_UID }, endJob = { jobsEnded++ })
+    // The add-on's own foreground service while a job works (the logic: :addon-shared's AddonKeepAliveTest)
 
     @Test
-    fun `KJB's start while a job runs goes into the foreground at once, mediaProcessing from Android 15, dataSync before it`() {
-        for ((sdk, type) in listOf(37 to "mediaProcessing", 35 to "mediaProcessing", 34 to "dataSync", 30 to "dataSync")) {
-            val port = FakeForeground()
-            foreground(port, sdk).start(startId = 1, tap = kjb)
-            assertEquals("Android API $sdk", listOf("start $type $KJB_UID"), port.calls)
-        }
-    }
-
-    @Test
-    fun `the foreground is left once no job is left, not while the next one runs`() {
-        val port = FakeForeground()
-        val foreground = foreground(port)
-        foreground.start(1, kjb)
-
-        foreground.jobEnded() // the next song's job already started
-        assertEquals(listOf("start mediaProcessing $KJB_UID"), port.calls)
-        busy = false
-        foreground.jobEnded()
-        foreground.jobEnded()
-
-        assertEquals(listOf("start mediaProcessing $KJB_UID", "stopForeground", "stopSelf 1"), port.calls)
-        busy = true
-        foreground.start(2, kjb) // the next song
-        busy = false
-        foreground.jobEnded()
-        assertEquals(listOf("start mediaProcessing $KJB_UID", "stopForeground", "stopSelf 2"), port.calls.takeLast(3))
-    }
-
-    @Test
-    fun `a start that comes after its job ended goes into the foreground, as Android requires, and out at once`() {
-        val port = FakeForeground()
-        val foreground = foreground(port)
-        busy = false
-
-        foreground.start(3, kjb)
-        foreground.jobEnded()
-        foreground.unbound()
-
-        assertEquals(listOf("start mediaProcessing $KJB_UID", "stopForeground", "stopSelf 3"), port.calls)
-    }
-
-    @Test
-    fun `a start from anyone but KJB is refused, answered so that Android does not end the add-on, and shows none of theirs`() {
-        val port = FakeForeground()
-        val foreground = foreground(port)
-
-        foreground.start(1, Tap(OTHER_UID))
-        foreground.start(2, null) // no tap at all
-        assertEquals(
-            listOf("start mediaProcessing null", "stopForeground", "stopSelf 1", "start mediaProcessing null", "stopForeground", "stopSelf 2"),
-            port.calls,
-        )
-
-        // While KJB's job holds the foreground, a refused start changes nothing.
-        port.calls.clear()
-        foreground.start(3, kjb)
-        foreground.start(4, Tap(OTHER_UID))
-        assertEquals(listOf("start mediaProcessing $KJB_UID"), port.calls)
-        busy = false
-        foreground.jobEnded()
-        assertEquals(listOf("start mediaProcessing $KJB_UID", "stopForeground", "stopSelf 4"), port.calls)
-    }
-
-    @Test
-    fun `a phone that refuses the foreground service leaves the job to run without it, and nothing throws`() {
-        val port = FakeForeground(refuses = true)
-        val foreground = foreground(port)
-
-        foreground.start(1, kjb)
-        busy = false
-        foreground.jobEnded()
-        foreground.unbound()
-
-        assertEquals(listOf("start mediaProcessing $KJB_UID", "stopSelf 1"), port.calls)
-    }
-
-    @Test
-    fun `KJB letting go leaves the foreground`() {
-        val port = FakeForeground()
-        val foreground = foreground(port)
-        foreground.start(1, kjb)
-
-        foreground.unbound()
-
-        assertEquals(listOf("start mediaProcessing $KJB_UID", "stopForeground", "stopSelf 1"), port.calls)
-    }
-
-    @Test
-    fun `the time running out leaves the foreground there and then, and ends the job under way`() {
-        val port = FakeForeground()
-        val foreground = foreground(port)
-        foreground.start(1, kjb)
-
-        foreground.timeUp()
-
-        assertEquals(1, jobsEnded)
-        assertEquals(listOf("start mediaProcessing $KJB_UID", "stopForeground", "stopSelf all"), port.calls)
-        busy = false
-        foreground.jobEnded()
-        assertEquals("left already", 3, port.calls.size)
+    fun `a job's foreground service is mediaProcessing from Android 15, dataSync before it`() {
+        assertEquals(ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING, jobForegroundType(37))
+        assertEquals(ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING, jobForegroundType(35))
+        assertEquals(ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC, jobForegroundType(34))
+        assertEquals(ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC, jobForegroundType(30))
     }
 
     @Test
@@ -756,10 +628,5 @@ class AiServiceTest {
         assertEquals("KJB AI is working", string("work_title"))
         // No placeholder: nothing of a job can be put into either.
         assertFalse(listOf("work_channel", "work_title").any { '%' in string(it).orEmpty() })
-    }
-
-    private companion object {
-        const val KJB_UID = 10_279
-        const val OTHER_UID = 10_301
     }
 }

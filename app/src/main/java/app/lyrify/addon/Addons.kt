@@ -51,7 +51,8 @@ data class AddonApk(val stem: String, val url: String, val sha256: String, val b
 /**
  * One of KJB's add-ons, as KJB gets it, checks it and binds it: its package and pinned certificate (this build type's:
  * app.lyrify.ai.debug beside KJB dev), its bound service and the bind permission it alone defines, its APK on the release,
- * and [folder], where KJB's cache keeps the APK while it is got. [label] names it in logcat.
+ * and [folder], where KJB's cache keeps the APK while it is got. [label] names it in logcat. [exemption]: its activity
+ * that asks to be left out of the phone's battery optimisation (AddonExemptions).
  */
 data class KjbAddon(
     val label: String,
@@ -61,6 +62,7 @@ data class KjbAddon(
     val permission: String,
     val apk: AddonApk,
     val folder: String,
+    val exemption: String,
 )
 
 /** KJB's add-ons, each signed with KJB's key: the AI (lyrify-bench handoff/ai-addon-design.md) and Downloads (downloads-addon-design.md). */
@@ -73,6 +75,7 @@ object KjbAddons {
         permission = AddonNames.permission(BuildConfig.AI_ADDON_PACKAGE),
         apk = AddonApk("KJB-AI", BuildConfig.AI_ADDON_URL, BuildConfig.AI_ADDON_SHA256, BuildConfig.AI_ADDON_BYTES),
         folder = "ai-addon",
+        exemption = AddonNames.EXEMPTION,
     )
 
     val DOWNLOADS: KjbAddon = KjbAddon(
@@ -83,6 +86,7 @@ object KjbAddons {
         permission = DlNames.permission(BuildConfig.DL_ADDON_PACKAGE),
         apk = AddonApk("KJB-Downloads", BuildConfig.DL_ADDON_URL, BuildConfig.DL_ADDON_SHA256, BuildConfig.DL_ADDON_BYTES),
         folder = "dl-addon",
+        exemption = DlNames.EXEMPTION,
     )
 }
 

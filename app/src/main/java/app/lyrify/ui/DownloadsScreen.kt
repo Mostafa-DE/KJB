@@ -644,7 +644,8 @@ private class LinkLookup(private val context: Context, private val scope: Corout
                     session = connection.session
                     withContext(Dispatchers.Main) { addon = AddonState.Ready }
                     lookup = try {
-                        connection.session.port.info(url, events)
+                        // Looked up in the add-on's own foreground service, which KJB starts once it took the link.
+                        connection.session.port.info(url, events).also { connection.session.foreground() }
                     } catch (_: AddonDiedException) {
                         withContext(Dispatchers.Main) { failed = DlFailure.ENGINE }
                         null

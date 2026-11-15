@@ -6,6 +6,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.PermissionInfo
@@ -21,8 +22,11 @@ import android.os.RemoteCallbackList
 import android.os.RemoteException
 import android.os.SystemClock
 import android.util.Log
-import androidx.core.content.IntentCompat
+import app.lyrify.addon.shared.AddonKeepAlive
 import app.lyrify.addon.shared.CallerCheck
+import app.lyrify.addon.shared.ExemptionActivity
+import app.lyrify.addon.shared.ForegroundPort
+import app.lyrify.addon.shared.JobForeground
 import app.lyrify.ai.api.AddonNames
 import app.lyrify.ai.api.AddonStatus
 import app.lyrify.ai.api.IAiAddon
@@ -395,134 +399,40 @@ class AddonJobs(
     }
 }
 
-/** What [JobForeground] has Android do for the service; [Tap] is what a tap on its notification opens (KJB's PendingIntent). */
-interface ForegroundPort<Tap : Any> {
-    /** Service.startForeground with the add-on's notice, of [type] (ServiceInfo.FOREGROUND_SERVICE_TYPE_*); throws what Android throws. */
-    fun startForeground(type: Int, tap: Tap?)
-
-    fun stopForeground()
-
-    /** Service.stopSelf of [startId], or of every start when null. */
-    fun stopSelf(startId: Int?)
-}
-
 /**
- * The add-on's own foreground service while a job works (lyrify-bench handoff/addon-freeze-research.md). A phone's app
- * freezer goes by the app's own state, not by who binds it: Samsung's froze the add-on 20 s into a job, KJB in the
- * foreground, and other makers ship their own. KJB starts the service for the foreground once the add-on took a job
- * ([start]: Context.startForegroundService on its explicit name, under KJB's own foreground), and the add-on goes into
- * the foreground at once, in onStartCommand, as Android requires within seconds: mediaProcessing from Android 15 (long
- * work on media files), dataSync before it. It holds it while a job runs, and leaves it when none is left ([jobEnded]),
- * when KJB lets go ([unbound]), and when Android's time for it runs out ([timeUp], Android 15+), which also ends the job
- * under way ([endJob]). A start from anyone but KJB, by the creator of the [Tap] it brings ([fromKjb]), is refused.
- * Nothing here throws: a phone that refuses the foreground service leaves the job to run without it.
+ * The type of the add-on's foreground service while a song's job works ([JobForeground]): mediaProcessing from Android 15
+ * (long work on media files), dataSync before it, on [sdk] (Build.VERSION.SDK_INT on the phone).
  */
-class JobForeground<Tap : Any>(
-    private val sdk: Int,
-    private val port: ForegroundPort<Tap>,
-    /** Whether a job runs now ([AddonJobs.busy]). */
-    private val busy: () -> Boolean,
-    /** Whether KJB made [Tap] (its creator's uid and certificate, [CallerCheck]). */
-    private val fromKjb: (Tap) -> Boolean,
-    /** Ends the job under way, as try later ([AddonJobs.timeUp]). */
-    private val endJob: () -> Unit,
-    private val log: (String) -> Unit = {},
-) {
-    /** In the foreground for KJB's job. */
-    private var held = false
+@SuppressLint("InlinedApi")
+fun jobForegroundType(sdk: Int): Int =
+    if (sdk >= Build.VERSION_CODES.VANILLA_ICE_CREAM) ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING else ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
 
-    /** The last start Android gave: stopSelf of it ends the service's started state, unless a later one came meanwhile. */
-    private var lastStart = 0
+/** KJB of this build type, signed with its pinned certificate: the one caller of the add-on's service and activity. */
+fun Context.kjbCallers(): CallerCheck = CallerCheck(
+    packageName,
+    BuildConfig.KJB_PACKAGE,
+    BuildConfig.KJB_CERT_SHA256,
+    packagesFor = packageManager::getPackagesForUid,
+    hasCert = { uid, sha -> packageManager.hasSigningCertificate(uid, sha, PackageManager.CERT_INPUT_SHA256) },
+)
 
-    // mediaProcessing only from Android 15: [sdk] is Build.VERSION.SDK_INT on the phone.
-    @SuppressLint("InlinedApi")
-    private val type: Int = if (sdk >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
-        ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING
-    } else {
-        ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
-    }
-
-    /** onStartCommand: [tap] is what the start brought, null when it brought none. */
-    @Synchronized
-    fun start(startId: Int, tap: Tap?) {
-        lastStart = startId
-        val kjb = tap?.takeIf(fromKjb)
-        when {
-            kjb == null -> {
-                log("a start not from KJB was refused")
-                // Android ends a service started for the foreground that stays out of it: one in it for KJB's job has
-                // nothing to answer, any other goes in and out at once.
-                if (!held) inAndOut(startId, tap = null)
-            }
-            busy() -> if (enter(kjb)) held = true else if (!held) port.stopSelf(startId)
-            // The job ended before its start came: in and out, unless still in for it ([jobEnded] is on its way).
-            !held -> inAndOut(startId, kjb)
-        }
-    }
-
-    /** A job ended: out of the foreground when no other runs. */
-    @Synchronized
-    fun jobEnded() {
-        if (held && !busy()) leave(lastStart)
-    }
-
-    /** KJB let go of the add-on (onUnbind). */
-    @Synchronized
-    fun unbound() {
-        if (held) leave(lastStart)
-    }
-
-    /** onTimeout (Android 15+): the job ends as try later, and the service leaves the foreground there and then. */
-    @Synchronized
-    fun timeUp() {
-        log("Android's time for the foreground service ran out")
-        endJob()
-        leave(startId = null)
-    }
-
-    /** Into the foreground; false when Android refuses, and the job runs without it. */
-    private fun enter(tap: Tap?): Boolean = try {
-        port.startForeground(type, tap)
-        true
-    } catch (e: RuntimeException) {
-        // ForegroundServiceStartNotAllowedException (Android 12+: no exemption at this moment; 15+: the day's time used
-        // up) or a SecurityException. KJB's freeze watch covers a phone that freezes the add-on without it.
-        log("the foreground service was refused (${e.javaClass.simpleName})")
-        false
-    }
-
-    private fun inAndOut(startId: Int, tap: Tap?) {
-        if (enter(tap)) port.stopForeground()
-        port.stopSelf(startId)
-    }
-
-    private fun leave(startId: Int?) {
-        port.stopForeground()
-        port.stopSelf(startId)
-        held = false
-    }
+/** The add-on's own request to be left out of the phone's battery optimisation ([ExemptionActivity]), started by KJB only. */
+class AiExemptionActivity : ExemptionActivity() {
+    override val callers: CallerCheck by lazy { kjbCallers() }
 }
 
 /**
  * The add-on's one service, bound by KJB only ([CallerCheck] on every call, behind the signature permission): the AI
  * ([AddonJobs]), the model download ([ModelDownloads]) and the handover of KJB 2.0's models. KJB binds it while the AI
  * works, from its own foreground service, and while its AI page shows. While a song's job runs, KJB also starts it, and
- * it runs in the foreground with its own notification ([JobForeground]): a phone's app freezer leaves alone an app at
- * work in the foreground, not a service another app binds. Nothing here touches ONNX Runtime until a song's engine
- * opens, so the QNN EP registers its library path before any HTP library loads in this process ([QnnEp]).
+ * it runs in the foreground with its own notification ([JobForeground], of [jobForegroundType]): a phone's app freezer
+ * leaves alone an app at work in the foreground, not a service another app binds. Nothing here touches ONNX Runtime until
+ * a song's engine opens, so the QNN EP registers its library path before any HTP library loads in this process ([QnnEp]).
  */
 class AiService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
-    private val callers by lazy {
-        CallerCheck(
-            packageName,
-            BuildConfig.KJB_PACKAGE,
-            BuildConfig.KJB_CERT_SHA256,
-            packagesFor = packageManager::getPackagesForUid,
-            hasCert = { uid, sha -> packageManager.hasSigningCertificate(uid, sha, PackageManager.CERT_INPUT_SHA256) },
-        )
-    }
+    private val callers by lazy { kjbCallers() }
 
     /** Debug builds only: each step of a job in logcat (stages, counts, times), so a phone run shows where a job stands. */
     private val debug: (String) -> Unit = if (BuildConfig.DEBUG) { line -> Log.d(LOG_TAG, line) } else { _ -> }
@@ -550,7 +460,7 @@ class AiService : Service() {
 
     private val foreground by lazy {
         JobForeground(
-            Build.VERSION.SDK_INT,
+            jobForegroundType(Build.VERSION.SDK_INT),
             object : ForegroundPort<PendingIntent> {
                 override fun startForeground(type: Int, tap: PendingIntent?) = this@AiService.startForeground(NOTICE_ID, notice(tap), type)
 
@@ -598,20 +508,12 @@ class AiService : Service() {
      * Android requires within seconds. Never started again by Android on its own.
      */
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        foreground.start(startId, intent?.let(::tapOf))
+        foreground.start(startId, intent?.let(AddonKeepAlive::tap))
         return START_NOT_STICKY
     }
 
     /** Android's time for the foreground service ran out (Android 15+): out of it within seconds, or Android ends the add-on. */
     override fun onTimeout(startId: Int, fgsType: Int) = foreground.timeUp()
-
-    /** The tap KJB's start brings ([AddonNames.EXTRA_TAP]); null when there is none or it cannot be read. */
-    private fun tapOf(intent: Intent): PendingIntent? = try {
-        IntentCompat.getParcelableExtra(intent, AddonNames.EXTRA_TAP, PendingIntent::class.java)
-    } catch (_: RuntimeException) {
-        // Extras another app put there that do not unparcel (BadParcelableException): no tap, so the start is refused.
-        null
-    }
 
     /**
      * The notice while a job works, in a quiet channel: the same words for every job, nothing of the song (KJB's own

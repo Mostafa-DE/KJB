@@ -127,7 +127,34 @@ class DownloadRunnerTest {
     private val saver by lazy { FakeSaver(temp.root) }
     private val heard = mutableListOf<DlProgress>()
 
-    private fun TestScope.running() = backgroundScope.async { DownloadRunner(port, death, saver).run(item, heard::add) }.also { runCurrent() }
+    /** Whether the phone lets the add-on's foreground service start; each start is in [FakePort.calls] for its order. */
+    private var foregroundAllowed = true
+
+    private fun TestScope.running() = backgroundScope.async {
+        DownloadRunner(port, death, saver, foreground = { foregroundAllowed.also { port.calls += "foreground" } }).run(item, heard::add)
+    }.also { runCurrent() }
+
+    @Test
+    fun `the run goes on in the add-on's own foreground service, which KJB starts once the add-on took it`() = runTest {
+        val outcome = running()
+
+        assertEquals(listOf("start d1", "foreground"), port.calls)
+        port.events!!.onFile(file)
+        runCurrent()
+        port.events!!.onEnd(DlEnd.Delivered(1_000, 50))
+        assertEquals(DownloadOutcome.Saved(File(temp.root, "x.mp3").path, null), outcome.await())
+    }
+
+    @Test
+    fun `a phone that refuses the add-on's foreground service still downloads`() = runTest {
+        foregroundAllowed = false
+        val outcome = running()
+        port.events!!.onFile(file)
+        runCurrent()
+        port.events!!.onEnd(DlEnd.Delivered(1_000, 50))
+
+        assertEquals(DownloadOutcome.Saved(File(temp.root, "x.mp3").path, null), outcome.await())
+    }
 
     @Test
     fun `a download goes through - progress, the file opened where it goes, streamed whole, then KJB's own steps`() = runTest {
@@ -137,7 +164,7 @@ class DownloadRunnerTest {
         events.onProgress(DlProgress(DlStage.DOWNLOADING, 40f))
         events.onFile(file)
         runCurrent()
-        assertEquals(listOf("start d1", "deliver 7"), port.calls)
+        assertEquals(listOf("start d1", "foreground", "deliver 7"), port.calls)
         assertEquals(File(temp.root, ".x.part") to File(temp.root, "cover.jpg"), port.delivered)
         events.onEnd(DlEnd.Delivered(1_000, 50))
         runCurrent()

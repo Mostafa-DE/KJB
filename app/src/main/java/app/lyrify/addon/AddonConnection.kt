@@ -6,7 +6,7 @@ import android.os.RemoteException
 import android.util.Log
 import app.lyrify.LOG_TAG
 import app.lyrify.ai.AiResult
-import app.lyrify.ai.api.AddonNames
+import app.lyrify.addon.shared.AddonKeepAlive
 import app.lyrify.ai.api.AddonStatus
 import app.lyrify.ai.api.IAiAddon
 import app.lyrify.ai.api.IAiDownloadCallback
@@ -54,7 +54,7 @@ object Addon {
 
 /**
  * The AI add-on through Android ([AndroidAddon]): its binder as an [AddonPort], and its service started for the foreground
- * for a job with KJB's AI page as the tap on its notice ([AddonNames.EXTRA_TAP]), which also tells the add-on the start
+ * for a job with KJB's AI page as the tap on its notice ([AddonKeepAlive.EXTRA_TAP]), which also tells the add-on the start
  * is KJB's.
  */
 internal class AndroidAddonHost(private val context: Context, addon: KjbAddon) : AddonHost {
@@ -71,7 +71,7 @@ internal class AndroidAddonHost(private val context: Context, addon: KjbAddon) :
             override val port: AddonPort = port
             override val death: Deferred<Unit> = bound.death
 
-            override fun foreground(): Boolean = android.startForeground { it.putExtra(AddonNames.EXTRA_TAP, AiLyrics.page(context)) }
+            override fun foreground(): Boolean = android.startForeground { it.putExtra(AddonKeepAlive.EXTRA_TAP, AiLyrics.page(context)) }
 
             override fun stopService() = android.stopService()
 

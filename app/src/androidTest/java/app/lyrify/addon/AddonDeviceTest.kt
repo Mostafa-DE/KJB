@@ -3,8 +3,6 @@ package app.lyrify.addon
 import android.media.MediaMetadataRetriever
 import android.os.Build
 import android.os.Environment
-import android.os.ParcelFileDescriptor
-import android.os.SystemClock
 import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -99,18 +97,18 @@ class AddonDeviceTest {
                 runBlocking {
                     engine.run(LocalTrack(song.file.path, "Test", null, null, song.durationMs), song.lyrics, { stage ->
                         stages += stage
-                        if (stage == AiStage.SEPARATE) duringJob = addonServiceWhen(foreground = true)
+                        if (stage == AiStage.SEPARATE) duringJob = AddonServices.once(KjbAddons.AI, foreground = true)
                     }) { chunks++ }
                 }
             }
             Log.i(TAG, "result: ${result.javaClass.simpleName}, stages $stages, $chunks chunks")
             val during = checkNotNull(duringJob) { "the job never reached the separation: $stages, ${result.javaClass.simpleName}" }
-            Log.i(TAG, "the add-on during the job: ${during.lines().filter(::foregroundLine).joinToString(" | ") { it.trim() }}")
+            Log.i(TAG, "the add-on during the job: ${AddonServices.summary(during)}")
             assertTrue(during, "isForeground=true" in during)
-            val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) MEDIA_PROCESSING else DATA_SYNC
+            val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) AddonServices.MEDIA_PROCESSING else AddonServices.DATA_SYNC
             assertTrue("$type: $during", "types=$type" in during)
             assertTrue("bound with BIND_AUTO_CREATE and BIND_IMPORTANT: $during", "CR IMP " in during)
-            val after = addonServiceWhen(foreground = false)
+            val after = AddonServices.once(KjbAddons.AI, foreground = false)
             assertFalse("out of the foreground once the job ended: $after", "isForeground=true" in after)
             if (result is AiResult.Failed && result.npu) {
                 // The NPU did not answer in time (another app holding it): the add-on's deadline ended the run cleanly,
@@ -132,30 +130,6 @@ class AddonDeviceTest {
             }
         }
     }
-
-    /**
-     * The add-on's service as `dumpsys activity services` shows it (its record, foreground state and bindings; its
-     * notice carries no song), once its foreground state is [foreground], looked at for up to 5 s: KJB starts the
-     * service right after the job is taken, and it leaves the foreground right after the job's end.
-     */
-    private fun addonServiceWhen(foreground: Boolean): String {
-        val until = SystemClock.elapsedRealtime() + FOREGROUND_WAIT_MS
-        var dump = addonService()
-        while (("isForeground=true" in dump) != foreground && SystemClock.elapsedRealtime() < until) {
-            SystemClock.sleep(LOOK_EVERY_MS)
-            dump = addonService()
-        }
-        return dump
-    }
-
-    private fun addonService(): String =
-        ParcelFileDescriptor.AutoCloseInputStream(
-            InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand("dumpsys activity services ${KjbAddons.AI.packageName}"),
-        ).bufferedReader().use { it.readText() }
-
-    /** The dump's lines worth a log line: the foreground state, why Android allowed it, and the bindings. */
-    private fun foregroundLine(line: String): Boolean =
-        "isForeground=" in line || "infoAllowStartForeground=" in line || "ConnectionRecord{" in line
 
     /** The song the run takes, its length, and its plain lyrics if it has any. [how] it was picked is all logcat gets. */
     private class Pick(val file: File, val durationMs: Long, val lyrics: String?, val how: String)
@@ -267,13 +241,6 @@ class AddonDeviceTest {
 
     private companion object {
         const val TAG = "AddonDeviceTest"
-
-        /** The service's foreground types as the dump prints them: mediaProcessing (Android 15+) and dataSync. */
-        const val MEDIA_PROCESSING = "0x00002000"
-        const val DATA_SYNC = "0x00000001"
-
-        const val FOREGROUND_WAIT_MS = 5_000L
-        const val LOOK_EVERY_MS = 250L
 
         val SONGS = setOf("mp3", "m4a", "flac", "ogg")
 

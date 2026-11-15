@@ -32,10 +32,12 @@ import app.lyrify.Lyrify
 import app.lyrify.R
 import app.lyrify.addon.Addon
 import app.lyrify.addon.AddonDownloads
+import app.lyrify.addon.AddonExemptions
 import app.lyrify.addon.AddonDiedException
 import app.lyrify.addon.AddonLease
 import app.lyrify.addon.AddonPort
 import app.lyrify.addon.Connection
+import app.lyrify.addon.KjbAddons
 import app.lyrify.addon.ModelHandover
 import app.lyrify.addon.RemoteSongEngine
 import app.lyrify.data.LedgerRepository
@@ -188,7 +190,11 @@ class AiWorker(context: Context, params: WorkerParameters) : CoroutineWorker(con
             if (end == AiRunEnd.CRASHED) AiLyrics.held(AiHold.CRASHED)
             if (end == AiRunEnd.MODEL_FAILED) AiLyrics.held(AiHold.MODEL_FAILED)
             if (end == AiRunEnd.NO_NPU) AiLyrics.held(AiHold.NO_NPU)
-            if (end == AiRunEnd.FROZEN) AiLyrics.held(AiHold.FROZEN)
+            if (end == AiRunEnd.FROZEN) {
+                AiLyrics.held(AiHold.FROZEN)
+                // The AI page now says plainly that a locked phone may pause the add-on, unless it is exempt.
+                AddonExemptions.store(context).update { it.pausedOnce(KjbAddons.AI) }
+            }
             // Each end waits for the next period (unplugged, the next hourly look finds the cable again); an add-on that
             // died is bound again sooner, after WorkManager's backoff.
             if (end == AiRunEnd.ADDON_DIED) Result.retry() else Result.success()

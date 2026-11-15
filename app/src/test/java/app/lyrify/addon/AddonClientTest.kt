@@ -570,6 +570,27 @@ class AddonClientTest {
     }
 
     @Test
+    fun `a freeze is its own reason, not the NPU busy the add-on tells once the phone lets it run again`() = runTest {
+        // Phone session 10: the add-on, frozen for minutes, woke and ended its MDX step as NpuBusyException.
+        val host = FakeHost()
+        val engine = RemoteSongEngine(session(host), notes = {})
+        val binding = host.bindings.single()
+        val run = async { runCatching { engine.run(track, null, {}) {} } }
+        runCurrent()
+        binding.port.events!!.onBeat()
+        binding.port.events!!.onStage("SEPARATE")
+        runCurrent()
+
+        advanceTimeBy(RemoteSongEngine.FROZEN_MS + 1)
+        runCurrent()
+        binding.port.events!!.onResult(AiResult.Failed("NpuBusyException: MDX session: no answer from the NPU within 480 s", npu = true))
+        runCurrent()
+
+        val error = run.await().exceptionOrNull()
+        assertTrue(error.toString(), error is AddonFrozenException && error.stage == AiStage.SEPARATE)
+    }
+
+    @Test
     fun `beats keep a first model load of minutes from looking frozen, and are no progress for the first load's limit`() = runTest {
         val host = FakeHost()
         val engine = RemoteSongEngine(session(host), notes = {})

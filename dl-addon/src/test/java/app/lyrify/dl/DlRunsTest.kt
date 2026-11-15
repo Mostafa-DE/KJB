@@ -144,7 +144,11 @@ class DlRunsTest {
         quickInfo = { quick(it) },
         io = StandardTestDispatcher(testScheduler),
         resolve = { host -> listOf(InetAddress.getByName(dns[host] ?: "93.184.216.34")) },
+        ended = { ends++ },
     )
+
+    /** How many times the add-on said a run or a lookup ended: its foreground service is left when it is no longer busy. */
+    private var ends = 0
 
     private val song = DlRequest("k1", "https://video.example.com/watch?v=abc", DlKind.AUDIO, AudioQuality.MP3_320)
     private val audio = ByteArray(600_000) { (it % 251).toByte() }
@@ -578,6 +582,88 @@ class DlRunsTest {
 
         assertTrue(ytdlp.calls.last().startsWith("kill "))
         assertTrue(ytdlp.live.isEmpty())
+    }
+
+    // Busy while it works: the add-on's own foreground service is held from a link taken to its last byte handed back
+
+    @Test
+    fun `a lookup keeps the add-on busy from the link taken to its full info, and says when it ended`() = runTest {
+        ytdlp.scripts += Script.Hang()
+        val runs = runs()
+        assertFalse(runs.busy)
+
+        runs.info("https://youtu.be/abc", Looked())
+        assertTrue("from the moment it takes the link", runs.busy)
+        runCurrent()
+        assertTrue("while yt-dlp looks it up", runs.busy)
+        assertEquals(0, ends)
+
+        ytdlp.live.values.single().complete(YtdlpExit.Done(fullInfo))
+        runCurrent()
+
+        assertFalse(runs.busy)
+        assertEquals(1, ends)
+    }
+
+    @Test
+    fun `a run keeps the add-on busy until its file is handed back to KJB, and says when it ended`() = runTest {
+        memory.lastCheck = now
+        ytdlp.scripts += finished
+        val runs = runs()
+
+        val run = runs.start(song, Heard())
+        assertTrue(runs.busy)
+        runCurrent()
+        assertTrue("waiting for KJB to take the file", runs.busy)
+        assertEquals(0, ends)
+
+        runs.deliver(run, ByteArrayOutputStream(), ByteArrayOutputStream())
+        runCurrent()
+
+        assertFalse(runs.busy)
+        assertEquals(1, ends)
+    }
+
+    @Test
+    fun `a cancelled lookup or run ends its busy time too`() = runTest {
+        ytdlp.scripts += Script.Hang()
+        ytdlp.scripts += Script.Hang()
+        memory.lastCheck = now
+        val runs = runs()
+        val lookup = runs.info("https://video.example.com/w", Looked())
+        val run = runs.start(song, Heard())
+        runCurrent()
+
+        runs.cancelInfo(lookup)
+        runCurrent()
+        assertTrue("the run still works", runs.busy)
+        runs.cancel(run, keepParts = true)
+        runCurrent()
+
+        assertFalse(runs.busy)
+        assertEquals(2, ends)
+    }
+
+    @Test
+    fun `Android's time for the foreground service running out stops the work, its parts kept for later`() = runTest {
+        memory.lastCheck = now
+        ytdlp.scripts += Script.Hang(mapOf("x.webm.part" to ByteArray(10)))
+        val runs = runs()
+        val heard = Heard()
+        runs.start(song, heard)
+        runCurrent()
+        ytdlp.scripts += Script.Hang()
+        runs.info("https://video.example.com/w", Looked())
+        runCurrent()
+        assertEquals(2, ytdlp.live.size)
+
+        runs.timeUp()
+        runCurrent()
+
+        assertEquals(DlEnd.Stopped, heard.end)
+        assertTrue("its parts stay for the next run", File(root, "k1/x.webm.part").exists())
+        assertTrue(ytdlp.live.isEmpty())
+        assertFalse(runs.busy)
     }
 
     // Updating yt-dlp

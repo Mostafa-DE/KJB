@@ -99,7 +99,8 @@ private class Produced(val media: File, val cover: File?, val meta: DlMeta, val 
  * that key (yt-dlp goes on from its parts) until KJB discards it or it is a week old ([sweep]). Cancel kills yt-dlp and its
  * ffmpeg ([Ytdlp.kill]): a process does not stop because its coroutine was cancelled. yt-dlp updates itself by
  * [UpdatePolicy], and never while a run or a lookup uses it. A finished file waits for KJB's descriptors ([deliver]) and
- * is streamed into them; the add-on never opens KJB's or the user's storage.
+ * is streamed into them; the add-on never opens KJB's or the user's storage. It is [busy] from a link taken (a lookup or a
+ * run) until the last of them ends, each end told to [ended]: the add-on's own foreground service is held meanwhile.
  */
 class DlRuns(
     private val scope: CoroutineScope,
@@ -117,6 +118,8 @@ class DlRuns(
     private val log: (String) -> Unit = {},
     /** A host's addresses (DNS); a fake in tests. */
     private val resolve: (String) -> List<InetAddress> = { InetAddress.getAllByName(it).toList() },
+    /** A run or a lookup ended (after [busy] says so). */
+    private val ended: () -> Unit = {},
 ) {
     private val lock = Any()
     private var nextId = 1L
@@ -180,6 +183,15 @@ class DlRuns(
         }
     }
 
+    /** A run or a lookup is under way: from the link taken until its end, the run's file handed back included. */
+    val busy: Boolean get() = synchronized(lock) { runs.isNotEmpty() || lookups.isNotEmpty() }
+
+    /**
+     * Android's time for the add-on's foreground service ran out (onTimeout, Android 15+: 6 hours of dataSync in 24): the
+     * work stops as when KJB lets go, the runs' parts kept for the next try.
+     */
+    fun timeUp() = cancelAll()
+
     /** Stops every run, their parts kept: KJB let go of the add-on (it may come back to them). */
     fun cancelAll() {
         val (live, looking) = synchronized(lock) { runs.values.toList() to lookups.values.toList() }
@@ -238,6 +250,7 @@ class DlRuns(
             synchronized(lock) { runs.remove(run.id) }
             log("run ${run.id}: ${label(end)}")
             run.events.onEnd(end)
+            ended()
         }
     }
 
@@ -340,6 +353,7 @@ class DlRuns(
                 lookUp(id, url, events)
             } finally {
                 synchronized(lock) { lookups.remove(id) }
+                ended()
             }
         }
         synchronized(lock) { lookups[id] = job }

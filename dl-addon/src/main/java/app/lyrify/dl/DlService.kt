@@ -1,17 +1,26 @@
 package app.lyrify.dl
 
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.PermissionInfo
+import android.content.pm.ServiceInfo
 import android.os.Binder
 import android.os.IBinder
 import android.os.ParcelFileDescriptor
 import android.os.RemoteException
 import android.os.SystemClock
 import android.util.Log
+import app.lyrify.addon.shared.AddonKeepAlive
 import app.lyrify.addon.shared.CallerCheck
+import app.lyrify.addon.shared.ExemptionActivity
+import app.lyrify.addon.shared.ForegroundPort
+import app.lyrify.addon.shared.JobForeground
 import app.lyrify.dl.api.DlEnd
 import app.lyrify.dl.api.DlFile
 import app.lyrify.dl.api.DlInfo
@@ -51,30 +60,38 @@ private class PrefsMemory(context: Context) : UpdateMemory {
     }
 }
 
+/** KJB of this build type, signed with its pinned certificate: the one caller of the add-on's service and activity. */
+fun Context.kjbCallers(): CallerCheck = CallerCheck(
+    packageName,
+    BuildConfig.KJB_PACKAGE,
+    BuildConfig.KJB_CERT_SHA256,
+    packagesFor = packageManager::getPackagesForUid,
+    hasCert = { uid, sha -> packageManager.hasSigningCertificate(uid, sha, PackageManager.CERT_INPUT_SHA256) },
+)
+
+/** The add-on's own request to be left out of the phone's battery optimisation ([ExemptionActivity]), started by KJB only. */
+class DlExemptionActivity : ExemptionActivity() {
+    override val callers: CallerCheck by lazy { kjbCallers() }
+}
+
 /**
  * The add-on's one service, bound by KJB only ([CallerCheck] on every call, behind the signature permission): link lookups
- * and downloads ([DlRuns]) and yt-dlp's updates. KJB binds it while it works, from its own foreground service; the add-on
- * runs no foreground service and posts no notification. KJB going away (its process dies, or it unbinds) stops what it
- * started; a download's parts stay for its next run.
+ * and downloads ([DlRuns]) and yt-dlp's updates. KJB binds it while it works, from its own screen or foreground service,
+ * and starts it for the foreground once it took a link: it runs in the foreground with its own notice from the link taken
+ * to the file handed back ([JobForeground], dataSync), as a phone's app freezer leaves alone an app at work in the
+ * foreground, not a service another app binds. KJB going away (its process dies, or it unbinds) stops what it started; a
+ * download's parts stay for its next run.
  */
 class DlService : Service() {
     private val scope = CoroutineScope(
         SupervisorJob() + Dispatchers.Default + CoroutineExceptionHandler { _, e -> Log.e(LOG_TAG, "work failed: ${e.javaClass.simpleName}") },
     )
 
-    private val callers by lazy {
-        CallerCheck(
-            packageName,
-            BuildConfig.KJB_PACKAGE,
-            BuildConfig.KJB_CERT_SHA256,
-            packagesFor = packageManager::getPackagesForUid,
-            hasCert = { uid, sha -> packageManager.hasSigningCertificate(uid, sha, PackageManager.CERT_INPUT_SHA256) },
-        )
-    }
+    private val callers by lazy { kjbCallers() }
 
     private val memory by lazy { PrefsMemory(this) }
 
-    private val runs by lazy {
+    private val runs: DlRuns by lazy {
         val log: (String) -> Unit = { Log.d(LOG_TAG, it) }
         DlRuns(
             scope = scope,
@@ -85,7 +102,27 @@ class DlService : Service() {
             monotonic = SystemClock::elapsedRealtime,
             quickInfo = { Info.quick(it, USER_AGENT) },
             log = log,
+            ended = { foreground.jobEnded() },
         ).also { it.sweep() }
+    }
+
+    private val foreground: JobForeground<PendingIntent> by lazy {
+        JobForeground(
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+            object : ForegroundPort<PendingIntent> {
+                override fun startForeground(type: Int, tap: PendingIntent?) = this@DlService.startForeground(NOTICE_ID, notice(tap), type)
+
+                override fun stopForeground() = this@DlService.stopForeground(STOP_FOREGROUND_REMOVE)
+
+                override fun stopSelf(startId: Int?) {
+                    if (startId == null) this@DlService.stopSelf() else this@DlService.stopSelfResult(startId)
+                }
+            },
+            busy = { runs.busy },
+            fromKjb = { tap -> callers.allows(tap.creatorUid) },
+            endJob = { runs.timeUp() },
+            log = { Log.i(LOG_TAG, it) },
+        )
     }
 
     /**
@@ -105,8 +142,38 @@ class DlService : Service() {
         return binder
     }
 
-    /** KJB let go of the add-on: its runs stop, their parts kept for when it comes back. */
+    /**
+     * KJB's start once the add-on took a link (Context.startForegroundService, [JobForeground]): into the foreground at
+     * once, as Android requires within seconds. Never started again by Android on its own.
+     */
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        foreground.start(startId, intent?.let(AddonKeepAlive::tap))
+        return START_NOT_STICKY
+    }
+
+    /** Android's time for the foreground service ran out (Android 15+): out of it within seconds, or Android ends the add-on. */
+    override fun onTimeout(startId: Int, fgsType: Int) = foreground.timeUp()
+
+    /**
+     * The notice while it works, in a quiet channel: the same words for every link, nothing of it (KJB's own notification
+     * names the download). A tap opens KJB's Downloads page through [tap], KJB's own. Without the notification permission,
+     * which the add-on never asks for, it shows in the phone's list of apps at work only, and the service runs all the same.
+     */
+    private fun notice(tap: PendingIntent?): Notification {
+        val channel = NotificationChannel(NOTICE_CHANNEL, getString(R.string.work_channel), NotificationManager.IMPORTANCE_LOW)
+        getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+        return Notification.Builder(this, NOTICE_CHANNEL)
+            .setSmallIcon(R.drawable.ic_stat_kjb)
+            .setContentTitle(getString(R.string.work_title))
+            .setContentIntent(tap)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .build()
+    }
+
+    /** KJB let go of the add-on: its runs stop, their parts kept for when it comes back, and it leaves the foreground. */
     override fun onUnbind(intent: Intent): Boolean {
+        foreground.unbound()
         runs.cancelAll()
         return false
     }
@@ -233,5 +300,11 @@ class DlService : Service() {
                 runs.cancelInfo(lookup)
             }
         }
+    }
+
+    private companion object {
+        /** The notice while it works: its id, and its channel, "Downloads work". */
+        const val NOTICE_ID = 1
+        const val NOTICE_CHANNEL = "dl_work"
     }
 }

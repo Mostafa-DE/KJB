@@ -9,6 +9,7 @@ import app.lyrify.addon.AndroidAddon
 import app.lyrify.addon.BoundAddon
 import app.lyrify.addon.KjbAddons
 import app.lyrify.addon.packageChanges
+import app.lyrify.addon.shared.AddonKeepAlive
 import app.lyrify.dl.api.DlEnd
 import app.lyrify.dl.api.DlFailure
 import app.lyrify.dl.api.DlFile
@@ -75,8 +76,16 @@ interface DlPort {
 }
 
 /** A bound Downloads add-on after the handshake, until [close] unbinds it; [death] completes when its process dies. */
-class DlSession internal constructor(private val bound: BoundAddon, val port: DlPort) : AutoCloseable {
+class DlSession internal constructor(private val bound: BoundAddon, val port: DlPort, private val startForeground: () -> Boolean) : AutoCloseable {
     val death: Deferred<Unit> get() = bound.death
+
+    /**
+     * Has the add-on work in its own foreground service, which a phone's app freezer leaves alone (a service KJB binds
+     * counts for nothing there), from the link it took to the file it hands back: KJB starts it right after a lookup or a
+     * run started, and KJB's own foreground (its screen, or its downloads service) is what lets it. False when the phone
+     * refuses; the add-on then works without it.
+     */
+    fun foreground(): Boolean = startForeground()
 
     override fun close() = bound.close()
 }
@@ -109,7 +118,8 @@ object DlAddon {
     /** Checks the add-on, binds it and asks its API: a session for one that speaks at least [MIN_DL_API], else why not. */
     suspend fun connect(context: Context): DlConnection {
         peek(context)?.let { return DlConnection.Closed(it) }
-        val bound = android(context).bind() ?: return DlConnection.Closed(AddonState.Unreachable)
+        val android = android(context)
+        val bound = android.bind() ?: return DlConnection.Closed(AddonState.Unreachable)
         val port = AidlDlPort(IDlAddon.Stub.asInterface(bound.binder))
         val api = try {
             port.apiVersion()
@@ -124,7 +134,8 @@ object DlAddon {
             bound.close()
             return DlConnection.Closed(AddonState.Outdated(api))
         }
-        return DlConnection.Open(DlSession(bound, port))
+        // KJB's Downloads page as the tap on the add-on's notice, which also tells the add-on the start is KJB's.
+        return DlConnection.Open(DlSession(bound, port) { android.startForeground { it.putExtra(AddonKeepAlive.EXTRA_TAP, DownloadNotices.page(context.applicationContext)) } })
     }
 
     /** [block] on the add-on, bound for the call and let go after it; null when it is not ready or died meanwhile. */

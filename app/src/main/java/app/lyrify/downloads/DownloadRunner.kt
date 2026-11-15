@@ -57,7 +57,8 @@ interface DownloadSaver {
  * cache), its file streamed into the part file KJB opened where it goes ([DownloadSaver.open]), then KJB's own steps
  * ([DownloadSaver.finish]). Never waited for forever: a run that says nothing for [stallMs] (longer than any step takes)
  * is stopped and fails. Cancelled (the user, or Android's limit for long work), it tells the add-on, which kills yt-dlp and
- * keeps its parts for the next try; the part file here goes.
+ * keeps its parts for the next try; the part file here goes. Once the add-on took the run, KJB starts the add-on's own
+ * foreground service ([foreground], DlSession.foreground), where it works until the file is handed back.
  */
 class DownloadRunner(
     private val port: DlPort,
@@ -65,6 +66,7 @@ class DownloadRunner(
     private val saver: DownloadSaver,
     private val stallMs: Long = STALL_MS,
     private val keepOnCancel: () -> Boolean = { true },
+    private val foreground: () -> Boolean = { true },
 ) {
     private sealed interface Event {
         data class Progress(val progress: DlProgress) : Event
@@ -97,6 +99,8 @@ class DownloadRunner(
         } catch (_: AddonDiedException) {
             return DownloadOutcome.Failed(DownloadFailure.ADDON_GONE)
         }
+        // Refused (the phone's choice), the add-on downloads without it, as before.
+        foreground()
         var target: Target? = null
         return coroutineScope {
             val died = launch {
