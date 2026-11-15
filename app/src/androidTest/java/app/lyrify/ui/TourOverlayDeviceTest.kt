@@ -1,5 +1,7 @@
 package app.lyrify.ui
 
+import androidx.compose.animation.core.SeekableTransitionState
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,6 +23,12 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
@@ -32,6 +40,7 @@ import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsFocused
+import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasClickAction
@@ -57,13 +66,15 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import kotlin.math.roundToInt
 
 /**
  * The tour's overlay on the phone, over a made-up shell with the targets a real one marks (Library's tabs, a song row,
  * the dock's Search and Tools), the test clock held (the halo breathes for ever): TalkBack through the semantics tree
  * (focus on the card's title, nothing under the dimmed layer reachable, Skip on every step, the card there while a
  * control is missing), the count of the steps that apply, the card at font scale 2.0 on a short screen, and a song row
- * under the dock scrolled into view. Made-up names only. Not run in the lane: the orchestrator runs it in a phone session.
+ * under the dock scrolled into view; and from Settings, over the shell's own page moves, Library's own content under the
+ * cut-outs and after Skip. Made-up names only. Not run in the lane: the orchestrator runs it in a phone session.
  */
 @RunWith(AndroidJUnit4::class)
 class TourOverlayDeviceTest {
@@ -222,6 +233,83 @@ class TourOverlayDeviceTest {
         compose.runOnIdle { assertEquals(TourStop.SEARCH, tour.state?.stop) }
     }
 
+    @Test
+    fun fromSettingsTheTourPointsAtLibrarysOwnTabsAndSongAndLeavesLibraryWholeAfterSkip() {
+        val tour = Tour()
+        val nav = Navigator(NavState.start(DockTab.LIBRARY))
+        compose.mainClock.autoAdvance = false
+        compose.setContent {
+            LyrifyTheme {
+                CompositionLocalProvider(LocalToasts provides remember { ToastState() }, LocalTour provides tour) {
+                    TourHost { PagedShell(nav) }
+                }
+            }
+        }
+        settle()
+        // Library shown once (its root kept, as on the phone), then Tools > Settings, each move at rest.
+        compose.runOnIdle { nav.select(DockTab.TOOLS) }
+        settle()
+        compose.runOnIdle { nav.open(Page.Settings) }
+        settle()
+        // Show tour, as Settings' row does it: Settings closes and the tour starts in the same tap.
+        compose.runOnIdle {
+            nav.back()
+            tour.start()
+        }
+        settle(PASS_MS)
+        compose.runOnIdle { assertEquals(TourStop.TABS, tour.state?.stop) }
+        // Library's own tabs show in the cut-out: Library is drawn, not a blank page.
+        assertEquals(TABS_FILL.toArgb(), pixelAt(tabsAt))
+        compose.onNodeWithText(words(R.string.tour_next)).performClick()
+        settle(PASS_MS)
+        compose.runOnIdle { assertEquals(TourStop.SONG, tour.state?.stop) }
+        assertEquals(SONG_FILL.toArgb(), pixelAt(songAt))
+        compose.onNodeWithContentDescription(words(R.string.ob_skip_tour)).performClick()
+        settle(PASS_MS)
+        compose.runOnIdle { assertNull(tour.state) }
+        // Skipped: Library whole, its tabs and its song as they were, without a tab switch.
+        assertEquals(TABS_FILL.toArgb(), pixelAt(tabsAt))
+        assertEquals(SONG_FILL.toArgb(), pixelAt(songAt))
+        assertEquals(LIBRARY_FILL.toArgb(), pixelAt(libraryAt))
+    }
+
+    /** Where Library's tabs, its song row and its own ground are on screen, as last placed. */
+    private var tabsAt = Rect.Zero
+    private var songAt = Rect.Zero
+    private var libraryAt = Rect.Zero
+
+    /** The colour on screen at the middle of [at]. */
+    private fun pixelAt(at: Rect): Int {
+        val shot = compose.onRoot().captureToImage().asAndroidBitmap()
+        return shot.getPixel(at.center.x.roundToInt(), at.center.y.roundToInt())
+    }
+
+    /**
+     * The shell's own page layer and its moves ([PagesBack], [PageLayers]) with made-up pages: Library's root (its tabs and
+     * a song row, each of its own colour, on Library's ground), Tools' root and Settings, a different colour each, and the
+     * tour lent the layer it rests on, as AppShell does.
+     */
+    @Composable
+    private fun PagedShell(nav: Navigator) {
+        val pages = remember { SeekableTransitionState(pageLayerOf(nav.state)) }
+        val swipe = remember { BackSwipe() }
+        TourShell(nav, songs = true, bar = false, ownSong = false) { pages.currentState.takeIf { it == pages.targetState } }
+        CompositionLocalProvider(LocalNavigator provides nav) {
+            PagesBack(nav, pages, swipe, reduced = false)
+            PageLayers(pages, swipe, rtl = false, reduced = false) { layer ->
+                when {
+                    layer.tab == DockTab.LIBRARY && layer.stack.isEmpty() -> Column(Modifier.fillMaxSize().background(LIBRARY_FILL).windowInsetsPadding(WindowInsets.safeDrawing)) {
+                        Row(Modifier.fillMaxWidth().padding(top = 48.dp).height(48.dp).background(TABS_FILL).onGloballyPositioned { tabsAt = it.boundsInRoot() }.tourTarget(TourStop.TABS)) { Text("Songs") }
+                        Spacer(Modifier.height(96.dp).fillMaxWidth().onGloballyPositioned { libraryAt = it.boundsInRoot() })
+                        Box(Modifier.fillMaxWidth().height(64.dp).background(SONG_FILL).onGloballyPositioned { songAt = it.boundsInRoot() }.tourTarget(TourStop.SONG, "Play Paper Harbour") {})
+                    }
+                    layer.stack.isEmpty() -> Box(Modifier.fillMaxSize().background(TOOLS_FILL)) { Text(layer.tab.name) }
+                    else -> Box(Modifier.fillMaxSize().background(Color.White)) { Text("Settings") }
+                }
+            }
+        }
+    }
+
     /**
      * A made-up shell: Library's tabs at the top, words and a button behind, maybe a song row (or one far down a list,
      * under the dock), and the dock's Search and Tools at the bottom; clear of the system's bars, as the real shell's
@@ -262,5 +350,10 @@ class TourOverlayDeviceTest {
 
         /** Well inside a stop's wait for its control. */
         const val WAITING_MS = 400L
+
+        val LIBRARY_FILL = Color(0xFF1B5E20)
+        val TABS_FILL = Color(0xFF0D47A1)
+        val SONG_FILL = Color(0xFFB71C1C)
+        val TOOLS_FILL = Color(0xFF4A148C)
     }
 }

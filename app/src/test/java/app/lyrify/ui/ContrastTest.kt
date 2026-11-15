@@ -91,7 +91,7 @@ class ContrastTest {
             // The main pages' header title, in the ink, on the page at rest and on the glass band (over the worst content
             // under it) once content scrolls under.
             val worst = if (variant.dark) Color.White else Color.Black
-            listOf("page" to s.background, "glass" to chrome.glass.compositeOver(worst), "solid glass" to chrome.glassSolid.compositeOver(worst)).forEach { (band, under) ->
+            listOf("page" to s.background, "top bar" to chrome.topBar, "glass" to chrome.glass.compositeOver(worst), "solid glass" to chrome.glassSolid.compositeOver(worst)).forEach { (band, under) ->
                 assertReads("$theme header title on the $band", s.onSurface, under, 4.5f)
             }
             // The top tabs: the chosen one on its pill, the others on the page and on the glass band over the worst content.
@@ -346,7 +346,7 @@ class ContrastTest {
     /** The fills the page's ink reads on (the root ink test): a word without a colour of its own may sit on these only. */
     private val pageFill = Regex(
         "((MaterialTheme\\.colorScheme|colors)\\.(background|surface|surfaceVariant|surfaceDim|surfaceBright|surfaceContainer(Lowest|Low|High|Highest)?)|" +
-            "(chrome|LocalChromeColors\\.current)\\.(sheet|bar|glass|glassSolid)|Color\\.Transparent)(\\.copy\\(alpha = [^)]*\\))?",
+            "(chrome|LocalChromeColors\\.current)\\.(sheet|topBar|bar|glass|glassSolid)|Color\\.Transparent)(\\.copy\\(alpha = [^)]*\\))?",
     )
 
     /** The Black and White the ui may use, none of them ink, each with why; a line must match its file's pattern. */

@@ -217,6 +217,33 @@ class ThemeTokensTest {
         assertTrue(nowBar.contains("color = ink.line"))
     }
 
+    /**
+     * Every top bar stands on [ChromeColors.topBar], the page's own colour, opaque, from the top of the status bar down
+     * (phone session 10: on Settings, whose bar never hears that content is under it, the rows scrolled up through its
+     * title and under the status bar, in Light, Dark and Pure black). At rest the bar still reads as the page; once content
+     * is under it, the glass band fades in over it as before.
+     */
+    @Test
+    fun `a list scrolls under every top bar and the status bar, never through them, in every theme`() {
+        ThemeVariant.entries.forEach { variant ->
+            val scheme = variant.colors
+            val chrome = chromeColors(scheme, variant.brand, variant.dark)
+            assertEquals(variant.name, 1f, chrome.topBar.alpha)
+            assertColor("${variant.name} top bar", hex(scheme.background), chrome.topBar)
+            // A row's words under the bar come out the bar's own colour: nothing of them is left.
+            listOf(scheme.onSurface, scheme.onSurfaceVariant, scheme.surfaceContainer, Color.White, Color.Black).forEach { row ->
+                assertColor("${variant.name} a row under the bar", hex(chrome.topBar), chrome.topBar.compositeOver(row))
+            }
+        }
+        // Read from the source, as above: the band behind every top bar (LyrifyTopBar, MainTopBar, Library's tabs) is
+        // filled with it, and the bars' status bar padding is inside the band, so the fill covers the status bar too.
+        val chromeKt = java.io.File("src/main/java/app/lyrify/ui/Chrome.kt").readText()
+        val band = chromeKt.substringAfter("fun TopBand(").substringBefore("\n}\n")
+        assertTrue(band, band.contains("Box(modifier.fillMaxWidth().background(LocalChromeColors.current.topBar))"))
+        assertTrue(Regex("TopBand\\(under, backdrop, modifier\\) \\{\\s*Box\\(Modifier\\.statusBarsPadding\\(\\)\\)").containsMatchIn(chromeKt))
+        assertTrue(Regex("TopBand\\(under, backdrop\\) \\{\\s*Column\\(Modifier\\.statusBarsPadding\\(\\)\\)").containsMatchIn(chromeKt))
+    }
+
     @Test
     fun `a view's card is drawn behind its content, which still takes the page's ink, so nothing in it is left black on dark`() {
         // Read from the source, as above: the card (the player's included) draws its own fill behind a see-through

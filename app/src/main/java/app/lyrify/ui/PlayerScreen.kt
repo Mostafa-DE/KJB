@@ -327,14 +327,20 @@ fun clock(ms: Long): String {
     return if (hours > 0) String.format(Locale.ROOT, "%d:%02d:%02d", hours, seconds / 60 % 60, seconds % 60) else String.format(Locale.ROOT, "%d:%02d", seconds / 60, seconds % 60)
 }
 
+/**
+ * The song's name on every player surface ([displayTitle]): the library's song's, else the tags of the file another app
+ * opened ([PlayerUi.named]), else the file's name.
+ */
+fun shownTitle(ui: PlayerUi, settings: LibrarySettings): String = ui.named?.let { displayTitle(it, settings) } ?: ui.item.song.path.substringAfterLast('/')
+
 /** KJB's own song for the Now bar: as every surface names it ([displayTitle]), its cover, and how far it is at [now]. */
 fun ownNow(ui: PlayerUi?, settings: LibrarySettings, now: Long): OwnNow? {
     if (ui == null) return null
     val path = ui.item.song.path
     return OwnNow(
-        title = ui.song?.let { displayTitle(it, settings) } ?: path.substringAfterLast('/'),
-        artist = ui.song?.artist,
-        album = ui.song?.album,
+        title = shownTitle(ui, settings),
+        artist = ui.named?.artist,
+        album = ui.named?.album,
         cover = SongArt(path),
         playing = ui.playing,
         progress = ringShare(ui.positionAt(now), ui.durationMs),
@@ -768,7 +774,7 @@ private fun CoverFace(
         moving?.let { incoming(ui.queue, it, ui.repeat, ui.positionAt(SystemClock.elapsedRealtime())) }
     }
     val neighbour = if (arrived) null else landing?.item ?: beside
-    val label = stringResource(if (onFlip != null) R.string.player_cover else R.string.book_cover, ui.song?.title ?: ui.item.song.path.substringAfterLast('/'))
+    val label = stringResource(if (onFlip != null) R.string.player_cover else R.string.book_cover, ui.named?.title ?: ui.item.song.path.substringAfterLast('/'))
     Box(Modifier.fillMaxSize()) {
         if (neighbour != null && way != null) {
             val from = if (way == SkipWay.NEXT) travel else -travel
@@ -950,7 +956,7 @@ internal fun PanelState(title: String, sweeping: Boolean = false, action: (() ->
 @Composable
 private fun CoverChip(ui: PlayerUi, modifier: Modifier, enabled: Boolean, onFlipBack: () -> Unit) {
     val chrome = LocalChromeColors.current
-    val label = stringResource(R.string.player_show_cover, ui.song?.title ?: ui.item.song.path.substringAfterLast('/'))
+    val label = stringResource(R.string.player_show_cover, ui.named?.title ?: ui.item.song.path.substringAfterLast('/'))
     Box(
         contentAlignment = Alignment.Center,
         modifier = modifier
@@ -974,7 +980,7 @@ private fun TitleAndLinks(ui: PlayerUi, settings: LibrarySettings, book: BookNow
     Text(
         // A book: the chapter playing, else the book's title (BooksScreen.kt).
         book?.let { now -> if (now.chapter >= 0) chapterTitle(now.chapters, now.chapter) else now.book.title }
-            ?: song?.let { displayTitle(it, settings) } ?: ui.item.song.path.substringAfterLast('/'),
+            ?: shownTitle(ui, settings),
         style = MaterialTheme.typography.headlineSmall,
         textAlign = TextAlign.Center,
         maxLines = 2,
@@ -982,8 +988,17 @@ private fun TitleAndLinks(ui: PlayerUi, settings: LibrarySettings, book: BookNow
         modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
     )
     Row(horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().heightIn(min = TOUCH)) {
+        val opened = ui.opened
+        if (song == null && opened != null && (opened.artist != null || opened.album != null)) {
+            // A file another app opened that the library lacks (player/OpenedFiles.kt): its own tags, which open no page.
+            val meta = metaLine(opened.artist, opened.album)
+            PlayerLink(meta.artist.text ?: stringResource(R.string.player_no_artist), onClick = null, Modifier.weight(1f, fill = false))
+            Text("·", style = MetaStyle, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 8.dp))
+            PlayerLink(meta.album.text ?: stringResource(R.string.player_no_album), onClick = null, Modifier.weight(1f, fill = false))
+            return@Row
+        }
         if (song == null) {
-            // A file another app opened that the library lacks plays all the same (player/OpenedFiles.kt).
+            // Without tags of its own, it says where it came from.
             PlayerLink(stringResource(if (ui.queue.source.kind == SourceKind.OPENED) R.string.open_queue else R.string.player_not_on_phone), onClick = null, Modifier)
             return@Row
         }

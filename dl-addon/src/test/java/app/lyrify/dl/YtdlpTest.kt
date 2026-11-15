@@ -36,19 +36,64 @@ class YtdlpTest {
         return args.take(at) + to + args.drop(at + 1)
     }
 
+    /** VidGrab's blind split: every "A - B" became artist A and title B. */
+    private val blindSplit = "title:(?P<meta_artist>.+?)\\s+[-\u2013\u2014]\\s+(?P<meta_title>.+)"
+
+    /** KJB's own split, the same "A - B" against the uploader's and the channel's names (compared as [Info] compares them). */
+    private val ownSplit: List<String> = run {
+        val split = "(?i)^(?P<kjb_key>\\S+) (?P=kjb_key) (?P<meta_artist>.+?)\\s+[-\u2013\u2014]\\s+(?P<meta_title>.+)$"
+        listOf(
+            "--parse-metadata", "title:(?P<kjb_a>.+?)\\s+[-\u2013\u2014]\\s+.+",
+            "--parse-metadata", "%(kjb_a|)s:(?P<kjb_key_a>.*)",
+            "--parse-metadata", "%(uploader|)s:(?P<kjb_key_u>.*)",
+            "--parse-metadata", "%(channel|)s:(?P<kjb_key_c>.*)",
+            "--replace-in-metadata", "kjb_key_a,kjb_key_u,kjb_key_c", "(?i)(\\s*-\\s*topic|\\s*vevo|\\s*official)$|\\s+", "",
+            "--parse-metadata", "%(kjb_key_a)s %(kjb_key_u)s %(title)s:$split",
+            "--parse-metadata", "%(kjb_key_a)s %(kjb_key_c)s %(title)s:$split",
+        )
+    }
+
+    /** VidGrab's artist with no uploader, "Unknown" (the sheet's is empty), and its name with an artist always in front. */
+    private val unknownArtist = "%(uploader|Unknown)s:%(meta_artist)s"
+    private val artistName = "%(meta_artist).80B - %(meta_title).120B.%(ext)s"
+
+    /** KJB's: no uploader leaves the artist empty, and a file without an artist is named by its title alone. */
+    private val noArtist = "%(uploader|)s:(?P<meta_artist>.*)"
+    private val titleName = "%(meta_artist|).80B%(meta_artist& - |)s%(meta_title).120B.%(ext)s"
+
+    /**
+     * VidGrab's tested set with its blind split made KJB's (phone session 10), and no "Unknown" artist (PF10's review).
+     * Checked with yt-dlp itself (2025.11.12, the one youtubedl-android ships) on made-up info read with
+     * --load-info-json, offline: the cases of InfoTest's naming test come out the same, a name with an artist as before,
+     * and one without as its title alone.
+     */
+    private val kjb: List<String> = tested.indexOf(blindSplit).let { at -> tested.take(at - 1) + ownSplit + tested.drop(at + 1) }
+        .map { arg -> mapOf(unknownArtist to noArtist, artistName to titleName)[arg] ?: arg }
+
     @Test
-    fun `MP3 320 with the original language is exactly the arg set VidGrab tested`() {
+    fun `MP3 320 with the original language is the arg set VidGrab tested, its "Artist - Title" split made KJB's`() {
         assertEquals(70, tested.size)
-        assertEquals(tested, DlArgs.audio(AudioQuality.MP3_320, originalLanguage = true))
+        assertEquals("--parse-metadata", tested[tested.indexOf(blindSplit) - 1])
+        assertEquals(84, kjb.size)
+        assertEquals(kjb, DlArgs.audio(AudioQuality.MP3_320, originalLanguage = true))
+    }
+
+    @Test
+    fun `with no uploader the artist is left empty, as the sheet leaves it, and the file is named by its title alone`() {
+        val audio = DlArgs.audio(AudioQuality.MP3_320, originalLanguage = true)
+
+        assertTrue(audio.none { "Unknown" in it })
+        assertEquals(noArtist, audio[audio.indexOf("title:%(meta_title)s") + 2])
+        assertEquals(titleName, audio[audio.indexOf("-o") + 1])
     }
 
     @Test
     fun `the other audio choices change only the format and quality, as VidGrab's do`() {
         val quality = listOf("--audio-format", "mp3", "--audio-quality", "320K", "--ppa", "ExtractAudio+ffmpeg_o:-b:a 320k -ar 44100")
         fun swapped(to: List<String>): List<String> {
-            val at = tested.indexOf("--audio-format")
-            assertEquals(quality, tested.subList(at, at + quality.size))
-            return tested.take(at) + to + tested.drop(at + quality.size)
+            val at = kjb.indexOf("--audio-format")
+            assertEquals(quality, kjb.subList(at, at + quality.size))
+            return kjb.take(at) + to + kjb.drop(at + quality.size)
         }
 
         assertEquals(
@@ -61,7 +106,7 @@ class YtdlpTest {
 
     @Test
     fun `without the original language, audio sorts by bitrate alone`() {
-        assertEquals(replaced(tested, "lang,abr,asr", listOf("abr,asr")), DlArgs.audio(AudioQuality.MP3_320, originalLanguage = false))
+        assertEquals(replaced(kjb, "lang,abr,asr", listOf("abr,asr")), DlArgs.audio(AudioQuality.MP3_320, originalLanguage = false))
     }
 
     @Test
@@ -82,7 +127,7 @@ class YtdlpTest {
         val dir = File("/data/dl/k1")
         val audio = DlArgs.forRun(DlRequest("k1", "https://video.example.com/v", DlKind.AUDIO), dir)
 
-        assertEquals("/data/dl/k1/%(meta_artist).80B - %(meta_title).120B.%(ext)s", audio[audio.indexOf("-o") + 1])
+        assertEquals("/data/dl/k1/$titleName", audio[audio.indexOf("-o") + 1])
         assertTrue(audio.containsAll(listOf("--write-thumbnail", "--no-mtime", "--newline")))
         val print = audio.indexOf("--print-to-file")
         assertTrue(audio[print + 1].startsWith("after_move:%(.{meta_title,meta_artist,"))
@@ -90,7 +135,7 @@ class YtdlpTest {
         assertEquals("--", audio.last())
         // The tested set is all there, in its order.
         val start = audio.indexOf("-f")
-        assertEquals(tested.dropLast(1), audio.subList(start, start + tested.size - 1))
+        assertEquals(kjb.dropLast(1), audio.subList(start, start + kjb.size - 1))
 
         val video = DlArgs.forRun(DlRequest("k2", "https://video.example.com/v", DlKind.VIDEO, height = 1080), File("/data/dl/k2"))
         assertEquals("/data/dl/k2/%(title).150B.%(ext)s", video[video.indexOf("-o") + 1])

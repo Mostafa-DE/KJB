@@ -195,6 +195,9 @@ class Tour(state: TourState? = null, ended: Boolean = false) {
      * ([bar]) and whether KJB's player has a song ([ownSong]). Until the shell says, every step applies.
      */
     internal var navigator: Navigator? by mutableStateOf(null)
+
+    /** The page layer the shell rests on, null while it moves; until the shell says, the one its navigator shows. */
+    internal var settled: () -> PageLayer? = { navigator?.state?.let(::pageLayerOf) }
     internal var songs: Boolean by mutableStateOf(true)
     internal var bar: Boolean by mutableStateOf(true)
     internal var ownSong: Boolean by mutableStateOf(true)
@@ -271,6 +274,25 @@ fun stopReady(stop: TourStop, ownSong: Boolean, bar: Boolean, played: Boolean, w
     }
 }
 
+/** What a stop does on its way to its control ([arriveStep]): wait for the shell, move it there, or look for the control. */
+enum class Arrive { WAIT, MOVE, LOOK }
+
+/**
+ * A stop's way to its control: it moves the shell there ([Navigator.arrive]) only once the page layer rests on what the
+ * navigator shows ([settled]), so its move never lands on one still running (Settings closing as the tour started from
+ * it, then Library at once, left Library blank: phone session 11); once it has [moved], it looks for the control when
+ * the layer rests again, on the page it moved to. A layer that does not rest holds it at most [SETTLE_WAIT_MS]
+ * ([waitedMs]).
+ */
+fun arriveStep(settled: Boolean, moved: Boolean, waitedMs: Long): Arrive = when {
+    !settled && waitedMs <= SETTLE_WAIT_MS -> Arrive.WAIT
+    !moved -> Arrive.MOVE
+    else -> Arrive.LOOK
+}
+
+/** A page layer that does not come to rest holds a stop at most this long. */
+const val SETTLE_WAIT_MS: Long = 1_000
+
 /** What the tour does with a stop's target: show it, scroll it into view first, or pass the stop. */
 enum class Aim { SHOW, SCROLL, PASS }
 
@@ -285,9 +307,19 @@ fun aim(bounds: Rect?, room: Rect, scrolled: Boolean): Aim = when {
     else -> Aim.PASS
 }
 
-/** Of several targets for one stop (a list's rows), the one to point at: the topmost whole in [room], else the topmost in part. */
-fun <T> pickTarget(marks: List<T>, room: Rect, bounds: (T) -> Rect): T? =
-    marks.filter { room.holds(bounds(it)) }.minByOrNull { bounds(it).top } ?: marks.filter { bounds(it).overlaps(room) }.minByOrNull { bounds(it).top }
+/**
+ * Of several targets for one stop (a list's rows), the one to point at: the topmost whole in [room], else the topmost in
+ * part. With none in the room at all and [nearby] (a list's rows, which a scroll brings in: a song wholly under the Now
+ * bar and the dock on a small phone or with large text, or further down its list), the nearest above or below the room,
+ * in its column; never a row beside it (another page of Library's tabs).
+ */
+fun <T> pickTarget(marks: List<T>, room: Rect, nearby: Boolean = false, bounds: (T) -> Rect): T? =
+    marks.filter { room.holds(bounds(it)) }.minByOrNull { bounds(it).top }
+        ?: marks.filter { bounds(it).overlaps(room) }.minByOrNull { bounds(it).top }
+        ?: marks.takeIf { nearby }?.filter { bounds(it).left < room.right && bounds(it).right > room.left }?.minByOrNull { gap(bounds(it), room) }
+
+/** How far [target], wholly above or below [room], is from it. */
+private fun gap(target: Rect, room: Rect): Float = if (target.top >= room.bottom) target.top - room.bottom else room.top - target.bottom
 
 /** [inner] whole inside this, give or take a pixel of rounding. */
 private fun Rect.holds(inner: Rect): Boolean =
@@ -452,20 +484,27 @@ fun TourHost(content: @Composable () -> Unit) {
     }
 }
 
-/** The shell lends the tour its [nav], and says what it has to point at: the library's songs and the Now bar ([bar]). */
+/**
+ * The shell lends the tour its [nav] and the page layer it rests on ([settled], null while it moves), and says what it
+ * has to point at: the library's songs and the Now bar ([bar]).
+ */
 @Composable
-fun TourShell(nav: Navigator, bar: NowBarShows) {
+fun TourShell(nav: Navigator, bar: NowBarShows, settled: () -> PageLayer?) {
     val context = LocalContext.current
     val library by remember(context) { LibraryGraph.repository(context).state }.collectAsStateWithLifecycle()
-    TourShell(nav, songs = (library as? LibraryState.Ready)?.library?.songs?.isNotEmpty() == true, bar = bar != NowBarShows.Hidden, ownSong = bar is NowBarShows.Own)
+    TourShell(nav, songs = (library as? LibraryState.Ready)?.library?.songs?.isNotEmpty() == true, bar = bar != NowBarShows.Hidden, ownSong = bar is NowBarShows.Own, settled = settled)
 }
 
-/** What [TourShell] lends: [songs] in the library, a Now bar showing ([bar]), a song in KJB's own player ([ownSong]). */
+/**
+ * What [TourShell] lends: [songs] in the library, a Now bar showing ([bar]), a song in KJB's own player ([ownSong]), and
+ * the page layer it rests on ([settled]; a shell without page moves always rests on what [nav] shows).
+ */
 @Composable
-internal fun TourShell(nav: Navigator, songs: Boolean, bar: Boolean, ownSong: Boolean) {
+internal fun TourShell(nav: Navigator, songs: Boolean, bar: Boolean, ownSong: Boolean, settled: () -> PageLayer? = { pageLayerOf(nav.state) }) {
     val tour = LocalTour.current ?: return
     SideEffect {
         tour.navigator = nav
+        tour.settled = settled
         tour.songs = songs
         tour.bar = bar
         tour.ownSong = ownSong
@@ -477,10 +516,11 @@ private data class Aimed(val stop: TourStop, val hole: Rect, val node: TourTarge
 
 /**
  * The dimmed layer with the cut-out round the stop's control, its ring, and the card on the far side of it. Each stop
- * first waits for what it needs ([stopReady]), goes where its control is (Library's Songs, the player, the dock), then
- * finds it every frame: a control that moves is followed, one off screen is scrolled into view once, and a stop whose
- * control does not come is passed. The card is there all the while, in the middle of the screen until the control is
- * found, so Skip and Next are always in reach and the title always has the focus.
+ * first waits for what it needs ([stopReady]), goes where its control is (Library's Songs, the player, the dock) once
+ * the shell's pages rest and waits for them to rest there ([arriveStep]), then finds it every frame: a control that
+ * moves is followed, one off screen is scrolled into view once, and a stop whose control does not come is passed. The
+ * card is there all the while, in the middle of the screen until the control is found, so Skip and Next are always in
+ * reach and the title always has the focus.
  */
 @Composable
 private fun TourLayer(tour: Tour, state: TourState, nav: Navigator) {
@@ -516,7 +556,23 @@ private fun TourLayer(tour: Tour, state: TourState, nav: Navigator) {
                 }
             }
         }
-        nav.arrive(state.stop)
+        // The shell moves, and the control is looked for, only once its page layer rests ([arriveStep]).
+        var moved = false
+        var since = -1L
+        while (true) {
+            val now = withFrameMillis { it }
+            if (since < 0) since = now
+            if (now - start > GRACE_MS) grace = false
+            when (arriveStep(tour.settled() == pageLayerOf(nav.state), moved, now - since)) {
+                Arrive.WAIT -> continue
+                Arrive.MOVE -> {
+                    nav.arrive(state.stop)
+                    moved = true
+                    since = now
+                }
+                Arrive.LOOK -> break
+            }
+        }
         var scrolled = false
         var roomed = false
         var seen = -1L
@@ -541,7 +597,7 @@ private fun TourLayer(tour: Tour, state: TourState, nav: Navigator) {
             val tabsBottom = tour.targets.of(TourStop.TABS).mapNotNull { it.bounds(space) }.maxOfOrNull { it.bottom }
             val clear = targetRoom(state.stop, window, tabsBottom, chromeTop)
             val marks = tour.targets.of(state.stop).mapNotNull { node -> node.bounds(space)?.let { node to it } }
-            val mark = pickTarget(marks, clear) { it.second }
+            val mark = pickTarget(marks, clear, nearby = state.stop == TourStop.SONG) { it.second }
             still = if (mark?.second == last) still + 1 else 0
             last = mark?.second
             val resting = still >= STILL_FRAMES || now - seen > ARRIVE_WAIT_MS
@@ -618,7 +674,7 @@ private fun TourLayer(tour: Tour, state: TourState, nav: Navigator) {
  * Goes where [stop]'s control shows: Library's Songs with nothing over it, the player for the lyrics, or just the shell's
  * own dock.
  */
-private fun Navigator.arrive(stop: TourStop) {
+internal fun Navigator.arrive(stop: TourStop) {
     if (stop == TourStop.LYRICS) {
         show(FullScreen.Player)
         return

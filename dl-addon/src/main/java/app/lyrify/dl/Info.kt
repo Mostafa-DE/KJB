@@ -30,7 +30,16 @@ object Info {
 
     /** "Artist - Title", with a hyphen, an en dash or an em dash (written as escapes: KJB's copy rule). */
     private val ARTIST_TITLE = Regex("^(.+?)\\s+[-\u2013\u2014]\\s+(.+)$")
-    private val TOPIC = Regex("""\s*-\s*Topic$""")
+
+    /**
+     * What a name is compared without: spaces, and a trailing " - Topic", VEVO or Official (as DlArgs' split does). A space
+     * is any of Unicode's, a no-break space too, as yt-dlp's Python reads `\s`; `\p{Z}` says so on the JVM as on the phone,
+     * whose regex (ICU) already reads `\s` that way and refuses the JVM's own Unicode flag (?U).
+     */
+    private val NAME_NOISE = Regex("""(?i)([\s\p{Z}]*-[\s\p{Z}]*topic|[\s\p{Z}]*vevo|[\s\p{Z}]*official)$|[\s\p{Z}]+""")
+
+    /** An artist's channel words, dropped from the artist (as DlArgs' tagging does). */
+    private val CHANNEL_WORDS = Regex("""(?i)\s*-\s*Topic$|VEVO$""")
     private val TAIL = Regex("""\s*\|.*$""")
 
     /** The heights a video offers, besides its top one. */
@@ -42,19 +51,28 @@ object Info {
     private const val BYTES_PER_KBIT = 125
     private const val QUICK_TIMEOUT_MS = 3_000
 
-    /** Artist and title from the site's tags, else from "Artist - Title", else the uploader without " - Topic"; junk dropped. */
-    private fun names(rawTitle: String, artistTag: String?, trackTag: String?, uploader: String?): Pair<String, String> {
-        val split = ARTIST_TITLE.find(rawTitle)
-        val artist = artistTag?.takeIf { it.isNotBlank() } ?: split?.groupValues?.get(1) ?: uploader.orEmpty().replace(TOPIC, "")
+    /**
+     * Artist and title from the site's tags; else from "Artist - Title" when Artist is the [uploader] or the [channel]
+     * ([sameName]); else the whole title, by the uploader. Junk dropped, and " - Topic" or VEVO after the artist.
+     */
+    private fun names(rawTitle: String, artistTag: String?, trackTag: String?, uploader: String?, channel: String?): Pair<String, String> {
+        val split = ARTIST_TITLE.find(rawTitle)?.takeIf { found -> listOfNotNull(uploader, channel).any { sameName(found.groupValues[1], it) } }
+        val artist = artistTag?.takeIf { it.isNotBlank() } ?: split?.groupValues?.get(1) ?: uploader.orEmpty()
         val title = (trackTag?.takeIf { it.isNotBlank() } ?: split?.groupValues?.get(2) ?: rawTitle).replace(TAIL, "").replace(JUNK, "").trim()
-        return artist.trim() to title
+        return artist.replace(CHANNEL_WORDS, "").trim() to title
+    }
+
+    /** Whether a title's [artist] is the [channel]'s own name: without case, spaces, or a trailing " - Topic", VEVO or Official. */
+    private fun sameName(artist: String, channel: String): Boolean {
+        val key = artist.replace(NAME_NOISE, "")
+        return key.isNotEmpty() && key.equals(channel.replace(NAME_NOISE, ""), ignoreCase = true)
     }
 
     /** yt-dlp's full info ([text], its -J JSON) for [url]; null when it is not that. */
     fun full(url: String, text: String): DlInfo? {
         val info = parse(text) ?: return null
         val rawTitle = info.text("title") ?: return null
-        val (artist, title) = names(rawTitle, info.text("artist"), info.text("track"), info.text("uploader"))
+        val (artist, title) = names(rawTitle, info.text("artist"), info.text("track"), info.text("uploader"), info.text("channel"))
         val duration = info.number("duration") ?: 0.0
         var audio = 0.0
         val best = HashMap<Int, Double>()
@@ -85,7 +103,7 @@ object Info {
     fun oembed(url: String, text: String): DlInfo? {
         val answer = parse(text) ?: return null
         val rawTitle = answer.text("title") ?: return null
-        val (artist, title) = names(rawTitle, null, null, answer.text("author_name"))
+        val (artist, title) = names(rawTitle, null, null, answer.text("author_name"), null)
         return DlInfo(url, title, artist, 0, answer.text("thumbnail_url"), partial = true, choices = QUICK_CHOICES)
     }
 

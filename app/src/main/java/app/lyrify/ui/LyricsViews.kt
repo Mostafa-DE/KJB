@@ -85,7 +85,6 @@ import app.lyrify.books.knownBookPart
 import app.lyrify.data.LedgerEntry
 import app.lyrify.data.LyricsStatus
 import app.lyrify.library.Song
-import app.lyrify.library.displayTitle
 import app.lyrify.lyrics.LocalTrack
 import app.lyrify.lyrics.LrcFormat
 import app.lyrify.lyrics.LrcLine
@@ -589,8 +588,8 @@ fun FullLyricsView() {
                 ChromeIconButton(R.drawable.ic_keyboard_arrow_down, stringResource(R.string.lyrics_close), close)
                 SongCover(SongArt(path), size = 40.dp, shape = RoundedCornerShape(10.dp))
                 Column(Modifier.weight(1f)) {
-                    Text(ui.song?.let { displayTitle(it, library) } ?: path.substringAfterLast('/'), style = type.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    ui.song?.artist?.takeIf(String::isNotBlank)?.let { Text(it, style = type.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                    Text(shownTitle(ui, library), style = type.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    ui.named?.artist?.takeIf(String::isNotBlank)?.let { Text(it, style = type.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                 }
                 if (book == false) AaButton { sheet = PlayerRoute.LYRICS_TEXT }
                 syncAction(lyrics)?.let { action -> SyncMenu(action) { nav.show(FullScreen.SyncEditor(ui.item.song)) } }

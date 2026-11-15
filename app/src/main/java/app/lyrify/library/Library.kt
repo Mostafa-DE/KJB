@@ -4,6 +4,7 @@ import app.lyrify.books.Book
 import app.lyrify.books.BookMarks
 import app.lyrify.books.autoBook
 import app.lyrify.books.booksOf
+import app.lyrify.books.oldFolderBookId
 import app.lyrify.books.userMark
 import app.lyrify.settings.LibrarySettings
 import app.lyrify.settings.Settings
@@ -104,13 +105,21 @@ class Library private constructor(
     private val booksById: Map<String, Book> = books.associateBy { it.id }
     private val bookByPath: Map<String, Book> = books.flatMap { book -> book.parts.map { it.path to book } }.toMap()
 
+    /** The folder books by their id before PF10 ([oldFolderBookId]); one two books had is no one's. */
+    private val booksByOldId: Map<String, Book> = books.mapNotNull { book -> oldFolderBookId(book.id)?.let { it to book } }
+        .groupBy({ it.first }, { it.second }).mapNotNull { (id, named) -> named.singleOrNull()?.let { id to it } }.toMap()
+
     fun album(key: String): Album? = albumsByKey[key]
 
     /** The book whose part is the file at [path]; null for music. */
     fun bookOf(path: String): Book? = bookByPath[path]
 
-    /** The book [id] names ([Book.id]); null when it is gone. */
-    fun book(id: String): Book? = booksById[id]
+    /**
+     * The book [id] names ([Book.id]), or the one it named before PF10: a lone file's path before its folder and album
+     * named it, or its folder and album as they were written then ([oldFolderBookId]); null when it is gone, or when those
+     * two name different books.
+     */
+    fun book(id: String): Book? = booksById[id] ?: listOfNotNull(bookByPath[id], booksByOldId[id]).distinct().singleOrNull()
 
     fun artist(name: String): Artist? = artistsByName[name]
 
