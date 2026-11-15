@@ -59,17 +59,29 @@ fun autoBook(song: Song): Boolean =
         song.genre?.trim()?.lowercase(Locale.ROOT) in BOOK_GENRES
 
 /**
- * Whether [song], music in [library], looks like a book without being one: a podcast episode, or a file of
- * [LOOKS_LONG_MS] or more with no other song of its folder and album beside it (so a folder of long mixes does not).
- * The song menu says so under "Mark as book"; it never makes a book by itself.
+ * Whether [song], music in [library], looks like a book without being one: a podcast episode, an .m4a the song menu
+ * found chapters in ([chaptered], [readsChaptersFor]), or a file of [LOOKS_LONG_MS] or more with no other song of its
+ * folder and album beside it (so a folder of long mixes does not). The song menu says so under "Mark as book"; it never
+ * makes a book by itself (spec 13: chapters are no book signal, and DJ mixes have them too).
  */
-fun looksLikeBook(song: Song, library: Library): Boolean {
+fun looksLikeBook(song: Song, library: Library, chaptered: Boolean = false): Boolean {
     if (library.bookOf(song.path) != null) return false
-    if (song.isPodcast) return true
+    if (song.isPodcast || chaptered) return true
     if (song.durationMs < LOOKS_LONG_MS) return false
     val key = groupKey(song)
     return library.songs.none { it.path != song.path && groupKey(it) == key }
 }
+
+/** Whether the song menu reads [song]'s chapters, to suggest Mark as book ([looksLikeBook]): an .m4a that is no book. */
+fun readsChaptersFor(song: Song, library: Library): Boolean = song.path.endsWith(M4A, ignoreCase = true) && library.bookOf(song.path) == null
+
+/**
+ * Whether the file at [path] is a book's part, for the lyrics and the AI, which never touch a book: by [library] once it
+ * is read; before that, by what the path alone says (an .m4b, a folder named Audiobooks), so nothing slips through while
+ * the library loads.
+ */
+fun isBookPart(path: String, library: Library?): Boolean =
+    if (library != null) library.bookOf(path) != null else path.endsWith(M4B, ignoreCase = true) || inAudiobooksFolder(path.substringBeforeLast('/'))
 
 /** A lone file this long looks like a book ([looksLikeBook]). */
 const val LOOKS_LONG_MS: Long = 2 * 3_600_000
@@ -95,9 +107,10 @@ fun folderBookId(dir: String, album: String?): String = "$dir/|${album.orEmpty()
 /**
  * The books among [songs] (the library's, already filtered), by [marks] and the automatic signals, by title. A song
  * marked "Mark as book" is a book of its own. The rest are grouped by folder (their absolute folder) and album tag (the
- * same, or none for all): a group of two or more files is one folder book when its folder is marked or any of its files
- * has an automatic signal ([autoBook]); an `.m4b` is always a book of its own, never a part. A lone file is a book when
- * it has a signal of its own or its folder is marked. "Not a book" on a song or its folder keeps it out.
+ * same, or none for all): a group of two or more files is one folder book when its folder is marked or every one of its
+ * files has an automatic signal ([autoBook]), so one track tagged Spoken Word never takes its album out of the music; an
+ * `.m4b` is always a book of its own, never a part. A lone file is a book when it has a signal of its own or its folder
+ * is marked. "Not a book" on a song or its folder keeps it out.
  */
 fun booksOf(songs: List<Song>, marks: BookMarks): List<Book> {
     val books = ArrayList<Book>()
@@ -111,7 +124,7 @@ fun booksOf(songs: List<Song>, marks: BookMarks): List<Book> {
     }
     grouped.groupBy(::groupKey).forEach { (key, group) ->
         val folderMarked = folderKey(group.first()) in marks.folders
-        if (!folderMarked && group.none(::autoBook)) return@forEach
+        if (!folderMarked && !group.all(::autoBook)) return@forEach
         if (group.size == 1) {
             books += single(group.single())
             return@forEach
@@ -236,6 +249,7 @@ sealed interface BookStatus {
 }
 
 private const val M4B: String = ".m4b"
+private const val M4A: String = ".m4a"
 private const val AUDIOBOOKS: String = "Audiobooks"
 private const val MINUTE_MS: Long = 60_000
 private const val MIN_SPEED: Float = 0.1f

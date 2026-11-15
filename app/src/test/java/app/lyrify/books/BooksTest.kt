@@ -1,7 +1,9 @@
 package app.lyrify.books
 
+import app.lyrify.library.Library
 import app.lyrify.library.VOLUME
 import app.lyrify.library.song
+import app.lyrify.settings.Settings
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -127,12 +129,16 @@ class BooksTest {
     }
 
     @Test
-    fun `one book signal in an album folder makes the whole group a book`() {
-        val parts = listOf(
-            song("Music/Rips/Lantern Keeper/01.mp3", album = "Lantern Keeper", genre = "Audiobook"),
-            song("Music/Rips/Lantern Keeper/02.mp3", album = "Lantern Keeper"),
-        )
-        assertEquals(2, booksOf(parts, BookMarks()).single().parts.size)
+    fun `a folder and album is a book only when each of its files has a sign, so one spoken track never takes its album`() {
+        val tagged = listOf("01", "02").map { song("Music/Rips/Lantern Keeper/$it.mp3", album = "Lantern Keeper", genre = "Audiobook") }
+        assertEquals(2, booksOf(tagged, BookMarks()).single().parts.size)
+        val album = (1..10).map { n -> song("Music/Harbour Glass/$n.mp3", album = "Harbour Glass", track = n, genre = if (n == 4) "Spoken Word" else "Folk") }
+        assertTrue(booksOf(album, BookMarks()).isEmpty())
+        val library = Library.of(album, Settings())
+        assertEquals(album.map { it.path }, library.album(library.albums.single().key)!!.songs.map { it.path })
+        // The user can still make it a book, or that one track alone.
+        assertEquals(10, booksOf(album, BookMarks(folders = setOf("Music/Harbour Glass"))).single().parts.size)
+        assertEquals(BookKind.SINGLE, booksOf(album, BookMarks(songs = setOf(album[3].path))).single().kind)
     }
 
     @Test

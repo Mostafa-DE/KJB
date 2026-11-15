@@ -26,6 +26,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -51,7 +52,9 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.lyrify.R
+import app.lyrify.books.Media3Chapters
 import app.lyrify.books.looksLikeBook
+import app.lyrify.books.readsChaptersFor
 import app.lyrify.data.LedgerEntry
 import app.lyrify.data.LyricsStatus
 import app.lyrify.library.Song
@@ -97,8 +100,13 @@ internal fun SongMenuSheet(
                     SheetRow.EDIT_TAGS -> ActionRow(R.drawable.ic_sell, stringResource(R.string.lib_edit_tags)) { onRow(row) }
                     SheetRow.BOOK -> {
                         val library = ui.library
-                        // A podcast or a long lone file: Mark as book is suggested, never done by itself (books/Books.kt).
-                        val looks = remember(song, library) { library != null && looksLikeBook(song, library) }
+                        val context = LocalContext.current
+                        // An .m4a with chapters, a podcast or a long lone file: Mark as book is suggested, never done by
+                        // itself (books/Books.kt). The chapters are read once the sheet is open.
+                        val chaptered by produceState(false, song.path, library) {
+                            if (library != null && readsChaptersFor(song, library)) value = Media3Chapters(context).read(song.path, song.durationMs)?.isNotEmpty() == true
+                        }
+                        val looks = remember(song, library, chaptered) { library != null && looksLikeBook(song, library, chaptered) }
                         ActionRow(
                             R.drawable.ic_auto_stories,
                             stringResource(if (library?.bookOf(song.path) != null) R.string.book_not else R.string.book_mark),

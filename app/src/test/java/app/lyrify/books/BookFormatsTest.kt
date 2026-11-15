@@ -239,6 +239,37 @@ class BookFormatsTest {
     }
 
     @Test
+    fun `an m4a with chapters is suggested as a book whatever its length, and never made one by them`() {
+        val mix = song("Music/Mixes/Night Ferry Mix.m4a", album = "Night Ferry", durationMs = 50 * MINUTE)
+        val library = library(mix)
+        assertNull(library.bookOf(mix.path))
+        assertFalse(looksLikeBook(mix, library))
+        assertTrue(looksLikeBook(mix, library, chaptered = true))
+        val shelved = song("Audiobooks/Night Ferry.m4a", durationMs = 50 * MINUTE)
+        assertFalse(looksLikeBook(shelved, library(shelved), chaptered = true))
+        // The song menu reads chapters for an .m4a that is no book only.
+        assertTrue(readsChaptersFor(mix, library))
+        assertFalse(readsChaptersFor(music, library))
+        assertFalse(readsChaptersFor(shelved, library(shelved)))
+    }
+
+    @Test
+    fun `a book's files are known as books for the lyrics, by their path alone while the library loads`() {
+        val tale = song("Audiobooks/Lantern Keeper/01.mp3", album = "Lantern Keeper", durationMs = 30 * MINUTE)
+        val read = library(m4b, tale)
+        assertTrue(isBookPart(m4b.path, read))
+        assertTrue(isBookPart(tale.path, read))
+        assertFalse(isBookPart(music.path, read))
+        // Not read yet: an .m4b or a file in an Audiobooks folder counts as a book, music does not.
+        assertTrue(isBookPart(m4b.path, null))
+        assertTrue(isBookPart(tale.path, null))
+        assertFalse(isBookPart(music.path, null))
+        // Read, the user's word wins: an Audiobooks file marked Not a book is music.
+        val kept = library(tale, marks = BookMarks(notSongs = setOf(tale.path)))
+        assertFalse(isBookPart(tale.path, kept))
+    }
+
+    @Test
     fun `a folder makes a book by its name or by the user's mark, its files grouped by album`() {
         // An Audiobooks folder at any depth, in any case: a book with no other sign.
         val deep = (1..3).map { song("Music/Spoken/audiobooks/Quiet Orchard/$it.mp3", album = "Quiet Orchard", durationMs = 30 * MINUTE) }
