@@ -55,6 +55,40 @@ class ImportFormatsTest {
         assertEquals(ImportFailure.EMPTY, failure("#EXTM3U\n# nothing here\n", "Empty.m3u8"))
     }
 
+    // Samsung Music's favourites: Export writes them as one m3u of its own name, in the Music folder
+
+    @Test
+    fun `Samsung Music's favourites file is told by its name, in any case, m3u or m3u8`() {
+        listOf("!#SamsungMusic_favorites#!.m3u", "!#samsungmusic_FAVORITES#!.M3U8", " !#SamsungMusic_favorites#!.m3u8 ").forEach { assertTrue(it, ImportFormats.isSamsungFavourites(it)) }
+        listOf(
+            "!#SamsungMusic_favorites#!.pls", "!#SamsungMusic_favorites#!.txt", "!#SamsungMusic_favorites#!", "SamsungMusic_favorites.m3u", "!#SamsungMusic_favorites#! (1).m3u",
+            "Favorites.m3u", "!#SamsungMusic_Road Trip#!.m3u", null,
+        ).forEach { assertFalse("$it", ImportFormats.isSamsungFavourites(it)) }
+    }
+
+    @Test
+    fun `Samsung Music's favourites file is read as favourites in its order, paths found from its folder, and no playlist`() {
+        // As Samsung Music writes it: a header, no #EXTINF, paths relative to the Music folder the file is in.
+        val text = "#EXTM3U\n../Download/Night Ferry/01 Low Water.mp3\nHarbour Glass/01 Paper Lantern.mp3\n../Download/Night Ferry/01 Low Water.mp3\n"
+
+        listOf("!#SamsungMusic_favorites#!.m3u", "!#SAMSUNGMUSIC_favorites#!.m3u8").forEach { name ->
+            val read = ImportFormats.read(text.encodeToByteArray(), name, MUSIC) as ImportRead.Read
+
+            assertEquals(name, ImportFormat.M3U, read.format)
+            assertEquals(name, emptyList<ImportPlaylist>(), read.bundle.playlists)
+            assertEquals(
+                name,
+                listOf("/storage/emulated/0/Download/Night Ferry/01 Low Water.mp3", "$MUSIC/Harbour Glass/01 Paper Lantern.mp3", "/storage/emulated/0/Download/Night Ferry/01 Low Water.mp3"),
+                read.bundle.favourites.map { it.path },
+            )
+        }
+        // The same lines in any other m3u are a playlist named after its file, as ever.
+        val other = ImportFormats.read(text.encodeToByteArray(), "!#SamsungMusic_Road Trip#!.m3u", MUSIC) as ImportRead.Read
+        assertEquals(listOf("!#SamsungMusic_Road Trip#!"), other.bundle.playlists.map { it.name })
+        assertEquals(emptyList<ImportSong>(), other.bundle.favourites)
+        assertEquals(ImportFailure.EMPTY, failure("#EXTM3U\n", "!#SamsungMusic_favorites#!.m3u"))
+    }
+
     // pls
 
     @Test

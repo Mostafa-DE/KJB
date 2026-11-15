@@ -322,7 +322,8 @@ class ImportPlan(val bundle: ImportBundle, phone: List<Song>) {
          * [now] with an import's [playlists] (each a name and its songs on this phone, in order) and [favourites] added,
          * never wiping anything: a name not there makes a playlist; a playlist of the same name (case aside) gets only
          * the songs it does not hold yet, each once, at its end in the import's order, and one that would not change is
-         * left as it is; favourites are a union. A name of [reserved] gets " (2)". What it added comes back with it.
+         * left as it is; favourites are a union, the new ones each once after the user's own, in the import's order. A
+         * name of [reserved] gets " (2)". What it added comes back with it.
          */
         internal fun merge(
             now: PlaylistsState,
@@ -353,7 +354,8 @@ class ImportPlan(val bundle: ImportBundle, phone: List<Song>) {
             }
             val known = state.favouriteSongs.map { it.path }.toSet()
             val loved = favourites.filter { it.path !in known }.distinctBy { it.path }
-            if (loved.isNotEmpty()) state = state.favourite(loved, favourite = true)
+            // After the user's own, so an import never pushes down the songs they hearted in KJB.
+            if (loved.isNotEmpty()) state = state.copy(favouriteSongs = state.favouriteSongs + loved)
             return state to ImportUndo(created = created, added = added, favourites = loved)
         }
 

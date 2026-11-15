@@ -147,17 +147,17 @@ class ImportPlanTest {
 
         assertEquals(listOf(other, Playlist("p1", "Road Trip", listOf(lantern.ref), NOW)), state.playlists)
         assertEquals(listOf(newer), state.unknownPlaylists)
-        assertEquals(listOf(water.ref, road.ref), state.favouriteSongs)
+        assertEquals(listOf(road.ref, water.ref), state.favouriteSongs)
     }
 
     @Test
-    fun `favourites are a union, never unfavouriting`() {
+    fun `favourites are a union, never unfavouriting, the new ones after the user's own, each once, in the import's order`() {
         val before = PlaylistsState(favouriteSongs = listOf(road.ref, water.ref))
 
-        val (state, undo) = ImportPlan.merge(before, emptyList(), listOf(water.ref, lantern.ref, lantern.ref), ids(), NOW)
+        val (state, undo) = ImportPlan.merge(before, emptyList(), listOf(bell.ref, water.ref, lantern.ref, bell.ref), ids(), NOW)
 
-        assertEquals(listOf(lantern.ref, road.ref, water.ref), state.favouriteSongs)
-        assertEquals(ImportUndo(favourites = listOf(lantern.ref)), undo)
+        assertEquals(listOf(road.ref, water.ref, bell.ref, lantern.ref), state.favouriteSongs)
+        assertEquals(ImportUndo(favourites = listOf(bell.ref, lantern.ref)), undo)
     }
 
     // Play counts only go up
@@ -481,6 +481,71 @@ class ImportPlanTest {
         assertEquals(listOf("Musicolet: Morning", QUEUE), outcome.undo.queues.keys.map { stores.queues.queue(it)!!.name })
     }
 
+    // Samsung Music's favourites file: into Favourites, never a playlist
+
+    @Test
+    fun `Samsung Music's favourites go into Favourites after the user's own, each once, in the file's order, and make no playlist`() = runTest {
+        val before = PlaylistsState(listOf(Playlist("mine", "Evening", listOf(road.ref), 1)), favouriteSongs = listOf(water.ref))
+        val stores = FakeStores(before)
+        val plan = ImportPlan(samsung(SAMSUNG_LINES), phone)
+
+        assertEquals(mapOf(ImportKind.FAVOURITES to 4), plan.counts)
+        assertEquals(listOf("../Download/Gone/03 Glass Steps.mp3"), plan.missing(plan.defaultChosen()).map { it.location })
+        val outcome = plan.apply(plan.defaultChosen(), stores, ids(), NOW, UNTITLED)!!
+
+        assertEquals(before.playlists, stores.state.playlists)
+        assertEquals(listOf(water.ref, bell.ref, lantern.ref), stores.state.favouriteSongs)
+        assertEquals(ImportOutcome(created = 0, extended = 0, songsAdded = 0, favouritesAdded = 2, countsRaised = 0, undo = ImportUndo(favourites = listOf(bell.ref, lantern.ref))), outcome)
+        // Undo takes them back, and nothing of the user's.
+        assertTrue(ImportPlan.undo(outcome.undo, stores))
+        assertEquals(before, stores.state)
+    }
+
+    @Test
+    fun `a second import of the same favourites file adds nothing and says so`() = runTest {
+        val stores = FakeStores(PlaylistsState(favouriteSongs = listOf(water.ref)))
+        ImportPlan(samsung(SAMSUNG_LINES), phone).apply(setOf(ImportKind.FAVOURITES), stores, ids(), NOW, UNTITLED)
+        val once = stores.state
+
+        val again = ImportPlan(samsung(SAMSUNG_LINES), phone).apply(setOf(ImportKind.FAVOURITES), stores, ids(), NOW, UNTITLED)!!
+
+        assertFalse(again.changed)
+        assertEquals(0, again.favouritesAdded)
+        assertEquals(once, stores.state)
+        assertEquals(listOf(water.ref, bell.ref, lantern.ref), stores.state.favouriteSongs)
+    }
+
+    @Test
+    fun `in a folder the favourites file goes into Favourites and every other file is a playlist named after it`() = runTest {
+        val files = mapOf(
+            SAMSUNG to SAMSUNG_LINES,
+            "Road Trip.m3u" to "#EXTM3U\nNight Ferry/02 Salt Road.mp3\nHarbour Glass/01 Paper Lantern.mp3\n",
+            "Evening.m3u8" to "../Night Ferry/01 Low Water.mp3\n",
+        )
+        val tree = mapOf(
+            "music" to listOf(child("Road Trip.m3u"), child("cover.jpg"), child(SAMSUNG), FolderChild("old", "Old", folder = true)),
+            "old" to listOf(child("Evening.m3u8")),
+        )
+        val walked = ImportFolder.walk("music") { tree[it] }
+        val pick = ImportFormats.combine(walked.map { file -> ImportFormats.read(files.getValue(file.name!!).encodeToByteArray(), file.name, if (file.id == "Evening.m3u8") "$MUSIC/Old" else MUSIC) })
+        val stores = FakeStores()
+
+        val plan = ImportPlan(pick.bundle, phone)
+        val outcome = plan.apply(plan.defaultChosen(), stores, ids(), NOW, UNTITLED)!!
+
+        assertEquals(3, pick.read)
+        assertEquals(listOf("Road Trip", "Evening"), stores.state.playlists.map { it.name })
+        assertEquals(listOf(listOf(road.ref, lantern.ref), listOf(water.ref)), stores.state.playlists.map { it.songs })
+        assertEquals(listOf(bell.ref, water.ref, lantern.ref), stores.state.favouriteSongs)
+        assertEquals(2, outcome.created)
+        assertEquals(3, outcome.favouritesAdded)
+    }
+
+    /** What Samsung Music's favourites file in the Music folder holds, read as KJB reads a picked file. */
+    private fun samsung(text: String): ImportBundle = (ImportFormats.read(text.encodeToByteArray(), SAMSUNG, MUSIC) as ImportRead.Read).bundle
+
+    private fun child(name: String) = FolderChild(name, name, folder = false, sizeBytes = 100)
+
     private fun line(song: Song) = ImportSong(song.path, song.path)
 
     private fun ids(prefix: String = "p"): () -> String {
@@ -535,5 +600,11 @@ class ImportPlanTest {
         const val LAST: Long = 1_790_000_000_000L
         const val UNTITLED: String = "Imported playlist"
         const val QUEUE: String = "Musicolet queue"
+        const val MUSIC: String = "/storage/emulated/0/Music"
+        const val SAMSUNG: String = "!#SamsungMusic_favorites#!.m3u"
+
+        /** Paths relative to the Music folder, a song twice, one in a folder above it, one not on the phone. */
+        const val SAMSUNG_LINES: String = "#EXTM3U\nHarbour Glass/02 Tide Bell.mp3\n../Music/Night Ferry/01 Low Water.mp3\n" +
+            "../Download/Gone/03 Glass Steps.mp3\nHarbour Glass/01 Paper Lantern.mp3\nHarbour Glass/02 Tide Bell.mp3\n"
     }
 }
