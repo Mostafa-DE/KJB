@@ -6,7 +6,13 @@ import app.lyrify.library.SongRef
 import app.lyrify.library.song
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
+import java.io.ByteArrayOutputStream
+import java.io.DataOutputStream
+import java.io.File
 
 /**
  * A file another app opens in KJB: only MediaStore's own address of an audio file names a library song (by its id); any
@@ -14,6 +20,9 @@ import org.junit.Test
  * files stay while a queue holds them.
  */
 class OpenedFilesTest {
+    @get:Rule
+    val temp = TemporaryFolder()
+
     @Test
     fun `MediaStore's address of an audio file names its id`() {
         assertEquals(42L, mediaStoreAudioId("content://media/external/audio/media/42"))
@@ -79,5 +88,121 @@ class OpenedFilesTest {
             "$root/10a0/0/Paper Harbour.mp3", "$root/1000/x/Paper Harbour.mp3", "$root/1000/0/", "cache/opened/1000/0",
         ).forEach { assertNull(it, openedCoverKey(it)) }
         listOf("opened-1000", "opened-1000-0-1", "opened-..-0", "opened--0", "opened-1000-x", "opened-1000/0", "42", DEFAULT_COVER, "").forEach { assertNull(it, openedCoverDir(it)) }
+    }
+
+    // An opened copy's cover and tags, from a file another app gave (made-up bytes)
+
+    private val mb = 1024 * 1024
+
+    private fun bytes(write: DataOutputStream.() -> Unit): ByteArray = ByteArrayOutputStream().also { DataOutputStream(it).use(write) }.toByteArray()
+
+    private fun file(write: DataOutputStream.() -> Unit): File = temp.newFile().apply { writeBytes(bytes(write)) }
+
+    private fun DataOutputStream.ascii(text: String) = write(text.toByteArray(Charsets.ISO_8859_1))
+
+    /** An ID3v2.3 tag's header: [size] bytes of frames follow it. */
+    private fun DataOutputStream.id3(size: Int) {
+        ascii("ID3")
+        write(byteArrayOf(3, 0, 0))
+        write(byteArrayOf((size shr 21 and 0x7f).toByte(), (size shr 14 and 0x7f).toByte(), (size shr 7 and 0x7f).toByte(), (size and 0x7f).toByte()))
+    }
+
+    /** A FLAC metadata block's header: its [type] and [length], and whether it is the [last]. */
+    private fun DataOutputStream.block(type: Int, length: Int, last: Boolean = false) = writeInt((if (last) 1 shl 31 else 0) or (type shl 24) or length)
+
+    /** A FLAC picture block whose picture says it holds [says] bytes, [data] written. */
+    private fun DataOutputStream.picture(says: Int, data: Int, last: Boolean = true) {
+        block(6, 4 + 4 + 10 + 4 + 16 + 4 + data, last)
+        writeInt(3)
+        writeInt(10)
+        ascii("image/jpeg")
+        writeInt(0)
+        write(ByteArray(16))
+        writeInt(says)
+        write(ByteArray(data))
+    }
+
+    /** An MP4 atom of [type] holding [payload]. */
+    private fun atom(type: String, vararg payload: ByteArray): ByteArray = bytes {
+        writeInt(8 + payload.sumOf { it.size })
+        ascii(type)
+        payload.forEach(::write)
+    }
+
+    private fun mp4(vararg top: ByteArray): File = file {
+        write(atom("ftyp", "M4A isom".toByteArray()))
+        top.forEach(::write)
+        write(atom("mdat", ByteArray(2_000)))
+    }
+
+    /** An Ogg page carrying [laces] (each a segment's length) of zeros. */
+    private fun DataOutputStream.page(vararg laces: Int) {
+        ascii("OggS")
+        write(ByteArray(22))
+        writeByte(laces.size)
+        laces.forEach { writeByte(it) }
+        write(ByteArray(laces.sum()))
+    }
+
+    /**
+     * Android's retriever hands over an embedded picture whole, whatever its size (phone session 11 ended in an
+     * OutOfMemoryError elsewhere): an opened copy's picture is bounded by its tags' own sizes before any is read.
+     */
+    @Test
+    fun `an MP3's or a FLAC's picture is bounded by its ID3v2 tag, its picture and comment blocks and what its picture says`() {
+        assertEquals("an ID3v2 tag whole", 1_010L, embeddedPictureBytes(file { id3(1_000); write(ByteArray(1_000)); write(ByteArray(400)) }))
+        assertTrue("a tag that says 9 MB", embeddedPictureBytes(file { id3(9 * mb); write(ByteArray(100)) })!! > MAX_COVER_BYTES)
+        val streamInfo = bytes { block(0, 34); write(ByteArray(34)) }
+        assertEquals("a picture block", 4_042L, embeddedPictureBytes(file { ascii("fLaC"); write(streamInfo); picture(says = 4_000, data = 4_000) }))
+        assertTrue("a small block whose picture says 9 MB", embeddedPictureBytes(file { ascii("fLaC"); write(streamInfo); picture(says = 9 * mb, data = 10) })!! > MAX_COVER_BYTES)
+        assertEquals("a comment block, where a picture may be written as text", 5_000L, embeddedPictureBytes(file { ascii("fLaC"); write(streamInfo); block(4, 5_000, last = true); write(ByteArray(5_000)) }))
+        assertEquals("no picture", 0L, embeddedPictureBytes(file { ascii("fLaC"); block(0, 34, last = true); write(ByteArray(34)) }))
+        assertEquals("a FLAC after an ID3v2 tag: both", 4_042L, embeddedPictureBytes(file { id3(100); write(ByteArray(100)); ascii("fLaC"); write(streamInfo); picture(4_000, 4_000) }))
+    }
+
+    @Test
+    fun `an MP4's picture is bounded by its metadata items, its sample tables never counted`() {
+        val items = atom("ilst", atom("\u00a9nam", atom("data", ByteArray(40))), atom("covr", atom("data", ByteArray(3_000))))
+        val iso = atom("meta", ByteArray(4), atom("hdlr", ByteArray(25)), items)
+        val tables = atom("trak", atom("mdia", ByteArray(20_000)))
+        assertEquals(3_016L, embeddedPictureBytes(mp4(atom("moov", tables, atom("udta", iso)))))
+        // QuickTime's meta, with no version and flags.
+        assertEquals(3_016L, embeddedPictureBytes(mp4(atom("moov", atom("meta", atom("hdlr", ByteArray(25)), items)))))
+        assertEquals("no metadata", 0L, embeddedPictureBytes(mp4(atom("moov", tables))))
+        // An ID32 atom's ID3v2 tag that says 9 MB, and an item that says it.
+        val id32 = atom("ID32", ByteArray(6), bytes { id3(9 * mb) })
+        assertTrue(embeddedPictureBytes(mp4(atom("moov", atom("udta", atom("meta", ByteArray(4), id32)))))!! > MAX_COVER_BYTES)
+        val big = bytes { writeInt(9 * mb); ascii("covr") }
+        assertTrue(embeddedPictureBytes(mp4(atom("moov", atom("udta", atom("meta", ByteArray(4), atom("ilst", big))))))!! > MAX_COVER_BYTES)
+        assertNull("an atom shorter than its header", embeddedPictureBytes(mp4(atom("moov", bytes { writeInt(4); ascii("udta") }))))
+    }
+
+    @Test
+    fun `an Ogg's picture is bounded by its comment header, and any other file is read for none`() {
+        assertEquals(520L, embeddedPictureBytes(file { page(30); page(255, 255, 10); page(200) }))
+        assertEquals("a comment header over two pages", 65_380L, embeddedPictureBytes(file { page(30); page(*IntArray(255) { 255 }); page(255, 100) }))
+        assertNull("cut short", embeddedPictureBytes(file { page(30); page(255, 255) }))
+        assertNull("a WAV", embeddedPictureBytes(file { ascii("RIFF"); writeInt(100); ascii("WAVE"); write(ByteArray(100)) }))
+        assertNull("no format", embeddedPictureBytes(file { write(ByteArray(64) { it.toByte() }) }))
+        assertNull("empty", embeddedPictureBytes(temp.newFile()))
+        assertNull("gone", embeddedPictureBytes(File(temp.root, "gone.mp3")))
+    }
+
+    @Test
+    fun `a cover is decoded at the largest halving still at least the size asked, and never for no size`() {
+        assertEquals(8, coverSample(4_000, 3_000, 500))
+        assertEquals(1, coverSample(300, 300, 500))
+        assertNull(coverSample(300, 300, 0))
+        assertNull(coverSample(300, 300, -1))
+        assertNull("not a picture", coverSample(-1, -1, 500))
+        assertEquals(1 shl 30, coverSample(Int.MAX_VALUE, 1, 1))
+    }
+
+    @Test
+    fun `an opened copy's title, artist and album are kept to a few hundred characters, blank ones none`() {
+        assertEquals("Harbour Lamp", tagText("Harbour Lamp"))
+        assertEquals(MAX_TAG_TEXT, tagText("Lamp ".repeat(10_000))!!.length)
+        assertNull(tagText("  "))
+        assertNull(tagText(null))
     }
 }
