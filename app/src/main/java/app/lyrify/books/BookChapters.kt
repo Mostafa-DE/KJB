@@ -298,12 +298,15 @@ private class Mp4Boxes(private val file: SeekableByteChannel) {
     /** [count] bytes from [offset] into [box]'s body; null when they are not all inside it. */
     private fun body(box: Mp4Box, offset: Int, count: Int): ByteArray? = if (count < 0 || offset + count > box.size) null else bytes(box.start + offset, count)
 
-    /** [count] bytes of the file from [at]; null when they are not all inside it (or it was cut short meanwhile). */
+    /**
+     * [count] bytes of the file from [at]; null when they are not all inside it (or it was cut short meanwhile), or a read
+     * gives none: a channel may give 0 bytes, and one that kept doing so would be asked forever.
+     */
     private fun bytes(at: Long, count: Int): ByteArray? {
         if (at < 0 || count < 0 || at > length - count) return null
         val read = ByteBuffer.allocate(count)
         file.position(at)
-        while (read.hasRemaining()) if (file.read(read) < 0) return null
+        while (read.hasRemaining()) if (file.read(read) <= 0) return null
         return read.array()
     }
 

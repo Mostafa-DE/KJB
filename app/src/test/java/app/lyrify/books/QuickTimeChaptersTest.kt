@@ -7,6 +7,7 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
 import java.nio.ByteBuffer
+import java.nio.channels.SeekableByteChannel
 import java.nio.file.Files
 import kotlin.random.Random
 import androidx.media3.extractor.metadata.Chapter as Media3Chapter
@@ -188,6 +189,16 @@ class QuickTimeChaptersTest {
     }
 
     @Test
+    fun `a read that gives no bytes ends the read at once, and one that gives a byte at a time reads the whole book`() {
+        val file = folder.newFile().apply { writeBytes(book(listOf(sample("Lantern One"), sample("Lantern Two")))) }
+        // A channel may give 0 bytes a read; one that never gives more is not asked again and again.
+        val stalled = Files.newByteChannel(file.toPath()).use { Trickle(it, most = 0).run { quickTimeChapters(this) to reads } }
+        assertEquals(emptyList<Media3Chapter>() to 1, stalled)
+        val trickled = Files.newByteChannel(file.toPath()).use { quickTimeChapters(Trickle(it, most = 1)) }
+        assertEquals(listOf("Lantern One", "Lantern Two"), trickled.map { it.title?.value })
+    }
+
+    @Test
     fun `any byte of a book changed at random never fails the read, nor reads more than there is`() {
         val random = Random(20261115)
         val shapes = listOf(
@@ -202,6 +213,29 @@ class QuickTimeChaptersTest {
             file.writeBytes(bytes)
             assertTrue(read(file).size <= 6)
         }
+    }
+}
+
+/**
+ * [file] as a channel that gives at most [most] bytes a read (none at all for 0), and after [GIVE_UP] reads its end, so
+ * a reader that asks forever fails a test instead of hanging it.
+ */
+private class Trickle(private val file: SeekableByteChannel, private val most: Int) : SeekableByteChannel by file {
+    var reads = 0
+        private set
+
+    override fun read(dst: ByteBuffer): Int {
+        if (++reads >= GIVE_UP) return -1
+        if (most == 0) return 0
+        val part = ByteBuffer.allocate(minOf(most, dst.remaining()))
+        val count = file.read(part)
+        part.flip()
+        dst.put(part)
+        return count
+    }
+
+    companion object {
+        const val GIVE_UP: Int = 100_000
     }
 }
 
