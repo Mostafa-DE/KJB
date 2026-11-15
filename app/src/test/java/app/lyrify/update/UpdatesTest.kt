@@ -9,6 +9,7 @@ import app.lyrify.addon.InstallVerdict
 import app.lyrify.addon.KjbAddon
 import app.lyrify.addon.KjbAddons
 import app.lyrify.addon.archiveSigningFlags
+import app.lyrify.addon.confirmFrom
 import app.lyrify.addon.signerDigests
 import app.lyrify.settings.AboutSettings
 import app.lyrify.settings.Settings

@@ -1,12 +1,9 @@
 package app.lyrify.update
 
 import android.app.PendingIntent
-import android.content.ActivityNotFoundException
-import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageInstaller
-import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
 import androidx.core.content.edit
@@ -19,8 +16,8 @@ import app.lyrify.addon.ApkSigning
 import app.lyrify.addon.GitHubReleases
 import app.lyrify.addon.InstallOutcome
 import app.lyrify.addon.InstallPort
-import app.lyrify.addon.InstallReport
-import app.lyrify.addon.InstallVerdict
+import app.lyrify.addon.InstallReceiver
+import app.lyrify.addon.InstallTarget
 import app.lyrify.addon.KjbAddon
 import app.lyrify.addon.KjbAddons
 import app.lyrify.addon.archiveSigning
@@ -33,7 +30,6 @@ import app.lyrify.models.ModelDownloader
 import app.lyrify.models.ModelSpec
 import app.lyrify.models.ModelStore
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -58,7 +54,6 @@ import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URI
 import java.net.URISyntaxException
-import java.util.concurrent.ConcurrentHashMap
 
 // KJB's own update check (features-2026-11-15, item 2): once a day when KJB opens, and from Settings > About > Check now,
 // one small request to KJB's latest release on GitHub. A newer KJB shows "KJB <ver> is out" with its notes; Install
@@ -177,13 +172,6 @@ internal class SingleInstall<K : Any, T : Any>(private val make: (K) -> T, priva
         return make(key).also { current = key to it }
     }
 }
-
-/**
- * [verdict] as KJB acts on it: a confirmation ([InstallReport.verdict] has checked its action and session) starts only
- * when [isSystemInstaller] says its package is the phone's own installer; any other ends the install as failed.
- */
-internal fun confirmFrom(verdict: InstallVerdict, isSystemInstaller: (String) -> Boolean): InstallVerdict =
-    if (verdict is InstallVerdict.Confirm && !isSystemInstaller(verdict.installer)) InstallVerdict.End(InstallOutcome.Failed(PackageInstaller.STATUS_FAILURE)) else verdict
 
 /** A day, the daily check's spacing. */
 private const val DAY_MS: Long = 24 * 60 * 60_000L
@@ -427,7 +415,7 @@ private class AndroidUpdatePort(private val context: Context) : UpdatePort {
 /**
  * A newer KJB's APK through Android, the add-on's way: downloaded into KJB's cache with the models' downloader (the
  * release's size and SHA-256, resumed with HTTP Range, github.com and its asset host only), checked against the KJB
- * running ([isKjbUpdate]), and installed with a PackageInstaller session; Android's word comes back to [UpdateReceiver].
+ * running ([isKjbUpdate]), and installed with a PackageInstaller session; Android's word comes back to [InstallReceiver].
  * The install replaces KJB, so a successful one ends this process.
  */
 internal class SelfInstallPort(private val context: Context, private val apk: ReleaseApk) : InstallPort {
@@ -471,14 +459,14 @@ internal class SelfInstallPort(private val context: Context, private val apk: Re
             Log.w(LOG_TAG, "update: no install session (${e.javaClass.simpleName})")
             return@withContext InstallOutcome.Failed(PackageInstaller.STATUS_FAILURE)
         }
-        val outcome = UpdateReceiver.expect(session)
+        val outcome = InstallReceiver.expect(session, InstallTarget.Kjb)
         try {
             installer.openSession(session).use { open ->
                 open.openWrite(INSTALL_NAME, 0, file.length()).use { out ->
                     file.inputStream().use { it.copyTo(out) }
                     open.fsync(out)
                 }
-                val status = Intent(context, UpdateReceiver::class.java).putExtra(UpdateReceiver.EXTRA_SESSION, session)
+                val status = Intent(context, InstallReceiver::class.java).putExtra(InstallReceiver.EXTRA_SESSION, session)
                 // Mutable: the installer adds its status. Explicit, to KJB's own receiver, which is not exported.
                 val pending = PendingIntent.getBroadcast(context, session, status, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE)
                 open.commit(pending.intentSender)
@@ -496,7 +484,7 @@ internal class SelfInstallPort(private val context: Context, private val apk: Re
             runCatching { installer.abandonSession(session) }
             InstallOutcome.Failed(PackageInstaller.STATUS_FAILURE_BLOCKED)
         } finally {
-            UpdateReceiver.forget(session)
+            InstallReceiver.forget(session)
         }
     }
 
@@ -504,83 +492,6 @@ internal class SelfInstallPort(private val context: Context, private val apk: Re
         const val FOLDER = "kjb-update"
         const val APK = "KJB.apk"
         const val INSTALL_NAME = "kjb.apk"
-    }
-}
-
-/**
- * Android's installer's word on a KJB update (through [SelfInstallPort]'s pending intent; not exported), read as the
- * add-on's receiver reads it ([InstallReport]) but for KJB's own package. One receiver for both once the add-on code is
- * shared (lane DL1).
- */
-class UpdateReceiver : BroadcastReceiver() {
-    override fun onReceive(context: Context, intent: Intent) {
-        val confirm = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            intent.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)
-        } else {
-            @Suppress("DEPRECATION")
-            intent.getParcelableExtra(Intent.EXTRA_INTENT)
-        }
-        val report = InstallReport(
-            ourSession = intent.getIntExtra(EXTRA_SESSION, -1),
-            session = intent.getIntExtra(PackageInstaller.EXTRA_SESSION_ID, -1),
-            status = intent.getIntExtra(PackageInstaller.EXTRA_STATUS, PackageInstaller.STATUS_FAILURE),
-            packageName = intent.getStringExtra(PackageInstaller.EXTRA_PACKAGE_NAME),
-            confirmAction = confirm?.action,
-            confirmPackage = confirm?.`package`,
-            confirmSession = confirm?.getIntExtra(PackageInstaller.EXTRA_SESSION_ID, -1) ?: -1,
-        )
-        when (val verdict = confirmFrom(report.verdict(outcomes::containsKey, context.packageName)) { systemInstaller(context, it) }) {
-            InstallVerdict.Ignore -> Log.w(LOG_TAG, "update: an install report for no session of KJB's, ignored")
-            is InstallVerdict.Confirm -> {
-                // Rebuilt from what was checked, nothing else; KJB is in front (the user just tapped Install).
-                val dialog = Intent(InstallReport.CONFIRM_INSTALL).setPackage(verdict.installer)
-                    .putExtra(PackageInstaller.EXTRA_SESSION_ID, verdict.session).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                try {
-                    context.startActivity(dialog)
-                } catch (e: ActivityNotFoundException) {
-                    end(verdict.session, e)
-                } catch (e: SecurityException) {
-                    end(verdict.session, e)
-                }
-            }
-            is InstallVerdict.End -> {
-                if (verdict.outcome is InstallOutcome.Failed) Log.w(LOG_TAG, "update: not installed, status ${verdict.outcome.status}")
-                outcomes.remove(report.session)?.complete(verdict.outcome)
-            }
-        }
-    }
-
-    /**
-     * [packageName] is the phone's own package installer: a system app with the activity for Android's confirm action
-     * (KJB's manifest queries it, so the installer is visible whatever its name on this phone).
-     */
-    private fun systemInstaller(context: Context, packageName: String): Boolean {
-        val confirm = Intent(InstallReport.CONFIRM_INSTALL).setPackage(packageName)
-        val found = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            context.packageManager.resolveActivity(confirm, PackageManager.ResolveInfoFlags.of(PackageManager.MATCH_SYSTEM_ONLY.toLong()))
-        } else {
-            @Suppress("DEPRECATION")
-            context.packageManager.resolveActivity(confirm, PackageManager.MATCH_SYSTEM_ONLY)
-        }
-        return found?.activityInfo?.packageName == packageName
-    }
-
-    private fun end(session: Int, e: Exception) {
-        Log.w(LOG_TAG, "update: the install dialog did not open (${e.javaClass.simpleName})")
-        outcomes.remove(session)?.complete(InstallOutcome.Failed(PackageInstaller.STATUS_FAILURE))
-    }
-
-    companion object {
-        const val EXTRA_SESSION: String = "app.lyrify.update.session"
-
-        /** The installs waiting for the installer's word, by session. */
-        private val outcomes = ConcurrentHashMap<Int, CompletableDeferred<InstallOutcome>>()
-
-        internal fun expect(session: Int): CompletableDeferred<InstallOutcome> = CompletableDeferred<InstallOutcome>().also { outcomes[session] = it }
-
-        internal fun forget(session: Int) {
-            outcomes.remove(session)
-        }
     }
 }
 

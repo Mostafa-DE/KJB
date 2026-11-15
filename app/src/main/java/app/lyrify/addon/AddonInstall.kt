@@ -119,13 +119,13 @@ internal data class InstallReport(
      * Only a session KJB created and still waits on ([waiting]) is heard. A confirmation is started only when it is the
      * installer's own (PackageInstallerSession builds it from CONFIRM_INSTALL, the system installer's package and the
      * session id, nothing else), and it is rebuilt from those three; anything else asking for the user, or a result
-     * for another package than [addonPackage], ends the install as failed, so it never waits on a dialog that cannot
-     * come.
+     * for another package than [expectedPackage] (the add-on's, or KJB's own for its update), ends the install as
+     * failed, so it never waits on a dialog that cannot come.
      */
-    fun verdict(waiting: (Int) -> Boolean, addonPackage: String): InstallVerdict {
+    fun verdict(waiting: (Int) -> Boolean, expectedPackage: String): InstallVerdict {
         if (session < 0 || session != ourSession || !waiting(session)) return InstallVerdict.Ignore
         val failed = InstallVerdict.End(InstallOutcome.Failed(PackageInstaller.STATUS_FAILURE))
-        if (packageName != null && packageName != addonPackage) return failed
+        if (packageName != null && packageName != expectedPackage) return failed
         return when (status) {
             PackageInstaller.STATUS_PENDING_USER_ACTION ->
                 if (confirmAction == CONFIRM_INSTALL && confirmSession == session && !confirmPackage.isNullOrEmpty()) {
@@ -152,6 +152,65 @@ internal sealed interface InstallVerdict {
     data class Confirm(val installer: String, val session: Int) : InstallVerdict
 
     data class End(val outcome: InstallOutcome) : InstallVerdict
+}
+
+/**
+ * [verdict] as KJB acts on it: a confirmation ([InstallReport.verdict] has checked its action and session) starts only
+ * when [isSystemInstaller] says its package is the phone's own installer; any other ends the install as failed.
+ */
+internal fun confirmFrom(verdict: InstallVerdict, isSystemInstaller: (String) -> Boolean): InstallVerdict =
+    if (verdict is InstallVerdict.Confirm && !isSystemInstaller(verdict.installer)) InstallVerdict.End(InstallOutcome.Failed(PackageInstaller.STATUS_FAILURE)) else verdict
+
+/** What an install session installs: KJB itself (its own update, update/Updates.kt) or one of its add-ons. */
+internal sealed interface InstallTarget {
+    /** Names it in logcat. */
+    val label: String
+
+    data object Kjb : InstallTarget {
+        override val label: String = "update"
+    }
+
+    data class Addon(val addon: KjbAddon) : InstallTarget {
+        override val label: String get() = addon.label
+    }
+}
+
+/**
+ * The installs waiting for Android's installer's word, by session, each with what it installs ([InstallTarget]). A
+ * report is heard only for the session's own package (KJB's for its update), and its confirmation only when it is the
+ * phone's own installer's; [InstallReceiver] holds the one of the process.
+ */
+internal class InstallSessions {
+    private class Pending(val target: InstallTarget, val outcome: CompletableDeferred<InstallOutcome>)
+
+    private val pending = ConcurrentHashMap<Int, Pending>()
+
+    fun expect(session: Int, target: InstallTarget): CompletableDeferred<InstallOutcome> =
+        CompletableDeferred<InstallOutcome>().also { pending[session] = Pending(target, it) }
+
+    fun forget(session: Int) {
+        pending.remove(session)
+    }
+
+    /** What [session] installs; null when no install waits on it. */
+    fun target(session: Int): InstallTarget? = pending[session]?.target
+
+    /**
+     * What KJB does with [report]: [InstallReport.verdict] for its session's package, KJB's own ([ownPackage]) for its
+     * update, and then [confirmFrom].
+     */
+    fun verdict(report: InstallReport, ownPackage: String, isSystemInstaller: (String) -> Boolean): InstallVerdict {
+        val expected = when (val target = target(report.ourSession)) {
+            null -> return InstallVerdict.Ignore
+            InstallTarget.Kjb -> ownPackage
+            is InstallTarget.Addon -> target.addon.packageName
+        }
+        return confirmFrom(report.verdict(pending::containsKey, expected), isSystemInstaller)
+    }
+
+    /** Ends [session] with [outcome]: what it installed, or null when no install waited on it (any more). */
+    fun end(session: Int, outcome: InstallOutcome): InstallTarget? =
+        pending.remove(session)?.let { ended -> ended.outcome.complete(outcome); ended.target }
 }
 
 // An APK's identity, read the same way for KJB's own update (update/Updates.kt) and for each add-on
@@ -396,7 +455,7 @@ internal class AndroidInstallPort(private val context: Context, private val addo
             Log.w(LOG_TAG, "${addon.label}: no install session (${e.javaClass.simpleName})")
             return@withContext InstallOutcome.Failed(PackageInstaller.STATUS_FAILURE)
         }
-        val outcome = InstallReceiver.expect(session, addon)
+        val outcome = InstallReceiver.expect(session, InstallTarget.Addon(addon))
         try {
             installer.openSession(session).use { open ->
                 open.openWrite(INSTALL_NAME, 0, apk.length()).use { out ->
@@ -432,9 +491,10 @@ internal class AndroidInstallPort(private val context: Context, private val addo
 }
 
 /**
- * Android's installer's word on an add-on install (through [AndroidInstallPort]'s pending intent; not exported, so only
- * that reaches it): it asks the user (its dialog is started from here), or it is done, refused or failed. Each session
- * is heard only for the add-on KJB started it for.
+ * Android's installer's word on every install KJB starts: its own update ([app.lyrify.update.SelfInstallPort]) and each
+ * add-on's ([AndroidInstallPort]), through their pending intents (not exported, so only those reach it). It asks the user
+ * (its dialog is started from here, only for the phone's own installer), or it is done, refused or failed. Each session
+ * is heard only for what KJB started it for ([InstallSessions]).
  */
 class InstallReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -453,50 +513,57 @@ class InstallReceiver : BroadcastReceiver() {
             confirmPackage = confirm?.`package`,
             confirmSession = confirm?.getIntExtra(PackageInstaller.EXTRA_SESSION_ID, -1) ?: -1,
         )
-        val pending = outcomes[report.ourSession]
-        when (val verdict = report.verdict(outcomes::containsKey, pending?.addon?.packageName.orEmpty())) {
-            InstallVerdict.Ignore -> Log.w(LOG_TAG, "add-on: an install report for no session of KJB's, ignored")
+        when (val verdict = sessions.verdict(report, context.packageName) { systemInstaller(context, it) }) {
+            InstallVerdict.Ignore -> Log.w(LOG_TAG, "install: a report for no session of KJB's, ignored")
             is InstallVerdict.Confirm -> {
-                // Rebuilt from what was checked, nothing else. KJB is in front (the user just tapped Get AI), so Android
-                // lets it show the dialog; when it cannot, the install ends here instead of waiting for it.
+                // Rebuilt from what was checked, nothing else. KJB is in front (the user just tapped Install, Update or
+                // Get), so Android lets it show the dialog; when it cannot, the install ends here instead of waiting for it.
                 val dialog = Intent(InstallReport.CONFIRM_INSTALL).setPackage(verdict.installer)
                     .putExtra(PackageInstaller.EXTRA_SESSION_ID, verdict.session).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 try {
                     context.startActivity(dialog)
                 } catch (e: ActivityNotFoundException) {
-                    end(verdict.session, InstallOutcome.Failed(PackageInstaller.STATUS_FAILURE), e)
+                    end(verdict.session, e)
                 } catch (e: SecurityException) {
-                    end(verdict.session, InstallOutcome.Failed(PackageInstaller.STATUS_FAILURE), e)
+                    end(verdict.session, e)
                 }
             }
             is InstallVerdict.End -> {
-                val addon = pending?.addon ?: return
-                if (verdict.outcome is InstallOutcome.Failed) Log.w(LOG_TAG, "${addon.label}: not installed, status ${verdict.outcome.status}")
-                outcomes.remove(report.session)?.outcome?.complete(verdict.outcome)
-                if (verdict.outcome == InstallOutcome.Installed && addon == KjbAddons.AI) AiLyrics.addonInstalled(context)
+                val target = sessions.end(report.session, verdict.outcome) ?: return
+                if (verdict.outcome is InstallOutcome.Failed) Log.w(LOG_TAG, "${target.label}: not installed, status ${verdict.outcome.status}")
+                if (verdict.outcome == InstallOutcome.Installed && (target as? InstallTarget.Addon)?.addon == KjbAddons.AI) AiLyrics.addonInstalled(context)
             }
         }
     }
 
-    private fun end(session: Int, outcome: InstallOutcome, e: Exception) {
-        Log.w(LOG_TAG, "add-on: the install dialog did not open (${e.javaClass.simpleName})")
-        outcomes.remove(session)?.outcome?.complete(outcome)
+    /**
+     * [packageName] is the phone's own package installer: a system app with the activity for Android's confirm action
+     * (KJB's manifest queries it, so the installer is visible whatever its name on this phone).
+     */
+    private fun systemInstaller(context: Context, packageName: String): Boolean {
+        val confirm = Intent(InstallReport.CONFIRM_INSTALL).setPackage(packageName)
+        val found = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            context.packageManager.resolveActivity(confirm, PackageManager.ResolveInfoFlags.of(PackageManager.MATCH_SYSTEM_ONLY.toLong()))
+        } else {
+            @Suppress("DEPRECATION")
+            context.packageManager.resolveActivity(confirm, PackageManager.MATCH_SYSTEM_ONLY)
+        }
+        return found?.activityInfo?.packageName == packageName
+    }
+
+    private fun end(session: Int, e: Exception) {
+        val target = sessions.end(session, InstallOutcome.Failed(PackageInstaller.STATUS_FAILURE))
+        Log.w(LOG_TAG, "${target?.label ?: "install"}: the install dialog did not open (${e.javaClass.simpleName})")
     }
 
     companion object {
         const val EXTRA_SESSION: String = "app.lyrify.addon.session"
 
-        /** An install waiting for the installer's word: the add-on it is for, and where its outcome goes. */
-        private class Pending(val addon: KjbAddon, val outcome: CompletableDeferred<InstallOutcome>)
+        /** The installs of this process waiting for the installer's word. */
+        private val sessions = InstallSessions()
 
-        /** The installs waiting for the installer's word, by session. */
-        private val outcomes = ConcurrentHashMap<Int, Pending>()
+        internal fun expect(session: Int, target: InstallTarget): CompletableDeferred<InstallOutcome> = sessions.expect(session, target)
 
-        internal fun expect(session: Int, addon: KjbAddon): CompletableDeferred<InstallOutcome> =
-            CompletableDeferred<InstallOutcome>().also { outcomes[session] = Pending(addon, it) }
-
-        internal fun forget(session: Int) {
-            outcomes.remove(session)
-        }
+        internal fun forget(session: Int) = sessions.forget(session)
     }
 }

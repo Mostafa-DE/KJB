@@ -194,18 +194,11 @@
             tools:node="merge"
             tools:targetApi="35" />
 
-        <!-- ai add-on -->
-        <!-- Android's installer reports the add-on's install here (addon/AddonInstall.kt), through KJB's own pending
-             intent: not exported. -->
+        <!-- installs -->
+        <!-- Android's installer reports every install KJB starts here (addon/AddonInstall.kt): KJB's own update
+             (update/Updates.kt) and each add-on's, through KJB's own pending intents: not exported. -->
         <receiver
             android:name=".addon.InstallReceiver"
-            android:exported="false" />
-
-        <!-- updates -->
-        <!-- Android's installer reports KJB's own update here (update/Updates.kt), through KJB's own pending intent: not
-             exported. -->
-        <receiver
-            android:name=".update.UpdateReceiver"
             android:exported="false" />
 
         <!-- downloads -->

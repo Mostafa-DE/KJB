@@ -12,6 +12,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -347,7 +348,75 @@ class AddonInstallTest {
         assertEquals(3, setOf(ai.name, downloads.name, newer.name).size)
     }
 
+    // One receiver for every install: KJB's own update and both add-ons
+
+    private val sessions = InstallSessions()
+    private val update = InstallTarget.Kjb
+    private val ai = InstallTarget.Addon(KjbAddons.AI.copy(packageName = ADDON))
+    private val dl = InstallTarget.Addon(KjbAddons.DOWNLOADS.copy(packageName = DOWNLOADS))
+    private val failure = InstallVerdict.End(InstallOutcome.Failed(PackageInstaller.STATUS_FAILURE))
+
+    /** The installer's report for KJB's [session], naming [packageName]. */
+    private fun reportFor(session: Int, status: Int = PackageInstaller.STATUS_SUCCESS, packageName: String? = null, confirmPackage: String? = "com.android.packageinstaller") =
+        InstallReport(session, session, status, packageName, InstallReport.CONFIRM_INSTALL, confirmPackage, session)
+
+    private fun verdict(report: InstallReport, systemInstaller: (String) -> Boolean = { it == "com.android.packageinstaller" }) =
+        sessions.verdict(report, KJB, systemInstaller)
+
+    @Test
+    fun `each session is heard for what it installs, KJB's own package or its add-on's`() {
+        sessions.expect(1, update)
+        sessions.expect(2, ai)
+        sessions.expect(3, dl)
+
+        assertEquals(InstallVerdict.End(InstallOutcome.Installed), verdict(reportFor(1, packageName = KJB)))
+        assertEquals(InstallVerdict.End(InstallOutcome.Installed), verdict(reportFor(2, packageName = ADDON)))
+        assertEquals(InstallVerdict.End(InstallOutcome.Installed), verdict(reportFor(3, packageName = DOWNLOADS)))
+        assertEquals("KJB's update hears no add-on", failure, verdict(reportFor(1, packageName = DOWNLOADS)))
+        assertEquals("an add-on hears no KJB", failure, verdict(reportFor(3, packageName = KJB)))
+        assertEquals("nor the other add-on", failure, verdict(reportFor(2, packageName = DOWNLOADS)))
+        assertEquals(update, sessions.target(1))
+        assertEquals(dl, sessions.target(3))
+    }
+
+    @Test
+    fun `the install dialog starts only from the phone's own installer, for KJB's update and the add-ons alike`() {
+        sessions.expect(1, update)
+        sessions.expect(3, dl)
+        val asks = PackageInstaller.STATUS_PENDING_USER_ACTION
+
+        assertEquals(InstallVerdict.Confirm("com.android.packageinstaller", 1), verdict(reportFor(1, asks)))
+        assertEquals(InstallVerdict.Confirm("com.android.packageinstaller", 3), verdict(reportFor(3, asks)))
+        assertEquals(failure, verdict(reportFor(1, asks, confirmPackage = "com.example.installer")))
+        assertEquals(failure, verdict(reportFor(3, asks, confirmPackage = "com.example.installer")))
+    }
+
+    @Test
+    fun `a session no install waits on is ignored`() {
+        sessions.expect(2, ai)
+        sessions.forget(2)
+
+        assertEquals(InstallVerdict.Ignore, verdict(reportFor(2, packageName = ADDON)))
+        assertEquals(InstallVerdict.Ignore, verdict(reportFor(9, packageName = KJB)))
+        assertNull(sessions.target(2))
+    }
+
+    @Test
+    fun `an install's end reaches its own session only, once`() = runTest {
+        val kjb = sessions.expect(1, update)
+        val addon = sessions.expect(3, dl)
+
+        assertEquals(dl, sessions.end(3, InstallOutcome.Aborted))
+        assertNull("ended already", sessions.end(3, InstallOutcome.Installed))
+
+        assertEquals(InstallOutcome.Aborted, addon.await())
+        assertFalse(kjb.isCompleted)
+        assertEquals(update, sessions.end(1, InstallOutcome.Installed))
+        assertEquals(InstallOutcome.Installed, kjb.await())
+    }
+
     private companion object {
+        const val KJB = "app.lyrify"
         const val ADDON = "app.lyrify.ai"
         const val DOWNLOADS = "app.lyrify.dl"
     }
