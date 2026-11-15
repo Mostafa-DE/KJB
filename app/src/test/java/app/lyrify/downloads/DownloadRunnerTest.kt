@@ -335,6 +335,29 @@ class DownloadRunnerTest {
         assertFalse(target.cover.exists())
     }
 
+    /**
+     * A site whose yt-dlp extractor gives no thumbnail has no cover to embed (phone session 10: Wikimedia Commons, whose
+     * extractor returns none, as of its 2026-06 rework): the song is still tagged and saved, its cover left empty, and
+     * KJB's default cover shows for it, as for any song without one.
+     */
+    @Test
+    fun `a song from a site with no thumbnail is tagged and saved without a cover`() = runTest {
+        val files = files()
+        val bare = file.copy(coverBytes = null)
+        val target = (files.open(item, bare, DownloadSettings()) as Opened.Ready).target
+        target.part.writeBytes(ByteArray(1_000))
+        val steps = Steps()
+        steps.library = listOf(saved(target.final.path, "Paper Lantern", 214, 9))
+
+        val outcome = DownloadFinish(files, steps).finish(item, target, bare)
+
+        assertEquals(DownloadOutcome.Saved(target.final.path, null), outcome)
+        assertNull(target.cover)
+        assertEquals(listOf("tag cover=false", "scan audio/mpeg", "library", "lyrics"), steps.calls)
+        assertEquals(listOf("Paper Lantern"), steps.tagged!!["TITLE"])
+        assertTrue(target.final.isFile)
+    }
+
     @Test
     fun `a video is only named and scanned, never tagged or looked up for lyrics`() = runTest {
         val video = item.copy(kind = DlKind.VIDEO, height = 720)

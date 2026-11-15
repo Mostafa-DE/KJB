@@ -96,7 +96,8 @@ object DlArgs {
      * VidGrab's tags for audio: title and artist from the site's tags, or "Artist - Title" by that artist's own channel
      * ([OWN_SPLIT]), else the title by the uploader; junk words, "| ..." tails and "- Topic" or VEVO dropped, "ft." as
      * "(feat. X)", album, album artist, year and genre; description, comment and the link blanked; the cover cropped
-     * square as a JPG; ID3v2.3.
+     * square as a JPG, when the site's extractor gives a thumbnail (Wikimedia Commons' gives none, so its downloads have
+     * no cover and KJB's default cover shows: phone session 10); ID3v2.3.
      */
     private val TAGGING: List<String> = listOf(
         "--embed-metadata",
