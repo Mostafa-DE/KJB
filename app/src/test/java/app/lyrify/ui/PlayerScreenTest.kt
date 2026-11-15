@@ -120,6 +120,16 @@ class PlayerScreenTest {
     }
 
     @Test
+    fun `a flip on a book's part, as the tour's cover chip makes, never changes the side kept for songs`() {
+        val onLyrics = PlayerUiSettings(showLyrics = true, flipHintShown = true)
+        assertEquals(onLyrics, flipped(onLyrics, lyrics = false, book = true))
+        assertEquals(PlayerUiSettings(), flipped(PlayerUiSettings(), lyrics = true, book = true))
+        // A song's flip is kept.
+        assertEquals(onLyrics.copy(showLyrics = false), flipped(onLyrics, lyrics = false, book = false))
+        assertEquals(PlayerUiSettings(showLyrics = true), flipped(PlayerUiSettings(), lyrics = true, book = false))
+    }
+
+    @Test
     fun `a file not known yet as a song or a book has nothing read until the library tells`() = runTest {
         val path = "/storage/emulated/0/Music/Lantern Keeper/01 Lantern Keeper.mp3"
         val entry = LedgerEntry(path = path, title = "Lantern Keeper", durationMs = 200_000, status = LyricsStatus.PLAIN_ONLY, lrclibId = 42, updatedAt = 1)

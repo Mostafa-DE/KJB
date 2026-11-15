@@ -258,6 +258,12 @@ fun flipHintOnOpen(ui: PlayerUiSettings, book: Boolean): Boolean = !book && !ui.
  */
 fun showsLyrics(ui: PlayerUiSettings, book: Boolean, touring: Boolean): Boolean = touring || ui.showLyrics && !book
 
+/**
+ * The settings after a flip to the [lyrics] side or the cover. A [book]'s part flips only by the tour's cover chip, and
+ * that keeps the side kept for songs.
+ */
+fun flipped(ui: PlayerUiSettings, lyrics: Boolean, book: Boolean): PlayerUiSettings = if (book) ui else ui.copy(showLyrics = lyrics)
+
 /** The links row and the progress bar each take a 48 dp touch area; this much clear space separates them, chips or not. */
 private val LINKS_GAP = 16.dp
 private val CHIPS_GAP = 16.dp
@@ -483,7 +489,7 @@ fun PlayerView() {
                     // stays as the user left it.
                     showLyrics = showsLyrics(settings.playerUi, bookPart, touring = LocalTour.current?.state?.stop == TourStop.LYRICS),
                     flips = !bookPart,
-                    onFlip = { lyrics -> scope.launch { store.update { it.copy(playerUi = it.playerUi.copy(showLyrics = lyrics)) } } },
+                    onFlip = { lyrics -> scope.launch { store.update { it.copy(playerUi = flipped(it.playerUi, lyrics, bookPart)) } } },
                     onSeek = connection::seekTo,
                     onPlay = connection::play,
                     onNext = connection::next,
