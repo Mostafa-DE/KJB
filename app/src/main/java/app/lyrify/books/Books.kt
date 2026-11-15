@@ -219,3 +219,59 @@ private const val M4B: String = ".m4b"
 private const val AUDIOBOOKS: String = "Audiobooks"
 private const val MINUTE_MS: Long = 60_000
 private const val MIN_SPEED: Float = 0.1f
+
+/** What [book]'s card says ([BookStatus]): finished, never played, or where it is with the time left at its speed. */
+fun bookStatus(book: Book, state: BookState): BookStatus {
+    val entry = state.entryOf(book)
+    if (entry?.finished == true) return BookStatus.Finished
+    if (entry?.lastPlayedAt == null) return BookStatus.NotStarted(book.durationMs)
+    val chapters = bookChapters(book, state)
+    val at = bookMs(book, state.placeOf(book))
+    val total = book.durationMs
+    val chapter = chapterAt(chapters, at).takeIf { it >= 0 }?.plus(1)
+    return BookStatus.Listening(chapter, chapters.size, leftMs(total, at, state.speedOf(book).speed), if (total > 0) at.toFloat() / total else 0f)
+}
+
+/** The Books tab's Continue row: the book played last that is not finished; null when there is none. */
+fun continueBook(books: List<Book>, state: BookState): Book? =
+    books.filter { state.entryOf(it)?.let { entry -> entry.lastPlayedAt != null && !entry.finished } == true }.maxByOrNull { state.entryOf(it)?.lastPlayedAt ?: 0 }
+
+/** The Books tab's order: the books played, the latest first, then the others as [books] has them (by title). */
+fun booksInOrder(books: List<Book>, state: BookState): List<Book> = books.sortedByDescending { state.entryOf(it)?.lastPlayedAt ?: Long.MIN_VALUE }
+
+/**
+ * The book playing, as the player shows it: its part [partIndex] playing, its [chapters] (a folder book's are its
+ * parts), the [chapter] playing (-1 without chapters), and where it is in the whole book ([bookMs]).
+ */
+data class BookNow(val book: Book, val partIndex: Int, val chapters: List<Chapter>, val chapter: Int, val bookMs: Long)
+
+/** The book playing in part [partIndex] at [positionMs] of it, with the chapters [state] keeps. */
+fun bookNow(book: Book, partIndex: Int, positionMs: Long, state: BookState): BookNow {
+    val chapters = bookChapters(book, state)
+    val at = bookMs(book, BookPlace(partIndex, positionMs))
+    return BookNow(book, partIndex, chapters, chapterAt(chapters, at), at)
+}
+
+/** Where the progress bar marks the chapters of a single file [durationMs] long: each chapter's start but the first, as shares. */
+fun chapterTicks(now: BookNow, durationMs: Long): List<Float> =
+    if (now.book.kind != BookKind.SINGLE || durationMs <= 0) emptyList() else now.chapters.drop(1).map { (it.startMs.toFloat() / durationMs).coerceIn(0f, 1f) }
+
+/** Where chapter [index] starts: a place in a single file, or a folder book's part from its start. */
+fun chapterPlace(now: BookNow, index: Int): BookPlace = when (now.book.kind) {
+    BookKind.SINGLE -> BookPlace(0, now.chapters.getOrNull(index)?.startMs ?: 0)
+    BookKind.FOLDER -> BookPlace(index.coerceIn(0, now.book.parts.lastIndex), 0)
+}
+
+/** "Previous chapter": the start of the chapter playing, or within [CHAPTER_BACK_MS] of it the one before; null without chapters. */
+fun previousChapter(now: BookNow): Int? {
+    if (now.chapters.isEmpty()) return null
+    val playing = now.chapter.coerceAtLeast(0)
+    val into = now.bookMs - now.chapters[playing].startMs
+    return if (into > CHAPTER_BACK_MS || playing == 0) playing else playing - 1
+}
+
+/** "Next chapter": the chapter after the one playing; null at the last or without chapters. */
+fun nextChapter(now: BookNow): Int? = (now.chapter + 1).takeIf { now.chapters.isNotEmpty() && it < now.chapters.size }
+
+/** Previous goes to the chapter before only this close to the start of the one playing, as a player's Previous does. */
+const val CHAPTER_BACK_MS: Long = 3_000

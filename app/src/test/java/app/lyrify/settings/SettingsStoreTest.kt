@@ -53,6 +53,7 @@ class SettingsStoreTest {
                 LibraryTabSetting(LibraryTab.GENRES, true),
                 LibraryTabSetting(LibraryTab.ARTISTS, false),
                 LibraryTabSetting(LibraryTab.FOLDERS, true),
+                LibraryTabSetting(LibraryTab.BOOKS, false),
                 LibraryTabSetting(LibraryTab.PLAYLISTS, false),
             ),
             foldersToSkip = listOf("Recordings/Calls", "Music/Voice Notes"),
@@ -86,7 +87,7 @@ class SettingsStoreTest {
         assertEquals(AudioSettings(Levelling.AUTO, crossfadeSeconds = 0), s.audio)
         // What Settings > Library tabs lists: Playlists right after Songs.
         assertEquals(
-            listOf(LibraryTab.SONGS, LibraryTab.PLAYLISTS, LibraryTab.ALBUMS, LibraryTab.ARTISTS, LibraryTab.FOLDERS, LibraryTab.GENRES),
+            listOf(LibraryTab.SONGS, LibraryTab.PLAYLISTS, LibraryTab.ALBUMS, LibraryTab.ARTISTS, LibraryTab.FOLDERS, LibraryTab.BOOKS, LibraryTab.GENRES),
             s.library.tabs.map { it.tab },
         )
         assertEquals(listOf(LibraryTab.GENRES), s.library.tabs.filterNot { it.shown }.map { it.tab })
@@ -184,6 +185,7 @@ class SettingsStoreTest {
                 LibraryTabSetting(LibraryTab.ALBUMS, true),
                 LibraryTabSetting(LibraryTab.ARTISTS, true),
                 LibraryTabSetting(LibraryTab.FOLDERS, true),
+                LibraryTabSetting(LibraryTab.BOOKS, true),
                 LibraryTabSetting(LibraryTab.GENRES, false),
             ),
             tabs(
@@ -219,12 +221,13 @@ class SettingsStoreTest {
                 LibraryTabSetting(LibraryTab.GENRES, true),
                 LibraryTabSetting(LibraryTab.ARTISTS, false),
                 LibraryTabSetting(LibraryTab.FOLDERS, true),
+                LibraryTabSetting(LibraryTab.BOOKS, true),
             ),
             tabs(1, own),
         )
         // From version 2 on, Playlists stays where the user put it.
         val last = first.joinToString(",") { tab(it, true) }
-        assertEquals(first, tabs(SettingsJson.VERSION, last)?.map { it.tab })
+        assertEquals(first.take(4) + LibraryTab.BOOKS + first.drop(4), tabs(SettingsJson.VERSION, last)?.map { it.tab })
         assertTrue(""""version":${SettingsJson.VERSION}""" in SettingsJson.encode(Settings()))
     }
 
@@ -354,5 +357,19 @@ class SettingsStoreTest {
 
     private companion object {
         const val NOW: Long = 1_800_000_000_000L
+    }
+
+    @Test
+    fun `the Books tab comes right after Folders for a file that never had it, and stays where the user put it`() {
+        fun tabs(order: String) = SettingsJson.decode("""{"library":{"tabs":[$order]}}""")?.library?.tabs?.map { it.tab }
+        fun tab(name: LibraryTab) = """{"tab":"$name","shown":true}"""
+        val before = listOf(LibraryTab.FOLDERS, LibraryTab.SONGS, LibraryTab.GENRES, LibraryTab.ALBUMS, LibraryTab.ARTISTS, LibraryTab.PLAYLISTS)
+        assertEquals(
+            listOf(LibraryTab.FOLDERS, LibraryTab.BOOKS, LibraryTab.SONGS, LibraryTab.GENRES, LibraryTab.ALBUMS, LibraryTab.ARTISTS, LibraryTab.PLAYLISTS),
+            tabs(before.joinToString(",") { tab(it) }),
+        )
+        val moved = listOf(LibraryTab.BOOKS) + before
+        assertEquals(moved, tabs(moved.joinToString(",") { tab(it) }))
+        assertTrue(LibrarySettings.DEFAULT_TABS.single { it.tab == LibraryTab.BOOKS }.shown)
     }
 }

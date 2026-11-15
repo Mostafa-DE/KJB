@@ -54,6 +54,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.lyrify.R
+import app.lyrify.books.BOOK_SKIP_MS
+import app.lyrify.books.BookNow
 import app.lyrify.library.LibraryGraph
 import app.lyrify.player.PlayerConnection
 import app.lyrify.player.PlayerUi
@@ -133,14 +135,21 @@ internal fun ProgressBar(ui: PlayerUi, onSeek: (Long) -> Unit, marks: @Composabl
     }
 }
 
-/** Back N s, Previous, Play/Pause, Next, Forward N s: the seek buttons smaller, showing the chosen amounts. */
+/**
+ * Back N s, Previous, Play/Pause, Next, Forward N s: the seek buttons smaller, showing the chosen amounts. In a [book],
+ * 30 s each way, and Previous and Next go by chapter (BooksScreen.kt).
+ */
 @Composable
-internal fun MainRow(ui: PlayerUi, settings: Settings, connection: PlayerConnection) {
-    val back = settings.playback.skipBackSeconds
-    val forward = settings.playback.skipForwardSeconds
+internal fun MainRow(ui: PlayerUi, settings: Settings, connection: PlayerConnection, book: BookNow? = null) {
+    val back = if (book != null) BOOK_SKIP_S else settings.playback.skipBackSeconds
+    val forward = if (book != null) BOOK_SKIP_S else settings.playback.skipForwardSeconds
     Row(horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) {
         SeekJump(seekIcon(back = true, back), pluralStringResource(R.plurals.player_back_seconds, back, back)) { connection.seekBy(-back * 1_000L) }
-        RoundButton(R.drawable.ic_skip_previous_fill, stringResource(R.string.player_previous), size = 56.dp, iconSize = 38.dp, onClick = connection::previous)
+        if (book != null) {
+            RoundButton(R.drawable.ic_skip_previous_fill, stringResource(R.string.book_previous_chapter), size = 56.dp, iconSize = 38.dp) { chapterStep(connection, ui, book, forward = false) }
+        } else {
+            RoundButton(R.drawable.ic_skip_previous_fill, stringResource(R.string.player_previous), size = 56.dp, iconSize = 38.dp, onClick = connection::previous)
+        }
         val chrome = LocalChromeColors.current
         val label = stringResource(if (ui.playing) R.string.player_pause else R.string.player_play)
         Box(
@@ -155,7 +164,11 @@ internal fun MainRow(ui: PlayerUi, settings: Settings, connection: PlayerConnect
         ) {
             PlayPauseIcon(ui.playing, tint = chrome.onAction, modifier = Modifier.size(40.dp))
         }
-        RoundButton(R.drawable.ic_skip_next_fill, stringResource(R.string.player_next), size = 56.dp, iconSize = 38.dp, onClick = connection::next)
+        if (book != null) {
+            RoundButton(R.drawable.ic_skip_next_fill, stringResource(R.string.book_next_chapter), size = 56.dp, iconSize = 38.dp) { chapterStep(connection, ui, book, forward = true) }
+        } else {
+            RoundButton(R.drawable.ic_skip_next_fill, stringResource(R.string.player_next), size = 56.dp, iconSize = 38.dp, onClick = connection::next)
+        }
         SeekJump(seekIcon(back = false, forward), pluralStringResource(R.plurals.player_forward_seconds, forward, forward)) { connection.seekBy(forward * 1_000L) }
     }
 }
@@ -195,9 +208,12 @@ private fun SeekJump(@DrawableRes icon: Int, label: String, jump: () -> Unit) {
     ) { Icon(painterResource(icon), contentDescription = null, modifier = Modifier.size(27.dp)) }
 }
 
-/** Shuffle, the heart, the sleep timer (P2), Queue and Repeat. Toggles that are on show in the highlight colour, with a bar. */
+/**
+ * Shuffle, the heart, the sleep timer (P2), Queue and Repeat. Toggles that are on show in the highlight colour, with a
+ * bar. A [book] never shuffles or repeats: Chapters takes Shuffle's place (when it has chapters) and Repeat's stays empty.
+ */
 @Composable
-internal fun SecondaryRow(ui: PlayerUi, connection: PlayerConnection, onQueue: () -> Unit, onRoute: (PlayerRoute) -> Unit) {
+internal fun SecondaryRow(ui: PlayerUi, connection: PlayerConnection, onQueue: () -> Unit, onRoute: (PlayerRoute) -> Unit, book: BookNow? = null, onChapters: () -> Unit = {}) {
     val context = LocalContext.current
     val toasts = LocalToasts.current
     val resources = LocalResources.current
@@ -207,9 +223,13 @@ internal fun SecondaryRow(ui: PlayerUi, connection: PlayerConnection, onQueue: (
     val favourite = favouriteSongs.any { it.path == ui.item.song.path }
     val shuffled = ui.queue.shuffled
     Row(horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 8.dp)) {
-        ToggleButton(R.drawable.ic_shuffle, stringResource(if (shuffled) R.string.player_shuffle_on else R.string.player_shuffle_off), on = shuffled) {
-            val on = connection.toggleShuffle()
-            scope.launch { toasts.show(Toast(resources.getString(if (on) R.string.player_shuffled else R.string.player_unshuffled), R.drawable.ic_shuffle)) }
+        when {
+            book == null -> ToggleButton(R.drawable.ic_shuffle, stringResource(if (shuffled) R.string.player_shuffle_on else R.string.player_shuffle_off), on = shuffled) {
+                val on = connection.toggleShuffle()
+                scope.launch { toasts.show(Toast(resources.getString(if (on) R.string.player_shuffled else R.string.player_unshuffled), R.drawable.ic_shuffle)) }
+            }
+            book.chapters.isNotEmpty() -> RoundButton(R.drawable.ic_format_list_numbered, stringResource(R.string.books_chapters), onClick = onChapters)
+            else -> Spacer(Modifier.size(TOUCH))
         }
         ToggleButton(if (favourite) R.drawable.ic_favorite_fill else R.drawable.ic_favorite, stringResource(heartLabel(favourite)), on = favourite, bar = false) {
             val song = listOf(ui.item.song)
@@ -226,9 +246,13 @@ internal fun SecondaryRow(ui: PlayerUi, connection: PlayerConnection, onQueue: (
         SleepButton(ui) { onRoute(PlayerRoute.SLEEP) }
         RoundButton(R.drawable.ic_queue_music, stringResource(R.string.player_queue), onClick = onQueue)
         val repeat = ui.repeat
-        ToggleButton(if (repeat == Repeat.ONE) R.drawable.ic_repeat_one else R.drawable.ic_repeat, stringResource(repeatLabel(repeat)), on = repeat != Repeat.OFF) {
-            val next = connection.cycleRepeat()
-            scope.launch { toasts.show(Toast(resources.getString(repeatLabel(next)), if (next == Repeat.ONE) R.drawable.ic_repeat_one else R.drawable.ic_repeat)) }
+        if (book != null) {
+            Spacer(Modifier.size(TOUCH))
+        } else {
+            ToggleButton(if (repeat == Repeat.ONE) R.drawable.ic_repeat_one else R.drawable.ic_repeat, stringResource(repeatLabel(repeat)), on = repeat != Repeat.OFF) {
+                val next = connection.cycleRepeat()
+                scope.launch { toasts.show(Toast(resources.getString(repeatLabel(next)), if (next == Repeat.ONE) R.drawable.ic_repeat_one else R.drawable.ic_repeat)) }
+            }
         }
     }
 }
@@ -258,6 +282,9 @@ private fun ToggleButton(@DrawableRes icon: Int, label: String, on: Boolean, bar
         if (on && bar) Box(Modifier.align(Alignment.BottomCenter).padding(bottom = 5.dp).size(14.dp, 3.dp).clip(CircleShape).background(highlight))
     }
 }
+
+/** A book's jumps, in seconds (books/BookPlayback.kt). */
+private const val BOOK_SKIP_S: Int = (BOOK_SKIP_MS / 1_000).toInt()
 
 /** The progress knob grows this much under the finger (the prototype's scale(1.3) over 0.12 s). */
 internal const val KNOB_DRAG_SCALE = 1.3f

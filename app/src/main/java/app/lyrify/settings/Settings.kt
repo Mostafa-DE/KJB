@@ -101,12 +101,13 @@ data class LibrarySettings(
     val artistSort: SortArtists = SortArtists.NAME,
 ) {
     companion object {
-        /** Songs, Playlists, Albums, Artists and Folders shown; Genres hidden. */
+        /** Songs, Playlists, Albums, Artists, Folders and Books shown; Genres hidden. */
         val DEFAULT_TABS: List<LibraryTabSetting> = LibraryTab.entries.map { LibraryTabSetting(it, shown = it != LibraryTab.GENRES) }
     }
 }
 
-enum class LibraryTab { SONGS, PLAYLISTS, ALBUMS, ARTISTS, FOLDERS, GENRES }
+/** The Library tabs. [BOOKS] shows only while the library holds a book (books/), whatever this says. */
+enum class LibraryTab { SONGS, PLAYLISTS, ALBUMS, ARTISTS, FOLDERS, BOOKS, GENRES }
 
 data class LibraryTabSetting(val tab: LibraryTab, val shown: Boolean)
 
@@ -379,6 +380,7 @@ object SettingsJson {
             LibraryTabSetting(name, tab.flag("shown", LibrarySettings.DEFAULT_TABS.first { it.tab == name }.shown))
         }.distinctBy { it.tab }
         val all = (read + LibrarySettings.DEFAULT_TABS.filter { default -> read.none { it.tab == default.tab } })
+            .let { if (read.none { it.tab == LibraryTab.BOOKS }) booksAfterFolders(it) else it }
             .let { if (version < PLAYLISTS_AFTER_SONGS) playlistsAfterSongs(it) else it }
         return if (all.any { it.shown }) all else LibrarySettings.DEFAULT_TABS
     }
@@ -389,6 +391,14 @@ object SettingsJson {
         val others = tabs - playlists
         val at = others.indexOfFirst { it.tab == LibraryTab.SONGS } + 1
         return others.take(at) + playlists + others.drop(at)
+    }
+
+    /** [tabs], every tab once, with Books moved right after Folders: where a file from before Books had it comes. */
+    private fun booksAfterFolders(tabs: List<LibraryTabSetting>): List<LibraryTabSetting> {
+        val books = tabs.first { it.tab == LibraryTab.BOOKS }
+        val others = tabs - books
+        val at = others.indexOfFirst { it.tab == LibraryTab.FOLDERS } + 1
+        return others.take(at) + books + others.drop(at)
     }
 
     /** The version from which Playlists follows Songs in the Library tabs. */
