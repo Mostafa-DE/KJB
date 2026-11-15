@@ -15,16 +15,19 @@
 #      Velveteen: an .m4b.
 # 2. Push with adb ($ADB, default "adb"; set ANDROID_SERIAL if more than one device is connected). First
 #    "$ADB get-state" must say "device", else the script stops. Each book goes to its own folder under
-#    "/sdcard/Audiobooks/KJB test/" (Book A to Book D, see the push step). One more copy of the Snark .m4b goes to "/sdcard/Music/KJB test/Books outside/",
-#    to check that an .m4b outside Audiobooks/ is still found as a book. The fixtures lantern-chap.mp3 and
+#    "/sdcard/Audiobooks/KJB test/" (Book A to Book D, see the push step). "/sdcard/Music/KJB test/Books outside/"
+#    gets files with no book sign from their folder: one more copy of the Snark .m4b (still a book by its extension),
+#    the Snark .mp3 (half an hour: music until marked), and with --with-big-m4b the big .m4b again as "Long
+#    Fables.m4a" (six hours: music that the song menu suggests marking). The fixtures lantern-chap.mp3 and
 #    lantern-chpl-only.m4b (made by tools/make_book_fixtures.py) go to "/sdcard/Audiobooks/KJB test/Fixtures/": no
 #    real LibriVox file has CHAP frames or chpl-only chapters. Each folder is made with "mkdir -p" first and each file
 #    is pushed to its full path, so the spaces in these paths need no escaping on the adb push side (adb push takes
 #    the path as one argument); "adb shell" joins its arguments into one shell line, so paths there are single-quoted.
 # 3. Ask MediaStore to scan the shared storage. Files pushed through adb on Android 11+ are usually scanned on their
 #    own; this makes sure. A failed scan call only prints a warning.
-# 4. Print, and never run, the commands that install the debug build and its test APK and run the device tests.
-#    Never use connectedDebugAndroidTest for these: it uninstalls KJB dev afterwards and wipes its data.
+# 4. Print, and never run, the commands that install the debug build and its test APK and run the device tests
+#    (tools/run-book-device-tests.sh). Never use connectedDebugAndroidTest for these: it uninstalls KJB dev afterwards
+#    and wipes its data.
 #
 # --remove deletes "/sdcard/Audiobooks/KJB test" and "/sdcard/Music/KJB test/Books outside" from the phone (the
 # rest of "Music/KJB test" stays) and rescans. It downloads nothing.
@@ -159,7 +162,10 @@ if [ "$with_big" = 1 ]; then
   push "$PHONE_BOOKS/Book D" "$cache/Aesop 3/$AESOP_M4B"
 fi
 push "$PHONE_BOOKS/Book C" "$cache/Velveteen/$VELVETEEN_M4B"
-push "$PHONE_OUTSIDE" "$cache/Snark/$SNARK_M4B"
+push "$PHONE_OUTSIDE" "$cache/Snark/$SNARK_M4B" "$cache/Snark/$SNARK_MP3"
+if [ "$with_big" = 1 ]; then
+  "$ADB" push "$cache/Aesop 3/$AESOP_M4B" "$PHONE_OUTSIDE/Long Fables.m4a"
+fi
 push "$PHONE_BOOKS/Fixtures" "$FIXTURES/lantern-chap.mp3" "$FIXTURES/lantern-chpl-only.m4b"
 
 # 3. Scan.
@@ -178,7 +184,7 @@ One time only, All files access for KJB dev (already granted on your phone; inst
 
   adb shell appops set --uid app.lyrify.debug MANAGE_EXTERNAL_STORAGE allow
 
-Then:
+Then (tools/run-book-device-tests.sh runs these and counts passes, skips and failures):
 
   adb shell am instrument -w -e class app.lyrify.books.BookChaptersDeviceTest app.lyrify.debug.test/androidx.test.runner.AndroidJUnitRunner
   adb shell am instrument -w -e class app.lyrify.books.LibriVoxBooksDeviceTest app.lyrify.debug.test/androidx.test.runner.AndroidJUnitRunner
