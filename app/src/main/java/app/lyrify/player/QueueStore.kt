@@ -147,8 +147,9 @@ object QueuesJson {
 
     /**
      * [key] of a list of [kind] as its place is named now: queues stored before one recent queue per place had a key per
-     * sort and filter of the Songs tab (songs:<sort>:<filter>), per search (search:<words>) and per selection
-     * (picked:<time>). A new queue's own key from Add to (ending #q<n>) and every other key stay as they are.
+     * sort and filter of the Songs tab (songs:<sort>:<filter>, the sort ending -reversed the other way round), per search
+     * (search:<words>) and per selection (picked:<time>). A new queue's own key from Add to (ending #q<n>) and every other
+     * key stay as they are.
      */
     private fun placeKey(kind: SourceKind, key: String): String = when {
         OWN_KEY.containsMatchIn(key) -> key
@@ -159,7 +160,7 @@ object QueuesJson {
     }
 
     private val OWN_KEY = Regex("""#q\d+$""")
-    private val OLD_SONGS_KEY = Regex("""^songs:[A-Z_]+:[A-Z_]+$""")
+    private val OLD_SONGS_KEY = Regex("""^songs:[A-Z_]+(-reversed)?:[A-Z_]+$""")
     private val OLD_SEARCH_KEY = Regex("""^search:""")
     private val OLD_PICKED_KEY = Regex("""^picked:\d+$""")
 

@@ -88,6 +88,14 @@ class QueueStoreTest {
         )
     }
 
+    /** F2 kept a Songs tab list the other way round under its own key, "songs:<sort>-reversed:<filter>": the same one place. */
+    @Test
+    fun `a Songs queue stored under a reversed sort's old key reads as the Songs tab's one place`() {
+        val text = """{"schemaVersion":1,"recent":["q1"],"queues":[{"id":"q1","source":{"kind":"SONGS","key":"songs:TITLE-reversed:ALL","name":""},""" +
+            """"items":[{"uid":1,"path":"/storage/emulated/0/Music/1.mp3","sourceIndex":0}]}]}"""
+        assertEquals(listOf(SongsTabSource.key), QueuesJson.decode(text)!!.queues.map { it.source.key })
+    }
+
     @Test
     fun `missing parts read as empty, unknown keys are ignored, and only text that is no JSON object is not queues`() {
         assertEquals(QueueBook(), QueuesJson.decode("{}"))
