@@ -3,6 +3,7 @@ package app.lyrify.ui
 import androidx.compose.runtime.saveable.SaverScope
 import androidx.compose.ui.geometry.Rect
 import app.lyrify.settings.DockTab
+import app.lyrify.settings.LibraryTab
 import app.lyrify.settings.NavSettings
 import app.lyrify.settings.Settings
 import app.lyrify.settings.SettingsJson
@@ -383,11 +384,96 @@ class TourTest {
         }
     }
 
+    // Every start path: the tour moves the shell, and looks, only once its page layer rests (phone session 11)
+
+    /** The shell's page layer: it rests on what [nav] shows [frames] frames after each move, as the shell's moves take. */
+    private class Layer(private val nav: Navigator, private val frames: Int) {
+        var on: PageLayer = pageLayerOf(nav.state)
+        private var heading = on
+        private var left = 0
+
+        fun frame() {
+            val shown = pageLayerOf(nav.state)
+            if (shown != heading) {
+                heading = shown
+                left = frames
+            }
+            if (left > 0 && --left == 0) on = heading
+        }
+
+        val settled: Boolean get() = on == pageLayerOf(nav.state)
+    }
+
+    /** [stop]'s way to its control over [layer], a frame at a time: what it did on each. */
+    private fun arrive(stop: TourStop, nav: Navigator, layer: Layer): List<Arrive> {
+        val did = mutableListOf<Arrive>()
+        var moved = false
+        var waited = 0L
+        while (did.size < 1_000) {
+            layer.frame()
+            val step = arriveStep(layer.settled, moved, waited)
+            did += step
+            when (step) {
+                Arrive.WAIT -> waited += FRAME_MS
+                Arrive.MOVE -> {
+                    nav.arrive(stop)
+                    moved = true
+                    waited = 0
+                }
+                Arrive.LOOK -> return did
+            }
+        }
+        return did
+    }
+
+    @Test
+    fun `from Settings the tour moves to Library once Settings has closed, and points once Library shows`() {
+        val nav = Navigator(NavState.start(DockTab.LIBRARY))
+        nav.select(DockTab.TOOLS)
+        nav.open(Page.Settings)
+        val layer = Layer(nav, frames = MOVE_FRAMES)
+        repeat(MOVE_FRAMES * 2) { layer.frame() }
+        // Show tour: Settings closes, and the tour starts at once.
+        nav.back()
+        val tabs = arrive(TourStop.TABS, nav, layer)
+        // It waits while Settings closes, moves once, waits while Library comes in, and only then looks.
+        val move = tabs.indexOf(Arrive.MOVE)
+        assertEquals(List(MOVE_FRAMES - 1) { Arrive.WAIT }, tabs.subList(0, move))
+        assertEquals(List(MOVE_FRAMES - 1) { Arrive.WAIT } + Arrive.LOOK, tabs.subList(move + 1, tabs.size))
+        assertEquals(PageLayer(DockTab.LIBRARY, emptyList()), layer.on)
+        assertEquals(LibraryTab.SONGS, nav.state.libraryTab)
+        // Play a song: Library rests there already.
+        assertEquals(listOf(Arrive.MOVE, Arrive.LOOK), arrive(TourStop.SONG, nav, layer))
+    }
+
+    @Test
+    fun `on the first run the tour looks at once, Library resting under it`() {
+        val nav = Navigator(NavState.start(DockTab.LIBRARY))
+        assertEquals(listOf(Arrive.MOVE, Arrive.LOOK), arrive(TourStop.TABS, nav, Layer(nav, frames = MOVE_FRAMES)))
+        assertEquals(PageLayer(DockTab.LIBRARY, emptyList()), pageLayerOf(nav.state))
+    }
+
+    @Test
+    fun `a page layer that never rests holds a stop at most so long`() {
+        assertEquals(Arrive.WAIT, arriveStep(settled = false, moved = false, waitedMs = SETTLE_WAIT_MS))
+        assertEquals(Arrive.MOVE, arriveStep(settled = false, moved = false, waitedMs = SETTLE_WAIT_MS + 1))
+        assertEquals(Arrive.WAIT, arriveStep(settled = false, moved = true, waitedMs = 0))
+        assertEquals(Arrive.LOOK, arriveStep(settled = false, moved = true, waitedMs = SETTLE_WAIT_MS + 1))
+    }
+
     @Test
     fun `the dock's Search and Tools are steps 4 and 5`() {
         assertEquals(TourStop.SEARCH, dockStop(DockTab.SEARCH))
         assertEquals(TourStop.TOOLS, dockStop(DockTab.TOOLS))
         assertNull(dockStop(DockTab.LIBRARY))
         assertNull(dockStop(DockTab.PLAYLISTS))
+    }
+
+    private companion object {
+        /** A frame at 60 Hz. */
+        const val FRAME_MS = 16L
+
+        /** About a page move (300 ms) in frames. */
+        const val MOVE_FRAMES = 19
     }
 }
