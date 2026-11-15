@@ -27,6 +27,13 @@ import java.io.FileDescriptor
 /** How a song's job runs in the add-on ([AddonJobs]); who may call it is :addon-shared's AddonTrustTest. */
 @OptIn(ExperimentalCoroutinesApi::class)
 class AiServiceTest {
+    // How it introduces itself
+
+    @Test
+    fun `the model downloads name the add-on, its version and KJB's repository`() {
+        assertEquals("KJB-AI/${BuildConfig.VERSION_NAME} ( https://github.com/Mostafa-DE/KJB )", USER_AGENT)
+    }
+
     // A song's job
 
     private val song = AiSong(FileDescriptor(), durationMs = 200_000)

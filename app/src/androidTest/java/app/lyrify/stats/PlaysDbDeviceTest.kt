@@ -50,7 +50,7 @@ class PlaysDbDeviceTest {
     }
 
     @Test
-    fun aNewFileKeepsPlaysByTheStoreRules() = runBlocking {
+    fun aNewFileKeepsPlaysByTheStoreRules() = runBlocking<Unit> {
         val store = open()
         val other = "$MUSIC/Ember Ledger.mp3"
         assertTrue(store.put(LoggedPlay(SongRef(PATH, 12), T0, 50_000, counted = true)))
@@ -64,7 +64,7 @@ class PlaysDbDeviceTest {
     }
 
     @Test
-    fun aPlayWrittenAgainNeverLosesItsCountOrTimeHeard() = runBlocking {
+    fun aPlayWrittenAgainNeverLosesItsCountOrTimeHeard() = runBlocking<Unit> {
         val store = open()
         assertTrue(store.put(LoggedPlay(SongRef(PATH, 12), T0, 120_000, counted = true)))
         assertTrue(store.put(LoggedPlay(SongRef(PATH), T0, 5_000, counted = false)))
@@ -73,7 +73,7 @@ class PlaysDbDeviceTest {
     }
 
     @Test
-    fun aPlayStillGoingIsKeptWhereItStoodAndLetGoWhenItCloses() = runBlocking {
+    fun aPlayStillGoingIsKeptWhereItStoodAndLetGoWhenItCloses() = runBlocking<Unit> {
         val store = open()
         val state = OpenState(200_000, 60_000, listOf(HeardSpan(0, 30_000), HeardSpan(40_000, 70_000)))
         assertTrue(store.put(LoggedPlay(SongRef(PATH, 12), T0, 60_000, counted = false), state))
@@ -85,7 +85,7 @@ class PlaysDbDeviceTest {
     }
 
     @Test
-    fun aVersionOneFileUpgradesWithItsPlays() = runBlocking {
+    fun aVersionOneFileUpgradesWithItsPlays() = runBlocking<Unit> {
         SQLiteDatabase.openOrCreateDatabase(file, null).use { db ->
             PlaysSchema.STEPS[0].forEach(db::execSQL)
             db.execSQL(PlaysSchema.PUT, arrayOf<Any?>(PATH, T0, 12L, 120_000L, 1L))
@@ -103,7 +103,7 @@ class PlaysDbDeviceTest {
     }
 
     @Test
-    fun aNewerKjbsFileIsKeptAsItIs() = runBlocking {
+    fun aNewerKjbsFileIsKeptAsItIs() = runBlocking<Unit> {
         SQLiteDatabase.openOrCreateDatabase(file, null).use { db ->
             PlaysSchema.upgrade(0, PlaysSchema.VERSION).forEach(db::execSQL)
             db.execSQL("ALTER TABLE plays ADD COLUMN later INTEGER")
@@ -118,7 +118,7 @@ class PlaysDbDeviceTest {
     }
 
     @Test
-    fun damagedRowsReadLeniently() = runBlocking {
+    fun damagedRowsReadLeniently() = runBlocking<Unit> {
         val store = open()
         store.put(LoggedPlay(SongRef(PATH), T0, 0, counted = false))
         val db = opened.single().writableDatabase
@@ -133,7 +133,7 @@ class PlaysDbDeviceTest {
      * so the very first write lands. (Closing the database there, mid-open, failed that first call on the phone.)
      */
     @Test
-    fun anUnreadableFileIsKeptAsideAndANewOneStarted() = runBlocking {
+    fun anUnreadableFileIsKeptAsideAndANewOneStarted() = runBlocking<Unit> {
         val junk = ByteArray(8_192) { (it * 31 + 7).toByte() }
         file.writeBytes(junk)
         val store = open()
@@ -149,7 +149,7 @@ class PlaysDbDeviceTest {
     }
 
     @Test
-    fun theTopListsOnTenThousandPlaysTakeUnder50Ms() = runBlocking {
+    fun theTopListsOnTenThousandPlaysTakeUnder50Ms() = runBlocking<Unit> {
         val songs = (1..SONGS).map { n ->
             Song(SongRef("$MUSIC/Made Up $n.mp3", n.toLong()), "Made Up $n", "Artist ${n % 40}", "Album ${n % 60}", null, 200_000, n % 12, null, 2020, null, "Music/KJB test/", T0, T0, 4_000_000, "audio/mpeg")
         }

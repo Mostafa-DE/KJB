@@ -5,6 +5,7 @@ import android.content.ActivityNotFoundException
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageInfo
 import android.content.pm.PackageInstaller
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -35,6 +36,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.io.IOException
+import java.io.InputStream
+import java.io.OutputStream
 import java.net.URI
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
@@ -118,13 +121,13 @@ internal data class InstallReport(
      * Only a session KJB created and still waits on ([waiting]) is heard. A confirmation is started only when it is the
      * installer's own (PackageInstallerSession builds it from CONFIRM_INSTALL, the system installer's package and the
      * session id, nothing else), and it is rebuilt from those three; anything else asking for the user, or a result
-     * for another package than [addonPackage], ends the install as failed, so it never waits on a dialog that cannot
-     * come.
+     * for another package than [expectedPackage] (the add-on's, or KJB's own for its update), ends the install as
+     * failed, so it never waits on a dialog that cannot come.
      */
-    fun verdict(waiting: (Int) -> Boolean, addonPackage: String): InstallVerdict {
+    fun verdict(waiting: (Int) -> Boolean, expectedPackage: String): InstallVerdict {
         if (session < 0 || session != ourSession || !waiting(session)) return InstallVerdict.Ignore
         val failed = InstallVerdict.End(InstallOutcome.Failed(PackageInstaller.STATUS_FAILURE))
-        if (packageName != null && packageName != addonPackage) return failed
+        if (packageName != null && packageName != expectedPackage) return failed
         return when (status) {
             PackageInstaller.STATUS_PENDING_USER_ACTION ->
                 if (confirmAction == CONFIRM_INSTALL && confirmSession == session && !confirmPackage.isNullOrEmpty()) {
@@ -151,6 +154,177 @@ internal sealed interface InstallVerdict {
     data class Confirm(val installer: String, val session: Int) : InstallVerdict
 
     data class End(val outcome: InstallOutcome) : InstallVerdict
+}
+
+/**
+ * [verdict] as KJB acts on it: a confirmation ([InstallReport.verdict] has checked its action and session) starts only
+ * when [isSystemInstaller] says its package is the phone's own installer; any other ends the install as failed.
+ */
+internal fun confirmFrom(verdict: InstallVerdict, isSystemInstaller: (String) -> Boolean): InstallVerdict =
+    if (verdict is InstallVerdict.Confirm && !isSystemInstaller(verdict.installer)) InstallVerdict.End(InstallOutcome.Failed(PackageInstaller.STATUS_FAILURE)) else verdict
+
+/** What an install session installs: KJB itself (its own update, update/Updates.kt) or one of its add-ons. */
+internal sealed interface InstallTarget {
+    /** Names it in logcat. */
+    val label: String
+
+    data object Kjb : InstallTarget {
+        override val label: String = "update"
+    }
+
+    data class Addon(val addon: KjbAddon) : InstallTarget {
+        override val label: String get() = addon.label
+    }
+}
+
+/**
+ * The installs waiting for Android's installer's word, by session, each with what it installs ([InstallTarget]). A
+ * report is heard only for the session's own package (KJB's for its update), and its confirmation only when it is the
+ * phone's own installer's; [InstallReceiver] holds the one of the process.
+ */
+internal class InstallSessions {
+    private class Pending(val target: InstallTarget, val outcome: CompletableDeferred<InstallOutcome>)
+
+    private val pending = ConcurrentHashMap<Int, Pending>()
+
+    fun expect(session: Int, target: InstallTarget): CompletableDeferred<InstallOutcome> =
+        CompletableDeferred<InstallOutcome>().also { pending[session] = Pending(target, it) }
+
+    fun forget(session: Int) {
+        pending.remove(session)
+    }
+
+    /** What [session] installs; null when no install waits on it. */
+    fun target(session: Int): InstallTarget? = pending[session]?.target
+
+    /**
+     * What KJB does with [report]: [InstallReport.verdict] for its session's package, KJB's own ([ownPackage]) for its
+     * update, and then [confirmFrom].
+     */
+    fun verdict(report: InstallReport, ownPackage: String, isSystemInstaller: (String) -> Boolean): InstallVerdict {
+        val expected = when (val target = target(report.ourSession)) {
+            null -> return InstallVerdict.Ignore
+            InstallTarget.Kjb -> ownPackage
+            is InstallTarget.Addon -> target.addon.packageName
+        }
+        return confirmFrom(report.verdict(pending::containsKey, expected), isSystemInstaller)
+    }
+
+    /** Ends [session] with [outcome]: what it installed, or null when no install waited on it (any more). */
+    fun end(session: Int, outcome: InstallOutcome): InstallTarget? =
+        pending.remove(session)?.let { ended -> ended.outcome.complete(outcome); ended.target }
+}
+
+// An APK's identity, read the same way for KJB's own update (update/Updates.kt) and for each add-on
+
+/** An APK as KJB checks it before an install: its package, version code and signing certificates (SHA-256, hex). */
+data class ApkSigning(val packageName: String, val versionCode: Long, val signers: Set<String>)
+
+/**
+ * The flags that read an APK file's signing certificates ([PackageManager.getPackageArchiveInfo]) on [sdk]. Before
+ * Android 13 the deprecated GET_SIGNATURES is asked for too, so the certificates are there for [signerDigests]' older
+ * field on any build of those versions. (AOSP's own Android 11 and 12 collect them for either flag and fill signingInfo
+ * for GET_SIGNING_CERTIFICATES, android11-release PackageManager.getPackageArchiveInfo and android12-release
+ * ApplicationPackageManager.getPackageArchiveInfo; the review of lane F1 found builds that do not, 2026-11-15.)
+ */
+fun archiveSigningFlags(sdk: Int): Int =
+    @Suppress("DEPRECATION")
+    if (sdk < Build.VERSION_CODES.TIRAMISU) PackageManager.GET_SIGNING_CERTIFICATES or PackageManager.GET_SIGNATURES else PackageManager.GET_SIGNING_CERTIFICATES
+
+/**
+ * The SHA-256 (hex) of each signing certificate: [current] (SigningInfo's, the certificates the APK is signed with now),
+ * else, when a build leaves SigningInfo empty, [legacy] (PackageInfo.signatures). Empty without either, which no check passes.
+ */
+fun signerDigests(current: List<ByteArray>?, legacy: List<ByteArray>?): Set<String> =
+    (current?.takeIf { it.isNotEmpty() } ?: legacy.orEmpty()).map { cert -> hex(MessageDigest.getInstance("SHA-256").digest(cert)) }.toSet()
+
+/**
+ * All of [file] is [sha256] (hex, any case): hashed whole, whether it was downloaded now or found from before. False when
+ * it cannot be read. Blocking.
+ */
+fun wholeFileIs(file: File, sha256: String): Boolean = try {
+    file.inputStream().use { hashed(it, null) }.sha256.equals(sha256, ignoreCase = true)
+} catch (_: IOException) {
+    false
+}
+
+/**
+ * Copies all of [input] to [out] (an install session's file) while hashing and counting it: true when what went is exactly
+ * [bytes] long and [sha256] (hex, any case). The install commits only then, so a file changed after its check
+ * ([wholeFileIs]) never reaches the installer. Blocking.
+ */
+fun copyVerified(input: InputStream, out: OutputStream, sha256: String, bytes: Long): Boolean {
+    val read = hashed(input, out)
+    return read.bytes == bytes && read.sha256.equals(sha256, ignoreCase = true)
+}
+
+/** What [hashed] read: its SHA-256 (hex) and its length. */
+private class Hashed(val sha256: String, val bytes: Long)
+
+/** Reads all of [input], hashing and counting it, and writes it on to [out] when there is one. Blocking. */
+private fun hashed(input: InputStream, out: OutputStream?): Hashed {
+    val digest = MessageDigest.getInstance("SHA-256")
+    val buffer = ByteArray(HASH_BUFFER_BYTES)
+    var total = 0L
+    while (true) {
+        val read = input.read(buffer)
+        if (read < 0) break
+        digest.update(buffer, 0, read)
+        out?.write(buffer, 0, read)
+        total += read
+    }
+    return Hashed(hex(digest.digest()), total)
+}
+
+/**
+ * [signers] (SHA-256, hex) are exactly [addon]'s pinned certificate, no other key besides: an add-on downloaded
+ * ([verifiedAddon]) or installed (the update check) is KJB's only so. No pin trusts nobody.
+ */
+fun signedByPin(addon: KjbAddon, signers: Set<String>): Boolean {
+    val pin = AddonPins.bytes(addon.certSha256)?.let(::hex) ?: return false
+    return signers == setOf(pin)
+}
+
+/**
+ * The downloaded [file] is [addon]'s APK: all of it is the SHA-256 this KJB pins for it ([wholeFileIs]), and only then its
+ * signing, read by [archive], is checked: [addon]'s package, signed with its pinned certificate and no other. Blocking.
+ */
+fun verifiedAddon(file: File, addon: KjbAddon, archive: (File) -> ApkSigning?): Boolean {
+    if (!wholeFileIs(file, addon.apk.sha256)) return false
+    val apk = archive(file) ?: return false
+    return apk.packageName == addon.packageName && signedByPin(addon, apk.signers)
+}
+
+private fun hex(bytes: ByteArray): String = bytes.joinToString("") { "%02x".format(it) }
+
+private const val HASH_BUFFER_BYTES = 1024 * 1024
+
+/** The SHA-256 (hex) of each of [info]'s signing certificates ([signerDigests]); empty without them. */
+internal fun signers(info: PackageInfo?): Set<String> =
+    @Suppress("DEPRECATION")
+    signerDigests(info?.signingInfo?.apkContentsSigners?.map { it.toByteArray() }, info?.signatures?.map { it.toByteArray() })
+
+/** An installed package with its signing certificates, read the same way as an APK file's ([archiveSigningFlags]). */
+internal fun PackageManager.signed(packageName: String): PackageInfo? = try {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        getPackageInfo(packageName, PackageManager.PackageInfoFlags.of(archiveSigningFlags(Build.VERSION.SDK_INT).toLong()))
+    } else {
+        @Suppress("DEPRECATION")
+        getPackageInfo(packageName, archiveSigningFlags(Build.VERSION.SDK_INT))
+    }
+} catch (_: PackageManager.NameNotFoundException) {
+    null
+}
+
+/** The APK [file]'s package, version code and signers ([archiveSigningFlags], [signers]); null when Android cannot read it. */
+internal fun PackageManager.archiveSigning(file: File): ApkSigning? {
+    val archive = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        getPackageArchiveInfo(file.path, PackageManager.PackageInfoFlags.of(archiveSigningFlags(Build.VERSION.SDK_INT).toLong()))
+    } else {
+        @Suppress("DEPRECATION")
+        getPackageArchiveInfo(file.path, archiveSigningFlags(Build.VERSION.SDK_INT))
+    }
+    return archive?.let { ApkSigning(it.packageName, it.longVersionCode, signers(it)) }
 }
 
 /**
@@ -267,9 +441,10 @@ internal object GitHubReleases : ModelHosts {
 
 /**
  * An add-on's APK through Android, the same way for each add-on: downloaded into KJB's cache with the models' verified
- * downloader ([ModelDownloader]: the pinned size and SHA-256, resumed with HTTP Range, GitHub only), checked for the
- * add-on's package and KJB's certificate, and installed with a PackageInstaller session. The result comes back to
- * [InstallReceiver].
+ * downloader ([ModelDownloader]: the pinned size and SHA-256, resumed with HTTP Range, GitHub only), checked again whole
+ * and for the add-on's package and KJB's certificate ([verifiedAddon], the older signatures field too before Android 13),
+ * and installed with a PackageInstaller session. The result comes back to [InstallReceiver]. Get AI and Get Downloads
+ * install this way, and so does the update sheet's Update for either add-on.
  */
 internal class AndroidInstallPort(private val context: Context, private val addon: KjbAddon) : InstallPort {
     private val folder = File(context.cacheDir, addon.folder)
@@ -283,19 +458,7 @@ internal class AndroidInstallPort(private val context: Context, private val addo
         return ModelDownloader(store, USER_AGENT, hosts = GitHubReleases, log = { Log.d(LOG_TAG, "${addon.label}: $it") }).downloadAll(progress)
     }
 
-    override fun verified(): Boolean {
-        val pin = AddonPins.bytes(addon.certSha256) ?: return false
-        val packages = context.packageManager
-        val info = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            packages.getPackageArchiveInfo(apk.path, PackageManager.PackageInfoFlags.of(PackageManager.GET_SIGNING_CERTIFICATES.toLong()))
-        } else {
-            @Suppress("DEPRECATION")
-            packages.getPackageArchiveInfo(apk.path, PackageManager.GET_SIGNING_CERTIFICATES)
-        } ?: return false
-        val signers = info.signingInfo?.apkContentsSigners ?: return false
-        return info.packageName == addon.packageName &&
-            signers.any { MessageDigest.getInstance("SHA-256").digest(it.toByteArray()).contentEquals(pin) }
-    }
+    override fun verified(): Boolean = verifiedAddon(apk, addon, context.packageManager::archiveSigning)
 
     override fun discard() {
         if (!store.delete()) Log.w(LOG_TAG, "${addon.label}: the downloaded file could not be deleted")
@@ -318,19 +481,31 @@ internal class AndroidInstallPort(private val context: Context, private val addo
             Log.w(LOG_TAG, "${addon.label}: no install session (${e.javaClass.simpleName})")
             return@withContext InstallOutcome.Failed(PackageInstaller.STATUS_FAILURE)
         }
-        val outcome = InstallReceiver.expect(session, addon)
+        val outcome = InstallReceiver.expect(session, InstallTarget.Addon(addon))
         try {
-            installer.openSession(session).use { open ->
-                open.openWrite(INSTALL_NAME, 0, apk.length()).use { out ->
-                    apk.inputStream().use { it.copyTo(out) }
-                    open.fsync(out)
+            val whole = installer.openSession(session).use { open ->
+                // The bytes the installer gets are the pinned ones: hashed and counted as they go, else never committed.
+                val copied = open.openWrite(INSTALL_NAME, 0, apk.length()).use { out ->
+                    apk.inputStream().use { copyVerified(it, out, addon.apk.sha256, addon.apk.bytes) }.also { if (it) open.fsync(out) }
                 }
-                val status = Intent(context, InstallReceiver::class.java).putExtra(InstallReceiver.EXTRA_SESSION, session)
-                // Mutable: the installer adds its status. Explicit, to KJB's own receiver, which is not exported.
-                val pending = PendingIntent.getBroadcast(context, session, status, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE)
-                open.commit(pending.intentSender)
+                if (copied) {
+                    val status = Intent(context, InstallReceiver::class.java).putExtra(InstallReceiver.EXTRA_SESSION, session)
+                    // Mutable: the installer adds its status. Explicit, to KJB's own receiver, which is not exported.
+                    val pending = PendingIntent.getBroadcast(context, session, status, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE)
+                    open.commit(pending.intentSender)
+                } else {
+                    open.abandon()
+                }
+                copied
             }
-            outcome.await()
+            if (whole) {
+                outcome.await()
+            } else {
+                // Changed after its check: deleted, so the next try downloads it again.
+                Log.w(LOG_TAG, "${addon.label}: the file changed after its check, not installed")
+                discard()
+                InstallOutcome.Failed(PackageInstaller.STATUS_FAILURE_INVALID)
+            }
         } catch (e: CancellationException) {
             runCatching { installer.abandonSession(session) }
             throw e
@@ -354,9 +529,10 @@ internal class AndroidInstallPort(private val context: Context, private val addo
 }
 
 /**
- * Android's installer's word on an add-on install (through [AndroidInstallPort]'s pending intent; not exported, so only
- * that reaches it): it asks the user (its dialog is started from here), or it is done, refused or failed. Each session
- * is heard only for the add-on KJB started it for.
+ * Android's installer's word on every install KJB starts: its own update ([app.lyrify.update.SelfInstallPort]) and each
+ * add-on's ([AndroidInstallPort]), through their pending intents (not exported, so only those reach it). It asks the user
+ * (its dialog is started from here, only for the phone's own installer), or it is done, refused or failed. Each session
+ * is heard only for what KJB started it for ([InstallSessions]).
  */
 class InstallReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -375,50 +551,57 @@ class InstallReceiver : BroadcastReceiver() {
             confirmPackage = confirm?.`package`,
             confirmSession = confirm?.getIntExtra(PackageInstaller.EXTRA_SESSION_ID, -1) ?: -1,
         )
-        val pending = outcomes[report.ourSession]
-        when (val verdict = report.verdict(outcomes::containsKey, pending?.addon?.packageName.orEmpty())) {
-            InstallVerdict.Ignore -> Log.w(LOG_TAG, "add-on: an install report for no session of KJB's, ignored")
+        when (val verdict = sessions.verdict(report, context.packageName) { systemInstaller(context, it) }) {
+            InstallVerdict.Ignore -> Log.w(LOG_TAG, "install: a report for no session of KJB's, ignored")
             is InstallVerdict.Confirm -> {
-                // Rebuilt from what was checked, nothing else. KJB is in front (the user just tapped Get AI), so Android
-                // lets it show the dialog; when it cannot, the install ends here instead of waiting for it.
+                // Rebuilt from what was checked, nothing else. KJB is in front (the user just tapped Install, Update or
+                // Get), so Android lets it show the dialog; when it cannot, the install ends here instead of waiting for it.
                 val dialog = Intent(InstallReport.CONFIRM_INSTALL).setPackage(verdict.installer)
                     .putExtra(PackageInstaller.EXTRA_SESSION_ID, verdict.session).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 try {
                     context.startActivity(dialog)
                 } catch (e: ActivityNotFoundException) {
-                    end(verdict.session, InstallOutcome.Failed(PackageInstaller.STATUS_FAILURE), e)
+                    end(verdict.session, e)
                 } catch (e: SecurityException) {
-                    end(verdict.session, InstallOutcome.Failed(PackageInstaller.STATUS_FAILURE), e)
+                    end(verdict.session, e)
                 }
             }
             is InstallVerdict.End -> {
-                val addon = pending?.addon ?: return
-                if (verdict.outcome is InstallOutcome.Failed) Log.w(LOG_TAG, "${addon.label}: not installed, status ${verdict.outcome.status}")
-                outcomes.remove(report.session)?.outcome?.complete(verdict.outcome)
-                if (verdict.outcome == InstallOutcome.Installed && addon == KjbAddons.AI) AiLyrics.addonInstalled(context)
+                val target = sessions.end(report.session, verdict.outcome) ?: return
+                if (verdict.outcome is InstallOutcome.Failed) Log.w(LOG_TAG, "${target.label}: not installed, status ${verdict.outcome.status}")
+                if (verdict.outcome == InstallOutcome.Installed && (target as? InstallTarget.Addon)?.addon == KjbAddons.AI) AiLyrics.addonInstalled(context)
             }
         }
     }
 
-    private fun end(session: Int, outcome: InstallOutcome, e: Exception) {
-        Log.w(LOG_TAG, "add-on: the install dialog did not open (${e.javaClass.simpleName})")
-        outcomes.remove(session)?.outcome?.complete(outcome)
+    /**
+     * [packageName] is the phone's own package installer: a system app with the activity for Android's confirm action
+     * (KJB's manifest queries it, so the installer is visible whatever its name on this phone).
+     */
+    private fun systemInstaller(context: Context, packageName: String): Boolean {
+        val confirm = Intent(InstallReport.CONFIRM_INSTALL).setPackage(packageName)
+        val found = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            context.packageManager.resolveActivity(confirm, PackageManager.ResolveInfoFlags.of(PackageManager.MATCH_SYSTEM_ONLY.toLong()))
+        } else {
+            @Suppress("DEPRECATION")
+            context.packageManager.resolveActivity(confirm, PackageManager.MATCH_SYSTEM_ONLY)
+        }
+        return found?.activityInfo?.packageName == packageName
+    }
+
+    private fun end(session: Int, e: Exception) {
+        val target = sessions.end(session, InstallOutcome.Failed(PackageInstaller.STATUS_FAILURE))
+        Log.w(LOG_TAG, "${target?.label ?: "install"}: the install dialog did not open (${e.javaClass.simpleName})")
     }
 
     companion object {
         const val EXTRA_SESSION: String = "app.lyrify.addon.session"
 
-        /** An install waiting for the installer's word: the add-on it is for, and where its outcome goes. */
-        private class Pending(val addon: KjbAddon, val outcome: CompletableDeferred<InstallOutcome>)
+        /** The installs of this process waiting for the installer's word. */
+        private val sessions = InstallSessions()
 
-        /** The installs waiting for the installer's word, by session. */
-        private val outcomes = ConcurrentHashMap<Int, Pending>()
+        internal fun expect(session: Int, target: InstallTarget): CompletableDeferred<InstallOutcome> = sessions.expect(session, target)
 
-        internal fun expect(session: Int, addon: KjbAddon): CompletableDeferred<InstallOutcome> =
-            CompletableDeferred<InstallOutcome>().also { outcomes[session] = Pending(addon, it) }
-
-        internal fun forget(session: Int) {
-            outcomes.remove(session)
-        }
+        internal fun forget(session: Int) = sessions.forget(session)
     }
 }

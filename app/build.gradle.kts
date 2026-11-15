@@ -14,29 +14,31 @@ val releaseKeystore = rootProject.extra["releaseKeystore"] as Properties?
 @Suppress("UNCHECKED_CAST")
 val certPins = rootProject.extra["certPins"] as Map<String, String>
 
+/** KJB's GitHub repository, "owner/name" (root build file). */
+val kjbRepo = rootProject.extra["kjbRepo"] as String
+
 /**
  * The AI add-on's APK that KJB downloads (Tools > AI lyrics > Get AI): KJB-AI-<version>.apk, the release asset beside
  * KJB's own on the GitHub release, its SHA-256 (hex) and size. PLACEHOLDER: the release lane pins the published file
  * here. With no SHA-256 nothing is downloaded and Get AI says it could not get the add-on. -PaiAddonUrl,
  * -PaiAddonSha256 and -PaiAddonBytes point a test build at another file (GitHub only, and signed with this build's key).
  */
-val aiAddonUrl = findProperty("aiAddonUrl")?.toString() ?: "https://github.com/Mostafa-DE/Lyrify/releases/download/v3.0.0/KJB-AI-3.0.0.apk"
+val aiAddonUrl = findProperty("aiAddonUrl")?.toString() ?: "https://github.com/$kjbRepo/releases/download/v3.0.0/KJB-AI-3.0.0.apk"
 val aiAddonSha256 = findProperty("aiAddonSha256")?.toString() ?: "" // PLACEHOLDER: the release asset's SHA-256
 val aiAddonBytes = findProperty("aiAddonBytes")?.toString() ?: "0" // PLACEHOLDER: the release asset's size in bytes
 
 /**
- * KJB's GitHub repository ("owner/name"), whose latest release the update check reads (update/Updates.kt). The repository
- * rename at 3.0.0 (plan section 12) changes it here; GitHub's API also redirects the old name. -PupdateRepo points a test
- * build at another repository.
+ * The repository ("owner/name") whose latest release the update check reads (update/Updates.kt): KJB's own. GitHub's API
+ * also redirects the old name. -PupdateRepo points a test build at another repository.
  */
-val updateRepo = findProperty("updateRepo")?.toString() ?: "Mostafa-DE/Lyrify"
+val updateRepo = findProperty("updateRepo")?.toString() ?: kjbRepo
 
 /**
  * The Downloads add-on's APK that KJB downloads (Tools > Downloads > Get Downloads): KJB-Downloads-<version>.apk on the same
  * release, pinned the same way. PLACEHOLDER until the release lane pins it; -PdlAddonUrl, -PdlAddonSha256 and
  * -PdlAddonBytes point a test build at another file.
  */
-val dlAddonUrl = findProperty("dlAddonUrl")?.toString() ?: "https://github.com/Mostafa-DE/Lyrify/releases/download/v3.0.0/KJB-Downloads-3.0.0.apk"
+val dlAddonUrl = findProperty("dlAddonUrl")?.toString() ?: "https://github.com/$kjbRepo/releases/download/v3.0.0/KJB-Downloads-3.0.0.apk"
 val dlAddonSha256 = findProperty("dlAddonSha256")?.toString() ?: "" // PLACEHOLDER: the release asset's SHA-256
 val dlAddonBytes = findProperty("dlAddonBytes")?.toString() ?: "0" // PLACEHOLDER: the release asset's size in bytes
 
@@ -61,6 +63,8 @@ android {
         buildConfigField("String", "AI_ADDON_SHA256", "\"$aiAddonSha256\"")
         buildConfigField("long", "AI_ADDON_BYTES", "${aiAddonBytes}L")
         buildConfigField("String", "UPDATE_REPO", "\"$updateRepo\"")
+        // KJB's repository's address, in the User-Agent of every request KJB makes.
+        buildConfigField("String", "REPOSITORY", "\"https://github.com/$kjbRepo\"")
         buildConfigField("String", "DL_ADDON_URL", "\"$dlAddonUrl\"")
         buildConfigField("String", "DL_ADDON_SHA256", "\"$dlAddonSha256\"")
         buildConfigField("long", "DL_ADDON_BYTES", "${dlAddonBytes}L")

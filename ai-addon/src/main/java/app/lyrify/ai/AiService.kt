@@ -48,7 +48,7 @@ import kotlin.coroutines.CoroutineContext
 const val LOG_TAG: String = "KJB-AI"
 
 /** How the add-on's model downloads introduce themselves. */
-val USER_AGENT: String = "KJB-AI/${BuildConfig.VERSION_NAME} ( https://github.com/Mostafa-DE/Lyrify )"
+val USER_AGENT: String = "KJB-AI/${BuildConfig.VERSION_NAME} ( ${BuildConfig.REPOSITORY} )"
 
 /** CPU threads for the engine: the MDX STFT and iSTFT (the spike's measured 4) and wav2vec2. The models run on the NPU. */
 const val ENGINE_THREADS: Int = 4

@@ -50,5 +50,13 @@ val certPins: Map<String, String> = run {
     )
 }
 
+/**
+ * KJB's GitHub repository ("owner/name"), Mostafa-DE/KJB from 3.0.0 (formerly Mostafa-DE/Lyrify): KJB's update check reads
+ * its latest release, KJB downloads both add-ons from its releases, and KJB and both add-ons name it in the User-Agent of
+ * their requests (BuildConfig.REPOSITORY). The package names keep "lyrify", so installs keep updating.
+ */
+val kjbRepo = "Mostafa-DE/KJB"
+
 extra["releaseKeystore"] = releaseKeystore
 extra["certPins"] = certPins
+extra["kjbRepo"] = kjbRepo

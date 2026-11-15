@@ -38,7 +38,7 @@ class PlaysBackupDeviceTest {
     }
 
     @Test
-    fun everyPlayComesOutOldestFirst() = runBlocking {
+    fun everyPlayComesOutOldestFirst() = runBlocking<Unit> {
         val store = open()
         val late = LoggedPlay(SongRef(LANTERN, 11), T0 + 5_000, 90_000, counted = true)
         val early = LoggedPlay(SongRef(BELL), T0, 20_000, counted = false)
@@ -49,7 +49,7 @@ class PlaysBackupDeviceTest {
     }
 
     @Test
-    fun aRestoreTwiceAddsNoPlayTheSecondTime() = runBlocking {
+    fun aRestoreTwiceAddsNoPlayTheSecondTime() = runBlocking<Unit> {
         val store = open()
         val mine = LoggedPlay(SongRef(LANTERN, 11), T0, 120_000, counted = true)
         assertTrue(store.put(mine))

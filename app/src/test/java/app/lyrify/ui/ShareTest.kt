@@ -9,8 +9,14 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
+import javax.xml.parsers.DocumentBuilderFactory
+import org.w3c.dom.Element
 
-/** Share: songs as their files, lyrics as text or as the `.lrc`, as the share sheet gets them. Made-up names and lines only. */
+/**
+ * Share: songs as their files, lyrics as text or as the `.lrc`, a crash report as text, as the share sheet gets them.
+ * Made-up names and lines only.
+ */
 class ShareTest {
     private fun shared(id: Long, type: String?, title: String) = SharedSong("content://media/external/audio/media/$id", type, title)
 
@@ -157,14 +163,63 @@ class ShareTest {
     }
 
     @Test
-    fun `Lyrics file goes as ACTION_SEND of the lrc as a file, with the read grant and the title as the subject`() {
+    fun `Lyrics file goes as ACTION_SEND of the lrc as a text file, with the read grant and the title as the subject`() {
         val uri = "content://app.lyrify.share/lyrics/01%20Paper%20Lantern.lrc"
         val request = lyricsFileShare(uri, "Paper Lantern")
         assertEquals(Intent.ACTION_SEND, request.action)
-        assertEquals("application/octet-stream", request.type)
+        assertEquals("text/plain", request.type)
         assertEquals(listOf(uri), request.streams)
         assertEquals(Intent.FLAG_GRANT_READ_URI_PERMISSION, request.flags)
         assertEquals("Paper Lantern", request.subject)
         assertNull(request.text)
+    }
+
+    @Test
+    fun `KJB types a shared lrc itself, as text, whatever your phone's Android maps the name to`() {
+        // MimeTypeMap types .lrc as application/lrc on some Android versions and not at all on others.
+        assertEquals("text/plain", shareType("01 Paper Lantern.lrc"))
+        assertEquals("text/plain", shareType("02 TIDE BELL.LRC"))
+        assertNull("KJB shares nothing else through its provider", shareType("cover.jpg"))
+        assertNull(shareType("lrc"))
+    }
+
+    // A crash report
+
+    @Test
+    fun `a crash report goes as ACTION_SEND text plain with its text and KJB's subject, and no file`() {
+        val request = crashReportShare("java.lang.IllegalStateException\n\tat app.lyrify.Made.up(Made.kt:1)")
+        assertEquals(Intent.ACTION_SEND, request.action)
+        assertEquals("text/plain", request.type)
+        assertEquals("java.lang.IllegalStateException\n\tat app.lyrify.Made.up(Made.kt:1)", request.text)
+        assertEquals("KJB crash report", request.subject)
+        assertEquals(emptyList<String>(), request.streams)
+        assertEquals(0, request.flags)
+    }
+
+    // KJB does not offer itself
+
+    /** The activities of KJB's manifests (main and debug) that take a share (SEND or SEND_MULTIPLE), by class name. */
+    private fun manifestShareTargets(): Set<String> = listOf("src/main/AndroidManifest.xml", "src/debug/AndroidManifest.xml").map(::File).filter(File::isFile).flatMap { file ->
+        val activities = DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(file).getElementsByTagName("activity")
+        (0 until activities.length).map { activities.item(it) as Element }.filter { activity ->
+            val actions = activity.getElementsByTagName("action")
+            (0 until actions.length).any { (actions.item(it) as Element).getAttribute("android:name") in SHARE_ACTIONS }
+        }.map { activity -> activity.getAttribute("android:name").let { if (it.startsWith(".")) "app.lyrify$it" else it } }
+    }.toSet()
+
+    @Test
+    fun `KJB's own share sheets leave out every activity of KJB's that takes a share`() {
+        assertEquals(setOf("app.lyrify.ui.MainActivity", "app.lyrify.ui.SaveToKjbActivity"), manifestShareTargets())
+        assertEquals(manifestShareTargets(), OWN_SHARE_TARGETS.toSet())
+    }
+
+    @Test
+    fun `every share sheet KJB opens is the share helper's`() {
+        val choosers = File("src/main/java").walkTopDown().filter { it.isFile && it.extension == "kt" && "createChooser(" in it.readText() }.map { it.name }.toList()
+        assertEquals(listOf("Share.kt"), choosers)
+    }
+
+    private companion object {
+        val SHARE_ACTIONS = setOf(Intent.ACTION_SEND, Intent.ACTION_SEND_MULTIPLE)
     }
 }

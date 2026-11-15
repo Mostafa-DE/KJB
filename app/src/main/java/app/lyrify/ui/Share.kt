@@ -2,6 +2,7 @@ package app.lyrify.ui
 
 import android.content.ActivityNotFoundException
 import android.content.ClipData
+import android.content.ComponentName
 import android.content.ContentResolver
 import android.content.ContentUris
 import android.content.Context
@@ -36,11 +37,12 @@ import java.io.File
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
-// Share: songs as their files, and lyrics as text or as the `.lrc`, through your phone's share sheet. Songs go as
-// MediaStore's content URIs: KJB may hand on read access to them because it can read them itself (MediaProvider's
-// checkUriPermission), they work on every storage volume, and the app picked gets the file's real name, size and type.
-// No song is copied. A `.lrc` is not a MediaStore audio row, so it goes as a byte copy in KJB's cache, served by a
-// FileProvider limited to that one folder (res/xml/share_paths.xml).
+// Share: songs as their files, lyrics as text or as the `.lrc`, and a crash report as text, through your phone's share
+// sheet; every share sheet KJB opens is this file's [shareSheet]. Songs go as MediaStore's content URIs: KJB may hand on
+// read access to them because it can read them itself (MediaProvider's checkUriPermission), they work on every storage
+// volume, and the app picked gets the file's real name, size and type. No song is copied. A `.lrc` is not a MediaStore
+// audio row, so it goes as a byte copy in KJB's cache, served by a FileProvider limited to that one folder
+// (res/xml/share_paths.xml).
 
 /**
  * The most songs one share carries: each costs about 0.3 KB in the intent and its ClipData, so 500 stay well inside the
@@ -49,11 +51,13 @@ import java.util.concurrent.TimeUnit
 const val SHARE_SONGS_MAX: Int = 500
 
 /**
- * The type a `.lrc` goes as: no MIME type is registered for `.lrc`, so this is what KJB's FileProvider answers for it, and
- * what developer.android.com advises for data without a specific type. The apps that take any file (mail, chats, Quick
- * Share, Files) take it as a file named `<song>.lrc`; text/plain would offer it to apps that read only the text extra.
+ * The type a `.lrc` goes as, KJB's own in the intent and from its FileProvider ([ShareProvider]), never your phone's
+ * MimeTypeMap, which types `.lrc` differently by Android version (application/lrc on some, nothing on others). Text, as
+ * a file manager shares a `.txt`: mail, chats, Quick Share, Files and text apps take it as a file named `<song>.lrc` that
+ * opens as text. An app that reads only the text extra gets nothing, as with any shared text file; KJB's own such target,
+ * Save to KJB, is left out ([OWN_SHARE_TARGETS]).
  */
-const val LRC_TYPE: String = "application/octet-stream"
+const val LRC_TYPE: String = "text/plain"
 
 /** Songs of different types, or one MediaStore gives no type. */
 private const val ANY_AUDIO: String = "audio/*"
@@ -150,6 +154,22 @@ fun lyricsTextShare(title: String, text: String): ShareRequest =
 /** "Lyrics file" as a share: ACTION_SEND of the `.lrc` at [uri] as a file ([LRC_TYPE]), the title as the subject. */
 fun lyricsFileShare(uri: String, title: String): ShareRequest = ShareRequest(Intent.ACTION_SEND, LRC_TYPE, listOf(uri), subject = title)
 
+/** A crash report as a share (Settings > About > Crash reports): ACTION_SEND text/plain with its text, KJB's subject. */
+fun crashReportShare(text: String): ShareRequest = ShareRequest(Intent.ACTION_SEND, TEXT_TYPE, subject = CRASH_SUBJECT, text = text)
+
+private const val CRASH_SUBJECT: String = "KJB crash report"
+
+/** The type KJB gives a file its FileProvider serves, by the file's [name]: [LRC_TYPE] for a `.lrc`, the one file it shares. */
+internal fun shareType(name: String): String? = if (name.endsWith(".lrc", ignoreCase = true)) LRC_TYPE else null
+
+/**
+ * KJB's FileProvider for Share (AndroidManifest.xml, "share"): what it serves is typed by [shareType], not by the
+ * platform's MimeTypeMap, so the app picked reads the same type from the file as from the intent on every Android version.
+ */
+class ShareProvider : FileProvider() {
+    override fun getType(uri: Uri): String? = uri.lastPathSegment?.let(::shareType) ?: super.getType(uri)
+}
+
 // Your phone's share sheet
 
 /**
@@ -172,8 +192,20 @@ fun ShareRequest.toIntent(): Intent {
     }
 }
 
-/** Your phone's share sheet for [request]. */
-fun shareSheet(request: ShareRequest): Intent = Intent.createChooser(request.toIntent(), null)
+/**
+ * KJB's own share targets, by class: its audio open target ([MainActivity], files other apps share) and Save to KJB
+ * ([SaveToKjbActivity], shared text with a link). KJB's own share sheets never offer them: a song or lyrics shared to KJB
+ * itself would only come back.
+ */
+internal val OWN_SHARE_TARGETS: List<String> = listOf(MainActivity::class.java.name, SaveToKjbActivity::class.java.name)
+
+/**
+ * Your phone's share sheet for [request], without KJB's own targets ([OWN_SHARE_TARGETS] in [ownPackage], the running
+ * build's package). The chooser reads EXTRA_EXCLUDE_COMPONENTS from Android 7 (API 24), below KJB's minSdk.
+ */
+fun shareSheet(request: ShareRequest, ownPackage: String): Intent =
+    Intent.createChooser(request.toIntent(), null)
+        .putExtra(Intent.EXTRA_EXCLUDE_COMPONENTS, OWN_SHARE_TARGETS.map { ComponentName(ownPackage, it) }.toTypedArray())
 
 /** How a share went; all but [Opened] say so in a toast. */
 sealed interface Shared {
@@ -213,7 +245,7 @@ suspend fun shareSongs(context: Context, songs: List<Song>, title: (Song) -> Str
     val missing = songs.count { it.path !in found }
     if (missing > 0) return Shared.NotFound(missing)
     val shared = songs.map { song -> found.getValue(song.path).let { SharedSong(it.uri, it.mimeType, title(song)) } }
-    return launchShare(songs.size) { context.startActivity(shareSheet(songsShare(shared) { count -> context.resources.getQuantityString(R.plurals.lib_songs, count, count) })) }
+    return launchShare(songs.size) { context.startActivity(shareSheet(songsShare(shared) { count -> context.resources.getQuantityString(R.plurals.lib_songs, count, count) }, context.packageName)) }
 }
 
 /** "As text": the song's `.lrc` as words ([lyricsText]), else LRCLIB's plain lyrics the player shows ([plainRecord]). */
@@ -222,15 +254,18 @@ suspend fun shareLyricsText(context: Context, song: Song, title: String, entry: 
     val text = lrc?.let { lyricsText(title, song.artist, it) }
         ?: plainRecord(entry)?.let { plainText(context, it) }?.let { lyricsText(title, song.artist, it) }
         ?: return Shared.NoLyrics
-    return launchShare(1) { context.startActivity(shareSheet(lyricsTextShare(title, text))) }
+    return launchShare(1) { context.startActivity(shareSheet(lyricsTextShare(title, text), context.packageName)) }
 }
 
 /** "Lyrics file": the song's synced `.lrc` as it is on disk, through a copy in KJB's cache ([lrcCopy]). */
 suspend fun shareLyricsFile(context: Context, song: Song, title: String): Shared {
     val file = withContext(Dispatchers.IO) { lrcCopy(context.cacheDir, song.path, System.currentTimeMillis()) } ?: return Shared.NoLyrics
     val uri = FileProvider.getUriForFile(context, context.packageName + SHARE_AUTHORITY, file)
-    return launchShare(1) { context.startActivity(shareSheet(lyricsFileShare(uri.toString(), title))) }
+    return launchShare(1) { context.startActivity(shareSheet(lyricsFileShare(uri.toString(), title), context.packageName)) }
 }
+
+/** Share on one crash: its report as text ([crashReportShare]); it leaves the phone only where the user sends it. */
+fun shareCrashReport(context: Context, text: String): Shared = launchShare(1) { context.startActivity(shareSheet(crashReportShare(text), context.packageName)) }
 
 /** Starts the share sheet of [songs] songs ([start]): how it went. */
 internal inline fun launchShare(songs: Int, start: () -> Unit): Shared = try {

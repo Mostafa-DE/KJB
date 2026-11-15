@@ -1,5 +1,6 @@
 package app.lyrify.ui
 
+import android.content.ComponentName
 import android.content.Intent
 import android.net.Uri
 import android.os.Parcel
@@ -18,9 +19,10 @@ import java.io.File
 
 /**
  * Share on the phone, with no other app launched: the chooser intent each share builds (the files in EXTRA_STREAM and in
- * ClipData with the read grant, which the chooser carries on), 500 songs inside the Binder buffer, and KJB's FileProvider
- * serving a `.lrc` copy from its cache as a file: the copy goes where a real share puts it, the provider's one folder
- * (cache/share/), and only the test's own copy is removed. Made-up names and lines only; nothing goes to shared storage.
+ * ClipData with the read grant, which the chooser carries on, and KJB's own targets left out), 500 songs inside the
+ * Binder buffer, and KJB's FileProvider serving a `.lrc` copy from its cache as a file: the copy goes where a real share
+ * puts it, the provider's one folder (cache/share/), and only the test's own copy is removed. Made-up names and lines
+ * only; nothing goes to shared storage.
  */
 @RunWith(AndroidJUnit4::class)
 class ShareDeviceTest {
@@ -50,7 +52,7 @@ class ShareDeviceTest {
 
     @Test
     fun oneSongGoesAsSendWithItsFileTheGrantAndItsTitle() {
-        val chooser = shareSheet(songsShare(listOf(song(11, "audio/mpeg", "Paper Lantern")), several))
+        val chooser = shareSheet(songsShare(listOf(song(11, "audio/mpeg", "Paper Lantern")), several), context.packageName)
         val send = target(chooser)
         val uri = Uri.parse("content://media/external/audio/media/11")
         assertEquals(Intent.ACTION_SEND, send.action)
@@ -67,7 +69,7 @@ class ShareDeviceTest {
     @Test
     fun severalSongsOfMixedTypesGoAsSendMultipleOfAnyAudio() {
         val songs = listOf(song(12, "audio/mpeg", "Tide Bell"), song(13, "audio/flac", "Low Water"), song(11, "audio/mpeg", "Paper Lantern"))
-        val chooser = shareSheet(songsShare(songs, several))
+        val chooser = shareSheet(songsShare(songs, several), context.packageName)
         val send = target(chooser)
         val uris = songs.map { Uri.parse(it.uri) }
         assertEquals(Intent.ACTION_SEND_MULTIPLE, send.action)
@@ -84,7 +86,7 @@ class ShareDeviceTest {
         val songs = (1..SHARE_SONGS_MAX).map { song(1_000_000L + it, "audio/mpeg", "Made-up song $it") }
         val parcel = Parcel.obtain()
         try {
-            shareSheet(songsShare(songs, several)).writeToParcel(parcel, 0)
+            shareSheet(songsShare(songs, several), context.packageName).writeToParcel(parcel, 0)
             // The Binder buffer is 1 MB for all of the app's calls in progress; one share keeps to a quarter of it.
             assertTrue("${parcel.dataSize()} bytes", parcel.dataSize() < 256 * 1024)
         } finally {
@@ -95,7 +97,7 @@ class ShareDeviceTest {
     @Test
     fun lyricsAsTextGoAsPlainTextWithoutAFileOrAGrant() {
         val text = lyricsText("Paper Lantern", "Harbour Glass", "[00:01.00]<00:01.00>First <00:01.40>made-up line\n")
-        val send = target(shareSheet(lyricsTextShare("Paper Lantern", checkNotNull(text) { "no words" })))
+        val send = target(shareSheet(lyricsTextShare("Paper Lantern", checkNotNull(text) { "no words" }), context.packageName))
         assertEquals(Intent.ACTION_SEND, send.action)
         assertEquals("text/plain", send.type)
         assertEquals("Paper Lantern · Harbour Glass\n\nFirst made-up line", send.getStringExtra(Intent.EXTRA_TEXT))
@@ -103,6 +105,33 @@ class ShareDeviceTest {
         assertEquals("Paper Lantern", send.getStringExtra(Intent.EXTRA_TITLE))
         assertNull(send.clipData)
         assertEquals(0, send.flags and Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+
+    @Test
+    fun aCrashReportGoesAsPlainTextWithKjbsSubjectAndNoFile() {
+        val report = "java.lang.IllegalStateException\n\tat app.lyrify.Made.up(Made.kt:1)"
+        val send = target(shareSheet(crashReportShare(report), context.packageName))
+        assertEquals(Intent.ACTION_SEND, send.action)
+        assertEquals("text/plain", send.type)
+        assertEquals(report, send.getStringExtra(Intent.EXTRA_TEXT))
+        assertEquals("KJB crash report", send.getStringExtra(Intent.EXTRA_SUBJECT))
+        assertNull(send.clipData)
+        assertEquals(0, send.flags and Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+
+    @Test
+    fun noShareSheetOffersKjbsOwnTargets() {
+        val own = setOf(ComponentName(context, MainActivity::class.java), ComponentName(context, SaveToKjbActivity::class.java))
+        val sheets = listOf(
+            shareSheet(songsShare(listOf(song(11, "audio/mpeg", "Paper Lantern")), several), context.packageName),
+            shareSheet(lyricsTextShare("Paper Lantern", "Paper Lantern\n\nFirst made-up line"), context.packageName),
+            shareSheet(lyricsFileShare("content://${context.packageName}.share/share/1/01%20Paper%20Lantern.lrc", "Paper Lantern"), context.packageName),
+            shareSheet(crashReportShare("java.lang.IllegalStateException"), context.packageName),
+        )
+        sheets.forEach { chooser ->
+            val excluded = IntentCompat.getParcelableArrayExtra(chooser, Intent.EXTRA_EXCLUDE_COMPONENTS, ComponentName::class.java)
+            assertEquals(own, excluded.orEmpty().toSet())
+        }
     }
 
     @Test
@@ -115,12 +144,14 @@ class ShareDeviceTest {
         assertEquals("01 Paper Lantern.lrc", copy.name)
         assertEquals(File(context.cacheDir, "share").canonicalPath, copy.parentFile!!.parentFile!!.canonicalPath)
         val uri = FileProvider.getUriForFile(context, context.packageName + ".share", copy)
-        assertEquals(LRC_TYPE, context.contentResolver.getType(uri))
+        // KJB's own type, not the one this phone's MimeTypeMap has for .lrc (application/lrc on some Android versions).
+        assertEquals("text/plain", context.contentResolver.getType(uri))
         assertArrayEquals(bytes, context.contentResolver.openInputStream(uri)!!.use { it.readBytes() })
 
-        val send = target(shareSheet(lyricsFileShare(uri.toString(), "Paper Lantern")))
+        val send = target(shareSheet(lyricsFileShare(uri.toString(), "Paper Lantern"), context.packageName))
         assertEquals(Intent.ACTION_SEND, send.action)
-        assertEquals(LRC_TYPE, send.type)
+        assertEquals("text/plain", send.type)
+        assertEquals("text/plain", send.clipData?.description?.getMimeType(0))
         assertEquals(uri, IntentCompat.getParcelableExtra(send, Intent.EXTRA_STREAM, Uri::class.java))
         assertEquals(listOf(uri), clipUris(send))
         assertTrue(send.flags and Intent.FLAG_GRANT_READ_URI_PERMISSION != 0)

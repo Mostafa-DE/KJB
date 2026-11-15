@@ -316,6 +316,14 @@ class NpuContractTest {
     // A deadline for native NPU work
 
     @Test
+    fun `the MDX session gets 8 minutes on the NPU, registering the QNN EP and the Whisper sessions 2 each`() {
+        // Under KJB's watchdog (app AddonClient's RemoteSongEngine: 10 minutes for a first load, 3 for a step, pinned in
+        // AddonClientTest), so the add-on's NPU busy answer reaches KJB before KJB gives up on the add-on.
+        assertEquals(8 * 60_000L, NpuStages.MDX_CREATE_MS)
+        assertEquals(2 * 60_000L, NpuStages.NPU_STEP_MS)
+    }
+
+    @Test
     fun `NPU work that ends in time gives its value, and its own failure is thrown as it is`() {
         val inline = NativeDeadline(abandoned = { error("not abandoned") }, start = { it.run() })
 

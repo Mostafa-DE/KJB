@@ -2,8 +2,15 @@ package app.lyrify.update
 
 import android.content.pm.PackageInstaller
 import android.content.pm.PackageManager
+import app.lyrify.addon.AddonApk
+import app.lyrify.addon.ApkSigning
 import app.lyrify.addon.InstallOutcome
 import app.lyrify.addon.InstallVerdict
+import app.lyrify.addon.KjbAddon
+import app.lyrify.addon.KjbAddons
+import app.lyrify.addon.archiveSigningFlags
+import app.lyrify.addon.confirmFrom
+import app.lyrify.addon.signerDigests
 import app.lyrify.settings.AboutSettings
 import app.lyrify.settings.Settings
 import app.lyrify.settings.SettingsJson
@@ -35,7 +42,7 @@ class UpdatesTest {
     private val sha = "AB".repeat(32)
 
     private fun asset(name: String, size: Long = 81_000_000, digest: String? = "sha256:$sha", state: String = "uploaded", url: String? = null): String {
-        val address = url ?: "https://github.com/Mostafa-DE/Lyrify/releases/download/v3.0.1/$name"
+        val address = url ?: "https://github.com/Mostafa-DE/KJB/releases/download/v3.0.1/$name"
         val digestJson = digest?.let { "\"$it\"" } ?: "null"
         return """{"name":"$name","size":$size,"state":"$state","digest":$digestJson,"browser_download_url":"$address","content_type":"application/vnd.android.package-archive"}"""
     }
@@ -74,7 +81,7 @@ class UpdatesTest {
     fun `the latest release is read with KJB's own APK, its size and its SHA-256`() {
         val read = Releases.parse(release(), REPO)!!
         assertEquals("3.0.1", read.version)
-        assertEquals(ReleaseApk("https://github.com/Mostafa-DE/Lyrify/releases/download/v3.0.1/KJB-3.0.1.apk", 81_000_000, sha.lowercase()), read.apk)
+        assertEquals(ReleaseApk("https://github.com/Mostafa-DE/KJB/releases/download/v3.0.1/KJB-3.0.1.apk", 81_000_000, sha.lowercase()), read.apk)
         assertEquals("New\n• Made-up change one\n• Made-up change two", read.notes)
     }
 
@@ -91,13 +98,13 @@ class UpdatesTest {
     fun `an APK KJB cannot check is no APK to install`() {
         fun apkOf(vararg assets: String) = Releases.parse(release(assets = assets.toList()), REPO)!!.apk
         assertNull("another repository's", apkOf(asset("KJB-3.0.1.apk", url = "https://github.com/Someone/Else/releases/download/v3.0.1/KJB-3.0.1.apk")))
-        assertNull("not a release download", apkOf(asset("KJB-3.0.1.apk", url = "https://github.com/Mostafa-DE/Lyrify/raw/main/releases/download/KJB-3.0.1.apk")))
+        assertNull("not a release download", apkOf(asset("KJB-3.0.1.apk", url = "https://github.com/Mostafa-DE/KJB/raw/main/releases/download/KJB-3.0.1.apk")))
         assertNull("no SHA-256 published", apkOf(asset("KJB-3.0.1.apk", digest = null)))
         assertNull("another digest", apkOf(asset("KJB-3.0.1.apk", digest = "sha512:$sha")))
         assertNull("too large", apkOf(asset("KJB-3.0.1.apk", size = Releases.MAX_APK_BYTES + 1)))
         assertNull("empty", apkOf(asset("KJB-3.0.1.apk", size = 0)))
         assertNull("still uploading", apkOf(asset("KJB-3.0.1.apk", state = "open")))
-        assertNull("not over https", apkOf(asset("KJB-3.0.1.apk", url = "http://github.com/Mostafa-DE/Lyrify/releases/download/v3.0.1/KJB-3.0.1.apk")))
+        assertNull("not over https", apkOf(asset("KJB-3.0.1.apk", url = "http://github.com/Mostafa-DE/KJB/releases/download/v3.0.1/KJB-3.0.1.apk")))
         assertNull("not GitHub's", apkOf(asset("KJB-3.0.1.apk", url = "https://example.com/KJB-3.0.1.apk")))
         assertNull("another version's", apkOf(asset("KJB-3.0.0.apk")))
         assertNull("the add-on only", apkOf(asset("KJB-AI-3.0.1.apk")))
@@ -111,10 +118,29 @@ class UpdatesTest {
         assertNull(Releases.sha256(null))
     }
 
+    private fun pin(stem: String, file: String, sha256: String = sha, bytes: Long = 54_000_000) =
+        AddonApk(stem, "https://github.com/Mostafa-DE/KJB/releases/download/v3.0.1/$file", sha256, bytes)
+
     @Test
-    fun `the add-on's version comes from the file this KJB pins`() {
-        assertEquals("3.0.0", Releases.pinnedVersion("https://github.com/Mostafa-DE/Lyrify/releases/download/v3.0.0/KJB-AI-3.0.0.apk"))
-        assertNull(Releases.pinnedVersion("https://github.com/Mostafa-DE/Lyrify/releases/download/v3.0.0/other.apk"))
+    fun `an add-on's version comes from the file this KJB pins for it`() {
+        assertEquals("3.0.0", Releases.pinnedVersion(pin("KJB-AI", "KJB-AI-3.0.0.apk")))
+        assertEquals("3.0.1", Releases.pinnedVersion(pin("KJB-Downloads", "KJB-Downloads-3.0.1.apk")))
+        assertNull(Releases.pinnedVersion(pin("KJB-AI", "other.apk")))
+        assertNull("the other add-on's file", Releases.pinnedVersion(pin("KJB-Downloads", "KJB-AI-3.0.1.apk")))
+        assertNull("KJB's own", Releases.pinnedVersion(pin("KJB-Downloads", "KJB-3.0.1.apk")))
+    }
+
+    @Test
+    fun `each add-on whose file this KJB pins is offered at that file's version, in order`() {
+        val ai = KjbAddons.AI.copy(apk = pin("KJB-AI", "KJB-AI-3.0.1.apk"))
+        val downloads = KjbAddons.DOWNLOADS.copy(apk = pin("KJB-Downloads", "KJB-Downloads-3.0.2.apk"))
+        assertEquals(listOf(AddonUpdate(ai, "3.0.1"), AddonUpdate(downloads, "3.0.2")), offeredAddons(listOf(ai, downloads)))
+
+        // The placeholders a build keeps until the release pins the file: nothing to offer.
+        val noSha = downloads.copy(apk = pin("KJB-Downloads", "KJB-Downloads-3.0.2.apk", sha256 = ""))
+        val noSize = downloads.copy(apk = pin("KJB-Downloads", "KJB-Downloads-3.0.2.apk", bytes = 0))
+        val noVersion = downloads.copy(apk = pin("KJB-Downloads", "downloads.apk"))
+        assertEquals(listOf(AddonUpdate(ai, "3.0.1")), offeredAddons(listOf(ai, noSha, noSize, noVersion)))
     }
 
     // The APK's signing
@@ -237,32 +263,33 @@ class UpdatesTest {
 
     private fun github(vararg answers: Answer): GitHubLatest {
         val queue = answers.toMutableList()
-        return GitHubLatest("Mostafa-DE/Lyrify", "KJB/test") { uri -> FakeConnection(uri, queue.removeAt(0)).also { opened += it } }
+        return GitHubLatest("Mostafa-DE/KJB", "KJB/test") { uri -> FakeConnection(uri, queue.removeAt(0)).also { opened += it } }
     }
 
     @Test
     fun `the latest release is asked of GitHub's API with KJB's name`() {
         val fetched = github(Answer(200, release())).fetch()
 
-        assertEquals("3.0.1", ((fetched as Fetched.Answer).release)?.version)
+        assertEquals("3.0.1", (fetched as Fetched.Answer).release.version)
         val request = opened.single()
-        assertEquals("https://api.github.com/repos/Mostafa-DE/Lyrify/releases/latest", request.url.toString())
+        assertEquals("https://api.github.com/repos/Mostafa-DE/KJB/releases/latest", request.url.toString())
         assertEquals("KJB/test", request.headers["User-Agent"])
         assertEquals("application/vnd.github+json", request.headers["Accept"])
     }
 
     @Test
-    fun `no release yet is an answer, a busy or refusing server is none`() {
-        assertEquals(Fetched.Answer(null), github(Answer(404)).fetch())
+    fun `a missing repository or release is no answer, as a busy or refusing server is, never up to date`() {
+        // A renamed or missing repository, or one with no release yet, must not read as "KJB is the latest" for good.
+        assertEquals(Fetched.NoAnswer, github(Answer(404)).fetch())
         assertEquals(Fetched.NoAnswer, github(Answer(403)).fetch())
         assertEquals(Fetched.NoAnswer, github(Answer(200, "not json")).fetch())
-        assertEquals(Fetched.NoAnswer, GitHubLatest("Mostafa-DE/Lyrify", "KJB/test") { throw IOException("offline") }.fetch())
+        assertEquals(Fetched.NoAnswer, GitHubLatest("Mostafa-DE/KJB", "KJB/test") { throw IOException("offline") }.fetch())
     }
 
     @Test
     fun `a renamed repository's redirect within GitHub's API is followed, any other is refused`() {
         val moved = github(Answer(301, location = "https://api.github.com/repositories/1/releases/latest"), Answer(200, release())).fetch()
-        assertEquals("3.0.1", (moved as Fetched.Answer).release?.version)
+        assertEquals("3.0.1", (moved as Fetched.Answer).release.version)
 
         opened.clear()
         assertEquals(Fetched.NoAnswer, github(Answer(302, location = "https://example.com/latest")).fetch())
@@ -284,7 +311,9 @@ class UpdatesTest {
         var fetches = 0
         var last: Long? = null
         var dismissedOffer: String? = null
-        var addon: String? = null
+
+        /** The version of each add-on installed that is KJB's own. */
+        val addons = mutableMapOf<KjbAddon, String>()
 
         override suspend fun latest(): Fetched {
             fetches++
@@ -303,14 +332,21 @@ class UpdatesTest {
             dismissedOffer = offer
         }
 
-        override fun addonInstalled(): String? = addon
+        override fun addonInstalled(addon: KjbAddon): String? = addons[addon]
     }
 
     private var now = 100 * DAY
     private val newer = Releases.parse(release(), REPO)!!
 
-    private fun TestScope.checker(port: FakePort, installed: String = "3.0.0", addonOffered: String? = null) =
-        UpdateChecker(port, installed, addonOffered, { now }, backgroundScope)
+    /** GitHub's latest release, no newer than the KJB of these tests (3.0.0 or 3.0.1). */
+    private val older = Releases.parse(release(tag = "v3.0.0"), REPO)!!
+
+    private fun TestScope.checker(port: FakePort, installed: String = "3.0.0", addonsOffered: List<AddonUpdate> = emptyList()) =
+        UpdateChecker(port, installed, addonsOffered, { now }, backgroundScope)
+
+    private val none = emptyList<AddonUpdate>()
+    private val ai = KjbAddons.AI
+    private val downloads = KjbAddons.DOWNLOADS
 
     @Test
     fun `opening KJB checks at most once a day`() = runTest {
@@ -359,35 +395,75 @@ class UpdatesTest {
 
         checker.checkIfDue(enabled = true)
         runCurrent()
-        assertEquals(UpdateState.Checked(newer, addon = null, ask = true), checker.state.value)
+        assertEquals(UpdateState.Checked(newer, addons = none, ask = true), checker.state.value)
 
         checker.dismiss()
         runCurrent()
-        assertEquals(UpdateState.Checked(newer, addon = null, ask = false), checker.state.value)
+        assertEquals(UpdateState.Checked(newer, addons = none, ask = false), checker.state.value)
         now += DAY
         checker.checkIfDue(enabled = true)
         runCurrent()
-        assertEquals(UpdateState.Checked(newer, addon = null, ask = false), checker.state.value)
+        assertEquals(UpdateState.Checked(newer, addons = none, ask = false), checker.state.value)
 
-        assertEquals(UpdateState.Checked(newer, addon = null, ask = true), checker.checkNow())
+        assertEquals(UpdateState.Checked(newer, addons = none, ask = true), checker.checkNow())
     }
 
     @Test
     fun `the same or an older release offers nothing`() = runTest {
         val port = FakePort(Fetched.Answer(newer))
-        assertEquals(UpdateState.Checked(null, addon = null, ask = false), checker(port, installed = "3.0.1").checkNow())
-        assertEquals(UpdateState.Checked(null, addon = null, ask = false), checker(FakePort(Fetched.Answer(null))).checkNow())
+        assertEquals(UpdateState.Checked(null, addons = none, ask = false), checker(port, installed = "3.0.1").checkNow())
+        assertEquals(UpdateState.Checked(null, addons = none, ask = false), checker(FakePort(Fetched.Answer(older))).checkNow())
     }
 
     @Test
     fun `an installed add-on older than the one this KJB brings is offered too`() = runTest {
-        val port = FakePort(Fetched.Answer(null)).apply { addon = "3.0.0" }
-        assertEquals(UpdateState.Checked(null, addon = "3.0.1", ask = true), checker(port, installed = "3.0.1", addonOffered = "3.0.1").checkNow())
+        val offered = listOf(AddonUpdate(ai, "3.0.1"))
+        val port = FakePort(Fetched.Answer(older)).apply { addons[ai] = "3.0.0" }
+        assertEquals(UpdateState.Checked(null, addons = offered, ask = true), checker(port, installed = "3.0.1", addonsOffered = offered).checkNow())
 
-        port.addon = "3.0.1"
-        assertEquals(UpdateState.Checked(null, addon = null, ask = false), checker(port, installed = "3.0.1", addonOffered = "3.0.1").checkNow())
-        port.addon = null
-        assertEquals(UpdateState.Checked(null, addon = null, ask = false), checker(port, installed = "3.0.1", addonOffered = "3.0.1").checkNow())
+        port.addons[ai] = "3.0.1"
+        assertEquals(UpdateState.Checked(null, addons = none, ask = false), checker(port, installed = "3.0.1", addonsOffered = offered).checkNow())
+        port.addons.remove(ai)
+        assertEquals(UpdateState.Checked(null, addons = none, ask = false), checker(port, installed = "3.0.1", addonsOffered = offered).checkNow())
+    }
+
+    @Test
+    fun `the Downloads add-on is offered the AI add-on's way, each by its own installed version`() = runTest {
+        val offered = listOf(AddonUpdate(ai, "3.0.1"), AddonUpdate(downloads, "3.0.1"))
+        val port = FakePort(Fetched.Answer(older)).apply {
+            addons[ai] = "3.0.1"
+            addons[downloads] = "3.0.0-dev"
+        }
+        assertEquals(UpdateState.Checked(null, addons = listOf(AddonUpdate(downloads, "3.0.1")), ask = true), checker(port, installed = "3.0.1", addonsOffered = offered).checkNow())
+
+        port.addons[ai] = "3.0.0"
+        assertEquals(UpdateState.Checked(null, addons = offered, ask = true), checker(port, installed = "3.0.1", addonsOffered = offered).checkNow())
+
+        // Not installed, or not KJB's (the port reads no version for an add-on signed with another key): nothing to update.
+        port.addons.remove(downloads)
+        assertEquals(UpdateState.Checked(null, addons = listOf(AddonUpdate(ai, "3.0.1")), ask = true), checker(port, installed = "3.0.1", addonsOffered = offered).checkNow())
+    }
+
+    @Test
+    fun `Not now puts off the add-ons offered, and another add-on's update asks again`() = runTest {
+        val offered = listOf(AddonUpdate(ai, "3.0.1"), AddonUpdate(downloads, "3.0.1"))
+        val port = FakePort(Fetched.Answer(older)).apply { addons[ai] = "3.0.0" }
+        val checker = checker(port, installed = "3.0.1", addonsOffered = offered)
+
+        checker.checkIfDue(enabled = true)
+        runCurrent()
+        checker.dismiss()
+        runCurrent()
+        now += DAY
+        checker.checkIfDue(enabled = true)
+        runCurrent()
+        assertEquals(UpdateState.Checked(null, addons = listOf(AddonUpdate(ai, "3.0.1")), ask = false), checker.state.value)
+
+        port.addons[downloads] = "3.0.0"
+        now += DAY
+        checker.checkIfDue(enabled = true)
+        runCurrent()
+        assertEquals(UpdateState.Checked(null, addons = offered, ask = true), checker.state.value)
     }
 
     @Test
@@ -420,7 +496,7 @@ class UpdatesTest {
     }
 
     private companion object {
-        const val REPO: String = "Mostafa-DE/Lyrify"
+        const val REPO: String = "Mostafa-DE/KJB"
         const val HOUR: Long = 60 * 60_000L
         const val DAY: Long = 24 * HOUR
     }

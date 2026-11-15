@@ -10,10 +10,17 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
+import java.io.ByteArrayOutputStream
+import java.io.File
+import java.security.MessageDigest
 
 /** Get AI: the add-on's APK downloaded, checked and installed, against a fake phone. */
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -299,6 +306,36 @@ class AddonInstallTest {
         assertFalse(AddonApk("KJB-Downloads", "https://github.com/x", "", 54_000_000).pinned)
         assertFalse(AddonApk("KJB-Downloads", "https://github.com/x", sha.drop(1), 54_000_000).pinned)
         assertFalse(AddonApk("KJB-Downloads", "https://github.com/x", sha, 0).pinned)
+        assertFalse("not hex", AddonApk("KJB-Downloads", "https://github.com/x", "zz".repeat(32), 54_000_000).pinned)
+    }
+
+    // The downloaded APK
+
+    @get:Rule
+    val temp = TemporaryFolder()
+
+    private fun hex(bytes: ByteArray) = bytes.joinToString("") { "%02x".format(it) }
+
+    @Test
+    fun `a downloaded add-on is checked whole against its pin before its signing, downloaded now or found from before`() {
+        val file = temp.newFile("KJB-Downloads.apk").apply { writeBytes(byteArrayOf(5, 5, 5)) }
+        val right = hex(MessageDigest.getInstance("SHA-256").digest(byteArrayOf(5, 5, 5)))
+        val cert = "C0".repeat(32)
+        // The pins come as the build writes them: hex in capitals.
+        val addon = KjbAddons.DOWNLOADS.copy(packageName = DOWNLOADS, certSha256 = cert, apk = AddonApk("KJB-Downloads", "https://github.com/x/d.apk", right.uppercase(), 3))
+        var read = 0
+        val signed: (File) -> ApkSigning? = { read++; ApkSigning(DOWNLOADS, 2, setOf(cert.lowercase())) }
+
+        assertFalse("same size, other bytes", verifiedAddon(file, addon.copy(apk = addon.apk.copy(sha256 = "00".repeat(32))), signed))
+        assertEquals("the signing is not even read", 0, read)
+        assertTrue(verifiedAddon(file, addon, signed))
+        assertFalse("not read", verifiedAddon(file, addon) { null })
+        assertFalse("another package", verifiedAddon(file, addon) { ApkSigning(ADDON, 2, setOf(cert.lowercase())) })
+        assertFalse("another key", verifiedAddon(file, addon) { ApkSigning(DOWNLOADS, 2, setOf("d0".repeat(32))) })
+        assertFalse("another key besides", verifiedAddon(file, addon) { ApkSigning(DOWNLOADS, 2, setOf(cert.lowercase(), "d0".repeat(32))) })
+        assertFalse("unsigned", verifiedAddon(file, addon) { ApkSigning(DOWNLOADS, 2, emptySet()) })
+        assertFalse("no pin trusts nobody", verifiedAddon(file, addon.copy(certSha256 = "")) { ApkSigning(DOWNLOADS, 2, emptySet()) })
+        assertFalse("gone", verifiedAddon(File(temp.root, "gone.apk"), addon, signed))
     }
 
     @Test
@@ -313,7 +350,108 @@ class AddonInstallTest {
         assertEquals(3, setOf(ai.name, downloads.name, newer.name).size)
     }
 
+    @Test
+    fun `an add-on is signed as KJB's only by its pinned certificate and no other key`() {
+        val cert = "C0".repeat(32)
+        // The pins come as the build writes them: hex in capitals.
+        val addon = KjbAddons.DOWNLOADS.copy(packageName = DOWNLOADS, certSha256 = cert)
+
+        assertTrue(signedByPin(addon, setOf(cert.lowercase())))
+        assertFalse("another key besides", signedByPin(addon, setOf(cert.lowercase(), "d0".repeat(32))))
+        assertFalse("another key", signedByPin(addon, setOf("d0".repeat(32))))
+        assertFalse("unsigned", signedByPin(addon, emptySet()))
+        assertFalse("no pin trusts nobody", signedByPin(addon.copy(certSha256 = ""), setOf("")))
+    }
+
+    @Test
+    fun `the bytes copied into an install are hashed and counted on the way, so a file changed after its check is not installed`() {
+        val file = temp.newFile("KJB-Downloads.apk").apply { writeBytes(byteArrayOf(5, 5, 5)) }
+        val pin = hex(MessageDigest.getInstance("SHA-256").digest(byteArrayOf(5, 5, 5)))
+        assertTrue("checked before the install", wholeFileIs(file, pin))
+        fun copied(sha256: String = pin, bytes: Long = 3, out: ByteArrayOutputStream = ByteArrayOutputStream()) = file.inputStream().use { copyVerified(it, out, sha256, bytes) }
+
+        file.writeBytes(byteArrayOf(6, 6, 6))
+        assertFalse("changed since its check: same size, other bytes", copied())
+        file.writeBytes(byteArrayOf(5, 5, 5, 5))
+        assertFalse("longer than the pin", copied())
+        file.writeBytes(byteArrayOf(5, 5))
+        assertFalse("shorter than the pin", copied())
+
+        file.writeBytes(byteArrayOf(5, 5, 5))
+        val out = ByteArrayOutputStream()
+        assertTrue(copied(sha256 = pin.uppercase(), out = out))
+        assertArrayEquals("every byte goes to the session", byteArrayOf(5, 5, 5), out.toByteArray())
+    }
+
+    // One receiver for every install: KJB's own update and both add-ons
+
+    private val sessions = InstallSessions()
+    private val update = InstallTarget.Kjb
+    private val ai = InstallTarget.Addon(KjbAddons.AI.copy(packageName = ADDON))
+    private val dl = InstallTarget.Addon(KjbAddons.DOWNLOADS.copy(packageName = DOWNLOADS))
+    private val failure = InstallVerdict.End(InstallOutcome.Failed(PackageInstaller.STATUS_FAILURE))
+
+    /** The installer's report for KJB's [session], naming [packageName]. */
+    private fun reportFor(session: Int, status: Int = PackageInstaller.STATUS_SUCCESS, packageName: String? = null, confirmPackage: String? = "com.android.packageinstaller") =
+        InstallReport(session, session, status, packageName, InstallReport.CONFIRM_INSTALL, confirmPackage, session)
+
+    private fun verdict(report: InstallReport, systemInstaller: (String) -> Boolean = { it == "com.android.packageinstaller" }) =
+        sessions.verdict(report, KJB, systemInstaller)
+
+    @Test
+    fun `each session is heard for what it installs, KJB's own package or its add-on's`() {
+        sessions.expect(1, update)
+        sessions.expect(2, ai)
+        sessions.expect(3, dl)
+
+        assertEquals(InstallVerdict.End(InstallOutcome.Installed), verdict(reportFor(1, packageName = KJB)))
+        assertEquals(InstallVerdict.End(InstallOutcome.Installed), verdict(reportFor(2, packageName = ADDON)))
+        assertEquals(InstallVerdict.End(InstallOutcome.Installed), verdict(reportFor(3, packageName = DOWNLOADS)))
+        assertEquals("KJB's update hears no add-on", failure, verdict(reportFor(1, packageName = DOWNLOADS)))
+        assertEquals("an add-on hears no KJB", failure, verdict(reportFor(3, packageName = KJB)))
+        assertEquals("nor the other add-on", failure, verdict(reportFor(2, packageName = DOWNLOADS)))
+        assertEquals(update, sessions.target(1))
+        assertEquals(dl, sessions.target(3))
+    }
+
+    @Test
+    fun `the install dialog starts only from the phone's own installer, for KJB's update and the add-ons alike`() {
+        sessions.expect(1, update)
+        sessions.expect(3, dl)
+        val asks = PackageInstaller.STATUS_PENDING_USER_ACTION
+
+        assertEquals(InstallVerdict.Confirm("com.android.packageinstaller", 1), verdict(reportFor(1, asks)))
+        assertEquals(InstallVerdict.Confirm("com.android.packageinstaller", 3), verdict(reportFor(3, asks)))
+        assertEquals(failure, verdict(reportFor(1, asks, confirmPackage = "com.example.installer")))
+        assertEquals(failure, verdict(reportFor(3, asks, confirmPackage = "com.example.installer")))
+    }
+
+    @Test
+    fun `a session no install waits on is ignored`() {
+        sessions.expect(2, ai)
+        sessions.forget(2)
+
+        assertEquals(InstallVerdict.Ignore, verdict(reportFor(2, packageName = ADDON)))
+        assertEquals(InstallVerdict.Ignore, verdict(reportFor(9, packageName = KJB)))
+        assertNull(sessions.target(2))
+    }
+
+    @Test
+    fun `an install's end reaches its own session only, once`() = runTest {
+        val kjb = sessions.expect(1, update)
+        val addon = sessions.expect(3, dl)
+
+        assertEquals(dl, sessions.end(3, InstallOutcome.Aborted))
+        assertNull("ended already", sessions.end(3, InstallOutcome.Installed))
+
+        assertEquals(InstallOutcome.Aborted, addon.await())
+        assertFalse(kjb.isCompleted)
+        assertEquals(update, sessions.end(1, InstallOutcome.Installed))
+        assertEquals(InstallOutcome.Installed, kjb.await())
+    }
+
     private companion object {
+        const val KJB = "app.lyrify"
         const val ADDON = "app.lyrify.ai"
         const val DOWNLOADS = "app.lyrify.dl"
     }

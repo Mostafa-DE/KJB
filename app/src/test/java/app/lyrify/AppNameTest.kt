@@ -8,8 +8,8 @@ import java.io.File
 
 /**
  * The app's visible name is KJB from 3.0 (formerly Lyrify): every string the user sees, the User-Agent, the log tag and
- * the debug build's test folder. The package, class and data file names keep "lyrify", so 3.0 installs over 2.0.x and
- * keeps its data; the repository's address keeps it until the repository is renamed.
+ * the debug build's test folder, and its GitHub repository, Mostafa-DE/KJB. The package, class and data file names keep
+ * "lyrify", so 3.0 installs over 2.0.x and keeps its data.
  */
 class AppNameTest {
     private fun file(path: String): File = File(path).also { assertTrue("run from the app module: ${it.absolutePath}", it.isFile) }
@@ -37,11 +37,11 @@ class AppNameTest {
     }
 
     @Test
-    fun `no text in the code says Lyrify, except the repository's address`() {
+    fun `no text in the code says Lyrify`() {
         val found = listOf("src/main/java", "src/debug/java").flatMap { root ->
             File(root).walkTopDown().filter { it.isFile && it.extension == "kt" }.flatMap { source ->
                 KOTLIN_TOKEN.findAll(source.readText()).map { it.value }
-                    .filter { it.startsWith('"') && "Lyrify" in it.replace(REPOSITORY, "") }
+                    .filter { it.startsWith('"') && "Lyrify" in it }
                     .map { "${source.name}: $it" }
             }.toList()
         }
@@ -55,8 +55,16 @@ class AppNameTest {
         assertEquals("Music/KJB test/", SharedWrites.TEST_FOLDER)
     }
 
+    @Test
+    fun `the update check and both add-ons' downloads use the repository Mostafa-DE KJB`() {
+        assertEquals("Mostafa-DE/KJB", BuildConfig.UPDATE_REPO)
+        assertEquals(REPOSITORY, BuildConfig.REPOSITORY)
+        assertTrue(BuildConfig.AI_ADDON_URL, BuildConfig.AI_ADDON_URL.startsWith("$REPOSITORY/releases/download/"))
+        assertTrue(BuildConfig.DL_ADDON_URL, BuildConfig.DL_ADDON_URL.startsWith("$REPOSITORY/releases/download/"))
+    }
+
     private companion object {
-        const val REPOSITORY: String = "https://github.com/Mostafa-DE/Lyrify"
+        const val REPOSITORY: String = "https://github.com/Mostafa-DE/KJB"
         val XML_COMMENT = Regex("""<!--[\s\S]*?-->""")
 
         /** Comments, string literals and char literals of Kotlin source, whichever starts first. */
