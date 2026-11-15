@@ -3,6 +3,13 @@ package app.lyrify.backup
 import app.lyrify.backup.BackupFixtures.T0
 import app.lyrify.backup.BackupFixtures.VERSION
 import app.lyrify.backup.BackupFixtures.zipOf
+import app.lyrify.books.BookEntry
+import app.lyrify.books.BookMarks
+import app.lyrify.books.BookPlace
+import app.lyrify.books.BookState
+import app.lyrify.books.Chapter
+import app.lyrify.books.booksOf
+import app.lyrify.books.folderBookId
 import app.lyrify.data.LedgerEntry
 import app.lyrify.data.LedgerState
 import app.lyrify.data.LyricsSource
@@ -444,6 +451,79 @@ class BackupNewPhoneTest {
         assertEquals(1, result.counts[Section.TONES])
         assertEquals(1, result.counts[Section.COVERS])
         assertEquals(2, result.counts[Section.SEARCHES])
+    }
+
+    // Books
+
+    private val archive = at(OLD, "Audiobooks/The Salt Archive.m4b", "The Salt Archive", "Ada Quill", null, 36_000_000, 31, 300_000_000)
+    private val keeperOne = at(OLD, "Audiobooks/Lantern Keeper/01.mp3", "The Keeper Wakes", "Ada Quill", "Lantern Keeper", 1_800_000, 32, 28_000_000)
+    private val keeperTwo = at(OLD, "Audiobooks/Lantern Keeper/02.mp3", "The Long Stair", "Ada Quill", "Lantern Keeper", 2_100_000, 33, 33_000_000)
+
+    /**
+     * On the card: The Salt Archive where it was (found by its path below the root), Lantern Keeper in another folder
+     * (found by its tags).
+     */
+    private val newArchive = at(NEW, "Audiobooks/The Salt Archive.m4b", "The Salt Archive", "Ada Quill", null, 36_000_500, 931, 300_000_000)
+    private val newKeeperOne = at(NEW, "Audiobooks/Keeper/01.mp3", "The Keeper Wakes", "Ada Quill", "Lantern Keeper", 1_800_300, 932, 28_000_000)
+    private val newKeeperTwo = at(NEW, "Audiobooks/Keeper/02.mp3", "The Long Stair", "Ada Quill", "Lantern Keeper", 2_099_800, 933, 33_000_000)
+
+    private val salt = BookEntry(
+        archive.path, "The Salt Archive", "Ada Quill", listOf(archive.path), BookPlace(0, 5_400_000), archive.path, lastPlayedAt = T0 + 7,
+        chapters = listOf(Chapter(0, 36_000_000, "Part One")), chaptersStamp = "300000000:$T0",
+    )
+    private val keeper = BookEntry(
+        folderBookId(OLD + "Audiobooks/Lantern Keeper", "Lantern Keeper"), "Lantern Keeper", "Ada Quill", listOf(keeperOne.path, keeperTwo.path), BookPlace(1, 600_000), keeperTwo.path,
+        Speed(1.25f), lastPlayedAt = T0 + 8,
+    )
+
+    /** Glass Steps marked as a book, Copper Moon as not one, a folder each way. */
+    private val oldBooks = BookState(
+        listOf(salt, keeper).associateBy { it.id },
+        BookMarks(songs = setOf(steps.path), folders = setOf("Spoken/Ada Quill"), notSongs = setOf(moon.path), notFolders = setOf("Music/Night Ferry")),
+    )
+
+    /** Lantern Keeper's id on the new phone: the folder its files are in there. */
+    private val keeperHere = folderBookId(NEW + "Audiobooks/Keeper", "Lantern Keeper")
+
+    /** Moves the old phone with its books and their files to [phone], whose library is [phoneLibrary]. */
+    private fun moveBooks(phone: MemoryStores, phoneLibrary: List<Song>): RestoreResult =
+        move(old = oldPhone().apply { books = oldBooks }, library = oldLibrary + archive + keeperOne + keeperTwo, phone = phone, phoneLibrary = phoneLibrary)
+
+    @Test
+    fun `books come back on their files' new paths and ids, with their places, speeds and marks, the chapters read again`() {
+        val phone = newPhone()
+        val library = newLibrary + newArchive + newKeeperOne + newKeeperTwo
+
+        val result = moveBooks(phone, library)
+
+        assertEquals(
+            BookState(
+                mapOf(
+                    newArchive.path to salt.copy(id = newArchive.path, parts = listOf(newArchive.path), partPath = newArchive.path, chapters = null, chaptersStamp = null),
+                    keeperHere to keeper.copy(id = keeperHere, parts = listOf(newKeeperOne.path, newKeeperTwo.path), partPath = newKeeperTwo.path),
+                ),
+                BookMarks(songs = setOf(newSteps.path), folders = setOf("Spoken/Ada Quill"), notSongs = setOf(newMoon.path), notFolders = setOf("Music/Night Ferry")),
+            ),
+            phone.books,
+        )
+        assertEquals(0 to 2, result.notFound to result.counts[Section.BOOKS])
+        // The library groups the files here into books of the same ids, so each finds its place.
+        val here = booksOf(library, phone.books.marks).filter { it.id in phone.books.books }
+        assertEquals(listOf(BookPlace(1, 600_000), BookPlace(0, 5_400_000)), here.map(phone.books::placeOf))
+    }
+
+    @Test
+    fun `a book whose files are all gone is left out and its songs counted as not found, one with a file gone keeps the rest`() {
+        val gone = newPhone()
+        val half = newPhone()
+
+        val all = moveBooks(gone, newLibrary + newArchive)
+        val one = moveBooks(half, newLibrary + newArchive + newKeeperTwo)
+
+        assertEquals(setOf(newArchive.path), gone.books.books.keys)
+        assertEquals(2 to 1, all.notFound to all.counts[Section.BOOKS])
+        assertEquals(keeper.copy(id = keeperHere, parts = listOf(newKeeperTwo.path), partPath = newKeeperTwo.path), half.books.books[keeperHere])
+        assertEquals(1 to 2, one.notFound to one.counts[Section.BOOKS])
     }
 
     // An older KJB's backup

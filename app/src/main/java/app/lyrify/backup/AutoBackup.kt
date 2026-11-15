@@ -24,6 +24,8 @@ import app.lyrify.LOG_TAG
 import app.lyrify.Lyrify
 import app.lyrify.audio.EqProfiles
 import app.lyrify.audio.EqProfilesStore
+import app.lyrify.books.BookState
+import app.lyrify.books.BooksGraph
 import app.lyrify.data.LedgerRepository
 import app.lyrify.data.LedgerState
 import app.lyrify.data.SharedWrite
@@ -130,8 +132,8 @@ object AutoBackups {
 
 /**
  * The app's stores as a backup and a restore see them, each through its own API (Duplicates and Covers & tags through
- * their engines, so a restore never writes under them). The queues, Repeat and the song state live on the main thread
- * and are read once they are loaded; the rest are read and written where their stores say.
+ * their engines, so a restore never writes under them). The queues, Repeat, the song state and the books live on the
+ * main thread and are read once they are loaded; the rest are read and written where their stores say.
  */
 class AppBackupStores(context: Context) : BackupStores {
     private val app = context.applicationContext
@@ -239,6 +241,21 @@ class AppBackupStores(context: Context) : BackupStores {
     override suspend fun addSearches(searches: List<String>): Boolean = SearchGraph.recent(app).addAll(searches)
 
     override suspend fun fileMark(path: String): FileMark? = withContext(Dispatchers.IO) { markOf(path) }
+
+    /** Null when `books.json` could not be read: a backup leaves the books out rather than keep none. */
+    override suspend fun books(): BookState? = withContext(Dispatchers.Main) {
+        val store = BooksGraph.store(app)
+        store.ready.first { it }
+        store.state.value.takeIf { store.readable }
+    }
+
+    /** False when `books.json` could not be read: nothing is written over it. */
+    override suspend fun updateBooks(change: (BookState) -> BookState): Boolean = withContext(Dispatchers.Main) {
+        val store = BooksGraph.store(app)
+        store.ready.first { it }
+        if (store.readable) store.change(change)
+        store.readable
+    }
 }
 
 /** Making a backup of the app and reading one back. The log gets counts and section names only. */
@@ -249,7 +266,7 @@ object Backups {
         val snapshot = AppBackupStores(app).snapshot()
         val songs = library(app)?.all.orEmpty()
         val bytes = ByteArrayOutputStream().also { BackupBundle.write(snapshot, songs, BuildConfig.VERSION_NAME, System.currentTimeMillis(), it) }.toByteArray()
-        val read = listOfNotNull(snapshot.playlists, snapshot.queues, snapshot.plays, snapshot.songState, snapshot.equalizer, snapshot.ledger, snapshot.settings, snapshot.tones, snapshot.duplicates, snapshot.coversTags, snapshot.searches)
+        val read = listOfNotNull(snapshot.playlists, snapshot.queues, snapshot.plays, snapshot.songState, snapshot.equalizer, snapshot.ledger, snapshot.settings, snapshot.tones, snapshot.duplicates, snapshot.coversTags, snapshot.searches, snapshot.books)
         Log.i(LOG_TAG, "backup: ${bytes.size} bytes, ${read.size} stores read, ${songs.size} songs listed")
         bytes
     }
@@ -275,7 +292,10 @@ object Backups {
         RestorePlan(contents, library(context.applicationContext)?.all.orEmpty())
     }
 
-    /** Restores the [chosen] sections of [plan] into the app's stores; the queues and the song state on the main thread. */
+    /**
+     * Restores the [chosen] sections of [plan] into the app's stores; the queues, the song state and the books on the
+     * main thread.
+     */
     suspend fun restore(context: Context, plan: RestorePlan, chosen: Set<Section>): RestoreResult = withContext(Dispatchers.Default) {
         plan.apply(chosen, AppBackupStores(context), newId = { UUID.randomUUID().toString() }) { Log.i(LOG_TAG, it) }
     }

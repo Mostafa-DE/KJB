@@ -7,6 +7,8 @@ import app.lyrify.backup.SectionJson.int
 import app.lyrify.backup.SectionJson.jsonObject
 import app.lyrify.backup.SectionJson.long
 import app.lyrify.backup.SectionJson.text
+import app.lyrify.books.BookState
+import app.lyrify.books.BooksJson
 import app.lyrify.data.LedgerJson
 import app.lyrify.data.LedgerState
 import app.lyrify.data.LyricsStatus
@@ -81,6 +83,12 @@ enum class Section(val key: String, val version: Int) {
 
     /** Search's recent searches. */
     SEARCHES("searches", 1),
+
+    /**
+     * `books.json`: each book's place, speed, finished and last played, and the user's "Mark as book" and "Not a book";
+     * never chapters (read again from the files).
+     */
+    BOOKS("books", 1),
     ;
 
     /** Its file in the zip. */
@@ -120,6 +128,7 @@ data class BackupSnapshot(
     val coversTags: CoversTagsMemory? = null,
     val keptApart: Set<NamePair>? = null,
     val searches: List<String>? = null,
+    val books: BookState? = null,
 )
 
 /**
@@ -160,6 +169,8 @@ data class BackupContents(
     val covers: BackupCovers? = null,
     val names: Set<NamePair>? = null,
     val searches: List<String>? = null,
+    /** The books by their ids on the phone that made it, their parts and the marked songs by path; no chapters. */
+    val books: BookState? = null,
     /** Sections a newer KJB wrote in a form this version cannot read: skipped, and the summary says so. */
     val tooNew: List<Section> = emptyList(),
     /** How many sections this version does not know at all (a newer KJB's): skipped. */
@@ -181,6 +192,7 @@ data class BackupContents(
         Section.COVERS -> covers != null
         Section.NAMES -> names != null
         Section.SEARCHES -> searches != null
+        Section.BOOKS -> books != null
     }
 }
 
@@ -228,7 +240,8 @@ data class ZipLimits(
  * Format 2 added the paths below the root and sizes, the queue playing, Repeat, the speeds and the part repeating, the
  * AI switch, and the tones, Duplicates, Covers & tags, names kept apart and recent searches sections, all as new keys or
  * sections: format 1 backups read as before, and a format 1 KJB reads a format 2 backup's sections it knows. The queues
- * section keeps version 1: a format 1 KJB reads its Recent and Saved queues and leaves the one playing, as before.
+ * section keeps version 1: a format 1 KJB reads its Recent and Saved queues and leaves the one playing, as before. The
+ * books section came later, a section only: a KJB without it skips it as one it does not know.
  *
  * Read as untrusted input: only the known entry names are kept, no entry name ever becomes a path, each entry and all of
  * them together are capped unpacked ([ZipLimits]), two entries of one name make it unreadable, and every section is
@@ -268,6 +281,7 @@ object BackupBundle {
             snapshot.coversTags?.let { add(Section.COVERS to SectionJson.covers(it)) }
             snapshot.keptApart?.let { add(Section.NAMES to SectionJson.names(it)) }
             snapshot.searches?.let { add(Section.SEARCHES to SectionJson.searches(it)) }
+            snapshot.books?.let { add(Section.BOOKS to BooksJson.encode(bare(it))) }
         }
         val byPath = library.associateBy { it.path }
         val songs = named(snapshot, pathOf::get).mapNotNull(byPath::get).map { song ->
@@ -296,6 +310,7 @@ object BackupBundle {
         snapshot.tones?.let { state -> state.tones.values.forEach { add(it.songPath) } }
         snapshot.duplicates?.let { choices -> (choices.notDuplicates + choices.reviewed).forEach { key -> key.split(',').mapNotNull { it.toLongOrNull()?.let(pathOf) }.forEach(::add) } }
         snapshot.coversTags?.let { memory -> memory.albums.forEach { album -> album.songs.forEach { add(it.path) } } }
+        snapshot.books?.let { state -> state.books.values.forEach { entry -> addAll(entry.parts + listOfNotNull(entry.partPath)) }; addAll(state.marks.songs + state.marks.notSongs) }
     }.distinct()
 
     /** A song as a backup keeps it: by its path only, as a MediaStore id names a file on this phone alone. */
@@ -310,6 +325,9 @@ object BackupBundle {
 
     /** Every queue as it is, the one playing at its song and second, without ids. */
     private fun bare(book: QueueBook): QueueBook = book.copy(queues = book.queues.map { queue -> queue.copy(items = queue.items.map { it.copy(song = bare(it.song)) }) })
+
+    /** The books without the chapters read from their files: the phone they come back to reads them again. */
+    private fun bare(state: BookState): BookState = state.copy(books = state.books.mapValues { (_, entry) -> entry.copy(chapters = null, chaptersStamp = null) })
 
     /** The lyrics choices: no write cut short (its entry holds lyrics text), nor what only a newer version could read. */
     private fun bare(state: LedgerState): LedgerState = LedgerState(entries = state.entries.filterValues { it.status != LyricsStatus.WRITING })
@@ -434,6 +452,7 @@ object BackupBundle {
         Section.COVERS -> SectionJson.covers(text)?.let { contents.copy(covers = it) }
         Section.NAMES -> SectionJson.names(text)?.let { contents.copy(names = it) }
         Section.SEARCHES -> SectionJson.searches(text)?.let { contents.copy(searches = it) }
+        Section.BOOKS -> BooksJson.decode(text)?.let { contents.copy(books = bare(it)) }
     }
 
     private fun ledger(text: String): LedgerState? = try {

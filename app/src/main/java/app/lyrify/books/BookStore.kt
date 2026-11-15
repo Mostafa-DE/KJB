@@ -401,6 +401,13 @@ class BookStore(private val storage: BookStorage, private val scope: CoroutineSc
     private val _ready = MutableStateFlow(false)
     val ready: StateFlow<Boolean> = _ready.asStateFlow()
 
+    /**
+     * Whether `books.json` was read: false when it could not be, and then nothing is written over it, so a backup leaves
+     * the books out and a restore of them fails.
+     */
+    var readable: Boolean = false
+        private set
+
     /** The user's marks, from the moment `books.json` is read: the library groups by them ([app.lyrify.library.LibraryRepository]). */
     val marks: Flow<BookMarks> = combine(_ready, _state) { ready, state -> state.marks.takeIf { ready } }.filterNotNull().distinctUntilChanged()
 
@@ -416,6 +423,7 @@ class BookStore(private val storage: BookStorage, private val scope: CoroutineSc
                 null
             }
             read?.let { _state.value = it }
+            readable = read != null
             // Listening before the changes that waited for the read come in.
             if (read != null) launch(start = CoroutineStart.UNDISPATCHED) { _state.drop(1).collect { storage.save(it) } }
             _ready.value = true

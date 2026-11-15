@@ -7,6 +7,7 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -37,6 +38,7 @@ class BookStoreTest {
         assertEquals(BookMarks(songs = setOf("/storage/emulated/0/Music/a.mp3"), folders = setOf("Music/Rips")), store.state.value.marks)
         assertEquals(store.state.value, storage.saved.last())
         assertEquals(store.state.value.marks, store.marks.first())
+        assertTrue(store.readable)
     }
 
     @Test
@@ -48,6 +50,7 @@ class BookStoreTest {
         runCurrent()
 
         assertTrue(store.ready.value)
+        assertFalse(store.readable)
         assertEquals(setOf("/storage/emulated/0/Music/a.mp3"), store.marks.first().songs)
         assertTrue(storage.saved.isEmpty())
     }
