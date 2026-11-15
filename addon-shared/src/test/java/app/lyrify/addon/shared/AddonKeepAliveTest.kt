@@ -7,6 +7,7 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -98,6 +99,33 @@ class AddonKeepAliveTest {
         busy = false
         foreground.jobEnded()
         assertEquals(listOf("start mediaProcessing $KJB_UID", "stopForeground", "stopSelf 2"), port.calls.takeLast(3))
+    }
+
+    @Test
+    fun `every start ends in a defined state, a start while in the foreground needing no answer`() {
+        // In the foreground for job 1: a second start (KJB's, its job ended and jobEnded on its way; or anyone's) is
+        // one Android asks nothing of, as the service is in the foreground already (AOSP sendServiceArgsLocked).
+        for (second in listOf(kjb, Tap(OTHER_UID), null)) {
+            val port = FakeForeground()
+            val foreground = foreground(port)
+            foreground.start(1, kjb)
+            busy = false
+
+            foreground.start(2, second)
+            assertEquals("$second: still in the foreground, nothing more asked", listOf("start mediaProcessing $KJB_UID"), port.calls)
+            foreground.jobEnded()
+            assertEquals("$second: out once the job's end comes", listOf("start mediaProcessing $KJB_UID", "stopForeground", "stopSelf 2"), port.calls)
+            busy = true
+        }
+        // Out of the foreground: every start, KJB's or not, job or no job, goes in, and out unless it holds a job of KJB's.
+        for ((tap, running) in listOf(kjb to true, kjb to false, Tap(OTHER_UID) to true, null to false)) {
+            val port = FakeForeground()
+            busy = running
+            foreground(port).start(3, tap)
+            val holds = tap == kjb && running
+            assertEquals("$tap busy=$running", if (holds) 1 else 3, port.calls.size)
+            assertTrue("$tap busy=$running", port.calls.first().startsWith("start"))
+        }
     }
 
     @Test

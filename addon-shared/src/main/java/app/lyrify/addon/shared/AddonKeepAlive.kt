@@ -116,6 +116,11 @@ class JobForeground<Tap : Any>(
             busy() -> if (enter(kjb)) held = true else if (!held) port.stopSelf(startId)
             // The job ended before its start came: in and out, unless still in for it ([jobEnded] is on its way).
             !held -> inAndOut(startId, kjb)
+            // Held: nothing to answer. A start for the foreground that Android delivers while the service is in the
+            // foreground has its requirement cleared there and then (ActiveServices.sendServiceArgsLocked: "Service
+            // already foreground; no new timeout", fgRequired = false), the same in android11 to android16-release
+            // (API 30 to 36); one delivered before the earlier start's startForeground waits on that one, which clears
+            // it (setServiceForegroundInnerLocked).
         }
     }
 
