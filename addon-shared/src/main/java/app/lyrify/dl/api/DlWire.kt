@@ -4,8 +4,12 @@ import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import java.net.Inet4Address
+import java.net.Inet6Address
+import java.net.InetAddress
 import java.net.URI
 import java.net.URISyntaxException
+import java.net.UnknownHostException
 
 /** The Downloads add-on's bound service and its permission, as KJB binds it (IDlAddon). */
 object DlNames {
@@ -52,8 +56,9 @@ private val DOWNLOAD_KEY = Regex("[A-Za-z0-9-]{1,64}")
 private const val MAX_HEIGHT = 10_000
 
 /**
- * Whether [text] is one http or https link with a host and nothing else: no spaces or control characters, and it cannot
- * be read as one of yt-dlp's options.
+ * Whether [text] is one http or https link with a host and nothing else: no spaces or control characters, it cannot be
+ * read as one of yt-dlp's options, and its host is not this phone or a private address written out ([PublicAddresses];
+ * a name that resolves to one is caught where the link is fetched).
  */
 fun isWebLink(text: String): Boolean {
     if (text.length > MAX_LINK || text.any { it.isWhitespace() || it.isISOControl() }) return false
@@ -63,10 +68,115 @@ fun isWebLink(text: String): Boolean {
         return false
     }
     val scheme = uri.scheme?.lowercase()
-    return (scheme == "http" || scheme == "https") && !uri.host.isNullOrEmpty() && uri.rawUserInfo == null
+    val host = uri.host
+    return (scheme == "http" || scheme == "https") && !host.isNullOrEmpty() && uri.rawUserInfo == null && !PublicAddresses.namesLocal(host)
 }
 
 private const val MAX_LINK = 4_096
+
+/**
+ * Whether a link's host is out on the internet, so a shared link never makes the add-on (or KJB, for a cover) reach this
+ * phone, the home or office network, or a cloud's metadata address: not loopback, unspecified, private (10/8, 172.16/12,
+ * 192.168/16, carrier NAT 100.64/10, fc00::/7), link-local (169.254/16, fe80::/10), multicast or broadcast. An IPv6 form of
+ * an IPv4 address counts as that address.
+ */
+object PublicAddresses {
+    enum class Verdict { PUBLIC, NOT_PUBLIC, UNKNOWN }
+
+    fun isPublic(address: InetAddress): Boolean {
+        if (address.isAnyLocalAddress || address.isLoopbackAddress || address.isLinkLocalAddress || address.isSiteLocalAddress || address.isMulticastAddress) return false
+        val bytes = address.address.map { it.toInt() and BYTE }
+        return when (address) {
+            is Inet4Address -> !(bytes[0] == 0 || bytes[0] >= MULTICAST_V4 || (bytes[0] == CGNAT_FIRST && bytes[1] and CGNAT_MASK == CGNAT_SECOND))
+            // Unique local addresses (fc00::/7), and IPv4 written in IPv6 (::a.b.c.d, ::ffff:a.b.c.d) by its IPv4 address.
+            is Inet6Address -> bytes[0] and ULA_MASK != ULA && embeddedV4(bytes)?.let(::isPublic) != false
+            else -> false
+        }
+    }
+
+    /**
+     * [url]'s host by every address [resolve] gives it: public only when all are; [Verdict.UNKNOWN] when it does not
+     * resolve (offline), so the fetch fails the ordinary way.
+     */
+    fun of(url: String, resolve: (String) -> List<InetAddress>): Verdict {
+        val host = try {
+            URI(url).host
+        } catch (_: URISyntaxException) {
+            null
+        } ?: return Verdict.NOT_PUBLIC
+        val addresses = try {
+            resolve(host.removePrefix("[").removeSuffix("]"))
+        } catch (_: UnknownHostException) {
+            return Verdict.UNKNOWN
+        } catch (_: SecurityException) {
+            return Verdict.UNKNOWN
+        }
+        return when {
+            addresses.isEmpty() -> Verdict.UNKNOWN
+            addresses.all(::isPublic) -> Verdict.PUBLIC
+            else -> Verdict.NOT_PUBLIC
+        }
+    }
+
+    /**
+     * Whether [host] (a URI's host) names this phone or a non-public address in itself, with no DNS: localhost, an IPv6
+     * literal, or an IPv4 address in any form inet_aton reads (127.1, 2130706433, 0x7f.0.0.1), which yt-dlp's Python does.
+     */
+    internal fun namesLocal(host: String): Boolean {
+        val name = host.lowercase().trimEnd('.')
+        if (name == "localhost" || name.endsWith(".localhost")) return true
+        if (name.startsWith("[")) {
+            val address = try {
+                InetAddress.getByName(name.removePrefix("[").removeSuffix("]"))
+            } catch (_: UnknownHostException) {
+                return true
+            }
+            return !isPublic(address)
+        }
+        val v4 = inetAton(name) ?: return false
+        return !isPublic(InetAddress.getByAddress(v4))
+    }
+
+    /** [text] as inet_aton reads an IPv4 address (1 to 4 parts, each decimal, 0x hex or 0 octal); null when it is a name. */
+    private fun inetAton(text: String): ByteArray? {
+        val parts = text.split('.')
+        if (parts.size !in 1..4 || parts.any { !NUMBER.matches(it) }) return null
+        val values = parts.map { part ->
+            when {
+                part.startsWith("0x") -> part.drop(2).ifEmpty { "0" }.toLongOrNull(HEX)
+                part.length > 1 && part.startsWith("0") -> part.toLongOrNull(OCTAL)
+                else -> part.toLongOrNull()
+            } ?: return null
+        }
+        // The last part fills the bytes the others left.
+        val last = values.last()
+        val lastBytes = 4 - (values.size - 1)
+        if (values.dropLast(1).any { it > BYTE } || last >= 1L shl (8 * lastBytes)) return null
+        return ByteArray(4) { index ->
+            if (index < values.size - 1) values[index].toByte() else (last shr (8 * (3 - index))).toByte()
+        }
+    }
+
+    /** The IPv4 address an IPv6 address holds (::a.b.c.d, ::ffff:a.b.c.d), if it is one of those. */
+    private fun embeddedV4(bytes: List<Int>): InetAddress? {
+        val head = bytes.take(10)
+        val mark = bytes.subList(10, 12)
+        if (head.any { it != 0 } || (mark != listOf(0, 0) && mark != listOf(BYTE, BYTE))) return null
+        if (mark == listOf(0, 0) && bytes.subList(12, 16).all { it == 0 }) return null
+        return InetAddress.getByAddress(bytes.subList(12, 16).map { it.toByte() }.toByteArray())
+    }
+
+    private val NUMBER = Regex("0x[0-9a-f]*|[0-9]+")
+    private const val BYTE = 0xFF
+    private const val HEX = 16
+    private const val OCTAL = 8
+    private const val MULTICAST_V4 = 224
+    private const val CGNAT_FIRST = 100
+    private const val CGNAT_SECOND = 64
+    private const val CGNAT_MASK = 0xC0
+    private const val ULA = 0xFC
+    private const val ULA_MASK = 0xFE
+}
 
 /** One of a video's qualities: [height] (null: the best there is), its [label] ("1080p", "4K") and its estimated size. */
 @Serializable
@@ -147,6 +257,9 @@ enum class DlFailure {
 
     /** The request was not one the add-on takes (KJB's bug), or the key is busy with another run. */
     REFUSED,
+
+    /** The link's host is this phone, the home or office network, or another address not on the internet. */
+    LOCAL_ADDRESS,
 
     UNKNOWN,
 }

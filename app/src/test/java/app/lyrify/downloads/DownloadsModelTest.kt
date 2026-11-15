@@ -45,7 +45,29 @@ class DownloadsModelTest {
         assertEquals(emptyList<String>(), ShareLinks.parse("https://user:pw@video.example.com/v"))
     }
 
+    @Test
+    fun `only a share is read, and only its first few kilobytes`() {
+        assertEquals(listOf("https://video.example.com/a"), ShareLinks.fromShare("android.intent.action.SEND", "see https://video.example.com/a", null))
+        assertEquals(listOf("https://video.example.com/b"), ShareLinks.fromShare("android.intent.action.SEND", null, "https://video.example.com/b"))
+        assertEquals(emptyList<String>(), ShareLinks.fromShare("android.intent.action.VIEW", "https://video.example.com/a", null))
+        assertEquals(emptyList<String>(), ShareLinks.fromShare(null, "https://video.example.com/a", null))
+        val late = "x".repeat(ShareLinks.MAX_SHARED_CHARS) + " https://video.example.com/late"
+        assertEquals(emptyList<String>(), ShareLinks.fromShare("android.intent.action.SEND", late, null))
+    }
+
     // Folders
+
+    @Test
+    fun `a saved file takes only an extension KJB knows, else its kind's`() {
+        assertEquals("mp3", DownloadFolders.extension("Paper Lantern.MP3", DlKind.AUDIO))
+        assertEquals("opus", DownloadFolders.extension("Paper Lantern.opus", DlKind.AUDIO))
+        assertEquals("m4a", DownloadFolders.extension("Paper Lantern.m4a", DlKind.AUDIO))
+        assertEquals("webm", DownloadFolders.extension("Clip.webm", DlKind.VIDEO))
+        assertEquals("mkv", DownloadFolders.extension("Clip.mkv", DlKind.VIDEO))
+        assertEquals("mp3", DownloadFolders.extension("Paper Lantern.exe", DlKind.AUDIO))
+        assertEquals("mp4", DownloadFolders.extension("Clip", DlKind.VIDEO))
+        assertEquals("mp3", DownloadFolders.extension("a.mp3/../../b", DlKind.AUDIO))
+    }
 
     @Test
     fun `a download folder is a plain path in a top folder its kind may use`() {

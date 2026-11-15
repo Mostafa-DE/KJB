@@ -31,6 +31,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
 import java.io.OutputStream
+import java.net.InetAddress
 
 /**
  * A download in the add-on ([DlRuns]) against a fake yt-dlp whose "process" runs until it ends or is killed, as the real
@@ -130,6 +131,9 @@ class DlRunsTest {
     private val root: File get() = File(temp.root, "dl")
     private var quick: suspend (String) -> DlInfo? = { null }
 
+    /** Every host is out on the internet, but those the test gives an address of its own. */
+    private val dns = mutableMapOf<String, String>()
+
     private fun TestScope.runs() = DlRuns(
         scope = backgroundScope,
         ytdlp = ytdlp,
@@ -139,6 +143,7 @@ class DlRunsTest {
         monotonic = { testScheduler.currentTime },
         quickInfo = { quick(it) },
         io = StandardTestDispatcher(testScheduler),
+        resolve = { host -> listOf(InetAddress.getByName(dns[host] ?: "93.184.216.34")) },
     )
 
     private val song = DlRequest("k1", "https://video.example.com/watch?v=abc", DlKind.AUDIO, AudioQuality.MP3_320)
@@ -401,6 +406,57 @@ class DlRunsTest {
     }
 
     // What the add-on refuses
+
+    @Test
+    fun `a link whose host resolves to this phone or the home network is refused before yt-dlp runs`() = runTest {
+        memory.lastCheck = now
+        dns["router.example.com"] = "192.168.1.1"
+        dns["meta.example.com"] = "169.254.169.254"
+        val runs = runs()
+        val looked = Looked()
+        runs.info("http://router.example.com/admin", looked)
+        val heard = Heard()
+        runs.start(song.copy(url = "https://meta.example.com/latest"), heard)
+        runCurrent()
+
+        assertEquals(DlEnd.Failed(DlFailure.LOCAL_ADDRESS), looked.failed)
+        assertEquals(DlEnd.Failed(DlFailure.LOCAL_ADDRESS), heard.end)
+        assertFalse("run" in ytdlp.calls)
+        assertFalse(File(root, "k1").exists())
+    }
+
+    @Test
+    fun `discard while its run is live stops it and deletes its folder once it has stopped`() = runTest {
+        memory.lastCheck = now
+        ytdlp.scripts += Script.Hang(mapOf("x.webm.part" to ByteArray(10)))
+        val runs = runs()
+        val heard = Heard()
+        val run = runs.start(song, heard)
+        runCurrent()
+        // KJB's Cancel, as it came before: the run kept its parts, then the key was discarded while it was still stopping.
+        runs.cancel(run, keepParts = true)
+        runs.discard("k1")
+        runCurrent()
+
+        assertEquals(DlEnd.Stopped, heard.end)
+        assertFalse(File(root, "k1").exists())
+    }
+
+    @Test
+    fun `a folder a discard could not delete is swept at the next start, whatever its age`() = runTest {
+        val left = File(root, "k9").apply { mkdirs() }
+        File(left, "x.part").writeBytes(ByteArray(1))
+        File(left, DlRuns.DISCARDED).writeText("")
+        val kept = File(root, "k8").apply { mkdirs() }
+        File(kept, "x.part").writeBytes(ByteArray(1))
+        left.setLastModified(now)
+        kept.setLastModified(now)
+
+        runs().sweep()
+
+        assertFalse(left.exists())
+        assertTrue(kept.exists())
+    }
 
     @Test
     fun `a request the add-on does not take is refused at once, and so is a second run of a busy key`() = runTest {

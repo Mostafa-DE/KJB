@@ -106,6 +106,7 @@ import app.lyrify.downloads.Downloads
 import app.lyrify.downloads.DownloadsUi
 import app.lyrify.downloads.DuplicateCheck
 import app.lyrify.downloads.ShareLinks
+import app.lyrify.downloads.Thumbnails
 import app.lyrify.dupes.AudioFile
 import app.lyrify.dupes.LibraryRead
 import app.lyrify.dupes.MediaStoreLibrary
@@ -120,9 +121,6 @@ import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.io.IOException
-import java.net.HttpURLConnection
-import java.net.URL
 
 // The Tools row
 
@@ -437,6 +435,7 @@ private fun failureSentence(reason: DownloadFailure): Int = when (reason) {
     DownloadFailure.ADDON_GONE -> R.string.dl_failed_addon_detail
     DownloadFailure.NO_ADDON -> R.string.dl_failed_no_addon_detail
     DownloadFailure.NOT_ALLOWED -> R.string.dl_failed_not_allowed_detail
+    DownloadFailure.LOCAL_ADDRESS -> R.string.dl_failed_local_detail
     DownloadFailure.UNKNOWN -> R.string.dl_failed_unknown_detail
 }
 
@@ -845,46 +844,17 @@ private fun VideoSheet(choices: List<VideoChoice>, onDismiss: () -> Unit, onPick
     }
 }
 
-/** A thumbnail over https, at most [THUMBNAIL_BYTES], scaled down as it is decoded; null when it can't be had. */
+/** The link's cover ([Thumbnails.fetch]: https, a host on the internet, 2 MB at most), scaled down as it is decoded. */
 private fun thumbnail(url: String): ImageBitmap? {
-    if (!url.startsWith("https://", ignoreCase = true)) return null
-    val connection = try {
-        URL(url).openConnection() as HttpURLConnection
-    } catch (_: IOException) {
-        return null
-    }
-    return try {
-        connection.connectTimeout = THUMBNAIL_TIMEOUT_MS
-        connection.readTimeout = THUMBNAIL_TIMEOUT_MS
-        connection.instanceFollowRedirects = false
-        if (connection.responseCode != HttpURLConnection.HTTP_OK) return null
-        val bytes = connection.inputStream.use { input -> input.readNBytesCapped(THUMBNAIL_BYTES) } ?: return null
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
-        val sample = generateSequence(1) { it * 2 }.first { maxOf(bounds.outWidth, bounds.outHeight) / it <= THUMBNAIL_SIDE }
-        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })?.asImageBitmap()
-    } catch (_: IOException) {
-        null
-    } finally {
-        connection.disconnect()
-    }
-}
-
-/** At most [max] bytes of this stream; null when there are more. */
-private fun java.io.InputStream.readNBytesCapped(max: Int): ByteArray? {
-    val out = java.io.ByteArrayOutputStream()
-    val buffer = ByteArray(16 * 1024)
-    while (true) {
-        val read = read(buffer)
-        if (read < 0) return out.toByteArray()
-        if (out.size() + read > max) return null
-        out.write(buffer, 0, read)
-    }
+    val bytes = Thumbnails.fetch(url) ?: return null
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+    val sample = generateSequence(1) { it * 2 }.first { maxOf(bounds.outWidth, bounds.outHeight) / it <= THUMBNAIL_SIDE }
+    return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })?.asImageBitmap()
 }
 
 /** Where the sheets let go of the add-on once they have closed. */
 private val closing = CoroutineScope(SupervisorJob() + Dispatchers.IO + logFailures)
 
-private const val THUMBNAIL_BYTES = 2 * 1024 * 1024
 private const val THUMBNAIL_SIDE = 512
-private const val THUMBNAIL_TIMEOUT_MS = 5_000

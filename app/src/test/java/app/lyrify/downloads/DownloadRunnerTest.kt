@@ -22,6 +22,7 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -30,6 +31,10 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
+import java.io.IOException
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.StandardCopyOption
 
 /**
  * One download from KJB's side: the run in the add-on followed with a watchdog, the file streamed into the part file KJB
@@ -54,6 +59,10 @@ class DownloadRunnerTest {
         addedAt = 1,
         state = DownloadState.Queued,
     )
+    private companion object {
+        val TAGS = "TAGS".toByteArray()
+    }
+
     private val file = DlFile("The Quiet Hours - Paper Lantern.mp3", 1_000, 50, DlMeta(title = "Paper Lantern", artist = "The Quiet Hours", album = "Paper Lantern"), 214)
 
     // The fakes
@@ -247,9 +256,14 @@ class DownloadRunnerTest {
         var library: List<AudioFile>? = emptyList()
         var lyrics: LocalTrack? = null
 
-        override suspend fun tag(part: File, fields: Map<String, List<String>>, cover: File?): Boolean {
+        /** Where the tag engine was given the song: KJB's own files, never the shared folder. */
+        var taggedAt: File? = null
+
+        override suspend fun tag(song: File, fields: Map<String, List<String>>, cover: File?): Boolean {
             calls += "tag cover=${cover != null}"
             tagged = fields
+            taggedAt = song
+            if (tags) song.appendBytes(TAGS)
             return tags
         }
 
@@ -268,8 +282,14 @@ class DownloadRunnerTest {
         }
     }
 
-    private fun files(writes: SharedWrites = SharedWrites.ANYWHERE, allowed: Boolean = true) =
-        DownloadFiles(temp.root.resolve("storage"), File(temp.root, "private"), writes, canWrite = { allowed })
+    private fun files(
+        writes: SharedWrites = SharedWrites.ANYWHERE,
+        allowed: Boolean = true,
+        copy: (Path, Path) -> Unit = { from, to -> Files.copy(from, to, StandardCopyOption.REPLACE_EXISTING) },
+        freeName: (File, String) -> File = DownloadFolders::free,
+    ) = DownloadFiles(temp.root.resolve("storage"), File(temp.root, "private"), writes, canWrite = { allowed }, copy = copy, freeName = freeName)
+
+    private val storage: File get() = temp.root.resolve("storage")
 
     private fun saved(path: String, title: String, seconds: Int, id: Long) = AudioFile(id, path, "Music/KJB Downloads/", File(path).name, title, "The Quiet Hours", null, seconds * 1000L, 1_000)
 
@@ -368,6 +388,105 @@ class DownloadRunnerTest {
         val outcome = DownloadFinish(files, Steps()).finish(item, target, file) as DownloadOutcome.Saved
 
         assertEquals("The Quiet Hours - Paper Lantern (2).mp3", File(outcome.path).name)
+    }
+
+    @Test
+    fun `the tag engine works on a private copy, and the tagged song replaces the part whole`() = runTest {
+        val files = files()
+        val target = (files.open(item, file, DownloadSettings()) as Opened.Ready).target
+        target.part.writeBytes(ByteArray(1_000))
+        val steps = Steps()
+
+        val outcome = DownloadFinish(files, steps).finish(item, target, file) as DownloadOutcome.Saved
+
+        assertTrue(steps.taggedAt!!.path.startsWith(temp.root.resolve("private").path))
+        assertArrayEquals(ByteArray(1_000) + TAGS, File(outcome.path).readBytes())
+        assertFalse(steps.taggedAt!!.exists())
+    }
+
+    @Test
+    fun `a tagged copy that breaks on its way back leaves the original song, which is saved whole`() = runTest {
+        // Copying into the shared folder writes half, then the disk fails.
+        val breaking: (Path, Path) -> Unit = { from, to ->
+            if (to.startsWith(storage.toPath())) {
+                Files.write(to, Files.readAllBytes(from).copyOf(300))
+                throw IOException("write failed: EIO")
+            }
+            Files.copy(from, to, StandardCopyOption.REPLACE_EXISTING)
+        }
+        val files = files(copy = breaking)
+        val target = (files.open(item, file, DownloadSettings()) as Opened.Ready).target
+        val original = ByteArray(1_000) { (it % 7).toByte() }
+        target.part.writeBytes(original)
+
+        val outcome = DownloadFinish(files, Steps()).finish(item, target, file) as DownloadOutcome.Saved
+
+        assertArrayEquals(original, File(outcome.path).readBytes())
+        assertEquals(listOf(File(outcome.path).name), target.final.parentFile!!.list()!!.toList())
+    }
+
+    @Test
+    fun `a cover larger than KJB's covers take is never opened, nor read`() = runTest {
+        val files = files()
+        val big = file.copy(coverBytes = DownloadFiles.MAX_COVER_BYTES + 1L)
+        assertNull((files.open(item, big, DownloadSettings()) as Opened.Ready).target.cover)
+
+        val target = (files.open(item, file, DownloadSettings()) as Opened.Ready).target
+        target.part.writeBytes(ByteArray(1_000))
+        target.cover!!.writeBytes(ByteArray(DownloadFiles.MAX_COVER_BYTES + 1))
+        val steps = Steps()
+        DownloadFinish(files, steps).finish(item, target, file)
+
+        assertEquals("tag cover=false", steps.calls.first())
+    }
+
+    @Test
+    fun `publishing never replaces a file that took the name after it was found free`() = runTest {
+        var asked = 0
+        // The first free name is taken by another app right after it was picked.
+        val racing: (File, String) -> File = { folder, name ->
+            if (asked++ == 0) File(folder, name).also { it.writeText("another app's") } else DownloadFolders.free(folder, name)
+        }
+        val files = files(freeName = racing)
+        val target = (files.open(item, file, DownloadSettings()) as Opened.Ready).target
+        target.part.writeBytes(ByteArray(1_000))
+
+        val outcome = DownloadFinish(files, Steps().apply { tags = false }).finish(item, target, file) as DownloadOutcome.Saved
+
+        assertEquals("another app's", target.final.readText())
+        assertEquals("The Quiet Hours - Paper Lantern (2).mp3", File(outcome.path).name)
+        assertEquals(1_000L, File(outcome.path).length())
+    }
+
+    @Test
+    fun `a name from the add-on keeps its file in its folder, with an extension KJB knows`() {
+        val files = files()
+        val folder = storage.resolve("Music/KJB Downloads")
+
+        val sneaky = (files.open(item, file.copy(name = "song.mp3/../../../evil"), DownloadSettings()) as Opened.Ready).target
+        val odd = (files.open(item, file.copy(name = "song.exe"), DownloadSettings()) as Opened.Ready).target
+
+        assertEquals(folder.canonicalFile, sneaky.final.canonicalFile.parentFile)
+        assertEquals(folder.canonicalFile, sneaky.part.canonicalFile.parentFile)
+        assertTrue(sneaky.final.name, sneaky.final.name.endsWith(".mp3"))
+        assertEquals("song.mp3", odd.final.name)
+    }
+
+    @Test
+    fun `the user's Cancel tells the add-on to delete what it got, a pause keeps it`() = runTest {
+        var userCancelled = true
+        val outcome = backgroundScope.async { DownloadRunner(port, death, saver, keepOnCancel = { !userCancelled }).run(item) {} }
+        runCurrent()
+        outcome.cancel()
+        runCurrent()
+        assertEquals("cancel 7 keep=false", port.calls.last())
+
+        userCancelled = false
+        val paused = backgroundScope.async { DownloadRunner(port, death, saver, keepOnCancel = { !userCancelled }).run(item) {} }
+        runCurrent()
+        paused.cancel()
+        runCurrent()
+        assertEquals("cancel 7 keep=true", port.calls.last())
     }
 
     @Test

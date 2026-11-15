@@ -20,7 +20,9 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.io.IOException
+import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Files
+import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 
 /** How one download ended on KJB's side. */
@@ -62,6 +64,7 @@ class DownloadRunner(
     private val death: Deferred<Unit>,
     private val saver: DownloadSaver,
     private val stallMs: Long = STALL_MS,
+    private val keepOnCancel: () -> Boolean = { true },
 ) {
     private sealed interface Event {
         data class Progress(val progress: DlProgress) : Event
@@ -105,7 +108,8 @@ class DownloadRunner(
             } catch (e: CancellationException) {
                 withContext(NonCancellable) {
                     try {
-                        port.cancel(run, keepParts = true)
+                        // The user's Cancel: what the add-on got goes; Android's pause: it stays for the next run.
+                        port.cancel(run, keepParts = keepOnCancel())
                     } catch (_: AddonDiedException) {
                         // Gone, and its processes with it.
                     }
@@ -197,19 +201,65 @@ class DownloadFiles(
     private val private: File,
     private val writes: SharedWrites,
     private val canWrite: () -> Boolean,
+    private val copy: (Path, Path) -> Unit = { from, to -> Files.copy(from, to, StandardCopyOption.REPLACE_EXISTING) },
+    private val freeName: (File, String) -> File = DownloadFolders::free,
 ) {
+    companion object {
+        /** The largest cover KJB takes: what Covers & tags' pipeline decodes (MetaClient's Body.IMAGE). */
+        const val MAX_COVER_BYTES: Int = 2 * 1024 * 1024
+
+        /** How many times a name taken meanwhile is passed over for the next free one. */
+        private const val NAME_TRIES = 20
+    }
+
+    /** A private copy of [part] for the tag engine (it writes only KJB's own files), as a `.ext` file; null when it can't be made. */
+    fun privateCopy(part: File, ext: String): File? {
+        val copied = File(private, "tagging.$ext")
+        return try {
+            private.mkdirs()
+            copy(part.toPath(), copied.toPath())
+            copied
+        } catch (_: IOException) {
+            copied.delete()
+            null
+        }
+    }
+
+    /**
+     * [tagged] in place of [part], whole or not at all: copied beside it (hidden too), then moved over it in one rename. On
+     * any failure [part] stays as it was, the untagged song, and nothing half-copied is ever published.
+     */
+    fun replacePart(part: File, tagged: File): Boolean {
+        val beside = File(part.parentFile, "${part.name}.tagged")
+        if (!writes.allows(SharedWrite.DOWNLOAD_SAVE, beside.path)) return false
+        return try {
+            copy(tagged.toPath(), beside.toPath())
+            Files.move(beside.toPath(), part.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+            true
+        } catch (_: IOException) {
+            if (writes.allows(SharedWrite.DOWNLOAD_DELETE, beside.path)) beside.delete()
+            false
+        }
+    }
+
     fun open(item: DownloadItem, file: DlFile, settings: DownloadSettings): Opened {
         if (!canWrite()) return Opened.Refused(DownloadFailure.NOT_ALLOWED)
-        val ext = file.name.substringAfterLast('.', "").lowercase().ifEmpty { if (item.kind == DlKind.AUDIO) "mp3" else "mp4" }
+        val ext = DownloadFolders.extension(file.name, item.kind)
         val folder = File(DownloadFolders.absolute(settings, item.kind, volume.path, writes.testFolderOnly))
+        // A name for now; publish takes the one free then.
         val final = DownloadFolders.free(folder, DownloadFolders.safeName(file.name, ext))
         val part = File(folder, ".${final.name}.part")
-        if (!writes.allows(SharedWrite.DOWNLOAD_SAVE, final.path) || !writes.allows(SharedWrite.DOWNLOAD_SAVE, part.path)) return Opened.Refused(DownloadFailure.NOT_ALLOWED)
+        // Both in the folder itself, whatever the add-on named the file.
+        val inFolder = listOf(final, part).all { it.canonicalFile.parentFile == folder.canonicalFile }
+        if (!inFolder || !writes.allows(SharedWrite.DOWNLOAD_SAVE, final.path) || !writes.allows(SharedWrite.DOWNLOAD_SAVE, part.path)) {
+            return Opened.Refused(DownloadFailure.NOT_ALLOWED)
+        }
         return try {
             folder.mkdirs()
             part.delete()
             if (!part.createNewFile()) return Opened.Refused(DownloadFailure.NOT_ALLOWED)
-            val cover = file.coverBytes?.let { File(private.apply { mkdirs() }, "${item.key}.jpg") }
+            // A cover larger than KJB takes is not asked for: the add-on streams nothing into it.
+            val cover = file.coverBytes?.takeIf { it in 1..MAX_COVER_BYTES }?.let { File(private.apply { mkdirs() }, "${item.key}.jpg") }
             Opened.Ready(Target(part, cover, final))
         } catch (_: IOException) {
             Opened.Refused(DownloadFailure.NOT_ALLOWED)
@@ -218,16 +268,32 @@ class DownloadFiles(
         }
     }
 
-    /** The whole [target] under its name, or the next free one; null when it could not be moved there. */
+    /**
+     * The whole [target] under its name, or the next free one; null when it could not be moved there. The name is taken
+     * by creating the file (it fails when any file or link has it, so nothing is ever replaced), then the part is moved
+     * over that empty file of its own; a name taken in between is passed over for the next.
+     */
     fun publish(target: Target): File? {
-        val final = if (target.final.exists()) DownloadFolders.free(target.final.parentFile!!, target.final.name) else target.final
-        if (!writes.allows(SharedWrite.DOWNLOAD_SAVE, final.path)) return null
-        return try {
-            Files.move(target.part.toPath(), final.toPath(), StandardCopyOption.ATOMIC_MOVE)
-            final
-        } catch (_: IOException) {
-            null
+        val folder = target.final.parentFile ?: return null
+        repeat(NAME_TRIES) {
+            val final = freeName(folder, target.final.name)
+            if (!writes.allows(SharedWrite.DOWNLOAD_SAVE, final.path)) return null
+            try {
+                Files.createFile(final.toPath())
+            } catch (_: FileAlreadyExistsException) {
+                return@repeat
+            } catch (_: IOException) {
+                return null
+            }
+            return try {
+                Files.move(target.part.toPath(), final.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+                final
+            } catch (_: IOException) {
+                if (writes.allows(SharedWrite.DOWNLOAD_DELETE, final.path)) final.delete()
+                null
+            }
         }
+        return null
     }
 
     fun abandon(target: Target) {
@@ -239,7 +305,7 @@ class DownloadFiles(
 /** What finishing a download needs from the phone: KJB's tag engine, the media scan, the library, the lyrics pipeline. */
 interface FinishSteps {
     /** Writes [fields] and the front cover from [cover] into [part] with KJB's tag engine; false when it could not. */
-    suspend fun tag(part: File, fields: Map<String, List<String>>, cover: File?): Boolean
+    suspend fun tag(song: File, fields: Map<String, List<String>>, cover: File?): Boolean
 
     /** Tells MediaStore about [saved] and waits for it, so the library shows it at once. */
     suspend fun scan(saved: File, mime: String)
@@ -271,7 +337,13 @@ class DownloadFinish(private val files: DownloadFiles, private val steps: Finish
         }
         val audio = item.kind == DlKind.AUDIO
         val fields = DownloadTags.fields(item, file)
-        if (audio && !steps.tag(target.part, fields, target.cover?.takeIf { it.isFile })) log("downloads: tags not written, yt-dlp's kept")
+        if (audio) {
+            val copy = files.privateCopy(target.part, target.final.extension)
+            val cover = target.cover?.takeIf { it.isFile && it.length() in 1..DownloadFiles.MAX_COVER_BYTES.toLong() }
+            val tagged = copy != null && steps.tag(copy, fields, cover) && files.replacePart(target.part, copy)
+            copy?.delete()
+            if (!tagged) log("downloads: tags not written, yt-dlp's kept")
+        }
         target.cover?.delete()
         val saved = files.publish(target) ?: run {
             files.abandon(target)

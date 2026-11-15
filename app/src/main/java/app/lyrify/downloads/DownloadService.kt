@@ -23,7 +23,6 @@ import app.lyrify.Lyrify
 import app.lyrify.R
 import app.lyrify.addon.AddonDiedException
 import app.lyrify.addon.AddonState
-import app.lyrify.data.SharedWrite
 import app.lyrify.dl.api.AudioQuality
 import app.lyrify.dl.api.DlKind
 import app.lyrify.dl.api.DlProgress
@@ -69,8 +68,6 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.io.IOException
-import java.nio.file.Files
-import java.nio.file.StandardCopyOption
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.coroutines.resume
@@ -289,7 +286,7 @@ class DownloadService : Service() {
     private suspend fun queue() {
         try {
             val steps = PhoneSteps(this)
-            val files = DownloadFiles(Environment.getExternalStorageDirectory(), File(filesDir, "download-covers"), Lyrify.writes, Environment::isExternalStorageManager)
+            val files = DownloadFiles(Environment.getExternalStorageDirectory(), File(filesDir, "downloads"), Lyrify.writes, Environment::isExternalStorageManager)
             while (true) {
                 val item = Downloads.next(this)
                 if (item == null) {
@@ -311,36 +308,39 @@ class DownloadService : Service() {
     }
 
     /** One download through the add-on; null when the user cancelled it. Paused (the service stopped), it goes back to the queue. */
-    private suspend fun one(item: DownloadItem, saver: DownloadFinish): DownloadOutcome? {
-        val session = when (val connection = DlAddon.connect(this)) {
-            is DlConnection.Open -> connection.session
+    private suspend fun one(item: DownloadItem, saver: DownloadFinish): DownloadOutcome? = try {
+        when (val connection = DlAddon.connect(this)) {
+            is DlConnection.Open -> connection.session.use { session -> run(item, session, saver) }
             is DlConnection.Closed -> {
                 val reason = if (connection.state == AddonState.Unreachable) DownloadFailure.ADDON_GONE else DownloadFailure.NO_ADDON
                 Downloads.failQueued(this, reason)
-                return DownloadOutcome.Failed(reason)
+                DownloadOutcome.Failed(reason)
             }
         }
-        return session.use {
-            try {
-                coroutineScope {
-                    val run = async { DownloadRunner(session.port, session.death, saver).run(item) { progress -> shown(item, progress) } }
-                    Downloads.running(item.key, run)
-                    if (Downloads.isCancelled(item.key)) run.cancel()
-                    try {
-                        run.await()
-                    } catch (e: CancellationException) {
-                        // Only this download was cancelled (the user): the service goes on with the next.
-                        if (currentCoroutineContext().isActive) null else throw e
-                    } finally {
-                        Downloads.running(null, null)
-                    }
-                }.also { if (it == null && Downloads.wasCancelled(item.key)) discard(session, item.key) }
-            } catch (e: CancellationException) {
-                withContext(NonCancellable) { Downloads.paused(this@DownloadService, item.key) }
-                throw e
-            }
-        }
+    } catch (e: CancellationException) {
+        // Stopped while it bound the add-on or ran (Android's limit): back to the queue, never left running.
+        withContext(NonCancellable) { Downloads.paused(this@DownloadService, item.key) }
+        throw e
     }
+
+    /**
+     * [item] in the add-on over [session]; null when the user cancelled it, and then the add-on deletes what it got (its
+     * Cancel says so, and the discard after it covers a run that was still stopping).
+     */
+    private suspend fun run(item: DownloadItem, session: DlSession, saver: DownloadFinish): DownloadOutcome? = coroutineScope {
+        val keepOnCancel = { !Downloads.isCancelled(item.key) }
+        val run = async { DownloadRunner(session.port, session.death, saver, keepOnCancel = keepOnCancel).run(item) { progress -> shown(item, progress) } }
+        Downloads.running(item.key, run)
+        if (Downloads.isCancelled(item.key)) run.cancel()
+        try {
+            run.await()
+        } catch (e: CancellationException) {
+            // Only this download was cancelled (the user): the service goes on with the next.
+            if (currentCoroutineContext().isActive) null else throw e
+        } finally {
+            Downloads.running(null, null)
+        }
+    }.also { if (it == null && Downloads.wasCancelled(item.key)) discard(session, item.key) }
 
     private fun discard(session: DlSession, key: String) {
         try {
@@ -491,6 +491,7 @@ internal object DownloadNotices {
         DownloadFailure.ADDON_GONE -> R.string.dl_failed_addon
         DownloadFailure.NO_ADDON -> R.string.dl_failed_no_addon
         DownloadFailure.NOT_ALLOWED -> R.string.dl_failed_not_allowed
+        DownloadFailure.LOCAL_ADDRESS -> R.string.dl_failed_local
         DownloadFailure.UNKNOWN -> R.string.dl_failed_unknown
     }
 }
@@ -500,32 +501,25 @@ internal object DownloadNotices {
  * & tags' pipeline), the media scan, MediaStore's songs for the Duplicates check, and the lyrics pipeline.
  */
 internal class PhoneSteps(private val context: Context) : FinishSteps {
-    private val work = File(context.filesDir, "download-tags")
     private val tags = TagLibFile(context.filesDir)
     private val covers = CoverPipeline(AndroidImageCodec)
 
     /**
-     * TagLib writes only KJB's private copies: the part file is copied in, tagged (an MP3 as ID3v2.3), and copied back
-     * over the part, which is still hidden. False leaves yt-dlp's own tags.
+     * Writes [fields] and the cover into [song], KJB's private copy of a download (TagLib writes only those): an MP3 as
+     * ID3v2.3. The cover is read only when it is within what Covers & tags' pipeline takes ([DownloadFiles.MAX_COVER_BYTES]).
+     * False leaves yt-dlp's own tags.
      */
-    override suspend fun tag(part: File, fields: Map<String, List<String>>, cover: File?): Boolean = withContext(Dispatchers.IO) {
-        if (!Lyrify.writes.allows(SharedWrite.DOWNLOAD_SAVE, part.path)) return@withContext false
-        val ext = part.name.removeSuffix(".part").substringAfterLast('.', "mp3").lowercase()
-        val copy = File(work.apply { mkdirs() }, "song.$ext")
+    override suspend fun tag(song: File, fields: Map<String, List<String>>, cover: File?): Boolean = withContext(Dispatchers.IO) {
         try {
-            Files.copy(part.toPath(), copy.toPath(), StandardCopyOption.REPLACE_EXISTING)
-            val read = tags.read(copy) ?: return@withContext false
-            val image = cover?.readBytes()?.let { if (ext == "opus") covers.prepareOpus(it) else covers.prepare(it) }
+            val read = tags.read(song) ?: return@withContext false
+            val bytes = cover?.takeIf { it.length() in 1..DownloadFiles.MAX_COVER_BYTES.toLong() }?.readBytes()
+            val image = bytes?.let { if (song.extension.equals("opus", ignoreCase = true)) covers.prepareOpus(it) else covers.prepare(it) }
             val front = image?.let { CoverEdit.Replace(TagPicture(it.jpeg, "", FRONT_COVER, "image/jpeg")) } ?: CoverEdit.Keep
             val applied = TagEdit(fields, cover = front).applyTo(read)
-            if (!tags.write(copy, applied.fields, applied.pictures, Id3Version.V2_3)) return@withContext false
-            Files.copy(copy.toPath(), part.toPath(), StandardCopyOption.REPLACE_EXISTING)
-            true
+            tags.write(song, applied.fields, applied.pictures, Id3Version.V2_3)
         } catch (e: IOException) {
             Log.w(LOG_TAG, "downloads: tags not written (${e.javaClass.simpleName})")
             false
-        } finally {
-            copy.delete()
         }
     }
 

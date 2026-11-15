@@ -79,6 +79,7 @@
     <string name="dl_failed_addon">Add-on stopped</string>
     <string name="dl_failed_no_addon">Add-on missing</string>
     <string name="dl_failed_not_allowed">Can\'t save there</string>
+    <string name="dl_failed_local">Local address</string>
     <string name="dl_failed_unknown">Didn\'t work</string>
     <string name="dl_failed_offline_detail">Your phone is offline, or the site can\'t be reached. Retry once you are back online.</string>
     <string name="dl_failed_not_found_detail">There is no video at that link: it was removed, it is private, or the site is not one KJB can save from.</string>
@@ -89,6 +90,7 @@
     <string name="dl_failed_addon_detail">The Downloads add-on stopped. Retry goes on from what was downloaded.</string>
     <string name="dl_failed_no_addon_detail">Downloads needs its add-on. Get it on the Downloads page, then Retry.</string>
     <string name="dl_failed_not_allowed_detail">KJB may not save in that folder. Check All files access, or pick another folder in Settings.</string>
+    <string name="dl_failed_local_detail">KJB saves only from sites on the internet, never from your phone or your home network.</string>
     <string name="dl_failed_unknown_detail">Something went wrong. Retry, or update the downloader in Settings.</string>
 
     <!-- The share sheet -->

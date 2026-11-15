@@ -9,6 +9,7 @@ import app.lyrify.dl.api.DlProgress
 import app.lyrify.dl.api.DlRequest
 import app.lyrify.dl.api.DlStage
 import app.lyrify.dl.api.DlUpdate
+import app.lyrify.dl.api.PublicAddresses
 import app.lyrify.dl.api.isDownloadKey
 import app.lyrify.dl.api.isWebLink
 import kotlinx.coroutines.CancellationException
@@ -30,6 +31,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 import java.io.OutputStream
+import java.net.InetAddress
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.CoroutineContext
 
@@ -113,6 +115,8 @@ class DlRuns(
     /** Where files are read and streamed. */
     private val io: CoroutineContext = Dispatchers.IO,
     private val log: (String) -> Unit = {},
+    /** A host's addresses (DNS); a fake in tests. */
+    private val resolve: (String) -> List<InetAddress> = { InetAddress.getAllByName(it).toList() },
 ) {
     private val lock = Any()
     private var nextId = 1L
@@ -183,17 +187,36 @@ class DlRuns(
         looking.forEach { it.cancel() }
     }
 
-    /** Deletes what the runs of [key] left, unless one runs now. */
+    /**
+     * Deletes what the runs of [key] left. A run of it still under way (or still stopping) is stopped and deletes its
+     * folder as it ends; the folder is marked ([DISCARDED]) too, so the next [sweep] deletes it if the process goes first.
+     */
     fun discard(key: String) {
-        if (!isDownloadKey(key) || synchronized(lock) { runs.values.any { it.request.key == key } }) return
-        File(folder, key).deleteRecursively()
+        if (!isDownloadKey(key)) return
+        val dir = File(folder, key)
+        val live = synchronized(lock) { runs.values.firstOrNull { it.request.key == key } }
+        if (live == null) {
+            dir.deleteRecursively()
+            return
+        }
+        live.keepParts = false
+        live.job.cancel()
+        try {
+            if (dir.isDirectory) File(dir, DISCARDED).createNewFile()
+        } catch (e: IOException) {
+            log("discard: not marked (${e.javaClass.simpleName})")
+        }
     }
 
-    /** Deletes the folders of runs untouched for a week: a download KJB never came back to. */
+    /**
+     * Deletes the folders no run will come back to, at the add-on's start: those a discard marked, and those untouched for a
+     * week (a download KJB never came back to).
+     */
     fun sweep() {
         val live = synchronized(lock) { runs.values.map { it.request.key }.toSet() }
         val now = clock()
-        folder.listFiles()?.filter { it.isDirectory && it.name !in live && now - it.lastModified() > SWEEP_AFTER_MS }?.forEach { it.deleteRecursively() }
+        folder.listFiles()?.filter { it.isDirectory && it.name !in live && (File(it, DISCARDED).exists() || now - it.lastModified() > SWEEP_AFTER_MS) }
+            ?.forEach { it.deleteRecursively() }
     }
 
     private suspend fun body(run: Run) {
@@ -221,6 +244,7 @@ class DlRuns(
     /** The run's way to its end: update when due, yt-dlp, once more after an update, then the hand-off. */
     private suspend fun download(run: Run, dir: File): DlEnd {
         val events = run.events
+        if (notPublic(run.request.url)) return DlEnd.Failed(DlFailure.LOCAL_ADDRESS)
         if (!ytdlp.ready()) return DlEnd.Failed(DlFailure.ENGINE)
         var checked = false
         if (UpdatePolicy.beforeRun(memory.lastCheck, clock())) {
@@ -333,6 +357,10 @@ class DlRuns(
             events.onFailed(DlEnd.Failed(DlFailure.REFUSED))
             return@coroutineScope
         }
+        if (notPublic(url)) {
+            events.onFailed(DlEnd.Failed(DlFailure.LOCAL_ADDRESS))
+            return@coroutineScope
+        }
         val told = Any()
         var full = false
         val quick = launch {
@@ -357,6 +385,13 @@ class DlRuns(
             }
         }
     }
+
+    /**
+     * Whether [url]'s host resolves to an address not on the internet (this phone, the home network, a cloud's metadata
+     * address): a shared link must never make yt-dlp reach those. One that does not resolve goes on, to fail as offline.
+     * yt-dlp follows a site's redirects itself, past this check; only the link's own host is checked here.
+     */
+    private suspend fun notPublic(url: String): Boolean = withContext(io) { PublicAddresses.of(url, resolve) } == PublicAddresses.Verdict.NOT_PUBLIC
 
     /** Update now (Settings): refused while a download or lookup uses yt-dlp. */
     suspend fun update(): DlUpdate {
@@ -422,6 +457,9 @@ class DlRuns(
 
         /** Progress goes to KJB at most this often, a new stage at once: yt-dlp writes many lines a second. */
         const val PROGRESS_EVERY_MS: Long = 500
+
+        /** The mark of a folder a discard could not delete yet, because its run was still stopping ([sweep] deletes it). */
+        const val DISCARDED: String = ".discarded"
 
         /** A run's folder untouched this long goes ([sweep]). */
         const val SWEEP_AFTER_MS: Long = 7 * 24 * 60 * 60_000L

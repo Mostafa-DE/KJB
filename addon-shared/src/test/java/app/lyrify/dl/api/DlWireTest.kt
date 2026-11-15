@@ -75,6 +75,59 @@ class DlWireTest {
     }
 
     @Test
+    fun `a link to this phone or a literal private address is never a web link`() {
+        listOf(
+            "http://localhost/x",
+            "https://LOCALHOST:8080/",
+            "http://app.localhost/",
+            "http://127.0.0.1/",
+            "http://127.8.9.10/x",
+            "https://10.0.0.5/",
+            "http://172.20.1.1/",
+            "http://192.168.1.1/admin",
+            "http://169.254.169.254/latest",
+            "http://0.0.0.0/",
+            "http://224.0.0.1/",
+            "http://[::1]/",
+            "http://[fe80::1]/",
+            "http://[fd00::1]/",
+            "http://[::ffff:127.0.0.1]/",
+            // The forms inet_aton reads, which yt-dlp's Python resolves to the same addresses.
+            "http://127.1/",
+            "http://2130706433/",
+            "http://0x7f.0.0.1/",
+            "http://0177.0.0.1/",
+            "http://0xc0.0xa8.1.1/",
+        ).forEach { assertFalse(it, isWebLink(it)) }
+        assertTrue(isWebLink("https://93.184.216.34/v"))
+        assertTrue(isWebLink("https://[2606:4700::1111]/v"))
+    }
+
+    @Test
+    fun `an address is public unless it is this phone, a home or office network, link-local or multicast`() {
+        fun address(text: String) = java.net.InetAddress.getByName(text)
+        listOf("127.0.0.1", "10.1.2.3", "172.16.0.1", "172.31.255.255", "192.168.0.10", "169.254.1.1", "0.0.0.0", "224.0.0.251", "255.255.255.255", "100.64.0.1", "::1", "::", "fe80::1", "fc00::1", "fd12::1", "ff02::1", "::ffff:10.0.0.1")
+            .forEach { assertFalse(it, PublicAddresses.isPublic(address(it))) }
+        listOf("93.184.216.34", "172.15.0.1", "172.32.0.1", "8.8.8.8", "2606:4700::1111").forEach { assertTrue(it, PublicAddresses.isPublic(address(it))) }
+    }
+
+    @Test
+    fun `a host is public only when every address it resolves to is, and one that does not resolve is not known`() {
+        val dns = mapOf(
+            "video.example.com" to listOf("93.184.216.34"),
+            "mixed.example.com" to listOf("93.184.216.34", "192.168.1.1"),
+            "rebind.example.com" to listOf("127.0.0.1"),
+        ).mapValues { (_, list) -> list.map { java.net.InetAddress.getByName(it) } }
+        val resolve: (String) -> List<java.net.InetAddress> = { host -> dns[host] ?: throw java.net.UnknownHostException(host) }
+
+        assertEquals(PublicAddresses.Verdict.PUBLIC, PublicAddresses.of("https://video.example.com/v", resolve))
+        assertEquals(PublicAddresses.Verdict.NOT_PUBLIC, PublicAddresses.of("https://mixed.example.com/v", resolve))
+        assertEquals(PublicAddresses.Verdict.NOT_PUBLIC, PublicAddresses.of("https://rebind.example.com/v", resolve))
+        assertEquals(PublicAddresses.Verdict.UNKNOWN, PublicAddresses.of("https://offline.example.com/v", resolve))
+        assertEquals(PublicAddresses.Verdict.NOT_PUBLIC, PublicAddresses.of("not a link", resolve))
+    }
+
+    @Test
     fun `the bind permission carries the add-on's own id`() {
         assertEquals("app.lyrify.dl.permission.BIND_DL", DlNames.permission("app.lyrify.dl"))
         assertEquals("app.lyrify.dl.debug.permission.BIND_DL", DlNames.permission("app.lyrify.dl.debug"))

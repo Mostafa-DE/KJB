@@ -387,7 +387,6 @@ class SharedWritesTest {
             "backup/AutoBackup.kt",
             "backup/M3u.kt",
             "downloads/DownloadRunner.kt",
-            "downloads/DownloadService.kt",
             "dupes/SongTrash.kt",
             "lyrics/LrcEdits.kt",
             "lyrics/LyricsPipeline.kt",

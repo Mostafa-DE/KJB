@@ -38,7 +38,7 @@ class SaveToKjbActivity : ComponentActivity() {
         }
     }
 
-    /** The links in what was shared: its text, then its subject (some apps put the link there). */
+    /** The links in what was shared ([ShareLinks.fromShare]: a share only, its first few kilobytes). */
     private fun links(intent: Intent?): List<String> =
-        (ShareLinks.parse(intent?.getStringExtra(Intent.EXTRA_TEXT)) + ShareLinks.parse(intent?.getStringExtra(Intent.EXTRA_SUBJECT))).distinct()
+        ShareLinks.fromShare(intent?.action, intent?.getCharSequenceExtra(Intent.EXTRA_TEXT), intent?.getCharSequenceExtra(Intent.EXTRA_SUBJECT))
 }

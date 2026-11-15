@@ -14,6 +14,7 @@ import com.yausername.ffmpeg.FFmpeg
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLException
 import com.yausername.youtubedl_android.YoutubeDLRequest
+import com.yausername.youtubedl_common.SharedPrefsHelper
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -23,7 +24,10 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.doubleOrNull
 import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.CoroutineContext
 import kotlin.math.roundToInt
@@ -327,18 +331,45 @@ class LibraryYtdlp(private val context: Context, private val cache: File, privat
         log("killed a run and ${left.size} of its processes")
     }
 
+    /**
+     * yt-dlp's latest stable release, checked ([YtdlpUpdater]: yt-dlp's signature on its SHA2-256SUMS, then the file's
+     * SHA-256) before it replaces the one in place; not the library's own updater, which checks nothing.
+     */
     override suspend fun update(): DlUpdate.Outcome = withContext(io) {
-        try {
-            when (YoutubeDL.getInstance().updateYoutubeDL(context, YoutubeDL.UpdateChannel.STABLE)) {
-                YoutubeDL.UpdateStatus.DONE -> DlUpdate.Outcome.UPDATED
-                YoutubeDL.UpdateStatus.ALREADY_UP_TO_DATE -> DlUpdate.Outcome.CURRENT
-                null -> DlUpdate.Outcome.FAILED
+        val github = GitHubFetch(userAgent = USER_AGENT)
+        YtdlpUpdater(fetch = { uri, max -> github.get(uri, max) }, current = ::version, install = ::install).update()
+            .also { if (it == DlUpdate.Outcome.FAILED) log("yt-dlp update not made; the one in place stays") }
+    }
+
+    /**
+     * Puts a checked [binary] where youtubedl-android runs yt-dlp from, whole or not at all (written beside it, then moved
+     * over it), and records its [tag] where the library keeps its version.
+     */
+    private fun install(tag: String, binary: ByteArray): Boolean {
+        val dir = File(File(context.noBackupFilesDir, YoutubeDL.baseName), YoutubeDL.ytdlpDirName)
+        val next = File(dir, "${YoutubeDL.ytdlpBin}.new")
+        return try {
+            dir.mkdirs()
+            FileOutputStream(next).use { out ->
+                out.write(binary)
+                out.fd.sync()
             }
-        } catch (e: YoutubeDLException) {
-            log("yt-dlp update failed (${(e.cause ?: e).javaClass.simpleName})")
-            DlUpdate.Outcome.FAILED
+            Files.move(next.toPath(), File(dir, YoutubeDL.ytdlpBin).toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+            SharedPrefsHelper.update(context, VERSION_KEY, tag)
+            SharedPrefsHelper.update(context, VERSION_NAME_KEY, tag)
+            true
+        } catch (e: IOException) {
+            log("yt-dlp not put in place (${e.javaClass.simpleName})")
+            next.delete()
+            false
         }
     }
 
     override fun version(): String? = YoutubeDL.getInstance().version(context)
+
+    private companion object {
+        /** Where youtubedl-android keeps yt-dlp's release tag and name (its YoutubeDLUpdater). */
+        const val VERSION_KEY = "dlpVersion"
+        const val VERSION_NAME_KEY = "dlpVersionName"
+    }
 }

@@ -1,5 +1,6 @@
 package app.lyrify.downloads
 
+import android.content.Intent
 import app.lyrify.data.SharedWrites
 import app.lyrify.dl.api.AudioQuality
 import app.lyrify.dl.api.DlFailure
@@ -32,6 +33,19 @@ object ShareLinks {
     /** What may close a sentence or a bracket around a link, never its last character. */
     private const val TRAILING = ".,;:!?)]}…"
 
+    /** How much of a shared text or subject is read: a link is never this long, and nothing more is looked at. */
+    const val MAX_SHARED_CHARS: Int = 8 * 1024
+
+    /**
+     * The links of a share ([Intent.ACTION_SEND] only; the share target is exported, so any app could send another
+     * action): its text, then its subject (some apps put the link there), each read to [MAX_SHARED_CHARS].
+     */
+    fun fromShare(action: String?, text: CharSequence?, subject: CharSequence?): List<String> {
+        if (action != Intent.ACTION_SEND) return emptyList()
+        fun head(value: CharSequence?) = value?.let { it.subSequence(0, minOf(it.length, MAX_SHARED_CHARS)).toString() }
+        return (parse(head(text)) + parse(head(subject))).distinct()
+    }
+
     fun parse(text: String?): List<String> =
         LINK.findAll(text.orEmpty()).map { it.value.trimEnd { char -> char in TRAILING } }.filter(::isWebLink).distinct().toList()
 }
@@ -57,6 +71,9 @@ enum class DownloadFailure {
 
     /** KJB may not save there: no All files access, or the folder is outside what this build may change. */
     NOT_ALLOWED,
+
+    /** The link's host is this phone or the home network: never fetched. */
+    LOCAL_ADDRESS,
     UNKNOWN;
 
     companion object {
@@ -67,6 +84,7 @@ enum class DownloadFailure {
             DlFailure.NO_ROOM -> NO_ROOM
             DlFailure.HAND_OFF -> HAND_OFF
             DlFailure.ENGINE -> ADDON_GONE
+            DlFailure.LOCAL_ADDRESS -> LOCAL_ADDRESS
             DlFailure.REFUSED, DlFailure.UNKNOWN -> UNKNOWN
         }
     }
@@ -177,9 +195,13 @@ object DownloadFolders {
         return if (testFolderOnly) "$root/${SharedWrites.TEST_FOLDER}$folder" else "$root/$folder"
     }
 
-    /** [name] (yt-dlp's, its extension [ext]) as a file name: no path or reserved signs, no leading dot, not too long. */
+    /**
+     * [name] (yt-dlp's) as a file name with the extension [ext] ([extension]): its own extension-like ending taken off,
+     * then no path or reserved signs, no leading dot, not too long.
+     */
     fun safeName(name: String, ext: String): String {
-        val base = name.removeSuffix(".$ext").replace(NOT_IN_NAMES, "_").replace(Regex("\\s+"), " ").trim { it == ' ' || it == '.' }.take(MAX_FILE_NAME).trim()
+        val stem = name.substringAfterLast('.', "").takeIf(EXTENSION_LIKE::matches)?.let { name.substringBeforeLast('.') } ?: name
+        val base = stem.replace(NOT_IN_NAMES, "_").replace(Regex("\\s+"), " ").trim { it == ' ' || it == '.' }.take(MAX_FILE_NAME).trim()
         return "${base.ifEmpty { FALLBACK }}.$ext"
     }
 
@@ -191,6 +213,14 @@ object DownloadFolders {
         val ext = name.substringAfterLast('.', "")
         return generateSequence(2) { it + 1 }.map { File(folder, if (ext.isEmpty()) "$base ($it)" else "$base ($it).$ext") }.first { !it.exists() }
     }
+
+    /** The extensions a saved download may have: what yt-dlp makes of audio and video here. */
+    private val EXTENSIONS = setOf("mp3", "m4a", "opus", "ogg", "webm", "mp4", "mkv")
+    private val EXTENSION_LIKE = Regex("[A-Za-z0-9]{1,8}")
+
+    /** [name]'s extension when it is one KJB knows ([EXTENSIONS]), else its [kind]'s: mp3 or mp4. */
+    fun extension(name: String, kind: DlKind): String =
+        name.substringAfterLast('.', "").lowercase().takeIf { it in EXTENSIONS } ?: if (kind == DlKind.AUDIO) "mp3" else "mp4"
 
     /** The MIME type of a saved file by its extension, for the scan. */
     fun mime(ext: String): String = when (ext.lowercase()) {

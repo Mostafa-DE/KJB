@@ -104,6 +104,7 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.youtubedl.android.library)
     implementation(libs.youtubedl.android.ffmpeg)
+    implementation(libs.youtubedl.android.common)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
