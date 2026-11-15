@@ -43,12 +43,15 @@ import app.lyrify.logFailures
 import app.lyrify.player.Found
 import app.lyrify.player.LibraryTree
 import app.lyrify.player.NameSearch
+import app.lyrify.player.OpenedFiles
 import app.lyrify.player.PlayerCore
 import app.lyrify.player.TreeData
 import app.lyrify.player.TreeNode
 import app.lyrify.player.TreePlay
 import app.lyrify.player.TreeSearch
 import app.lyrify.player.metadataOf
+import app.lyrify.player.openedCoverDir
+import app.lyrify.player.openedCoverKey
 import app.lyrify.player.queueLabel
 import app.lyrify.player.queueLabels
 import app.lyrify.settings.LibrarySettings
@@ -461,19 +464,23 @@ class CoverGrants<C : Any>(
 /** The path of KJB's default cover ([R.drawable.kjb_default_cover]) at [CarCovers]. */
 const val DEFAULT_COVER: String = "default"
 
-/** The path of [song]'s cover at [CarCovers]: its MediaStore id (no path in the uri), or the default cover without one. */
-fun coverPath(song: Song): String = song.ref.mediaStoreId?.toString() ?: DEFAULT_COVER
+/**
+ * The path of [song]'s cover at [CarCovers]: its MediaStore id (no path in the uri), a copy of a file another app opened
+ * by its key ([openedCoverKey]), or the default cover without one.
+ */
+fun coverPath(song: Song): String = song.ref.mediaStoreId?.toString() ?: openedCoverKey(song.path) ?: DEFAULT_COVER
 
 /** The path of the cover a browse item shows at [CarCovers]: a song's, an album's; null for a list of lists (the car's own icons). */
 fun nodeCover(node: TreeNode): String? = node.cover?.let(::coverPath)
 
 /**
  * What [CarCovers] serves at [path]: song [path]'s embedded cover ([embedded], by its MediaStore id) when it may be
- * served ([allowed]: a song in the library) and has one; else the default cover ([fallback]), so a car never shows a
- * gap, and never a cover of anything outside the library.
+ * served ([allowed]: a song in the library) and has one; the cover of the opened copy [path] names ([opened], given only
+ * to KJB's own session, never to a car); else the default cover ([fallback]), so a car never shows a gap, and never a
+ * cover of anything outside the library.
  */
-fun <T : Any> coverFor(path: String, allowed: (Long) -> Boolean, embedded: (Long) -> T?, fallback: () -> T): T =
-    path.toLongOrNull()?.takeIf(allowed)?.let(embedded) ?: fallback()
+fun <T : Any> coverFor(path: String, allowed: (Long) -> Boolean, embedded: (Long) -> T?, opened: (String) -> T? = { null }, fallback: () -> T): T =
+    path.toLongOrNull()?.takeIf(allowed)?.let(embedded) ?: path.takeIf { openedCoverDir(it) != null }?.let(opened) ?: fallback()
 
 /** How long a cover asked for during the library's first read waits for it: on a binder thread, never long. */
 private const val LIBRARY_WAIT_MS = 300L
@@ -576,9 +583,15 @@ class CarCovers : ContentProvider() {
 
         /**
          * The cover at [path] for KJB's own surfaces (the session's bitmap loader, in this process): the song's embedded
-         * cover, else the default cover. No library check: the session hands out only its own songs' paths. Blocking.
+         * cover, or an opened copy's ([OpenedFiles.cover]), else the default cover. No library check: the session hands out
+         * only its own songs' paths. Blocking.
          */
-        fun bitmap(context: Context, path: String?): Bitmap = coverFor(path.orEmpty(), { true }, { embedded(context, it) }) { defaultBitmap(context) }
+        fun bitmap(context: Context, path: String?): Bitmap = coverFor(
+            path.orEmpty(),
+            { true },
+            { embedded(context, it) },
+            { key -> OpenedFiles.coverCopy(context, key)?.let { OpenedFiles.cover(context, it, COVER_PX) }?.let(::capped) },
+        ) { defaultBitmap(context) }
 
         /** [packageName] (a car app) may read every cover, until [revoke] or the phone restarts. */
         fun grant(context: Context, packageName: String) {

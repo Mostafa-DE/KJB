@@ -7,6 +7,7 @@ import app.lyrify.library.song
 import app.lyrify.player.Found
 import app.lyrify.player.QueueSource
 import app.lyrify.player.SourceKind
+import app.lyrify.player.openedCoverDir
 import app.lyrify.settings.PlaybackSettings
 import app.lyrify.settings.Settings
 import kotlinx.coroutines.async
@@ -213,7 +214,13 @@ class CarAccessTest {
         assertEquals("default", serve("99"))
         assertEquals("default", serve(DEFAULT_COVER))
         assertEquals("default", serve("../Music"))
+        // A file another app opened is in no library: a car gets the default for it, and nothing is read.
+        assertEquals("default", serve("opened-1000-0"))
         assertEquals(listOf(20L, 22L), read)
+        // KJB's own session (the notification) gets the copy's own cover, else the default.
+        assertEquals("copy 1000/0", coverFor("opened-1000-0", { true }, { null }, opened = { key -> openedCoverDir(key)?.let { "copy $it" } }) { "default" })
+        assertEquals("default", coverFor("opened-1000-0", { true }, { null }, opened = { null }) { "default" })
+        assertEquals("default", coverFor(DEFAULT_COVER, { true }, { null }, opened = { error("not a copy's key") }) { "default" })
     }
 
     @Test

@@ -293,8 +293,8 @@ private fun LockLyricsScreen(ledger: LedgerState, onClose: () -> Unit) {
                 ChromeIconButton(R.drawable.ic_keyboard_arrow_down, stringResource(R.string.lock_close), onClose, glass = false, size = 48.dp, iconSize = 28.dp, tint = LockText)
                 SongCover(SongArt(path), size = 44.dp, shape = RoundedCornerShape(10.dp))
                 Column(Modifier.weight(1f)) {
-                    Text(ui.song?.title ?: path.substringAfterLast('/'), style = MaterialTheme.typography.titleSmall, color = LockText, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    ui.song?.artist?.takeIf(String::isNotBlank)?.let { Text(it, style = body(13f, 18), color = LockMuted, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                    Text(ui.named?.title ?: path.substringAfterLast('/'), style = MaterialTheme.typography.titleSmall, color = LockText, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    ui.named?.artist?.takeIf(String::isNotBlank)?.let { Text(it, style = body(13f, 18), color = LockMuted, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                 }
             },
             lyrics = {

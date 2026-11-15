@@ -2,6 +2,8 @@ package app.lyrify.player
 
 import android.content.ContentResolver
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.provider.MediaStore
@@ -17,9 +19,12 @@ import app.lyrify.library.SongRef
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -27,7 +32,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.io.IOException
-import java.util.concurrent.ConcurrentHashMap
+import kotlin.math.max
 
 // Audio files other apps open in KJB (features-2026-11-15, item 1): a file manager's View, or its Share of one or several
 // files. They play at once as one queue, "Opened file". Only `content:` addresses are taken, and each is read through the
@@ -57,6 +62,33 @@ fun staleBatches(batches: List<String>, queued: Collection<String>, root: String
     return batches.filter { it != newest && it !in held }.sorted()
 }
 
+/**
+ * The key of an opened copy's cover at KJB's cover provider (`auto/CarBrowse.kt`, CarCovers): its open and its place,
+ * `opened-<open>-<place>` for `.../cache/opened/<open>/<place>/<name>`, never its name or path; null for any other path.
+ */
+fun openedCoverKey(path: String): String? {
+    val parts = path.split('/')
+    if (parts.size < OPENED_DEPTH) return null
+    val (cache, folder, open, place) = parts.subList(parts.size - OPENED_DEPTH, parts.size - 1)
+    if (cache != "cache" || folder != OPENED_FOLDER || !open.isNumber() || !place.isNumber() || parts.last().isEmpty()) return null
+    return "$OPENED_FOLDER-$open-$place"
+}
+
+/** The folder of the copy that cover [key] ([openedCoverKey]) names, `<open>/<place>` under the copies; null for any other key. */
+fun openedCoverDir(key: String): String? {
+    val parts = key.split('-')
+    if (parts.size != 3 || parts[0] != OPENED_FOLDER || !parts[1].isNumber() || !parts[2].isNumber()) return null
+    return "${parts[1]}/${parts[2]}"
+}
+
+private fun String.isNumber(): Boolean = isNotEmpty() && all { it in '0'..'9' }
+
+/** KJB's copies of opened files, in its cache: `cache/opened/<open>/<place>/<name>`. */
+private const val OPENED_FOLDER = "opened"
+
+/** The last path segments that place a copy: the cache, its folder, the open, the place, and its name. */
+private const val OPENED_DEPTH = 5
+
 private const val MEDIA_PREFIX = "content://" + MediaStore.AUTHORITY + "/"
 private const val MEDIA_SEGMENTS = 4
 
@@ -82,19 +114,59 @@ object OpenedFiles {
     private val one = Mutex()
 
     /** The tags of the copies the opens still hold, by path. */
-    private val opened = ConcurrentHashMap<String, Song>()
+    private val held = MutableStateFlow<Map<String, Song>>(emptyMap())
+
+    /**
+     * The tags of the copies the opens still hold, by path: the player, the Now bar and the lyrics name a copy the library
+     * lacks by them (PlayerUi.opened), the notification too ([song]).
+     */
+    val songs: StateFlow<Map<String, Song>> = held.asStateFlow()
 
     @Volatile
     private var folder: File? = null
 
-    private fun folder(context: Context): File = folder ?: File(context.applicationContext.cacheDir, "opened").also { folder = it }
+    private fun folder(context: Context): File = folder ?: File(context.applicationContext.cacheDir, OPENED_FOLDER).also { folder = it }
 
     /**
      * The player's song for [ref] when it is a copy of an opened file (PlaybackService plays the library's first); null for
-     * any other. A copy still in the cache after KJB restarted plays under its name.
+     * any other. A copy still in the cache after KJB restarted plays under its name until [watch] has read its tags again.
      */
     fun song(context: Context, ref: SongRef): Song? =
-        opened[ref.path] ?: ref.path.takeIf { it.startsWith(folder(context).path + "/") }?.let { plainSong(File(it), readTags = false) }
+        held.value[ref.path] ?: ref.path.takeIf { it.startsWith(folder(context).path + "/") }?.let { plainSong(File(it), readTags = false) }
+
+    /**
+     * The embedded cover of the copy at [path], decoded at the largest halving still at least [px] on its longer side;
+     * null for a path outside KJB's copies (nothing else is read), or a copy without one. Blocking.
+     */
+    fun cover(context: Context, path: String, px: Int): Bitmap? {
+        val file = File(path)
+        val inside = try {
+            file.canonicalPath.startsWith(folder(context).canonicalPath + "/")
+        } catch (e: IOException) {
+            false
+        }
+        if (!inside || !file.isFile) return null
+        val bytes = try {
+            MediaMetadataRetriever().use { tags ->
+                tags.setDataSource(file.path)
+                tags.embeddedPicture
+            }
+        } catch (e: RuntimeException) {
+            Log.w(LOG_TAG, "open: no cover read (${e.javaClass.simpleName})")
+            null
+        } ?: return null
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        var sample = 1
+        while (max(bounds.outWidth, bounds.outHeight) / (sample * 2) >= px) sample *= 2
+        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })
+    }
+
+    /** The copy whose cover [key] ([openedCoverKey]) names, while it is in the cache; null for any other key. */
+    fun coverCopy(context: Context, key: String): String? {
+        val dir = openedCoverDir(key)?.let { File(folder(context), it) } ?: return null
+        return dir.listFiles()?.singleOrNull { it.isFile && it.extension != "part" }?.path
+    }
 
     /**
      * Plays [uris] (`content:` addresses) at once as one queue, "Opened file", in their order: each the library's song when
@@ -119,7 +191,12 @@ object OpenedFiles {
         val root = folder(context)
         scope.launch(Dispatchers.Default) {
             book.map { it.queuedPaths().filterTo(HashSet()) { path -> path.startsWith(root.path + "/") } }.distinctUntilChanged().collect { queued ->
-                one.withLock { withContext(Dispatchers.IO) { sweep(root, queued) } }
+                one.withLock {
+                    withContext(Dispatchers.IO) {
+                        sweep(root, queued)
+                        recall(queued)
+                    }
+                }
             }
         }
     }
@@ -131,7 +208,15 @@ object OpenedFiles {
         val batches = root.list()?.toList().orEmpty()
         staleBatches(batches, queued, root.path).forEach { batch ->
             val gone = File(root, batch)
-            if (gone.deleteRecursively()) opened.keys.removeAll { it.startsWith(gone.path + "/") }
+            if (gone.deleteRecursively()) held.update { songs -> songs.filterKeys { !it.startsWith(gone.path + "/") } }
+        }
+    }
+
+    /** Reads again the tags of the [queued] copies this process has not read (KJB restarted since they were opened). Holding [one]. */
+    private fun recall(queued: Collection<String>) {
+        queued.filter { it !in held.value && File(it).isFile }.forEach { path ->
+            val song = plainSong(File(path), readTags = true)
+            held.update { it + (path to song) }
         }
     }
 
@@ -144,7 +229,7 @@ object OpenedFiles {
             if (!address.startsWith("content://", ignoreCase = true)) return@mapIndexedNotNull null
             val uri = address.toUri()
             val copy = copy(context.contentResolver, uri, File(batch, index.toString()), displayName(context.contentResolver, uri), budget)
-            copy?.also { budget -= it.length() }?.let { plainSong(it, readTags = true) }?.also { opened[it.path] = it }?.ref
+            copy?.also { budget -= it.length() }?.let { plainSong(it, readTags = true) }?.also { song -> held.update { it + (song.path to song) } }?.ref
         }
         if (refs.isEmpty()) batch.deleteRecursively()
         if (refs.size < uris.size) Log.w(LOG_TAG, "open: ${uris.size - refs.size} of ${uris.size} files not readable")
@@ -209,8 +294,8 @@ object OpenedFiles {
         return if (clean.length <= MAX_NAME) clean else clean.take(MAX_NAME - extension.length) + extension
     }
 
-    /** [file] as a song that is in no library: its tags when [readTags] (blocking), else only its name. */
-    private fun plainSong(file: File, readTags: Boolean): Song {
+    /** [file] as a song that is in no library: its tags when [readTags] (blocking), else only its name; its name too without a title tag. */
+    internal fun plainSong(file: File, readTags: Boolean): Song {
         var title: String? = null
         var artist: String? = null
         var album: String? = null

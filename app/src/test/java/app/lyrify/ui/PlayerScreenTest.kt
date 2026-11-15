@@ -3,6 +3,7 @@ package app.lyrify.ui
 import androidx.compose.ui.unit.dp
 import app.lyrify.R
 import app.lyrify.data.LyricsStatus
+import app.lyrify.library.SongRef
 import app.lyrify.library.song
 import app.lyrify.lyrics.LrcLine
 import app.lyrify.player.PlayerUi
@@ -10,6 +11,8 @@ import app.lyrify.player.QueueBook
 import app.lyrify.player.QueueSource
 import app.lyrify.player.Repeat
 import app.lyrify.player.SourceKind
+import app.lyrify.player.Transport
+import app.lyrify.player.playerUi
 import app.lyrify.player.seekTarget
 import app.lyrify.settings.LibrarySettings
 import app.lyrify.settings.PlaybackSettings
@@ -120,6 +123,34 @@ class PlayerScreenTest {
         assertEquals("01 Paper Lantern.mp3", ownNow(ui, LibrarySettings(showFileNames = true), now = 2_000)!!.title)
         assertEquals("01 Paper Lantern.mp3", ownNow(ui.copy(song = null), LibrarySettings(), now = 2_000)!!.title)
         assertNull(ownNow(null, LibrarySettings(), now = 2_000))
+    }
+
+    /**
+     * A file another app opened that the library lacks (phone session 10: the player showed the copy's file name and
+     * "Opened file"): the player, the Now bar and the lyrics name it by its own tags, which open no page; by its file's
+     * name only when none were read.
+     */
+    @Test
+    fun `a file another app opened is named by its own tags on the player and the Now bar`() {
+        val path = "/data/user/0/app.lyrify/cache/opened/1000/0/Paper Harbour (demo).mp3"
+        val tagged = song("Music/x.mp3", title = "Paper Harbour", artist = "Mira Solen", album = "Glass Harbour Sessions").copy(ref = SongRef(path))
+        val book = QueueBook().play(listOf(SongRef(path)), 0, QueueSource(SourceKind.OPENED, "opened", ""), now = 1).book
+        // The connection hands over the copy's tags while the library lacks the song.
+        val ui = playerUi(book, Repeat.OFF, place = null, Transport(), library = null, now = 0, opened = mapOf(path to tagged))!!
+        // In no library: no heart, no artist or album page.
+        assertNull(ui.song)
+        assertEquals(tagged, ui.opened)
+        assertEquals(tagged, ui.named)
+        assertEquals("Paper Harbour", shownTitle(ui, LibrarySettings()))
+        assertEquals(
+            OwnNow("Paper Harbour", "Mira Solen", SongArt(path), playing = false, progress = 0f, path = path, album = "Glass Harbour Sessions"),
+            ownNow(ui, LibrarySettings(), now = 0),
+        )
+        // Show file names: its file's name, as any song's.
+        assertEquals("Paper Harbour (demo).mp3", shownTitle(ui, LibrarySettings(showFileNames = true)))
+        // No tags read for it: its file's name.
+        assertEquals("Paper Harbour (demo).mp3", shownTitle(ui.copy(opened = null), LibrarySettings()))
+        assertEquals("Paper Harbour (demo).mp3", playerUi(book, Repeat.OFF, place = null, Transport(), library = null, now = 0)!!.let { shownTitle(it, LibrarySettings()) })
     }
 
     // The line under the title
