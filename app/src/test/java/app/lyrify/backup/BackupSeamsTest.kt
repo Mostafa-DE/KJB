@@ -106,7 +106,7 @@ class BackupSeamsTest {
     @Test
     fun `tones take a whole restore in one write, stored in their file`() = runBlocking {
         val file = File(folder.root, "tones.json")
-        val store = ToneListStore(tonesStore(file, scope) {}) {}
+        val store = ToneListStore(tonesStore(file, folder.root, scope, { 0L }) {}) {}
         val tone = BackupFixtures.tone
         val other = tone.copy(id = 502, name = "Tide Bell (KJB)", fileName = "Tide Bell (KJB).m4a")
 

@@ -25,6 +25,8 @@ import java.io.File
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
+import java.nio.file.Files
+import java.nio.file.StandardOpenOption
 
 /**
  * A tone KJB made, in "Your tones": its MediaStore id ([id], the key), its [name] as the phone's sound pickers list
@@ -121,31 +123,55 @@ interface ToneList {
 }
 
 /**
- * Reads and writes [TonesState]. A file that is not a tones list starts the list over: the tone files themselves stay
- * in MediaStore, so only the list's memory of them is lost. The log gets no names or paths.
+ * Reads and writes [TonesState]. A file that is not a tones list at all is first copied to [backupDir] as
+ * `tones-corrupt-<epochMillis>.json` (the newest copy only), then reported, so the list starts over without losing it
+ * (the tone files themselves stay in MediaStore). When the copy cannot be made, the read fails with a plain IOException
+ * instead and the file stays as it is. The log gets the copy's name and size only, never names or paths.
  */
-internal class TonesSerializer : Serializer<TonesState> {
+internal class TonesSerializer(private val backupDir: File, private val clock: () -> Long, private val log: (String) -> Unit) : Serializer<TonesState> {
     override val defaultValue: TonesState = TonesState()
 
-    override suspend fun readFrom(input: InputStream): TonesState = try {
-        TonesJson.decode(input.readBytes().decodeToString())
-    } catch (e: SerializationException) {
-        throw CorruptionException("Unreadable tones list", e)
+    override suspend fun readFrom(input: InputStream): TonesState {
+        val bytes = input.readBytes()
+        return try {
+            TonesJson.decode(bytes.decodeToString())
+        } catch (e: SerializationException) {
+            throw CorruptionException("Unreadable tones list, kept as ${keep(bytes)}", e)
+        }
     }
 
     override suspend fun writeTo(t: TonesState, output: OutputStream) {
         output.write(TonesJson.encode(t).encodeToByteArray())
     }
+
+    private fun keep(bytes: ByteArray): String {
+        val copies = backupDir.listFiles().orEmpty().filter { it.name.startsWith(BACKUP_PREFIX) && it.name.endsWith(BACKUP_SUFFIX) }
+        copies.firstOrNull { it.length() == bytes.size.toLong() && it.readBytes().contentEquals(bytes) }?.let { return it.name }
+        val copy = File(backupDir, "$BACKUP_PREFIX${clock()}$BACKUP_SUFFIX")
+        // On storage before the list starts over.
+        Files.write(copy.toPath(), bytes, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE, StandardOpenOption.SYNC)
+        log("tones list unreadable: kept as ${copy.name} (${bytes.size} bytes), starting over")
+        copies.forEach { old ->
+            try {
+                Files.deleteIfExists(old.toPath())
+            } catch (e: IOException) {
+                log("tones list: old copy ${old.name} not removed: ${e.javaClass.simpleName}")
+            }
+        }
+        return copy.name
+    }
+
+    private companion object {
+        const val BACKUP_PREFIX: String = "tones-corrupt-"
+        const val BACKUP_SUFFIX: String = ".json"
+    }
 }
 
-/** The tones list's DataStore at [file]: one per file and process. */
-internal fun tonesStore(file: File, scope: CoroutineScope, log: (String) -> Unit): DataStore<TonesState> =
+/** The tones list's DataStore at [file]: one per file and process. It starts over only once [TonesSerializer] kept a copy in [backupDir]. */
+internal fun tonesStore(file: File, backupDir: File, scope: CoroutineScope, clock: () -> Long, log: (String) -> Unit): DataStore<TonesState> =
     DataStoreFactory.create(
-        serializer = TonesSerializer(),
-        corruptionHandler = ReplaceFileCorruptionHandler {
-            log("tones list unreadable, starting over")
-            TonesState()
-        },
+        serializer = TonesSerializer(backupDir, clock, log),
+        corruptionHandler = ReplaceFileCorruptionHandler { TonesState() },
         scope = scope,
         produceFile = { file },
     )
@@ -173,12 +199,16 @@ class ToneListStore internal constructor(private val store: DataStore<TonesState
     companion object {
         private var shared: ToneListStore? = null
 
-        /** The app's: app-private `files/datastore/tones.json`, never backed up (allowBackup is off). One per process. */
+        /**
+         * The app's: app-private `files/datastore/tones.json`, a copy of an unreadable one in `files`; never backed up
+         * (allowBackup is off). One per process.
+         */
         @Synchronized
         fun of(context: Context): ToneListStore = shared ?: run {
             val log: (String) -> Unit = { Log.w(LOG_TAG, it) }
             val file = context.applicationContext.dataStoreFile("tones.json")
-            ToneListStore(tonesStore(file, CoroutineScope(Dispatchers.IO + SupervisorJob()), log), log)
+            val store = tonesStore(file, context.applicationContext.filesDir, CoroutineScope(Dispatchers.IO + SupervisorJob()), System::currentTimeMillis, log)
+            ToneListStore(store, log)
         }.also { shared = it }
     }
 }
