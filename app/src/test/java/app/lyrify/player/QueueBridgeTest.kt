@@ -39,8 +39,12 @@ class QueueBridgeTest {
         override var positionMs: Long = 0
         val calls = mutableListOf<String>()
 
+        /** The path it was handed for each song, by uid. */
+        val paths = mutableMapOf<Long, String>()
+
         override fun load(items: List<Projected>, index: Int, positionMs: Long) {
             loaded = items.map { it.uid }
+            items.forEach { paths[it.uid] = it.song.path }
             this.index = index
             this.positionMs = positionMs
             calls += "load"
@@ -50,11 +54,15 @@ class QueueBridgeTest {
             val current = loaded.getOrNull(index)
             val list = loaded.toMutableList()
             when (edit) {
-                is Edit.Remove -> list.removeAt(edit.at)
-                is Edit.Insert -> list.addAll(edit.at, edit.items.map { it.uid })
+                is Edit.Remove -> list.subList(edit.at, edit.at + edit.count).clear()
+                is Edit.Insert -> {
+                    list.addAll(edit.at, edit.items.map { it.uid })
+                    edit.items.forEach { paths[it.uid] = it.song.path }
+                }
                 is Edit.Move -> list.add(edit.to, list.removeAt(edit.from))
                 is Edit.Replace -> {
                     list[edit.at] = edit.item.uid
+                    paths[edit.item.uid] = edit.item.song.path
                     calls += "replace ${edit.at} ${edit.item.song.path}"
                     return
                 }
@@ -188,9 +196,58 @@ class QueueBridgeTest {
                 loaded = from
                 index = from.indexOf(current)
             }
-            edits(fake.loaded, to.map { Projected(it, songs[0]) }).forEach(fake::apply)
+            edits(fake.loaded, to.map { Projected(it, songs[0]) })!!.forEach(fake::apply)
             assertEquals(to, fake.loaded)
             assertEquals(current, fake.current)
+        }
+    }
+
+    @Test
+    fun `a plan from any order to any other is a few edits, keeps the song playing, and hands moved files their new path`() {
+        val random = Random(17)
+        val elsewhere = "Music/Elsewhere/Paper Lantern.mp3"
+        repeat(400) {
+            val from = (1L..60L).shuffled(random).take(random.nextInt(1, 60))
+            val playing = from[random.nextInt(from.size)]
+            val stays = random.nextInt(4) != 0
+            val others = (from - playing).filter { random.nextInt(5) != 0 } + (100L..110L).filter { random.nextBoolean() }
+            // Small changes (the old order, a song or two out of place) and large ones (a shuffle).
+            val all = others + listOfNotNull(playing.takeIf { stays })
+            val rank = all.associateWith { uid -> from.indexOf(uid).takeIf { it >= 0 } ?: random.nextInt(60) }
+            val to = if (random.nextBoolean()) all.shuffled(random) else all.sortedBy(rank::getValue)
+            val handed = from.associateWith { if (random.nextInt(12) == 0) elsewhere else songs[0].path }
+            val fake = FakePort().apply {
+                loaded = from
+                index = from.indexOf(playing)
+                paths += handed
+            }
+            val plan = plan(from, to.map { Projected(it, songs[0]) }, playing, handed)
+            if (plan == null) {
+                assertTrue("only a large change without the song playing loads again", !stays)
+                return@repeat
+            }
+            assertTrue("${plan.size} edits", plan.size <= MAX_EDITS)
+            plan.forEach(fake::apply)
+            assertEquals(to, fake.loaded)
+            if (stays) assertEquals(playing, fake.current)
+            assertEquals(to.map { songs[0].path }, to.map { fake.paths[it] })
+        }
+    }
+
+    @Test
+    fun `a song dragged from any place to any other is one move`() {
+        val from = (1L..30L).toList()
+        for (a in from.indices) for (b in from.indices) {
+            if (a == b) continue
+            val to = from.toMutableList().apply { add(b, removeAt(a)) }
+            val fake = FakePort().apply {
+                loaded = from
+                index = 0
+            }
+            val edits = edits(from, to.map { Projected(it, songs[0]) })!!
+            assertEquals("$a to $b", 1, edits.size)
+            edits.forEach(fake::apply)
+            assertEquals(to, fake.loaded)
         }
     }
 

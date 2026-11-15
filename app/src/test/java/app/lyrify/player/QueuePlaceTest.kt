@@ -82,7 +82,7 @@ class QueuePlaceTest {
             val before = loaded.getOrNull(index)
             val list = loaded.toMutableList()
             when (edit) {
-                is Edit.Remove -> list.removeAt(edit.at)
+                is Edit.Remove -> list.subList(edit.at, edit.at + edit.count).clear()
                 is Edit.Insert -> list.addAll(edit.at, edit.items.map { it.uid })
                 is Edit.Move -> list.add(edit.to, list.removeAt(edit.from))
                 is Edit.Replace -> list[edit.at] = edit.item.uid

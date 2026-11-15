@@ -344,10 +344,19 @@ class CrossfadeEngine(
         look()
     }
 
-    override fun apply(edit: Edit) {
-        // The song waiting may not be the next one any more: it loads again at the next look.
+    override fun apply(edit: Edit) = applyAll(listOf(edit))
+
+    override fun applyAll(edits: List<Edit>) {
+        // The song waiting may not be the next one any more: it loads again at the look after the last edit, once for the
+        // whole change; a look the player's events ask for meanwhile waits for it.
         dropStandby()
-        active.apply(edit)
+        val held = looking
+        looking = true
+        try {
+            active.applyAll(edits)
+        } finally {
+            looking = held
+        }
         look()
     }
 
