@@ -13,6 +13,7 @@ import app.lyrify.backup.ImportQueue
 import app.lyrify.backup.ImportSong
 import app.lyrify.backup.ImportUndo
 import app.lyrify.library.song
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -27,6 +28,7 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
 
 /** Settings > Backup > Import from app: the row, the preview's rows, the reasons, the copied list, and the words. Made-up names only. */
+@OptIn(ExperimentalCoroutinesApi::class) // runCurrent
 class ImportScreensTest {
     private val lantern = song("Music/Harbour Glass/01 Paper Lantern.mp3", title = "Paper Lantern", durationMs = 201_000)
 

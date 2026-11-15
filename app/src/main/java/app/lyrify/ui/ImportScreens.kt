@@ -45,6 +45,7 @@ import app.lyrify.backup.ImportPlan
 import app.lyrify.backup.ImportRead
 import app.lyrify.backup.ImportSong
 import app.lyrify.backup.Imports
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -155,11 +156,35 @@ private object ShownSummary {
 
 /**
  * Picked files another page hands to the import sheet, which lives once, in the shell's backup actions: the Playlists
- * tab's Import sends Samsung Music's favourites file ([forImportSheet]), so it is read as Pick file reads it. Kept
- * until the sheet takes them.
+ * tab's Import sends Samsung Music's favourites file ([forImportSheet], [handOver]), so it is read as Pick file reads it.
+ * This lives only as long as the process, so the page lets go of the files only once the sheet holds them in its own
+ * saved pick (review panel-im3).
  */
-internal object ImportHandoff {
-    val files: Channel<List<String>> = Channel(Channel.UNLIMITED)
+internal class ImportHandoff {
+    /** Picked files on their way, and the word that the sheet holds them. */
+    private class Handed(val documents: List<String>, val held: CompletableDeferred<Unit> = CompletableDeferred())
+
+    private val files = Channel<Handed>()
+
+    /** The page's side: hands [documents] to the sheet, and returns once the sheet holds them. */
+    suspend fun hand(documents: List<String>) {
+        val handed = Handed(documents)
+        files.send(handed)
+        handed.held.await()
+    }
+
+    /** The sheet's side, while it is there: each pick handed is read as Pick file's, then its page may let go. */
+    suspend fun receive(reads: ImportReads) {
+        for (handed in files) {
+            reads.load(listOf(PICKED_FILES) + handed.documents)
+            handed.held.complete(Unit)
+        }
+    }
+
+    companion object {
+        /** The one the Playlists tab's Import and the import sheet share. */
+        val shared: ImportHandoff = ImportHandoff()
+    }
 }
 
 /** The sheet lists this many songs or files of a kind, then "And 12 more". */
@@ -190,9 +215,7 @@ fun rememberImportFromApp(): () -> Unit {
         scope.launch { toasts.show(if (failed) Toast(resources.getString(text), R.drawable.ic_error, Tone.ERROR) else Toast(resources.getString(text))) }
     }
     LaunchedEffect(Unit) { reads.resume() }
-    LaunchedEffect(ImportHandoff) {
-        for (documents in ImportHandoff.files) load(listOf(PICKED_FILES) + documents)
-    }
+    LaunchedEffect(ImportHandoff.shared) { ImportHandoff.shared.receive(reads) }
     val files = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { documents ->
         if (documents.isNotEmpty()) load(listOf(PICKED_FILES) + documents.map(Uri::toString).distinct())
     }

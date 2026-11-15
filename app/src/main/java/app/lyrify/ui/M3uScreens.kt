@@ -17,6 +17,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
@@ -91,6 +92,16 @@ internal fun importResult(document: String, read: M3uRead, resolver: SongResolve
 internal fun forImportSheet(picked: List<Pair<String, M3uRead>>): List<String> =
     picked.filter { (_, file) -> ImportFormats.isSamsungFavourites(file.name) }.map { it.first }
 
+/**
+ * Hands [handed] to Import from app's sheet ([handoff]), and only then lets go of them in [pending], the picked files this
+ * page keeps: a turn of the phone or the process ending meanwhile leaves them there, and the page reads and hands them
+ * again.
+ */
+internal suspend fun handOver(handed: List<String>, pending: MutableState<List<String>>, handoff: ImportHandoff = ImportHandoff.shared) {
+    handoff.hand(handed)
+    pending.value -= handed
+}
+
 /** The sheet lists this many songs of a kind (missing, or matched by name), then "And 12 more". */
 private const val SHOWN: Int = 50
 
@@ -145,11 +156,8 @@ fun rememberM3uActions(): M3uActions {
     val load = { documents: List<String> ->
         scope.launch {
             val picked = withContext(Dispatchers.IO) { documents.map { it to files.read(it.toUri()) } }
-            val handed = forImportSheet(picked).toSet()
-            if (handed.isNotEmpty()) {
-                pending.value -= handed
-                ImportHandoff.files.send(handed.toList())
-            }
+            val handed = forImportSheet(picked)
+            if (handed.isNotEmpty()) scope.launch { handOver(handed, pending) }
             val read = picked.filter { it.first !in handed }
             val resolver = library.resolver()
             val fresh = withContext(Dispatchers.Default) { read.map { (document, file) -> importResult(document, file, resolver, untitled()) } }
