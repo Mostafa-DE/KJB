@@ -133,11 +133,6 @@ class DlRuns(
     private class Run(val id: Long, val request: DlRequest, val events: RunEvents) {
         lateinit var job: Job
 
-        /** Whether what it got stays as it stops: as the stops said ([stopping]), until one said it goes. */
-        @Volatile
-        var keepParts = false
-            private set
-
         /** A stop said what it got goes (KJB's Cancel, a discard): no later stop keeps it (KJB letting go of the add-on). */
         @Volatile
         var dropped = false
@@ -147,7 +142,6 @@ class DlRuns(
         /** A stop that [keep]s what it got, or not. Under [lock]. */
         fun stopping(keep: Boolean) {
             dropped = dropped || !keep
-            keepParts = !dropped
         }
     }
 
@@ -202,15 +196,17 @@ class DlRuns(
     }
 
     /**
-     * Deletes what the runs of [key] left. A run of it still under way (or still stopping) is stopped and deletes its
-     * folder as it ends; the folder is marked ([DISCARDED]) too, so the next [sweep] deletes it if the process goes first.
+     * Deletes what the runs of [key] left. A run of it still under way (or still stopping, a killed process still in its
+     * folder) is stopped and deletes its folder once its processes are gone; the folder is marked ([DISCARDED]) too, for
+     * the next start's [sweep] should the add-on go first. A folder no run holds goes at once, unless a process of the
+     * add-on is still in it: it is marked then.
      */
     fun discard(key: String) {
         if (!isDownloadKey(key)) return
         val dir = File(folder, key)
         val live = synchronized(lock) { runs.values.firstOrNull { it.request.key == key }?.also { it.stopping(keep = false) } }
         if (live == null) {
-            dir.deleteRecursively()
+            if (ytdlp.running(dir.path + "/")) mark(dir) else dir.deleteRecursively()
             return
         }
         live.job.cancel()
@@ -227,29 +223,40 @@ class DlRuns(
     }
 
     /**
-     * Deletes stopped run folder [dir] once no process of the add-on is left in it: its yt-dlp and ffmpeg were killed and
-     * go at once, waited for at most [GONE_WAIT_MS]. One still there keeps its files untouched, the folder marked for the
-     * next [sweep].
+     * Lets go of [run]'s key once no process of the add-on is left in its folder [dir] (its killed yt-dlp and ffmpeg go at
+     * once, but one may take longer, and is waited for however long): until then no run of the key starts, and nothing
+     * deletes the folder under it. The folder goes first when its file was [delivered] or a stop said what it got goes,
+     * a discard heard meanwhile too.
      */
-    private suspend fun clear(dir: File) {
+    private suspend fun settle(run: Run, dir: File, delivered: Boolean) {
         val marker = dir.path + "/"
-        val gone = withTimeoutOrNull(GONE_WAIT_MS) { while (ytdlp.running(marker)) delay(GONE_LOOK_MS) } != null
-        if (gone) {
-            dir.deleteRecursively()
-        } else {
-            log("a stopped run's folder is left to the next start: a process is still in it")
-            mark(dir)
+        var waited = 0L
+        while (ytdlp.running(marker)) {
+            if (waited == GONE_WAIT_MS) log("run ${run.id}: waits for a killed process still in its folder")
+            val look = if (waited < GONE_WAIT_MS) GONE_LOOK_MS else GONE_LOOK_SLOW_MS
+            delay(look)
+            waited += look
         }
+        var cleared = false
+        do {
+            if (!cleared && (delivered || run.dropped)) {
+                dir.deleteRecursively()
+                cleared = true
+            }
+            // The key goes under the lock, so a discard that came after the look above still deletes the folder first.
+            val free = synchronized(lock) { (cleared || !run.dropped).also { if (it) runs.remove(run.id) } }
+        } while (!free)
     }
 
     /**
      * Deletes the folders no run will come back to, at the add-on's start: those a discard marked, and those untouched for a
-     * week (a download KJB never came back to).
+     * week (a download KJB never came back to). A folder a process of the add-on is still in stays.
      */
     fun sweep() {
         val live = synchronized(lock) { runs.values.map { it.request.key }.toSet() }
         val now = clock()
-        folder.listFiles()?.filter { it.isDirectory && it.name !in live && (File(it, DISCARDED).exists() || now - it.lastModified() > SWEEP_AFTER_MS) }
+        folder.listFiles()
+            ?.filter { it.isDirectory && it.name !in live && (File(it, DISCARDED).exists() || now - it.lastModified() > SWEEP_AFTER_MS) && !ytdlp.running(it.path + "/") }
             ?.forEach { it.deleteRecursively() }
     }
 
@@ -258,18 +265,19 @@ class DlRuns(
         var end: DlEnd = DlEnd.Stopped
         try {
             end = download(run, dir)
-            // A delivered file is KJB's now; what a failed run got stays for its Retry, unless KJB's Cancel came as it failed.
-            if (end is DlEnd.Delivered || run.dropped) withContext(NonCancellable + io) { clear(dir) }
         } catch (e: CancellationException) {
-            if (!run.keepParts) withContext(NonCancellable + io) { clear(dir) }
             throw e
         } catch (e: RuntimeException) {
             // A bug, never a reason to take the add-on down: the run fails, to be tried again.
             log("run ${run.id}: ${e.javaClass.simpleName}")
             end = DlEnd.Failed(DlFailure.UNKNOWN)
         } finally {
+            // A delivered file is KJB's now; what a stopped or failed run got stays for its next run, unless a stop said it goes.
+            val delivered = end is DlEnd.Delivered
+            // NonCancellable on the run's own dispatcher first: a cancelled run coming back from io would throw, never ending.
+            withContext(NonCancellable) { withContext(io) { settle(run, dir, delivered) } }
+            // After it: KJB's descriptors for it may come while it settles, the run still holding its key.
             if (run.delivery.isCompleted) run.delivery.getCompleted().close()
-            synchronized(lock) { runs.remove(run.id) }
             log("run ${run.id}: ${label(end)}")
             run.events.onEnd(end)
         }
@@ -498,11 +506,12 @@ class DlRuns(
         /** A run's folder untouched this long goes ([sweep]). */
         const val SWEEP_AFTER_MS: Long = 7 * 24 * 60 * 60_000L
 
-        /** How long a stopped run's folder waits for its killed processes to be gone before it is left to the [sweep]. */
+        /** How long a stopped run looks often for its killed processes to be gone ([settle]); then less often, however long. */
         const val GONE_WAIT_MS: Long = 5_000
 
-        /** How often [clear] looks for them meanwhile. */
+        /** How often [settle] looks for them, at first and after [GONE_WAIT_MS]. */
         private const val GONE_LOOK_MS: Long = 100
+        private const val GONE_LOOK_SLOW_MS: Long = 1_000
 
         private const val CHUNK = 256 * 1024
     }
