@@ -25,6 +25,7 @@ import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
+import java.util.concurrent.atomic.AtomicReference
 
 /** How one download ended on KJB's side. */
 sealed interface DownloadOutcome {
@@ -87,12 +88,17 @@ class DownloadRunner(
     suspend fun run(item: DownloadItem, progress: (DlProgress) -> Unit): DownloadOutcome {
         val events = Channel<Event>(Channel.UNLIMITED)
         val watch = FreezeWatch()
+        // The run's end, also kept apart from the channel: told as the watch gave up, it can come behind the watch's word.
+        val ended = AtomicReference<DlEnd?>(null)
         val heard = object : DlRunEvents {
             override fun onProgress(progress: DlProgress) = tell(Event.Progress(progress))
 
             override fun onFile(file: DlFile) = tell(Event.File(file))
 
-            override fun onEnd(end: DlEnd) = tell(Event.End(end))
+            override fun onEnd(end: DlEnd) {
+                ended.compareAndSet(null, end)
+                tell(Event.End(end))
+            }
 
             override fun onBeat() = watch.beat()
 
@@ -120,7 +126,7 @@ class DownloadRunner(
                 events.trySend(Event.Frozen)
             }
             try {
-                follow(events, run, item, progress) { target = it }
+                follow(events, ended, run, item, progress) { target = it }
             } catch (e: CancellationException) {
                 withContext(NonCancellable) {
                     try {
@@ -140,7 +146,14 @@ class DownloadRunner(
     }
 
     /** The run's events to its end; [opened] hears the destination as soon as it is opened. */
-    private suspend fun follow(events: Channel<Event>, run: Long, item: DownloadItem, progress: (DlProgress) -> Unit, opened: (Target) -> Unit): DownloadOutcome {
+    private suspend fun follow(
+        events: Channel<Event>,
+        ended: AtomicReference<DlEnd?>,
+        run: Long,
+        item: DownloadItem,
+        progress: (DlProgress) -> Unit,
+        opened: (Target) -> Unit,
+    ): DownloadOutcome {
         var target: Target? = null
         var file: DlFile? = null
         fun failed(reason: DownloadFailure): DownloadOutcome {
@@ -185,7 +198,8 @@ class DownloadRunner(
                     DlEnd.Stopped -> failed(DownloadFailure.ADDON_GONE)
                 }
                 Event.Died -> return failed(DownloadFailure.ADDON_GONE)
-                Event.Frozen -> return failed(DownloadFailure.FROZEN)
+                // An end told meanwhile follows in the channel: the run ended, the phone froze nothing.
+                Event.Frozen -> if (ended.get() == null) return failed(DownloadFailure.FROZEN)
             }
         }
     }

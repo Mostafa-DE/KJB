@@ -19,10 +19,13 @@ import app.lyrify.lyrics.LocalTrack
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.yield
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -162,6 +165,27 @@ class DownloadRunnerTest {
         assertEquals(DownloadOutcome.Failed(DownloadFailure.FROZEN), outcome.await())
         // A call into a frozen process can wait for as long as it stays frozen: none is made.
         assertEquals(listOf("start d1", "foreground"), port.calls)
+    }
+
+    @Test
+    fun `an end that comes as the freeze watch gives up is the download's end, and its file is kept`() = runTest {
+        val outcome = running()
+        val events = port.events!!
+        events.onFile(file)
+        events.onBeat()
+        runCurrent()
+        // The end comes at the very moment the watch gives up: after its word is in, before the run reads it.
+        backgroundScope.launch {
+            delay(AddonKeepAlive.FROZEN_MS)
+            yield() // behind the watch, which wakes at the same moment
+            events.onEnd(DlEnd.Delivered(1_000, 50))
+        }
+
+        advanceTimeBy(AddonKeepAlive.FROZEN_MS + 1)
+        runCurrent()
+
+        assertEquals(DownloadOutcome.Saved(File(temp.root, "x.mp3").path, null), outcome.await())
+        assertEquals("never abandoned", listOf("open", "finish"), saver.calls)
     }
 
     @Test
