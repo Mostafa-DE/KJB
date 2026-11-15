@@ -137,6 +137,8 @@ class PlaybackService : MediaLibraryService() {
     override fun onCreate() {
         super.onCreate()
         core = PlayerGraph.core(this)
+        // Copies of files other apps opened go once no queue holds them.
+        OpenedFiles.watch(this, core.book, scope)
         settings = Lyrify.settings(this).settings.stateIn(scope, SharingStarted.Eagerly, Settings())
         library = LibraryGraph.repository(this).state.map { (it as? LibraryState.Ready)?.library }.stateIn(scope, SharingStarted.Eagerly, null)
         val levels = Levels()
@@ -182,7 +184,7 @@ class PlaybackService : MediaLibraryService() {
                 if (book.currentId != queueId) failedInARow = 0
                 queueId = book.currentId
                 jumps = book.jumps
-                if (songs != null) bridge.sync(book, ::find)
+                if (songs != null) bridge.sync(book, ::playable)
                 player.changed()
             }
         }
@@ -232,6 +234,9 @@ class PlaybackService : MediaLibraryService() {
 
     private fun find(ref: SongRef): Song? = library.value?.resolver?.find(ref)
 
+    /** A song the player plays: the library's, else a file another app opened that the library lacks (OpenedFiles). */
+    private fun playable(ref: SongRef): Song? = find(ref) ?: OpenedFiles.song(this, ref)
+
     /** KJB, brought back where it was (onNewIntent when it is open), showing the player. */
     private fun openPlayer(): Intent = Intent(this, MainActivity::class.java)
         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
@@ -243,7 +248,7 @@ class PlaybackService : MediaLibraryService() {
 
     /** The bridge applied now, before a controller's items are matched against the engine's. */
     private fun sync() {
-        if (core.ready.value) library.value?.let { bridge.sync(core.book.value, ::find) }
+        if (core.ready.value) library.value?.let { bridge.sync(core.book.value, ::playable) }
     }
 
     /** Where the queue playing is (its song and position), into `playback.json`. */
@@ -422,7 +427,7 @@ class PlaybackService : MediaLibraryService() {
     /** The queue playing as media items, from its current song (or the next on the phone) at its place. */
     private fun playing(): MediaSession.MediaItemsWithStartPosition {
         val queue = core.book.value.current
-        val projected = projection(queue, ::find)
+        val projected = projection(queue, ::playable)
         val start = queue?.let { startOf(it, projected) } ?: -1
         if (start < 0) return MediaSession.MediaItemsWithStartPosition(emptyList(), 0, 0)
         val position = if (projected[start].uid == queue?.current?.uid) queue.positionMs else 0

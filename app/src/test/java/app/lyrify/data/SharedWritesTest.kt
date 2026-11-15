@@ -403,6 +403,8 @@ class SharedWritesTest {
             // import journal in the app's files.
             "backup/ImportSources.kt",
             "backup/Musicolet.kt",
+            // The crash reports in the app's files.
+            "crash/CrashLog.kt",
             "data/LedgerRepository.kt",
             "dupes/DuplicatesStore.kt",
             "library/Playlists.kt",
@@ -411,6 +413,8 @@ class SharedWritesTest {
             "overnight/AiRunLog.kt",
             "overnight/AiWorker.kt",
             "overnight/CrashGuard.kt",
+            // Files another app opened that the library lacks: copied into the cache to play, never into shared storage.
+            "player/OpenedFiles.kt",
             "player/QueueStore.kt",
             "player/SongStateStore.kt",
             "settings/SettingsStore.kt",
@@ -420,6 +424,8 @@ class SharedWritesTest {
             "tags/UndoStore.kt",
             "tags/lookup/MetaClient.kt",
             "tones/ToneAudio.kt",
+            // KJB's own update: its APK downloaded into the cache, and the check's times in the app's preferences.
+            "update/Updates.kt",
         )
     }
 }

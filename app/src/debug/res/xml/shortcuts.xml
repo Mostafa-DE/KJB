@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The debug build's copy of src/main/res/xml/shortcuts.xml: the same shortcuts, opening app.lyrify.debug (KJB dev).
+     LaunchesTest keeps the two in step. -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:enabled="true"
+        android:icon="@drawable/shortcut_shuffle"
+        android:shortcutId="shuffle_all"
+        android:shortcutLongLabel="@string/shortcut_shuffle_long"
+        android:shortcutShortLabel="@string/shortcut_shuffle">
+        <intent
+            android:action="app.lyrify.action.SHUFFLE_ALL"
+            android:targetClass="app.lyrify.ui.MainActivity"
+            android:targetPackage="app.lyrify.debug" />
+    </shortcut>
+    <shortcut
+        android:enabled="true"
+        android:icon="@drawable/shortcut_resume"
+        android:shortcutId="resume"
+        android:shortcutLongLabel="@string/shortcut_resume_long"
+        android:shortcutShortLabel="@string/shortcut_resume">
+        <intent
+            android:action="app.lyrify.action.RESUME"
+            android:targetClass="app.lyrify.ui.MainActivity"
+            android:targetPackage="app.lyrify.debug" />
+    </shortcut>
+    <shortcut
+        android:enabled="true"
+        android:icon="@drawable/shortcut_search"
+        android:shortcutId="search"
+        android:shortcutLongLabel="@string/shortcut_search_long"
+        android:shortcutShortLabel="@string/shortcut_search">
+        <intent
+            android:action="app.lyrify.action.SEARCH"
+            android:targetClass="app.lyrify.ui.MainActivity"
+            android:targetPackage="app.lyrify.debug" />
+    </shortcut>
+    <shortcut
+        android:enabled="true"
+        android:icon="@drawable/shortcut_favourites"
+        android:shortcutId="favourites"
+        android:shortcutLongLabel="@string/shortcut_favourites_long"
+        android:shortcutShortLabel="@string/shortcut_favourites">
+        <intent
+            android:action="app.lyrify.action.FAVOURITES"
+            android:targetClass="app.lyrify.ui.MainActivity"
+            android:targetPackage="app.lyrify.debug" />
+    </shortcut>
+</shortcuts>

@@ -102,6 +102,7 @@ import app.lyrify.player.PlayerUi
 import app.lyrify.player.Queue
 import app.lyrify.player.QueueItem
 import app.lyrify.player.Repeat
+import app.lyrify.player.SourceKind
 import app.lyrify.player.sourceLabel
 import app.lyrify.settings.LibrarySettings
 import app.lyrify.settings.PlayerUiSettings
@@ -938,7 +939,8 @@ private fun TitleAndLinks(ui: PlayerUi, settings: LibrarySettings) {
     )
     Row(horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().heightIn(min = TOUCH)) {
         if (song == null) {
-            PlayerLink(stringResource(R.string.player_not_on_phone), onClick = null, Modifier)
+            // A file another app opened that the library lacks plays all the same (player/OpenedFiles.kt).
+            PlayerLink(stringResource(if (ui.queue.source.kind == SourceKind.OPENED) R.string.open_queue else R.string.player_not_on_phone), onClick = null, Modifier)
             return@Row
         }
         val meta = metaLine(song.artist, song.album)

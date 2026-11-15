@@ -4,7 +4,8 @@
 
     <!-- LRCLIB lookups carry artist, title, album and duration only. Covers & tags asks musicbrainz.org with album
          titles, artists, song titles, track counts and lengths, and gets covers from coverartarchive.org and the
-         archive.org servers it redirects to. -->
+         archive.org servers it redirects to. The update check asks api.github.com once a day for KJB's latest release
+         (Settings > About > Check for updates, on by default), and Install downloads its APK from github.com. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
     <!-- All files access: find songs in MediaStore and create .lrc files next to them in any
@@ -43,7 +44,8 @@
          certificate before it binds, and the add-on checks KJB's on every call. -->
     <uses-permission android:name="${aiAddonPackage}.permission.BIND_AI" />
     <!-- Tools > AI lyrics > Get AI: KJB downloads the add-on from its GitHub release (pinned SHA-256, certificate checked)
-         and installs it with Android's installer, after the user allows "Install unknown apps" for KJB and confirms. -->
+         and installs it with Android's installer, after the user allows "Install unknown apps" for KJB and confirms. KJB's
+         own update installs the same way (update/Updates.kt): the release's SHA-256, and KJB's own signing certificate. -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- Android 12+: an update of the add-on KJB installed may go through without the confirm dialog (a normal
          permission; the first install always asks). -->
@@ -108,6 +110,11 @@
         <package android:name="com.google.android.deskclock" />
         <!-- The AI add-on: without it Android would show it to KJB as not installed, and refuse the bind. -->
         <package android:name="${aiAddonPackage}" />
+        <!-- KJB's own update (update/Updates.kt): the phone's package installer, whatever its name, so KJB can check that
+             the install confirmation it starts is that installer's own. -->
+        <intent>
+            <action android:name="android.content.pm.action.CONFIRM_INSTALL" />
+        </intent>
     </queries>
 
     <!-- largeHeap: was for the AI lyrics engine, which now runs in the AI add-on (its own process, its own large heap).
@@ -135,6 +142,36 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- open files -->
+            <!-- Audio files from other apps (ui/Launches.kt, player/OpenedFiles.kt): a file manager's View, and its Share of
+                 one or several files; they play at once as one queue. content: addresses only, read through the opening
+                 app's grant: never a file: path, which KJB would read with its own All files access. Audio only, so these
+                 never take shared text: that is the Downloads add-on's "Save to KJB", through its own text/plain filter. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
+                <data android:mimeType="audio/*" />
+                <data android:mimeType="application/ogg" />
+                <data android:mimeType="application/x-ogg" />
+                <data android:mimeType="application/flac" />
+                <data android:mimeType="application/x-flac" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="audio/*" />
+                <data android:mimeType="application/ogg" />
+                <data android:mimeType="application/x-ogg" />
+                <data android:mimeType="application/flac" />
+                <data android:mimeType="application/x-flac" />
+            </intent-filter>
+            <!-- shortcuts -->
+            <!-- The launcher's shortcuts, a long press on KJB's icon: Shuffle all, Resume, Search, Favourites. -->
+            <meta-data
+                android:name="android.app.shortcuts"
+                android:resource="@xml/shortcuts" />
         </activity>
 
         <!-- WorkManager's foreground service: mediaProcessing for the AI worker (long work on media files), known from
@@ -151,6 +188,13 @@
              intent: not exported. -->
         <receiver
             android:name=".addon.InstallReceiver"
+            android:exported="false" />
+
+        <!-- updates -->
+        <!-- Android's installer reports KJB's own update here (update/Updates.kt), through KJB's own pending intent: not
+             exported. -->
+        <receiver
+            android:name=".update.UpdateReceiver"
             android:exported="false" />
 
         <!-- Bound by the system while notification access is granted (sample manifest in the

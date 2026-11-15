@@ -59,7 +59,9 @@ import app.lyrify.overnight.AiLyrics
 import app.lyrify.overnight.AiQueue
 import app.lyrify.overnight.audioWithoutLyrics
 import app.lyrify.settings.DisplaySettings
+import app.lyrify.settings.DockTab
 import app.lyrify.settings.ThemeChoice
+import app.lyrify.update.Updates
 import app.lyrify.widget.Widgets
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -76,10 +78,17 @@ class MainActivity : ComponentActivity() {
     /** The view an intent asked for (the widget's cover: the player), until the shell has shown it. */
     private val view = MutableStateFlow<FullScreen?>(null)
 
+    /** The tab a launcher shortcut asked for (Search), until the shell has opened it. */
+    private val tab = MutableStateFlow<DockTab?>(null)
+
+    /** What another app or a shortcut asked to play (Launches.kt), until it plays. */
+    private val launch = MutableStateFlow<Launch.Plays?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        open(intent)
+        // Brought back after Android ended the process, what the intent asked to play was done then: not again.
+        open(intent, fresh = savedInstanceState == null)
         // The stored AI switch is the truth: a schedule that got lost is made again.
         lifecycleScope.launch(logFailures) { AiLyrics.reconcile(applicationContext) }
         val ledger = LedgerRepository(this)
@@ -99,7 +108,16 @@ class MainActivity : ComponentActivity() {
                 // The app's one message queue: the shell shows it above the dock, a sheet or full screen above its buttons.
                 val a11y = LocalAccessibilityManager.current
                 CompositionLocalProvider(LocalToasts provides remember { ToastState(a11y) }) {
-                    App(ledger, destination.collectAsStateWithLifecycle().value, view.collectAsStateWithLifecycle().value, { view.value = null }) { destination.value = null }
+                    App(
+                        ledger,
+                        destination.collectAsStateWithLifecycle().value,
+                        view.collectAsStateWithLifecycle().value,
+                        { view.value = null },
+                        { destination.value = null },
+                        Opened(tab.collectAsStateWithLifecycle().value, { tab.value = null }, launch.collectAsStateWithLifecycle().value, { launch.value = null }) {
+                            view.value = FullScreen.Player
+                        },
+                    )
                 }
             }
         }
@@ -115,7 +133,14 @@ class MainActivity : ComponentActivity() {
      * Where [intent] asks KJB to open, also after the activity was made again. Read once: the extra is taken out, so a
      * turn of the phone does not open it again; a relaunch from Recents opens where the user left instead.
      */
-    private fun open(intent: Intent) {
+    private fun open(intent: Intent, fresh: Boolean = true) {
+        // Audio files from another app, or a launcher shortcut (Launches.kt): read once too.
+        when (val asked = takeLaunch(intent)?.takeIf { fresh }) {
+            null -> Unit
+            Launch.Search -> tab.value = DockTab.SEARCH
+            Launch.Favourites -> destination.value = Page.BuiltIn(BuiltInList.FAVOURITES)
+            is Launch.Plays -> launch.value = asked
+        }
         val name = intent.getStringExtra(EXTRA_DESTINATION) ?: return
         intent.removeExtra(EXTRA_DESTINATION)
         if (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0) return
@@ -125,11 +150,17 @@ class MainActivity : ComponentActivity() {
 }
 
 /**
+ * What another app or a launcher shortcut asked, for the shell: a [tab] to open, something to play ([launch], then
+ * [onPlayer]), each cleared once done.
+ */
+private class Opened(val tab: DockTab?, val onTabOpened: () -> Unit, val launch: Launch.Plays?, val onLaunchDone: () -> Unit, val onPlayer: () -> Unit)
+
+/**
  * The first-run screen while [setupShows] says so, then the app's shell, opened at [destination] when a notification
- * asked for a page; collects what every screen shows.
+ * asked for a page, or where [opened] asks; collects what every screen shows.
  */
 @Composable
-private fun App(ledger: LedgerStore, destination: Page?, view: FullScreen?, onViewOpened: () -> Unit, onDestinationOpened: () -> Unit) {
+private fun App(ledger: LedgerStore, destination: Page?, view: FullScreen?, onViewOpened: () -> Unit, onDestinationOpened: () -> Unit, opened: Opened) {
     val context = LocalContext.current
     val resources = LocalResources.current
     val toasts = LocalToasts.current
@@ -312,9 +343,16 @@ private fun App(ledger: LedgerStore, destination: Page?, view: FullScreen?, onVi
                 onDestinationOpened = onDestinationOpened,
                 view = view,
                 onViewOpened = onViewOpened,
+                tab = opened.tab,
+                onTabOpened = opened.onTabOpened,
             )
         }
     }
+    // Files another app opened, Shuffle all and Resume: they play, then the player shows.
+    LaunchWork(opened.launch, opened.onLaunchDone, opened.onPlayer)
+    // KJB's update, when the check finds one; the check runs once a day when KJB opens, unless switched off.
+    UpdateHost()
+    LaunchedEffect(Unit) { Updates.checker(context).checkIfDue(settings.about.checkForUpdates) }
     AiAskSheets(
         ask = asks.firstOrNull()?.takeUnless { asking },
         onAllow = {

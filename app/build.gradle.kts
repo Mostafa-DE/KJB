@@ -24,6 +24,13 @@ val aiAddonUrl = findProperty("aiAddonUrl")?.toString() ?: "https://github.com/M
 val aiAddonSha256 = findProperty("aiAddonSha256")?.toString() ?: "" // PLACEHOLDER: the release asset's SHA-256
 val aiAddonBytes = findProperty("aiAddonBytes")?.toString() ?: "0" // PLACEHOLDER: the release asset's size in bytes
 
+/**
+ * KJB's GitHub repository ("owner/name"), whose latest release the update check reads (update/Updates.kt). The repository
+ * rename at 3.0.0 (plan section 12) changes it here; GitHub's API also redirects the old name. -PupdateRepo points a test
+ * build at another repository.
+ */
+val updateRepo = findProperty("updateRepo")?.toString() ?: "Mostafa-DE/Lyrify"
+
 android {
     namespace = "app.lyrify"
     compileSdk = 37
@@ -44,6 +51,7 @@ android {
         buildConfigField("String", "AI_ADDON_URL", "\"$aiAddonUrl\"")
         buildConfigField("String", "AI_ADDON_SHA256", "\"$aiAddonSha256\"")
         buildConfigField("long", "AI_ADDON_BYTES", "${aiAddonBytes}L")
+        buildConfigField("String", "UPDATE_REPO", "\"$updateRepo\"")
 
         // Device tests (app/src/androidTest) run on the debug build, beside the release app.
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

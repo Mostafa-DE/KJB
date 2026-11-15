@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The launcher's "Search" shortcut (res/xml/shortcuts.xml): KJB's black ground, its glyph in white. -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@drawable/ic_launcher_background" />
+    <foreground android:drawable="@drawable/shortcut_search_glyph" />
+</adaptive-icon>

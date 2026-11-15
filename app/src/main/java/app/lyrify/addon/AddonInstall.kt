@@ -279,7 +279,7 @@ private object AddonRelease {
  * GitHub's release downloads only, over https on the default port: github.com, which redirects to its asset host
  * (ModelStore's [AllowedHosts] for the same two).
  */
-private object GitHubReleases : ModelHosts {
+internal object GitHubReleases : ModelHosts {
     override fun isSource(uri: URI): Boolean = AllowedHosts.isSource(uri) && uri.host.equals(AllowedHosts.GITHUB, ignoreCase = true)
 
     override fun isRedirect(uri: URI): Boolean =

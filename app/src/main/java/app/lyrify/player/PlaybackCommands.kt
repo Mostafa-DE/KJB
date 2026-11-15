@@ -5,8 +5,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.Serializable
 
-/** What a list in the app is, as the source of a queue. */
-enum class SourceKind { SONGS, ALBUM, ARTIST, FOLDER, GENRE, PLAYLIST, FAVOURITES, MOST_PLAYED, RECENTLY_PLAYED, RECENTLY_ADDED, SEARCH, PICKED }
+/** What a list in the app is, as the source of a queue; OPENED: files another app opened in KJB (player/OpenedFiles.kt). */
+enum class SourceKind { SONGS, ALBUM, ARTIST, FOLDER, GENRE, PLAYLIST, FAVOURITES, MOST_PLAYED, RECENTLY_PLAYED, RECENTLY_ADDED, SEARCH, PICKED, OPENED }
 
 /**
  * The list a queue was made from. [kind] and [key] tell one list from another, so a tap in the list the current queue
