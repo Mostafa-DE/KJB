@@ -105,8 +105,8 @@ class Library private constructor(
     /** The book whose part is the file at [path]; null for music. */
     fun bookOf(path: String): Book? = bookByPath[path]
 
-    /** The book [id] names ([Book.id]); null when it is gone. */
-    fun book(id: String): Book? = booksById[id]
+    /** The book [id] names ([Book.id]), or the one a lone file's path named before its folder and album did; null when it is gone. */
+    fun book(id: String): Book? = booksById[id] ?: bookByPath[id]
 
     fun artist(name: String): Artist? = artistsByName[name]
 

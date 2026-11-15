@@ -61,7 +61,8 @@ class BooksTest {
         val books = booksOf(listOf(tale, song("Music/Harbour Glass/01 Paper Lantern.mp3", album = "Harbour Glass")), BookMarks())
         val book = books.single()
         assertEquals(BookKind.SINGLE, book.kind)
-        assertEquals(tale.path, book.id)
+        // Named by its folder and album, as it would be with more parts: its id holds when one is added beside it.
+        assertEquals(folderBookId(VOLUME + "Audiobooks/Lantern Keeper", "Lantern Keeper"), book.id)
         assertEquals(listOf(tale), book.parts)
         assertEquals("Lantern Keeper", book.title)
         assertEquals(3_600_000L, book.durationMs)

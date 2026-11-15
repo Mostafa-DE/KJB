@@ -26,9 +26,10 @@ data class BookMarks(
 enum class BookKind { SINGLE, FOLDER }
 
 /**
- * A book in the library. [id] never changes while its files stay: the file's path for a single file, the folder's
- * path and the album for a folder book ([folderBookId]). [parts] are in play order ([partOrder]); a single file has one.
- * [title] is the file's title or the folder book's album (else the folder's name); [author] the album artist or artist.
+ * A book in the library. [id] never changes while its files stay: the file's path for an `.m4b` or a song marked as a
+ * book, else the folder's path and the album ([folderBookId]), one file of them or more, so it holds as parts are
+ * hidden, added or removed. [parts] are in play order ([partOrder]); a single file has one. [title] is the file's title
+ * or the folder book's album (else the folder's name); [author] the album artist or artist.
  */
 data class Book(val id: String, val kind: BookKind, val title: String, val author: String?, val parts: List<Song>) {
     /** The whole book's length; a part MediaStore could not measure counts 0. */
@@ -127,12 +128,13 @@ fun booksOf(songs: List<Song>, marks: BookMarks): List<Book> {
     grouped.groupBy(::groupKey).forEach { (key, group) ->
         val folderMarked = folderKey(group.first()) in marks.folders
         if (!folderMarked && !group.all(::autoBook)) return@forEach
-        if (group.size == 1) {
-            books += single(group.single())
-            return@forEach
-        }
         val (dir, album) = key
-        books += Book(folderBookId(dir, album), BookKind.FOLDER, album ?: dir.substringAfterLast('/'), authorOf(group), partOrder(group))
+        // One file left of its folder and album is still that book: the same id, its chapters in the file.
+        books += if (group.size == 1) {
+            single(group.single()).copy(id = folderBookId(dir, album))
+        } else {
+            Book(folderBookId(dir, album), BookKind.FOLDER, album ?: dir.substringAfterLast('/'), authorOf(group), partOrder(group))
+        }
     }
     return books.sortedWith(compareBy<Book, String>(::naturalCompare) { it.title }.thenBy { it.id })
 }
