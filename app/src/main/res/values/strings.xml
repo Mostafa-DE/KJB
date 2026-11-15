@@ -295,7 +295,7 @@
     <string name="ai_held_npu">AI chip busy, retrying soon</string>
     <string name="ai_held_npu_detail">KJB tries again within the hour.</string>
     <string name="ai_held_frozen">Paused by your phone</string>
-    <string name="ai_held_frozen_detail">Your phone paused the AI while it worked. KJB tries again within the hour.</string>
+    <string name="ai_held_frozen_detail">A locked phone may pause the AI. KJB tries again within the hour.</string>
     <string name="ai_all_done">All caught up</string>
     <string name="ai_all_done_detail">No songs are waiting for AI lyrics.</string>
     <string name="ai_results_title">Results</string>

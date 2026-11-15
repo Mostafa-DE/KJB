@@ -79,6 +79,7 @@ import app.lyrify.Lyrify
 import app.lyrify.logFailures
 import app.lyrify.R
 import app.lyrify.addon.AddonDiedException
+import app.lyrify.addon.AddonExemptions
 import app.lyrify.addon.AddonInstalls
 import app.lyrify.addon.AddonState
 import app.lyrify.addon.InstallState
@@ -157,9 +158,10 @@ fun downloadsRow(): EntryRow? {
 // The page
 
 /**
- * Tools > Downloads: the add-on to get (or update) until it is ready; then a link field with Paste (a copied link is
- * offered when Check clipboard is on), and the downloads: what downloads now with Cancel, what did not save with Retry,
- * and what was saved (VidGrab's Finished list), newest first.
+ * Tools > Downloads: the add-on to get (or update) until it is ready, then Run when locked offered once; then a link field
+ * with Paste (a copied link is offered when Check clipboard is on), and the downloads: what downloads now with Cancel,
+ * what did not save with Retry, and what was saved (VidGrab's Finished list), newest first. After a download stalled
+ * with the phone locked, one plain line says so.
  */
 @Composable
 fun DownloadsPage(onBack: () -> Unit) {
@@ -175,9 +177,18 @@ fun DownloadsPage(onBack: () -> Unit) {
     var looking by rememberSaveable { mutableStateOf<String?>(null) }
     var opened by remember { mutableStateOf<DownloadItem?>(null) }
     var filesAccess by remember { mutableStateOf(true) }
+    // The add-on left out of the phone's battery optimisation (AD9), and what the user answered about it.
+    val exemptions = remember(context) { AddonExemptions.store(context) }
+    val exemptionChoices by exemptions.choices.collectAsStateWithLifecycle()
+    var exempt by remember { mutableStateOf(AddonExemptions.exempt(context, KjbAddons.DOWNLOADS)) }
+    val requestExemption = rememberExemptionRequest(KjbAddons.DOWNLOADS) { exempt = AddonExemptions.exempt(context, KjbAddons.DOWNLOADS) }
+    // Allow tapped on the offer: not offered again on this visit, whatever the phone answered.
+    var allowTapped by rememberSaveable { mutableStateOf(false) }
+    val locked = lockedPhone(KjbAddons.DOWNLOADS, addon == AddonState.Ready, exempt, exemptionChoices)
     LaunchedEffect(Unit) { Downloads.load(context) }
     LifecycleResumeEffect(Unit) {
         filesAccess = Environment.isExternalStorageManager()
+        exempt = AddonExemptions.exempt(context, KjbAddons.DOWNLOADS)
         installer.resume()
         Downloads.resume(context)
         if (Downloads.state.value.settings.checkClipboard && link.isEmpty()) clipboardLink(context)?.let { link = it }
@@ -205,6 +216,22 @@ fun DownloadsPage(onBack: () -> Unit) {
                     Box(rowMotion(reduced)) { AddonCard(addon, install, installer::start, installer::cancel) }
                 }
             }
+            // Only after a download stalled with the phone locked: one plain line, until it is answered.
+            if (locked.hint) {
+                item(key = "locked", contentType = "locked") {
+                    Box(rowMotion(reduced)) {
+                        LockedHint(
+                            stringResource(R.string.dl_locked_hint),
+                            onAllow = {
+                                requestExemption()
+                                exemptions.update { it.hintSeen(KjbAddons.DOWNLOADS) }
+                            },
+                            onNotNow = { exemptions.update { it.hintSeen(KjbAddons.DOWNLOADS) } },
+                            modifier = Modifier.padding(horizontal = ScreenPadding),
+                        )
+                    }
+                }
+            }
             if (!filesAccess) {
                 item(key = "access", contentType = "access") {
                     Box(rowMotion(reduced)) {
@@ -221,6 +248,21 @@ fun DownloadsPage(onBack: () -> Unit) {
             }
             downloadsList(ui, onOpen = { opened = it }, onCancel = { Downloads.cancel(context, it.key) })
         }
+    }
+    // Where the add-on is set up, once it is ready: Not now (or the sheet put away) is kept, and the row in Settings keeps
+    // the way to it.
+    if (locked.offer && !allowTapped) {
+        AskSheet(
+            R.drawable.ic_lock,
+            R.string.addon_locked_title,
+            R.string.dl_locked_text,
+            R.string.setup_allow,
+            onAction = {
+                allowTapped = true
+                requestExemption()
+            },
+            onNotNow = { exemptions.update { it.turnedDown(KjbAddons.DOWNLOADS) } },
+        )
     }
     looking?.let { url ->
         SaveSheet(url, onDismiss = { looking = null }) {
@@ -473,6 +515,14 @@ private fun DownloadsSettings(modifier: Modifier) {
     var sheet by remember { mutableStateOf<DownloadsSheet?>(null) }
     var updating by remember { mutableStateOf(false) }
     val version by produceState<String?>(null, updating) { value = withContext(Dispatchers.IO) { DlAddon.withPort(context) { it.status()?.ytdlpVersion } } }
+    // Locked phone, while the add-on is ready: left out of the phone's battery optimisation or not (AD9).
+    val addon by remember(context) { DlAddon.states(context) }.collectAsStateWithLifecycle(initialValue = null)
+    var exempt by remember { mutableStateOf(AddonExemptions.exempt(context, KjbAddons.DOWNLOADS)) }
+    val requestExemption = rememberExemptionRequest(KjbAddons.DOWNLOADS) { exempt = AddonExemptions.exempt(context, KjbAddons.DOWNLOADS) }
+    LifecycleResumeEffect(Unit) {
+        exempt = AddonExemptions.exempt(context, KjbAddons.DOWNLOADS)
+        onPauseOrDispose { }
+    }
     LaunchedEffect(Unit) { Downloads.load(context) }
     val settings = ui.settings
     fun change(block: (DownloadSettings) -> DownloadSettings) = Downloads.settings(context, block)
@@ -495,6 +545,9 @@ private fun DownloadsSettings(modifier: Modifier) {
                         toasts.say(resources, updateMessage(outcome))
                     }
                 }
+            }
+            lockedRow(addon == AddonState.Ready, exempt)?.let { row ->
+                LockedPhoneRow(row, onAllow = requestExemption, onOpenAppInfo = { context.startFirst(listOf(AddonInstalls.addonInfo(KjbAddons.DOWNLOADS))) })
             }
         }
     }

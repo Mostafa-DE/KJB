@@ -61,9 +61,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.lyrify.R
 import app.lyrify.addon.AddonState
+import app.lyrify.addon.ExemptionChoices
 import app.lyrify.addon.HandoverState
 import app.lyrify.addon.InstallFailure
 import app.lyrify.addon.InstallState
+import app.lyrify.addon.KjbAddons
 import app.lyrify.data.LyricsStatus
 import app.lyrify.models.ModelState
 import app.lyrify.models.NpuChip
@@ -96,12 +98,19 @@ data class AiState(
     val handover: HandoverState = HandoverState.None,
     /** Whether KJB may show the AI's progress; denied for good ([NotificationGrant.OFF]), a row opens the phone's settings. */
     val notifications: NotificationGrant = NotificationGrant.ON,
+    /** The phone leaves the AI add-on out of its battery optimisation, so a locked phone does not pause it (AD9). */
+    val addonExempt: Boolean = false,
+    /** What the user answered about the add-ons' exemption, and whether the phone paused one at work. */
+    val exemptions: ExemptionChoices = ExemptionChoices(),
 ) {
     /** The AI runs on this phone: its chip and its software. */
     val supported: Boolean get() = chip != null && newEnough
 
     /** The switch shows once the add-on is there to run the AI. */
     val showsSwitch: Boolean get() = supported && addon == AddonState.Ready
+
+    /** The AI add-on's Run when locked: its offer, its row and the hint after a pause. */
+    val locked: LockedPhone get() = lockedPhone(KjbAddons.AI, addon == AddonState.Ready, addonExempt, exemptions)
 
     /** Tonight, from the run, the files, the charger and holds ([waiting] songs from the ledger). */
     fun night(waiting: Int): NightStatus = nightStatus(enabled, models is ModelState.Ready, progress, hold, pluggedIn, waiting)
@@ -110,6 +119,7 @@ data class AiState(
 /**
  * What the AI tab can do. [readLog]: the last lines of the AI's run log. The add-on: get or update it, cancel that, open
  * the phone's "Install unknown apps" switch for KJB, or the add-on's own app info (to uninstall one that is not KJB's).
+ * Run when locked: the add-on's own request ([onAllowLocked]), and the hint after a pause put away ([onLockedHintSeen]).
  */
 @Immutable
 data class AiActions(
@@ -123,6 +133,8 @@ data class AiActions(
     val onCancelInstall: () -> Unit = {},
     val onOpenInstallSettings: () -> Unit = {},
     val onOpenAddonInfo: () -> Unit = {},
+    val onAllowLocked: () -> Unit = {},
+    val onLockedHintSeen: () -> Unit = {},
 )
 
 // The glance: one ring, one line, at most one action
@@ -499,6 +511,18 @@ fun AiScreen(
         item(key = "switch", contentType = "switch") {
             Column(rowMotion(reduced)) {
                 banner()
+                // Only after the phone paused the AI with the screen locked: one plain line, until it is answered.
+                if (state.locked.hint) {
+                    LockedHint(
+                        stringResource(R.string.ai_locked_hint),
+                        onAllow = {
+                            actions.onAllowLocked()
+                            actions.onLockedHintSeen()
+                        },
+                        onNotNow = actions.onLockedHintSeen,
+                        modifier = Modifier.padding(start = ScreenPadding, end = ScreenPadding, bottom = 12.dp),
+                    )
+                }
                 if (state.showsSwitch) AiSwitchBar(state.enabled, enabled = !state.stopping, actions.onSwitch)
             }
         }
@@ -524,6 +548,8 @@ fun AiScreen(
                         state = state,
                         onDownload = { downloadSheet = true },
                         onBattery = actions.onOpenAppInfo,
+                        onAllowLocked = actions.onAllowLocked,
+                        onOpenAddonInfo = actions.onOpenAddonInfo,
                         onNotifications = actions.onOpenNotificationSettings,
                         onHowItWorks = { howItWorks = true },
                     )
@@ -696,9 +722,20 @@ fun aiDownloadRow(state: AiState): ModelState? = when {
     else -> null
 }
 
-/** The AI download, battery use, the chip and how it works: grouped rows, sheets behind them. */
+/**
+ * The AI download, battery use (KJB's, then the add-on's Locked phone), the chip and how it works: grouped rows, sheets
+ * behind them.
+ */
 @Composable
-private fun AiRows(state: AiState, onDownload: () -> Unit, onBattery: () -> Unit, onNotifications: () -> Unit, onHowItWorks: () -> Unit) {
+private fun AiRows(
+    state: AiState,
+    onDownload: () -> Unit,
+    onBattery: () -> Unit,
+    onAllowLocked: () -> Unit,
+    onOpenAddonInfo: () -> Unit,
+    onNotifications: () -> Unit,
+    onHowItWorks: () -> Unit,
+) {
     val colors = MaterialTheme.colorScheme
     val brand = LocalBrandColors.current
     val tones = LocalStatusColors.current
@@ -738,6 +775,7 @@ private fun AiRows(state: AiState, onDownload: () -> Unit, onBattery: () -> Unit
             onClick = onBattery,
             trailing = chevron,
         )
+        state.locked.row?.let { row -> LockedPhoneRow(row, onAllow = onAllowLocked, onOpenAppInfo = onOpenAddonInfo) }
         // Notifications denied for good: Android asks no more, so the one way back is the phone's own settings.
         if (state.notifications == NotificationGrant.OFF) {
             val off = tones[Tone.ERROR]
