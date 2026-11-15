@@ -1,6 +1,7 @@
 package app.lyrify.downloads
 
 import app.lyrify.addon.AddonDiedException
+import app.lyrify.addon.shared.AddonKeepAlive
 import app.lyrify.data.SharedWrites
 import app.lyrify.dl.api.AudioQuality
 import app.lyrify.dl.api.DlEnd
@@ -142,6 +143,61 @@ class DownloadRunnerTest {
         port.events!!.onFile(file)
         runCurrent()
         port.events!!.onEnd(DlEnd.Delivered(1_000, 50))
+        assertEquals(DownloadOutcome.Saved(File(temp.root, "x.mp3").path, null), outcome.await())
+    }
+
+    @Test
+    fun `silent for 30 s once it beats, the add-on is frozen, the run fails as such with nothing asked of it`() = runTest {
+        val outcome = running()
+        port.events!!.onBeat()
+        port.events!!.onProgress(DlProgress(DlStage.DOWNLOADING, 10f))
+        runCurrent()
+
+        advanceTimeBy(AddonKeepAlive.FROZEN_MS - 1)
+        runCurrent()
+        assertFalse("silent for less than 30 s", outcome.isCompleted)
+        advanceTimeBy(2)
+        runCurrent()
+
+        assertEquals(DownloadOutcome.Failed(DownloadFailure.FROZEN), outcome.await())
+        // A call into a frozen process can wait for as long as it stays frozen: none is made.
+        assertEquals(listOf("start d1", "foreground"), port.calls)
+    }
+
+    @Test
+    fun `beats keep a quiet step from looking frozen, and are no progress for the stall limit`() = runTest {
+        val outcome = running()
+        port.events!!.onProgress(DlProgress(DlStage.CONVERTING))
+        runCurrent()
+
+        repeat((DownloadRunner.STALL_MS / AddonKeepAlive.BEAT_EVERY_MS).toInt() - 1) {
+            advanceTimeBy(AddonKeepAlive.BEAT_EVERY_MS)
+            port.events!!.onBeat()
+            runCurrent()
+        }
+        assertFalse(outcome.isCompleted)
+        repeat(2) {
+            advanceTimeBy(AddonKeepAlive.BEAT_EVERY_MS)
+            port.events!!.onBeat()
+            runCurrent()
+        }
+
+        assertEquals(DownloadOutcome.Failed(DownloadFailure.STALLED), outcome.await())
+    }
+
+    @Test
+    fun `a run that never beats is not watched for freezes`() = runTest {
+        val outcome = running()
+        port.events!!.onProgress(DlProgress(DlStage.DOWNLOADING, 10f))
+        runCurrent()
+
+        advanceTimeBy(4 * AddonKeepAlive.FROZEN_MS)
+        runCurrent()
+        assertFalse(outcome.isCompleted)
+        port.events!!.onFile(file)
+        runCurrent()
+        port.events!!.onEnd(DlEnd.Delivered(1_000, 50))
+
         assertEquals(DownloadOutcome.Saved(File(temp.root, "x.mp3").path, null), outcome.await())
     }
 

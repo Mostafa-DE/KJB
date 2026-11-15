@@ -1,5 +1,6 @@
 package app.lyrify.addon
 
+import app.lyrify.addon.shared.AddonKeepAlive
 import app.lyrify.ai.AiResult
 import app.lyrify.ai.AiStage
 import app.lyrify.ai.api.AddonStatus
@@ -64,6 +65,34 @@ class AddonStalledException(val stage: AiStage?, val silentMs: Long) :
  */
 class AddonFrozenException(val stage: AiStage?, val silentMs: Long) :
     Exception("the AI add-on was frozen: no word for ${silentMs / 1000} s during ${stage?.name?.lowercase() ?: "its start"}")
+
+/**
+ * KJB's watch for an add-on the phone froze (AD9), the same for a song's job and a download: [heard] each word of the job
+ * and [beat] each beat (binder threads). An add-on's job beats every few seconds from a timer no step blocks, so
+ * [silence] returns once one that beat has said nothing for [AddonKeepAlive.FROZEN_MS]; a job that never beat is not
+ * watched.
+ */
+class FreezeWatch {
+    private val alive = Channel<Unit>(Channel.CONFLATED)
+    private val beating = AtomicBoolean(false)
+
+    fun heard() {
+        alive.trySend(Unit)
+    }
+
+    fun beat() {
+        beating.set(true)
+        alive.trySend(Unit)
+    }
+
+    /** Waits for [AddonKeepAlive.FROZEN_MS] without a word from a job that beat. */
+    suspend fun silence() {
+        while (true) {
+            val heard = withTimeoutOrNull(AddonKeepAlive.FROZEN_MS) { alive.receive() } != null
+            if (!heard && beating.get()) return
+        }
+    }
+}
 
 /** One song's job as the add-on tells it (IAiRunCallback, as Kotlin). Called on binder threads. */
 interface RunEvents {
@@ -359,8 +388,7 @@ class RemoteSongEngine(
         // The job's end, also kept apart from the channel: a receive the silence limit cancels can lose what it took.
         val ended = AtomicReference<Event?>(null)
         // Each word from the add-on, beats included, for the freeze watch, which starts with the first beat.
-        val alive = Channel<Unit>(Channel.CONFLATED)
-        val beating = AtomicBoolean(false)
+        val watch = FreezeWatch()
         val heard = object : RunEvents {
             override fun onStage(stage: String) = tell(Event.Stage(stage))
 
@@ -379,13 +407,10 @@ class RemoteSongEngine(
 
             override fun onProgress(done: Int, total: Int) = tell(Event.Progress)
 
-            override fun onBeat() {
-                beating.set(true)
-                alive.trySend(Unit)
-            }
+            override fun onBeat() = watch.beat()
 
             private fun tell(event: Event) {
-                alive.trySend(Unit)
+                watch.heard()
                 events.trySend(event)
             }
         }
@@ -403,8 +428,8 @@ class RemoteSongEngine(
                 events.trySend(Event.Died)
             }
             val frozen = AtomicBoolean(false)
-            val watch = launch {
-                silence(alive, beating)
+            val watching = launch {
+                watch.silence()
                 frozen.set(true)
                 events.trySend(Event.Frozen)
             }
@@ -429,16 +454,8 @@ class RemoteSongEngine(
                 throw e
             } finally {
                 death.cancel()
-                watch.cancel()
+                watching.cancel()
             }
-        }
-    }
-
-    /** Returns once an add-on that beat ([beating]) has said nothing for [FROZEN_MS]. */
-    private suspend fun silence(alive: ReceiveChannel<Unit>, beating: AtomicBoolean) {
-        while (true) {
-            val heard = withTimeoutOrNull(FROZEN_MS) { alive.receive() } != null
-            if (!heard && beating.get()) return
         }
     }
 
@@ -541,7 +558,7 @@ class RemoteSongEngine(
          * The silence that is a freeze once the add-on beats: 6 of its beats (every 5 s) missed. A process the phone froze
          * says nothing at all; one at work on a long step still beats.
          */
-        const val FROZEN_MS: Long = 30_000
+        const val FROZEN_MS: Long = AddonKeepAlive.FROZEN_MS
 
         /** After a stall, how long the add-on gets to stop: its own limit for a stopped step (10 s), then a margin. */
         const val STALL_STOP_MS: Long = 15_000

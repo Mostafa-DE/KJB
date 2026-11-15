@@ -28,7 +28,8 @@ class AiGlanceTest {
         pluggedIn: Boolean = true,
         unrestricted: Boolean = true,
         stopping: Boolean = false,
-    ) = AiState(chip, newEnough, models, enabled, progress, hold, pluggedIn, unrestricted, stopping)
+        addonExempt: Boolean = false,
+    ) = AiState(chip, newEnough, models, enabled, progress, hold, pluggedIn, unrestricted, stopping, addonExempt = addonExempt)
 
     private fun glance(state: AiState, waiting: Int = WAITING) = aiGlance(state, waiting)
 
@@ -241,9 +242,17 @@ class AiGlanceTest {
             glance(state(hold = AiHold.NO_NPU)),
         )
         assertEquals(
-            AiGlance(Ring(1f, RingColor.OUTLINE), Centre.Icon(R.drawable.ic_pause_circle), text(R.string.ai_held_frozen), text(R.string.ai_held_frozen_detail), null),
+            AiGlance(
+                Ring(1f, RingColor.OUTLINE),
+                Centre.Icon(R.drawable.ic_pause_circle),
+                text(R.string.ai_held_frozen),
+                text(R.string.ai_held_frozen_detail),
+                // One tap to Run when locked: the add-on's own request.
+                GlanceAction(AiActionKind.ALLOW_LOCKED, text(R.string.setup_allow)),
+            ),
             glance(state(hold = AiHold.FROZEN)),
         )
+        assertEquals("already allowed: nothing to ask", null, glance(state(hold = AiHold.FROZEN, addonExempt = true)).action)
     }
 
     @Test

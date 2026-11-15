@@ -123,6 +123,13 @@ class DlRunsTest {
             check(this.end == null) { "two ends" }
             this.end = end
         }
+
+        /** Counted apart: they come with the virtual clock, not with the run's steps. */
+        var beats = 0
+
+        override fun onBeat() {
+            beats++
+        }
     }
 
     private val ytdlp = FakeYtdlp()
@@ -622,6 +629,28 @@ class DlRunsTest {
 
         assertFalse(runs.busy)
         assertEquals(1, ends)
+    }
+
+    @Test
+    fun `a run beats at once and every 5 s until it ends, through a yt-dlp that runs for minutes`() = runTest {
+        memory.lastCheck = now
+        ytdlp.scripts += Script.Hang()
+        val runs = runs()
+        val heard = Heard()
+
+        val run = runs.start(song, heard)
+        runCurrent()
+        assertEquals(1, heard.beats)
+        advanceTimeBy(5 * 60_000L)
+        runCurrent()
+        assertEquals("one at its start, then one every 5 s", 61, heard.beats)
+
+        runs.cancel(run, keepParts = true)
+        runCurrent()
+        val beats = heard.beats
+        advanceTimeBy(60_000)
+        runCurrent()
+        assertEquals("none once it ended", beats, heard.beats)
     }
 
     @Test

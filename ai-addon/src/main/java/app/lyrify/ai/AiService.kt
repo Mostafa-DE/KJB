@@ -27,6 +27,7 @@ import app.lyrify.addon.shared.CallerCheck
 import app.lyrify.addon.shared.ExemptionActivity
 import app.lyrify.addon.shared.ForegroundPort
 import app.lyrify.addon.shared.JobForeground
+import app.lyrify.addon.shared.beating
 import app.lyrify.ai.api.AddonNames
 import app.lyrify.ai.api.AddonStatus
 import app.lyrify.ai.api.IAiAddon
@@ -49,7 +50,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -177,12 +177,7 @@ class AddonJobs(
         // ATOMIC: the body runs, and its finally lets go of the song, even when the scope goes before it was dispatched.
         run.job = scope.launch(context, start = CoroutineStart.ATOMIC) {
             // The job's beats, apart from it: they go on while a native step blocks the job's thread for minutes.
-            val beating = scope.launch(beats) {
-                while (true) {
-                    heard.onBeat()
-                    delay(BEAT_EVERY_MS)
-                }
-            }
+            val beating = scope.beating(beats) { heard.onBeat() }
             try {
                 val result = if (stepLeftBehind) {
                     // A step left behind holds the NPU until the process ends: no session is made beside it, and the
@@ -370,7 +365,7 @@ class AddonJobs(
         const val PROGRESS_EVERY_MS: Long = 5_000
 
         /** How often a job tells KJB it is alive ([JobEvents.onBeat]); KJB takes 6 missed beats for a freeze. */
-        const val BEAT_EVERY_MS: Long = 5_000
+        const val BEAT_EVERY_MS: Long = AddonKeepAlive.BEAT_EVERY_MS
 
         /**
          * How long a stopped job's step may take to end before the process ends instead. Every step but one takes

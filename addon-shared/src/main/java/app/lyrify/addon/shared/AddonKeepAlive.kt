@@ -11,13 +11,19 @@ import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlin.coroutines.CoroutineContext
 
 /**
  * What keeps an add-on at work while the phone would rather it stopped (lyrify-bench handoff/addon-freeze-research.md,
  * AD9): a phone's app freezer goes by the add-on's own state, not by who binds it. Samsung's froze both add-ons mid-job,
  * KJB in the foreground or in its own foreground service, and other makers ship their own. Two things count there: the
  * add-on's own foreground service while it works ([JobForeground]), and the add-on left out of the phone's battery
- * optimisation, which it asks for itself ([ExemptionActivity]), KJB offering it.
+ * optimisation, which it asks for itself ([ExemptionActivity]), KJB offering it. Should a phone freeze it all the same,
+ * its beats stop ([beating]), and KJB ends the job in seconds instead of minutes.
  */
 object AddonKeepAlive {
     /**
@@ -25,6 +31,12 @@ object AddonKeepAlive {
      * on the add-on's notice opens (KJB's page for it), and, as Android names its creator, the proof that KJB sent it.
      */
     const val EXTRA_TAP: String = "app.lyrify.addon.extra.TAP"
+
+    /** How often an add-on's job tells KJB it is alive ([beating]). */
+    const val BEAT_EVERY_MS: Long = 5_000
+
+    /** The silence KJB takes for a freeze once a job beats: 6 beats missed. */
+    const val FROZEN_MS: Long = 30_000
 
     /** The tap a start brings ([EXTRA_TAP]); null when there is none or it cannot be read. */
     fun tap(intent: Intent): PendingIntent? = try {
@@ -37,6 +49,18 @@ object AddonKeepAlive {
     } catch (_: RuntimeException) {
         // Extras another app put there that do not unparcel (BadParcelableException): no tap, so the start is refused.
         null
+    }
+}
+
+/**
+ * A job's beats, apart from its own work: one at once, then every [AddonKeepAlive.BEAT_EVERY_MS] on [context] (the main
+ * thread on the phone, which no step blocks), until the returned job is cancelled at the job's end. A process the phone
+ * froze says nothing at all, so KJB tells a freeze (no beat) from a step that takes minutes (beats, no progress).
+ */
+fun CoroutineScope.beating(context: CoroutineContext, beat: () -> Unit): Job = launch(context) {
+    while (true) {
+        beat()
+        delay(AddonKeepAlive.BEAT_EVERY_MS)
     }
 }
 

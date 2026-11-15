@@ -4,6 +4,7 @@ import app.lyrify.addon.AddonState
 import app.lyrify.addon.ExemptionChoices
 import app.lyrify.addon.KjbAddons
 import app.lyrify.models.NpuChips
+import app.lyrify.overnight.AiHold
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -82,13 +83,13 @@ class LockedPhoneTest {
 
     // The AI page
 
-    private fun aiState(addon: AddonState?, exempt: Boolean, choices: ExemptionChoices) = AiState(
+    private fun aiState(addon: AddonState?, exempt: Boolean, choices: ExemptionChoices, hold: AiHold? = null) = AiState(
         chip = NpuChips.ALL.first(),
         newEnough = true,
         models = null,
         enabled = true,
         progress = null,
-        hold = null,
+        hold = hold,
         pluggedIn = true,
         unrestricted = true,
         stopping = false,
@@ -107,6 +108,15 @@ class LockedPhoneTest {
         for (addon in listOf(null, AddonState.Missing, AddonState.Unreachable, AddonState.Untrusted, AddonState.Outdated(1))) {
             assertEquals("$addon", LockedPhone(offer = false, row = null, hint = false), aiState(addon, exempt = false, none.pausedOnce(ai)).locked)
         }
+    }
+
+    @Test
+    fun `while Paused by your phone offers Allow itself, the hint does not ask the same`() {
+        // Turned down at setup, so the offer is not what holds the hint back.
+        val paused = none.turnedDown(ai).pausedOnce(ai)
+
+        assertFalse(aiState(AddonState.Ready, exempt = false, paused, hold = AiHold.FROZEN).locked.hint)
+        assertTrue("the hold gone (the next run started), the hint stays", aiState(AddonState.Ready, exempt = false, paused).locked.hint)
     }
 
     // The copy as it ships

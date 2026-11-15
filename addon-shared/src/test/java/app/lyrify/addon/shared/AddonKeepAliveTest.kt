@@ -1,6 +1,11 @@
 package app.lyrify.addon.shared
 
 import android.content.pm.ServiceInfo
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -8,7 +13,27 @@ import org.junit.Test
  * What keeps an add-on at work, for both add-ons: its own foreground service while it works ([JobForeground]), and the
  * battery exemption it asks for itself, KJB only ([exemptionStep]).
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 class AddonKeepAliveTest {
+    // A job's beats
+
+    @Test
+    fun `a job beats at once, then every 5 s on its own context, until it is stopped`() = runTest {
+        var beats = 0
+        val beating = backgroundScope.beating(StandardTestDispatcher(testScheduler)) { beats++ }
+        runCurrent()
+        assertEquals(1, beats)
+
+        advanceTimeBy(60_000)
+        runCurrent()
+        assertEquals("one at once, then one every 5 s", 1 + (60_000 / AddonKeepAlive.BEAT_EVERY_MS).toInt(), beats)
+        beating.cancel()
+        advanceTimeBy(60_000)
+        runCurrent()
+
+        assertEquals(13, beats)
+    }
+
     // The foreground service while a job works
 
     /** What a tap on the notification opens, as its creator's uid: KJB's PendingIntent on the phone. */

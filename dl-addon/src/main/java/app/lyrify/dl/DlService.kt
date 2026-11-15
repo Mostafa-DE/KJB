@@ -103,6 +103,8 @@ class DlService : Service() {
             quickInfo = { Info.quick(it, USER_AGENT) },
             log = log,
             ended = { foreground.jobEnded() },
+            // The main thread: no run's work is done there.
+            beats = Dispatchers.Main,
         ).also { it.sweep() }
     }
 
@@ -250,6 +252,8 @@ class DlService : Service() {
         override fun onProgress(progress: DlProgress) = send { callback.onProgress(run, DlWire.encode(progress)) }
 
         override fun onFile(file: DlFile) = send { callback.onFile(run, DlWire.encode(file)) }
+
+        override fun onBeat() = send { callback.onBeat(run) }
 
         override fun onEnd(end: DlEnd) {
             send { callback.onEnd(run, DlWire.encode(end)) }

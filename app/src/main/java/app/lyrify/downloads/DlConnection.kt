@@ -39,6 +39,9 @@ interface DlRunEvents {
     fun onFile(file: DlFile)
 
     fun onEnd(end: DlEnd)
+
+    /** The run is alive: every few seconds until its end, from a timer of the add-on's own. */
+    fun onBeat()
 }
 
 /** One lookup as the add-on tells it (IDlInfoCallback, as Kotlin). Called on binder threads. */
@@ -76,7 +79,12 @@ interface DlPort {
 }
 
 /** A bound Downloads add-on after the handshake, until [close] unbinds it; [death] completes when its process dies. */
-class DlSession internal constructor(private val bound: BoundAddon, val port: DlPort, private val startForeground: () -> Boolean) : AutoCloseable {
+class DlSession internal constructor(
+    private val bound: BoundAddon,
+    val port: DlPort,
+    private val startForeground: () -> Boolean,
+    private val stopService: () -> Unit,
+) : AutoCloseable {
     val death: Deferred<Unit> get() = bound.death
 
     /**
@@ -86,6 +94,15 @@ class DlSession internal constructor(private val bound: BoundAddon, val port: Dl
      * refuses; the add-on then works without it.
      */
     fun foreground(): Boolean = startForeground()
+
+    /**
+     * Lets go of an add-on the phone froze: unbinds it and stops the service KJB started for its work ([foreground]), so
+     * nothing of KJB's keeps it. Nothing is asked of the add-on itself.
+     */
+    fun abandon() {
+        close()
+        stopService()
+    }
 
     override fun close() = bound.close()
 }
@@ -135,7 +152,9 @@ object DlAddon {
             return DlConnection.Closed(AddonState.Outdated(api))
         }
         // KJB's Downloads page as the tap on the add-on's notice, which also tells the add-on the start is KJB's.
-        return DlConnection.Open(DlSession(bound, port) { android.startForeground { it.putExtra(AddonKeepAlive.EXTRA_TAP, DownloadNotices.page(context.applicationContext)) } })
+        return DlConnection.Open(
+            DlSession(bound, port, { android.startForeground { it.putExtra(AddonKeepAlive.EXTRA_TAP, DownloadNotices.page(context.applicationContext)) } }, android::stopService),
+        )
     }
 
     /** [block] on the add-on, bound for the call and let go after it; null when it is not ready or died meanwhile. */
@@ -195,6 +214,8 @@ private class AidlDlPort(private val addon: IDlAddon) : DlPort {
             }
 
             override fun onEnd(run: Long, end: String) = events.onEnd(DlWire.end(end))
+
+            override fun onBeat(run: Long) = events.onBeat()
         }
         return call { addon.start(DlWire.encode(request), callback) }
     }

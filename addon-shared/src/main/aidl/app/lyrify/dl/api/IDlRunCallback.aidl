@@ -11,4 +11,8 @@ oneway interface IDlRunCallback {
 
     // JSON DlEnd: delivered, failed, or stopped. The run's last call.
     void onEnd(long run, String end) = 3;
+
+    // The run is alive: every few seconds until its end, from a timer of the add-on's own, whatever yt-dlp is doing. KJB
+    // takes silence for a phone's app freezer at work.
+    void onBeat(long run) = 4;
 }

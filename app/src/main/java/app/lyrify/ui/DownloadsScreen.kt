@@ -474,6 +474,7 @@ private fun failureSentence(reason: DownloadFailure): Int = when (reason) {
     DownloadFailure.NO_ROOM -> R.string.dl_failed_room_detail
     DownloadFailure.HAND_OFF -> R.string.dl_failed_hand_off_detail
     DownloadFailure.STALLED -> R.string.dl_failed_stalled_detail
+    DownloadFailure.FROZEN -> R.string.dl_failed_frozen_detail
     DownloadFailure.ADDON_GONE -> R.string.dl_failed_addon_detail
     DownloadFailure.NO_ADDON -> R.string.dl_failed_no_addon_detail
     DownloadFailure.NOT_ALLOWED -> R.string.dl_failed_not_allowed_detail

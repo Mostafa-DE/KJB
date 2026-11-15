@@ -76,6 +76,7 @@
     <string name="dl_failed_room">Phone is full</string>
     <string name="dl_failed_hand_off">Not saved whole</string>
     <string name="dl_failed_stalled">Stopped answering</string>
+    <string name="dl_failed_frozen">Paused by phone</string>
     <string name="dl_failed_addon">Add-on stopped</string>
     <string name="dl_failed_no_addon">Add-on missing</string>
     <string name="dl_failed_not_allowed">Can\'t save there</string>
@@ -87,6 +88,7 @@
     <string name="dl_failed_room_detail">Your phone has no room left for it. Free some space, then Retry.</string>
     <string name="dl_failed_hand_off_detail">The file did not reach KJB whole, so nothing was kept. Retry goes on from what was downloaded.</string>
     <string name="dl_failed_stalled_detail">The download stopped moving, so KJB stopped it. Retry goes on from what was downloaded.</string>
+    <string name="dl_failed_frozen_detail">A locked phone paused the Downloads add-on. Retry goes on from what was downloaded.</string>
     <string name="dl_failed_addon_detail">The Downloads add-on stopped. Retry goes on from what was downloaded.</string>
     <string name="dl_failed_no_addon_detail">Downloads needs its add-on. Get it on the Downloads page, then Retry.</string>
     <string name="dl_failed_not_allowed_detail">KJB may not save in that folder. Check All files access, or pick another folder in Settings.</string>

@@ -1,6 +1,7 @@
 package app.lyrify.downloads
 
 import app.lyrify.addon.AddonDiedException
+import app.lyrify.addon.FreezeWatch
 import app.lyrify.data.SharedWrite
 import app.lyrify.data.SharedWrites
 import app.lyrify.dl.api.DlEnd
@@ -58,7 +59,9 @@ interface DownloadSaver {
  * ([DownloadSaver.finish]). Never waited for forever: a run that says nothing for [stallMs] (longer than any step takes)
  * is stopped and fails. Cancelled (the user, or Android's limit for long work), it tells the add-on, which kills yt-dlp and
  * keeps its parts for the next try; the part file here goes. Once the add-on took the run, KJB starts the add-on's own
- * foreground service ([foreground], DlSession.foreground), where it works until the file is handed back.
+ * foreground service ([foreground], DlSession.foreground), where it works until the file is handed back. A run that beat,
+ * then said nothing for 30 s, was frozen by the phone ([FreezeWatch]): it fails as such at once, nothing more asked of the
+ * add-on (a call into a frozen process can wait for as long as it stays frozen), and its parts stay for a Retry.
  */
 class DownloadRunner(
     private val port: DlPort,
@@ -76,21 +79,26 @@ class DownloadRunner(
         data class End(val end: DlEnd) : Event
 
         data object Died : Event
+
+        /** Nothing for 30 s from an add-on that beat: the phone froze it. */
+        data object Frozen : Event
     }
 
     suspend fun run(item: DownloadItem, progress: (DlProgress) -> Unit): DownloadOutcome {
         val events = Channel<Event>(Channel.UNLIMITED)
+        val watch = FreezeWatch()
         val heard = object : DlRunEvents {
-            override fun onProgress(progress: DlProgress) {
-                events.trySend(Event.Progress(progress))
-            }
+            override fun onProgress(progress: DlProgress) = tell(Event.Progress(progress))
 
-            override fun onFile(file: DlFile) {
-                events.trySend(Event.File(file))
-            }
+            override fun onFile(file: DlFile) = tell(Event.File(file))
 
-            override fun onEnd(end: DlEnd) {
-                events.trySend(Event.End(end))
+            override fun onEnd(end: DlEnd) = tell(Event.End(end))
+
+            override fun onBeat() = watch.beat()
+
+            private fun tell(event: Event) {
+                watch.heard()
+                events.trySend(event)
             }
         }
         val request = DlRequest(item.key, item.url, item.kind, item.audio, item.height, item.originalLanguage)
@@ -107,6 +115,10 @@ class DownloadRunner(
                 death.await()
                 events.trySend(Event.Died)
             }
+            val watching = launch {
+                watch.silence()
+                events.trySend(Event.Frozen)
+            }
             try {
                 follow(events, run, item, progress) { target = it }
             } catch (e: CancellationException) {
@@ -122,6 +134,7 @@ class DownloadRunner(
                 throw e
             } finally {
                 died.cancel()
+                watching.cancel()
             }
         }
     }
@@ -172,6 +185,7 @@ class DownloadRunner(
                     DlEnd.Stopped -> failed(DownloadFailure.ADDON_GONE)
                 }
                 Event.Died -> return failed(DownloadFailure.ADDON_GONE)
+                Event.Frozen -> return failed(DownloadFailure.FROZEN)
             }
         }
     }

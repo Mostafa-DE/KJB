@@ -109,8 +109,12 @@ data class AiState(
     /** The switch shows once the add-on is there to run the AI. */
     val showsSwitch: Boolean get() = supported && addon == AddonState.Ready
 
-    /** The AI add-on's Run when locked: its offer, its row and the hint after a pause. */
+    /**
+     * The AI add-on's Run when locked: its offer, its row and the hint after a pause, which waits while Paused by your phone
+     * offers Allow itself.
+     */
     val locked: LockedPhone get() = lockedPhone(KjbAddons.AI, addon == AddonState.Ready, addonExempt, exemptions)
+        .let { if (hold == AiHold.FROZEN) it.copy(hint = false) else it }
 
     /** Tonight, from the run, the files, the charger and holds ([waiting] songs from the ledger). */
     fun night(waiting: Int): NightStatus = nightStatus(enabled, models is ModelState.Ready, progress, hold, pluggedIn, waiting)
@@ -177,7 +181,7 @@ sealed interface Centre {
     data class Value(val value: CentreValue, @StringRes val label: Int? = null) : Centre
 }
 
-enum class AiActionKind { DOWNLOAD, RESUME, TRY_AGAIN, OPEN_APP_INFO, GET_ADDON, CANCEL_INSTALL, OPEN_INSTALL_SETTINGS, OPEN_ADDON_INFO }
+enum class AiActionKind { DOWNLOAD, RESUME, TRY_AGAIN, OPEN_APP_INFO, GET_ADDON, CANCEL_INSTALL, OPEN_INSTALL_SETTINGS, OPEN_ADDON_INFO, ALLOW_LOCKED }
 
 data class GlanceAction(val kind: AiActionKind, val label: GlanceText)
 
@@ -237,7 +241,9 @@ fun aiGlance(state: AiState, waiting: Int): AiGlance {
             AiHold.MODEL_FAILED -> held(RingColor.ERROR, R.drawable.ic_error, R.string.ai_held_model, R.string.ai_held_model_detail)
             AiHold.CRASHED -> held(RingColor.ERROR, R.drawable.ic_error, R.string.ai_held_crashed, R.string.ai_held_crashed_detail)
             AiHold.NO_NPU -> held(RingColor.OUTLINE, R.drawable.ic_memory, R.string.ai_held_npu, R.string.ai_held_npu_detail)
+            // One tap to Run when locked, unless the add-on is already left out of battery optimisation.
             AiHold.FROZEN -> held(RingColor.OUTLINE, R.drawable.ic_pause_circle, R.string.ai_held_frozen, R.string.ai_held_frozen_detail)
+                .copy(action = GlanceAction(AiActionKind.ALLOW_LOCKED, GlanceText(R.string.setup_allow)).takeUnless { state.addonExempt })
         }
         NightStatus.AllDone -> AiGlance(
             Ring(1f, RingColor.SYNCED),
@@ -536,6 +542,10 @@ fun AiScreen(
                         AiActionKind.CANCEL_INSTALL -> actions.onCancelInstall()
                         AiActionKind.OPEN_INSTALL_SETTINGS -> actions.onOpenInstallSettings()
                         AiActionKind.OPEN_ADDON_INFO -> actions.onOpenAddonInfo()
+                        AiActionKind.ALLOW_LOCKED -> {
+                            actions.onAllowLocked()
+                            actions.onLockedHintSeen()
+                        }
                     }
                 }
             }
