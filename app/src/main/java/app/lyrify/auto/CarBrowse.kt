@@ -124,7 +124,7 @@ class CarBrowse(
         grantsScope.launch { ControllerAccess.CAR_PACKAGES.forEach { CarCovers.revoke(context, it) } }
         // Recent queues follows the queues: a car showing it hears when one comes or goes.
         scope.launch {
-            core.book.map { (listOfNotNull(it.currentId) + it.saved + it.recent).distinct() }.distinctUntilChanged().drop(1)
+            core.book.map { book -> book.listed.map { it.id } }.distinctUntilChanged().drop(1)
                 .collect { session.notifyChildrenChanged(LibraryTree.QUEUES, it.size, null) }
         }
     }

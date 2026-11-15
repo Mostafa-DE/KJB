@@ -98,9 +98,10 @@
     <!-- The Favourites row at the top of Songs, with no favourite songs. -->
     <string name="lib_none_yet">None yet</string>
     <string name="lib_queues">Queues</string>
-    <plurals name="lib_saved">
-        <item quantity="one">%d saved</item>
-        <item quantity="other">%d saved</item>
+    <!-- The Queues row's line: every queue, the one playing too. Never shown for none. -->
+    <plurals name="lib_queues_count">
+        <item quantity="one">%d queue</item>
+        <item quantity="other">%d queues</item>
     </plurals>
     <string name="lib_built_for_you">Built for you</string>
     <string name="lib_favourites">Favourites</string>
@@ -187,16 +188,8 @@
     <string name="lib_add_to_queue">Add to queue</string>
     <string name="lib_add_to_end">Add to end</string>
     <plurals name="lib_queue_playing">
-        <item quantity="one">Playing · %d song</item>
-        <item quantity="other">Playing · %d songs</item>
-    </plurals>
-    <plurals name="lib_queue_saved">
-        <item quantity="one">Saved · %d song</item>
-        <item quantity="other">Saved · %d songs</item>
-    </plurals>
-    <plurals name="lib_queue_recent">
-        <item quantity="one">Recent · %d song</item>
-        <item quantity="other">Recent · %d songs</item>
+        <item quantity="one">Playing now · %d song</item>
+        <item quantity="other">Playing now · %d songs</item>
     </plurals>
     <string name="lib_new_queue">New queue</string>
     <string name="lib_added">Added</string>

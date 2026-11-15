@@ -279,7 +279,7 @@ private fun FavouriteRow(on: Boolean, onToggle: () -> Unit) {
 
 /**
  * Add to, the one door for one song or many. Queues first: the queue playing by name, with Play next and Add to end
- * (without one, Play next and Add to queue), then the saved and recent queues and New queue; then Favourites, then the
+ * (without one, Play next and Add to queue), then the other queues and New queue; then Favourites, then the
  * user's playlists and New playlist. A place that already holds every song is ticked.
  */
 @Composable
@@ -328,7 +328,7 @@ internal fun AddToSheet(songs: List<SongRef>, title: String, ui: LibraryUi, onDi
                 AddTarget.PlayNext, is AddTarget.AddToQueue -> Unit
                 is AddTarget.Queue -> NavRow(
                     title = target.queue.name,
-                    sub = pluralStringResource(if (target.queue.saved) R.plurals.lib_queue_saved else R.plurals.lib_queue_recent, target.queue.songs, target.queue.songs),
+                    sub = pluralStringResource(R.plurals.lib_songs, target.queue.songs, target.queue.songs),
                     lead = { Tile(R.drawable.ic_queue_music) },
                     trailing = null,
                 ) { onTarget(target) }

@@ -193,31 +193,31 @@ class SongActionsTest {
     // Add to
 
     @Test
-    fun `Add to offers the queue playing first, then saved and recent queues, Favourites, then the playlists by name`() {
-        val playing = QueueTarget("q0", "Album · Harbour Glass", 12, saved = false, playing = true)
-        val recent = QueueTarget("q1", "Folder · Rips", 30, saved = false, playing = false)
-        val saved = QueueTarget("q2", "Sunday chores", 8, saved = true, playing = false)
-        val older = QueueTarget("q3", "Road trip", 20, saved = true, playing = false)
+    fun `Add to offers the queue playing first, then the other queues as the Queues page lists them, Favourites, then the playlists by name`() {
+        val playing = QueueTarget("q0", "Album · Harbour Glass", 12, playing = true)
+        val recent = QueueTarget("q1", "Folder · Rips", 30, playing = false)
+        val kept = QueueTarget("q2", "Sunday chores", 8, playing = false)
+        val older = QueueTarget("q3", "Road trip", 20, playing = false)
         assertEquals(
             listOf(
                 AddTarget.PlayNext,
                 AddTarget.AddToQueue(playing),
-                AddTarget.Queue(saved),
-                AddTarget.Queue(older),
                 AddTarget.Queue(recent),
+                AddTarget.Queue(kept),
+                AddTarget.Queue(older),
                 AddTarget.NewQueue,
                 AddTarget.Favourites,
                 AddTarget.ToPlaylist(roadTrip),
                 AddTarget.ToPlaylist(sunday),
                 AddTarget.NewPlaylist,
             ),
-            addTargets(listOf(playing, recent, saved, older), listOf(sunday, roadTrip)),
+            addTargets(listOf(playing, recent, kept, older), listOf(sunday, roadTrip)),
         )
-        // A saved queue playing shows once, as the queue playing.
-        val savedPlaying = saved.copy(playing = true)
+        // A kept queue playing shows once, as the queue playing.
+        val keptPlaying = kept.copy(playing = true)
         assertEquals(
-            listOf(AddTarget.PlayNext, AddTarget.AddToQueue(savedPlaying), AddTarget.Queue(older), AddTarget.NewQueue, AddTarget.Favourites, AddTarget.NewPlaylist),
-            addTargets(listOf(savedPlaying, older), emptyList()),
+            listOf(AddTarget.PlayNext, AddTarget.AddToQueue(keptPlaying), AddTarget.Queue(older), AddTarget.NewQueue, AddTarget.Favourites, AddTarget.NewPlaylist),
+            addTargets(listOf(keptPlaying, older), emptyList()),
         )
         // With nothing playing, Play next and Add to queue make a queue of the songs.
         assertEquals(listOf(AddTarget.PlayNext, AddTarget.AddToQueue(null), AddTarget.NewQueue, AddTarget.Favourites, AddTarget.NewPlaylist), addTargets(emptyList(), emptyList()))
@@ -256,7 +256,7 @@ class SongActionsTest {
         val start = QueueBook().play(listOf(lantern.ref, bell.ref), 0, album, now = 1).book.place(0, 42_000)
         val player = BookPlayback(start)
         val actions = SongActions(player, MemoryPlaylists())
-        val playing = QueueTarget(start.currentId!!, "Harbour Glass", 2, saved = false, playing = true)
+        val playing = QueueTarget(start.currentId!!, "Harbour Glass", 2, playing = true)
 
         assertEquals(Said.AlreadyIn("Harbour Glass", 1), actions.addToEnd(playing, listOf(bell.ref))?.said)
         assertEquals(start, player.book)
@@ -283,7 +283,7 @@ class SongActionsTest {
         val road = start.saved.single()
         val player = BookPlayback(start)
         val actions = SongActions(player, MemoryPlaylists())
-        val target = QueueTarget(road, "Road trip", 1, saved = true, playing = false)
+        val target = QueueTarget(road, "Road trip", 1, playing = false)
 
         val added = actions.addToQueue(target, listOf(water.ref, lantern.ref))
         assertEquals(Said.AddedTo("Road trip", 1, already = 1), added?.said)
@@ -382,7 +382,7 @@ class SongActionsTest {
     fun `a named queue says how many were added and how many were there already`() = runBlocking {
         val player = FakePlayback()
         val actions = SongActions(player, MemoryPlaylists())
-        val road = QueueTarget("q3", "Road trip", 20, saved = true, playing = false)
+        val road = QueueTarget("q3", "Road trip", 20, playing = false)
         val songs = listOf(lantern.ref, bell.ref, water.ref)
 
         player.named = QueueAdded(added = 1, already = 2, undo = Undo { player.undone += "named" })

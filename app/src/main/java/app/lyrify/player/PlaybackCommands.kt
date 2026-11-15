@@ -30,8 +30,8 @@ fun interface Undo {
     fun undo()
 }
 
-/** A saved or recent queue, as the Add to sheet and the Playlists tab's Queues row show it. [id] never changes. */
-data class QueueTarget(val id: String, val name: String, val songs: Int, val saved: Boolean, val playing: Boolean)
+/** A queue, as the Add to sheet and the Playlists tab's Queues row show it ([QueueBook.listed]). [id] never changes. */
+data class QueueTarget(val id: String, val name: String, val songs: Int, val playing: Boolean)
 
 /** Songs added to a queue that is not playing: [added] of them, [already] skipped because the queue holds them. */
 data class QueueAdded(val added: Int, val already: Int, val undo: Undo?)
@@ -41,7 +41,7 @@ data class QueueAdded(val added: Int, val already: Int, val undo: Undo?)
  * (milestone P1); until then [NoPlayback]. Called on the main thread; never blocks.
  */
 interface PlaybackCommands {
-    /** The saved queues, then the recent ones, the newest first, the one playing among them: the Add to sheet's Queues. */
+    /** Every queue as the screens list them ([QueueBook.listed]): the Add to sheet's Queues and the Queues row. */
     val queues: StateFlow<List<QueueTarget>>
 
     /**
@@ -66,7 +66,7 @@ interface PlaybackCommands {
      */
     fun addToQueue(id: String, songs: List<SongRef>): QueueAdded?
 
-    /** "New queue": a saved queue named [name] holding [songs] (each once), made from [source]; nothing starts playing. */
+    /** "New queue": a kept queue named [name] of [songs] (each once), made from [source]; nothing starts playing. */
     fun newQueue(name: String, songs: List<SongRef>, source: QueueSource?): Undo?
 }
 

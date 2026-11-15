@@ -95,15 +95,8 @@
     <!-- Queues -->
     <string name="queue_title">Queue</string>
     <string name="queue_from">From %1$s · %2$s</string>
-    <string name="queue_keep">Keep</string>
-    <string name="queue_keep_named">Keep %1$s</string>
-    <string name="queue_kept">Kept in Saved</string>
-    <string name="queue_saved_tag">Saved</string>
-    <string name="queue_recent_tag">Recent</string>
-    <string name="queue_playing_tag">Playing</string>
     <string name="queue_recent">Recent</string>
     <string name="queue_all">All queues</string>
-    <string name="queue_no_recent">No recent queues</string>
     <string name="queue_nothing">Nothing queued</string>
     <string name="queue_save_playlist">Save as playlist</string>
     <string name="queue_playlist_field">Playlist name</string>
@@ -111,9 +104,12 @@
     <string name="queue_playlist_saved">Saved as %1$s</string>
     <string name="queue_playlist_failed">The playlist could not be saved.</string>
     <string name="queues_title">Queues</string>
-    <string name="queues_saved">Saved</string>
+    <!-- The queue playing, first on the Queues page, and its song's place in it: "12 of 48". -->
+    <string name="queues_playing">Playing now</string>
+    <string name="queue_position">%1$d of %2$d</string>
     <string name="queues_recent">Recent</string>
-    <string name="queues_saved_empty">Keep a recent queue to save it here.</string>
+    <string name="queues_none">No queues yet</string>
+    <string name="queues_none_text">Play a song and its queue shows here.</string>
     <string name="queue_place">Song %1$d of %2$d · %3$s</string>
     <string name="queue_line">%1$s · %2$s</string>
     <string name="queue_resume">Resume</string>

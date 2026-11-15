@@ -180,9 +180,7 @@ class PlayerConnection(
 
     override val queues: StateFlow<List<QueueTarget>> = core.book.map { book ->
         val names = queueLabels(context, book)
-        (book.saved + book.recent + listOfNotNull(book.currentId)).distinct().mapNotNull(book::queue).map { queue ->
-            QueueTarget(queue.id, names.getValue(queue.id), queue.items.size, saved = queue.id in book.saved, playing = queue.id == book.currentId)
-        }
+        book.listed.map { queue -> QueueTarget(queue.id, names.getValue(queue.id), queue.items.size, playing = queue.id == book.currentId) }
     }.stateIn(scope, SharingStarted.Eagerly, emptyList())
 
     private val listener = object : Player.Listener {
@@ -291,8 +289,6 @@ class PlayerConnection(
     }
 
     // The queue pages
-
-    fun keep(queueId: String) = core.change { it.keep(queueId) }
 
     fun rename(queueId: String, name: String) = core.change { it.rename(queueId, name) }
 

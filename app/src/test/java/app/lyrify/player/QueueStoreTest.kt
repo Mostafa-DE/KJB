@@ -144,6 +144,28 @@ class QueueStoreTest {
     }
 
     @Test
+    fun `queues saved with Keep before read back whole and show among the others, by when each was left`() {
+        val text = """
+            {"schemaVersion":1,"current":"q3","recent":["q2"],"saved":["q1","q4"],"nextId":5,"nextUid":9,
+             "queues":[
+              {"id":"q1","source":{"kind":"FOLDER","key":"folder:Music/Rips","name":"Rips"},"name":"Sunday chores","index":1,"positionMs":42000,"updatedAt":100,
+               "items":[{"uid":1,"path":"/storage/emulated/0/Music/a.mp3"},{"uid":2,"path":"/storage/emulated/0/Music/b.mp3"}]},
+              {"id":"q2","source":{"kind":"SONGS","key":"songs","name":""},"updatedAt":300,"items":[{"uid":3,"path":"/storage/emulated/0/Music/c.mp3"}]},
+              {"id":"q3","source":{"kind":"ALBUM","key":"album:lantern","name":"Paper Lantern"},"updatedAt":400,"items":[{"uid":4,"path":"/storage/emulated/0/Music/d.mp3"}]},
+              {"id":"q4","source":{"kind":"PICKED","key":"picked#q4","name":""},"name":"Road trip","updatedAt":200,"items":[{"uid":5,"path":"/storage/emulated/0/Music/e.mp3"}]}
+             ]}
+        """.trimIndent()
+        val book = QueuesJson.decode(text)!!
+        assertEquals(listOf("q3", "q2", "q4", "q1"), book.listed.map { it.id })
+        assertEquals("Sunday chores", book.queue("q1")!!.name)
+        assertEquals(1, book.queue("q1")!!.index)
+        assertEquals(42_000L, book.queue("q1")!!.positionMs)
+        // Stored again, nothing about them changed: a backup or an older KJB reads them as before.
+        assertEquals(listOf("q1", "q4"), book.saved)
+        assertEquals(book, QueuesJson.decode(QueuesJson.encode(book)))
+    }
+
+    @Test
     fun `a current queue that is gone reads as nothing playing`() {
         val text = """{"current":"q8","queues":[{"id":"q1","source":{"kind":"SONGS","key":"songs","name":""},"items":[{"uid":1,"path":"/storage/emulated/0/a.mp3"}]}],"recent":["q1"]}"""
         val book = QueuesJson.decode(text)!!
