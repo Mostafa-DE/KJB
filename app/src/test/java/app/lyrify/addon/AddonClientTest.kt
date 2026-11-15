@@ -346,6 +346,16 @@ class AddonClientTest {
     }
 
     @Test
+    fun `KJB waits 10 minutes for a first load and 3 for a step, past the add-on's NPU deadlines of 8 and 2`() {
+        assertEquals(10 * 60_000L, RemoteSongEngine.FIRST_LOAD_MS)
+        assertEquals(3 * 60_000L, RemoteSongEngine.STEP_MS)
+        // The add-on's own (ai-addon NpuStages.MDX_CREATE_MS and NPU_STEP_MS, pinned in its NpuContractTest): its NPU busy
+        // answer comes first.
+        assertTrue(RemoteSongEngine.FIRST_LOAD_MS > 8 * 60_000L)
+        assertTrue(RemoteSongEngine.STEP_MS > 2 * 60_000L)
+    }
+
+    @Test
     fun `before the models have loaded the add-on gets the first load's longer limit`() = runTest {
         val host = FakeHost()
         val engine = RemoteSongEngine(session(host), notes = {})
