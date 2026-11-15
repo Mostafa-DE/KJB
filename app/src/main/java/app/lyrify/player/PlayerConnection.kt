@@ -283,8 +283,6 @@ class PlayerConnection(
 
     // The queue pages
 
-    fun keep(queueId: String) = core.change { it.keep(queueId) }
-
     fun rename(queueId: String, name: String) = core.change { it.rename(queueId, name) }
 
     /** "Delete": only the queue goes, never the one playing; Undo puts it back where it was. Null when nothing went. */
