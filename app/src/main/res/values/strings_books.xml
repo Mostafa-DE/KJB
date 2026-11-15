@@ -23,6 +23,8 @@
     <string name="sleep_end_of_chapter">End of chapter</string>
     <string name="sleep_this_book">This book</string>
     <string name="speed_book_sentence">This book plays at its own speed. Your music keeps its usual speed.</string>
+    <string name="book_no_lyrics">No lyrics for books</string>
+    <string name="book_cover">Cover of %1$s. Swipe to skip.</string>
 
     <!-- The song and folder menus. -->
     <string name="book_mark">Mark as book</string>

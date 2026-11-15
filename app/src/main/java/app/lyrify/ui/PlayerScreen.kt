@@ -92,6 +92,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.lyrify.Lyrify
 import app.lyrify.R
 import app.lyrify.books.BookNow
+import app.lyrify.books.isBookPart
 import app.lyrify.data.LyricsStatus
 import app.lyrify.library.albumKey
 import app.lyrify.library.displayTitle
@@ -247,8 +248,15 @@ data class MetaLine(val artist: MetaName, val album: MetaName)
 
 fun metaLine(artist: String?, album: String?): MetaLine = MetaLine(MetaName(artist?.trim()?.takeIf(String::isNotEmpty)), MetaName(album?.trim()?.takeIf(String::isNotEmpty)))
 
-/** "Tap the cover for lyrics": once, when the player opens on the cover. */
-fun flipHintOnOpen(ui: PlayerUiSettings): Boolean = !ui.flipHintShown && !ui.showLyrics
+/** "Tap the cover for lyrics": once, when the player opens on a song's cover; a [book]'s cover never flips, so not there. */
+fun flipHintOnOpen(ui: PlayerUiSettings, book: Boolean): Boolean = !book && !ui.flipHintShown && !ui.showLyrics
+
+/**
+ * Whether the flip area shows the lyrics: the side the user left songs on, the cover for a [book]'s part (books have no
+ * lyrics), and the lyrics while the tour's lyrics step points at them ([touring]), for a book its calm state. The side
+ * kept for songs is never changed by a book.
+ */
+fun showsLyrics(ui: PlayerUiSettings, book: Boolean, touring: Boolean): Boolean = touring || ui.showLyrics && !book
 
 /** The links row and the progress bar each take a 48 dp touch area; this much clear space separates them, chips or not. */
 private val LINKS_GAP = 16.dp
@@ -270,6 +278,9 @@ sealed interface PanelLyrics {
 
     /** "No lyrics yet", with Search. */
     data object None : PanelLyrics
+
+    /** A book's part: books never have lyrics, so nothing is read or looked up for one, and nothing offered. */
+    data object Book : PanelLyrics
 }
 
 /** The panel for a song whose `.lrc` holds [lrc] (null without one), and whose ledger entry has [status] (null without one). */
@@ -416,7 +427,9 @@ fun PlayerView() {
     LaunchedEffect(headed) { if (headed) drag.reset() }
     var lyricsRoute by remember { mutableStateOf<PlayerRoute?>(null) }
     val extras = rememberPlayerExtras()
-    val lyricsShare = rememberLyricsShare(ui.item.song.path, LocalLyrics.current.ledger.entries[ui.item.song.path])
+    // A book's part, however it plays: its cover only, never the lyrics (LyricsViews.kt songLyrics), nor Share lyrics.
+    val bookPart = isBookPart(ui.item.song.path, ui.library)
+    val lyricsShare = if (bookPart) null else rememberLyricsShare(ui.item.song.path, LocalLyrics.current.ledger.entries[ui.item.song.path])
     val route: (PlayerRoute) -> Unit = { route ->
         when (route) {
             // The lyrics panel's Search and "Aa" (LyricsViews.kt).
@@ -432,7 +445,7 @@ fun PlayerView() {
     // "Tap the cover for lyrics", once, when the player first opens on the cover.
     LaunchedEffect(Unit) {
         val first = store.settings.first().playerUi
-        if (flipHintOnOpen(first)) {
+        if (flipHintOnOpen(first, bookPart)) {
             store.update { it.copy(playerUi = it.playerUi.copy(flipHintShown = true)) }
             toasts.show(Toast(resources.getString(R.string.player_flip_hint), R.drawable.ic_lyrics))
         }
@@ -466,7 +479,8 @@ fun PlayerView() {
                     ui = ui,
                     // The tour's Synced lyrics step turns the cover to the lyrics while it points at them; the side kept
                     // stays as the user left it.
-                    showLyrics = settings.playerUi.showLyrics || LocalTour.current?.state?.stop == TourStop.LYRICS,
+                    showLyrics = showsLyrics(settings.playerUi, bookPart, touring = LocalTour.current?.state?.stop == TourStop.LYRICS),
+                    flips = !bookPart,
                     onFlip = { lyrics -> scope.launch { store.update { it.copy(playerUi = it.playerUi.copy(showLyrics = lyrics)) } } },
                     onSeek = connection::seekTo,
                     onPlay = connection::play,
@@ -627,13 +641,15 @@ private fun PlayerTopBar(ui: PlayerUi, lyricsShare: LyricsShare?, onClose: () ->
 
 /**
  * The cover, and the lyrics panel on its back, in the free space: a tap flips it (a short 3D turn; a crossfade under
- * reduced motion), the "Lyrics" chip and the round cover chip are its visible twins. A sideways swipe on the cover skips
+ * reduced motion), the "Lyrics" chip and the round cover chip are its visible twins; a book's part never [flips], so its
+ * cover has neither tap nor chip ([showsLyrics]). A sideways swipe on the cover skips
  * (twins: Previous and Next), a swipe down closes the player (twin: the chevron).
  */
 @Composable
 private fun FlipArea(
     ui: PlayerUi,
     showLyrics: Boolean,
+    flips: Boolean,
     onFlip: (Boolean) -> Unit,
     onSeek: (Long) -> Unit,
     onPlay: () -> Unit,
@@ -666,7 +682,7 @@ private fun FlipArea(
                     cameraDistance = CAMERA * density
                     alpha = frontAlpha
                 },
-            ) { CoverFace(ui, side, area, enabled = !lyricsShown, onFlip = { onFlip(true) }, onNext, onPrevious, onDownDrag, onDownEnd) }
+            ) { CoverFace(ui, side, area, enabled = !lyricsShown, onFlip = if (flips) { { onFlip(true) } } else null, onNext, onPrevious, onDownDrag, onDownEnd) }
         }
         if (lyricsShown || (reduced && fade.value > 0f)) {
             Box(
@@ -687,8 +703,8 @@ private data class Landing(val way: SkipWay, val item: QueueItem)
  * The cover and its swipe ([swipeAxis] to [settleShift]): it follows the finger and tilts; the next or previous song's
  * cover rides in beside it from the screen's edge; past [SWIPE_SKIP_DP] it finishes the way (the prototype's 0.2 s ease)
  * and only then plays that song, with the incoming cover already in place, so nothing jumps. Short of it, or with no
- * song to slide in (Previous starting the song over, the end of the queue), it springs back. A tap flips to the lyrics;
- * down past [SWIPE_CLOSE_DP] closes the player.
+ * song to slide in (Previous starting the song over, the end of the queue), it springs back. A tap flips to the lyrics
+ * ([onFlip]; null for a book: no tap, no chip); down past [SWIPE_CLOSE_DP] closes the player.
  */
 @Composable
 private fun CoverFace(
@@ -696,7 +712,7 @@ private fun CoverFace(
     side: Dp,
     area: Dp,
     enabled: Boolean,
-    onFlip: () -> Unit,
+    onFlip: (() -> Unit)?,
     onNext: () -> Unit,
     onPrevious: () -> Unit,
     onDownDrag: (PointerInputChange, Float) -> Unit,
@@ -738,7 +754,7 @@ private fun CoverFace(
         moving?.let { incoming(ui.queue, it, ui.repeat, ui.positionAt(SystemClock.elapsedRealtime())) }
     }
     val neighbour = if (arrived) null else landing?.item ?: beside
-    val label = stringResource(R.string.player_cover, ui.song?.title ?: ui.item.song.path.substringAfterLast('/'))
+    val label = stringResource(if (onFlip != null) R.string.player_cover else R.string.book_cover, ui.song?.title ?: ui.item.song.path.substringAfterLast('/'))
     Box(Modifier.fillMaxSize()) {
         if (neighbour != null && way != null) {
             val from = if (way == SkipWay.NEXT) travel else -travel
@@ -816,12 +832,12 @@ private fun CoverFace(
                         }
                     }
                 }
-                .clickable(enabled = enabled, role = Role.Button, onClick = onFlip)
+                .then(if (onFlip != null) Modifier.clickable(enabled = enabled, role = Role.Button, onClick = onFlip) else Modifier)
                 .semantics { contentDescription = label },
         ) {
             SongCover(SongArt(ui.item.song.path), containerCover(LocalContainer.current), size = side, shape = shape)
         }
-        FlipChip(Modifier.align(Alignment.BottomEnd).padding(12.dp), enabled, onFlip)
+        if (onFlip != null) FlipChip(Modifier.align(Alignment.BottomEnd).padding(12.dp), enabled, onFlip)
     }
 }
 
@@ -859,14 +875,16 @@ private fun FlipChip(modifier: Modifier, enabled: Boolean, onFlip: () -> Unit) {
  * The back of the cover: synced lines that scroll with the current one lit (a tap jumps there), plain lyrics as still
  * text, or the state ("Finding lyrics", "No lyrics yet" with Search). Its header holds the status pill, "Aa" and
  * "Full screen"; the round cover chip flips back. The `.lrc` next to the song is read off the main thread, again
- * whenever its ledger entry changes.
+ * whenever its ledger entry changes. A book's part (shown only by the tour's lyrics step) has a calm "No lyrics for
+ * books", with no pill, "Aa", "Full screen" or Search.
  */
 @Composable
 private fun LyricsPanel(ui: PlayerUi, enabled: Boolean, onFlipBack: () -> Unit, onSeek: (Long) -> Unit, onPlay: () -> Unit, onRoute: (PlayerRoute) -> Unit) {
     val nav = LocalNavigator.current
     val path = ui.item.song.path
     val entry = LocalLyrics.current.ledger.entries[path]
-    val lyrics = rememberSongLyrics(path, entry)
+    val book = isBookPart(path, ui.library)
+    val lyrics = rememberSongLyrics(path, entry, book)
     val now = rememberClock(ui.playing)
     Column(
         Modifier
@@ -876,12 +894,15 @@ private fun LyricsPanel(ui: PlayerUi, enabled: Boolean, onFlipBack: () -> Unit, 
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(start = 14.dp, end = 4.dp)) {
             when {
+                book -> Unit
                 lyrics == PanelLyrics.Finding -> StatusPill(stringResource(R.string.player_finding_lyrics), tone = null, leading = { BrandGlyph(width = 12.dp, sweeping = true) })
                 entry != null -> StatusPill(entry.status)
             }
             Spacer(Modifier.weight(1f))
-            AaButton(enabled) { onRoute(PlayerRoute.LYRICS_TEXT) }
-            LyrifyButton(stringResource(R.string.player_full_screen), { nav.show(FullScreen.FullLyrics) }, kind = ButtonKind.GHOST, icon = R.drawable.ic_open_in_full, compact = true, enabled = enabled)
+            if (!book) {
+                AaButton(enabled) { onRoute(PlayerRoute.LYRICS_TEXT) }
+                LyrifyButton(stringResource(R.string.player_full_screen), { nav.show(FullScreen.FullLyrics) }, kind = ButtonKind.GHOST, icon = R.drawable.ic_open_in_full, compact = true, enabled = enabled)
+            }
         }
         Box(Modifier.weight(1f).fillMaxWidth()) {
             when (val shown = lyrics) {
@@ -891,8 +912,9 @@ private fun LyricsPanel(ui: PlayerUi, enabled: Boolean, onFlipBack: () -> Unit, 
                     if (tap.play) onPlay()
                 }
                 is PanelLyrics.Plain -> StillLyrics(shown.lines, PanelStill, PaddingValues(start = 22.dp, end = 22.dp, bottom = 64.dp))
-                PanelLyrics.Finding -> PanelState(stringResource(R.string.player_finding_lyrics), action = null)
+                PanelLyrics.Finding -> PanelState(stringResource(R.string.player_finding_lyrics), sweeping = true, action = null)
                 PanelLyrics.None -> PanelState(stringResource(R.string.player_no_lyrics)) { onRoute(PlayerRoute.SEARCH_LYRICS) }
+                PanelLyrics.Book -> PanelState(stringResource(R.string.book_no_lyrics), action = null)
                 null -> Unit
             }
             CoverChip(ui, Modifier.align(Alignment.BottomEnd).padding(10.dp), enabled, onFlipBack)
@@ -900,10 +922,11 @@ private fun LyricsPanel(ui: PlayerUi, enabled: Boolean, onFlipBack: () -> Unit, 
     }
 }
 
+/** The panel's state: the brand glyph (sweeping while lyrics are being found), [title], and Search when there is an [action]. */
 @Composable
-private fun PanelState(title: String, action: (() -> Unit)?) {
+internal fun PanelState(title: String, sweeping: Boolean = false, action: (() -> Unit)?) {
     Column(Modifier.fillMaxSize().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterVertically)) {
-        BrandGlyph(width = 28.dp, sweeping = action == null)
+        BrandGlyph(width = 28.dp, sweeping = sweeping)
         Text(title, style = LyricsStateTitle, textAlign = TextAlign.Center)
         if (action != null) LyrifyButton(stringResource(R.string.player_search_lyrics), action, kind = ButtonKind.SECONDARY, icon = R.drawable.ic_search, compact = true)
     }

@@ -355,9 +355,10 @@ class LyricsPipeline(
      * ([Candidates.searched]). Synced lyrics are written through the same marker and exclusive create as any; plain
      * lyrics are kept as PLAIN_ONLY with that record, for the AI to time. With [song] (the player's Search, its tags
      * from the library), the song need not wait for a check; a write under way and lyrics the user made (unless they
-     * removed them) still win.
+     * removed them) still win. A book's part ([isBook]) is never asked for and never gets a `.lrc`: nothing changed.
      */
     suspend fun choose(audioPath: String, id: Long, song: LocalTrack? = null): Checked = exclusive(audioPath) {
+        if (isBook(audioPath)) return@exclusive Checked.Changed
         val stored = ledger.entry(audioPath)
         val theirs = stored?.mine == true && stored.status != LyricsStatus.REMOVED
         val searched = song != null && stored?.status != LyricsStatus.WRITING && !theirs
@@ -456,10 +457,13 @@ class LyricsPipeline(
         is LrclibResult.Transient -> LyricsPreview.Unavailable(result.cause)
     }
 
-    /** "Search myself": what LRCLIB has for [text] (`q=`, asked once) that fits [track] ([Candidates.searched]). */
+    /**
+     * "Search myself": what LRCLIB has for [text] (`q=`, asked once) that fits [track] ([Candidates.searched]). Nothing
+     * for a book's part ([isBook]), and LRCLIB is not asked.
+     */
     suspend fun search(track: LocalTrack, text: String): Searched {
         val words = text.trim().take(MAX_SEARCH_CHARS)
-        if (words.isEmpty()) return Searched.Found(emptyList())
+        if (words.isEmpty() || isBook(track.path)) return Searched.Found(emptyList())
         return when (val result = client.search(words, null, Lane.HIGH)) {
             is LrclibResult.Found -> Searched.Found(Candidates.searched(result.records, track))
             LrclibResult.NotFound -> Searched.Found(emptyList())
