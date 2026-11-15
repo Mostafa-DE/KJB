@@ -27,6 +27,7 @@
     <!-- The song and folder menus. -->
     <string name="book_mark">Mark as book</string>
     <string name="book_not">Not a book</string>
+    <string name="book_looks_like">This looks like a book.</string>
     <string name="book_marked">Marked as book</string>
     <string name="book_unmarked">Back to music</string>
     <string name="book_folder_menu">Folder menu</string>

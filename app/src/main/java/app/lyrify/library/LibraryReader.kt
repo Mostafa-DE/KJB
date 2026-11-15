@@ -87,6 +87,7 @@ class LibraryReader(
         val mimeType = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.MIME_TYPE)
         val isMusic = cursor.getColumnIndexOrThrow(MediaStore.Audio.AudioColumns.IS_MUSIC)
         val isAudiobook = cursor.getColumnIndexOrThrow(MediaStore.Audio.AudioColumns.IS_AUDIOBOOK)
+        val isPodcast = cursor.getColumnIndexOrThrow(MediaStore.Audio.AudioColumns.IS_PODCAST)
         fun text(column: Int): String? = cursor.getString(column)?.trim()?.takeIf { it.isNotEmpty() && it != UNKNOWN }
         fun long(column: Int): Long? = if (cursor.isNull(column)) null else cursor.getLong(column)
         return buildList {
@@ -114,6 +115,7 @@ class LibraryReader(
                         mimeType = cursor.getString(mimeType),
                         albumId = long(albumId)?.takeIf { it > 0 },
                         isAudiobook = book,
+                        isPodcast = cursor.getInt(isPodcast) != 0,
                     ),
                 )
             }
@@ -147,6 +149,7 @@ class LibraryReader(
             MediaStore.MediaColumns.MIME_TYPE,
             MediaStore.Audio.AudioColumns.IS_MUSIC,
             MediaStore.Audio.AudioColumns.IS_AUDIOBOOK,
+            MediaStore.Audio.AudioColumns.IS_PODCAST,
         )
 
         /**

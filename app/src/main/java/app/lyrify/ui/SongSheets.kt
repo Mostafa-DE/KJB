@@ -51,6 +51,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.lyrify.R
+import app.lyrify.books.looksLikeBook
 import app.lyrify.data.LedgerEntry
 import app.lyrify.data.LyricsStatus
 import app.lyrify.library.Song
@@ -94,7 +95,16 @@ internal fun SongMenuSheet(
                     SheetRow.SHARE_LYRICS -> ActionRow(R.drawable.ic_share, stringResource(R.string.share_lyrics), chevron = true) { onRow(row) }
                     SheetRow.SONG_INFO -> ActionRow(R.drawable.ic_info, stringResource(R.string.lib_song_info)) { onRow(row) }
                     SheetRow.EDIT_TAGS -> ActionRow(R.drawable.ic_sell, stringResource(R.string.lib_edit_tags)) { onRow(row) }
-                    SheetRow.BOOK -> ActionRow(R.drawable.ic_auto_stories, stringResource(if (ui.library?.bookOf(song.path) != null) R.string.book_not else R.string.book_mark)) { onRow(row) }
+                    SheetRow.BOOK -> {
+                        val library = ui.library
+                        // A podcast or a long lone file: Mark as book is suggested, never done by itself (books/Books.kt).
+                        val looks = remember(song, library) { library != null && looksLikeBook(song, library) }
+                        ActionRow(
+                            R.drawable.ic_auto_stories,
+                            stringResource(if (library?.bookOf(song.path) != null) R.string.book_not else R.string.book_mark),
+                            supporting = if (looks) stringResource(R.string.book_looks_like) else null,
+                        ) { onRow(row) }
+                    }
                     SheetRow.COVERS_TAGS -> ActionRow(R.drawable.ic_album, stringResource(R.string.tools_covers)) { onRow(row) }
                     SheetRow.REMOVE_FROM_QUEUE -> ActionRow(R.drawable.ic_playlist_remove, stringResource(R.string.lib_remove_from_queue)) { onRow(row) }
                     SheetRow.REMOVE_FROM_PLAYLIST -> ActionRow(R.drawable.ic_playlist_remove, stringResource(R.string.lib_remove_from_playlist)) { onRow(row) }
@@ -187,12 +197,13 @@ internal fun LinkText(text: String, onClick: (() -> Unit)?, modifier: Modifier =
 /** The sheet's song title (.shh .t): Bricolage 21/26. */
 private val SheetSongTitle = display(21, 26, -0.01)
 
-/** A row of a sheet: its icon, its words, maybe a value and a chevron; 52 dp tall; [danger] in red. */
+/** A row of a sheet: its icon, its words (and a [supporting] line under them), maybe a value and a chevron; 52 dp tall; [danger] in red. */
 @Composable
 private fun ActionRow(
     @DrawableRes icon: Int,
     text: String,
     modifier: Modifier = Modifier,
+    supporting: String? = null,
     danger: Boolean = false,
     chevron: Boolean = false,
     iconTint: Color = Color.Unspecified,
@@ -212,7 +223,10 @@ private fun ActionRow(
             .padding(horizontal = 8.dp),
     ) {
         Icon(painterResource(icon), contentDescription = null, tint = iconTint.takeOrElse { if (danger) colors.error else colors.onSurfaceVariant }, modifier = Modifier.size(22.dp))
-        Text(text, style = MaterialTheme.typography.bodyLarge, color = content, modifier = Modifier.weight(1f))
+        Column(Modifier.weight(1f)) {
+            Text(text, style = MaterialTheme.typography.bodyLarge, color = content)
+            supporting?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant) }
+        }
         // The tail (.tail): its value and the chevron 6 dp apart.
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             trailing?.invoke()

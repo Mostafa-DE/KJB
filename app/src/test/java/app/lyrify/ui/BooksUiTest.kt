@@ -30,7 +30,7 @@ class BooksUiTest {
     @Test
     fun `labels are three words or fewer, the status lines are the spec's, and no text has an em-dash`() {
         val lines = setOf("book_chapter_of", "book_left", "book_hours_minutes", "book_minutes", "book_source")
-        val sentences = setOf("speed_book_sentence")
+        val sentences = setOf("speed_book_sentence", "book_looks_like")
         strings.filterKeys { it !in lines + sentences }.forEach { (name, text) -> assertTrue("$name: $text", text.split(' ').size <= 3) }
         assertEquals("Chapter 7 of 22", strings.getValue("book_chapter_of").replace("%1\$d", "7").replace("%2\$d", "22"))
         assertEquals("2 h 10 m left", strings.getValue("book_left").replace("%1\$s", strings.getValue("book_hours_minutes").replace("%1\$d", "2").replace("%2\$d", "10")))

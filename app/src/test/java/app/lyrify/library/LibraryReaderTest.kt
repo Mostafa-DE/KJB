@@ -185,6 +185,16 @@ class LibraryReaderTest {
     }
 
     @Test
+    fun `a podcast in a Music folder is listed and known as one`() {
+        val rows = listOf(
+            row("Music/Podcasts/Glass Talk/Episode 5.mp3", MediaStore.Audio.Media.IS_MUSIC to 0, MediaStore.Audio.AudioColumns.IS_PODCAST to 1, id = 1),
+            row("Music/A/song.mp3", id = 2),
+        )
+
+        assertEquals(listOf(true, false), songs(reader(rows).read()).map { it.isPodcast })
+    }
+
+    @Test
     fun `a debug build lists only the songs in its test folder`() {
         val root = folder.root.toPath()
         val debug = SharedWrites(testFolderOnly = true, root = root)
