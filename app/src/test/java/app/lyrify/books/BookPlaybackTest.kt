@@ -61,6 +61,19 @@ class BookPlaybackTest {
     }
 
     @Test
+    fun `a book's queue plays as a book while the library loads, and once it is read a song added to it does not`() {
+        val queue = bookQueue().current!!
+        assertTrue(playsAsBook(queue, null, queue.items[0].uid))
+        assertTrue(playsAsBook(queue, library, queue.items[0].uid))
+        val added = QueueBook().play(parts.map { it.ref }, 0, bookSource(book), now = 1).book.playNext(listOf(music.ref), bookSource(book), now = 2)!!.book.current!!
+        assertTrue(playsAsBook(added, null, added.items[1].uid))
+        assertFalse(playsAsBook(added, library, added.items[1].uid))
+        val songs = musicQueue().current!!
+        assertFalse(playsAsBook(songs, null, songs.items[0].uid))
+        assertFalse(playsAsBook(songs, library, songs.items[0].uid))
+    }
+
+    @Test
     fun `End of chapter stops at the end of the chapter playing, in a file with chapters only`() {
         val chapters = listOf(Chapter(0, 4_000, "One"), Chapter(4_000, 8_000, "Two"), Chapter(8_000, 12_000, "Three"))
         assertEquals(SleepTimer.ByChapter(8_000, listOf(4_000, 8_000, 12_000)), sleepToChapterEnd(chapters, 5_000))
@@ -224,6 +237,27 @@ class BookPlaybackTest {
         runCurrent()
         assertTrue(last.store.state.value.entryOf(book)!!.finished)
         assertEquals(BookPlace(), last.store.state.value.placeOf(book))
+    }
+
+    @Test
+    fun `a seek is kept at once, and music started right after it keeps the place it jumped to`() = runTest {
+        val run = driving()
+        run.driver.playingChanged(true)
+        run.port.positionMs = 10_000
+        advanceTimeBy(1_100)
+        runCurrent()
+        run.port.positionMs = 70_000
+        run.driver.seeked(70_000)
+        runCurrent()
+        assertEquals(BookPlace(0, 70_000), run.store.state.value.placeOf(book))
+        // Back 30 s, then a song at once, before the next look.
+        run.port.positionMs = 40_000
+        run.driver.seeked(40_000)
+        run.playing = null
+        run.port.positionMs = 0
+        run.driver.songStarted(uid = 9, lap = false, natural = false)
+        runCurrent()
+        assertEquals(BookPlace(0, 40_000), run.store.state.value.placeOf(book))
     }
 
     @Test

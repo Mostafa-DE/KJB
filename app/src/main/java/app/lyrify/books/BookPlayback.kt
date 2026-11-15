@@ -66,6 +66,13 @@ fun playingBook(queue: Queue?, library: Library?, uid: Long? = queue?.current?.u
     return if (part < 0) null else PlayingBook(book, part)
 }
 
+/**
+ * Whether song [uid] of [queue] plays as a book's part, for Remember my place and the speeds: once the library is read
+ * ([library]), one of the book's parts ([playingBook]); before that, every song of a book's queue, so a book restored
+ * while the library loads never jumps to a place Remember my place kept.
+ */
+fun playsAsBook(queue: Queue?, library: Library?, uid: Long): Boolean = inBook(queue) && (library == null || playingBook(queue, library, uid) != null)
+
 /** The speed of the book playing, as `books.json` has it; null while music plays: the player's speed follows it (player/PlaybackExtras.kt). */
 fun bookSpeeds(core: PlayerCore, library: StateFlow<LibraryState>, store: BookStore): Flow<Speed?> =
     combine(core.book, library, store.state) { queues, state, books ->
@@ -152,6 +159,14 @@ class BookDriver(
         if (!playing) keep()
     }
 
+    /** The user jumped inside the part playing, to [toMs] (a chapter, 30 s): kept at once, so nothing after it loses it. */
+    fun seeked(toMs: Long) {
+        val now = seen() ?: return
+        current = now
+        lastMs = toMs
+        store.change { it.withPlace(now.book, BookPlace(now.partIndex, toMs), clock()) }
+    }
+
     /** The queue played to its end with Repeat off: a book's last part is done, the book finished. */
     fun ended() {
         val now = playing() ?: return
@@ -167,13 +182,18 @@ class BookDriver(
         store.change { it.withPlace(now.book, at, clock()) }
     }
 
-    /** Notes the part playing and where, unless the player is in another one it has not said it started yet. */
+    /** Notes the part playing and where. */
     private fun look() {
-        val now = playing() ?: return
-        val was = current
-        if (was != null && (was.book.id != now.book.id || was.partIndex != now.partIndex)) return
+        val now = seen() ?: return
         current = now
         lastMs = port.positionMs
+    }
+
+    /** The book's part playing, unless the player is in another one it has not said it started yet. */
+    private fun seen(): PlayingBook? {
+        val now = playing() ?: return null
+        val was = current
+        return now.takeIf { was == null || was.book.id == now.book.id && was.partIndex == now.partIndex }
     }
 
     /** The player left [left]'s book at [atMs] of its part, or ([natural]) at the end of it: the next part, or finished. */
@@ -212,6 +232,8 @@ class BookPart : ServicePart {
             override fun onSongStarted(uid: Long, lap: Boolean, natural: Boolean) = made.songStarted(uid, lap, natural)
 
             override fun onPlayingChanged(playing: Boolean) = made.playingChanged(playing)
+
+            override fun onSeeked(fromMs: Long, toMs: Long) = made.seeked(toMs)
 
             // The service parks the queue at its first song first (PlaybackService's Follower).
             override fun onEnded() = made.ended()

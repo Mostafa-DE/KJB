@@ -10,7 +10,7 @@ import app.lyrify.LOG_TAG
 import app.lyrify.Lyrify
 import app.lyrify.books.BooksGraph
 import app.lyrify.books.bookSpeeds
-import app.lyrify.books.playingBook
+import app.lyrify.books.playsAsBook
 import app.lyrify.library.LibraryGraph
 import app.lyrify.library.LibraryState
 import app.lyrify.library.SongRef
@@ -583,7 +583,8 @@ internal fun playingOf(uid: Long, core: PlayerCore, library: StateFlow<LibrarySt
     val read = (library.value as? LibraryState.Ready)?.library
     val song = read?.resolver?.find(ref)
     val decoded = engine.durationMs.takeIf { it != C.TIME_UNSET && engine.loaded.getOrNull(engine.index) == uid } ?: 0
-    return Playing(uid, song?.ref ?: ref, song?.durationMs?.takeIf { it > 0 } ?: decoded, inBook = playingBook(queue, read, uid) != null)
+    // A book's queue is a book from its source, before the library is read too ([playsAsBook]).
+    return Playing(uid, song?.ref ?: ref, song?.durationMs?.takeIf { it > 0 } ?: decoded, inBook = playsAsBook(queue, read, uid))
 }
 
 /** Speeds, the part repeating and Remember my place in the service ([ExtrasDriver] on the engine). */
