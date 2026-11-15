@@ -6,8 +6,8 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
-import java.io.RandomAccessFile
 import java.nio.ByteBuffer
+import java.nio.file.Files
 import kotlin.random.Random
 import androidx.media3.extractor.metadata.Chapter as Media3Chapter
 
@@ -21,7 +21,7 @@ class QuickTimeChaptersTest {
     @get:Rule
     val folder = TemporaryFolder()
 
-    private fun read(file: File): List<Media3Chapter> = RandomAccessFile(file, "r").use(::quickTimeChapters)
+    private fun read(file: File): List<Media3Chapter> = Files.newByteChannel(file.toPath()).use(::quickTimeChapters)
 
     private fun read(bytes: ByteArray): List<Media3Chapter> = read(folder.newFile().apply { writeBytes(bytes) })
 

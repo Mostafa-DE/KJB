@@ -21,7 +21,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
-import java.io.RandomAccessFile
+import java.nio.ByteBuffer
+import java.nio.channels.SeekableByteChannel
+import java.nio.file.Files
+import java.nio.file.StandardOpenOption
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
@@ -117,11 +120,12 @@ private fun titleOf(mark: Media3Chapter): String? {
  * chapter track only with every track's table built (a 6 h book's half million audio samples) and its text as UTF-8 only.
  * Empty for a file that is no MP4 or has no such track. Bounded for any file: at most [BookState.MAX_CHAPTERS] samples and
  * [Mp4Boxes.MAX_BOXES] box headers, every table read only as far as its box and those samples, nothing past the file's end.
+ * The [file] is only read: a channel opened for reading.
  */
 @OptIn(UnstableApi::class)
-fun quickTimeChapters(file: RandomAccessFile): List<Media3Chapter> {
+fun quickTimeChapters(file: SeekableByteChannel): List<Media3Chapter> {
     val boxes = Mp4Boxes(file)
-    val moov = boxes.children(0, file.length()).firstOrNull { it.type == MOOV } ?: return emptyList()
+    val moov = boxes.children(0, file.size()).firstOrNull { it.type == MOOV } ?: return emptyList()
     val tracks = boxes.children(moov).filter { it.type == TRAK }.map { trak ->
         val inside = boxes.children(trak)
         val chapters = inside.firstOrNull { it.type == TREF }?.let(boxes::children)?.firstOrNull { it.type == CHAP }?.let(boxes::trackIds).orEmpty()
@@ -144,8 +148,8 @@ private class Mp4Box(val type: Int, val start: Long, val end: Long) {
 
 /** [quickTimeChapters]'s reads: box headers inside their parent and the file, at most [MAX_BOXES] of them; tables capped. */
 @OptIn(UnstableApi::class)
-private class Mp4Boxes(private val file: RandomAccessFile) {
-    private val length = file.length()
+private class Mp4Boxes(private val file: SeekableByteChannel) {
+    private val length = file.size()
     private var headersLeft = MAX_BOXES
 
     /** The boxes in [start] to [end], in order, until one that does not fit there (a broken or cut file) or the cap. */
@@ -294,11 +298,13 @@ private class Mp4Boxes(private val file: RandomAccessFile) {
     /** [count] bytes from [offset] into [box]'s body; null when they are not all inside it. */
     private fun body(box: Mp4Box, offset: Int, count: Int): ByteArray? = if (count < 0 || offset + count > box.size) null else bytes(box.start + offset, count)
 
-    /** [count] bytes of the file from [at]; null when they are not all inside it. */
+    /** [count] bytes of the file from [at]; null when they are not all inside it (or it was cut short meanwhile). */
     private fun bytes(at: Long, count: Int): ByteArray? {
         if (at < 0 || count < 0 || at > length - count) return null
-        file.seek(at)
-        return ByteArray(count).also(file::readFully)
+        val read = ByteBuffer.allocate(count)
+        file.position(at)
+        while (read.hasRemaining()) if (file.read(read) < 0) return null
+        return read.array()
     }
 
     companion object {
@@ -411,7 +417,7 @@ class BookChapters(private val store: BookStore, private val reader: ChapterRead
 class Media3Chapters(private val context: Context, private val log: (String) -> Unit = {}) : ChapterReader {
     override suspend fun read(path: String, durationMs: Long): List<Chapter>? = withContext(Dispatchers.IO) {
         try {
-            val quickTime = RandomAccessFile(path, "r").use(::quickTimeChapters)
+            val quickTime = Files.newByteChannel(File(path).toPath(), StandardOpenOption.READ).use(::quickTimeChapters)
             chaptersOf(quickTime.ifEmpty { media3Entries(path) }, durationMs)
         } catch (e: ExecutionException) {
             log("books: chapters not read (${(e.cause ?: e).javaClass.simpleName})")
