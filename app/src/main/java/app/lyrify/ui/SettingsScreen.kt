@@ -600,6 +600,7 @@ val LibraryTab.label: Int
         LibraryTab.FOLDERS -> R.string.library_tab_folders
         LibraryTab.PLAYLISTS -> R.string.library_tab_playlists
         LibraryTab.GENRES -> R.string.library_tab_genres
+        LibraryTab.BOOKS -> R.string.library_tab_books
     }
 
 @Composable

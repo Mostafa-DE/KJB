@@ -1,11 +1,16 @@
 package app.lyrify.downloads
 
+import app.lyrify.books.Book
+import app.lyrify.books.inAudiobooksFolder
 import app.lyrify.dl.api.AudioQuality
 import app.lyrify.dl.api.DlFailure
 import app.lyrify.dl.api.DlFile
 import app.lyrify.dl.api.DlKind
 import app.lyrify.dl.api.DlMeta
 import app.lyrify.dupes.AudioFile
+import app.lyrify.library.Library
+import app.lyrify.library.song
+import app.lyrify.settings.Settings
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -78,6 +83,19 @@ class DownloadsModelTest {
         listOf("", "/Music/x", "Music/../Android", "Music/./x", "Movies/x", "Android/data/x", "Music//x", "Music/a:b", "Music/" + "x".repeat(70), "Music/a/b/c/d/e")
             .forEach { assertFalse(it, DownloadFolders.valid(it, DlKind.AUDIO)) }
         assertFalse(DownloadFolders.valid("Music/KJB Downloads", DlKind.VIDEO))
+    }
+
+    @Test
+    fun `songs are never saved where books are found by their folder alone, so a download is never a book by it`() {
+        listOf("Audiobooks/KJB Downloads", "Music/Audiobooks", "Download/audiobooks/New", "Podcasts/AUDIOBOOKS")
+            .forEach { assertFalse(it, DownloadFolders.valid(it, DlKind.AUDIO)) }
+        assertTrue(DownloadFolders.valid("Podcasts/KJB Downloads", DlKind.AUDIO))
+        // A folder stored before this rule reads as the usual one.
+        assertEquals(DownloadFolders.AUDIO, DownloadsJson.decode("""{"settings":{"audioFolder":"Audiobooks/Saved"}}""").settings.audioFolder)
+        // A song saved in the usual folder is music.
+        val saved = song("${DownloadFolders.AUDIO}/Paper Lantern.mp3")
+        assertFalse(inAudiobooksFolder(saved.folder))
+        assertEquals(emptyList<Book>(), Library.of(listOf(saved), Settings()).books)
     }
 
     @Test

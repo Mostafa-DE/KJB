@@ -1,5 +1,8 @@
 package app.lyrify.library
 
+import app.lyrify.books.Book
+import app.lyrify.books.BookMarks
+import app.lyrify.books.booksOf
 import app.lyrify.settings.LibrarySettings
 import app.lyrify.settings.Settings
 import app.lyrify.settings.SortAlbums
@@ -73,7 +76,7 @@ data class FolderRow(val names: List<String>, val folder: Folder)
 class Library private constructor(
     /** Every song MediaStore lists (a debug build: its test folder only), short clips and skipped folders too. */
     val all: List<Song>,
-    /** The library's songs, in path order ([Folder.allSongs]): [all] without hidden songs, short clips and skipped folders. */
+    /** The library's songs, in path order ([Folder.allSongs]): [all] without hidden songs, short clips, skipped folders and books. */
     val songs: List<Song>,
     /** By title. */
     val albums: List<Album>,
@@ -83,17 +86,27 @@ class Library private constructor(
     val artists: List<Artist>,
     /** By name. */
     val genres: List<Genre>,
-    /** The Folders tab: [Folder.rows] of the root. */
+    /** The Folders tab: [Folder.rows] of the root. Books' files are here too: folders are file browsing. */
     val root: Folder,
     /** Finds songs again among [all], hidden ones too: a queue or playlist keeps a song the filters hide. */
     val resolver: SongResolver,
+    /** The Books tab: every book among the songs ([app.lyrify.books.booksOf]), by title. Their files are in no other list. */
+    val books: List<Book> = emptyList(),
 ) {
     private val byPath: Map<String, Song> = songs.associateBy { it.path }
     private val albumsByKey: Map<String, Album> = albums.associateBy { it.key }
     private val artistsByName: Map<String, Artist> = artists.associateBy { it.name }
     private val genresByName: Map<String, Genre> = genres.associateBy { it.name }
+    private val booksById: Map<String, Book> = books.associateBy { it.id }
+    private val bookByPath: Map<String, Book> = books.flatMap { book -> book.parts.map { it.path to book } }.toMap()
 
     fun album(key: String): Album? = albumsByKey[key]
+
+    /** The book whose part is the file at [path]; null for music. */
+    fun bookOf(path: String): Book? = bookByPath[path]
+
+    /** The book [id] names ([Book.id]); null when it is gone. */
+    fun book(id: String): Book? = booksById[id]
 
     fun artist(name: String): Artist? = artistsByName[name]
 
@@ -116,15 +129,22 @@ class Library private constructor(
         /** "Skip short clips": songs shorter than this leave the library. */
         const val SHORT_CLIP_MS: Long = 30_000
 
-        /** The library of [all] under [settings]' "Hidden songs", "Skip short clips" and "Folders to skip". */
-        fun of(all: List<Song>, settings: Settings): Library {
+        /**
+         * The library of [all] under [settings]' "Hidden songs", "Skip short clips" and "Folders to skip", with the books
+         * [marks] and the automatic signals make ([app.lyrify.books.booksOf]) taken out of the music.
+         */
+        fun of(all: List<Song>, settings: Settings, marks: BookMarks = BookMarks()): Library {
             val collator = collator()
             val resolver = SongResolver(all)
             // A hidden song is found as a playlist's is: by its path, then by its id on the same volume, so a rename or a
             // move in place keeps it hidden.
             val hidden = settings.library.hiddenSongs.mapNotNullTo(HashSet()) { resolver.find(it)?.path }
-            val root = folderOf("", "", all.filter { inLibrary(it, settings, hidden) }, collator)
-            val songs = root.allSongs
+            // A book's short parts stay in it: "Skip short clips" is for music. A hidden file is in no book.
+            val shown = all.filter { inLibrary(it, settings.copy(playback = settings.playback.copy(skipShortClips = false)), hidden) }
+            val books = booksOf(shown, marks)
+            val bookPaths = books.flatMapTo(HashSet()) { book -> book.parts.map { it.path } }
+            val root = folderOf("", "", shown.filter { it.path in bookPaths || inLibrary(it, settings, hidden) }, collator)
+            val songs = root.allSongs.filterNot { it.path in bookPaths }
             val byAlbum = songs.groupBy(::albumKey)
             val albums = byAlbum.mapNotNull { (key, its) ->
                 if (key == null) return@mapNotNull null
@@ -155,7 +175,7 @@ class Library private constructor(
             val genres = songs.groupBy { text(it.genre) }
                 .mapNotNull { (name, its) -> name?.let { Genre(it, its) } }
                 .sortedWith(compareBy(nameOrder(collator)) { it.name })
-            return Library(all, songs, albums, byAlbum[null].orEmpty(), artists, genres, root, resolver)
+            return Library(all, songs, albums, byAlbum[null].orEmpty(), artists, genres, root, resolver, books)
         }
 
         /** The folder [name] at [path] holding [songs] at or below it ([Song.folder] relative to its volume). */

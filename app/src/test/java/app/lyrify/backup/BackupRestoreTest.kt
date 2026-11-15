@@ -8,12 +8,24 @@ import app.lyrify.audio.OutputKind
 import app.lyrify.backup.BackupFixtures.T0
 import app.lyrify.backup.BackupFixtures.bell
 import app.lyrify.backup.BackupFixtures.contents
+import app.lyrify.backup.BackupFixtures.archive
+import app.lyrify.backup.BackupFixtures.keeperId
+import app.lyrify.backup.BackupFixtures.keeperOne
+import app.lyrify.backup.BackupFixtures.keeperTwo
 import app.lyrify.backup.BackupFixtures.lantern
+import app.lyrify.backup.BackupFixtures.newArchive
 import app.lyrify.backup.BackupFixtures.newBell
+import app.lyrify.backup.BackupFixtures.newKeeperOne
 import app.lyrify.backup.BackupFixtures.newLantern
 import app.lyrify.backup.BackupFixtures.newLibrary
 import app.lyrify.backup.BackupFixtures.newWater
 import app.lyrify.backup.BackupFixtures.water
+import app.lyrify.books.BookEntry
+import app.lyrify.books.BookMarks
+import app.lyrify.books.BookPlace
+import app.lyrify.books.BookState
+import app.lyrify.books.Chapter
+import app.lyrify.books.folderBookId
 import app.lyrify.data.LedgerEntry
 import app.lyrify.data.LedgerState
 import app.lyrify.data.LyricsStatus
@@ -87,6 +99,7 @@ class BackupRestoreTest {
         assertEquals(BackupFixtures.duplicates, stores.duplicates)
         assertEquals(BackupFixtures.keptApart, stores.keptApart)
         assertEquals(BackupFixtures.searches, stores.searches)
+        assertEquals(BackupFixtures.booksKept, stores.books)
     }
 
     // Replace and merge
@@ -271,17 +284,105 @@ class BackupRestoreTest {
         assertEquals(listOf(30_000L to "Chorus"), stores.songState.bookmarksOf(lantern.path).map { it.positionMs to it.note })
     }
 
+    // Books
+
+    @Test
+    fun `books are added to the phone's own and counted, the phone's marks kept`() {
+        val shelf = "${VOLUME_PHONE}Audiobooks/Quiet Shelf.m4b"
+        val mine = BookEntry(shelf, "Quiet Shelf", "Ada Quill", listOf(shelf), BookPlace(0, 90_000), shelf, lastPlayedAt = T0 + 1)
+        val stores = MemoryStores(books = BookState(mapOf(shelf to mine), BookMarks(notSongs = setOf(water.path))))
+
+        val result = restore(stores, chosen = setOf(Section.BOOKS))
+
+        assertEquals(listOf(Section.BOOKS), result.restored)
+        assertEquals(2, result.counts[Section.BOOKS])
+        assertEquals(BackupFixtures.booksKept.books + (shelf to mine), stores.books.books)
+        // The phone said Low Water is no book, the backup that it is one: the phone's word stays.
+        assertEquals(BookMarks(folders = setOf("Spoken/Ada Quill"), notSongs = setOf(water.path), notFolders = setOf("Music/Night Ferry")), stores.books.marks)
+    }
+
+    @Test
+    fun `a book whose part playing is not on this phone starts again, never at that place in another file`() {
+        val stores = MemoryStores()
+
+        restore(stores, library = BackupFixtures.library - keeperTwo, chosen = setOf(Section.BOOKS))
+
+        val keeper = stores.books.books.values.single { it.title == "Lantern Keeper" }
+        assertEquals(listOf(keeperOne.path), keeper.parts)
+        assertEquals(BookPlace(), keeper.place)
+        assertEquals(null, keeper.partPath)
+    }
+
+    @Test
+    fun `of a book on both, the one played last wins, with the phone's chapters, and a tie keeps the phone's`() {
+        val backup = BackupFixtures.booksKept.books.getValue(archive.path)
+        val chapters = listOf(Chapter(0, 36_000_000, "The Whole Archive"))
+        val phone = backup.copy(place = BookPlace(0, 1_200_000), partPath = archive.path, speed = null, finished = false, chapters = chapters, chaptersStamp = "300000000:9")
+        fun merged(phone: BookEntry, backup: BookEntry) = RestorePlan.mergeBooks(BookState(mapOf(phone.id to phone)), BookState(mapOf(backup.id to backup))).books.getValue(archive.path)
+
+        // The backup's played later, or the phone's never: the backup's place, with the phone's chapters.
+        assertEquals(backup.copy(chapters = chapters, chaptersStamp = "300000000:9"), merged(phone.copy(lastPlayedAt = T0 + 2), backup))
+        assertEquals(backup.copy(chapters = chapters, chaptersStamp = "300000000:9"), merged(phone.copy(lastPlayedAt = null), backup))
+        // The phone's was played after the backup's, at the same time, or the backup's never was: the phone's stays.
+        assertEquals(phone.copy(lastPlayedAt = T0 + 9), merged(phone.copy(lastPlayedAt = T0 + 9), backup))
+        assertEquals(phone.copy(lastPlayedAt = T0 + 7), merged(phone.copy(lastPlayedAt = T0 + 7), backup))
+        assertEquals(phone.copy(lastPlayedAt = T0 + 2), merged(phone.copy(lastPlayedAt = T0 + 2), backup.copy(lastPlayedAt = null)))
+    }
+
+    @Test
+    fun `the phone's marks stay, the backup's are added for songs and folders the phone has no mark for either way`() {
+        val note = "${VOLUME_PHONE}Music/Spoken/Note.mp3"
+        val now = BookState(marks = BookMarks(songs = setOf(bell.path), folders = setOf("Music/Night Ferry"), notSongs = setOf(water.path), notFolders = setOf("Talks")))
+        val restored = BookState(
+            marks = BookMarks(songs = setOf(water.path, lantern.path), folders = setOf("Talks", "Spoken/Ada Quill"), notSongs = setOf(bell.path, note), notFolders = setOf("Music/Night Ferry", "Music/Rips")),
+        )
+
+        assertEquals(
+            BookMarks(
+                songs = setOf(bell.path, lantern.path),
+                folders = setOf("Music/Night Ferry", "Spoken/Ada Quill"),
+                notSongs = setOf(water.path, note),
+                notFolders = setOf("Talks", "Music/Rips"),
+            ),
+            RestorePlan.mergeBooks(now, restored).marks,
+        )
+    }
+
+    @Test
+    fun `books past the cap are left out, those played longest ago first`() {
+        val mine = (1..BookState.MAX_BOOKS).map { n -> "${VOLUME_PHONE}Books/b$n.m4b".let { BookEntry(it, "Book $n", null, listOf(it), lastPlayedAt = T0 + n) } }
+        val now = BookState(mine.associateBy { it.id })
+
+        val merged = RestorePlan.mergeBooks(now, BackupFixtures.booksKept)
+
+        assertEquals(BookState.MAX_BOOKS, merged.books.size)
+        // The backup's were played at T0 + 7 and T0 + 8: the phone's two oldest go.
+        assertEquals(setOf(mine[0].id, mine[1].id), now.books.keys - merged.books.keys)
+        assertTrue(archive.path in merged.books && keeperId in merged.books)
+    }
+
+    @Test
+    fun `when the books can't be written they stay as they were and the part is named as failed`() {
+        val mine = BookState(marks = BookMarks(notSongs = setOf(keeperOne.path)))
+        val stores = MemoryStores(failing = mutableSetOf(Section.BOOKS), books = mine)
+
+        val result = restore(stores)
+
+        assertEquals(listOf(Section.BOOKS), result.failed)
+        assertEquals(mine, stores.books)
+    }
+
     // Twice
 
     @Test
     fun `restoring the same backup twice adds nothing the second time`() {
         val stores = MemoryStores()
         restore(stores)
-        val once = listOf(stores.playlists, stores.queues, stores.log.plays.toSet(), stores.songState, stores.ledger, stores.settings, stores.equalizer)
+        val once = listOf(stores.playlists, stores.queues, stores.log.plays.toSet(), stores.songState, stores.ledger, stores.settings, stores.equalizer, stores.books)
 
         restore(stores)
 
-        assertEquals(once, listOf(stores.playlists, stores.queues, stores.log.plays.toSet(), stores.songState, stores.ledger, stores.settings, stores.equalizer))
+        assertEquals(once, listOf(stores.playlists, stores.queues, stores.log.plays.toSet(), stores.songState, stores.ledger, stores.settings, stores.equalizer, stores.books))
         assertEquals(BackupFixtures.plays.size, stores.log.plays.size)
     }
 
@@ -301,6 +402,8 @@ class BackupRestoreTest {
         assertEquals(setOf(newLantern.path, newBell.path, newWater.path), stores.ledger.entries.keys)
         assertEquals(newBell.path, stores.ledger.entries.getValue(newBell.path).path)
         assertEquals(setOf(newBell.path, newWater.path, newLantern.path), stores.queues.queues.flatMap { q -> q.items.map { it.song.path } }.toSet())
+        assertEquals(setOf(newArchive.path, folderBookId(newKeeperOne.path.substringBeforeLast('/'), "Lantern Keeper")), stores.books.books.keys)
+        assertEquals(setOf(newWater.path), stores.books.marks.songs)
         assertEquals(emptyList<MissingSong>(), plan(newLibrary).missing(all))
     }
 
@@ -323,7 +426,7 @@ class BackupRestoreTest {
     @Test
     fun `songs not on the phone are listed, and left out of what they were in`() {
         val stores = MemoryStores()
-        val library = listOf(lantern, bell)
+        val library = BackupFixtures.library - water
 
         assertEquals(listOf(MissingSong(water.path, "Low Water", "Mira Solen")), plan(library).missing(all))
         assertEquals(emptyList<MissingSong>(), plan(library).missing(setOf(Section.SETTINGS, Section.EQUALIZER, Section.PLAYS)))
@@ -337,6 +440,8 @@ class BackupRestoreTest {
         assertFalse(stores.queues.queues.any { q -> q.items.any { it.song.path == water.path } })
         // The saved queue held only the missing song.
         assertEquals(emptyList<String>(), stores.queues.saved)
+        assertEquals(BackupFixtures.booksKept.books, stores.books.books)
+        assertEquals(emptySet<String>(), stores.books.marks.songs)
     }
 
     @Test
@@ -365,6 +470,7 @@ class BackupRestoreTest {
         assertEquals(SongState(), stores.songState)
         assertEquals(EqProfiles(), stores.equalizer)
         assertEquals(LedgerState(), stores.ledger)
+        assertEquals(BookState(), stores.books)
         assertEquals(3, stores.log.plays.size)
     }
 
@@ -395,12 +501,13 @@ class BackupRestoreTest {
 
     @Test
     fun `a backup is read from every store, a store that cannot be read left out`() = runBlocking {
-        val stores = MemoryStores(BackupFixtures.playlists, BackupFixtures.queues, FakePlayLog(BackupFixtures.plays), BackupFixtures.songState, BackupFixtures.equalizer, BackupFixtures.ledger, BackupFixtures.settings)
+        val stores = MemoryStores(BackupFixtures.playlists, BackupFixtures.queues, FakePlayLog(BackupFixtures.plays), BackupFixtures.songState, BackupFixtures.equalizer, BackupFixtures.ledger, BackupFixtures.settings, books = BackupFixtures.books)
 
         assertEquals(
             BackupSnapshot(
                 BackupFixtures.playlists, BackupFixtures.queues, BackupFixtures.plays, BackupFixtures.songState, BackupFixtures.equalizer, BackupFixtures.ledger, BackupFixtures.settings,
                 repeat = Repeat.OFF, aiLyrics = false, tones = TonesState(), duplicates = DuplicateChoices(), coversTags = CoversTagsMemory(), keptApart = emptySet(), searches = emptyList(),
+                books = BackupFixtures.books,
             ),
             stores.snapshot(),
         )

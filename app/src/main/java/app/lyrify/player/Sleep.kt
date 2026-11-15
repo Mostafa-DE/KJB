@@ -36,7 +36,16 @@ sealed interface SleepTimer {
 
     /** Stops at the end of the song [left] songs on, the one playing counting as the first; [songs] were chosen. */
     data class BySongs(val songs: Int, val left: Int, override val custom: Boolean = false) : SleepTimer
+
+    /**
+     * A book's "End of chapter" in a file of chapters: stops at [endMs] in the file, the end of the chapter playing; a
+     * seek moves it to the end of the chapter it lands in ([seekedTo]), from the chapters' [ends].
+     */
+    data class ByChapter(val endMs: Long, val ends: List<Long>, override val custom: Boolean = false) : SleepTimer
 }
+
+/** "End of chapter" after a seek to [positionMs]: the end of the chapter it lands in. */
+fun SleepTimer.ByChapter.seekedTo(positionMs: Long): SleepTimer.ByChapter = copy(endMs = ends.firstOrNull { it > positionMs } ?: ends.lastOrNull() ?: endMs)
 
 /** A timer of [minutes], set at [now] (elapsed realtime). */
 fun sleepFor(minutes: Int, now: Long, custom: Boolean = false): SleepTimer = SleepTimer.ByTime(now + minutes * 60_000L, minutes, custom)
@@ -52,6 +61,7 @@ fun sleepAfter(songs: Int, custom: Boolean = false): SleepTimer = SleepTimer.ByS
 fun sleepLeftMs(timer: SleepTimer, now: Long, positionMs: Long, durationMs: Long, speed: Float): Long? = when (timer) {
     is SleepTimer.ByTime -> (timer.endsAt - now).coerceAtLeast(0)
     is SleepTimer.BySongs -> if (timer.left > 1 || durationMs <= 0) null else ((durationMs - positionMs).coerceAtLeast(0) / speed.coerceAtLeast(MIN_SPEED)).toLong()
+    is SleepTimer.ByChapter -> ((timer.endMs - positionMs).coerceAtLeast(0) / speed.coerceAtLeast(MIN_SPEED)).toLong()
 }
 
 private const val MIN_SPEED: Float = 0.1f
@@ -75,7 +85,7 @@ data class SleepStep(val volume: Float, val stops: Boolean, val nextMs: Long?)
  */
 fun sleepStep(timer: SleepTimer, now: Long, positionMs: Long, durationMs: Long, speed: Float): SleepStep {
     val left = sleepLeftMs(timer, now, positionMs, durationMs, speed)
-    if (timer is SleepTimer.ByTime && left == 0L) return SleepStep(1f, stops = true, nextMs = null)
+    if ((timer is SleepTimer.ByTime || timer is SleepTimer.ByChapter) && left == 0L) return SleepStep(1f, stops = true, nextMs = null)
     val volume = if (left != null) sleepFadeVolume(left) else 1f
     val next = when {
         // Other songs first: nothing to do until one ends.
@@ -93,6 +103,8 @@ fun sleepStep(timer: SleepTimer, now: Long, positionMs: Long, durationMs: Long, 
 fun sleepAfterSong(timer: SleepTimer): SleepTimer? = when (timer) {
     is SleepTimer.ByTime -> timer
     is SleepTimer.BySongs -> if (timer.left <= 1) null else timer.copy(left = timer.left - 1)
+    // The file played to its end: past its last chapter.
+    is SleepTimer.ByChapter -> null
 }
 
 /**
@@ -127,8 +139,15 @@ class SleepDriver(
         }
     }
 
+    /** The user jumped inside the song playing, to [toMs]: "End of chapter" now ends the chapter landed in. */
+    fun seeked(toMs: Long) {
+        val running = timer.value as? SleepTimer.ByChapter ?: return
+        timer.value = running.seekedTo(toMs)
+    }
+
     /** A song played to its end (the next one starts, or the same again for Repeat one). */
     fun songEnded() {
+        if (timer.value is SleepTimer.ByChapter) return stop()
         val running = timer.value as? SleepTimer.BySongs ?: return
         val after = sleepAfterSong(running)
         if (after != null) {
@@ -174,6 +193,8 @@ class SleepPart : ServicePart {
             override fun onSongStarted(uid: Long, lap: Boolean, natural: Boolean) {
                 if (natural) driver.songEnded()
             }
+
+            override fun onSeeked(fromMs: Long, toMs: Long) = driver.seeked(toMs)
 
             override fun onEnded() = driver.queueEnded()
         })

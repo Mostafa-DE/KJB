@@ -48,6 +48,7 @@ class BackupScreensTest {
                 RestoreRow(Section.COVERS, 2, null),
                 RestoreRow(Section.NAMES, 1, null),
                 RestoreRow(Section.SEARCHES, 2, null),
+                RestoreRow(Section.BOOKS, 2, null),
             ),
             restoreRows(BackupFixtures.contents()),
         )
@@ -111,7 +112,8 @@ class BackupScreensTest {
     @Test
     fun `every section has its label`() {
         Section.entries.forEach { assertTrue(it.key, strings().containsKey("restore_section_${it.key}")) }
-        Section.entries.forEach { sectionLabel(it) }
+        assertEquals(Section.entries.size, Section.entries.map(::sectionLabel).distinct().size)
+        assertEquals("Books", strings()["restore_section_books"])
     }
 
     private fun strings(): Map<String, String> =

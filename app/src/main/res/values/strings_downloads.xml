@@ -127,7 +127,7 @@
     <string name="set_dl_language_detail">Never a dubbed track</string>
     <string name="set_dl_audio_folder">Audio folder</string>
     <string name="set_dl_video_folder">Video folder</string>
-    <string name="set_dl_audio_folder_sheet">Where KJB saves songs on your phone. It starts with Music, Download, Podcasts or Audiobooks. Songs already saved stay where they are.</string>
+    <string name="set_dl_audio_folder_sheet">Where KJB saves songs on your phone. It starts with Music, Download or Podcasts, and no folder in it is named Audiobooks. Songs already saved stay where they are.</string>
     <string name="set_dl_video_folder_sheet">Where KJB saves videos on your phone. It starts with Movies, Download or DCIM. Videos already saved stay where they are.</string>
     <string name="set_dl_folder">Folder</string>
     <string name="set_dl_folder_save">Save</string>

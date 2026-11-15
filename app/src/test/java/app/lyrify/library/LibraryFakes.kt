@@ -24,6 +24,8 @@ fun song(
     addedAt: Long? = null,
     id: Long? = null,
     albumId: Long? = null,
+    isAudiobook: Boolean = false,
+    isPodcast: Boolean = false,
 ): Song = Song(
     ref = SongRef(VOLUME + relativePath, id),
     title = title,
@@ -41,6 +43,8 @@ fun song(
     sizeBytes = 4_000_000,
     mimeType = "audio/mpeg",
     albumId = albumId,
+    isAudiobook = isAudiobook,
+    isPodcast = isPodcast,
 )
 
 /** MediaStore made up: [result] for every read, [stamp] as its version, [changes] sent by the test. */

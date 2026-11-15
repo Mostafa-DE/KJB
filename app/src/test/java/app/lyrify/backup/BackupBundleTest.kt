@@ -2,9 +2,12 @@ package app.lyrify.backup
 
 import app.lyrify.backup.BackupFixtures.T0
 import app.lyrify.backup.BackupFixtures.VERSION
+import app.lyrify.backup.BackupFixtures.archive
 import app.lyrify.backup.BackupFixtures.bell
 import app.lyrify.backup.BackupFixtures.contents
 import app.lyrify.backup.BackupFixtures.entries
+import app.lyrify.backup.BackupFixtures.keeperOne
+import app.lyrify.backup.BackupFixtures.keeperTwo
 import app.lyrify.backup.BackupFixtures.lantern
 import app.lyrify.backup.BackupFixtures.read
 import app.lyrify.backup.BackupFixtures.water
@@ -12,6 +15,7 @@ import app.lyrify.backup.BackupFixtures.zip
 import app.lyrify.backup.BackupFixtures.zipOf
 import app.lyrify.data.LedgerState
 import app.lyrify.library.SongRef
+import app.lyrify.library.song
 import app.lyrify.player.AbPart
 import app.lyrify.player.Repeat
 import app.lyrify.player.Speed
@@ -100,6 +104,36 @@ class BackupBundleTest {
     }
 
     @Test
+    fun `books come back with their places, speeds, finished and marks, never the chapters, which are read again from the files`() {
+        val bytes = zip()
+        val file = entries(bytes).firstOrNull { it.first == "books.json" }?.second
+        val manifest = Json.parseToJsonElement(entries(bytes).first { it.first == BackupBundle.MANIFEST }.second).jsonObject
+
+        assertEquals(BackupFixtures.booksKept, contents(bytes).books)
+        assertNotNull("no books.json", file)
+        assertFalse(file!!, "chapters" in file)
+        assertTrue("books" in (manifest["sections"] as JsonObject).keys)
+        // A backup without them (an earlier KJB's) reads as no books, as with the other sections.
+        assertNull(contents(zip(BackupFixtures.snapshot.copy(books = null))).books)
+    }
+
+    @Test
+    fun `hidden songs and books in one backup both come back, and the songs name the files of each, in format 2`() {
+        // A song only Hidden songs names, beside the books, which name their own files.
+        val drift = song("Music/Odds/Drift.mp3", title = "Drift", album = "Odds", durationMs = 199_000, id = 31)
+        val hiding = BackupFixtures.settings.copy(library = BackupFixtures.settings.library.copy(hiddenSongs = listOf(drift.ref)))
+        val bytes = zip(BackupFixtures.snapshot.copy(settings = hiding), BackupFixtures.library + drift)
+        val manifest = Json.parseToJsonElement(entries(bytes).first { it.first == BackupBundle.MANIFEST }.second).jsonObject
+
+        val read = contents(bytes)
+
+        assertEquals(listOf(noId(drift.ref)), read.settings?.library?.hiddenSongs)
+        assertEquals(BackupFixtures.booksKept, read.books)
+        assertTrue(read.songs.map { it.path }.containsAll(listOf(drift.path, archive.path, keeperOne.path, keeperTwo.path)))
+        assertEquals(JsonPrimitive(2), manifest["format"])
+    }
+
+    @Test
     fun `equalizer profiles come back by output and device name, with the own presets`() {
         assertEquals(BackupFixtures.equalizer, contents().equalizer)
     }
@@ -129,7 +163,8 @@ class BackupBundleTest {
     fun `the songs the sections name come with their tags, so another phone can find them`() {
         val songs = contents().songs.associateBy { it.path }
 
-        assertEquals(setOf(lantern.path, bell.path, water.path), songs.keys)
+        // The books' files and the songs marked as books too.
+        assertEquals(setOf(lantern.path, bell.path, water.path, archive.path, keeperOne.path, keeperTwo.path), songs.keys)
         assertEquals(BackupSong(water.path, "Low Water", "Mira Solen", "Night Ferry", 240_000, "Music/Night Ferry/01 Low Water.mp3", 4_000_000), songs[water.path])
         assertEquals(T0, contents().createdAt)
         assertEquals(VERSION, contents().appVersion)

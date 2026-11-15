@@ -38,6 +38,13 @@ import app.lyrify.audio.QueueFadeRules
 import app.lyrify.auto.CarBrowse
 import app.lyrify.auto.CarCovers
 import app.lyrify.auto.ControllerAccess
+import app.lyrify.books.BookPart
+import app.lyrify.books.BookPlayFilter
+import app.lyrify.books.BooksGraph
+import app.lyrify.books.inBook
+import app.lyrify.books.isBookPart
+import app.lyrify.books.playingBook
+import app.lyrify.books.skipsFor
 import app.lyrify.library.Library
 import app.lyrify.library.LibraryGraph
 import app.lyrify.library.LibraryState
@@ -111,7 +118,7 @@ private const val OPEN_PLAYER: Int = 1
 @OptIn(UnstableApi::class)
 class PlaybackService : MediaLibraryService() {
     /** The service's parts: P2, A1, A3 and A4 each add one line here, in merge order. */
-    private val parts: List<ServicePart> = listOf(WidgetPart(), LockLyricsPart(), SleepPart(), ExtrasPart(), ButtonsPart(), ConnectPart(), OutputRoutesPart())
+    private val parts: List<ServicePart> = listOf(WidgetPart(), LockLyricsPart(), SleepPart(), ExtrasPart(), ButtonsPart(), ConnectPart(), OutputRoutesPart(), BookPart())
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + logFailures)
     private val io = CoroutineScope(SupervisorJob() + Dispatchers.IO + logFailures)
@@ -131,7 +138,9 @@ class PlaybackService : MediaLibraryService() {
 
     /** Songs that could not be played since one last played: the whole queue failing stops the player. */
     private var failedInARow = 0
-    private val tracker = PlayTracker({ event -> Lyrify.playEvents(this).onEvent(event) }, System::currentTimeMillis)
+    /** The play counter, without a book's plays (books/BookPlayback.kt). */
+    private val plays = BookPlayFilter({ event -> Lyrify.playEvents(this).onEvent(event) }) { path -> library.value?.bookOf(path) != null }
+    private val tracker = PlayTracker(plays::onEvent, System::currentTimeMillis)
     private val offload = OffloadGate { engine.setOffload(it) }
 
     override fun onCreate() {
@@ -147,7 +156,7 @@ class PlaybackService : MediaLibraryService() {
         // the engine's then.
         engine = CrossfadeEngine(
             newSlot = { GaplessEngine(this, settings::value, levels, ::mediaItem) },
-            rules = QueueFadeRules(core, PlayerExtras.of(this), settings::value),
+            rules = QueueFadeRules(core, PlayerExtras.of(this), settings::value) { bookSpeed() },
             focusOf = { control -> MediaFocus(this, mainLooper, control) },
             scope = scope,
             clock = SystemClock::elapsedRealtime,
@@ -188,7 +197,11 @@ class PlaybackService : MediaLibraryService() {
                 player.changed()
             }
         }
-        scope.launch { core.repeat.collect { engine.setRepeat(it); player.changed() } }
+        // A book never repeats (books/BookPlayback.kt): its queue plays to its end whatever Repeat says.
+        scope.launch {
+            combine(core.repeat, core.book.map { inBook(it.current) }.distinctUntilChanged()) { repeat, book -> if (book) Repeat.OFF else repeat }
+                .collect { engine.setRepeat(it); player.changed() }
+        }
         scope.launch {
             settings.collect {
                 engine.setCrossfade(it.audio.crossfadeSeconds)
@@ -242,7 +255,11 @@ class PlaybackService : MediaLibraryService() {
         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         .putExtra(EXTRA_DESTINATION, DESTINATION_PLAYER)
 
-    private fun skips(): SkipAmounts = skipAmounts(settings.value.playback)
+    /** The seek buttons' jumps: 30 s in a book, else "Skip amounts" (books/BookPlayback.kt). */
+    private fun skips(): SkipAmounts = skipsFor(core.book.value.current, settings.value.playback)
+
+    /** The speed of the book playing; null while music plays. */
+    private fun bookSpeed(): Speed? = playingBook(core.book.value.current, library.value)?.let { BooksGraph.store(this).state.value.speedOf(it.book) }
 
     private fun mediaItem(projected: Projected): MediaItem = mediaItemOf(projected, settings.value.library, CarCovers.authority(this))
 
@@ -267,7 +284,8 @@ class PlaybackService : MediaLibraryService() {
     private fun ownLyrics() {
         val pipeline = Lyrify.pipeline(this)
         val sweep = QueueSweep(
-            files = { track -> ownFiles(track) { path -> find(SongRef(path)) } },
+            // A book's part (a book's queue gives no snapshot; a part added to music is left out here) never gets lyrics.
+            files = { track -> ownFiles(track) { path -> find(SongRef(path))?.takeUnless { isBookPart(it.path, library.value) } } },
             process = pipeline::process,
             // The listener's sweep retries failed lookups and settles interrupted writes while it runs; without it, this one does.
             dueErrors = { if (NowPlaying.connected.value) emptyList() else pipeline.dueErrors() + pipeline.staleLookups() },

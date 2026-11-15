@@ -24,6 +24,8 @@ import app.lyrify.player.Queue
 import app.lyrify.player.Repeat
 import app.lyrify.player.SleepTimer
 import app.lyrify.player.SongState
+import app.lyrify.player.SourceKind
+import app.lyrify.player.Speed
 import app.lyrify.player.albumInOrder
 import app.lyrify.player.resumeAt
 import app.lyrify.settings.RememberPlace
@@ -131,7 +133,8 @@ fun nextIndexFor(index: Int, size: Int, repeat: Repeat): Int? = when {
  * which ends as it would and stops the music there.
  */
 fun mayCrossfade(queue: Queue?, from: Long, to: Long, keepAlbumsGapless: Boolean, part: AbPart?, sleep: SleepTimer?): Boolean {
-    if (queue == null) return false
+    // A book's parts never fade into each other: a sentence goes on across them (books/BookPlayback.kt).
+    if (queue == null || queue.source.kind == SourceKind.BOOK) return false
     if (keepAlbumsGapless && albumInOrder(queue, queue.items.indexOfFirst { it.uid == to })) return false
     if (part != null && queue.items.firstOrNull { it.uid == from }?.song?.path == part.path) return false
     return !(sleep is SleepTimer.BySongs && sleep.left <= 1)
@@ -804,8 +807,11 @@ class MediaFocus(context: Context, looper: Looper, control: AudioFocusManager.Pl
     override fun release() = manager.release()
 }
 
-/** The rules from the queue playing ([core]), the extras (the part repeating, the sleep timer, speeds) and the settings. */
-class QueueFadeRules(private val core: PlayerCore, private val extras: PlayerExtras, private val settings: () -> Settings) : FadeRules {
+/**
+ * The rules from the queue playing ([core]), the extras (the part repeating, the sleep timer, speeds) and the settings; a
+ * book's parts play at the book's speed ([bookSpeed], null while music plays).
+ */
+class QueueFadeRules(private val core: PlayerCore, private val extras: PlayerExtras, private val settings: () -> Settings, private val bookSpeed: () -> Speed? = { null }) : FadeRules {
     override fun mayFade(from: Long, to: Long): Boolean =
         mayCrossfade(core.book.value.current, from, to, settings().advanced.keepAlbumsGapless, extras.state.value.part, extras.sleep.value)
 
@@ -814,7 +820,7 @@ class QueueFadeRules(private val core: PlayerCore, private val extras: PlayerExt
 
     override fun parametersOf(uid: Long): PlaybackParameters? {
         val song = core.book.value.current?.items?.firstOrNull { it.uid == uid }?.song ?: return null
-        val speed = extras.state.value.speedOf(song.path)
+        val speed = bookSpeed() ?: extras.state.value.speedOf(song.path)
         return PlaybackParameters(speed.speed, speed.pitch)
     }
 }

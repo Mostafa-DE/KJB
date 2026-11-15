@@ -9,6 +9,12 @@ import app.lyrify.audio.OutputKey
 import app.lyrify.audio.OutputKind
 import app.lyrify.audio.OwnPreset
 import app.lyrify.audio.PresetChoice
+import app.lyrify.books.BookEntry
+import app.lyrify.books.BookMarks
+import app.lyrify.books.BookPlace
+import app.lyrify.books.BookState
+import app.lyrify.books.Chapter
+import app.lyrify.books.folderBookId
 import app.lyrify.data.LedgerEntry
 import app.lyrify.data.LedgerState
 import app.lyrify.data.LyricsSource
@@ -56,8 +62,8 @@ import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 
 /**
- * A made-up phone for the backup tests: three songs, and every store holding something of each kind. Made-up names
- * only.
+ * A made-up phone for the backup tests: three songs and two books, and every store holding something of each kind.
+ * Made-up names only.
  */
 object BackupFixtures {
     const val T0: Long = 1_800_000_000_000L
@@ -66,13 +72,21 @@ object BackupFixtures {
     val lantern: Song = song("Music/Harbour Glass/01 Paper Lantern.mp3", title = "Paper Lantern", album = "Harbour Glass", durationMs = 201_000, id = 11)
     val bell: Song = song("Music/Harbour Glass/02 Tide Bell.mp3", title = "Tide Bell", album = "Harbour Glass", durationMs = 185_000, id = 12)
     val water: Song = song("Music/Night Ferry/01 Low Water.mp3", title = "Low Water", artist = "Mira Solen", album = "Night Ferry", durationMs = 240_000, id = 13)
-    val library: List<Song> = listOf(lantern, bell, water)
+
+    /** A book of one file, and the two files of a folder book. */
+    val archive: Song = song("Audiobooks/The Salt Archive.m4b", title = "The Salt Archive", artist = "Ada Quill", durationMs = 36_000_000, id = 21)
+    val keeperOne: Song = song("Audiobooks/Lantern Keeper/01.mp3", title = "The Keeper Wakes", artist = "Ada Quill", album = "Lantern Keeper", durationMs = 1_800_000, id = 22)
+    val keeperTwo: Song = song("Audiobooks/Lantern Keeper/02.mp3", title = "The Long Stair", artist = "Ada Quill", album = "Lantern Keeper", durationMs = 2_100_000, id = 23)
+    val library: List<Song> = listOf(lantern, bell, water, archive, keeperOne, keeperTwo)
 
     /** The same songs on a new phone: another volume and other folders, the same tags, lengths a second apart. */
     val newLantern: Song = moved(lantern, "/storage/1A2B-3C4D/Songs/Paper Lantern.flac", 201_900)
     val newBell: Song = moved(bell, "/storage/1A2B-3C4D/Songs/Tide Bell.flac", 184_200)
     val newWater: Song = moved(water, "/storage/1A2B-3C4D/Songs/Low Water.flac", 240_000)
-    val newLibrary: List<Song> = listOf(newLantern, newBell, newWater)
+    val newArchive: Song = moved(archive, "/storage/1A2B-3C4D/Books/The Salt Archive.m4b", 36_000_600)
+    val newKeeperOne: Song = moved(keeperOne, "/storage/1A2B-3C4D/Books/Keeper/Part 1.mp3", 1_800_400)
+    val newKeeperTwo: Song = moved(keeperTwo, "/storage/1A2B-3C4D/Books/Keeper/Part 2.mp3", 2_099_500)
+    val newLibrary: List<Song> = listOf(newLantern, newBell, newWater, newArchive, newKeeperOne, newKeeperTwo)
 
     fun moved(song: Song, path: String, durationMs: Long): Song = song.copy(ref = SongRef(path, song.ref.mediaStoreId?.plus(100)), durationMs = durationMs)
 
@@ -164,10 +178,31 @@ object BackupFixtures {
     val keptApart: Set<NamePair> = setOf(NamePair.of(NameKind.ARTIST, "Kit Calloway", "Kit Galloway"))
     val searches: List<String> = listOf("harbour", "mira")
 
+    /** Lantern Keeper's id: its folder and its album. */
+    val keeperId: String = folderBookId(keeperOne.path.substringBeforeLast('/'), "Lantern Keeper")
+
+    /**
+     * The Salt Archive finished at 1.5×, with the chapters read from its file; Lantern Keeper 10 minutes into its
+     * second file. Low Water marked as a book, a folder marked as books and one as not.
+     */
+    val books: BookState = BookState(
+        books = listOf(
+            BookEntry(
+                archive.path, "The Salt Archive", "Ada Quill", listOf(archive.path), speed = Speed(1.5f), lastPlayedAt = T0 + 7, finished = true,
+                chapters = listOf(Chapter(0, 18_000_000, "Part One"), Chapter(18_000_000, 36_000_000, "Part Two")), chaptersStamp = "300000000:$T0",
+            ),
+            BookEntry(keeperId, "Lantern Keeper", "Ada Quill", listOf(keeperOne.path, keeperTwo.path), BookPlace(1, 600_000), keeperTwo.path, lastPlayedAt = T0 + 8),
+        ).associateBy { it.id },
+        marks = BookMarks(songs = setOf(water.path), folders = setOf("Spoken/Ada Quill"), notFolders = setOf("Music/Night Ferry")),
+    )
+
+    /** [books] as a backup keeps them: without the chapters, read again from the files. */
+    val booksKept: BookState = books.copy(books = books.books.mapValues { it.value.copy(chapters = null, chaptersStamp = null) })
+
     val snapshot: BackupSnapshot = BackupSnapshot(
         playlists, queues, plays, songState, equalizer, ledger.put(writing), settings,
         repeat = Repeat.ALL, aiLyrics = true, tones = TonesState(mapOf(tone.id to tone)), duplicates = duplicates, coversTags = coversTags,
-        keptApart = keptApart, searches = searches,
+        keptApart = keptApart, searches = searches, books = books,
     )
 
     const val VOLUME_SD: String = "/storage/1A2B-3C4D/"
@@ -232,6 +267,7 @@ class MemoryStores(
     val files: Map<String, FileMark> = emptyMap(),
     var repeatFails: Boolean = false,
     var aiFails: Boolean = false,
+    var books: BookState = BookState(),
 ) : BackupStores {
     private fun <T> change(section: Section, now: T, change: (T) -> T, set: (T) -> Unit): Boolean = (section !in failing).also { if (it) set(change(now)) }
 
@@ -301,4 +337,8 @@ class MemoryStores(
     }) { this.searches = it }
 
     override suspend fun fileMark(path: String): FileMark? = files[path]
+
+    override suspend fun books(): BookState = books
+
+    override suspend fun updateBooks(change: (BookState) -> BookState) = change(Section.BOOKS, books, change) { books = it }
 }

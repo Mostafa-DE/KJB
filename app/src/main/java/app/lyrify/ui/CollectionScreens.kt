@@ -439,7 +439,8 @@ private fun FolderPage(ui: LibraryUi, library: Library, path: String) {
     val reduced = LocalReducedMotion.current
     SongListFrame(ui, songs, source, loaded = sorted != null, topBar = { under, backdrop ->
         CollectionTopBar(folder.name, under, backdrop, ui, heart = FavouriteCollection(CollectionKind.FOLDER, path), alwaysTitle = true) {
-            FolderMenu(folder) { nav.back() }
+            // Audiobooks: Mark as book and Not a book for the folder's own files (BooksScreen.kt), above Hide folder.
+            FolderMenu(folder, onHidden = { nav.back() }) { close -> BookFolderRow(folder, library, close) }
         }
     }) { list ->
         item(key = "path", contentType = "path") {

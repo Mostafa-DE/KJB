@@ -172,12 +172,14 @@ class LyricsPipeline(
     private val log: (String) -> Unit = {},
     /** For what needs a person to look: the ledger failing where a file's safety depends on it. */
     private val warn: (String) -> Unit = log,
-    /** The song's outcome by its title, for debugging: the app passes it to logcat only under VERBOSE. Never lyrics. */
+    /** The song's outcome with its LRCLIB record, for debugging: the app passes it to logcat only under VERBOSE. Never a title or lyrics. */
     private val detail: (String) -> Unit = {},
     /** How the bytes go into a new `.lrc`; tests make it fail. */
     private val writeBytes: (FileChannel, ByteBuffer) -> Unit = SidecarFile::writeFully,
     /** The per-path lock shared with the tag writer ([app.lyrify.Lyrify.locks]): one file is never handled twice at once. */
     private val locks: PathLocks = PathLocks(),
+    /** Whether a file is a book's part (books/): a book never gets a lookup or a `.lrc`. */
+    private val isBook: (String) -> Boolean = { false },
 ) : PathHold {
 
     /** Songs the AI is working on, for the queue sweep to skip (one set with the pipeline, so one per process). */
@@ -188,9 +190,11 @@ class LyricsPipeline(
      * [force], a track that is not due yet is looked up anyway (lyrics on disk still win,
      * and lyrics the user removed are never looked up again). A track an older lookup found
      * nothing for ([LedgerEntry.lookupStale]) is due at once. While the ledger cannot be read
-     * ([LedgerState.readable]), nothing is done (null): every song would look new.
+     * ([LedgerState.readable]), nothing is done (null): every song would look new. A book's part ([isBook]) is never
+     * looked up and never gets a sidecar (null).
      */
     suspend fun process(track: LocalTrack, lane: Lane = Lane.HIGH, force: Boolean = false): Processed? = exclusive(track.path) {
+        if (isBook(track.path)) return@exclusive null
         val sidecarPath = LrcFormat.sidecarPath(track.path)
         if (sidecarPath == null) {
             log("lyrics: a song skipped, its file has no extension")
@@ -250,6 +254,8 @@ class LyricsPipeline(
      * ledger does not know it or it cannot have a sidecar.
      */
     suspend fun recordAi(track: LocalTrack, result: AiResult): LyricsStatus? = exclusive(track.path) {
+        // A file that became a book while the run worked on it: nothing written, the ledger as it was.
+        if (isBook(track.path)) return@exclusive null
         val sidecarPath = LrcFormat.sidecarPath(track.path) ?: return@exclusive null
         val sidecar = File(sidecarPath).toPath()
         val previous = ledger.entry(track.path) ?: return@exclusive null
@@ -898,7 +904,7 @@ class LyricsPipeline(
         )
         val stored = ledger.put(entry)
         log("lyrics: $status${if (stored) "" else ", not stored"}")
-        detail("${track.title}: $status${lrclibId?.let { " (LRCLIB $it)" }.orEmpty()}")
+        detail("lyrics: $status${lrclibId?.let { " (LRCLIB $it)" }.orEmpty()}")
         return stored
     }
 

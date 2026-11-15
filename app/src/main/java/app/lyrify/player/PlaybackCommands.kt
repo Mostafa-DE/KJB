@@ -5,8 +5,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.Serializable
 
-/** What a list in the app is, as the source of a queue; OPENED: files another app opened in KJB (player/OpenedFiles.kt). */
-enum class SourceKind { SONGS, ALBUM, ARTIST, FOLDER, GENRE, PLAYLIST, FAVOURITES, MOST_PLAYED, RECENTLY_PLAYED, RECENTLY_ADDED, SEARCH, PICKED, OPENED }
+/**
+ * What a list in the app is, as the source of a queue; OPENED: files another app opened in KJB (player/OpenedFiles.kt).
+ * A [BOOK] queue (its key the book's id) plays in book mode (books/).
+ */
+enum class SourceKind { SONGS, ALBUM, ARTIST, FOLDER, GENRE, PLAYLIST, FAVOURITES, MOST_PLAYED, RECENTLY_PLAYED, RECENTLY_ADDED, SEARCH, PICKED, OPENED, BOOK }
 
 /**
  * The place in the app a queue was made from. [kind] and [key] tell one place from another: Recent keeps one queue per

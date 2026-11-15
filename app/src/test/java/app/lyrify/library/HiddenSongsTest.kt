@@ -1,5 +1,10 @@
 package app.lyrify.library
 
+import app.lyrify.books.BookPlace
+import app.lyrify.books.BookState
+import app.lyrify.books.continueBook
+import app.lyrify.books.isBookPart
+import app.lyrify.books.looksLikeBook
 import app.lyrify.library.search.SearchIndex
 import app.lyrify.settings.LibrarySettings
 import app.lyrify.settings.Settings
@@ -15,6 +20,7 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -180,6 +186,48 @@ class HiddenSongsTest {
         runCurrent()
         assertTrue(water in songs())
         assertEquals(1, source.reads)
+    }
+
+    // Books (AB1): a hidden file is in no book
+
+    @Test
+    fun `a hidden file is in no book, the Continue row or a suggestion, and the rest of its book keeps its order and place`() {
+        val parts = (1..4).map { n -> song("Audiobooks/Lantern Road/0$n Part $n.mp3", title = "Part $n", album = "Lantern Road", track = n, id = 40L + n) }
+        val tideChart = song("Audiobooks/Tide Chart/Tide Chart.mp3", album = "Tide Chart", id = 50)
+        val episode = song("Music/Talks/Episode 7.mp3", isPodcast = true, id = 60)
+        val before = library(emptyList(), parts + tideChart + episode)
+        val lanternRoad = before.books.single { it.parts.size == 4 }
+        // Part 3 played at 61 s, then Tide Chart, later.
+        val state = BookState()
+            .withPlace(lanternRoad, BookPlace(2, 61_000), now = 1)
+            .withPlace(before.books.single { it.id == tideChart.path }, BookPlace(0, 5_000), now = 2)
+        // Part 2 hidden, then renamed: hidden by its id still (F2), and out of its book too.
+        val renamed = parts[1].copy(ref = SongRef(VOLUME + "Audiobooks/Lantern Road/02 Part Two.mp3", 42))
+
+        val library = library(listOf(parts[1].ref, tideChart.ref, episode.ref), listOf(parts[0], renamed, parts[2], parts[3], tideChart, episode))
+
+        val book = library.books.single()
+        assertEquals(lanternRoad.id, book.id)
+        assertEquals(listOf(parts[0], parts[2], parts[3]), book.parts)
+        assertNull(library.bookOf(renamed.path))
+        assertEquals(BookPlace(1, 61_000), state.placeOf(book))
+        assertEquals(book, continueBook(library.books, state))
+        assertEquals(emptyList<Song>(), library.songs)
+        // A hidden podcast opened from a playlist suggests nothing.
+        assertFalse(looksLikeBook(episode, library))
+        assertTrue(looksLikeBook(episode, before))
+    }
+
+    @Test
+    fun `a hidden book file played from a playlist still never gets lyrics or the AI, by what its path says, while hidden music does`() {
+        val orchard = song("Music/Talks/Quiet Orchard.m4b", id = 70)
+        val chapter = song("Audiobooks/Lantern Road/01 Part 1.mp3", album = "Lantern Road", track = 1, id = 71)
+        val library = library(listOf(orchard.ref, chapter.ref, steps.ref), all + orchard + chapter)
+
+        assertTrue(isBookPart(orchard.path, library))
+        assertTrue(isBookPart(chapter.path, library))
+        assertFalse(isBookPart(steps.path, library))
+        assertFalse(isBookPart(lantern.path, library))
     }
 }
 

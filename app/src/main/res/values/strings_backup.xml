@@ -57,6 +57,7 @@
     <string name="restore_section_covers">Covers &amp; tags</string>
     <string name="restore_section_names">Names kept apart</string>
     <string name="restore_section_searches">Recent searches</string>
+    <string name="restore_section_books">Books</string>
     <plurals name="restore_favourites">
         <item quantity="one">And %1$s favourite</item>
         <item quantity="other">And %1$s favourites</item>

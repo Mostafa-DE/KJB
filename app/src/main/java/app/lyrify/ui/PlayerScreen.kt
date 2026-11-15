@@ -91,6 +91,7 @@ import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.lyrify.Lyrify
 import app.lyrify.R
+import app.lyrify.books.BookNow
 import app.lyrify.data.LyricsStatus
 import app.lyrify.library.albumKey
 import app.lyrify.library.displayTitle
@@ -424,6 +425,9 @@ fun PlayerView() {
         }
     }
     var queueSheet by remember { mutableStateOf(false) }
+    // Book mode (BooksScreen.kt): the chapter playing, and the chapter sheet.
+    val book = rememberBookNow(ui)
+    var chapterSheet by remember { mutableStateOf(false) }
 
     // "Tap the cover for lyrics", once, when the player first opens on the cover.
     LaunchedEffect(Unit) {
@@ -473,19 +477,20 @@ fun PlayerView() {
                     onRoute = route,
                     modifier = Modifier.weight(1f),
                 )
-                TitleAndLinks(ui, settings.library)
+                TitleAndLinks(ui, settings.library, book) { chapterSheet = true }
                 PlayerChips(ui, extras)
                 Spacer(Modifier.height(LINKS_GAP))
                 PartHandles(ui, extras)
-                ProgressBar(ui, onSeek = connection::seekTo, marks = { BarMarks(ui) })
-                MainRow(ui, settings, connection)
-                SecondaryRow(ui, connection, onQueue = { queueSheet = true }, onRoute = route)
+                ProgressBar(ui, onSeek = connection::seekTo, marks = { BarMarks(ui); ChapterTicks(ui) })
+                MainRow(ui, settings, connection, book)
+                SecondaryRow(ui, connection, onQueue = { queueSheet = true }, onRoute = route, book = book, onChapters = { chapterSheet = true })
             }
         }
         // The message floats down from under the top bar, over the cover, as the prototype's does; the controls stay clear.
         ToastSlot(Modifier.statusBarsPadding().padding(top = PLAYER_BAR + 6.dp).padding(horizontal = 12.dp), float = ToastFloat.DOWN)
     }
     if (queueSheet) QueueSheet(onDismiss = { queueSheet = false })
+    if (chapterSheet) ChapterSheet(ui) { chapterSheet = false }
     lyricsRoute?.let { PlayerLyricsSheet(it, ui) { lyricsRoute = null } }
     PlayerExtrasHost(extras, ui)
 }
@@ -926,11 +931,13 @@ private fun CoverChip(ui: PlayerUi, modifier: Modifier, enabled: Boolean, onFlip
  * ink and does nothing ([metaLine]). A song that is not on the phone says so.
  */
 @Composable
-private fun TitleAndLinks(ui: PlayerUi, settings: LibrarySettings) {
+private fun TitleAndLinks(ui: PlayerUi, settings: LibrarySettings, book: BookNow?, onChapters: () -> Unit) {
     val nav = LocalNavigator.current
     val song = ui.song
     Text(
-        song?.let { displayTitle(it, settings) } ?: ui.item.song.path.substringAfterLast('/'),
+        // A book: the chapter playing, else the book's title (BooksScreen.kt).
+        book?.let { now -> if (now.chapter >= 0) chapterTitle(now.chapters, now.chapter) else now.book.title }
+            ?: song?.let { displayTitle(it, settings) } ?: ui.item.song.path.substringAfterLast('/'),
         style = MaterialTheme.typography.headlineSmall,
         textAlign = TextAlign.Center,
         maxLines = 2,
@@ -941,6 +948,15 @@ private fun TitleAndLinks(ui: PlayerUi, settings: LibrarySettings) {
         if (song == null) {
             // A file another app opened that the library lacks plays all the same (player/OpenedFiles.kt).
             PlayerLink(stringResource(if (ui.queue.source.kind == SourceKind.OPENED) R.string.open_queue else R.string.player_not_on_phone), onClick = null, Modifier)
+            return@Row
+        }
+        if (book != null) {
+            // "Chapter 7 of 22" opens the chapter sheet; a book without chapters shows its title.
+            PlayerLink(chapterOf(book) ?: book.book.title, onChapters.takeIf { book.chapters.isNotEmpty() }, Modifier.weight(1f, fill = false))
+            book.book.author?.let { author ->
+                Text("·", style = MetaStyle, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 8.dp))
+                PlayerLink(author, onClick = null, Modifier.weight(1f, fill = false))
+            }
             return@Row
         }
         val meta = metaLine(song.artist, song.album)

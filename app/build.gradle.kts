@@ -222,6 +222,7 @@ dependencies {
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.session)
     implementation(libs.media3.common)
+    implementation(libs.media3.inspector)
     implementation(project(":taglib"))
     implementation(libs.glance.appwidget)
     implementation(libs.androidx.profileinstaller)

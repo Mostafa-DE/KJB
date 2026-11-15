@@ -17,6 +17,7 @@ import androidx.media3.session.SessionError
 import androidx.media3.session.SessionResult
 import app.lyrify.Lyrify
 import app.lyrify.R
+import app.lyrify.books.inBook
 import app.lyrify.library.FavouritesPort
 import app.lyrify.library.LibraryGraph
 import app.lyrify.library.SongRef
@@ -89,8 +90,41 @@ class PressCounter(private val scope: CoroutineScope, private val windowMs: Long
     }
 }
 
+/**
+ * In a book, a headset's two presses go forward 30 s and three go back ([Press.NEXT] true, [Press.PREVIOUS] false); null
+ * for a press that does what it always does.
+ */
+fun bookPress(press: Press): Boolean? = when (press) {
+    Press.NEXT -> true
+    Press.PREVIOUS -> false
+    Press.PLAY_PAUSE -> null
+}
+
+/**
+ * In a book, a car's or a Bluetooth headset's Next and Fast forward keys go forward 30 s (true), Previous and Rewind go
+ * back (false); null for any other key.
+ */
+fun bookSeek(keyCode: Int): Boolean? = when (keyCode) {
+    KeyEvent.KEYCODE_MEDIA_NEXT, KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> true
+    KeyEvent.KEYCODE_MEDIA_PREVIOUS, KeyEvent.KEYCODE_MEDIA_REWIND -> false
+    else -> null
+}
+
+/** A button of a book's notification, lock screen and car: a player command, its icon (a CommandButton icon), its name, its slot. */
+data class BookButton(val command: Int, val icon: Int, @StringRes val label: Int, val slot: Int)
+
+/** A book's buttons: back 30 s where Previous is, forward 30 s where Next is (Media3 picks the 30 s icons by the jumps). */
+@OptIn(UnstableApi::class)
+fun bookButtons(): List<BookButton> = listOf(
+    BookButton(Player.COMMAND_SEEK_BACK, CommandButton.ICON_SKIP_BACK_30, R.string.book_back_30, CommandButton.SLOT_BACK),
+    BookButton(Player.COMMAND_SEEK_FORWARD, CommandButton.ICON_SKIP_FORWARD_30, R.string.book_forward_30, CommandButton.SLOT_FORWARD),
+)
+
 /** One extra button of the music notification: its session command, its icon (a CommandButton icon) and its name. */
 data class NotificationButton(val command: String, val icon: Int, @StringRes val label: Int)
+
+/** Whether a book's session takes the custom command [action]: never Shuffle or Repeat, as a book does neither. */
+fun bookAllows(action: String): Boolean = action != COMMAND_SHUFFLE && action != COMMAND_REPEAT
 
 /** The custom commands of the extra buttons. */
 const val COMMAND_FAVOURITE: String = "app.lyrify.player.FAVOURITE"
@@ -99,18 +133,19 @@ const val COMMAND_REPEAT: String = "app.lyrify.player.REPEAT"
 
 /**
  * The notification's extra buttons beside Next ("Notification buttons"): the heart for the song playing, or Shuffle
- * and Repeat as they are now. The same buttons draw Android 11 and 12's own notification.
+ * and Repeat as they are now, none of those two in a [book]. The same buttons draw Android 11 and 12's own notification.
  */
 @OptIn(UnstableApi::class)
-fun notificationButtons(choice: NotificationButtons, favourite: Boolean, shuffled: Boolean, repeat: Repeat): List<NotificationButton> = when (choice) {
-    NotificationButtons.FAVOURITE -> listOf(
+fun notificationButtons(choice: NotificationButtons, favourite: Boolean, shuffled: Boolean, repeat: Repeat, book: Boolean = false): List<NotificationButton> = when {
+    choice == NotificationButtons.SHUFFLE_REPEAT && book -> emptyList()
+    choice == NotificationButtons.FAVOURITE -> listOf(
         if (favourite) {
             NotificationButton(COMMAND_FAVOURITE, CommandButton.ICON_HEART_FILLED, heartLabel(on = true))
         } else {
             NotificationButton(COMMAND_FAVOURITE, CommandButton.ICON_HEART_UNFILLED, heartLabel(on = false))
         },
     )
-    NotificationButtons.SHUFFLE_REPEAT -> listOf(
+    else -> listOf(
         if (shuffled) {
             NotificationButton(COMMAND_SHUFFLE, CommandButton.ICON_SHUFFLE_ON, R.string.player_shuffle_on)
         } else {
@@ -127,17 +162,20 @@ fun notificationButtons(choice: NotificationButtons, favourite: Boolean, shuffle
 /**
  * Headset presses on a session's player: media button events through the [PressCounter] while [enabled] ("Headset
  * buttons"). With nothing loaded (KJB was closed) a press goes to the session, which resumes the last queue; the
- * notification's own taps on Android 11 and 12 are not presses and go to the session too. Main thread.
+ * notification's own taps on Android 11 and 12 are not presses and go to the session too. In a [book], skipping goes
+ * 30 s instead ([bookPress], [bookSeek]): a book's session offers no Next or Previous. Main thread.
  */
 @OptIn(UnstableApi::class)
-class HeadsetButtons(scope: CoroutineScope, private val enabled: () -> Boolean) {
+class HeadsetButtons(scope: CoroutineScope, private val book: () -> Boolean = { false }, private val enabled: () -> Boolean) {
     private var player: Player? = null
     private val counter = PressCounter(scope) { press ->
         val on = player ?: return@PressCounter
-        when (press) {
-            Press.PLAY_PAUSE -> Util.handlePlayPauseButtonAction(on)
-            Press.NEXT -> on.seekToNext()
-            Press.PREVIOUS -> on.seekToPrevious()
+        val seek = if (book()) bookPress(press) else null
+        when {
+            seek != null -> if (seek) on.seekForward() else on.seekBack()
+            press == Press.PLAY_PAUSE -> Util.handlePlayPauseButtonAction(on)
+            press == Press.NEXT -> on.seekToNext()
+            else -> on.seekToPrevious()
         }
     }
 
@@ -148,6 +186,13 @@ class HeadsetButtons(scope: CoroutineScope, private val enabled: () -> Boolean) 
         val enabled = enabled()
         if (enabled && session.player.mediaItemCount == 0) return false
         player = session.player
+        val seek = if (book()) bookSeek(event.keyCode) else null
+        if (seek != null) {
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                if (seek) session.player.seekForward() else session.player.seekBack()
+            }
+            return true
+        }
         return counter.onKey(event.keyCode, event.action == KeyEvent.ACTION_DOWN, event.repeatCount, enabled)
     }
 
@@ -178,14 +223,23 @@ class ButtonsPart : ServicePart {
         val favourites = LibraryGraph.favourites(service).also { favourites = it }
         settings = Lyrify.settings(service).settings.stateIn(scope, SharingStarted.Eagerly, Settings())
         favouriteSongs = favourites.songs.stateIn(scope, SharingStarted.Eagerly, emptyList())
-        headset = HeadsetButtons(scope) { settings.value.playback.headsetButtons }
+        headset = HeadsetButtons(scope, enabled = { settings.value.playback.headsetButtons }, book = { inBook(core.book.value.current) })
         scope.launch {
             combine(settings.map { it.advanced.notificationButtons }.distinctUntilChanged(), favouriteSongs, core.book, core.repeat) { choice, favourite, book, repeat ->
                 val path = book.current?.current?.song?.path
-                notificationButtons(choice, favourite = path != null && favourite.any { it.path == path }, shuffled = book.current?.shuffled == true, repeat = repeat)
-            }.distinctUntilChanged().collect { buttons ->
+                val bookMode = inBook(book.current)
+                notificationButtons(choice, favourite = path != null && favourite.any { it.path == path }, shuffled = book.current?.shuffled == true, repeat = repeat, book = bookMode) to bookMode
+            }.distinctUntilChanged().collect { (buttons, book) ->
+                // A book: 30 s back and forward where Previous and Next are, for the notification, the lock screen and the car.
+                val seeks = if (book) {
+                    bookButtons().map { button ->
+                        CommandButton.Builder(button.icon).setDisplayName(service.getString(button.label)).setPlayerCommand(button.command).setSlots(button.slot).build()
+                    }
+                } else {
+                    emptyList()
+                }
                 session.setMediaButtonPreferences(
-                    buttons.map { button ->
+                    seeks + buttons.map { button ->
                         CommandButton.Builder(button.icon)
                             .setDisplayName(service.getString(button.label))
                             .setSessionCommand(SessionCommand(button.command, Bundle.EMPTY))
@@ -205,6 +259,8 @@ class ButtonsPart : ServicePart {
 
     override fun onCommand(command: SessionCommand, args: Bundle): SessionResult? {
         val core = core ?: return null
+        // A book never shuffles or repeats: an old notification's button or another app's command changes nothing.
+        if (inBook(core.book.value.current) && !bookAllows(command.customAction)) return SessionResult(SessionError.ERROR_NOT_SUPPORTED)
         when (command.customAction) {
             COMMAND_FAVOURITE -> {
                 val song = core.book.value.current?.current?.song ?: return SessionResult(SessionError.ERROR_BAD_VALUE)

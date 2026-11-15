@@ -79,6 +79,7 @@ internal fun restoreRows(contents: BackupContents): List<RestoreRow> = listOfNot
     contents.covers?.let { RestoreRow(Section.COVERS, it.albums.size, null) },
     contents.names?.let { RestoreRow(Section.NAMES, it.size, null) },
     contents.searches?.let { RestoreRow(Section.SEARCHES, it.size, null) },
+    contents.books?.let { RestoreRow(Section.BOOKS, it.books.size, null) },
 )
 
 @StringRes
@@ -95,6 +96,7 @@ internal fun sectionLabel(section: Section): Int = when (section) {
     Section.COVERS -> R.string.restore_section_covers
     Section.NAMES -> R.string.restore_section_names
     Section.SEARCHES -> R.string.restore_section_searches
+    Section.BOOKS -> R.string.restore_section_books
 }
 
 /** Whether a restore brought back all it was asked to: else the summary after it is "Partly restored". */

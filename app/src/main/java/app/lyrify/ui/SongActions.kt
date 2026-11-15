@@ -94,7 +94,7 @@ sealed interface SheetPlace {
 }
 
 /** The song sheet's rows, in the order they show. Move to trash sits apart at the bottom. */
-enum class SheetRow { PLAY_NEXT, ADD_TO, FAVOURITE, LYRICS, MAKE_TONE, SHARE, SHARE_LYRICS, SONG_INFO, EDIT_TAGS, COVERS_TAGS, REMOVE_FROM_QUEUE, REMOVE_FROM_PLAYLIST, HIDE, MOVE_TO_TRASH }
+enum class SheetRow { PLAY_NEXT, ADD_TO, FAVOURITE, LYRICS, MAKE_TONE, SHARE, SHARE_LYRICS, SONG_INFO, EDIT_TAGS, BOOK, COVERS_TAGS, REMOVE_FROM_QUEUE, REMOVE_FROM_PLAYLIST, HIDE, MOVE_TO_TRASH }
 
 /**
  * The rows the song sheet shows when opened at [place]. [coversTags] and [removeFromQueue]: their slots are filled
@@ -593,6 +593,7 @@ fun sourceLabel(resources: Resources, source: QueueSource): String = when (sourc
     SourceKind.RECENTLY_ADDED -> resources.getString(R.string.lib_recently_added)
     SourceKind.OPENED -> resources.getString(R.string.open_queue)
     SourceKind.SONGS -> source.name.ifEmpty { resources.getString(R.string.library_tab_songs) }
+    SourceKind.BOOK -> resources.getString(R.string.book_source, source.name)
 }
 
 /**
@@ -681,6 +682,11 @@ fun SongSheetsHost(sheets: SongSheets, ui: LibraryUi, onActed: () -> Unit = {}) 
                         }
                         SheetRow.HIDE -> doneLater { actions.hide(listOf(song.ref), settings) }
                         SheetRow.MOVE_TO_TRASH -> sheets.show(OpenSheet.Trash(listOf(song.ref)))
+                        SheetRow.BOOK -> {
+                            sheets.close()
+                            val book = library.bookOf(song.path)
+                            scope.launch { toasts.markBooks(context, resources, marked = book == null) { it.toggled(song, book) } }
+                        }
                     }
                 }
             }

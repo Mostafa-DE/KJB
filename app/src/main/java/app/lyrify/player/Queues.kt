@@ -406,7 +406,7 @@ data class QueueBook(
     /**
      * [queueId] plays: the queue left goes to Recent at the front (a saved one stays in Saved), replacing an older recent
      * queue from its source; a [fresh] queue replaces the recent queues from its own source; Recent keeps
-     * [MAX_RECENT].
+     * [MAX_RECENT]. A book's queue left goes: `books.json` keeps its place, and the Books tab's Continue row goes back to it.
      */
     private fun switchTo(queueId: String, fresh: Boolean, now: Long): Switched {
         val target = queue(queueId) ?: return Switched(this, toRecent = false)
@@ -416,7 +416,9 @@ data class QueueBook(
         var book = this
         if (old != null && old.id != queueId) {
             book = book.edit(old.id) { it.copy(updatedAt = now) }
-            if (old.id !in saved) {
+            if (old.id !in saved && old.source.kind == SourceKind.BOOK) {
+                drop += old.id
+            } else if (old.id !in saved) {
                 val replaced = recent.filter { it != old.id && queue(it)?.from(old.source) == true }
                 recent = listOf(old.id) + recent.filter { it != old.id && it !in replaced }
                 drop += replaced

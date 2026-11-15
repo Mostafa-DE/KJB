@@ -1,5 +1,6 @@
 package app.lyrify.player
 
+import app.lyrify.books.inBook
 import app.lyrify.library.Song
 import app.lyrify.library.SongRef
 import app.lyrify.lyrics.LocalTrack
@@ -13,10 +14,11 @@ import app.lyrify.media.SessionTrack
 
 /**
  * [queue] as a session snapshot: its songs on the phone (found with [find]), each by its uid, the current one (or the
- * next on the phone) active. Each names its file by path ([SessionTrack.mediaUri]), so [ownFiles] needs no guessing.
+ * next on the phone) active. Each names its file by path ([SessionTrack.mediaUri]), so [ownFiles] needs no guessing. A
+ * book's queue has none: a book never gets lyrics (books/).
  */
 fun ownSnapshot(queue: Queue?, find: (SongRef) -> Song?): SessionSnapshot {
-    if (queue == null) return SessionSnapshot.EMPTY
+    if (queue == null || inBook(queue)) return SessionSnapshot.EMPTY
     val projected = projection(queue, find)
     val start = startOf(queue, projected)
     if (start < 0) return SessionSnapshot.EMPTY

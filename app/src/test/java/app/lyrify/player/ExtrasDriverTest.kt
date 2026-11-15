@@ -75,6 +75,36 @@ class ExtrasDriverTest {
         assertEquals(listOf(mark), storage.stored.bookmarksOf(short.path))
     }
 
+    // Books (books/BookPlayback.kt)
+
+    @Test
+    fun `a song in a book plays at the book's speed, and neither keeps nor resumes a place of its own`() = runTest {
+        val inBook = Playing(4, SongRef("/storage/emulated/0/Audiobooks/Lantern Keeper/01.mp3", 104), 1_800_000, inBook = true)
+        val storage = MemoryStorage(SongState(usual = Speed(1.25f), places = mapOf(inBook.path to 300_000)))
+        val extras = PlayerExtras(storage, backgroundScope)
+        val port = FakeExtrasPort()
+        val bookSpeed = kotlinx.coroutines.flow.MutableStateFlow<Speed?>(null)
+        val driver = ExtrasDriver(port, extras, (songs + (inBook.uid to inBook))::get, bookSpeed) { RememberPlace.ALL_SONGS }
+        backgroundScope.launch { driver.run() }
+        runCurrent()
+        bookSpeed.value = Speed(1.5f)
+        port.index = 3
+        port.positionMs = 0
+        port.durationMs = inBook.durationMs
+        driver.songStarted(inBook.uid, lap = false, natural = false)
+        runCurrent()
+        assertEquals(1.5f, port.speed, 0f)
+        assertTrue(port.seeks.isEmpty())
+        port.positionMs = 600_000
+        driver.playingChanged(false)
+        runCurrent()
+        assertEquals(300_000L, extras.state.value.places[inBook.path])
+        // Music again: the usual speed.
+        bookSpeed.value = null
+        runCurrent()
+        assertEquals(1.25f, port.speed, 0f)
+    }
+
     // Speeds
 
     @Test

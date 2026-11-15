@@ -128,6 +128,30 @@ class MediaButtonsTest {
         assertEquals(emptyList<Press>(), acted)
     }
 
+    @Test
+    fun `in a book, two presses and Next go forward 30 s, three and Previous go back, one still plays or pauses`() {
+        assertEquals(true, bookPress(Press.NEXT))
+        assertEquals(false, bookPress(Press.PREVIOUS))
+        assertEquals(null, bookPress(Press.PLAY_PAUSE))
+        assertEquals(true, bookSeek(KeyEvent.KEYCODE_MEDIA_NEXT))
+        assertEquals(true, bookSeek(KeyEvent.KEYCODE_MEDIA_FAST_FORWARD))
+        assertEquals(false, bookSeek(KeyEvent.KEYCODE_MEDIA_PREVIOUS))
+        assertEquals(false, bookSeek(KeyEvent.KEYCODE_MEDIA_REWIND))
+        assertEquals(null, bookSeek(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE))
+        assertEquals(null, bookSeek(KeyEvent.KEYCODE_HEADSETHOOK))
+    }
+
+    @Test
+    fun `a book's notification, lock screen and car show back 30 s where Previous is and forward 30 s where Next is`() {
+        assertEquals(
+            listOf(
+                BookButton(androidx.media3.common.Player.COMMAND_SEEK_BACK, CommandButton.ICON_SKIP_BACK_30, R.string.book_back_30, CommandButton.SLOT_BACK),
+                BookButton(androidx.media3.common.Player.COMMAND_SEEK_FORWARD, CommandButton.ICON_SKIP_FORWARD_30, R.string.book_forward_30, CommandButton.SLOT_FORWARD),
+            ),
+            bookButtons(),
+        )
+    }
+
     // The notification's extra buttons
 
     @Test
@@ -160,5 +184,17 @@ class MediaButtonsTest {
         )
         assertEquals(CommandButton.ICON_REPEAT_ONE, notificationButtons(NotificationButtons.SHUFFLE_REPEAT, false, false, Repeat.ONE)[1].icon)
         assertEquals(R.string.player_repeat_one, notificationButtons(NotificationButtons.SHUFFLE_REPEAT, false, false, Repeat.ONE)[1].label)
+    }
+
+    @Test
+    fun `a book's notification has no Shuffle or Repeat, keeps the heart, and its session refuses both commands`() {
+        assertEquals(emptyList<NotificationButton>(), notificationButtons(NotificationButtons.SHUFFLE_REPEAT, favourite = false, shuffled = true, repeat = Repeat.ALL, book = true))
+        assertEquals(
+            notificationButtons(NotificationButtons.FAVOURITE, favourite = true, shuffled = false, repeat = Repeat.OFF),
+            notificationButtons(NotificationButtons.FAVOURITE, favourite = true, shuffled = false, repeat = Repeat.OFF, book = true),
+        )
+        assertFalse(bookAllows(COMMAND_SHUFFLE))
+        assertFalse(bookAllows(COMMAND_REPEAT))
+        assertTrue(bookAllows(COMMAND_FAVOURITE))
     }
 }

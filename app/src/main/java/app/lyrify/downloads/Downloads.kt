@@ -1,6 +1,7 @@
 package app.lyrify.downloads
 
 import android.content.Intent
+import app.lyrify.books.inAudiobooksFolder
 import app.lyrify.data.SharedWrites
 import app.lyrify.dl.api.AudioQuality
 import app.lyrify.dl.api.DlFailure
@@ -169,8 +170,11 @@ object DownloadFolders {
     const val AUDIO: String = "Music/KJB Downloads"
     const val VIDEO: String = "Movies/KJB Downloads"
 
-    /** The top folders each kind may go in: where the phone's apps look for music, and for videos. */
-    private val AUDIO_TOPS = setOf("Music", "Download", "Podcasts", "Audiobooks")
+    /**
+     * The top folders each kind may go in: where the phone's apps look for music, and for videos. Never a folder named
+     * Audiobooks, where every file is a book by its folder alone ([inAudiobooksFolder]).
+     */
+    private val AUDIO_TOPS = setOf("Music", "Download", "Podcasts")
     private val VIDEO_TOPS = setOf("Movies", "Download", "DCIM")
     private val NOT_IN_NAMES = Regex("""[\\/:*?"<>|\p{Cntrl}]""")
     private const val MAX_DEPTH = 4
@@ -182,7 +186,7 @@ object DownloadFolders {
     fun valid(folder: String, kind: DlKind): Boolean {
         val names = folder.split('/')
         val tops = if (kind == DlKind.AUDIO) AUDIO_TOPS else VIDEO_TOPS
-        return names.size in 2..MAX_DEPTH && names.first() in tops &&
+        return names.size in 2..MAX_DEPTH && names.first() in tops && !(kind == DlKind.AUDIO && inAudiobooksFolder(folder)) &&
             names.all { it.isNotBlank() && it == it.trim() && it.length <= MAX_NAME && it != "." && it != ".." && !NOT_IN_NAMES.containsMatchIn(it) }
     }
 

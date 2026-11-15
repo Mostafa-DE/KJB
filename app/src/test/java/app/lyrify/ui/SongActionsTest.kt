@@ -109,7 +109,7 @@ class SongActionsTest {
 
     @Test
     fun `the song sheet shows every row for a song in a list, and the rows of its place, Hide and Move to trash last`() {
-        val common = listOf(SheetRow.PLAY_NEXT, SheetRow.ADD_TO, SheetRow.FAVOURITE, SheetRow.LYRICS, SheetRow.MAKE_TONE, SheetRow.SHARE, SheetRow.SONG_INFO, SheetRow.EDIT_TAGS)
+        val common = listOf(SheetRow.PLAY_NEXT, SheetRow.ADD_TO, SheetRow.FAVOURITE, SheetRow.LYRICS, SheetRow.MAKE_TONE, SheetRow.SHARE, SheetRow.SONG_INFO, SheetRow.EDIT_TAGS, SheetRow.BOOK)
         assertEquals(common + SheetRow.HIDE + SheetRow.MOVE_TO_TRASH, sheetRows(SheetPlace.List, coversTags = false, removeFromQueue = false, lyrics = false))
         assertEquals(common + SheetRow.COVERS_TAGS + SheetRow.HIDE + SheetRow.MOVE_TO_TRASH, sheetRows(SheetPlace.List, coversTags = true, removeFromQueue = true, lyrics = false))
         assertEquals(

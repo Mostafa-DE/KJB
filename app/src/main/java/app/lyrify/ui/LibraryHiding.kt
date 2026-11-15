@@ -226,10 +226,11 @@ private fun HiddenRow(song: Song, title: String, modifier: Modifier, onUnhide: (
 
 /**
  * A folder row's "⋯" on the Folders tab and a folder page: Hide folder, which adds it to Folders to skip (with Undo);
- * [onHidden] after it is stored (a folder page goes back, its folder gone from the library).
+ * [onHidden] after it is stored (a folder page goes back, its folder gone from the library). [more]: rows above it, given
+ * what shuts the menu (a folder page's Mark as book).
  */
 @Composable
-fun FolderMenu(folder: Folder, onHidden: () -> Unit = {}) {
+fun FolderMenu(folder: Folder, onHidden: () -> Unit = {}, more: @Composable (close: () -> Unit) -> Unit = {}) {
     val toasts = LocalToasts.current
     val resources = LocalResources.current
     // The toast outlives a folder page Hide folder leaves: it runs in the activity's scope, not the page's.
@@ -240,6 +241,7 @@ fun FolderMenu(folder: Folder, onHidden: () -> Unit = {}) {
     Box {
         ChromeIconButton(R.drawable.ic_more_horiz, stringResource(R.string.lib_more_folder), { open = true }, glass = false)
         LyrifyMenu(expanded = open, onDismiss = { open = false }) {
+            more { open = false }
             MenuRow(stringResource(R.string.lib_hide_folder), R.drawable.ic_visibility_off, onClick = {
                 open = false
                 scope.launch {

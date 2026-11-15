@@ -36,6 +36,10 @@ data class Song(
      * MediaStore splits an album without an album artist by folder.
      */
     val albumId: Long? = null,
+    /** MediaStore's IS_AUDIOBOOK: Android's scanner sets it for a file in an Audiobooks folder (books/Books.kt). */
+    val isAudiobook: Boolean = false,
+    /** MediaStore's IS_PODCAST: a podcast episode only suggests "Mark as book" (books/Books.kt [app.lyrify.books.looksLikeBook]). */
+    val isPodcast: Boolean = false,
 ) {
     val path: String get() = ref.path
 

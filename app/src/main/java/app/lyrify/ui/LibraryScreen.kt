@@ -96,7 +96,7 @@ import java.time.ZoneId
 fun LibraryPage() {
     val nav = LocalNavigator.current
     val ui = rememberLibraryUi() ?: return
-    val tabs = ui.settings.library.tabs.filter { it.shown }.map { it.tab }.ifEmpty { listOf(LibraryTab.SONGS) }
+    val tabs = ui.settings.library.tabs.filter { it.shown && libraryTabShows(it.tab, ui.library) }.map { it.tab }.ifEmpty { listOf(LibraryTab.SONGS) }
     val tab = nav.state.libraryTab.takeIf { it in tabs } ?: tabs.first()
     val reselect = nav.state.reselectsOf(DockTab.LIBRARY)
     val sheets = rememberSongSheets()
@@ -124,6 +124,7 @@ fun LibraryPage() {
                         LibraryTab.ARTISTS -> ArtistsTab(ui, library, padding, reselect)
                         LibraryTab.FOLDERS -> FoldersTab(library, padding, reselect)
                         LibraryTab.GENRES -> GenresTab(library, padding, reselect)
+                        LibraryTab.BOOKS -> BooksTab(library, padding, reselect)
                         LibraryTab.SONGS -> Unit
                     }
                 }
@@ -201,7 +202,7 @@ private fun LibraryUnavailable(state: LibraryState, modifier: Modifier) {
  * ([LocalTabCurrent]: the others are kept, not shown); coming back keeps the place.
  */
 @Composable
-private fun ReselectToTop(reselect: Int, top: suspend () -> Unit) {
+internal fun ReselectToTop(reselect: Int, top: suspend () -> Unit) {
     var handled by rememberSaveable { mutableIntStateOf(reselect) }
     val shown by rememberUpdatedState(LocalTabCurrent.current)
     LaunchedEffect(reselect) {

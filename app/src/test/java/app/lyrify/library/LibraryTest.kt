@@ -1,5 +1,6 @@
 package app.lyrify.library
 
+import app.lyrify.books.BookMarks
 import app.lyrify.settings.LibrarySettings
 import app.lyrify.settings.PlaybackSettings
 import app.lyrify.settings.Settings
@@ -402,5 +403,46 @@ class LibraryTest {
 
         assertNotEquals(one, two)
         assertEquals(one, albumKey(song("Music/3.mp3", album = " B ", albumArtist = "A, C")))
+    }
+
+    // Books (books/Books.kt)
+
+    @Test
+    fun `books leave every music list but stay in their folders`() {
+        val music = song("Music/Harbour Glass/01 Paper Lantern.mp3", album = "Harbour Glass", genre = "Folk")
+        val parts = listOf("1", "2").map { song("Audiobooks/Folder Book/$it.mp3", artist = "Ada Quill", album = "Folder Book", genre = "Audiobook") }
+        val lib = library(music, *parts.toTypedArray())
+
+        assertEquals(listOf(music), lib.songs)
+        assertEquals(listOf("Harbour Glass"), lib.albums.map { it.title })
+        assertEquals(listOf("Kit Calloway"), lib.artists.map { it.name })
+        assertEquals(listOf("Folk"), lib.genres.map { it.name })
+        assertNull(lib.song(parts[0].path))
+        assertEquals(listOf("Audiobooks", "Music"), lib.root.rows.map { it.names.first() })
+        val book = lib.books.single()
+        assertEquals(parts, book.parts)
+        assertSame(book, lib.bookOf(parts[1].path))
+        assertSame(book, lib.book(book.id))
+        assertNull(lib.bookOf(music.path))
+        // Found again by the player, like any song on the phone.
+        assertEquals(parts[0], lib.resolver.find(parts[0].ref))
+    }
+
+    @Test
+    fun `a book's short parts stay in it under Skip short clips, and folders to skip take books too`() {
+        val parts = listOf("1", "2").map { song("Audiobooks/Folder Book/$it.mp3", album = "Folder Book", durationMs = 4_000) }
+        assertEquals(parts, library(*parts.toTypedArray()).books.single().parts)
+
+        val skipped = Settings(library = LibrarySettings(foldersToSkip = listOf("Audiobooks")))
+        assertTrue(library(*parts.toTypedArray(), settings = skipped).books.isEmpty())
+    }
+
+    @Test
+    fun `the user's marks make and unmake books`() {
+        val rips = listOf("01", "02").map { song("Music/Rips/Lantern Keeper/$it.mp3", album = "Lantern Keeper") }
+        assertTrue(Library.of(rips, Settings()).books.isEmpty())
+        val marked = Library.of(rips, Settings(), BookMarks(folders = setOf("Music/Rips/Lantern Keeper")))
+        assertEquals(rips, marked.books.single().parts)
+        assertTrue(marked.songs.isEmpty())
     }
 }

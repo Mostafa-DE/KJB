@@ -166,7 +166,8 @@ private fun SleepChip(ui: PlayerUi, timer: SleepTimer, onOpen: () -> Unit) {
 internal fun ExtrasChips(ui: PlayerUi, extras: PlayerExtrasUi) {
     val state = extras.extras.state.collectAsStateWithLifecycle().value
     val path = ui.path()
-    val speed = state.speedOf(path)
+    // A book's own speed (BooksScreen.kt).
+    val speed = rememberBookSpeed(ui)?.speed ?: state.speedOf(path)
     val part = partShown(state.part, path)
     val reduced = LocalReducedMotion.current
     // The row opens its room and each chip pops in and out on its own, so the title and the bar never jump.

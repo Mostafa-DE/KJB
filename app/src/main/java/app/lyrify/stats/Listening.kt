@@ -71,18 +71,19 @@ data class Listening(val heardMs: Long, val plays: Int, val songs: List<Top<Song
 /**
  * Your listening from a period's [totals], joined with [library] now, so a song moved or renamed keeps its plays (found
  * again by its path, then its id hint) and artists and albums follow today's tags. Songs gone leave the top lists, songs
- * hidden the totals too; songs only heard (no play counted) add time but no row. Ties go to the latest played, then by name, then by
- * path or key, so the order never changes between two looks. Without a library (not read yet) only the totals are known.
+ * hidden the totals too, and books every figure ([withoutBooks]); songs only heard (no play counted) add time but no
+ * row. Ties go to the latest played, then by name, then by path or key, so the order never changes between two looks. Without a library (not read yet) only the totals are known.
  */
 fun listeningOf(totals: List<SongPlays>, library: Library?): Listening {
     // The headline counts what the lists below it may show: a song the library's filters hide (Hidden songs, Folders to
-    // skip, short clips) is left out, while one gone from the phone stays, as its listening happened.
-    val counted = if (library == null) totals else totals.filter { total -> library.resolver.find(total.song)?.let(library::shows) != false }
+    // skip, short clips) is left out, while one gone from the phone stays, as its listening happened. Books never count.
+    val shown = if (library == null) totals else totals.filter { total -> library.resolver.find(total.song)?.let(library::shows) != false }
+    val counted = withoutBooks(shown, library)
     val heard = counted.sumOf { it.heardMs }
     val plays = counted.sumOf { it.count.toLong() }.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
     if (library == null) return Listening(heard, plays, emptyList(), emptyList(), emptyList())
     val collator = Collator.getInstance()
-    val songs = bySong(totals, library, shownOnly = true)
+    val songs = bySong(counted, library, shownOnly = true)
     val artists = songs.mapNotNull { top -> top.item.artist?.trim()?.let(library::artist)?.let { top to it } }
         .groupBy { it.second.name }
         .map { (_, its) -> sum(its.first().second, its.map { it.first }) }
@@ -97,6 +98,13 @@ fun listeningOf(totals: List<SongPlays>, library: Library?): Listening {
         albums = albums.filter { it.plays > 0 }.sortedWith(topOrder<Album>().thenBy(collator) { it.item.title }.thenBy { it.item.key }),
     )
 }
+
+/**
+ * [totals] without the plays of files that are books now (books/): a book's plays never count, also those from before
+ * it was a book; marked "Not a book", its plays are back.
+ */
+private fun withoutBooks(totals: List<SongPlays>, library: Library?): List<SongPlays> =
+    if (library == null || library.books.isEmpty()) totals else totals.filter { total -> library.bookOf(library.resolver.find(total.song)?.path ?: total.song.path) == null }
 
 /** The most plays first, then the latest played. */
 private fun <T> topOrder(): Comparator<Top<T>> = compareByDescending<Top<T>> { it.plays }.thenByDescending { it.lastPlayedAt ?: Long.MIN_VALUE }
@@ -148,6 +156,7 @@ class PlayStats(
         val totals = store.totals()
         return withContext(compute) {
             val library = library()
+            if (library?.bookOf(song.path) != null) return@withContext null
             val mine = if (library == null) {
                 totals.filter { it.song.path == song.path }.map { Top(song, it.count, it.heardMs, it.lastPlayedAt) }
             } else {

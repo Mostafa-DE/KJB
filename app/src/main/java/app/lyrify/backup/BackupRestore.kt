@@ -1,6 +1,11 @@
 package app.lyrify.backup
 
 import app.lyrify.audio.EqProfiles
+import app.lyrify.books.BookEntry
+import app.lyrify.books.BookMarks
+import app.lyrify.books.BookPlace
+import app.lyrify.books.BookState
+import app.lyrify.books.folderBookId
 import app.lyrify.data.LedgerEntry
 import app.lyrify.data.LedgerState
 import app.lyrify.library.CollectionKind
@@ -106,13 +111,18 @@ interface BackupStores {
 
     /** The file at [path] as it is now, its size and modified time; null when it is not a file. */
     suspend fun fileMark(path: String): FileMark?
+
+    /** The books' places and speeds, and the user's "Mark as book" and "Not a book" (`books.json`). */
+    suspend fun books(): BookState?
+
+    suspend fun updateBooks(change: (BookState) -> BookState): Boolean
 }
 
 /** What every store holds now, for a backup; a store that cannot be read is left out. */
 suspend fun BackupStores.snapshot(): BackupSnapshot = BackupSnapshot(
     playlists(), queues(), plays(), songState(), equalizer(), ledger(), settings(),
     repeat = repeat(), aiLyrics = aiLyrics(), tones = tones(), duplicates = duplicates(), coversTags = coversTags(),
-    keptApart = keptApart(), searches = searches(),
+    keptApart = keptApart(), searches = searches(), books = books(),
 )
 
 
@@ -126,9 +136,9 @@ internal data class MergedMarks(val state: SongState, val placesLeftOut: Int, va
  * What a restore did: the sections restored and those that failed, in the summary's order, and the places and bookmarks
  * left out because the phone holds as many as it keeps (a restore never pushes out the phone's own). For the summary
  * after it: how much each section brought back ([counts]: playlists, queues, plays, bookmarks, equalizer profiles,
- * lyrics choices, tones, "Not duplicates" groups, Covers & tags albums, searches; Settings has none), the songs of the
- * backup not on this phone ([notFound]), the tones whose files are not on it, and the devices to pick again for Start
- * when connected.
+ * lyrics choices, tones, "Not duplicates" groups, Covers & tags albums, searches, books; Settings has none), the songs
+ * of the backup not on this phone ([notFound]), the tones whose files are not on it, and the devices to pick again for
+ * Start when connected.
  */
 data class RestoreResult(
     val restored: List<Section>,
@@ -178,6 +188,7 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
         Section.LYRICS -> contents.lyrics?.entries?.keys.orEmpty().toList()
         Section.DUPLICATES -> contents.duplicates?.let { it.notDuplicates + it.reviewed }.orEmpty().flatten()
         Section.COVERS -> contents.covers?.albums.orEmpty().flatMap { it.paths }
+        Section.BOOKS -> contents.books?.let { state -> state.books.values.flatMap { it.parts + listOfNotNull(it.partPath) } + state.marks.songs + state.marks.notSongs }.orEmpty()
         Section.EQUALIZER, Section.SETTINGS, Section.TONES, Section.NAMES, Section.SEARCHES -> emptyList()
     }
 
@@ -263,6 +274,9 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
         data class Names(val pairs: Set<NamePair>) : Prepared
 
         data class Searches(val searches: List<String>) : Prepared
+
+        /** The books whose files are here, on them, and the marks of the songs here and of every folder. */
+        data class Books(val state: BookState) : Prepared
     }
 
     private fun prepare(section: Section): Prepared = when (section) {
@@ -313,6 +327,12 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
         }
         Section.NAMES -> Prepared.Names(checkNotNull(contents.names))
         Section.SEARCHES -> Prepared.Searches(checkNotNull(contents.searches))
+        Section.BOOKS -> checkNotNull(contents.books).let { state ->
+            fun here(paths: Set<String>) = paths.mapNotNullTo(LinkedHashSet()) { found[it]?.path }
+            // A folder mark names the folder below its volume, the same on this phone.
+            val marks = state.marks.copy(songs = here(state.marks.songs), notSongs = here(state.marks.notSongs))
+            Prepared.Books(BookState(state.books.values.mapNotNull(::matched).associateBy { it.id }, marks))
+        }
     }
 
     /** [queue] with its songs on this phone (each once), its place on the same song; null when none is here. */
@@ -328,6 +348,21 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
             positionMs = if (index >= 0) queue.positionMs else 0,
             unshuffled = queue.unshuffled?.filter { it in kept },
         )
+    }
+
+    /**
+     * [entry] on this phone: its parts here, in its order (those not here left out), the part it was in when that is
+     * here, and its id as the library gives it to these files: a single file's path, or the folder of its first part
+     * here with its album ([folderBookId]). When the part it was in is not here, it starts again: its place never goes to
+     * whichever file now has that number. Null when none of its files is here.
+     */
+    private fun matched(entry: BookEntry): BookEntry? {
+        val parts = entry.parts.mapNotNull { found[it]?.path }
+        val first = parts.firstOrNull() ?: return null
+        val id = if (FOLDER_BOOK in entry.id) folderBookId(first.substringBeforeLast('/'), entry.id.substringAfter(FOLDER_BOOK)) else first
+        val part = entry.partPath?.let { found[it]?.path }
+        val place = if (part == null) BookPlace() else entry.place.copy(partIndex = parts.indexOf(part))
+        return entry.copy(id = id, parts = parts, place = place, partPath = part)
     }
 
     /**
@@ -379,6 +414,7 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
         }
         is Prepared.Names -> counted(stores.addKeptApart(prepared.pairs), prepared.pairs.size)
         is Prepared.Searches -> counted(stores.addSearches(prepared.searches), prepared.searches.size)
+        is Prepared.Books -> counted(stores.updateBooks { mergeBooks(it, prepared.state) }, prepared.state.books.size)
     }
 
     private fun counted(written: Boolean, count: Int): Int? = if (written) count else null
@@ -434,6 +470,9 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
     companion object {
         /** What a playlist gets when one of its name is there already. */
         const val RESTORED: String = " (restored)"
+
+        /** Between a folder book's folder and its album in its id ([folderBookId]); a single file's id is its path. */
+        private const val FOLDER_BOOK: String = "/|"
 
         /**
          * [now] with the backup's playlists and Favourites added. A playlist already there (every song of the backup's in
@@ -576,6 +615,32 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
         internal fun mergeLedger(now: LedgerState, restored: List<LedgerEntry>): LedgerState {
             val added = restored.filter { it.path !in now.entries && it.path !in now.unknownEntries }
             return if (added.isEmpty()) now else now.copy(entries = now.entries + added.associateBy { it.path })
+        }
+
+        /**
+         * [now] with the backup's books ([restored], matched to this phone): of a book on both, the one played last
+         * wins (one never played loses to one played, and a tie keeps the phone's), always with the phone's chapters,
+         * as a backup has none. The phone's marks stay; the backup's are added for the songs and folders the phone has
+         * no mark for either way. Within [BookState.MAX_BOOKS], those played longest ago left out.
+         */
+        internal fun mergeBooks(now: BookState, restored: BookState): BookState {
+            val newer = restored.books.values.mapNotNull { entry ->
+                val mine = now.books[entry.id] ?: return@mapNotNull entry
+                val played = entry.lastPlayedAt ?: return@mapNotNull null
+                if (played > (mine.lastPlayedAt ?: Long.MIN_VALUE)) entry.copy(chapters = mine.chapters, chaptersStamp = mine.chaptersStamp) else null
+            }
+            val marks = now.marks
+            val songs = marks.songs + marks.notSongs
+            val folders = marks.folders + marks.notFolders
+            return BookState(
+                BookState.keepNewest(now.books + newer.associateBy { it.id }),
+                BookMarks(
+                    songs = marks.songs + (restored.marks.songs - songs),
+                    folders = marks.folders + (restored.marks.folders - folders),
+                    notSongs = marks.notSongs + (restored.marks.notSongs - songs),
+                    notFolders = marks.notFolders + (restored.marks.notFolders - folders),
+                ),
+            )
         }
     }
 }

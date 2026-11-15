@@ -344,6 +344,11 @@ private fun SleepSheet(extras: PlayerExtrasUi, ui: PlayerUi) {
                 },
             )
         }
+        // A book: End of chapter (BooksScreen.kt).
+        rememberChapterEnd(ui)?.let { chapterEnd ->
+            SectionTitle(stringResource(R.string.sleep_this_book))
+            OptionRow(count = 1, chosen = { timer is SleepTimer.ByChapter }, onPick = { extras.setSleep(chapterEnd(), ui) }) { Text(stringResource(R.string.sleep_end_of_chapter)) }
+        }
     }
 }
 
@@ -430,12 +435,14 @@ private fun SpeedSheet(extras: PlayerExtrasUi, ui: PlayerUi) {
     val state = store.state.collectAsStateWithLifecycle().value
     val path = ui.path()
     val usualAtOpen = remember { store.state.value.usual }
-    val speed = state.speedOf(path)
+    // A book plays at its own speed, kept with the book (BooksScreen.kt).
+    val book = rememberBookSpeed(ui)
+    val speed = book?.speed ?: state.speedOf(path)
     val own = path in state.speeds
     var sliding by remember { mutableStateOf<Float?>(null) }
     var pitching by remember { mutableStateOf<Int?>(null) }
     val shown = speed.copy(speed = sliding ?: speed.speed, semitones = pitching ?: speed.semitones)
-    val set: ((Speed) -> Speed) -> Unit = { change -> store.change { it.withSpeed(ui.ref(), change) } }
+    val set: ((Speed) -> Speed) -> Unit = book?.set ?: { change -> store.change { it.withSpeed(ui.ref(), change) } }
     LyrifySheet(
         onDismiss = extras::close,
         footer = {
@@ -499,6 +506,10 @@ private fun SpeedSheet(extras: PlayerExtrasUi, ui: PlayerUi) {
                     modifier = Modifier.semantics { contentDescription = title },
                 )
             }
+        }
+        if (book != null) {
+            Text(stringResource(R.string.speed_book_sentence), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            return@LyrifySheet
         }
         SheetSwitch(R.drawable.ic_music_note, stringResource(R.string.speed_this_song), stringResource(if (own) R.string.speed_this_song_on else R.string.speed_this_song_off), own) { on ->
             store.change { it.thisSongOnly(ui.ref(), on, usualAtOpen) }

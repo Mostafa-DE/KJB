@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Audiobook mode (books/, ui/BooksScreen.kt). Labels of 3 words or fewer; sentences only in sheets and dialogs. -->
+<resources>
+    <!-- The Library tab. -->
+    <string name="library_tab_books">Books</string>
+    <string name="books_continue">Continue</string>
+    <string name="books_more">More</string>
+    <string name="book_not_started">Not started</string>
+    <string name="book_finished">Finished</string>
+    <string name="book_chapter_of">Chapter %1$d of %2$d</string>
+    <string name="book_chapter">Chapter %1$d</string>
+    <string name="book_left">%1$s left</string>
+    <string name="book_hours_minutes">%1$d h %2$d m</string>
+    <string name="book_minutes">%1$d m</string>
+    <string name="book_start_over">Start over</string>
+    <string name="book_mark_finished">Mark finished</string>
+
+    <!-- The player in book mode. -->
+    <string name="books_chapters">Chapters</string>
+    <string name="book_heard">Heard</string>
+    <string name="book_previous_chapter">Previous chapter</string>
+    <string name="book_next_chapter">Next chapter</string>
+    <string name="sleep_end_of_chapter">End of chapter</string>
+    <string name="sleep_this_book">This book</string>
+    <string name="speed_book_sentence">This book plays at its own speed. Your music keeps its usual speed.</string>
+
+    <!-- The song and folder menus. -->
+    <string name="book_mark">Mark as book</string>
+    <string name="book_not">Not a book</string>
+    <string name="book_looks_like">This looks like a book.</string>
+    <string name="book_marked">Marked as book</string>
+    <string name="book_unmarked">Back to music</string>
+
+    <!-- A book's queue, as the player's "From" line and the queue pages name it. -->
+    <string name="book_source">Book · %1$s</string>
+    <string name="queue_source_book">Book</string>
+
+    <!-- A book's buttons in the notification, on the lock screen and in the car. -->
+    <string name="book_back_30">Back 30 s</string>
+    <string name="book_forward_30">Forward 30 s</string>
+</resources>

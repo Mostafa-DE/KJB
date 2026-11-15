@@ -350,6 +350,29 @@ class QueuesTest {
     }
 
     @Test
+    fun `a book's queue left for music or another book is never kept in Recent, the music queue before it is`() {
+        val parts = (1..3).map { song("Lantern Road $it") }
+        val lanternRoad = QueueSource(SourceKind.BOOK, "/storage/emulated/0/Audiobooks/Lantern Road/|Lantern Road", "Lantern Road")
+        val tideChart = QueueSource(SourceKind.BOOK, "/storage/emulated/0/Audiobooks/Tide Chart.m4b", "Tide Chart")
+        val music = playing(0)
+        val musicId = music.currentId!!
+        val reading = music.play(parts, 1, lanternRoad, now = 2).book
+        assertEquals(listOf(musicId), reading.recent)
+
+        // Another book, then music: neither book waits in Recent; books.json keeps their places for the Continue row.
+        val other = reading.play(listOf(song("Tide Chart")), 0, tideChart, now = 3)
+        val back = other.book.play(folder, 0, folderSource, now = 4)
+
+        assertFalse(other.toRecent)
+        assertFalse(back.toRecent)
+        assertEquals(listOf(musicId), back.book.recent)
+        assertEquals(listOf(albumSource.key, folderSource.key), back.book.queues.map { it.source.key })
+        // Resume of a recent queue from a book leaves no book behind either.
+        val resumed = back.book.play(parts, 0, lanternRoad, now = 5).book.resume(musicId, now = 6).book
+        assertEquals(listOf(SourceKind.FOLDER), resumed.recent.map { resumed.queue(it)!!.source.kind })
+    }
+
+    @Test
     fun `Keep moves a recent queue to Saved, where it never drops off and never goes to Recent`() {
         var book = playing(0).play(folder, 0, folderSource, now = 2).book
         val kept = book.recent.single()
