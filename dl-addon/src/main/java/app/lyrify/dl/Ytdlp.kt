@@ -70,8 +70,8 @@ interface Ytdlp {
  * (VidGrab's mp3-args-tested.txt, YtdlpTest), and what a run in the add-on adds to it ([forRun]).
  */
 object DlArgs {
-    /** An audio file's name: "Artist - Title", from the tags yt-dlp made. */
-    const val AUDIO_NAME: String = "%(meta_artist).80B - %(meta_title).120B.%(ext)s"
+    /** An audio file's name: "Artist - Title", from the tags yt-dlp made, or the title alone without an artist. */
+    const val AUDIO_NAME: String = "%(meta_artist|).80B%(meta_artist& - |)s%(meta_title).120B.%(ext)s"
 
     const val VIDEO_NAME: String = "%(title).150B.%(ext)s"
 
@@ -97,10 +97,11 @@ object DlArgs {
 
     /**
      * VidGrab's tags for audio: title and artist from the site's tags, or "Artist - Title" by that artist's own channel
-     * ([OWN_SPLIT]), else the title by the uploader; junk words, "| ..." tails and "- Topic" or VEVO dropped, "ft." as
-     * "(feat. X)", album, album artist, year and genre; description, comment and the link blanked; the cover cropped
-     * square as a JPG, when the site's extractor gives a thumbnail (Wikimedia Commons' gives none, so its downloads have
-     * no cover and KJB's default cover shows: phone session 10); ID3v2.3.
+     * ([OWN_SPLIT]), else the title by the uploader, and no artist without one (as [Info]'s sheet has it; VidGrab wrote
+     * "Unknown"); junk words, "| ..." tails and "- Topic" or VEVO dropped, "ft." as "(feat. X)", album, album artist, year
+     * and genre; description, comment and the link blanked; the cover cropped square as a JPG, when the site's extractor
+     * gives a thumbnail (Wikimedia Commons' gives none, so its downloads have no cover and KJB's default cover shows:
+     * phone session 10); ID3v2.3.
      */
     private val TAGGING: List<String> = listOf(
         "--embed-metadata",
@@ -116,7 +117,7 @@ object DlArgs {
         "--parse-metadata",
         "title:%(meta_title)s",
         "--parse-metadata",
-        "%(uploader|Unknown)s:%(meta_artist)s",
+        "%(uploader|)s:(?P<meta_artist>.*)",
         "--parse-metadata",
         """title:(?P<kjb_a>.+?)\s+[""" + DASHES + """]\s+.+""",
         "--parse-metadata",

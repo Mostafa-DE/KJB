@@ -53,12 +53,22 @@ class YtdlpTest {
         )
     }
 
+    /** VidGrab's artist with no uploader, "Unknown" (the sheet's is empty), and its name with an artist always in front. */
+    private val unknownArtist = "%(uploader|Unknown)s:%(meta_artist)s"
+    private val artistName = "%(meta_artist).80B - %(meta_title).120B.%(ext)s"
+
+    /** KJB's: no uploader leaves the artist empty, and a file without an artist is named by its title alone. */
+    private val noArtist = "%(uploader|)s:(?P<meta_artist>.*)"
+    private val titleName = "%(meta_artist|).80B%(meta_artist& - |)s%(meta_title).120B.%(ext)s"
+
     /**
-     * VidGrab's tested set with its blind split made KJB's (phone session 10). Checked with yt-dlp itself (2025.11.12, the
-     * one youtubedl-android ships) on made-up info read with --load-info-json, offline: the cases of InfoTest's naming
-     * test come out the same.
+     * VidGrab's tested set with its blind split made KJB's (phone session 10), and no "Unknown" artist (PF10's review).
+     * Checked with yt-dlp itself (2025.11.12, the one youtubedl-android ships) on made-up info read with
+     * --load-info-json, offline: the cases of InfoTest's naming test come out the same, a name with an artist as before,
+     * and one without as its title alone.
      */
     private val kjb: List<String> = tested.indexOf(blindSplit).let { at -> tested.take(at - 1) + ownSplit + tested.drop(at + 1) }
+        .map { arg -> mapOf(unknownArtist to noArtist, artistName to titleName)[arg] ?: arg }
 
     @Test
     fun `MP3 320 with the original language is the arg set VidGrab tested, its "Artist - Title" split made KJB's`() {
@@ -66,6 +76,15 @@ class YtdlpTest {
         assertEquals("--parse-metadata", tested[tested.indexOf(blindSplit) - 1])
         assertEquals(84, kjb.size)
         assertEquals(kjb, DlArgs.audio(AudioQuality.MP3_320, originalLanguage = true))
+    }
+
+    @Test
+    fun `with no uploader the artist is left empty, as the sheet leaves it, and the file is named by its title alone`() {
+        val audio = DlArgs.audio(AudioQuality.MP3_320, originalLanguage = true)
+
+        assertTrue(audio.none { "Unknown" in it })
+        assertEquals(noArtist, audio[audio.indexOf("title:%(meta_title)s") + 2])
+        assertEquals(titleName, audio[audio.indexOf("-o") + 1])
     }
 
     @Test
@@ -108,7 +127,7 @@ class YtdlpTest {
         val dir = File("/data/dl/k1")
         val audio = DlArgs.forRun(DlRequest("k1", "https://video.example.com/v", DlKind.AUDIO), dir)
 
-        assertEquals("/data/dl/k1/%(meta_artist).80B - %(meta_title).120B.%(ext)s", audio[audio.indexOf("-o") + 1])
+        assertEquals("/data/dl/k1/$titleName", audio[audio.indexOf("-o") + 1])
         assertTrue(audio.containsAll(listOf("--write-thumbnail", "--no-mtime", "--newline")))
         val print = audio.indexOf("--print-to-file")
         assertTrue(audio[print + 1].startsWith("after_move:%(.{meta_title,meta_artist,"))
