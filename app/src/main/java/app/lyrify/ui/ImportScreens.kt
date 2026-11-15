@@ -45,7 +45,11 @@ import app.lyrify.backup.ImportPlan
 import app.lyrify.backup.ImportRead
 import app.lyrify.backup.ImportSong
 import app.lyrify.backup.Imports
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -87,11 +91,38 @@ internal fun failureText(why: ImportFailure): Int = when (why) {
     ImportFailure.MUSICOLET -> R.string.import_musicolet_text
 }
 
+/** The summary's title: the string [text], or the plural [text] of [count] when it has one. */
+internal data class SummaryTitle(val text: Int, val count: Int? = null)
+
+/**
+ * What the summary's title says the import did: Couldn't import, Nothing new, Imported 12 playlists, Added 340 songs to
+ * Favourites (Samsung Music's favourites file, with no playlist), Import done.
+ */
+internal fun summaryTitle(outcome: ImportOutcome): SummaryTitle = when {
+    !outcome.complete -> SummaryTitle(R.string.import_failed)
+    !outcome.changed -> SummaryTitle(R.string.import_nothing_new)
+    outcome.playlists > 0 -> SummaryTitle(R.plurals.import_done, outcome.playlists)
+    outcome.favouritesAdded > 0 -> SummaryTitle(R.plurals.import_done_to_favourites, outcome.favouritesAdded)
+    else -> SummaryTitle(R.string.import_done_other)
+}
+
+/** The summary's count lines, each its label and count, those at none left out, and the favourites when the title says them. */
+internal fun summaryLines(outcome: ImportOutcome): List<Pair<Int, Int>> {
+    val favouritesInTitle = summaryTitle(outcome).text == R.plurals.import_done_to_favourites
+    return listOf(
+        R.string.import_done_created to outcome.created,
+        R.string.import_done_songs to outcome.songsAdded,
+        R.string.import_done_favourites to if (favouritesInTitle) 0 else outcome.favouritesAdded,
+        R.string.import_done_plays to outcome.countsRaised,
+        R.string.import_done_queues to outcome.queuesAdded,
+    ).filter { it.second > 0 }
+}
+
 /** "Copy list": each song not found on its own line, as the sheet lists it. */
 internal fun missingList(missing: List<ImportSong>): String = missing.joinToString("\n") { it.label }
 
 /** Where an import's files came from: the preview's title. */
-private enum class ImportSource(@StringRes val found: Int) {
+internal enum class ImportSource(@StringRes val found: Int) {
     FILE(R.string.import_found_file),
     FILES(R.string.import_found_files),
     FOLDER(R.string.import_found_folder),
@@ -99,7 +130,7 @@ private enum class ImportSource(@StringRes val found: Int) {
 }
 
 /** What the import sheet shows. */
-private sealed interface ImportSheet {
+internal sealed interface ImportSheet {
     /** Pick a file or a folder; [phone] playlists other apps saved on the phone, offered only when there are any. */
     data class Start(val phone: Int = 0) : ImportSheet
 
@@ -121,6 +152,39 @@ private sealed interface ImportSheet {
  */
 private object ShownSummary {
     var done: ImportSheet.Done? = null
+}
+
+/**
+ * Picked files another page hands to the import sheet, which lives once, in the shell's backup actions: the Playlists
+ * tab's Import sends Samsung Music's favourites file ([forImportSheet], [handOver]), so it is read as Pick file reads it.
+ * This lives only as long as the process, so the page lets go of the files only once the sheet holds them in its own
+ * saved pick (review panel-im3).
+ */
+internal class ImportHandoff {
+    /** Picked files on their way, and the word that the sheet holds them. */
+    private class Handed(val documents: List<String>, val held: CompletableDeferred<Unit> = CompletableDeferred())
+
+    private val files = Channel<Handed>()
+
+    /** The page's side: hands [documents] to the sheet, and returns once the sheet holds them. */
+    suspend fun hand(documents: List<String>) {
+        val handed = Handed(documents)
+        files.send(handed)
+        handed.held.await()
+    }
+
+    /** The sheet's side, while it is there: each pick handed is read as Pick file's, then its page may let go. */
+    suspend fun receive(reads: ImportReads) {
+        for (handed in files) {
+            reads.load(listOf(PICKED_FILES) + handed.documents)
+            handed.held.complete(Unit)
+        }
+    }
+
+    companion object {
+        /** The one the Playlists tab's Import and the import sheet share. */
+        val shared: ImportHandoff = ImportHandoff()
+    }
 }
 
 /** The sheet lists this many songs or files of a kind, then "And 12 more". */
@@ -145,25 +209,13 @@ fun rememberImportFromApp(): () -> Unit {
     val scope = rememberCoroutineScope()
     val sheet = remember { mutableStateOf<ImportSheet?>(ShownSummary.done) }
     val picked = rememberSaveable { mutableStateOf(emptyList<String>()) }
+    val reads = remember { ImportReads(scope, picked, sheet) { what -> readPick(app, what) } }
+    val load = reads::load
     val say = { text: Int, failed: Boolean ->
         scope.launch { toasts.show(if (failed) Toast(resources.getString(text), R.drawable.ic_error, Tone.ERROR) else Toast(resources.getString(text))) }
     }
-    val load = { what: List<String> ->
-        picked.value = what
-        sheet.value = ImportSheet.Reading
-        scope.launch {
-            val documents = what.drop(1).map(String::toUri)
-            val (source, pick) = when (what.first()) {
-                PICKED_FOLDER -> ImportSource.FOLDER to Imports.folder(app, documents.single())
-                PICKED_PHONE -> ImportSource.PHONE to Imports.phone(app)
-                else -> (if (documents.size == 1) ImportSource.FILE else ImportSource.FILES) to Imports.files(app, documents)
-            }
-            sheet.value = loaded(source, pick, app)
-        }
-    }
-    LaunchedEffect(Unit) {
-        if (sheet.value == null && picked.value.isNotEmpty()) load(picked.value)
-    }
+    LaunchedEffect(Unit) { reads.resume() }
+    LaunchedEffect(ImportHandoff.shared) { ImportHandoff.shared.receive(reads) }
     val files = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { documents ->
         if (documents.isNotEmpty()) load(listOf(PICKED_FILES) + documents.map(Uri::toString).distinct())
     }
@@ -171,9 +223,8 @@ fun rememberImportFromApp(): () -> Unit {
         tree?.let { load(listOf(PICKED_FOLDER, it.toString())) }
     }
     val close = {
-        sheet.value = null
+        reads.close()
         ShownSummary.done = null
-        picked.value = emptyList()
     }
     val show = { done: ImportSheet.Done ->
         ShownSummary.done = done
@@ -230,6 +281,57 @@ fun rememberImportFromApp(): () -> Unit {
             }
         }
     }
+}
+
+/**
+ * The import sheet's pick and its read: [load] keeps the pick in [picked] (saveable, so a remade activity reads it again,
+ * [resume]) and shows Reading until [read] gives the sheet. Each read has its ticket: a newer pick or [close] moves the
+ * ticket on and stops the read, so a read overtaken or dismissed never shows its sheet, which would have no pick behind
+ * it to come back after a turn of the phone (review panel-im3).
+ */
+internal class ImportReads(
+    private val scope: CoroutineScope,
+    private val picked: MutableState<List<String>>,
+    private val sheet: MutableState<ImportSheet?>,
+    private val read: suspend (List<String>) -> ImportSheet,
+) {
+    private var ticket: Int = 0
+    private var reading: Job? = null
+
+    fun load(what: List<String>) {
+        val mine = ++ticket
+        reading?.cancel()
+        picked.value = what
+        sheet.value = ImportSheet.Reading
+        reading = scope.launch {
+            val shown = read(what)
+            if (mine == ticket) sheet.value = shown
+        }
+    }
+
+    /** A remade activity: the pick it kept read again, when no sheet shows. */
+    fun resume() {
+        if (sheet.value == null && picked.value.isNotEmpty()) load(picked.value)
+    }
+
+    /** The sheet closed: no pick any more, and no read of one still to show. */
+    fun close() {
+        ticket++
+        reading?.cancel()
+        sheet.value = null
+        picked.value = emptyList()
+    }
+}
+
+/** The sheet the pick [what] reads as; [ImportReads] keeps a pick as its kind, then its documents. */
+private suspend fun readPick(app: Context, what: List<String>): ImportSheet {
+    val documents = what.drop(1).map(String::toUri)
+    val (source, pick) = when (what.first()) {
+        PICKED_FOLDER -> ImportSource.FOLDER to Imports.folder(app, documents.single())
+        PICKED_PHONE -> ImportSource.PHONE to Imports.phone(app)
+        else -> (if (documents.size == 1) ImportSource.FILE else ImportSource.FILES) to Imports.files(app, documents)
+    }
+    return loaded(source, pick, app)
 }
 
 /** What a pick read becomes: the preview when anything was read, else why nothing was. */
@@ -333,23 +435,12 @@ private fun ImportSheetView(
             },
         ) {
             val outcome = sheet.outcome
-            val title = when {
-                !outcome.complete -> stringResource(R.string.import_failed)
-                !outcome.changed -> stringResource(R.string.import_nothing_new)
-                outcome.playlists > 0 -> pluralStringResource(R.plurals.import_done, outcome.playlists, formatCount(outcome.playlists))
-                else -> stringResource(R.string.import_done_other)
-            }
+            val title = summaryTitle(outcome).let { (text, count) -> if (count == null) stringResource(text) else pluralStringResource(text, count, formatCount(count)) }
             Text(title, style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { heading() })
             if (!outcome.complete) Text(stringResource(R.string.import_partly_text), style = MaterialTheme.typography.bodyLarge, color = colors.onSurfaceVariant)
             if (!outcome.changed) Text(stringResource(R.string.import_nothing_new_text), style = MaterialTheme.typography.bodyLarge, color = colors.onSurfaceVariant)
             if (sheet.undoFailed) Text(stringResource(R.string.import_not_undone_text), style = MaterialTheme.typography.bodyLarge, color = colors.onSurfaceVariant)
-            listOf(
-                R.string.import_done_created to outcome.created,
-                R.string.import_done_songs to outcome.songsAdded,
-                R.string.import_done_favourites to outcome.favouritesAdded,
-                R.string.import_done_plays to outcome.countsRaised,
-                R.string.import_done_queues to outcome.queuesAdded,
-            ).filter { it.second > 0 }.forEach { (label, count) -> CountLine(stringResource(label), count) }
+            summaryLines(outcome).forEach { (label, count) -> CountLine(stringResource(label), count) }
             if (sheet.missing.isNotEmpty()) {
                 NotFound(sheet.missing)
                 LyrifyButton(stringResource(R.string.import_copy), onClick = { onCopy(sheet.missing) }, modifier = Modifier.fillMaxWidth(), kind = ButtonKind.SECONDARY, icon = R.drawable.ic_content_copy)

@@ -38,6 +38,9 @@ class SongMatcher(phone: List<Song>) {
     /** "folder/file", case aside: m3u's rule 2, for imports only. */
     private val byNameInFolder: Map<String, List<Song>> by lazy { phone.mapNotNull { song -> nameInFolder(song.path)?.let { it to song } }.groupBy({ it.first }, { it.second }) }
 
+    /** The file name alone, case aside: [byUniqueName], for imports only. */
+    private val byFileName: Map<String, List<Song>> by lazy { phone.groupBy { relativeKey(it.fileName) } }
+
     /**
      * Each of [paths] (as the backup names its songs) with the song it is on this phone; a path not found is left out.
      * [known] holds what the backup knows of each song; a song it knows nothing of is not found.
@@ -94,6 +97,17 @@ class SongMatcher(phone: List<Song>) {
         return readings(song).mapNotNull { (artist, title) -> byTags(song, title, artist) }.distinct().singleOrNull()
     }
 
+    /**
+     * Pass 5, an import's last resort for a song moved to another folder since the file was made: the one song of the
+     * phone with [song]'s file name, extension and all, case aside, when it [fits] and an `#EXTINF` text is its title
+     * ([titled]); none when two or more songs have that name. A name alone can still be a guess, so [ImportPlan] takes
+     * it only for a song no other pass finds, and never for a song another of the import's songs found or wants.
+     */
+    fun byUniqueName(song: ImportSong): Song? {
+        val name = (song.path ?: song.relativePath)?.substringAfterLast('/')?.takeIf(String::isNotEmpty) ?: return null
+        return byFileName[relativeKey(name)]?.singleOrNull()?.takeIf { fits(song, it) && (song.title != null || song.info == null || titled(song.info, it)) }
+    }
+
     /** Pass 2: the songs at [path] below the storage root, or at the longest end of a path whose root is unknown. */
     private fun below(path: String): List<Song> {
         val relative = if (path.startsWith('/')) relativeToRoot(path) else null
@@ -144,6 +158,18 @@ class SongMatcher(phone: List<Song>) {
     private fun names(info: String, phone: Song): Boolean {
         val title = TrackNames.normalize(phone.title).takeIf(String::isNotEmpty) ?: return false
         return " ${TrackNames.normalize(info)} ".contains(" $title ")
+    }
+
+    /**
+     * Whether [info] is [phone]'s title and no more: the whole text, or one side of its first " - ", case, accents and
+     * punctuation aside. Pass 5's check, stricter than [names], as a name alone is a guess: "Ember" is not "Ember Gate"
+     * (review panel-im3).
+     */
+    private fun titled(info: String, phone: Song): Boolean {
+        val title = TrackNames.normalize(phone.title).takeIf(String::isNotEmpty) ?: return false
+        val dash = info.indexOf(DASH)
+        val sides = if (dash < 0) emptyList() else listOf(info.substring(0, dash), info.substring(dash + DASH.length))
+        return (sides + info).any { TrackNames.normalize(it) == title }
     }
 
     /** The songs with [song]'s title, artist, album and length; of several, the one of its size when only one has it. */
@@ -206,6 +232,9 @@ class SongMatcher(phone: List<Song>) {
 
         /** A path below the root as compared: in one Unicode form (NFC), case aside. */
         private fun relativeKey(path: String): String = nfc(path).trim('/').lowercase(Locale.ROOT)
+
+        /** An import's path as [relativeKey] compares it, `\` as `/`: two spellings of one path are one key. */
+        internal fun pathKey(path: String): String = relativeKey(path.replace('\\', '/'))
 
         /** [path] in Unicode's composed form: a path copied from another system may come decomposed (NFD). */
         private fun nfc(path: String): String = Normalizer.normalize(path, Normalizer.Form.NFC)

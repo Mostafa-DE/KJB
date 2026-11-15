@@ -1,22 +1,34 @@
 package app.lyrify.ui
 
+import androidx.compose.runtime.mutableStateOf
 import app.lyrify.R
 import app.lyrify.backup.ImportBundle
 import app.lyrify.backup.ImportFailure
 import app.lyrify.backup.ImportKind
+import app.lyrify.backup.ImportOutcome
 import app.lyrify.backup.ImportPlan
 import app.lyrify.backup.ImportPlaylist
 import app.lyrify.backup.ImportPlays
 import app.lyrify.backup.ImportQueue
 import app.lyrify.backup.ImportSong
+import app.lyrify.backup.ImportUndo
 import app.lyrify.library.song
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
+import kotlin.coroutines.Continuation
+import kotlin.coroutines.resume
+import kotlin.coroutines.suspendCoroutine
 
 /** Settings > Backup > Import from app: the row, the preview's rows, the reasons, the copied list, and the words. Made-up names only. */
+@OptIn(ExperimentalCoroutinesApi::class) // runCurrent
 class ImportScreensTest {
     private val lantern = song("Music/Harbour Glass/01 Paper Lantern.mp3", title = "Paper Lantern", durationMs = 201_000)
 
@@ -85,6 +97,90 @@ class ImportScreensTest {
     }
 
     @Test
+    fun `a summary of favourites alone reads Added N songs to Favourites, and says it once`() {
+        val favourites = ImportOutcome(created = 0, extended = 0, songsAdded = 0, favouritesAdded = 12, countsRaised = 0, undo = ImportUndo(favourites = List(12) { lantern.ref }))
+        val both = favourites.copy(created = 2, undo = favourites.undo.copy(created = mapOf("p1" to listOf(lantern.ref), "p2" to listOf(lantern.ref))))
+
+        assertEquals(SummaryTitle(R.plurals.import_done_to_favourites, 12), summaryTitle(favourites))
+        assertEquals(emptyList<Pair<Int, Int>>(), summaryLines(favourites))
+        assertEquals("Added 12 songs to Favourites", plural("import_done_to_favourites").getValue("other").format("12"))
+        assertEquals("Added 1 song to Favourites", plural("import_done_to_favourites").getValue("one").format("1"))
+        // With playlists, the title counts them and a line the favourites.
+        assertEquals(SummaryTitle(R.plurals.import_done, 2), summaryTitle(both))
+        assertEquals(listOf(R.string.import_done_created to 2, R.string.import_done_favourites to 12), summaryLines(both))
+        assertEquals(SummaryTitle(R.string.import_nothing_new), summaryTitle(favourites.copy(favouritesAdded = 0, undo = ImportUndo())))
+        assertEquals(SummaryTitle(R.string.import_failed), summaryTitle(favourites.copy(complete = false)))
+        assertEquals(listOf(R.string.import_done_favourites to 12), summaryLines(favourites.copy(complete = false)))
+    }
+
+    @Test
+    fun `the Samsung Music hint says its favourites come in too`() {
+        val hint = strings().getValue("import_where_samsung")
+
+        assertTrue(hint, hint.startsWith("Samsung Music: Settings, Manage playlists, Export"))
+        assertTrue(hint, hint.contains("favourites", ignoreCase = true))
+    }
+
+    // The pick and its read (review panel-im3)
+
+    @Test
+    fun `closing the sheet while it reads stops the read and lets go of the pick, so a remade activity reads nothing`() = runTest {
+        val picked = mutableStateOf(emptyList<String>())
+        val sheet = mutableStateOf<ImportSheet?>(null)
+        var stopped = false
+        val reads = ImportReads(backgroundScope, picked, sheet) {
+            try {
+                awaitCancellation()
+            } finally {
+                stopped = true
+            }
+        }
+
+        reads.load(MIX)
+        runCurrent()
+        assertEquals(ImportSheet.Reading, sheet.value)
+        assertEquals(MIX, picked.value)
+        reads.close()
+        runCurrent()
+
+        assertTrue(stopped)
+        assertNull(sheet.value)
+        assertEquals(emptyList<String>(), picked.value)
+        reads.resume()
+        assertNull(sheet.value)
+    }
+
+    @Test
+    fun `a read that ends after a newer pick, or after the sheet closed, never shows its sheet`() = runTest {
+        val picked = mutableStateOf(emptyList<String>())
+        val sheet = mutableStateOf<ImportSheet?>(null)
+        // Reads that end even when stopped, as a read on another thread may.
+        val waiting = HashMap<List<String>, Continuation<ImportSheet>>()
+        val reads = ImportReads(backgroundScope, picked, sheet) { what -> suspendCoroutine { waiting[what] = it } }
+        val mix = ImportSheet.Failed(emptyList(), none = true)
+        val evening = ImportSheet.Failed(emptyList(), none = false)
+
+        reads.load(MIX)
+        runCurrent()
+        reads.load(EVENING)
+        runCurrent()
+        waiting.getValue(EVENING).resume(evening)
+        runCurrent()
+        waiting.getValue(MIX).resume(mix)
+        runCurrent()
+        assertEquals(evening, sheet.value)
+        assertEquals(EVENING, picked.value)
+
+        reads.load(MIX)
+        runCurrent()
+        reads.close()
+        waiting.getValue(MIX).resume(mix)
+        runCurrent()
+        assertNull(sheet.value)
+        assertEquals(emptyList<String>(), picked.value)
+    }
+
+    @Test
     fun `labels are three words or fewer, the copy says your phone, and no text has an em-dash`() {
         val labels = listOf(
             "import_row", "import_title", "import_pick_file", "import_pick_folder", "import_phone_title", "import_phone_button", "import_where_title", "import_reading",
@@ -111,5 +207,9 @@ class ImportScreensTest {
     private companion object {
         /** Unit tests run in the module's folder. */
         val FILE = File("src/main/res/values/strings_import.xml")
+
+        /** Picks as the sheet keeps them: the kind, then the documents. */
+        val MIX = listOf("files", "content://com.android.externalstorage.documents/document/primary%3AMusic%2FMix.m3u8")
+        val EVENING = listOf("files", "content://com.android.externalstorage.documents/document/primary%3AMusic%2FEvening.m3u8")
     }
 }
