@@ -21,6 +21,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -132,9 +133,22 @@ class DlRuns(
     private class Run(val id: Long, val request: DlRequest, val events: RunEvents) {
         lateinit var job: Job
 
+        /** Whether what it got stays as it stops: as the stops said ([stopping]), until one said it goes. */
         @Volatile
         var keepParts = false
+            private set
+
+        /** A stop said what it got goes (KJB's Cancel, a discard): no later stop keeps it (KJB letting go of the add-on). */
+        @Volatile
+        var dropped = false
+            private set
         val delivery = CompletableDeferred<Sinks>()
+
+        /** A stop that [keep]s what it got, or not. Under [lock]. */
+        fun stopping(keep: Boolean) {
+            dropped = dropped || !keep
+            keepParts = !dropped
+        }
     }
 
     /** KJB's descriptors for a run's file and its cover. */
@@ -172,12 +186,12 @@ class DlRuns(
         if (waiting == null || !waiting.delivery.complete(sinks)) sinks.close()
     }
 
-    /** Stops [run]: its processes are killed; [keepParts]: what it got stays for the next run of its key. */
+    /**
+     * Stops [run]: its processes are killed; [keepParts]: what it got stays for the next run of its key, unless a stop
+     * before said it goes.
+     */
     fun cancel(run: Long, keepParts: Boolean) {
-        synchronized(lock) { runs[run] }?.let {
-            it.keepParts = keepParts
-            it.job.cancel()
-        }
+        synchronized(lock) { runs[run]?.also { it.stopping(keepParts) } }?.job?.cancel()
     }
 
     /** Stops every run, their parts kept: KJB let go of the add-on (it may come back to them). */
@@ -194,17 +208,37 @@ class DlRuns(
     fun discard(key: String) {
         if (!isDownloadKey(key)) return
         val dir = File(folder, key)
-        val live = synchronized(lock) { runs.values.firstOrNull { it.request.key == key } }
+        val live = synchronized(lock) { runs.values.firstOrNull { it.request.key == key }?.also { it.stopping(keep = false) } }
         if (live == null) {
             dir.deleteRecursively()
             return
         }
-        live.keepParts = false
         live.job.cancel()
+        mark(dir)
+    }
+
+    /** Marks [dir] for the next [sweep] ([DISCARDED]). */
+    private fun mark(dir: File) {
         try {
             if (dir.isDirectory) File(dir, DISCARDED).createNewFile()
         } catch (e: IOException) {
             log("discard: not marked (${e.javaClass.simpleName})")
+        }
+    }
+
+    /**
+     * Deletes stopped run folder [dir] once no process of the add-on is left in it: its yt-dlp and ffmpeg were killed and
+     * go at once, waited for at most [GONE_WAIT_MS]. One still there keeps its files untouched, the folder marked for the
+     * next [sweep].
+     */
+    private suspend fun clear(dir: File) {
+        val marker = dir.path + "/"
+        val gone = withTimeoutOrNull(GONE_WAIT_MS) { while (ytdlp.running(marker)) delay(GONE_LOOK_MS) } != null
+        if (gone) {
+            dir.deleteRecursively()
+        } else {
+            log("a stopped run's folder is left to the next start: a process is still in it")
+            mark(dir)
         }
     }
 
@@ -224,10 +258,10 @@ class DlRuns(
         var end: DlEnd = DlEnd.Stopped
         try {
             end = download(run, dir)
-            // A delivered file is KJB's now; what a failed run got stays for its Retry.
-            if (end is DlEnd.Delivered) withContext(io) { dir.deleteRecursively() }
+            // A delivered file is KJB's now; what a failed run got stays for its Retry, unless KJB's Cancel came as it failed.
+            if (end is DlEnd.Delivered || run.dropped) withContext(NonCancellable + io) { clear(dir) }
         } catch (e: CancellationException) {
-            if (!run.keepParts) withContext(NonCancellable + io) { dir.deleteRecursively() }
+            if (!run.keepParts) withContext(NonCancellable + io) { clear(dir) }
             throw e
         } catch (e: RuntimeException) {
             // A bug, never a reason to take the add-on down: the run fails, to be tried again.
@@ -463,6 +497,12 @@ class DlRuns(
 
         /** A run's folder untouched this long goes ([sweep]). */
         const val SWEEP_AFTER_MS: Long = 7 * 24 * 60 * 60_000L
+
+        /** How long a stopped run's folder waits for its killed processes to be gone before it is left to the [sweep]. */
+        const val GONE_WAIT_MS: Long = 5_000
+
+        /** How often [clear] looks for them meanwhile. */
+        private const val GONE_LOOK_MS: Long = 100
 
         private const val CHUNK = 256 * 1024
     }

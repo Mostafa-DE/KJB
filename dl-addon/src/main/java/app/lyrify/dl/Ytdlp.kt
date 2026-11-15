@@ -55,6 +55,9 @@ interface Ytdlp {
     /** Kills run [id] and every process of the add-on whose command line holds [marker]: its ffmpeg too. */
     fun kill(id: String, marker: String)
 
+    /** Whether a process of the add-on still has [marker] in its command line: a killed run's yt-dlp or ffmpeg not gone yet. */
+    fun running(marker: String): Boolean
+
     /** Looks for a newer yt-dlp on its GitHub releases and puts it in place. */
     suspend fun update(): DlUpdate.Outcome
 
@@ -354,6 +357,8 @@ class LibraryYtdlp(private val context: Context, private val cache: File, privat
         left.forEach { Process.sendSignal(it, Process.SIGNAL_KILL) }
         log("killed a run and ${left.size} of its processes")
     }
+
+    override fun running(marker: String): Boolean = ProcTable.matching(File("/proc"), marker, Process.myPid()).isNotEmpty()
 
     /**
      * yt-dlp's latest stable release, checked ([YtdlpUpdater]: yt-dlp's signature on its SHA2-256SUMS, then the file's
