@@ -99,9 +99,9 @@ class BookPlayFilter(private val next: PlayEvents, private val isBook: (String) 
 
 /**
  * Keeps the place of the book playing in `books.json` ([store]) from the player ([port]): every [BOOK_SAVE_EVERY_MS]
- * while it plays, at every pause, when a part plays to its end and the next starts, and as the service stops; the
- * book's last part played to its end makes it finished. [playing] names the book and part playing now, null for music.
- * Main thread.
+ * while it plays, at every pause, when a part plays to its end and the next starts, as the service stops, and when
+ * music or another book takes over, where it was last seen (to the second); the book's last part played to its end
+ * makes it finished. [playing] names the book and part playing now, null for music. Main thread.
  */
 class BookDriver(
     private val port: PlayerPort,
@@ -111,26 +111,44 @@ class BookDriver(
 ) {
     private val sounding = MutableStateFlow(false)
 
+    /** The book's part last seen playing, and where: at a song change the player is in the next song already. */
+    private var current: PlayingBook? = null
+    private var lastMs: Long = 0
+
     /** Runs until cancelled. */
     suspend fun run() {
         sounding.collectLatest { on ->
+            var looked = 0L
             while (on) {
-                delay(BOOK_SAVE_EVERY_MS)
-                keep()
+                delay(LOOK_EVERY_MS)
+                look()
+                looked += LOOK_EVERY_MS
+                if (looked % BOOK_SAVE_EVERY_MS == 0L) keep()
             }
         }
     }
 
     /**
-     * A song started: a part that followed the one before by itself is kept at once. A jump (Continue, a chapter) is
-     * kept at the next save, never at once, as the player may not stand at its place yet.
+     * A song started. Music or another book after a book keeps that book where it was last seen, or at its next part
+     * when its part played to its end. A part that followed the one before by itself is kept at once. A jump in the
+     * book (Continue, a chapter) is kept at the next save, never at once, as the player may not stand at its place yet.
      */
     fun songStarted(uid: Long, lap: Boolean, natural: Boolean) {
-        if (natural && !lap) keep()
+        val left = current
+        val leftMs = lastMs
+        val now = playing()
+        current = now
+        lastMs = port.positionMs
+        if (left != null && left.book.id != now?.book?.id) {
+            leave(left, leftMs, natural)
+        } else if (natural && !lap) {
+            keep()
+        }
     }
 
     fun playingChanged(playing: Boolean) {
         sounding.value = playing
+        look()
         if (!playing) keep()
     }
 
@@ -147,6 +165,32 @@ class BookDriver(
         val now = playing() ?: return
         val at = BookPlace(now.partIndex, port.positionMs)
         store.change { it.withPlace(now.book, at, clock()) }
+    }
+
+    /** Notes the part playing and where, unless the player is in another one it has not said it started yet. */
+    private fun look() {
+        val now = playing() ?: return
+        val was = current
+        if (was != null && (was.book.id != now.book.id || was.partIndex != now.partIndex)) return
+        current = now
+        lastMs = port.positionMs
+    }
+
+    /** The player left [left]'s book at [atMs] of its part, or ([natural]) at the end of it: the next part, or finished. */
+    private fun leave(left: PlayingBook, atMs: Long, natural: Boolean) {
+        val book = left.book
+        store.change { state ->
+            when {
+                !natural -> state.withPlace(book, BookPlace(left.partIndex, atMs), clock())
+                left.partIndex < book.parts.lastIndex -> state.withPlace(book, BookPlace(left.partIndex + 1, 0), clock())
+                else -> state.finished(book, clock())
+            }
+        }
+    }
+
+    private companion object {
+        /** How often the place is noted while a book plays. */
+        const val LOOK_EVERY_MS: Long = 1_000
     }
 }
 

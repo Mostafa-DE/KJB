@@ -167,6 +167,66 @@ class BookPlaybackTest {
     }
 
     @Test
+    fun `music started while a book plays keeps the book where it was left, to the second`() = runTest {
+        val run = driving()
+        run.driver.playingChanged(true)
+        run.port.positionMs = 37_000
+        advanceTimeBy(7_100)
+        runCurrent()
+        // A tap on a song: the player is in the music already when it says so.
+        run.playing = null
+        run.port.positionMs = 0
+        run.driver.songStarted(uid = 9, lap = false, natural = false)
+        runCurrent()
+        assertEquals(BookPlace(0, 37_000), run.store.state.value.placeOf(book))
+    }
+
+    @Test
+    fun `another book started keeps the first where it was left, and the new one waits for its own save`() = runTest {
+        val other = booksOf(listOf(song("Audiobooks/Quiet Orchard.m4b", durationMs = 900_000)), BookMarks()).single()
+        val run = driving()
+        run.playing = PlayingBook(book, 1)
+        run.driver.playingChanged(true)
+        run.port.positionMs = 52_000
+        advanceTimeBy(3_100)
+        runCurrent()
+        run.playing = PlayingBook(other, 0)
+        run.port.positionMs = 0
+        run.driver.songStarted(uid = 7, lap = false, natural = false)
+        runCurrent()
+        assertEquals(BookPlace(1, 52_000), run.store.state.value.placeOf(book))
+        assertNull(run.store.state.value.entryOf(other))
+    }
+
+    @Test
+    fun `a part played to its end into a song added after it keeps the book at its next part, or finished after the last`() = runTest {
+        val run = driving()
+        run.playing = PlayingBook(book, 1)
+        run.driver.playingChanged(true)
+        run.port.positionMs = 599_000
+        advanceTimeBy(1_100)
+        runCurrent()
+        run.playing = null
+        run.port.positionMs = 0
+        run.driver.songStarted(uid = 9, lap = false, natural = true)
+        runCurrent()
+        assertEquals(BookPlace(2, 0), run.store.state.value.placeOf(book))
+        assertFalse(run.store.state.value.entryOf(book)!!.finished)
+
+        val last = driving()
+        last.playing = PlayingBook(book, 2)
+        last.driver.playingChanged(true)
+        last.port.positionMs = 599_000
+        advanceTimeBy(1_100)
+        runCurrent()
+        last.playing = null
+        last.driver.songStarted(uid = 9, lap = false, natural = true)
+        runCurrent()
+        assertTrue(last.store.state.value.entryOf(book)!!.finished)
+        assertEquals(BookPlace(), last.store.state.value.placeOf(book))
+    }
+
+    @Test
     fun `a song of the queue that is not the book's never moves the book's place`() = runTest {
         val run = driving()
         run.port.positionMs = 42_000
