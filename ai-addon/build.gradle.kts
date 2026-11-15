@@ -15,6 +15,9 @@ val releaseKeystore = rootProject.extra["releaseKeystore"] as Properties?
 @Suppress("UNCHECKED_CAST")
 val certPins = rootProject.extra["certPins"] as Map<String, String>
 
+/** KJB's GitHub repository, "owner/name" (root build file). */
+val kjbRepo = rootProject.extra["kjbRepo"] as String
+
 android {
     namespace = "app.lyrify.ai"
     compileSdk = 37
@@ -36,6 +39,8 @@ android {
         buildConfigField("String", "ORT_VERSION", "\"${libs.versions.onnxruntime.get()}\"")
         buildConfigField("String", "QNN_EP_VERSION", "\"${libs.versions.qnnEp.get()}\"")
         buildConfigField("String", "QNN_RUNTIME_VERSION", "\"${libs.versions.qnnRuntime.get()}\"")
+        // KJB's repository's address, in the User-Agent of the add-on's requests.
+        buildConfigField("String", "REPOSITORY", "\"https://github.com/$kjbRepo\"")
     }
 
     packaging {

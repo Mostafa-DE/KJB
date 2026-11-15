@@ -13,7 +13,7 @@ import java.util.concurrent.Executors
 import kotlin.coroutines.CoroutineContext
 
 /** The User-Agent the tests give the client. */
-internal const val TEST_AGENT: String = "KJB/3.0.0 ( https://github.com/Mostafa-DE/Lyrify )"
+internal const val TEST_AGENT: String = "KJB/3.0.0 ( https://github.com/Mostafa-DE/KJB )"
 
 /** A dispatcher on one thread named [name], to see where work ran. Close it after the test. */
 internal fun namedThread(name: String): ExecutorCoroutineDispatcher =

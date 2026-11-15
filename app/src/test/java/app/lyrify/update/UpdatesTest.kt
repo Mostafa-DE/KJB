@@ -35,7 +35,7 @@ class UpdatesTest {
     private val sha = "AB".repeat(32)
 
     private fun asset(name: String, size: Long = 81_000_000, digest: String? = "sha256:$sha", state: String = "uploaded", url: String? = null): String {
-        val address = url ?: "https://github.com/Mostafa-DE/Lyrify/releases/download/v3.0.1/$name"
+        val address = url ?: "https://github.com/Mostafa-DE/KJB/releases/download/v3.0.1/$name"
         val digestJson = digest?.let { "\"$it\"" } ?: "null"
         return """{"name":"$name","size":$size,"state":"$state","digest":$digestJson,"browser_download_url":"$address","content_type":"application/vnd.android.package-archive"}"""
     }
@@ -74,7 +74,7 @@ class UpdatesTest {
     fun `the latest release is read with KJB's own APK, its size and its SHA-256`() {
         val read = Releases.parse(release(), REPO)!!
         assertEquals("3.0.1", read.version)
-        assertEquals(ReleaseApk("https://github.com/Mostafa-DE/Lyrify/releases/download/v3.0.1/KJB-3.0.1.apk", 81_000_000, sha.lowercase()), read.apk)
+        assertEquals(ReleaseApk("https://github.com/Mostafa-DE/KJB/releases/download/v3.0.1/KJB-3.0.1.apk", 81_000_000, sha.lowercase()), read.apk)
         assertEquals("New\n• Made-up change one\n• Made-up change two", read.notes)
     }
 
@@ -91,13 +91,13 @@ class UpdatesTest {
     fun `an APK KJB cannot check is no APK to install`() {
         fun apkOf(vararg assets: String) = Releases.parse(release(assets = assets.toList()), REPO)!!.apk
         assertNull("another repository's", apkOf(asset("KJB-3.0.1.apk", url = "https://github.com/Someone/Else/releases/download/v3.0.1/KJB-3.0.1.apk")))
-        assertNull("not a release download", apkOf(asset("KJB-3.0.1.apk", url = "https://github.com/Mostafa-DE/Lyrify/raw/main/releases/download/KJB-3.0.1.apk")))
+        assertNull("not a release download", apkOf(asset("KJB-3.0.1.apk", url = "https://github.com/Mostafa-DE/KJB/raw/main/releases/download/KJB-3.0.1.apk")))
         assertNull("no SHA-256 published", apkOf(asset("KJB-3.0.1.apk", digest = null)))
         assertNull("another digest", apkOf(asset("KJB-3.0.1.apk", digest = "sha512:$sha")))
         assertNull("too large", apkOf(asset("KJB-3.0.1.apk", size = Releases.MAX_APK_BYTES + 1)))
         assertNull("empty", apkOf(asset("KJB-3.0.1.apk", size = 0)))
         assertNull("still uploading", apkOf(asset("KJB-3.0.1.apk", state = "open")))
-        assertNull("not over https", apkOf(asset("KJB-3.0.1.apk", url = "http://github.com/Mostafa-DE/Lyrify/releases/download/v3.0.1/KJB-3.0.1.apk")))
+        assertNull("not over https", apkOf(asset("KJB-3.0.1.apk", url = "http://github.com/Mostafa-DE/KJB/releases/download/v3.0.1/KJB-3.0.1.apk")))
         assertNull("not GitHub's", apkOf(asset("KJB-3.0.1.apk", url = "https://example.com/KJB-3.0.1.apk")))
         assertNull("another version's", apkOf(asset("KJB-3.0.0.apk")))
         assertNull("the add-on only", apkOf(asset("KJB-AI-3.0.1.apk")))
@@ -113,8 +113,8 @@ class UpdatesTest {
 
     @Test
     fun `the add-on's version comes from the file this KJB pins`() {
-        assertEquals("3.0.0", Releases.pinnedVersion("https://github.com/Mostafa-DE/Lyrify/releases/download/v3.0.0/KJB-AI-3.0.0.apk"))
-        assertNull(Releases.pinnedVersion("https://github.com/Mostafa-DE/Lyrify/releases/download/v3.0.0/other.apk"))
+        assertEquals("3.0.0", Releases.pinnedVersion("https://github.com/Mostafa-DE/KJB/releases/download/v3.0.0/KJB-AI-3.0.0.apk"))
+        assertNull(Releases.pinnedVersion("https://github.com/Mostafa-DE/KJB/releases/download/v3.0.0/other.apk"))
     }
 
     // The APK's signing
@@ -237,7 +237,7 @@ class UpdatesTest {
 
     private fun github(vararg answers: Answer): GitHubLatest {
         val queue = answers.toMutableList()
-        return GitHubLatest("Mostafa-DE/Lyrify", "KJB/test") { uri -> FakeConnection(uri, queue.removeAt(0)).also { opened += it } }
+        return GitHubLatest("Mostafa-DE/KJB", "KJB/test") { uri -> FakeConnection(uri, queue.removeAt(0)).also { opened += it } }
     }
 
     @Test
@@ -246,7 +246,7 @@ class UpdatesTest {
 
         assertEquals("3.0.1", ((fetched as Fetched.Answer).release)?.version)
         val request = opened.single()
-        assertEquals("https://api.github.com/repos/Mostafa-DE/Lyrify/releases/latest", request.url.toString())
+        assertEquals("https://api.github.com/repos/Mostafa-DE/KJB/releases/latest", request.url.toString())
         assertEquals("KJB/test", request.headers["User-Agent"])
         assertEquals("application/vnd.github+json", request.headers["Accept"])
     }
@@ -256,7 +256,7 @@ class UpdatesTest {
         assertEquals(Fetched.Answer(null), github(Answer(404)).fetch())
         assertEquals(Fetched.NoAnswer, github(Answer(403)).fetch())
         assertEquals(Fetched.NoAnswer, github(Answer(200, "not json")).fetch())
-        assertEquals(Fetched.NoAnswer, GitHubLatest("Mostafa-DE/Lyrify", "KJB/test") { throw IOException("offline") }.fetch())
+        assertEquals(Fetched.NoAnswer, GitHubLatest("Mostafa-DE/KJB", "KJB/test") { throw IOException("offline") }.fetch())
     }
 
     @Test
@@ -420,7 +420,7 @@ class UpdatesTest {
     }
 
     private companion object {
-        const val REPO: String = "Mostafa-DE/Lyrify"
+        const val REPO: String = "Mostafa-DE/KJB"
         const val HOUR: Long = 60 * 60_000L
         const val DAY: Long = 24 * HOUR
     }

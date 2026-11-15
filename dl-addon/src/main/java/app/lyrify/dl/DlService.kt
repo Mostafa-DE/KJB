@@ -34,7 +34,7 @@ import java.io.File
 const val LOG_TAG: String = "KJB-DL"
 
 /** How the add-on introduces itself to YouTube's oEmbed. */
-val USER_AGENT: String = "KJB-Downloads/${BuildConfig.VERSION_NAME} ( https://github.com/Mostafa-DE/Lyrify )"
+val USER_AGENT: String = "KJB-Downloads/${BuildConfig.VERSION_NAME} ( ${BuildConfig.REPOSITORY} )"
 
 /** When yt-dlp last looked for an update, in the add-on's own preferences. */
 private class PrefsMemory(context: Context) : UpdateMemory {

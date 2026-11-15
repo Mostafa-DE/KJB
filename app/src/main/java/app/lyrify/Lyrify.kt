@@ -51,7 +51,7 @@ import kotlinx.coroutines.withContext
 const val LOG_TAG: String = "KJB"
 
 /** The User-Agent of the app's requests (LRCLIB, the AI download): its name, version and repository. */
-val USER_AGENT: String = "KJB/${BuildConfig.VERSION_NAME} ( https://github.com/Mostafa-DE/Lyrify )"
+val USER_AGENT: String = "KJB/${BuildConfig.VERSION_NAME} ( ${BuildConfig.REPOSITORY} )"
 
 /** Extra diagnostics: `adb shell setprop log.tag.KJB VERBOSE`. */
 fun verbose(): Boolean = Log.isLoggable(LOG_TAG, Log.VERBOSE)

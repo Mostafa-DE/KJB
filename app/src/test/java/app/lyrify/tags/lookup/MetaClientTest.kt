@@ -140,7 +140,7 @@ class MetaClientTest {
         web.on(json, ok("{}"))
         client(web, agent = null).text(json)
         assertEquals(USER_AGENT, web.requests.single().userAgent)
-        assertTrue(USER_AGENT, Regex("""KJB/\S+ \( https://github\.com/Mostafa-DE/Lyrify \)""").matches(USER_AGENT))
+        assertTrue(USER_AGENT, Regex("""KJB/\S+ \( https://github\.com/Mostafa-DE/KJB \)""").matches(USER_AGENT))
     }
 
     @Test

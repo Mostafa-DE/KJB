@@ -16,6 +16,9 @@ val releaseKeystore = rootProject.extra["releaseKeystore"] as Properties?
 @Suppress("UNCHECKED_CAST")
 val certPins = rootProject.extra["certPins"] as Map<String, String>
 
+/** KJB's GitHub repository, "owner/name" (root build file). */
+val kjbRepo = rootProject.extra["kjbRepo"] as String
+
 android {
     namespace = "app.lyrify.dl"
     compileSdk = 37
@@ -34,6 +37,9 @@ android {
             // Python, ffmpeg and QuickJS are built for arm64 only here, as KJB.
             abiFilters += "arm64-v8a"
         }
+
+        // KJB's repository's address, in the User-Agent of the add-on's requests.
+        buildConfigField("String", "REPOSITORY", "\"https://github.com/$kjbRepo\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

@@ -86,6 +86,11 @@ class InfoTest {
     }
 
     @Test
+    fun `oEmbed is asked as KJB-Downloads, its version and KJB's repository`() {
+        assertEquals("KJB-Downloads/${BuildConfig.VERSION_NAME} ( https://github.com/Mostafa-DE/KJB )", USER_AGENT)
+    }
+
+    @Test
     fun `only YouTube links have quick info`() {
         assertEquals("https://www.youtube.com/oembed?format=json&url=https%3A%2F%2Fyoutu.be%2Fabc123", Info.oembedUrl("https://youtu.be/abc123"))
         assertEquals("https://www.youtube.com/oembed?format=json&url=https%3A%2F%2Fmusic.youtube.com%2Fwatch%3Fv%3Dabc", Info.oembedUrl("https://music.youtube.com/watch?v=abc"))
