@@ -466,7 +466,7 @@ class AiService : Service() {
                 }
             },
             busy = { jobs.busy },
-            fromKjb = { tap -> callers.allows(tap.creatorUid) },
+            fromKjb = { tap -> AddonKeepAlive.fromKjb(tap, callers) },
             endJob = jobs::timeUp,
             log = { Log.i(LOG_TAG, it) },
         )

@@ -121,7 +121,7 @@ class DlService : Service() {
                 }
             },
             busy = { runs.busy },
-            fromKjb = { tap -> callers.allows(tap.creatorUid) },
+            fromKjb = { tap -> AddonKeepAlive.fromKjb(tap, callers) },
             endJob = { runs.timeUp() },
             log = { Log.i(LOG_TAG, it) },
         )

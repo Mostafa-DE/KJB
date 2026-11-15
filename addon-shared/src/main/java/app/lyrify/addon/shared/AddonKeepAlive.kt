@@ -51,6 +51,10 @@ object AddonKeepAlive {
         // Extras another app put there that do not unparcel (BadParcelableException): no tap, so the start is refused.
         null
     }
+
+    /** [tapFromKjb] for a start's [tap], as Android tells its creator and, from Android 12, whether it is immutable. */
+    fun fromKjb(tap: PendingIntent, callers: CallerCheck): Boolean =
+        tapFromKjb(tap.creatorUid, if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) tap.isImmutable else null, callers)
 }
 
 /**
@@ -64,6 +68,13 @@ fun CoroutineScope.beating(context: CoroutineContext, beat: () -> Unit): Job = l
         delay(AddonKeepAlive.BEAT_EVERY_MS)
     }
 }
+
+/**
+ * Whether a start's tap is KJB's: made by KJB ([callers] on its creator's uid) and, from Android 12, immutable, so that
+ * nobody it passes through (an app that reads the add-on's notice) can fill it in. [immutable] is null before Android 12,
+ * which cannot tell.
+ */
+fun tapFromKjb(creatorUid: Int, immutable: Boolean?, callers: CallerCheck): Boolean = callers.allows(creatorUid) && immutable != false
 
 /** What [JobForeground] has Android do for the service; [Tap] is what a tap on its notice opens (KJB's PendingIntent). */
 interface ForegroundPort<Tap : Any> {

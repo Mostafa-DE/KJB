@@ -7,6 +7,7 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -229,6 +230,15 @@ class AddonKeepAliveTest {
             // Started without asking for a result: Android names no caller.
             assertEquals(ExemptionStep.REFUSE, exemptionStep(null, callers, exempt))
         }
+    }
+
+    @Test
+    fun `a start's tap is KJB's only when KJB made it and, from Android 12, nobody can fill it in`() {
+        assertTrue(tapFromKjb(KJB_UID, immutable = true, callers))
+        assertFalse("mutable: whoever it passes through could fill it in", tapFromKjb(KJB_UID, immutable = false, callers))
+        assertTrue("before Android 12, which cannot tell", tapFromKjb(KJB_UID, immutable = null, callers))
+        assertFalse(tapFromKjb(OTHER_UID, immutable = true, callers))
+        assertFalse(tapFromKjb(SAME_KEY_UID, immutable = true, callers))
     }
 
     @Test
