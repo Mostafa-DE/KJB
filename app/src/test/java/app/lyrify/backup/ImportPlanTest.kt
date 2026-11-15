@@ -541,6 +541,50 @@ class ImportPlanTest {
         assertEquals(3, outcome.favouritesAdded)
     }
 
+    // Pass 5: a file name only one song of the phone has, for the songs nothing else finds
+
+    @Test
+    fun `a moved song is found by a file name only one song has, and counts as found in the preview and the import`() = runTest {
+        val moved = ImportSong("../Download/Old Rips/02 Salt Road.mp3", "/storage/emulated/0/Download/Old Rips/02 Salt Road.mp3")
+        val bundle = ImportBundle(listOf(ImportPlaylist("Mix", listOf(line(lantern), moved))), favourites = listOf(moved))
+        val plan = ImportPlan(bundle, phone)
+        val stores = FakeStores()
+
+        assertEquals(emptyList<ImportSong>(), plan.missing(plan.defaultChosen()))
+        plan.apply(plan.defaultChosen(), stores, ids(), NOW, UNTITLED)
+
+        assertEquals(listOf(lantern.ref, road.ref), stores.state.playlists.single().songs)
+        assertEquals(listOf(road.ref), stores.state.favouriteSongs)
+    }
+
+    @Test
+    fun `a file name two songs of the phone share finds neither`() {
+        val copy = song("Music/Old Rips/01 Low Water.mp3", title = "Low Water", artist = "Mira Solen", durationMs = 240_000, id = 15)
+        val moved = ImportSong("/storage/emulated/0/Download/01 Low Water.mp3", "/storage/emulated/0/Download/01 Low Water.mp3")
+
+        assertEquals(listOf(moved), ImportPlan(ImportBundle(favourites = listOf(moved)), phone + copy).missing(setOf(ImportKind.FAVOURITES)))
+    }
+
+    @Test
+    fun `a song another line found is not taken again by name, nor one two lines of other paths both name`() {
+        val lanternElsewhere = ImportSong("/storage/emulated/0/Download/01 Paper Lantern.mp3", "/storage/emulated/0/Download/01 Paper Lantern.mp3")
+        val bellHere = ImportSong("/storage/emulated/0/Download/A/02 Tide Bell.mp3", "/storage/emulated/0/Download/A/02 Tide Bell.mp3")
+        val bellThere = ImportSong("/storage/emulated/0/Download/B/02 Tide Bell.mp3", "/storage/emulated/0/Download/B/02 Tide Bell.mp3")
+        val plan = ImportPlan(ImportBundle(listOf(ImportPlaylist("Mix", listOf(line(lantern), lanternElsewhere, bellHere, bellThere, bellHere)))), phone)
+
+        assertEquals(listOf(lanternElsewhere, bellHere, bellThere), plan.missing(setOf(ImportKind.PLAYLISTS)))
+    }
+
+    @Test
+    fun `a moved favourite in Samsung Music's file is found by its file name`() = runTest {
+        val plan = ImportPlan(samsung("#EXTM3U\n../Download/Old Rips/02 Salt Road.mp3\n"), phone)
+        val stores = FakeStores()
+
+        assertEquals(emptyList<ImportSong>(), plan.missing(plan.defaultChosen()))
+        plan.apply(plan.defaultChosen(), stores, ids(), NOW, UNTITLED)
+        assertEquals(listOf(road.ref), stores.state.favouriteSongs)
+    }
+
     /** What Samsung Music's favourites file in the Music folder holds, read as KJB reads a picked file. */
     private fun samsung(text: String): ImportBundle = (ImportFormats.read(text.encodeToByteArray(), SAMSUNG, MUSIC) as ImportRead.Read).bundle
 

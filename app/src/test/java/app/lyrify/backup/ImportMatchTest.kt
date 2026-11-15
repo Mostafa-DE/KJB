@@ -141,6 +141,24 @@ class ImportMatchTest {
     }
 
     @Test
+    fun `pass 5, a song moved to another folder is found by a file name only one song has, case aside, and never by a shared one`() {
+        // Moved since the file was made: another folder, another root, no pass 0 to 4 finds it.
+        val moved = hint("/storage/emulated/0/Download/Old Rips/02 SALT ROAD.MP3")
+        assertNull(matcher.find(moved))
+        assertEquals(road, matcher.byUniqueName(moved))
+        assertEquals(road, matcher.byUniqueName(hint("Old Rips/02 Salt Road.mp3")))
+
+        // Two songs of the phone with that name: neither.
+        val copy = water.copy(ref = SongRef("/storage/emulated/0/Music/Night Ferry/01 Low Water.mp3", 99))
+        assertNull(SongMatcher(listOf(water, copy)).byUniqueName(hint("/storage/emulated/0/Download/01 Low Water.mp3")))
+        // The name alone is not the extension's, and a line's own clues still have their say.
+        assertNull(matcher.byUniqueName(hint("/storage/emulated/0/Download/02 Salt Road.flac")))
+        assertNull(matcher.byUniqueName(hint("/storage/emulated/0/Download/02 Salt Road.mp3", info = "Odo Brannick - Glass Steps")))
+        assertNull(matcher.byUniqueName(hint("/storage/emulated/0/Download/02 Salt Road.mp3", durationMs = 90_000)))
+        assertNull(matcher.byUniqueName(hint(null, title = "Salt Road", durationMs = 199_000)))
+    }
+
+    @Test
     fun `a backup still finds its songs as before`() {
         val known = mapOf(lantern.path to BackupSong(lantern.path, "Paper Lantern", "Kit Calloway", "Harbour Glass", 201_000))
         assertEquals(mapOf(lantern.path to lantern), matcher.match(listOf(lantern.path), known))

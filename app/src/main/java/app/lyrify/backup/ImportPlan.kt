@@ -149,9 +149,14 @@ object ImportJournal {
  * once, before anything is written: the preview's counts and the songs not found come from it, and [apply] writes it.
  */
 class ImportPlan(val bundle: ImportBundle, phone: List<Song>) {
-    /** Each song the import names, matched once: the song it is on this phone, when found. */
+    /**
+     * Each song the import names, matched once: the song it is on this phone, when found by [SongMatcher.find], else by
+     * a file name only one song of the phone has ([byName]).
+     */
     private val found: Map<ImportSong, Song> = SongMatcher(phone).let { matcher ->
-        songs(ImportKind.entries.toSet()).distinct().mapNotNull { song -> matcher.find(song)?.let { song to it } }.toMap()
+        val songs = songs(ImportKind.entries.toSet()).distinct()
+        val sure = songs.mapNotNull { song -> matcher.find(song)?.let { song to it } }.toMap()
+        sure + byName(songs.filter { it !in sure }, matcher, sure.values.mapTo(HashSet()) { it.path })
     }
 
     /** "12 playlists, 340 favourites, play counts for 1,200 songs": what the files hold, kind by kind, those with none left out. */
@@ -449,6 +454,16 @@ class ImportPlan(val bundle: ImportBundle, phone: List<Song>) {
                 queue.items.all { it.uid in mine } -> now.delete(id)
                 else -> now.removeUids(id, mine)
             }
+        }
+
+        /**
+         * The songs of [left], those no other pass found, each by a file name only one song of the phone has
+         * ([SongMatcher.byUniqueName]): never a song of [taken], which other songs of the import found, and never one
+         * that songs of two paths both name, as it could be either.
+         */
+        private fun byName(left: List<ImportSong>, matcher: SongMatcher, taken: Set<String>): Map<ImportSong, Song> {
+            val claims = left.mapNotNull { song -> matcher.byUniqueName(song)?.takeIf { it.path !in taken }?.let { song to it } }
+            return claims.groupBy { it.second.path }.values.filter { same -> same.distinctBy { it.first.path ?: it.first.relativePath }.size == 1 }.flatten().toMap()
         }
 
         /** The key of the list an imported queue came from: its own, so a tap in another list never lands in it. */

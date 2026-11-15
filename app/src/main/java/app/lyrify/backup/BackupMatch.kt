@@ -38,6 +38,9 @@ class SongMatcher(phone: List<Song>) {
     /** "folder/file", case aside: m3u's rule 2, for imports only. */
     private val byNameInFolder: Map<String, List<Song>> by lazy { phone.mapNotNull { song -> nameInFolder(song.path)?.let { it to song } }.groupBy({ it.first }, { it.second }) }
 
+    /** The file name alone, case aside: [byUniqueName], for imports only. */
+    private val byFileName: Map<String, List<Song>> by lazy { phone.groupBy { relativeKey(it.fileName) } }
+
     /**
      * Each of [paths] (as the backup names its songs) with the song it is on this phone; a path not found is left out.
      * [known] holds what the backup knows of each song; a song it knows nothing of is not found.
@@ -92,6 +95,17 @@ class SongMatcher(phone: List<Song>) {
         below.filter { fits(song, it) }.singleOrNull()?.let { return it }
         (path ?: relative)?.let(::nameInFolder)?.let { byNameInFolder[it] }.orEmpty().filter { fits(song, it) }.singleOrNull()?.let { return it }
         return readings(song).mapNotNull { (artist, title) -> byTags(song, title, artist) }.distinct().singleOrNull()
+    }
+
+    /**
+     * Pass 5, an import's last resort for a song moved to another folder since the file was made: the one song of the
+     * phone with [song]'s file name, extension and all, case aside, when it [fits]; none when two or more songs have
+     * that name. A name alone can still be a guess, so [ImportPlan] takes it only for a song no other pass finds, and
+     * never for a song another of the import's songs found or wants.
+     */
+    fun byUniqueName(song: ImportSong): Song? {
+        val name = (song.path ?: song.relativePath)?.substringAfterLast('/')?.takeIf(String::isNotEmpty) ?: return null
+        return byFileName[relativeKey(name)]?.singleOrNull()?.takeIf { fits(song, it) }
     }
 
     /** Pass 2: the songs at [path] below the storage root, or at the longest end of a path whose root is unknown. */
