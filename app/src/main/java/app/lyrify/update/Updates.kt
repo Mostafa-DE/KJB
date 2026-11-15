@@ -23,6 +23,7 @@ import app.lyrify.addon.KjbAddons
 import app.lyrify.addon.archiveSigning
 import app.lyrify.addon.copyVerified
 import app.lyrify.addon.signed
+import app.lyrify.addon.signedByPin
 import app.lyrify.addon.signers
 import app.lyrify.addon.wholeFileIs
 import app.lyrify.logFailures
@@ -404,9 +405,8 @@ private class AndroidUpdatePort(private val context: Context) : UpdatePort {
 
     /** The add-on's version, when it is installed and signed with KJB's key (an add-on that is not KJB's is never updated). */
     override fun addonInstalled(addon: KjbAddon): String? {
-        val pin = addon.certSha256.lowercase()
         val info = context.packageManager.signed(addon.packageName) ?: return null
-        return info.versionName?.takeIf { pin.isNotEmpty() && pin in signers(info) }
+        return info.versionName?.takeIf { signedByPin(addon, signers(info)) }
     }
 
     private companion object {

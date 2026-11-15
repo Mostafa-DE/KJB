@@ -351,6 +351,19 @@ class AddonInstallTest {
     }
 
     @Test
+    fun `an add-on is signed as KJB's only by its pinned certificate and no other key`() {
+        val cert = "C0".repeat(32)
+        // The pins come as the build writes them: hex in capitals.
+        val addon = KjbAddons.DOWNLOADS.copy(packageName = DOWNLOADS, certSha256 = cert)
+
+        assertTrue(signedByPin(addon, setOf(cert.lowercase())))
+        assertFalse("another key besides", signedByPin(addon, setOf(cert.lowercase(), "d0".repeat(32))))
+        assertFalse("another key", signedByPin(addon, setOf("d0".repeat(32))))
+        assertFalse("unsigned", signedByPin(addon, emptySet()))
+        assertFalse("no pin trusts nobody", signedByPin(addon.copy(certSha256 = ""), setOf("")))
+    }
+
+    @Test
     fun `the bytes copied into an install are hashed and counted on the way, so a file changed after its check is not installed`() {
         val file = temp.newFile("KJB-Downloads.apk").apply { writeBytes(byteArrayOf(5, 5, 5)) }
         val pin = hex(MessageDigest.getInstance("SHA-256").digest(byteArrayOf(5, 5, 5)))

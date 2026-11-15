@@ -277,14 +277,22 @@ private fun hashed(input: InputStream, out: OutputStream?): Hashed {
 }
 
 /**
+ * [signers] (SHA-256, hex) are exactly [addon]'s pinned certificate, no other key besides: an add-on downloaded
+ * ([verifiedAddon]) or installed (the update check) is KJB's only so. No pin trusts nobody.
+ */
+fun signedByPin(addon: KjbAddon, signers: Set<String>): Boolean {
+    val pin = AddonPins.bytes(addon.certSha256)?.let(::hex) ?: return false
+    return signers == setOf(pin)
+}
+
+/**
  * The downloaded [file] is [addon]'s APK: all of it is the SHA-256 this KJB pins for it ([wholeFileIs]), and only then its
  * signing, read by [archive], is checked: [addon]'s package, signed with its pinned certificate and no other. Blocking.
  */
 fun verifiedAddon(file: File, addon: KjbAddon, archive: (File) -> ApkSigning?): Boolean {
-    val pin = AddonPins.bytes(addon.certSha256)?.let(::hex) ?: return false
     if (!wholeFileIs(file, addon.apk.sha256)) return false
     val apk = archive(file) ?: return false
-    return apk.packageName == addon.packageName && apk.signers == setOf(pin)
+    return apk.packageName == addon.packageName && signedByPin(addon, apk.signers)
 }
 
 private fun hex(bytes: ByteArray): String = bytes.joinToString("") { "%02x".format(it) }
