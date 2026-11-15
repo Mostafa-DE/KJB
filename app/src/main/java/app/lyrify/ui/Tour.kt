@@ -285,9 +285,19 @@ fun aim(bounds: Rect?, room: Rect, scrolled: Boolean): Aim = when {
     else -> Aim.PASS
 }
 
-/** Of several targets for one stop (a list's rows), the one to point at: the topmost whole in [room], else the topmost in part. */
-fun <T> pickTarget(marks: List<T>, room: Rect, bounds: (T) -> Rect): T? =
-    marks.filter { room.holds(bounds(it)) }.minByOrNull { bounds(it).top } ?: marks.filter { bounds(it).overlaps(room) }.minByOrNull { bounds(it).top }
+/**
+ * Of several targets for one stop (a list's rows), the one to point at: the topmost whole in [room], else the topmost in
+ * part. With none in the room at all and [nearby] (a list's rows, which a scroll brings in: a song wholly under the Now
+ * bar and the dock on a small phone or with large text, or further down its list), the nearest above or below the room,
+ * in its column; never a row beside it (another page of Library's tabs).
+ */
+fun <T> pickTarget(marks: List<T>, room: Rect, nearby: Boolean = false, bounds: (T) -> Rect): T? =
+    marks.filter { room.holds(bounds(it)) }.minByOrNull { bounds(it).top }
+        ?: marks.filter { bounds(it).overlaps(room) }.minByOrNull { bounds(it).top }
+        ?: marks.takeIf { nearby }?.filter { bounds(it).left < room.right && bounds(it).right > room.left }?.minByOrNull { gap(bounds(it), room) }
+
+/** How far [target], wholly above or below [room], is from it. */
+private fun gap(target: Rect, room: Rect): Float = if (target.top >= room.bottom) target.top - room.bottom else room.top - target.bottom
 
 /** [inner] whole inside this, give or take a pixel of rounding. */
 private fun Rect.holds(inner: Rect): Boolean =
@@ -541,7 +551,7 @@ private fun TourLayer(tour: Tour, state: TourState, nav: Navigator) {
             val tabsBottom = tour.targets.of(TourStop.TABS).mapNotNull { it.bounds(space) }.maxOfOrNull { it.bottom }
             val clear = targetRoom(state.stop, window, tabsBottom, chromeTop)
             val marks = tour.targets.of(state.stop).mapNotNull { node -> node.bounds(space)?.let { node to it } }
-            val mark = pickTarget(marks, clear) { it.second }
+            val mark = pickTarget(marks, clear, nearby = state.stop == TourStop.SONG) { it.second }
             still = if (mark?.second == last) still + 1 else 0
             last = mark?.second
             val resting = still >= STILL_FRAMES || now - seen > ARRIVE_WAIT_MS

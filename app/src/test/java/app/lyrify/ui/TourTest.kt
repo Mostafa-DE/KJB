@@ -193,6 +193,33 @@ class TourTest {
         assertNull(pickTarget(emptyList<Rect>(), room) { it })
     }
 
+    /**
+     * TourOverlayDeviceTest failed 3 of 3 in phone session 10: a song row wholly out of the room (further down its list,
+     * or on a small phone or with large text wholly under the Now bar and the dock) was taken for no row at all, so Play
+     * a song was passed instead of scrolled to.
+     */
+    @Test
+    fun `a song wholly under the dock or further down its list is scrolled to, a row on another page never`() {
+        val room = Rect(0f, 200f, 360f, 600f)
+        val underDock = Rect(0f, 620f, 360f, 684f)
+        val further = Rect(0f, 1400f, 360f, 1464f)
+        val underTabs = Rect(0f, 120f, 360f, 184f)
+        // The nearest, above or below.
+        assertEquals(underDock, pickTarget(listOf(further, underDock), room, nearby = true) { it })
+        assertEquals(further, pickTarget(listOf(further), room, nearby = true) { it })
+        assertEquals(underTabs, pickTarget(listOf(further, underTabs), room, nearby = true) { it })
+        // One in the room still comes first.
+        val shown = Rect(0f, 300f, 360f, 364f)
+        assertEquals(shown, pickTarget(listOf(underDock, shown), room, nearby = true) { it })
+        // Another page of Library's tabs, beside this one: not this list.
+        assertNull(pickTarget(listOf(Rect(360f, 300f, 720f, 364f)), room, nearby = true) { it })
+        // Picked, it is scrolled into view once.
+        assertEquals(Aim.SCROLL, aim(further, room, scrolled = false))
+        // The tour layer asks for it for the song stop only: the Now bar, the lyrics and the dock are no list's rows.
+        val tour = java.io.File("src/main/java/app/lyrify/ui/Tour.kt").readText()
+        assertTrue(tour.contains("pickTarget(marks, clear, nearby = state.stop == TourStop.SONG) { it.second }"))
+    }
+
     @Test
     fun `a song has to be clear of the tabs above and the Now bar and dock below`() {
         assertEquals(Rect(0f, 180f, 360f, 590f), targetRoom(TourStop.SONG, window, tabsBottom = 180f, chromeTop = 590f))
