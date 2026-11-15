@@ -23,7 +23,6 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
@@ -164,6 +163,9 @@ data class BookState(val books: Map<String, BookEntry> = emptyMap(), val marks: 
         const val MAX_PARTS: Int = 500
         const val MAX_TITLE: Int = 200
 
+        /** Each list of marks ("Mark as book" and "Not a book", on songs and on folders), as a backup is read. */
+        const val MAX_MARKS: Int = 2_000
+
         /** At most [MAX_BOOKS], those played longest ago (never played first) going first. */
         internal fun keepNewest(books: Map<String, BookEntry>): Map<String, BookEntry> =
             if (books.size <= MAX_BOOKS) books else books.values.sortedByDescending { it.lastPlayedAt ?: Long.MIN_VALUE }.take(MAX_BOOKS).associateBy { it.id }
@@ -201,13 +203,13 @@ object BooksJson {
         ),
     )
 
-    /** The state in [text]; null when it is not a JSON object. [onDropped] hears how many entries were left out. */
+    /**
+     * The state in [text]; null when it is not a JSON object, or is from a newer schema ([fromNewer]). [onDropped] hears
+     * how many entries were left out; each list of marks is capped at [BookState.MAX_MARKS].
+     */
     fun decode(text: String, onDropped: (Int) -> Unit = {}): BookState? {
-        val root = try {
-            json.parseToJsonElement(text) as? JsonObject
-        } catch (_: SerializationException) {
-            null
-        } ?: return null
+        val root = root(text) ?: return null
+        if (newer(root)) return null
         var dropped = 0
         val books = linkedMapOf<String, BookEntry>()
         (root[BOOKS_KEY] as? JsonArray).orEmpty().forEach { element ->
@@ -215,11 +217,26 @@ object BooksJson {
             if (entry == null || entry.id in books) dropped++ else books[entry.id] = entry
         }
         val marks = root[MARKS_KEY] as? JsonObject
-        fun set(key: String): Set<String> = (marks?.get(key) as? JsonArray).orEmpty().mapNotNullTo(LinkedHashSet()) { it.text()?.takeIf(String::isNotEmpty) ?: null.also { dropped++ } }
+        fun set(key: String): Set<String> {
+            val read = (marks?.get(key) as? JsonArray).orEmpty().mapNotNullTo(LinkedHashSet()) { it.text()?.takeIf(String::isNotEmpty) ?: null.also { dropped++ } }
+            dropped += (read.size - BookState.MAX_MARKS).coerceAtLeast(0)
+            return read.take(BookState.MAX_MARKS).toCollection(LinkedHashSet())
+        }
         val state = BookState(BookState.keepNewest(books), BookMarks(set(SONGS_KEY), set(FOLDERS_KEY), set(NOT_SONGS_KEY), set(NOT_FOLDERS_KEY)))
         if (dropped > 0) onDropped(dropped)
         return state
     }
+
+    /** Whether [text] holds books of a schema newer than this KJB reads: a newer KJB's, never read or written over. */
+    fun fromNewer(text: String): Boolean = root(text)?.let(::newer) == true
+
+    private fun root(text: String): JsonObject? = try {
+        json.parseToJsonElement(text) as? JsonObject
+    } catch (_: SerializationException) {
+        null
+    }
+
+    private fun newer(root: JsonObject): Boolean = (root[SCHEMA_VERSION_KEY]?.number()?.intOrNull ?: SCHEMA_VERSION) > SCHEMA_VERSION
 
     /** One book in its stored form: as backup/ writes it too. */
     fun entry(entry: BookEntry): JsonObject = JsonObject(
@@ -326,19 +343,17 @@ interface BookStorage {
     suspend fun save(state: BookState)
 }
 
-/** [BookStorage] on its DataStore, written on change. A file that cannot be read loads as nothing kept. */
+/**
+ * [BookStorage] on its DataStore, written on change. A read that fails (the disk, or books from a newer KJB) throws, so
+ * [BookStore] keeps nothing it read and writes nothing over the file; a file that is not books at all is kept aside
+ * first and starts over ([BookStateSerializer]).
+ */
 class BookFiles internal constructor(
     private val store: DataStore<BookState>,
     private val io: CoroutineDispatcher,
     private val log: (String) -> Unit,
 ) : BookStorage {
-    override suspend fun load(): BookState = withContext(io) {
-        store.data.catch { e ->
-            if (e !is IOException) throw e
-            log("books unreadable: ${e.javaClass.simpleName}")
-            emit(BookState())
-        }.first()
-    }
+    override suspend fun load(): BookState = withContext(io) { store.data.first() }
 
     override suspend fun save(state: BookState) {
         writeWithRetries(onFailure = { log("books not written: ${it.javaClass.simpleName}") }) { store.updateData { state } }
@@ -350,7 +365,10 @@ internal class BookStateSerializer(private val backupDir: File, private val cloc
 
     override suspend fun readFrom(input: InputStream): BookState {
         val bytes = input.readBytes()
-        return BooksJson.decode(bytes.decodeToString()) { log("books: $it entries this version cannot read left out") }
+        val text = bytes.decodeToString()
+        // Not corrupt: left as it is for the newer KJB, never started over (an IOException, not a CorruptionException).
+        if (BooksJson.fromNewer(text)) throw IOException("books from a newer schema")
+        return BooksJson.decode(text) { log("books: $it entries this version cannot read left out") }
             ?: throw CorruptionException("Unreadable books, kept as ${keep(bytes)}")
     }
 
