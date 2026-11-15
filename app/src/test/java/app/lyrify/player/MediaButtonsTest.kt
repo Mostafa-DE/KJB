@@ -185,4 +185,16 @@ class MediaButtonsTest {
         assertEquals(CommandButton.ICON_REPEAT_ONE, notificationButtons(NotificationButtons.SHUFFLE_REPEAT, false, false, Repeat.ONE)[1].icon)
         assertEquals(R.string.player_repeat_one, notificationButtons(NotificationButtons.SHUFFLE_REPEAT, false, false, Repeat.ONE)[1].label)
     }
+
+    @Test
+    fun `a book's notification has no Shuffle or Repeat, keeps the heart, and its session refuses both commands`() {
+        assertEquals(emptyList<NotificationButton>(), notificationButtons(NotificationButtons.SHUFFLE_REPEAT, favourite = false, shuffled = true, repeat = Repeat.ALL, book = true))
+        assertEquals(
+            notificationButtons(NotificationButtons.FAVOURITE, favourite = true, shuffled = false, repeat = Repeat.OFF),
+            notificationButtons(NotificationButtons.FAVOURITE, favourite = true, shuffled = false, repeat = Repeat.OFF, book = true),
+        )
+        assertFalse(bookAllows(COMMAND_SHUFFLE))
+        assertFalse(bookAllows(COMMAND_REPEAT))
+        assertTrue(bookAllows(COMMAND_FAVOURITE))
+    }
 }

@@ -22,6 +22,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import kotlin.random.Random
 
 /**
  * KJB's own playback beyond the queue model: lyrics for its own queue, the browse tree, the state the media session
@@ -231,6 +232,17 @@ class OwnPlaybackTest {
         ).forEach { assertFalse("$it", it in offered) }
         // Music keeps them all.
         assertFalse(sessionView(StillPort(uids, 0, 5_000), playing = true, book = QueueBook().play(songs.take(3).map { it.ref }, 0, albumSource, now = 1).book, repeat = Repeat.ALL).book)
+    }
+
+    @Test
+    fun `a book's session says Repeat off and Shuffle off, whatever the music's are`() {
+        val bookSource = QueueSource(SourceKind.BOOK, "/storage/emulated/0/Audiobooks/Folder Book/|Folder Book", "Folder Book")
+        val queues = QueueBook().play(songs.take(3).map { it.ref }, 0, bookSource, now = 1).book.let { it.toggleShuffle(Random(1)) }
+        assertTrue(queues.current!!.shuffled)
+        val uids = queues.current!!.items.map { it.uid }
+        val view = sessionView(StillPort(uids, 0, 5_000), playing = true, book = queues, repeat = Repeat.ALL)
+        assertEquals(Repeat.OFF, view.repeat)
+        assertFalse(view.shuffled)
     }
 
     // Offload

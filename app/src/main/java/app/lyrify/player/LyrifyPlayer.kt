@@ -26,7 +26,10 @@ fun sessionView(port: PlayerPort, playing: Boolean, book: QueueBook, repeat: Rep
     if (port.loaded.isEmpty()) {
         SessionView(emptyList(), -1, 0, playing = false, shuffled = false, repeat = repeat)
     } else {
-        SessionView(port.loaded, port.index, port.positionMs, playing, book.current?.shuffled == true, repeat, book = inBook(book.current))
+        // A book never shuffles or repeats (books/BookPlayback.kt): the session says so whatever the queue and Repeat hold.
+        inBook(book.current).let { inBook ->
+            SessionView(port.loaded, port.index, port.positionMs, playing, !inBook && book.current?.shuffled == true, if (inBook) Repeat.OFF else repeat, book = inBook)
+        }
     }
 
 /**

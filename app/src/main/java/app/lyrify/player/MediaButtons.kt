@@ -123,6 +123,9 @@ fun bookButtons(): List<BookButton> = listOf(
 /** One extra button of the music notification: its session command, its icon (a CommandButton icon) and its name. */
 data class NotificationButton(val command: String, val icon: Int, @StringRes val label: Int)
 
+/** Whether a book's session takes the custom command [action]: never Shuffle or Repeat, as a book does neither. */
+fun bookAllows(action: String): Boolean = action != COMMAND_SHUFFLE && action != COMMAND_REPEAT
+
 /** The custom commands of the extra buttons. */
 const val COMMAND_FAVOURITE: String = "app.lyrify.player.FAVOURITE"
 const val COMMAND_SHUFFLE: String = "app.lyrify.player.SHUFFLE"
@@ -130,18 +133,19 @@ const val COMMAND_REPEAT: String = "app.lyrify.player.REPEAT"
 
 /**
  * The notification's extra buttons beside Next ("Notification buttons"): the heart for the song playing, or Shuffle
- * and Repeat as they are now. The same buttons draw Android 11 and 12's own notification.
+ * and Repeat as they are now, none of those two in a [book]. The same buttons draw Android 11 and 12's own notification.
  */
 @OptIn(UnstableApi::class)
-fun notificationButtons(choice: NotificationButtons, favourite: Boolean, shuffled: Boolean, repeat: Repeat): List<NotificationButton> = when (choice) {
-    NotificationButtons.FAVOURITE -> listOf(
+fun notificationButtons(choice: NotificationButtons, favourite: Boolean, shuffled: Boolean, repeat: Repeat, book: Boolean = false): List<NotificationButton> = when {
+    choice == NotificationButtons.SHUFFLE_REPEAT && book -> emptyList()
+    choice == NotificationButtons.FAVOURITE -> listOf(
         if (favourite) {
             NotificationButton(COMMAND_FAVOURITE, CommandButton.ICON_HEART_FILLED, heartLabel(on = true))
         } else {
             NotificationButton(COMMAND_FAVOURITE, CommandButton.ICON_HEART_UNFILLED, heartLabel(on = false))
         },
     )
-    NotificationButtons.SHUFFLE_REPEAT -> listOf(
+    else -> listOf(
         if (shuffled) {
             NotificationButton(COMMAND_SHUFFLE, CommandButton.ICON_SHUFFLE_ON, R.string.player_shuffle_on)
         } else {
@@ -223,7 +227,8 @@ class ButtonsPart : ServicePart {
         scope.launch {
             combine(settings.map { it.advanced.notificationButtons }.distinctUntilChanged(), favouriteSongs, core.book, core.repeat) { choice, favourite, book, repeat ->
                 val path = book.current?.current?.song?.path
-                notificationButtons(choice, favourite = path != null && favourite.any { it.path == path }, shuffled = book.current?.shuffled == true, repeat = repeat) to inBook(book.current)
+                val bookMode = inBook(book.current)
+                notificationButtons(choice, favourite = path != null && favourite.any { it.path == path }, shuffled = book.current?.shuffled == true, repeat = repeat, book = bookMode) to bookMode
             }.distinctUntilChanged().collect { (buttons, book) ->
                 // A book: 30 s back and forward where Previous and Next are, for the notification, the lock screen and the car.
                 val seeks = if (book) {
@@ -254,6 +259,8 @@ class ButtonsPart : ServicePart {
 
     override fun onCommand(command: SessionCommand, args: Bundle): SessionResult? {
         val core = core ?: return null
+        // A book never shuffles or repeats: an old notification's button or another app's command changes nothing.
+        if (inBook(core.book.value.current) && !bookAllows(command.customAction)) return SessionResult(SessionError.ERROR_NOT_SUPPORTED)
         when (command.customAction) {
             COMMAND_FAVOURITE -> {
                 val song = core.book.value.current?.current?.song ?: return SessionResult(SessionError.ERROR_BAD_VALUE)
