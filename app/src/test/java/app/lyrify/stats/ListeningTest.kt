@@ -297,4 +297,23 @@ class ListeningTest {
         const val MINUTE: Long = 60_000
         const val HOUR: Long = 3_600_000
     }
+
+    @Test
+    fun `plays of a file that is a book now leave every figure and list, and come back if it is music again`() = runBlocking {
+        val part = song("Music/Rips/Lantern Keeper/01.mp3", album = "Lantern Keeper", genre = "Audiobook", id = 9)
+        val plays = arrayOf(play(alder, 1_000), play(part, 2_000), play(part, 3_000))
+        val withBook = Library.of(listOf(alder, birch, ember, salt, part), Settings())
+        val listening = listeningOf(plays.map { SongPlays(it.song, 1, it.startedAt, it.heardMs) }, withBook)
+        assertEquals(1, listening.plays)
+        assertEquals(120_000L, listening.heardMs)
+        assertEquals(listOf(alder), listening.songs.map { it.item })
+        val stats = stats(*plays, library = withBook)
+        assertEquals(listOf(alder.ref), stats.mostPlayed().map { it.song })
+        assertEquals(listOf(alder.ref), stats.recentlyPlayed().map { it.song })
+        assertNull(stats.plays(part.ref))
+        // "Not a book": its plays are back.
+        val music = Library.of(listOf(alder, birch, ember, salt, part), Settings(), app.lyrify.books.BookMarks(notSongs = setOf(part.path)))
+        assertEquals(3, listeningOf(plays.map { SongPlays(it.song, 1, it.startedAt, it.heardMs) }, music).plays)
+        assertEquals(2, stats(*plays, library = music).plays(part.ref)?.count)
+    }
 }
