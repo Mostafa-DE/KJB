@@ -246,7 +246,9 @@ private fun App(ledger: LedgerStore, destination: Page?, view: FullScreen?, onVi
     val askFor: (Boolean) -> Unit = { switchedOn ->
         asks = aiAsks(switchedOn, notificationGrant(Build.VERSION.SDK_INT, notifications, denied), unrestricted)
     }
-    val state by ledger.ledger.collectAsStateWithLifecycle(initialValue = LedgerState())
+    val stored by ledger.ledger.collectAsStateWithLifecycle(initialValue = LedgerState())
+    // The lyrics screens, counts and the AI's never list a book's part (books/).
+    val state = remember(stored, library) { ledgerWithoutBooks(stored, (library as? LibraryState.Ready)?.library) }
     val track by NowPlaying.track.collectAsStateWithLifecycle()
     val sweep by NowPlaying.sweep.collectAsStateWithLifecycle()
     val connected by NowPlaying.connected.collectAsStateWithLifecycle()

@@ -42,6 +42,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -128,6 +129,8 @@ object Lyrify {
         pipeline = created
         background.launch {
             created.adoptLegacy()
+            // Once the library is read, so a book known only by the user's mark or its tags is skipped too.
+            LibraryGraph.repository(context.applicationContext).state.first { it !is LibraryState.Loading }
             created.compareStored()
         }
     }

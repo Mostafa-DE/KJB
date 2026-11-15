@@ -284,12 +284,12 @@ class LyricsPipeline(
      * ([LedgerEntry.candidatesCompared]) get them compared now, as [Candidates.offered] does, so the same lyrics show
      * once. Each record is fetched by id in the LOW lane (asked again while busy, as [plainLyrics] is); its lyrics are
      * never stored. Once LRCLIB cannot answer, the pass stops: that song and the rest wait for the next start. A song
-     * answered or looked up meanwhile is left as it is. The song keeps its place on the list. Returns how many songs were
-     * compared.
+     * answered or looked up meanwhile is left as it is. The song keeps its place on the list. A book's part ([isBook]),
+     * left on the list from before it was a book, is never asked about. Returns how many songs were compared.
      */
     suspend fun compareStored(): Int {
         var compared = 0
-        for (stored in ledger.ledger.first().entries.values.filter { it.status == LyricsStatus.NEEDS_CHECK && !it.candidatesCompared }) {
+        for (stored in ledger.ledger.first().entries.values.filter { it.status == LyricsStatus.NEEDS_CHECK && !it.candidatesCompared && !isBook(it.path) }) {
             val lyrics = storedLyrics(stored) ?: break
             if (saveCompared(stored, lyrics)) compared++
         }
@@ -409,8 +409,12 @@ class LyricsPipeline(
         }
     }
 
-    /** "None of these": the song at [audioPath] is not found, so the AI may take it, and no candidates are offered for it again. */
+    /**
+     * "None of these": the song at [audioPath] is not found, so the AI may take it, and no candidates are offered for it
+     * again. A book's part ([isBook]) is left as it is, its entry and any `.lrc` beside it: nothing changed.
+     */
     suspend fun decline(audioPath: String): Checked = exclusive(audioPath) {
+        if (isBook(audioPath)) return@exclusive Checked.Changed
         val previous = ledger.entry(audioPath)?.takeIf { it.status == LyricsStatus.NEEDS_CHECK } ?: return@exclusive Checked.Changed
         val sidecar = LrcFormat.sidecarPath(audioPath)?.let { File(it).toPath() }?.takeIf { previous.retagCheck && Files.exists(it, LinkOption.NOFOLLOW_LINKS) }
         withContext(NonCancellable) {

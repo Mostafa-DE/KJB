@@ -1,10 +1,15 @@
 package app.lyrify.ui
 
+import app.lyrify.books.BookMarks
 import app.lyrify.data.LedgerState
 import app.lyrify.data.LyricsStatus
 import app.lyrify.data.recorded
 import app.lyrify.lyrics.Candidate
+import app.lyrify.library.Library
+import app.lyrify.library.VOLUME
+import app.lyrify.library.song as librarySong
 import app.lyrify.lyrics.LocalTrack
+import app.lyrify.settings.Settings
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -261,6 +266,24 @@ class SongFilterTest {
             .put(toCheck("/n.mp3", "Song N", 23, candidates = emptyList()))
         assertEquals(listOf("/l.mp3", "/m.mp3", "/k.mp3"), checkList(withChecks).map { it.path })
         assertEquals(emptyList<String>(), checkList(ledger).map { it.path })
+    }
+
+    @Test
+    fun `a book's part is in no lyrics list, count or check, whatever its entry says from before`() {
+        val marked = "Music/Lantern Keeper/01 Lantern Keeper.mp3"
+        val library = Library.of(listOf(librarySong(marked), librarySong("Music/Harbour Glass/01 Paper Lantern.mp3")), Settings(), BookMarks(songs = setOf(VOLUME + marked)))
+        val withBooks = ledger
+            .put(toCheck(VOLUME + marked, "Lantern Keeper", 20))
+            .put(toCheck("/k.mp3", "Song K", 21))
+            .put(toCheck("/storage/emulated/0/Music/Spare/Lantern Keeper.m4b", "Lantern Keeper", 22))
+
+        val shown = ledgerWithoutBooks(withBooks, library)
+        assertEquals(listOf("/k.mp3"), checkList(shown).map { it.path })
+        assertEquals(ledger.entries.size + 1, list(SongQuery(), shown).total)
+        assertEquals(1, shown.counts()[LyricsStatus.NEEDS_CHECK])
+        // While the library is read, a book by its path alone; and a ledger without books is the same ledger.
+        assertEquals(listOf("/k.mp3", VOLUME + marked).sorted(), checkList(ledgerWithoutBooks(withBooks, null)).map { it.path }.sorted())
+        assertTrue(ledgerWithoutBooks(ledger, library) === ledger)
     }
 
     @Test
