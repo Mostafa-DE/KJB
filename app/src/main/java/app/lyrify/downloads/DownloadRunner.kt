@@ -1,6 +1,7 @@
 package app.lyrify.downloads
 
 import app.lyrify.addon.AddonDiedException
+import app.lyrify.addon.FreezeWatch
 import app.lyrify.data.SharedWrite
 import app.lyrify.data.SharedWrites
 import app.lyrify.dl.api.DlEnd
@@ -24,6 +25,7 @@ import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
+import java.util.concurrent.atomic.AtomicReference
 
 /** How one download ended on KJB's side. */
 sealed interface DownloadOutcome {
@@ -57,7 +59,10 @@ interface DownloadSaver {
  * cache), its file streamed into the part file KJB opened where it goes ([DownloadSaver.open]), then KJB's own steps
  * ([DownloadSaver.finish]). Never waited for forever: a run that says nothing for [stallMs] (longer than any step takes)
  * is stopped and fails. Cancelled (the user, or Android's limit for long work), it tells the add-on, which kills yt-dlp and
- * keeps its parts for the next try; the part file here goes.
+ * keeps its parts for the next try; the part file here goes. Once the add-on took the run, KJB starts the add-on's own
+ * foreground service ([foreground], DlSession.foreground), where it works until the file is handed back. A run that beat,
+ * then said nothing for 30 s, was frozen by the phone ([FreezeWatch]): it fails as such at once, nothing more asked of the
+ * add-on (a call into a frozen process can wait for as long as it stays frozen), and its parts stay for a Retry.
  */
 class DownloadRunner(
     private val port: DlPort,
@@ -65,6 +70,7 @@ class DownloadRunner(
     private val saver: DownloadSaver,
     private val stallMs: Long = STALL_MS,
     private val keepOnCancel: () -> Boolean = { true },
+    private val foreground: () -> Boolean = { true },
 ) {
     private sealed interface Event {
         data class Progress(val progress: DlProgress) : Event
@@ -74,21 +80,31 @@ class DownloadRunner(
         data class End(val end: DlEnd) : Event
 
         data object Died : Event
+
+        /** Nothing for 30 s from an add-on that beat: the phone froze it. */
+        data object Frozen : Event
     }
 
     suspend fun run(item: DownloadItem, progress: (DlProgress) -> Unit): DownloadOutcome {
         val events = Channel<Event>(Channel.UNLIMITED)
+        val watch = FreezeWatch()
+        // The run's end, also kept apart from the channel: told as the watch gave up, it can come behind the watch's word.
+        val ended = AtomicReference<DlEnd?>(null)
         val heard = object : DlRunEvents {
-            override fun onProgress(progress: DlProgress) {
-                events.trySend(Event.Progress(progress))
-            }
+            override fun onProgress(progress: DlProgress) = tell(Event.Progress(progress))
 
-            override fun onFile(file: DlFile) {
-                events.trySend(Event.File(file))
-            }
+            override fun onFile(file: DlFile) = tell(Event.File(file))
 
             override fun onEnd(end: DlEnd) {
-                events.trySend(Event.End(end))
+                ended.compareAndSet(null, end)
+                tell(Event.End(end))
+            }
+
+            override fun onBeat() = watch.beat()
+
+            private fun tell(event: Event) {
+                watch.heard()
+                events.trySend(event)
             }
         }
         val request = DlRequest(item.key, item.url, item.kind, item.audio, item.height, item.originalLanguage)
@@ -97,14 +113,20 @@ class DownloadRunner(
         } catch (_: AddonDiedException) {
             return DownloadOutcome.Failed(DownloadFailure.ADDON_GONE)
         }
+        // Refused (the phone's choice), the add-on downloads without it, as before.
+        foreground()
         var target: Target? = null
         return coroutineScope {
             val died = launch {
                 death.await()
                 events.trySend(Event.Died)
             }
+            val watching = launch {
+                watch.silence()
+                events.trySend(Event.Frozen)
+            }
             try {
-                follow(events, run, item, progress) { target = it }
+                follow(events, ended, run, item, progress) { target = it }
             } catch (e: CancellationException) {
                 withContext(NonCancellable) {
                     try {
@@ -118,12 +140,20 @@ class DownloadRunner(
                 throw e
             } finally {
                 died.cancel()
+                watching.cancel()
             }
         }
     }
 
     /** The run's events to its end; [opened] hears the destination as soon as it is opened. */
-    private suspend fun follow(events: Channel<Event>, run: Long, item: DownloadItem, progress: (DlProgress) -> Unit, opened: (Target) -> Unit): DownloadOutcome {
+    private suspend fun follow(
+        events: Channel<Event>,
+        ended: AtomicReference<DlEnd?>,
+        run: Long,
+        item: DownloadItem,
+        progress: (DlProgress) -> Unit,
+        opened: (Target) -> Unit,
+    ): DownloadOutcome {
         var target: Target? = null
         var file: DlFile? = null
         fun failed(reason: DownloadFailure): DownloadOutcome {
@@ -168,6 +198,8 @@ class DownloadRunner(
                     DlEnd.Stopped -> failed(DownloadFailure.ADDON_GONE)
                 }
                 Event.Died -> return failed(DownloadFailure.ADDON_GONE)
+                // An end told meanwhile follows in the channel: the run ended, the phone froze nothing.
+                Event.Frozen -> if (ended.get() == null) return failed(DownloadFailure.FROZEN)
             }
         }
     }

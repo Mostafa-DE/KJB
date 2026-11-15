@@ -1,5 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Its name in Settings > Apps: KJB's AI add-on. No launcher icon, no notification: KJB shows its download. -->
+    <!-- Its name in Settings > Apps: KJB's AI add-on. No launcher icon; KJB shows its download. -->
     <string name="app_name">KJB AI</string>
+    <!-- The notice while a song's job works (AiService), the same for every job: nothing of the song goes into it. -->
+    <string name="work_channel">AI work</string>
+    <string name="work_title">KJB AI is working</string>
 </resources>

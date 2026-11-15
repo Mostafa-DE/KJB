@@ -32,10 +32,12 @@ import app.lyrify.Lyrify
 import app.lyrify.R
 import app.lyrify.addon.Addon
 import app.lyrify.addon.AddonDownloads
+import app.lyrify.addon.AddonExemptions
 import app.lyrify.addon.AddonDiedException
 import app.lyrify.addon.AddonLease
 import app.lyrify.addon.AddonPort
 import app.lyrify.addon.Connection
+import app.lyrify.addon.KjbAddons
 import app.lyrify.addon.ModelHandover
 import app.lyrify.addon.RemoteSongEngine
 import app.lyrify.books.isBookPart
@@ -77,7 +79,8 @@ import java.util.concurrent.TimeUnit
  * low and storage is not low, that runs only while the phone is plugged in (charging or not, see [AiLyrics.schedule]),
  * in a foreground service of type mediaProcessing, the type Android 15+ prescribes for long work on media files. The AI
  * itself runs in the AI add-on (app.lyrify.addon), bound from here for the whole run: the add-on runs at this
- * service's priority, needs no foreground service of its own, and the mediaProcessing time limit stays KJB's. That
+ * service's priority, and this service, which is not a short one, is what lets KJB start the add-on's own foreground
+ * service for each song's job (a phone's app freezer leaves alone an app at work in the foreground). That
  * type may run 6 hours in 24 (the time resets when the user opens the app); at the limit WorkManager's service gets
  * `onTimeout` and stops this worker ([WorkInfo.STOP_REASON_FOREGROUND_SERVICE_TIMEOUT]), and the AI then holds off for a
  * day or until the app is opened. Unplugged ([AiRunner] watches the cable) or cancelled, the engine finishes the step it
@@ -197,6 +200,11 @@ class AiWorker(context: Context, params: WorkerParameters) : CoroutineWorker(con
             if (end == AiRunEnd.CRASHED) AiLyrics.held(AiHold.CRASHED)
             if (end == AiRunEnd.MODEL_FAILED) AiLyrics.held(AiHold.MODEL_FAILED)
             if (end == AiRunEnd.NO_NPU) AiLyrics.held(AiHold.NO_NPU)
+            if (end == AiRunEnd.FROZEN) {
+                AiLyrics.held(AiHold.FROZEN)
+                // The AI page now says plainly that a locked phone may pause the add-on, unless it is exempt.
+                AddonExemptions.store(context).update { it.pausedOnce(KjbAddons.AI) }
+            }
             // Each end waits for the next period (unplugged, the next hourly look finds the cable again); an add-on that
             // died is bound again sooner, after WorkManager's backoff.
             if (end == AiRunEnd.ADDON_DIED) Result.retry() else Result.success()
@@ -505,6 +513,17 @@ object AiLyrics {
 
     private fun preferences(context: Context) = context.applicationContext.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
 
+    /**
+     * KJB's AI page, as a notification's tap opens it: the run's, and the AI add-on's notice while
+     * it works (KJB's own PendingIntent, which also shows the add-on that the start is KJB's).
+     */
+    internal fun page(context: Context): PendingIntent = PendingIntent.getActivity(
+        context,
+        0,
+        Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra(EXTRA_DESTINATION, DESTINATION_AI),
+        PendingIntent.FLAG_IMMUTABLE,
+    )
+
     @RequiresApi(Build.VERSION_CODES.VANILLA_ICE_CREAM)
     internal fun foregroundInfo(context: Context, progress: AiProgress?): ForegroundInfo {
         val manager = context.getSystemService(NotificationManager::class.java)
@@ -516,17 +535,11 @@ object AiLyrics {
             progress.current != null -> resources.getString(R.string.ai_notification_song, progress.current, progress.done, progress.total)
             else -> resources.getString(R.string.ai_notification_starting)
         }
-        val open = PendingIntent.getActivity(
-            context,
-            0,
-            Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra(EXTRA_DESTINATION, DESTINATION_AI),
-            PendingIntent.FLAG_IMMUTABLE,
-        )
         val notification = Notification.Builder(context, CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_kjb)
             .setContentTitle(context.getString(R.string.ai_notification_title))
             .setContentText(text)
-            .setContentIntent(open)
+            .setContentIntent(page(context))
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .build()

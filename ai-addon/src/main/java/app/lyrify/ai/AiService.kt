@@ -1,10 +1,18 @@
 package app.lyrify.ai
 
+import android.annotation.SuppressLint
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.PermissionInfo
+import android.content.pm.ServiceInfo
 import android.os.Binder
+import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
@@ -14,7 +22,12 @@ import android.os.RemoteCallbackList
 import android.os.RemoteException
 import android.os.SystemClock
 import android.util.Log
+import app.lyrify.addon.shared.AddonKeepAlive
 import app.lyrify.addon.shared.CallerCheck
+import app.lyrify.addon.shared.ExemptionActivity
+import app.lyrify.addon.shared.ForegroundPort
+import app.lyrify.addon.shared.JobForeground
+import app.lyrify.addon.shared.beating
 import app.lyrify.ai.api.AddonNames
 import app.lyrify.ai.api.AddonStatus
 import app.lyrify.ai.api.IAiAddon
@@ -69,6 +82,9 @@ interface JobEvents {
 
     /** [done] of [total] pieces of the stage it is in: the first of each stage, then at most every [AddonJobs.PROGRESS_EVERY_MS]. */
     fun onProgress(done: Int, total: Int)
+
+    /** The job is alive: at its start, then every [AddonJobs.BEAT_EVERY_MS] until it ends, whatever its step. */
+    fun onBeat()
 }
 
 /** The AI for songs ([LyricsFromAudio] on [NpuStages]): its models stay loaded from the first song until [close]. */
@@ -86,11 +102,13 @@ interface JobEngine : AutoCloseable {
  * The songs KJB sends, one at a time, on [context] in [scope]. The engine is opened ([openEngine], with where its notes
  * go) for the first song and kept for the next ones until [closeEngine]: one night's run loads the models once. A job
  * tells KJB each stage it enters and the pieces of a stage done (the first at once, then at most every
- * [PROGRESS_EVERY_MS]), so KJB's watchdog hears it move. Before each Whisper chunk a job tells KJB and waits for
- * [proceed] (KJB holds it while the phone is too warm). [cancel] stops a job after the step it is on. When the last client
- * leaves, [shutDown] lets go of the NPU at once (or as the step under way ends), whatever happens to the service's scope
- * after. A stopped job whose step has not ended [STEP_END_MS] later is stuck in native work no stop reaches (the NPU, a
- * codec): the add-on's process ends ([endProcess]), the only way to free what that step holds.
+ * [PROGRESS_EVERY_MS]), so KJB's watchdog hears it move, and it beats every [BEAT_EVERY_MS] on [beats], apart from its own
+ * thread, so that KJB tells a process a phone froze (no beat) from a step that takes minutes (beats, no progress). Before
+ * each Whisper chunk a job tells KJB and waits for [proceed] (KJB holds it while the phone is too warm). [cancel] stops a
+ * job after the step it is on. When the last client leaves, [shutDown] lets go of the NPU at once (or as the step under
+ * way ends), whatever happens to the service's scope after. A stopped job whose step has not ended [STEP_END_MS] later is
+ * stuck in native work no stop reaches (the NPU, a codec): the add-on's process ends ([endProcess]), the only way to free
+ * what that step holds.
  */
 class AddonJobs(
     private val scope: CoroutineScope,
@@ -105,6 +123,8 @@ class AddonJobs(
     private val debug: (String) -> Unit = {},
     /** Waits up to [ms] for [job] to end, blocking (the main thread, in onUnbind); whether it did. */
     private val waitForEnd: (job: Job, ms: Long) -> Boolean = { _, _ -> false },
+    /** Where a job's beats run (the main thread on the phone): apart from [context], whose thread a native step blocks. */
+    private val beats: CoroutineContext = context,
     private val openEngine: (notes: (String) -> Unit) -> JobEngine,
 ) {
     private val lock = Any()
@@ -126,10 +146,16 @@ class AddonJobs(
     @Volatile
     private var notesTo: JobEvents? = null
 
-    /** The job under way: the chunk it waits at for [proceed], the stage it is in, when it last told its progress. */
+    /**
+     * The job under way: the chunk it waits at for [proceed], the stage it is in, when it last told its progress, and what
+     * it ends with if it is stopped ([endAs], set by [timeUp]; else it ends as stopped).
+     */
     private class Running(val id: Long, val started: Long) {
         lateinit var job: Job
         var waiting: CompletableDeferred<Unit>? = null
+
+        @Volatile
+        var endAs: AiResult? = null
 
         @Volatile
         var stage: AiStage? = null
@@ -150,6 +176,8 @@ class AddonJobs(
         debug("job ${run.id}: started")
         // ATOMIC: the body runs, and its finally lets go of the song, even when the scope goes before it was dispatched.
         run.job = scope.launch(context, start = CoroutineStart.ATOMIC) {
+            // The job's beats, apart from it: they go on while a native step blocks the job's thread for minutes.
+            val beating = scope.beating(beats) { heard.onBeat() }
             try {
                 val result = if (stepLeftBehind) {
                     // A step left behind holds the NPU until the process ends: no session is made beside it, and the
@@ -171,10 +199,18 @@ class AddonJobs(
                 synchronized(lock) { kept = run.id to result }
                 heard.onResult(result)
             } catch (e: CancellationException) {
-                debug("job ${run.id}: stopped in ${run.where} at ${run.at()} ms")
-                heard.onStopped()
+                val instead = run.endAs
+                if (instead == null) {
+                    debug("job ${run.id}: stopped in ${run.where} at ${run.at()} ms")
+                    heard.onStopped()
+                } else {
+                    debug("job ${run.id}: ${label(instead)} in ${run.where} at ${run.at()} ms")
+                    synchronized(lock) { kept = run.id to instead }
+                    heard.onResult(instead)
+                }
                 throw e
             } finally {
+                beating.cancel()
                 notesTo = null
                 synchronized(lock) {
                     if (running === run) running = null
@@ -236,6 +272,21 @@ class AddonJobs(
 
     /** The result of [job], kept from its end until the next job's; null for a job unknown, running, stopped or replaced. */
     fun result(job: Long): AiResult? = synchronized(lock) { kept?.takeIf { it.first == job }?.second }
+
+    /** Whether a job runs now: from [start] until its end. */
+    val busy: Boolean get() = synchronized(lock) { running != null }
+
+    /**
+     * Android's time for the add-on's foreground service ran out (onTimeout, Android 15+: 6 hours in 24 for its type):
+     * the job under way stops after the step it is on, or the process ends ([stop]), and ends as the NPU busy, so that
+     * KJB records nothing and tries the song again later. The jobs after it run without the foreground service until
+     * Android gives the time back.
+     */
+    fun timeUp() {
+        val run = synchronized(lock) { running } ?: return
+        run.endAs = AiResult.Failed(TIME_UP, npu = true)
+        stop(run, "Android's time for the foreground service ran out")
+    }
 
     /** Stops a job under way, then closes the engine; the returned job ends once it is closed. */
     fun closeEngine(): Job = scope.launch(context) {
@@ -313,6 +364,9 @@ class AddonJobs(
         /** A job's progress goes to KJB at most this often: the aligner moves every few milliseconds. */
         const val PROGRESS_EVERY_MS: Long = 5_000
 
+        /** How often a job tells KJB it is alive ([JobEvents.onBeat]); KJB takes 6 missed beats for a freeze. */
+        const val BEAT_EVERY_MS: Long = AddonKeepAlive.BEAT_EVERY_MS
+
         /**
          * How long a stopped job's step may take to end before the process ends instead. Every step but one takes
          * seconds at most (an MDX segment, a Whisper chunk, a wav2vec2 window); creating the MDX session takes minutes,
@@ -334,28 +388,46 @@ class AddonJobs(
 
         /** What a song started after a step was left behind ([abandoned]) ends with: the NPU busy, until the process restarts. */
         private const val STEP_LEFT_BEHIND = "NpuBusyException: an earlier step still holds the NPU until the add-on restarts"
+
+        /** What the job under way ends with when Android's time for the foreground service ran out ([timeUp]). */
+        private const val TIME_UP = "ForegroundServiceTimeout: the phone's daily time for the AI add-on's work ran out"
     }
+}
+
+/**
+ * The type of the add-on's foreground service while a song's job works ([JobForeground]): mediaProcessing from Android 15
+ * (long work on media files), dataSync before it, on [sdk] (Build.VERSION.SDK_INT on the phone).
+ */
+@SuppressLint("InlinedApi")
+fun jobForegroundType(sdk: Int): Int =
+    if (sdk >= Build.VERSION_CODES.VANILLA_ICE_CREAM) ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING else ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+
+/** KJB of this build type, signed with its pinned certificate: the one caller of the add-on's service and activity. */
+fun Context.kjbCallers(): CallerCheck = CallerCheck(
+    packageName,
+    BuildConfig.KJB_PACKAGE,
+    BuildConfig.KJB_CERT_SHA256,
+    packagesFor = packageManager::getPackagesForUid,
+    hasCert = { uid, sha -> packageManager.hasSigningCertificate(uid, sha, PackageManager.CERT_INPUT_SHA256) },
+)
+
+/** The add-on's own request to be left out of the phone's battery optimisation ([ExemptionActivity]), started by KJB only. */
+class AiExemptionActivity : ExemptionActivity() {
+    override val callers: CallerCheck by lazy { kjbCallers() }
 }
 
 /**
  * The add-on's one service, bound by KJB only ([CallerCheck] on every call, behind the signature permission): the AI
  * ([AddonJobs]), the model download ([ModelDownloads]) and the handover of KJB 2.0's models. KJB binds it while the AI
- * works, from its own foreground service, and while its AI page shows; the add-on has no foreground service of its own
- * for the AI (a bound service runs at least at its client's priority). Nothing here touches ONNX Runtime until a song's
- * engine opens, so the QNN EP registers its library path before any HTP library loads in this process ([QnnEp]).
+ * works, from its own foreground service, and while its AI page shows. While a song's job runs, KJB also starts it, and
+ * it runs in the foreground with its own notification ([JobForeground], of [jobForegroundType]): a phone's app freezer
+ * leaves alone an app at work in the foreground, not a service another app binds. Nothing here touches ONNX Runtime until
+ * a song's engine opens, so the QNN EP registers its library path before any HTP library loads in this process ([QnnEp]).
  */
 class AiService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
-    private val callers by lazy {
-        CallerCheck(
-            packageName,
-            BuildConfig.KJB_PACKAGE,
-            BuildConfig.KJB_CERT_SHA256,
-            packagesFor = packageManager::getPackagesForUid,
-            hasCert = { uid, sha -> packageManager.hasSigningCertificate(uid, sha, PackageManager.CERT_INPUT_SHA256) },
-        )
-    }
+    private val callers by lazy { kjbCallers() }
 
     /** Debug builds only: each step of a job in logcat (stages, counts, times), so a phone run shows where a job stands. */
     private val debug: (String) -> Unit = if (BuildConfig.DEBUG) { line -> Log.d(LOG_TAG, line) } else { _ -> }
@@ -375,7 +447,28 @@ class AiService : Service() {
             debug = debug,
             // In onUnbind, on the main thread: the job runs on Dispatchers.Default.
             waitForEnd = { job, ms -> runBlocking { withTimeoutOrNull(ms) { job.join() } } != null },
+            // The main thread: no job's step runs there.
+            beats = Dispatchers.Main,
             openEngine = ::engine,
+        )
+    }
+
+    private val foreground by lazy {
+        JobForeground(
+            jobForegroundType(Build.VERSION.SDK_INT),
+            object : ForegroundPort<PendingIntent> {
+                override fun startForeground(type: Int, tap: PendingIntent?) = this@AiService.startForeground(NOTICE_ID, notice(tap), type)
+
+                override fun stopForeground() = this@AiService.stopForeground(STOP_FOREGROUND_REMOVE)
+
+                override fun stopSelf(startId: Int?) {
+                    if (startId == null) this@AiService.stopSelf() else this@AiService.stopSelfResult(startId)
+                }
+            },
+            busy = { jobs.busy },
+            fromKjb = { tap -> AddonKeepAlive.fromKjb(tap, callers) },
+            endJob = jobs::timeUp,
+            log = { Log.i(LOG_TAG, it) },
         )
     }
 
@@ -405,8 +498,38 @@ class AiService : Service() {
         return binder
     }
 
-    /** KJB let go of the add-on: what it started stops, and the NPU sessions close now. */
+    /**
+     * KJB's start for a song's job, Context.startForegroundService ([JobForeground]): into the foreground at once, as
+     * Android requires within seconds. Never started again by Android on its own.
+     */
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        foreground.start(startId, intent?.let(AddonKeepAlive::tap))
+        return START_NOT_STICKY
+    }
+
+    /** Android's time for the foreground service ran out (Android 15+): out of it within seconds, or Android ends the add-on. */
+    override fun onTimeout(startId: Int, fgsType: Int) = foreground.timeUp()
+
+    /**
+     * The notice while a job works, in a quiet channel: the same words for every job, nothing of the song (KJB's own
+     * notification names it). A tap opens KJB's AI page through [tap], KJB's own. Without the notification permission,
+     * which the add-on never asks for, it shows in the phone's list of apps at work only, and the service runs all the same.
+     */
+    private fun notice(tap: PendingIntent?): Notification {
+        val channel = NotificationChannel(NOTICE_CHANNEL, getString(R.string.work_channel), NotificationManager.IMPORTANCE_LOW)
+        getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+        return Notification.Builder(this, NOTICE_CHANNEL)
+            .setSmallIcon(R.drawable.ic_stat_kjb)
+            .setContentTitle(getString(R.string.work_title))
+            .setContentIntent(tap)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .build()
+    }
+
+    /** KJB let go of the add-on: what it started stops, the NPU sessions close now, and it leaves the foreground. */
     override fun onUnbind(intent: Intent): Boolean {
+        foreground.unbound()
         jobs.shutDown()
         // KJB went away (swiped, killed): the download pauses, and goes on from its parts at the next bind.
         downloads.cancelAll()
@@ -466,6 +589,7 @@ class AiService : Service() {
                 jobs.start(AiSong(song.fileDescriptor, durationMs), plainLyrics, { job -> RunCallback(job, callback) }) { job ->
                     runCatching { song.close() }
                     Log.d(LOG_TAG, "job $job ended")
+                    foreground.jobEnded()
                 }
             } catch (e: IllegalStateException) {
                 song.close()
@@ -557,6 +681,8 @@ class AiService : Service() {
 
         override fun onProgress(done: Int, total: Int) = send { callback.onProgress(job, done, total) }
 
+        override fun onBeat() = send { callback.onBeat(job) }
+
         private inline fun send(call: () -> Unit) {
             try {
                 call()
@@ -647,5 +773,11 @@ class AiService : Service() {
         } finally {
             watchers.finishBroadcast()
         }
+    }
+
+    private companion object {
+        /** The notice while a job works: its id, and its channel, "AI work". */
+        const val NOTICE_ID = 1
+        const val NOTICE_CHANNEL = "ai_work"
     }
 }

@@ -12,6 +12,9 @@ object AddonNames {
     /** The bound service's class in the add-on. */
     const val SERVICE: String = "app.lyrify.ai.AiService"
 
+    /** The add-on's request to be left out of the phone's battery optimisation, which KJB starts for its result. */
+    const val EXEMPTION: String = "app.lyrify.ai.AiExemptionActivity"
+
     /** The signature permission only the add-on declares and only KJB, signed with the same key, holds. */
     fun permission(addonPackage: String): String = "$addonPackage.permission.BIND_AI"
 }

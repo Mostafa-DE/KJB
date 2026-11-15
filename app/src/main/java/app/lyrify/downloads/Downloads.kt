@@ -64,6 +64,9 @@ enum class DownloadFailure {
     /** The add-on said nothing for longer than any step takes ([DownloadRunner.STALL_MS]). */
     STALLED,
 
+    /** The add-on beat, then said nothing for 30 s: the phone froze it ([DownloadRunner]). */
+    FROZEN,
+
     /** The add-on stopped (its process died). */
     ADDON_GONE,
 

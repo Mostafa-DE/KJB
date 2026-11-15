@@ -15,6 +15,32 @@
          own cache and streams the finished file into a descriptor KJB opened. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- From a link taken to its file handed back, the add-on works in its own foreground service (DlService.kt,
+         JobForeground), dataSync, which KJB starts for it: a phone's app freezer leaves alone an app at work in the
+         foreground, not a service another app binds. No notification permission: the add-on has no screen to ask from;
+         without it its notice shows in the phone's list of apps at work only, and the service runs all the same. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
+    <!-- Its own request to be left out of the phone's battery optimisation (ExemptionActivity in :addon-shared), which KJB
+         offers when the add-on is set up: a phone's app freezer stopped an add-on at work with the screen locked, and
+         left alone one that was exempt (phone session 10). Distributed outside Google Play. -->
+    <uses-permission
+        android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"
+        tools:ignore="BatteryLife" />
+
+    <!-- The phone's own settings for the exemption question (ExemptionActivity sends it to a system app only, so it must
+         see who answers these two actions). -->
+    <queries>
+        <intent>
+            <action android:name="android.settings.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+            <data android:scheme="package" />
+        </intent>
+        <intent>
+            <action android:name="android.settings.IGNORE_BATTERY_OPTIMIZATION_SETTINGS" />
+        </intent>
+    </queries>
+
     <!-- youtubedl-android's library and ffmpeg modules ask for nothing more; this keeps it so if a later one does. -->
     <uses-permission
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
@@ -23,7 +49,7 @@
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         tools:node="remove" />
 
-    <!-- No activity and no launcher icon: the add-on shows only in Settings > Apps. -->
+    <!-- No launcher icon: the add-on shows only in Settings > Apps. Its one activity has no window of its own. -->
     <application
         android:allowBackup="false"
         android:fullBackupContent="false"
@@ -32,11 +58,24 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         tools:ignore="DataExtractionRules">
 
-        <!-- KJB binds it by its explicit name while it looks up a link or downloads. Exported for KJB only: the signature
-             permission above, and every call checks the caller's uid and certificate (DlService.kt). -->
+        <!-- KJB binds it by its explicit name while it looks up a link or downloads, and starts it for the foreground once
+             it took a link. Exported for KJB only: the signature permission above guards the bind and the start, every
+             call checks the caller's uid and certificate, and a start is taken only with a PendingIntent KJB made
+             (DlService.kt). -->
         <service
             android:name=".DlService"
             android:exported="true"
+            android:foregroundServiceType="dataSync"
             android:permission="${applicationId}.permission.BIND_DL" />
+
+        <!-- Android's question to leave the add-on out of battery optimisation, for its own package, then back to KJB with
+             the answer. Started by KJB only, for its result: the signature permission above, and the caller is checked
+             again (ExemptionActivity). Translucent: Android's own dialog is all that shows. -->
+        <activity
+            android:name=".DlExemptionActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:permission="${applicationId}.permission.BIND_DL"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
     </application>
 </manifest>

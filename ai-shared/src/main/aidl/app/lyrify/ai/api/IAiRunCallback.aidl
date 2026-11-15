@@ -21,4 +21,8 @@ oneway interface IAiRunCallback {
     // A piece of the stage the job is in is done (an MDX segment, a wav2vec2 window, an aligner block): the first of each
     // stage at once, then at most every few seconds. KJB's watchdog hears the job move through its long stages.
     void onProgress(long job, int done, int total) = 6;
+
+    // The job is alive: every few seconds while it runs, from a timer of its own, whatever step it is on (one that takes
+    // minutes, such as creating the MDX session, included). KJB takes silence for a phone's app freezer at work.
+    void onBeat(long job) = 7;
 }

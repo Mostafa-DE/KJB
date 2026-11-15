@@ -6,6 +6,7 @@ import android.os.RemoteException
 import android.util.Log
 import app.lyrify.LOG_TAG
 import app.lyrify.ai.AiResult
+import app.lyrify.addon.shared.AddonKeepAlive
 import app.lyrify.ai.api.AddonStatus
 import app.lyrify.ai.api.IAiAddon
 import app.lyrify.ai.api.IAiDownloadCallback
@@ -13,6 +14,7 @@ import app.lyrify.ai.api.IAiRunCallback
 import app.lyrify.ai.api.IAiStatusCallback
 import app.lyrify.ai.api.ImportReply
 import app.lyrify.ai.api.Wire
+import app.lyrify.overnight.AiLyrics
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.flow.Flow
 import java.io.File
@@ -50,8 +52,12 @@ object Addon {
     }
 }
 
-/** The AI add-on through Android ([AndroidAddon]): its binder as an [AddonPort]. */
-internal class AndroidAddonHost(context: Context, addon: KjbAddon) : AddonHost {
+/**
+ * The AI add-on through Android ([AndroidAddon]): its binder as an [AddonPort], and its service started for the foreground
+ * for a job with KJB's AI page as the tap on its notice ([AddonKeepAlive.EXTRA_TAP]), which also tells the add-on the start
+ * is KJB's.
+ */
+internal class AndroidAddonHost(private val context: Context, addon: KjbAddon) : AddonHost {
     private val android = AndroidAddon(context, addon)
 
     override fun installed(): Boolean = android.installed()
@@ -64,6 +70,10 @@ internal class AndroidAddonHost(context: Context, addon: KjbAddon) : AddonHost {
         return object : AddonBinding {
             override val port: AddonPort = port
             override val death: Deferred<Unit> = bound.death
+
+            override fun foreground(): Boolean = android.startForeground { it.putExtra(AddonKeepAlive.EXTRA_TAP, AiLyrics.page(context)) }
+
+            override fun stopService() = android.stopService()
 
             override fun close() = bound.close()
         }
@@ -114,6 +124,8 @@ private class AidlPort(private val addon: IAiAddon) : AddonPort {
             override fun onStopped(job: Long) = events.onStopped()
 
             override fun onProgress(job: Long, done: Int, total: Int) = events.onProgress(done, total)
+
+            override fun onBeat(job: Long) = events.onBeat()
         }
         // Binder hands the add-on its own descriptor during the call: KJB's is closed right after.
         return ParcelFileDescriptor.open(song, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->

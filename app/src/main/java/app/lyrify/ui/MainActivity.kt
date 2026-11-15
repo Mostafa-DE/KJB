@@ -51,8 +51,11 @@ import app.lyrify.logFailures
 import app.lyrify.media.NowPlaying
 import app.lyrify.addon.Addon
 import app.lyrify.addon.AddonDownloads
+import app.lyrify.addon.AddonExemptions
 import app.lyrify.addon.AddonInstalls
+import app.lyrify.addon.AddonState
 import app.lyrify.addon.HandoverState
+import app.lyrify.addon.KjbAddons
 import app.lyrify.addon.ModelHandover
 import app.lyrify.downloads.Downloads
 import app.lyrify.models.NpuChips
@@ -170,12 +173,14 @@ private fun App(ledger: LedgerStore, destination: Page?, view: FullScreen?, onVi
     var access by remember { mutableStateOf(Access.of(context)) }
     var unrestricted by remember { mutableStateOf(isUnrestricted(context)) }
     var notifications by remember { mutableStateOf(notificationsAllowed(context)) }
+    var aiExempt by remember { mutableStateOf(AddonExemptions.exempt(context, KjbAddons.AI)) }
 
     // The grants are switched in Settings; check again whenever the user comes back.
     LifecycleResumeEffect(Unit) {
         access = Access.of(context)
         unrestricted = isUnrestricted(context)
         notifications = notificationsAllowed(context)
+        aiExempt = AddonExemptions.exempt(context, KjbAddons.AI)
         // An app in the foreground gets its daily time for long media work back.
         AiLyrics.appOpened(context)
         // Back from the phone's "Install unknown apps" switch: the add-on's install goes on.
@@ -220,7 +225,8 @@ private fun App(ledger: LedgerStore, destination: Page?, view: FullScreen?, onVi
     LaunchedEffect(settings.nav.tourSeen, tour.ended, libraryRead) {
         if (tourStarts(settings.nav.tourSeen, tour.ended, tour.state != null, libraryRead)) tour.start()
     }
-    // What the AI asks for once it is switched on or its download starts: Show progress, then Keep running.
+    // What the AI asks for once it is switched on or its download starts: Show progress, then Keep running, then Run
+    // when locked.
     val activity = LocalActivity.current
     val denied by rememberUpdatedState(settings.nav.notificationsDenied)
     val denials by rememberUpdatedState(settings.nav.notificationDenials)
@@ -243,9 +249,6 @@ private fun App(ledger: LedgerStore, destination: Page?, view: FullScreen?, onVi
         asking = false
         asks = asks.drop(1)
     }
-    val askFor: (Boolean) -> Unit = { switchedOn ->
-        asks = aiAsks(switchedOn, notificationGrant(Build.VERSION.SDK_INT, notifications, denied), unrestricted)
-    }
     val state by ledger.ledger.collectAsStateWithLifecycle(initialValue = LedgerState())
     val track by NowPlaying.track.collectAsStateWithLifecycle()
     val sweep by NowPlaying.sweep.collectAsStateWithLifecycle()
@@ -257,6 +260,24 @@ private fun App(ledger: LedgerStore, destination: Page?, view: FullScreen?, onVi
     val downloadPhase by remember(context) { AddonDownloads.phase(context) }.collectAsStateWithLifecycle(initialValue = null)
     val handover by remember(context) { ModelHandover.state(context) }.collectAsStateWithLifecycle(initialValue = HandoverState.None)
     val aiEnabled by remember(context) { AiLyrics.enabled(context) }.collectAsStateWithLifecycle()
+    // The AI add-on left out of the phone's battery optimisation (AD9): offered with the asks, its row and hint on the AI tab.
+    val exemptions = remember(context) { AddonExemptions.store(context) }
+    val exemptionChoices by exemptions.choices.collectAsStateWithLifecycle()
+    val aiLocked = lockedPhone(KjbAddons.AI, addon?.state == AddonState.Ready, aiExempt, exemptionChoices)
+    val addonOffer by rememberUpdatedState(aiLocked.offer)
+    val requestAiExemption = rememberExemptionRequest(KjbAddons.AI) { aiExempt = AddonExemptions.exempt(context, KjbAddons.AI) }
+    val askFor: (Boolean) -> Unit = { switchedOn ->
+        asks = aiAsks(switchedOn, notificationGrant(Build.VERSION.SDK_INT, notifications, denied), unrestricted, addonOffer)
+    }
+    // The add-on ready while the AI is on and Run when locked still due (its install just finished, or KJB opened so):
+    // offered once a run, after any other ask. Switching the AI on offers it with the asks.
+    var addonOffered by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(aiEnabled, aiLocked.offer) {
+        if (aiEnabled && aiLocked.offer && !addonOffered) {
+            addonOffered = true
+            if (AiAsk.ADDON !in asks) asks = asks + AiAsk.ADDON
+        }
+    }
     val deletingModels by Lyrify.deletingModels.collectAsStateWithLifecycle()
     val aiProgress by AiLyrics.progress.collectAsStateWithLifecycle()
     val aiHold by AiLyrics.hold.collectAsStateWithLifecycle()
@@ -295,6 +316,8 @@ private fun App(ledger: LedgerStore, destination: Page?, view: FullScreen?, onVi
                     unrestricted = unrestricted,
                     stopping = deletingModels,
                     notifications = grant,
+                    addonExempt = aiExempt,
+                    exemptions = exemptionChoices,
                 ),
                 aiActions = remember(context) {
                     AiActions(
@@ -318,6 +341,8 @@ private fun App(ledger: LedgerStore, destination: Page?, view: FullScreen?, onVi
                         onCancelInstall = { AddonInstalls.installer(context).cancel() },
                         onOpenInstallSettings = { context.startFirst(listOf(AddonInstalls.installSettings(context))) },
                         onOpenAddonInfo = { context.startFirst(listOf(AddonInstalls.addonInfo())) },
+                        onAllowLocked = requestAiExemption,
+                        onLockedHintSeen = { exemptions.update { it.hintSeen(KjbAddons.AI) } },
                     )
                 },
                 aiWaiting = aiCounts.first,
@@ -374,7 +399,15 @@ private fun App(ledger: LedgerStore, destination: Page?, view: FullScreen?, onVi
             asks = asks.drop(1)
             context.startFirst(appInfoIntents(context))
         },
-        onNotNow = { asks = asks.drop(1) },
+        onAllowAddon = {
+            asks = asks.drop(1)
+            requestAiExemption()
+        },
+        onNotNow = {
+            // Not now to Run when locked is kept: not offered again; the AI tab's Locked phone row keeps the way to it.
+            if (asks.firstOrNull() == AiAsk.ADDON) exemptions.update { it.turnedDown(KjbAddons.AI) }
+            asks = asks.drop(1)
+        },
     )
 }
 

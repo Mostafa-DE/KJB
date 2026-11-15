@@ -113,7 +113,7 @@ class OnboardingTest {
         assertEquals(0, app.lyrify.settings.SettingsJson.decode("""{"version":4,"nav":{}}""")!!.nav.notificationDenials)
         // Once for good: no more Show progress, and the AI screen's row instead.
         assertEquals(NotificationGrant.OFF, notificationGrant(sdk = 36, granted = false, deniedForGood = true))
-        assertEquals(emptyList<AiAsk>(), aiAsks(switchedOn = false, NotificationGrant.OFF, unrestricted = true))
+        assertEquals(emptyList<AiAsk>(), aiAsks(switchedOn = false, NotificationGrant.OFF, unrestricted = true, addonOffer = false))
     }
 
     @Test
@@ -126,12 +126,22 @@ class OnboardingTest {
 
     @Test
     fun `switching the AI on asks for progress then battery use, a download only for progress`() {
-        assertEquals(listOf(AiAsk.PROGRESS, AiAsk.BATTERY), aiAsks(switchedOn = true, NotificationGrant.ASK, unrestricted = false))
-        assertEquals(listOf(AiAsk.BATTERY), aiAsks(switchedOn = true, NotificationGrant.ON, unrestricted = false))
-        assertEquals(listOf(AiAsk.PROGRESS), aiAsks(switchedOn = true, NotificationGrant.ASK, unrestricted = true))
-        assertEquals(emptyList<AiAsk>(), aiAsks(switchedOn = true, NotificationGrant.OFF, unrestricted = true))
-        assertEquals(listOf(AiAsk.PROGRESS), aiAsks(switchedOn = false, NotificationGrant.ASK, unrestricted = false))
-        assertEquals(emptyList<AiAsk>(), aiAsks(switchedOn = false, NotificationGrant.OFF, unrestricted = false))
+        assertEquals(listOf(AiAsk.PROGRESS, AiAsk.BATTERY), aiAsks(switchedOn = true, NotificationGrant.ASK, unrestricted = false, addonOffer = false))
+        assertEquals(listOf(AiAsk.BATTERY), aiAsks(switchedOn = true, NotificationGrant.ON, unrestricted = false, addonOffer = false))
+        assertEquals(listOf(AiAsk.PROGRESS), aiAsks(switchedOn = true, NotificationGrant.ASK, unrestricted = true, addonOffer = false))
+        assertEquals(emptyList<AiAsk>(), aiAsks(switchedOn = true, NotificationGrant.OFF, unrestricted = true, addonOffer = false))
+        assertEquals(listOf(AiAsk.PROGRESS), aiAsks(switchedOn = false, NotificationGrant.ASK, unrestricted = false, addonOffer = false))
+        assertEquals(emptyList<AiAsk>(), aiAsks(switchedOn = false, NotificationGrant.OFF, unrestricted = false, addonOffer = false))
+    }
+
+    @Test
+    fun `switching the AI on offers the add-on's battery exemption last, a download never`() {
+        assertEquals(listOf(AiAsk.PROGRESS, AiAsk.BATTERY, AiAsk.ADDON), aiAsks(switchedOn = true, NotificationGrant.ASK, unrestricted = false, addonOffer = true))
+        assertEquals(listOf(AiAsk.BATTERY, AiAsk.ADDON), aiAsks(switchedOn = true, NotificationGrant.OFF, unrestricted = false, addonOffer = true))
+        assertEquals(listOf(AiAsk.ADDON), aiAsks(switchedOn = true, NotificationGrant.ON, unrestricted = true, addonOffer = true))
+        // A download alone is not the AI switched on.
+        assertEquals(listOf(AiAsk.PROGRESS), aiAsks(switchedOn = false, NotificationGrant.ASK, unrestricted = false, addonOffer = true))
+        assertEquals(emptyList<AiAsk>(), aiAsks(switchedOn = false, NotificationGrant.ON, unrestricted = true, addonOffer = true))
     }
 
     @Test

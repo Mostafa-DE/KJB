@@ -76,9 +76,8 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.lyrify.Lyrify
-import app.lyrify.logFailures
 import app.lyrify.R
-import app.lyrify.addon.AddonDiedException
+import app.lyrify.addon.AddonExemptions
 import app.lyrify.addon.AddonInstalls
 import app.lyrify.addon.AddonState
 import app.lyrify.addon.InstallState
@@ -93,9 +92,8 @@ import app.lyrify.dl.api.DlProgress
 import app.lyrify.dl.api.DlUpdate
 import app.lyrify.dl.api.VideoChoice
 import app.lyrify.downloads.DlAddon
-import app.lyrify.downloads.DlConnection
+import app.lyrify.downloads.DlLookup
 import app.lyrify.downloads.DlLookupEvents
-import app.lyrify.downloads.DlSession
 import app.lyrify.downloads.DownloadFailure
 import app.lyrify.downloads.DownloadFolders
 import app.lyrify.downloads.DownloadItem
@@ -115,7 +113,6 @@ import app.lyrify.player.QueueSource
 import app.lyrify.player.SourceKind
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.launch
@@ -157,9 +154,10 @@ fun downloadsRow(): EntryRow? {
 // The page
 
 /**
- * Tools > Downloads: the add-on to get (or update) until it is ready; then a link field with Paste (a copied link is
- * offered when Check clipboard is on), and the downloads: what downloads now with Cancel, what did not save with Retry,
- * and what was saved (VidGrab's Finished list), newest first.
+ * Tools > Downloads: the add-on to get (or update) until it is ready, then Run when locked offered once; then a link field
+ * with Paste (a copied link is offered when Check clipboard is on), and the downloads: what downloads now with Cancel,
+ * what did not save with Retry, and what was saved (VidGrab's Finished list), newest first. After a download stalled
+ * with the phone locked, one plain line says so.
  */
 @Composable
 fun DownloadsPage(onBack: () -> Unit) {
@@ -175,9 +173,18 @@ fun DownloadsPage(onBack: () -> Unit) {
     var looking by rememberSaveable { mutableStateOf<String?>(null) }
     var opened by remember { mutableStateOf<DownloadItem?>(null) }
     var filesAccess by remember { mutableStateOf(true) }
+    // The add-on left out of the phone's battery optimisation (AD9), and what the user answered about it.
+    val exemptions = remember(context) { AddonExemptions.store(context) }
+    val exemptionChoices by exemptions.choices.collectAsStateWithLifecycle()
+    var exempt by remember { mutableStateOf(AddonExemptions.exempt(context, KjbAddons.DOWNLOADS)) }
+    val requestExemption = rememberExemptionRequest(KjbAddons.DOWNLOADS) { exempt = AddonExemptions.exempt(context, KjbAddons.DOWNLOADS) }
+    // Allow tapped on the offer: not offered again on this visit, whatever the phone answered.
+    var allowTapped by rememberSaveable { mutableStateOf(false) }
+    val locked = lockedPhone(KjbAddons.DOWNLOADS, addon == AddonState.Ready, exempt, exemptionChoices)
     LaunchedEffect(Unit) { Downloads.load(context) }
     LifecycleResumeEffect(Unit) {
         filesAccess = Environment.isExternalStorageManager()
+        exempt = AddonExemptions.exempt(context, KjbAddons.DOWNLOADS)
         installer.resume()
         Downloads.resume(context)
         if (Downloads.state.value.settings.checkClipboard && link.isEmpty()) clipboardLink(context)?.let { link = it }
@@ -205,6 +212,22 @@ fun DownloadsPage(onBack: () -> Unit) {
                     Box(rowMotion(reduced)) { AddonCard(addon, install, installer::start, installer::cancel) }
                 }
             }
+            // Only after a download stalled with the phone locked: one plain line, until it is answered.
+            if (locked.hint) {
+                item(key = "locked", contentType = "locked") {
+                    Box(rowMotion(reduced)) {
+                        LockedHint(
+                            stringResource(R.string.dl_locked_hint),
+                            onAllow = {
+                                requestExemption()
+                                exemptions.update { it.hintSeen(KjbAddons.DOWNLOADS) }
+                            },
+                            onNotNow = { exemptions.update { it.hintSeen(KjbAddons.DOWNLOADS) } },
+                            modifier = Modifier.padding(horizontal = ScreenPadding),
+                        )
+                    }
+                }
+            }
             if (!filesAccess) {
                 item(key = "access", contentType = "access") {
                     Box(rowMotion(reduced)) {
@@ -221,6 +244,21 @@ fun DownloadsPage(onBack: () -> Unit) {
             }
             downloadsList(ui, onOpen = { opened = it }, onCancel = { Downloads.cancel(context, it.key) })
         }
+    }
+    // Where the add-on is set up, once it is ready: Not now (or the sheet put away) is kept, and the row in Settings keeps
+    // the way to it.
+    if (locked.offer && !allowTapped) {
+        AskSheet(
+            R.drawable.ic_lock,
+            R.string.addon_locked_title,
+            R.string.dl_locked_text,
+            R.string.setup_allow,
+            onAction = {
+                allowTapped = true
+                requestExemption()
+            },
+            onNotNow = { exemptions.update { it.turnedDown(KjbAddons.DOWNLOADS) } },
+        )
     }
     looking?.let { url ->
         SaveSheet(url, onDismiss = { looking = null }) {
@@ -432,6 +470,7 @@ private fun failureSentence(reason: DownloadFailure): Int = when (reason) {
     DownloadFailure.NO_ROOM -> R.string.dl_failed_room_detail
     DownloadFailure.HAND_OFF -> R.string.dl_failed_hand_off_detail
     DownloadFailure.STALLED -> R.string.dl_failed_stalled_detail
+    DownloadFailure.FROZEN -> R.string.dl_failed_frozen_detail
     DownloadFailure.ADDON_GONE -> R.string.dl_failed_addon_detail
     DownloadFailure.NO_ADDON -> R.string.dl_failed_no_addon_detail
     DownloadFailure.NOT_ALLOWED -> R.string.dl_failed_not_allowed_detail
@@ -473,6 +512,14 @@ private fun DownloadsSettings(modifier: Modifier) {
     var sheet by remember { mutableStateOf<DownloadsSheet?>(null) }
     var updating by remember { mutableStateOf(false) }
     val version by produceState<String?>(null, updating) { value = withContext(Dispatchers.IO) { DlAddon.withPort(context) { it.status()?.ytdlpVersion } } }
+    // Locked phone, while the add-on is ready: left out of the phone's battery optimisation or not (AD9).
+    val addon by remember(context) { DlAddon.states(context) }.collectAsStateWithLifecycle(initialValue = null)
+    var exempt by remember { mutableStateOf(AddonExemptions.exempt(context, KjbAddons.DOWNLOADS)) }
+    val requestExemption = rememberExemptionRequest(KjbAddons.DOWNLOADS) { exempt = AddonExemptions.exempt(context, KjbAddons.DOWNLOADS) }
+    LifecycleResumeEffect(Unit) {
+        exempt = AddonExemptions.exempt(context, KjbAddons.DOWNLOADS)
+        onPauseOrDispose { }
+    }
     LaunchedEffect(Unit) { Downloads.load(context) }
     val settings = ui.settings
     fun change(block: (DownloadSettings) -> DownloadSettings) = Downloads.settings(context, block)
@@ -495,6 +542,9 @@ private fun DownloadsSettings(modifier: Modifier) {
                         toasts.say(resources, updateMessage(outcome))
                     }
                 }
+            }
+            lockedRow(addon == AddonState.Ready, exempt)?.let { row ->
+                LockedPhoneRow(row, onAllow = requestExemption, onOpenAppInfo = { context.startFirst(listOf(AddonInstalls.addonInfo(KjbAddons.DOWNLOADS))) })
             }
         }
     }
@@ -619,8 +669,8 @@ private fun FolderSheet(kind: DlKind, current: String, onDismiss: () -> Unit, on
 // The save sheet: the share target's, and the page's Look up
 
 /**
- * One link being looked up in the Downloads add-on while the sheet shows: the quick info at once (YouTube's oEmbed),
- * then the full info, or why there is none. The add-on stays bound until [close].
+ * One link being looked up in the Downloads add-on while the sheet shows ([DlLookup]): the quick info at once (YouTube's
+ * oEmbed), then the full info, or why there is none. The add-on stays bound until [close], which asks nothing of it.
  */
 @Stable
 private class LinkLookup(private val context: Context, private val scope: CoroutineScope, private val url: String) {
@@ -633,24 +683,12 @@ private class LinkLookup(private val context: Context, private val scope: Corout
     var addon: AddonState? by mutableStateOf(null)
         private set
 
-    private var session: DlSession? = null
-    private var lookup: Long? = null
+    private val lookup = DlLookup { DlAddon.connect(context) }
 
     fun start() {
         scope.launch(Dispatchers.IO) {
-            when (val connection = DlAddon.connect(context)) {
-                is DlConnection.Closed -> withContext(Dispatchers.Main) { addon = connection.state }
-                is DlConnection.Open -> {
-                    session = connection.session
-                    withContext(Dispatchers.Main) { addon = AddonState.Ready }
-                    lookup = try {
-                        connection.session.port.info(url, events)
-                    } catch (_: AddonDiedException) {
-                        withContext(Dispatchers.Main) { failed = DlFailure.ENGINE }
-                        null
-                    }
-                }
-            }
+            val state = lookup.start(url, events)
+            withContext(Dispatchers.Main) { addon = state }
         }
     }
 
@@ -667,20 +705,8 @@ private class LinkLookup(private val context: Context, private val scope: Corout
     /** Full info is in, or no more is coming. */
     val settled: Boolean get() = info?.partial == false || failed != null || (addon != null && addon != AddonState.Ready)
 
-    /** Stops the lookup and lets the add-on go, off the main thread: the sheet's own scope is gone by then. */
-    fun close() {
-        val open = session ?: return
-        val asked = lookup
-        session = null
-        closing.launch {
-            try {
-                asked?.let { open.port.cancelInfo(it) }
-            } catch (_: AddonDiedException) {
-                // Gone, and its lookup with it.
-            }
-            open.close()
-        }
-    }
+    /** The sheet went: the add-on is let go of, with no call into it (one the phone froze could hold the call). */
+    fun close() = lookup.close()
 }
 
 /**
@@ -853,8 +879,5 @@ private fun thumbnail(url: String): ImageBitmap? {
     val sample = generateSequence(1) { it * 2 }.first { maxOf(bounds.outWidth, bounds.outHeight) / it <= THUMBNAIL_SIDE }
     return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })?.asImageBitmap()
 }
-
-/** Where the sheets let go of the add-on once they have closed. */
-private val closing = CoroutineScope(SupervisorJob() + Dispatchers.IO + logFailures)
 
 private const val THUMBNAIL_SIDE = 512

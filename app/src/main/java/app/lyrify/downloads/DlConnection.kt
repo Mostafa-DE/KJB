@@ -6,9 +6,9 @@ import android.os.RemoteException
 import app.lyrify.addon.AddonDiedException
 import app.lyrify.addon.AddonState
 import app.lyrify.addon.AndroidAddon
-import app.lyrify.addon.BoundAddon
 import app.lyrify.addon.KjbAddons
 import app.lyrify.addon.packageChanges
+import app.lyrify.addon.shared.AddonKeepAlive
 import app.lyrify.dl.api.DlEnd
 import app.lyrify.dl.api.DlFailure
 import app.lyrify.dl.api.DlFile
@@ -38,6 +38,9 @@ interface DlRunEvents {
     fun onFile(file: DlFile)
 
     fun onEnd(end: DlEnd)
+
+    /** The run is alive: every few seconds until its end, from a timer of the add-on's own. */
+    fun onBeat()
 }
 
 /** One lookup as the add-on tells it (IDlInfoCallback, as Kotlin). Called on binder threads. */
@@ -75,10 +78,73 @@ interface DlPort {
 }
 
 /** A bound Downloads add-on after the handshake, until [close] unbinds it; [death] completes when its process dies. */
-class DlSession internal constructor(private val bound: BoundAddon, val port: DlPort) : AutoCloseable {
-    val death: Deferred<Unit> get() = bound.death
+class DlSession internal constructor(
+    val port: DlPort,
+    val death: Deferred<Unit>,
+    private val unbind: () -> Unit,
+    private val startForeground: () -> Boolean,
+    private val stopService: () -> Unit,
+) : AutoCloseable {
+    /**
+     * Has the add-on work in its own foreground service, which a phone's app freezer leaves alone (a service KJB binds
+     * counts for nothing there), from the link it took to the file it hands back: KJB starts it right after a lookup or a
+     * run started, and KJB's own foreground (its screen, or its downloads service) is what lets it. False when the phone
+     * refuses; the add-on then works without it.
+     */
+    fun foreground(): Boolean = startForeground()
 
-    override fun close() = bound.close()
+    /**
+     * Lets go of an add-on the phone froze: unbinds it and stops the service KJB started for its work ([foreground]), so
+     * nothing of KJB's keeps it. Nothing is asked of the add-on itself.
+     */
+    fun abandon() {
+        close()
+        stopService()
+    }
+
+    override fun close() = unbind()
+}
+
+/**
+ * One link looked up in the Downloads add-on for the save sheet: bound from [start] until [close]. The add-on looks it up
+ * in its own foreground service, which KJB starts once it took the link. [close] asks nothing of the add-on: a call into
+ * one the phone froze can wait for as long as it stays frozen, so KJB lets go of it and stops the service it started
+ * ([DlSession.abandon]); the add-on, KJB gone, stops the lookup itself (its onUnbind). A lookup has no beat of its own:
+ * the sheet shows what came, its buttons work without the full info, and its going lets the add-on go.
+ */
+class DlLookup(private val connect: suspend () -> DlConnection) {
+    private var session: DlSession? = null
+    private var closed = false
+
+    /** Binds the add-on and asks it to look [url] up, heard by [events]: Ready, or why the add-on can't be used. */
+    suspend fun start(url: String, events: DlLookupEvents): AddonState {
+        val open = when (val connection = connect()) {
+            is DlConnection.Closed -> return connection.state
+            is DlConnection.Open -> connection.session
+        }
+        // Bound after the sheet went: let go of at once, never asked.
+        val gone = synchronized(this) { closed.also { if (!it) session = open } }
+        if (gone) {
+            open.abandon()
+            return AddonState.Ready
+        }
+        try {
+            open.port.info(url, events)
+            open.foreground()
+        } catch (_: AddonDiedException) {
+            events.onFailed(DlEnd.Failed(DlFailure.ENGINE))
+        }
+        return AddonState.Ready
+    }
+
+    /** The sheet went: the add-on is let go of, once. */
+    fun close() {
+        val open = synchronized(this) {
+            closed = true
+            session.also { session = null }
+        }
+        open?.abandon()
+    }
 }
 
 /** What [DlAddon.connect] got: a [session], or why there is none (the AI add-on's states, the same for both). */
@@ -109,7 +175,8 @@ object DlAddon {
     /** Checks the add-on, binds it and asks its API: a session for one that speaks at least [MIN_DL_API], else why not. */
     suspend fun connect(context: Context): DlConnection {
         peek(context)?.let { return DlConnection.Closed(it) }
-        val bound = android(context).bind() ?: return DlConnection.Closed(AddonState.Unreachable)
+        val android = android(context)
+        val bound = android.bind() ?: return DlConnection.Closed(AddonState.Unreachable)
         val port = AidlDlPort(IDlAddon.Stub.asInterface(bound.binder))
         val api = try {
             port.apiVersion()
@@ -124,7 +191,10 @@ object DlAddon {
             bound.close()
             return DlConnection.Closed(AddonState.Outdated(api))
         }
-        return DlConnection.Open(DlSession(bound, port))
+        // KJB's Downloads page as the tap on the add-on's notice, which also tells the add-on the start is KJB's.
+        return DlConnection.Open(
+            DlSession(port, bound.death, bound::close, { android.startForeground { it.putExtra(AddonKeepAlive.EXTRA_TAP, DownloadNotices.page(context.applicationContext)) } }, android::stopService),
+        )
     }
 
     /** [block] on the add-on, bound for the call and let go after it; null when it is not ready or died meanwhile. */
@@ -184,6 +254,8 @@ private class AidlDlPort(private val addon: IDlAddon) : DlPort {
             }
 
             override fun onEnd(run: Long, end: String) = events.onEnd(DlWire.end(end))
+
+            override fun onBeat(run: Long) = events.onBeat()
         }
         return call { addon.start(DlWire.encode(request), callback) }
     }

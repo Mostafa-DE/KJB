@@ -1,0 +1,119 @@
+package app.lyrify.downloads
+
+import app.lyrify.addon.AddonDiedException
+import app.lyrify.addon.AddonState
+import app.lyrify.dl.api.DlEnd
+import app.lyrify.dl.api.DlFailure
+import app.lyrify.dl.api.DlInfo
+import app.lyrify.dl.api.DlRequest
+import app.lyrify.dl.api.DlStatus
+import app.lyrify.dl.api.DlUpdate
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertEquals
+import org.junit.Test
+import java.io.File
+
+/** The save sheet's lookup in the Downloads add-on ([DlLookup]): never a call into an add-on the phone may have frozen when the sheet goes. */
+@OptIn(ExperimentalCoroutinesApi::class)
+class DlLookupTest {
+    /** What KJB did, in order: calls into the add-on, and what it asked of Android (the foreground start, the unbind, the stop). */
+    private val calls = mutableListOf<String>()
+
+    private inner class FakePort(private val dead: Boolean = false) : DlPort {
+        override fun apiVersion(): Int = 1
+
+        override fun status(): DlStatus = DlStatus()
+
+        override fun info(url: String, events: DlLookupEvents): Long {
+            if (dead) throw AddonDiedException()
+            calls += "info"
+            return 3
+        }
+
+        override fun cancelInfo(lookup: Long) {
+            calls += "cancelInfo $lookup"
+        }
+
+        override fun start(request: DlRequest, events: DlRunEvents): Long = error("not a run")
+
+        override fun deliver(run: Long, media: File, cover: File?) = error("not a run")
+
+        override fun cancel(run: Long, keepParts: Boolean) = error("not a run")
+
+        override fun discard(key: String) = error("not a run")
+
+        override fun update(): DlUpdate = error("not an update")
+    }
+
+    private fun session(port: DlPort = FakePort()) = DlSession(
+        port,
+        CompletableDeferred(),
+        unbind = { calls += "unbind" },
+        startForeground = { true.also { calls += "foreground" } },
+        stopService = { calls += "stopService" },
+    )
+
+    private val failures = mutableListOf<DlFailure>()
+
+    private val events = object : DlLookupEvents {
+        override fun onInfo(info: DlInfo) {}
+
+        override fun onFailed(end: DlEnd.Failed) {
+            failures += end.failure
+        }
+    }
+
+    @Test
+    fun `a lookup runs in the add-on's foreground, and the sheet going asks nothing of the add-on`() = runTest {
+        val lookup = DlLookup { DlConnection.Open(session()) }
+
+        assertEquals(AddonState.Ready, lookup.start("https://video.example.com/w", events))
+        lookup.close()
+
+        // A call into an add-on the phone froze can wait for as long as it stays frozen: KJB lets go of it and stops the
+        // service it started; the add-on, KJB gone, stops the lookup itself (onUnbind).
+        assertEquals(listOf("info", "foreground", "unbind", "stopService"), calls)
+        lookup.close()
+        assertEquals("once", 4, calls.size)
+    }
+
+    @Test
+    fun `an add-on bound after the sheet went is let go of at once, never asked to look up`() = runTest {
+        val bound = CompletableDeferred<DlConnection>()
+        val lookup = DlLookup { bound.await() }
+        val started = backgroundScope.async { lookup.start("https://video.example.com/w", events) }
+        runCurrent()
+
+        lookup.close()
+        bound.complete(DlConnection.Open(session()))
+        runCurrent()
+
+        assertEquals(listOf("unbind", "stopService"), calls)
+        assertEquals(AddonState.Ready, started.await())
+    }
+
+    @Test
+    fun `an add-on gone as it is asked fails the lookup as the engine, and is let go of`() = runTest {
+        val lookup = DlLookup { DlConnection.Open(session(FakePort(dead = true))) }
+
+        lookup.start("https://video.example.com/w", events)
+        lookup.close()
+
+        assertEquals(listOf(DlFailure.ENGINE), failures)
+        assertEquals(listOf("unbind", "stopService"), calls)
+    }
+
+    @Test
+    fun `an add-on that cannot be bound says why`() = runTest {
+        val lookup = DlLookup { DlConnection.Closed(AddonState.Missing) }
+
+        assertEquals(AddonState.Missing, lookup.start("https://video.example.com/w", events))
+        lookup.close()
+
+        assertEquals(emptyList<String>(), calls)
+    }
+}

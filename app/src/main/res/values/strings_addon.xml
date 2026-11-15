@@ -29,4 +29,14 @@
     <string name="ai_addon_moving">Moving the AI files</string>
     <string name="ai_addon_moving_detail">The AI files already on your phone move over to the AI add-on. Nothing is downloaded.</string>
     <string name="ai_tile_addon">AI add-on</string>
+
+    <!-- Run when locked: each add-on left out of the phone's battery optimisation (AD9, ui/Access.kt). -->
+    <string name="addon_locked_title">Run when locked</string>
+    <string name="addon_locked_row">Locked phone</string>
+    <string name="addon_locked_allowed">Allowed</string>
+    <string name="addon_locked_not_allowed">Not allowed</string>
+    <string name="ai_locked_text">So AI can finish while your phone is locked.</string>
+    <string name="ai_locked_hint">A locked phone paused the AI. Allow it to keep running?</string>
+    <string name="dl_locked_text">So downloads can finish while your phone is locked.</string>
+    <string name="dl_locked_hint">A locked phone paused a download. Allow it to keep running?</string>
 </resources>

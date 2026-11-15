@@ -1,5 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Its name in Settings > Apps: KJB's Downloads add-on. No launcher icon, no notification: KJB shows its downloads. -->
+    <!-- Its name in Settings > Apps: KJB's Downloads add-on. No launcher icon; KJB shows its downloads. -->
     <string name="app_name">KJB Downloads</string>
+    <!-- The notice while it works on a link (DlService), the same for every link: nothing of it goes into it. -->
+    <string name="work_channel">Downloads work</string>
+    <string name="work_title">KJB Downloads is working</string>
 </resources>

@@ -1,5 +1,6 @@
 package app.lyrify.dl
 
+import app.lyrify.addon.shared.beating
 import app.lyrify.dl.api.DlEnd
 import app.lyrify.dl.api.DlFailure
 import app.lyrify.dl.api.DlFile
@@ -34,6 +35,7 @@ import java.io.OutputStream
 import java.net.InetAddress
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.EmptyCoroutineContext
 
 /** What one run tells its caller: IDlRunCallback, as Kotlin. */
 interface RunEvents {
@@ -44,6 +46,9 @@ interface RunEvents {
 
     /** The run's last word. */
     fun onEnd(end: DlEnd)
+
+    /** The run is alive: at its start, then every AddonKeepAlive.BEAT_EVERY_MS until its end. */
+    fun onBeat()
 }
 
 /** What one lookup tells its caller: IDlInfoCallback, as Kotlin. */
@@ -99,7 +104,9 @@ private class Produced(val media: File, val cover: File?, val meta: DlMeta, val 
  * that key (yt-dlp goes on from its parts) until KJB discards it or it is a week old ([sweep]). Cancel kills yt-dlp and its
  * ffmpeg ([Ytdlp.kill]): a process does not stop because its coroutine was cancelled. yt-dlp updates itself by
  * [UpdatePolicy], and never while a run or a lookup uses it. A finished file waits for KJB's descriptors ([deliver]) and
- * is streamed into them; the add-on never opens KJB's or the user's storage.
+ * is streamed into them; the add-on never opens KJB's or the user's storage. It is [busy] from a link taken (a lookup or a
+ * run) until the last of them ends, each end told to [ended]: the add-on's own foreground service is held meanwhile. A
+ * run beats from its start to its end ([RunEvents.onBeat]), so KJB tells a frozen add-on from a quiet step.
  */
 class DlRuns(
     private val scope: CoroutineScope,
@@ -117,6 +124,10 @@ class DlRuns(
     private val log: (String) -> Unit = {},
     /** A host's addresses (DNS); a fake in tests. */
     private val resolve: (String) -> List<InetAddress> = { InetAddress.getAllByName(it).toList() },
+    /** A run or a lookup ended (after [busy] says so). */
+    private val ended: () -> Unit = {},
+    /** Where a run's beats run (the main thread on the phone): apart from yt-dlp's work. */
+    private val beats: CoroutineContext = EmptyCoroutineContext,
 ) {
     private val lock = Any()
     private var nextId = 1L
@@ -180,6 +191,15 @@ class DlRuns(
         }
     }
 
+    /** A run or a lookup is under way: from the link taken until its end, the run's file handed back included. */
+    val busy: Boolean get() = synchronized(lock) { runs.isNotEmpty() || lookups.isNotEmpty() }
+
+    /**
+     * Android's time for the add-on's foreground service ran out (onTimeout, Android 15+: 6 hours of dataSync in 24): the
+     * work stops as when KJB lets go, the runs' parts kept for the next try.
+     */
+    fun timeUp() = cancelAll()
+
     /** Stops every run, their parts kept: KJB let go of the add-on (it may come back to them). */
     fun cancelAll() {
         val (live, looking) = synchronized(lock) { runs.values.toList() to lookups.values.toList() }
@@ -222,6 +242,8 @@ class DlRuns(
     private suspend fun body(run: Run) {
         val dir = File(folder, run.request.key)
         var end: DlEnd = DlEnd.Stopped
+        // The run's beats, apart from it: they go on while yt-dlp or ffmpeg works for minutes without a line.
+        val beating = scope.beating(beats) { run.events.onBeat() }
         try {
             end = download(run, dir)
             // A delivered file is KJB's now; what a failed run got stays for its Retry.
@@ -234,10 +256,12 @@ class DlRuns(
             log("run ${run.id}: ${e.javaClass.simpleName}")
             end = DlEnd.Failed(DlFailure.UNKNOWN)
         } finally {
+            beating.cancel()
             if (run.delivery.isCompleted) run.delivery.getCompleted().close()
             synchronized(lock) { runs.remove(run.id) }
             log("run ${run.id}: ${label(end)}")
             run.events.onEnd(end)
+            ended()
         }
     }
 
@@ -340,6 +364,7 @@ class DlRuns(
                 lookUp(id, url, events)
             } finally {
                 synchronized(lock) { lookups.remove(id) }
+                ended()
             }
         }
         synchronized(lock) { lookups[id] = job }

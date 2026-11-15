@@ -1,6 +1,7 @@
 package app.lyrify.downloads
 
 import app.lyrify.addon.AddonDiedException
+import app.lyrify.addon.shared.AddonKeepAlive
 import app.lyrify.data.SharedWrites
 import app.lyrify.dl.api.AudioQuality
 import app.lyrify.dl.api.DlEnd
@@ -18,10 +19,13 @@ import app.lyrify.lyrics.LocalTrack
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.yield
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -127,7 +131,110 @@ class DownloadRunnerTest {
     private val saver by lazy { FakeSaver(temp.root) }
     private val heard = mutableListOf<DlProgress>()
 
-    private fun TestScope.running() = backgroundScope.async { DownloadRunner(port, death, saver).run(item, heard::add) }.also { runCurrent() }
+    /** Whether the phone lets the add-on's foreground service start; each start is in [FakePort.calls] for its order. */
+    private var foregroundAllowed = true
+
+    private fun TestScope.running() = backgroundScope.async {
+        DownloadRunner(port, death, saver, foreground = { foregroundAllowed.also { port.calls += "foreground" } }).run(item, heard::add)
+    }.also { runCurrent() }
+
+    @Test
+    fun `the run goes on in the add-on's own foreground service, which KJB starts once the add-on took it`() = runTest {
+        val outcome = running()
+
+        assertEquals(listOf("start d1", "foreground"), port.calls)
+        port.events!!.onFile(file)
+        runCurrent()
+        port.events!!.onEnd(DlEnd.Delivered(1_000, 50))
+        assertEquals(DownloadOutcome.Saved(File(temp.root, "x.mp3").path, null), outcome.await())
+    }
+
+    @Test
+    fun `silent for 30 s once it beats, the add-on is frozen, the run fails as such with nothing asked of it`() = runTest {
+        val outcome = running()
+        port.events!!.onBeat()
+        port.events!!.onProgress(DlProgress(DlStage.DOWNLOADING, 10f))
+        runCurrent()
+
+        advanceTimeBy(AddonKeepAlive.FROZEN_MS - 1)
+        runCurrent()
+        assertFalse("silent for less than 30 s", outcome.isCompleted)
+        advanceTimeBy(2)
+        runCurrent()
+
+        assertEquals(DownloadOutcome.Failed(DownloadFailure.FROZEN), outcome.await())
+        // A call into a frozen process can wait for as long as it stays frozen: none is made.
+        assertEquals(listOf("start d1", "foreground"), port.calls)
+    }
+
+    @Test
+    fun `an end that comes as the freeze watch gives up is the download's end, and its file is kept`() = runTest {
+        val outcome = running()
+        val events = port.events!!
+        events.onFile(file)
+        events.onBeat()
+        runCurrent()
+        // The end comes at the very moment the watch gives up: after its word is in, before the run reads it.
+        backgroundScope.launch {
+            delay(AddonKeepAlive.FROZEN_MS)
+            yield() // behind the watch, which wakes at the same moment
+            events.onEnd(DlEnd.Delivered(1_000, 50))
+        }
+
+        advanceTimeBy(AddonKeepAlive.FROZEN_MS + 1)
+        runCurrent()
+
+        assertEquals(DownloadOutcome.Saved(File(temp.root, "x.mp3").path, null), outcome.await())
+        assertEquals("never abandoned", listOf("open", "finish"), saver.calls)
+    }
+
+    @Test
+    fun `beats keep a quiet step from looking frozen, and are no progress for the stall limit`() = runTest {
+        val outcome = running()
+        port.events!!.onProgress(DlProgress(DlStage.CONVERTING))
+        runCurrent()
+
+        repeat((DownloadRunner.STALL_MS / AddonKeepAlive.BEAT_EVERY_MS).toInt() - 1) {
+            advanceTimeBy(AddonKeepAlive.BEAT_EVERY_MS)
+            port.events!!.onBeat()
+            runCurrent()
+        }
+        assertFalse(outcome.isCompleted)
+        repeat(2) {
+            advanceTimeBy(AddonKeepAlive.BEAT_EVERY_MS)
+            port.events!!.onBeat()
+            runCurrent()
+        }
+
+        assertEquals(DownloadOutcome.Failed(DownloadFailure.STALLED), outcome.await())
+    }
+
+    @Test
+    fun `a run that never beats is not watched for freezes`() = runTest {
+        val outcome = running()
+        port.events!!.onProgress(DlProgress(DlStage.DOWNLOADING, 10f))
+        runCurrent()
+
+        advanceTimeBy(4 * AddonKeepAlive.FROZEN_MS)
+        runCurrent()
+        assertFalse(outcome.isCompleted)
+        port.events!!.onFile(file)
+        runCurrent()
+        port.events!!.onEnd(DlEnd.Delivered(1_000, 50))
+
+        assertEquals(DownloadOutcome.Saved(File(temp.root, "x.mp3").path, null), outcome.await())
+    }
+
+    @Test
+    fun `a phone that refuses the add-on's foreground service still downloads`() = runTest {
+        foregroundAllowed = false
+        val outcome = running()
+        port.events!!.onFile(file)
+        runCurrent()
+        port.events!!.onEnd(DlEnd.Delivered(1_000, 50))
+
+        assertEquals(DownloadOutcome.Saved(File(temp.root, "x.mp3").path, null), outcome.await())
+    }
 
     @Test
     fun `a download goes through - progress, the file opened where it goes, streamed whole, then KJB's own steps`() = runTest {
@@ -137,7 +244,7 @@ class DownloadRunnerTest {
         events.onProgress(DlProgress(DlStage.DOWNLOADING, 40f))
         events.onFile(file)
         runCurrent()
-        assertEquals(listOf("start d1", "deliver 7"), port.calls)
+        assertEquals(listOf("start d1", "foreground", "deliver 7"), port.calls)
         assertEquals(File(temp.root, ".x.part") to File(temp.root, "cover.jpg"), port.delivered)
         events.onEnd(DlEnd.Delivered(1_000, 50))
         runCurrent()

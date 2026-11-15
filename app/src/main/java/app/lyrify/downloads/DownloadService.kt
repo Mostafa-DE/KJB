@@ -22,7 +22,9 @@ import app.lyrify.LOG_TAG
 import app.lyrify.Lyrify
 import app.lyrify.R
 import app.lyrify.addon.AddonDiedException
+import app.lyrify.addon.AddonExemptions
 import app.lyrify.addon.AddonState
+import app.lyrify.addon.KjbAddons
 import app.lyrify.dl.api.AudioQuality
 import app.lyrify.dl.api.DlKind
 import app.lyrify.dl.api.DlProgress
@@ -296,6 +298,11 @@ class DownloadService : Service() {
                 if (outcome != null) {
                     Downloads.ended(this, item.key, outcome)
                     DownloadNotices.ended(this, item, outcome)
+                    // The phone froze the add-on, or a run said nothing for minutes (most likely the same): the Downloads
+                    // page says plainly that a locked phone may pause it, unless the add-on is exempt.
+                    if ((outcome as? DownloadOutcome.Failed)?.reason in setOf(DownloadFailure.FROZEN, DownloadFailure.STALLED)) {
+                        AddonExemptions.store(this).update { it.pausedOnce(KjbAddons.DOWNLOADS) }
+                    }
                 }
             }
         } finally {
@@ -329,7 +336,11 @@ class DownloadService : Service() {
      */
     private suspend fun run(item: DownloadItem, session: DlSession, saver: DownloadFinish): DownloadOutcome? = coroutineScope {
         val keepOnCancel = { !Downloads.isCancelled(item.key) }
-        val run = async { DownloadRunner(session.port, session.death, saver, keepOnCancel = keepOnCancel).run(item) { progress -> shown(item, progress) } }
+        val run = async {
+            DownloadRunner(session.port, session.death, saver, keepOnCancel = keepOnCancel, foreground = session::foreground).run(item) { progress -> shown(item, progress) }
+                // Frozen: let go of it at once, its service stopped; it keeps its parts for a Retry once it runs again.
+                .also { if ((it as? DownloadOutcome.Failed)?.reason == DownloadFailure.FROZEN) session.abandon() }
+        }
         Downloads.running(item.key, run)
         if (Downloads.isCancelled(item.key)) run.cancel()
         try {
@@ -403,7 +414,8 @@ internal object DownloadNotices {
         createNotificationChannel(NotificationChannel(CHANNEL, context.getString(R.string.dl_channel), NotificationManager.IMPORTANCE_LOW))
     }
 
-    private fun open(context: Context): PendingIntent = PendingIntent.getActivity(
+    /** KJB's Downloads page, as a notification's tap opens it: KJB's downloads' own, and the Downloads add-on's notice. */
+    fun page(context: Context): PendingIntent = PendingIntent.getActivity(
         context,
         WORKING_ID,
         Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra(EXTRA_DESTINATION, DESTINATION_DOWNLOADS),
@@ -419,7 +431,7 @@ internal object DownloadNotices {
             .setContentTitle(item?.title?.ifBlank { null } ?: context.getString(R.string.dl_title))
             .setContentText(stageText(context, progress))
             .setProgress(PERCENT, percent ?: 0, percent == null)
-            .setContentIntent(open(context))
+            .setContentIntent(page(context))
             .setOngoing(true)
             .setOnlyAlertOnce(true)
         if (item != null) {
@@ -475,7 +487,7 @@ internal object DownloadNotices {
             .setSmallIcon(R.drawable.ic_stat_kjb)
             .setContentTitle(item.title.ifBlank { context.getString(R.string.dl_title) })
             .setContentText(text)
-            .setContentIntent(open(context))
+            .setContentIntent(page(context))
             .setAutoCancel(true)
             .build()
         runCatching { channel(context).notify(item.key.hashCode(), notification) }
@@ -488,6 +500,7 @@ internal object DownloadNotices {
         DownloadFailure.NO_ROOM -> R.string.dl_failed_room
         DownloadFailure.HAND_OFF -> R.string.dl_failed_hand_off
         DownloadFailure.STALLED -> R.string.dl_failed_stalled
+        DownloadFailure.FROZEN -> R.string.dl_failed_frozen
         DownloadFailure.ADDON_GONE -> R.string.dl_failed_addon
         DownloadFailure.NO_ADDON -> R.string.dl_failed_no_addon
         DownloadFailure.NOT_ALLOWED -> R.string.dl_failed_not_allowed

@@ -1,5 +1,6 @@
 package app.lyrify.ai
 
+import android.content.pm.ServiceInfo
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -22,6 +23,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 import java.io.FileDescriptor
 
 /** How a song's job runs in the add-on ([AddonJobs]); who may call it is :addon-shared's AddonTrustTest. */
@@ -65,6 +67,13 @@ class AiServiceTest {
 
         override fun onProgress(done: Int, total: Int) {
             events += "progress $done/$total"
+        }
+
+        /** Counted apart: they come with the virtual clock, not with the job's steps. */
+        var beats = 0
+
+        override fun onBeat() {
+            beats++
         }
     }
 
@@ -521,5 +530,110 @@ class AiServiceTest {
             ),
             lines,
         )
+    }
+
+    // KJB hears the job beat while it lives
+
+    @Test
+    fun `a job beats at once and every 5 s while it lives, through a step of minutes, and stops beating when it ends`() = runTest {
+        val step = CompletableDeferred<Unit>()
+        val heard = Heard()
+        val jobs = AddonJobs(backgroundScope, StandardTestDispatcher(testScheduler), beats = StandardTestDispatcher(testScheduler)) {
+            object : JobEngine {
+                override suspend fun run(song: AiSong, plainLyrics: String?, onStage: (AiStage) -> Unit, onProgress: (Int, Int) -> Unit, beforeChunk: suspend () -> Unit): AiResult {
+                    onStage(AiStage.SEPARATE)
+                    withContext(NonCancellable) { step.await() } // creating the MDX session: one native call of minutes
+                    return done
+                }
+
+                override fun close() {}
+            }
+        }
+
+        jobs.start(song, null, { heard }) {}
+        runCurrent()
+        assertEquals(1, heard.beats)
+        advanceTimeBy(5 * 60_000L)
+        runCurrent()
+        assertEquals("one at its start, then one every 5 s", 1 + 5 * 60_000 / AddonJobs.BEAT_EVERY_MS.toInt(), heard.beats)
+
+        step.complete(Unit)
+        runCurrent()
+        assertEquals("result Transcribed", heard.events.last())
+        val beats = heard.beats
+        advanceTimeBy(60_000)
+        runCurrent()
+        assertEquals("none once it ended", beats, heard.beats)
+    }
+
+    @Test
+    fun `busy from a job's start to its end`() = runTest {
+        val jobs = jobs(chunks = 1)
+        assertFalse(jobs.busy)
+
+        val job = jobs.start(song, null, { Heard() }) {}
+        assertTrue(jobs.busy)
+        runCurrent()
+        assertTrue("waiting at its chunk", jobs.busy)
+        jobs.proceed(job)
+        runCurrent()
+
+        assertFalse(jobs.busy)
+    }
+
+    // Android's time for the add-on's foreground service runs out (onTimeout, Android 15+)
+
+    @Test
+    fun `the time running out ends the job after its step as the NPU busy, so KJB tries the song again later`() = runTest {
+        val step = CompletableDeferred<Unit>()
+        val jobs = stuckJobs(step)
+        val heard = Heard()
+        val job = jobs.start(song, null, { heard }) { released += it }
+        runCurrent()
+
+        jobs.timeUp()
+        assertEquals("the process ends if the step has not ended 10 s later", listOf(AddonJobs.STEP_END_MS), checks.map { it.first })
+        step.complete(Unit)
+        runCurrent()
+
+        val result = jobs.result(job)
+        assertTrue("$result", result is AiResult.Failed && result.npu)
+        assertEquals("result Failed", heard.events.last())
+        assertEquals(listOf(job), released)
+        checks.single().second()
+        assertEquals("its step ended in time", emptyList<AiStage?>(), ended)
+    }
+
+    @Test
+    fun `the time running out with no job under way leaves the next job alone`() = runTest {
+        val jobs = jobs(chunks = 0)
+        jobs.timeUp()
+
+        val heard = Heard()
+        jobs.start(song, null, { heard }) {}
+        runCurrent()
+
+        assertEquals("result Transcribed", heard.events.last())
+    }
+
+    // The add-on's own foreground service while a job works (the logic: :addon-shared's AddonKeepAliveTest)
+
+    @Test
+    fun `a job's foreground service is mediaProcessing from Android 15, dataSync before it`() {
+        assertEquals(ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING, jobForegroundType(37))
+        assertEquals(ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING, jobForegroundType(35))
+        assertEquals(ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC, jobForegroundType(34))
+        assertEquals(ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC, jobForegroundType(30))
+    }
+
+    @Test
+    fun `the notice says the same for every job, with no room for a song, its lyrics or a path`() {
+        val strings = File("src/main/res/values/strings.xml").also { assertTrue("run from the module: ${it.absolutePath}", it.isFile) }.readText()
+        fun string(name: String): String? = Regex("""<string name="$name"[^>]*>([^<]*)</string>""").find(strings)?.groupValues?.get(1)
+
+        assertEquals("AI work", string("work_channel"))
+        assertEquals("KJB AI is working", string("work_title"))
+        // No placeholder: nothing of a job can be put into either.
+        assertFalse(listOf("work_channel", "work_title").any { '%' in string(it).orEmpty() })
     }
 }

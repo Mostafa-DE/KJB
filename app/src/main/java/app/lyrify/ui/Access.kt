@@ -12,17 +12,25 @@ import android.os.Environment
 import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -35,6 +43,9 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import app.lyrify.LOG_TAG
 import app.lyrify.R
+import app.lyrify.addon.AddonExemptions
+import app.lyrify.addon.ExemptionChoices
+import app.lyrify.addon.KjbAddon
 import app.lyrify.media.NowPlayingListener
 
 /**
@@ -136,15 +147,22 @@ const val AT_ONCE_MS: Long = 500L
 /** A request for notifications on its way: whether Android had explained before it, and when it went (elapsed realtime). */
 data class SentRequest(val explained: Boolean, val at: Long)
 
-/** The sheets that follow the AI switched on, or its download started: Show progress, then Keep running. */
-enum class AiAsk { PROGRESS, BATTERY }
+/**
+ * The sheets that follow the AI switched on, or its download started: Show progress, then Keep running, then Run when
+ * locked (the AI add-on's battery exemption).
+ */
+enum class AiAsk { PROGRESS, BATTERY, ADDON }
 
 /**
  * What to ask, in order: Show progress while notifications can still be asked for; Keep running only when the AI was
- * [switchedOn] (not for a download alone) and battery use is not [unrestricted].
+ * [switchedOn] (not for a download alone) and battery use is not [unrestricted]; Run when locked only when it was
+ * switched on and the AI add-on's exemption is to be offered ([addonOffer], [LockedPhone.offer]).
  */
-fun aiAsks(switchedOn: Boolean, notifications: NotificationGrant, unrestricted: Boolean): List<AiAsk> =
-    listOfNotNull(AiAsk.PROGRESS.takeIf { notifications == NotificationGrant.ASK }, AiAsk.BATTERY.takeIf { switchedOn && !unrestricted })
+fun aiAsks(switchedOn: Boolean, notifications: NotificationGrant, unrestricted: Boolean, addonOffer: Boolean): List<AiAsk> = listOfNotNull(
+    AiAsk.PROGRESS.takeIf { notifications == NotificationGrant.ASK },
+    AiAsk.BATTERY.takeIf { switchedOn && !unrestricted },
+    AiAsk.ADDON.takeIf { switchedOn && addonOffer },
+)
 
 /** True when KJB may post notifications: allowed on Android 13 and later, always on 11 and 12. */
 fun notificationsAllowed(context: Context): Boolean =
@@ -156,22 +174,24 @@ fun notificationSettingsIntents(context: Context): List<Intent> =
 
 /**
  * The sheet [ask] calls for, each in turn in one window (null: none): Show progress, whose Allow leads to Android's own
- * question ([onAllow]), and Keep running, which opens App info, where battery use is set. Not now, or the sheet dragged
- * away, goes on to the next ask ([onNotNow]).
+ * question ([onAllow]), Keep running, which opens App info, where battery use is set, and Run when locked, whose Allow
+ * starts the AI add-on's own request ([onAllowAddon]). Not now, or the sheet dragged away, goes on to the next ask
+ * ([onNotNow]).
  */
 @Composable
-fun AiAskSheets(ask: AiAsk?, onAllow: () -> Unit, onOpenAppInfo: () -> Unit, onNotNow: () -> Unit) {
+fun AiAskSheets(ask: AiAsk?, onAllow: () -> Unit, onOpenAppInfo: () -> Unit, onAllowAddon: () -> Unit, onNotNow: () -> Unit) {
     SheetFlow(ask, onDismiss = onNotNow) { at ->
         when (at) {
             AiAsk.PROGRESS -> AskSheet(R.drawable.ic_notifications, R.string.ask_progress_title, R.string.ask_progress_text, R.string.setup_allow, onAllow, onNotNow)
             AiAsk.BATTERY -> AskSheet(R.drawable.ic_battery_full, R.string.setup_battery_title, R.string.ask_battery_text, R.string.open_app_info, onOpenAppInfo, onNotNow)
+            AiAsk.ADDON -> AskSheet(R.drawable.ic_lock, R.string.addon_locked_title, R.string.ai_locked_text, R.string.setup_allow, onAllowAddon, onNotNow)
         }
     }
 }
 
-/** One ask: its tile, title and reason, then its one action and Not now. */
+/** One ask: its tile, title and reason, then its one action and Not now. Also the Downloads add-on's Run when locked. */
 @Composable
-private fun AskSheet(@DrawableRes icon: Int, @StringRes title: Int, @StringRes text: Int, @StringRes action: Int, onAction: () -> Unit, onNotNow: () -> Unit) {
+internal fun AskSheet(@DrawableRes icon: Int, @StringRes title: Int, @StringRes text: Int, @StringRes action: Int, onAction: () -> Unit, onNotNow: () -> Unit) {
     val colors = MaterialTheme.colorScheme
     LyrifySheet(
         onDismiss = onNotNow,
@@ -186,5 +206,104 @@ private fun AskSheet(@DrawableRes icon: Int, @StringRes title: Int, @StringRes t
         }
         Text(stringResource(title), style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { heading() })
         Text(stringResource(text), style = MaterialTheme.typography.bodyLarge, color = colors.onSurfaceVariant)
+    }
+}
+
+// Run when locked: an add-on left out of the phone's battery optimisation, offered where it is set up (AD9)
+
+/** The add-on's "Locked phone" row: [ALLOWED] while the phone leaves it out of battery optimisation. */
+enum class LockedRow { ALLOWED, NOT_ALLOWED }
+
+/**
+ * What an add-on's page shows of its battery exemption: the [offer] (a sheet where the add-on is set up), its [row] (null
+ * while there is none) and the [hint], one plain line after the phone paused it.
+ */
+data class LockedPhone(val offer: Boolean, val row: LockedRow?, val hint: Boolean)
+
+/** The row while the add-on is [ready] (its own request is there to start): Allowed once [exempt], else Not allowed. */
+fun lockedRow(ready: Boolean, exempt: Boolean): LockedRow? = when {
+    !ready -> null
+    exempt -> LockedRow.ALLOWED
+    else -> LockedRow.NOT_ALLOWED
+}
+
+/**
+ * [addon]'s exemption on its page, from whether it is [ready], [exempt] now and the user's [choices]: all of it only for
+ * a ready add-on. The hint waits while the offer is still due, which asks the same.
+ */
+fun lockedPhone(addon: KjbAddon, ready: Boolean, exempt: Boolean, choices: ExemptionChoices): LockedPhone {
+    val offer = ready && choices.offers(addon, exempt)
+    return LockedPhone(offer, lockedRow(ready, exempt), ready && !offer && choices.hints(addon, exempt))
+}
+
+/**
+ * Starts [addon]'s own request to be left out of battery optimisation, for its result (it refuses any other start); then
+ * [onDone] looks again ([AddonExemptions.exempt]) rather than trust the result. An add-on missing, or not KJB's, is left
+ * quietly.
+ */
+@Composable
+fun rememberExemptionRequest(addon: KjbAddon, onDone: () -> Unit): () -> Unit {
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { onDone() }
+    return remember(launcher, addon) {
+        {
+            try {
+                launcher.launch(AddonExemptions.intent(addon))
+            } catch (e: ActivityNotFoundException) {
+                Log.d(LOG_TAG, "${addon.label}: no exemption request, ${e.javaClass.simpleName}")
+            } catch (e: SecurityException) {
+                Log.d(LOG_TAG, "${addon.label}: exemption request refused, ${e.javaClass.simpleName}")
+            }
+        }
+    }
+}
+
+/**
+ * "Locked phone" among an add-on's rows: Allowed, a check in the synced tone, or Not allowed, as restricted battery use
+ * reads. A tap starts the add-on's request ([onAllow]), or once allowed opens its App info ([onOpenAppInfo]).
+ */
+@Composable
+fun LockedPhoneRow(row: LockedRow, onAllow: () -> Unit, onOpenAppInfo: () -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    val tones = LocalStatusColors.current
+    val allowed = row == LockedRow.ALLOWED
+    val tone = tones[if (allowed) Tone.SYNCED else Tone.ERROR]
+    GroupedRow(
+        R.drawable.ic_lock,
+        stringResource(R.string.addon_locked_row),
+        tile = tone.container,
+        onTile = tone.onContainer,
+        supporting = {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (allowed) {
+                    Icon(painterResource(R.drawable.ic_check), contentDescription = null, tint = tone.accent, modifier = Modifier.size(16.dp))
+                    Text(stringResource(R.string.addon_locked_allowed))
+                } else {
+                    Icon(painterResource(R.drawable.ic_warning), contentDescription = null, tint = colors.error, modifier = Modifier.size(16.dp))
+                    Text(stringResource(R.string.addon_locked_not_allowed), color = colors.error)
+                }
+            }
+        },
+        onClick = if (allowed) onOpenAppInfo else onAllow,
+        trailing = { Icon(painterResource(R.drawable.ic_chevron_right), contentDescription = null) },
+    )
+}
+
+/**
+ * The plain line after the phone paused an add-on ([LockedPhone.hint]): what happened, in a sentence, then Not now and
+ * Allow, which wrap under one another on a narrow screen or with large text. It only shows; it never asks by itself.
+ */
+@Composable
+fun LockedHint(text: String, onAllow: () -> Unit, onNotNow: () -> Unit, modifier: Modifier = Modifier) {
+    LyrifyCard(modifier.fillMaxWidth()) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Icon(painterResource(R.drawable.ic_lock), contentDescription = null, modifier = Modifier.size(24.dp))
+                Text(text, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+            }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End), modifier = Modifier.fillMaxWidth()) {
+                LyrifyButton(stringResource(R.string.setup_not_now), onClick = onNotNow, kind = ButtonKind.GHOST, compact = true, contentColor = MaterialTheme.colorScheme.onSurface)
+                LyrifyButton(stringResource(R.string.setup_allow), onClick = onAllow, kind = ButtonKind.SECONDARY, compact = true)
+            }
+        }
     }
 }

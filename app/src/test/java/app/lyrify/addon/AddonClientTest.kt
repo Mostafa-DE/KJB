@@ -1,5 +1,6 @@
 package app.lyrify.addon
 
+import android.content.Context
 import androidx.work.WorkInfo
 import app.lyrify.ai.AiResult
 import app.lyrify.ai.AiStage
@@ -93,6 +94,20 @@ class AddonClientTest {
         val died = CompletableDeferred<Unit>()
         var closed = false
         override val death: Deferred<Unit> get() = died
+
+        /** The phone refuses the add-on's foreground service; [stopped]: KJB stopped the service it started. */
+        var refusesForeground = false
+        var stopped = false
+
+        // Not a call into the add-on: KJB asks Android. Listed with the calls for their order.
+        override fun foreground(): Boolean {
+            port.calls += "foreground"
+            return !refusesForeground
+        }
+
+        override fun stopService() {
+            stopped = true
+        }
 
         /** The add-on's process dies: Android tells the binding, and every call throws. */
         fun kill() {
@@ -198,7 +213,7 @@ class AddonClientTest {
 
         val result = async { engine.run(track, "placeholder lyrics", stages::add) { chunks++ } }
         runCurrent()
-        assertEquals("run Placeholder.mp3 200000 true", port.calls.last())
+        assertEquals(listOf("run Placeholder.mp3 200000 true", "foreground"), port.calls.takeLast(2))
         val events = checkNotNull(port.events)
         events.onStage("DECODE")
         events.onNote("decode: 5 ms")
@@ -302,6 +317,8 @@ class AddonClientTest {
         val binding = object : AddonBinding {
             override val port: AddonPort = port
             override val death: Deferred<Unit> = CompletableDeferred()
+            override fun foreground() = true
+            override fun stopService() {}
             override fun close() {}
         }
 
@@ -341,6 +358,7 @@ class AddonClientTest {
         val error = run.await().exceptionOrNull()
         assertTrue(error.toString(), error is AddonStalledException && error.stage == AiStage.SEPARATE && error.silentMs == RemoteSongEngine.STEP_MS)
         assertTrue("let go of", binding.closed && session.closed)
+        assertTrue("and the service KJB started for the job stopped", binding.stopped)
         engine.close()
         assertFalse("nothing more is asked of it", "closeEngine" in binding.port.calls)
     }
@@ -489,6 +507,214 @@ class AddonClientTest {
         assertTrue(host.bindings.all { it.closed })
     }
 
+    // The add-on's own foreground service, and the freeze watch: a phone's app freezer stops a process, beats and all
+
+    @Test
+    fun `KJB binds an add-on at KJB's own priority, never below it`() {
+        assertEquals(Context.BIND_AUTO_CREATE or Context.BIND_IMPORTANT, ADDON_BIND_FLAGS)
+        for (lowers in listOf(Context.BIND_WAIVE_PRIORITY, Context.BIND_NOT_FOREGROUND, Context.BIND_NOT_PERCEPTIBLE, Context.BIND_ALLOW_OOM_MANAGEMENT)) {
+            assertEquals(0, ADDON_BIND_FLAGS and lowers)
+        }
+    }
+
+    @Test
+    fun `the job runs in the add-on's own foreground service, which KJB starts once the add-on took the job`() = runTest {
+        val host = FakeHost()
+        val engine = RemoteSongEngine(session(host), notes = {})
+        val port = host.bindings.single().port
+        val run = async { engine.run(track, null, {}) {} }
+        runCurrent()
+
+        assertEquals(listOf("apiVersion", "run Placeholder.mp3 200000 false", "foreground"), port.calls)
+        port.events!!.onResult(transcribed)
+        assertEquals(transcribed, run.await())
+    }
+
+    @Test
+    fun `a phone that refuses the add-on's foreground service still runs the song, and the run log says so`() = runTest {
+        val host = FakeHost()
+        val session = session(host)
+        host.bindings.single().refusesForeground = true
+        val notes = mutableListOf<String>()
+        val engine = RemoteSongEngine(session, notes::add)
+        val run = async { engine.run(track, null, {}) {} }
+        runCurrent()
+
+        host.bindings.single().port.events!!.onResult(transcribed)
+
+        assertEquals(transcribed, run.await())
+        assertTrue(notes.toString(), notes.any { "foreground service" in it })
+    }
+
+    @Test
+    fun `silent for 30 s once it beats, the add-on is frozen, let go of and its service stopped, with nothing asked of it`() = runTest {
+        val host = FakeHost()
+        val session = session(host)
+        val binding = host.bindings.single()
+        val engine = RemoteSongEngine(session, notes = {})
+        val run = async { runCatching { engine.run(track, null, {}) {} } }
+        runCurrent()
+        val events = checkNotNull(binding.port.events)
+        events.onBeat()
+        events.onStage("DECODE")
+        events.onStage("SEPARATE")
+        runCurrent()
+        advanceTimeBy(BEAT_MS)
+        events.onBeat()
+        runCurrent()
+
+        advanceTimeBy(RemoteSongEngine.FROZEN_MS - 1)
+        runCurrent()
+        assertFalse("silent for less than 30 s", run.isCompleted)
+        advanceTimeBy(2)
+        runCurrent()
+
+        val error = run.await().exceptionOrNull()
+        assertTrue(error.toString(), error is AddonFrozenException && error.stage == AiStage.SEPARATE && error.silentMs == RemoteSongEngine.FROZEN_MS)
+        assertTrue("let go of", binding.closed && session.closed)
+        assertTrue("the service KJB started is stopped", binding.stopped)
+        // A call into a frozen process may wait for as long as the phone keeps it frozen: none is made.
+        assertEquals(listOf("apiVersion", "run Placeholder.mp3 200000 false", "foreground"), binding.port.calls)
+        engine.close()
+        assertFalse("closeEngine" in binding.port.calls)
+    }
+
+    @Test
+    fun `a freeze is its own reason, not the NPU busy the add-on tells once the phone lets it run again`() = runTest {
+        // Phone session 10: the add-on, frozen for minutes, woke and ended its MDX step as NpuBusyException.
+        val host = FakeHost()
+        val engine = RemoteSongEngine(session(host), notes = {})
+        val binding = host.bindings.single()
+        val run = async { runCatching { engine.run(track, null, {}) {} } }
+        runCurrent()
+        binding.port.events!!.onBeat()
+        binding.port.events!!.onStage("SEPARATE")
+        runCurrent()
+
+        advanceTimeBy(RemoteSongEngine.FROZEN_MS + 1)
+        runCurrent()
+        binding.port.events!!.onResult(AiResult.Failed("NpuBusyException: MDX session: no answer from the NPU within 480 s", npu = true))
+        runCurrent()
+
+        val error = run.await().exceptionOrNull()
+        assertTrue(error.toString(), error is AddonFrozenException && error.stage == AiStage.SEPARATE)
+    }
+
+    @Test
+    fun `beats keep a first model load of minutes from looking frozen, and are no progress for the first load's limit`() = runTest {
+        val host = FakeHost()
+        val engine = RemoteSongEngine(session(host), notes = {})
+        val binding = host.bindings.single()
+        val port = binding.port
+        val run = async { runCatching { engine.run(track, null, {}) {} } }
+        runCurrent()
+        port.events!!.onBeat()
+        port.events!!.onStage("DECODE")
+        port.events!!.onStage("SEPARATE")
+        runCurrent()
+
+        // Creating the MDX session: 9 minutes of beats and nothing else.
+        repeat(9 * 60_000 / BEAT_MS.toInt()) {
+            advanceTimeBy(BEAT_MS)
+            port.events!!.onBeat()
+            runCurrent()
+        }
+        assertFalse(run.isCompleted || "cancel 7" in port.calls)
+        repeat(60_000 / BEAT_MS.toInt() + 1) {
+            advanceTimeBy(BEAT_MS)
+            port.events!!.onBeat()
+            runCurrent()
+        }
+        assertEquals("cancel 7", port.calls.last())
+        port.events!!.onStopped()
+        runCurrent()
+
+        val error = run.await().exceptionOrNull()
+        assertTrue(error.toString(), error is AddonStalledException && error.silentMs == RemoteSongEngine.FIRST_LOAD_MS)
+    }
+
+    @Test
+    fun `an add-on that does not beat is not watched for freezes, only held to the steps' limits`() = runTest {
+        val host = FakeHost()
+        val engine = RemoteSongEngine(session(host), notes = {})
+        val port = host.bindings.single().port
+        val run = async { runCatching { engine.run(track, null, {}) {} } }
+        runCurrent()
+        port.events!!.onStage("SEPARATE")
+        port.events!!.onProgress(1, 40)
+        runCurrent()
+
+        advanceTimeBy(4 * RemoteSongEngine.FROZEN_MS)
+        runCurrent()
+        assertFalse(run.isCompleted)
+        port.events!!.onResult(transcribed)
+
+        assertEquals(transcribed, run.await().getOrThrow())
+    }
+
+    @Test
+    fun `beats while KJB holds a chunk for the heat keep the add-on, and the chunk goes on after`() = runTest {
+        val host = FakeHost()
+        val engine = RemoteSongEngine(session(host), notes = {})
+        val port = host.bindings.single().port
+        val run = async { runCatching { engine.run(track, null, {}) { delay(2 * 60_000L) } } }
+        runCurrent()
+        port.events!!.onBeat()
+        port.events!!.onStage("TRANSCRIBE")
+        port.events!!.onChunk()
+        runCurrent()
+
+        repeat(2 * 60_000 / BEAT_MS.toInt() + 1) {
+            advanceTimeBy(BEAT_MS)
+            port.events!!.onBeat()
+            runCurrent()
+        }
+        assertEquals("proceed 7", port.calls.last())
+        port.events!!.onResult(transcribed)
+
+        assertEquals(transcribed, run.await().getOrThrow())
+    }
+
+    @Test
+    fun `frozen while KJB holds a chunk for the heat, the chunk is not let go into it`() = runTest {
+        val host = FakeHost()
+        val engine = RemoteSongEngine(session(host), notes = {})
+        val binding = host.bindings.single()
+        val run = async { runCatching { engine.run(track, null, {}) { delay(2 * 60_000L) } } }
+        runCurrent()
+        binding.port.events!!.onBeat()
+        binding.port.events!!.onStage("TRANSCRIBE")
+        binding.port.events!!.onChunk()
+        runCurrent()
+
+        advanceTimeBy(2 * 60_000L + 1)
+        runCurrent()
+
+        val error = run.await().exceptionOrNull()
+        assertTrue(error.toString(), error is AddonFrozenException && error.stage == AiStage.TRANSCRIBE)
+        assertFalse("proceed 7" in binding.port.calls)
+        assertTrue(binding.closed && binding.stopped)
+    }
+
+    @Test
+    fun `a result that arrives with the freeze watch's timeout is the song's end, not a freeze`() = runTest {
+        val host = FakeHost()
+        val engine = RemoteSongEngine(session(host), notes = {})
+        val binding = host.bindings.single()
+        val run = async { runCatching { engine.run(track, null, {}) {} } }
+        runCurrent()
+        binding.port.events!!.onBeat()
+        binding.port.events!!.onStage("ALIGN")
+        runCurrent()
+
+        advanceTimeBy(RemoteSongEngine.FROZEN_MS) // the limit is now: its timeout is queued, not yet run
+        binding.port.events!!.onResult(transcribed)
+        runCurrent()
+
+        assertEquals(transcribed, run.await().getOrThrow())
+        assertFalse(binding.closed || binding.stopped)
+    }
+
     // The models' download, run by the add-on while KJB keeps it bound
 
     @Test
@@ -614,5 +840,10 @@ class AddonClientTest {
 
         assertEquals(AddonState.Ready, views.last().state)
         watching.cancel()
+    }
+
+    private companion object {
+        /** How often the add-on beats (the add-on's AddonJobs.BEAT_EVERY_MS). */
+        const val BEAT_MS: Long = 5_000
     }
 }

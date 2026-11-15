@@ -28,7 +28,8 @@ class AiGlanceTest {
         pluggedIn: Boolean = true,
         unrestricted: Boolean = true,
         stopping: Boolean = false,
-    ) = AiState(chip, newEnough, models, enabled, progress, hold, pluggedIn, unrestricted, stopping)
+        addonExempt: Boolean = false,
+    ) = AiState(chip, newEnough, models, enabled, progress, hold, pluggedIn, unrestricted, stopping, addonExempt = addonExempt)
 
     private fun glance(state: AiState, waiting: Int = WAITING) = aiGlance(state, waiting)
 
@@ -240,6 +241,18 @@ class AiGlanceTest {
             AiGlance(Ring(1f, RingColor.OUTLINE), Centre.Icon(R.drawable.ic_memory), text(R.string.ai_held_npu), text(R.string.ai_held_npu_detail), null),
             glance(state(hold = AiHold.NO_NPU)),
         )
+        assertEquals(
+            AiGlance(
+                Ring(1f, RingColor.OUTLINE),
+                Centre.Icon(R.drawable.ic_pause_circle),
+                text(R.string.ai_held_frozen),
+                text(R.string.ai_held_frozen_detail),
+                // One tap to Run when locked: the add-on's own request.
+                GlanceAction(AiActionKind.ALLOW_LOCKED, text(R.string.setup_allow)),
+            ),
+            glance(state(hold = AiHold.FROZEN)),
+        )
+        assertEquals("already allowed: nothing to ask", null, glance(state(hold = AiHold.FROZEN, addonExempt = true)).action)
     }
 
     @Test
@@ -302,6 +315,7 @@ class AiGlanceTest {
         assertEquals(R.string.ai_tile_update, aiTile(state(hold = AiHold.MODEL_FAILED), WAITING)?.label)
         assertEquals(R.string.ai_tile_update, aiTile(state(hold = AiHold.CRASHED), WAITING)?.label)
         assertEquals(R.string.ai_tile_chip, aiTile(state(hold = AiHold.NO_NPU), WAITING)?.label)
+        assertEquals(R.string.ai_tile_phone, aiTile(state(hold = AiHold.FROZEN), WAITING)?.label)
         assertEquals(AiTile(Ring(1f, RingColor.SYNCED), TileValue.Text(R.string.ai_all_done), R.string.ai_title), aiTile(state(), 0))
     }
 

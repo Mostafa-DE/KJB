@@ -31,6 +31,9 @@ tasks.withType<Test>().configureEach {
 
 dependencies {
     implementation(libs.kotlinx.serialization.json)
+    // A job's beats (AddonKeepAlive.beating), on a context of the add-on's choosing.
+    implementation(libs.kotlinx.coroutines.android)
 
     testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
 }

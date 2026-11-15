@@ -67,6 +67,8 @@ class DlDeviceTest {
         override fun onEnd(end: DlEnd) {
             this.end.complete(end)
         }
+
+        override fun onBeat() {}
     }
 
     @After
