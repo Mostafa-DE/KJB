@@ -117,12 +117,79 @@ class BigQueueDeviceTest {
         return (0 until QUEUED).map { n -> if (n == START) song(tone.path, n).copy(durationMs = seconds * 1_000L, mimeType = "audio/wav") else song("$missing/%04d Paper Lantern.mp3".format(n), n) }
     }
 
-    private class MemoryStorage : QueueStorage {
-        override suspend fun load(): Pair<QueueBook, Repeat> = QueueBook() to Repeat.OFF
+    /** The queues in memory: what the core saves is what the next core reads, as after a restart. */
+    private class KeptStorage : QueueStorage {
+        @Volatile
+        var book = QueueBook()
 
-        override suspend fun saveBook(book: QueueBook) = Unit
+        override suspend fun load(): Pair<QueueBook, Repeat> = book to Repeat.OFF
+
+        override suspend fun saveBook(book: QueueBook) {
+            this.book = book
+        }
 
         override suspend fun savePlace(place: PlaybackPlace) = Unit
+    }
+
+    /**
+     * The player as the service builds it over [storage]: the core, the engine (silent and without audio focus, so the
+     * phone's own music is never paused), the bridge, the facade, a session and a controller. [stops] notes each time
+     * the engine stopped playing, with its state then.
+     */
+    private inner class Stack(storage: QueueStorage, private val find: (SongRef) -> Song?, id: String) {
+        val core: PlayerCore = onMain { PlayerCore(storage, scope, System::currentTimeMillis) }
+        val engine: GaplessEngine = onMain {
+            GaplessEngine(context, { Settings() }, NoLevels) { mediaItemOf(it, LibrarySettings(), CarCovers.authority(context)) }.apply {
+                setFocusHandled(false)
+                volume = 0f
+            }
+        }
+        private val bridge = QueueBridge(engine)
+        val player: LyrifyPlayer = onMain { LyrifyPlayer(Looper.getMainLooper(), engine, core, { SkipAmounts(30_000, 10_000) }, ::syncHere) }
+        val session: MediaSession = onMain { MediaSession.Builder(context, player).setId(id).build() }
+        val controller: MediaController = MediaController.Builder(context, session.token).setApplicationLooper(Looper.getMainLooper()).buildAsync().get(10, TimeUnit.SECONDS)
+        val stops = mutableListOf<String>()
+        var step = "start"
+
+        init {
+            onMain {
+                engine.addListener(object : EngineListener {
+                    override fun onPlayingChanged(playing: Boolean) {
+                        if (!playing) stops += "$step: ${describe()}"
+                    }
+                })
+            }
+            cleanups += ::release
+        }
+
+        private fun syncHere() = bridge.sync(core.book.value, find)
+
+        /** The bridge applied and the session told, on the main thread. */
+        fun sync() = onMain {
+            syncHere()
+            player.changed()
+        }
+
+        /** The engine's state, on the main thread. */
+        fun describe(): String =
+            "state ${engine.playbackState}, playWhenReady ${engine.playWhenReady}, suppressed ${engine.suppression}, error ${engine.error?.errorCodeName}, at ${engine.positionMs} ms"
+
+        /** The song playing, on the main thread. */
+        fun current(): Long = engine.loaded[engine.index]
+
+        val playing: Long get() = onMain(::current)
+
+        private var released = false
+
+        /** On the main thread; once. */
+        fun release() {
+            if (released) return
+            released = true
+            controller.release()
+            session.release()
+            player.release()
+            engine.release()
+        }
     }
 
     private object NoLevels : SongLevels {
@@ -155,58 +222,88 @@ class BigQueueDeviceTest {
         assertTrue("a media item has no cover uri", items.all { it.mediaMetadata.artworkUri != null })
     }
 
+    /**
+     * The crash as the user made it: a queue playing, the song tapped in a 7,000-song list while it plays (a new queue),
+     * Shuffle on, KJB starting again on the queues it saved; then Shuffle on and off 100 times, a Play next of 2,000 songs
+     * and its Undo. The heap stays flat, each step is quick, and the song playing never changes or stops.
+     */
     @Test
-    fun shuffleOnAndOffAHundredTimesOnALibrarySizedQueueLeavesTheHeapFlatAndTheSongPlaying() {
-        val songs = library(seconds = 120)
+    fun theCrashSequenceThenAHundredShufflesLeavesTheHeapFlatAndTheSongPlaying() {
+        val songs = library(seconds = 180)
         val byPath = songs.associateBy { it.path }
         val find: (SongRef) -> Song? = { ref -> byPath[ref.path] }
+        val storage = KeptStorage()
         val empty = usedAfterGc()
-        val core = onMain { PlayerCore(MemoryStorage(), scope, System::currentTimeMillis) }
-        assertTrue(waitFor(2_000) { core.ready.value })
-        val engine = onMain { GaplessEngine(context, { Settings() }, NoLevels) { mediaItemOf(it, LibrarySettings(), CarCovers.authority(context)) } }
-        val bridge = QueueBridge(engine)
-        val sync = { bridge.sync(core.book.value, find) }
-        val player = onMain { LyrifyPlayer(Looper.getMainLooper(), engine, core, { SkipAmounts(30_000, 10_000) }, sync) }
-        cleanups += {
-            player.release()
-            engine.release()
-        }
-        val source = QueueSource(SourceKind.SONGS, "songs", "Songs")
-        onMain {
-            core.switch { it.play(songs.map(Song::ref), START, source, System.currentTimeMillis()) }
-            sync()
-        }
-        val session = onMain { MediaSession.Builder(context, player).setId("kjb-cr1-test").build() }
-        cleanups += { session.release() }
-        val controller = MediaController.Builder(context, session.token).setApplicationLooper(Looper.getMainLooper()).buildAsync().get(10, TimeUnit.SECONDS)
-        cleanups += { controller.release() }
-        assertTrue("the controller never saw the queue", waitFor(10_000) { controller.mediaItemCount == QUEUED })
-        onMain { controller.play() }
-        assertTrue("never played", waitFor(5_000) { controller.isPlaying })
-        val playing = onMain { engine.loaded[engine.index] }
+        val first = Stack(storage, find, "kjb-cr1-test-1")
+        assertTrue(waitFor(2_000) { first.core.ready.value })
+        val now = System::currentTimeMillis
+        val picked = QueueSource(SourceKind.PICKED, "picked", "")
+        val list = QueueSource(SourceKind.SONGS, "songs", "Songs")
+        onMain { first.core.switch { it.play(songs.reversed().map(Song::ref), QUEUED - 1 - START, picked, now()) } }
+        first.sync()
+        onMain { first.controller.play() }
+        assertTrue("never played: ${onMain { first.describe() }}", waitFor(5_000) { first.engine.isPlaying })
+
+        // A tap starts the song again from its start in the new queue: a stop then is no fault.
+        first.step = "the song tapped in the list"
+        onMain { first.core.switch { it.play(songs.map(Song::ref), START, list, now()) } }
+        first.sync()
+        assertTrue("the tapped list never reached the controller", waitFor(10_000) { first.controller.mediaItemCount == QUEUED && first.controller.currentMediaItem?.mediaId == first.current().toString() })
+        assertTrue("the tapped song never played: ${onMain { first.describe() }}", waitFor(5_000) { first.engine.isPlaying })
+        onMain { first.stops.clear() }
+        val tone = first.playing
+        val random = Random(9)
+        first.step = "Shuffle on"
+        onMain { first.core.change { it.toggleShuffle(random) } }
+        first.sync()
+        assertTrue("the shuffled queue was never saved", waitFor(5_000) { storage.book.current?.shuffled == true })
+        val playing = first.playing
+        assertEquals("the song playing after Shuffle", tone, playing)
+        assertTrue("the first player stopped: ${first.stops}", first.stops.isEmpty())
+        onMain(first::release)
+
+        // KJB starts again on the queues it saved.
+        val second = Stack(storage, find, "kjb-cr1-test-2")
+        assertTrue(waitFor(2_000) { second.core.ready.value && second.core.book.value.current?.shuffled == true })
+        second.sync()
+        onMain { second.controller.play() }
+        assertTrue("never played after the restart: ${onMain { second.describe() }}", waitFor(5_000) { second.engine.isPlaying })
+        assertEquals("the song playing after the restart", playing, second.playing)
+        assertEquals(projection(onMain { second.core.book.value.current }, find).map { it.uid }, onMain { second.engine.loaded })
         val loaded = usedAfterGc()
         Log.i(TAG, "CR1 measure: a queued song costs the app ${(loaded - empty) / QUEUED} bytes (engine, facade, session, controller)")
 
-        val random = Random(9)
         var settled = 0L
         var footprint = 0L
-        repeat(100) { round ->
-            onMain {
-                core.change { it.toggleShuffle(random) }
-                sync()
-                player.changed()
-            }
+        var slowestMs = 0L
+        fun timed(step: String, change: (QueueBook) -> QueueBook) {
+            second.step = step
+            val started = SystemClock.elapsedRealtime()
+            onMain { second.core.change(change) }
+            second.sync()
             // The main thread's queue drained: the playback thread's answers and the controller's update are in.
-            assertTrue("the controller never caught up in round $round", waitFor(10_000) { controller.mediaItemCount == QUEUED && controller.currentMediaItem?.mediaId == playing.toString() })
+            assertTrue("$step: the controller never caught up", waitFor(10_000) { second.controller.mediaItemCount == second.engine.loaded.size && second.controller.currentMediaItem?.mediaId == playing.toString() })
+            slowestMs = maxOf(slowestMs, SystemClock.elapsedRealtime() - started)
             footprint = maxOf(footprint, Runtime.getRuntime().totalMemory())
+        }
+        repeat(100) { round ->
+            timed("Shuffle, round $round") { it.toggleShuffle(random) }
             if (round == 9) settled = usedAfterGc()
         }
+        var before: List<QueueItem> = emptyList()
+        timed("Play next of 2,000 songs") { book -> book.playNext(songs.takeLast(2_000).map(Song::ref), picked, now())!!.also { before = it.before }.book }
+        timed("its Undo") { book -> book.restore(book.currentId!!, before) }
         val end = usedAfterGc()
-        Log.i(TAG, "CR1 measure: after 100 Shuffles the heap holds ${(end - empty) / 1024} KB over empty, grew ${(end - settled) / 1024} KB since round 10, footprint peaked at ${footprint / 1024 / 1024} MB")
+        Log.i(
+            TAG,
+            "CR1 measure: after the crash sequence and 100 Shuffles the heap holds ${(end - empty) / 1024} KB over empty, grew ${(end - settled) / 1024} KB " +
+                "since round 10, footprint peaked at ${footprint / 1024 / 1024} MB, the slowest step took $slowestMs ms, stops: ${second.stops.size}",
+        )
         assertTrue("the heap grew by ${(end - settled) / 1024} KB over 90 Shuffles", end - settled < 16L * 1024 * 1024)
-        assertEquals("the song playing", playing, onMain { engine.loaded[engine.index] })
-        assertTrue("stopped playing", onMain { engine.isPlaying })
-        assertEquals(projection(onMain { core.book.value.current }, find).map { it.uid }, onMain { engine.loaded })
+        assertTrue("a step took $slowestMs ms", slowestMs < 3_000)
+        assertEquals("the song playing", playing, second.playing)
+        assertTrue("stopped playing: ${second.stops}; now ${onMain { second.describe() }}", second.stops.isEmpty() && onMain { second.engine.isPlaying })
+        assertEquals(projection(onMain { second.core.book.value.current }, find).map { it.uid }, onMain { second.engine.loaded })
     }
 
     private companion object {

@@ -75,9 +75,18 @@ class BigQueueTest {
         val current: Long? get() = loaded.getOrNull(index)
     }
 
-    private val port = CostPort()
-    private val bridge = QueueBridge(port)
+    private var port = CostPort()
+    private var bridge = QueueBridge(port)
     private var book = QueueBook()
+
+    /** The longest one sync took, in ms. */
+    private var slowestMs = 0L
+
+    private fun sync(find: (SongRef) -> Song? = this.find) {
+        val started = System.nanoTime()
+        bridge.sync(book, find)
+        slowestMs = maxOf(slowestMs, (System.nanoTime() - started) / 1_000_000)
+    }
 
     /** The queue of the first [QUEUED] songs playing from song [start], [positionMs] in, loaded on the player. */
     private fun playing(start: Int = 3_000, positionMs: Long = 61_000) {
@@ -97,7 +106,7 @@ class BigQueueTest {
         val builtBefore = port.built
         val jumps = book.jumps
         book = change(book)
-        bridge.sync(book, find)
+        sync()
         val queue = book.current!!
         val size = maxOf(queue.items.size, 1)
         val lists = (port.built - builtBefore).toDouble() / size
@@ -122,6 +131,53 @@ class BigQueueTest {
     }
 
     private val id: String get() = book.currentId!!
+
+    /**
+     * The crash as the user made it: a queue playing, a song tapped in the 7,000-song list while it plays (a new queue),
+     * Shuffle on; then KJB starting again and loading that shuffled queue from `queues.json` at its place; then Shuffle
+     * off and on 100 times, a Play next of 2,000 songs and its Undo. Each step costs the player a few lists of the queue
+     * and little time, the song playing never changes or starts again, and the heap stays flat.
+     */
+    @Test
+    fun `the crash - a song tapped in a 7,000-song list while one plays, then Shuffle, then a restart - stays small`() {
+        book = book.play(songs.drop(LIBRARY - QUEUED).map { it.ref }, 100, picked, now = 1).book.place(100, 30_000)
+        sync()
+        port.calls.clear()
+        val list = songs.take(QUEUED).map { it.ref }
+        change("a song tapped in the list while another plays") { it.play(list, 3_000, source, now = 2).book.place(3_000, 12_000) }
+        assertEquals(listOf("load"), port.calls)
+        measured("Shuffle on") { it.toggleShuffle(Random(11)) }
+
+        // KJB starts again: the queues and the place as stored, a new player and bridge.
+        val stored = QueuesJson.decode(QueuesJson.encode(book.place(book.current!!.index, 95_000)))!!
+        val playing = book.current!!.current!!.uid
+        port = CostPort()
+        bridge = QueueBridge(port)
+        book = stored
+        sync()
+        assertEquals("a restart loads once", listOf("load"), port.calls)
+        assertEquals("a restart builds one list of the queue", QUEUED.toLong(), port.built)
+        assertEquals(projection(book.current, find).map { it.uid }, port.loaded)
+        assertEquals(playing, port.current)
+        assertEquals(95_000L, port.positionMs)
+
+        val random = Random(13)
+        var used = 0L
+        repeat(100) { round ->
+            change("Shuffle ${if (book.current!!.shuffled) "off" else "on"}, round $round") { it.toggleShuffle(random) }
+            if (round == 9) used = usedAfterGc()
+        }
+        var before: List<QueueItem> = emptyList()
+        measured("Play next of 2,000 songs") { book -> book.playNext(list.takeLast(2_000), picked, now = 3)!!.also { before = it.before }.book }
+        measured("its Undo") { it.restore(id, before) }
+        val grown = usedAfterGc() - used
+        println("CR1 measure: the crash sequence: the heap grew by ${grown / 1024} KB over 90 Shuffles, the slowest sync took $slowestMs ms")
+        assertTrue("the heap grew by ${grown / 1024} KB over 90 Shuffles", grown < 4L * 1024 * 1024)
+        assertTrue("a sync took $slowestMs ms", slowestMs < 2_000)
+        assertEquals(playing, port.current)
+        assertEquals(95_000L, port.positionMs)
+        assertEquals(listOf("load"), port.calls.filter { it == "load" || it == "seek" })
+    }
 
     @Test
     fun `Shuffle on and off for a library-sized queue costs the player a few lists of it, never one per song`() {
