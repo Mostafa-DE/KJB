@@ -30,7 +30,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -67,6 +66,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalResources
@@ -677,7 +677,9 @@ private fun QueueSongRow(
         song == null && library != null -> stringResource(if (queue.source.kind == SourceKind.OPENED) R.string.open_queue else R.string.player_not_on_phone)
         else -> song?.artist ?: ""
     }
-    val rowPx = with(LocalDensity.current) { ROW.toPx() }
+    // The row grows with its text at a large font scale, so a drag moves the song by the height the row is laid out at.
+    val density = LocalDensity.current
+    var rowPx by remember { mutableFloatStateOf(with(density) { ROW.toPx() }) }
     val held = reorder.held == item.uid
     val reduced = LocalReducedMotion.current
     val lift = animateFloatAsState(if (held) 1f else 0f, motion(Motion.press, reduced), label = "queue lift")
@@ -697,6 +699,7 @@ private fun QueueSongRow(
         enableDismissFromStartToEnd = false,
         onDismiss = { if (it == SwipeToDismissBoxValue.EndToStart) remove() },
         modifier = motion
+            .onSizeChanged { rowPx = it.height.toFloat() }
             .zIndex(if (held) 1f else 0f)
             .graphicsLayer {
                 if (held) translationY = reorder.offset
@@ -727,7 +730,7 @@ private fun QueueSongRow(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .fillMaxWidth()
-                .height(ROW)
+                .heightIn(min = ROW)
                 .background(surface)
                 // The song here has its own rounded fill, inset as a selected song row's ([rowFill]).
                 .background(fill, RowFillShape)
@@ -744,10 +747,10 @@ private fun QueueSongRow(
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier
                     .weight(1f)
-                    .fillMaxSize()
+                    .heightIn(min = ROW)
                     .clickable(role = Role.Button) { connection.jump(queue.id, index) }
                     .semantics(mergeDescendants = true) { contentDescription = "$label, $sub" }
-                    .padding(start = ScreenPadding),
+                    .padding(start = ScreenPadding, top = 8.dp, bottom = 8.dp),
             ) {
                 Box {
                     SongCover(SongArt(item.song.path), size = 44.dp, shape = RoundedCornerShape(10.dp))
@@ -801,7 +804,7 @@ private fun QueueSongRow(
     }
 }
 
-/** A queue row's height (.qrow, 60 dp); a drag moves a song by whole rows. */
+/** A queue row's height (.qrow, 60 dp), taller when its two lines need it at a large font scale; a drag moves a song by whole rows. */
 private val ROW = 60.dp
 
 /** How long the order a drag left waits for the queue to say the same before the queue's own order shows. */
