@@ -32,8 +32,9 @@ import androidx.media3.extractor.metadata.Chapter as Media3Chapter
 /**
  * Ogg Vorbis and Opus chapters from the file's comments ([comments], key and value as written): `CHAPTER001` is a start
  * as `HH:MM:SS.mmm` and `CHAPTER001NAME` its title. The number only orders them, from 000 (ffmpeg) or 001 (the Vorbis
- * convention); a chapter whose time cannot be read is left out, the rest kept. Each ends where the next starts, the last
- * at [durationMs]. At most [BookState.MAX_CHAPTERS].
+ * convention); a chapter whose time cannot be read, or that starts past the end of the file, is left out, the rest kept.
+ * Each ends where the next starts, the last at [durationMs] (0 when unknown: then nothing is left out by time). At most
+ * [BookState.MAX_CHAPTERS].
  */
 fun oggChapters(comments: List<Pair<String, String>>, durationMs: Long): List<Chapter> {
     val starts = HashMap<Int, Long>()
@@ -43,12 +44,18 @@ fun oggChapters(comments: List<Pair<String, String>>, durationMs: Long): List<Ch
         val number = match.groupValues[1].toIntOrNull() ?: return@forEach
         if (match.groupValues[2].isEmpty()) chapterTime(value)?.let { starts[number] = it } else names[number] = value
     }
-    val ordered = starts.entries.sortedWith(compareBy<Map.Entry<Int, Long>> { it.value }.thenBy { it.key }).take(BookState.MAX_CHAPTERS)
+    val ordered = starts.entries.sortedWith(compareBy<Map.Entry<Int, Long>> { it.value }.thenBy { it.key }).filter { inFile(it.value, durationMs) }.take(BookState.MAX_CHAPTERS)
     return ordered.mapIndexed { at, (number, start) ->
         val end = ordered.getOrNull(at + 1)?.value ?: durationMs
-        Chapter(start, end.coerceAtLeast(start), names[number]?.trim()?.takeIf(String::isNotEmpty))
+        Chapter(start, endIn(end, start, durationMs), names[number]?.trim()?.takeIf(String::isNotEmpty))
     }
 }
+
+/** Whether a chapter starting at [startMs] is in a file [durationMs] long (0: not known, so it is). */
+private fun inFile(startMs: Long, durationMs: Long): Boolean = durationMs <= 0 || startMs < durationMs
+
+/** A chapter's [endMs] within the file and never before its [startMs]. */
+private fun endIn(endMs: Long, startMs: Long, durationMs: Long): Long = (if (durationMs > 0) endMs.coerceAtMost(durationMs) else endMs).coerceAtLeast(startMs)
 
 /** `CHAPTER` and its number, then `NAME` or nothing, in any case. */
 private val OGG_CHAPTER = Regex("""CHAPTER(\d{1,6})(NAME)?""", RegexOption.IGNORE_CASE)
@@ -69,24 +76,24 @@ private val CHAPTER_TIME = Regex("""(\d{1,4}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?"""
 
 /**
  * The chapters Media3 found in a file, from its tracks' metadata [entries]: its `Chapter` entries (MP4, ID3 `CHAP` with
- * its `TIT2` title), ID3 ones in the root `CTOC`'s order when there is one, else by start; hidden ones left out. Without
- * any, the Ogg comments ([oggChapters]). An end Media3 does not know is the next chapter's start, the last one's
- * [durationMs].
+ * its `TIT2` title) in time order (the root `CTOC`'s order only between equal starts, as [chapterAt] searches by start);
+ * hidden ones and those starting past the end of the file left out. Without any, the Ogg comments ([oggChapters]). An
+ * end Media3 does not know is the next later chapter's start, the last one's [durationMs]; every end is within the file.
  */
 @OptIn(UnstableApi::class)
 fun chaptersOf(entries: List<Metadata.Entry>, durationMs: Long): List<Chapter> {
     val marks = entries.filterIsInstance<Media3Chapter>().filterNot { it.isHidden }
     if (marks.isEmpty()) return oggChapters(entries.filterIsInstance<VorbisComment>().map { it.key to it.value }, durationMs)
     val toc = entries.filterIsInstance<ChapterTocFrame>().firstOrNull { it.isRoot }?.children?.withIndex()?.associate { (at, id) -> id to at }
-    val ordered = if (toc != null) {
-        marks.sortedWith(compareBy<Media3Chapter> { (it as? ChapterFrame)?.chapterId?.let(toc::get) ?: Int.MAX_VALUE }.thenBy { it.startTimeMs })
-    } else {
-        marks.sortedBy { it.startTimeMs }
-    }.distinctBy { it.startTimeMs to titleOf(it) }.take(BookState.MAX_CHAPTERS)
+    val ordered = marks.sortedWith(compareBy<Media3Chapter> { it.startTimeMs.coerceAtLeast(0) }.thenBy { (it as? ChapterFrame)?.chapterId?.let { id -> toc?.get(id) } ?: Int.MAX_VALUE })
+        .filter { inFile(it.startTimeMs, durationMs) }
+        .distinctBy { it.startTimeMs.coerceAtLeast(0) to titleOf(it) }
+        .take(BookState.MAX_CHAPTERS)
     return ordered.mapIndexed { at, mark ->
         val start = mark.startTimeMs.coerceAtLeast(0)
-        val end = mark.endTimeMs.takeIf { it != C.TIME_UNSET && it > start } ?: ordered.getOrNull(at + 1)?.startTimeMs ?: durationMs
-        Chapter(start, end.coerceAtLeast(start), titleOf(mark))
+        val next = ordered.subList(at + 1, ordered.size).firstOrNull { it.startTimeMs > start }?.startTimeMs
+        val end = mark.endTimeMs.takeIf { it != C.TIME_UNSET && it > start } ?: next ?: durationMs
+        Chapter(start, endIn(end, start, durationMs), titleOf(mark))
     }
 }
 
@@ -115,8 +122,8 @@ fun interface ChapterReader {
 
 /**
  * Keeps the single files' chapters in `books.json`: [ensure] reads a book's when they are not kept for its file as it is
- * now, once at a time, on [scope] ([reader] works off the main thread). A file that cannot be read keeps no chapters
- * until it changes. Main thread.
+ * now, once at a time, on [scope] ([reader] works off the main thread). A file that cannot be read keeps nothing and is
+ * read again at the next [ensure]. Main thread.
  */
 class BookChapters(private val store: BookStore, private val reader: ChapterReader, private val scope: CoroutineScope, private val log: (String) -> Unit = {}) {
     private val reading = HashSet<String>()
@@ -131,8 +138,12 @@ class BookChapters(private val store: BookStore, private val reader: ChapterRead
                 store.ready.first { it }
                 if (store.state.value.entryOf(book)?.chaptersStamp == stamp) return@launch
                 val read = reader.read(file.path, file.durationMs)
-                if (read == null) log("books: chapters not read")
-                store.change { it.withChapters(book, stamp, read.orEmpty()) }
+                if (read == null) {
+                    // Nothing kept: read again the next time it is asked for.
+                    log("books: chapters not read")
+                    return@launch
+                }
+                store.change { it.withChapters(book, stamp, read) }
             } finally {
                 reading.remove(book.id)
             }

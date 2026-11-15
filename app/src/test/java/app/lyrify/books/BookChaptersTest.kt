@@ -91,7 +91,7 @@ class BookChaptersTest {
     }
 
     @Test
-    fun `ID3 chapters follow the root CTOC's order, titled by their TIT2`() {
+    fun `ID3 chapters come in time order, titled by their TIT2`() {
         val entries = listOf<Metadata.Entry>(
             frame("ch2", 8_000, 12_000, "Chapter Three"),
             frame("ch0", 0, 4_000, "Chapter One"),
@@ -102,6 +102,42 @@ class BookChaptersTest {
         assertEquals(listOf(Chapter(0, 4_000, "Chapter One"), Chapter(4_000, 8_000, null), Chapter(8_000, 12_000, "Chapter Three")), chaptersOf(entries, 12_000))
         // Without a CTOC: by start.
         assertEquals(listOf(0L, 4_000L, 8_000L), chaptersOf(entries.take(3), 12_000).map { it.startMs })
+    }
+
+    @Test
+    fun `chapters come in time order inside the file, whatever order or times the table has`() {
+        // A root CTOC that lists the chapters out of time order.
+        val toc = listOf<Metadata.Entry>(
+            frame("ch2", 8_000, 12_000, "Chapter Three"),
+            frame("ch0", 0, 4_000, "Chapter One"),
+            frame("ch1", 4_000, 8_000, "Chapter Two"),
+            ChapterTocFrame("toc", true, true, arrayOf("ch2", "ch0", "ch1"), emptyArray()),
+        )
+        assertEquals(listOf(0L, 4_000L, 8_000L), chaptersOf(toc, 12_000).map { it.startMs })
+        // MP4 chapters out of order, one past the end of the file, and an end past it.
+        val mp4 = listOf<Metadata.Entry>(
+            Media3Chapter.Builder().setStartTimeMs(8_000).setEndTimeMs(C.TIME_UNSET).build(),
+            Media3Chapter.Builder().setStartTimeMs(0).setEndTimeMs(C.TIME_UNSET).build(),
+            Media3Chapter.Builder().setStartTimeMs(20_000).setEndTimeMs(C.TIME_UNSET).build(),
+            Media3Chapter.Builder().setStartTimeMs(4_000).setEndTimeMs(99_000).build(),
+        )
+        val read = chaptersOf(mp4, 12_000)
+        assertEquals(listOf(Chapter(0, 4_000, null), Chapter(4_000, 12_000, null), Chapter(8_000, 12_000, null)), read)
+        assertEquals(1, chapterAt(read, 5_000))
+        // A length MediaStore does not know (0) keeps every chapter, in time order.
+        assertEquals(listOf(0L, 4_000L, 8_000L, 20_000L), chaptersOf(mp4, 0).map { it.startMs })
+    }
+
+    @Test
+    fun `Ogg chapters past the end of the file are left out`() {
+        val comments = listOf("CHAPTER001" to "00:00:00.000", "CHAPTER002" to "00:00:04.000", "CHAPTER003" to "00:00:20.000")
+        assertEquals(listOf(Chapter(0, 4_000, null), Chapter(4_000, 12_000, null)), oggChapters(comments, 12_000))
+    }
+
+    @Test
+    fun `chapters kept for a book are in time order`() {
+        val state = BookState().withChapters(single, "1:1", listOf(Chapter(8_000, 12_000, "Three"), Chapter(0, 4_000, "One"), Chapter(4_000, 8_000, "Two")))
+        assertEquals(listOf("One", "Two", "Three"), bookChapters(single, state).map { it.title })
     }
 
     @Test
@@ -155,7 +191,7 @@ class BookChaptersTest {
     }
 
     @Test
-    fun `a file that cannot be read keeps no chapters and is not read again until it changes`() = runTest {
+    fun `a file that cannot be read keeps nothing, and is read again the next time`() = runTest {
         var reads = 0
         val scope = TestScope(StandardTestDispatcher(testScheduler))
         val store = BookStore(object : BookStorage {
@@ -167,7 +203,8 @@ class BookChaptersTest {
         runCurrent()
         chapters.ensure(single)
         runCurrent()
-        assertEquals(1, reads)
+        assertEquals(2, reads)
         assertTrue(bookChapters(single, store.state.value).isEmpty())
+        assertNull(store.state.value.entryOf(single)?.chaptersStamp)
     }
 }

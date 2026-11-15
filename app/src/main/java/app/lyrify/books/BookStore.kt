@@ -170,8 +170,8 @@ data class BookState(val books: Map<String, BookEntry> = emptyMap(), val marks: 
         internal fun keepNewest(books: Map<String, BookEntry>): Map<String, BookEntry> =
             if (books.size <= MAX_BOOKS) books else books.values.sortedByDescending { it.lastPlayedAt ?: Long.MIN_VALUE }.take(MAX_BOOKS).associateBy { it.id }
 
-        /** At most [MAX_CHAPTERS], each title at most [MAX_TITLE] long. */
-        internal fun capped(chapters: List<Chapter>): List<Chapter> = chapters.take(MAX_CHAPTERS).map { it.copy(title = it.title?.take(MAX_TITLE)) }
+        /** In time order ([chapterAt] searches them so), at most [MAX_CHAPTERS], each title at most [MAX_TITLE] long. */
+        internal fun capped(chapters: List<Chapter>): List<Chapter> = chapters.sortedBy { it.startMs }.take(MAX_CHAPTERS).map { it.copy(title = it.title?.take(MAX_TITLE)) }
     }
 }
 
