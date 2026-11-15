@@ -438,9 +438,10 @@ fun LyrifyTheme(display: DisplaySettings = DisplaySettings(), content: @Composab
 /**
  * KJB's chrome on either scheme: ink [action] for primary buttons, the ink [toast] with a coral [toastAction], the
  * frosted [glass] of the top bar and the other floating bars (as opaque as it must be for its text over any content,
- * [glassAlpha]; [glassSolid] when nothing blurs under it), the opaque [bar] of the Now bar and the dock (a list scrolling
- * behind never shows through), the soft [shadow] of floating chrome, the deeper [shadowStrong] under covers and the Play
- * button, the brand-tinted [scrim] behind sheets and dialogs, and their [sheet] card.
+ * [glassAlpha]; [glassSolid] when nothing blurs under it), the opaque [topBar] under every top bar and the status bar,
+ * the opaque [bar] of the Now bar and the dock (a list scrolling behind never shows through), the soft [shadow] of
+ * floating chrome, the deeper [shadowStrong] under covers and the Play button, the brand-tinted [scrim] behind sheets and
+ * dialogs, and their [sheet] card.
  */
 @Immutable
 data class ChromeColors(
@@ -457,6 +458,7 @@ data class ChromeColors(
     val shadowStrong: Color,
     val scrim: Color,
     val sheet: Color,
+    val topBar: Color,
     val bar: Color,
 )
 
@@ -475,6 +477,9 @@ internal fun chromeColors(scheme: ColorScheme, brand: BrandColors, dark: Boolean
     shadowStrong = if (dark) Color.Black.copy(alpha = 0.65f) else ShadowInk.copy(alpha = 0.38f),
     scrim = if (dark) Color.Black.copy(alpha = 0.56f) else ShadowInk.copy(alpha = 0.36f),
     sheet = if (dark) scheme.surfaceContainer else scheme.surfaceContainerLowest,
+    // Opaque, the page's own colour: a list scrolls under the top bar and the status bar, never through them, on a page
+    // whose bar is never told that content is under it (Settings, phone session 10) as on any other.
+    topBar = scheme.background,
     // Opaque: at 94% a list's text read through the Now bar and the dock as it scrolled behind them.
     bar = scheme.surfaceContainerHigh,
 )
