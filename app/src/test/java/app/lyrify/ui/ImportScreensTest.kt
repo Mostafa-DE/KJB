@@ -1,5 +1,6 @@
 package app.lyrify.ui
 
+import androidx.compose.runtime.mutableStateOf
 import app.lyrify.R
 import app.lyrify.backup.ImportBundle
 import app.lyrify.backup.ImportFailure
@@ -12,11 +13,18 @@ import app.lyrify.backup.ImportQueue
 import app.lyrify.backup.ImportSong
 import app.lyrify.backup.ImportUndo
 import app.lyrify.library.song
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
+import kotlin.coroutines.Continuation
+import kotlin.coroutines.resume
+import kotlin.coroutines.suspendCoroutine
 
 /** Settings > Backup > Import from app: the row, the preview's rows, the reasons, the copied list, and the words. Made-up names only. */
 class ImportScreensTest {
@@ -111,6 +119,65 @@ class ImportScreensTest {
         assertTrue(hint, hint.contains("favourites", ignoreCase = true))
     }
 
+    // The pick and its read (review panel-im3)
+
+    @Test
+    fun `closing the sheet while it reads stops the read and lets go of the pick, so a remade activity reads nothing`() = runTest {
+        val picked = mutableStateOf(emptyList<String>())
+        val sheet = mutableStateOf<ImportSheet?>(null)
+        var stopped = false
+        val reads = ImportReads(backgroundScope, picked, sheet) {
+            try {
+                awaitCancellation()
+            } finally {
+                stopped = true
+            }
+        }
+
+        reads.load(MIX)
+        runCurrent()
+        assertEquals(ImportSheet.Reading, sheet.value)
+        assertEquals(MIX, picked.value)
+        reads.close()
+        runCurrent()
+
+        assertTrue(stopped)
+        assertNull(sheet.value)
+        assertEquals(emptyList<String>(), picked.value)
+        reads.resume()
+        assertNull(sheet.value)
+    }
+
+    @Test
+    fun `a read that ends after a newer pick, or after the sheet closed, never shows its sheet`() = runTest {
+        val picked = mutableStateOf(emptyList<String>())
+        val sheet = mutableStateOf<ImportSheet?>(null)
+        // Reads that end even when stopped, as a read on another thread may.
+        val waiting = HashMap<List<String>, Continuation<ImportSheet>>()
+        val reads = ImportReads(backgroundScope, picked, sheet) { what -> suspendCoroutine { waiting[what] = it } }
+        val mix = ImportSheet.Failed(emptyList(), none = true)
+        val evening = ImportSheet.Failed(emptyList(), none = false)
+
+        reads.load(MIX)
+        runCurrent()
+        reads.load(EVENING)
+        runCurrent()
+        waiting.getValue(EVENING).resume(evening)
+        runCurrent()
+        waiting.getValue(MIX).resume(mix)
+        runCurrent()
+        assertEquals(evening, sheet.value)
+        assertEquals(EVENING, picked.value)
+
+        reads.load(MIX)
+        runCurrent()
+        reads.close()
+        waiting.getValue(MIX).resume(mix)
+        runCurrent()
+        assertNull(sheet.value)
+        assertEquals(emptyList<String>(), picked.value)
+    }
+
     @Test
     fun `labels are three words or fewer, the copy says your phone, and no text has an em-dash`() {
         val labels = listOf(
@@ -138,5 +205,9 @@ class ImportScreensTest {
     private companion object {
         /** Unit tests run in the module's folder. */
         val FILE = File("src/main/res/values/strings_import.xml")
+
+        /** Picks as the sheet keeps them: the kind, then the documents. */
+        val MIX = listOf("files", "content://com.android.externalstorage.documents/document/primary%3AMusic%2FMix.m3u8")
+        val EVENING = listOf("files", "content://com.android.externalstorage.documents/document/primary%3AMusic%2FEvening.m3u8")
     }
 }

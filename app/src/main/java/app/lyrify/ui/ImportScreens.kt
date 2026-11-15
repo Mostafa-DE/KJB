@@ -45,6 +45,8 @@ import app.lyrify.backup.ImportPlan
 import app.lyrify.backup.ImportRead
 import app.lyrify.backup.ImportSong
 import app.lyrify.backup.Imports
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
@@ -119,7 +121,7 @@ internal fun summaryLines(outcome: ImportOutcome): List<Pair<Int, Int>> {
 internal fun missingList(missing: List<ImportSong>): String = missing.joinToString("\n") { it.label }
 
 /** Where an import's files came from: the preview's title. */
-private enum class ImportSource(@StringRes val found: Int) {
+internal enum class ImportSource(@StringRes val found: Int) {
     FILE(R.string.import_found_file),
     FILES(R.string.import_found_files),
     FOLDER(R.string.import_found_folder),
@@ -127,7 +129,7 @@ private enum class ImportSource(@StringRes val found: Int) {
 }
 
 /** What the import sheet shows. */
-private sealed interface ImportSheet {
+internal sealed interface ImportSheet {
     /** Pick a file or a folder; [phone] playlists other apps saved on the phone, offered only when there are any. */
     data class Start(val phone: Int = 0) : ImportSheet
 
@@ -182,25 +184,12 @@ fun rememberImportFromApp(): () -> Unit {
     val scope = rememberCoroutineScope()
     val sheet = remember { mutableStateOf<ImportSheet?>(ShownSummary.done) }
     val picked = rememberSaveable { mutableStateOf(emptyList<String>()) }
+    val reads = remember { ImportReads(scope, picked, sheet) { what -> readPick(app, what) } }
+    val load = reads::load
     val say = { text: Int, failed: Boolean ->
         scope.launch { toasts.show(if (failed) Toast(resources.getString(text), R.drawable.ic_error, Tone.ERROR) else Toast(resources.getString(text))) }
     }
-    val load = { what: List<String> ->
-        picked.value = what
-        sheet.value = ImportSheet.Reading
-        scope.launch {
-            val documents = what.drop(1).map(String::toUri)
-            val (source, pick) = when (what.first()) {
-                PICKED_FOLDER -> ImportSource.FOLDER to Imports.folder(app, documents.single())
-                PICKED_PHONE -> ImportSource.PHONE to Imports.phone(app)
-                else -> (if (documents.size == 1) ImportSource.FILE else ImportSource.FILES) to Imports.files(app, documents)
-            }
-            sheet.value = loaded(source, pick, app)
-        }
-    }
-    LaunchedEffect(Unit) {
-        if (sheet.value == null && picked.value.isNotEmpty()) load(picked.value)
-    }
+    LaunchedEffect(Unit) { reads.resume() }
     LaunchedEffect(ImportHandoff) {
         for (documents in ImportHandoff.files) load(listOf(PICKED_FILES) + documents)
     }
@@ -211,9 +200,8 @@ fun rememberImportFromApp(): () -> Unit {
         tree?.let { load(listOf(PICKED_FOLDER, it.toString())) }
     }
     val close = {
-        sheet.value = null
+        reads.close()
         ShownSummary.done = null
-        picked.value = emptyList()
     }
     val show = { done: ImportSheet.Done ->
         ShownSummary.done = done
@@ -270,6 +258,57 @@ fun rememberImportFromApp(): () -> Unit {
             }
         }
     }
+}
+
+/**
+ * The import sheet's pick and its read: [load] keeps the pick in [picked] (saveable, so a remade activity reads it again,
+ * [resume]) and shows Reading until [read] gives the sheet. Each read has its ticket: a newer pick or [close] moves the
+ * ticket on and stops the read, so a read overtaken or dismissed never shows its sheet, which would have no pick behind
+ * it to come back after a turn of the phone (review panel-im3).
+ */
+internal class ImportReads(
+    private val scope: CoroutineScope,
+    private val picked: MutableState<List<String>>,
+    private val sheet: MutableState<ImportSheet?>,
+    private val read: suspend (List<String>) -> ImportSheet,
+) {
+    private var ticket: Int = 0
+    private var reading: Job? = null
+
+    fun load(what: List<String>) {
+        val mine = ++ticket
+        reading?.cancel()
+        picked.value = what
+        sheet.value = ImportSheet.Reading
+        reading = scope.launch {
+            val shown = read(what)
+            if (mine == ticket) sheet.value = shown
+        }
+    }
+
+    /** A remade activity: the pick it kept read again, when no sheet shows. */
+    fun resume() {
+        if (sheet.value == null && picked.value.isNotEmpty()) load(picked.value)
+    }
+
+    /** The sheet closed: no pick any more, and no read of one still to show. */
+    fun close() {
+        ticket++
+        reading?.cancel()
+        sheet.value = null
+        picked.value = emptyList()
+    }
+}
+
+/** The sheet the pick [what] reads as; [ImportReads] keeps a pick as its kind, then its documents. */
+private suspend fun readPick(app: Context, what: List<String>): ImportSheet {
+    val documents = what.drop(1).map(String::toUri)
+    val (source, pick) = when (what.first()) {
+        PICKED_FOLDER -> ImportSource.FOLDER to Imports.folder(app, documents.single())
+        PICKED_PHONE -> ImportSource.PHONE to Imports.phone(app)
+        else -> (if (documents.size == 1) ImportSource.FILE else ImportSource.FILES) to Imports.files(app, documents)
+    }
+    return loaded(source, pick, app)
 }
 
 /** What a pick read becomes: the preview when anything was read, else why nothing was. */
