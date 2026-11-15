@@ -29,6 +29,18 @@
         android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"
         tools:ignore="BatteryLife" />
 
+    <!-- The phone's own settings for the exemption question (ExemptionActivity sends it to a system app only, so it must
+         see who answers these two actions). -->
+    <queries>
+        <intent>
+            <action android:name="android.settings.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+            <data android:scheme="package" />
+        </intent>
+        <intent>
+            <action android:name="android.settings.IGNORE_BATTERY_OPTIMIZATION_SETTINGS" />
+        </intent>
+    </queries>
+
     <!-- youtubedl-android's library and ffmpeg modules ask for nothing more; this keeps it so if a later one does. -->
     <uses-permission
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"

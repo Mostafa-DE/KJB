@@ -231,6 +231,17 @@ class AddonKeepAliveTest {
         }
     }
 
+    @Test
+    fun `the question goes to the phone's own settings, never to another app that claims it`() {
+        val settings = IntentHandler("com.android.settings", system = true)
+        val other = IntentHandler("com.example.claims", system = false)
+
+        assertEquals("com.android.settings", systemHandler(listOf(other, settings)))
+        assertEquals("com.android.settings", systemHandler(listOf(settings, other)))
+        assertEquals("only another app answers: not sent", null, systemHandler(listOf(other)))
+        assertEquals(null, systemHandler(emptyList()))
+    }
+
     private companion object {
         const val KJB_UID = 10_279
         const val OTHER_UID = 10_301

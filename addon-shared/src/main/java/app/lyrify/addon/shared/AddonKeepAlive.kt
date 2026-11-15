@@ -5,6 +5,7 @@ import android.app.Activity
 import android.app.PendingIntent
 import android.content.ActivityNotFoundException
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
@@ -167,6 +168,15 @@ class JobForeground<Tap : Any>(
     }
 }
 
+/** One activity that answers an intent: its app, and whether that app is part of the phone's system. */
+data class IntentHandler(val packageName: String, val system: Boolean)
+
+/**
+ * The app to send the exemption question to: the phone's own, a system app, never another app that claims the same
+ * Settings action; null when only others answer.
+ */
+fun systemHandler(handlers: List<IntentHandler>): String? = handlers.firstOrNull { it.system }?.packageName
+
 /** What the exemption activity does first: refuse a caller that is not KJB, answer at once when exempt, else ask. */
 enum class ExemptionStep { REFUSE, DONE, ASK }
 
@@ -215,21 +225,35 @@ abstract class ExemptionActivity : Activity() {
     }
 
     /**
-     * Android's question for this package; a phone whose settings lack it gets the list where it is set. Distributed
-     * outside Google Play, and work KJB starts must go on while the phone is locked: the reason Android asks for.
+     * Android's question for this package; a phone whose settings lack it gets the list where it is set. Each goes to the
+     * phone's own settings ([systemHandler]), never to another app that claims the action; what it answers is not
+     * trusted either: the phone is asked again ([onActivityResult]). Distributed outside Google Play, and work KJB starts
+     * must go on while the phone is locked: the reason Android asks for.
      */
     @SuppressLint("BatteryLife")
     private fun ask() {
         val question = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.fromParts("package", packageName, null))
         for (intent in listOf(question, Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))) {
+            val settings = systemHandler(handlers(intent)) ?: continue
             try {
-                startActivityForResult(intent, ASKED)
+                startActivityForResult(Intent(intent).setPackage(settings), ASKED)
                 return
             } catch (_: ActivityNotFoundException) {
                 // The next way, if any.
             }
         }
         answer(RESULT_CANCELED)
+    }
+
+    /** The activities that answer [intent], as the add-on's <queries> lets it see them. */
+    private fun handlers(intent: Intent): List<IntentHandler> {
+        val found = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            packageManager.queryIntentActivities(intent, PackageManager.ResolveInfoFlags.of(0))
+        } else {
+            @Suppress("DEPRECATION")
+            packageManager.queryIntentActivities(intent, 0)
+        }
+        return found.map { IntentHandler(it.activityInfo.packageName, it.activityInfo.applicationInfo.flags and ApplicationInfo.FLAG_SYSTEM != 0) }
     }
 
     private fun exempt(): Boolean = getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName)
