@@ -42,6 +42,7 @@ import app.lyrify.books.BookPart
 import app.lyrify.books.BookPlayFilter
 import app.lyrify.books.BooksGraph
 import app.lyrify.books.inBook
+import app.lyrify.books.isBookPart
 import app.lyrify.books.playingBook
 import app.lyrify.books.skipsFor
 import app.lyrify.library.Library
@@ -278,7 +279,8 @@ class PlaybackService : MediaLibraryService() {
     private fun ownLyrics() {
         val pipeline = Lyrify.pipeline(this)
         val sweep = QueueSweep(
-            files = { track -> ownFiles(track) { path -> find(SongRef(path)) } },
+            // A book's part (a book's queue gives no snapshot; a part added to music is left out here) never gets lyrics.
+            files = { track -> ownFiles(track) { path -> find(SongRef(path))?.takeUnless { isBookPart(it.path, library.value) } } },
             process = pipeline::process,
             // The listener's sweep retries failed lookups and settles interrupted writes while it runs; without it, this one does.
             dueErrors = { if (NowPlaying.connected.value) emptyList() else pipeline.dueErrors() + pipeline.staleLookups() },

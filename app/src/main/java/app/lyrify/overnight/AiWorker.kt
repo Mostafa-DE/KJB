@@ -38,7 +38,10 @@ import app.lyrify.addon.AddonPort
 import app.lyrify.addon.Connection
 import app.lyrify.addon.ModelHandover
 import app.lyrify.addon.RemoteSongEngine
+import app.lyrify.books.isBookPart
 import app.lyrify.data.LedgerRepository
+import app.lyrify.library.LibraryGraph
+import app.lyrify.library.LibraryState
 import app.lyrify.logFailures
 import app.lyrify.models.ModelState
 import app.lyrify.models.ModelStore
@@ -62,6 +65,7 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
@@ -137,6 +141,12 @@ class AiWorker(context: Context, params: WorkerParameters) : CoroutineWorker(con
         }
         // The ledger alone (no file is looked at): with no song waiting, no foreground service.
         if (state.entries.values.none { AiQueue.wants(it, now) }) return Result.success()
+        // Books never get AI lyrics (books/): the library says which files are books, so the run waits for it.
+        val library = LibraryGraph.repository(context).state
+        if (withTimeoutOrNull(LIBRARY_WAIT_MS) { library.first { it !is LibraryState.Loading } } !is LibraryState.Ready) {
+            Log.w(LOG_TAG, "AI: the library cannot be read; trying again later")
+            return Result.retry()
+        }
         val runLog = AiLyrics.runLog(context)
         // Into the foreground first; the run then builds its queue, looking at each song's files.
         if (!foreground(null)) {
@@ -170,8 +180,8 @@ class AiWorker(context: Context, params: WorkerParameters) : CoroutineWorker(con
             loadFailures = loadFailures,
             engineContext = Dispatchers.Default,
             aiPaths = pipeline.aiPaths,
-            // A song the tag writer or its start-up recovery holds is left for the next run.
-            canTake = { path -> path !in Lyrify.locks && audioWithoutLyrics(path) },
+            // A song the tag writer or its start-up recovery holds is left for the next run; a book's part never runs.
+            canTake = { path -> path !in Lyrify.locks && !isBookPart(path, (library.value as? LibraryState.Ready)?.library) && audioWithoutLyrics(path) },
             inUse = AiLyrics.inUse,
             badModel = { model -> discard(lease.session().port, model) },
             onProgress = { progress ->
@@ -220,6 +230,9 @@ class AiWorker(context: Context, params: WorkerParameters) : CoroutineWorker(con
             Log.w(LOG_TAG, "AI: not allowed to start in the background: ${e.javaClass.simpleName}")
         }
 }
+
+/** How long a run waits for the library to be read, to know the books it must leave alone. */
+private const val LIBRARY_WAIT_MS: Long = 60_000
 
 /**
  * Switching the AI on and off, and what the AI card shows about it. Process-wide. The user's choice is stored and is

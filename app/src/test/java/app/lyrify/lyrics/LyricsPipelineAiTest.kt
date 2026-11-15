@@ -49,13 +49,14 @@ class LyricsPipelineAiTest {
     /** Placeholder lines, never real lyrics. */
     private val lrc = "[00:05.000]placeholder one\n[00:09.500]placeholder two\n[00:14.250]placeholder three\n[00:20.000]placeholder four\n"
 
-    private fun TestScope.pipeline(writeBytes: (FileChannel, ByteBuffer) -> Unit = SidecarFile::writeFully) = LyricsPipeline(
+    private fun TestScope.pipeline(isBook: (String) -> Boolean = { false }, writeBytes: (FileChannel, ByteBuffer) -> Unit = SidecarFile::writeFully) = LyricsPipeline(
         client = client,
         ledger = ledger,
         clock = { BASE + testScheduler.currentTime },
         writes = SharedWrites.ANYWHERE,
         random = MiddleRandom,
         writeBytes = writeBytes,
+        isBook = isBook,
     )
 
     private val audioBytes = byteArrayOf(0x49, 0x44, 0x33, 4, 0, 0, 9, 8, 7)
@@ -84,6 +85,18 @@ class LyricsPipelineAiTest {
     }
 
     // Lyrics the AI made
+
+    @Test
+    fun `a run's lyrics for a file that became a book are never written beside it`() = runTest {
+        val track = audio()
+        val before = waiting(track)
+
+        assertNull(pipeline(isBook = { it == track.path }).recordAi(track, AiResult.Transcribed(lrc, stats)))
+
+        assertFalse(sidecar(track).exists())
+        assertEquals(before, ledger[track.path])
+        assertAudioUntouched(track)
+    }
 
     @Test
     fun `heard lyrics are written next to the audio file and recorded as AI lyrics`() = runTest {

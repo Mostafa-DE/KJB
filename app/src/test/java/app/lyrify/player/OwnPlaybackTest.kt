@@ -11,6 +11,7 @@ import app.lyrify.library.Song
 import app.lyrify.library.SongRef
 import app.lyrify.library.song
 import app.lyrify.lyrics.LocalTrack
+import app.lyrify.media.SessionSnapshot
 import app.lyrify.media.SessionTrack
 import app.lyrify.media.SessionTracks
 import app.lyrify.settings.AdvancedSettings
@@ -51,6 +52,13 @@ class OwnPlaybackTest {
         assertEquals(listOf(9, 0, 1).map { songs[it].path }, order.low.map { it.track.mediaUri })
         assertEquals(ownSnapshot(null, find), ownSnapshot(QueueBook().current, find))
         assertNull(ownSnapshot(null, find).current)
+    }
+
+    @Test
+    fun `a book's queue is never swept for lyrics`() {
+        val bookSource = QueueSource(SourceKind.BOOK, "/storage/emulated/0/Audiobooks/Folder Book/|Folder Book", "Folder Book")
+        val queues = QueueBook().play(songs.take(3).map { it.ref }, 0, bookSource, now = 1).book
+        assertEquals(SessionSnapshot.EMPTY, ownSnapshot(queues.current, find))
     }
 
     @Test
