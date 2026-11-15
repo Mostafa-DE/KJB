@@ -1,5 +1,6 @@
 package app.lyrify.ai
 
+import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -433,6 +434,8 @@ class JobForeground<Tap : Any>(
     /** The last start Android gave: stopSelf of it ends the service's started state, unless a later one came meanwhile. */
     private var lastStart = 0
 
+    // mediaProcessing only from Android 15: [sdk] is Build.VERSION.SDK_INT on the phone.
+    @SuppressLint("InlinedApi")
     private val type: Int = if (sdk >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
         ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING
     } else {
