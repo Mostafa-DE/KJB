@@ -105,7 +105,7 @@ import androidx.media3.session.MediaLibraryService
 import app.lyrify.LOG_TAG
 import app.lyrify.Lyrify
 import app.lyrify.R
-import app.lyrify.books.isBookPart
+import app.lyrify.books.knownBookPart
 import app.lyrify.data.LedgerRepository
 import app.lyrify.data.LedgerState
 import app.lyrify.logFailures
@@ -299,7 +299,7 @@ private fun LockLyricsScreen(ledger: LedgerState, onClose: () -> Unit) {
                 }
             },
             lyrics = {
-                LockLines(rememberSongLyrics(path, ledger.entries[path], isBookPart(path, ui.library)), ui.positionAt(rememberClock(playing))) { line ->
+                LockLines(rememberSongLyrics(path, ledger.entries[path], knownBookPart(path, ui.library)), ui.positionAt(rememberClock(playing))) { line ->
                     val tap = lineTap(line, playing)
                     connection.seekTo(tap.seekMs)
                     if (tap.play) connection.play()

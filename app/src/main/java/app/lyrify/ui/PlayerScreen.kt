@@ -92,7 +92,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.lyrify.Lyrify
 import app.lyrify.R
 import app.lyrify.books.BookNow
-import app.lyrify.books.isBookPart
+import app.lyrify.books.knownBookPart
 import app.lyrify.data.LyricsStatus
 import app.lyrify.library.albumKey
 import app.lyrify.library.displayTitle
@@ -427,9 +427,11 @@ fun PlayerView() {
     LaunchedEffect(headed) { if (headed) drag.reset() }
     var lyricsRoute by remember { mutableStateOf<PlayerRoute?>(null) }
     val extras = rememberPlayerExtras()
-    // A book's part, however it plays: its cover only, never the lyrics (LyricsViews.kt songLyrics), nor Share lyrics.
-    val bookPart = isBookPart(ui.item.song.path, ui.library)
-    val lyricsShare = if (bookPart) null else rememberLyricsShare(ui.item.song.path, LocalLyrics.current.ledger.entries[ui.item.song.path])
+    // A book's part, however it plays: its cover only, never the lyrics (LyricsViews.kt songLyrics), nor Share lyrics. Not
+    // known yet while the library is read (null): no lyrics read, the flip as for a song.
+    val book = knownBookPart(ui.item.song.path, ui.library)
+    val bookPart = book == true
+    val lyricsShare = if (book != false) null else rememberLyricsShare(ui.item.song.path, LocalLyrics.current.ledger.entries[ui.item.song.path])
     val route: (PlayerRoute) -> Unit = { route ->
         when (route) {
             // The lyrics panel's Search and "Aa" (LyricsViews.kt).
@@ -439,13 +441,13 @@ fun PlayerView() {
     }
     var queueSheet by remember { mutableStateOf(false) }
     // Book mode (BooksScreen.kt): the chapter playing, and the chapter sheet.
-    val book = rememberBookNow(ui)
+    val bookNow = rememberBookNow(ui)
     var chapterSheet by remember { mutableStateOf(false) }
 
     // "Tap the cover for lyrics", once, when the player first opens on the cover.
     LaunchedEffect(Unit) {
         val first = store.settings.first().playerUi
-        if (flipHintOnOpen(first, bookPart)) {
+        if (flipHintOnOpen(first, book != false)) {
             store.update { it.copy(playerUi = it.playerUi.copy(flipHintShown = true)) }
             toasts.show(Toast(resources.getString(R.string.player_flip_hint), R.drawable.ic_lyrics))
         }
@@ -491,13 +493,13 @@ fun PlayerView() {
                     onRoute = route,
                     modifier = Modifier.weight(1f),
                 )
-                TitleAndLinks(ui, settings.library, book) { chapterSheet = true }
+                TitleAndLinks(ui, settings.library, bookNow) { chapterSheet = true }
                 PlayerChips(ui, extras)
                 Spacer(Modifier.height(LINKS_GAP))
                 PartHandles(ui, extras)
                 ProgressBar(ui, onSeek = connection::seekTo, marks = { BarMarks(ui); ChapterTicks(ui) })
-                MainRow(ui, settings, connection, book)
-                SecondaryRow(ui, connection, onQueue = { queueSheet = true }, onRoute = route, book = book, onChapters = { chapterSheet = true })
+                MainRow(ui, settings, connection, bookNow)
+                SecondaryRow(ui, connection, onQueue = { queueSheet = true }, onRoute = route, book = bookNow, onChapters = { chapterSheet = true })
             }
         }
         // The message floats down from under the top bar, over the cover, as the prototype's does; the controls stay clear.
@@ -883,7 +885,7 @@ private fun LyricsPanel(ui: PlayerUi, enabled: Boolean, onFlipBack: () -> Unit, 
     val nav = LocalNavigator.current
     val path = ui.item.song.path
     val entry = LocalLyrics.current.ledger.entries[path]
-    val book = isBookPart(path, ui.library)
+    val book = knownBookPart(path, ui.library)
     val lyrics = rememberSongLyrics(path, entry, book)
     val now = rememberClock(ui.playing)
     Column(
@@ -894,12 +896,12 @@ private fun LyricsPanel(ui: PlayerUi, enabled: Boolean, onFlipBack: () -> Unit, 
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(start = 14.dp, end = 4.dp)) {
             when {
-                book -> Unit
+                book != false -> Unit
                 lyrics == PanelLyrics.Finding -> StatusPill(stringResource(R.string.player_finding_lyrics), tone = null, leading = { BrandGlyph(width = 12.dp, sweeping = true) })
                 entry != null -> StatusPill(entry.status)
             }
             Spacer(Modifier.weight(1f))
-            if (!book) {
+            if (book == false) {
                 AaButton(enabled) { onRoute(PlayerRoute.LYRICS_TEXT) }
                 LyrifyButton(stringResource(R.string.player_full_screen), { nav.show(FullScreen.FullLyrics) }, kind = ButtonKind.GHOST, icon = R.drawable.ic_open_in_full, compact = true, enabled = enabled)
             }

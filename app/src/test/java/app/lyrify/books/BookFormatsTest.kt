@@ -5,10 +5,17 @@ import androidx.media3.common.Label
 import androidx.media3.common.Metadata
 import androidx.media3.extractor.metadata.id3.TextInformationFrame
 import app.lyrify.library.Library
+import app.lyrify.library.LibraryState
 import app.lyrify.library.Song
 import app.lyrify.library.song
 import app.lyrify.player.Speed
+import app.lyrify.settings.LibrarySettings
 import app.lyrify.settings.Settings
+import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -267,6 +274,60 @@ class BookFormatsTest {
         // Read, the user's word wins: an Audiobooks file marked Not a book is music.
         val kept = library(tale, marks = BookMarks(notSongs = setOf(tale.path)))
         assertFalse(isBookPart(tale.path, kept))
+    }
+
+    @Test
+    fun `a hidden or skipped file is in no book, but its own mark or sign keeps it a book for the lyrics`() {
+        val marked = song("Music/Lantern Keeper/01 Lantern Keeper.mp3", album = "Lantern Keeper")
+        val spoken = song("Music/Talks/Quiet Orchard.mp3", genre = "Spoken Word")
+        val kept = song("Music/Talks/Salt Road.mp3", genre = "Spoken Word")
+        val plain = song("Music/Harbour Glass/02 Tin Roof.mp3", album = "Harbour Glass", track = 2)
+        val skipped = song("Music/Skipped/Fables/01.mp3", album = "Fables")
+        val settings = Settings(library = LibrarySettings(hiddenSongs = listOf(marked, spoken, kept, plain).map { it.ref }, foldersToSkip = listOf("Music/Skipped")))
+        val marks = BookMarks(songs = setOf(marked.path), notSongs = setOf(kept.path), folders = setOf("Music/Skipped/Fables"))
+        val read = Library.of(listOf(marked, spoken, kept, plain, skipped, music), settings, marks)
+
+        assertTrue(read.books.isEmpty())
+        assertTrue(isBookPart(marked.path, read))
+        assertTrue(isBookPart(spoken.path, read))
+        assertTrue(isBookPart(skipped.path, read))
+        // "Not a book" wins, and a hidden song with no sign is music.
+        assertFalse(isBookPart(kept.path, read))
+        assertFalse(isBookPart(plain.path, read))
+        assertFalse(isBookPart(music.path, read))
+    }
+
+    @Test
+    fun `while the library is read, a file is a book by its path, else not known yet, never music`() {
+        val marked = song("Music/Lantern Keeper/01 Lantern Keeper.mp3", album = "Lantern Keeper")
+        val tale = song("Audiobooks/Lantern Keeper/01.mp3", album = "Lantern Keeper")
+        val read = library(marked, marks = BookMarks(songs = setOf(marked.path)))
+
+        assertEquals(true, knownBookPart(marked.path, read))
+        assertEquals(false, knownBookPart(music.path, read))
+        assertEquals(true, knownBookPart(m4b.path, null))
+        assertEquals(true, knownBookPart(tale.path, null))
+        assertNull(knownBookPart(marked.path, null))
+        assertNull(knownBookPart(music.path, null))
+    }
+
+    @Test
+    fun `the lyrics wait for the library before they judge a file, then go by what is known if it is never read`() = runTest {
+        val marked = song("Music/Lantern Keeper/01 Lantern Keeper.mp3", album = "Lantern Keeper")
+        val state = MutableStateFlow<LibraryState>(LibraryState.Loading)
+        val judged = async { isBookPartOnceRead(marked.path, state) }
+        runCurrent()
+        assertFalse(judged.isCompleted)
+        state.value = LibraryState.Ready(library(marked, marks = BookMarks(songs = setOf(marked.path))))
+        assertTrue(judged.await())
+
+        // Never read in time: by the path alone.
+        val stuck = MutableStateFlow<LibraryState>(LibraryState.Loading)
+        val byPath = async { isBookPartOnceRead(m4b.path, stuck) }
+        val unknown = async { isBookPartOnceRead(marked.path, stuck) }
+        advanceTimeBy(LIBRARY_READ_WAIT_MS + 1)
+        assertTrue(byPath.await())
+        assertFalse(unknown.await())
     }
 
     @Test

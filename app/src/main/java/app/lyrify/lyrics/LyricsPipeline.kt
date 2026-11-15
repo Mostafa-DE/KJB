@@ -178,8 +178,8 @@ class LyricsPipeline(
     private val writeBytes: (FileChannel, ByteBuffer) -> Unit = SidecarFile::writeFully,
     /** The per-path lock shared with the tag writer ([app.lyrify.Lyrify.locks]): one file is never handled twice at once. */
     private val locks: PathLocks = PathLocks(),
-    /** Whether a file is a book's part (books/): a book never gets a lookup or a `.lrc`. */
-    private val isBook: (String) -> Boolean = { false },
+    /** Whether a file is a book's part (books/): a book never gets a lookup or a `.lrc`. It may wait for the library. */
+    private val isBook: suspend (String) -> Boolean = { false },
 ) : PathHold {
 
     /** Songs the AI is working on, for the queue sweep to skip (one set with the pipeline, so one per process). */

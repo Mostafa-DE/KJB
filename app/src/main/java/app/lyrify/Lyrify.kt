@@ -5,14 +5,13 @@ import android.content.Context
 import android.os.StrictMode
 import android.util.Log
 import app.lyrify.backup.Imports
-import app.lyrify.books.isBookPart
+import app.lyrify.books.isBookPartOnceRead
 import app.lyrify.crash.CrashLog
 import app.lyrify.data.LedgerRepository
 import app.lyrify.data.PathLocks
 import app.lyrify.data.SharedWrites
 import app.lyrify.library.FavouritesPort
 import app.lyrify.library.LibraryGraph
-import app.lyrify.library.LibraryState
 import app.lyrify.lyrics.Checked
 import app.lyrify.lyrics.HttpLrclibClient
 import app.lyrify.lyrics.LocalTrack
@@ -42,7 +41,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -123,14 +121,12 @@ object Lyrify {
         warn = { Log.w(LOG_TAG, it) },
         detail = { if (verbose()) Log.v(LOG_TAG, it) },
         locks = locks,
-        // Books never get lyrics (books/): known by the library once read, by their path before.
-        isBook = context.applicationContext.let { app -> { path -> isBookPart(path, (LibraryGraph.repository(app).state.value as? LibraryState.Ready)?.library) } },
+        // Books never get lyrics (books/): known by the library, waited for while it is read; by their path if it never is.
+        isBook = context.applicationContext.let { app -> { path -> isBookPartOnceRead(path, LibraryGraph.repository(app).state) } },
     ).also { created ->
         pipeline = created
         background.launch {
             created.adoptLegacy()
-            // Once the library is read, so a book known only by the user's mark or its tags is skipped too.
-            LibraryGraph.repository(context.applicationContext).state.first { it !is LibraryState.Loading }
             created.compareStored()
         }
     }

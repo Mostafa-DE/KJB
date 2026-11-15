@@ -120,6 +120,19 @@ class PlayerScreenTest {
     }
 
     @Test
+    fun `a file not known yet as a song or a book has nothing read until the library tells`() = runTest {
+        val path = "/storage/emulated/0/Music/Lantern Keeper/01 Lantern Keeper.mp3"
+        val entry = LedgerEntry(path = path, title = "Lantern Keeper", durationMs = 200_000, status = LyricsStatus.PLAIN_ONLY, lrclibId = 42, updatedAt = 1)
+        var reads = 0
+        var asks = 0
+        val lrc: suspend (String) -> String? = { reads++; null }
+        val plain: suspend (Long) -> String? = { asks++; "Paper lanterns rise" }
+        assertNull(songLyrics(path, entry, book = null, lrc, plain))
+        assertNull(songLyrics(path, null, book = null, lrc, plain))
+        assertEquals(0 to 0, reads to asks)
+    }
+
+    @Test
     fun `the current line is the last one that has started`() {
         val lines = (panelLyrics(synced, LyricsStatus.SYNCED) as PanelLyrics.Synced).lines
         assertEquals(-1, currentLine(lines, 999))
