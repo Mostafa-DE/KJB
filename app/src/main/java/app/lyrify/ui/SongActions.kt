@@ -178,14 +178,13 @@ sealed interface AddTarget {
 
 /**
  * The Add to sheet's places, the queues first: the queue playing, by name, with Play next and Add to end (without one
- * they make a queue of the songs), then the other queues (saved, then recent) and New queue, then Favourites, then the
- * user's [playlists] by name and New playlist.
+ * they make a queue of the songs), then the other queues in [queues]' order (the Queues page's) and New queue, then
+ * Favourites, then the user's [playlists] by name and New playlist.
  */
 fun addTargets(queues: List<QueueTarget>, playlists: List<Playlist>): List<AddTarget> {
-    val others = queues.filterNot { it.playing }
     val collator = Collator.getInstance()
     return listOf(AddTarget.PlayNext, AddTarget.AddToQueue(queues.firstOrNull { it.playing })) +
-        (others.filter { it.saved } + others.filterNot { it.saved }).map(AddTarget::Queue) +
+        queues.filterNot { it.playing }.map(AddTarget::Queue) +
         listOf(AddTarget.NewQueue, AddTarget.Favourites) +
         playlists.sortedWith(compareBy(collator) { it.name }).map(AddTarget::ToPlaylist) +
         AddTarget.NewPlaylist

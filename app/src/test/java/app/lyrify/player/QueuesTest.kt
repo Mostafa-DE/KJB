@@ -454,6 +454,58 @@ class QueuesTest {
         assertEquals(refilled.currentId, undone.currentId)
     }
 
+    // The lists the screens show (QF3): the queue playing first, then the others, with no Saved part
+
+    @Test
+    fun `the queue playing is listed first and only there, the others under it with the last left first`() {
+        val first = playing(0)
+        val albumId = first.currentId!!
+        val second = first.play(folder, 0, folderSource, now = 2).book
+        val ripsId = second.currentId!!
+        val book = second.play(listOf(song("Loose 1")), 0, QueueSource(SourceKind.SEARCH, "search:loose", "loose"), now = 3).book
+        assertEquals(listOf(book.currentId, ripsId, albumId), book.listed.map { it.id })
+        assertEquals(listOf(ripsId, albumId), book.others.map { it.id })
+        // Kept while it plays (a New queue played, or Keep in 3.0.0), it still shows once, first.
+        val kept = book.keep(book.currentId!!)
+        assertEquals(listOf(kept.currentId), kept.saved)
+        assertEquals(listOf(kept.currentId, ripsId, albumId), kept.listed.map { it.id })
+        assertFalse(kept.currentId in kept.others.map { it.id })
+        // One recent queue per place still: the album played again shows once.
+        val again = book.play(album, 3, albumSource, now = 4).book
+        assertEquals(listOf(albumSource.key, "search:loose", folderSource.key), again.listed.map { it.source.key })
+    }
+
+    @Test
+    fun `a queue kept with Keep before stays listed among the others by when it was left, and Recent still keeps 10`() {
+        var book = playing(0)
+        val kept = book.currentId!!
+        book = book.keep(kept).play(folder, 0, folderSource, now = 2).book
+        (1..12).forEach { n -> book = book.play(listOf(song("Loose $n")), 0, QueueSource(SourceKind.SEARCH, "search:$n", "$n"), now = 2L + n).book }
+        assertEquals(QueueBook.MAX_RECENT, book.recent.size)
+        val others = book.others
+        assertEquals(QueueBook.MAX_RECENT + 1, others.size)
+        // Left first (at 2), it shows last, under Recent's ten, the newest first.
+        assertEquals(kept, others.last().id)
+        assertEquals(book.recent, others.dropLast(1).map { it.id })
+        // A queue made with New queue is kept too, and shows first, as the newest.
+        val made = book.newQueue("Road trip", folder, folderSource, now = 50)!!.book
+        assertEquals("Road trip", made.others.first().name)
+        assertEquals(made.others.map { it.id }.distinct(), made.others.map { it.id })
+    }
+
+    @Test
+    fun `with nothing playing the others are listed alone, and with no queue at all nothing is`() {
+        assertEquals(emptyList<Queue>(), QueueBook().listed)
+        val book = playing(0).play(folder, 0, folderSource, now = 2).book
+        val albumId = book.recent.single()
+        // Every song taken out of the queue playing takes the queue with it: nothing plays.
+        val id = book.currentId!!
+        val emptied = book.queue(id)!!.items.fold(book) { left, item -> left.remove(id, item.uid)!!.book }
+        assertNull(emptied.current)
+        assertEquals(listOf(albumId), emptied.listed.map { it.id })
+        assertEquals(emptied.listed, emptied.others)
+    }
+
     // Resume and Play from start
 
     @Test

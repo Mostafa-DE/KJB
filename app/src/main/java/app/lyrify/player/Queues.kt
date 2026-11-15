@@ -71,11 +71,13 @@ data class Deleted(val book: QueueBook, val queue: Queue, val saved: Boolean, va
 data class Removed(val book: QueueBook, val queueId: String, val item: QueueItem, val at: Int, val queueGone: Boolean)
 
 /**
- * Every queue KJB keeps: the one playing ([currentId]), Recent (newest first, at most [MAX_RECENT]) and Saved (newest
- * first, no cap). Pure: each operation gives a new book, and player/PlayerCore.kt keeps the latest. Queue ids and item
- * uids come from counters kept with the book, so they never repeat. [jumps] counts the user's moves inside or between
- * queues (a tap, Resume, Play from start): on each new count the player goes to the current queue's [Queue.index] and
- * [Queue.positionMs]; a song changing by itself does not count.
+ * Every queue KJB keeps: the one playing ([currentId]), Recent (newest first, at most [MAX_RECENT]) and the kept queues
+ * ([saved]: made with New queue or by an import, or kept with Keep in 3.0.0; newest first, no cap), which the screens
+ * list with Recent ([others]), never as a part of their own. Pure: each operation gives a new book, and
+ * player/PlayerCore.kt keeps the latest. Queue ids and item uids come from counters kept with the book, so they never
+ * repeat. [jumps] counts the user's moves inside or between queues (a tap, Resume, Play from start): on each new count
+ * the player goes to the current queue's [Queue.index] and [Queue.positionMs]; a song changing by itself does not
+ * count.
  */
 data class QueueBook(
     val queues: List<Queue> = emptyList(),
@@ -89,6 +91,17 @@ data class QueueBook(
     val current: Queue? get() = currentId?.let(::queue)
 
     fun queue(id: String): Queue? = queues.firstOrNull { it.id == id }
+
+    /**
+     * Every queue but the one playing, as every list shows them under it (the Queues page, the Queue sheet, Add to, the
+     * car): the last played or left first, each once. Recent and the kept queues ([saved]) are one list on screen, so a
+     * queue kept with Keep before it went (3.0.0) still shows, and stays until it is deleted.
+     */
+    val others: List<Queue>
+        get() = (recent + saved).distinct().filter { it != currentId }.mapNotNull(::queue).sortedByDescending { it.updatedAt }
+
+    /** The queue playing first, then [others]. */
+    val listed: List<Queue> get() = listOfNotNull(current) + others
 
     /**
      * A tap on [songs]`[start]` in a list from [source]: inside the current queue when it came from that place and the
@@ -246,7 +259,7 @@ data class QueueBook(
         return edit(queueId) { it.copy(items = items, index = index, positionMs = if (kept >= 0) it.positionMs else 0, unshuffled = it.unshuffled?.minus(uids.toSet())) }
     }
 
-    /** "Keep": a recent queue moves to Saved, where it never drops off. */
+    /** "Keep" (3.0.0, gone from the screens since): a recent queue moves to the kept ones, where it never drops off. */
     fun keep(queueId: String): QueueBook {
         if (queue(queueId) == null || queueId in saved) return this
         return copy(recent = recent - queueId, saved = listOf(queueId) + saved)

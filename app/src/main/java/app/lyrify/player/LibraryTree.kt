@@ -136,8 +136,7 @@ object LibraryTree {
         val library = data.library
         rootSize(id)?.let { size -> return TOP.take(size).map { TreeNode(it, data.name(it), grid = it == ALBUMS) } }
         return when (id) {
-            QUEUES -> (listOfNotNull(data.book.currentId) + data.book.saved + data.book.recent).distinct()
-                .mapNotNull(data.book::queue).map { TreeNode(QUEUE + it.id, data.queueName(it)) }
+            QUEUES -> data.book.listed.map { TreeNode(QUEUE + it.id, data.queueName(it)) }
             PLAYLISTS -> playlists(data)
             ALBUMS -> library.albums.map { TreeNode(ALBUM + it.key, it.title, it.artist, cover = it.songs.firstOrNull()) }
             ARTISTS -> library.artists.map { TreeNode(ARTIST + it.name, it.name) }
