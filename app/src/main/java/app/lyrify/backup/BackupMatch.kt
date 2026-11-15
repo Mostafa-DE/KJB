@@ -233,6 +233,9 @@ class SongMatcher(phone: List<Song>) {
         /** A path below the root as compared: in one Unicode form (NFC), case aside. */
         private fun relativeKey(path: String): String = nfc(path).trim('/').lowercase(Locale.ROOT)
 
+        /** An import's path as [relativeKey] compares it, `\` as `/`: two spellings of one path are one key. */
+        internal fun pathKey(path: String): String = relativeKey(path.replace('\\', '/'))
+
         /** [path] in Unicode's composed form: a path copied from another system may come decomposed (NFD). */
         private fun nfc(path: String): String = Normalizer.normalize(path, Normalizer.Form.NFC)
     }

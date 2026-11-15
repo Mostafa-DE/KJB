@@ -459,11 +459,14 @@ class ImportPlan(val bundle: ImportBundle, phone: List<Song>) {
         /**
          * The songs of [left], those no other pass found, each by a file name only one song of the phone has
          * ([SongMatcher.byUniqueName]): never a song of [taken], which other songs of the import found, and never one
-         * that songs of two paths both name, as it could be either.
+         * that songs of two paths both name, as it could be either. Two spellings of one path ([SongMatcher.pathKey]:
+         * Unicode form, case, `\`) are one path.
          */
         private fun byName(left: List<ImportSong>, matcher: SongMatcher, taken: Set<String>): Map<ImportSong, Song> {
             val claims = left.mapNotNull { song -> matcher.byUniqueName(song)?.takeIf { it.path !in taken }?.let { song to it } }
-            return claims.groupBy { it.second.path }.values.filter { same -> same.distinctBy { it.first.path ?: it.first.relativePath }.size == 1 }.flatten().toMap()
+            return claims.groupBy { it.second.path }.values
+                .filter { same -> same.distinctBy { (song, _) -> (song.path ?: song.relativePath)?.let(SongMatcher::pathKey) }.size == 1 }
+                .flatten().toMap()
         }
 
         /** The key of the list an imported queue came from: its own, so a tap in another list never lands in it. */

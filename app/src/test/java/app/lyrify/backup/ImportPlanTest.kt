@@ -576,6 +576,18 @@ class ImportPlanTest {
     }
 
     @Test
+    fun `one moved song named twice, in two Unicode forms or two cases of one path, is one path, and found`() = runTest {
+        val spellings = listOf("Download/Caf\u00e9/02 Salt Road.mp3", "Download/Cafe\u0301/02 Salt Road.mp3", "DOWNLOAD/CAF\u00c9/02 SALT ROAD.MP3")
+        val songs = spellings.map { ImportSong("/storage/emulated/0/$it", "/storage/emulated/0/$it") }
+        val plan = ImportPlan(ImportBundle(favourites = songs), phone)
+        val stores = FakeStores()
+
+        assertEquals(emptyList<ImportSong>(), plan.missing(setOf(ImportKind.FAVOURITES)))
+        plan.apply(setOf(ImportKind.FAVOURITES), stores, ids(), NOW, UNTITLED)
+        assertEquals(listOf(road.ref), stores.state.favouriteSongs)
+    }
+
+    @Test
     fun `a moved favourite in Samsung Music's file is found by its file name`() = runTest {
         val plan = ImportPlan(samsung("#EXTM3U\n../Download/Old Rips/02 Salt Road.mp3\n"), phone)
         val stores = FakeStores()
