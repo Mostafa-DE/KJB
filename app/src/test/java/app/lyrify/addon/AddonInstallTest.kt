@@ -10,6 +10,7 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -17,6 +18,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.security.MessageDigest
 
@@ -346,6 +348,26 @@ class AddonInstallTest {
         assertEquals("ab".repeat(32), downloads.sha256)
         assertEquals(54_000_000, downloads.bytes)
         assertEquals(3, setOf(ai.name, downloads.name, newer.name).size)
+    }
+
+    @Test
+    fun `the bytes copied into an install are hashed and counted on the way, so a file changed after its check is not installed`() {
+        val file = temp.newFile("KJB-Downloads.apk").apply { writeBytes(byteArrayOf(5, 5, 5)) }
+        val pin = hex(MessageDigest.getInstance("SHA-256").digest(byteArrayOf(5, 5, 5)))
+        assertTrue("checked before the install", wholeFileIs(file, pin))
+        fun copied(sha256: String = pin, bytes: Long = 3, out: ByteArrayOutputStream = ByteArrayOutputStream()) = file.inputStream().use { copyVerified(it, out, sha256, bytes) }
+
+        file.writeBytes(byteArrayOf(6, 6, 6))
+        assertFalse("changed since its check: same size, other bytes", copied())
+        file.writeBytes(byteArrayOf(5, 5, 5, 5))
+        assertFalse("longer than the pin", copied())
+        file.writeBytes(byteArrayOf(5, 5))
+        assertFalse("shorter than the pin", copied())
+
+        file.writeBytes(byteArrayOf(5, 5, 5))
+        val out = ByteArrayOutputStream()
+        assertTrue(copied(sha256 = pin.uppercase(), out = out))
+        assertArrayEquals("every byte goes to the session", byteArrayOf(5, 5, 5), out.toByteArray())
     }
 
     // One receiver for every install: KJB's own update and both add-ons

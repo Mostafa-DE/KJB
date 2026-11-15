@@ -36,6 +36,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.io.IOException
+import java.io.InputStream
+import java.io.OutputStream
 import java.net.URI
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
@@ -240,22 +242,38 @@ fun signerDigests(current: List<ByteArray>?, legacy: List<ByteArray>?): Set<Stri
  * All of [file] is [sha256] (hex, any case): hashed whole, whether it was downloaded now or found from before. False when
  * it cannot be read. Blocking.
  */
-fun wholeFileIs(file: File, sha256: String): Boolean {
-    val whole = try {
-        val digest = MessageDigest.getInstance("SHA-256")
-        file.inputStream().use { input ->
-            val buffer = ByteArray(HASH_BUFFER_BYTES)
-            while (true) {
-                val read = input.read(buffer)
-                if (read < 0) break
-                digest.update(buffer, 0, read)
-            }
-        }
-        hex(digest.digest())
-    } catch (_: IOException) {
-        return false
+fun wholeFileIs(file: File, sha256: String): Boolean = try {
+    file.inputStream().use { hashed(it, null) }.sha256.equals(sha256, ignoreCase = true)
+} catch (_: IOException) {
+    false
+}
+
+/**
+ * Copies all of [input] to [out] (an install session's file) while hashing and counting it: true when what went is exactly
+ * [bytes] long and [sha256] (hex, any case). The install commits only then, so a file changed after its check
+ * ([wholeFileIs]) never reaches the installer. Blocking.
+ */
+fun copyVerified(input: InputStream, out: OutputStream, sha256: String, bytes: Long): Boolean {
+    val read = hashed(input, out)
+    return read.bytes == bytes && read.sha256.equals(sha256, ignoreCase = true)
+}
+
+/** What [hashed] read: its SHA-256 (hex) and its length. */
+private class Hashed(val sha256: String, val bytes: Long)
+
+/** Reads all of [input], hashing and counting it, and writes it on to [out] when there is one. Blocking. */
+private fun hashed(input: InputStream, out: OutputStream?): Hashed {
+    val digest = MessageDigest.getInstance("SHA-256")
+    val buffer = ByteArray(HASH_BUFFER_BYTES)
+    var total = 0L
+    while (true) {
+        val read = input.read(buffer)
+        if (read < 0) break
+        digest.update(buffer, 0, read)
+        out?.write(buffer, 0, read)
+        total += read
     }
-    return whole.equals(sha256, ignoreCase = true)
+    return Hashed(hex(digest.digest()), total)
 }
 
 /**
@@ -457,17 +475,29 @@ internal class AndroidInstallPort(private val context: Context, private val addo
         }
         val outcome = InstallReceiver.expect(session, InstallTarget.Addon(addon))
         try {
-            installer.openSession(session).use { open ->
-                open.openWrite(INSTALL_NAME, 0, apk.length()).use { out ->
-                    apk.inputStream().use { it.copyTo(out) }
-                    open.fsync(out)
+            val whole = installer.openSession(session).use { open ->
+                // The bytes the installer gets are the pinned ones: hashed and counted as they go, else never committed.
+                val copied = open.openWrite(INSTALL_NAME, 0, apk.length()).use { out ->
+                    apk.inputStream().use { copyVerified(it, out, addon.apk.sha256, addon.apk.bytes) }.also { if (it) open.fsync(out) }
                 }
-                val status = Intent(context, InstallReceiver::class.java).putExtra(InstallReceiver.EXTRA_SESSION, session)
-                // Mutable: the installer adds its status. Explicit, to KJB's own receiver, which is not exported.
-                val pending = PendingIntent.getBroadcast(context, session, status, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE)
-                open.commit(pending.intentSender)
+                if (copied) {
+                    val status = Intent(context, InstallReceiver::class.java).putExtra(InstallReceiver.EXTRA_SESSION, session)
+                    // Mutable: the installer adds its status. Explicit, to KJB's own receiver, which is not exported.
+                    val pending = PendingIntent.getBroadcast(context, session, status, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE)
+                    open.commit(pending.intentSender)
+                } else {
+                    open.abandon()
+                }
+                copied
             }
-            outcome.await()
+            if (whole) {
+                outcome.await()
+            } else {
+                // Changed after its check: deleted, so the next try downloads it again.
+                Log.w(LOG_TAG, "${addon.label}: the file changed after its check, not installed")
+                discard()
+                InstallOutcome.Failed(PackageInstaller.STATUS_FAILURE_INVALID)
+            }
         } catch (e: CancellationException) {
             runCatching { installer.abandonSession(session) }
             throw e

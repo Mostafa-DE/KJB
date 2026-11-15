@@ -21,6 +21,7 @@ import app.lyrify.addon.InstallTarget
 import app.lyrify.addon.KjbAddon
 import app.lyrify.addon.KjbAddons
 import app.lyrify.addon.archiveSigning
+import app.lyrify.addon.copyVerified
 import app.lyrify.addon.signed
 import app.lyrify.addon.signers
 import app.lyrify.addon.wholeFileIs
@@ -463,17 +464,29 @@ internal class SelfInstallPort(private val context: Context, private val apk: Re
         }
         val outcome = InstallReceiver.expect(session, InstallTarget.Kjb)
         try {
-            installer.openSession(session).use { open ->
-                open.openWrite(INSTALL_NAME, 0, file.length()).use { out ->
-                    file.inputStream().use { it.copyTo(out) }
-                    open.fsync(out)
+            val whole = installer.openSession(session).use { open ->
+                // The bytes the installer gets are the release's: hashed and counted as they go, else never committed.
+                val copied = open.openWrite(INSTALL_NAME, 0, file.length()).use { out ->
+                    file.inputStream().use { copyVerified(it, out, apk.sha256, apk.bytes) }.also { if (it) open.fsync(out) }
                 }
-                val status = Intent(context, InstallReceiver::class.java).putExtra(InstallReceiver.EXTRA_SESSION, session)
-                // Mutable: the installer adds its status. Explicit, to KJB's own receiver, which is not exported.
-                val pending = PendingIntent.getBroadcast(context, session, status, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE)
-                open.commit(pending.intentSender)
+                if (copied) {
+                    val status = Intent(context, InstallReceiver::class.java).putExtra(InstallReceiver.EXTRA_SESSION, session)
+                    // Mutable: the installer adds its status. Explicit, to KJB's own receiver, which is not exported.
+                    val pending = PendingIntent.getBroadcast(context, session, status, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE)
+                    open.commit(pending.intentSender)
+                } else {
+                    open.abandon()
+                }
+                copied
             }
-            outcome.await()
+            if (whole) {
+                outcome.await()
+            } else {
+                // Changed after its check: deleted, so the next try downloads it again.
+                Log.w(LOG_TAG, "update: the file changed after its check, not installed")
+                discard()
+                InstallOutcome.Failed(PackageInstaller.STATUS_FAILURE_INVALID)
+            }
         } catch (e: CancellationException) {
             runCatching { installer.abandonSession(session) }
             throw e
