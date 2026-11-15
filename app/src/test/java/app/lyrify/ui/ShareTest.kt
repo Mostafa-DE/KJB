@@ -10,6 +10,8 @@ import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
+import javax.xml.parsers.DocumentBuilderFactory
+import org.w3c.dom.Element
 
 /**
  * Share: songs as their files, lyrics as text or as the `.lrc`, a crash report as text, as the share sheet gets them.
@@ -185,9 +187,30 @@ class ShareTest {
         assertEquals(0, request.flags)
     }
 
+    // KJB does not offer itself
+
+    /** The activities of KJB's manifests (main and debug) that take a share (SEND or SEND_MULTIPLE), by class name. */
+    private fun manifestShareTargets(): Set<String> = listOf("src/main/AndroidManifest.xml", "src/debug/AndroidManifest.xml").map(::File).filter(File::isFile).flatMap { file ->
+        val activities = DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(file).getElementsByTagName("activity")
+        (0 until activities.length).map { activities.item(it) as Element }.filter { activity ->
+            val actions = activity.getElementsByTagName("action")
+            (0 until actions.length).any { (actions.item(it) as Element).getAttribute("android:name") in SHARE_ACTIONS }
+        }.map { activity -> activity.getAttribute("android:name").let { if (it.startsWith(".")) "app.lyrify$it" else it } }
+    }.toSet()
+
+    @Test
+    fun `KJB's own share sheets leave out every activity of KJB's that takes a share`() {
+        assertEquals(setOf("app.lyrify.ui.MainActivity", "app.lyrify.ui.SaveToKjbActivity"), manifestShareTargets())
+        assertEquals(manifestShareTargets(), OWN_SHARE_TARGETS.toSet())
+    }
+
     @Test
     fun `every share sheet KJB opens is the share helper's`() {
         val choosers = File("src/main/java").walkTopDown().filter { it.isFile && it.extension == "kt" && "createChooser(" in it.readText() }.map { it.name }.toList()
         assertEquals(listOf("Share.kt"), choosers)
+    }
+
+    private companion object {
+        val SHARE_ACTIONS = setOf(Intent.ACTION_SEND, Intent.ACTION_SEND_MULTIPLE)
     }
 }

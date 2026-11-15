@@ -2,6 +2,7 @@ package app.lyrify.ui
 
 import android.content.ActivityNotFoundException
 import android.content.ClipData
+import android.content.ComponentName
 import android.content.ContentResolver
 import android.content.ContentUris
 import android.content.Context
@@ -178,8 +179,20 @@ fun ShareRequest.toIntent(): Intent {
     }
 }
 
-/** Your phone's share sheet for [request]. */
-fun shareSheet(request: ShareRequest): Intent = Intent.createChooser(request.toIntent(), null)
+/**
+ * KJB's own share targets, by class: its audio open target ([MainActivity], files other apps share) and Save to KJB
+ * ([SaveToKjbActivity], shared text with a link). KJB's own share sheets never offer them: a song or lyrics shared to KJB
+ * itself would only come back.
+ */
+internal val OWN_SHARE_TARGETS: List<String> = listOf(MainActivity::class.java.name, SaveToKjbActivity::class.java.name)
+
+/**
+ * Your phone's share sheet for [request], without KJB's own targets ([OWN_SHARE_TARGETS] in [ownPackage], the running
+ * build's package). The chooser reads EXTRA_EXCLUDE_COMPONENTS from Android 7 (API 24), below KJB's minSdk.
+ */
+fun shareSheet(request: ShareRequest, ownPackage: String): Intent =
+    Intent.createChooser(request.toIntent(), null)
+        .putExtra(Intent.EXTRA_EXCLUDE_COMPONENTS, OWN_SHARE_TARGETS.map { ComponentName(ownPackage, it) }.toTypedArray())
 
 /** How a share went; all but [Opened] say so in a toast. */
 sealed interface Shared {
@@ -219,7 +232,7 @@ suspend fun shareSongs(context: Context, songs: List<Song>, title: (Song) -> Str
     val missing = songs.count { it.path !in found }
     if (missing > 0) return Shared.NotFound(missing)
     val shared = songs.map { song -> found.getValue(song.path).let { SharedSong(it.uri, it.mimeType, title(song)) } }
-    return launchShare(songs.size) { context.startActivity(shareSheet(songsShare(shared) { count -> context.resources.getQuantityString(R.plurals.lib_songs, count, count) })) }
+    return launchShare(songs.size) { context.startActivity(shareSheet(songsShare(shared) { count -> context.resources.getQuantityString(R.plurals.lib_songs, count, count) }, context.packageName)) }
 }
 
 /** "As text": the song's `.lrc` as words ([lyricsText]), else LRCLIB's plain lyrics the player shows ([plainRecord]). */
@@ -228,18 +241,18 @@ suspend fun shareLyricsText(context: Context, song: Song, title: String, entry: 
     val text = lrc?.let { lyricsText(title, song.artist, it) }
         ?: plainRecord(entry)?.let { plainText(context, it) }?.let { lyricsText(title, song.artist, it) }
         ?: return Shared.NoLyrics
-    return launchShare(1) { context.startActivity(shareSheet(lyricsTextShare(title, text))) }
+    return launchShare(1) { context.startActivity(shareSheet(lyricsTextShare(title, text), context.packageName)) }
 }
 
 /** "Lyrics file": the song's synced `.lrc` as it is on disk, through a copy in KJB's cache ([lrcCopy]). */
 suspend fun shareLyricsFile(context: Context, song: Song, title: String): Shared {
     val file = withContext(Dispatchers.IO) { lrcCopy(context.cacheDir, song.path, System.currentTimeMillis()) } ?: return Shared.NoLyrics
     val uri = FileProvider.getUriForFile(context, context.packageName + SHARE_AUTHORITY, file)
-    return launchShare(1) { context.startActivity(shareSheet(lyricsFileShare(uri.toString(), title))) }
+    return launchShare(1) { context.startActivity(shareSheet(lyricsFileShare(uri.toString(), title), context.packageName)) }
 }
 
 /** Share on one crash: its report as text ([crashReportShare]); it leaves the phone only where the user sends it. */
-fun shareCrashReport(context: Context, text: String): Shared = launchShare(1) { context.startActivity(shareSheet(crashReportShare(text))) }
+fun shareCrashReport(context: Context, text: String): Shared = launchShare(1) { context.startActivity(shareSheet(crashReportShare(text), context.packageName)) }
 
 /** Starts the share sheet of [songs] songs ([start]): how it went. */
 internal inline fun launchShare(songs: Int, start: () -> Unit): Shared = try {
