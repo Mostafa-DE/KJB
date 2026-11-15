@@ -207,6 +207,28 @@ class BookStateTest {
     }
 
     @Test
+    fun `a book reads the place, speed and finished it played with last, whichever of its ids kept them, and its next change keeps its id alone`() {
+        val book = shelf(road).books.single()
+        fun lone(part: Int, at: Long, played: Long, speed: Float) =
+            BookEntry(road[part].path, "Part ${part + 1}", parts = listOf(road[part].path), place = BookPlace(0, at), partPath = road[part].path, speed = Speed(speed), lastPlayedAt = played)
+        // Its folder's id while it had three parts (finished then), and its first file's path once that file was left alone, newer.
+        val folder = BookEntry(book.id, "Lantern Road", parts = road.map { it.path }, place = BookPlace(), speed = Speed(1.25f), lastPlayedAt = 5, finished = true)
+        val stale = BookState(books = mapOf(book.id to folder, road[0].path to lone(0, 41_000, played = 9, speed = 1.5f)))
+        assertEquals(BookPlace(0, 41_000), stale.placeOf(book))
+        assertEquals(Speed(1.5f), stale.speedOf(book))
+        assertFalse(stale.entryOf(book)!!.finished)
+        // No folder id: a later part played more recently wins over the first part in play order.
+        val parts = BookState(books = mapOf(road[0].path to lone(0, 1_000, played = 3, speed = 1f), road[1].path to lone(1, 2_000, played = 7, speed = 2f)))
+        assertEquals(BookPlace(1, 2_000), parts.placeOf(book))
+        assertEquals(Speed(2f), parts.speedOf(book))
+        // Its next change keeps it under its id alone, at the place it read.
+        val changed = stale.withSpeed(book, Speed(1.75f))
+        assertEquals(setOf(book.id), changed.books.keys)
+        assertEquals(BookPlace(0, 41_000), changed.placeOf(book))
+        assertEquals(setOf(book.id), parts.withPlace(book, BookPlace(2, 500), now = 10).books.keys)
+    }
+
+    @Test
     fun `a book down to one file never shows another file's chapters`() {
         val two = road.take(2)
         val first = shelf(two, hidden = listOf(two[1])).books.single()

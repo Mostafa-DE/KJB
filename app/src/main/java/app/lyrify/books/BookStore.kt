@@ -74,15 +74,19 @@ data class BookEntry(
 /** Everything `books.json` holds: the books by [BookEntry.id] and the user's [marks]. */
 data class BookState(val books: Map<String, BookEntry> = emptyMap(), val marks: BookMarks = BookMarks()) {
     /**
-     * [book]'s entry: under its id, else under one of its files' paths, the id a lone file had before its folder and album
-     * named it (moved to the id at the book's next change). A single file's chapters only while they are that file's, as
-     * another file of its folder and album may stand in it now.
+     * [book]'s entry: the one played last of those under its id and under its files' paths (the id a lone file had before
+     * its folder and album named it), so an older one never wins over a newer place, speed or finished; they all go to
+     * its id at the book's next change. A single file's chapters only while they are that file's, as another file of its
+     * folder and album may stand in it now.
      */
     fun entryOf(book: Book): BookEntry? {
-        val entry = books[book.id] ?: book.parts.firstNotNullOfOrNull { books[it.path] } ?: return null
+        val entry = keysOf(book).mapNotNull(books::get).maxByOrNull { it.lastPlayedAt ?: Long.MIN_VALUE } ?: return null
         val own = book.kind != BookKind.SINGLE || entry.parts == book.parts.map { it.path }
         return if (own) entry else entry.copy(chapters = null, chaptersStamp = null)
     }
+
+    /** Where `books.json` may keep [book]: its id first (the one kept when none played later), then its files' paths. */
+    private fun keysOf(book: Book): List<String> = (listOf(book.id) + book.parts.map { it.path }).distinct()
 
     /**
      * Where [book] stands: its kept part found by path, else by number within the parts; its start when never played.
@@ -175,15 +179,15 @@ data class BookState(val books: Map<String, BookEntry> = emptyMap(), val marks: 
 
     /**
      * [book]'s entry changed (made when new, with its title, author and parts as they are now), within the caps, under its
-     * id. Its place is kept as it reads now ([placeOf]), as the parts it was found by are written over.
+     * id alone, the others it was kept under ([keysOf]) gone. Its place is kept as it reads now ([placeOf]), as the parts
+     * it was found by are written over.
      */
     private fun change(book: Book, change: (BookEntry) -> BookEntry): BookState {
         val now = BookEntry(book.id, book.title.take(MAX_TITLE), book.author?.take(MAX_TITLE), book.parts.take(MAX_PARTS).map { it.path })
         val kept = entryOf(book)
         val place = placeOf(book)
         val entry = change(kept?.copy(id = book.id, title = now.title, author = now.author, parts = now.parts, place = place, partPath = kept.partPath?.let { book.parts[place.partIndex].path }) ?: now)
-        val others = if (kept == null) books else books - kept.id
-        return copy(books = keepNewest(others + (book.id to entry)))
+        return copy(books = keepNewest(books - keysOf(book).toSet() + (book.id to entry)))
     }
 
     companion object {
