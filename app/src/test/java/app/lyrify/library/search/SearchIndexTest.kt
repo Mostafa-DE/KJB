@@ -158,8 +158,9 @@ class SearchIndexTest {
     }
 
     @Test
-    fun `the queue is named after the words, the same list whatever their case or accents`() {
-        assertEquals(QueueSource(SourceKind.SEARCH, "search:ferry bell", "Ferry Bell"), searchSource("  Ferry   Bell "))
+    fun `the queue is named after the words, and every search is one list, so Recent keeps one search queue`() {
+        assertEquals(QueueSource(SourceKind.SEARCH, "search", "Ferry Bell"), searchSource("  Ferry   Bell "))
+        assertEquals(searchSource("ferry bell").key, searchSource("harbour glass").key)
         assertEquals(searchSource("ferry bell").key, searchSource("FÉRRY Bell").key)
         assertEquals("FÉRRY Bell", searchSource("FÉRRY Bell").name)
     }

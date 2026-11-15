@@ -67,6 +67,7 @@ import app.lyrify.player.QueueSource
 import app.lyrify.player.QueueTarget
 import app.lyrify.player.SourceKind
 import app.lyrify.player.Undo
+import app.lyrify.player.pickedSource
 import kotlinx.coroutines.launch
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -594,10 +595,6 @@ fun sourceLabel(resources: Resources, source: QueueSource): String = when (sourc
     SourceKind.SONGS -> source.name.ifEmpty { resources.getString(R.string.library_tab_songs) }
 }
 
-/** The source of songs picked by hand in a selection: a new one each time. */
-fun pickedSource(resources: Resources, count: Int, now: Long): QueueSource =
-    QueueSource(SourceKind.PICKED, "picked:$now", resources.getQuantityString(R.plurals.lib_songs, count, count))
-
 /**
  * A page outside the Library's lists that opens song sheets (Your listening's Top songs, Search): keep
  * `val sheets = rememberSongSheets()`, call `sheets.openSong(ref)` on a tap, and place this once on the page.
@@ -849,11 +846,11 @@ fun SelectionHost(selection: SongSelection, list: List<Song>, loaded: Boolean, u
         val refs = picked.map { it.ref }
         SelectionBar(
             onPlay = {
-                Lyrify.playback(context).play(refs, 0, pickedSource(resources, refs.size, System.currentTimeMillis()))
+                Lyrify.playback(context).play(refs, 0, pickedSource(resources.getQuantityString(R.plurals.lib_songs, refs.size, refs.size)))
                 onChange(SongSelection())
             },
             onAdd = {
-                val source = pickedSource(resources, refs.size, System.currentTimeMillis())
+                val source = pickedSource(resources.getQuantityString(R.plurals.lib_songs, refs.size, refs.size))
                 sheets.show(OpenSheet.AddTo(refs, source, sourceLabel(resources, source)))
             },
             onFavourite = {

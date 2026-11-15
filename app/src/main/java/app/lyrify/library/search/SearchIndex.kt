@@ -135,8 +135,8 @@ class SearchIndex private constructor(
 /** What a song tapped in the results plays: the song results, then the songs found only by their lyrics. */
 fun searchQueue(songs: List<Song>, lyrics: List<Song>): List<Song> = (songs + lyrics).distinctBy { it.path }
 
-/** The results' queue as a list: "Search · words", with the words as typed; the same words in another case or with other accents are the same list. */
-fun searchSource(query: String): QueueSource = QueueSource(SourceKind.SEARCH, "search:" + fold(query), query.trim().replace(SPACES, " "))
+/** The results' queue: "Search · words", with the words as typed. Every search is one place, so Recent keeps one search queue. */
+fun searchSource(query: String): QueueSource = QueueSource(SourceKind.SEARCH, "search", query.trim().replace(SPACES, " "))
 
 /**
  * Search's songs for a search typed or said in the car ([TreeSearch], auto/CarBrowse.kt), what a song tapped in Search's

@@ -17,7 +17,8 @@ data class QueueItem(val uid: Long, val song: SongRef, val sourceIndex: Int? = n
  * A queue: its songs in play order, each song once (by path), the [index] of the current one and the [positionMs] in it,
  * the list it came from ([source]), and the user's [name] for it (Rename; null shows the source and [startedAt], see
  * [queueNames]). While shuffled, [unshuffled] keeps the order before, by uid, so turning Shuffle off restores it.
- * [startedAt] is when it was made, [updatedAt] when it last played or was left, wall-clock millis.
+ * [startedAt] is when it was made, [updatedAt] when it last played or was left, wall-clock millis. [listSize] is how
+ * many songs the list it came from had then (null for a queue stored before it was kept).
  */
 data class Queue(
     val id: String,
@@ -29,13 +30,26 @@ data class Queue(
     val unshuffled: List<Long>? = null,
     val updatedAt: Long = 0,
     val startedAt: Long = 0,
+    val listSize: Int? = null,
 ) {
     val shuffled: Boolean get() = unshuffled != null
 
     val current: QueueItem? get() = items.getOrNull(index)
 
-    /** Whether this queue came from the list [other] names: the same kind and key, whatever the name says now. */
+    /** Whether this queue came from the place [other] names: the same kind and key, whatever the name says now. */
     fun from(other: QueueSource): Boolean = source.kind == other.kind && source.key == other.key
+
+    /**
+     * Whether [songs], a list as shown now, is still the list this queue was made from: as long (when its [listSize] is
+     * known), and each of the queue's songs from it still at its place there, whatever the queue's own changes since
+     * (songs taken out, moves, Shuffle, Play next and added songs). Another sort, filter or search of the same place is
+     * another list, and so is the list after the library changed (a song added to it or gone from it).
+     */
+    fun madeFrom(songs: List<SongRef>): Boolean {
+        val shown = songs.distinctBy { it.path }
+        if (listSize != null && shown.size != listSize) return false
+        return items.all { item -> item.sourceIndex?.let { shown.getOrNull(it)?.path == item.song.path } ?: true }
+    }
 }
 
 /** A change that may have moved the queue left into Recent ([toRecent]), for the one-time "Your last queue is in Recent". */
@@ -77,19 +91,26 @@ data class QueueBook(
     fun queue(id: String): Queue? = queues.firstOrNull { it.id == id }
 
     /**
-     * A tap on [songs]`[start]` in a list from [source]: inside the current queue when it came from that list and is not
-     * saved (songs added with Play next stay), else a new queue from the list, starting at the tapped song, the old one
-     * kept in Recent, or in Saved at its place: a saved queue is kept for later, so a tap never moves it.
+     * A tap on [songs]`[start]` in a list from [source]: inside the current queue when it came from that place and the
+     * place still shows the list it was made from ([Queue.madeFrom]), and it is not saved (songs added with Play next
+     * stay; a song of the list taken out of the queue goes back in at its place). Else a new queue from the list as shown,
+     * starting at the tapped song. The old one is kept in Recent, where a queue from the same place replaces it (one
+     * recent queue per place), or in Saved at its place: a saved queue is kept for later, so a tap never moves it.
      */
     fun play(songs: List<SongRef>, start: Int, source: QueueSource, now: Long): Switched {
         val song = songs.getOrNull(start) ?: return Switched(this, toRecent = false)
         val playing = current?.takeUnless { it.id in saved }
-        if (playing != null && playing.from(source)) {
+        if (playing != null && playing.from(source) && playing.madeFrom(songs)) {
+            val shown = songs.distinctBy { it.path }
+            // A queue stored before the list's length was kept learns it here, its songs seen in their places.
+            val book = if (playing.listSize == null) edit(playing.id) { it.copy(listSize = shown.size) } else this
             val items = playing.items
             val at = items.getOrNull(start)?.takeIf { it.song.path == song.path && !it.playNext }?.let { start }
                 ?: items.indexOfFirst { it.song.path == song.path && !it.playNext }.takeIf { it >= 0 }
                 ?: items.indexOfFirst { it.song.path == song.path }.takeIf { it >= 0 }
-            if (at != null) return jumpTo(playing.id, at, now)
+            if (at != null) return book.jumpTo(playing.id, at, now)
+            val (back, index) = book.listSongBack(playing.id, song, shown.indexOfFirst { it.path == song.path })
+            return back.jumpTo(playing.id, index, now)
         }
         val (book, queue) = made(source, songs, song.path, now, shuffle = null)
         return book.switchTo(queue.id, fresh = true, now)
@@ -377,6 +398,7 @@ data class QueueBook(
             unshuffled = if (shuffle != null) ordered.map { it.uid } else null,
             updatedAt = now,
             startedAt = now,
+            listSize = unique.size,
         )
         return copy(queues = queues + queue, nextId = nextId + 1, nextUid = nextUid + items.size) to queue
     }
@@ -413,6 +435,25 @@ data class QueueBook(
         book = book.copy(currentId = queueId, recent = recent).edit(queueId) { it.copy(updatedAt = now) }
         val toRecent = old != null && old.id != queueId && old.id in recent
         return Switched(book.dropped(drop - queueId, evenCurrent = false), toRecent)
+    }
+
+    /**
+     * [song], the song at [place] in the list queue [queueId] came from, taken out of the queue before: back in right after
+     * the last of the list's songs before it, in the queue's order and in its order before Shuffle. The book and its index.
+     */
+    private fun listSongBack(queueId: String, song: SongRef, place: Int): Pair<QueueBook, Int> {
+        val queue = queue(queueId) ?: return this to 0
+        val item = QueueItem(nextUid, song, sourceIndex = place)
+        val before = { other: QueueItem? -> (other?.sourceIndex ?: -1) in 0 until place }
+        val at = queue.items.indexOfLast(before) + 1
+        val unshuffled = queue.unshuffled?.let { uids ->
+            val byUid = queue.items.associateBy { it.uid }
+            val after = uids.indexOfLast { before(byUid[it]) } + 1
+            uids.take(after) + item.uid + uids.drop(after)
+        }
+        val items = queue.items.take(at) + item + queue.items.drop(at)
+        val index = if (at <= queue.index) queue.index + 1 else queue.index
+        return edit(queueId) { it.copy(items = items, index = index, unshuffled = unshuffled) }.copy(nextUid = nextUid + 1) to at
     }
 
     /** Queue [queueId] plays (switched to, if it was not playing) from the song at [index], at its start. */

@@ -7,8 +7,8 @@ import app.lyrify.library.SongRef
 import app.lyrify.library.displayTitle
 import app.lyrify.library.recentlyAdded
 import app.lyrify.library.sortSongs
+import app.lyrify.library.search.searchSource
 import app.lyrify.settings.LibrarySettings
-import app.lyrify.settings.LyricsFilter
 import app.lyrify.settings.SortSongs
 import java.text.Normalizer
 import java.util.Locale
@@ -107,12 +107,15 @@ object LibraryTree {
     private const val SEARCH = "search:"
     private const val SONG = '|'
 
+    /**
+     * The car's Songs: every song by title, never the Songs tab's sort and filter, so a place of its own: a tap in the car
+     * never replaces the phone's Songs queue.
+     */
+    private val CAR_SONGS = QueueSource(SourceKind.SONGS, "car-songs", "")
+
     /** The lists whose children are songs: these, and those named by one of [SONG_LIST_PREFIXES]. */
     private val SONG_LISTS = setOf(SONGS, FAVOURITES, MOST_PLAYED, RECENTLY_PLAYED, RECENTLY_ADDED)
     private val SONG_LIST_PREFIXES = listOf(QUEUE, PLAYLIST, ALBUM, ARTIST, SEARCH)
-
-    /** The Songs tab's queue key for the same songs in the same order: all of them, by title. */
-    private val SONGS_KEY = "songs:${SortSongs.TITLE}:${LyricsFilter.ALL}"
 
     /**
      * The root for a client that shows at most [limit] items there (Android Auto's root hint, usually 4): the top lists
@@ -223,7 +226,7 @@ object LibraryTree {
 
     /** The queue list [id] plays as: the kind and key of the same list in the app (its pages and tabs). */
     private fun source(id: String, data: TreeData): QueueSource? = when {
-        id == SONGS -> QueueSource(SourceKind.SONGS, SONGS_KEY, "")
+        id == SONGS -> CAR_SONGS
         id == FAVOURITES -> QueueSource(SourceKind.FAVOURITES, "favourites", "")
         id == MOST_PLAYED -> QueueSource(SourceKind.MOST_PLAYED, "MOST_PLAYED", "")
         id == RECENTLY_PLAYED -> QueueSource(SourceKind.RECENTLY_PLAYED, "RECENTLY_PLAYED", "")
@@ -266,7 +269,7 @@ object NameSearch : TreeSearch {
         return fields.flatMap { field -> library.songs.filter { song -> field(song)?.let(::fold)?.contains(words) == true } }.distinctBy { it.path }
     }
 
-    override fun source(query: String): QueueSource = QueueSource(SourceKind.SEARCH, "search:" + fold(query), query.trim().replace(SPACES, " "))
+    override fun source(query: String): QueueSource = searchSource(query)
 
     private fun fold(text: String): String = Normalizer.normalize(text, Normalizer.Form.NFD).replace(MARKS, "").lowercase(Locale.ROOT).trim().replace(SPACES, " ")
 }

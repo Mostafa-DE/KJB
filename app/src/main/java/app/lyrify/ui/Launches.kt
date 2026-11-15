@@ -18,10 +18,7 @@ import app.lyrify.library.LibraryGraph
 import app.lyrify.library.LibraryState
 import app.lyrify.player.OpenedFiles
 import app.lyrify.player.PlayerGraph
-import app.lyrify.player.QueueSource
-import app.lyrify.player.SourceKind
-import app.lyrify.settings.LyricsFilter
-import app.lyrify.settings.SortSongs
+import app.lyrify.player.SongsTabSource
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
@@ -168,9 +165,6 @@ fun shuffleAllProblem(state: LibraryState?): Int? = when (state) {
     is LibraryState.Ready -> if (state.library.songs.isEmpty()) R.string.launch_no_songs else null
 }
 
-/** The key of a Songs queue in the default order: a tap in Library > Songs then plays inside the shuffled queue. */
-private val ALL_SONGS = QueueSource(SourceKind.SONGS, "songs:${SortSongs.TITLE}:${LyricsFilter.ALL}", "")
-
 /** How long a cold start waits for the queues. */
 private const val READ_WAIT_MS: Long = 10_000
 
@@ -183,7 +177,8 @@ private suspend fun play(context: Context, launch: Launch.Plays): Int? = when (l
     Launch.ShuffleAll -> {
         val state = withTimeoutOrNull(LIBRARY_WAIT_MS) { LibraryGraph.repository(context).state.first { it !is LibraryState.Loading } }
         shuffleAllProblem(state) ?: run {
-            Lyrify.playback(context).shuffle((state as LibraryState.Ready).library.songs.map { it.ref }, ALL_SONGS)
+            // In the Songs tab's place, so it is that place's one recent queue.
+            Lyrify.playback(context).shuffle((state as LibraryState.Ready).library.songs.map { it.ref }, SongsTabSource)
             null
         }
     }

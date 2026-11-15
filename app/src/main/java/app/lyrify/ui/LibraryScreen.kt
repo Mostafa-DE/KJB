@@ -65,6 +65,7 @@ import app.lyrify.library.sortArtists
 import app.lyrify.library.needsPlays
 import app.lyrify.library.sortSongs
 import app.lyrify.player.QueueSource
+import app.lyrify.player.SongsTabSource
 import app.lyrify.player.SourceKind
 import app.lyrify.settings.DockTab
 import app.lyrify.settings.LibrarySettings
@@ -229,7 +230,7 @@ private fun SongsTab(ui: LibraryUi, library: Library, reselect: Int, topBar: @Co
     val state = rememberLazyListState()
     var sorting by rememberSaveable { mutableStateOf(false) }
     ReselectToTop(reselect) { state.animateScrollToItem(0) }
-    val source = QueueSource(SourceKind.SONGS, "songs:${settings.songSort}${if (settings.songReversed) REVERSED_KEY else ""}:${settings.songFilter}", "")
+    val source = SongsTabSource
     val reduced = LocalReducedMotion.current
     SongListFrame(ui, songs, source, topBar, state, loaded = listed != null) { list ->
         item(key = "favourites", contentType = "favourites") { Box(rowMotion(reduced)) { FavouritesRowView(ui, library) } }
@@ -346,9 +347,6 @@ private fun songsOrder(settings: LibrarySettings): String {
     val sort = sortChip(settings.songSort.words, settings.songSort.ways, settings.songReversed)
     return if (settings.songFilter == LyricsFilter.ALL) sort else stringResource(R.string.lib_after, sort, stringResource(settings.songFilter.short))
 }
-
-/** The Songs tab's queue key of a list the other way round, so it is another list than the same sort's first way. */
-private const val REVERSED_KEY: String = "-reversed"
 
 @get:StringRes
 private val LyricsFilter.words: Int
