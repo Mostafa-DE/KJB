@@ -22,6 +22,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.io.IOException
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
 /** The lowest add-on API (IAiAddon.VERSION) this KJB speaks; an add-on that answers less needs an update. */
@@ -55,6 +56,15 @@ class AddonDiedException(cause: Throwable? = null) : Exception("the AI add-on is
 class AddonStalledException(val stage: AiStage?, val silentMs: Long) :
     Exception("the AI add-on said nothing for ${silentMs / 1000} s during ${stage?.name?.lowercase() ?: "its start"}")
 
+/**
+ * A song's job in the add-on beat, then said nothing for [silentMs] in [stage] (null: before its first stage): the phone
+ * froze the add-on's process, as an app freezer does (Samsung's, others), beats and all ([RemoteSongEngine]'s freeze
+ * watch). Nothing more was asked of it; it was let go of and its service stopped. Not the song's doing: the song is
+ * tried again later, and the night's run ends.
+ */
+class AddonFrozenException(val stage: AiStage?, val silentMs: Long) :
+    Exception("the AI add-on was frozen: no word for ${silentMs / 1000} s during ${stage?.name?.lowercase() ?: "its start"}")
+
 /** One song's job as the add-on tells it (IAiRunCallback, as Kotlin). Called on binder threads. */
 interface RunEvents {
     /** An AiStage name; a later add-on may name one this KJB does not know. */
@@ -71,6 +81,9 @@ interface RunEvents {
 
     /** [done] of [total] pieces of the stage the job is in (the first of each stage, then every few seconds at most). */
     fun onProgress(done: Int, total: Int)
+
+    /** The job is alive: every few seconds while it runs, whatever its step, from a timer of the add-on's own. */
+    fun onBeat()
 }
 
 /** The add-on's model download as it goes (IAiDownloadCallback, as Kotlin). Called on binder threads. */
@@ -126,6 +139,12 @@ interface AddonBinding : AutoCloseable {
     val port: AddonPort
     val death: Deferred<Unit>
 
+    /** Starts the add-on's service for the foreground (Context.startForegroundService); false when Android refuses. */
+    fun foreground(): Boolean
+
+    /** Stops the service [foreground] started (Context.stopService); quiet when it does not run. */
+    fun stopService()
+
     override fun close()
 }
 
@@ -158,6 +177,22 @@ class AddonSession internal constructor(private val binding: AddonBinding, val a
     override fun close() {
         closed = true
         binding.close()
+    }
+
+    /**
+     * Has the add-on run its job in its own foreground service, which a phone's app freezer leaves alone (a service KJB
+     * binds counts for nothing there): KJB starts it, and KJB's own foreground (its overnight service, or its screen)
+     * is what lets it. False when the phone refuses; the job then runs without it.
+     */
+    fun foreground(): Boolean = binding.foreground()
+
+    /**
+     * Lets go of an add-on that stopped answering or that the phone froze: unbinds it and stops the service KJB started
+     * for its job ([foreground]), so that nothing of KJB's keeps it. Nothing is asked of the add-on itself.
+     */
+    fun abandon() {
+        close()
+        binding.stopService()
     }
 }
 
@@ -277,6 +312,14 @@ class AddonClient(private val host: AddonHost, private val minApi: Int = MIN_ADD
  * (the heat) is not the add-on's silence. Before a stall is declared, the job's end is looked for where it cannot be
  * lost: the end told meanwhile (kept apart from the channel, which a cancelled receive can drop an event from), then the
  * result the add-on keeps ([AddonPort.result]: its callback lost). A result too long for the callback is read there too.
+ *
+ * The job runs in the add-on's own foreground service, which KJB starts once the add-on took it
+ * ([AddonSession.foreground]): a phone's app freezer leaves alone an app at work in the foreground. Should a phone freeze
+ * it all the same, the freeze watch ends the song in seconds instead of minutes: the add-on beats every few seconds, from
+ * a timer no step blocks, so [FROZEN_MS] without a word from an add-on that beat is a process the phone stopped. Nothing
+ * more is asked of it (a call into a frozen process can wait for as long as it stays frozen); it is let go of and its
+ * service stopped ([AddonSession.abandon]): [AddonFrozenException]. The beats are not progress: a step that never ends
+ * still meets the limits above. An add-on that never beat is not watched.
  */
 class RemoteSongEngine(
     private val session: AddonSession,
@@ -300,30 +343,30 @@ class RemoteSongEngine(
         data object Kept : Event
 
         data object Died : Event
+
+        /** Nothing for [FROZEN_MS] from an add-on that beat: the phone froze it. */
+        data object Frozen : Event
     }
 
     /** Set once a song's separation moved: the add-on's models are loaded, and each silence gets [STEP_MS]. */
     private var loaded = false
 
-    /** Set by a stall: the session was let go of, and nothing more is asked of the add-on. */
+    /** Set by a stall or a freeze: the session was let go of, and nothing more is asked of the add-on. */
     private var stalled = false
 
     override suspend fun run(track: LocalTrack, plainLyrics: String?, onStage: (AiStage) -> Unit, beforeChunk: suspend () -> Unit): AiResult {
         val events = Channel<Event>(Channel.UNLIMITED)
         // The job's end, also kept apart from the channel: a receive the silence limit cancels can lose what it took.
         val ended = AtomicReference<Event?>(null)
+        // Each word from the add-on, beats included, for the freeze watch, which starts with the first beat.
+        val alive = Channel<Unit>(Channel.CONFLATED)
+        val beating = AtomicBoolean(false)
         val heard = object : RunEvents {
-            override fun onStage(stage: String) {
-                events.trySend(Event.Stage(stage))
-            }
+            override fun onStage(stage: String) = tell(Event.Stage(stage))
 
-            override fun onNote(line: String) {
-                events.trySend(Event.Note(line))
-            }
+            override fun onNote(line: String) = tell(Event.Note(line))
 
-            override fun onChunk() {
-                events.trySend(Event.Chunk)
-            }
+            override fun onChunk() = tell(Event.Chunk)
 
             override fun onResult(result: AiResult?) = end(if (result == null) Event.Kept else Event.End(result))
 
@@ -331,11 +374,19 @@ class RemoteSongEngine(
 
             private fun end(event: Event) {
                 ended.compareAndSet(null, event)
-                events.trySend(event)
+                tell(event)
             }
 
-            override fun onProgress(done: Int, total: Int) {
-                events.trySend(Event.Progress)
+            override fun onProgress(done: Int, total: Int) = tell(Event.Progress)
+
+            override fun onBeat() {
+                beating.set(true)
+                alive.trySend(Unit)
+            }
+
+            private fun tell(event: Event) {
+                alive.trySend(Unit)
+                events.trySend(event)
             }
         }
         val port = session.port
@@ -345,27 +396,49 @@ class RemoteSongEngine(
             // The song's file, not the add-on: a failed run of that song, as the engine would report it.
             return AiResult.Failed(e.javaClass.simpleName)
         }
+        if (!session.foreground()) notes("the phone did not let the AI add-on run as a foreground service; it runs without one")
         return coroutineScope {
             val death = launch {
                 session.death.await()
                 events.trySend(Event.Died)
             }
+            val frozen = AtomicBoolean(false)
+            val watch = launch {
+                silence(alive, beating)
+                frozen.set(true)
+                events.trySend(Event.Frozen)
+            }
             try {
-                follow(events, ended, job, onStage, beforeChunk)
+                follow(events, ended, frozen, job, onStage, beforeChunk)
             } catch (e: CancellationException) {
                 // The step under way finishes in the add-on; wait for it to stop, as the engine in KJB's process did.
                 withContext(NonCancellable) { stop(job, events, ended, stopTimeoutMs) }
                 throw e
             } catch (e: AddonStalledException) {
-                // Cancelled, then let go of whether it stopped or not: with no client left, an add-on whose step never
-                // ends ends its own process.
+                // Cancelled, then let go of whether it stopped or not (unbound, the service KJB started for the job
+                // stopped): with no client left, an add-on whose step never ends ends its own process.
                 stalled = true
                 withContext(NonCancellable) { stop(job, events, ended, STALL_STOP_MS) }
-                session.close()
+                session.abandon()
+                throw e
+            } catch (e: AddonFrozenException) {
+                // Not asked to stop: the phone ends the job with the process, or the add-on does once it runs again
+                // and finds KJB gone.
+                stalled = true
+                session.abandon()
                 throw e
             } finally {
                 death.cancel()
+                watch.cancel()
             }
+        }
+    }
+
+    /** Returns once an add-on that beat ([beating]) has said nothing for [FROZEN_MS]. */
+    private suspend fun silence(alive: ReceiveChannel<Unit>, beating: AtomicBoolean) {
+        while (true) {
+            val heard = withTimeoutOrNull(FROZEN_MS) { alive.receive() } != null
+            if (!heard && beating.get()) return
         }
     }
 
@@ -382,11 +455,13 @@ class RemoteSongEngine(
 
     /**
      * The job's events until its end: stages to the crash guard, notes to the run log, each chunk after beforeChunk. No
-     * event within [silenceLimit] is a stall ([AddonStalledException]).
+     * event within [silenceLimit] is a stall ([AddonStalledException]); the freeze watch's word ([frozen]), a freeze
+     * ([AddonFrozenException]).
      */
     private suspend fun follow(
         events: ReceiveChannel<Event>,
         ended: AtomicReference<Event?>,
+        frozen: AtomicBoolean,
         job: Long,
         onStage: (AiStage) -> Unit,
         beforeChunk: suspend () -> Unit,
@@ -406,12 +481,16 @@ class RemoteSongEngine(
                 Event.Progress -> if (stage == AiStage.SEPARATE) loaded = true
                 Event.Chunk -> {
                     beforeChunk()
+                    // Frozen while KJB held the chunk (the heat): nothing goes into a process the phone stopped.
+                    if (frozen.get()) throw AddonFrozenException(stage, FROZEN_MS)
                     session.port.proceed(job)
                 }
                 // Stopped without KJB asking: no result to record.
                 is Event.End -> return event.result ?: AiResult.Failed(STOPPED)
                 Event.Kept -> return session.port.result(job) ?: AiResult.Failed(LOST)
                 Event.Died -> throw AddonDiedException()
+                // An end told meanwhile follows in the channel: the watch's receive, cancelled by its limit, lost the word.
+                Event.Frozen -> if (ended.get() == null) throw AddonFrozenException(stage, FROZEN_MS)
             }
         }
     }
@@ -457,6 +536,12 @@ class RemoteSongEngine(
          * (about 1.5 s) and loading Whisper (3 s) or wav2vec2; this is 50 times the longest, for a hot or slower phone.
          */
         const val STEP_MS: Long = 3 * 60_000
+
+        /**
+         * The silence that is a freeze once the add-on beats: 6 of its beats (every 5 s) missed. A process the phone froze
+         * says nothing at all; one at work on a long step still beats.
+         */
+        const val FROZEN_MS: Long = 30_000
 
         /** After a stall, how long the add-on gets to stop: its own limit for a stopped step (10 s), then a margin. */
         const val STALL_STOP_MS: Long = 15_000

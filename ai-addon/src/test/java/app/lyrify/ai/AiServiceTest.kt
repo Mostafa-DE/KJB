@@ -1,5 +1,6 @@
 package app.lyrify.ai
 
+import android.content.pm.ServiceInfo
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -22,6 +23,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 import java.io.FileDescriptor
 
 /** How a song's job runs in the add-on ([AddonJobs]); who may call it is :addon-shared's AddonTrustTest. */
@@ -58,6 +60,13 @@ class AiServiceTest {
 
         override fun onProgress(done: Int, total: Int) {
             events += "progress $done/$total"
+        }
+
+        /** Counted apart: they come with the virtual clock, not with the job's steps. */
+        var beats = 0
+
+        override fun onBeat() {
+            beats++
         }
     }
 
@@ -514,5 +523,243 @@ class AiServiceTest {
             ),
             lines,
         )
+    }
+
+    // KJB hears the job beat while it lives
+
+    @Test
+    fun `a job beats at once and every 5 s while it lives, through a step of minutes, and stops beating when it ends`() = runTest {
+        val step = CompletableDeferred<Unit>()
+        val heard = Heard()
+        val jobs = AddonJobs(backgroundScope, StandardTestDispatcher(testScheduler), beats = StandardTestDispatcher(testScheduler)) {
+            object : JobEngine {
+                override suspend fun run(song: AiSong, plainLyrics: String?, onStage: (AiStage) -> Unit, onProgress: (Int, Int) -> Unit, beforeChunk: suspend () -> Unit): AiResult {
+                    onStage(AiStage.SEPARATE)
+                    withContext(NonCancellable) { step.await() } // creating the MDX session: one native call of minutes
+                    return done
+                }
+
+                override fun close() {}
+            }
+        }
+
+        jobs.start(song, null, { heard }) {}
+        runCurrent()
+        assertEquals(1, heard.beats)
+        advanceTimeBy(5 * 60_000L)
+        runCurrent()
+        assertEquals("one at its start, then one every 5 s", 1 + 5 * 60_000 / AddonJobs.BEAT_EVERY_MS.toInt(), heard.beats)
+
+        step.complete(Unit)
+        runCurrent()
+        assertEquals("result Transcribed", heard.events.last())
+        val beats = heard.beats
+        advanceTimeBy(60_000)
+        runCurrent()
+        assertEquals("none once it ended", beats, heard.beats)
+    }
+
+    @Test
+    fun `busy from a job's start to its end`() = runTest {
+        val jobs = jobs(chunks = 1)
+        assertFalse(jobs.busy)
+
+        val job = jobs.start(song, null, { Heard() }) {}
+        assertTrue(jobs.busy)
+        runCurrent()
+        assertTrue("waiting at its chunk", jobs.busy)
+        jobs.proceed(job)
+        runCurrent()
+
+        assertFalse(jobs.busy)
+    }
+
+    // Android's time for the add-on's foreground service runs out (onTimeout, Android 15+)
+
+    @Test
+    fun `the time running out ends the job after its step as the NPU busy, so KJB tries the song again later`() = runTest {
+        val step = CompletableDeferred<Unit>()
+        val jobs = stuckJobs(step)
+        val heard = Heard()
+        val job = jobs.start(song, null, { heard }) { released += it }
+        runCurrent()
+
+        jobs.timeUp()
+        assertEquals("the process ends if the step has not ended 10 s later", listOf(AddonJobs.STEP_END_MS), checks.map { it.first })
+        step.complete(Unit)
+        runCurrent()
+
+        val result = jobs.result(job)
+        assertTrue("$result", result is AiResult.Failed && result.npu)
+        assertEquals("result Failed", heard.events.last())
+        assertEquals(listOf(job), released)
+        checks.single().second()
+        assertEquals("its step ended in time", emptyList<AiStage?>(), ended)
+    }
+
+    @Test
+    fun `the time running out with no job under way leaves the next job alone`() = runTest {
+        val jobs = jobs(chunks = 0)
+        jobs.timeUp()
+
+        val heard = Heard()
+        jobs.start(song, null, { heard }) {}
+        runCurrent()
+
+        assertEquals("result Transcribed", heard.events.last())
+    }
+
+    // The add-on's own foreground service while a job works, which a phone's app freezer leaves alone
+
+    /** What a tap on the notification opens, as its creator's uid: KJB's PendingIntent on the phone. */
+    private data class Tap(val uid: Int)
+
+    private class FakeForeground(private val refuses: Boolean = false) : ForegroundPort<Tap> {
+        val calls = mutableListOf<String>()
+
+        override fun startForeground(type: Int, tap: Tap?) {
+            val name = when (type) {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING -> "mediaProcessing"
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC -> "dataSync"
+                else -> "type $type"
+            }
+            calls += "start $name ${tap?.uid}"
+            // ForegroundServiceStartNotAllowedException is one: Android 12+ refusing it now, or Android 15+ after the day's time ran out.
+            if (refuses) throw IllegalStateException("not allowed now")
+        }
+
+        override fun stopForeground() {
+            calls += "stopForeground"
+        }
+
+        override fun stopSelf(startId: Int?) {
+            calls += "stopSelf ${startId ?: "all"}"
+        }
+    }
+
+    private val kjb = Tap(KJB_UID)
+    private var busy = true
+    private var jobsEnded = 0
+
+    private fun foreground(port: FakeForeground, sdk: Int = 36) =
+        JobForeground(sdk, port, busy = { busy }, fromKjb = { it.uid == KJB_UID }, endJob = { jobsEnded++ })
+
+    @Test
+    fun `KJB's start while a job runs goes into the foreground at once, mediaProcessing from Android 15, dataSync before it`() {
+        for ((sdk, type) in listOf(37 to "mediaProcessing", 35 to "mediaProcessing", 34 to "dataSync", 30 to "dataSync")) {
+            val port = FakeForeground()
+            foreground(port, sdk).start(startId = 1, tap = kjb)
+            assertEquals("Android API $sdk", listOf("start $type $KJB_UID"), port.calls)
+        }
+    }
+
+    @Test
+    fun `the foreground is left once no job is left, not while the next one runs`() {
+        val port = FakeForeground()
+        val foreground = foreground(port)
+        foreground.start(1, kjb)
+
+        foreground.jobEnded() // the next song's job already started
+        assertEquals(listOf("start mediaProcessing $KJB_UID"), port.calls)
+        busy = false
+        foreground.jobEnded()
+        foreground.jobEnded()
+
+        assertEquals(listOf("start mediaProcessing $KJB_UID", "stopForeground", "stopSelf 1"), port.calls)
+        busy = true
+        foreground.start(2, kjb) // the next song
+        busy = false
+        foreground.jobEnded()
+        assertEquals(listOf("start mediaProcessing $KJB_UID", "stopForeground", "stopSelf 2"), port.calls.takeLast(3))
+    }
+
+    @Test
+    fun `a start that comes after its job ended goes into the foreground, as Android requires, and out at once`() {
+        val port = FakeForeground()
+        val foreground = foreground(port)
+        busy = false
+
+        foreground.start(3, kjb)
+        foreground.jobEnded()
+        foreground.unbound()
+
+        assertEquals(listOf("start mediaProcessing $KJB_UID", "stopForeground", "stopSelf 3"), port.calls)
+    }
+
+    @Test
+    fun `a start from anyone but KJB is refused, answered so that Android does not end the add-on, and shows none of theirs`() {
+        val port = FakeForeground()
+        val foreground = foreground(port)
+
+        foreground.start(1, Tap(OTHER_UID))
+        foreground.start(2, null) // no tap at all
+        assertEquals(
+            listOf("start mediaProcessing null", "stopForeground", "stopSelf 1", "start mediaProcessing null", "stopForeground", "stopSelf 2"),
+            port.calls,
+        )
+
+        // While KJB's job holds the foreground, a refused start changes nothing.
+        port.calls.clear()
+        foreground.start(3, kjb)
+        foreground.start(4, Tap(OTHER_UID))
+        assertEquals(listOf("start mediaProcessing $KJB_UID"), port.calls)
+        busy = false
+        foreground.jobEnded()
+        assertEquals(listOf("start mediaProcessing $KJB_UID", "stopForeground", "stopSelf 4"), port.calls)
+    }
+
+    @Test
+    fun `a phone that refuses the foreground service leaves the job to run without it, and nothing throws`() {
+        val port = FakeForeground(refuses = true)
+        val foreground = foreground(port)
+
+        foreground.start(1, kjb)
+        busy = false
+        foreground.jobEnded()
+        foreground.unbound()
+
+        assertEquals(listOf("start mediaProcessing $KJB_UID", "stopSelf 1"), port.calls)
+    }
+
+    @Test
+    fun `KJB letting go leaves the foreground`() {
+        val port = FakeForeground()
+        val foreground = foreground(port)
+        foreground.start(1, kjb)
+
+        foreground.unbound()
+
+        assertEquals(listOf("start mediaProcessing $KJB_UID", "stopForeground", "stopSelf 1"), port.calls)
+    }
+
+    @Test
+    fun `the time running out leaves the foreground there and then, and ends the job under way`() {
+        val port = FakeForeground()
+        val foreground = foreground(port)
+        foreground.start(1, kjb)
+
+        foreground.timeUp()
+
+        assertEquals(1, jobsEnded)
+        assertEquals(listOf("start mediaProcessing $KJB_UID", "stopForeground", "stopSelf all"), port.calls)
+        busy = false
+        foreground.jobEnded()
+        assertEquals("left already", 3, port.calls.size)
+    }
+
+    @Test
+    fun `the notice says the same for every job, with no room for a song, its lyrics or a path`() {
+        val strings = File("src/main/res/values/strings.xml").also { assertTrue("run from the module: ${it.absolutePath}", it.isFile) }.readText()
+        fun string(name: String): String? = Regex("""<string name="$name"[^>]*>([^<]*)</string>""").find(strings)?.groupValues?.get(1)
+
+        assertEquals("AI work", string("work_channel"))
+        assertEquals("KJB AI is working", string("work_title"))
+        // No placeholder: nothing of a job can be put into either.
+        assertFalse(listOf("work_channel", "work_title").any { '%' in string(it).orEmpty() })
+    }
+
+    private companion object {
+        const val KJB_UID = 10_279
+        const val OTHER_UID = 10_301
     }
 }

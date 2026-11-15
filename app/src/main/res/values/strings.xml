@@ -98,6 +98,7 @@
     <string name="ai_tile_battery">Battery</string>
     <string name="ai_tile_update">Next update</string>
     <string name="ai_tile_chip">Chip busy</string>
+    <string name="ai_tile_phone">By your phone</string>
     <string name="group_has_lyrics">Has lyrics</string>
     <string name="group_to_check">To check</string>
     <string name="group_waiting">Waiting</string>
@@ -293,6 +294,8 @@
     <string name="ai_held_crashed_detail">The AI stopped unexpectedly several times in a row.</string>
     <string name="ai_held_npu">AI chip busy, retrying soon</string>
     <string name="ai_held_npu_detail">KJB tries again within the hour.</string>
+    <string name="ai_held_frozen">Paused by your phone</string>
+    <string name="ai_held_frozen_detail">Your phone paused the AI while it worked. KJB tries again within the hour.</string>
     <string name="ai_all_done">All caught up</string>
     <string name="ai_all_done_detail">No songs are waiting for AI lyrics.</string>
     <string name="ai_results_title">Results</string>

@@ -225,6 +225,7 @@ fun aiGlance(state: AiState, waiting: Int): AiGlance {
             AiHold.MODEL_FAILED -> held(RingColor.ERROR, R.drawable.ic_error, R.string.ai_held_model, R.string.ai_held_model_detail)
             AiHold.CRASHED -> held(RingColor.ERROR, R.drawable.ic_error, R.string.ai_held_crashed, R.string.ai_held_crashed_detail)
             AiHold.NO_NPU -> held(RingColor.OUTLINE, R.drawable.ic_memory, R.string.ai_held_npu, R.string.ai_held_npu_detail)
+            AiHold.FROZEN -> held(RingColor.OUTLINE, R.drawable.ic_pause_circle, R.string.ai_held_frozen, R.string.ai_held_frozen_detail)
         }
         NightStatus.AllDone -> AiGlance(
             Ring(1f, RingColor.SYNCED),
@@ -430,6 +431,7 @@ fun aiTile(state: AiState, waiting: Int): AiTile? {
                 AiHold.NOT_ALLOWED -> R.string.ai_tile_battery
                 AiHold.MODEL_FAILED, AiHold.CRASHED -> R.string.ai_tile_update
                 AiHold.NO_NPU -> R.string.ai_tile_chip
+                AiHold.FROZEN -> R.string.ai_tile_phone
             },
         )
         NightStatus.AllDone -> AiTile(ring, TileValue.Text(R.string.ai_all_done), R.string.ai_title)

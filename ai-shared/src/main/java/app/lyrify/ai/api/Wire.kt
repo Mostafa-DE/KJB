@@ -14,6 +14,12 @@ object AddonNames {
 
     /** The signature permission only the add-on declares and only KJB, signed with the same key, holds. */
     fun permission(addonPackage: String): String = "$addonPackage.permission.BIND_AI"
+
+    /**
+     * KJB's start of the service in the foreground for a job carries a PendingIntent KJB made, under this name: what a tap
+     * on the add-on's notification opens (KJB's AI page), and, as Android names its creator, the proof that KJB sent it.
+     */
+    const val EXTRA_TAP: String = "app.lyrify.ai.extra.TAP"
 }
 
 /**

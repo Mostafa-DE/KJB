@@ -1,6 +1,7 @@
 package app.lyrify.overnight
 
 import app.lyrify.addon.AddonDiedException
+import app.lyrify.addon.AddonFrozenException
 import app.lyrify.addon.AddonStalledException
 import app.lyrify.ai.AiResult
 import app.lyrify.ai.AiStage
@@ -137,6 +138,9 @@ enum class AiRunEnd {
 
     /** The phone's NPU could not be used at all (no QNN execution provider or NPU device); the next period tries again. */
     NO_NPU,
+
+    /** The phone froze the AI add-on during a song ([AddonFrozenException]); nothing recorded, the next period tries again. */
+    FROZEN,
 }
 
 /**
@@ -156,9 +160,10 @@ enum class AiRunEnd {
  * counts the death of the song in its stage as the next run would have counted its own, and ends the run
  * ([AiRunEnd.ADDON_DIED]). When it stops answering during a song ([AddonStalledException], the engine's watchdog), that
  * song is recorded as failed with the reason and counted as a death in its stage, and the run goes on with the add-on
- * bound anew. A model that does not load counts as a death of the song in its stage too; it is downloaded
- * again once, then the AI pauses ([ModelLoadFailures]). A song whose audio file was replaced during its run is
- * abandoned: nothing is recorded.
+ * bound anew. When the phone freezes it during a song ([AddonFrozenException]), as with an NPU another app holds, nothing
+ * is recorded or counted and the run ends ([AiRunEnd.FROZEN]): the song is tried again later. A model that does not load
+ * counts as a death of the song in its stage too; it is downloaded again once, then the AI pauses ([ModelLoadFailures]).
+ * A song whose audio file was replaced during its run is abandoned: nothing is recorded.
  * [runLog] gets one line per event: titles, stages, times, counts, never lyrics. It is the AI's run log ([AiRunLog]), in
  * the app's own files and shown on the phone; logcat repeats it only under VERBOSE, as it names songs.
  */
@@ -308,6 +313,12 @@ class AiRunner(
                         GuardVerdict.NONE -> {}
                     }
                     continue
+                } catch (e: AddonFrozenException) {
+                    // The phone stopped the add-on's process, not the song nor a crash: nothing is recorded or counted,
+                    // and the run ends, the add-on let go of; the next hourly look tries again.
+                    closeEngine()
+                    runLog("AI: $title: your phone paused the AI add-on during ${e.stage?.label() ?: "its start"} (nothing for ${seconds(e.silentMs)}); nothing recorded, trying again later")
+                    return AiRunEnd.FROZEN
                 } finally {
                     song.ended()
                 }
@@ -516,6 +527,9 @@ enum class AiHold {
 
     /** A model did not load, again after it was downloaded again ([AiRunEnd.MODEL_FAILED]); it waits for the next version or new models. */
     MODEL_FAILED,
+
+    /** The phone froze the AI add-on at work ([AiRunEnd.FROZEN]); it tries again at the next hourly look. */
+    FROZEN,
 }
 
 /** The AI card's progress line. */

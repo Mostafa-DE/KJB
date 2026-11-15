@@ -279,17 +279,19 @@ class ModelDownloadsTest {
         assertArrayEquals(body, store.file(store.specs.single()).readBytes())
     }
 
-    // The add-on itself shows nothing
+    // The add-on's download shows nothing of its own: KJB does
 
     @Test
-    fun `the add-on runs no foreground service and posts no notification, KJB shows its download`() {
+    fun `the add-on's download runs without a foreground service or notification of its own, KJB shows it`() {
+        // Its one foreground service is a song's job's (ai/AiService.kt, JobForeground), and it asks for no notification
+        // permission; WorkManager, and the download's foreground service and notification, are KJB's.
         val manifest = File("src/main/AndroidManifest.xml").readText()
-        listOf("FOREGROUND_SERVICE", "POST_NOTIFICATIONS", "SystemForegroundService", "foregroundServiceType").forEach { word ->
-            assertFalse(word, word in manifest)
+        listOf("POST_NOTIFICATIONS", "SystemForegroundService").forEach { word -> assertFalse(word, word in manifest) }
+        val download = File("src/main/java/app/lyrify/models").walkTopDown().filter { it.extension == "kt" }.joinToString("\n") { it.readText() }
+        listOf("Notification.Builder", "NotificationManager", "setForeground", "startForeground").forEach { word ->
+            assertFalse(word, word in download)
         }
         val sources = File("src/main/java").walkTopDown().filter { it.extension == "kt" }.joinToString("\n") { it.readText() }
-        listOf("Notification.Builder", "NotificationManager", "setForeground", "startForeground", "androidx.work").forEach { word ->
-            assertFalse(word, word in sources)
-        }
+        assertFalse("androidx.work" in sources)
     }
 }

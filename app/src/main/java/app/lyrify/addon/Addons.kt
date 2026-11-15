@@ -86,6 +86,14 @@ object KjbAddons {
     )
 }
 
+/**
+ * How KJB binds an add-on: created for the bind, and at KJB's own priority (BIND_IMPORTANT: without it Android lifts a
+ * bound process no higher than visible, even while KJB is in the foreground). No flag that would lower it. A phone's app
+ * freezer goes by the add-on's own state, which no bind flag changes: the AI add-on's jobs run in its own foreground
+ * service for that (AddonSession.foreground).
+ */
+internal const val ADDON_BIND_FLAGS: Int = Context.BIND_AUTO_CREATE or Context.BIND_IMPORTANT
+
 /** One bind of an add-on's service: its [binder] while it lives; [death] completes when its process dies. [close] unbinds. */
 internal class BoundAddon(val binder: IBinder, val death: Deferred<Unit>, private val unbind: () -> Unit) : AutoCloseable {
     override fun close() = unbind()
@@ -158,7 +166,7 @@ internal class AndroidAddon(private val context: Context, private val addon: Kjb
         val unbound = AtomicBoolean(false)
         val unbind = { if (unbound.compareAndSet(false, true)) runCatching { context.unbindService(connection) } }
         val bound = try {
-            context.bindService(Intent().setComponent(ComponentName(addon.packageName, addon.service)), connection, Context.BIND_AUTO_CREATE)
+            context.bindService(service(), connection, ADDON_BIND_FLAGS)
         } catch (e: SecurityException) {
             // Not holding its signature permission: another key, or the add-on was installed in a way Android did not grant it.
             Log.w(LOG_TAG, "${addon.label}: bind refused (${e.javaClass.simpleName})")
@@ -182,6 +190,33 @@ internal class AndroidAddon(private val context: Context, private val addon: Kjb
         }
         return BoundAddon(binder, death) { unbind() }
     }
+
+    /**
+     * Starts the add-on's service for the foreground (Context.startForegroundService on its explicit name, [extras]
+     * added): Android allows it on KJB's own foreground (its screen, or a foreground service of its own that is not a
+     * short one), and the add-on must then go into the foreground within seconds. False when Android refuses.
+     */
+    fun startForeground(extras: (Intent) -> Unit): Boolean = try {
+        context.startForegroundService(service().also(extras)) != null
+    } catch (e: IllegalStateException) {
+        // ForegroundServiceStartNotAllowedException is one (Android 12+).
+        Log.w(LOG_TAG, "${addon.label}: foreground start refused (${e.javaClass.simpleName})")
+        false
+    } catch (e: SecurityException) {
+        Log.w(LOG_TAG, "${addon.label}: foreground start refused (${e.javaClass.simpleName})")
+        false
+    }
+
+    /** Stops the add-on's service KJB started ([startForeground]); quiet when it does not run. */
+    fun stopService() {
+        try {
+            context.stopService(service())
+        } catch (e: RuntimeException) {
+            Log.w(LOG_TAG, "${addon.label}: stop refused (${e.javaClass.simpleName})")
+        }
+    }
+
+    private fun service(): Intent = Intent().setComponent(ComponentName(addon.packageName, addon.service))
 
     private companion object {
         const val CONNECT_TIMEOUT_MS = 30_000L

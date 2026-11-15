@@ -1,6 +1,7 @@
 package app.lyrify.overnight
 
 import app.lyrify.addon.AddonDiedException
+import app.lyrify.addon.AddonFrozenException
 import app.lyrify.addon.AddonStalledException
 import app.lyrify.addon.RemoteSongEngine
 import app.lyrify.ai.AiModels
@@ -231,6 +232,9 @@ class AiNightTest {
     private var stallAt: ((LocalTrack, Int) -> Boolean) = { _, _ -> false }
     private var stallIn = AiStage.TRANSCRIBE
 
+    /** The phone freezes the add-on at this chunk of a song's run, until RemoteSongEngine's freeze watch gives up on it. */
+    private var freezeAt: ((LocalTrack, Int) -> Boolean) = { _, _ -> false }
+
     private fun audio(name: String): LocalTrack {
         val file = File(folder.root, "$name.mp3")
         file.writeBytes(byteArrayOf(1, 2, 3))
@@ -269,6 +273,7 @@ class AiNightTest {
                                 onStage(stallIn)
                                 throw AddonStalledException(stallIn, RemoteSongEngine.STEP_MS)
                             }
+                            if (freezeAt(track, k)) throw AddonFrozenException(AiStage.TRANSCRIBE, RemoteSongEngine.FROZEN_MS)
                             beforeChunk()
                             withContext(NonCancellable) { delay(chunkMs) }
                             call.chunksRun++
@@ -825,6 +830,23 @@ class AiNightTest {
         assertEquals("the stalled engine was let go of, the next song got its own", 2, opened)
         assertEquals(opened, closed)
         assertTrue(logs.toString(), logs.any { "First" in it && "stopped answering during transcribe" in it })
+    }
+
+    @Test
+    fun `the phone freezing the add-on leaves the song for later, with nothing recorded and no death, and ends the run`() = runTest {
+        val first = waiting("First", updatedAt = now - 1)
+        waiting("Second", updatedAt = now - 2)
+        val before = checkNotNull(memory[first.path])
+        freezeAt = { track, chunk -> track.title == "First" && chunk == 1 }
+
+        assertEquals(AiRunEnd.FROZEN, runner().run())
+
+        assertEquals(before, memory[first.path])
+        assertEquals("the others wait for the next run", listOf("First"), calls.map { it.title })
+        assertEquals(0, guard.open(before).deaths)
+        assertEquals(GuardVerdict.NONE, guard.verdict())
+        assertEquals(opened, closed)
+        assertTrue(logs.toString(), logs.any { "First" in it && "paused" in it && "trying again later" in it })
     }
 
     @Test
