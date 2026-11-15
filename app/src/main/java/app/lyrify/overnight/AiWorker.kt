@@ -247,13 +247,14 @@ private const val LIBRARY_WAIT_MS: Long = 60_000
  * what the switch shows; WorkManager's schedule follows it ([reconcile]).
  */
 object AiLyrics {
-    private const val WORK = "ai-lyrics"
+    // The schedule's name, the preferences file and its keys are 2.0's: an update keeps the switch and its schedule.
+    internal const val WORK = "ai-lyrics"
     private const val CHANNEL = "ai_lyrics"
     private const val NOTIFICATION_ID = 2
-    private const val PREFERENCES = "ai_lyrics"
+    internal const val PREFERENCES = "ai_lyrics"
     private const val LIMIT_REACHED_AT = "limit_reached_at"
-    private const val ENABLED = "enabled"
-    private const val LOAD_FAILURES = "model_load_failures"
+    internal const val ENABLED = "enabled"
+    internal const val LOAD_FAILURES = "model_load_failures"
     private const val RUN_EVERY_HOURS = 1L
     private const val RETRY_MINUTES = 15L
     private const val DAY_MS = 24 * 60 * 60_000L
