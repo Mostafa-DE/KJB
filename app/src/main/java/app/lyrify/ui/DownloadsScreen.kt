@@ -76,9 +76,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.lyrify.Lyrify
-import app.lyrify.logFailures
 import app.lyrify.R
-import app.lyrify.addon.AddonDiedException
 import app.lyrify.addon.AddonExemptions
 import app.lyrify.addon.AddonInstalls
 import app.lyrify.addon.AddonState
@@ -94,9 +92,8 @@ import app.lyrify.dl.api.DlProgress
 import app.lyrify.dl.api.DlUpdate
 import app.lyrify.dl.api.VideoChoice
 import app.lyrify.downloads.DlAddon
-import app.lyrify.downloads.DlConnection
+import app.lyrify.downloads.DlLookup
 import app.lyrify.downloads.DlLookupEvents
-import app.lyrify.downloads.DlSession
 import app.lyrify.downloads.DownloadFailure
 import app.lyrify.downloads.DownloadFolders
 import app.lyrify.downloads.DownloadItem
@@ -116,7 +113,6 @@ import app.lyrify.player.QueueSource
 import app.lyrify.player.SourceKind
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.launch
@@ -673,8 +669,8 @@ private fun FolderSheet(kind: DlKind, current: String, onDismiss: () -> Unit, on
 // The save sheet: the share target's, and the page's Look up
 
 /**
- * One link being looked up in the Downloads add-on while the sheet shows: the quick info at once (YouTube's oEmbed),
- * then the full info, or why there is none. The add-on stays bound until [close].
+ * One link being looked up in the Downloads add-on while the sheet shows ([DlLookup]): the quick info at once (YouTube's
+ * oEmbed), then the full info, or why there is none. The add-on stays bound until [close], which asks nothing of it.
  */
 @Stable
 private class LinkLookup(private val context: Context, private val scope: CoroutineScope, private val url: String) {
@@ -687,25 +683,12 @@ private class LinkLookup(private val context: Context, private val scope: Corout
     var addon: AddonState? by mutableStateOf(null)
         private set
 
-    private var session: DlSession? = null
-    private var lookup: Long? = null
+    private val lookup = DlLookup { DlAddon.connect(context) }
 
     fun start() {
         scope.launch(Dispatchers.IO) {
-            when (val connection = DlAddon.connect(context)) {
-                is DlConnection.Closed -> withContext(Dispatchers.Main) { addon = connection.state }
-                is DlConnection.Open -> {
-                    session = connection.session
-                    withContext(Dispatchers.Main) { addon = AddonState.Ready }
-                    lookup = try {
-                        // Looked up in the add-on's own foreground service, which KJB starts once it took the link.
-                        connection.session.port.info(url, events).also { connection.session.foreground() }
-                    } catch (_: AddonDiedException) {
-                        withContext(Dispatchers.Main) { failed = DlFailure.ENGINE }
-                        null
-                    }
-                }
-            }
+            val state = lookup.start(url, events)
+            withContext(Dispatchers.Main) { addon = state }
         }
     }
 
@@ -722,20 +705,8 @@ private class LinkLookup(private val context: Context, private val scope: Corout
     /** Full info is in, or no more is coming. */
     val settled: Boolean get() = info?.partial == false || failed != null || (addon != null && addon != AddonState.Ready)
 
-    /** Stops the lookup and lets the add-on go, off the main thread: the sheet's own scope is gone by then. */
-    fun close() {
-        val open = session ?: return
-        val asked = lookup
-        session = null
-        closing.launch {
-            try {
-                asked?.let { open.port.cancelInfo(it) }
-            } catch (_: AddonDiedException) {
-                // Gone, and its lookup with it.
-            }
-            open.close()
-        }
-    }
+    /** The sheet went: the add-on is let go of, with no call into it (one the phone froze could hold the call). */
+    fun close() = lookup.close()
 }
 
 /**
@@ -908,8 +879,5 @@ private fun thumbnail(url: String): ImageBitmap? {
     val sample = generateSequence(1) { it * 2 }.first { maxOf(bounds.outWidth, bounds.outHeight) / it <= THUMBNAIL_SIDE }
     return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })?.asImageBitmap()
 }
-
-/** Where the sheets let go of the add-on once they have closed. */
-private val closing = CoroutineScope(SupervisorJob() + Dispatchers.IO + logFailures)
 
 private const val THUMBNAIL_SIDE = 512
