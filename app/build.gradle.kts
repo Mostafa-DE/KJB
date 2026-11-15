@@ -31,6 +31,15 @@ val aiAddonBytes = findProperty("aiAddonBytes")?.toString() ?: "0" // PLACEHOLDE
  */
 val updateRepo = findProperty("updateRepo")?.toString() ?: "Mostafa-DE/Lyrify"
 
+/**
+ * The Downloads add-on's APK that KJB downloads (Tools > Downloads > Get Downloads): KJB-Downloads-<version>.apk on the same
+ * release, pinned the same way. PLACEHOLDER until the release lane pins it; -PdlAddonUrl, -PdlAddonSha256 and
+ * -PdlAddonBytes point a test build at another file.
+ */
+val dlAddonUrl = findProperty("dlAddonUrl")?.toString() ?: "https://github.com/Mostafa-DE/Lyrify/releases/download/v3.0.0/KJB-Downloads-3.0.0.apk"
+val dlAddonSha256 = findProperty("dlAddonSha256")?.toString() ?: "" // PLACEHOLDER: the release asset's SHA-256
+val dlAddonBytes = findProperty("dlAddonBytes")?.toString() ?: "0" // PLACEHOLDER: the release asset's size in bytes
+
 android {
     namespace = "app.lyrify"
     compileSdk = 37
@@ -52,6 +61,9 @@ android {
         buildConfigField("String", "AI_ADDON_SHA256", "\"$aiAddonSha256\"")
         buildConfigField("long", "AI_ADDON_BYTES", "${aiAddonBytes}L")
         buildConfigField("String", "UPDATE_REPO", "\"$updateRepo\"")
+        buildConfigField("String", "DL_ADDON_URL", "\"$dlAddonUrl\"")
+        buildConfigField("String", "DL_ADDON_SHA256", "\"$dlAddonSha256\"")
+        buildConfigField("long", "DL_ADDON_BYTES", "${dlAddonBytes}L")
 
         // Device tests (app/src/androidTest) run on the debug build, beside the release app.
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -89,6 +101,10 @@ android {
             buildConfigField("String", "AI_ADDON_PACKAGE", "\"app.lyrify.ai.debug\"")
             buildConfigField("String", "AI_CERT_SHA256", "\"${certPins.getValue("debug")}\"")
             manifestPlaceholders["aiAddonPackage"] = "app.lyrify.ai.debug"
+            // The Downloads add-on beside KJB dev: app.lyrify.dl.debug (dl-addon/).
+            buildConfigField("String", "DL_ADDON_PACKAGE", "\"app.lyrify.dl.debug\"")
+            buildConfigField("String", "DL_CERT_SHA256", "\"${certPins.getValue("debug")}\"")
+            manifestPlaceholders["dlAddonPackage"] = "app.lyrify.dl.debug"
         }
         release {
             isMinifyEnabled = true
@@ -103,6 +119,9 @@ android {
             buildConfigField("String", "AI_ADDON_PACKAGE", "\"app.lyrify.ai\"")
             buildConfigField("String", "AI_CERT_SHA256", "\"${certPins.getValue("release")}\"")
             manifestPlaceholders["aiAddonPackage"] = "app.lyrify.ai"
+            buildConfigField("String", "DL_ADDON_PACKAGE", "\"app.lyrify.dl\"")
+            buildConfigField("String", "DL_CERT_SHA256", "\"${certPins.getValue("release")}\"")
+            manifestPlaceholders["dlAddonPackage"] = "app.lyrify.dl"
         }
         // The Baseline Profile plugin's two copies of release, for the phone only (baselineprofile/): nonMinifiedRelease
         // records the profile, benchmarkRelease measures it. The plugin forces them non-debuggable and profileable, and
@@ -196,6 +215,8 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     // What KJB and the AI add-on share: the add-on's AIDL and wire types, the chip table, the downloader, the decoder.
     implementation(project(":ai-shared"))
+    // What KJB and every add-on share: the trust both ways and the Downloads add-on's contract.
+    implementation(project(":addon-shared"))
     implementation(libs.androidx.work.runtime)
     implementation(libs.coil.compose)
     implementation(libs.media3.exoplayer)

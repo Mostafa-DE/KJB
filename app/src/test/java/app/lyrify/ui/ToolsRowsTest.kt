@@ -33,7 +33,7 @@ class ToolsRowsTest {
 
     @Test
     fun `the rows come in the prototype's order, Settings last`() {
-        assertEquals(listOf(Tool.CHECK, Tool.DUPLICATES, Tool.TONES, Tool.COVERS_TAGS, Tool.AI, Tool.SETTINGS), toolRows(0, DupesView.Loading, 0, 0, null, ai(), 0).map { it.tool })
+        assertEquals(listOf(Tool.CHECK, Tool.DUPLICATES, Tool.TONES, Tool.COVERS_TAGS, Tool.DOWNLOADS, Tool.AI, Tool.SETTINGS), toolRows(0, DupesView.Loading, 0, 0, null, ai(), 0).map { it.tool })
     }
 
     @Test

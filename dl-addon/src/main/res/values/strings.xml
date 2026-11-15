@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Its name in Settings > Apps: KJB's Downloads add-on. No launcher icon, no notification: KJB shows its downloads. -->
+    <string name="app_name">KJB Downloads</string>
+</resources>

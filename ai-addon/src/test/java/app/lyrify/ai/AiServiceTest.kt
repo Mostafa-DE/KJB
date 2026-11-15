@@ -24,70 +24,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.FileDescriptor
 
-/** The add-on's side of KJB's calls: who may call ([CallerCheck]) and how a song's job runs ([AddonJobs]). */
+/** How a song's job runs in the add-on ([AddonJobs]); who may call it is :addon-shared's AddonTrustTest. */
 @OptIn(ExperimentalCoroutinesApi::class)
 class AiServiceTest {
-    // Who may call
-
-    private val kjb = 10_123
-    private val pin = "AB".repeat(32)
-
-    /** KJB's uid holds KJB's package and KJB's certificate; [other] another app's, signed with another key. */
-    private val other = 10_200
-
-    private fun check(
-        pinned: String = pin,
-        packages: Map<Int, Array<String>> = mapOf(kjb to arrayOf("app.lyrify"), other to arrayOf("com.example.other")),
-        certs: Map<Int, String> = mapOf(kjb to pin, other to "CD".repeat(32)),
-    ) = CallerCheck(
-        addonPackage = "app.lyrify.ai",
-        kjbPackage = "app.lyrify",
-        certSha256 = pinned,
-        packagesFor = { uid -> packages[uid] },
-        hasCert = { uid, sha -> certs[uid]?.let { hex -> hex.chunked(2).map { it.toInt(16).toByte() }.toByteArray().contentEquals(sha) } == true },
-    )
-
-    @Test
-    fun `KJB signed with the pinned certificate may call`() {
-        assertTrue(check().allows(kjb))
-        check().enforce(kjb)
-    }
-
-    @Test
-    fun `another app, an unknown uid, or KJB's name with another certificate may not`() {
-        assertFalse(check().allows(other))
-        assertFalse(check().allows(99_999))
-        assertFalse(check(certs = mapOf(kjb to "CD".repeat(32))).allows(kjb))
-        assertThrows(SecurityException::class.java) { check().enforce(other) }
-    }
-
-    @Test
-    fun `an app signed with KJB's key but not KJB may not`() {
-        val sameKey = check(packages = mapOf(other to arrayOf("com.example.other")), certs = mapOf(other to pin))
-
-        assertFalse(sameKey.allows(other))
-    }
-
-    @Test
-    fun `no pin trusts nobody`() {
-        assertFalse(check(pinned = "").allows(kjb))
-        assertFalse(check(pinned = "not hex").allows(kjb))
-    }
-
-    @Test
-    fun `a uid KJB shares with other packages is KJB's`() {
-        assertTrue(check(packages = mapOf(kjb to arrayOf("com.example.shared", "app.lyrify"))).allows(kjb))
-    }
-
-    @Test
-    fun `a bind is served only while the bind permission is the add-on's own, at signature level`() {
-        assertTrue(check().guardsBind(permissionOwner = "app.lyrify.ai", signatureLevel = true))
-        // Another app defined the permission first (it would set its level), or it is no longer signature level.
-        assertFalse(check().guardsBind(permissionOwner = "com.example.other", signatureLevel = true))
-        assertFalse(check().guardsBind(permissionOwner = "app.lyrify.ai", signatureLevel = false))
-        assertFalse(check().guardsBind(permissionOwner = null, signatureLevel = true))
-    }
-
     // A song's job
 
     private val song = AiSong(FileDescriptor(), durationMs = 200_000)

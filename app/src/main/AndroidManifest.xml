@@ -32,10 +32,11 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROCESSING" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
-    <!-- Notifications, Android 13 and later: only for the overnight AI worker's and the models' download's progress (KJB
-         shows the add-on's download: the add-on posts nothing), which without it show in the Task Manager only. Asked
-         when the user switches the AI on or starts its download, never on the first run; after a lasting no, the AI screen has one row that opens the
-         phone's notification settings. The music notification needs none (see the player's permissions). -->
+    <!-- Notifications, Android 13 and later: only for the progress of the overnight AI worker, the models' download (KJB
+         shows the add-on's download: the add-on posts nothing) and KJB's own downloads (downloads/), which without it
+         show in the Task Manager only. Asked when the user switches the AI on, starts the models' download or the first
+         download, never on the first run; after a lasting no, the AI screen has one row that opens the phone's
+         notification settings. The music notification needs none (see the player's permissions). -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- ai add-on -->
@@ -50,6 +51,14 @@
     <!-- Android 12+: an update of the add-on KJB installed may go through without the confirm dialog (a normal
          permission; the first install always asks). -->
     <uses-permission android:name="android.permission.UPDATE_PACKAGES_WITHOUT_USER_ACTION" />
+
+    <!-- downloads: permissions -->
+    <!-- Downloads runs yt-dlp in its own add-on app, "KJB Downloads" (downloads/), bound through this signature
+         permission, which only the add-on declares; the same checks both ways as the AI add-on. The add-on holds only
+         INTERNET: KJB opens the file it saves into and writes its tags. KJB's own downloads service is a foreground
+         service of type dataSync (FOREGROUND_SERVICE_DATA_SYNC above), with the progress and Cancel in its notification
+         (POST_NOTIFICATIONS, asked on the first download). Getting the add-on uses the install permissions above. -->
+    <uses-permission android:name="${dlAddonPackage}.permission.BIND_DL" />
 
     <!-- player: permissions -->
     <!-- KJB's own player (player/PlaybackService): a foreground service of type mediaPlayback while music plays, as
@@ -110,6 +119,8 @@
         <package android:name="com.google.android.deskclock" />
         <!-- The AI add-on: without it Android would show it to KJB as not installed, and refuse the bind. -->
         <package android:name="${aiAddonPackage}" />
+        <!-- The Downloads add-on, for the same reason. -->
+        <package android:name="${dlAddonPackage}" />
         <!-- KJB's own update (update/Updates.kt): the phone's package installer, whatever its name, so KJB can check that
              the install confirmation it starts is that installer's own. -->
         <intent>
@@ -195,6 +206,34 @@
              exported. -->
         <receiver
             android:name=".update.UpdateReceiver"
+            android:exported="false" />
+
+        <!-- downloads -->
+        <!-- "Save to KJB" in other apps' share sheets (ui/SaveToKjbActivity): a small sheet over the sharing app for a
+             shared link. Its own task, never in recents. Exported for the share sheet; it only reads the shared text's
+             links and starts nothing without a tap. -->
+        <activity
+            android:name=".ui.SaveToKjbActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:label="@string/dl_share_label"
+            android:taskAffinity="${applicationId}.share"
+            android:theme="@style/Theme.Lyrify.Share">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+        </activity>
+        <!-- KJB's own downloads service (downloads/DownloadService.kt): dataSync, 6 hours in 24 from Android 15, with
+             onTimeout handled. Started only while KJB is in front. Not exported. -->
+        <service
+            android:name=".downloads.DownloadService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+        <!-- The notification's Cancel, through KJB's own pending intent: not exported. -->
+        <receiver
+            android:name=".downloads.DownloadCancelReceiver"
             android:exported="false" />
 
         <!-- Bound by the system while notification access is granted (sample manifest in the

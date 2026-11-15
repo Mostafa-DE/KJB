@@ -11,16 +11,14 @@ import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import android.util.Log
-import app.lyrify.BuildConfig
 import app.lyrify.LOG_TAG
 import app.lyrify.USER_AGENT
-import app.lyrify.ai.api.AddonNames
+import app.lyrify.addon.shared.AddonPins
 import app.lyrify.logFailures
 import app.lyrify.models.AllowedHosts
 import app.lyrify.models.Download
 import app.lyrify.models.ModelDownloader
 import app.lyrify.models.ModelHosts
-import app.lyrify.models.ModelSpec
 import app.lyrify.models.ModelStore
 import app.lyrify.overnight.AiLyrics
 import kotlinx.coroutines.CancellationException
@@ -41,7 +39,7 @@ import java.net.URI
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 
-/** Where getting the AI add-on stands (Get AI, Update, Try again). */
+/** Where getting an add-on stands (Get AI or Get Downloads, Update, Try again). */
 sealed interface InstallState {
     data object Idle : InstallState
 
@@ -156,7 +154,8 @@ internal sealed interface InstallVerdict {
 }
 
 /**
- * Get AI, Update, Try again: download, check, install, one at a time, in [scope]; [pinned]: this build pins an add-on.
+ * Get AI or Get Downloads, Update, Try again: download, check, install, one at a time, in [scope]; [pinned]: this build
+ * pins the add-on.
  * The APK is checked twice before Android sees it: the download against the pinned size and SHA-256, then the file's
  * package and signing certificate. What fails a check is deleted; a download that stops keeps its part.
  */
@@ -234,18 +233,17 @@ class AddonInstaller(private val port: InstallPort, private val pinned: Boolean,
 }
 
 /**
- * Getting the add-on on this phone, process-wide: one [AddonInstaller] over Android ([AndroidInstallPort]), for the
- * release this KJB pins ([BuildConfig.AI_ADDON_URL], its SHA-256 and size). A build whose pin is still the placeholder
+ * Getting KJB's add-ons on this phone, process-wide: one [AddonInstaller] per add-on over Android ([AndroidInstallPort]),
+ * for the release this KJB pins ([KjbAddon.apk]: its URL, SHA-256 and size). A build whose pin is still the placeholder
  * downloads nothing.
  */
 object AddonInstalls {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + logFailures)
 
-    @Volatile
-    private var installer: AddonInstaller? = null
+    private val installers = ConcurrentHashMap<String, AddonInstaller>()
 
-    fun installer(context: Context): AddonInstaller = installer ?: synchronized(this) {
-        installer ?: AddonInstaller(AndroidInstallPort(context.applicationContext), pinned = AddonRelease.pinned, scope).also { installer = it }
+    fun installer(context: Context, addon: KjbAddon = KjbAddons.AI): AddonInstaller = installers.getOrPut(addon.packageName) {
+        AddonInstaller(AndroidInstallPort(context.applicationContext, addon), pinned = addon.apk.pinned, scope)
     }
 
     /** The phone's "Install unknown apps" switch for KJB. */
@@ -253,26 +251,7 @@ object AddonInstalls {
         Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.fromParts("package", context.packageName, null))
 
     /** The add-on's app info, where one that is not KJB's can be uninstalled. */
-    fun addonInfo(): Intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", BuildConfig.AI_ADDON_PACKAGE, null))
-}
-
-/**
- * The add-on's APK this KJB pins: KJB-AI-<version>.apk on the GitHub release, its SHA-256 and size (app/build.gradle.kts).
- * Kept in KJB's cache under a name of its pin, so a file an earlier KJB downloaded is never taken for this one.
- */
-private object AddonRelease {
-    const val APK: String = "KJB-AI.apk"
-
-    val pinned: Boolean get() = BuildConfig.AI_ADDON_SHA256.length == SHA256_HEX && BuildConfig.AI_ADDON_BYTES > 0
-
-    val spec: ModelSpec
-        get() = BuildConfig.AI_ADDON_SHA256.lowercase().let { sha ->
-            ModelSpec("KJB-AI-${sha.take(PIN_IN_NAME)}.apk", BuildConfig.AI_ADDON_URL, sha, BuildConfig.AI_ADDON_BYTES)
-        }
-
-    private const val PIN_IN_NAME = 16
-
-    private const val SHA256_HEX = 64
+    fun addonInfo(addon: KjbAddon = KjbAddons.AI): Intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", addon.packageName, null))
 }
 
 /**
@@ -287,24 +266,25 @@ internal object GitHubReleases : ModelHosts {
 }
 
 /**
- * The add-on's APK through Android: downloaded into KJB's cache with the models' downloader ([ModelDownloader]: the pinned
- * size and SHA-256, resumed with HTTP Range, GitHub only), checked for the add-on's package and KJB's certificate, and
- * installed with a PackageInstaller session. The result comes back to [InstallReceiver].
+ * An add-on's APK through Android, the same way for each add-on: downloaded into KJB's cache with the models' verified
+ * downloader ([ModelDownloader]: the pinned size and SHA-256, resumed with HTTP Range, GitHub only), checked for the
+ * add-on's package and KJB's certificate, and installed with a PackageInstaller session. The result comes back to
+ * [InstallReceiver].
  */
-internal class AndroidInstallPort(private val context: Context) : InstallPort {
-    private val folder = File(context.cacheDir, FOLDER)
-    private val store get() = ModelStore(folder, listOf(AddonRelease.spec), folder)
-    private val apk: File get() = store.file(AddonRelease.spec)
+internal class AndroidInstallPort(private val context: Context, private val addon: KjbAddon) : InstallPort {
+    private val folder = File(context.cacheDir, addon.folder)
+    private val store get() = ModelStore(folder, listOf(addon.apk.spec), folder)
+    private val apk: File get() = store.file(addon.apk.spec)
 
     override suspend fun download(progress: suspend (Long, Long) -> Unit): Download {
         // What an earlier KJB downloaded for another pin goes first.
-        val keep = setOf(apk.name, store.part(AddonRelease.spec).name)
+        val keep = setOf(apk.name, store.part(addon.apk.spec).name)
         withContext(Dispatchers.IO) { folder.listFiles()?.filter { it.name !in keep }?.forEach { it.delete() } }
-        return ModelDownloader(store, USER_AGENT, hosts = GitHubReleases, log = { Log.d(LOG_TAG, "AI add-on: $it") }).downloadAll(progress)
+        return ModelDownloader(store, USER_AGENT, hosts = GitHubReleases, log = { Log.d(LOG_TAG, "${addon.label}: $it") }).downloadAll(progress)
     }
 
     override fun verified(): Boolean {
-        val pin = AddonNames.pinBytes(BuildConfig.AI_CERT_SHA256) ?: return false
+        val pin = AddonPins.bytes(addon.certSha256) ?: return false
         val packages = context.packageManager
         val info = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             packages.getPackageArchiveInfo(apk.path, PackageManager.PackageInfoFlags.of(PackageManager.GET_SIGNING_CERTIFICATES.toLong()))
@@ -313,12 +293,12 @@ internal class AndroidInstallPort(private val context: Context) : InstallPort {
             packages.getPackageArchiveInfo(apk.path, PackageManager.GET_SIGNING_CERTIFICATES)
         } ?: return false
         val signers = info.signingInfo?.apkContentsSigners ?: return false
-        return info.packageName == BuildConfig.AI_ADDON_PACKAGE &&
+        return info.packageName == addon.packageName &&
             signers.any { MessageDigest.getInstance("SHA-256").digest(it.toByteArray()).contentEquals(pin) }
     }
 
     override fun discard() {
-        if (!store.delete()) Log.w(LOG_TAG, "AI add-on: the downloaded file could not be deleted")
+        if (!store.delete()) Log.w(LOG_TAG, "${addon.label}: the downloaded file could not be deleted")
     }
 
     override fun canInstall(): Boolean = context.packageManager.canRequestPackageInstalls()
@@ -326,7 +306,7 @@ internal class AndroidInstallPort(private val context: Context) : InstallPort {
     override suspend fun install(): InstallOutcome = withContext(Dispatchers.IO) {
         val installer = context.packageManager.packageInstaller
         val params = PackageInstaller.SessionParams(PackageInstaller.SessionParams.MODE_FULL_INSTALL).apply {
-            setAppPackageName(BuildConfig.AI_ADDON_PACKAGE)
+            setAppPackageName(addon.packageName)
             setSize(apk.length())
             // An update of the add-on KJB installed may go through without asking (Android 12+, with
             // UPDATE_PACKAGES_WITHOUT_USER_ACTION); the first install always asks, and so may any other.
@@ -335,13 +315,13 @@ internal class AndroidInstallPort(private val context: Context) : InstallPort {
         val session = try {
             installer.createSession(params)
         } catch (e: IOException) {
-            Log.w(LOG_TAG, "AI add-on: no install session (${e.javaClass.simpleName})")
+            Log.w(LOG_TAG, "${addon.label}: no install session (${e.javaClass.simpleName})")
             return@withContext InstallOutcome.Failed(PackageInstaller.STATUS_FAILURE)
         }
-        val outcome = InstallReceiver.expect(session)
+        val outcome = InstallReceiver.expect(session, addon)
         try {
             installer.openSession(session).use { open ->
-                open.openWrite(AddonRelease.APK, 0, apk.length()).use { out ->
+                open.openWrite(INSTALL_NAME, 0, apk.length()).use { out ->
                     apk.inputStream().use { it.copyTo(out) }
                     open.fsync(out)
                 }
@@ -355,11 +335,11 @@ internal class AndroidInstallPort(private val context: Context) : InstallPort {
             runCatching { installer.abandonSession(session) }
             throw e
         } catch (e: IOException) {
-            Log.w(LOG_TAG, "AI add-on: install not written (${e.javaClass.simpleName})")
+            Log.w(LOG_TAG, "${addon.label}: install not written (${e.javaClass.simpleName})")
             runCatching { installer.abandonSession(session) }
             InstallOutcome.Failed(PackageInstaller.STATUS_FAILURE)
         } catch (e: SecurityException) {
-            Log.w(LOG_TAG, "AI add-on: install refused (${e.javaClass.simpleName})")
+            Log.w(LOG_TAG, "${addon.label}: install refused (${e.javaClass.simpleName})")
             runCatching { installer.abandonSession(session) }
             InstallOutcome.Failed(PackageInstaller.STATUS_FAILURE_BLOCKED)
         } finally {
@@ -368,13 +348,15 @@ internal class AndroidInstallPort(private val context: Context) : InstallPort {
     }
 
     private companion object {
-        const val FOLDER = "ai-addon"
+        /** The APK's name in the install session. */
+        const val INSTALL_NAME = "addon.apk"
     }
 }
 
 /**
  * Android's installer's word on an add-on install (through [AndroidInstallPort]'s pending intent; not exported, so only
- * that reaches it): it asks the user (its dialog is started from here), or it is done, refused or failed.
+ * that reaches it): it asks the user (its dialog is started from here), or it is done, refused or failed. Each session
+ * is heard only for the add-on KJB started it for.
  */
 class InstallReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -393,8 +375,9 @@ class InstallReceiver : BroadcastReceiver() {
             confirmPackage = confirm?.`package`,
             confirmSession = confirm?.getIntExtra(PackageInstaller.EXTRA_SESSION_ID, -1) ?: -1,
         )
-        when (val verdict = report.verdict(outcomes::containsKey, BuildConfig.AI_ADDON_PACKAGE)) {
-            InstallVerdict.Ignore -> Log.w(LOG_TAG, "AI add-on: an install report for no session of KJB's, ignored")
+        val pending = outcomes[report.ourSession]
+        when (val verdict = report.verdict(outcomes::containsKey, pending?.addon?.packageName.orEmpty())) {
+            InstallVerdict.Ignore -> Log.w(LOG_TAG, "add-on: an install report for no session of KJB's, ignored")
             is InstallVerdict.Confirm -> {
                 // Rebuilt from what was checked, nothing else. KJB is in front (the user just tapped Get AI), so Android
                 // lets it show the dialog; when it cannot, the install ends here instead of waiting for it.
@@ -409,25 +392,30 @@ class InstallReceiver : BroadcastReceiver() {
                 }
             }
             is InstallVerdict.End -> {
-                if (verdict.outcome is InstallOutcome.Failed) Log.w(LOG_TAG, "AI add-on: not installed, status ${verdict.outcome.status}")
-                outcomes.remove(report.session)?.complete(verdict.outcome)
-                if (verdict.outcome == InstallOutcome.Installed) AiLyrics.addonInstalled(context)
+                val addon = pending?.addon ?: return
+                if (verdict.outcome is InstallOutcome.Failed) Log.w(LOG_TAG, "${addon.label}: not installed, status ${verdict.outcome.status}")
+                outcomes.remove(report.session)?.outcome?.complete(verdict.outcome)
+                if (verdict.outcome == InstallOutcome.Installed && addon == KjbAddons.AI) AiLyrics.addonInstalled(context)
             }
         }
     }
 
     private fun end(session: Int, outcome: InstallOutcome, e: Exception) {
-        Log.w(LOG_TAG, "AI add-on: the install dialog did not open (${e.javaClass.simpleName})")
-        outcomes.remove(session)?.complete(outcome)
+        Log.w(LOG_TAG, "add-on: the install dialog did not open (${e.javaClass.simpleName})")
+        outcomes.remove(session)?.outcome?.complete(outcome)
     }
 
     companion object {
         const val EXTRA_SESSION: String = "app.lyrify.addon.session"
 
-        /** The installs waiting for the installer's word, by session. */
-        private val outcomes = ConcurrentHashMap<Int, CompletableDeferred<InstallOutcome>>()
+        /** An install waiting for the installer's word: the add-on it is for, and where its outcome goes. */
+        private class Pending(val addon: KjbAddon, val outcome: CompletableDeferred<InstallOutcome>)
 
-        internal fun expect(session: Int): CompletableDeferred<InstallOutcome> = CompletableDeferred<InstallOutcome>().also { outcomes[session] = it }
+        /** The installs waiting for the installer's word, by session. */
+        private val outcomes = ConcurrentHashMap<Int, Pending>()
+
+        internal fun expect(session: Int, addon: KjbAddon): CompletableDeferred<InstallOutcome> =
+            CompletableDeferred<InstallOutcome>().also { outcomes[session] = Pending(addon, it) }
 
         internal fun forget(session: Int) {
             outcomes.remove(session)

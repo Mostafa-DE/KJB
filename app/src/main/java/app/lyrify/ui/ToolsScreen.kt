@@ -48,6 +48,7 @@ enum class Tool(@StringRes val title: Int, @DrawableRes val icon: Int, val page:
     DUPLICATES(R.string.dupes_title, R.drawable.ic_content_copy, Page.Duplicates),
     TONES(R.string.tones_title, R.drawable.ic_ring_volume, Page.Tones),
     COVERS_TAGS(R.string.tools_covers, R.drawable.ic_sell, Page.CoversTags),
+    DOWNLOADS(R.string.dl_title, R.drawable.ic_download, Page.Downloads),
     AI(R.string.ai_title, R.drawable.ic_auto_awesome, Page.Ai),
     SETTINGS(R.string.settings_title, R.drawable.ic_settings, Page.Settings),
 }
@@ -73,11 +74,12 @@ data class ToolRow(val tool: Tool, val line: ToolLine?, val badge: Int? = null, 
  * state with [aiWaiting] songs waiting for it. On a phone the AI does not run on there is no AI row at all, no dead
  * button (the AI add-on design).
  */
-fun toolRows(checks: Int, dupes: DupesView, dupesBadge: Int, tones: Int, coversTags: EntryRow?, ai: AiState, aiWaiting: Int): List<ToolRow> = listOfNotNull(
+fun toolRows(checks: Int, dupes: DupesView, dupesBadge: Int, tones: Int, coversTags: EntryRow?, ai: AiState, aiWaiting: Int, downloads: EntryRow? = null): List<ToolRow> = listOfNotNull(
     ToolRow(Tool.CHECK, if (checks > 0) ToolLine.Count(R.plurals.tools_check, checks) else ToolLine.Text(R.string.tools_check_none), badge = checks.takeIf { it > 0 }),
     ToolRow(Tool.DUPLICATES, dupesLine(dupes), badge = dupesBadge.takeIf { it > 0 }),
     ToolRow(Tool.TONES, if (tones > 0) ToolLine.Count(R.plurals.tools_tones, tones) else ToolLine.Text(R.string.tools_tones_none)),
     ToolRow(Tool.COVERS_TAGS, coversTags?.line, badge = coversTags?.badge),
+    ToolRow(Tool.DOWNLOADS, downloads?.line, badge = downloads?.badge),
     ToolRow(Tool.AI, aiLine(ai, aiWaiting), dot = aiAttention(ai, aiWaiting)).takeIf { ai.supported },
     ToolRow(Tool.SETTINGS, null),
 )

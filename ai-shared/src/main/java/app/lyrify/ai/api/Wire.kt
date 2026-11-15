@@ -14,14 +14,6 @@ object AddonNames {
 
     /** The signature permission only the add-on declares and only KJB, signed with the same key, holds. */
     fun permission(addonPackage: String): String = "$addonPackage.permission.BIND_AI"
-
-    /** A pinned certificate's SHA-256 as hex, as bytes; null when it is empty or not hex: no pin trusts nobody. */
-    fun pinBytes(hex: String): ByteArray? =
-        if (hex.isEmpty() || hex.length % 2 != 0 || !hex.all { it in '0'..'9' || it.lowercaseChar() in 'a'..'f' }) {
-            null
-        } else {
-            hex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
-        }
 }
 
 /**

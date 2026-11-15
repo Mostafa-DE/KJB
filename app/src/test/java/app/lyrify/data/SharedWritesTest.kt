@@ -386,6 +386,7 @@ class SharedWritesTest {
         val SHARED: Set<String> = setOf(
             "backup/AutoBackup.kt",
             "backup/M3u.kt",
+            "downloads/DownloadRunner.kt",
             "dupes/SongTrash.kt",
             "lyrics/LrcEdits.kt",
             "lyrics/LyricsPipeline.kt",
@@ -406,6 +407,8 @@ class SharedWritesTest {
             // The crash reports in the app's files.
             "crash/CrashLog.kt",
             "data/LedgerRepository.kt",
+            // Downloads: downloads.json, written aside and moved over.
+            "downloads/Downloads.kt",
             "dupes/DuplicatesStore.kt",
             "library/Playlists.kt",
             "library/search/RecentSearches.kt",

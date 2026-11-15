@@ -14,6 +14,7 @@ import android.os.RemoteCallbackList
 import android.os.RemoteException
 import android.os.SystemClock
 import android.util.Log
+import app.lyrify.addon.shared.CallerCheck
 import app.lyrify.ai.api.AddonNames
 import app.lyrify.ai.api.AddonStatus
 import app.lyrify.ai.api.IAiAddon
@@ -51,37 +52,6 @@ val USER_AGENT: String = "KJB-AI/${BuildConfig.VERSION_NAME} ( https://github.co
 
 /** CPU threads for the engine: the MDX STFT and iSTFT (the spike's measured 4) and wav2vec2. The models run on the NPU. */
 const val ENGINE_THREADS: Int = 4
-
-/**
- * Who may call the add-on: KJB of this build type ([kjbPackage]) signed with the pinned certificate ([certSha256], hex),
- * by the calling uid's packages ([packagesFor], `PackageManager.getPackagesForUid`) and certificate ([hasCert],
- * `PackageManager.hasSigningCertificate` with CERT_INPUT_SHA256). No pin trusts nobody.
- */
-class CallerCheck(
-    private val addonPackage: String,
-    private val kjbPackage: String,
-    private val certSha256: String,
-    private val packagesFor: (Int) -> Array<String>?,
-    private val hasCert: (Int, ByteArray) -> Boolean,
-) {
-    fun allows(uid: Int): Boolean {
-        val pin = AddonNames.pinBytes(certSha256) ?: return false
-        val packages = packagesFor(uid) ?: return false
-        return kjbPackage in packages && hasCert(uid, pin)
-    }
-
-    /**
-     * Whether a bind may be served: the bind permission is this add-on's own definition, at signature level (an app that
-     * defined it first would set its level). onBind runs outside the client's transaction, so the caller itself is
-     * checked on each call ([enforce]).
-     */
-    fun guardsBind(permissionOwner: String?, signatureLevel: Boolean): Boolean = permissionOwner == addonPackage && signatureLevel
-
-    /** Throws SecurityException, which reaches KJB as such, unless [uid] [allows]. */
-    fun enforce(uid: Int) {
-        if (!allows(uid)) throw SecurityException("the caller is not KJB")
-    }
-}
 
 /** What one song's job tells its caller: IAiRunCallback, as Kotlin. */
 interface JobEvents {

@@ -187,6 +187,7 @@ fun SettingsScreen(
                 )
                 if (ai.supported) ValueRow(R.drawable.ic_download, R.string.set_ai_download, aiDownloadText(ai.models)) { onOpen(Page.Ai) }
             }
+            downloadsSettings()
             section(R.string.settings_backup) {
                 ActionRow(R.drawable.ic_backup, R.string.set_backup_now, first = true, onClick = backup.backUpNow)
                 ActionRow(R.drawable.ic_settings_backup_restore, R.string.set_restore, onClick = backup.restore)
