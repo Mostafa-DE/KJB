@@ -20,7 +20,6 @@ import android.os.SystemClock
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -35,11 +34,12 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -99,6 +99,7 @@ import app.lyrify.player.QueueItem
 import app.lyrify.player.SourceKind
 import app.lyrify.player.Undo
 import app.lyrify.player.queueLabel
+import app.lyrify.player.queueLabels
 import app.lyrify.player.sourceLabel
 import app.lyrify.settings.LibrarySettings
 import kotlinx.coroutines.flow.map
@@ -506,6 +507,7 @@ fun QueueSheet(onDismiss: () -> Unit) {
                 return@Column
             }
             val others = book.others
+            val labels = remember(context, book) { queueLabels(context, book) }
             // The sheet opens with the song playing in view, under the head and the chips.
             val list = rememberLazyListState(firstShown(queue.index, head = if (others.isEmpty()) 1 else 2))
             LazyColumn(Modifier.weight(1f, fill = false), state = list) {
@@ -514,7 +516,7 @@ fun QueueSheet(onDismiss: () -> Unit) {
                         Column(Modifier.weight(1f)) {
                             Text(stringResource(R.string.queue_title), style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { heading() })
                             Text(
-                                stringResource(R.string.queue_from, queueLabel(context, book, queue), stringResource(R.string.queue_position, queue.index + 1, queue.items.size)),
+                                stringResource(R.string.queue_from, labels.getValue(queue.id), stringResource(R.string.queue_position, queue.index + 1, queue.items.size)),
                                 style = MaterialTheme.typography.bodyMedium.tabular(),
                                 color = colors.onSurfaceVariant,
                             )
@@ -525,13 +527,7 @@ fun QueueSheet(onDismiss: () -> Unit) {
                 if (others.isNotEmpty()) {
                     item {
                         SectionTitle(stringResource(R.string.queue_recent), Modifier.padding(start = 20.dp, end = 20.dp, top = 12.dp))
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 4.dp)) {
-                            others.forEach { other ->
-                                LyrifyChip(selected = false, onClick = { open(Page.Queue(other.id)) }, role = Role.Button, icon = R.drawable.ic_queue_music) {
-                                    Text(queueLabel(context, book, other), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                }
-                            }
-                        }
+                        RecentChips(others, labels) { open(Page.Queue(it)) }
                     }
                 }
                 queueSongs(queue, playing = true, library, names, connection, reorder, sheetSurface, onRemoved = { undo ->
@@ -541,6 +537,21 @@ fun QueueSheet(onDismiss: () -> Unit) {
             ToastSlot(Modifier.padding(horizontal = 12.dp), padding = PaddingValues(bottom = 8.dp))
             LyrifyButton(stringResource(R.string.queue_save_playlist), { saving = true }, Modifier.fillMaxWidth().padding(16.dp), kind = ButtonKind.SECONDARY, icon = R.drawable.ic_playlist_add)
             if (saving) SaveAsPlaylistDialog(queue, connection) { saving = false }
+        }
+    }
+}
+
+/**
+ * The Queue sheet's Recent chips: [others] by their names in [labels] ([queueLabels]), each one capped in width. A lazy
+ * row, as every kept queue shows here; a tap opens that queue's page by its id ([onOpen]).
+ */
+@Composable
+internal fun RecentChips(others: List<Queue>, labels: Map<String, String>, onOpen: (String) -> Unit) {
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(horizontal = 20.dp, vertical = 4.dp)) {
+        items(others, key = { it.id }, contentType = { "chip" }) { other ->
+            LyrifyChip(selected = false, onClick = { onOpen(other.id) }, role = Role.Button, icon = R.drawable.ic_queue_music) {
+                Text(labels.getValue(other.id), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = CHIP_NAME_MAX))
+            }
         }
     }
 }
@@ -806,6 +817,9 @@ private fun QueueSongRow(
 
 /** A queue row's height (.qrow, 60 dp), taller when its two lines need it at a large font scale; a drag moves a song by whole rows. */
 private val ROW = 60.dp
+
+/** A Recent chip's widest name; a longer one ends in an ellipsis. */
+private val CHIP_NAME_MAX = 220.dp
 
 /** How long the order a drag left waits for the queue to say the same before the queue's own order shows. */
 private const val CATCH_UP_MS = 1_500L

@@ -4,6 +4,7 @@ import android.content.res.Configuration
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.requiredWidth
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
@@ -26,6 +27,7 @@ import app.lyrify.library.SongRef
 import app.lyrify.player.QueueBook
 import app.lyrify.player.QueueSource
 import app.lyrify.player.SourceKind
+import app.lyrify.player.queueLabels
 import app.lyrify.settings.LibrarySettings
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -37,7 +39,8 @@ import org.junit.runner.RunWith
 /**
  * The Queues page's list (QF3) on the phone, at a width and font scale set here rather than the phone's, light and dark:
  * "Playing now" with the queue playing first and only there, Recent under it holding a queue kept with Keep in 3.0.0,
- * no Saved part, and one empty state when there is no queue. The book alone: nothing plays. Made-up names only.
+ * no Saved part, and one empty state when there is no queue. The book alone: nothing plays. Also the Queue sheet's
+ * Recent chips, many queues of them. Made-up names only.
  */
 @RunWith(AndroidJUnit4::class)
 class QueuesListDeviceTest {
@@ -113,15 +116,41 @@ class QueuesListDeviceTest {
         compose.onAllNodesWithText(playingNow).assertCountEquals(1)
     }
 
+    @Test
+    fun theSheetsRecentChipsComposeOnlyThoseInReachAndCutALongName() {
+        // 40 queues kept with Keep in 3.0.0, so 39 chips beside the one playing; the queue left last has a long name.
+        val many = (1..40).fold(QueueBook()) { book, n ->
+            val played = book.play(listOf(song("Chip $n")), 0, QueueSource(SourceKind.FOLDER, "folder:Music/Chip $n", "Chip $n"), now = n.toLong()).book
+            val id = played.currentId!!
+            played.rename(id, "Chip $n").keep(id)
+        }
+        val long = "Chip of a long evening walk along the harbour wall and back again"
+        val target = many.others.first().id
+        val book = many.rename(target, long)
+        val others = book.others
+        show { RecentChips(others, queueLabels(context, book)) { opened += it } }
+        val shown = compose.onAllNodesWithText("Chip", substring = true).fetchSemanticsNodes().size
+        assertTrue("$shown of ${others.size} chips composed", shown in 1 until others.size)
+        val name = layoutOf(long)
+        assertTrue("the long name is not cut", name.isLineEllipsized(0))
+        val width = compose.onNodeWithText(long, useUnmergedTree = true).getUnclippedBoundsInRoot().let { it.right - it.left }
+        assertTrue("the long name is $width wide", width <= 220.dp)
+        compose.onNodeWithText(long).performClick()
+        assertEquals(listOf(target), opened)
+    }
+
     /** The list alone, [width] wide (beyond the phone's own if need be), at [fontScale], light or [dark]. */
-    private fun show(book: QueueBook, width: Dp = 360.dp, fontScale: Float = 1f, dark: Boolean = false) = compose.setContent {
+    private fun show(book: QueueBook, width: Dp = 360.dp, fontScale: Float = 1f, dark: Boolean = false) = show(width, fontScale, dark) {
+        QueuesList(book, ui = null, library = null, names = LibrarySettings(), padding = PaddingValues(0.dp)) { opened += it }
+    }
+
+    /** [content] alone, [width] wide (beyond the phone's own if need be), at [fontScale], light or [dark]. */
+    private fun show(width: Dp = 360.dp, fontScale: Float = 1f, dark: Boolean = false, content: @Composable () -> Unit) = compose.setContent {
         val night = if (dark) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO
         val config = Configuration(LocalConfiguration.current).apply { uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or night }
         CompositionLocalProvider(LocalConfiguration provides config, LocalDensity provides Density(LocalDensity.current.density, fontScale)) {
             LyrifyTheme {
-                Box(Modifier.requiredWidth(width)) {
-                    QueuesList(book, ui = null, library = null, names = LibrarySettings(), padding = PaddingValues(0.dp)) { opened += it }
-                }
+                Box(Modifier.requiredWidth(width)) { content() }
             }
         }
     }
