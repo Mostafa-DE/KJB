@@ -130,6 +130,14 @@ class PlayerScreenTest {
     }
 
     @Test
+    fun `the player's menu offers Make a tone for a song, never for a book's part, whose lrc the editor would read`() {
+        assertTrue(makesTone(book = false))
+        assertFalse(makesTone(book = true))
+        // Not known yet while the library is read: nothing that reads lyrics, as for Share lyrics.
+        assertFalse(makesTone(book = null))
+    }
+
+    @Test
     fun `a file not known yet as a song or a book has nothing read until the library tells`() = runTest {
         val path = "/storage/emulated/0/Music/Lantern Keeper/01 Lantern Keeper.mp3"
         val entry = LedgerEntry(path = path, title = "Lantern Keeper", durationMs = 200_000, status = LyricsStatus.PLAIN_ONLY, lrclibId = 42, updatedAt = 1)

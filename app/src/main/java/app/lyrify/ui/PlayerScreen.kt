@@ -264,6 +264,12 @@ fun showsLyrics(ui: PlayerUiSettings, book: Boolean, touring: Boolean): Boolean 
  */
 fun flipped(ui: PlayerUiSettings, lyrics: Boolean, book: Boolean): PlayerUiSettings = if (book) ui else ui.copy(showLyrics = lyrics)
 
+/**
+ * Whether the player's "⋯" offers Make a tone: for a song only. The tone editor reads the `.lrc` beside the file, and
+ * nothing reads a book's part's, nor one's not known yet ([knownBookPart] null) while the library is read.
+ */
+fun makesTone(book: Boolean?): Boolean = book == false
+
 /** The links row and the progress bar each take a 48 dp touch area; this much clear space separates them, chips or not. */
 private val LINKS_GAP = 16.dp
 private val CHIPS_GAP = 16.dp
@@ -481,7 +487,7 @@ fun PlayerView() {
     ) {
         Backdrop(ui.item.song.path)
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
-            PlayerTopBar(ui, lyricsShare, onClose = close, onRoute = route, onDrag = drag::follow, onDragEnd = letGo)
+            PlayerTopBar(ui, lyricsShare, tone = makesTone(book), onClose = close, onRoute = route, onDrag = drag::follow, onDragEnd = letGo)
             Column(Modifier.weight(1f).padding(horizontal = 24.dp, vertical = 4.dp)) {
                 FlipArea(
                     ui = ui,
@@ -597,10 +603,10 @@ private fun Backdrop(path: String) {
 
 /**
  * The chevron, "From Album · Name", and "⋯" with every item of the menu; Share and Share lyrics ([lyricsShare]) for a song
- * of the library. Dragged down, the player follows ([onDrag]).
+ * of the library, Make a tone when [tone] ([makesTone]). Dragged down, the player follows ([onDrag]).
  */
 @Composable
-private fun PlayerTopBar(ui: PlayerUi, lyricsShare: LyricsShare?, onClose: () -> Unit, onRoute: (PlayerRoute) -> Unit, onDrag: (PointerInputChange, Float) -> Unit, onDragEnd: () -> Unit) {
+private fun PlayerTopBar(ui: PlayerUi, lyricsShare: LyricsShare?, tone: Boolean, onClose: () -> Unit, onRoute: (PlayerRoute) -> Unit, onDrag: (PointerInputChange, Float) -> Unit, onDragEnd: () -> Unit) {
     val context = LocalContext.current
     val nav = LocalNavigator.current
     var menu by remember { mutableStateOf(false) }
@@ -638,7 +644,7 @@ private fun PlayerTopBar(ui: PlayerUi, lyricsShare: LyricsShare?, onClose: () ->
                 MenuRow(stringResource(R.string.player_menu_play_on), R.drawable.ic_speaker, pick { onRoute(PlayerRoute.PLAY_ON) })
                 // KJB's equalizer (AudioScreens.kt); the phone's own sound effects open from inside it.
                 MenuRow(stringResource(R.string.player_menu_equalizer), R.drawable.ic_equalizer, pick { nav.show(FullScreen.Equalizer) })
-                MenuRow(stringResource(R.string.player_menu_tone), R.drawable.ic_ring_volume, pick { onRoute(PlayerRoute.MAKE_TONE) })
+                if (tone) MenuRow(stringResource(R.string.player_menu_tone), R.drawable.ic_ring_volume, pick { onRoute(PlayerRoute.MAKE_TONE) })
                 if (song != null) MenuRow(stringResource(R.string.share), R.drawable.ic_share, pick { onRoute(PlayerRoute.SHARE) })
                 if (song != null && lyricsShare != null) MenuRow(stringResource(R.string.share_lyrics), R.drawable.ic_share, pick { onRoute(PlayerRoute.SHARE_LYRICS) })
                 MenuRow(stringResource(R.string.player_menu_info), R.drawable.ic_info, pick { onRoute(PlayerRoute.SONG_INFO) })
