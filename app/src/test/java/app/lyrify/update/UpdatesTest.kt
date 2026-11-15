@@ -270,7 +270,7 @@ class UpdatesTest {
     fun `the latest release is asked of GitHub's API with KJB's name`() {
         val fetched = github(Answer(200, release())).fetch()
 
-        assertEquals("3.0.1", ((fetched as Fetched.Answer).release)?.version)
+        assertEquals("3.0.1", (fetched as Fetched.Answer).release.version)
         val request = opened.single()
         assertEquals("https://api.github.com/repos/Mostafa-DE/KJB/releases/latest", request.url.toString())
         assertEquals("KJB/test", request.headers["User-Agent"])
@@ -278,8 +278,9 @@ class UpdatesTest {
     }
 
     @Test
-    fun `no release yet is an answer, a busy or refusing server is none`() {
-        assertEquals(Fetched.Answer(null), github(Answer(404)).fetch())
+    fun `a missing repository or release is no answer, as a busy or refusing server is, never up to date`() {
+        // A renamed or missing repository, or one with no release yet, must not read as "KJB is the latest" for good.
+        assertEquals(Fetched.NoAnswer, github(Answer(404)).fetch())
         assertEquals(Fetched.NoAnswer, github(Answer(403)).fetch())
         assertEquals(Fetched.NoAnswer, github(Answer(200, "not json")).fetch())
         assertEquals(Fetched.NoAnswer, GitHubLatest("Mostafa-DE/KJB", "KJB/test") { throw IOException("offline") }.fetch())
@@ -288,7 +289,7 @@ class UpdatesTest {
     @Test
     fun `a renamed repository's redirect within GitHub's API is followed, any other is refused`() {
         val moved = github(Answer(301, location = "https://api.github.com/repositories/1/releases/latest"), Answer(200, release())).fetch()
-        assertEquals("3.0.1", (moved as Fetched.Answer).release?.version)
+        assertEquals("3.0.1", (moved as Fetched.Answer).release.version)
 
         opened.clear()
         assertEquals(Fetched.NoAnswer, github(Answer(302, location = "https://example.com/latest")).fetch())
@@ -336,6 +337,9 @@ class UpdatesTest {
 
     private var now = 100 * DAY
     private val newer = Releases.parse(release(), REPO)!!
+
+    /** GitHub's latest release, no newer than the KJB of these tests (3.0.0 or 3.0.1). */
+    private val older = Releases.parse(release(tag = "v3.0.0"), REPO)!!
 
     private fun TestScope.checker(port: FakePort, installed: String = "3.0.0", addonsOffered: List<AddonUpdate> = emptyList()) =
         UpdateChecker(port, installed, addonsOffered, { now }, backgroundScope)
@@ -408,13 +412,13 @@ class UpdatesTest {
     fun `the same or an older release offers nothing`() = runTest {
         val port = FakePort(Fetched.Answer(newer))
         assertEquals(UpdateState.Checked(null, addons = none, ask = false), checker(port, installed = "3.0.1").checkNow())
-        assertEquals(UpdateState.Checked(null, addons = none, ask = false), checker(FakePort(Fetched.Answer(null))).checkNow())
+        assertEquals(UpdateState.Checked(null, addons = none, ask = false), checker(FakePort(Fetched.Answer(older))).checkNow())
     }
 
     @Test
     fun `an installed add-on older than the one this KJB brings is offered too`() = runTest {
         val offered = listOf(AddonUpdate(ai, "3.0.1"))
-        val port = FakePort(Fetched.Answer(null)).apply { addons[ai] = "3.0.0" }
+        val port = FakePort(Fetched.Answer(older)).apply { addons[ai] = "3.0.0" }
         assertEquals(UpdateState.Checked(null, addons = offered, ask = true), checker(port, installed = "3.0.1", addonsOffered = offered).checkNow())
 
         port.addons[ai] = "3.0.1"
@@ -426,7 +430,7 @@ class UpdatesTest {
     @Test
     fun `the Downloads add-on is offered the AI add-on's way, each by its own installed version`() = runTest {
         val offered = listOf(AddonUpdate(ai, "3.0.1"), AddonUpdate(downloads, "3.0.1"))
-        val port = FakePort(Fetched.Answer(null)).apply {
+        val port = FakePort(Fetched.Answer(older)).apply {
             addons[ai] = "3.0.1"
             addons[downloads] = "3.0.0-dev"
         }
@@ -443,7 +447,7 @@ class UpdatesTest {
     @Test
     fun `Not now puts off the add-ons offered, and another add-on's update asks again`() = runTest {
         val offered = listOf(AddonUpdate(ai, "3.0.1"), AddonUpdate(downloads, "3.0.1"))
-        val port = FakePort(Fetched.Answer(null)).apply { addons[ai] = "3.0.0" }
+        val port = FakePort(Fetched.Answer(older)).apply { addons[ai] = "3.0.0" }
         val checker = checker(port, installed = "3.0.1", addonsOffered = offered)
 
         checker.checkIfDue(enabled = true)

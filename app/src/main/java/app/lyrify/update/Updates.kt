@@ -196,10 +196,13 @@ fun offeredAddons(addons: List<KjbAddon>): List<AddonUpdate> =
 
 /** What asking GitHub gave. */
 sealed interface Fetched {
-    /** GitHub answered: the latest [release], or null when there is none (yet) KJB can read as one. */
-    data class Answer(val release: Release?) : Fetched
+    /** GitHub answered with the latest [release]. */
+    data class Answer(val release: Release) : Fetched
 
-    /** No answer: no network, a busy or refusing server, an answer that is not a release. */
+    /**
+     * No answer: no network, a busy or refusing server, an answer that is not a release, or no release at all (a 404:
+     * the repository is missing or renamed, or has none yet), which must never read as KJB being up to date.
+     */
     data object NoAnswer : Fetched
 }
 
@@ -235,7 +238,6 @@ class GitHubLatest(
                 connection.setRequestProperty("X-GitHub-Api-Version", API_VERSION)
                 when (connection.responseCode) {
                     HttpURLConnection.HTTP_OK -> return body(connection)?.let { Releases.parse(it, repo) }?.let { Fetched.Answer(it) } ?: Fetched.NoAnswer
-                    HttpURLConnection.HTTP_NOT_FOUND -> return Fetched.Answer(null)
                     HttpURLConnection.HTTP_MOVED_PERM, HttpURLConnection.HTTP_MOVED_TEMP, TEMPORARY_REDIRECT, PERMANENT_REDIRECT -> {
                         uri = connection.getHeaderField("Location")?.let { resolve(uri, it) } ?: return Fetched.NoAnswer
                     }
@@ -367,7 +369,7 @@ class UpdateChecker(
         val result = when (val fetched = port.latest()) {
             Fetched.NoAnswer -> UpdateState.Failed
             is Fetched.Answer -> {
-                val release = fetched.release?.takeIf { Releases.newer(it.version, installed) }
+                val release = fetched.release.takeIf { Releases.newer(it.version, installed) }
                 val addons = addonsOffered.filter { offered -> port.addonInstalled(offered.addon)?.let { Releases.newer(offered.version, it) } == true }
                 val checked = UpdateState.Checked(release, addons, ask = false)
                 val offer = offerOf(checked)
