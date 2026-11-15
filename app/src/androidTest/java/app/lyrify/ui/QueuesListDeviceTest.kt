@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
@@ -13,7 +14,9 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.text.TextLayoutResult
@@ -24,8 +27,10 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import app.lyrify.R
 import app.lyrify.library.SongRef
+import app.lyrify.player.PlayerUi
 import app.lyrify.player.QueueBook
 import app.lyrify.player.QueueSource
+import app.lyrify.player.Repeat
 import app.lyrify.player.SourceKind
 import app.lyrify.player.queueLabels
 import app.lyrify.settings.LibrarySettings
@@ -39,8 +44,8 @@ import org.junit.runner.RunWith
 /**
  * The Queues page's list (QF3) on the phone, at a width and font scale set here rather than the phone's, light and dark:
  * "Playing now" with the queue playing first and only there, Recent under it holding a queue kept with Keep in 3.0.0,
- * no Saved part, and one empty state when there is no queue. The book alone: nothing plays. Also the Queue sheet's
- * Recent chips, many queues of them. Made-up names only.
+ * no Saved part, and one empty state when there is no queue. The book alone: nothing plays, but for the card told
+ * playing or paused. Also the Queue sheet's Recent chips, many queues of them. Made-up names only.
  */
 @RunWith(AndroidJUnit4::class)
 class QueuesListDeviceTest {
@@ -114,6 +119,19 @@ class QueuesListDeviceTest {
         val place = layoutOf("3 of 4")
         assertFalse("3 of 4 cut", place.hasVisualOverflow || place.isLineEllipsized(place.lineCount - 1))
         compose.onAllNodesWithText(playingNow).assertCountEquals(1)
+    }
+
+    @Test
+    fun theCardTellsTalkBackWhetherItsQueueIsPlayingOrPaused() {
+        val book = book()
+        val queue = book.current!!
+        fun ui(playing: Boolean) = PlayerUi(book, queue, queue.current!!, song = null, playing = playing, positionMs = 0, at = 0, speed = 1f, durationMs = 0, repeat = Repeat.OFF, library = null)
+        val live = mutableStateOf(ui(playing = true))
+        show { QueuesList(book, live.value, library = null, names = LibrarySettings(), padding = PaddingValues(0.dp)) { opened += it } }
+        compose.onNodeWithContentDescription("3 of 4, $playingNow", substring = true).assertExists()
+        live.value = ui(playing = false)
+        compose.onNodeWithContentDescription("3 of 4", substring = true).assertExists()
+        compose.onAllNodesWithContentDescription(playingNow, substring = true).assertCountEquals(0)
     }
 
     @Test

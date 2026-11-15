@@ -188,8 +188,8 @@ internal fun QueuesList(book: QueueBook, ui: PlayerUi?, library: Library?, names
 
 /**
  * The queue playing, first on the Queues page, on the fill its song has in a queue's list: that song's cover, the
- * queue's name, the song, and where it is ("12 of 48"), live while it plays. One TalkBack stop; a tap opens the queue's
- * page at the song.
+ * queue's name, the song, and where it is ("12 of 48"), live while it plays. One TalkBack stop, which says "Playing now"
+ * while the song plays (the equalizer; paused, the chevron); a tap opens the queue's page at the song.
  */
 @Composable
 private fun PlayingCard(queue: Queue, book: QueueBook, ui: PlayerUi?, library: Library?, names: LibrarySettings, onOpen: () -> Unit) {
@@ -201,6 +201,8 @@ private fun PlayingCard(queue: Queue, book: QueueBook, ui: PlayerUi?, library: L
     val title = song?.let { displayTitle(it, names) } ?: item?.song?.path?.substringAfterLast('/').orEmpty()
     val name = queueLabel(context, book, queue)
     val at = stringResource(R.string.queue_position, (live?.queue?.index ?: queue.index) + 1, queue.items.size)
+    val on = live?.playing == true
+    val playingNow = stringResource(R.string.queues_playing)
     val fill = brand.highlightContainer.copy(alpha = CURRENT_ALPHA).compositeOver(MaterialTheme.colorScheme.background)
     Row(
         verticalAlignment = Alignment.CenterVertically,
@@ -210,7 +212,7 @@ private fun PlayingCard(queue: Queue, book: QueueBook, ui: PlayerUi?, library: L
             .clip(RoundedCornerShape(20.dp))
             .background(fill)
             .clickable(role = Role.Button, onClick = onOpen)
-            .semantics(mergeDescendants = true) { contentDescription = listOf(name, title, at).joinToString(", ") }
+            .semantics(mergeDescendants = true) { contentDescription = listOfNotNull(name, title, at, playingNow.takeIf { on }).joinToString(", ") }
             .heightIn(min = 80.dp)
             .padding(12.dp),
     ) {
@@ -220,7 +222,7 @@ private fun PlayingCard(queue: Queue, book: QueueBook, ui: PlayerUi?, library: L
             Text(title, style = MaterialTheme.typography.bodyMedium, color = brand.onHighlightContainer, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(at, style = MaterialTheme.typography.bodySmall.tabular(), color = brand.onHighlightContainer, maxLines = 1)
         }
-        Icon(painterResource(if (live?.playing == true) R.drawable.ic_graphic_eq else R.drawable.ic_chevron_right), contentDescription = null, tint = brand.onHighlightContainer)
+        Icon(painterResource(if (on) R.drawable.ic_graphic_eq else R.drawable.ic_chevron_right), contentDescription = null, tint = brand.onHighlightContainer)
     }
 }
 
