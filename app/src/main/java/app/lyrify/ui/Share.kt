@@ -51,11 +51,13 @@ import java.util.concurrent.TimeUnit
 const val SHARE_SONGS_MAX: Int = 500
 
 /**
- * The type a `.lrc` goes as: no MIME type is registered for `.lrc`, so this is what KJB's FileProvider answers for it, and
- * what developer.android.com advises for data without a specific type. The apps that take any file (mail, chats, Quick
- * Share, Files) take it as a file named `<song>.lrc`; text/plain would offer it to apps that read only the text extra.
+ * The type a `.lrc` goes as, KJB's own in the intent and from its FileProvider ([ShareProvider]), never your phone's
+ * MimeTypeMap, which types `.lrc` differently by Android version (application/lrc on some, nothing on others). Text, as
+ * a file manager shares a `.txt`: mail, chats, Quick Share, Files and text apps take it as a file named `<song>.lrc` that
+ * opens as text. An app that reads only the text extra gets nothing, as with any shared text file; KJB's own such target,
+ * Save to KJB, is left out ([OWN_SHARE_TARGETS]).
  */
-const val LRC_TYPE: String = "application/octet-stream"
+const val LRC_TYPE: String = "text/plain"
 
 /** Songs of different types, or one MediaStore gives no type. */
 private const val ANY_AUDIO: String = "audio/*"
@@ -156,6 +158,17 @@ fun lyricsFileShare(uri: String, title: String): ShareRequest = ShareRequest(Int
 fun crashReportShare(text: String): ShareRequest = ShareRequest(Intent.ACTION_SEND, TEXT_TYPE, subject = CRASH_SUBJECT, text = text)
 
 private const val CRASH_SUBJECT: String = "KJB crash report"
+
+/** The type KJB gives a file its FileProvider serves, by the file's [name]: [LRC_TYPE] for a `.lrc`, the one file it shares. */
+internal fun shareType(name: String): String? = if (name.endsWith(".lrc", ignoreCase = true)) LRC_TYPE else null
+
+/**
+ * KJB's FileProvider for Share (AndroidManifest.xml, "share"): what it serves is typed by [shareType], not by the
+ * platform's MimeTypeMap, so the app picked reads the same type from the file as from the intent on every Android version.
+ */
+class ShareProvider : FileProvider() {
+    override fun getType(uri: Uri): String? = uri.lastPathSegment?.let(::shareType) ?: super.getType(uri)
+}
 
 // Your phone's share sheet
 

@@ -163,15 +163,24 @@ class ShareTest {
     }
 
     @Test
-    fun `Lyrics file goes as ACTION_SEND of the lrc as a file, with the read grant and the title as the subject`() {
+    fun `Lyrics file goes as ACTION_SEND of the lrc as a text file, with the read grant and the title as the subject`() {
         val uri = "content://app.lyrify.share/lyrics/01%20Paper%20Lantern.lrc"
         val request = lyricsFileShare(uri, "Paper Lantern")
         assertEquals(Intent.ACTION_SEND, request.action)
-        assertEquals("application/octet-stream", request.type)
+        assertEquals("text/plain", request.type)
         assertEquals(listOf(uri), request.streams)
         assertEquals(Intent.FLAG_GRANT_READ_URI_PERMISSION, request.flags)
         assertEquals("Paper Lantern", request.subject)
         assertNull(request.text)
+    }
+
+    @Test
+    fun `KJB types a shared lrc itself, as text, whatever your phone's Android maps the name to`() {
+        // MimeTypeMap types .lrc as application/lrc on some Android versions and not at all on others.
+        assertEquals("text/plain", shareType("01 Paper Lantern.lrc"))
+        assertEquals("text/plain", shareType("02 TIDE BELL.LRC"))
+        assertNull("KJB shares nothing else through its provider", shareType("cover.jpg"))
+        assertNull(shareType("lrc"))
     }
 
     // A crash report

@@ -144,12 +144,14 @@ class ShareDeviceTest {
         assertEquals("01 Paper Lantern.lrc", copy.name)
         assertEquals(File(context.cacheDir, "share").canonicalPath, copy.parentFile!!.parentFile!!.canonicalPath)
         val uri = FileProvider.getUriForFile(context, context.packageName + ".share", copy)
-        assertEquals(LRC_TYPE, context.contentResolver.getType(uri))
+        // KJB's own type, not the one this phone's MimeTypeMap has for .lrc (application/lrc on some Android versions).
+        assertEquals("text/plain", context.contentResolver.getType(uri))
         assertArrayEquals(bytes, context.contentResolver.openInputStream(uri)!!.use { it.readBytes() })
 
         val send = target(shareSheet(lyricsFileShare(uri.toString(), "Paper Lantern"), context.packageName))
         assertEquals(Intent.ACTION_SEND, send.action)
-        assertEquals(LRC_TYPE, send.type)
+        assertEquals("text/plain", send.type)
+        assertEquals("text/plain", send.clipData?.description?.getMimeType(0))
         assertEquals(uri, IntentCompat.getParcelableExtra(send, Intent.EXTRA_STREAM, Uri::class.java))
         assertEquals(listOf(uri), clipUris(send))
         assertTrue(send.flags and Intent.FLAG_GRANT_READ_URI_PERMISSION != 0)
