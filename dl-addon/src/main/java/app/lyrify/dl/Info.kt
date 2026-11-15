@@ -31,8 +31,12 @@ object Info {
     /** "Artist - Title", with a hyphen, an en dash or an em dash (written as escapes: KJB's copy rule). */
     private val ARTIST_TITLE = Regex("^(.+?)\\s+[-\u2013\u2014]\\s+(.+)$")
 
-    /** What a name is compared without: spaces, and a trailing " - Topic", VEVO or Official (as DlArgs' split does). */
-    private val NAME_NOISE = Regex("""(?i)(\s*-\s*topic|\s*vevo|\s*official)$|\s+""")
+    /**
+     * What a name is compared without: spaces, and a trailing " - Topic", VEVO or Official (as DlArgs' split does). A space
+     * is any of Unicode's, a no-break space too, as yt-dlp's Python reads `\s`; `\p{Z}` says so on the JVM as on the phone,
+     * whose regex (ICU) already reads `\s` that way and refuses the JVM's own Unicode flag (?U).
+     */
+    private val NAME_NOISE = Regex("""(?i)([\s\p{Z}]*-[\s\p{Z}]*topic|[\s\p{Z}]*vevo|[\s\p{Z}]*official)$|[\s\p{Z}]+""")
 
     /** An artist's channel words, dropped from the artist (as DlArgs' tagging does). */
     private val CHANNEL_WORDS = Regex("""(?i)\s*-\s*Topic$|VEVO$""")

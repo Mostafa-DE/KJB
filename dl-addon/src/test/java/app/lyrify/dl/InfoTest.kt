@@ -48,6 +48,16 @@ class InfoTest {
         cases.forEach { (text, want) -> assertEquals(text, want, names(Info.full("https://video.example.com/v", text)!!)) }
     }
 
+    /** yt-dlp's split (Python) reads a no-break or narrow no-break space as a space: the sheet does too, on any runtime. */
+    @Test
+    fun `a name with a no-break or narrow no-break space is the same name, as yt-dlp's split reads it`() {
+        val cases = listOf(
+            json("title" to "Mira\u00a0Solen - Paper Harbour", "uploader" to "Mira Solen") to ("Mira\u00a0Solen" to "Paper Harbour"),
+            json("title" to "Mira Solen - Paper Harbour", "uploader" to "Mira\u202fSolen") to ("Mira Solen" to "Paper Harbour"),
+        )
+        cases.forEach { (text, want) -> assertEquals(text, want, names(Info.full("https://video.example.com/v", text)!!)) }
+    }
+
     @Test
     fun `the video qualities are the best, then 4K to 480p and the top height, each with video and audio sizes added`() {
         val text = json(
