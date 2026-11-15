@@ -1,7 +1,10 @@
 package app.lyrify.addon
 
 import android.media.MediaMetadataRetriever
+import android.os.Build
 import android.os.Environment
+import android.os.ParcelFileDescriptor
+import android.os.SystemClock
 import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -41,6 +44,10 @@ import java.util.concurrent.TimeUnit
  * and the run, run alone, hands KJB dev's models over itself while they are still KJB dev's. The run takes the song
  * `-e song "<path in Music/KJB test>"` names, else the first one with lyrics (a `.txt`, a synced `.lrc`, a tag), so that
  * Whisper and the timing run ([pick]); logcat says how it was picked, never its name or path.
+ *
+ * The run also checks, from `dumpsys activity services`, that the add-on works in its own foreground service while the
+ * job runs (mediaProcessing from Android 15, dataSync before it), that KJB binds it with BIND_IMPORTANT, and that it
+ * leaves the foreground once the job ended: a phone's app freezer stopped it mid-job without them (phone session 10).
  */
 @RunWith(AndroidJUnit4::class)
 @FixMethodOrder(MethodSorters.NAME_ASCENDING)
@@ -85,11 +92,26 @@ class AddonDeviceTest {
             assumeTrue("the add-on's models", session.port.status()?.models is ModelState.Ready)
             val stages = mutableListOf<AiStage>()
             var chunks = 0
+            // The add-on's service as the separation starts: the step (creating the MDX session) a phone froze it in.
+            var duringJob: String? = null
             // The add-on's notes (stages, times, counts; no lyrics) in logcat: a run that stalls shows its last step.
             val result = RemoteSongEngine(session, notes = { Log.i(TAG, it) }).use { engine ->
-                runBlocking { engine.run(LocalTrack(song.file.path, "Test", null, null, song.durationMs), song.lyrics, stages::add) { chunks++ } }
+                runBlocking {
+                    engine.run(LocalTrack(song.file.path, "Test", null, null, song.durationMs), song.lyrics, { stage ->
+                        stages += stage
+                        if (stage == AiStage.SEPARATE) duringJob = addonServiceWhen(foreground = true)
+                    }) { chunks++ }
+                }
             }
             Log.i(TAG, "result: ${result.javaClass.simpleName}, stages $stages, $chunks chunks")
+            val during = checkNotNull(duringJob) { "the job never reached the separation: $stages, ${result.javaClass.simpleName}" }
+            Log.i(TAG, "the add-on during the job: ${during.lines().filter(::foregroundLine).joinToString(" | ") { it.trim() }}")
+            assertTrue(during, "isForeground=true" in during)
+            val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) MEDIA_PROCESSING else DATA_SYNC
+            assertTrue("$type: $during", "types=$type" in during)
+            assertTrue("bound with BIND_AUTO_CREATE and BIND_IMPORTANT: $during", "CR IMP " in during)
+            val after = addonServiceWhen(foreground = false)
+            assertFalse("out of the foreground once the job ended: $after", "isForeground=true" in after)
             if (result is AiResult.Failed && result.npu) {
                 // The NPU did not answer in time (another app holding it): the add-on's deadline ended the run cleanly,
                 // an NPU failure KJB records nothing for (the song is tried again later), and once KJB lets go the add-on
@@ -110,6 +132,30 @@ class AddonDeviceTest {
             }
         }
     }
+
+    /**
+     * The add-on's service as `dumpsys activity services` shows it (its record, foreground state and bindings; its
+     * notice carries no song), once its foreground state is [foreground], looked at for up to 5 s: KJB starts the
+     * service right after the job is taken, and it leaves the foreground right after the job's end.
+     */
+    private fun addonServiceWhen(foreground: Boolean): String {
+        val until = SystemClock.elapsedRealtime() + FOREGROUND_WAIT_MS
+        var dump = addonService()
+        while (("isForeground=true" in dump) != foreground && SystemClock.elapsedRealtime() < until) {
+            SystemClock.sleep(LOOK_EVERY_MS)
+            dump = addonService()
+        }
+        return dump
+    }
+
+    private fun addonService(): String =
+        ParcelFileDescriptor.AutoCloseInputStream(
+            InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand("dumpsys activity services ${KjbAddons.AI.packageName}"),
+        ).bufferedReader().use { it.readText() }
+
+    /** The dump's lines worth a log line: the foreground state, why Android allowed it, and the bindings. */
+    private fun foregroundLine(line: String): Boolean =
+        "isForeground=" in line || "infoAllowStartForeground=" in line || "ConnectionRecord{" in line
 
     /** The song the run takes, its length, and its plain lyrics if it has any. [how] it was picked is all logcat gets. */
     private class Pick(val file: File, val durationMs: Long, val lyrics: String?, val how: String)
@@ -221,6 +267,13 @@ class AddonDeviceTest {
 
     private companion object {
         const val TAG = "AddonDeviceTest"
+
+        /** The service's foreground types as the dump prints them: mediaProcessing (Android 15+) and dataSync. */
+        const val MEDIA_PROCESSING = "0x00002000"
+        const val DATA_SYNC = "0x00000001"
+
+        const val FOREGROUND_WAIT_MS = 5_000L
+        const val LOOK_EVERY_MS = 250L
 
         val SONGS = setOf("mp3", "m4a", "flac", "ogg")
 
