@@ -49,6 +49,8 @@
     <string name="update_failed_install">Your phone didn\'t install the update. Try again.</string>
     <string name="update_addon_title">AI add-on %1$s</string>
     <string name="update_addon_detail">This KJB comes with a newer AI add-on. KJB downloads it, then your phone asks you to confirm.</string>
+    <string name="update_dl_title">Downloads add-on %1$s</string>
+    <string name="update_dl_detail">This KJB comes with a newer Downloads add-on. KJB downloads it, then your phone asks you to confirm.</string>
     <string name="update_addon_action">Update</string>
     <string name="update_up_to_date">KJB is up to date</string>
     <string name="update_check_failed">Couldn\'t check for updates</string>

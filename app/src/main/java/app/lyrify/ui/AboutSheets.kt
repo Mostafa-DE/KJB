@@ -35,8 +35,10 @@ import app.lyrify.R
 import app.lyrify.addon.AddonInstalls
 import app.lyrify.addon.InstallFailure
 import app.lyrify.addon.InstallState
+import app.lyrify.addon.KjbAddons
 import app.lyrify.crash.CrashEntry
 import app.lyrify.crash.CrashLog
+import app.lyrify.update.AddonUpdate
 import app.lyrify.update.UpdateState
 import app.lyrify.update.Updates
 import kotlinx.coroutines.Dispatchers
@@ -59,8 +61,8 @@ fun UpdateHost() {
 
 /**
  * "KJB <ver> is out": the version on the phone, the release notes and Install, which downloads, checks and installs the
- * update (its progress, the phone's install switch, Android's dialog, or why it failed); and the AI add-on's update when
- * this KJB brings a newer one. Not now, or putting the sheet away, keeps it for the next Check now.
+ * update (its progress, the phone's install switch, Android's dialog, or why it failed); and each add-on's update (the AI,
+ * Downloads) when this KJB brings a newer one. Not now, or putting the sheet away, keeps it for the next Check now.
  */
 @Composable
 private fun UpdateSheet(checked: UpdateState.Checked, onDismiss: () -> Unit) {
@@ -70,11 +72,10 @@ private fun UpdateSheet(checked: UpdateState.Checked, onDismiss: () -> Unit) {
     val installer = apk?.let { remember(context, it) { Updates.installer(context, it) } }
     val idle = remember { MutableStateFlow<InstallState>(InstallState.Idle) }
     val install by (installer?.state ?: idle).collectAsStateWithLifecycle()
-    val addonInstaller = remember(context) { AddonInstalls.installer(context) }
-    val addonInstall by addonInstaller.state.collectAsStateWithLifecycle()
-    // Back from the phone's "Install unknown apps" switch: the install goes on.
-    LifecycleResumeEffect(installer) {
+    // Back from the phone's "Install unknown apps" switch: the installs go on.
+    LifecycleResumeEffect(installer, checked.addons) {
         installer?.resume()
+        checked.addons.forEach { AddonInstalls.installer(context, it.addon).resume() }
         onPauseOrDispose { }
     }
     val openInstallSettings = { context.startFirst(listOf(AddonInstalls.installSettings(context))) }
@@ -100,18 +101,32 @@ private fun UpdateSheet(checked: UpdateState.Checked, onDismiss: () -> Unit) {
                 Text(release.notes, style = MaterialTheme.typography.bodyMedium)
             }
         }
-        checked.addon?.let { version ->
-            if (release == null) {
-                Text(stringResource(R.string.update_addon_title, version), style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { heading() })
-            } else {
-                SectionTitle(stringResource(R.string.update_addon_title, version))
-            }
-            Text(stringResource(R.string.update_addon_detail), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            InstallLine(addonInstall)
-            InstallButtons(addonInstall, addonInstaller::start, addonInstaller::cancel, openInstallSettings, compact = true, start = R.string.update_addon_action)
-        }
+        checked.addons.forEachIndexed { i, update -> AddonUpdateSection(update, asHeading = release == null && i == 0, openInstallSettings) }
     }
 }
+
+/** One add-on's update in the update sheet: its title (the sheet's heading when it comes first), what happens, and Update. */
+@Composable
+private fun AddonUpdateSection(update: AddonUpdate, asHeading: Boolean, onOpenSettings: () -> Unit) {
+    val context = LocalContext.current
+    val installer = remember(context, update.addon) { AddonInstalls.installer(context, update.addon) }
+    val install by installer.state.collectAsStateWithLifecycle()
+    val title = addonUpdateTitle(update)
+    if (asHeading) {
+        Text(title, style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { heading() })
+    } else {
+        SectionTitle(title)
+    }
+    val detail = if (update.addon == KjbAddons.DOWNLOADS) R.string.update_dl_detail else R.string.update_addon_detail
+    Text(stringResource(detail), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    InstallLine(install)
+    InstallButtons(install, installer::start, installer::cancel, onOpenSettings, compact = true, start = R.string.update_addon_action)
+}
+
+/** "AI add-on 3.0.1" or "Downloads add-on 3.0.1". */
+@Composable
+private fun addonUpdateTitle(update: AddonUpdate): String =
+    stringResource(if (update.addon == KjbAddons.DOWNLOADS) R.string.update_dl_title else R.string.update_addon_title, update.version)
 
 /** What an install is doing, under its title; nothing while it waits for a tap. */
 @Composable
@@ -171,7 +186,7 @@ fun updateLine(state: UpdateState): String = when (state) {
     UpdateState.Failed -> stringResource(R.string.update_line_failed)
     is UpdateState.Checked -> when {
         state.release != null -> stringResource(R.string.update_title, state.release.version)
-        state.addon != null -> stringResource(R.string.update_addon_title, state.addon)
+        state.addons.isNotEmpty() -> addonUpdateTitle(state.addons.first())
         else -> stringResource(R.string.update_line_latest, BuildConfig.VERSION_NAME)
     }
 }

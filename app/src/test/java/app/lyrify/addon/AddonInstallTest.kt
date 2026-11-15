@@ -13,7 +13,11 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
+import java.io.File
+import java.security.MessageDigest
 
 /** Get AI: the add-on's APK downloaded, checked and installed, against a fake phone. */
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -299,6 +303,36 @@ class AddonInstallTest {
         assertFalse(AddonApk("KJB-Downloads", "https://github.com/x", "", 54_000_000).pinned)
         assertFalse(AddonApk("KJB-Downloads", "https://github.com/x", sha.drop(1), 54_000_000).pinned)
         assertFalse(AddonApk("KJB-Downloads", "https://github.com/x", sha, 0).pinned)
+        assertFalse("not hex", AddonApk("KJB-Downloads", "https://github.com/x", "zz".repeat(32), 54_000_000).pinned)
+    }
+
+    // The downloaded APK
+
+    @get:Rule
+    val temp = TemporaryFolder()
+
+    private fun hex(bytes: ByteArray) = bytes.joinToString("") { "%02x".format(it) }
+
+    @Test
+    fun `a downloaded add-on is checked whole against its pin before its signing, downloaded now or found from before`() {
+        val file = temp.newFile("KJB-Downloads.apk").apply { writeBytes(byteArrayOf(5, 5, 5)) }
+        val right = hex(MessageDigest.getInstance("SHA-256").digest(byteArrayOf(5, 5, 5)))
+        val cert = "C0".repeat(32)
+        // The pins come as the build writes them: hex in capitals.
+        val addon = KjbAddons.DOWNLOADS.copy(packageName = DOWNLOADS, certSha256 = cert, apk = AddonApk("KJB-Downloads", "https://github.com/x/d.apk", right.uppercase(), 3))
+        var read = 0
+        val signed: (File) -> ApkSigning? = { read++; ApkSigning(DOWNLOADS, 2, setOf(cert.lowercase())) }
+
+        assertFalse("same size, other bytes", verifiedAddon(file, addon.copy(apk = addon.apk.copy(sha256 = "00".repeat(32))), signed))
+        assertEquals("the signing is not even read", 0, read)
+        assertTrue(verifiedAddon(file, addon, signed))
+        assertFalse("not read", verifiedAddon(file, addon) { null })
+        assertFalse("another package", verifiedAddon(file, addon) { ApkSigning(ADDON, 2, setOf(cert.lowercase())) })
+        assertFalse("another key", verifiedAddon(file, addon) { ApkSigning(DOWNLOADS, 2, setOf("d0".repeat(32))) })
+        assertFalse("another key besides", verifiedAddon(file, addon) { ApkSigning(DOWNLOADS, 2, setOf(cert.lowercase(), "d0".repeat(32))) })
+        assertFalse("unsigned", verifiedAddon(file, addon) { ApkSigning(DOWNLOADS, 2, emptySet()) })
+        assertFalse("no pin trusts nobody", verifiedAddon(file, addon.copy(certSha256 = "")) { ApkSigning(DOWNLOADS, 2, emptySet()) })
+        assertFalse("gone", verifiedAddon(File(temp.root, "gone.apk"), addon, signed))
     }
 
     @Test

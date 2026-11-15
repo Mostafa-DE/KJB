@@ -2,8 +2,14 @@ package app.lyrify.update
 
 import android.content.pm.PackageInstaller
 import android.content.pm.PackageManager
+import app.lyrify.addon.AddonApk
+import app.lyrify.addon.ApkSigning
 import app.lyrify.addon.InstallOutcome
 import app.lyrify.addon.InstallVerdict
+import app.lyrify.addon.KjbAddon
+import app.lyrify.addon.KjbAddons
+import app.lyrify.addon.archiveSigningFlags
+import app.lyrify.addon.signerDigests
 import app.lyrify.settings.AboutSettings
 import app.lyrify.settings.Settings
 import app.lyrify.settings.SettingsJson
@@ -111,10 +117,29 @@ class UpdatesTest {
         assertNull(Releases.sha256(null))
     }
 
+    private fun pin(stem: String, file: String, sha256: String = sha, bytes: Long = 54_000_000) =
+        AddonApk(stem, "https://github.com/Mostafa-DE/KJB/releases/download/v3.0.1/$file", sha256, bytes)
+
     @Test
-    fun `the add-on's version comes from the file this KJB pins`() {
-        assertEquals("3.0.0", Releases.pinnedVersion("https://github.com/Mostafa-DE/KJB/releases/download/v3.0.0/KJB-AI-3.0.0.apk"))
-        assertNull(Releases.pinnedVersion("https://github.com/Mostafa-DE/KJB/releases/download/v3.0.0/other.apk"))
+    fun `an add-on's version comes from the file this KJB pins for it`() {
+        assertEquals("3.0.0", Releases.pinnedVersion(pin("KJB-AI", "KJB-AI-3.0.0.apk")))
+        assertEquals("3.0.1", Releases.pinnedVersion(pin("KJB-Downloads", "KJB-Downloads-3.0.1.apk")))
+        assertNull(Releases.pinnedVersion(pin("KJB-AI", "other.apk")))
+        assertNull("the other add-on's file", Releases.pinnedVersion(pin("KJB-Downloads", "KJB-AI-3.0.1.apk")))
+        assertNull("KJB's own", Releases.pinnedVersion(pin("KJB-Downloads", "KJB-3.0.1.apk")))
+    }
+
+    @Test
+    fun `each add-on whose file this KJB pins is offered at that file's version, in order`() {
+        val ai = KjbAddons.AI.copy(apk = pin("KJB-AI", "KJB-AI-3.0.1.apk"))
+        val downloads = KjbAddons.DOWNLOADS.copy(apk = pin("KJB-Downloads", "KJB-Downloads-3.0.2.apk"))
+        assertEquals(listOf(AddonUpdate(ai, "3.0.1"), AddonUpdate(downloads, "3.0.2")), offeredAddons(listOf(ai, downloads)))
+
+        // The placeholders a build keeps until the release pins the file: nothing to offer.
+        val noSha = downloads.copy(apk = pin("KJB-Downloads", "KJB-Downloads-3.0.2.apk", sha256 = ""))
+        val noSize = downloads.copy(apk = pin("KJB-Downloads", "KJB-Downloads-3.0.2.apk", bytes = 0))
+        val noVersion = downloads.copy(apk = pin("KJB-Downloads", "downloads.apk"))
+        assertEquals(listOf(AddonUpdate(ai, "3.0.1")), offeredAddons(listOf(ai, noSha, noSize, noVersion)))
     }
 
     // The APK's signing
@@ -284,7 +309,9 @@ class UpdatesTest {
         var fetches = 0
         var last: Long? = null
         var dismissedOffer: String? = null
-        var addon: String? = null
+
+        /** The version of each add-on installed that is KJB's own. */
+        val addons = mutableMapOf<KjbAddon, String>()
 
         override suspend fun latest(): Fetched {
             fetches++
@@ -303,14 +330,18 @@ class UpdatesTest {
             dismissedOffer = offer
         }
 
-        override fun addonInstalled(): String? = addon
+        override fun addonInstalled(addon: KjbAddon): String? = addons[addon]
     }
 
     private var now = 100 * DAY
     private val newer = Releases.parse(release(), REPO)!!
 
-    private fun TestScope.checker(port: FakePort, installed: String = "3.0.0", addonOffered: String? = null) =
-        UpdateChecker(port, installed, addonOffered, { now }, backgroundScope)
+    private fun TestScope.checker(port: FakePort, installed: String = "3.0.0", addonsOffered: List<AddonUpdate> = emptyList()) =
+        UpdateChecker(port, installed, addonsOffered, { now }, backgroundScope)
+
+    private val none = emptyList<AddonUpdate>()
+    private val ai = KjbAddons.AI
+    private val downloads = KjbAddons.DOWNLOADS
 
     @Test
     fun `opening KJB checks at most once a day`() = runTest {
@@ -359,35 +390,75 @@ class UpdatesTest {
 
         checker.checkIfDue(enabled = true)
         runCurrent()
-        assertEquals(UpdateState.Checked(newer, addon = null, ask = true), checker.state.value)
+        assertEquals(UpdateState.Checked(newer, addons = none, ask = true), checker.state.value)
 
         checker.dismiss()
         runCurrent()
-        assertEquals(UpdateState.Checked(newer, addon = null, ask = false), checker.state.value)
+        assertEquals(UpdateState.Checked(newer, addons = none, ask = false), checker.state.value)
         now += DAY
         checker.checkIfDue(enabled = true)
         runCurrent()
-        assertEquals(UpdateState.Checked(newer, addon = null, ask = false), checker.state.value)
+        assertEquals(UpdateState.Checked(newer, addons = none, ask = false), checker.state.value)
 
-        assertEquals(UpdateState.Checked(newer, addon = null, ask = true), checker.checkNow())
+        assertEquals(UpdateState.Checked(newer, addons = none, ask = true), checker.checkNow())
     }
 
     @Test
     fun `the same or an older release offers nothing`() = runTest {
         val port = FakePort(Fetched.Answer(newer))
-        assertEquals(UpdateState.Checked(null, addon = null, ask = false), checker(port, installed = "3.0.1").checkNow())
-        assertEquals(UpdateState.Checked(null, addon = null, ask = false), checker(FakePort(Fetched.Answer(null))).checkNow())
+        assertEquals(UpdateState.Checked(null, addons = none, ask = false), checker(port, installed = "3.0.1").checkNow())
+        assertEquals(UpdateState.Checked(null, addons = none, ask = false), checker(FakePort(Fetched.Answer(null))).checkNow())
     }
 
     @Test
     fun `an installed add-on older than the one this KJB brings is offered too`() = runTest {
-        val port = FakePort(Fetched.Answer(null)).apply { addon = "3.0.0" }
-        assertEquals(UpdateState.Checked(null, addon = "3.0.1", ask = true), checker(port, installed = "3.0.1", addonOffered = "3.0.1").checkNow())
+        val offered = listOf(AddonUpdate(ai, "3.0.1"))
+        val port = FakePort(Fetched.Answer(null)).apply { addons[ai] = "3.0.0" }
+        assertEquals(UpdateState.Checked(null, addons = offered, ask = true), checker(port, installed = "3.0.1", addonsOffered = offered).checkNow())
 
-        port.addon = "3.0.1"
-        assertEquals(UpdateState.Checked(null, addon = null, ask = false), checker(port, installed = "3.0.1", addonOffered = "3.0.1").checkNow())
-        port.addon = null
-        assertEquals(UpdateState.Checked(null, addon = null, ask = false), checker(port, installed = "3.0.1", addonOffered = "3.0.1").checkNow())
+        port.addons[ai] = "3.0.1"
+        assertEquals(UpdateState.Checked(null, addons = none, ask = false), checker(port, installed = "3.0.1", addonsOffered = offered).checkNow())
+        port.addons.remove(ai)
+        assertEquals(UpdateState.Checked(null, addons = none, ask = false), checker(port, installed = "3.0.1", addonsOffered = offered).checkNow())
+    }
+
+    @Test
+    fun `the Downloads add-on is offered the AI add-on's way, each by its own installed version`() = runTest {
+        val offered = listOf(AddonUpdate(ai, "3.0.1"), AddonUpdate(downloads, "3.0.1"))
+        val port = FakePort(Fetched.Answer(null)).apply {
+            addons[ai] = "3.0.1"
+            addons[downloads] = "3.0.0-dev"
+        }
+        assertEquals(UpdateState.Checked(null, addons = listOf(AddonUpdate(downloads, "3.0.1")), ask = true), checker(port, installed = "3.0.1", addonsOffered = offered).checkNow())
+
+        port.addons[ai] = "3.0.0"
+        assertEquals(UpdateState.Checked(null, addons = offered, ask = true), checker(port, installed = "3.0.1", addonsOffered = offered).checkNow())
+
+        // Not installed, or not KJB's (the port reads no version for an add-on signed with another key): nothing to update.
+        port.addons.remove(downloads)
+        assertEquals(UpdateState.Checked(null, addons = listOf(AddonUpdate(ai, "3.0.1")), ask = true), checker(port, installed = "3.0.1", addonsOffered = offered).checkNow())
+    }
+
+    @Test
+    fun `Not now puts off the add-ons offered, and another add-on's update asks again`() = runTest {
+        val offered = listOf(AddonUpdate(ai, "3.0.1"), AddonUpdate(downloads, "3.0.1"))
+        val port = FakePort(Fetched.Answer(null)).apply { addons[ai] = "3.0.0" }
+        val checker = checker(port, installed = "3.0.1", addonsOffered = offered)
+
+        checker.checkIfDue(enabled = true)
+        runCurrent()
+        checker.dismiss()
+        runCurrent()
+        now += DAY
+        checker.checkIfDue(enabled = true)
+        runCurrent()
+        assertEquals(UpdateState.Checked(null, addons = listOf(AddonUpdate(ai, "3.0.1")), ask = false), checker.state.value)
+
+        port.addons[downloads] = "3.0.0"
+        now += DAY
+        checker.checkIfDue(enabled = true)
+        runCurrent()
+        assertEquals(UpdateState.Checked(null, addons = offered, ask = true), checker.state.value)
     }
 
     @Test

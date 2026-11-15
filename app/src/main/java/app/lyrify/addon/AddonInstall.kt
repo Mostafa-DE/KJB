@@ -5,6 +5,7 @@ import android.content.ActivityNotFoundException
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageInfo
 import android.content.pm.PackageInstaller
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -153,6 +154,94 @@ internal sealed interface InstallVerdict {
     data class End(val outcome: InstallOutcome) : InstallVerdict
 }
 
+// An APK's identity, read the same way for KJB's own update (update/Updates.kt) and for each add-on
+
+/** An APK as KJB checks it before an install: its package, version code and signing certificates (SHA-256, hex). */
+data class ApkSigning(val packageName: String, val versionCode: Long, val signers: Set<String>)
+
+/**
+ * The flags that read an APK file's signing certificates ([PackageManager.getPackageArchiveInfo]) on [sdk]. Before
+ * Android 13 the deprecated GET_SIGNATURES is asked for too, so the certificates are there for [signerDigests]' older
+ * field on any build of those versions. (AOSP's own Android 11 and 12 collect them for either flag and fill signingInfo
+ * for GET_SIGNING_CERTIFICATES, android11-release PackageManager.getPackageArchiveInfo and android12-release
+ * ApplicationPackageManager.getPackageArchiveInfo; the review of lane F1 found builds that do not, 2026-11-15.)
+ */
+fun archiveSigningFlags(sdk: Int): Int =
+    @Suppress("DEPRECATION")
+    if (sdk < Build.VERSION_CODES.TIRAMISU) PackageManager.GET_SIGNING_CERTIFICATES or PackageManager.GET_SIGNATURES else PackageManager.GET_SIGNING_CERTIFICATES
+
+/**
+ * The SHA-256 (hex) of each signing certificate: [current] (SigningInfo's, the certificates the APK is signed with now),
+ * else, when a build leaves SigningInfo empty, [legacy] (PackageInfo.signatures). Empty without either, which no check passes.
+ */
+fun signerDigests(current: List<ByteArray>?, legacy: List<ByteArray>?): Set<String> =
+    (current?.takeIf { it.isNotEmpty() } ?: legacy.orEmpty()).map { cert -> hex(MessageDigest.getInstance("SHA-256").digest(cert)) }.toSet()
+
+/**
+ * All of [file] is [sha256] (hex, any case): hashed whole, whether it was downloaded now or found from before. False when
+ * it cannot be read. Blocking.
+ */
+fun wholeFileIs(file: File, sha256: String): Boolean {
+    val whole = try {
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { input ->
+            val buffer = ByteArray(HASH_BUFFER_BYTES)
+            while (true) {
+                val read = input.read(buffer)
+                if (read < 0) break
+                digest.update(buffer, 0, read)
+            }
+        }
+        hex(digest.digest())
+    } catch (_: IOException) {
+        return false
+    }
+    return whole.equals(sha256, ignoreCase = true)
+}
+
+/**
+ * The downloaded [file] is [addon]'s APK: all of it is the SHA-256 this KJB pins for it ([wholeFileIs]), and only then its
+ * signing, read by [archive], is checked: [addon]'s package, signed with its pinned certificate and no other. Blocking.
+ */
+fun verifiedAddon(file: File, addon: KjbAddon, archive: (File) -> ApkSigning?): Boolean {
+    val pin = AddonPins.bytes(addon.certSha256)?.let(::hex) ?: return false
+    if (!wholeFileIs(file, addon.apk.sha256)) return false
+    val apk = archive(file) ?: return false
+    return apk.packageName == addon.packageName && apk.signers == setOf(pin)
+}
+
+private fun hex(bytes: ByteArray): String = bytes.joinToString("") { "%02x".format(it) }
+
+private const val HASH_BUFFER_BYTES = 1024 * 1024
+
+/** The SHA-256 (hex) of each of [info]'s signing certificates ([signerDigests]); empty without them. */
+internal fun signers(info: PackageInfo?): Set<String> =
+    @Suppress("DEPRECATION")
+    signerDigests(info?.signingInfo?.apkContentsSigners?.map { it.toByteArray() }, info?.signatures?.map { it.toByteArray() })
+
+/** An installed package with its signing certificates, read the same way as an APK file's ([archiveSigningFlags]). */
+internal fun PackageManager.signed(packageName: String): PackageInfo? = try {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        getPackageInfo(packageName, PackageManager.PackageInfoFlags.of(archiveSigningFlags(Build.VERSION.SDK_INT).toLong()))
+    } else {
+        @Suppress("DEPRECATION")
+        getPackageInfo(packageName, archiveSigningFlags(Build.VERSION.SDK_INT))
+    }
+} catch (_: PackageManager.NameNotFoundException) {
+    null
+}
+
+/** The APK [file]'s package, version code and signers ([archiveSigningFlags], [signers]); null when Android cannot read it. */
+internal fun PackageManager.archiveSigning(file: File): ApkSigning? {
+    val archive = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        getPackageArchiveInfo(file.path, PackageManager.PackageInfoFlags.of(archiveSigningFlags(Build.VERSION.SDK_INT).toLong()))
+    } else {
+        @Suppress("DEPRECATION")
+        getPackageArchiveInfo(file.path, archiveSigningFlags(Build.VERSION.SDK_INT))
+    }
+    return archive?.let { ApkSigning(it.packageName, it.longVersionCode, signers(it)) }
+}
+
 /**
  * Get AI or Get Downloads, Update, Try again: download, check, install, one at a time, in [scope]; [pinned]: this build
  * pins the add-on.
@@ -267,9 +356,10 @@ internal object GitHubReleases : ModelHosts {
 
 /**
  * An add-on's APK through Android, the same way for each add-on: downloaded into KJB's cache with the models' verified
- * downloader ([ModelDownloader]: the pinned size and SHA-256, resumed with HTTP Range, GitHub only), checked for the
- * add-on's package and KJB's certificate, and installed with a PackageInstaller session. The result comes back to
- * [InstallReceiver].
+ * downloader ([ModelDownloader]: the pinned size and SHA-256, resumed with HTTP Range, GitHub only), checked again whole
+ * and for the add-on's package and KJB's certificate ([verifiedAddon], the older signatures field too before Android 13),
+ * and installed with a PackageInstaller session. The result comes back to [InstallReceiver]. Get AI and Get Downloads
+ * install this way, and so does the update sheet's Update for either add-on.
  */
 internal class AndroidInstallPort(private val context: Context, private val addon: KjbAddon) : InstallPort {
     private val folder = File(context.cacheDir, addon.folder)
@@ -283,19 +373,7 @@ internal class AndroidInstallPort(private val context: Context, private val addo
         return ModelDownloader(store, USER_AGENT, hosts = GitHubReleases, log = { Log.d(LOG_TAG, "${addon.label}: $it") }).downloadAll(progress)
     }
 
-    override fun verified(): Boolean {
-        val pin = AddonPins.bytes(addon.certSha256) ?: return false
-        val packages = context.packageManager
-        val info = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            packages.getPackageArchiveInfo(apk.path, PackageManager.PackageInfoFlags.of(PackageManager.GET_SIGNING_CERTIFICATES.toLong()))
-        } else {
-            @Suppress("DEPRECATION")
-            packages.getPackageArchiveInfo(apk.path, PackageManager.GET_SIGNING_CERTIFICATES)
-        } ?: return false
-        val signers = info.signingInfo?.apkContentsSigners ?: return false
-        return info.packageName == addon.packageName &&
-            signers.any { MessageDigest.getInstance("SHA-256").digest(it.toByteArray()).contentEquals(pin) }
-    }
+    override fun verified(): Boolean = verifiedAddon(apk, addon, context.packageManager::archiveSigning)
 
     override fun discard() {
         if (!store.delete()) Log.w(LOG_TAG, "${addon.label}: the downloaded file could not be deleted")

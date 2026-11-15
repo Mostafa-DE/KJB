@@ -36,8 +36,8 @@ import java.util.concurrent.atomic.AtomicBoolean
  * for this one.
  */
 data class AddonApk(val stem: String, val url: String, val sha256: String, val bytes: Long) {
-    /** This build pins a file (the release value may still be a placeholder). */
-    val pinned: Boolean get() = sha256.length == SHA256_HEX && bytes > 0
+    /** This build pins a file: a whole SHA-256 in hex and a size (the release values may still be placeholders). */
+    val pinned: Boolean get() = sha256.length == SHA256_HEX && sha256.all { it in '0'..'9' || it.lowercaseChar() in 'a'..'f' } && bytes > 0
 
     /** The download, checked against the pin by the verified downloader (models/ModelDownloader). */
     val spec: ModelSpec get() = sha256.lowercase().let { sha -> ModelSpec("$stem-${sha.take(PIN_IN_NAME)}.apk", url, sha, bytes) }
@@ -84,6 +84,9 @@ object KjbAddons {
         apk = AddonApk("KJB-Downloads", BuildConfig.DL_ADDON_URL, BuildConfig.DL_ADDON_SHA256, BuildConfig.DL_ADDON_BYTES),
         folder = "dl-addon",
     )
+
+    /** Every add-on, in the order KJB lists them (the update sheet). */
+    val ALL: List<KjbAddon> = listOf(AI, DOWNLOADS)
 }
 
 /** One bind of an add-on's service: its [binder] while it lives; [death] completes when its process dies. [close] unbinds. */
