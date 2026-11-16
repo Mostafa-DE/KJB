@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Playlist import and export, backup and restore (milestones B1 and B2). -->
 <resources>
-    <!-- Playlists: m3u import and export (B1, ui/M3uScreens.kt). Labels are three words or fewer; sentences only in the sheet. -->
+    <!-- Playlists: m3u import and export (B1, ui/M3uScreens.kt); Import opens Import from app's sheet. Labels are three words or fewer. -->
     <string name="m3u_export">Export</string>
     <string name="m3u_export_all">Export all</string>
     <string name="m3u_import">Import</string>
@@ -14,28 +14,6 @@
     </plurals>
     <string name="m3u_exported_some">%1$s of %2$s playlists exported</string>
     <string name="m3u_no_playlists">No playlists to export</string>
-    <plurals name="m3u_found">
-        <item quantity="one">%1$s of %2$s song found</item>
-        <item quantity="other">%1$s of %2$s songs found</item>
-    </plurals>
-    <string name="m3u_missing">Not found</string>
-    <string name="m3u_more">And %1$s more</string>
-    <string name="m3u_create">Create playlist</string>
-    <string name="m3u_skip">Skip</string>
-    <string name="m3u_cancel">Cancel</string>
-    <string name="m3u_close">Close</string>
-    <string name="m3u_created">Playlist created</string>
-    <string name="m3u_not_created">Couldn\'t create the playlist</string>
-    <string name="m3u_no_songs">This file lists no songs.</string>
-    <string name="m3u_too_big">This file is too big to be a playlist.</string>
-    <string name="m3u_unreadable">KJB couldn\'t read this file.</string>
-    <string name="m3u_not_m3u">This isn\'t a playlist file. Pick one ending in .m3u or .m3u8.</string>
-    <plurals name="m3u_by_name">
-        <item quantity="one">%1$s matched by name</item>
-        <item quantity="other">%1$s matched by name</item>
-    </plurals>
-    <string name="m3u_by_name_text">Found by title, artist and length only, not by where the file is. Check them before you create the playlist.</string>
-    <string name="m3u_by_name_include">Include them</string>
 
     <!-- Backup and restore (B2, ui/BackupScreens.kt and backup/). Labels are three words or fewer; sentences only in the sheet. -->
     <string name="backup_saved">Backup saved</string>

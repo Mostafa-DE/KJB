@@ -101,7 +101,7 @@ fun LibraryPage() {
     val tab = nav.state.libraryTab.takeIf { it in tabs } ?: tabs.first()
     val reselect = nav.state.reselectsOf(DockTab.LIBRARY)
     val sheets = rememberSongSheets()
-    // The Playlists tab's "⋯" rows and its import sheet (B1).
+    // The Playlists tab's "⋯" rows (B1).
     val m3u = rememberM3uActions()
     val pager = rememberTabPager(tabs.size, tabs.indexOf(tab)) { at -> tabs.getOrNull(at)?.takeIf { it != nav.state.libraryTab }?.let(nav::pickLibraryTab) }
     val labels = tabs.map { stringResource(it.label) }
@@ -133,7 +133,6 @@ fun LibraryPage() {
         }
     }
     SongSheetsHost(sheets, ui)
-    M3uImportSheet(m3u)
 }
 
 /**
@@ -157,7 +156,6 @@ fun PlaylistsPage() {
         }
     }
     SongSheetsHost(sheets, ui)
-    M3uImportSheet(m3u)
 }
 
 /** The Playlists list's "⋯": New playlist, then Export all and Import (B1). */

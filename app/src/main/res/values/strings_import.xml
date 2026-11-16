@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Import from another app (lane IM1, ui/ImportScreens.kt): Settings, Backup, Import from app. Labels are three words or fewer; sentences only in the sheet. -->
+<!-- Import from another app (lane IM1, ui/ImportScreens.kt): Settings, Backup, Import from app, and the Playlists tab's Import. Labels are three words or fewer; sentences only in the sheet. -->
 <resources>
     <string name="import_row">Import from app</string>
     <string name="import_row_detail">Playlists and favourites from other players</string>

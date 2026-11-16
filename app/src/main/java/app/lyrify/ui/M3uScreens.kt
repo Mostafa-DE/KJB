@@ -5,51 +5,28 @@ import android.net.Uri
 import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.annotation.DrawableRes
-import androidx.annotation.StringRes
-import androidx.compose.foundation.ScrollState
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.selection.toggleable
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.Stable
-import androidx.compose.runtime.State
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
-import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.heading
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.unit.dp
-import androidx.core.net.toUri
 import app.lyrify.LOG_TAG
 import app.lyrify.Lyrify
 import app.lyrify.R
-import app.lyrify.backup.ImportFormats
 import app.lyrify.backup.M3u
 import app.lyrify.backup.M3uDocuments
-import app.lyrify.backup.M3uImport
-import app.lyrify.backup.M3uRead
 import app.lyrify.library.LibraryGraph
 import app.lyrify.library.LibraryRepository
 import app.lyrify.library.LibraryState
 import app.lyrify.library.Playlist
 import app.lyrify.library.SongResolver
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.first
@@ -57,84 +34,45 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 // Playlists: m3u import and export (milestone B1). L1's pages call these: the Playlists tab and a playlist's page each
-// call rememberM3uActions; a playlist's "⋯" shows PlaylistExportRow, the Playlists tab's "⋯" PlaylistsM3uRows, and the
-// Playlists tab places M3uImportSheet.
-
-/** One picked file in the import sheet, by its [document] (its URI): what it found in the library, or why it could not be read. */
-internal sealed interface ImportResult {
-    val document: String
-    val name: String
-
-    data class Found(override val document: String, val import: M3uImport) : ImportResult {
-        override val name: String get() = import.name
-    }
-
-    data class Failed(override val document: String, override val name: String, @StringRes val reason: Int) : ImportResult
-}
-
-/** [read] as the sheet shows it, named after its file ([untitled] when that leaves nothing): matched in [resolver], or why not. */
-internal fun importResult(document: String, read: M3uRead, resolver: SongResolver, untitled: String): ImportResult {
-    val name = M3u.playlistName(read.name) ?: untitled
-    return when (read) {
-        is M3uRead.Entries ->
-            if (read.entries.isEmpty()) ImportResult.Failed(document, name, R.string.m3u_no_songs) else ImportResult.Found(document, M3u.match(name, read.entries, resolver, read.folder))
-        is M3uRead.TooBig -> ImportResult.Failed(document, name, R.string.m3u_too_big)
-        is M3uRead.Unreadable -> ImportResult.Failed(document, name, R.string.m3u_unreadable)
-        is M3uRead.NotM3u -> ImportResult.Failed(document, name, R.string.m3u_not_m3u)
-    }
-}
+// call rememberM3uActions; a playlist's "⋯" shows PlaylistExportRow, the Playlists tab's "⋯" PlaylistsM3uRows. Import
+// hands the picked files to Import from app's sheet (ImportScreens.kt), so a file comes in one way only.
 
 /**
- * The [picked] files (each its document and what it read) that go to Import from app's sheet instead ([ImportHandoff]):
- * Samsung Music's favourites file ([ImportFormats.isSamsungFavourites]), so its songs go to Favourites as Import from
- * app takes them, never into a playlist of its name. Every other file stays in this sheet.
+ * "⋯ > Import"'s answer: the [picked] files (their URIs) not on their way already are kept in [pending], the picked
+ * files this page keeps, and handed to Import from app's sheet as one Pick file ([handOver]).
  */
-internal fun forImportSheet(picked: List<Pair<String, M3uRead>>): List<String> =
-    picked.filter { (_, file) -> ImportFormats.isSamsungFavourites(file.name) }.map { it.first }
+internal fun CoroutineScope.handPicked(picked: List<String>, pending: MutableState<List<String>>, handoff: ImportHandoff = ImportHandoff.shared) {
+    val added = picked.distinct().filter { it !in pending.value }
+    if (added.isEmpty()) return
+    pending.value += added
+    launch { handOver(added, pending, handoff) }
+}
 
 /**
  * Hands [handed] to Import from app's sheet ([handoff]), and only then lets go of them in [pending], the picked files this
- * page keeps: a turn of the phone or the process ending meanwhile leaves them there, and the page reads and hands them
- * again.
+ * page keeps: a turn of the phone or the process ending meanwhile leaves them there, and the page hands them again.
  */
 internal suspend fun handOver(handed: List<String>, pending: MutableState<List<String>>, handoff: ImportHandoff = ImportHandoff.shared) {
     handoff.hand(handed)
     pending.value -= handed
 }
 
-/** The sheet lists this many songs of a kind (missing, or matched by name), then "And 12 more". */
-private const val SHOWN: Int = 50
-
-/**
- * Export, Export all and Import for one page ([rememberM3uActions]): the system's dialogs, the files, the toasts, and the
- * picked files' results, which [M3uImportSheet] shows one at a time.
- */
+/** Export, Export all and Import for one page ([rememberM3uActions]): the system's dialogs, the files and the toasts. */
 @Stable
 class M3uActions internal constructor(
     /** A playlist's "⋯" > Export: the save dialog (a debug build: a folder), then `Name.m3u8` there. */
     val export: (Playlist) -> Unit,
     /** The Playlists tab's "⋯" > Export all: a folder, then one file per playlist in it. */
     val exportAll: () -> Unit,
-    /** The Playlists tab's "⋯" > Import: one or more `.m3u` or `.m3u8` files, then [M3uImportSheet]. */
+    /** The Playlists tab's "⋯" > Import: one or more `.m3u` or `.m3u8` files, then Import from app's sheet with them. */
     val import: () -> Unit,
-    internal val results: State<List<ImportResult>>,
-    internal val creating: State<Boolean>,
-    /**
-     * "Create playlist" for the first result, with or without the songs matched by name only: named apart from the
-     * playlists there are, then the next result.
-     */
-    internal val create: (ImportResult.Found, Boolean) -> Unit,
-    /** Skip, Cancel or Close: the next result, if any. */
-    internal val next: () -> Unit,
-    /** The sheet swiped away: no more results. */
-    internal val close: () -> Unit,
 )
 
 /**
  * [M3uActions] for a page. Call it on the page, not inside its menu, so the dialogs' answers still find it once the menu
  * has closed. Files are written on the IO dispatcher and finish even if the page closes meanwhile. The picked files
- * not answered yet are kept if the activity is made again (a turn of the phone) and read again then. The log gets counts
- * and exception names only.
+ * not handed to Import from app's sheet yet are kept if the activity is made again (a turn of the phone) and handed
+ * then. The log gets counts and exception names only.
  */
 @Composable
 fun rememberM3uActions(): M3uActions {
@@ -145,32 +83,14 @@ fun rememberM3uActions(): M3uActions {
     val files = remember(app) { M3uDocuments(app.contentResolver, Lyrify.writes) { Log.w(LOG_TAG, it) } }
     val playlists = remember(app) { LibraryGraph.playlists(app) }
     val library = remember(app) { LibraryGraph.repository(app) }
-    // The picked files not answered yet, by URI, in the order picked; their results, read from them.
+    // The picked files not handed to Import from app's sheet yet, by URI, in the order picked.
     val pending = rememberSaveable { mutableStateOf(emptyList<String>()) }
-    val results = remember { mutableStateOf(emptyList<ImportResult>()) }
-    val creating = remember { mutableStateOf(false) }
     // The playlist the save dialog or the folder is open for (none: Export all), kept if the activity is made again.
     val exporting = rememberSaveable { mutableStateOf<String?>(null) }
     val untitled = { resources.getString(R.string.m3u_untitled) }
     val say = { text: String, failed: Boolean -> scope.launch { toasts.show(if (failed) Toast(text, R.drawable.ic_error, Tone.ERROR) else Toast(text)) } }
-    val load = { documents: List<String> ->
-        scope.launch {
-            val picked = withContext(Dispatchers.IO) { documents.map { it to files.read(it.toUri()) } }
-            val handed = forImportSheet(picked)
-            if (handed.isNotEmpty()) scope.launch { handOver(handed, pending) }
-            val read = picked.filter { it.first !in handed }
-            val resolver = library.resolver()
-            val fresh = withContext(Dispatchers.Default) { read.map { (document, file) -> importResult(document, file, resolver, untitled()) } }
-            val imports = fresh.filterIsInstance<ImportResult.Found>().map { it.import }
-            Log.i(LOG_TAG, "m3u import: ${fresh.size} files, ${imports.sumOf { it.found.size }} of ${imports.sumOf { it.total }} songs found")
-            // Once each, in the order picked, and only those not answered meanwhile.
-            val known = results.value.map { it.document }.toSet()
-            val order = pending.value
-            results.value = (results.value + fresh.filter { it.document !in known }).filter { it.document in order }.sortedBy { order.indexOf(it.document) }
-        }
-    }
     LaunchedEffect(Unit) {
-        if (results.value.isEmpty() && pending.value.isNotEmpty()) load(pending.value)
+        if (pending.value.isNotEmpty()) handOver(pending.value, pending)
     }
 
     val save = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument(files.mimeType)) { document ->
@@ -206,11 +126,7 @@ fun rememberM3uActions(): M3uActions {
         }
     }
     val open = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { picked ->
-        val added = picked.map(Uri::toString).distinct().filter { it !in pending.value }
-        if (added.isNotEmpty()) {
-            pending.value += added
-            load(added)
-        }
+        scope.handPicked(picked.map(Uri::toString), pending)
     }
 
     return remember(save, folder, open) {
@@ -226,35 +142,6 @@ fun rememberM3uActions(): M3uActions {
                 }
             },
             import = { open.launch(M3u.MIME_TYPES) },
-            results = results,
-            creating = creating,
-            create = { result, includeByName ->
-                if (!creating.value) {
-                    creating.value = true
-                    scope.launch {
-                        val made = try {
-                            val taken = playlists.state.first().playlists.map { it.name }
-                            playlists.create(M3u.uniqueName(result.import.name, taken), result.import.songs(includeByName).map { it.ref })
-                        } finally {
-                            creating.value = false
-                        }
-                        // A failure keeps the result in the sheet, to try again.
-                        if (made != null) {
-                            results.value -= result
-                            pending.value -= result.document
-                        }
-                        say(resources.getString(if (made != null) R.string.m3u_created else R.string.m3u_not_created), made == null)
-                    }
-                }
-            },
-            next = {
-                results.value.firstOrNull()?.let { pending.value -= it.document }
-                results.value = results.value.drop(1)
-            },
-            close = {
-                results.value = emptyList()
-                pending.value = emptyList()
-            },
         )
     }
 }
@@ -291,88 +178,6 @@ fun PlaylistsM3uRows(m3u: M3uActions, close: () -> Unit) {
             m3u.import()
         },
     )
-}
-
-/**
- * The import result, one picked file at a time: its name, "18 of 20 songs found", the songs matched by name only (each
- * listed, with "Include them" to leave them out), the songs not found, then "Create playlist" (when any song would go
- * in) and Skip (more files wait), Cancel or Close. Shows nothing while there is no result.
- */
-@Composable
-fun M3uImportSheet(m3u: M3uActions) {
-    val results by m3u.results
-    val result = results.firstOrNull() ?: return
-    val creating by m3u.creating
-    var includeByName by rememberSaveable(result.document) { mutableStateOf(true) }
-    val colors = MaterialTheme.colorScheme
-    LyrifySheet(
-        onDismiss = m3u.close,
-        scroll = remember(result) { ScrollState(0) },
-        footer = {
-            if (result is ImportResult.Found) {
-                LyrifyButton(
-                    stringResource(R.string.m3u_create),
-                    onClick = { m3u.create(result, includeByName) },
-                    modifier = Modifier.fillMaxWidth(),
-                    icon = R.drawable.ic_queue_music,
-                    enabled = result.import.songs(includeByName).isNotEmpty() && !creating,
-                )
-            }
-            val other = when {
-                results.size > 1 -> R.string.m3u_skip
-                result is ImportResult.Found -> R.string.m3u_cancel
-                else -> R.string.m3u_close
-            }
-            LyrifyButton(stringResource(other), onClick = m3u.next, modifier = Modifier.fillMaxWidth(), kind = ButtonKind.SECONDARY)
-        },
-    ) {
-        Text(result.name, style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { heading() })
-        when (result) {
-            is ImportResult.Found -> {
-                val import = result.import
-                Text(
-                    pluralStringResource(R.plurals.m3u_found, import.total, formatCount(import.found.size), formatCount(import.total)),
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = colors.onSurfaceVariant,
-                )
-                val byName = import.byName
-                if (byName.isNotEmpty()) {
-                    SectionTitle(pluralStringResource(R.plurals.m3u_by_name, byName.size, formatCount(byName.size)))
-                    Text(stringResource(R.string.m3u_by_name_text), style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant)
-                    ShownSongs(byName.map { listOfNotNull(it.song.title, it.song.artist).joinToString(" · ") }, R.drawable.ic_music_note)
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 48.dp)
-                            .toggleable(value = includeByName, role = Role.Checkbox, onValueChange = { includeByName = it }),
-                    ) {
-                        LyrifyCheckbox(includeByName)
-                        Text(stringResource(R.string.m3u_by_name_include), style = MaterialTheme.typography.bodyLarge)
-                    }
-                }
-                if (import.missing.isNotEmpty()) {
-                    SectionTitle(stringResource(R.string.m3u_missing))
-                    ShownSongs(import.missing.map { it.label }, R.drawable.ic_search_off)
-                }
-            }
-            is ImportResult.Failed -> Text(stringResource(result.reason), style = MaterialTheme.typography.bodyLarge, color = colors.onSurfaceVariant)
-        }
-    }
-}
-
-/** The first [SHOWN] of [lines], one row each with [icon], then "And 12 more". */
-@Composable
-private fun ShownSongs(lines: List<String>, @DrawableRes icon: Int) {
-    lines.take(SHOWN).forEach { Fact(icon, it, middleEllipsis = true) }
-    if (lines.size > SHOWN) {
-        Text(
-            stringResource(R.string.m3u_more, formatCount(lines.size - SHOWN)),
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
 }
 
 /** The toast after Export all: how many playlists were written, of how many. */

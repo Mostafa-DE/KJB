@@ -12,7 +12,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.junit4.StateRestorationTester
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
@@ -33,7 +32,6 @@ import app.lyrify.library.PlaylistsState
 import app.lyrify.settings.DockTab
 import app.lyrify.settings.Settings
 import org.junit.Assert.assertArrayEquals
-import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -41,8 +39,8 @@ import org.junit.runner.RunWith
 
 /**
  * m3u on the phone (B1 review): Export all and Import are in the Playlists tab's "⋯" and Export in a playlist's (8f8fe6b),
- * and a picked file's result is still in the import sheet after the activity is made again (80f40b3). The system's
- * pickers are stood in for, so nothing is opened, read or written outside the app. Made-up names only.
+ * and Import hands the picked files to Import from app's sheet (FU5). The system's pickers are stood in for, so nothing
+ * is opened, read or written outside the app. Made-up names only.
  */
 @RunWith(AndroidJUnit4::class)
 class M3uScreensDeviceTest {
@@ -52,9 +50,15 @@ class M3uScreensDeviceTest {
     private val context = InstrumentationRegistry.getInstrumentation().targetContext
 
     @Test
-    fun thePlaylistsTabsMenuHasExportAllAndImportAndTheTabShowsWhatWasPicked() {
+    fun thePlaylistsTabsMenuHasExportAllAndImportAndImportFromAppsSheetShowsWhatWasPicked() {
         val pickers = FakePickers(picked = listOf(ROAD_TRIP))
-        compose.setContent { Shell(pickers) { PlaylistsPage() } }
+        compose.setContent {
+            Shell(pickers) {
+                PlaylistsPage()
+                // Import from app's sheet, as the shell's backup actions place it.
+                rememberImportFromApp()
+            }
+        }
         val more = context.getString(R.string.menu_more)
         compose.waitUntil("the Playlists tab's top bar", TIMEOUT_MS) { compose.onAllNodesWithContentDescription(more).fetchSemanticsNodes().isNotEmpty() }
 
@@ -62,8 +66,8 @@ class M3uScreensDeviceTest {
         compose.onNodeWithText(context.getString(R.string.m3u_export_all)).assertIsDisplayed()
         compose.onNodeWithText(context.getString(R.string.m3u_import)).performClick()
 
-        compose.waitUntil("the import sheet on the Playlists tab", TIMEOUT_MS) {
-            compose.onAllNodesWithText(context.getString(R.string.m3u_untitled)).fetchSemanticsNodes().isNotEmpty()
+        compose.waitUntil("Import from app's sheet with the picked file", TIMEOUT_MS) {
+            compose.onAllNodesWithText(context.getString(R.string.import_unreadable)).fetchSemanticsNodes().isNotEmpty()
         }
         val (contract, input) = pickers.launched.single()
         assertTrue(contract is ActivityResultContracts.OpenMultipleDocuments)
@@ -90,29 +94,6 @@ class M3uScreensDeviceTest {
                 assertTrue(contract is ActivityResultContracts.CreateDocument)
             }
         }
-    }
-
-    @Test
-    fun aPickedFilesResultIsInTheSheetAgainAfterTheActivityIsMadeAgain() {
-        val pickers = FakePickers(picked = listOf(ROAD_TRIP))
-        val restoration = StateRestorationTester(compose)
-        var m3u: M3uActions? = null
-        restoration.setContent {
-            Shell(pickers) {
-                val actions = rememberM3uActions()
-                m3u = actions
-                M3uImportSheet(actions)
-            }
-        }
-        val untitled = context.getString(R.string.m3u_untitled)
-
-        compose.runOnIdle { m3u!!.import() }
-        compose.waitUntil("the picked file's result in the sheet", TIMEOUT_MS) { compose.onAllNodesWithText(untitled).fetchSemanticsNodes().isNotEmpty() }
-        restoration.emulateSavedInstanceStateRestore()
-
-        compose.waitUntil("the picked file's result in the sheet again", TIMEOUT_MS) { compose.onAllNodesWithText(untitled).fetchSemanticsNodes().isNotEmpty() }
-        compose.onNodeWithText(context.getString(R.string.m3u_not_m3u)).assertExists()
-        assertEquals(1, pickers.launched.size)
     }
 
     /** The shell's locals a page needs: a navigator, lyrics, messages, and [pickers] for the system's dialogs. */
@@ -146,7 +127,7 @@ class M3uScreensDeviceTest {
     private companion object {
         const val TIMEOUT_MS: Long = 10_000
 
-        /** A picked file no app on the phone has, so it reads as not an m3u: a result all the same, under the stand-in name. */
+        /** A picked file no app on the phone has, so Import from app's sheet says it cannot read it. */
         val ROAD_TRIP: Uri = Uri.parse("content://app.lyrify.test.none/document/Road%20Trip.m3u8")
     }
 }
