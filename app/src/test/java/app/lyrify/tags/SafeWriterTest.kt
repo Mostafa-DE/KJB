@@ -17,6 +17,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import org.junit.rules.Timeout
 import java.io.File
 
 /**
@@ -25,8 +26,15 @@ import java.io.File
  * and every failure after the write began puts the backup back byte for byte. Made-up names only.
  */
 class SafeWriterTest {
-    @get:Rule
+    @get:Rule(order = 0)
     val folder = TemporaryFolder()
+
+    /**
+     * Each test ends within this or fails: two albums are written from two threads at once, and a write that waits for
+     * the other for good would leave runBlocking waiting, holding the gate. Inside [folder], which still goes then.
+     */
+    @get:Rule(order = 1)
+    val timeout: Timeout = Timeout.seconds(30)
 
     private val rig by lazy { WriterRig(folder.root) }
 

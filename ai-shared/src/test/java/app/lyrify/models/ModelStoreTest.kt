@@ -19,6 +19,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import org.junit.rules.Timeout
 import java.io.File
 import java.net.InetAddress
 import java.net.InetSocketAddress
@@ -27,8 +28,16 @@ import java.security.MessageDigest
 import java.util.Collections
 
 class ModelStoreTest {
-    @get:Rule
+    @get:Rule(order = 0)
     val folder = TemporaryFolder()
+
+    /**
+     * Each test ends within this or fails: downloads run on real threads against a local server, and a worker waits for
+     * its foreground in runBlocking, which has no timeout of its own; a wait that never ends would hold the gate. Inside
+     * [folder], which still goes then.
+     */
+    @get:Rule(order = 1)
+    val timeout: Timeout = Timeout.seconds(30)
 
     // The pinned models
 

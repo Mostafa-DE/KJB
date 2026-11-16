@@ -16,7 +16,9 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.Timeout
 import org.w3c.dom.Element
 import java.io.File
 import java.io.FileNotFoundException
@@ -32,6 +34,13 @@ import javax.xml.parsers.DocumentBuilderFactory
  * the car's searches. Controllers are made up ([Caller]); signing certificates are checked by a fake. Made-up names only.
  */
 class CarAccessTest {
+    /**
+     * Each test ends within this or fails: the cover key and the signatures are asked for from several threads at once,
+     * and a lock that never lets go would leave a join or a future waiting for good, holding the gate.
+     */
+    @get:Rule
+    val timeout: Timeout = Timeout.seconds(30)
+
     private val ownUid = 10_123
     private val autoUid = 10_200
     private val centreUid = 1_000
