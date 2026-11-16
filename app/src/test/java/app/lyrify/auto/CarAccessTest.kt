@@ -18,9 +18,12 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.w3c.dom.Element
+import java.io.File
 import java.util.concurrent.Executors
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
+import javax.xml.parsers.DocumentBuilderFactory
 
 /**
  * Who may see KJB's library through its media session, the covers' uris, the covers the provider serves, and
@@ -195,12 +198,12 @@ class CarAccessTest {
     fun `the cover key is made once, kept, and made again only when it is not a key`() {
         val dir = java.nio.file.Files.createTempDirectory("covers").toFile()
         try {
-            val file = java.io.File(dir, "covers.key")
+            val file = File(dir, "covers.key")
             val made = CoverKey.read(file)
             assertEquals(32, made.size)
             assertTrue(made.contentEquals(file.readBytes()))
             assertTrue(made.contentEquals(CoverKey.read(file)))
-            assertFalse(java.io.File(dir, "covers.key.new").exists())
+            assertFalse(File(dir, "covers.key.new").exists())
             file.writeBytes(ByteArray(5))
             val again = CoverKey.read(file)
             assertEquals(32, again.size)
@@ -208,6 +211,32 @@ class CarAccessTest {
         } finally {
             dir.deleteRecursively()
         }
+    }
+
+    @Test
+    fun `the cover key is in no backup, and the covers are exported read-only with no grant anywhere`() {
+        val manifest = DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(File("src/main/AndroidManifest.xml"))
+        val application = manifest.getElementsByTagName("application").item(0) as Element
+        assertEquals("false", application.getAttribute("android:allowBackup"))
+        assertEquals("false", application.getAttribute("android:fullBackupContent"))
+        // Android 12 and later move an app's data to a new phone even without backup: the rules leave out files/, the key's.
+        assertEquals("@xml/data_extraction_rules", application.getAttribute("android:dataExtractionRules"))
+        val rules = DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(File("src/main/res/xml/data_extraction_rules.xml"))
+        listOf("cloud-backup", "device-transfer").forEach { kind ->
+            val excluded = (rules.getElementsByTagName(kind).item(0) as Element).getElementsByTagName("exclude")
+            val files = (0 until excluded.length).map { excluded.item(it) as Element }.filter { it.getAttribute("domain") == "file" }
+            assertTrue("$kind keeps the key", files.any { it.getAttribute("path") in setOf("", ".", "covers.key") })
+        }
+
+        val providers = manifest.getElementsByTagName("provider")
+        val covers = (0 until providers.length).map { providers.item(it) as Element }.single { it.getAttribute("android:name") == ".auto.CarCovers" }
+        assertEquals("true", covers.getAttribute("android:exported"))
+        listOf("android:permission", "android:readPermission", "android:writePermission", "android:grantUriPermissions")
+            .forEach { assertEquals(it, "", covers.getAttribute(it)) }
+        // Nothing hands out or takes back uri grants any more: each cover's uri is its own key.
+        val granting = File("src/main/java").walkTopDown().filter { it.isFile && it.extension == "kt" }
+            .filter { Regex("""(grant|revoke)UriPermission\(""").containsMatchIn(it.readText()) }.map { it.name }.toList()
+        assertEquals(emptyList<String>(), granting)
     }
 
     // The covers the provider serves
