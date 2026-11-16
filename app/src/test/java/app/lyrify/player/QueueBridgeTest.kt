@@ -42,12 +42,20 @@ class QueueBridgeTest {
         /** The path it was handed for each song, by uid. */
         val paths = mutableMapOf<Long, String>()
 
+        /** The size of each batch handed over. */
+        val batches = mutableListOf<Int>()
+
         override fun load(items: List<Projected>, index: Int, positionMs: Long) {
             loaded = items.map { it.uid }
             items.forEach { paths[it.uid] = it.song.path }
             this.index = index
             this.positionMs = positionMs
             calls += "load"
+        }
+
+        override fun applyAll(edits: List<Edit>) {
+            batches += edits.size
+            edits.forEach(::apply)
         }
 
         override fun apply(edit: Edit) {
@@ -134,6 +142,19 @@ class QueueBridgeTest {
         assertEquals(50_000L, port.positionMs)
         assertEquals(1, port.calls.count { it == "load" })
         assertEquals(0, port.calls.count { it == "seek" })
+    }
+
+    /** CR2: before CR1 an empty edit list made no engine calls; a batch of none would drop the crossfade's song waiting. */
+    @Test
+    fun `a change that leaves the player's songs as they are - a rename, a tap inside the queue - hands the player no batch`() {
+        var book = QueueBook().play(refs, 0, albumSource, now = 1).book
+        bridge.sync(book, find)
+        book = book.rename(book.currentId!!, "Evening Set")
+        bridge.sync(book, find)
+        book = book.play(refs, 5, albumSource, now = 2).book
+        bridge.sync(book, find)
+        assertEquals(emptyList<Int>(), port.batches)
+        assertEquals(listOf("load", "seek"), port.calls)
     }
 
     @Test

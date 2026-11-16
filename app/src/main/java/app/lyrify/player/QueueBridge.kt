@@ -231,7 +231,7 @@ class QueueBridge(private val port: PlayerPort) {
             jumps = book.jumps
             return
         }
-        port.applyAll(plan)
+        if (plan.isNotEmpty()) port.applyAll(plan)
         val lost = playing != null && projected.none { it.uid == playing }
         if (book.jumps != jumps || lost) {
             jumps = book.jumps
