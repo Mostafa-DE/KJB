@@ -3,23 +3,15 @@ package app.lyrify.auto
 import android.content.Context
 import android.content.ContextWrapper
 import androidx.media3.common.Player
-import app.lyrify.library.Library
-import app.lyrify.library.LibraryState
 import app.lyrify.library.song
 import app.lyrify.player.Found
 import app.lyrify.player.QueueSource
 import app.lyrify.player.SourceKind
 import app.lyrify.player.openedCoverDir
 import app.lyrify.player.openedCoverKey
-import app.lyrify.settings.PlaybackSettings
-import app.lyrify.settings.Settings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.test.advanceTimeBy
-import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -321,36 +313,21 @@ class CarAccessTest {
     // The covers the provider serves
 
     @Test
-    fun `covers are served only for songs in the library`() {
-        val shown = song("Music/Rips/Loose Thread.mp3", id = 20)
-        val clip = song("Music/Rips/Short Bell.mp3", id = 21, durationMs = 5_000)
-        val noId = song("Music/Rips/Ember Road.mp3")
-        val library = Library.of(listOf(shown, clip, noId), Settings(playback = PlaybackSettings(skipShortClips = true)))
-        assertEquals(setOf(20L), coverIds(library))
-        assertTrue(CarCovers.allowed(20, library))
-        assertFalse(CarCovers.allowed(21, library))
-        assertFalse(CarCovers.allowed(99, library))
-        assertFalse(CarCovers.allowed(20, null))
-    }
-
-    @Test
-    fun `the provider serves a song's own cover, else the default cover, and never one of a song outside the library`() {
-        val withArt = song("Music/Rips/Loose Thread.mp3", id = 20)
-        val noArt = song("Music/Rips/Ember Road.mp3", id = 22)
-        val library = Library.of(listOf(withArt, noArt), Settings())
+    fun `the provider serves a song's own cover, else the default cover`() {
         val read = mutableListOf<Long>()
-        fun serve(path: String) = coverFor(path, { CarCovers.allowed(it, library) }, { id -> read += id; if (id == 20L) "cover 20" else null }) { "default" }
+        fun serve(path: String) = coverFor(path, { id -> read += id; if (id == 22L) null else "cover $id" }) { "default" }
 
         assertEquals("cover 20", serve("20"))
         // No embedded cover: the default, so the car never shows a gap.
         assertEquals("default", serve("22"))
-        // Not a song in the library, or not an id at all: the default, and no file is read.
-        assertEquals("default", serve("99"))
+        // A song the library leaves out (a short clip) is served its own cover too: only KJB signs a song's id.
+        assertEquals("cover 21", serve("21"))
+        // Not an id at all: the default, and no file is read.
         assertEquals("default", serve(DEFAULT_COVER))
         assertEquals("default", serve("../Music"))
-        // A file another app opened is in no library: a car gets the default for it, and nothing is read.
+        // A file another app opened: a car gets the default for it, and nothing is read.
         assertEquals("default", serve("opened-1000-0"))
-        assertEquals(listOf(20L, 22L), read)
+        assertEquals(listOf(20L, 22L, 21L), read)
         // KJB's own session (the notification, the lock screen) reads in the process: the copy's own cover, else the default.
         assertEquals("copy 1000/0", ownCover("opened-1000-0", { error("not a song") }, opened = { key -> openedCoverDir(key)?.let { "copy $it" } }) { "default" })
         assertEquals("default", ownCover("opened-1000-0", { error("not a song") }, opened = { null }) { "default" })
@@ -359,14 +336,13 @@ class CarAccessTest {
 
     @Test
     fun `an opened copy's signed uri reads its own cover in KJB's process, and a car is served the default cover for it`() {
-        val library = Library.of(listOf(song("Music/Rips/Loose Thread.mp3", id = 20)), Settings())
         val songs = mutableListOf<Long>()
         val copies = mutableListOf<String>()
         val opened = { key: String -> copies += key; if (key == "opened-1000-0") "copy 1000/0" else null }
         // As CarCovers.read and CarCovers.openFile go: the uri's path and signature checked, then that cover read.
         fun own(segments: List<String>) = ownCover(uris.pathOf(segments).orEmpty(), { id -> songs += id; "cover $id" }, opened) { "default" }
         fun car(segments: List<String>) =
-            uris.pathOf(segments)?.let { path -> coverFor(path, { CarCovers.allowed(it, library) }, { id -> songs += id; "cover $id" }) { "default" } }
+            uris.pathOf(segments)?.let { path -> coverFor(path, { id -> songs += id; "cover $id" }) { "default" } }
 
         // The notification and the lock screen: the copy's own cover; the default for a copy with none, or gone from the cache.
         assertEquals("copy 1000/0", own(segments("opened-1000-0")))
@@ -421,18 +397,20 @@ class CarAccessTest {
     }
 
     @Test
-    fun `a cover asked for while the library is first read waits a moment at most, then the default is served`() = runTest {
-        val state = MutableStateFlow<LibraryState>(LibraryState.Loading)
-        // It runs on a binder thread: never long.
-        val waiting = async { readyLibrary(state) }
-        advanceTimeBy(301)
-        assertTrue("still waiting after 300 ms", waiting.isCompleted)
-        assertNull(waiting.await())
-        val library = Library.of(listOf(song("Music/Rips/Loose Thread.mp3", id = 20)), Settings())
-        state.value = LibraryState.Ready(library)
-        assertEquals(library, readyLibrary(state))
-        state.value = LibraryState.Unreadable
-        assertNull(readyLibrary(state))
+    fun `a car asking as KJB starts, before the library is read, is served a signed song's own cover at once`() {
+        // Android Auto starts KJB as the car connects, asks for covers at once and keeps each by its uri: the signature
+        // alone lets a song's cover out, so nothing waits for the library, and no song keeps the default for good.
+        val read = mutableListOf<Long>()
+        fun car(segments: List<String>) =
+            uris.pathOf(segments)?.let { path -> coverFor(path, { id -> read += id; if (id == 20L) "cover 20" else null }) { "default" } }
+
+        assertEquals("cover 20", car(segments("20")))
+        // MediaStore has no cover for the song: the default, as before.
+        assertEquals("default", car(segments("22")))
+        // A uri KJB did not sign is no cover at all (the provider's FileNotFoundException), and nothing is read.
+        assertNull(car(listOf("21", uris.sign("20"))))
+        assertNull(car(listOf("21")))
+        assertEquals(listOf(20L, 22L), read)
     }
 
     // The car's searches

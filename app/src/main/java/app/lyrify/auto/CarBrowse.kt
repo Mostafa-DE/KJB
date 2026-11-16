@@ -60,16 +60,13 @@ import com.google.common.util.concurrent.SettableFuture
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 import java.io.ByteArrayOutputStream
 import java.io.FileNotFoundException
 import java.io.IOException
@@ -417,12 +414,13 @@ fun nodeCover(node: TreeNode): String? = node.cover?.let(::coverPath)
 
 /**
  * What [CarCovers] serves another app (the car) at [path]: song [path]'s embedded cover ([embedded], by its MediaStore id)
- * when it may be served ([allowed]: a song in the library) and has one; else the default cover ([fallback]), so a car
- * never shows a gap, and never a cover of anything outside the library: an opened copy's key gets the default too, the
- * copy's own cover is KJB's surfaces' only ([ownCover]).
+ * when it has one; else the default cover ([fallback]), so a car never shows a gap. No library check, so nothing waits
+ * for the library's first read: [path] comes only under KJB's own signature ([CoverUris]), and KJB signs only its own
+ * songs' ids. Android Auto starts KJB as the car connects, asks for covers at once and keeps each by its uri: a default
+ * served then would stay. An opened copy's key gets the default: the copy's own cover is KJB's surfaces' only ([ownCover]).
  */
-fun <T : Any> coverFor(path: String, allowed: (Long) -> Boolean, embedded: (Long) -> T?, fallback: () -> T): T =
-    path.toLongOrNull()?.takeIf(allowed)?.let(embedded) ?: fallback()
+fun <T : Any> coverFor(path: String, embedded: (Long) -> T?, fallback: () -> T): T =
+    path.toLongOrNull()?.let(embedded) ?: fallback()
 
 /**
  * Cover [path] as KJB's own surfaces read it in the process ([CarCovers.read]): song [path]'s embedded cover ([embedded],
@@ -443,19 +441,6 @@ fun <T : Any> ownCover(path: String, embedded: (Long) -> T, opened: (String) -> 
         null
     }
 }
-
-/** How long a cover asked for during the library's first read waits for it: on a binder thread, never long. */
-private const val LIBRARY_WAIT_MS = 300L
-
-/**
- * The library once read, waiting [LIBRARY_WAIT_MS] at most while it is first read (Auto may ask right after KJB
- * starts); null without one, and the provider serves the default cover.
- */
-suspend fun readyLibrary(state: Flow<LibraryState>): Library? =
-    (withTimeoutOrNull(LIBRARY_WAIT_MS) { state.first { it !is LibraryState.Loading } } as? LibraryState.Ready)?.library
-
-/** The MediaStore ids of the songs in [library]: the only covers [CarCovers] serves. */
-fun coverIds(library: Library): Set<Long> = library.songs.mapNotNull { it.ref.mediaStoreId }.toSet()
 
 /** The car's searches, per app and words, so two browsers never take each other's results; the latest [KEPT] stay. Not thread-safe. */
 class Searches {
@@ -480,12 +465,12 @@ class Searches {
  * KJB's covers as content uris, for Android Auto (its lists, its queue and the song playing) and KJB's own media session
  * (the notification and the lock screen, through the session's bitmap loader, [bitmap]): a song's cover by its
  * MediaStore id only (no paths in the uri), a JPEG of MediaStore's thumbnail of the file's embedded art at most
- * [COVER_PX] square, or KJB's default cover ([R.drawable.kjb_default_cover]) when the song has none, is not in the
- * library, or the path is [DEFAULT_COVER]. Android Auto cannot read MediaStore's audio uris (Media3 hands it a uri, and
- * the cover of a MediaStore audio uri is not an image), so every item points here. Exported, so whichever of Android
- * Auto's processes reads a cover may, but only at a uri KJB signed ([CoverUris]): a song's id or an opened copy's key and
- * its own signature, nothing else; never a path, never a write. Another app gets the default cover for an opened copy,
- * whose own cover only KJB's surfaces read ([read]). The log gets exception names only.
+ * [COVER_PX] square, or KJB's default cover ([R.drawable.kjb_default_cover]) when the song has none or the path is
+ * [DEFAULT_COVER], never waiting for the library ([coverFor]). Android Auto cannot read MediaStore's audio uris (Media3
+ * hands it a uri, and the cover of a MediaStore audio uri is not an image), so every item points here. Exported, so
+ * whichever of Android Auto's processes reads a cover may, but only at a uri KJB signed ([CoverUris]): a song's id or an
+ * opened copy's key and its own signature, nothing else; never a path, never a write. Another app gets the default cover
+ * for an opened copy, whose own cover only KJB's surfaces read ([read]). The log gets exception names only.
  */
 class CarCovers : ContentProvider() {
     override fun onCreate(): Boolean = true
@@ -496,8 +481,7 @@ class CarCovers : ContentProvider() {
         if (mode != "r") throw SecurityException("covers are read-only")
         val context = context ?: throw FileNotFoundException("not ready")
         val path = uris(context).pathOf(uri.pathSegments) ?: throw FileNotFoundException("not a cover")
-        val library = library(context)
-        val jpeg = coverFor(path, { allowed(it, library) }, { id -> embedded(context, id)?.let(::jpeg) }) { defaultJpeg(context) }
+        val jpeg = coverFor(path, { id -> embedded(context, id)?.let(::jpeg) }) { defaultJpeg(context) }
         return openPipeHelper(uri, JPEG, null, jpeg) { output, _, _, _, bytes ->
             try {
                 ParcelFileDescriptor.AutoCloseOutputStream(output).use { it.write(bytes) }
@@ -523,21 +507,9 @@ class CarCovers : ContentProvider() {
         /** Covers are at most this size: the notification's and Auto's largest; Auto's grid tiles are smaller. */
         private const val COVER_PX = 512
 
-
-        /** The ids of the library last asked about, so a screen of covers reads the library once. */
-        @Volatile
-        private var index: Pair<Library, Set<Long>>? = null
-
         /** The default cover as served, made once per process. */
         @Volatile
         private var madeDefault: ByteArray? = null
-
-        /** Whether the cover of MediaStore item [id] may be served: a song in [library]. */
-        fun allowed(id: Long, library: Library?): Boolean {
-            library ?: return false
-            val ids = index?.takeIf { it.first === library }?.second ?: coverIds(library).also { index = library to it }
-            return id in ids
-        }
 
         /** The provider's authority in this build (the debug build's differs). */
         fun authority(context: Context): String = context.packageName + ".covers"
@@ -566,9 +538,6 @@ class CarCovers : ContentProvider() {
         /** The embedded cover of the opened copy [key] names, at most [COVER_PX] square; null when the copy is gone or has none. */
         private fun opened(context: Context, key: String): Bitmap? =
             OpenedFiles.coverCopy(context, key)?.let { OpenedFiles.cover(context, it, COVER_PX) }?.let(::capped)
-
-        /** The library, while a cover is asked for on a binder thread ([readyLibrary]). */
-        private fun library(context: Context): Library? = runBlocking { readyLibrary(LibraryGraph.repository(context).state) }
 
         /** Song [id]'s embedded cover ([thumbnail]); null without one, or when it cannot be read. */
         private fun embedded(context: Context, id: Long): Bitmap? = try {
