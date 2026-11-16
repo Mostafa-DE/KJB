@@ -21,6 +21,7 @@ import android.os.Process
 import android.os.RemoteCallbackList
 import android.os.RemoteException
 import android.os.SystemClock
+import android.text.format.Formatter
 import android.util.Log
 import app.lyrify.addon.shared.AddonKeepAlive
 import app.lyrify.addon.shared.CallerCheck
@@ -42,6 +43,7 @@ import app.lyrify.models.DownloadRun
 import app.lyrify.models.ModelDownloads
 import app.lyrify.models.ModelImport
 import app.lyrify.models.ModelState
+import app.lyrify.models.RunState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -402,6 +404,18 @@ class AddonJobs(
 fun jobForegroundType(sdk: Int): Int =
     if (sdk >= Build.VERSION_CODES.VANILLA_ICE_CREAM) ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING else ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
 
+/**
+ * The type of the add-on's foreground service for the work under way ([JobForeground]): a song's job's
+ * ([jobForegroundType]) while one runs, else the models' download's, dataSync on every Android version (a download, which
+ * Android 15+ gives its own 6 hours in 24, apart from the jobs' mediaProcessing time).
+ */
+fun foregroundType(sdk: Int, job: Boolean): Int = if (job) jobForegroundType(sdk) else ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+
+/** How far the models' download is, for its notice: whole percents of [total] bytes, 0 until the size is told, never past 100. */
+fun downloadPercent(done: Long, total: Long): Int = if (total <= 0) 0 else (done * PERCENT / total).toInt().coerceIn(0, PERCENT)
+
+private const val PERCENT = 100
+
 /** KJB of this build type, signed with its pinned certificate: the one caller of the add-on's service and activity. */
 fun Context.kjbCallers(): CallerCheck = CallerCheck(
     packageName,
@@ -419,10 +433,11 @@ class AiExemptionActivity : ExemptionActivity() {
 /**
  * The add-on's one service, bound by KJB only ([CallerCheck] on every call, behind the signature permission): the AI
  * ([AddonJobs]), the model download ([ModelDownloads]) and the handover of KJB 2.0's models. KJB binds it while the AI
- * works, from its own foreground service, and while its AI page shows. While a song's job runs, KJB also starts it, and
- * it runs in the foreground with its own notification ([JobForeground], of [jobForegroundType]): a phone's app freezer
- * leaves alone an app at work in the foreground, not a service another app binds. Nothing here touches ONNX Runtime until
- * a song's engine opens, so the QNN EP registers its library path before any HTP library loads in this process ([QnnEp]).
+ * works or the models download, from its own foreground service, and while its AI page shows. While a song's job runs or
+ * the models download, KJB also starts it, and it runs in the foreground with its own notification ([JobForeground], of
+ * [foregroundType]): a phone's app freezer leaves alone an app at work in the foreground, not a service another app binds.
+ * Nothing here touches ONNX Runtime until a song's engine opens, so the QNN EP registers its library path before any HTP
+ * library loads in this process ([QnnEp]).
  */
 class AiService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -453,27 +468,51 @@ class AiService : Service() {
         )
     }
 
-    private val foreground by lazy {
+    private val foreground: JobForeground<PendingIntent> by lazy {
         JobForeground(
-            jobForegroundType(Build.VERSION.SDK_INT),
+            // Each start goes into the foreground as the work under way: a song's job, else the download (KJB downloads
+            // while the models are not in place, which a job needs, so the two seldom meet).
+            { foregroundType(Build.VERSION.SDK_INT, job = jobs.busy) },
             object : ForegroundPort<PendingIntent> {
                 override fun startForeground(type: Int, tap: PendingIntent?) = this@AiService.startForeground(NOTICE_ID, notice(tap), type)
 
-                override fun stopForeground() = this@AiService.stopForeground(STOP_FOREGROUND_REMOVE)
+                override fun stopForeground() {
+                    this@AiService.stopForeground(STOP_FOREGROUND_REMOVE)
+                    // A notice posted again just after Android let the service go (KJB stopped it, the add-on frozen
+                    // until now) is a notice of its own, which the line above leaves: it goes too.
+                    getSystemService(NotificationManager::class.java).cancel(NOTICE_ID)
+                }
 
                 override fun stopSelf(startId: Int?) {
                     if (startId == null) this@AiService.stopSelf() else this@AiService.stopSelfResult(startId)
                 }
+
+                // Under the service's id, Android takes it for the service's own notice (NotificationManagerService,
+                // applyForegroundServiceNotification). Without the notification permission no notice of the add-on
+                // shows, the first one included, and the service is in the phone's list of apps at work all the same.
+                @SuppressLint("NotificationPermission")
+                override fun updateNotice(tap: PendingIntent?) = getSystemService(NotificationManager::class.java).notify(NOTICE_ID, notice(tap))
             },
-            busy = { jobs.busy },
+            busy = { jobs.busy || downloads.busy },
             fromKjb = { tap -> AddonKeepAlive.fromKjb(tap, callers) },
-            endJob = jobs::timeUp,
+            endJob = {
+                jobs.timeUp()
+                downloads.timeUp()
+            },
             log = { Log.i(LOG_TAG, it) },
         )
     }
 
-    /** The model download, run while KJB keeps the add-on bound from its foreground service (which shows its notification). */
-    private val downloads by lazy { DownloadRun(scope) { progress -> ModelDownloads.download(this, progress) } }
+    /**
+     * The model download, run while KJB keeps the add-on bound from its foreground service (which shows its notification),
+     * in the add-on's own foreground service, which KJB starts once the add-on took it ([foreground]): its notice follows
+     * the progress. Its beats run on the main thread, which no download blocks.
+     */
+    private val downloads by lazy {
+        DownloadRun(scope, beats = Dispatchers.Main, moved = { foreground.noticeChanged() }, ended = { foreground.jobEnded() }) { progress ->
+            ModelDownloads.download(this, progress)
+        }
+    }
 
     /** KJB's status watchers ([IAiAddon.watchStatus]); the status is collected only while there is one. */
     private val watchers = object : RemoteCallbackList<IAiStatusCallback>() {
@@ -499,8 +538,8 @@ class AiService : Service() {
     }
 
     /**
-     * KJB's start for a song's job, Context.startForegroundService ([JobForeground]): into the foreground at once, as
-     * Android requires within seconds. Never started again by Android on its own.
+     * KJB's start for a song's job or the models' download, Context.startForegroundService ([JobForeground]): into the
+     * foreground at once, as Android requires within seconds. Never started again by Android on its own.
      */
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         foreground.start(startId, intent?.let(AddonKeepAlive::tap))
@@ -511,19 +550,29 @@ class AiService : Service() {
     override fun onTimeout(startId: Int, fgsType: Int) = foreground.timeUp()
 
     /**
-     * The notice while a job works, in a quiet channel: the same words for every job, nothing of the song (KJB's own
-     * notification names it). A tap opens KJB's AI page through [tap], KJB's own. Without the notification permission,
-     * which the add-on never asks for, it shows in the phone's list of apps at work only, and the service runs all the same.
+     * The notice while the add-on works, in a quiet channel. A job: the same words for every job, nothing of the song
+     * (KJB's own notification names it). The models' download: how far it is, a percent and two sizes over a bar, never a
+     * file or a link. A tap opens KJB's AI page through [tap], KJB's own. Without the notification permission, which the
+     * add-on never asks for, it shows in the phone's list of apps at work only, and the service runs all the same.
      */
     private fun notice(tap: PendingIntent?): Notification {
         val channel = NotificationChannel(NOTICE_CHANNEL, getString(R.string.work_channel), NotificationManager.IMPORTANCE_LOW)
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
-        return Notification.Builder(this, NOTICE_CHANNEL)
+        val notice = Notification.Builder(this, NOTICE_CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_kjb)
-            .setContentTitle(getString(R.string.work_title))
             .setContentIntent(tap)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
+        val download = downloads.state.value as? RunState.Running
+        if (jobs.busy || download == null) return notice.setContentTitle(getString(R.string.work_title)).build()
+        notice.setContentTitle(getString(R.string.models_title))
+        val done = download.doneBytes
+        val total = download.totalBytes
+        if (done == null || total == null) return notice.setProgress(0, 0, true).build()
+        val percent = downloadPercent(done, total)
+        return notice
+            .setContentText(getString(R.string.models_progress, percent, Formatter.formatShortFileSize(this, done), Formatter.formatShortFileSize(this, total)))
+            .setProgress(PERCENT, percent, false)
             .build()
     }
 
@@ -651,6 +700,8 @@ class AiService : Service() {
 
         override fun onProgress(done: Long, total: Long) = send { callback.onProgress(done, total) }
 
+        override fun onBeat() = send { callback.onBeat() }
+
         override fun onEnd(end: Download) {
             send { callback.onEnd(Wire.encode(end)) }
             if (linked) runCatching { callback.asBinder().unlinkToDeath(death, 0) }
@@ -776,7 +827,7 @@ class AiService : Service() {
     }
 
     private companion object {
-        /** The notice while a job works: its id, and its channel, "AI work". */
+        /** The notice while the add-on works (a job, the models' download): its id, and its channel, "AI work". */
         const val NOTICE_ID = 1
         const val NOTICE_CHANNEL = "ai_work"
     }

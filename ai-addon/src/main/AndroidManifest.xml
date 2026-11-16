@@ -11,15 +11,15 @@
         android:protectionLevel="signature" />
 
     <!-- The one-time model download (models/ModelDownloads), run while KJB keeps the add-on bound from its own
-         foreground service, which shows the progress: the add-on runs no foreground service for it. It talks to
-         Qualcomm AI Hub, GitHub and Hugging Face only (models/ModelStore.kt). The AI itself never goes online. -->
+         foreground service, which shows the progress, in the add-on's own below. It talks to Qualcomm AI Hub, GitHub and
+         Hugging Face only (models/ModelStore.kt). The AI itself never goes online. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
-    <!-- A song's job runs in the add-on's own foreground service (ai/AiService.kt, JobForeground), which KJB starts for
-         it: a phone's app freezer leaves alone an app at work in the foreground, not a service another app binds.
-         mediaProcessing from Android 15 (long work on media files), dataSync before it. No notification permission: the
-         add-on has no screen to ask from; without it its notice shows in the phone's list of apps at work only, and
-         the service runs all the same. -->
+    <!-- A song's job and the model download run in the add-on's own foreground service (ai/AiService.kt,
+         JobForeground), which KJB starts for them: a phone's app freezer leaves alone an app at work in the foreground,
+         not a service another app binds. A job: mediaProcessing from Android 15 (long work on media files), dataSync
+         before it. The download: dataSync (a download). No notification permission: the add-on has no screen to ask
+         from; without it its notice shows in the phone's list of apps at work only, and the service runs all the same. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROCESSING" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
@@ -73,7 +73,7 @@
             tools:node="remove" />
 
         <!-- KJB binds it by its explicit name while the AI works, the models download or its page shows, and starts it
-             for the foreground while a song's job runs. Exported for KJB only: the signature permission above guards
+             for the foreground while a song's job runs or the models download. Exported for KJB only: the signature permission above guards
              the bind and the start, every call checks the caller's uid and certificate, and a start is taken only with
              a PendingIntent KJB made (ai/AiService.kt). mediaProcessing is known from Android 15 (targetApi); below it
              the service goes into the foreground as dataSync. -->

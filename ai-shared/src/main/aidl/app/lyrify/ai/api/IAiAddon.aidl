@@ -22,10 +22,11 @@ interface IAiAddon {
     void watchStatus(IAiStatusCallback callback) = 3;
     void unwatchStatus(IAiStatusCallback callback) = 4;
 
-    // Downloads the models the add-on lacks, from the parts it has, and tells the callback its progress and end. KJB runs
-    // it from its own foreground service and shows the notification (the add-on has neither), on the networks it allows.
-    // Returns the run's id. Each call is its own run, heard by its own callback; runs take the files one after the other.
-    // A run stops when its caller goes away (its parts stay).
+    // Downloads the models the add-on lacks, from the parts it has, and tells the callback its progress, its beats and its
+    // end. KJB runs it from its own foreground service, which shows the notification, on the networks it allows, and then
+    // starts the add-on's service for the foreground, as for a song's job. Returns the run's id. Each call is its own run,
+    // heard by its own callback; runs take the files one after the other. A run stops when its caller goes away (its
+    // parts stay).
     long download(IAiDownloadCallback callback) = 5;
 
     // Stops the model download run started by that download() call (its id), and no other; its parts stay.

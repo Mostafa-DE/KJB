@@ -101,6 +101,8 @@ private class AidlPort(private val addon: IAiAddon) : AddonPort {
             override fun onProgress(done: Long, total: Long) = events.onProgress(done, total)
 
             override fun onEnd(end: String) = events.onEnd(Wire.download(end))
+
+            override fun onBeat() = events.onBeat()
         }
         return call { addon.download(callback) }
     }

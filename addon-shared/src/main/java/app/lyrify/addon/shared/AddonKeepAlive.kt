@@ -85,19 +85,27 @@ interface ForegroundPort<Tap : Any> {
 
     /** Service.stopSelf of [startId], or of every start when null. */
     fun stopSelf(startId: Int?)
+
+    /**
+     * The notice posted again as it reads now, under the foreground service's id: an add-on whose notice never changes has
+     * nothing to do.
+     */
+    fun updateNotice(tap: Tap?) {}
 }
 
 /**
- * An add-on's own foreground service while it works, of [type]. KJB starts the service for the foreground once the add-on
- * took a job ([start]: Context.startForegroundService on its explicit name, under KJB's own foreground), and the add-on
- * goes into the foreground at once, in onStartCommand, as Android requires within seconds. It holds it while a job runs
- * ([busy]), and leaves it when none is left ([jobEnded]), when KJB lets go ([unbound]), and when Android's time for its
- * type runs out ([timeUp], Android 15+), which also ends the work under way ([endJob]). A start from anyone but KJB, by the
- * creator of the [Tap] it brings ([fromKjb]), is refused. Nothing here throws: a phone that refuses the foreground service
- * leaves the job to run without it.
+ * An add-on's own foreground service while it works, of the [type] for the work under way. KJB starts the service for the
+ * foreground once the add-on took a job ([start]: Context.startForegroundService on its explicit name, under KJB's own
+ * foreground), and the add-on goes into the foreground at once, in onStartCommand, as Android requires within seconds. It
+ * holds it while a job runs ([busy]), its notice posted again as the work moves on ([noticeChanged]), and leaves it when
+ * none is left ([jobEnded]), when KJB lets go ([unbound]), and when Android's time for its type runs out ([timeUp],
+ * Android 15+), which also ends the work under way ([endJob]). A start from anyone but KJB, by the creator of the [Tap]
+ * it brings ([fromKjb]), is refused. Nothing here throws: a phone that refuses the foreground service leaves the job to
+ * run without it.
  */
 class JobForeground<Tap : Any>(
-    private val type: Int,
+    /** The type for the work under way (ServiceInfo.FOREGROUND_SERVICE_TYPE_*), asked as the service goes into the foreground. */
+    private val type: () -> Int,
     private val port: ForegroundPort<Tap>,
     /** Whether a job runs now. */
     private val busy: () -> Boolean,
@@ -109,6 +117,9 @@ class JobForeground<Tap : Any>(
 ) {
     /** In the foreground for KJB's job. */
     private var held = false
+
+    /** The tap of the start that holds the foreground, KJB's: the notice keeps it when it is posted again. */
+    private var tap: Tap? = null
 
     /** The last start Android gave: stopSelf of it ends the service's started state, unless a later one came meanwhile. */
     private var lastStart = 0
@@ -125,7 +136,7 @@ class JobForeground<Tap : Any>(
                 // nothing to answer, any other goes in and out at once.
                 if (!held) inAndOut(startId, tap = null)
             }
-            busy() -> if (enter(kjb)) held = true else if (!held) port.stopSelf(startId)
+            busy() -> if (enter(kjb)) hold(kjb) else if (!held) port.stopSelf(startId)
             // The job ended before its start came: in and out, unless still in for it ([jobEnded] is on its way).
             !held -> inAndOut(startId, kjb)
             // Held: nothing to answer. A start for the foreground that Android delivers while the service is in the
@@ -140,6 +151,15 @@ class JobForeground<Tap : Any>(
     @Synchronized
     fun jobEnded() {
         if (held && !busy()) leave(lastStart)
+    }
+
+    /**
+     * What the work under way says on its notice changed (the models' download moved on): the notice is posted again while
+     * in the foreground, and never outside it, where it would be a notice of its own that stays behind.
+     */
+    @Synchronized
+    fun noticeChanged() {
+        if (held) port.updateNotice(tap)
     }
 
     /** KJB let go of the add-on (onUnbind). */
@@ -158,13 +178,18 @@ class JobForeground<Tap : Any>(
 
     /** Into the foreground; false when Android refuses, and the job runs without it. */
     private fun enter(tap: Tap?): Boolean = try {
-        port.startForeground(type, tap)
+        port.startForeground(type(), tap)
         true
     } catch (e: RuntimeException) {
         // ForegroundServiceStartNotAllowedException (Android 12+: no exemption at this moment; 15+: the day's time used
         // up) or a SecurityException. KJB's watch covers a phone that freezes the add-on without it.
         log("the foreground service was refused (${e.javaClass.simpleName})")
         false
+    }
+
+    private fun hold(kjb: Tap) {
+        held = true
+        tap = kjb
     }
 
     private fun inAndOut(startId: Int, tap: Tap?) {
@@ -176,6 +201,7 @@ class JobForeground<Tap : Any>(
         port.stopForeground()
         port.stopSelf(startId)
         held = false
+        tap = null
     }
 }
 

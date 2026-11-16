@@ -110,7 +110,7 @@ class DlService : Service() {
 
     private val foreground: JobForeground<PendingIntent> by lazy {
         JobForeground(
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+            { ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC },
             object : ForegroundPort<PendingIntent> {
                 override fun startForeground(type: Int, tap: PendingIntent?) = this@DlService.startForeground(NOTICE_ID, notice(tap), type)
 

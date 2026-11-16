@@ -143,6 +143,9 @@ object AddonDownloads {
                 override fun onEnd(end: Download) {
                     events.trySend(Event.End(end))
                 }
+
+                // Not watched yet.
+                override fun onBeat() {}
             },
         )
         return coroutineScope {

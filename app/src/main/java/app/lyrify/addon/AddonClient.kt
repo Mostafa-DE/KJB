@@ -120,6 +120,9 @@ interface DownloadEvents {
     fun onProgress(done: Long, total: Long)
 
     fun onEnd(end: Download)
+
+    /** The run is alive: every few seconds while it runs, whatever it waits on, from a timer of the add-on's own. */
+    fun onBeat()
 }
 
 /**

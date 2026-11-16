@@ -62,6 +62,10 @@ class AddonKeepAliveTest {
         override fun stopSelf(startId: Int?) {
             calls += "stopSelf ${startId ?: "all"}"
         }
+
+        override fun updateNotice(tap: Tap?) {
+            calls += "notice ${tap?.uid}"
+        }
     }
 
     private val kjb = Tap(KJB_UID)
@@ -69,7 +73,7 @@ class AddonKeepAliveTest {
     private var jobsEnded = 0
 
     private fun foreground(port: FakeForeground) =
-        JobForeground(ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING, port, busy = { busy }, fromKjb = { it.uid == KJB_UID }, endJob = { jobsEnded++ })
+        JobForeground({ ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING }, port, busy = { busy }, fromKjb = { it.uid == KJB_UID }, endJob = { jobsEnded++ })
 
     @Test
     fun `KJB's start while a job runs goes into the foreground at once, of the add-on's type, with KJB's tap`() {
@@ -78,8 +82,48 @@ class AddonKeepAliveTest {
 
         assertEquals(listOf("start mediaProcessing $KJB_UID"), port.calls)
         val dataSync = FakeForeground()
-        JobForeground(ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC, dataSync, busy = { true }, fromKjb = { it.uid == KJB_UID }, endJob = {}).start(1, kjb)
+        JobForeground({ ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC }, dataSync, busy = { true }, fromKjb = { it.uid == KJB_UID }, endJob = {}).start(1, kjb)
         assertEquals(listOf("start dataSync $KJB_UID"), dataSync.calls)
+    }
+
+    @Test
+    fun `the type is the work's under way as each start goes into the foreground`() {
+        // The AI add-on: a song's job in mediaProcessing, the models' download in dataSync, one after the other.
+        var type = ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+        val port = FakeForeground()
+        val foreground = JobForeground({ type }, port, busy = { busy }, fromKjb = { it.uid == KJB_UID }, endJob = {})
+
+        foreground.start(1, kjb)
+        busy = false
+        foreground.jobEnded()
+        type = ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING
+        busy = true
+        foreground.start(2, kjb)
+
+        assertEquals(listOf("start dataSync $KJB_UID", "stopForeground", "stopSelf 1", "start mediaProcessing $KJB_UID"), port.calls)
+    }
+
+    @Test
+    fun `the notice is posted again as the work moves on, with KJB's tap, only while in the foreground`() {
+        val port = FakeForeground()
+        val foreground = foreground(port)
+
+        foreground.noticeChanged() // not in the foreground yet: a notice posted now would stay behind
+        foreground.start(1, kjb)
+        foreground.noticeChanged()
+        foreground.noticeChanged()
+        busy = false
+        foreground.jobEnded()
+        foreground.noticeChanged() // left: nothing more
+
+        assertEquals(listOf("start mediaProcessing $KJB_UID", "notice $KJB_UID", "notice $KJB_UID", "stopForeground", "stopSelf 1"), port.calls)
+        val refused = FakeForeground(refuses = true)
+        busy = true
+        foreground(refused).apply {
+            start(2, kjb)
+            noticeChanged()
+        }
+        assertEquals("refused, the work runs without it, and nothing is posted", listOf("start mediaProcessing $KJB_UID", "stopSelf 2"), refused.calls)
     }
 
     @Test

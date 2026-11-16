@@ -627,7 +627,25 @@ class AiServiceTest {
     }
 
     @Test
-    fun `the notice says the same for every job, with no room for a song, its lyrics or a path`() {
+    fun `the models' download runs as dataSync on every Android version, a song's job as its own type`() {
+        // Android 15+ counts 6 hours in 24 for each type apart: the download never takes from the jobs' mediaProcessing time.
+        for (sdk in listOf(30, 34, 35, 36, 37)) {
+            assertEquals("$sdk", ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC, foregroundType(sdk, job = false))
+            assertEquals("$sdk", jobForegroundType(sdk), foregroundType(sdk, job = true))
+        }
+    }
+
+    @Test
+    fun `the download's notice says how far it is in whole percents, never past whole`() {
+        assertEquals(41, downloadPercent(412, 981))
+        assertEquals(0, downloadPercent(0, 981))
+        assertEquals(100, downloadPercent(981, 981))
+        assertEquals(100, downloadPercent(990, 981))
+        assertEquals("no size told yet", 0, downloadPercent(5, 0))
+    }
+
+    @Test
+    fun `the notice says the same for every job and only numbers for the download, with no room for a song, its lyrics, a path or a link`() {
         val strings = File("src/main/res/values/strings.xml").also { assertTrue("run from the module: ${it.absolutePath}", it.isFile) }.readText()
         fun string(name: String): String? = Regex("""<string name="$name"[^>]*>([^<]*)</string>""").find(strings)?.groupValues?.get(1)
 
@@ -635,5 +653,8 @@ class AiServiceTest {
         assertEquals("KJB AI is working", string("work_title"))
         // No placeholder: nothing of a job can be put into either.
         assertFalse(listOf("work_channel", "work_title").any { '%' in string(it).orEmpty() })
+        // The download's: plain words, then its percent and two sizes, room for no file name or link.
+        assertEquals("Downloading the AI models", string("models_title"))
+        assertEquals("%1\$d%% (%2\$s of %3\$s)", string("models_progress"))
     }
 }
