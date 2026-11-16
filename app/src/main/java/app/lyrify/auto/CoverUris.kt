@@ -37,7 +37,8 @@ class CoverUris(val authority: String, key: ByteArray) {
 
     /** [path]'s signature: the first 128 bits of its HMAC-SHA256, in lower-case hex. */
     fun sign(path: String): String {
-        val digest = macs.get().doFinal(path.toByteArray(Charsets.UTF_8))
+        // withInitial gives every thread its Mac; Android's ThreadLocal.get() is only annotated nullable.
+        val digest = checkNotNull(macs.get()).doFinal(path.toByteArray(Charsets.UTF_8))
         return String(CharArray(SIGNATURE_BYTES * 2) { i -> HEX[(digest[i / 2].toInt() shr (if (i % 2 == 0) 4 else 0)) and 0xF] })
     }
 
