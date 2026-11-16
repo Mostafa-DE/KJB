@@ -78,7 +78,8 @@ class SongMatcher(phone: List<Song>) {
      *    path below the root the file gives apart ([ImportSong.relativePath], Musicolet's) is taken as it is.
      * 3. The same file name in a folder of the same name, anywhere (m3u's rule 2).
      * 4. The same title, artist and album as far as the file knows them, and a length within [LENGTH_TOLERANCE_MS];
-     *    the length is needed. An "Artist - Title" text is read two ways, as m3u import reads it ([M3u.findByName]).
+     *    the length is needed. An "Artist - Title" text is read two ways: the artist before the first dash and the
+     *    title after it, or the whole text as a title without an artist.
      *    Of several, the one of the file's size when only one has it.
      *
      * Passes 0 and 2 to 4 take a song only when it [fits]. Missing clues are skipped, never a mismatch.
