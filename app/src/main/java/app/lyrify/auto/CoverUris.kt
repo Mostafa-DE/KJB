@@ -5,6 +5,10 @@ import android.content.Context
 import android.net.Uri
 import android.util.Log
 import app.lyrify.LOG_TAG
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import java.io.File
 import java.io.IOException
 import java.security.MessageDigest
@@ -64,8 +68,21 @@ object CoverKey {
     @Volatile
     private var key: ByteArray? = null
 
+    /**
+     * The key read in [scope] off the main thread as KJB starts (LyrifyApplication): the playback service signs its first
+     * covers on the main thread, and finds it in memory.
+     */
+    fun warm(context: Context, scope: CoroutineScope): Job = scope.launch(Dispatchers.IO) { of(context) }
+
+    /** The key, read (or made) by whichever thread asks first; one asking meanwhile waits for that read, and gets the same key. */
     @Synchronized
     fun of(context: Context): ByteArray = key ?: read(File(context.filesDir, "covers.key")).also { key = it }
+
+    /** The key read again at its next use, as in a new process: for tests. */
+    @Synchronized
+    internal fun forget() {
+        key = null
+    }
 
     /** The key in [file], or a new one written there (whole, then renamed into place) when it is missing or not a key. */
     internal fun read(file: File): ByteArray {

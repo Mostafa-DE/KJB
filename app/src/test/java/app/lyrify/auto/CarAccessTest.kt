@@ -1,5 +1,7 @@
 package app.lyrify.auto
 
+import android.content.Context
+import android.content.ContextWrapper
 import androidx.media3.common.Player
 import app.lyrify.library.Library
 import app.lyrify.library.LibraryState
@@ -9,8 +11,11 @@ import app.lyrify.player.QueueSource
 import app.lyrify.player.SourceKind
 import app.lyrify.settings.PlaybackSettings
 import app.lyrify.settings.Settings
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -22,6 +27,7 @@ import org.w3c.dom.Element
 import java.io.File
 import java.io.FileNotFoundException
 import java.io.IOException
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
@@ -211,6 +217,53 @@ class CarAccessTest {
             assertEquals(32, again.size)
             assertFalse(again.contentEquals(made))
         } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    /** A context whose files are in [dir]: all CoverKey asks of it. */
+    private fun context(dir: File): Context = object : ContextWrapper(null) {
+        override fun getFilesDir(): File = dir
+    }
+
+    @Test
+    fun `the cover key is read off the main thread as KJB starts, and the service's first cover reads no file`() = runBlocking<Unit> {
+        val dir = java.nio.file.Files.createTempDirectory("covers").toFile()
+        try {
+            CoverKey.forget()
+            CoverKey.warm(context(dir), this).join()
+            val file = File(dir, "covers.key")
+            assertTrue("no key made by the warm-up", file.isFile)
+            val warmed = file.readBytes()
+            // The service signs its first cover on the main thread: the key is in memory, the file is not read again.
+            file.delete()
+            assertTrue(warmed.contentEquals(CoverKey.of(context(dir))))
+            assertFalse(file.exists())
+        } finally {
+            CoverKey.forget()
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `the warm-up, the service and the car's lists asking at once get one key, in one file`() {
+        val dir = java.nio.file.Files.createTempDirectory("covers").toFile()
+        val threads = Executors.newFixedThreadPool(8)
+        try {
+            CoverKey.forget()
+            val start = CountDownLatch(1)
+            val asked = (1..8).map { threads.submit<ByteArray> { start.await(); CoverKey.of(context(dir)) } }
+            val warm = CoverKey.warm(context(dir), CoroutineScope(Dispatchers.IO))
+            start.countDown()
+            val keys = asked.map { it.get() }
+            runBlocking { warm.join() }
+            keys.forEach { assertTrue(it.contentEquals(keys.first())) }
+            assertTrue(keys.first().contentEquals(CoverKey.of(context(dir))))
+            assertTrue(keys.first().contentEquals(File(dir, "covers.key").readBytes()))
+            assertEquals(listOf("covers.key"), dir.list()?.toList())
+        } finally {
+            threads.shutdown()
+            CoverKey.forget()
             dir.deleteRecursively()
         }
     }

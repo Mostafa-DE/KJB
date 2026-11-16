@@ -23,6 +23,7 @@ import app.lyrify.lyrics.Searched
 import app.lyrify.addon.Addon
 import app.lyrify.addon.AddonDownloads
 import app.lyrify.addon.ModelHandover
+import app.lyrify.auto.CoverKey
 import app.lyrify.overnight.AiLyrics
 import app.lyrify.player.PlaybackCommands
 import app.lyrify.player.PlayerGraph
@@ -80,6 +81,8 @@ class LyrifyApplication : Application() {
         TagsGraph.startRecovery(this)
         // An import from another app the app's death cut short is taken back.
         Imports.startRecovery(this)
+        // The covers' key is read now, off the main thread, where the playback service would read it first.
+        CoverKey.warm(this, Lyrify.background)
     }
 }
 
@@ -96,8 +99,8 @@ object Lyrify {
     /** The per-path lock the lyrics pipeline and the tag writer share: one song is never changed by both at once. */
     val locks: PathLocks = PathLocks()
 
-    /** Work started from the screen that must finish even if the screen closes. */
-    private val background: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO + logFailures)
+    /** Work started from the screen that must finish even if the screen closes, and the process's own as it starts. */
+    internal val background: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO + logFailures)
 
     /** "Check these" answers: they finish, and the snackbar says how, even if the screen closes or the phone turns. */
     val checkAnswers: CheckAnswers = CheckAnswers(background)
