@@ -313,6 +313,21 @@ class CrossfadeEngineTest {
         assertEquals(rig.start(3, natural = true), rig.heard.starts.last())
     }
 
+    /** CR2: a change that leaves the songs as they are (a queue renamed) is nothing to the players; the song waiting stays. */
+    @Test
+    fun `an empty batch of edits while the next song waits keeps it waiting, and its fade comes as planned`() = runTest {
+        val rig = FadeRig(this, crossfadeSeconds = 6)
+        rig.runToLeft(6_000 + 2_000)
+        val waiting = rig.made(1)
+        rig.engine.applyAll(emptyList())
+        rig.run(0)
+        assertFalse(waiting.released)
+        assertEquals("players made", 2, rig.slots.size)
+        rig.run(3_000)
+        assertEquals(rig.start(1, natural = true), rig.heard.starts.last())
+        assertTrue(waiting.isPlaying)
+    }
+
     // Plays
 
     /** As PlaybackService's Follower feeds the play counter. */
