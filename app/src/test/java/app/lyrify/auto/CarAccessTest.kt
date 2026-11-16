@@ -18,6 +18,9 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.concurrent.Executors
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
 
 /**
  * Who may see KJB's library through its media session, the covers' uris, the covers the provider serves, and
@@ -159,6 +162,21 @@ class CarAccessTest {
         assertNull(uris.pathOf(listOf("20", signature.replaceFirst(signature[0], if (signature[0] == 'a') 'b' else 'a'))))
         assertNull(uris.pathOf(listOf("20", signature.uppercase())))
         assertNull(CoverUris("app.lyrify.covers", ByteArray(32) { 1 }).pathOf(segments("20")))
+    }
+
+    @Test
+    fun `a signature is the first 128 bits of the path's HMAC-SHA256, the same on every thread at once`() {
+        val mac = Mac.getInstance("HmacSHA256").apply { init(SecretKeySpec(key, "HmacSHA256")) }
+        assertEquals(mac.doFinal("20".toByteArray()).copyOf(16).joinToString("") { "%02x".format(it) }, uris.sign("20"))
+        // The service signs on the main thread while the car's lists sign on others and the provider checks on binder threads.
+        val paths = (0 until 2_000).map { it.toString() } + DEFAULT_COVER
+        val alone = paths.map(uris::sign)
+        val threads = Executors.newFixedThreadPool(4)
+        try {
+            (1..4).map { threads.submit<List<String>> { paths.map(uris::sign) } }.forEach { assertEquals(alone, it.get()) }
+        } finally {
+            threads.shutdown()
+        }
     }
 
     @Test
