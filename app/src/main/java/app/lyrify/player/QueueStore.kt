@@ -18,6 +18,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.longOrNull
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
 import java.io.InputStream
@@ -45,19 +46,72 @@ object QueuesJson {
 
     private val json = Json { ignoreUnknownKeys = true }
 
-    fun encode(book: QueueBook): String = json.encodeToString(
-        JsonObject.serializer(),
-        JsonObject(
-            mapOf(
-                SCHEMA_VERSION_KEY to JsonPrimitive(SCHEMA_VERSION),
-                CURRENT_KEY to JsonPrimitive(book.currentId),
-                RECENT_KEY to JsonArray(book.recent.map(::JsonPrimitive)),
-                SAVED_KEY to JsonArray(book.saved.map(::JsonPrimitive)),
-                NEXT_ID_KEY to JsonPrimitive(book.nextId),
-                NEXT_UID_KEY to JsonPrimitive(book.nextUid),
-                QUEUES_KEY to JsonArray(book.queues.map(::queue)),
-            ),
-        ),
+    /** The whole book as one text (a backup's queues), as [Encoder] writes `queues.json`. */
+    fun encode(book: QueueBook): String = ByteArrayOutputStream().also { Encoder().write(book, it) }.toByteArray().decodeToString()
+
+    /**
+     * Writes books as `queues.json` holds them, keeping each queue's songs (and its order before Shuffle) as last encoded
+     * while the queue holds that very list. A change makes a new book that shares every list it left alone, so a skip or a
+     * new place encodes a few fields of one queue, and a change to one queue that queue's lists: never every song of
+     * every queue. One per file, one write at a time. [onEncoded] hears a queue's id for each of its lists encoded.
+     */
+    class Encoder(private val onEncoded: (String) -> Unit = {}) {
+        /** By queue id, the lists of the last write. */
+        private var songs: Map<String, Encoded> = emptyMap()
+        private var orders: Map<String, Encoded> = emptyMap()
+
+        fun write(book: QueueBook, out: OutputStream) {
+            val songs = book.queues.map { queue -> encoded(queue.id, queue.items, this.songs[queue.id]) { item(it) } }
+            val orders = book.queues.map { queue -> queue.unshuffled?.let { order -> encoded(queue.id, order, this.orders[queue.id]) { JsonPrimitive(it) } } }
+            // The members before the queues and each queue's before its lists, then the lists: the order 3.0.2 wrote.
+            out.write(open(top(book)))
+            out.text(",\"$QUEUES_KEY\":[")
+            book.queues.forEachIndexed { i, queue ->
+                if (i > 0) out.text(",")
+                out.write(open(head(queue)))
+                orders[i]?.let { order ->
+                    out.text(",\"$UNSHUFFLED_KEY\":")
+                    out.write(order.json)
+                }
+                out.text(",\"$ITEMS_KEY\":")
+                out.write(songs[i].json)
+                out.text("}")
+            }
+            out.text("]}")
+            this.songs = book.queues.indices.associate { book.queues[it].id to songs[it] }
+            this.orders = book.queues.indices.mapNotNull { i -> orders[i]?.let { book.queues[i].id to it } }.toMap()
+        }
+
+        private fun <T> encoded(queueId: String, list: List<T>, before: Encoded?, element: (T) -> JsonElement): Encoded =
+            before?.takeIf { it.list === list } ?: Encoded(list, array(list, element)).also { onEncoded(queueId) }
+
+        private fun OutputStream.text(text: String) = write(text.encodeToByteArray())
+    }
+
+    /** A queue's [list] and its JSON array ([json]), kept while the queue holds that very list. */
+    private class Encoded(val list: List<*>, val json: ByteArray)
+
+    /** [list] as a JSON array, encoded an element at a time: no tree of a whole long list is built. */
+    private fun <T> array(list: List<T>, element: (T) -> JsonElement): ByteArray = ByteArrayOutputStream().apply {
+        write('['.code)
+        list.forEachIndexed { i, it ->
+            if (i > 0) write(','.code)
+            write(json.encodeToString(JsonElement.serializer(), element(it)).encodeToByteArray())
+        }
+        write(']'.code)
+    }.toByteArray()
+
+    /** [members] as a JSON object left open (its closing brace off), for the lists to follow. */
+    private fun open(members: Map<String, JsonElement>): ByteArray =
+        json.encodeToString(JsonObject.serializer(), JsonObject(members)).dropLast(1).encodeToByteArray()
+
+    private fun top(book: QueueBook): Map<String, JsonElement> = mapOf(
+        SCHEMA_VERSION_KEY to JsonPrimitive(SCHEMA_VERSION),
+        CURRENT_KEY to JsonPrimitive(book.currentId),
+        RECENT_KEY to JsonArray(book.recent.map(::JsonPrimitive)),
+        SAVED_KEY to JsonArray(book.saved.map(::JsonPrimitive)),
+        NEXT_ID_KEY to JsonPrimitive(book.nextId),
+        NEXT_UID_KEY to JsonPrimitive(book.nextUid),
     )
 
     /** The book in [text]; null when it is not a JSON object. [onDropped] hears how many queues and songs were left out. */
@@ -91,20 +145,17 @@ object QueuesJson {
         )
     }
 
-    private fun queue(queue: Queue): JsonElement = JsonObject(
-        buildMap {
-            put(ID_KEY, JsonPrimitive(queue.id))
-            put(SOURCE_KEY, JsonObject(mapOf(KIND_KEY to JsonPrimitive(queue.source.kind.name), KEY_KEY to JsonPrimitive(queue.source.key), NAME_KEY to JsonPrimitive(queue.source.name))))
-            queue.name?.let { put(NAME_KEY, JsonPrimitive(it)) }
-            put(INDEX_KEY, JsonPrimitive(queue.index))
-            put(POSITION_KEY, JsonPrimitive(queue.positionMs))
-            put(UPDATED_AT_KEY, JsonPrimitive(queue.updatedAt))
-            put(STARTED_AT_KEY, JsonPrimitive(queue.startedAt))
-            queue.listSize?.let { put(LIST_SIZE_KEY, JsonPrimitive(it)) }
-            queue.unshuffled?.let { put(UNSHUFFLED_KEY, JsonArray(it.map(::JsonPrimitive))) }
-            put(ITEMS_KEY, JsonArray(queue.items.map(::item)))
-        },
-    )
+    /** A queue's members but its two lists ([Encoder] adds them). */
+    private fun head(queue: Queue): Map<String, JsonElement> = buildMap {
+        put(ID_KEY, JsonPrimitive(queue.id))
+        put(SOURCE_KEY, JsonObject(mapOf(KIND_KEY to JsonPrimitive(queue.source.kind.name), KEY_KEY to JsonPrimitive(queue.source.key), NAME_KEY to JsonPrimitive(queue.source.name))))
+        queue.name?.let { put(NAME_KEY, JsonPrimitive(it)) }
+        put(INDEX_KEY, JsonPrimitive(queue.index))
+        put(POSITION_KEY, JsonPrimitive(queue.positionMs))
+        put(UPDATED_AT_KEY, JsonPrimitive(queue.updatedAt))
+        put(STARTED_AT_KEY, JsonPrimitive(queue.startedAt))
+        queue.listSize?.let { put(LIST_SIZE_KEY, JsonPrimitive(it)) }
+    }
 
     private fun item(item: QueueItem): JsonElement = JsonObject(
         buildMap {
@@ -265,10 +316,12 @@ private fun JsonObject.int(key: String): Int? = (this[key] as? JsonPrimitive)?.t
  * Reads and writes [QueueBook]. A file that is not queues at all is first copied to [backupDir] as
  * `queues-corrupt-<epochMillis>.json` (the newest copy only), then reported, so the store starts over without losing it.
  * When the copy cannot be made, the read fails with a plain IOException instead and the file stays as it is. The log
- * gets counts and the copy's name and size only.
+ * gets counts and the copy's name and size only. Writes encode only the song lists changed since the last ([encoder]).
  */
 internal class QueuesSerializer(private val backupDir: File, private val clock: () -> Long, private val log: (String) -> Unit) : Serializer<QueueBook> {
     override val defaultValue: QueueBook = QueueBook()
+
+    private val encoder = QueuesJson.Encoder()
 
     override suspend fun readFrom(input: InputStream): QueueBook {
         val bytes = input.readBytes()
@@ -277,7 +330,10 @@ internal class QueuesSerializer(private val backupDir: File, private val clock: 
     }
 
     override suspend fun writeTo(t: QueueBook, output: OutputStream) {
-        output.write(QueuesJson.encode(t).encodeToByteArray())
+        // Buffered for the few fields between the lists; the lists themselves go through whole.
+        val buffered = output.buffered()
+        encoder.write(t, buffered)
+        buffered.flush()
     }
 
     private fun keep(bytes: ByteArray): String {
