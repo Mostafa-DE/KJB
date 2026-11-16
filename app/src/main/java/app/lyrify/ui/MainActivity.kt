@@ -49,6 +49,7 @@ import app.lyrify.library.LibraryGraph
 import app.lyrify.library.LibraryState
 import app.lyrify.logFailures
 import app.lyrify.media.NowPlaying
+import app.lyrify.player.PlayerGraph
 import app.lyrify.addon.Addon
 import app.lyrify.addon.AddonDownloads
 import app.lyrify.addon.AddonExemptions
@@ -125,6 +126,12 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onStop() {
+        super.onStop()
+        // In the background Android may end the process: a queue change still waiting is written now.
+        PlayerGraph.flush()
     }
 
     override fun onNewIntent(intent: Intent) {

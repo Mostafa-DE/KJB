@@ -25,11 +25,11 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.io.IOException
 import kotlin.random.Random
@@ -76,10 +76,10 @@ class QueueFiles internal constructor(
 /**
  * The queues of the whole app, one per process: the [book] (every queue, the one playing, Recent and Saved), [repeat],
  * and the operations the screens and the player's session ask for. Read from storage once ([ready]); every change of the
- * book is stored (`queues.json`), while the place of the queue playing is kept apart ([savePlace], `playback.json`, on
- * every song start and pause and every 10 s while playing) and folded into the book before the next change, so the book
- * is not rewritten every 10 s. Each place carries when it was said; on a restart the newer of the two wins
- * ([withPlace]). Main thread only. A change asked for before the queues are read waits for them.
+ * book is stored (`queues.json`, see [keep]), while the place of the queue playing is kept apart ([savePlace],
+ * `playback.json`, on every song start and pause and every 10 s while playing) and folded into the book before the next
+ * change, so the book is not rewritten every 10 s. Each place carries when it was said; on a restart the newer of the two
+ * wins ([withPlace]). Main thread only. A change asked for before the queues are read waits for them.
  */
 class PlayerCore(
     private val storage: QueueStorage,
@@ -110,6 +110,9 @@ class PlayerCore(
     /** False once the queues could not be read: nothing is written over them this run. */
     private var stored = true
 
+    /** Counts [flush]es: [keep] writes a change still waiting when it moves. */
+    private val flushes = MutableStateFlow(0L)
+
     init {
         scope.launch {
             val read = try {
@@ -127,8 +130,30 @@ class PlayerCore(
                 _repeat.value = repeat
             }
             _ready.value = true
-            if (stored) launch { _book.drop(1).collect { storage.saveBook(it) } }
+            if (stored) launch { keep() }
         }
+    }
+
+    /**
+     * Writes the book after each change, the newest each time. A change of the queues themselves (their songs, names and
+     * lists, the queue playing) is written at once. One that only moves places ([placesOnly]: a song starting, skips) is
+     * written at once after a calm, then at most every [PLACES_EVERY_MS] (the last one always), or at once on a [flush]:
+     * a run of skips is two writes, not one each. A kill can lose places only, and `playback.json` holds the one playing.
+     */
+    private suspend fun keep() {
+        var written = _book.value
+        while (true) {
+            val book = _book.first { it !== written }
+            val asked = flushes.value
+            storage.saveBook(book)
+            written = book
+            withTimeoutOrNull(PLACES_EVERY_MS) { combine(_book, flushes) { now, flushed -> flushed != asked || !placesOnly(book, now) }.first { it } }
+        }
+    }
+
+    /** A change still waiting to be written ([keep]) is written now: the player pausing, the app going to the background, the service ending. */
+    fun flush() {
+        flushes.value++
     }
 
     /**
@@ -214,6 +239,21 @@ class PlayerCore(
     }
 }
 
+/** A book change that only moves places waits at most this long after the write before ([PlayerCore.flush] sooner). */
+private const val PLACES_EVERY_MS: Long = 10_000
+
+/**
+ * Whether [after] is [before] with only places moved: each queue's song, position and last play, and the jumps, which are
+ * not stored. Lists count as the same only as the same lists, so any edit of a queue's songs is more than that.
+ */
+private fun placesOnly(before: QueueBook, after: QueueBook): Boolean =
+    before.copy(queues = after.queues, jumps = after.jumps) == after && before.queues.size == after.queues.size &&
+        before.queues.indices.all { i ->
+            val was = before.queues[i]
+            val now = after.queues[i]
+            was === now || (was.items === now.items && was.unshuffled === now.unshuffled && was.copy(index = now.index, positionMs = now.positionMs, updatedAt = now.updatedAt) == now)
+        }
+
 /** The player's objects, built by hand, one of each per process. */
 object PlayerGraph {
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + logFailures)
@@ -256,4 +296,10 @@ object PlayerGraph {
 
     /** Plays songs from any list. */
     fun commands(context: Context): PlaybackCommands = connection(context)
+
+    /** A queue change still waiting is written now ([PlayerCore.flush]): the app going to the background. Nothing before the queues were opened. */
+    @Synchronized
+    fun flush() {
+        core?.flush()
+    }
 }
