@@ -2,6 +2,8 @@ package app.lyrify.widget
 
 import androidx.media3.common.Player
 import app.lyrify.R
+import app.lyrify.auto.CoverUris
+import app.lyrify.auto.ownCover
 import app.lyrify.library.Library
 import app.lyrify.library.Song
 import app.lyrify.library.SongRef
@@ -46,7 +48,7 @@ class WidgetTest {
         song = refs[index],
         title = "Paper Lantern ${index + 1}",
         artist = "Kit Calloway",
-        cover = 41L + index,
+        cover = "${41 + index}",
         playing = playing,
         favourite = favourite,
     )
@@ -203,27 +205,49 @@ class WidgetTest {
 
     @Test
     fun `a cover is read once per song, and again after a read that failed`() {
-        assertEquals(42L, coverToRead(loaded(1, playing = true), readFor = null))
-        assertEquals(42L, coverToRead(loaded(1, playing = true), readFor = 41L))
-        assertNull(coverToRead(loaded(1, playing = false), readFor = 42L))
-        assertNull(coverToRead(WidgetState.Empty, readFor = 42L))
+        assertEquals("42", coverToRead(loaded(1, playing = true), readFor = null))
+        assertEquals("42", coverToRead(loaded(1, playing = true), readFor = "41"))
+        assertNull(coverToRead(loaded(1, playing = false), readFor = "42"))
+        assertNull(coverToRead(WidgetState.Empty, readFor = "42"))
         assertNull(coverToRead(loaded(1, playing = true).copy(cover = null), readFor = null))
     }
 
     @Test
-    fun `a cover read that failed records no id, so the next update reads it again, and a cover read stays for the song`() = runTest {
-        val reads = mutableListOf<Long>()
-        // The cover could not be read now (CarCovers.read gave none): the default cover is drawn, and no id kept.
+    fun `a cover read that failed records no path, so the next update reads it again, and a cover read stays for the song`() = runTest {
+        val reads = mutableListOf<String>()
+        // The cover could not be read now (CarCovers.read gave none): the default cover is drawn, and no path kept.
         val failed = Widgets.withCover(loaded(1, playing = true), Shown(WidgetState.Empty)) { reads += it; null }
         assertNull(failed.coverOf)
         assertNull(failed.large)
         // Pause, the next update: it reads again.
         Widgets.withCover(loaded(1, playing = false), failed) { reads += it; null }
-        assertEquals(listOf(42L, 42L), reads)
+        assertEquals(listOf("42", "42"), reads)
         // A cover read for the song (its own, or the default when it has none) is kept: no read until the song changes.
-        val kept = Widgets.withCover(loaded(1, playing = true), Shown(loaded(1, playing = false), coverOf = 42L)) { reads += it; null }
-        assertEquals(42L, kept.coverOf)
-        assertEquals(listOf(42L, 42L), reads)
+        val kept = Widgets.withCover(loaded(1, playing = true), Shown(loaded(1, playing = false), coverOf = "42")) { reads += it; null }
+        assertEquals("42", kept.coverOf)
+        assertEquals(listOf("42", "42"), reads)
+    }
+
+    @Test
+    fun `a file another app opened shows its own cover, read in KJB's process, or the default cover without one`() = runTest {
+        // A copy the library does not know: its file's name, and its cover by the copy's key, never its path.
+        val copy = SongRef("/data/user/0/app.lyrify/cache/opened/1763290000000/12/Paper Harbour.mp3")
+        val opened = QueueBook().play(listOf(copy), 0, QueueSource(SourceKind.OPENED, "opened", ""), now = 1).book
+        val state = widgetState(opened, library, playing = true, favourites = emptyList(), settings) as WidgetState.Loaded
+        assertEquals("Paper Harbour.mp3", state.title)
+        assertEquals("opened-1763290000000-12", state.cover)
+
+        // The widget reads that key at its signed uri, as the notification does (CarCovers.read): the copy's own cover,
+        // else the default. A song's MediaStore id is never read for it.
+        val uris = CoverUris("app.lyrify.covers", ByteArray(32) { 7 })
+        fun own(path: String, cover: String?) =
+            ownCover(uris.pathOf(listOf(path, uris.sign(path))).orEmpty(), { error("not a song") }, { key -> cover.takeIf { key == state.cover } }) { "default" }
+        val reads = mutableListOf<String>()
+        Widgets.withCover(state, Shown(WidgetState.Empty)) { path -> reads += path; null }
+        assertEquals(listOf("opened-1763290000000-12"), reads)
+        assertEquals("copy's cover", own(reads.single(), "copy's cover"))
+        // A copy without a cover: the default cover.
+        assertEquals("default", own(reads.single(), null))
     }
 
     @Test

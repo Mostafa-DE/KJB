@@ -93,10 +93,10 @@ import kotlin.math.roundToInt
 
 /**
  * What the widgets draw: [state], and its cover read once and sized to each widget's slot ([small], [large]), null for a
- * song the library does not know. [coverOf] is the MediaStore id the cover was read for: null while no widget is placed,
- * or after a read that failed (no cover, so the default is drawn), so the next update reads it again.
+ * song without a cover's path. [coverOf] is the cover's path ([WidgetState.Loaded.cover]) it was read for: null while no
+ * widget is placed, or after a read that failed (no cover, so the default is drawn), so the next update reads it again.
  */
-internal class Shown(val state: WidgetState, val small: Bitmap? = null, val large: Bitmap? = null, val coverOf: Long? = null)
+internal class Shown(val state: WidgetState, val small: Bitmap? = null, val large: Bitmap? = null, val coverOf: String? = null)
 
 /**
  * The widgets' state in this process, and the updates pushed to them. In memory only: a fresh process (after a restart
@@ -161,22 +161,23 @@ internal object Widgets {
 
     /**
      * [state] with its cover: [before]'s when it was read for the same song, else [read] now ([thumbnails]); a read that
-     * failed (null) records no id, so the next update reads it again.
+     * failed (null) records no path, so the next update reads it again.
      */
-    internal suspend fun withCover(state: WidgetState, before: Shown, read: suspend (Long) -> Pair<Bitmap, Bitmap>?): Shown {
-        val id = (state as? WidgetState.Loaded)?.cover ?: return Shown(state)
-        if (coverToRead(state, before.coverOf) == null) return Shown(state, before.small, before.large, id)
-        val (small, large) = read(id) ?: return Shown(state)
-        return Shown(state, small, large, id)
+    internal suspend fun withCover(state: WidgetState, before: Shown, read: suspend (String) -> Pair<Bitmap, Bitmap>?): Shown {
+        val path = (state as? WidgetState.Loaded)?.cover ?: return Shown(state)
+        if (coverToRead(state, before.coverOf) == null) return Shown(state, before.small, before.large, path)
+        val (small, large) = read(path) ?: return Shown(state)
+        return Shown(state, small, large, path)
     }
 
     /**
-     * Song [id]'s cover, read once at the uri the session and the car have for it ([CarCovers.read]): its embedded art,
-     * else KJB's default cover; sized to the small and the large slot on this screen. Null when it could not be read now.
+     * The cover at [path] (a song's, or a file another app opened), read once at the uri the session and the car have
+     * for it, in this process as the notification reads it ([CarCovers.read]): its own, else KJB's default cover; sized
+     * to the small and the large slot on this screen. Null when it could not be read now.
      */
-    private suspend fun thumbnails(context: Context, id: Long): Pair<Bitmap, Bitmap>? = withContext(Dispatchers.IO) {
+    private suspend fun thumbnails(context: Context, path: String): Pair<Bitmap, Bitmap>? = withContext(Dispatchers.IO) {
         val density = context.resources.displayMetrics.density
-        CarCovers.read(context, CarCovers.uris(context).of(id.toString()))?.let { read ->
+        CarCovers.read(context, CarCovers.uris(context).of(path))?.let { read ->
             fitted(read, coverPx(WidgetSize.SMALL, density)) to fitted(read, coverPx(WidgetSize.LARGE, density))
         }
     }

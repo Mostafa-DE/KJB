@@ -8,6 +8,7 @@ import app.lyrify.library.Library
 import app.lyrify.library.SongRef
 import app.lyrify.library.displayTitle
 import app.lyrify.player.QueueBook
+import app.lyrify.player.openedCoverKey
 import app.lyrify.settings.LibrarySettings
 import app.lyrify.ui.DESTINATION_PLAYER
 import kotlinx.coroutines.flow.Flow
@@ -29,8 +30,11 @@ sealed interface WidgetState {
         val title: String,
         /** Null when the song has none, or is not on the phone. */
         val artist: String?,
-        /** Its MediaStore id, for its cover; null when the library does not know the song. */
-        val cover: Long?,
+        /**
+         * The path of its cover at KJB's cover provider ([app.lyrify.auto.coverPath]): its MediaStore id, or the key of a
+         * file another app opened; null when it is neither (KJB's default cover is drawn, and nothing read).
+         */
+        val cover: String?,
         val playing: Boolean,
         val favourite: Boolean,
     ) : WidgetState
@@ -38,8 +42,9 @@ sealed interface WidgetState {
 
 /**
  * The widgets' state from the player's: the current song of the queue playing as the library has it ("Show file names"
- * applies; a song not on the phone shows its file's name), whether the player plays, and whether that song is a
- * favourite. Nothing is loaded without a queue, or before the library is read (the player waits for it too).
+ * applies; a song not on the phone shows its file's name, and a file another app opened its own cover), whether the
+ * player plays, and whether that song is a favourite. Nothing is loaded without a queue, or before the library is read
+ * (the player waits for it too).
  */
 fun widgetState(book: QueueBook, library: Library?, playing: Boolean, favourites: List<SongRef>, settings: LibrarySettings): WidgetState {
     val ref = book.current?.current?.song ?: return WidgetState.Empty
@@ -49,7 +54,7 @@ fun widgetState(book: QueueBook, library: Library?, playing: Boolean, favourites
         song = ref,
         title = song?.let { displayTitle(it, settings) } ?: ref.path.substringAfterLast('/'),
         artist = song?.artist,
-        cover = song?.ref?.mediaStoreId,
+        cover = song?.ref?.mediaStoreId?.toString() ?: openedCoverKey(ref.path),
         playing = playing,
         favourite = favourites.any { it.path == ref.path },
     )
@@ -129,10 +134,10 @@ fun widgetButtons(state: WidgetState, size: WidgetSize): List<WidgetButton> {
 fun coverDestination(state: WidgetState): String = DESTINATION_PLAYER
 
 /**
- * The MediaStore id of [state]'s cover to read now, given the id a cover was last read for ([readFor]); null when there
- * is nothing to read. A read that failed records no id, so the next update tries again.
+ * The path of [state]'s cover to read now, given the path a cover was last read for ([readFor]); null when there is
+ * nothing to read. A read that failed records no path, so the next update tries again.
  */
-fun coverToRead(state: WidgetState, readFor: Long?): Long? = (state as? WidgetState.Loaded)?.cover?.takeIf { it != readFor }
+fun coverToRead(state: WidgetState, readFor: String?): String? = (state as? WidgetState.Loaded)?.cover?.takeIf { it != readFor }
 
 /** The cover's size in pixels for [size]'s slot on a screen of [density]. */
 fun coverPx(size: WidgetSize, density: Float): Int = (size.coverDp * density).roundToInt()
