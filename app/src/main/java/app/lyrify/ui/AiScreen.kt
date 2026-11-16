@@ -102,6 +102,8 @@ data class AiState(
     val addonExempt: Boolean = false,
     /** What the user answered about the add-ons' exemption, and whether the phone paused one at work. */
     val exemptions: ExemptionChoices = ExemptionChoices(),
+    /** The phone froze the AI add-on during the models' download (AddonDownloads.paused), which goes on at its next run. */
+    val downloadPaused: Boolean = false,
 ) {
     /** The AI runs on this phone: its chip and its software. */
     val supported: Boolean get() = chip != null && newEnough
@@ -109,12 +111,15 @@ data class AiState(
     /** The switch shows once the add-on is there to run the AI. */
     val showsSwitch: Boolean get() = supported && addon == AddonState.Ready
 
+    /** The download the phone paused waits for its next run: it says so where it would say how far it is. */
+    val modelsPaused: Boolean get() = downloadPaused && models is ModelState.Downloading
+
     /**
      * The AI add-on's Run when locked: its offer, its row and the hint after a pause, which waits while Paused by your phone
-     * offers Allow itself.
+     * offers Allow itself (a song's job the phone paused, or the download while the AI is on).
      */
     val locked: LockedPhone get() = lockedPhone(KjbAddons.AI, addon == AddonState.Ready, addonExempt, exemptions)
-        .let { if (hold == AiHold.FROZEN) it.copy(hint = false) else it }
+        .let { if (hold == AiHold.FROZEN || (enabled && modelsPaused)) it.copy(hint = false) else it }
 
     /** Tonight, from the run, the files, the charger and holds ([waiting] songs from the ledger). */
     fun night(waiting: Int): NightStatus = nightStatus(enabled, models is ModelState.Ready, progress, hold, pluggedIn, waiting)
@@ -200,7 +205,9 @@ fun aiGlance(state: AiState, waiting: Int): AiGlance {
     addonGlance(state)?.let { return it }
     if (!state.enabled) return AiGlance(null, Centre.Glyph, GlanceText(R.string.ai_off), GlanceText(R.string.ai_intro), null)
     return when (val night = state.night(waiting)) {
-        NightStatus.Off, NightStatus.NeedsModels -> downloadGlance(state.models)
+        // A download the phone paused: one tap to Run when locked, as for a song's job.
+        NightStatus.Off, NightStatus.NeedsModels -> downloadGlance(state.models, state.modelsPaused)
+            .let { if (state.modelsPaused) it.copy(action = allowLocked(state)) else it }
         is NightStatus.Working -> AiGlance(
             Ring(fraction(night.done, night.total), RingColor.HIGHLIGHT),
             Centre.Value(CentreValue.Fraction(night.done, night.total), R.string.ai_tonight_label),
@@ -241,9 +248,8 @@ fun aiGlance(state: AiState, waiting: Int): AiGlance {
             AiHold.MODEL_FAILED -> held(RingColor.ERROR, R.drawable.ic_error, R.string.ai_held_model, R.string.ai_held_model_detail)
             AiHold.CRASHED -> held(RingColor.ERROR, R.drawable.ic_error, R.string.ai_held_crashed, R.string.ai_held_crashed_detail)
             AiHold.NO_NPU -> held(RingColor.OUTLINE, R.drawable.ic_memory, R.string.ai_held_npu, R.string.ai_held_npu_detail)
-            // One tap to Run when locked, unless the add-on is already left out of battery optimisation.
             AiHold.FROZEN -> held(RingColor.OUTLINE, R.drawable.ic_pause_circle, R.string.ai_held_frozen, R.string.ai_held_frozen_detail)
-                .copy(action = GlanceAction(AiActionKind.ALLOW_LOCKED, GlanceText(R.string.setup_allow)).takeUnless { state.addonExempt })
+                .copy(action = allowLocked(state))
         }
         NightStatus.AllDone -> AiGlance(
             Ring(1f, RingColor.SYNCED),
@@ -345,11 +351,17 @@ private fun installGlance(install: InstallState): AiGlance? = when (install) {
     )
 }
 
+/** One tap to Run when locked after the phone paused the AI, unless the add-on is already left out of battery optimisation. */
+private fun allowLocked(state: AiState): GlanceAction? = GlanceAction(AiActionKind.ALLOW_LOCKED, GlanceText(R.string.setup_allow)).takeUnless { state.addonExempt }
+
 private fun held(color: RingColor, @DrawableRes icon: Int, @StringRes line: Int, @StringRes sheet: Int) =
     AiGlance(Ring(1f, color), Centre.Icon(icon, tint = color.takeIf { it == RingColor.ERROR }), GlanceText(line), GlanceText(sheet), null)
 
-/** The AI files' states; null (not looked at yet) shows an empty ring and "Download needed" without a size. */
-private fun downloadGlance(models: ModelState?): AiGlance = when (models) {
+/**
+ * The AI files' states; null (not looked at yet) shows an empty ring and "Download needed" without a size. [paused]: a
+ * download the phone froze, which goes on at its next run ([AiState.modelsPaused]).
+ */
+private fun downloadGlance(models: ModelState?, paused: Boolean): AiGlance = when (models) {
     null -> AiGlance(EMPTY_RING, Centre.Icon(R.drawable.ic_download), GlanceText(R.string.ai_models_missing), null, null)
     is ModelState.Missing -> if (models.doneBytes > 0) {
         AiGlance(
@@ -368,7 +380,15 @@ private fun downloadGlance(models: ModelState?): AiGlance = when (models) {
             GlanceAction(AiActionKind.DOWNLOAD, GlanceText(R.string.ai_download, listOf(GlanceArg.Bytes(models.totalBytes)))),
         )
     }
-    is ModelState.Downloading -> if (models.waiting) {
+    is ModelState.Downloading -> if (paused) {
+        AiGlance(
+            Ring(models.percent / PERCENT, RingColor.OUTLINE),
+            Centre.Icon(R.drawable.ic_pause_circle, CentreValue.Percent(models.percent)),
+            GlanceText(R.string.ai_held_frozen),
+            GlanceText(R.string.ai_models_frozen_detail),
+            null,
+        )
+    } else if (models.waiting) {
         AiGlance(
             Ring(models.percent / PERCENT, RingColor.OUTLINE),
             Centre.Icon(R.drawable.ic_wifi, CentreValue.Percent(models.percent)),
@@ -426,7 +446,9 @@ fun aiTile(state: AiState, waiting: Int): AiTile? {
         null, AddonState.Unreachable, AddonState.Ready -> Unit
     }
     return when (val night = state.night(waiting)) {
-        NightStatus.Off, NightStatus.NeedsModels -> {
+        NightStatus.Off, NightStatus.NeedsModels -> if (state.modelsPaused) {
+            AiTile(ring, TileValue.Text(R.string.ai_tile_paused), R.string.ai_tile_phone)
+        } else {
             val done = when (val models = state.models) {
                 is ModelState.Missing -> models.doneBytes
                 is ModelState.Downloading -> models.doneBytes
@@ -571,7 +593,7 @@ fun AiScreen(
     if (howItWorks) AiInfoSheet { howItWorks = false }
     val models = state.models
     if (downloadSheet && models != null) {
-        AiDownloadSheet(models, state.stopping, onDelete = { confirmDelete = true }) { downloadSheet = false }
+        AiDownloadSheet(models, state.modelsPaused, state.stopping, onDelete = { confirmDelete = true }) { downloadSheet = false }
     }
     if (confirmDelete) {
         DeleteDownloadDialog(models, onDismiss = { confirmDelete = false }) {
@@ -759,7 +781,7 @@ private fun AiRows(
                 tile = brand.highlightContainer,
                 onTile = brand.onHighlightContainer,
                 first = true,
-                supporting = { Text(glanceText(downloadLine(models))) },
+                supporting = { Text(glanceText(downloadLine(models, state.modelsPaused))) },
                 onClick = onDownload,
                 trailing = chevron,
             )
@@ -824,14 +846,14 @@ private fun AiRows(
     }
 }
 
-/** The download row's line: "980 MB · Ready", else the download state's line. */
-private fun downloadLine(models: ModelState): GlanceText =
-    if (models is ModelState.Ready) GlanceText(R.string.ai_models_ready, listOf(GlanceArg.Bytes(models.totalBytes))) else downloadGlance(models).line
+/** The download row's line: "980 MB · Ready", else the download state's line ([paused]: by the phone). */
+internal fun downloadLine(models: ModelState, paused: Boolean): GlanceText =
+    if (models is ModelState.Ready) GlanceText(R.string.ai_models_ready, listOf(GlanceArg.Bytes(models.totalBytes))) else downloadGlance(models, paused).line
 
 /** The AI download: its size, its state, and "Delete download" in red while something is on the phone. */
 @Composable
-private fun AiDownloadSheet(models: ModelState, stopping: Boolean, onDelete: () -> Unit, onDismiss: () -> Unit) {
-    val style = downloadGlance(models)
+private fun AiDownloadSheet(models: ModelState, paused: Boolean, stopping: Boolean, onDelete: () -> Unit, onDismiss: () -> Unit) {
+    val style = downloadGlance(models, paused)
     LyrifySheet(
         onDismiss = onDismiss,
         spacing = 12.dp,
@@ -852,7 +874,7 @@ private fun AiDownloadSheet(models: ModelState, stopping: Boolean, onDelete: () 
     ) {
         Text(stringResource(R.string.ai_row_download), style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { heading() })
         Fact(R.drawable.ic_storage, size(models.totalBytes))
-        Fact(if (models is ModelState.Ready) R.drawable.ic_check_circle else (style.centre as? Centre.Icon)?.icon ?: R.drawable.ic_download, glanceText(downloadLine(models)))
+        Fact(if (models is ModelState.Ready) R.drawable.ic_check_circle else (style.centre as? Centre.Icon)?.icon ?: R.drawable.ic_download, glanceText(downloadLine(models, paused)))
     }
 }
 

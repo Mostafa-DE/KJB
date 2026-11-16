@@ -263,6 +263,7 @@
     <string name="ai_models_no_room_detail">Free up space and the download goes on by itself.</string>
     <string name="ai_models_failed">Download failed</string>
     <string name="ai_models_failed_detail">Something went wrong. Try again.</string>
+    <string name="ai_models_frozen_detail">A locked phone paused the download. It goes on from where it stopped.</string>
     <string name="ai_try_again">Try again</string>
     <string name="ai_tonight_count" tools:ignore="PluralsCandidate">%1$d/%2$d</string>
     <string name="ai_tonight_label">tonight</string>
