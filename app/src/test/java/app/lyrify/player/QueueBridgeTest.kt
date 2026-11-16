@@ -18,6 +18,8 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.random.Random
@@ -88,6 +90,78 @@ class QueueBridgeTest {
 
         val current: Long? get() = loaded.getOrNull(index)
     }
+
+    /**
+     * A player as ExoPlayer is one across its two threads (CR2). [loaded] and [index] are what the main thread sees: its
+     * own edits show at once, and the song it sees playing stays current through them. [playing] is the song the playback
+     * thread plays: at a song's end it goes on by itself ([moveOn]), and the main thread hears of that later. An edit
+     * taking that song away makes the playback thread go on, as Media3 1.11.1 does (`resolveSubsequentPeriod`), with the
+     * first song after it, in the list as it was before that edit, that the edit left, from its start; with none, playback
+     * ends ([playing] null). A song taken out and put in again is another song to it. [beforeBatch] runs as a batch comes
+     * in: a song ending between the plan and its edits.
+     */
+    private class ThreadedPort(private val repeatAll: Boolean = false) : PlayerPort {
+        override var loaded: List<Long> = emptyList()
+        override var index: Int = -1
+        override val positionMs: Long = 0
+
+        /** The song the playback thread plays; null once playback ended. */
+        var playing: Long? = null
+
+        /** Whether an edit made the playback thread start a song from its start. */
+        var restarted: Boolean = false
+        var beforeBatch: () -> Unit = {}
+
+        override fun load(items: List<Projected>, index: Int, positionMs: Long) {
+            loaded = items.map { it.uid }
+            this.index = index
+            playing = loaded.getOrNull(index)
+        }
+
+        override fun seek(index: Int, positionMs: Long) {
+            this.index = index
+            playing = loaded.getOrNull(index)
+        }
+
+        /** The song playing ended on the playback thread: the next one plays, the first after the last under Repeat all. */
+        fun moveOn() {
+            playing = loaded.getOrNull(loaded.indexOf(playing) + 1) ?: loaded.firstOrNull()?.takeIf { repeatAll }
+        }
+
+        override fun applyAll(edits: List<Edit>) {
+            beforeBatch()
+            beforeBatch = {}
+            edits.forEach(::apply)
+        }
+
+        override fun apply(edit: Edit) {
+            val before = loaded
+            val seen = before.getOrNull(index)
+            val list = before.toMutableList()
+            // A Replace puts the new copy in and takes the old one out, as Media3 does for another file.
+            val gone = when (edit) {
+                is Edit.Remove -> list.subList(edit.at, edit.at + edit.count).toSet().also { list.subList(edit.at, edit.at + edit.count).clear() }
+                is Edit.Insert -> emptySet<Long>().also { list.addAll(edit.at, edit.items.map { it.uid }) }
+                is Edit.Move -> emptySet<Long>().also { list.add(edit.to, list.removeAt(edit.from)) }
+                is Edit.Replace -> setOf(list[edit.at])
+            }
+            loaded = list
+            index = if (seen != null && seen in list) list.indexOf(seen) else index.coerceAtMost(list.lastIndex)
+            val now = playing ?: return
+            if (now !in gone) return
+            restarted = true
+            if (edit is Edit.Replace) return
+            val at = before.indexOf(now)
+            playing = (at + 1 until at + before.size).asSequence()
+                .takeWhile { repeatAll || it < before.size }
+                .map { before[it % before.size] }
+                .firstOrNull { it in list }
+        }
+    }
+
+    /** A queue long enough that Shuffle takes more than [MAX_EDITS] edits, so the player is rebuilt around the song playing. */
+    private val shelf: List<Song> = (1..40).map { song("Music/Long Shelf/%02d Paper Lantern %d.mp3".format(it, it), album = "Long Shelf", track = it) }
+    private val findOnShelf: (SongRef) -> Song? = { ref -> shelf.firstOrNull { it.path == ref.path } }
 
     private val port = FakePort()
     private val bridge = QueueBridge(port)
@@ -269,6 +343,54 @@ class QueueBridgeTest {
             assertEquals("$a to $b", 1, edits.size)
             edits.forEach(fake::apply)
             assertEquals(to, fake.loaded)
+        }
+    }
+
+    /** CR2 (Codex review P1 on CR1): the main thread's place is behind the playback thread's at a song's end. */
+    @Test
+    fun `a Shuffle whose edits come just after the song playing ended keeps the song the player went on to playing`() {
+        val threads = ThreadedPort()
+        val bridge = QueueBridge(threads)
+        var book = QueueBook().play(shelf.map { it.ref }, 9, albumSource, now = 1).book
+        bridge.sync(book, findOnShelf)
+        val next = threads.loaded[10]
+        // Song 10 ends on the playback thread as the edits come in; the main thread still sees it playing.
+        threads.beforeBatch = threads::moveOn
+        book = book.toggleShuffle(Random(3))
+        bridge.sync(book, findOnShelf)
+        assertEquals("the song playing", next, threads.playing)
+        assertFalse("started again", threads.restarted)
+        assertEquals(projection(book.current, findOnShelf).map { it.uid }, threads.loaded)
+    }
+
+    @Test
+    fun `a large change whose edits come just after the song playing ended never stops the song the player went on to`() {
+        val random = Random(23)
+        repeat(400) { case ->
+            val from = (1L..60L).shuffled(random).take(random.nextInt(30, 60))
+            val repeatAll = random.nextBoolean()
+            val at = if (random.nextInt(4) == 0) from.lastIndex else random.nextInt(from.size)
+            val playing = from[at]
+            val threads = ThreadedPort(repeatAll).apply { load(from.map { Projected(it, songs[0]) }, at, 0) }
+            threads.moveOn()
+            // The last song ended with Repeat off: playback is over, and no edit starts it again.
+            val next = threads.playing ?: return@repeat
+            val to = ((from - playing).filter { random.nextInt(5) != 0 } + (100L..110L).filter { random.nextBoolean() } + playing).shuffled(random)
+            val projected = to.map { Projected(it, songs[0]) }
+            assertNull("case $case is a large change", edits(from, projected, MAX_EDITS))
+            val plan = plan(from, projected, playing, from.associateWith { songs[0].path })!!
+            assertTrue("case $case: ${plan.size} edits", plan.size <= MAX_EDITS)
+            threads.applyAll(plan)
+            assertEquals("case $case: the player's songs", to, threads.loaded)
+            assertEquals("case $case: the song the main thread sees", playing, threads.loaded[threads.index])
+            if (next in to) {
+                assertEquals("case $case: the song playing", next, threads.playing)
+                assertFalse("case $case: started again", threads.restarted)
+            } else {
+                // The song it went on to left the queue: on with the song after the one playing in the new order.
+                val after = to.getOrNull(to.indexOf(playing) + 1) ?: to.first().takeIf { repeatAll }
+                assertEquals("case $case: the song after the one that left", after, threads.playing)
+            }
         }
     }
 

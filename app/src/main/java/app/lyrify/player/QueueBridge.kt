@@ -55,7 +55,7 @@ sealed interface Edit {
  * At most this many edits reach the player for one change of the queue playing ([plan]). Each edit makes ExoPlayer build
  * its whole list again, on its playback thread too, and the lists that thread sends back wait on the main thread until
  * the change is done: a Shuffle of 6,906 songs as one move per song ran KJB out of memory (CR1). A larger change is made
- * around the song playing instead ([around]): four edits at most, however long the queue.
+ * around the song playing instead ([around]): six edits at most, however long the queue.
  */
 const val MAX_EDITS: Int = 8
 
@@ -136,35 +136,65 @@ private fun rising(values: List<Int>): List<Int> {
 }
 
 /**
- * The edits that turn [from] into [to] around the song [playing], which both hold: the songs after it go, then the songs
- * before it, then [to]'s songs before it and after it come in, one edit each. Four edits at most, whatever the change,
- * and the song playing never stops.
+ * The edits that turn [from] into [to] around the song [playing], which both hold, and the song after it in [from] (the
+ * first song when it is the last: Repeat all). ExoPlayer's playback thread goes on to that one at a song's end before the
+ * main thread hears of it, so as the edits come in it may be the song really playing (CR2), and a song taken out and put
+ * in again would stop. So neither of the two is ever taken out: every other song goes, then [to]'s songs come in around
+ * the two (the song after moved before the song playing when [to] has it there). A song after that [to] leaves out goes
+ * last, from right after the song playing, so a player on it goes on with [to]'s song after the one playing. Six edits
+ * at most, whatever the change.
  */
 fun around(from: List<Long>, to: List<Projected>, playing: Long): List<Edit> {
     val at = from.indexOf(playing)
     val kept = to.indexOfFirst { it.uid == playing }
+    if (from.size == 1) {
+        return listOfNotNull(
+            Edit.Insert(1, to.subList(kept + 1, to.size).toList()).takeIf { it.items.isNotEmpty() },
+            Edit.Insert(0, to.subList(0, kept).toList()).takeIf { it.items.isNotEmpty() },
+        )
+    }
+    val nextAt = (at + 1) % from.size
+    val next = from[nextAt]
+    val nextKept = to.indexOfFirst { it.uid == next }
+    val leaves = nextKept < 0
+    // The two in [to]'s order; a song after that leaves stands right after the song playing until it goes.
+    val last = if (leaves || kept < nextKept) next else playing
+    val low = if (leaves) kept else minOf(kept, nextKept)
+    val high = if (leaves) kept else maxOf(kept, nextKept)
+    val before = to.subList(0, low).toList()
+    val between = if (leaves) emptyList() else to.subList(low + 1, high).toList()
+    val after = to.subList(high + 1, to.size).toList()
+    // Once the others go, the player holds the two in [from]'s order, the other way round from [to]'s when [reversed].
+    val firstAt = minOf(at, nextAt)
+    val secondAt = maxOf(at, nextAt)
+    val reversed = from[firstAt] == last
     return listOfNotNull(
-        Edit.Remove(at + 1, from.size - at - 1).takeIf { it.count > 0 },
-        Edit.Remove(0, at).takeIf { it.count > 0 },
-        Edit.Insert(0, to.subList(0, kept).toList()).takeIf { it.items.isNotEmpty() },
-        Edit.Insert(kept + 1, to.subList(kept + 1, to.size).toList()).takeIf { it.items.isNotEmpty() },
+        Edit.Remove(secondAt + 1, from.size - secondAt - 1).takeIf { it.count > 0 },
+        Edit.Remove(firstAt + 1, secondAt - firstAt - 1).takeIf { it.count > 0 },
+        Edit.Remove(0, firstAt).takeIf { it.count > 0 },
+        Edit.Insert(if (reversed) 1 else 2, after).takeIf { it.items.isNotEmpty() },
+        Edit.Move(1 + after.size, 0).takeIf { reversed },
+        Edit.Insert(1, between).takeIf { it.items.isNotEmpty() },
+        Edit.Insert(0, before).takeIf { it.items.isNotEmpty() },
+        Edit.Remove(before.size + 1).takeIf { leaves },
     )
 }
 
 /**
  * How the player holding [from] and playing [playing] comes to hold [to], [paths] being the path it was handed for each
  * song: the [edits], and each song whose file moved replaced at its new path ([Edit.Replace]), while that is at most
- * [MAX_EDITS] edits; else everything around the song playing ([around]), that song replaced if its file moved. Null
- * when the song playing leaves in a larger change: the player loads [to] again then.
+ * [MAX_EDITS] edits; else everything around the song playing ([around]), the songs it keeps replaced if their files
+ * moved. Null when the song playing leaves in a larger change: the player loads [to] again then.
  */
 fun plan(from: List<Long>, to: List<Projected>, playing: Long?, paths: Map<Long, String>): List<Edit>? {
     val moved = to.indices.filter { at -> paths[to[at].uid].let { it != null && it != to[at].song.path } }
     edits(from, to, MAX_EDITS - moved.size)?.takeIf { it.size + moved.size <= MAX_EDITS }?.let { edits ->
         return edits + moved.map { Edit.Replace(it, to[it]) }
     }
-    val kept = to.indexOfFirst { it.uid == playing }
-    if (playing == null || kept < 0) return null
-    return around(from, to, playing) + listOfNotNull(Edit.Replace(kept, to[kept]).takeIf { kept in moved })
+    if (playing == null || to.none { it.uid == playing }) return null
+    val edits = around(from, to, playing)
+    val fresh = edits.flatMapTo(HashSet()) { edit -> if (edit is Edit.Insert) edit.items.map { it.uid } else emptyList() }
+    return edits + moved.filter { to[it].uid !in fresh }.map { Edit.Replace(it, to[it]) }
 }
 
 /**
