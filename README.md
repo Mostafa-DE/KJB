@@ -5,9 +5,10 @@ finds synced lyrics for them on [LRCLIB](https://lrclib.net) and saves each as a
 so any player that reads `.lrc` files shows them too. If you keep using another player, such as Samsung Music, KJB can
 stay in the background and add lyrics for what that player plays.
 
-KJB was called Lyrify until 2.0. Its package is still `app.lyrify`, so 3.0 installs over 2.x and keeps your lyrics
-records, tones and AI models. It is a personal app, installed from the APK on the GitHub release page or with adb; it
-is not in an app store.
+KJB was called Lyrify until 2.0. Its package is still `app.lyrify`, so KJB installs over Lyrify 2.0 and keeps your
+lyrics records and tones. Your AI models carry over too, once you install the AI add-on. It is a personal app,
+installed from the APK on the [release page](https://github.com/Mostafa-DE/KJB/releases/latest) or with adb; it is not
+in an app store.
 
 ## What it does
 
@@ -17,14 +18,16 @@ is not in an app store.
   each sorted and filtered, with Play, Shuffle and Add all on every list. Favourite songs, albums, artists, folders
   and playlists.
 - A Search tab over songs, albums, artists, folders, playlists and the words of your lyrics.
-- Queues you can see: the queue playing, recent queues and saved ones. Play next, Add to queue, or start a new queue
-  from any song or list.
+- A Queues page: the queue playing first, then your recent and saved queues, each opening at its current song. Play
+  next, Add to queue, or start a new queue from any song or list.
+- Audiobooks: a Books tab with a Continue row, chapters, and 30-second jumps in place of next and previous. Each book
+  keeps its own place and speed. Mark any song or folder as a book.
 - The player: the cover flips to the lyrics, and full-screen lyrics with their own text size. A sleep timer by time
   or by songs, speed and pitch, Repeat a part (A-B), bookmarks, and Play on (your phone's output picker).
 - Sound: gapless playback, crossfade, volume levelling from ReplayGain tags, and an equalizer with a profile for each
   output (headphones, speaker, car).
-- Headset buttons (one, two or three presses), lyrics on the lock screen, two home-screen widgets, Android Auto, and
-  "Start when connected" for Bluetooth devices you pick (Android 13 and later).
+- Headset buttons (one, two or three presses), lyrics on the lock screen, two home-screen widgets, Android Auto (see
+  "Using Android Auto"), and "Start when connected" for Bluetooth devices you pick (Android 13 and later).
 - Your listening: what you played most and lately, kept on your phone.
 
 **Lyrics**
@@ -34,8 +37,9 @@ is not in an app store.
 - Check these: when KJB is not sure it found the right song, you pick the lyrics, or search yourself.
 - A synced lyrics editor: Make synced turns plain lyrics into synced ones, Edit timing fixes the times. Lyrics you made
   or edited are yours; KJB never replaces them.
-- AI lyrics (optional, off by default): on phones with a supported Snapdragon chip, the phone's AI chip times plain
-  lyrics or writes lyrics for songs no one has, overnight while the phone charges. See "Requirements".
+- AI lyrics (KJB AI add-on, off by default): on phones with a supported Snapdragon chip, the phone's AI chip times
+  plain lyrics or writes lyrics for songs no one has, overnight while the phone charges. See "Add-ons" and
+  "Requirements".
 
 **Your library**
 
@@ -47,6 +51,19 @@ is not in an app store.
 - Tones: makes a ringtone, alarm or notification sound from part of a song.
 - Playlists to and from `.m3u` files, and backup and restore of your playlists, queues, favourites, plays, bookmarks,
   equalizer profiles, lyrics choices and settings.
+- Import from other apps (Settings > Backup > Import from app): m3u, m3u8, pls and XSPF playlists, playlists other
+  apps saved on your phone, Musicolet backups (playlists, favourites, play counts and queues), and Samsung Music
+  playlists and favourites. It only adds to what you have, and one Undo takes it back.
+- Downloads (KJB Downloads add-on): share a link from another app to **Save to KJB**, or paste one in Tools >
+  Downloads, then pick audio or video and a quality. Audio goes to Music/KJB Downloads with its title, artist and
+  cover, video to Movies/KJB Downloads; Settings can change both. Save only what you have the right to save.
+
+**Settings and updates**
+
+- Theme: System, Light or Dark, and Pure black for black pages in the dark theme.
+- Updates: once a day KJB checks github.com for a new version (Settings > About > Check for updates, which you can
+  turn off). Tap Install and KJB downloads it, checks it matches the release and is signed like KJB, then your phone
+  asks you to confirm.
 
 ## The promise
 
@@ -64,11 +81,17 @@ change.**
 
 **What leaves your phone**
 
-Only names and lengths leave your phone. Lyrics lookups send the title, artist, album and length to LRCLIB. Covers &
-tags sends album titles, artists, song titles, track counts and lengths to MusicBrainz, and gets covers from the Cover
-Art Archive and archive.org.
+For lyrics and covers, only names and lengths leave your phone. Lyrics lookups send the title, artist, album and
+length to LRCLIB. Covers & tags sends album titles, artists, song titles, track counts and lengths to MusicBrainz, and
+gets covers from the Cover Art Archive and archive.org.
 
-- The AI lyrics models download once, from Qualcomm AI Hub, GitHub and Hugging Face. The AI itself runs offline.
+- Once a day KJB asks github.com if there is a new version. You can turn this off in Settings > About > Check for
+  updates. KJB updates and the add-ons download from KJB's release page on GitHub.
+- The AI add-on downloads its models once, from Qualcomm AI Hub, GitHub and Hugging Face. The AI itself runs offline.
+- The Downloads add-on goes online for the links you share: it gets each one from that link's own site. Its
+  downloader, yt-dlp, gets its updates from yt-dlp's releases on GitHub.
+- Crash reports stay on your phone: the last 10, without song names, paths or lyrics. Nothing is sent unless you share
+  one.
 - No account, no ads, no analytics. ONNX Runtime's telemetry is switched off.
 - Backups hold no songs, no `.lrc` files and no Bluetooth addresses.
 - The app's log (logcat) holds counts, status codes and error types only: never titles, artists, paths, web addresses
@@ -84,29 +107,53 @@ Art Archive and archive.org.
 | Display over other apps | Only for "Show when locked": the lyrics open over the lock screen when the screen turns on. Nothing is drawn over other apps | Asked when you switch it on |
 | Modify system settings | Only to set a tone as your ringtone, alarm or notification sound | Asked when you tap Set |
 | Set alarms | Only so "Open Clock" can show your alarm list. KJB never sets or changes an alarm | Granted at install |
-| Internet, network state | LRCLIB, Covers & tags and the one-time AI download (over Wi-Fi only) | Granted at install |
-| Foreground services, wake lock | Playing music with the screen off; the overnight AI run and the model download | Granted at install |
+| Install unknown apps ("Allow from this source") | To install a KJB update or an add-on when you tap Install. KJB first checks the file is KJB's own | Asked the first time you install one from KJB |
+| Internet, network state | LRCLIB, Covers & tags, the daily update check, and downloading updates and add-ons from GitHub | Granted at install |
+| Use the add-ons | So KJB can talk to KJB AI and KJB Downloads. Android grants it only to apps signed with KJB's key | Granted at install |
+| Foreground services, wake lock | Playing music with the screen off; the overnight AI run, the model download and Downloads | Granted at install |
 | Companion device presence | "Start when connected": Android tells KJB when a Bluetooth device you picked connects | Granted at install; does nothing until you pick a device |
 | Run at startup | WorkManager reschedules the AI run and the download after a restart | Granted at install |
 
 The music notification needs no notification permission: media notifications are exempt.
 
+Each add-on can go online for its own downloads, and may ask to keep running while your phone is locked ("Run when
+locked") so its work can finish. Neither has access to your files: KJB opens the one file each job needs and hands it
+over.
+
 ## Install
 
-1. Download `KJB-3.0.0.apk` from the release page on your phone.
+1. On your phone, download `KJB-3.0.2.apk` (about 10 MB) from the
+   [release page](https://github.com/Mostafa-DE/KJB/releases/latest).
 2. Open it. If asked, allow your browser or file manager to install apps.
 3. Open KJB and allow All files access. "See what's playing" and "Keep running" are optional.
 4. If a switch is greyed out ("Restricted setting"), your phone blocks it for apps from outside an app store: in KJB tap
    **Greyed out?**, open App info, tap the three dots at the top right, then **Allow restricted settings**, and try again.
 
-With adb instead: `adb install -r app/build/outputs/apk/release/KJB-3.0.0.apk`.
+With adb instead: `adb install -r KJB-3.0.2.apk`.
+
+## Add-ons
+
+Two parts of KJB come as separate apps, so KJB itself stays small. Both are optional; install only what you want.
+
+- **KJB AI** (`KJB-AI-3.0.0.apk`, about 70 MB): AI lyrics. It needs Android 15 or newer and a supported Snapdragon
+  chip (see "Requirements").
+- **KJB Downloads** (`KJB-Downloads-3.0.1.apk`, about 54 MB): saves audio or video from a link you share to **Save to
+  KJB**, or one you paste in Tools > Downloads. Save only what you have the right to save.
+
+In 3.0.2, KJB's own Get AI and Get Downloads buttons can't download the add-ons yet. Install them from the same
+[release page](https://github.com/Mostafa-DE/KJB/releases/latest) instead: download the APK on your phone and open it,
+before or after installing KJB. From the next version, KJB can get them itself.
+
+The add-ons have no icon of their own; they show in your phone's settings under Apps. They work only with KJB from the
+release page, as Android lets them talk only to an app signed with the same key.
 
 ## Requirements
 
 - KJB: Android 11 or newer, an arm64 phone.
-- AI lyrics: Android 15 or newer and one of these Snapdragon chips. Other phones get everything except the AI.
+- KJB AI (AI lyrics): Android 15 or newer and one of these Snapdragon chips. Other phones get everything except the AI.
   - Tested: 8 Elite Gen 5.
   - Should work: 8 Elite, 8 Gen 3, 8 Gen 1.
+- KJB Downloads: Android 11 or newer, an arm64 phone.
 - The AI download is about 1 GB, once, over Wi-Fi, with about 2 GB free while it downloads.
 
 ## Using Android Auto
@@ -139,17 +186,19 @@ echo "sdk.dir=$HOME/Android/Sdk" > local.properties   # if ANDROID_HOME is not s
 
 - The debug APK (`app/build/outputs/apk/debug/app-debug.apk`) is `app.lyrify.debug`, named "KJB dev". It installs
   beside the release app with its own data, and changes shared storage only in `Music/KJB test/`.
-- The release APK is `app/build/outputs/apk/release/KJB-<version>.apk`, arm64-v8a only, about 80 MB (most of it the
-  QNN runtime for the AI). It is signed when `~/.android-keys/lyrify-keystore.properties` (or the file named by
-  `LYRIFY_KEYSTORE_PROPS`) gives `storeFile`, `storePassword`, `keyAlias` and `keyPassword`; without it the release
-  build is unsigned. A release build fails if TagLib's library is not aligned to 16 KB pages.
+- The release APK is `app/build/outputs/apk/release/KJB-<version>.apk`, arm64-v8a only, about 10 MB. The add-ons
+  build beside it, to `ai-addon/build/outputs/apk/release/KJB-AI-<version>.apk` and
+  `dl-addon/build/outputs/apk/release/KJB-Downloads-<version>.apk`. All three are signed when
+  `~/.android-keys/lyrify-keystore.properties` (or the file named by `LYRIFY_KEYSTORE_PROPS`) gives `storeFile`,
+  `storePassword`, `keyAlias` and `keyPassword`; without it the release builds are unsigned. A release build fails if
+  TagLib's library is not aligned to 16 KB pages.
 - Device tests run on a connected phone, on the debug build: `./gradlew connectedDebugAndroidTest`.
 - Unit test coverage: `./gradlew createDebugUnitTestCoverageReport`, then open
   `app/build/reports/coverage/test/debug/index.html`.
 
 Toolchain: AGP 9.4.1, Gradle 9.8.2, Kotlin 2.4.21, Compose BOM 2026.09.00, Media3 1.11.1, Glance 1.2.0,
-WorkManager 2.12.0, compileSdk 37, targetSdk 36, minSdk 30. Network requests use `HttpURLConnection`. The AI runs on
-ONNX Runtime 1.30.0 with Qualcomm's QNN execution provider 2.6.0 and the QNN runtime 2.50.0.
+WorkManager 2.12.0, compileSdk 37, targetSdk 36, minSdk 30. Network requests use `HttpURLConnection`. The AI add-on
+runs on ONNX Runtime 1.30.0 with Qualcomm's QNN execution provider 2.6.0 and the QNN runtime 2.50.0.
 
 ## Logs
 
@@ -184,8 +233,9 @@ Program grant you additional permission to convey the resulting work.
   [Cover Art Archive](https://coverartarchive.org).
 - Tags are read and written with [TagLib](https://taglib.org) (LGPL 2.1) through
   [Kyant0/taglib](https://github.com/Kyant0/taglib) (Apache 2.0).
-- Playback is [Media3](https://github.com/androidx/media); the AI uses [ONNX Runtime](https://onnxruntime.ai), Qualcomm
-  AI Hub's Whisper, UVR's MDX-Net and wav2vec2 models (see `NOTICE`).
+- Playback is [Media3](https://github.com/androidx/media); the AI add-on uses [ONNX Runtime](https://onnxruntime.ai),
+  Qualcomm AI Hub's Whisper, UVR's MDX-Net and wav2vec2 models (see `NOTICE`).
+- The Downloads add-on uses [yt-dlp](https://github.com/yt-dlp/yt-dlp) and FFmpeg.
 - Icons: Material Symbols. Font: Bricolage Grotesque (SIL Open Font License 1.1).
 
 Samsung and Samsung Music are trademarks of Samsung Electronics Co., Ltd. Snapdragon and Qualcomm are trademarks of
