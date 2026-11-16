@@ -19,6 +19,7 @@ import app.lyrify.library.LibraryReader
 import app.lyrify.library.SongsRead
 import app.lyrify.settings.Settings
 import kotlinx.coroutines.runBlocking
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
@@ -42,9 +43,24 @@ class BookChaptersDeviceTest {
 
     private val three = listOf("Chapter One", "Chapter Two", "Chapter Three")
 
-    /** The fixture [name] copied to the app's cache, where KJB can read it as a file. */
+    /** What a test made, undone after it in reverse, also when it fails midway: its files, then the folders it made. */
+    private val cleanups = mutableListOf<() -> Unit>()
+
+    @After
+    fun cleanUp() {
+        cleanups.reversed().forEach { it() }
+    }
+
+    /** [folder], missing now, is the test's to make: deleted after it once empty. A folder that was there stays. */
+    private fun removedAfterIfMade(folder: File) {
+        if (!folder.exists()) cleanups += { folder.delete() }
+    }
+
+    /** The fixture [name] copied to the app's cache, where KJB can read it as a file; deleted after the test. */
     private fun fixture(name: String): File =
         File(context.cacheDir, "books/$name").apply {
+            parentFile?.let { removedAfterIfMade(it) }
+            cleanups += { delete() }
             parentFile?.mkdirs()
             assets.open("books/$name").use { input -> outputStream().use { input.copyTo(it) } }
         }
@@ -133,7 +149,9 @@ class BookChaptersDeviceTest {
     /**
      * A folder of parts through MediaStore and KJB's library, as on the phone: put in the test folder (the only place a
      * debug build may write), read back by the library reader, and grouped as one book of three chapters in order,
-     * by track numbers 1, 2, 10; a second folder without track numbers by its file names 1, 2, 10. Deleted after.
+     * by track numbers 1, 2, 10; a second folder without track numbers by its file names 1, 2, 10. Deleted after: the
+     * parts, their two folders (MediaStore makes them, and deleting the parts leaves them), and the test folder if this
+     * test made it.
      */
     @Test
     fun aFolderOfPartsIsOneBookInOrder() {
@@ -141,32 +159,30 @@ class BookChaptersDeviceTest {
         val stamp = System.currentTimeMillis()
         val tracked = "${SharedWrites.TEST_FOLDER}Folder Book $stamp/"
         val untracked = "${SharedWrites.TEST_FOLDER}No Track Book $stamp/"
-        val made = listOf("01.mp3", "02.mp3", "10.mp3").map { put("folder-book/$it", tracked) } +
-            listOf("2.mp3", "10.mp3", "1.mp3").map { put("no-track-book/$it", untracked) }
-        try {
-            val read = LibraryReader(context, Lyrify.writes).read()
-            assertTrue(read.toString(), read is SongsRead.Songs)
-            val mine = (read as SongsRead.Songs).songs.filter { it.folder == tracked || it.folder == untracked }
-            assertEquals(6, mine.size)
-            val books = Library.of(mine, Settings()).books.associateBy { it.parts.first().folder }
+        listOf(SharedWrites.TEST_FOLDER, tracked, untracked).forEach { removedAfterIfMade(File(Environment.getExternalStorageDirectory(), it)) }
+        listOf("01.mp3", "02.mp3", "10.mp3").forEach { put("folder-book/$it", tracked) }
+        listOf("2.mp3", "10.mp3", "1.mp3").forEach { put("no-track-book/$it", untracked) }
 
-            val book = books.getValue(tracked)
-            assertEquals(BookKind.FOLDER, book.kind)
-            assertEquals("Folder Book", book.title)
-            assertEquals(listOf("01.mp3", "02.mp3", "10.mp3"), book.parts.map { it.fileName })
-            val chapters = partChapters(book)
-            assertEquals(listOf("Part One", "Part Two", "Part Ten"), chapters.map { it.title })
-            assertEquals(0L, chapters.first().startMs)
-            assertTrue(chapters.zipWithNext().all { (a, b) -> a.endMs == b.startMs && b.startMs > a.startMs })
+        val read = LibraryReader(context, Lyrify.writes).read()
+        assertTrue(read.toString(), read is SongsRead.Songs)
+        val mine = (read as SongsRead.Songs).songs.filter { it.folder == tracked || it.folder == untracked }
+        assertEquals(6, mine.size)
+        val books = Library.of(mine, Settings()).books.associateBy { it.parts.first().folder }
 
-            assertEquals(listOf("1.mp3", "2.mp3", "10.mp3"), books.getValue(untracked).parts.map { it.fileName })
-        } finally {
-            made.forEach { context.contentResolver.delete(it, null, null) }
-        }
+        val book = books.getValue(tracked)
+        assertEquals(BookKind.FOLDER, book.kind)
+        assertEquals("Folder Book", book.title)
+        assertEquals(listOf("01.mp3", "02.mp3", "10.mp3"), book.parts.map { it.fileName })
+        val chapters = partChapters(book)
+        assertEquals(listOf("Part One", "Part Two", "Part Ten"), chapters.map { it.title })
+        assertEquals(0L, chapters.first().startMs)
+        assertTrue(chapters.zipWithNext().all { (a, b) -> a.endMs == b.startMs && b.startMs > a.startMs })
+
+        assertEquals(listOf("1.mp3", "2.mp3", "10.mp3"), books.getValue(untracked).parts.map { it.fileName })
     }
 
-    /** The fixture [asset] as a new file in MediaStore's [folder] (the test folder); the caller deletes it. */
-    private fun put(asset: String, folder: String): Uri {
+    /** The fixture [asset] as a new file in MediaStore's [folder] (the test folder), deleted after the test. */
+    private fun put(asset: String, folder: String) {
         val resolver = context.contentResolver
         val values = ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME, asset.substringAfterLast('/'))
@@ -174,14 +190,9 @@ class BookChaptersDeviceTest {
             put(MediaStore.MediaColumns.IS_PENDING, 1)
         }
         val uri = checkNotNull(resolver.insert(MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), values)) { "MediaStore would not make the part" }
-        try {
-            resolver.openOutputStream(uri)!!.use { out -> assets.open("books/$asset").use { it.copyTo(out) } }
-            resolver.update(uri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
-        } catch (e: Exception) {
-            resolver.delete(uri, null, null)
-            throw e
-        }
-        return uri
+        cleanups += { resolver.delete(uri, null, null) }
+        resolver.openOutputStream(uri)!!.use { out -> assets.open("books/$asset").use { it.copyTo(out) } }
+        resolver.update(uri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
     }
 
     private companion object {
