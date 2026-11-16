@@ -1,11 +1,14 @@
 package app.lyrify.player
 
 import android.graphics.Color
+import android.os.ParcelFileDescriptor
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import app.lyrify.auto.CarCovers
+import app.lyrify.auto.DEFAULT_COVER
 import app.lyrify.auto.coverPath
 import org.junit.After
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -17,9 +20,9 @@ import kotlin.math.abs
 /**
  * A file another app opened, as KJB reads its copy on the phone (phone session 10: the player showed the copy's file
  * name, not its tags): its own title, artist, album and cover, read by MediaMetadataRetriever from a copy in KJB's cache;
- * the file name only without a title tag; its cover served to KJB's own session (the notification) by a key, never a path;
- * and nothing read outside the copies. Made-up tag fixtures (app/src/androidTest/assets/tags, tools/make_tag_fixtures.py).
- * Plays nothing and starts no screen.
+ * the file name only without a title tag; its cover served to KJB's own session (the notification) by a key, never a path,
+ * and the default cover to any other app at that key's uri; and nothing read outside the copies. Made-up tag fixtures
+ * (app/src/androidTest/assets/tags, tools/make_tag_fixtures.py). Plays nothing and starts no screen.
  */
 @RunWith(AndroidJUnit4::class)
 class OpenedFilesDeviceTest {
@@ -35,6 +38,12 @@ class OpenedFilesDeviceTest {
         batch.deleteRecursively()
         outside.deleteRecursively()
     }
+
+    /** What the shell, another app as far as KJB's cover provider can tell, reads at [uri]. */
+    private fun readAsShell(uri: String): ByteArray =
+        ParcelFileDescriptor.AutoCloseInputStream(InstrumentationRegistry.getInstrumentation().uiAutomation.executeShellCommand("content read --uri $uri")).use { it.readBytes() }
+
+    private fun isJpeg(bytes: ByteArray): Boolean = bytes.size > 2 && bytes[0] == 0xFF.toByte() && bytes[1] == 0xD8.toByte()
 
     private fun fixture(name: String): ByteArray = assets.open("tags/$name").use { it.readBytes() }
 
@@ -68,6 +77,10 @@ class OpenedFilesDeviceTest {
         assertEquals(openedCoverKey(file.path), key)
         assertTrue(key, !key.contains("Kelp") && !key.contains('/'))
         assertFront(CarCovers.bitmap(context, CarCovers.uris(context).of(key)))
+        // A car, or any other app, reads that uri through the provider: the default cover, as in 3.0.1, never the copy's.
+        val default = readAsShell(CarCovers.uris(context).of(DEFAULT_COVER).toString())
+        assertTrue("the default cover did not open (${default.size} bytes)", isJpeg(default))
+        assertArrayEquals(default, readAsShell(CarCovers.uris(context).of(key).toString()))
     }
 
     @Test

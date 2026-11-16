@@ -10,6 +10,7 @@ import app.lyrify.player.Found
 import app.lyrify.player.QueueSource
 import app.lyrify.player.SourceKind
 import app.lyrify.player.openedCoverDir
+import app.lyrify.player.openedCoverKey
 import app.lyrify.settings.PlaybackSettings
 import app.lyrify.settings.Settings
 import kotlinx.coroutines.CoroutineScope
@@ -192,7 +193,7 @@ class CarAccessTest {
     }
 
     @Test
-    fun `a cover's uri never reaches anything but a song's id or the default cover`() {
+    fun `a cover's uri never reaches anything but a song's id, an opened copy's key or the default cover`() {
         listOf("..", "../files/covers.key", "%2e%2e", "/etc/hosts", "20/..", "-1", "20 ", "0x14", "", "１２", "1234567890123456789")
             .forEach { path -> assertNull(path, uris.pathOf(listOf(path, uris.sign(path)))) }
         // Exactly a path and its signature: no more, no less.
@@ -201,6 +202,28 @@ class CarAccessTest {
         assertNull(uris.pathOf(listOf(uris.sign("20"))))
         assertNull(uris.pathOf(segments("20") + "extra"))
         assertNull(uris.pathOf(listOf("x") + segments("20")))
+    }
+
+    @Test
+    fun `an opened copy's uri names its key and a signature, and opens only a key of that exact shape`() {
+        // The key coverPath gives a copy in KJB's cache (openedCoverKey) opens, signed.
+        val key = checkNotNull(openedCoverKey("/data/user/0/app.lyrify/cache/opened/1763290000000/12/Paper Harbour.mp3"))
+        assertEquals("opened-1763290000000-12", key)
+        assertEquals(key, uris.pathOf(segments(key)))
+        assertEquals("opened-1000-0", uris.pathOf(segments("opened-1000-0")))
+        // Unsigned, signed for another copy or a song, changed, or under another install's key: nothing.
+        assertNull(uris.pathOf(listOf("opened-1000-0")))
+        assertNull(uris.pathOf(listOf("opened-1000-1", uris.sign("opened-1000-0"))))
+        assertNull(uris.pathOf(listOf("opened-1000-0", uris.sign("20"))))
+        assertNull(uris.pathOf(listOf("opened-1000-0", uris.sign("opened-1000-0").uppercase())))
+        assertNull(CoverUris("app.lyrify.covers", ByteArray(32) { 1 }).pathOf(segments("opened-1000-0")))
+        // Signed or not, only opened-<digits>-<digits>: no folder, no name, no way out of the copies, no other text.
+        listOf(
+            "opened", "opened-1000", "opened-1000-0-1", "opened--0", "opened-1000-", "opened-..-0", "opened-1000-..",
+            "opened-1000/0", "opened-1000-0/..", "opened-%2e%2e-0", "opened-1000-x", "opened-+1-0", "opened--1-0",
+            "opened-١٠٠٠-0", "opened-1000-0 ", " opened-1000-0", "opened-1000-0\n", "Opened-1000-0", "copy-1000-0",
+            "opened-1234567890123456789-0", "opened-1000-1234567890123456789", "../cache/opened/1000/0/Paper Harbour.mp3",
+        ).forEach { path -> assertNull(path, uris.pathOf(listOf(path, uris.sign(path)))) }
     }
 
     @Test
@@ -328,10 +351,46 @@ class CarAccessTest {
         // A file another app opened is in no library: a car gets the default for it, and nothing is read.
         assertEquals("default", serve("opened-1000-0"))
         assertEquals(listOf(20L, 22L), read)
-        // KJB's own session (the notification) gets the copy's own cover, else the default.
-        assertEquals("copy 1000/0", coverFor("opened-1000-0", { true }, { null }, opened = { key -> openedCoverDir(key)?.let { "copy $it" } }) { "default" })
-        assertEquals("default", coverFor("opened-1000-0", { true }, { null }, opened = { null }) { "default" })
-        assertEquals("default", coverFor(DEFAULT_COVER, { true }, { null }, opened = { error("not a copy's key") }) { "default" })
+        // KJB's own session (the notification, the lock screen) reads in the process: the copy's own cover, else the default.
+        assertEquals("copy 1000/0", ownCover("opened-1000-0", { error("not a song") }, opened = { key -> openedCoverDir(key)?.let { "copy $it" } }) { "default" })
+        assertEquals("default", ownCover("opened-1000-0", { error("not a song") }, opened = { null }) { "default" })
+        assertEquals("default", ownCover(DEFAULT_COVER, { error("not a song") }, opened = { error("not a copy's key") }) { "default" })
+    }
+
+    @Test
+    fun `an opened copy's signed uri reads its own cover in KJB's process, and a car is served the default cover for it`() {
+        val library = Library.of(listOf(song("Music/Rips/Loose Thread.mp3", id = 20)), Settings())
+        val songs = mutableListOf<Long>()
+        val copies = mutableListOf<String>()
+        val opened = { key: String -> copies += key; if (key == "opened-1000-0") "copy 1000/0" else null }
+        // As CarCovers.read and CarCovers.openFile go: the uri's path and signature checked, then that cover read.
+        fun own(segments: List<String>) = ownCover(uris.pathOf(segments).orEmpty(), { id -> songs += id; "cover $id" }, opened) { "default" }
+        fun car(segments: List<String>) =
+            uris.pathOf(segments)?.let { path -> coverFor(path, { CarCovers.allowed(it, library) }, { id -> songs += id; "cover $id" }) { "default" } }
+
+        // The notification and the lock screen: the copy's own cover; the default for a copy with none, or gone from the cache.
+        assertEquals("copy 1000/0", own(segments("opened-1000-0")))
+        assertEquals("default", own(segments("opened-1000-1")))
+        // Unsigned, or signed for another copy: the default, and no copy is read.
+        assertEquals("default", own(listOf("opened-1000-0")))
+        assertEquals("default", own(listOf("opened-1000-0", uris.sign("opened-1000-1"))))
+        assertEquals(listOf("opened-1000-0", "opened-1000-1"), copies)
+
+        // A car, or any other app, is served the default cover for a copy, as 3.0.1 served it, and no copy is read there.
+        copies.clear()
+        assertEquals("default", car(segments("opened-1000-0")))
+        assertEquals("default", car(segments("opened-1000-1")))
+        // A uri KJB did not sign is no cover at all (the provider's FileNotFoundException).
+        assertNull(car(listOf("opened-1000-0", uris.sign("opened-1000-1"))))
+        assertEquals(emptyList<String>(), copies)
+
+        // A song and the default cover read as before, in the process and in the car, and never reach the copies.
+        assertEquals("cover 20", own(segments("20")))
+        assertEquals("cover 20", car(segments("20")))
+        assertEquals("default", own(segments(DEFAULT_COVER)))
+        assertEquals("default", car(segments(DEFAULT_COVER)))
+        assertEquals(listOf(20L, 20L), songs)
+        assertEquals(emptyList<String>(), copies)
     }
 
     @Test

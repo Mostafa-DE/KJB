@@ -40,6 +40,7 @@ import app.lyrify.library.recentlyPlayed
 import app.lyrify.player.Found
 import app.lyrify.player.LibraryTree
 import app.lyrify.player.NameSearch
+import app.lyrify.player.OpenedFiles
 import app.lyrify.player.PlayerCore
 import app.lyrify.player.TreeData
 import app.lyrify.player.TreeNode
@@ -415,22 +416,23 @@ fun coverPath(song: Song): String = song.ref.mediaStoreId?.toString() ?: openedC
 fun nodeCover(node: TreeNode): String? = node.cover?.let(::coverPath)
 
 /**
- * What [CarCovers] serves at [path]: song [path]'s embedded cover ([embedded], by its MediaStore id) when it may be
- * served ([allowed]: a song in the library) and has one; the cover of the opened copy [path] names ([opened], given only
- * to KJB's own session, never to a car); else the default cover ([fallback]), so a car never shows a gap, and never a
- * cover of anything outside the library.
+ * What [CarCovers] serves another app (the car) at [path]: song [path]'s embedded cover ([embedded], by its MediaStore id)
+ * when it may be served ([allowed]: a song in the library) and has one; else the default cover ([fallback]), so a car
+ * never shows a gap, and never a cover of anything outside the library: an opened copy's key gets the default too, the
+ * copy's own cover is KJB's surfaces' only ([ownCover]).
  */
-fun <T : Any> coverFor(path: String, allowed: (Long) -> Boolean, embedded: (Long) -> T?, opened: (String) -> T? = { null }, fallback: () -> T): T =
-    path.toLongOrNull()?.takeIf(allowed)?.let(embedded) ?: path.takeIf { openedCoverDir(it) != null }?.let(opened) ?: fallback()
+fun <T : Any> coverFor(path: String, allowed: (Long) -> Boolean, embedded: (Long) -> T?, fallback: () -> T): T =
+    path.toLongOrNull()?.takeIf(allowed)?.let(embedded) ?: fallback()
 
 /**
  * Cover [path] as KJB's own surfaces read it in the process ([CarCovers.read]): song [path]'s embedded cover ([embedded],
  * by its MediaStore id), else the default cover ([fallback]) when MediaStore has none for it (FileNotFoundException:
- * no embedded art, or the song is gone) or the path is not a song's; null when it could not be read now (any other
- * IOException, a SecurityException), so a surface that keeps its cover per song reads it again later.
+ * no embedded art, or the song is gone) or the path is not a song's; the cover of the opened copy [path] names ([opened],
+ * never a car's), else the default; null when a song's could not be read now (any other IOException, a
+ * SecurityException), so a surface that keeps its cover per song reads it again later.
  */
-fun <T : Any> ownCover(path: String, embedded: (Long) -> T, fallback: () -> T): T? {
-    val id = path.toLongOrNull() ?: return fallback()
+fun <T : Any> ownCover(path: String, embedded: (Long) -> T, opened: (String) -> T? = { null }, fallback: () -> T): T? {
+    val id = path.toLongOrNull() ?: return path.takeIf { openedCoverDir(it) != null }?.let(opened) ?: fallback()
     return try {
         embedded(id)
     } catch (e: FileNotFoundException) {
@@ -481,8 +483,9 @@ class Searches {
  * [COVER_PX] square, or KJB's default cover ([R.drawable.kjb_default_cover]) when the song has none, is not in the
  * library, or the path is [DEFAULT_COVER]. Android Auto cannot read MediaStore's audio uris (Media3 hands it a uri, and
  * the cover of a MediaStore audio uri is not an image), so every item points here. Exported, so whichever of Android
- * Auto's processes reads a cover may, but only at a uri KJB signed ([CoverUris]): a song's id and its own signature,
- * nothing else; never a path, never a write. The log gets exception names only.
+ * Auto's processes reads a cover may, but only at a uri KJB signed ([CoverUris]): a song's id or an opened copy's key and
+ * its own signature, nothing else; never a path, never a write. Another app gets the default cover for an opened copy,
+ * whose own cover only KJB's surfaces read ([read]). The log gets exception names only.
  */
 class CarCovers : ContentProvider() {
     override fun onCreate(): Boolean = true
@@ -547,9 +550,9 @@ class CarCovers : ContentProvider() {
 
         /**
          * The cover at [uri] for KJB's own surfaces, read in this process at the uri the car reads (the session's bitmap
-         * loader for the notification and the lock screen): the song's embedded cover, else the default cover, which a
-         * uri KJB did not sign, and a read that failed, also get. No library check: KJB hands out only its own songs'
-         * uris. Blocking.
+         * loader for the notification and the lock screen): the song's embedded cover, or an opened copy's
+         * ([OpenedFiles.cover]), else the default cover, which a uri KJB did not sign, and a read that failed, also get.
+         * No library check: KJB hands out only its own songs' and copies' uris. Blocking.
          */
         fun bitmap(context: Context, uri: Uri): Bitmap = read(context, uri) ?: defaultBitmap(context)
 
@@ -558,7 +561,11 @@ class CarCovers : ContentProvider() {
          * read now ([ownCover]), so they read it again rather than keep the default cover. Blocking.
          */
         fun read(context: Context, uri: Uri): Bitmap? =
-            ownCover(uris(context).pathOf(uri.pathSegments).orEmpty(), { thumbnail(context, it) }) { defaultBitmap(context) }
+            ownCover(uris(context).pathOf(uri.pathSegments).orEmpty(), { thumbnail(context, it) }, { opened(context, it) }) { defaultBitmap(context) }
+
+        /** The embedded cover of the opened copy [key] names, at most [COVER_PX] square; null when the copy is gone or has none. */
+        private fun opened(context: Context, key: String): Bitmap? =
+            OpenedFiles.coverCopy(context, key)?.let { OpenedFiles.cover(context, it, COVER_PX) }?.let(::capped)
 
         /** The library, while a cover is asked for on a binder thread ([readyLibrary]). */
         private fun library(context: Context): Library? = runBlocking { readyLibrary(LibraryGraph.repository(context).state) }
