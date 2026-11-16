@@ -419,6 +419,8 @@ class SharedWritesTest {
             "addon/AddonInstall.kt",
             "addon/ModelHandover.kt",
             "audio/EqProfiles.kt",
+            // The covers' key in the app's files, written aside and moved over.
+            "auto/CoverUris.kt",
             // Import from app: a Musicolet backup's songs table, copied to the cache to be read, then deleted; the
             // import journal in the app's files.
             "backup/ImportSources.kt",

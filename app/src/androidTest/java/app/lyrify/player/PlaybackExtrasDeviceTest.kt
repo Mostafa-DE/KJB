@@ -133,7 +133,7 @@ class PlaybackExtrasDeviceTest {
         val songs = (1..3).map { song(tone("kjb-extras-$it.wav", 20, 330.0 + it * 110), "Tone $it") }
         val built = onMain {
             val core = PlayerCore(MemoryStorage(), scope, System::currentTimeMillis)
-            val engine = GaplessEngine(context, { Settings() }, NoLevels) { mediaItemOf(it, LibrarySettings(), CarCovers.authority(context)) }
+            val engine = GaplessEngine(context, { Settings() }, NoLevels) { mediaItemOf(it, LibrarySettings(), CarCovers.uris(context)) }
             val bridge = QueueBridge(engine)
             val find: (SongRef) -> Song? = { ref -> songs.firstOrNull { it.path == ref.path } }
             val player = LyrifyPlayer(Looper.getMainLooper(), engine, core, { SkipAmounts(30_000, 10_000) }, { bridge.sync(core.book.value, find) })

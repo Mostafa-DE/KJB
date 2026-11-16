@@ -20,7 +20,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Who may see KJB's library through its media session, the car's cover grants, the covers the provider serves, and
+ * Who may see KJB's library through its media session, the covers' uris, the covers the provider serves, and
  * the car's searches. Controllers are made up ([Caller]); signing certificates are checked by a fake. Made-up names only.
  */
 class CarAccessTest {
@@ -136,51 +136,60 @@ class CarAccessTest {
             .forEach { assertFalse("has $it", it in transport) }
     }
 
-    // The car's cover grants
+    // The covers' uris (CR1): exported, so each uri carries its own signature
 
-    private val log = mutableListOf<String>()
-    private val grants = CoverGrants<String>(
-        packageOf = { it.substringBefore('#') },
-        grant = { packageName -> log += "grant $packageName" },
-        revoke = { packageName -> log += "revoke $packageName" },
-    )
+    private val key = ByteArray(32) { (it * 7 + 3).toByte() }
+    private val uris = CoverUris("app.lyrify.covers", key)
+
+    /** The segments of the uri [uris] makes for [path]: the path and its signature (Uri itself is Android's). */
+    private fun segments(path: String) = listOf(path, uris.sign(path))
 
     @Test
-    fun `a car app may read every cover from its first connection, once, and an app not connected as a car never`() {
-        grants.connected("auto#1")
-        grants.connected("auto#1")
-        grants.connected("auto#2")
-        grants.connected("centre#1")
-        assertEquals(listOf("grant auto", "grant centre"), log)
-        grants.disconnected("other#1")
-        assertEquals(2, log.size)
+    fun `a cover's uri names its MediaStore id and a signature, and opens that cover only`() {
+        assertEquals("20", uris.pathOf(segments("20")))
+        assertEquals(DEFAULT_COVER, uris.pathOf(segments(DEFAULT_COVER)))
+        val signature = uris.sign("20")
+        assertEquals(32, signature.length)
+        assertTrue(signature.all { it in '0'..'9' || it in 'a'..'f' })
+        // The same cover always has the same uri, so the car keeps it; another cover has another.
+        assertEquals(signature, CoverUris("app.lyrify.covers", key.copyOf()).sign("20"))
+        assertFalse(signature == uris.sign("21"))
+        // Another song's signature, a changed one, or another install's key opens nothing.
+        assertNull(uris.pathOf(listOf("21", signature)))
+        assertNull(uris.pathOf(listOf("20", signature.replaceFirst(signature[0], if (signature[0] == 'a') 'b' else 'a'))))
+        assertNull(uris.pathOf(listOf("20", signature.uppercase())))
+        assertNull(CoverUris("app.lyrify.covers", ByteArray(32) { 1 }).pathOf(segments("20")))
     }
 
     @Test
-    fun `a car app's grant goes with its last connection, and comes again with a new one`() {
-        grants.connected("auto#1")
-        grants.connected("auto#2")
-        log.clear()
-        grants.disconnected("auto#1")
-        assertEquals(emptyList<String>(), log)
-        grants.disconnected("auto#2")
-        assertEquals(listOf("revoke auto"), log)
-        grants.disconnected("auto#2")
-        grants.connected("auto#3")
-        assertEquals(listOf("revoke auto", "grant auto"), log)
+    fun `a cover's uri never reaches anything but a song's id or the default cover`() {
+        listOf("..", "../files/covers.key", "%2e%2e", "/etc/hosts", "20/..", "-1", "20 ", "0x14", "", "１２", "1234567890123456789")
+            .forEach { path -> assertNull(path, uris.pathOf(listOf(path, uris.sign(path)))) }
+        // Exactly a path and its signature: no more, no less.
+        assertNull(uris.pathOf(emptyList()))
+        assertNull(uris.pathOf(listOf("20")))
+        assertNull(uris.pathOf(listOf(uris.sign("20"))))
+        assertNull(uris.pathOf(segments("20") + "extra"))
+        assertNull(uris.pathOf(listOf("x") + segments("20")))
     }
 
     @Test
-    fun `when the service stops, every car app still connected loses its grant, and only those`() {
-        grants.connected("auto#1")
-        grants.connected("auto#2")
-        grants.connected("centre#1")
-        grants.disconnected("centre#1")
-        log.clear()
-        grants.closed()
-        assertEquals(listOf("revoke auto"), log)
-        // Grants left by a KJB that ended without its cars leaving (a crash) are taken back at the start, from every car app.
-        assertEquals(setOf(ControllerAccess.ANDROID_AUTO, "com.android.car.media"), ControllerAccess.CAR_PACKAGES)
+    fun `the cover key is made once, kept, and made again only when it is not a key`() {
+        val dir = java.nio.file.Files.createTempDirectory("covers").toFile()
+        try {
+            val file = java.io.File(dir, "covers.key")
+            val made = CoverKey.read(file)
+            assertEquals(32, made.size)
+            assertTrue(made.contentEquals(file.readBytes()))
+            assertTrue(made.contentEquals(CoverKey.read(file)))
+            assertFalse(java.io.File(dir, "covers.key.new").exists())
+            file.writeBytes(ByteArray(5))
+            val again = CoverKey.read(file)
+            assertEquals(32, again.size)
+            assertFalse(again.contentEquals(made))
+        } finally {
+            dir.deleteRecursively()
+        }
     }
 
     // The covers the provider serves

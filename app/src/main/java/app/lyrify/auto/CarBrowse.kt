@@ -1,11 +1,9 @@
 package app.lyrify.auto
 
 import android.content.ContentProvider
-import android.content.ContentResolver
 import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.database.Cursor
 import android.graphics.Bitmap
@@ -39,7 +37,6 @@ import app.lyrify.library.LibraryState
 import app.lyrify.library.Song
 import app.lyrify.library.mostPlayed
 import app.lyrify.library.recentlyPlayed
-import app.lyrify.logFailures
 import app.lyrify.player.Found
 import app.lyrify.player.LibraryTree
 import app.lyrify.player.NameSearch
@@ -60,7 +57,6 @@ import com.google.common.util.concurrent.SettableFuture
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -84,7 +80,7 @@ import kotlin.math.roundToInt
  * transport only. The root honours Android Auto's limit on root items; lists show as lists and Albums as a grid; a list
  * a client asks for whole is capped, one it pages is not. Lists are built from a snapshot off the main thread and paged
  * before they become media items. Every song and album carries a cover from [CarCovers] (its own, or KJB's default
- * cover), and a car app may read them from its first connection until its last one goes ([CoverGrants]). A song or
+ * cover), at a uri only it can read ([CoverUris]). A song or
  * Shuffle all picked in the car, or a voice request, changes KJB's own queue
  * model, which the session then plays. Called on the main thread. The log gets counts and exception names.
  */
@@ -106,19 +102,10 @@ class CarBrowse(
     /** The car's searches, per app and words. Main thread. */
     private val searches = Searches()
 
-    /** One thread for the cover grants, outliving the service so a revoke is never dropped. */
-    private val grantsThread = Dispatchers.IO.limitedParallelism(1)
-    private val grantsScope = CoroutineScope(SupervisorJob() + grantsThread + logFailures)
-    private val grants = CoverGrants<MediaSession.ControllerInfo>(
-        packageOf = { it.packageName },
-        grant = { packageName -> CarCovers.grant(context, packageName) },
-        revoke = { packageName -> CarCovers.revoke(context, packageName) },
-    )
+    /** The covers' uris. */
+    private val covers = CarCovers.uris(context)
 
     init {
-        // Grants a KJB that ended without its cars leaving (a crash, a kill) left in the system go first: a grant outlives
-        // the process until the phone restarts. One thread, in order, so before any car connecting now gets its own.
-        grantsScope.launch { ControllerAccess.CAR_PACKAGES.forEach { CarCovers.revoke(context, it) } }
         // Recent queues follows the queues: a car showing it hears when one comes or goes.
         scope.launch {
             core.book.map { (listOfNotNull(it.currentId) + it.saved + it.recent).distinct() }.distinctUntilChanged().drop(1)
@@ -130,18 +117,12 @@ class CarBrowse(
     fun connect(controller: MediaSession.ControllerInfo): Access {
         val granted = access.of(Caller(controller.packageName, controller.uid, controller.isTrusted))
         connected[controller] = granted
-        if (granted == Access.CAR) grantsScope.launch { grants.connected(controller) }
         return granted
     }
 
-    /** The service stops: the car apps still connected lose their cover grants. */
-    fun release() {
-        grantsScope.launch { grants.closed() }
-    }
-
-    /** [controller] left: a car app's cover grant goes with its last connection. */
+    /** [controller] left. */
     fun disconnect(controller: MediaSession.ControllerInfo) {
-        if (connected.remove(controller) == Access.CAR) grantsScope.launch { grants.disconnected(controller) }
+        connected.remove(controller)
     }
 
     /** The root, at once and never null: as many top lists as [params]' root hint allows (Android Auto's, usually 4), and the list style for every level. */
@@ -158,7 +139,7 @@ class CarBrowse(
         val data = data(browser, plays = needsPlays(parentId))
         val nodes = withContext(Dispatchers.Default) { LibraryTree.children(parentId, data)?.let { LibraryTree.page(it, page, pageSize) } }
             ?: return@future LibraryResult.ofError(SessionError.ERROR_BAD_VALUE)
-        LibraryResult.ofItemList(items(browser, nodes), params)
+        LibraryResult.ofItemList(items(nodes), params)
     }
 
     fun item(mediaId: String): LibraryResult<MediaItem> =
@@ -183,7 +164,7 @@ class CarBrowse(
         if (searches.of(browser.packageName)[query] == null) searches.put(browser.packageName, find(query, data(browser).library))
         val data = data(browser)
         val nodes = withContext(Dispatchers.Default) { LibraryTree.page(LibraryTree.children(LibraryTree.searchId(query), data).orEmpty(), page, pageSize) }
-        LibraryResult.ofItemList(items(browser, nodes), params)
+        LibraryResult.ofItemList(items(nodes), params)
     }
 
     /**
@@ -249,13 +230,10 @@ class CarBrowse(
 
     private fun needsPlays(id: String): Boolean = id == LibraryTree.PLAYLISTS || id.startsWith(LibraryTree.MOST_PLAYED) || id.startsWith(LibraryTree.RECENTLY_PLAYED)
 
-    /** [nodes] as media items, built off the main thread; a car's grant, asked for as it connected, is in place before it gets them. */
-    private suspend fun items(controller: MediaSession.ControllerInfo, nodes: List<TreeNode>): List<MediaItem> {
+    /** [nodes] as media items, built off the main thread. */
+    private suspend fun items(nodes: List<TreeNode>): List<MediaItem> {
         val library = settings.value.library
-        val items = withContext(Dispatchers.Default) { nodes.map { item(it, library) } }
-        // One thread, in order: this waits for the grant queued at connect.
-        if (connected[controller] == Access.CAR) withContext(grantsThread) {}
-        return items
+        return withContext(Dispatchers.Default) { nodes.map { item(it, library) } }
     }
 
     private fun rootItem(id: String): MediaItem = item(TreeNode(id, context.getString(R.string.app_name)), settings.value.library)
@@ -266,7 +244,6 @@ class CarBrowse(
      */
     private fun item(node: TreeNode, library: LibrarySettings): MediaItem {
         val song = node.song
-        val covers = CarCovers.authority(context)
         val metadata = song?.let { metadataOf(it, library, covers).buildUpon() }
             ?: MediaMetadata.Builder().setTitle(node.title).setSubtitle(node.subtitle)
                 .setMediaType(if (node.playable) MediaMetadata.MEDIA_TYPE_MIXED else MediaMetadata.MEDIA_TYPE_FOLDER_MIXED)
@@ -274,7 +251,7 @@ class CarBrowse(
         node.group?.let { extras.putString(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_GROUP_TITLE, it) }
         if (node.grid) extras.putInt(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_BROWSABLE, MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_GRID_ITEM)
         metadata.setIsBrowsable(node.browsable).setIsPlayable(node.playable)
-            .setArtworkUri(nodeCover(node)?.let { CarCovers.uri(covers, it) })
+            .setArtworkUri(nodeCover(node)?.let(covers::of))
         if (!extras.isEmpty) metadata.setExtras(extras)
         return MediaItem.Builder().setMediaId(node.id).setMediaMetadata(metadata.build()).build()
     }
@@ -366,9 +343,6 @@ class ControllerAccess(
         /** Android Automotive's media centre (a platform app). */
         val MEDIA_CENTRES: Set<String> = setOf("com.android.car.media")
 
-        /** Every app that can connect as a car, so ever hold a cover grant. */
-        val CAR_PACKAGES: Set<String> = setOf(ANDROID_AUTO) + MEDIA_CENTRES
-
         /** Android Auto's release signing certificates, the current and the rotated one (Google's UAMP allowlist). */
         val AUTO_CERTIFICATES: Set<String> = setOf(
             "FDB00C43DBDE8B51CB312AA81D3B5FA17713ADB94B28F598D77F8EB89DACEEDF",
@@ -423,38 +397,6 @@ class ControllerAccess(
         }
 
         private fun bytes(hex: String): ByteArray = hex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
-    }
-}
-
-/**
- * Read access to the covers ([CarCovers]) for the car apps connected: one grant per app on the whole provider, so the
- * covers of the browse lists, the queue and the song playing alike, given as the app's first connection comes and taken
- * back as its last one goes. Android Auto reads the song playing's cover from the session, not only from the lists it
- * browses, so single grants per listed cover left the player without one. Confined to one thread.
- */
-class CoverGrants<C : Any>(
-    private val packageOf: (C) -> String,
-    private val grant: (packageName: String) -> Unit,
-    private val revoke: (packageName: String) -> Unit,
-) {
-    private val apps = HashMap<C, String>()
-
-    fun connected(car: C) {
-        if (car in apps) return
-        val app = packageOf(car)
-        if (app !in apps.values) grant(app)
-        apps[car] = app
-    }
-
-    fun disconnected(car: C) {
-        val app = apps.remove(car) ?: return
-        if (app !in apps.values) revoke(app)
-    }
-
-    /** The service stops: every car app still connected loses its grant. */
-    fun closed() {
-        apps.values.toSet().forEach(revoke)
-        apps.clear()
     }
 }
 
@@ -513,8 +455,9 @@ class Searches {
  * MediaStore id only (no paths in the uri), a JPEG of MediaStore's thumbnail of the file's embedded art at most
  * [COVER_PX] square, or KJB's default cover ([R.drawable.kjb_default_cover]) when the song has none, is not in the
  * library, or the path is [DEFAULT_COVER]. Android Auto cannot read MediaStore's audio uris (Media3 hands it a uri, and
- * the cover of a MediaStore audio uri is not an image), so every item points here. Not exported: a car app is granted
- * read access as it connects ([CoverGrants]). Read-only. The log gets exception names only.
+ * the cover of a MediaStore audio uri is not an image), so every item points here. Exported, so whichever of Android
+ * Auto's processes reads a cover may, but only at a uri KJB signed ([CoverUris]): a song's id and its own signature,
+ * nothing else; never a path, never a write. The log gets exception names only.
  */
 class CarCovers : ContentProvider() {
     override fun onCreate(): Boolean = true
@@ -523,8 +466,8 @@ class CarCovers : ContentProvider() {
 
     override fun openFile(uri: Uri, mode: String): ParcelFileDescriptor {
         if (mode != "r") throw SecurityException("covers are read-only")
-        val path = uri.pathSegments.singleOrNull() ?: throw FileNotFoundException("not a cover")
         val context = context ?: throw FileNotFoundException("not ready")
+        val path = uris(context).pathOf(uri.pathSegments) ?: throw FileNotFoundException("not a cover")
         val library = library(context)
         val jpeg = coverFor(path, { allowed(it, library) }, { id -> embedded(context, id)?.let(::jpeg) }) { defaultJpeg(context) }
         return openPipeHelper(uri, JPEG, null, jpeg) { output, _, _, _, bytes ->
@@ -571,38 +514,17 @@ class CarCovers : ContentProvider() {
         /** The provider's authority in this build (the debug build's differs). */
         fun authority(context: Context): String = context.packageName + ".covers"
 
-        /** The cover at [path] ([coverPath], [DEFAULT_COVER]) of the provider at [authority]. */
-        fun uri(authority: String, path: String): Uri = Uri.Builder().scheme(ContentResolver.SCHEME_CONTENT).authority(authority).appendPath(path).build()
+        @Volatile
+        private var made: CoverUris? = null
+
+        /** The covers' uris in this build, under this install's key. */
+        fun uris(context: Context): CoverUris = made ?: CoverUris(authority(context), CoverKey.of(context)).also { made = it }
 
         /**
          * The cover at [path] for KJB's own surfaces (the session's bitmap loader, in this process): the song's embedded
          * cover, else the default cover. No library check: the session hands out only its own songs' paths. Blocking.
          */
         fun bitmap(context: Context, path: String?): Bitmap = coverFor(path.orEmpty(), { true }, { embedded(context, it) }) { defaultBitmap(context) }
-
-        /** [packageName] (a car app) may read every cover, until [revoke] or the phone restarts. */
-        fun grant(context: Context, packageName: String) {
-            try {
-                context.grantUriPermission(packageName, root(context), Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION)
-            } catch (e: RuntimeException) {
-                // A car app gone or unknown to the phone: it shows its own placeholders.
-                Log.w(LOG_TAG, "car covers not granted: ${e.javaClass.simpleName}")
-            }
-        }
-
-        /**
-         * [packageName]'s grant goes. Android matches a revoke by path (every grant at or under the uri), not by the
-         * prefix flag (UriGrantsManagerService.revokeUriPermissionLocked), so the provider's root takes the prefix grant.
-         */
-        fun revoke(context: Context, packageName: String) {
-            try {
-                context.revokeUriPermission(packageName, root(context), Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            } catch (e: RuntimeException) {
-                Log.w(LOG_TAG, "car covers not revoked: ${e.javaClass.simpleName}")
-            }
-        }
-
-        private fun root(context: Context): Uri = Uri.Builder().scheme(ContentResolver.SCHEME_CONTENT).authority(authority(context)).build()
 
         /** The library, while a cover is asked for on a binder thread ([readyLibrary]). */
         private fun library(context: Context): Library? = runBlocking { readyLibrary(LibraryGraph.repository(context).state) }

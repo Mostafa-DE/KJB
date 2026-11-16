@@ -139,7 +139,7 @@ class BigQueueDeviceTest {
     private inner class Stack(storage: QueueStorage, private val find: (SongRef) -> Song?, id: String) {
         val core: PlayerCore = onMain { PlayerCore(storage, scope, System::currentTimeMillis) }
         val engine: GaplessEngine = onMain {
-            GaplessEngine(context, { Settings() }, NoLevels) { mediaItemOf(it, LibrarySettings(), CarCovers.authority(context)) }.apply {
+            GaplessEngine(context, { Settings() }, NoLevels) { mediaItemOf(it, LibrarySettings(), CarCovers.uris(context)) }.apply {
                 setFocusHandled(false)
                 volume = 0f
             }
@@ -212,7 +212,7 @@ class BigQueueDeviceTest {
     fun aQueuedSongsMediaItemIsSmallAndCarriesItsCoverAsAUriNeverAsBytes() {
         val songs = library(seconds = 2)
         val projected = songs.mapIndexed { i, s -> Projected(i + 1L, s) }
-        val covers = CarCovers.authority(context)
+        val covers = CarCovers.uris(context)
         val before = usedAfterGc()
         val items = projected.map { mediaItemOf(it, LibrarySettings(), covers) }
         val perSong = (usedAfterGc() - before) / QUEUED
