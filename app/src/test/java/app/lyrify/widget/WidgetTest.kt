@@ -211,6 +211,22 @@ class WidgetTest {
     }
 
     @Test
+    fun `a cover read that failed records no id, so the next update reads it again, and a cover read stays for the song`() = runTest {
+        val reads = mutableListOf<Long>()
+        // The cover could not be read now (CarCovers.read gave none): the default cover is drawn, and no id kept.
+        val failed = Widgets.withCover(loaded(1, playing = true), Shown(WidgetState.Empty)) { reads += it; null }
+        assertNull(failed.coverOf)
+        assertNull(failed.large)
+        // Pause, the next update: it reads again.
+        Widgets.withCover(loaded(1, playing = false), failed) { reads += it; null }
+        assertEquals(listOf(42L, 42L), reads)
+        // A cover read for the song (its own, or the default when it has none) is kept: no read until the song changes.
+        val kept = Widgets.withCover(loaded(1, playing = true), Shown(loaded(1, playing = false), coverOf = 42L)) { reads += it; null }
+        assertEquals(42L, kept.coverOf)
+        assertEquals(listOf(42L, 42L), reads)
+    }
+
+    @Test
     fun `covers are read at the size of their slot on the phone's screen`() {
         assertEquals(154, coverPx(WidgetSize.SMALL, density = 3.5f))
         assertEquals(308, coverPx(WidgetSize.LARGE, density = 3.5f))

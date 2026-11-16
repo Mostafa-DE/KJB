@@ -20,6 +20,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.w3c.dom.Element
 import java.io.File
+import java.io.FileNotFoundException
+import java.io.IOException
 import java.util.concurrent.Executors
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
@@ -270,6 +272,33 @@ class CarAccessTest {
         assertEquals("default", serve(DEFAULT_COVER))
         assertEquals("default", serve("../Music"))
         assertEquals(listOf(20L, 22L), read)
+    }
+
+    @Test
+    fun `KJB's own surfaces get the default cover for a song without one, and none for a read that failed, to read again`() {
+        val read = mutableListOf<Long>()
+        fun own(path: String) = ownCover(path, { id ->
+            read += id
+            when (id) {
+                20L -> "cover 20"
+                // MediaStore has no cover for the song: no embedded art, or the song is gone.
+                22L -> throw FileNotFoundException()
+                // Not read now: the thumbnail did not decode, or KJB may not read the song yet.
+                23L -> throw IOException()
+                else -> throw SecurityException()
+            }
+        }) { "default" }
+
+        assertEquals("cover 20", own("20"))
+        // No art: the default cover, which the widget keeps for the song, as the car shows it.
+        assertEquals("default", own("22"))
+        // A read that failed: no cover, so the widget reads it again at its next update rather than keep the default.
+        assertNull(own("23"))
+        assertNull(own("24"))
+        // The default cover's path, or a uri KJB did not sign: the default, and no file is read.
+        assertEquals("default", own(DEFAULT_COVER))
+        assertEquals("default", own(""))
+        assertEquals(listOf(20L, 22L, 23L, 24L), read)
     }
 
     @Test

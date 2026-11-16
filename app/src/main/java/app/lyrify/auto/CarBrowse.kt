@@ -417,6 +417,25 @@ fun nodeCover(node: TreeNode): String? = node.cover?.let(::coverPath)
 fun <T : Any> coverFor(path: String, allowed: (Long) -> Boolean, embedded: (Long) -> T?, fallback: () -> T): T =
     path.toLongOrNull()?.takeIf(allowed)?.let(embedded) ?: fallback()
 
+/**
+ * Cover [path] as KJB's own surfaces read it in the process ([CarCovers.read]): song [path]'s embedded cover ([embedded],
+ * by its MediaStore id), else the default cover ([fallback]) when MediaStore has none for it (FileNotFoundException:
+ * no embedded art, or the song is gone) or the path is not a song's; null when it could not be read now (any other
+ * IOException, a SecurityException), so a surface that keeps its cover per song reads it again later.
+ */
+fun <T : Any> ownCover(path: String, embedded: (Long) -> T, fallback: () -> T): T? {
+    val id = path.toLongOrNull() ?: return fallback()
+    return try {
+        embedded(id)
+    } catch (e: FileNotFoundException) {
+        fallback()
+    } catch (e: IOException) {
+        null
+    } catch (e: SecurityException) {
+        null
+    }
+}
+
 /** How long a cover asked for during the library's first read waits for it: on a binder thread, never long. */
 private const val LIBRARY_WAIT_MS = 300L
 
@@ -522,25 +541,39 @@ class CarCovers : ContentProvider() {
 
         /**
          * The cover at [uri] for KJB's own surfaces, read in this process at the uri the car reads (the session's bitmap
-         * loader for the notification and the lock screen, and the widgets): the song's embedded cover, else the default
-         * cover, which a uri KJB did not sign also gets. No library check: KJB hands out only its own songs' uris. Blocking.
+         * loader for the notification and the lock screen): the song's embedded cover, else the default cover, which a
+         * uri KJB did not sign, and a read that failed, also get. No library check: KJB hands out only its own songs'
+         * uris. Blocking.
          */
-        fun bitmap(context: Context, uri: Uri): Bitmap =
-            coverFor(uris(context).pathOf(uri.pathSegments).orEmpty(), { true }, { embedded(context, it) }) { defaultBitmap(context) }
+        fun bitmap(context: Context, uri: Uri): Bitmap = read(context, uri) ?: defaultBitmap(context)
+
+        /**
+         * The cover at [uri] as [bitmap] reads it, for the widgets, which keep it for the song: null when it could not be
+         * read now ([ownCover]), so they read it again rather than keep the default cover. Blocking.
+         */
+        fun read(context: Context, uri: Uri): Bitmap? =
+            ownCover(uris(context).pathOf(uri.pathSegments).orEmpty(), { thumbnail(context, it) }) { defaultBitmap(context) }
 
         /** The library, while a cover is asked for on a binder thread ([readyLibrary]). */
         private fun library(context: Context): Library? = runBlocking { readyLibrary(LibraryGraph.repository(context).state) }
 
-        /** Song [id]'s embedded cover, at most [COVER_PX] square; null without one, or when it cannot be read. */
+        /** Song [id]'s embedded cover ([thumbnail]); null without one, or when it cannot be read. */
         private fun embedded(context: Context, id: Long): Bitmap? = try {
-            capped(context.contentResolver.loadThumbnail(ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id), Size(COVER_PX, COVER_PX), null))
+            thumbnail(context, id)
         } catch (e: IOException) {
-            // No embedded cover, or the song is gone.
+            // No embedded cover, the song is gone, or it could not be read now: the car gets the default cover.
             null
         } catch (e: SecurityException) {
             Log.w(LOG_TAG, "cover not read: ${e.javaClass.simpleName}")
             null
         }
+
+        /**
+         * MediaStore's thumbnail of song [id]'s embedded art, at most [COVER_PX] square. Throws FileNotFoundException when
+         * MediaStore has none for it, another IOException or a SecurityException when it could not be read.
+         */
+        private fun thumbnail(context: Context, id: Long): Bitmap =
+            capped(context.contentResolver.loadThumbnail(ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id), Size(COVER_PX, COVER_PX), null))
 
         /** MediaStore decodes by a whole sample size, so a thumbnail can come back up to twice as large: scaled down to fit. */
         private fun capped(bitmap: Bitmap): Bitmap {
