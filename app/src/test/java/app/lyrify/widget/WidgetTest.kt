@@ -256,6 +256,13 @@ class WidgetTest {
         Widgets.withCover(loaded(2, playing = true), later, now = 1_000 + 10 * NO_ART_RECHECK_MS, noArt)
         assertEquals(listOf("42", "42", "43"), reads)
 
+        // Another song inside the minute is read at once; back to the first, it is read at once too, with a new minute.
+        reads.clear()
+        val other = Widgets.withCover(loaded(2, playing = true), first, now = 1_001, noArt)
+        val back = Widgets.withCover(loaded(1, playing = true), other, now = 1_002, noArt)
+        Widgets.withCover(loaded(1, playing = false), back, now = 1_002 + NO_ART_RECHECK_MS - 1, noArt)
+        assertEquals(listOf("43", "42"), reads)
+
         // A read again that fails keeps no path: the next update reads at once, as after any failed read.
         reads.clear()
         val failedAgain = Widgets.withCover(loaded(1, playing = true), first, now = 1_000 + NO_ART_RECHECK_MS) { reads += it; null }
