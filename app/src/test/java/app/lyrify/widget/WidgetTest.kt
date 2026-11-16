@@ -205,26 +205,62 @@ class WidgetTest {
 
     @Test
     fun `a cover is read once per song, and again after a read that failed`() {
-        assertEquals("42", coverToRead(loaded(1, playing = true), readFor = null))
-        assertEquals("42", coverToRead(loaded(1, playing = true), readFor = "41"))
-        assertNull(coverToRead(loaded(1, playing = false), readFor = "42"))
-        assertNull(coverToRead(WidgetState.Empty, readFor = "42"))
-        assertNull(coverToRead(loaded(1, playing = true).copy(cover = null), readFor = null))
+        assertEquals("42", coverToRead(loaded(1, playing = true), readFor = null, noArtAt = null, now = 0))
+        assertEquals("42", coverToRead(loaded(1, playing = true), readFor = "41", noArtAt = null, now = 0))
+        assertNull(coverToRead(loaded(1, playing = false), readFor = "42", noArtAt = null, now = NO_ART_RECHECK_MS * 10))
+        assertNull(coverToRead(WidgetState.Empty, readFor = "42", noArtAt = null, now = 0))
+        assertNull(coverToRead(loaded(1, playing = true).copy(cover = null), readFor = null, noArtAt = null, now = 0))
+        // No art for the song: kept, and read once more from NO_ART_RECHECK_MS after that read.
+        assertNull(coverToRead(loaded(1, playing = true), readFor = "42", noArtAt = 5_000, now = 5_000 + NO_ART_RECHECK_MS - 1))
+        assertEquals("42", coverToRead(loaded(1, playing = true), readFor = "42", noArtAt = 5_000, now = 5_000 + NO_ART_RECHECK_MS))
     }
 
     @Test
     fun `a cover read that failed records no path, so the next update reads it again, and a cover read stays for the song`() = runTest {
         val reads = mutableListOf<String>()
         // The cover could not be read now (CarCovers.read gave none): the default cover is drawn, and no path kept.
-        val failed = Widgets.withCover(loaded(1, playing = true), Shown(WidgetState.Empty)) { reads += it; null }
+        val failed = Widgets.withCover(loaded(1, playing = true), Shown(WidgetState.Empty), now = 1_000) { reads += it; null }
         assertNull(failed.coverOf)
         assertNull(failed.large)
-        // Pause, the next update: it reads again.
-        Widgets.withCover(loaded(1, playing = false), failed) { reads += it; null }
+        // Pause, the next update a moment later: it reads again, without waiting for NO_ART_RECHECK_MS.
+        Widgets.withCover(loaded(1, playing = false), failed, now = 1_001) { reads += it; null }
         assertEquals(listOf("42", "42"), reads)
-        // A cover read for the song (its own, or the default when it has none) is kept: no read until the song changes.
-        val kept = Widgets.withCover(loaded(1, playing = true), Shown(loaded(1, playing = false), coverOf = "42")) { reads += it; null }
+        // A cover read for the song is kept: no read until the song changes.
+        val kept = Widgets.withCover(loaded(1, playing = true), Shown(loaded(1, playing = false), coverOf = "42"), now = 1_002) { reads += it; null }
         assertEquals("42", kept.coverOf)
+        assertEquals(listOf("42", "42"), reads)
+    }
+
+    @Test
+    fun `a song with no art keeps the default cover, and is read once more at the first update a minute on`() = runTest {
+        val reads = mutableListOf<String>()
+        val noArt: suspend (String) -> CoverRead? = { reads += it; CoverRead.NoArt }
+        // MediaStore has no art for the song (FileNotFoundException, which it may also give for a moment's failure).
+        val first = Widgets.withCover(loaded(1, playing = true), Shown(WidgetState.Empty), now = 1_000, noArt)
+        assertEquals("42", first.coverOf)
+        assertNull(first.small)
+        assertNull(first.large)
+        // Updates before the bound draw the default cover again, and read nothing.
+        val paused = Widgets.withCover(loaded(1, playing = false), first, now = 1_000 + NO_ART_RECHECK_MS - 1, noArt)
+        assertEquals("42", paused.coverOf)
+        assertEquals(listOf("42"), reads)
+        // The first update from the bound on reads it once more...
+        val again = Widgets.withCover(loaded(1, playing = true), paused, now = 1_000 + NO_ART_RECHECK_MS, noArt)
+        assertEquals("42", again.coverOf)
+        assertEquals(listOf("42", "42"), reads)
+        // ...and what it finds stays for the song: no art for good, until the song changes.
+        val later = Widgets.withCover(loaded(1, playing = false), again, now = 1_000 + 10 * NO_ART_RECHECK_MS, noArt)
+        assertEquals("42", later.coverOf)
+        assertEquals(listOf("42", "42"), reads)
+        // Another song is read at once.
+        Widgets.withCover(loaded(2, playing = true), later, now = 1_000 + 10 * NO_ART_RECHECK_MS, noArt)
+        assertEquals(listOf("42", "42", "43"), reads)
+
+        // A read again that fails keeps no path: the next update reads at once, as after any failed read.
+        reads.clear()
+        val failedAgain = Widgets.withCover(loaded(1, playing = true), first, now = 1_000 + NO_ART_RECHECK_MS) { reads += it; null }
+        assertNull(failedAgain.coverOf)
+        Widgets.withCover(loaded(1, playing = false), failedAgain, now = 1_000 + NO_ART_RECHECK_MS + 1, noArt)
         assertEquals(listOf("42", "42"), reads)
     }
 
@@ -243,11 +279,13 @@ class WidgetTest {
         fun own(path: String, cover: String?) =
             ownCover(uris.pathOf(listOf(path, uris.sign(path))).orEmpty(), { error("not a song") }, { key -> cover.takeIf { key == state.cover } }) { "default" }
         val reads = mutableListOf<String>()
-        Widgets.withCover(state, Shown(WidgetState.Empty)) { path -> reads += path; null }
+        val shown = Widgets.withCover(state, Shown(WidgetState.Empty), now = 1_000) { path -> reads += path; CoverRead.NoArt }
         assertEquals(listOf("opened-1763290000000-12"), reads)
         assertEquals("copy's cover", own(reads.single(), "copy's cover"))
-        // A copy without a cover: the default cover.
+        // A copy without a cover: the default cover, kept as for a song with no art.
         assertEquals("default", own(reads.single(), null))
+        assertEquals("opened-1763290000000-12", shown.coverOf)
+        assertNull(shown.large)
     }
 
     @Test

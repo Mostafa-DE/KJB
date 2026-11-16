@@ -134,10 +134,24 @@ fun widgetButtons(state: WidgetState, size: WidgetSize): List<WidgetButton> {
 fun coverDestination(state: WidgetState): String = DESTINATION_PLAYER
 
 /**
- * The path of [state]'s cover to read now, given the path a cover was last read for ([readFor]); null when there is
- * nothing to read. A read that failed records no path, so the next update tries again.
+ * How long the widgets keep "no art" for a song before they read its cover once more ([coverToRead]). MediaStore says
+ * "no art" (FileNotFoundException) for a song without embedded art, but also for some failures of a moment, so a song
+ * with art may be given the default cover: one read a minute on mends that, while a song that has none is read twice in
+ * all, never at every update. No timer: the read comes with the first update from then on (Play, Pause, the heart, the
+ * widget drawn again), and a new process reads every cover afresh, as the widgets' state is in memory only.
  */
-fun coverToRead(state: WidgetState, readFor: String?): String? = (state as? WidgetState.Loaded)?.cover?.takeIf { it != readFor }
+const val NO_ART_RECHECK_MS: Long = 60_000
+
+/**
+ * The path of [state]'s cover to read now, given the path a cover was last read for ([readFor]) and, when that read
+ * found no art, when it did ([noArtAt], on [now]'s clock); null when there is nothing to read. A read that failed
+ * records no path, so the next update tries again; no art is read once more from [NO_ART_RECHECK_MS] after.
+ */
+fun coverToRead(state: WidgetState, readFor: String?, noArtAt: Long?, now: Long): String? {
+    val path = (state as? WidgetState.Loaded)?.cover ?: return null
+    val recheck = noArtAt != null && now - noArtAt >= NO_ART_RECHECK_MS
+    return path.takeIf { it != readFor || recheck }
+}
 
 /** The cover's size in pixels for [size]'s slot on a screen of [density]. */
 fun coverPx(size: WidgetSize, density: Float): Int = (size.coverDp * density).roundToInt()

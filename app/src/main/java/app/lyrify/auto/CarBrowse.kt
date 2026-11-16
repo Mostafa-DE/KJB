@@ -526,14 +526,15 @@ class CarCovers : ContentProvider() {
          * ([OpenedFiles.cover]), else the default cover, which a uri KJB did not sign, and a read that failed, also get.
          * No library check: KJB hands out only its own songs' and copies' uris. Blocking.
          */
-        fun bitmap(context: Context, uri: Uri): Bitmap = read(context, uri) ?: defaultBitmap(context)
+        fun bitmap(context: Context, uri: Uri): Bitmap = read(context, uri, { it }) { defaultBitmap(context) } ?: defaultBitmap(context)
 
         /**
-         * The cover at [uri] as [bitmap] reads it, for the widgets, which keep it for the song: null when it could not be
-         * read now ([ownCover]), so they read it again rather than keep the default cover. Blocking.
+         * The cover at [uri] as [bitmap] reads it, for the widgets, which keep it for the song: [own] of the song's
+         * embedded cover or the opened copy's; [none] when it has none, or for a uri KJB did not sign; null when it could
+         * not be read now ([ownCover]), so they read it again rather than keep the default cover. Blocking.
          */
-        fun read(context: Context, uri: Uri): Bitmap? =
-            ownCover(uris(context).pathOf(uri.pathSegments).orEmpty(), { thumbnail(context, it) }, { opened(context, it) }) { defaultBitmap(context) }
+        fun <T : Any> read(context: Context, uri: Uri, own: (Bitmap) -> T, none: () -> T): T? =
+            ownCover(uris(context).pathOf(uri.pathSegments).orEmpty(), { own(thumbnail(context, it)) }, { opened(context, it)?.let(own) }, none)
 
         /** The embedded cover of the opened copy [key] names, at most [COVER_PX] square; null when the copy is gone or has none. */
         private fun opened(context: Context, key: String): Bitmap? =

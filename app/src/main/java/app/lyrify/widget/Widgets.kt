@@ -4,6 +4,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.os.SystemClock
 import android.util.Log
 import androidx.annotation.OptIn
 import androidx.compose.runtime.Composable
@@ -92,11 +93,21 @@ import kotlin.coroutines.resume
 import kotlin.math.roundToInt
 
 /**
- * What the widgets draw: [state], and its cover read once and sized to each widget's slot ([small], [large]), null for a
- * song without a cover's path. [coverOf] is the cover's path ([WidgetState.Loaded.cover]) it was read for: null while no
- * widget is placed, or after a read that failed (no cover, so the default is drawn), so the next update reads it again.
+ * What the widgets draw: [state], and its own cover read once and sized to each widget's slot ([small], [large]), null
+ * without one (KJB's default cover is drawn). [coverOf] is the cover's path ([WidgetState.Loaded.cover]) it was read for:
+ * null while no widget is placed, or after a read that failed, so the next update reads it again. [noArtAt] is when a read
+ * found no art for it (SystemClock.elapsedRealtime), until it is read once more ([NO_ART_RECHECK_MS]); else null.
  */
-internal class Shown(val state: WidgetState, val small: Bitmap? = null, val large: Bitmap? = null, val coverOf: String? = null)
+internal class Shown(val state: WidgetState, val small: Bitmap? = null, val large: Bitmap? = null, val coverOf: String? = null, val noArtAt: Long? = null)
+
+/** A cover read for the widgets ([Widgets.withCover]): its own, or none; a read that failed gives null. */
+internal sealed interface CoverRead {
+    /** A song's embedded art, or the cover of a file another app opened, sized to the small and the large slot. */
+    class Own(val small: Bitmap, val large: Bitmap) : CoverRead
+
+    /** None: MediaStore has no art for the song (or the song is gone), or the copy has no cover. The default is drawn. */
+    data object NoArt : CoverRead
+}
 
 /**
  * The widgets' state in this process, and the updates pushed to them. In memory only: a fresh process (after a restart
@@ -120,7 +131,7 @@ internal object Widgets {
     /** [state] to every KJB widget on the home screen. While none is placed, nothing is drawn and no cover read. */
     suspend fun show(context: Context, state: WidgetState) {
         val placed = placed(context)
-        lock.withLock { current.value = if (placed) withCover(state, current.value) { thumbnails(context, it) } else Shown(state) }
+        lock.withLock { current.value = if (placed) withCover(state, current.value, SystemClock.elapsedRealtime()) { thumbnails(context, it) } else Shown(state) }
         if (placed) update(context)
     }
 
@@ -140,7 +151,7 @@ internal object Widgets {
      */
     suspend fun reconcile(context: Context) = lock.withLock {
         val state = onScreen(current.value.state, playerAlive)
-        current.value = if (state == WidgetState.Empty) Shown(state) else withCover(state, current.value) { thumbnails(context, it) }
+        current.value = if (state == WidgetState.Empty) Shown(state) else withCover(state, current.value, SystemClock.elapsedRealtime()) { thumbnails(context, it) }
     }
 
     /** The widgets drawn again, after a tap that no player answers (the heart on a widget left from before a kill). */
@@ -161,25 +172,30 @@ internal object Widgets {
 
     /**
      * [state] with its cover: [before]'s when it was read for the same song, else [read] now ([thumbnails]); a read that
-     * failed (null) records no path, so the next update reads it again.
+     * failed (null) records no path, so the next update reads it again. No art is kept for the song with the time it was
+     * read ([now]), and read once more at the first update [NO_ART_RECHECK_MS] on; what that read finds stays.
      */
-    internal suspend fun withCover(state: WidgetState, before: Shown, read: suspend (String) -> Pair<Bitmap, Bitmap>?): Shown {
+    internal suspend fun withCover(state: WidgetState, before: Shown, now: Long, read: suspend (String) -> CoverRead?): Shown {
         val path = (state as? WidgetState.Loaded)?.cover ?: return Shown(state)
-        if (coverToRead(state, before.coverOf) == null) return Shown(state, before.small, before.large, path)
-        val (small, large) = read(path) ?: return Shown(state)
-        return Shown(state, small, large, path)
+        if (coverToRead(state, before.coverOf, before.noArtAt, now) == null) return Shown(state, before.small, before.large, path, before.noArtAt)
+        return when (val cover = read(path)) {
+            null -> Shown(state)
+            is CoverRead.Own -> Shown(state, cover.small, cover.large, path)
+            // The same path as before: this was the read once more, so no art stays for the song.
+            CoverRead.NoArt -> Shown(state, coverOf = path, noArtAt = now.takeIf { path != before.coverOf })
+        }
     }
 
     /**
-     * The cover at [path] (a song's, or a file another app opened), read once at the uri the session and the car have
-     * for it, in this process as the notification reads it ([CarCovers.read]): its own, else KJB's default cover; sized
-     * to the small and the large slot on this screen. Null when it could not be read now.
+     * The own cover at [path] (a song's, or a file another app opened), read once at the uri the session and the car
+     * have for it, in this process as the notification reads it ([CarCovers.read]); sized to the small and the large
+     * slot on this screen. [CoverRead.NoArt] when it has none, null when it could not be read now.
      */
-    private suspend fun thumbnails(context: Context, path: String): Pair<Bitmap, Bitmap>? = withContext(Dispatchers.IO) {
+    private suspend fun thumbnails(context: Context, path: String): CoverRead? = withContext(Dispatchers.IO) {
         val density = context.resources.displayMetrics.density
-        CarCovers.read(context, CarCovers.uris(context).of(path))?.let { read ->
-            fitted(read, coverPx(WidgetSize.SMALL, density)) to fitted(read, coverPx(WidgetSize.LARGE, density))
-        }
+        CarCovers.read(context, CarCovers.uris(context).of(path), { own ->
+            CoverRead.Own(fitted(own, coverPx(WidgetSize.SMALL, density)), fitted(own, coverPx(WidgetSize.LARGE, density)))
+        }) { CoverRead.NoArt }
     }
 
     /** [bitmap] scaled down to fit [px] square. */

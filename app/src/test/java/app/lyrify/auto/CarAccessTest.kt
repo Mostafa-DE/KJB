@@ -385,7 +385,7 @@ class CarAccessTest {
         }) { "default" }
 
         assertEquals("cover 20", own("20"))
-        // No art: the default cover, which the widget keeps for the song, as the car shows it.
+        // No art: the default cover, which the widget keeps for the song (and reads once more a minute on), as the car shows it.
         assertEquals("default", own("22"))
         // A read that failed: no cover, so the widget reads it again at its next update rather than keep the default.
         assertNull(own("23"))
