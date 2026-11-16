@@ -1,13 +1,10 @@
 package app.lyrify.widget
 
 import android.content.ComponentName
-import android.content.ContentUris
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
-import android.provider.MediaStore
 import android.util.Log
-import android.util.Size
 import androidx.annotation.OptIn
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -62,6 +59,7 @@ import androidx.media3.session.SessionToken
 import app.lyrify.LOG_TAG
 import app.lyrify.Lyrify
 import app.lyrify.R
+import app.lyrify.auto.CarCovers
 import app.lyrify.library.LibraryGraph
 import app.lyrify.library.LibraryState
 import app.lyrify.library.SongRef
@@ -88,16 +86,15 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import java.io.IOException
 import java.util.concurrent.ExecutionException
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.coroutines.resume
 import kotlin.math.roundToInt
 
 /**
- * What the widgets draw: [state], and its cover read once and sized to each widget's slot ([small], [large]), null
- * without one. [coverOf] is the MediaStore id the cover was read for: null while no widget is placed, or after a read
- * that failed, so the next update reads it again.
+ * What the widgets draw: [state], and its cover read once and sized to each widget's slot ([small], [large]), null for a
+ * song the library does not know. [coverOf] is the MediaStore id the cover was read for: null while no widget is placed,
+ * or after a read that failed (no cover, so the default is drawn), so the next update reads it again.
  */
 internal class Shown(val state: WidgetState, val small: Bitmap? = null, val large: Bitmap? = null, val coverOf: Long? = null)
 
@@ -123,7 +120,7 @@ internal object Widgets {
     /** [state] to every KJB widget on the home screen. While none is placed, nothing is drawn and no cover read. */
     suspend fun show(context: Context, state: WidgetState) {
         val placed = placed(context)
-        lock.withLock { current.value = if (placed) withCover(context, state, current.value) else Shown(state) }
+        lock.withLock { current.value = if (placed) withCover(state, current.value) { thumbnails(context, it) } else Shown(state) }
         if (placed) update(context)
     }
 
@@ -143,7 +140,7 @@ internal object Widgets {
      */
     suspend fun reconcile(context: Context) = lock.withLock {
         val state = onScreen(current.value.state, playerAlive)
-        current.value = if (state == WidgetState.Empty) Shown(state) else withCover(context, state, current.value)
+        current.value = if (state == WidgetState.Empty) Shown(state) else withCover(state, current.value) { thumbnails(context, it) }
     }
 
     /** The widgets drawn again, after a tap that no player answers (the heart on a widget left from before a kill). */
@@ -162,34 +159,29 @@ internal object Widgets {
         return manager.getGlanceIds(SmallWidget::class.java).isNotEmpty() || manager.getGlanceIds(LargeWidget::class.java).isNotEmpty()
     }
 
-    /** [state] with its cover: [before]'s when it was read for the same song, else MediaStore's thumbnail of its embedded art. */
-    private suspend fun withCover(context: Context, state: WidgetState, before: Shown): Shown {
+    /**
+     * [state] with its cover: [before]'s when it was read for the same song, else [read] now ([thumbnails]); a read that
+     * failed (null) records no id, so the next update reads it again.
+     */
+    internal suspend fun withCover(state: WidgetState, before: Shown, read: suspend (Long) -> Pair<Bitmap, Bitmap>?): Shown {
         val id = (state as? WidgetState.Loaded)?.cover ?: return Shown(state)
         if (coverToRead(state, before.coverOf) == null) return Shown(state, before.small, before.large, id)
-        val (small, large) = thumbnails(context, id) ?: return Shown(state)
+        val (small, large) = read(id) ?: return Shown(state)
         return Shown(state, small, large, id)
     }
 
     /**
-     * Song [id]'s embedded cover, read once from MediaStore's thumbnail and sized to the small and the large slot on
-     * this screen; null without one, or when it could not be read.
+     * Song [id]'s cover, read once at the uri the session and the car have for it ([CarCovers.read]): its embedded art,
+     * else KJB's default cover; sized to the small and the large slot on this screen. Null when it could not be read now.
      */
     private suspend fun thumbnails(context: Context, id: Long): Pair<Bitmap, Bitmap>? = withContext(Dispatchers.IO) {
         val density = context.resources.displayMetrics.density
-        val large = coverPx(WidgetSize.LARGE, density)
-        val uri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id)
-        try {
-            val read = context.contentResolver.loadThumbnail(uri, Size(large, large), null)
-            fitted(read, coverPx(WidgetSize.SMALL, density)) to fitted(read, large)
-        } catch (_: IOException) {
-            // No embedded cover, or it could not be read: the widget shows the default cover.
-            null
-        } catch (_: SecurityException) {
-            null
+        CarCovers.read(context, CarCovers.uris(context).of(id.toString()))?.let { read ->
+            fitted(read, coverPx(WidgetSize.SMALL, density)) to fitted(read, coverPx(WidgetSize.LARGE, density))
         }
     }
 
-    /** [bitmap] scaled down to fit [px] square; MediaStore decodes by a whole sample size, so it can come back up to twice as large. */
+    /** [bitmap] scaled down to fit [px] square. */
     private fun fitted(bitmap: Bitmap, px: Int): Bitmap {
         val scale = px.toFloat() / maxOf(bitmap.width, bitmap.height)
         return if (scale >= 1f) bitmap else bitmap.scale((bitmap.width * scale).roundToInt(), (bitmap.height * scale).roundToInt())

@@ -1,5 +1,7 @@
 package app.lyrify.auto
 
+import android.content.Context
+import android.content.ContextWrapper
 import androidx.media3.common.Player
 import app.lyrify.library.Library
 import app.lyrify.library.LibraryState
@@ -8,10 +10,14 @@ import app.lyrify.player.Found
 import app.lyrify.player.QueueSource
 import app.lyrify.player.SourceKind
 import app.lyrify.player.openedCoverDir
+import app.lyrify.player.openedCoverKey
 import app.lyrify.settings.PlaybackSettings
 import app.lyrify.settings.Settings
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -19,9 +25,18 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.w3c.dom.Element
+import java.io.File
+import java.io.FileNotFoundException
+import java.io.IOException
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
+import javax.xml.parsers.DocumentBuilderFactory
 
 /**
- * Who may see KJB's library through its media session, the car's cover grants, the covers the provider serves, and
+ * Who may see KJB's library through its media session, the covers' uris, the covers the provider serves, and
  * the car's searches. Controllers are made up ([Caller]); signing certificates are checked by a fake. Made-up names only.
  */
 class CarAccessTest {
@@ -137,51 +152,170 @@ class CarAccessTest {
             .forEach { assertFalse("has $it", it in transport) }
     }
 
-    // The car's cover grants
+    // The covers' uris (CR1): exported, so each uri carries its own signature
 
-    private val log = mutableListOf<String>()
-    private val grants = CoverGrants<String>(
-        packageOf = { it.substringBefore('#') },
-        grant = { packageName -> log += "grant $packageName" },
-        revoke = { packageName -> log += "revoke $packageName" },
-    )
+    private val key = ByteArray(32) { (it * 7 + 3).toByte() }
+    private val uris = CoverUris("app.lyrify.covers", key)
+
+    /** The segments of the uri [uris] makes for [path]: the path and its signature (Uri itself is Android's). */
+    private fun segments(path: String) = listOf(path, uris.sign(path))
 
     @Test
-    fun `a car app may read every cover from its first connection, once, and an app not connected as a car never`() {
-        grants.connected("auto#1")
-        grants.connected("auto#1")
-        grants.connected("auto#2")
-        grants.connected("centre#1")
-        assertEquals(listOf("grant auto", "grant centre"), log)
-        grants.disconnected("other#1")
-        assertEquals(2, log.size)
+    fun `a cover's uri names its MediaStore id and a signature, and opens that cover only`() {
+        assertEquals("20", uris.pathOf(segments("20")))
+        assertEquals(DEFAULT_COVER, uris.pathOf(segments(DEFAULT_COVER)))
+        val signature = uris.sign("20")
+        assertEquals(32, signature.length)
+        assertTrue(signature.all { it in '0'..'9' || it in 'a'..'f' })
+        // The same cover always has the same uri, so the car keeps it; another cover has another.
+        assertEquals(signature, CoverUris("app.lyrify.covers", key.copyOf()).sign("20"))
+        assertFalse(signature == uris.sign("21"))
+        // Another song's signature, a changed one, or another install's key opens nothing.
+        assertNull(uris.pathOf(listOf("21", signature)))
+        assertNull(uris.pathOf(listOf("20", signature.replaceFirst(signature[0], if (signature[0] == 'a') 'b' else 'a'))))
+        assertNull(uris.pathOf(listOf("20", signature.uppercase())))
+        assertNull(CoverUris("app.lyrify.covers", ByteArray(32) { 1 }).pathOf(segments("20")))
     }
 
     @Test
-    fun `a car app's grant goes with its last connection, and comes again with a new one`() {
-        grants.connected("auto#1")
-        grants.connected("auto#2")
-        log.clear()
-        grants.disconnected("auto#1")
-        assertEquals(emptyList<String>(), log)
-        grants.disconnected("auto#2")
-        assertEquals(listOf("revoke auto"), log)
-        grants.disconnected("auto#2")
-        grants.connected("auto#3")
-        assertEquals(listOf("revoke auto", "grant auto"), log)
+    fun `a signature is the first 128 bits of the path's HMAC-SHA256, the same on every thread at once`() {
+        val mac = Mac.getInstance("HmacSHA256").apply { init(SecretKeySpec(key, "HmacSHA256")) }
+        assertEquals(mac.doFinal("20".toByteArray()).copyOf(16).joinToString("") { "%02x".format(it) }, uris.sign("20"))
+        // The service signs on the main thread while the car's lists sign on others and the provider checks on binder threads.
+        val paths = (0 until 2_000).map { it.toString() } + DEFAULT_COVER
+        val alone = paths.map(uris::sign)
+        val threads = Executors.newFixedThreadPool(4)
+        try {
+            (1..4).map { threads.submit<List<String>> { paths.map(uris::sign) } }.forEach { assertEquals(alone, it.get()) }
+        } finally {
+            threads.shutdown()
+        }
     }
 
     @Test
-    fun `when the service stops, every car app still connected loses its grant, and only those`() {
-        grants.connected("auto#1")
-        grants.connected("auto#2")
-        grants.connected("centre#1")
-        grants.disconnected("centre#1")
-        log.clear()
-        grants.closed()
-        assertEquals(listOf("revoke auto"), log)
-        // Grants left by a KJB that ended without its cars leaving (a crash) are taken back at the start, from every car app.
-        assertEquals(setOf(ControllerAccess.ANDROID_AUTO, "com.android.car.media"), ControllerAccess.CAR_PACKAGES)
+    fun `a cover's uri never reaches anything but a song's id, an opened copy's key or the default cover`() {
+        listOf("..", "../files/covers.key", "%2e%2e", "/etc/hosts", "20/..", "-1", "20 ", "0x14", "", "１２", "1234567890123456789")
+            .forEach { path -> assertNull(path, uris.pathOf(listOf(path, uris.sign(path)))) }
+        // Exactly a path and its signature: no more, no less.
+        assertNull(uris.pathOf(emptyList()))
+        assertNull(uris.pathOf(listOf("20")))
+        assertNull(uris.pathOf(listOf(uris.sign("20"))))
+        assertNull(uris.pathOf(segments("20") + "extra"))
+        assertNull(uris.pathOf(listOf("x") + segments("20")))
+    }
+
+    @Test
+    fun `an opened copy's uri names its key and a signature, and opens only a key of that exact shape`() {
+        // The key coverPath gives a copy in KJB's cache (openedCoverKey) opens, signed.
+        val key = checkNotNull(openedCoverKey("/data/user/0/app.lyrify/cache/opened/1763290000000/12/Paper Harbour.mp3"))
+        assertEquals("opened-1763290000000-12", key)
+        assertEquals(key, uris.pathOf(segments(key)))
+        assertEquals("opened-1000-0", uris.pathOf(segments("opened-1000-0")))
+        // Unsigned, signed for another copy or a song, changed, or under another install's key: nothing.
+        assertNull(uris.pathOf(listOf("opened-1000-0")))
+        assertNull(uris.pathOf(listOf("opened-1000-1", uris.sign("opened-1000-0"))))
+        assertNull(uris.pathOf(listOf("opened-1000-0", uris.sign("20"))))
+        assertNull(uris.pathOf(listOf("opened-1000-0", uris.sign("opened-1000-0").uppercase())))
+        assertNull(CoverUris("app.lyrify.covers", ByteArray(32) { 1 }).pathOf(segments("opened-1000-0")))
+        // Signed or not, only opened-<digits>-<digits>: no folder, no name, no way out of the copies, no other text.
+        listOf(
+            "opened", "opened-1000", "opened-1000-0-1", "opened--0", "opened-1000-", "opened-..-0", "opened-1000-..",
+            "opened-1000/0", "opened-1000-0/..", "opened-%2e%2e-0", "opened-1000-x", "opened-+1-0", "opened--1-0",
+            "opened-١٠٠٠-0", "opened-1000-0 ", " opened-1000-0", "opened-1000-0\n", "Opened-1000-0", "copy-1000-0",
+            "opened-1234567890123456789-0", "opened-1000-1234567890123456789", "../cache/opened/1000/0/Paper Harbour.mp3",
+        ).forEach { path -> assertNull(path, uris.pathOf(listOf(path, uris.sign(path)))) }
+    }
+
+    @Test
+    fun `the cover key is made once, kept, and made again only when it is not a key`() {
+        val dir = java.nio.file.Files.createTempDirectory("covers").toFile()
+        try {
+            val file = File(dir, "covers.key")
+            val made = CoverKey.read(file)
+            assertEquals(32, made.size)
+            assertTrue(made.contentEquals(file.readBytes()))
+            assertTrue(made.contentEquals(CoverKey.read(file)))
+            assertFalse(File(dir, "covers.key.new").exists())
+            file.writeBytes(ByteArray(5))
+            val again = CoverKey.read(file)
+            assertEquals(32, again.size)
+            assertFalse(again.contentEquals(made))
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    /** A context whose files are in [dir]: all CoverKey asks of it. */
+    private fun context(dir: File): Context = object : ContextWrapper(null) {
+        override fun getFilesDir(): File = dir
+    }
+
+    @Test
+    fun `the cover key is read off the main thread as KJB starts, and the service's first cover reads no file`() = runBlocking<Unit> {
+        val dir = java.nio.file.Files.createTempDirectory("covers").toFile()
+        try {
+            CoverKey.forget()
+            CoverKey.warm(context(dir), this).join()
+            val file = File(dir, "covers.key")
+            assertTrue("no key made by the warm-up", file.isFile)
+            val warmed = file.readBytes()
+            // The service signs its first cover on the main thread: the key is in memory, the file is not read again.
+            file.delete()
+            assertTrue(warmed.contentEquals(CoverKey.of(context(dir))))
+            assertFalse(file.exists())
+        } finally {
+            CoverKey.forget()
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `the warm-up, the service and the car's lists asking at once get one key, in one file`() {
+        val dir = java.nio.file.Files.createTempDirectory("covers").toFile()
+        val threads = Executors.newFixedThreadPool(8)
+        try {
+            CoverKey.forget()
+            val start = CountDownLatch(1)
+            val asked = (1..8).map { threads.submit<ByteArray> { start.await(); CoverKey.of(context(dir)) } }
+            val warm = CoverKey.warm(context(dir), CoroutineScope(Dispatchers.IO))
+            start.countDown()
+            val keys = asked.map { it.get() }
+            runBlocking { warm.join() }
+            keys.forEach { assertTrue(it.contentEquals(keys.first())) }
+            assertTrue(keys.first().contentEquals(CoverKey.of(context(dir))))
+            assertTrue(keys.first().contentEquals(File(dir, "covers.key").readBytes()))
+            assertEquals(listOf("covers.key"), dir.list()?.toList())
+        } finally {
+            threads.shutdown()
+            CoverKey.forget()
+            dir.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `the cover key is in no backup, and the covers are exported read-only with no grant anywhere`() {
+        val manifest = DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(File("src/main/AndroidManifest.xml"))
+        val application = manifest.getElementsByTagName("application").item(0) as Element
+        assertEquals("false", application.getAttribute("android:allowBackup"))
+        assertEquals("false", application.getAttribute("android:fullBackupContent"))
+        // Android 12 and later move an app's data to a new phone even without backup: the rules leave out files/, the key's.
+        assertEquals("@xml/data_extraction_rules", application.getAttribute("android:dataExtractionRules"))
+        val rules = DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(File("src/main/res/xml/data_extraction_rules.xml"))
+        listOf("cloud-backup", "device-transfer").forEach { kind ->
+            val excluded = (rules.getElementsByTagName(kind).item(0) as Element).getElementsByTagName("exclude")
+            val files = (0 until excluded.length).map { excluded.item(it) as Element }.filter { it.getAttribute("domain") == "file" }
+            assertTrue("$kind keeps the key", files.any { it.getAttribute("path") in setOf("", ".", "covers.key") })
+        }
+
+        val providers = manifest.getElementsByTagName("provider")
+        val covers = (0 until providers.length).map { providers.item(it) as Element }.single { it.getAttribute("android:name") == ".auto.CarCovers" }
+        assertEquals("true", covers.getAttribute("android:exported"))
+        listOf("android:permission", "android:readPermission", "android:writePermission", "android:grantUriPermissions")
+            .forEach { assertEquals(it, "", covers.getAttribute(it)) }
+        // Nothing hands out or takes back uri grants any more: each cover's uri is its own key.
+        val granting = File("src/main/java").walkTopDown().filter { it.isFile && it.extension == "kt" }
+            .filter { Regex("""(grant|revoke)UriPermission\(""").containsMatchIn(it.readText()) }.map { it.name }.toList()
+        assertEquals(emptyList<String>(), granting)
     }
 
     // The covers the provider serves
@@ -217,10 +351,73 @@ class CarAccessTest {
         // A file another app opened is in no library: a car gets the default for it, and nothing is read.
         assertEquals("default", serve("opened-1000-0"))
         assertEquals(listOf(20L, 22L), read)
-        // KJB's own session (the notification) gets the copy's own cover, else the default.
-        assertEquals("copy 1000/0", coverFor("opened-1000-0", { true }, { null }, opened = { key -> openedCoverDir(key)?.let { "copy $it" } }) { "default" })
-        assertEquals("default", coverFor("opened-1000-0", { true }, { null }, opened = { null }) { "default" })
-        assertEquals("default", coverFor(DEFAULT_COVER, { true }, { null }, opened = { error("not a copy's key") }) { "default" })
+        // KJB's own session (the notification, the lock screen) reads in the process: the copy's own cover, else the default.
+        assertEquals("copy 1000/0", ownCover("opened-1000-0", { error("not a song") }, opened = { key -> openedCoverDir(key)?.let { "copy $it" } }) { "default" })
+        assertEquals("default", ownCover("opened-1000-0", { error("not a song") }, opened = { null }) { "default" })
+        assertEquals("default", ownCover(DEFAULT_COVER, { error("not a song") }, opened = { error("not a copy's key") }) { "default" })
+    }
+
+    @Test
+    fun `an opened copy's signed uri reads its own cover in KJB's process, and a car is served the default cover for it`() {
+        val library = Library.of(listOf(song("Music/Rips/Loose Thread.mp3", id = 20)), Settings())
+        val songs = mutableListOf<Long>()
+        val copies = mutableListOf<String>()
+        val opened = { key: String -> copies += key; if (key == "opened-1000-0") "copy 1000/0" else null }
+        // As CarCovers.read and CarCovers.openFile go: the uri's path and signature checked, then that cover read.
+        fun own(segments: List<String>) = ownCover(uris.pathOf(segments).orEmpty(), { id -> songs += id; "cover $id" }, opened) { "default" }
+        fun car(segments: List<String>) =
+            uris.pathOf(segments)?.let { path -> coverFor(path, { CarCovers.allowed(it, library) }, { id -> songs += id; "cover $id" }) { "default" } }
+
+        // The notification and the lock screen: the copy's own cover; the default for a copy with none, or gone from the cache.
+        assertEquals("copy 1000/0", own(segments("opened-1000-0")))
+        assertEquals("default", own(segments("opened-1000-1")))
+        // Unsigned, or signed for another copy: the default, and no copy is read.
+        assertEquals("default", own(listOf("opened-1000-0")))
+        assertEquals("default", own(listOf("opened-1000-0", uris.sign("opened-1000-1"))))
+        assertEquals(listOf("opened-1000-0", "opened-1000-1"), copies)
+
+        // A car, or any other app, is served the default cover for a copy, as 3.0.1 served it, and no copy is read there.
+        copies.clear()
+        assertEquals("default", car(segments("opened-1000-0")))
+        assertEquals("default", car(segments("opened-1000-1")))
+        // A uri KJB did not sign is no cover at all (the provider's FileNotFoundException).
+        assertNull(car(listOf("opened-1000-0", uris.sign("opened-1000-1"))))
+        assertEquals(emptyList<String>(), copies)
+
+        // A song and the default cover read as before, in the process and in the car, and never reach the copies.
+        assertEquals("cover 20", own(segments("20")))
+        assertEquals("cover 20", car(segments("20")))
+        assertEquals("default", own(segments(DEFAULT_COVER)))
+        assertEquals("default", car(segments(DEFAULT_COVER)))
+        assertEquals(listOf(20L, 20L), songs)
+        assertEquals(emptyList<String>(), copies)
+    }
+
+    @Test
+    fun `KJB's own surfaces get the default cover for a song without one, and none for a read that failed, to read again`() {
+        val read = mutableListOf<Long>()
+        fun own(path: String) = ownCover(path, { id ->
+            read += id
+            when (id) {
+                20L -> "cover 20"
+                // MediaStore has no cover for the song: no embedded art, or the song is gone.
+                22L -> throw FileNotFoundException()
+                // Not read now: the thumbnail did not decode, or KJB may not read the song yet.
+                23L -> throw IOException()
+                else -> throw SecurityException()
+            }
+        }) { "default" }
+
+        assertEquals("cover 20", own("20"))
+        // No art: the default cover, which the widget keeps for the song, as the car shows it.
+        assertEquals("default", own("22"))
+        // A read that failed: no cover, so the widget reads it again at its next update rather than keep the default.
+        assertNull(own("23"))
+        assertNull(own("24"))
+        // The default cover's path, or a uri KJB did not sign: the default, and no file is read.
+        assertEquals("default", own(DEFAULT_COVER))
+        assertEquals("default", own(""))
+        assertEquals(listOf(20L, 22L, 23L, 24L), read)
     }
 
     @Test

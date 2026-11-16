@@ -340,13 +340,15 @@
             </intent-filter>
         </activity-alias>
         <!-- Covers for Android Auto and the media session (auto/CarBrowse.kt, CarCovers): a song's embedded cover by
-             MediaStore id only, or KJB's default cover; read-only. Not exported: a car app that connects is granted read
-             access to the covers until it disconnects. -->
+             MediaStore id only, or KJB's default cover; read-only. Exported, as Android Auto's own sample provider is: a
+             grant given as a car connected could miss Android Auto (Media3 tells KJB of a controller that only listens
+             at its first command, and each service start took grants back). Each uri carries its own signature
+             (auto/CoverUris.kt), so only a uri KJB handed out opens, and none can be made. -->
         <provider
             android:name=".auto.CarCovers"
             android:authorities="${applicationId}.covers"
-            android:exported="false"
-            android:grantUriPermissions="true" />
+            android:exported="true"
+            tools:ignore="ExportedContentProvider" />
 
         <!-- share -->
         <!-- Share lyrics > Lyrics file (ui/Share.kt): the .lrc goes as a copy in KJB's cache, the one folder this provider

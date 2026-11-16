@@ -130,7 +130,7 @@ class CrossfadeDeviceTest {
     private fun build(songs: List<Song>, seconds: Int): Built = onMain {
         val made = mutableListOf<GaplessEngine>()
         val engine = CrossfadeEngine(
-            newSlot = { GaplessEngine(context, { Settings() }, NoLevels) { mediaItemOf(it, LibrarySettings(), CarCovers.authority(context)) }.also { made += it } },
+            newSlot = { GaplessEngine(context, { Settings() }, NoLevels) { mediaItemOf(it, LibrarySettings(), CarCovers.uris(context)) }.also { made += it } },
             rules = AnyFade,
             focusOf = { control -> MediaFocus(context, Looper.getMainLooper(), control) },
             scope = scope,

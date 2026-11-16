@@ -29,7 +29,7 @@ import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.extractor.mp4.Mp4Extractor
 import app.lyrify.audio.FadeSlot
-import app.lyrify.auto.CarCovers
+import app.lyrify.auto.CoverUris
 import app.lyrify.auto.coverPath
 import app.lyrify.audio.LiveEq
 import app.lyrify.library.Song
@@ -332,10 +332,10 @@ class GaplessEngine(context: Context, settings: () -> Settings, levels: SongLeve
 /**
  * [projected] as a media item: its uid as the media id (the session, the bridge and the browse tree know it by that), the
  * file, and what the notification, the lock screen, Bluetooth and the car show: the title as every surface shows it
- * ([displayTitle]), the artist, the album, the length, and the cover from the provider at [covers] ([CarCovers]).
+ * ([displayTitle]), the artist, the album, the length, and the cover at its uri from [covers].
  */
 @OptIn(UnstableApi::class)
-fun mediaItemOf(projected: Projected, settings: LibrarySettings, covers: String): MediaItem {
+fun mediaItemOf(projected: Projected, settings: LibrarySettings, covers: CoverUris): MediaItem {
     val song = projected.song
     return MediaItem.Builder()
         .setMediaId(projected.uid.toString())
@@ -345,12 +345,12 @@ fun mediaItemOf(projected: Projected, settings: LibrarySettings, covers: String)
 }
 
 /**
- * What a song shows on the session and in the browse tree. Its cover is a uri of KJB's cover provider at [covers]
- * ([CarCovers]): by MediaStore id, never a path, and KJB's default cover for a song without one, so Android Auto (which
- * cannot read MediaStore's audio uris) and the notification always have one.
+ * What a song shows on the session and in the browse tree. Its cover is a uri of KJB's cover provider ([covers]): by
+ * MediaStore id and signed, never a path, and KJB's default cover for a song without one, so Android Auto (which cannot
+ * read MediaStore's audio uris) and the notification always have one. Never artwork bytes.
  */
 @OptIn(UnstableApi::class)
-fun metadataOf(song: Song, settings: LibrarySettings, covers: String): MediaMetadata = MediaMetadata.Builder()
+fun metadataOf(song: Song, settings: LibrarySettings, covers: CoverUris): MediaMetadata = MediaMetadata.Builder()
     .setTitle(displayTitle(song, settings))
     .setArtist(song.artist)
     .setAlbumTitle(song.album)
@@ -360,6 +360,6 @@ fun metadataOf(song: Song, settings: LibrarySettings, covers: String): MediaMeta
     .setReleaseYear(song.year)
     .setGenre(song.genre)
     .setDurationMs(song.durationMs.takeIf { it > 0 })
-    .setArtworkUri(CarCovers.uri(covers, coverPath(song)))
+    .setArtworkUri(covers.of(coverPath(song)))
     .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
     .build()

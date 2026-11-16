@@ -150,7 +150,7 @@ class PlayerDeviceTest {
     /** The player as the service builds it, over [songs] and its queues in [storage], on the main thread. */
     private fun build(songs: List<Song>, storage: QueueStorage = MemoryStorage()): Built = onMain {
         val core = PlayerCore(storage, scope, System::currentTimeMillis)
-        val engine = GaplessEngine(context, { Settings() }, NoLevels) { mediaItemOf(it, LibrarySettings(), CarCovers.authority(context)) }
+        val engine = GaplessEngine(context, { Settings() }, NoLevels) { mediaItemOf(it, LibrarySettings(), CarCovers.uris(context)) }
         val bridge = QueueBridge(engine)
         val find: (SongRef) -> Song? = { ref -> songs.firstOrNull { it.path == ref.path } }
         val player = LyrifyPlayer(Looper.getMainLooper(), engine, core, { SkipAmounts(30_000, 10_000) }, { bridge.sync(core.book.value, find) })
@@ -222,7 +222,7 @@ class PlayerDeviceTest {
     @Test
     fun theEngineHasItsOwnAudioSessionAsSoonAsItIsBuilt() {
         val session = onMain {
-            val engine = GaplessEngine(context, { Settings() }, NoLevels) { mediaItemOf(it, LibrarySettings(), CarCovers.authority(context)) }
+            val engine = GaplessEngine(context, { Settings() }, NoLevels) { mediaItemOf(it, LibrarySettings(), CarCovers.uris(context)) }
             engine.audioSessionId.also { engine.release() }
         }
         assertTrue("audio session $session", session > 0)

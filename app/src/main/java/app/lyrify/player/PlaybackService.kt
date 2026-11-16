@@ -233,7 +233,6 @@ class PlaybackService : MediaLibraryService() {
         heardSoFar()
         tracker.end()
         parts.forEach { it.stop() }
-        browse.release()
         session?.release()
         session = null
         // Its thread would outlive the service; a cover still loading fails, and the notification is going anyway.
@@ -261,7 +260,7 @@ class PlaybackService : MediaLibraryService() {
     /** The speed of the book playing; null while music plays. */
     private fun bookSpeed(): Speed? = playingBook(core.book.value.current, library.value)?.let { BooksGraph.store(this).state.value.speedOf(it.book) }
 
-    private fun mediaItem(projected: Projected): MediaItem = mediaItemOf(projected, settings.value.library, CarCovers.authority(this))
+    private fun mediaItem(projected: Projected): MediaItem = mediaItemOf(projected, settings.value.library, CarCovers.uris(this))
 
     /** The bridge applied now, before a controller's items are matched against the engine's. */
     private fun sync() {
@@ -462,15 +461,15 @@ class PlaybackService : MediaLibraryService() {
 private class ThumbnailLoader(private val context: Context) : BitmapLoader {
     private val fallback = DataSourceBitmapLoader.Builder(context).build()
     private val io: ListeningExecutorService = MoreExecutors.listeningDecorator(Executors.newSingleThreadExecutor())
-    private val covers = CarCovers.authority(context)
+    private val covers = CarCovers.uris(context)
 
     override fun supportsMimeType(mimeType: String): Boolean = fallback.supportsMimeType(mimeType)
 
     override fun decodeBitmap(data: ByteArray): ListenableFuture<Bitmap> = fallback.decodeBitmap(data)
 
     override fun loadBitmap(uri: Uri): ListenableFuture<Bitmap> {
-        if (uri.scheme != ContentResolver.SCHEME_CONTENT || uri.authority != covers) return fallback.loadBitmap(uri)
-        return io.submit<Bitmap> { CarCovers.bitmap(context, uri.lastPathSegment) }
+        if (uri.scheme != ContentResolver.SCHEME_CONTENT || uri.authority != covers.authority) return fallback.loadBitmap(uri)
+        return io.submit<Bitmap> { CarCovers.bitmap(context, uri) }
     }
 
     /** Lets the loading thread go, with the service. */
