@@ -58,10 +58,11 @@ class AddonStalledException(val stage: AiStage?, val silentMs: Long) :
     Exception("the AI add-on said nothing for ${silentMs / 1000} s during ${stage?.name?.lowercase() ?: "its start"}")
 
 /**
- * A song's job in the add-on beat, then said nothing for [silentMs] in [stage] (null: before its first stage): the phone
- * froze the add-on's process, as an app freezer does (Samsung's, others), beats and all ([RemoteSongEngine]'s freeze
- * watch). Nothing more was asked of it; it was let go of and its service stopped. Not the song's doing: the song is
- * tried again later, and the night's run ends.
+ * A song's job in the add-on beat, then said nothing for [silentMs] in [stage] (null: before its first stage, or the
+ * models' download): the phone froze the add-on's process, as an app freezer does (Samsung's, others), beats and all
+ * ([RemoteSongEngine]'s freeze watch, [AddonDownloads.follow]'s). Nothing more was asked of it; it was let go of and its
+ * service stopped. Not the song's doing: the song is tried again later, and the night's run ends; a download goes on
+ * from its parts at its next run.
  */
 class AddonFrozenException(val stage: AiStage?, val silentMs: Long) :
     Exception("the AI add-on was frozen: no word for ${silentMs / 1000} s during ${stage?.name?.lowercase() ?: "its start"}")
@@ -212,9 +213,9 @@ class AddonSession internal constructor(private val binding: AddonBinding, val a
     }
 
     /**
-     * Has the add-on run its job in its own foreground service, which a phone's app freezer leaves alone (a service KJB
-     * binds counts for nothing there): KJB starts it, and KJB's own foreground (its overnight service, or its screen)
-     * is what lets it. False when the phone refuses; the job then runs without it.
+     * Has the add-on run its job or the models' download in its own foreground service, which a phone's app freezer leaves
+     * alone (a service KJB binds counts for nothing there): KJB starts it, and KJB's own foreground (its overnight or
+     * download service, or its screen) is what lets it. False when the phone refuses; the work then runs without it.
      */
     fun foreground(): Boolean = binding.foreground()
 

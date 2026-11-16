@@ -54,8 +54,8 @@ object Addon {
 
 /**
  * The AI add-on through Android ([AndroidAddon]): its binder as an [AddonPort], and its service started for the foreground
- * for a job with KJB's AI page as the tap on its notice ([AddonKeepAlive.EXTRA_TAP]), which also tells the add-on the start
- * is KJB's.
+ * for a job or the models' download with KJB's AI page as the tap on its notice ([AddonKeepAlive.EXTRA_TAP]), which also
+ * tells the add-on the start is KJB's.
  */
 internal class AndroidAddonHost(private val context: Context, addon: KjbAddon) : AddonHost {
     private val android = AndroidAddon(context, addon)
