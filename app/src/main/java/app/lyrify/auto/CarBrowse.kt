@@ -521,10 +521,12 @@ class CarCovers : ContentProvider() {
         fun uris(context: Context): CoverUris = made ?: CoverUris(authority(context), CoverKey.of(context)).also { made = it }
 
         /**
-         * The cover at [path] for KJB's own surfaces (the session's bitmap loader, in this process): the song's embedded
-         * cover, else the default cover. No library check: the session hands out only its own songs' paths. Blocking.
+         * The cover at [uri] for KJB's own surfaces, read in this process at the uri the car reads (the session's bitmap
+         * loader for the notification and the lock screen, and the widgets): the song's embedded cover, else the default
+         * cover, which a uri KJB did not sign also gets. No library check: KJB hands out only its own songs' uris. Blocking.
          */
-        fun bitmap(context: Context, path: String?): Bitmap = coverFor(path.orEmpty(), { true }, { embedded(context, it) }) { defaultBitmap(context) }
+        fun bitmap(context: Context, uri: Uri): Bitmap =
+            coverFor(uris(context).pathOf(uri.pathSegments).orEmpty(), { true }, { embedded(context, it) }) { defaultBitmap(context) }
 
         /** The library, while a cover is asked for on a binder thread ([readyLibrary]). */
         private fun library(context: Context): Library? = runBlocking { readyLibrary(LibraryGraph.repository(context).state) }

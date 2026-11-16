@@ -469,7 +469,7 @@ private class ThumbnailLoader(private val context: Context) : BitmapLoader {
 
     override fun loadBitmap(uri: Uri): ListenableFuture<Bitmap> {
         if (uri.scheme != ContentResolver.SCHEME_CONTENT || uri.authority != covers.authority) return fallback.loadBitmap(uri)
-        return io.submit<Bitmap> { CarCovers.bitmap(context, covers.pathOf(uri.pathSegments)) }
+        return io.submit<Bitmap> { CarCovers.bitmap(context, uri) }
     }
 
     /** Lets the loading thread go, with the service. */
