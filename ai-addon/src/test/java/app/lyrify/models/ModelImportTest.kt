@@ -92,6 +92,32 @@ class ModelImportTest {
     }
 
     @Test
+    fun `a Whisper folder as KJB 2_0_2 left it goes in whole, with the manifest 2_0_2 wrote`() {
+        // What 2.0.2's own downloader wrote for a made-up archive (app: CarryOverTest, carry-over-2.0.2/models), byte for byte.
+        val files = AiModels.WHISPER_FILES.mapIndexed { i, name -> name to ByteArray(100 + i) { ((it * 31 + 3 + i) % 251).toByte() } }.toMap()
+        val manifest = (
+            """{"archiveSha256":"2fa16a9d993b33da3ea47ab847a52c9702dc6d4d433de0a985e57defb6b206fb","files":{""" +
+                """"encoder.onnx":{"bytes":100,"sha256":"7e335cb0ca4ba0bf749efe0e46e142bb6c8f710eea7fbf806ae9150bf98a19b7"},""" +
+                """"encoder.bin":{"bytes":101,"sha256":"8f0bb883c871e48183c0e92e11dedf298b23b4ed6c90e02de2652ae6acc45da9"},""" +
+                """"decoder.onnx":{"bytes":102,"sha256":"61334c2c1d9bcad4fd83c55a47df1dc6b229505397eda2ed8a542a933e923332"},""" +
+                """"decoder.bin":{"bytes":103,"sha256":"505b488002db5b71682d3485f94dda3f46fd8fda0537bd1f71c86f732778a8ae"},""" +
+                """"metadata.json":{"bytes":104,"sha256":"245a07efa256cc6c2803cf4500682bea15b484d323d9e1146af5301a9a556b56"}}}"""
+            ).toByteArray()
+        val spec = ModelSpec(
+            AiModels.WHISPER, "https://github.com/x", "2fa16a9d993b33da3ea47ab847a52c9702dc6d4d433de0a985e57defb6b206fb", 999,
+            ModelSpec.Unpack("whisper-pack", AiModels.WHISPER_FILES, files.values.sumOf { it.size.toLong() }),
+        )
+        val store = ModelStore(folder.newFolder("models-202"), listOf(spec), folder.newFolder("cache-202"))
+        val import = ModelImport(store, freeBytes = { Long.MAX_VALUE })
+        fun send(name: String, bytes: ByteArray) = import.import("${AiModels.WHISPER}/$name", ByteArrayInputStream(bytes), bytes.size.toLong(), sha(bytes))
+
+        files.forEach { (name, bytes) -> assertEquals(imported, send(name, bytes)) }
+        assertEquals(imported, send(ModelStore.MANIFEST, manifest))
+
+        assertTrue(store.has(spec))
+    }
+
+    @Test
     fun `a Whisper file sent again after a kill is not read again`() {
         val (name, bytes) = whisperFiles.entries.first()
         assertEquals(imported, send("${AiModels.WHISPER}/$name", bytes))

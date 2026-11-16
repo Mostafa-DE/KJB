@@ -122,6 +122,7 @@ object ImportFormats {
      * format KJB reads, or why not. The content decides, the name only when the content cannot: `[playlist]` is pls, XML
      * whose root is `playlist` is xspf, `#EXTM3U` is m3u, and so are lines naming songs, or any text in a file named
      * `.m3u` or `.m3u8`. Binary files (an audio file, a PDF, a database) are not recognised whatever their names.
+     * Samsung Music's favourites file ([isSamsungFavourites]) holds favourites instead of a playlist.
      */
     fun read(bytes: ByteArray, fileName: String?, folder: String?, musicolet: MusicoletDb? = null): ImportRead {
         val name = clean(fileName, MAX_NAME_CHARS)
@@ -147,10 +148,10 @@ object ImportFormats {
         }
         return when (parsed) {
             is Parsed.Failed -> failed(parsed.why)
-            is Parsed.Songs -> if (parsed.songs.isEmpty()) {
-                failed(ImportFailure.EMPTY)
-            } else {
-                ImportRead.Read(name, parsed.format, ImportBundle(listOf(ImportPlaylist(cleanName(parsed.title) ?: cleanName(playlistName(fileName)), parsed.songs))))
+            is Parsed.Songs -> when {
+                parsed.songs.isEmpty() -> failed(ImportFailure.EMPTY)
+                isSamsungFavourites(fileName) -> ImportRead.Read(name, parsed.format, ImportBundle(favourites = parsed.songs))
+                else -> ImportRead.Read(name, parsed.format, ImportBundle(listOf(ImportPlaylist(cleanName(parsed.title) ?: cleanName(playlistName(fileName)), parsed.songs))))
             }
         }
     }
@@ -197,6 +198,15 @@ object ImportFormats {
 
     /** Whether a folder's file [fileName] is worth reading: its name ends in a playlist's extension. */
     fun isPlaylistFile(fileName: String?): Boolean = extension(fileName) in PLAYLIST_EXTENSIONS
+
+    /**
+     * Whether [fileName] is the file Samsung Music's Export writes its favourites to, `!#SamsungMusic_favorites#!.m3u`
+     * in the Music folder: its name with `.m3u` or `.m3u8`, case aside. Its songs go to Favourites, not a playlist.
+     */
+    fun isSamsungFavourites(fileName: String?): Boolean {
+        val name = fileName?.trim() ?: return false
+        return extension(name).let { it == M3U || it == M3u.EXTENSION } && name.substringBeforeLast('.').equals(SAMSUNG_FAVOURITES, ignoreCase = true)
+    }
 
     /** A playlist's name from its file's: a playlist's extension (or `.txt`) taken off; null when that leaves nothing. */
     fun playlistName(fileName: String?): String? {
@@ -394,6 +404,7 @@ object ImportFormats {
     private const val ARCHIVE: String = "zip"
     private const val M3U: String = "m3u"
     private const val M3U_HEADER: String = "#EXTM3U"
+    private const val SAMSUNG_FAVOURITES: String = "!#SamsungMusic_favorites#!"
     private const val XSPF_ROOT: String = "playlist"
     private const val LOCATION: String = "location"
     private const val TITLE_FIELD: String = "title"

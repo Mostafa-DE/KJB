@@ -96,6 +96,15 @@ class DlRunsTest {
             live.remove(id)?.complete(YtdlpExit.Killed)
         }
 
+        /** A killed process still in a folder, by its marker: how many more looks see it (it goes after them). */
+        val lingering = HashMap<String, Int>()
+
+        override fun running(marker: String): Boolean {
+            val left = lingering[marker] ?: 0
+            if (left > 0) lingering[marker] = left - 1
+            return left > 0
+        }
+
         override suspend fun update(): DlUpdate.Outcome {
             calls += "update"
             return updateOutcome
@@ -404,6 +413,28 @@ class DlRunsTest {
     }
 
     @Test
+    fun `Cancel whose closed descriptor fails the hand-off first still deletes the file`() = runTest {
+        val runs = runs()
+        val heard = Heard()
+        val run = waiting(runs, heard)
+        // KJB's Cancel, then KJB's descriptor closed under the copy: the write fails before the run sees the Cancel.
+        val closed = object : OutputStream() {
+            override fun write(b: Int) = write(byteArrayOf(b.toByte()), 0, 1)
+
+            override fun write(b: ByteArray, off: Int, len: Int) {
+                runs.cancel(run, keepParts = false)
+                throw IOException("write failed: EPIPE (Broken pipe)")
+            }
+        }
+
+        runs.deliver(run, closed, null)
+        runCurrent()
+
+        assertEquals(DlEnd.Failed(DlFailure.HAND_OFF), heard.end)
+        assertFalse(File(root, "k1").exists())
+    }
+
+    @Test
     fun `KJB never taking the file does not hold the run for good`() = runTest {
         val runs = runs()
         val heard = Heard()
@@ -451,6 +482,114 @@ class DlRunsTest {
 
         assertEquals(DlEnd.Stopped, heard.end)
         assertFalse(File(root, "k1").exists())
+    }
+
+    @Test
+    fun `KJB's Cancel deletes the run's parts as it stops, though KJB lets go of the add-on meanwhile, and nothing else`() = runTest {
+        memory.lastCheck = now
+        // In the merge: both streams whole, the merged file part way.
+        ytdlp.scripts += Script.Hang(mapOf("x.f315.webm" to ByteArray(10), "x.f258.m4a" to ByteArray(10), "x.temp.mp4" to ByteArray(10)))
+        val other = File(root, "k2").apply { mkdirs() }
+        File(other, "y.webm.part").writeBytes(ByteArray(1))
+        val outside = File(temp.root, "x.temp.mp4").apply { writeBytes(ByteArray(1)) }
+        val runs = runs()
+        val heard = Heard()
+        val run = runs.start(song, heard)
+        runCurrent()
+
+        // KJB's Cancel, its discard, then KJB letting go of the add-on (every run stopped, parts kept): all while it stops.
+        runs.cancel(run, keepParts = false)
+        runs.discard("k1")
+        runs.cancelAll()
+        runCurrent()
+
+        assertEquals(DlEnd.Stopped, heard.end)
+        assertFalse(File(root, "k1").exists())
+        assertTrue(File(other, "y.webm.part").exists())
+        assertTrue(outside.exists())
+    }
+
+    @Test
+    fun `a stopped run's folder goes once its killed processes are gone, however long one stays, and its key stays taken meanwhile`() = runTest {
+        memory.lastCheck = now
+        ytdlp.scripts += Script.Hang(mapOf("x.temp.mp4" to ByteArray(10)))
+        val runs = runs()
+        val heard = Heard()
+        val run = runs.start(song, heard)
+        runCurrent()
+        val marker = File(root, "k1").path + "/"
+        // Its ffmpeg, killed, still there a minute on.
+        ytdlp.lingering[marker] = Int.MAX_VALUE
+
+        runs.cancel(run, keepParts = false)
+        advanceTimeBy(60_000)
+        runCurrent()
+
+        // Its files untouched and its run not over: no second run of its key starts, and no sweep deletes it.
+        assertTrue(File(root, "k1/x.temp.mp4").exists())
+        assertNull(heard.end)
+        val second = Heard()
+        runs.start(song, second)
+        runCurrent()
+        assertEquals(DlEnd.Failed(DlFailure.REFUSED), second.end)
+        runs.discard("k1")
+        runs().sweep()
+        assertTrue(File(root, "k1/x.temp.mp4").exists())
+
+        // Gone: the folder goes, the run ends, and the key is free again.
+        ytdlp.lingering.clear()
+        advanceTimeBy(DlRuns.GONE_WAIT_MS)
+        runCurrent()
+        assertFalse(File(root, "k1").exists())
+        assertEquals(DlEnd.Stopped, heard.end)
+        ytdlp.scripts += Script.Hang()
+        val third = Heard()
+        runs.start(song, third)
+        runCurrent()
+        assertNull(third.end)
+    }
+
+    @Test
+    fun `a run KJB lets go of keeps its key while a killed process is in its folder, and a discard meanwhile deletes it once gone`() = runTest {
+        memory.lastCheck = now
+        ytdlp.scripts += Script.Hang(mapOf("x.temp.mp4" to ByteArray(10)))
+        val runs = runs()
+        val heard = Heard()
+        runs.start(song, heard)
+        runCurrent()
+        // Its ffmpeg, killed, still seen for 3 s.
+        ytdlp.lingering[File(root, "k1").path + "/"] = 30
+
+        // KJB lets go of the add-on (parts kept), starts the key again, then discards it, all while the ffmpeg is there.
+        runs.cancelAll()
+        runCurrent()
+        val second = Heard()
+        runs.start(song, second)
+        runCurrent()
+        assertEquals(DlEnd.Failed(DlFailure.REFUSED), second.end)
+        runs.discard("k1")
+        runCurrent()
+        assertTrue(File(root, "k1/x.temp.mp4").exists())
+
+        advanceTimeBy(DlRuns.GONE_WAIT_MS)
+        runCurrent()
+        assertFalse(File(root, "k1").exists())
+        assertEquals(DlEnd.Stopped, heard.end)
+    }
+
+    @Test
+    fun `a discard of a key no run holds deletes its folder only once no process is in it, else marks it for the sweep`() = runTest {
+        val left = File(root, "k9").apply { mkdirs() }
+        File(left, "x.part").writeBytes(ByteArray(1))
+        ytdlp.lingering[left.path + "/"] = Int.MAX_VALUE
+
+        runs().discard("k9")
+
+        assertTrue(File(left, "x.part").exists())
+        assertTrue(File(left, DlRuns.DISCARDED).exists())
+        ytdlp.lingering.clear()
+        runs().sweep()
+        assertFalse(left.exists())
     }
 
     @Test
@@ -651,6 +790,39 @@ class DlRunsTest {
         advanceTimeBy(60_000)
         runCurrent()
         assertEquals("none once it ended", beats, heard.beats)
+    }
+
+    @Test
+    fun `a stopped run beats on while a killed process keeps it from its end, and stops at its end`() = runTest {
+        memory.lastCheck = now
+        ytdlp.scripts += Script.Hang()
+        val runs = runs()
+        val heard = Heard()
+        val run = runs.start(song, heard)
+        runCurrent()
+        // Its ffmpeg, killed, still there a minute on.
+        ytdlp.lingering[File(root, "k1").path + "/"] = Int.MAX_VALUE
+
+        runs.cancel(run, keepParts = false)
+        runCurrent()
+        val stopped = heard.beats
+        advanceTimeBy(60_000)
+        runCurrent()
+        val endWhileThere = heard.end
+        val beatsWhileThere = heard.beats - stopped
+        // Gone, so the run ends before anything is asserted: a run left waiting would hold the test.
+        ytdlp.lingering.clear()
+        advanceTimeBy(DlRuns.GONE_WAIT_MS)
+        runCurrent()
+
+        // KJB still hears from it every 5 s, so its freeze watch never takes the wait for a frozen add-on.
+        assertNull(endWhileThere)
+        assertEquals("one every 5 s while it waits", 12, beatsWhileThere)
+        assertEquals(DlEnd.Stopped, heard.end)
+        val ended = heard.beats
+        advanceTimeBy(60_000)
+        runCurrent()
+        assertEquals("none once it ended", ended, heard.beats)
     }
 
     @Test

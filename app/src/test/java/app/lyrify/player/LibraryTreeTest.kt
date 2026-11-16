@@ -186,6 +186,16 @@ class LibraryTreeTest {
     }
 
     @Test
+    fun `the car lists the queues as the app does, the one playing first, then the others with the last left first`() {
+        val appSource = QueueSource(SourceKind.ALBUM, albumKey(harbour[0])!!, "Harbour Glass")
+        var book = QueueBook().play(harbour.map { it.ref }, 0, appSource, now = 1).book
+        // Kept with Keep in 3.0.0, then left: it is no Saved part of its own, only a queue left at 2.
+        book = book.keep(book.currentId!!).play(listOf(loose.ref), 0, QueueSource(SourceKind.FOLDER, "folder:Music/Rips", "Rips"), now = 2).book
+        book = book.play(listOf(ember.ref), 0, QueueSource(SourceKind.SEARCH, "search", "ember"), now = 3).book
+        assertEquals(listOf("ember", "Rips", "Harbour Glass"), children(LibraryTree.QUEUES, data(book)).map { it.title })
+    }
+
+    @Test
     fun `a song picked in the car inside the album the app is playing goes on in the same queue`() {
         val appSource = QueueSource(SourceKind.ALBUM, albumKey(harbour[0])!!, "Harbour Glass")
         val book = QueueBook().play(harbour.map { it.ref }, 0, appSource, now = 1).book

@@ -456,6 +456,22 @@ class LyricsPipelineTest {
     }
 
     @Test
+    fun `a book's part is never searched for, and a pick from a search never writes beside it`() = runTest {
+        val track = audio("Lantern Keeper 01.mp3", title = "Lantern Keeper")
+        client.onSearch = { LrclibResult.Found(listOf(record())) }
+        client.onId = { LrclibResult.Found(listOf(record())) }
+        val pipeline = pipeline(isBook = { it == track.path })
+
+        assertEquals(Searched.Found(emptyList()), pipeline.search(track, "Lantern Keeper"))
+        assertEquals(Checked.Changed, pipeline.choose(track.path, 42, song = track))
+
+        assertEquals(0, client.requests)
+        assertFalse(sidecar(track).exists())
+        assertNull(ledger[track.path])
+        assertAudioUntouched(track)
+    }
+
+    @Test
     fun `no log, warning or detail line names the song or its files`() = runTest {
         val details = mutableListOf<String>()
         val pipeline = pipeline(detail = { details += it })

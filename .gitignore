@@ -35,3 +35,5 @@ keystore.properties
 *.onnx
 # Except the tiny stand-in test models (a few KB, made by tools/whisper_io_models.py)
 !app/src/test/resources/npu/*.onnx
+# and the carry-over tests' stand-in model files (a few hundred bytes each)
+!app/src/test/resources/carry-over-2.0.2/models/**

@@ -65,6 +65,7 @@ import app.lyrify.library.sortArtists
 import app.lyrify.library.needsPlays
 import app.lyrify.library.sortSongs
 import app.lyrify.player.QueueSource
+import app.lyrify.player.QueueTarget
 import app.lyrify.player.SongsTabSource
 import app.lyrify.player.SourceKind
 import app.lyrify.settings.DockTab
@@ -558,7 +559,7 @@ internal fun LazyListScope.folderRows(rows: List<FolderRow>, reduced: Boolean) {
 }
 
 /**
- * Playlists, in Library's Playlists tab and on the Playlists tab's root: the pinned Queues row ("3 saved"), Built for
+ * Playlists, in Library's Playlists tab and on the Playlists tab's root: the pinned Queues row ("4 queues"), Built for
  * you (Favourites, Most played, Recently played, Recently added), then the user's playlists by name and New playlist.
  */
 @Composable
@@ -575,7 +576,7 @@ private fun PlaylistsTab(ui: LibraryUi, library: Library, padding: PaddingValues
     val most by produceState(0, library, written) { value = mostPlayed(Lyrify.plays(context), library).size }
     val played by produceState(0, library, written) { value = recentlyPlayed(Lyrify.plays(context), library).size }
     val added = remember(library) { recentlyAdded(library, System.currentTimeMillis()).size }
-    val saved = ui.queues.count { it.saved }
+    val queues = queuesCount(ui.queues)
     val source = QueueSource(SourceKind.SONGS, "tab:playlists", stringResource(R.string.library_tab_playlists))
     val state = rememberLazyListState()
     ReselectToTop(reselect) { state.animateScrollToItem(0) }
@@ -585,7 +586,7 @@ private fun PlaylistsTab(ui: LibraryUi, library: Library, padding: PaddingValues
             Box(rowMotion(reduced)) { ListHeader(playlists.size + BuiltInList.entries.size, R.plurals.lib_noun_playlists, { playback.shuffle(songs.map { it.ref }, source) }, { playback.play(songs.map { it.ref }, 0, source) }, songs = songs.size) }
         }
         item(key = "queues", contentType = "row") {
-            NavRow(stringResource(R.string.lib_queues), pluralStringResource(R.plurals.lib_saved, saved, saved), rowMotion(reduced), lead = { Tile(R.drawable.ic_queue_music, brand.highlightContainer, brand.onHighlightContainer) }) {
+            NavRow(stringResource(R.string.lib_queues), queues?.let { pluralStringResource(R.plurals.lib_queues_count, it, it) }, rowMotion(reduced), lead = { Tile(R.drawable.ic_queue_music, brand.highlightContainer, brand.onHighlightContainer) }) {
                 nav.open(Page.Queues)
             }
         }
@@ -602,6 +603,9 @@ private fun PlaylistsTab(ui: LibraryUi, library: Library, padding: PaddingValues
         item(key = "new", contentType = "new") { Box(rowMotion(reduced)) { NewRow(stringResource(R.string.lib_new_playlist)) { sheets.show(OpenSheet.NewPlaylist(emptyList())) } } }
     }
 }
+
+/** The Queues row's count: every queue, the one playing too; null when there is none, so the row never reads 0. */
+internal fun queuesCount(queues: List<QueueTarget>): Int? = queues.size.takeIf { it > 0 }
 
 /** A Built for you row: its tile, its name and how many songs it holds. */
 @Composable

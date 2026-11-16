@@ -35,8 +35,8 @@ class LyricsViewsTest {
         val read = SettingsJson.decode(SettingsJson.encode(flipped))!!
         assertEquals(flipped.playerUi, read.playerUi)
         // Opened again on the lyrics, it says nothing; on a first open, on the cover, it says "Tap the cover for lyrics".
-        assertFalse(flipHintOnOpen(read.playerUi))
-        assertTrue(flipHintOnOpen(Settings().playerUi))
+        assertFalse(flipHintOnOpen(read.playerUi, book = false))
+        assertTrue(flipHintOnOpen(Settings().playerUi, book = false))
         assertFalse(Settings().playerUi.showLyrics)
     }
 

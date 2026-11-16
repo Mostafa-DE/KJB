@@ -16,7 +16,7 @@
     </plurals>
     <string name="import_phone_button">From your phone</string>
     <string name="import_where_title">Other players</string>
-    <string name="import_where_samsung">Samsung Music: Settings, Manage playlists, Export my playlists. Then pick the file in your Music folder.</string>
+    <string name="import_where_samsung">Samsung Music: Settings, Manage playlists, Export my playlists. Then pick your Music folder, or the files in it. Your favourites come in too.</string>
     <string name="import_where_poweramp">Poweramp: Settings, Folders and Library, Export Poweramp Playlists. Then pick the folder they went to.</string>
     <string name="import_where_musicolet">Musicolet: Settings, Backup/Restore, Backup now. Then pick the backup in its Backups folder. It brings playlists, favourites, play counts and queues.</string>
     <string name="import_where_aimp">AIMP: export the playlist as an XSPF file, then pick it.</string>
@@ -69,6 +69,10 @@
     <plurals name="import_done">
         <item quantity="one">Imported %1$s playlist</item>
         <item quantity="other">Imported %1$s playlists</item>
+    </plurals>
+    <plurals name="import_done_to_favourites">
+        <item quantity="one">Added %1$s song to Favourites</item>
+        <item quantity="other">Added %1$s songs to Favourites</item>
     </plurals>
     <string name="import_done_other">Import done</string>
     <string name="import_nothing_new">Nothing new</string>

@@ -56,8 +56,11 @@ class LrcEditsTest {
     private val undos: File get() = File(folder.root, "app/files/lrc-undo")
     private var ids = 0
 
-    private fun edits(writes: SharedWrites = SharedWrites.ANYWHERE, writeBytes: (FileChannel, ByteBuffer) -> Unit = SidecarFile::writeFully) =
-        LrcEdits(ledger, writes, hold, undos, clock = { NOW }, log = { logs += it }, writeBytes = writeBytes, newId = { "u${++ids}" })
+    private fun edits(
+        writes: SharedWrites = SharedWrites.ANYWHERE,
+        writeBytes: (FileChannel, ByteBuffer) -> Unit = SidecarFile::writeFully,
+        isBook: suspend (String) -> Boolean = { false },
+    ) = LrcEdits(ledger, writes, hold, undos, clock = { NOW }, log = { logs += it }, writeBytes = writeBytes, newId = { "u${++ids}" }, isBook = isBook)
 
     private fun copy(undo: LrcUndo): File = File(undos, undo.backup ?: error("no copy kept"))
 
@@ -270,6 +273,28 @@ class LrcEditsTest {
         assertEquals(before, sidecar(existing).readText())
         assertNull(ledger[fresh.path])
         assertNull(ledger[existing.path])
+    }
+
+    @Test
+    fun `a book's part is never given an lrc, whatever its entry says from before`() = runTest {
+        val fresh = audio("Lantern Keeper.m4b")
+        val existing = audio("Lantern Keeper Part Two.m4b")
+        sidecar(existing).writeText(before)
+        // Looked up as a song before it became a book.
+        val plain = entry(existing, LyricsStatus.PLAIN_ONLY, lrclibId = 7)
+        ledger.put(plain)
+        val edits = edits(isBook = { it.endsWith(".m4b") })
+
+        assertEquals(LrcSave.Refused, edits.save(fresh, saved))
+        assertEquals(LrcSave.Refused, edits.save(existing, saved))
+
+        assertFalse(sidecar(fresh).exists())
+        assertEquals(before, sidecar(existing).readText())
+        assertNull(ledger[fresh.path])
+        assertEquals(plain, ledger[existing.path])
+        assertEquals(emptyList<LrcUndo>(), edits.pending.value)
+        // A song beside them is saved as ever.
+        assertTrue(edits.save(audio(), saved) is LrcSave.Saved)
     }
 
     @Test

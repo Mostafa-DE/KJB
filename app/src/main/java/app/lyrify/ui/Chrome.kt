@@ -380,8 +380,8 @@ fun DotBadge(modifier: Modifier = Modifier) {
 // Top bars
 
 /**
- * KJB's top bar: the title in Bricolage, its navigation and actions as glass circles. Clear at rest; once content is
- * [under] it, a glass band and a hairline fade in. No colour flip.
+ * KJB's top bar: the title in Bricolage, its navigation and actions as glass circles. The page's colour at rest, opaque
+ * ([TopBand]); once content is [under] it, a glass band and a hairline fade in. No colour flip.
  */
 @Composable
 fun LyrifyTopBar(
@@ -456,11 +456,14 @@ private fun HeaderLogo() {
     Image(painterResource(R.drawable.kjb_default_cover), contentDescription = null, modifier = Modifier.size(HEADER_LOGO).clip(shape).then(edge))
 }
 
-/** The band behind a top bar: clear at rest, glass and a hairline while content is [under] it. */
+/**
+ * The band behind a top bar, from the top of the status bar: the page's own colour at rest, opaque ([ChromeColors.topBar]),
+ * so a list scrolls under it and never shows through; glass and a hairline while content is [under] it.
+ */
 @Composable
 fun TopBand(under: Boolean, backdrop: GlassBackdrop?, modifier: Modifier = Modifier, content: @Composable () -> Unit) {
     val band by animateFloatAsState(if (under) 1f else 0f, motion(tween(BAND_FADE_MS), LocalReducedMotion.current), label = "band")
-    Box(modifier.fillMaxWidth()) {
+    Box(modifier.fillMaxWidth().background(LocalChromeColors.current.topBar)) {
         if (band > 0f) GlassSurface(backdrop, RectangleShape, Modifier.matchParentSize().graphicsLayer { alpha = band }, elevation = 0.dp) {}
         content()
     }

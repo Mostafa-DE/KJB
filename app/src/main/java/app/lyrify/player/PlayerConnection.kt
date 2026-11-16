@@ -67,7 +67,12 @@ data class PlayerUi(
     val durationMs: Long,
     val repeat: Repeat,
     val library: Library?,
+    /** The tags of a file another app opened, while the library lacks it ([OpenedFiles]); [song] stays null: it is in no library. */
+    val opened: Song? = null,
 ) {
+    /** The tags the screens name the song by: the library's song, else an opened file's own ([opened]). */
+    val named: Song? get() = song ?: opened
+
     /** Where the song is at [now] (elapsed realtime), within its length. */
     fun positionAt(now: Long): Long {
         val moved = if (playing) positionMs + ((now - at) * speed).toLong() else positionMs
@@ -76,17 +81,18 @@ data class PlayerUi(
 }
 
 /**
- * What the screens show for KJB's own player: the queue playing from the model, the song from the library, and the
- * transport from the session's player while the screens are connected to it ([transport] for that song), else the place
- * saved ([place], or the queue's own). Null when nothing is loaded.
+ * What the screens show for KJB's own player: the queue playing from the model, the song from the library (else the tags
+ * of the [opened] copy it is, by path), and the transport from the session's player while the screens are connected to it
+ * ([transport] for that song), else the place saved ([place], or the queue's own). Null when nothing is loaded.
  */
-fun playerUi(book: QueueBook, repeat: Repeat, place: PlaybackPlace?, transport: Transport, library: Library?, now: Long): PlayerUi? {
+fun playerUi(book: QueueBook, repeat: Repeat, place: PlaybackPlace?, transport: Transport, library: Library?, now: Long, opened: Map<String, Song> = emptyMap()): PlayerUi? {
     val queue = book.current ?: return null
     val placed = if (place != null && place.queueId == queue.id) withPlace(book, place).current ?: queue else queue
     val item = placed.current ?: return null
     val song = library?.resolver?.find(item.song)
+    val copy = if (song == null) opened[item.song.path] else null
     val live = transport.connected && transport.uid == item.uid
-    val length = if (live && transport.durationMs > 0) transport.durationMs else song?.durationMs ?: 0
+    val length = if (live && transport.durationMs > 0) transport.durationMs else (song ?: copy)?.durationMs ?: 0
     return PlayerUi(
         book = book,
         queue = placed,
@@ -99,6 +105,7 @@ fun playerUi(book: QueueBook, repeat: Repeat, place: PlaybackPlace?, transport: 
         durationMs = length,
         repeat = repeat,
         library = library,
+        opened = copy,
     )
 }
 
@@ -161,8 +168,8 @@ class PlayerConnection(
     /** Every queue, for the queue pages. */
     val book: StateFlow<QueueBook> get() = core.book
 
-    val ui: StateFlow<PlayerUi?> = combine(core.book, core.repeat, core.place, transport, this.library) { book, repeat, place, transport, songs ->
-        playerUi(book, repeat, place, transport, songs, SystemClock.elapsedRealtime())
+    val ui: StateFlow<PlayerUi?> = combine(core.book, core.repeat, core.place, transport, combine(this.library, OpenedFiles.songs, ::Pair)) { book, repeat, place, transport, (songs, opened) ->
+        playerUi(book, repeat, place, transport, songs, SystemClock.elapsedRealtime(), opened)
     }.stateIn(scope, SharingStarted.Eagerly, null)
 
     /** A queue just moved to Recent. */
@@ -173,9 +180,7 @@ class PlayerConnection(
 
     override val queues: StateFlow<List<QueueTarget>> = core.book.map { book ->
         val names = queueLabels(context, book)
-        (book.saved + book.recent + listOfNotNull(book.currentId)).distinct().mapNotNull(book::queue).map { queue ->
-            QueueTarget(queue.id, names.getValue(queue.id), queue.items.size, saved = queue.id in book.saved, playing = queue.id == book.currentId)
-        }
+        book.listed.map { queue -> QueueTarget(queue.id, names.getValue(queue.id), queue.items.size, playing = queue.id == book.currentId) }
     }.stateIn(scope, SharingStarted.Eagerly, emptyList())
 
     private val listener = object : Player.Listener {
@@ -284,8 +289,6 @@ class PlayerConnection(
     }
 
     // The queue pages
-
-    fun keep(queueId: String) = core.change { it.keep(queueId) }
 
     fun rename(queueId: String, name: String) = core.change { it.rename(queueId, name) }
 

@@ -119,6 +119,7 @@ import androidx.compose.ui.window.DialogWindowProvider
 import androidx.core.view.WindowCompat
 import app.lyrify.R
 import app.lyrify.data.LyricsStatus
+import app.lyrify.player.OpenedFiles
 import app.lyrify.tags.CoverVersions
 import coil3.ImageLoader
 import coil3.asImage
@@ -827,12 +828,16 @@ fun Fact(@DrawableRes icon: Int, text: String, modifier: Modifier = Modifier, st
  */
 data class SongArt(val path: String, val mediaStoreId: Long? = null, val version: Int = 0)
 
-/** Loads a [SongArt] through MediaStore; a song without a cover fails, and the default cover under it shows. */
+/**
+ * Loads a [SongArt] through MediaStore, or a file another app opened from KJB's copy of it ([OpenedFiles.cover]); a song
+ * without a cover fails, and the default cover under it shows.
+ */
 class SongArtFetcher(private val art: SongArt, private val options: Options) : Fetcher {
     override suspend fun fetch(): FetchResult? {
         val context = options.context
-        val uri = art.mediaStoreId?.let { ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, it) } ?: audioUri(context, art.path) ?: return null
         val px = options.size.width.pxOrElse { DEFAULT_PX }
+        val uri = art.mediaStoreId?.let { ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, it) } ?: audioUri(context, art.path)
+            ?: return OpenedFiles.cover(context, art.path, px)?.let { ImageFetchResult(it.asImage(), isSampled = true, dataSource = DataSource.DISK) }
         val bitmap = try {
             context.contentResolver.loadThumbnail(uri, android.util.Size(px, px), null)
         } catch (e: IOException) {

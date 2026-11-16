@@ -5,9 +5,11 @@ import androidx.annotation.StringRes
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.listSaver
 import app.lyrify.R
+import app.lyrify.books.isBookPart
 import app.lyrify.data.LedgerEntry
 import app.lyrify.data.LedgerState
 import app.lyrify.data.LyricsStatus
+import app.lyrify.library.Library
 import app.lyrify.library.nameLetter
 import app.lyrify.library.nameOrder
 import app.lyrify.lyrics.TrackNames
@@ -144,6 +146,17 @@ fun sameChip(a: LyricsStatus, b: LyricsStatus): Boolean = a.style.label == b.sty
 
 /** Songs per group, from the songs per status ([LedgerState.counts]). */
 fun groupCounts(counts: Map<LyricsStatus, Int>): Map<SongGroup, Int> = SongGroup.entries.associateWith { group -> group.statuses.sumOf { counts[it] ?: 0 } }
+
+/**
+ * The ledger as the lyrics screens show it (the Songs list, Check these, the counts): without books' parts
+ * ([isBookPart]), whose entries from before they were books stay in the ledger unseen, so nothing offers to look up,
+ * check or decline lyrics for a book. [library] null while it is read: books by their path alone. The same [ledger]
+ * when it holds no book.
+ */
+fun ledgerWithoutBooks(ledger: LedgerState, library: Library?): LedgerState {
+    val songs = ledger.entries.filterKeys { !isBookPart(it, library) }
+    return if (songs.size == ledger.entries.size) ledger else ledger.copy(entries = songs)
+}
 
 /** The songs of the "Check these" screen: those waiting for the user to pick lyrics, with something to pick, newest first. */
 fun checkList(ledger: LedgerState): List<LedgerEntry> =

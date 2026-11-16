@@ -105,6 +105,7 @@ import androidx.media3.session.MediaLibraryService
 import app.lyrify.LOG_TAG
 import app.lyrify.Lyrify
 import app.lyrify.R
+import app.lyrify.books.knownBookPart
 import app.lyrify.data.LedgerRepository
 import app.lyrify.data.LedgerState
 import app.lyrify.logFailures
@@ -293,12 +294,12 @@ private fun LockLyricsScreen(ledger: LedgerState, onClose: () -> Unit) {
                 ChromeIconButton(R.drawable.ic_keyboard_arrow_down, stringResource(R.string.lock_close), onClose, glass = false, size = 48.dp, iconSize = 28.dp, tint = LockText)
                 SongCover(SongArt(path), size = 44.dp, shape = RoundedCornerShape(10.dp))
                 Column(Modifier.weight(1f)) {
-                    Text(ui.song?.title ?: path.substringAfterLast('/'), style = MaterialTheme.typography.titleSmall, color = LockText, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    ui.song?.artist?.takeIf(String::isNotBlank)?.let { Text(it, style = body(13f, 18), color = LockMuted, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                    Text(ui.named?.title ?: path.substringAfterLast('/'), style = MaterialTheme.typography.titleSmall, color = LockText, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    ui.named?.artist?.takeIf(String::isNotBlank)?.let { Text(it, style = body(13f, 18), color = LockMuted, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                 }
             },
             lyrics = {
-                LockLines(rememberSongLyrics(path, ledger.entries[path]), ui.positionAt(rememberClock(playing))) { line ->
+                LockLines(rememberSongLyrics(path, ledger.entries[path], knownBookPart(path, ui.library)), ui.positionAt(rememberClock(playing))) { line ->
                     val tap = lineTap(line, playing)
                     connection.seekTo(tap.seekMs)
                     if (tap.play) connection.play()
@@ -388,7 +389,7 @@ private fun rememberLockLinePx(): Int {
  * The lyrics as on the player: synced lines following the song (one size for every line, the line playing lit by its
  * colour, a smooth scroll to the anchor), which scroll by finger, the follow waiting while a finger is on them and a
  * while after, and a tap on one going there ([onLine], [lineTap]), a scroll never; plain lyrics still, scrolling whole;
- * or "No lyrics yet".
+ * or "No lyrics yet"; for a book's part, "No lyrics for books".
  */
 @Composable
 internal fun LockLines(lyrics: PanelLyrics?, positionMs: Long, onLine: (LrcLine) -> Unit) {
@@ -405,6 +406,8 @@ internal fun LockLines(lyrics: PanelLyrics?, positionMs: Long, onLine: (LrcLine)
         }
         PanelLyrics.Finding, PanelLyrics.None ->
             Text(stringResource(R.string.player_no_lyrics), style = MaterialTheme.typography.titleLarge, color = LockMuted, textAlign = look.align, modifier = Modifier.fillMaxWidth())
+        PanelLyrics.Book ->
+            Text(stringResource(R.string.book_no_lyrics), style = MaterialTheme.typography.titleLarge, color = LockMuted, textAlign = look.align, modifier = Modifier.fillMaxWidth())
         null -> Unit
     }
 }

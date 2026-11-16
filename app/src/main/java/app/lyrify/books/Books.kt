@@ -1,7 +1,11 @@
 package app.lyrify.books
 
 import app.lyrify.library.Library
+import app.lyrify.library.LibraryState
 import app.lyrify.library.Song
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.Locale
 import kotlin.math.ceil
 
@@ -26,9 +30,10 @@ data class BookMarks(
 enum class BookKind { SINGLE, FOLDER }
 
 /**
- * A book in the library. [id] never changes while its files stay: the file's path for a single file, the folder's
- * path and the album for a folder book ([folderBookId]). [parts] are in play order ([partOrder]); a single file has one.
- * [title] is the file's title or the folder book's album (else the folder's name); [author] the album artist or artist.
+ * A book in the library. [id] never changes while its files stay: the file's path for an `.m4b` or a song marked as a
+ * book, else the folder's path and the album ([folderBookId]), one file of them or more, so it holds as parts are
+ * hidden, added or removed. [parts] are in play order ([partOrder]); a single file has one. [title] is the file's title
+ * or the folder book's album (else the folder's name); [author] the album artist or artist.
  */
 data class Book(val id: String, val kind: BookKind, val title: String, val author: String?, val parts: List<Song>) {
     /** The whole book's length; a part MediaStore could not measure counts 0. */
@@ -78,12 +83,33 @@ fun readsChaptersFor(song: Song, library: Library): Boolean = song.path.endsWith
 
 /**
  * Whether the file at [path] is a book's part, for the lyrics and the AI, which never touch a book: by [library] once it
- * is read; before that, and for a file it does not show (Hidden songs, played from a playlist), by what the path alone
- * says (an .m4b, a folder named Audiobooks), so nothing slips through while the library loads or once a book file is hidden.
+ * is read, a file it hides (Hidden songs, Folders to skip, played from a playlist) by its own mark or signal
+ * ([Library.hiddenBook]); before that, and for a file it does not know, by what the path alone says ([bookByPath]).
  */
 fun isBookPart(path: String, library: Library?): Boolean =
-    library?.bookOf(path) != null ||
-        library?.song(path) == null && (path.endsWith(M4B, ignoreCase = true) || inAudiobooksFolder(path.substringBeforeLast('/')))
+    library?.bookOf(path) != null || library?.hiddenBook(path) == true || library?.song(path) == null && bookByPath(path)
+
+/** Whether [path] alone says it is a book: an .m4b, or a file in a folder named Audiobooks. */
+private fun bookByPath(path: String): Boolean = path.endsWith(M4B, ignoreCase = true) || inAudiobooksFolder(path.substringBeforeLast('/'))
+
+/**
+ * Whether the file at [path] is a book's part as far as can be told now: [isBookPart] once [library] is read; before
+ * that, true when its path says so, else null: not known yet, as a book by the user's mark or its tags looks like a
+ * song until then. The lyrics views read nothing for a file not known yet.
+ */
+fun knownBookPart(path: String, library: Library?): Boolean? = if (library != null || bookByPath(path)) isBookPart(path, library) else null
+
+/**
+ * [isBookPart] once [library] has been read, waiting at most [waitMs] for it: until then a book known only by the user's
+ * mark or its tags would pass for a song and be looked up. Never read in time, or unreadable: by its path alone.
+ */
+suspend fun isBookPartOnceRead(path: String, library: StateFlow<LibraryState>, waitMs: Long = LIBRARY_READ_WAIT_MS): Boolean {
+    val state = withTimeoutOrNull(waitMs) { library.first { it !is LibraryState.Loading } } ?: library.value
+    return isBookPart(path, (state as? LibraryState.Ready)?.library)
+}
+
+/** How long the lyrics wait for the library before they judge a file by its path alone ([isBookPartOnceRead]). */
+const val LIBRARY_READ_WAIT_MS: Long = 120_000
 
 /** A lone file this long looks like a book ([looksLikeBook]). */
 const val LOOKS_LONG_MS: Long = 2 * 3_600_000
@@ -103,8 +129,25 @@ fun userMark(song: Song, marks: BookMarks): Boolean? = when {
     else -> null
 }
 
-/** The id of the folder book of the files in folder [dir] (an absolute path) with album [album]. */
-fun folderBookId(dir: String, album: String?): String = "$dir/|${album.orEmpty()}"
+/**
+ * The id of the folder book of the files in folder [dir] (an absolute path) with album [album]: the two apart by a NUL,
+ * which no path holds, so the id is never a file's path, nor another folder's book's.
+ */
+fun folderBookId(dir: String, album: String?): String = "$dir$FOLDER_BOOK${album.orEmpty()}"
+
+/**
+ * The id [folderBookId] gave the same book before PF10, the folder and the album apart by "/|", which a file's path or
+ * another folder's book could have too: what `books.json`, queues and backups written then name it by. Null for an id
+ * that is no folder book's.
+ */
+fun oldFolderBookId(id: String): String? = id.takeIf { FOLDER_BOOK in it }?.replaceFirst(FOLDER_BOOK, OLD_FOLDER_BOOK)
+
+/** The album folder book [id] names ([folderBookId], or [oldFolderBookId] as a backup made before PF10 has it); null for a path. */
+fun folderBookAlbum(id: String): String? = when {
+    FOLDER_BOOK in id -> id.substringAfter(FOLDER_BOOK)
+    OLD_FOLDER_BOOK in id -> id.substringAfter(OLD_FOLDER_BOOK)
+    else -> null
+}
 
 /**
  * The books among [songs] (the library's, already filtered), by [marks] and the automatic signals, by title. A song
@@ -112,7 +155,8 @@ fun folderBookId(dir: String, album: String?): String = "$dir/|${album.orEmpty()
  * same, or none for all): a group of two or more files is one folder book when its folder is marked or every one of its
  * files has an automatic signal ([autoBook]), so one track tagged Spoken Word never takes its album out of the music; an
  * `.m4b` is always a book of its own, never a part. A lone file is a book when it has a signal of its own or its folder
- * is marked. "Not a book" on a song or its folder keeps it out.
+ * is marked. "Not a book" on a song or its folder keeps it out. Never two books with one id: a file listed twice is
+ * one book, as two books would share one place.
  */
 fun booksOf(songs: List<Song>, marks: BookMarks): List<Book> {
     val books = ArrayList<Book>()
@@ -127,14 +171,15 @@ fun booksOf(songs: List<Song>, marks: BookMarks): List<Book> {
     grouped.groupBy(::groupKey).forEach { (key, group) ->
         val folderMarked = folderKey(group.first()) in marks.folders
         if (!folderMarked && !group.all(::autoBook)) return@forEach
-        if (group.size == 1) {
-            books += single(group.single())
-            return@forEach
-        }
         val (dir, album) = key
-        books += Book(folderBookId(dir, album), BookKind.FOLDER, album ?: dir.substringAfterLast('/'), authorOf(group), partOrder(group))
+        // One file left of its folder and album is still that book: the same id, its chapters in the file.
+        books += if (group.size == 1) {
+            single(group.single()).copy(id = folderBookId(dir, album))
+        } else {
+            Book(folderBookId(dir, album), BookKind.FOLDER, album ?: dir.substringAfterLast('/'), authorOf(group), partOrder(group))
+        }
     }
-    return books.sortedWith(compareBy<Book, String>(::naturalCompare) { it.title }.thenBy { it.id })
+    return books.distinctBy { it.id }.sortedWith(compareBy<Book, String>(::naturalCompare) { it.title }.thenBy { it.id })
 }
 
 /** What the files of one folder book share: their absolute folder and their album tag (or none). */
@@ -250,6 +295,9 @@ sealed interface BookStatus {
     data object Finished : BookStatus
 }
 
+/** What sets a folder book's folder and album apart in its id ([folderBookId]), and what did before PF10 ([oldFolderBookId]). */
+private const val FOLDER_BOOK: String = "\u0000"
+private const val OLD_FOLDER_BOOK: String = "/|"
 private const val M4B: String = ".m4b"
 private const val M4A: String = ".m4a"
 private const val AUDIOBOOKS: String = "Audiobooks"

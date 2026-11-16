@@ -14,6 +14,7 @@ import java.io.File
 import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import java.nio.file.StandardOpenOption
 
 /** What the Duplicates tab remembers between runs of the app. */
 data class DuplicatesMemory(
@@ -130,23 +131,61 @@ object DuplicatesJson {
 
 /**
  * [DuplicatesMemory] in one app-private file (never backed up: allowBackup is off), written whole or not at all
- * (written aside, then moved over). One that cannot be read is logged, by its size only, and the tab starts over.
- * Blocking.
+ * (written aside, then moved over). One that is not a memory at all is first copied beside it as
+ * `duplicates-corrupt-<epochMillis>.json` (the newest copy only), logged by its size only, and the tab starts over. One
+ * that cannot be read, or not copied, is never written over: saves fail until a load reads it. Blocking.
  */
-class DuplicatesStore(private val file: File, private val log: (String) -> Unit = {}) {
+class DuplicatesStore(private val file: File, private val clock: () -> Long = System::currentTimeMillis, private val log: (String) -> Unit = {}) {
+    /** The file could not be read or kept aside: a save would lose it. */
+    @Volatile
+    private var held = false
+
     fun load(): DuplicatesMemory {
-        if (!file.isFile) return DuplicatesMemory()
-        val text = try {
-            file.readText()
+        if (!file.isFile) return DuplicatesMemory().also { held = false }
+        val bytes = try {
+            file.readBytes()
         } catch (e: IOException) {
-            log("duplicates: not readable (${e.javaClass.simpleName}), starting over")
+            log("duplicates: not readable (${e.javaClass.simpleName}), kept as it is")
+            held = true
             return DuplicatesMemory()
         }
-        return DuplicatesJson.decode(text) ?: DuplicatesMemory().also { log("duplicates: stored file unreadable (${text.length} chars), starting over") }
+        DuplicatesJson.decode(bytes.decodeToString())?.let { memory ->
+            held = false
+            return memory
+        }
+        held = !keep(bytes)
+        return DuplicatesMemory()
+    }
+
+    /** A copy of [bytes], a file that is not a memory, beside it before the tab starts over; false when none could be made. */
+    private fun keep(bytes: ByteArray): Boolean {
+        val folder = file.parentFile ?: return false
+        val copies = folder.listFiles().orEmpty().filter { it.name.startsWith(CORRUPT_PREFIX) && it.name.endsWith(CORRUPT_SUFFIX) }
+        if (copies.any { it.length() == bytes.size.toLong() && it.readBytes().contentEquals(bytes) }) return true
+        val copy = File(folder, "$CORRUPT_PREFIX${clock()}$CORRUPT_SUFFIX")
+        try {
+            Files.write(copy.toPath(), bytes, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE, StandardOpenOption.SYNC)
+        } catch (e: IOException) {
+            log("duplicates: stored file unreadable (${bytes.size} bytes), not kept aside (${e.javaClass.simpleName}), kept as it is")
+            return false
+        }
+        log("duplicates: stored file unreadable, kept as ${copy.name} (${bytes.size} bytes), starting over")
+        copies.forEach { old ->
+            try {
+                Files.deleteIfExists(old.toPath())
+            } catch (e: IOException) {
+                log("duplicates: old copy ${old.name} not removed: ${e.javaClass.simpleName}")
+            }
+        }
+        return true
     }
 
     /** False when it could not be written; the file before stays then. */
     fun save(memory: DuplicatesMemory): Boolean {
+        if (held) {
+            log("duplicates: not written, the stored file is kept as it is")
+            return false
+        }
         val aside = File(file.path + TMP)
         return try {
             file.parentFile?.mkdirs()
@@ -162,5 +201,7 @@ class DuplicatesStore(private val file: File, private val log: (String) -> Unit 
 
     private companion object {
         const val TMP: String = ".tmp"
+        const val CORRUPT_PREFIX: String = "duplicates-corrupt-"
+        const val CORRUPT_SUFFIX: String = ".json"
     }
 }

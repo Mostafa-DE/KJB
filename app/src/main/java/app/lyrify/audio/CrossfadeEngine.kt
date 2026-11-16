@@ -347,6 +347,8 @@ class CrossfadeEngine(
     override fun apply(edit: Edit) = applyAll(listOf(edit))
 
     override fun applyAll(edits: List<Edit>) {
+        // No edits (a queue renamed) change nothing: the song waiting stays, ready for its fade (CR2).
+        if (edits.isEmpty()) return
         // The song waiting may not be the next one any more: it loads again at the look after the last edit, once for the
         // whole change; a look the player's events ask for meanwhile waits for it.
         dropStandby()

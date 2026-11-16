@@ -81,10 +81,10 @@ import androidx.compose.ui.unit.isSpecified
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.lyrify.Lyrify
 import app.lyrify.R
+import app.lyrify.books.knownBookPart
 import app.lyrify.data.LedgerEntry
 import app.lyrify.data.LyricsStatus
 import app.lyrify.library.Song
-import app.lyrify.library.displayTitle
 import app.lyrify.lyrics.LocalTrack
 import app.lyrify.lyrics.LrcFormat
 import app.lyrify.lyrics.LrcLine
@@ -202,20 +202,29 @@ suspend fun plainText(context: Context, id: Long): String? {
 }
 
 /**
- * The lyrics of the song at [path] as the views show them: its `.lrc` read off the main thread, again whenever its
- * ledger [entry] changes; without a file, the plain lyrics LRCLIB has for it ([plainRecord]). Null while reading.
+ * The lyrics of the song at [path] as the views show them: its `.lrc` ([lrc] reads it) as [panelLyrics] tells it with its
+ * ledger [entry]; without a file, the plain lyrics LRCLIB has for it ([plainRecord], [plain] asks). A [book]'s part is
+ * [PanelLyrics.Book] at once: books never have lyrics, so nothing beside it is read and LRCLIB is never asked, whatever
+ * its ledger still says from before it was a book. [book] null, not known yet ([knownBookPart]): null, nothing read.
+ */
+suspend fun songLyrics(path: String, entry: LedgerEntry?, book: Boolean?, lrc: suspend (String) -> String?, plain: suspend (Long) -> String?): PanelLyrics? {
+    if (book == null) return null
+    if (book) return PanelLyrics.Book
+    val read = panelLyrics(lrc(path), entry?.status)
+    val id = plainRecord(entry)
+    return if (read == PanelLyrics.None && id != null) plain(id)?.let(::plainLines)?.takeIf { it.isNotEmpty() }?.let(PanelLyrics::Plain) ?: read else read
+}
+
+/**
+ * The lyrics of the song at [path] as the views show them ([songLyrics]): its `.lrc` read off the main thread, again
+ * whenever its ledger [entry] changes; without a file, the plain lyrics LRCLIB has for it; for a [book]'s part, none.
+ * Null while reading, and while it is not known whether it is a book ([knownBookPart]).
  */
 @Composable
-fun rememberSongLyrics(path: String, entry: LedgerEntry?): PanelLyrics? {
+fun rememberSongLyrics(path: String, entry: LedgerEntry?, book: Boolean?): PanelLyrics? {
     val context = LocalContext.current
-    val lyrics by produceState<PanelLyrics?>(null, path, entry?.status, entry?.updatedAt) {
-        val read = withContext(Dispatchers.IO) { panelLyrics(readLrc(path), entry?.status) }
-        val id = plainRecord(entry)
-        value = if (read == PanelLyrics.None && id != null) {
-            plainText(context, id)?.let(::plainLines)?.takeIf { it.isNotEmpty() }?.let(PanelLyrics::Plain) ?: read
-        } else {
-            read
-        }
+    val lyrics by produceState<PanelLyrics?>(null, path, entry?.status, entry?.updatedAt, book) {
+        value = withContext(Dispatchers.IO) { songLyrics(path, entry, book, lrc = { readLrc(it) }, plain = { plainText(context, it) }) }
     }
     return lyrics
 }
@@ -566,7 +575,8 @@ fun FullLyricsView() {
     if (ui == null) return
     val close = { nav.close(FullScreen.FullLyrics) }
     val path = ui.item.song.path
-    val lyrics = rememberSongLyrics(path, LocalLyrics.current.ledger.entries[path])
+    val book = knownBookPart(path, ui.library)
+    val lyrics = rememberSongLyrics(path, LocalLyrics.current.ledger.entries[path], book)
     var sheet by remember { mutableStateOf<PlayerRoute?>(null) }
     val now = rememberClock(ui.playing)
     val type = MaterialTheme.typography
@@ -578,10 +588,10 @@ fun FullLyricsView() {
                 ChromeIconButton(R.drawable.ic_keyboard_arrow_down, stringResource(R.string.lyrics_close), close)
                 SongCover(SongArt(path), size = 40.dp, shape = RoundedCornerShape(10.dp))
                 Column(Modifier.weight(1f)) {
-                    Text(ui.song?.let { displayTitle(it, library) } ?: path.substringAfterLast('/'), style = type.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    ui.song?.artist?.takeIf(String::isNotBlank)?.let { Text(it, style = type.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                    Text(shownTitle(ui, library), style = type.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    ui.named?.artist?.takeIf(String::isNotBlank)?.let { Text(it, style = type.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis) }
                 }
-                AaButton { sheet = PlayerRoute.LYRICS_TEXT }
+                if (book == false) AaButton { sheet = PlayerRoute.LYRICS_TEXT }
                 syncAction(lyrics)?.let { action -> SyncMenu(action) { nav.show(FullScreen.SyncEditor(ui.item.song)) } }
             }
             Box(Modifier.weight(1f).fillMaxWidth()) {
@@ -603,6 +613,7 @@ fun FullLyricsView() {
                         Modifier.align(Alignment.Center),
                         action = stringResource(R.string.player_search_lyrics).takeIf { ui.song != null },
                     ) { sheet = PlayerRoute.SEARCH_LYRICS }
+                    PanelLyrics.Book -> EmptyState(EmptyArt.Glyph, stringResource(R.string.book_no_lyrics), Modifier.align(Alignment.Center))
                     null -> Unit
                 }
             }

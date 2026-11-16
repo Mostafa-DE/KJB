@@ -55,6 +55,9 @@ interface Ytdlp {
     /** Kills run [id] and every process of the add-on whose command line holds [marker]: its ffmpeg too. */
     fun kill(id: String, marker: String)
 
+    /** Whether a process of the add-on still has [marker] in its command line: a killed run's yt-dlp or ffmpeg not gone yet. */
+    fun running(marker: String): Boolean
+
     /** Looks for a newer yt-dlp on its GitHub releases and puts it in place. */
     suspend fun update(): DlUpdate.Outcome
 
@@ -67,8 +70,8 @@ interface Ytdlp {
  * (VidGrab's mp3-args-tested.txt, YtdlpTest), and what a run in the add-on adds to it ([forRun]).
  */
 object DlArgs {
-    /** An audio file's name: "Artist - Title", from the tags yt-dlp made. */
-    const val AUDIO_NAME: String = "%(meta_artist).80B - %(meta_title).120B.%(ext)s"
+    /** An audio file's name: "Artist - Title", from the tags yt-dlp made, or the title alone without an artist. */
+    const val AUDIO_NAME: String = "%(meta_artist|).80B%(meta_artist& - |)s%(meta_title).120B.%(ext)s"
 
     const val VIDEO_NAME: String = "%(title).150B.%(ext)s"
 
@@ -85,9 +88,20 @@ object DlArgs {
     private const val DASHES = "-\u2013\u2014"
 
     /**
-     * VidGrab's tags for audio: title and artist from the site's tags or "Artist - Title", junk words, "| ..." tails and
-     * "- Topic" or VEVO dropped, "ft." as "(feat. X)", album, album artist, year and genre; description, comment and the
-     * link blanked; the cover cropped square as a JPG; ID3v2.3.
+     * "Artist - Title" split only when Artist is the uploader or the channel (phone session 10: VidGrab split every
+     * "A - B", so a trailer named "A - B" got artist A), compared as [Info] compares them: the title's Artist and both
+     * names copied into fields of KJB's own, without spaces or a trailing " - Topic", VEVO or Official, then matched case
+     * blind by a backreference. Checked with yt-dlp itself (2025.11.12) on made-up info, offline (YtdlpTest).
+     */
+    private val OWN_SPLIT = "(?i)^(?P<kjb_key>\\S+) (?P=kjb_key) (?P<meta_artist>.+?)\\s+[$DASHES]\\s+(?P<meta_title>.+)$"
+
+    /**
+     * VidGrab's tags for audio: title and artist from the site's tags, or "Artist - Title" by that artist's own channel
+     * ([OWN_SPLIT]), else the title by the uploader, and no artist without one (as [Info]'s sheet has it; VidGrab wrote
+     * "Unknown"); junk words, "| ..." tails and "- Topic" or VEVO dropped, "ft." as "(feat. X)", album, album artist, year
+     * and genre; description, comment and the link blanked; the cover cropped square as a JPG, when the site's extractor
+     * gives a thumbnail (Wikimedia Commons' gives none, so its downloads have no cover and KJB's default cover shows:
+     * phone session 10); ID3v2.3.
      */
     private val TAGGING: List<String> = listOf(
         "--embed-metadata",
@@ -103,9 +117,23 @@ object DlArgs {
         "--parse-metadata",
         "title:%(meta_title)s",
         "--parse-metadata",
-        "%(uploader|Unknown)s:%(meta_artist)s",
+        "%(uploader|)s:(?P<meta_artist>.*)",
         "--parse-metadata",
-        """title:(?P<meta_artist>.+?)\s+[""" + DASHES + """]\s+(?P<meta_title>.+)""",
+        """title:(?P<kjb_a>.+?)\s+[""" + DASHES + """]\s+.+""",
+        "--parse-metadata",
+        "%(kjb_a|)s:(?P<kjb_key_a>.*)",
+        "--parse-metadata",
+        "%(uploader|)s:(?P<kjb_key_u>.*)",
+        "--parse-metadata",
+        "%(channel|)s:(?P<kjb_key_c>.*)",
+        "--replace-in-metadata",
+        "kjb_key_a,kjb_key_u,kjb_key_c",
+        """(?i)(\s*-\s*topic|\s*vevo|\s*official)$|\s+""",
+        "",
+        "--parse-metadata",
+        "%(kjb_key_a)s %(kjb_key_u)s %(title)s:$OWN_SPLIT",
+        "--parse-metadata",
+        "%(kjb_key_a)s %(kjb_key_c)s %(title)s:$OWN_SPLIT",
         "--parse-metadata",
         "%(track,meta_title)s:%(meta_title)s",
         "--parse-metadata",
@@ -330,6 +358,8 @@ class LibraryYtdlp(private val context: Context, private val cache: File, privat
         left.forEach { Process.sendSignal(it, Process.SIGNAL_KILL) }
         log("killed a run and ${left.size} of its processes")
     }
+
+    override fun running(marker: String): Boolean = ProcTable.matching(File("/proc"), marker, Process.myPid()).isNotEmpty()
 
     /**
      * yt-dlp's latest stable release, checked ([YtdlpUpdater]: yt-dlp's signature on its SHA2-256SUMS, then the file's

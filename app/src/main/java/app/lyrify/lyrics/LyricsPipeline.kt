@@ -178,8 +178,8 @@ class LyricsPipeline(
     private val writeBytes: (FileChannel, ByteBuffer) -> Unit = SidecarFile::writeFully,
     /** The per-path lock shared with the tag writer ([app.lyrify.Lyrify.locks]): one file is never handled twice at once. */
     private val locks: PathLocks = PathLocks(),
-    /** Whether a file is a book's part (books/): a book never gets a lookup or a `.lrc`. */
-    private val isBook: (String) -> Boolean = { false },
+    /** Whether a file is a book's part (books/): a book never gets a lookup or a `.lrc`. It may wait for the library. */
+    private val isBook: suspend (String) -> Boolean = { false },
 ) : PathHold {
 
     /** Songs the AI is working on, for the queue sweep to skip (one set with the pipeline, so one per process). */
@@ -284,12 +284,12 @@ class LyricsPipeline(
      * ([LedgerEntry.candidatesCompared]) get them compared now, as [Candidates.offered] does, so the same lyrics show
      * once. Each record is fetched by id in the LOW lane (asked again while busy, as [plainLyrics] is); its lyrics are
      * never stored. Once LRCLIB cannot answer, the pass stops: that song and the rest wait for the next start. A song
-     * answered or looked up meanwhile is left as it is. The song keeps its place on the list. Returns how many songs were
-     * compared.
+     * answered or looked up meanwhile is left as it is. The song keeps its place on the list. A book's part ([isBook]),
+     * left on the list from before it was a book, is never asked about. Returns how many songs were compared.
      */
     suspend fun compareStored(): Int {
         var compared = 0
-        for (stored in ledger.ledger.first().entries.values.filter { it.status == LyricsStatus.NEEDS_CHECK && !it.candidatesCompared }) {
+        for (stored in ledger.ledger.first().entries.values.filter { it.status == LyricsStatus.NEEDS_CHECK && !it.candidatesCompared && !isBook(it.path) }) {
             val lyrics = storedLyrics(stored) ?: break
             if (saveCompared(stored, lyrics)) compared++
         }
@@ -355,9 +355,10 @@ class LyricsPipeline(
      * ([Candidates.searched]). Synced lyrics are written through the same marker and exclusive create as any; plain
      * lyrics are kept as PLAIN_ONLY with that record, for the AI to time. With [song] (the player's Search, its tags
      * from the library), the song need not wait for a check; a write under way and lyrics the user made (unless they
-     * removed them) still win.
+     * removed them) still win. A book's part ([isBook]) is never asked for and never gets a `.lrc`: nothing changed.
      */
     suspend fun choose(audioPath: String, id: Long, song: LocalTrack? = null): Checked = exclusive(audioPath) {
+        if (isBook(audioPath)) return@exclusive Checked.Changed
         val stored = ledger.entry(audioPath)
         val theirs = stored?.mine == true && stored.status != LyricsStatus.REMOVED
         val searched = song != null && stored?.status != LyricsStatus.WRITING && !theirs
@@ -408,8 +409,12 @@ class LyricsPipeline(
         }
     }
 
-    /** "None of these": the song at [audioPath] is not found, so the AI may take it, and no candidates are offered for it again. */
+    /**
+     * "None of these": the song at [audioPath] is not found, so the AI may take it, and no candidates are offered for it
+     * again. A book's part ([isBook]) is left as it is, its entry and any `.lrc` beside it: nothing changed.
+     */
     suspend fun decline(audioPath: String): Checked = exclusive(audioPath) {
+        if (isBook(audioPath)) return@exclusive Checked.Changed
         val previous = ledger.entry(audioPath)?.takeIf { it.status == LyricsStatus.NEEDS_CHECK } ?: return@exclusive Checked.Changed
         val sidecar = LrcFormat.sidecarPath(audioPath)?.let { File(it).toPath() }?.takeIf { previous.retagCheck && Files.exists(it, LinkOption.NOFOLLOW_LINKS) }
         withContext(NonCancellable) {
@@ -456,10 +461,13 @@ class LyricsPipeline(
         is LrclibResult.Transient -> LyricsPreview.Unavailable(result.cause)
     }
 
-    /** "Search myself": what LRCLIB has for [text] (`q=`, asked once) that fits [track] ([Candidates.searched]). */
+    /**
+     * "Search myself": what LRCLIB has for [text] (`q=`, asked once) that fits [track] ([Candidates.searched]). Nothing
+     * for a book's part ([isBook]), and LRCLIB is not asked.
+     */
     suspend fun search(track: LocalTrack, text: String): Searched {
         val words = text.trim().take(MAX_SEARCH_CHARS)
-        if (words.isEmpty()) return Searched.Found(emptyList())
+        if (words.isEmpty() || isBook(track.path)) return Searched.Found(emptyList())
         return when (val result = client.search(words, null, Lane.HIGH)) {
             is LrclibResult.Found -> Searched.Found(Candidates.searched(result.records, track))
             LrclibResult.NotFound -> Searched.Found(emptyList())

@@ -29,11 +29,14 @@ class BooksUiTest {
 
     @Test
     fun `labels are three words or fewer, the status lines are the spec's, and no text has an em-dash`() {
-        val lines = setOf("book_chapter_of", "book_left", "book_hours_minutes", "book_minutes", "book_source")
-        val sentences = setOf("speed_book_sentence", "book_looks_like")
+        val lines = setOf("book_chapter_of", "book_left", "book_hours_minutes", "book_minutes", "book_source", "book_no_lyrics")
+        val sentences = setOf("speed_book_sentence", "book_looks_like", "book_cover")
         strings.filterKeys { it !in lines + sentences }.forEach { (name, text) -> assertTrue("$name: $text", text.split(' ').size <= 3) }
         assertEquals("Chapter 7 of 22", strings.getValue("book_chapter_of").replace("%1\$d", "7").replace("%2\$d", "22"))
         assertEquals("2 h 10 m left", strings.getValue("book_left").replace("%1\$s", strings.getValue("book_hours_minutes").replace("%1\$d", "2").replace("%2\$d", "10")))
+        assertEquals("No lyrics for books", strings["book_no_lyrics"])
+        // A book's cover never flips: its label offers no lyrics.
+        assertFalse(strings.getValue("book_cover").contains("lyrics", ignoreCase = true))
         assertTrue(strings.values.none { '\u2014' in it })
         assertFalse(File("src/main/java/app/lyrify/ui/BooksScreen.kt").readText().contains('\u2014'))
         File("src/main/java/app/lyrify/books").listFiles().orEmpty().forEach { assertFalse(it.name, it.readText().contains('\u2014')) }

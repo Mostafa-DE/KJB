@@ -200,7 +200,7 @@ class HiddenSongsTest {
         // Part 3 played at 61 s, then Tide Chart, later.
         val state = BookState()
             .withPlace(lanternRoad, BookPlace(2, 61_000), now = 1)
-            .withPlace(before.books.single { it.id == tideChart.path }, BookPlace(0, 5_000), now = 2)
+            .withPlace(before.books.single { it.parts == listOf(tideChart) }, BookPlace(0, 5_000), now = 2)
         // Part 2 hidden, then renamed: hidden by its id still (F2), and out of its book too.
         val renamed = parts[1].copy(ref = SongRef(VOLUME + "Audiobooks/Lantern Road/02 Part Two.mp3", 42))
 

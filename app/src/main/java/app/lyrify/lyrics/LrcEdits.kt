@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import app.lyrify.LOG_TAG
 import app.lyrify.Lyrify
+import app.lyrify.books.isBookPartOnceRead
 import app.lyrify.data.LedgerEntry
 import app.lyrify.data.LedgerRepository
 import app.lyrify.data.LedgerStore
@@ -11,6 +12,7 @@ import app.lyrify.data.LyricsStatus
 import app.lyrify.data.SharedWrite
 import app.lyrify.data.SharedWrites
 import app.lyrify.data.recorded
+import app.lyrify.library.LibraryGraph
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -41,7 +43,10 @@ sealed interface LrcSave {
     /** The `.lrc` is written and marked as the user's; [undo] puts back what was there. */
     data class Saved(val undo: LrcUndo) : LrcSave
 
-    /** Nothing written: this build may not change that file, or the song's file name has no extension. */
+    /**
+     * Nothing written: this build may not change that file, the song's file name has no extension, or it is a book's
+     * part (books never have lyrics).
+     */
     data object Refused : LrcSave
 
     /**
@@ -118,6 +123,8 @@ class LrcEdits(
     /** How the bytes go into a temporary file; tests make it die halfway. */
     private val writeBytes: (FileChannel, ByteBuffer) -> Unit = SidecarFile::writeFully,
     private val newId: () -> String = { UUID.randomUUID().toString() },
+    /** Whether a file is a book's part (books/): a book never gets a `.lrc`. It may wait for the library. */
+    private val isBook: suspend (String) -> Boolean = { false },
 ) {
     private val waiting = MutableStateFlow<List<LrcUndo>>(emptyList())
 
@@ -170,6 +177,7 @@ class LrcEdits(
     }
 
     private suspend fun saveHeld(track: LocalTrack, text: String): LrcSave {
+        if (isBook(track.path)) return LrcSave.Refused
         val sidecar = LrcFormat.sidecarPath(track.path)?.let { File(it).toPath() } ?: return LrcSave.Refused
         val bytes = LrcFormat.encode(text)
         val before = ledger.entry(track.path)
@@ -323,6 +331,8 @@ class LrcEdits(
                 folder = File(app.filesDir, "lrc-undo"),
                 clock = System::currentTimeMillis,
                 log = { Log.d(LOG_TAG, it) },
+                // As the pipeline's: known by the library, waited for while it is read; by their path if it never is.
+                isBook = { path -> isBookPartOnceRead(path, LibraryGraph.repository(app).state) },
             )
         }.also { shared = it }
     }

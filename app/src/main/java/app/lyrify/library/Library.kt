@@ -2,7 +2,10 @@ package app.lyrify.library
 
 import app.lyrify.books.Book
 import app.lyrify.books.BookMarks
+import app.lyrify.books.autoBook
 import app.lyrify.books.booksOf
+import app.lyrify.books.oldFolderBookId
+import app.lyrify.books.userMark
 import app.lyrify.settings.LibrarySettings
 import app.lyrify.settings.Settings
 import app.lyrify.settings.SortAlbums
@@ -92,6 +95,8 @@ class Library private constructor(
     val resolver: SongResolver,
     /** The Books tab: every book among the songs ([app.lyrify.books.booksOf]), by title. Their files are in no other list. */
     val books: List<Book> = emptyList(),
+    /** The files the filters hide that are books by a sign of their own ([of]): in no book, and no song for the lyrics. */
+    private val hiddenBooks: Set<String> = emptySet(),
 ) {
     private val byPath: Map<String, Song> = songs.associateBy { it.path }
     private val albumsByKey: Map<String, Album> = albums.associateBy { it.key }
@@ -100,13 +105,21 @@ class Library private constructor(
     private val booksById: Map<String, Book> = books.associateBy { it.id }
     private val bookByPath: Map<String, Book> = books.flatMap { book -> book.parts.map { it.path to book } }.toMap()
 
+    /** The folder books by their id before PF10 ([oldFolderBookId]); one two books had is no one's. */
+    private val booksByOldId: Map<String, Book> = books.mapNotNull { book -> oldFolderBookId(book.id)?.let { it to book } }
+        .groupBy({ it.first }, { it.second }).mapNotNull { (id, named) -> named.singleOrNull()?.let { id to it } }.toMap()
+
     fun album(key: String): Album? = albumsByKey[key]
 
     /** The book whose part is the file at [path]; null for music. */
     fun bookOf(path: String): Book? = bookByPath[path]
 
-    /** The book [id] names ([Book.id]); null when it is gone. */
-    fun book(id: String): Book? = booksById[id]
+    /**
+     * The book [id] names ([Book.id]), or the one it named before PF10: a lone file's path before its folder and album
+     * named it, or its folder and album as they were written then ([oldFolderBookId]); null when it is gone, or when those
+     * two name different books.
+     */
+    fun book(id: String): Book? = booksById[id] ?: listOfNotNull(bookByPath[id], booksByOldId[id]).distinct().singleOrNull()
 
     fun artist(name: String): Artist? = artistsByName[name]
 
@@ -116,6 +129,9 @@ class Library private constructor(
     fun folder(path: String): Folder? = path.split('/').filter(String::isNotEmpty).fold(root as Folder?) { at, name ->
         at?.folders?.firstOrNull { it.name == name }
     }
+
+    /** Whether the file at [path] is hidden by the filters and a book by its own mark or signal ([hiddenBooks]). */
+    fun hiddenBook(path: String): Boolean = path in hiddenBooks
 
     /** The library's song at [path]; null when there is none, or the filters hide it. */
     fun song(path: String): Song? = byPath[path]
@@ -142,6 +158,10 @@ class Library private constructor(
             // A book's short parts stay in it: "Skip short clips" is for music. A hidden file is in no book.
             val shown = all.filter { inLibrary(it, settings.copy(playback = settings.playback.copy(skipShortClips = false)), hidden) }
             val books = booksOf(shown, marks)
+            // A hidden file is in no book; one with a book's sign of its own (the user's mark, else an automatic signal)
+            // still never gets lyrics, when a playlist or a queue plays it.
+            val shownPaths = shown.mapTo(HashSet()) { it.path }
+            val hiddenBooks = all.filter { it.path !in shownPaths && (userMark(it, marks) ?: autoBook(it)) }.mapTo(HashSet()) { it.path }
             val bookPaths = books.flatMapTo(HashSet()) { book -> book.parts.map { it.path } }
             val root = folderOf("", "", shown.filter { it.path in bookPaths || inLibrary(it, settings, hidden) }, collator)
             val songs = root.allSongs.filterNot { it.path in bookPaths }
@@ -175,7 +195,7 @@ class Library private constructor(
             val genres = songs.groupBy { text(it.genre) }
                 .mapNotNull { (name, its) -> name?.let { Genre(it, its) } }
                 .sortedWith(compareBy(nameOrder(collator)) { it.name })
-            return Library(all, songs, albums, byAlbum[null].orEmpty(), artists, genres, root, resolver, books)
+            return Library(all, songs, albums, byAlbum[null].orEmpty(), artists, genres, root, resolver, books, hiddenBooks)
         }
 
         /** The folder [name] at [path] holding [songs] at or below it ([Song.folder] relative to its volume). */
