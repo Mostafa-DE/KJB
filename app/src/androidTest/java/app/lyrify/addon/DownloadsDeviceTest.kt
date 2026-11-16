@@ -21,6 +21,7 @@ import app.lyrify.downloads.DownloadFolders
 import app.lyrify.downloads.DownloadItem
 import app.lyrify.downloads.DownloadOutcome
 import app.lyrify.downloads.DownloadRunner
+import app.lyrify.downloads.DownloadSettings
 import app.lyrify.downloads.DownloadState
 import app.lyrify.downloads.FinishSteps
 import app.lyrify.downloads.PhoneSteps
@@ -53,22 +54,27 @@ import java.io.File
 class DownloadsDeviceTest {
     private val context = InstrumentationRegistry.getInstrumentation().targetContext
 
-    /** KJB dev's test folder, the debug build's fence, and where it saves a download with the default settings. */
+    /**
+     * KJB dev's test folder, the debug build's fence, and in it an audio folder of this test's own ([finish]), so that
+     * all that is in it is what the test's download made.
+     */
     private val testFolder = File(Environment.getExternalStorageDirectory(), SharedWrites.TEST_FOLDER)
-    private val downloads = File(testFolder, DownloadFolders.AUDIO)
+    private val audioFolder = "${DownloadFolders.AUDIO} ${System.currentTimeMillis()}"
+    private val downloads = File(testFolder, audioFolder)
 
-    /** What [downloads] held as the test began, and the folders on the way to it, the test folder's own, missing then. */
-    private val before = downloads.listFiles()?.map { it.name }.orEmpty().toSet()
+    /**
+     * The folders on the way to [downloads] missing as the test began, deepest first: [downloads], then Music/ and the
+     * test folder if they were missing too.
+     */
     private val missing = generateSequence(downloads) { it.parentFile }.takeWhile { it.startsWith(testFolder) }.filterNot(File::exists).toList()
 
     /**
-     * What a test's download made goes, also when the test fails midway: the files new in [downloads] (the test's run is
-     * all that saves there meanwhile: its song, or a part a stopped run left), then the folders it made, deepest first,
-     * each only once empty.
+     * What a test's download made goes, also when the test fails midway: what is in [downloads] (its song, or a part a
+     * stopped run left), then the folders it made, deepest first, each only once empty.
      */
     @After
     fun cleanUp() {
-        downloads.listFiles()?.filter { it.name !in before }?.forEach(File::delete)
+        downloads.listFiles()?.forEach(File::delete)
         missing.forEach(File::delete)
     }
 
@@ -93,7 +99,7 @@ class DownloadsDeviceTest {
     private fun finish(steps: FinishSteps) = DownloadFinish(
         DownloadFiles(Environment.getExternalStorageDirectory(), File(context.filesDir, "download-covers"), Lyrify.writes, Environment::isExternalStorageManager),
         steps,
-    )
+    ).apply { settings = DownloadSettings(audioFolder = audioFolder) }
 
     @Test
     fun bindsTheAddonAfterItsChecksAndSpeaksItsApi() {
@@ -181,7 +187,7 @@ class DownloadsDeviceTest {
                 run.join()
             }
         }
-        val parts = downloads.listFiles()?.map { it.name }.orEmpty().filter { it !in before && it.endsWith(".part") }
+        val parts = downloads.listFiles()?.map { it.name }.orEmpty().filter { it.endsWith(".part") }
         assertEquals(emptyList<String>(), parts)
     }
 
