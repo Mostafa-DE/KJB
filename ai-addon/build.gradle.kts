@@ -27,8 +27,8 @@ android {
         minSdk = 30
         targetSdk = 36
         // The add-on's own; what KJB checks is the AIDL's VERSION (IAiAddon), not this.
-        versionCode = 1
-        versionName = "3.0.0"
+        versionCode = 2
+        versionName = "3.0.3"
 
         ndk {
             // The AI runs on Snapdragon phones only, all arm64; the QNN libraries are arm64 only.

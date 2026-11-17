@@ -51,8 +51,8 @@ android {
         minSdk = 30
         targetSdk = 36
         // 3.0.0 was 10, not 9: a private 2.0.2 used 9 on the user's phone, and 3.0.0 installed over it as an update.
-        versionCode = 12
-        versionName = "3.0.2"
+        versionCode = 13
+        versionName = "3.0.3"
 
         ndk {
             // TagLib's library is built for arm64 only (taglib/), as the AI add-on's QNN libraries are.
