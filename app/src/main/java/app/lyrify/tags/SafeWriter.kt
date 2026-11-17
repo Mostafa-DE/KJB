@@ -803,6 +803,8 @@ class SafeWriter(
             coverChanged = applied.coverChanged,
             coverBefore = coverBefore,
             coverAfter = if (applied.coverChanged) applied.frontAfter?.let { PictureRef(it.sha256, it.description, it.type, it.mime) } else null,
+            lengthBefore = done.original.length,
+            lengthAfter = done.written.length,
         )
         val snapshot = if (undo.snapshot(song.mediaStoreId) == null) {
             Snapshot(song.mediaStoreId, song.path, done.backup.name, done.original.length, done.original.sha256, done.original.payload, entry.id, clock())

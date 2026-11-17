@@ -48,8 +48,9 @@ import app.lyrify.lyrics.TrackNames
 /**
  * A group's files, the suggested keep first with its star: only a hint, never acted on. Every file has a checkbox,
  * unchecked at first, the suggested keep's too: the user picks what goes. "Move to trash" asks KJB's dialog for the
- * checked ones, never every copy ("Keep at least one copy."); "Not duplicates" hides the group for good. Each file row is
- * one TalkBack stop: where it is, its facts, "Suggested keep" when it is, and its checkbox state.
+ * checked ones, never every copy; while it waits (every copy checked, a file changed since the scan) the reason shows
+ * right above it, in view however long the list. "Not duplicates" hides the group for good. Each file row is one
+ * TalkBack stop: where it is, its facts, "Suggested keep" when it is, and its checkbox state.
  */
 @Composable
 fun GroupSheet(group: DuplicateGroup, stale: Boolean, onMove: (Set<Long>) -> Unit, onNotDuplicates: () -> Unit, onDismiss: () -> Unit) {
@@ -59,6 +60,11 @@ fun GroupSheet(group: DuplicateGroup, stale: Boolean, onMove: (Set<Long>) -> Uni
     LyrifySheet(
         onDismiss = onDismiss,
         footer = {
+            when {
+                stale -> Fact(R.drawable.ic_warning, stringResource(R.string.dupes_changed))
+                mustKeepOne(count, group.copies) ->
+                    Fact(R.drawable.ic_info, stringResource(R.string.dupes_keep_one), modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+            }
             LyrifyButton(
                 if (count > 0) stringResource(R.string.dupes_move, count) else stringResource(R.string.dupes_move_none),
                 onClick = { onMove(checked.toSet()) },
@@ -81,11 +87,6 @@ fun GroupSheet(group: DuplicateGroup, stale: Boolean, onMove: (Set<Long>) -> Uni
                     checked = if (on) checked + file.id else checked.filter { it != file.id }.toLongArray()
                 }
             }
-        }
-        when {
-            stale -> Fact(R.drawable.ic_warning, stringResource(R.string.dupes_changed))
-            mustKeepOne(count, group.copies) ->
-                Fact(R.drawable.ic_info, stringResource(R.string.dupes_keep_one), modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
         }
     }
 }

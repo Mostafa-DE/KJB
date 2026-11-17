@@ -703,11 +703,13 @@ fun toastMillis(toast: Toast, a11y: AccessibilityManager?): Long {
 /** [text], the words of the string or plural [message], with the icon and tone that fit it: failures in the error tone. */
 fun messageToast(message: Int, text: String): Toast = when (message) {
     R.string.check_done_synced -> Toast(text, R.drawable.ic_lyrics, Tone.SYNCED)
-    R.string.removal_done, R.string.removal_done_samsung, R.plurals.dupes_moved, R.string.tones_deleted -> Toast(text, R.drawable.ic_delete, Tone.NONE)
+    R.string.removal_done, R.string.removal_done_samsung, R.plurals.dupes_moved, R.plurals.dupes_moved_some, R.string.tones_deleted ->
+        Toast(text, R.drawable.ic_delete, Tone.NONE)
     R.string.dupes_restored -> Toast(text, R.drawable.ic_restore_from_trash, Tone.SYNCED)
-    R.string.check_not_saved, R.string.check_busy -> Toast(text, R.drawable.ic_sync_problem, Tone.ERROR)
-    R.string.removal_failed, R.string.dupes_trash_failed, R.string.tones_not_saved, R.string.tones_song_unreadable,
-    R.string.tones_not_deleted, R.string.tones_not_renamed, R.string.tones_not_played, R.string.tones_clock_not_opened,
+    R.string.check_not_saved, R.string.check_busy, R.string.dupes_trash_unconfirmed -> Toast(text, R.drawable.ic_sync_problem, Tone.ERROR)
+    R.string.removal_failed, R.string.dupes_trash_failed, R.plurals.dupes_moved_none, R.plurals.dupes_trash_refused,
+    R.string.tones_not_saved, R.string.tones_song_unreadable, R.string.tones_not_deleted, R.string.tones_not_renamed,
+    R.string.tones_not_played, R.string.tones_clock_not_opened,
     -> Toast(text, R.drawable.ic_error, Tone.ERROR)
     else -> Toast(text)
 }

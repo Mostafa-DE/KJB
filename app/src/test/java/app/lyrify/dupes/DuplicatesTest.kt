@@ -1,6 +1,7 @@
 package app.lyrify.dupes
 
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -18,7 +19,14 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import app.lyrify.tags.AudioFormat
+import app.lyrify.tags.EditKind
+import app.lyrify.tags.HistoryEntry
+import app.lyrify.tags.Payload
+import app.lyrify.tags.PayloadHash
+import app.lyrify.tags.SongEdit
 import app.lyrify.tags.TagFixtures
+import app.lyrify.tags.UndoMemory
 import java.io.File
 import java.nio.channels.SeekableByteChannel
 import java.nio.file.Files
@@ -44,8 +52,14 @@ class DuplicatesTest {
     }
     private val cleaned = mutableListOf<String>()
 
+    /** KJB's History of tag writes, as the engine reads it for a song bigger than when it was listed. */
+    private var history = UndoMemory()
+
     /** The phone's trash: ids in it, with when the phone deletes each; null while MediaStore cannot be read. */
     private var phoneTrash: MutableMap<Long, Long?>? = mutableMapOf()
+
+    /** Runs as MediaStore is asked what is in the phone's trash. */
+    private var onTrashRead: () -> Unit = {}
     private val logs = mutableListOf<String>()
     private val storeFile: File get() = File(folder.root, "app/duplicates.json")
 
@@ -61,12 +75,16 @@ class DuplicatesTest {
         library = library,
         store = DuplicatesStore(storeFile) { logs += it },
         cleanup = { cleaned += it },
-        phoneTrash = { ids -> phoneTrash?.filterKeys { it in ids } },
+        phoneTrash = { ids ->
+            onTrashRead()
+            phoneTrash?.filterKeys { it in ids }
+        },
         // Not backgroundScope: advanceUntilIdle runs the engine's work to the end.
         scope = this,
         io = StandardTestDispatcher(testScheduler),
         clock = { BASE + testScheduler.currentTime },
         hasher = ContentHasher(sliceBytes = 4, fullLimit = 32, open = ::open),
+        ownWrite = kjbTagWrites { history },
         log = { logs += it },
     )
 
@@ -300,7 +318,7 @@ class DuplicatesTest {
 
     private suspend fun TestScope.trashReady(engine: Duplicates): DuplicateGroup {
         val group = scanned(engine).groups.single()
-        assertTrue(engine.askTrash(group, setOf(group.files[1].id)))
+        assertEquals(TrashAsk.ASKED, engine.askTrash(group, setOf(group.files[1].id)))
         return group
     }
 
@@ -310,15 +328,15 @@ class DuplicatesTest {
         val engine = engine()
         val group = scanned(engine).groups.single()
         assertEquals(1L, group.keep.id)
-        assertFalse(engine.askTrash(group, emptySet()))
-        assertFalse(engine.askTrash(group, setOf(1L, 2L, 3L)))
-        assertFalse(engine.askTrash(group, setOf(2L, 9L)))
-        assertFalse(engine.askTrash(group.copy(files = group.files.take(2)), setOf(2L)))
+        assertEquals(TrashAsk.NONE_CHECKED, engine.askTrash(group, emptySet()))
+        assertEquals(TrashAsk.KEEP_ONE, engine.askTrash(group, setOf(1L, 2L, 3L)))
+        assertEquals(TrashAsk.CHANGED, engine.askTrash(group, setOf(2L, 9L)))
+        assertEquals(TrashAsk.CHANGED, engine.askTrash(group.copy(files = group.files.take(2)), setOf(2L)))
         assertEquals(TrashStep.None, engine.state.value.trash)
-        assertTrue(engine.askTrash(group, setOf(1L, 2L)))
+        assertEquals(TrashAsk.ASKED, engine.askTrash(group, setOf(1L, 2L)))
         assertEquals(listOf(1L, 2L), (engine.state.value.trash as TrashStep.Confirm).files.map { it.id })
         engine.cancelTrash()
-        assertTrue(engine.askTrash(group, setOf(2L, 3L)))
+        assertEquals(TrashAsk.ASKED, engine.askTrash(group, setOf(2L, 3L)))
         assertEquals(listOf(2L, 3L), (engine.state.value.trash as TrashStep.Confirm).files.map { it.id })
         engine.cancelTrash()
         assertEquals(TrashStep.None, engine.state.value.trash)
@@ -364,7 +382,7 @@ class DuplicatesTest {
         val engine = engine()
         val group = scanned(engine).groups.single()
         assertEquals(1L, group.keep.id)
-        assertTrue(engine.askTrash(group, setOf(1L)))
+        assertEquals(TrashAsk.ASKED, engine.askTrash(group, setOf(1L)))
         engine.confirmShown()
         trashOnDisk(keep)
         assertEquals(Trashed.Moved(1), engine.systemAnswered(approved = true))
@@ -414,7 +432,7 @@ class DuplicatesTest {
         trashOnDisk(moved)
         // Deleted by another app meanwhile: not at its path, and not in the phone's trash.
         assertTrue(File(gone.path).delete())
-        assertEquals(Trashed.Moved(1), engine.systemAnswered(approved = true))
+        assertEquals(Trashed.Moved(1, of = 2), engine.systemAnswered(approved = true))
         assertEquals(listOf(moved.path), cleaned)
         assertEquals(listOf(2L), engine.state.value.trashed.map { it.file.id })
         assertEquals(setOf(1L, 3L), engine.state.value.results?.groups?.single()?.files?.map { it.id }?.toSet())
@@ -434,15 +452,98 @@ class DuplicatesTest {
         assertTrue(cleaned.isEmpty())
         assertTrue(engine.state.value.trashed.isEmpty())
         assertEquals(listOf(copy.id), DuplicatesStore(storeFile).load().pendingTrash.map { it.id })
+        // While MediaStore still can't say, nothing else is asked: the copy may be gone, and the last one must stay.
         val group = engine.state.value.results?.groups?.single() ?: error("no group")
-        assertFalse(engine.askTrash(group, setOf(keep.id)))
-        assertEquals(Confirmation.NotAsked, engine.confirmShown())
+        assertEquals(TrashAsk.UNAVAILABLE, engine.askTrash(group, setOf(keep.id)))
+        assertEquals(TrashStep.None, engine.state.value.trash)
         assertEquals(listOf(copy.id), DuplicatesStore(storeFile).load().pendingTrash.map { it.id })
 
         phoneTrash = mutableMapOf(copy.id to EXPIRES)
         library(keep)
         scanned(engine)
         assertEquals(listOf(copy.path), cleaned)
+        assertTrue(DuplicatesStore(storeFile).load().pendingTrash.isEmpty())
+    }
+
+    @Test
+    fun `a Move settles first what an unconfirmed answer left, so a copy the phone did move counts as gone`() = runTest {
+        val keep = song(1, "same bytes")
+        val copy = song(2, "same bytes", folderName = "b")
+        val third = song(3, "same bytes", folderName = "c")
+        library(keep, copy, third)
+        val engine = engine()
+        val group = scanned(engine).groups.single()
+        assertEquals(TrashAsk.ASKED, engine.askTrash(group, setOf(copy.id)))
+        engine.confirmShown()
+        trashOnDisk(copy)
+        phoneTrash = null
+        assertEquals(Trashed.NotConfirmed, engine.systemAnswered(approved = true))
+
+        phoneTrash = mutableMapOf(copy.id to EXPIRES)
+        // The sheet still shows three copies, but the phone did move one: of the two left, one stays.
+        assertEquals(TrashAsk.KEEP_ONE, engine.askTrash(group, setOf(keep.id, third.id)))
+        assertEquals(listOf(copy.path), cleaned)
+        assertEquals(listOf(copy.id), engine.state.value.trashed.map { it.file.id })
+        assertEquals(TrashAsk.CHANGED, engine.askTrash(group, setOf(copy.id)))
+        assertEquals(TrashAsk.ASKED, engine.askTrash(group, setOf(third.id)))
+        assertEquals(Confirmation.Ask(listOf(third.id)), engine.confirmShown())
+    }
+
+    @Test
+    fun `a Move whose phone answer never came gives way to the next, which settles what it left`() = runTest {
+        val keep = song(1, "same bytes")
+        val copy = song(2, "same bytes", folderName = "b")
+        val third = song(3, "same bytes", folderName = "c")
+        library(keep, copy, third)
+        val engine = engine()
+        val group = scanned(engine).groups.single()
+        engine.askTrash(group, setOf(copy.id))
+        engine.confirmShown()
+        // The user said OK, but the answer never reached KJB: the dialog step is still open.
+        trashOnDisk(copy)
+        assertTrue(engine.state.value.trash is TrashStep.System)
+        assertEquals(TrashAsk.ASKED, engine.askTrash(group, setOf(third.id)))
+        assertEquals(listOf(copy.path), cleaned)
+        assertEquals(listOf(1L, 3L), engine.state.value.results?.groups?.single()?.files?.map { it.id })
+        assertEquals(Confirmation.Ask(listOf(third.id)), engine.confirmShown())
+        trashOnDisk(third)
+        assertEquals(Trashed.Moved(1), engine.systemAnswered(approved = true))
+        assertEquals(listOf(copy.id, third.id), engine.state.value.trashed.map { it.file.id }.sorted())
+    }
+
+    @Test
+    fun `a Move whose screen went while it settled what was left opens no dialog`() = runTest {
+        val copy = song(2, "same bytes", folderName = "b")
+        val third = song(3, "same bytes", folderName = "c")
+        library(song(1, "same bytes"), copy, third)
+        val engine = engine()
+        val group = scanned(engine).groups.single()
+        engine.askTrash(group, setOf(copy.id))
+        engine.confirmShown()
+        // The phone's answer never came; the next Move settles it, and its screen goes meanwhile.
+        lateinit var moving: Job
+        onTrashRead = { moving.cancel() }
+        moving = launch { engine.askTrash(group, setOf(third.id)) }
+        advanceUntilIdle()
+
+        assertTrue(moving.isCancelled)
+        assertFalse(engine.state.value.trash is TrashStep.Confirm)
+        assertTrue(DuplicatesStore(storeFile).load().pendingTrash.isEmpty())
+    }
+
+    @Test
+    fun `opening the tab settles an answer the app did not hear`() = runTest {
+        val keep = song(1, "same bytes")
+        val copy = song(2, "same bytes", folderName = "b")
+        library(keep, copy)
+        val engine = engine()
+        trashReady(engine)
+        engine.confirmShown()
+        trashOnDisk(copy)
+        val restarted = engine()
+        restarted.refreshTrashed()
+        assertEquals(listOf(copy.path), cleaned)
+        assertEquals(listOf(copy.id), restarted.state.value.trashed.map { it.file.id })
         assertTrue(DuplicatesStore(storeFile).load().pendingTrash.isEmpty())
     }
 
@@ -454,17 +555,44 @@ class DuplicatesTest {
         val engine = engine()
         for (changed in listOf(copy.copy(size = copy.size + 1), copy.copy(path = copy.path + ".moved"), copy.copy(displayName = "renamed.mp3"), null)) {
             val group = scanned(engine).groups.single()
-            assertTrue(engine.askTrash(group, setOf(2L)))
+            assertEquals(TrashAsk.ASKED, engine.askTrash(group, setOf(2L)))
             rows = { ids -> mapOf(1L to keep).filterKeys { it in ids } + listOfNotNull(changed).associateBy { it.id } }
             assertEquals("$changed", Confirmation.Changed, engine.confirmShown())
             assertEquals(TrashStep.None, engine.state.value.trash)
             assertEquals(setOf(group.key), engine.state.value.stale)
-            assertFalse(engine.askTrash(group, setOf(2L)))
+            assertEquals(TrashAsk.CHANGED, engine.askTrash(group, setOf(2L)))
             assertTrue(DuplicatesStore(storeFile).load().pendingTrash.isEmpty())
             rows = { ids -> (songs as LibraryRead.Files).files.filter { it.id in ids }.associateBy { it.id } }
         }
         scanned(engine)
         assertTrue(engine.state.value.stale.isEmpty())
+        assertTrue(cleaned.isEmpty())
+    }
+
+    @Test
+    fun `a copy KJB retagged since the scan can still be moved, but not once another app changed it`() = runTest {
+        val keep = song(1, "same bytes")
+        val copy = song(2, "same bytes", folderName = "b")
+        library(keep, copy)
+        val engine = engine()
+        val group = scanned(engine).groups.single()
+        // KJB writes the copy's tags: it is bigger now, and MediaStore says so after KJB's rescan.
+        val (lengthBefore, before) = PayloadHash.fileHash(File(copy.path).toPath())
+        File(copy.path).appendText(" with new tags")
+        val (lengthAfter, after) = PayloadHash.fileHash(File(copy.path).toPath())
+        val edit = SongEdit(copy.id, copy.path, Payload(AudioFormat.MP3, "audio"), before, after, emptyList(), lengthBefore = lengthBefore, lengthAfter = lengthAfter)
+        history = UndoMemory(listOf(HistoryEntry(1, EditKind.SONG, "Lanterns", BASE, listOf(edit))))
+        rows = { ids -> listOf(keep, copy.copy(size = lengthAfter)).filter { it.id in ids }.associateBy { it.id } }
+
+        assertEquals(TrashAsk.ASKED, engine.askTrash(group, setOf(copy.id)))
+        assertEquals(Confirmation.Ask(listOf(copy.id)), engine.confirmShown())
+        assertEquals(Trashed.Unchanged, engine.systemAnswered(approved = false))
+
+        // Another app rewrote it since, keeping its size.
+        File(copy.path).writeText(File(copy.path).readText().reversed())
+        assertEquals(TrashAsk.ASKED, engine.askTrash(group, setOf(copy.id)))
+        assertEquals(Confirmation.Changed, engine.confirmShown())
+        assertEquals(setOf(group.key), engine.state.value.stale)
         assertTrue(cleaned.isEmpty())
     }
 
@@ -486,7 +614,7 @@ class DuplicatesTest {
         val engine = engine()
         val group = trashReady(engine)
         engine.confirmShown()
-        assertEquals(Trashed.Moved(0), engine.systemAnswered(approved = true))
+        assertEquals(Trashed.Moved(0, of = 1), engine.systemAnswered(approved = true))
         assertTrue(cleaned.isEmpty())
         assertEquals(group, engine.state.value.results?.groups?.single())
     }
@@ -582,7 +710,7 @@ class DuplicatesTest {
     /** [copy] moved to the trash through both dialogs; the song as the tab lists it. */
     private suspend fun TestScope.trashedSong(engine: Duplicates, copy: AudioFile): TrashedSong {
         val group = scanned(engine).groups.single()
-        assertTrue(engine.askTrash(group, setOf(copy.id)))
+        assertEquals(TrashAsk.ASKED, engine.askTrash(group, setOf(copy.id)))
         engine.confirmShown()
         trashOnDisk(copy)
         assertEquals(Trashed.Moved(1), engine.systemAnswered(approved = true))
@@ -676,7 +804,7 @@ class DuplicatesTest {
         val engine = engine()
         val trashed = trashedSong(engine, copy)
         assertEquals(emptyList<Long>(), engine.restore(trashed.copy(file = trashed.file.copy(id = 9))))
-        assertTrue(engine.askTrash(engine.state.value.results?.groups?.single() ?: error("no group"), setOf(3L)))
+        assertEquals(TrashAsk.ASKED, engine.askTrash(engine.state.value.results?.groups?.single() ?: error("no group"), setOf(3L)))
         assertEquals(emptyList<Long>(), engine.restore(trashed))
         assertEquals(Restored.Unchanged, engine.restoreAnswered(approved = true))
     }
