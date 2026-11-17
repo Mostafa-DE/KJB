@@ -1,0 +1,233 @@
+KJB Downloads, the Downloads add-on of KJB (formerly called Lyrify)
+Copyright (C) 2026 KJB contributors
+
+KJB Downloads is part of KJB and free software under KJB's licence: the GNU General Public License version 3
+(gpl-3.0.txt), with the additional permission that ends KJB's LICENSE. It is built with the software below, each part
+under its own licence. KJB shows this file, and the full text of every licence named in it, in Settings > About >
+Licences once the add-on is installed.
+
+Source code
+
+- KJB's own code in the add-on (dl-addon and addon-shared) is in KJB's repository, https://github.com/Mostafa-DE/KJB,
+  at the tag of each release.
+- youtubedl-android 0.18.1 is used as published on Maven Central (io.github.junkfood02.youtubedl-android: library,
+  ffmpeg and common). Its Java source is published beside it there, as library-0.18.1-sources.jar,
+  ffmpeg-0.18.1-sources.jar and common-0.18.1-sources.jar
+  (https://repo1.maven.org/maven2/io/github/junkfood02/youtubedl-android/), and its repository is
+  https://github.com/JunkFood02/youtubedl-android.
+- The programs and libraries youtubedl-android carries (Python, FFmpeg and every library listed under them below) are
+  the Termux project's builds for Android, packed by youtubedl-android without change (Python's in libpython.zip.so,
+  FFmpeg's in libffmpeg.zip.so). Termux's build script and patches for each are in
+  https://github.com/termux/termux-packages (packages/<name>/build.sh and the patches beside it). The source of each
+  project, at the version named below, is at the address named below.
+- yt-dlp, yt-dlp-ejs, mutagen and PyCryptodome ship as their source (Python and JavaScript).
+
+The engine (youtubedl-android and what it carries)
+
+- youtubedl-android 0.18.1 (https://github.com/JunkFood02/youtubedl-android, a fork of
+  https://github.com/yausername/youtubedl-android), GNU General Public License version 3 (gpl-3.0.txt; its POM and
+  LICENSE), Copyright yausername, JunkFood02 and the youtubedl-android contributors. Its Java library, and the
+  programs and archives below.
+- yt-dlp 2025.11.12 (https://github.com/yt-dlp/yt-dlp), released into the public domain under the Unlicense
+  (unlicense-yt-dlp.txt), by the yt-dlp contributors. In youtubedl-android's res/raw/ytdlp; the add-on later replaces it
+  with newer yt-dlp releases from the same project, under the same terms. It bundles yt-dlp-ejs 0.3.1
+  (https://github.com/yt-dlp/ejs, the Unlicense), which bundles meriyah 6.1.4 (ISC License, Copyright 2019 and later
+  KFlash and others) and astring 1.9.0 (MIT License, Copyright 2015 David Bonnet); their notices are in
+  third-party-notices.txt.
+- Python 3.12.11 (https://www.python.org), the Python Software Foundation License Version 2 (python-license.txt,
+  Python's LICENSE at v3.12.11), Copyright 2001 Python Software Foundation; All Rights Reserved. The software Python
+  incorporates is listed with its licences in python-incorporated.txt (Python's Doc/license.rst at v3.12.11, from its
+  "Licenses and Acknowledgements for Incorporated Software"). libpython.so, and libpython3.12.so with its standard
+  library in libpython.zip.so.
+- FFmpeg 7.1.1 (https://ffmpeg.org), configured with --enable-gpl --enable-version3, so the whole build is under the
+  GNU General Public License version 3 or later (gpl-3.0.txt; libavutil reports "GPL version 3 or later"; see
+  https://ffmpeg.org/legal.html), Copyright the FFmpeg developers. No non-free part is enabled
+  (--disable-libfdk-aac). libffmpeg.so and libffprobe.so, and libavcodec, libavdevice, libavfilter, libavformat,
+  libavutil, libpostproc, libswresample and libswscale in libffmpeg.zip.so. Source: https://ffmpeg.org/releases/
+  (ffmpeg-7.1.1).
+- QuickJS 2025-04-26 (https://bellard.org/quickjs/), MIT License (mit-quickjs.txt), Copyright 2017-2021 Fabrice
+  Bellard and Charlie Gordon. libqjs.so, which yt-dlp runs JavaScript with, and libquickjs.a in libpython.zip.so.
+- Mutagen 1.47.0 (https://github.com/quodlibet/mutagen), GNU General Public License version 2 or later (gpl-2.0.txt),
+  Copyright Joe Wreschnig, Michael Urman, Lukas Lalinsky and the Mutagen contributors. In Python's site-packages;
+  yt-dlp writes tags and covers with it.
+- PyCryptodome 3.23.0 (pycryptodomex, https://www.pycryptodome.org), partly public domain and partly the BSD 2-Clause
+  License (pycryptodome.txt, its LICENSE.rst), Copyright its authors. In Python's site-packages.
+
+Libraries Python is built with (Termux's builds, in libpython.zip.so)
+
+- OpenSSL 3.5.2 (https://www.openssl.org), Apache License 2.0 (apache-2.0.txt), Copyright The OpenSSL Project
+  Authors. libcrypto.so and libssl.so, with engines-3 and ossl-modules.
+- SQLite 3.50.4 (https://sqlite.org), in the public domain (https://sqlite.org/copyright.html).
+- libffi (https://github.com/libffi/libffi), MIT License, Copyright Anthony Green, Red Hat, Inc and others.
+- zlib 1.3.1 (https://zlib.net), zlib License, Copyright Jean-loup Gailly and Mark Adler.
+- bzip2 1.0.8 (https://sourceware.org/bzip2/), a BSD-style licence, Copyright Julian R Seward.
+- XZ Utils 5.8.1 (liblzma, https://tukaani.org/xz/), BSD Zero Clause License.
+- Expat 2.7.3 (https://libexpat.github.io), MIT License, Copyright Thai Open Source Software Center Ltd, Clark Cooper
+  and the Expat maintainers.
+- ncurses 6.5 (https://invisible-island.net/ncurses/), an X11-style licence, Copyright Thomas E. Dickey and the Free
+  Software Foundation. libncurses, libncursesw, libtinfo, libtic, libform, libmenu and libpanel.
+- GNU Readline 8.3 (https://tiswww.case.edu/php/chet/readline/rltop.html), GNU General Public License version 3 or
+  later (gpl-3.0.txt), Copyright Free Software Foundation, Inc. libreadline and libhistory, and etc/inputrc.
+- GNU dbm 1.26 (https://www.gnu.org.ua/software/gdbm/), GNU General Public License version 3 or later (gpl-3.0.txt),
+  Copyright Free Software Foundation, Inc. libgdbm and libgdbm_compat.
+- libcrypt (Termux's crypt(3) over OpenSSL), BSD 2-Clause License, Copyright The FreeBSD Project.
+- libandroid-support (https://github.com/termux/libandroid-support), Apache License 2.0, Copyright The Android Open
+  Source Project, with parts of musl under the MIT License, Copyright Rich Felker, et al.
+- libandroid-posix-semaphore (Termux), MIT License, from musl, Copyright Rich Felker, et al.
+- LLVM libc++ (libc++_shared.so, from the Android NDK), Apache License 2.0 with LLVM Exceptions (apache-2.0.txt,
+  llvm-exception.txt), The LLVM Project.
+- The CA certificates in etc/tls/cert.pem, Mozilla's root store as curl extracts it
+  (https://curl.se/docs/caextract.html), Mozilla Public License 2.0 (mpl-2.0.txt).
+
+Libraries FFmpeg is built with (Termux's builds, in libffmpeg.zip.so)
+
+Under the GNU GPL, version 2 or later (gpl-2.0.txt), which FFmpeg's GPL version 3 build takes as version 3:
+- x264, core 164 (https://www.videolan.org/developers/x264.html), Copyright 2003-2024 x264 project.
+- x265 (https://bitbucket.org/multicoreware/x265_git), Copyright MulticoreWare, Inc.
+- Xvid 1.3.7 (libxvidcore, https://www.xvid.com), Copyright the Xvid authors.
+- vid.stab (libvidstab, https://github.com/georgmartius/vid.stab), Copyright Georg Martius. Releases up to v1.1.2,
+  which this is, are under the GPL.
+- Rubber Band Library (librubberband, https://breakfastquay.com/rubberband/), Copyright Particular Programs Ltd.
+- FFTW 3.3.10 (libfftw3, libfftw3f, libfftw3l and their threads libraries, https://www.fftw.org), Copyright Matteo
+  Frigo and the Massachusetts Institute of Technology.
+
+Under the GNU LGPL (lgpl-2.0.txt, lgpl-2.1.txt and lgpl-3.0.txt with gpl-3.0.txt), each at the version named or later:
+- GnuTLS 3.8.10 (libgnutls, libgnutls-dane and libgnutlsxx, https://www.gnutls.org), LGPL 2.1, Copyright Free
+  Software Foundation, Inc. and others.
+- Nettle (libnettle and libhogweed, https://www.lysator.liu.se/~nisse/nettle/), LGPL 3.0 or GPL 2.0, Copyright the Nettle
+  authors.
+- GMP 6.3.0 (libgmp and libgmpxx, https://gmplib.org), LGPL 3.0 or GPL 2.0, Copyright Free Software Foundation, Inc.
+- libidn2 2.3.8 (https://gitlab.com/libidn/libidn2), LGPL 3.0 or GPL 2.0, Copyright Simon Josefsson and others.
+- libunistring (https://www.gnu.org/software/libunistring/), LGPL 3.0 or GPL 2.0, Copyright Free Software
+  Foundation, Inc.
+- GNU libiconv (libiconv and libcharset, https://www.gnu.org/software/libiconv/), LGPL 2.1, Copyright Free Software
+  Foundation, Inc.
+- GLib 2.86.0 (libglib, libgio, libgobject, libgmodule, libgthread and libgirepository with their typelibs,
+  https://gitlab.gnome.org/GNOME/glib), LGPL 2.1, Copyright the GLib authors.
+- GNU FriBidi (https://github.com/fribidi/fribidi), LGPL 2.1, Copyright Behdad Esfahbod, Sharif FarsiWeb, Inc. and
+  others.
+- libbluray 1.3.4 (https://www.videolan.org/developers/libbluray.html), LGPL 2.1, Copyright the libbluray authors.
+- libudfread (https://code.videolan.org/videolan/libudfread), LGPL 2.1, Copyright VLC authors and
+  VideoLAN.
+- Game Music Emu (libgme, https://github.com/libgme/game-music-emu), LGPL 2.1, Copyright Shay Green and others.
+- LAME 3.100 (libmp3lame, https://lame.sourceforge.io), LGPL 2.0 (the GNU Library General Public License), Copyright
+  the LAME authors.
+- mpg123 1.33.2 (libmpg123, libout123 and libsyn123, https://www.mpg123.de), LGPL 2.1, Copyright the mpg123 project.
+- SoX Resampler 0.1.3 (libsoxr and libsoxr-lsr, https://sourceforge.net/projects/soxr/), LGPL 2.1, Copyright the SoX
+  Resampler authors.
+- libv4l (libv4l1, libv4l2, libv4lconvert, libv4l2rds and its plugins, https://git.linuxtv.org/v4l-utils.git),
+  LGPL 2.1, Copyright the v4l-utils authors.
+- libssh 0.11.3 (https://www.libssh.org), LGPL 2.1, with parts under the BSD 2-Clause License
+  (third-party-notices.txt), Copyright Aris Adamantiadis, Andreas Schneider and the libssh contributors.
+- Graphite2 (libgraphite2, https://github.com/silnrsi/graphite), LGPL 2.1, or MPL 2.0, or GPL 2.0 or later,
+  Copyright SIL International.
+
+Under the Mozilla Public License 2.0 (mpl-2.0.txt):
+- SRT 1.5.4 (libsrt, https://github.com/Haivision/srt), Copyright Haivision Systems Inc.
+- ZeroMQ (libzmq, https://github.com/zeromq/libzmq), Copyright the libzmq contributors.
+
+Under permissive licences, their notices in third-party-notices.txt:
+- libaom 3.13.1 (BSD 2-Clause, with the Alliance for Open Media Patent License 1.0), dav1d 1.5.1 (BSD 2-Clause),
+  rav1e 0.8.1 (BSD 2-Clause, with the Alliance for Open Media Patent License 1.0), SVT-AV1 3.1.2 (BSD 3-Clause Clear,
+  with the Alliance for Open Media Patent License 1.0) and libvmaf 3.0.0 (BSD-2-Clause-Patent).
+- libvpx 1.15.2 and libwebp (BSD 3-Clause, each with Google's patent grant).
+- Opus 1.5.2, Ogg, Vorbis 1.3.7 and Theora 1.2.0 (BSD 3-Clause, Xiph.Org Foundation and others).
+- libass (ISC), FreeType (the FreeType License; portions of this software are copyright The FreeType Project,
+  https://freetype.org, all rights reserved), Fontconfig (MIT-style), HarfBuzz 11.5.1 ("Old MIT").
+- libpng 1.6.50 (PNG Reference Library License version 2), libxml2 2.14.6 (MIT), Little CMS (MIT), Brotli (MIT),
+  PCRE2 10.46 (BSD 3-Clause with the PCRE2 exception), zimg (WTFPL), and zlib, bzip2, XZ Utils and libffi as above.
+- libsamplerate 0.2.2 (BSD 2-Clause), libopenmpt (BSD 3-Clause), libsodium 1.0.20 (ISC) and the OpenCL ICD loader
+  ocl-icd 2.3.4 (BSD 2-Clause).
+- OpenCORE AMR (libopencore-amrnb and libopencore-amrwb, https://sourceforge.net/projects/opencore-amr/) and the
+  VisualOn AMR-WB encoder (libvo-amrwbenc), Apache License 2.0 (apache-2.0.txt), Copyright PacketVideo, The Android
+  Open Source Project and VisualOn.
+- The LLVM OpenMP runtime, inside libvidstab and libsoxr, Apache License 2.0 with LLVM Exceptions (apache-2.0.txt,
+  llvm-exception.txt), The LLVM Project.
+- Termux's libandroid-glob (BSD 3-Clause, Copyright The Regents of the University of California) and
+  libandroid-stub (libandroid.so, libmediandk.so and libOpenSLES.so, which pass calls on to Android's own; the
+  University of Illinois/NCSA Open Source License, per its Termux build script).
+
+Java libraries in the add-on (Apache License 2.0, apache-2.0.txt)
+
+- Jackson 2.11.1 (jackson-databind, jackson-core and jackson-annotations, https://github.com/FasterXML/jackson),
+  Copyright FasterXML and the Jackson contributors. Brought in by youtubedl-android.
+- Apache Commons IO 2.5 and Apache Commons Compress 1.12 (https://commons.apache.org), Copyright The Apache Software
+  Foundation. Brought in by youtubedl-android.
+- AndroidX (androidx.appcompat 1.4.2, androidx.core 1.8.0 and what they bring), Copyright The Android Open Source
+  Project; Guava's listenablefuture 1.0, Copyright The Guava Authors. Brought in by youtubedl-android.
+- The Kotlin standard library 2.4.21, kotlinx.coroutines 1.11.0 and kotlinx.serialization 1.12.0, Copyright JetBrains
+  s.r.o.; JetBrains Java annotations 23.0.0, Copyright JetBrains s.r.o.
+
+Apache License 2.0 NOTICE files (section 4(d)), as their projects publish them
+
+   =========================================================================
+   ==  NOTICE file corresponding to the section 4 d of                    ==
+   ==  the Apache License, Version 2.0,                                   ==
+   ==  in this case for the Kotlin Compiler distribution.                 ==
+   =========================================================================
+
+   Kotlin Compiler
+   Copyright 2010-2024 JetBrains s.r.o and respective authors and developers
+
+=========================================================================
+==  NOTICE file corresponding to the section 4 d of                    ==
+==  the Apache License, Version 2.0,                                   ==
+==  in this case for the kotlinx.coroutines library.                   ==
+=========================================================================
+
+kotlinx.coroutines library.
+Copyright 2016-2025 JetBrains s.r.o and contributors
+
+   =========================================================================
+   ==  NOTICE file corresponding to the section 4 d of                    ==
+   ==  the Apache License, Version 2.0,                                   ==
+   ==  in this case for the kotlix.serialization library.                 ==
+   =========================================================================
+
+   kotlinx.serialization library.
+   Copyright 2017-2019 JetBrains s.r.o and respective authors and developers
+
+Jackson (jackson-databind 2.11.1's META-INF/NOTICE; jackson-core's is the same text)
+
+# Jackson JSON processor
+
+Jackson is a high-performance, Free/Open Source JSON processing library.
+It was originally written by Tatu Saloranta (tatu.saloranta@iki.fi), and has
+been in development since 2007.
+It is currently developed by a community of developers, as well as supported
+commercially by FasterXML.com.
+
+## Licensing
+
+Jackson core and extension components may be licensed under different licenses.
+To find the details that apply to this artifact see the accompanying LICENSE file.
+For more information, including possible other licensing options, contact
+FasterXML.com (http://fasterxml.com).
+
+## Credits
+
+A list of contributors may be found from CREDITS file, which is included
+in some artifacts (usually source distributions); but is always available
+from the source code management (SCM) system project uses.
+
+Apache Commons IO 2.5 (META-INF/NOTICE.txt)
+
+Apache Commons IO
+Copyright 2002-2016 The Apache Software Foundation
+
+This product includes software developed at
+The Apache Software Foundation (http://www.apache.org/).
+
+Apache Commons Compress 1.12 (META-INF/NOTICE.txt)
+
+Apache Commons Compress
+Copyright 2002-2016 The Apache Software Foundation
+
+This product includes software developed at
+The Apache Software Foundation (http://www.apache.org/).
+
+The files in the package org.apache.commons.compress.archivers.sevenz
+were derived from the LZMA SDK, version 9.20 (C/ and CPP/7zip/),
+which has been placed in the public domain:
+
+"LZMA SDK is placed in the public domain." (http://www.7-zip.org/sdk.html)

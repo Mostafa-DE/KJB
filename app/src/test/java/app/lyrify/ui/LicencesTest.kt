@@ -1,5 +1,6 @@
 package app.lyrify.ui
 
+import app.lyrify.addon.KjbAddons
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -8,7 +9,8 @@ import java.io.File
 
 /**
  * Settings > About > Licences: every text it names ships in assets/licences, every text there is named, the notices are
- * the repository's NOTICE, and every library the app depends on directly is listed. Transitive libraries (Guava, Okio,
+ * the repository's NOTICE, each add-on's texts ship in its own APK and show only with it, and every library the app
+ * depends on directly is listed. Transitive libraries (Guava, Okio,
  * Accompanist) and native code cannot be checked from here: they were listed from `:app:dependencies
  * --configuration releaseRuntimeClasspath` and the release APK's lib/ folder.
  */
@@ -32,17 +34,60 @@ class LicencesTest {
     @Test
     fun `the AI's own software is the add-on's, its texts ship in the add-on, and KJB lists it only with the add-on there`() {
         val addonFolder = File("../ai-addon/src/main/assets/$LICENCE_DIR")
-        val named = ADDON_THIRD_PARTY.flatMap { it.texts }.toSet()
+        val named = AI_THIRD_PARTY.flatMap { it.texts }.toSet()
         assertEquals(addonFolder.list().orEmpty().toSet(), named)
         listOf("ONNX Runtime", "ONNX Runtime QNN", "Qualcomm AI Engine Direct", "Microsoft 1DS SDK", "Whisper tokenizer").forEach { name ->
-            assertTrue(name, ADDON_THIRD_PARTY.any { it.name == name })
+            assertTrue(name, AI_THIRD_PARTY.any { it.name == name })
             assertFalse("$name is not in KJB", THIRD_PARTY.any { it.name == name })
         }
-        assertTrue(ADDON_THIRD_PARTY.all { it.inAddon } && ADDON_NOTICES.inAddon && THIRD_PARTY.none { it.inAddon })
-        assertEquals(ADDON_THIRD_PARTY.flatMap { it.texts }.distinct(), ADDON_NOTICES.texts)
-        assertEquals(listOf(KJB_LICENCE, NOTICES), licenceRows(addonInstalled = false))
-        assertEquals(listOf(KJB_LICENCE, NOTICES, ADDON_NOTICES), licenceRows(addonInstalled = true))
-        assertEquals(ADDON_NOTICES, shipped(ADDON_NOTICES.name))
+        assertTrue((AI_THIRD_PARTY + AI_NOTICES).all { it.addon == KjbAddons.AI } && THIRD_PARTY.none { it.inAddon })
+        assertEquals(AI_THIRD_PARTY.flatMap { it.texts }.distinct(), AI_NOTICES.texts)
+        assertEquals(listOf(KJB_LICENCE, NOTICES), licenceRows(emptySet()))
+        assertEquals(listOf(KJB_LICENCE, NOTICES, AI_NOTICES), licenceRows(setOf(KjbAddons.AI)))
+        assertEquals(AI_NOTICES, shipped(AI_NOTICES.name))
+    }
+
+    @Test
+    fun `the Downloads add-on's software is the add-on's, its texts ship in the add-on, and KJB lists it only with the add-on there`() {
+        val addonFolder = File("../dl-addon/src/main/assets/$LICENCE_DIR")
+        assertEquals(addonFolder.list().orEmpty().toSet(), DL_NOTICES.texts.toSet())
+        DL_NOTICES.texts.forEach { assertTrue(it, File(addonFolder, it).length() > 0) }
+        // The add-on's NOTICE, then the full text of every licence its parts name, each once.
+        assertEquals("NOTICE.txt", DL_NOTICES.texts.first())
+        assertEquals(DL_THIRD_PARTY.flatMap { it.texts }.distinct(), DL_NOTICES.texts.drop(1))
+        DL_ENGINE.forEach { name ->
+            assertTrue(name, DL_THIRD_PARTY.any { it.name == name })
+            assertFalse("$name is not in KJB", THIRD_PARTY.any { it.name == name })
+        }
+        assertTrue((DL_THIRD_PARTY + DL_NOTICES).all { it.addon == KjbAddons.DOWNLOADS })
+        assertEquals(listOf(KJB_LICENCE, NOTICES, DL_NOTICES), licenceRows(setOf(KjbAddons.DOWNLOADS)))
+        assertEquals(listOf(KJB_LICENCE, NOTICES, AI_NOTICES, DL_NOTICES), licenceRows(KjbAddons.ALL.toSet()))
+        assertEquals(DL_NOTICES, shipped(DL_NOTICES.name))
+    }
+
+    @Test
+    fun `the Downloads add-on's NOTICE names each of its parts and where their source is, and KJB's NOTICE points to it`() {
+        val file = File("../dl-addon/src/main/assets/$LICENCE_DIR/NOTICE.txt")
+        assertTrue("the add-on's NOTICE ships in it", file.isFile)
+        val notice = file.readText()
+        DL_THIRD_PARTY.forEach { assertTrue(it.name, notice.contains(it.name)) }
+        // The GPL and LGPL parts: where their source is, for each.
+        listOf("Source code", "github.com/termux/termux-packages", "-sources.jar", "--enable-gpl --enable-version3").forEach { assertTrue(it, notice.contains(it)) }
+        val kjb = File("../NOTICE").readText()
+        listOf("KJB Downloads", "dl-addon/src/main/assets/licences").forEach { assertTrue(it, kjb.contains(it)) }
+        DL_ENGINE.forEach { assertTrue(it, kjb.contains(it)) }
+    }
+
+    @Test
+    fun `an add-on's copy of a licence KJB also ships is the same text`() {
+        listOf("../ai-addon", "../dl-addon").forEach { module ->
+            // Each NOTICE.txt is its own APK's.
+            val copies = File("$module/src/main/assets/$LICENCE_DIR").listFiles().orEmpty().filter { it.name != "NOTICE.txt" && File(folder, it.name).isFile }
+            assertTrue(module, copies.isNotEmpty())
+            copies.forEach { copy ->
+                assertEquals("$module ${copy.name}", File(folder, copy.name).readText(), copy.readText())
+            }
+        }
     }
 
     @Test
@@ -102,6 +147,9 @@ class LicencesTest {
 
     private companion object {
         const val PERMISSION: String = "kjb-additional-permission.txt"
+
+        /** What runs a download in the Downloads add-on: youtubedl-android and what it carries. */
+        val DL_ENGINE: List<String> = listOf("youtubedl-android", "yt-dlp", "Python", "FFmpeg", "QuickJS", "Mutagen", "PyCryptodome")
 
         /** A [libraries] line of the catalog: its alias and its group. */
         val LIBRARY = Regex("""(?m)^([\w-]+)\s*=\s*\{\s*group\s*=\s*"([^"]+)"""")
