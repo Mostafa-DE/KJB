@@ -163,6 +163,10 @@ version="$1"
 out_dir="$2"
 cache="${3:-${XDG_CACHE_HOME:-$HOME/.cache}/kjb-dl-sources}"
 [[ "$version" =~ ^[0-9]+(\.[0-9]+)*$ ]] || die "not a version: $version (say it as in dl-addon/build.gradle.kts, such as 3.0.3)"
+# Every pin here is for youtubedl-android 0.18.1: a KJB on any other version needs them all taken again.
+catalog="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/gradle/libs.versions.toml"
+grep -qx "youtubedlAndroid = \"$YDLA_TAG\"" "$catalog" \
+  || die "$catalog does not use youtubedl-android $YDLA_TAG: this bundle would not be its source; redo the pins first"
 mkdir -p "$out_dir" "$cache"
 name="KJB-Downloads-$version-sources"
 out="$(cd "$out_dir" && pwd)/$name.tar.gz"
