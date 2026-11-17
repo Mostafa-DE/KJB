@@ -1,6 +1,7 @@
 package app.lyrify.dupes
 
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -56,6 +57,9 @@ class DuplicatesTest {
 
     /** The phone's trash: ids in it, with when the phone deletes each; null while MediaStore cannot be read. */
     private var phoneTrash: MutableMap<Long, Long?>? = mutableMapOf()
+
+    /** Runs as MediaStore is asked what is in the phone's trash. */
+    private var onTrashRead: () -> Unit = {}
     private val logs = mutableListOf<String>()
     private val storeFile: File get() = File(folder.root, "app/duplicates.json")
 
@@ -71,7 +75,10 @@ class DuplicatesTest {
         library = library,
         store = DuplicatesStore(storeFile) { logs += it },
         cleanup = { cleaned += it },
-        phoneTrash = { ids -> phoneTrash?.filterKeys { it in ids } },
+        phoneTrash = { ids ->
+            onTrashRead()
+            phoneTrash?.filterKeys { it in ids }
+        },
         // Not backgroundScope: advanceUntilIdle runs the engine's work to the end.
         scope = this,
         io = StandardTestDispatcher(testScheduler),
@@ -502,6 +509,26 @@ class DuplicatesTest {
         trashOnDisk(third)
         assertEquals(Trashed.Moved(1), engine.systemAnswered(approved = true))
         assertEquals(listOf(copy.id, third.id), engine.state.value.trashed.map { it.file.id }.sorted())
+    }
+
+    @Test
+    fun `a Move whose screen went while it settled what was left opens no dialog`() = runTest {
+        val copy = song(2, "same bytes", folderName = "b")
+        val third = song(3, "same bytes", folderName = "c")
+        library(song(1, "same bytes"), copy, third)
+        val engine = engine()
+        val group = scanned(engine).groups.single()
+        engine.askTrash(group, setOf(copy.id))
+        engine.confirmShown()
+        // The phone's answer never came; the next Move settles it, and its screen goes meanwhile.
+        lateinit var moving: Job
+        onTrashRead = { moving.cancel() }
+        moving = launch { engine.askTrash(group, setOf(third.id)) }
+        advanceUntilIdle()
+
+        assertTrue(moving.isCancelled)
+        assertFalse(engine.state.value.trash is TrashStep.Confirm)
+        assertTrue(DuplicatesStore(storeFile).load().pendingTrash.isEmpty())
     }
 
     @Test

@@ -309,6 +309,25 @@ class SongTrashTest {
         }
     }
 
+    @Test
+    fun `a confirm cancelled before it remembered anything never drops what an earlier request left waiting`() = runTest {
+        val files = listOfNotNull(trashFile(song(11, "Paper Lantern")))
+        lateinit var confirming: Job
+        // The same song, left by a request whose answer never came; the retry's confirm goes before it settles anything.
+        val host = FakeTrashHost().apply {
+            memory = TrashMemory(pending = files)
+            onLoaded = { confirming.cancel() }
+        }
+        val trash = trash(host, files)
+        assertTrue(trash.ask(files))
+        confirming = launch { trash.confirm(files) }
+        advanceUntilIdle()
+
+        assertTrue(confirming.isCancelled)
+        assertEquals(TrashMemory(pending = files), host.memory)
+        assertEquals(TrashStep.None, trash.step)
+    }
+
     /**
      * The flow over [host], with MediaStore's rows as [files] say (each read first runs [onRows]), the phone's trash as
      * [inTrash] says (empty unless told), and KJB's own writes as [ownWrite] says (none unless told).
@@ -332,17 +351,25 @@ class SongTrashTest {
         ownWrite = ownWrite,
     )
 
-    /** The Duplicates engine's part made up: the step and the memory in fields, each commit first running [onCommit]. */
+    /**
+     * The Duplicates engine's part made up: the step and the memory in fields, each commit first running [onCommit], each
+     * wait for the stored memory first running [onLoaded].
+     */
     private class FakeTrashHost : TrashHost {
         override var step: TrashStep = TrashStep.None
         override var memory: TrashMemory = TrashMemory()
         var onCommit: () -> Unit = {}
+        var onLoaded: () -> Unit = {}
 
         override fun step(change: (TrashStep) -> TrashStep) {
             step = change(step)
         }
 
-        override suspend fun loaded() = Unit
+        override suspend fun loaded() {
+            onLoaded()
+            // Read from disk: a suspension, during which the page may go.
+            yield()
+        }
 
         override suspend fun commit(moved: Set<Long>, change: (TrashMemory) -> TrashMemory) {
             onCommit()

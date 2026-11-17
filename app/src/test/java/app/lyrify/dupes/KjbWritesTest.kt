@@ -22,8 +22,8 @@ class KjbWritesTest {
     )
 
     /** One KJB write of the song: from [before] ([lengthBefore] bytes) to [after] ([lengthAfter] bytes). */
-    private fun edit(before: String, after: String, lengthBefore: Long?, lengthAfter: Long?, id: Long = 41, path: String = listed.path) =
-        SongEdit(id, path, Payload(AudioFormat.MP3, "audio"), before, after, emptyList(), lengthBefore = lengthBefore, lengthAfter = lengthAfter)
+    private fun edit(before: String, after: String, lengthBefore: Long?, lengthAfter: Long?, id: Long = 41, path: String = listed.path, undone: Boolean = false) =
+        SongEdit(id, path, Payload(AudioFormat.MP3, "audio"), before, after, emptyList(), undone = undone, lengthBefore = lengthBefore, lengthAfter = lengthAfter)
 
     private fun now(size: Long) = listed.copy(size = size)
 
@@ -69,6 +69,21 @@ class KjbWritesTest {
         var reads = 0
         assertFalse(changedOnlyByKjb(listed, now(1_300), listOf(edit("s0", "s1", 1_000, 1_200))) { reads++; "s1" })
         assertEquals(0, reads)
+    }
+
+    @Test
+    fun `a later write KJB undid is passed over, the file holding what the write before it left`() {
+        val first = edit("s0", "s1", 1_000, 1_200)
+        val history = UndoMemory(
+            listOf(
+                HistoryEntry(3, EditKind.SONG, "a", 3, listOf(first)),
+                HistoryEntry(4, EditKind.SONG, "b", 4, listOf(edit("s1", "s2", 1_200, 1_350, undone = true))),
+            ),
+        )
+        assertEquals(listOf(first), kjbEdits(history, listed))
+        assertTrue(changedOnlyByKjb(listed, now(1_200), kjbEdits(history, listed)) { "s1" })
+        // An Undo that did not bring back those very bytes proves nothing.
+        assertFalse(changedOnlyByKjb(listed, now(1_200), kjbEdits(history, listed)) { "s1 again" })
     }
 
     @Test

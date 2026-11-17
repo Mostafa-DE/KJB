@@ -211,8 +211,11 @@ class SongTrash(
             return settling.withLock { confirmSettled(shown) }
         } catch (e: CancellationException) {
             withContext(NonCancellable) {
+                // Only what this confirm remembered goes (its step is the phone's dialog on [shown]): files an earlier
+                // request left waiting, the same ones or not, stay for the next settling.
+                val remembered = host.step == TrashStep.System(shown)
                 host.step { if (it == TrashStep.Confirm(shown) || it == TrashStep.System(shown)) TrashStep.None else it }
-                if (host.memory.pending == shown) host.commit(emptySet()) { it.copy(pending = emptyList()) }
+                if (remembered) settling.withLock { host.commit(emptySet()) { if (it.pending == shown) it.copy(pending = emptyList()) else it } }
             }
             throw e
         }
@@ -388,9 +391,12 @@ fun changedOnlyByKjb(listed: AudioFile, now: AudioFile, edits: List<SongEdit>, s
     return false
 }
 
-/** History's records of the song [file] names (its MediaStore id and path), oldest first. */
+/**
+ * History's records of the song [file] names (its MediaStore id and path), oldest first, without the writes KJB undid
+ * since: the file holds what the write before such a one left, or [changedOnlyByKjb]'s hash check says it does not.
+ */
 fun kjbEdits(history: UndoMemory, file: AudioFile): List<SongEdit> =
-    history.entries.sortedBy { it.id }.flatMap { entry -> entry.songs.filter { it.mediaStoreId == file.id && it.path == file.path } }
+    history.entries.sortedBy { it.id }.flatMap { entry -> entry.songs.filter { it.mediaStoreId == file.id && it.path == file.path && !it.undone } }
 
 /**
  * [SongTrash]'s check for a file changed since it was listed only by KJB's own tag writes ([changedOnlyByKjb]), from
