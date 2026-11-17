@@ -34,6 +34,8 @@
 
     <!-- The player -->
     <string name="player_close">Close the player</string>
+    <!-- What TalkBack calls the open player, as a pane. -->
+    <string name="player_pane">Player</string>
     <string name="player_from">From %1$s</string>
     <string name="player_more">More options</string>
     <string name="player_menu_add_to">Add to…</string>

@@ -88,6 +88,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.border
 import androidx.compose.material3.minimumInteractiveComponentSize
@@ -583,8 +584,8 @@ fun PlayerView() {
  * go it closes ([onClose]) or springs back ([PlayerDrag]). Closing into the Now bar, the drag is held where the finger
  * left it and goes as the card closes ([closeHeld]), so the player carries on from there into the bar. Whatever on the
  * player takes a drag first keeps it: the seek bar, the A-B handles, the cover's sideways swipe, a list scrolling; a list
- * already at its top hands a pull down over. A finger landing in the system's gesture edge is the system's back.
- * TalkBack's dismiss closes it, as the chevron does.
+ * already at its top hands a pull down over. A finger landing in the system's gesture edge is the system's back. For
+ * TalkBack it is a pane named Player; its dismiss is on the chevron ([PlayerCloseButton]), the node TalkBack focuses.
  */
 @Composable
 internal fun PlayerFrame(onClose: () -> Unit, content: @Composable BoxScope.() -> Unit) {
@@ -612,7 +613,7 @@ internal fun PlayerFrame(onClose: () -> Unit, content: @Composable BoxScope.() -
     val edge = rememberUpdatedState { at: Offset ->
         inGestureEdge(origin.value.x + at.x, window.containerSize.width.toFloat(), gestures.getLeft(density, direction).toFloat(), gestures.getRight(density, direction).toFloat())
     }
-    val label = stringResource(R.string.player_close)
+    val pane = stringResource(R.string.player_pane)
     Box(
         Modifier
             .fillMaxSize()
@@ -632,12 +633,7 @@ internal fun PlayerFrame(onClose: () -> Unit, content: @Composable BoxScope.() -
             }
             .nestedScroll(drag.lists)
             .pointerInput(drag) { dragsDown(drag, edge = { edge.value(it) }, letGo = { letGo.value() }) }
-            .semantics {
-                dismiss(label) {
-                    close()
-                    true
-                }
-            }
+            .semantics { paneTitle = pane }
             .background(MaterialTheme.colorScheme.background),
         content = content,
     )
@@ -839,7 +835,7 @@ private fun PlayerTopBar(ui: PlayerUi, lyricsShare: LyricsShare?, tone: Boolean,
             .heightIn(min = PLAYER_BAR)
             .padding(horizontal = 8.dp),
     ) {
-        ChromeIconButton(R.drawable.ic_keyboard_arrow_down, stringResource(R.string.player_close), onClose)
+        PlayerCloseButton(onClose)
         // Where it plays from, without the time the queue started that the queue lists add.
         val name = ui.queue.name ?: sourceLabel(context, ui.queue.source, ui.queue.items.size)
         Text(
@@ -1078,6 +1074,26 @@ internal fun CoverFace(
         }
         if (onFlip != null) FlipChip(Modifier.align(Alignment.BottomEnd).padding(12.dp), enabled, onFlip)
     }
+}
+
+/**
+ * The chevron that closes the player ([onClose]), with TalkBack's dismiss on it: the labelled, clickable node TalkBack
+ * focuses, so the dismiss reaches it (review 2026-11-17: on the player's unnamed frame it never did).
+ */
+@Composable
+internal fun PlayerCloseButton(onClose: () -> Unit) {
+    val label = stringResource(R.string.player_close)
+    ChromeIconButton(
+        R.drawable.ic_keyboard_arrow_down,
+        label,
+        onClose,
+        modifier = Modifier.semantics {
+            dismiss(label) {
+                onClose()
+                true
+            }
+        },
+    )
 }
 
 /** "From [name]" with the name in semibold on-surface, as the prototype's .src b. */
