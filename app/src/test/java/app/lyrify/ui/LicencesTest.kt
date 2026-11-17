@@ -79,6 +79,38 @@ class LicencesTest {
     }
 
     @Test
+    fun `the Downloads add-on's NOTICE and KJB's say the add-on's complete source is attached to each release`() {
+        listOf(File("../dl-addon/src/main/assets/$LICENCE_DIR/NOTICE.txt"), File("../NOTICE")).forEach { file ->
+            val text = paragraphs(file.readText()).joinToString(" ")
+            listOf(DL_SOURCES, "https://github.com/Mostafa-DE/KJB/releases").forEach { assertTrue("${file.path}: $it", text.contains(it)) }
+        }
+    }
+
+    @Test
+    fun `every licence the Downloads add-on's NOTICE names has its text in the add-on`() {
+        val addonFolder = File("../dl-addon/src/main/assets/$LICENCE_DIR")
+        val notice = paragraphs(File(addonFolder, "NOTICE.txt").readText()).joinToString(" ")
+        val files = Regex("""[a-z0-9.-]+\.txt""").findAll(notice).map { it.value }.toSet()
+        assertTrue(files.size > 10)
+        files.forEach { assertTrue("$it is named but does not ship", File(addonFolder, it).isFile) }
+        DL_LICENCE_TEXTS.forEach { (licence, text) ->
+            if (notice.contains(licence)) assertTrue("$licence is named but $text does not ship", File(addonFolder, text).isFile)
+        }
+    }
+
+    @Test
+    fun `each LGPL part of the Downloads add-on says which versions of the LGPL it is under`() {
+        val notice = paragraphs(File("../dl-addon/src/main/assets/$LICENCE_DIR/NOTICE.txt").readText())
+        val lgpl = notice.single { it.startsWith("Under the GNU LGPL") }.split(" - ")
+        // No blanket "or later" over the list: mpg123 is LGPL 2.1 only.
+        assertFalse(lgpl.first(), lgpl.first().contains("or later"))
+        assertTrue(lgpl.size > 15)
+        lgpl.drop(1).forEach { part -> assertTrue(part, part.contains("or later") || part.contains("only")) }
+        val mpg123 = lgpl.single { it.startsWith("mpg123") }
+        assertTrue(mpg123, mpg123.contains("LGPL 2.1 only") && !mpg123.contains("or later"))
+    }
+
+    @Test
     fun `an add-on's copy of a licence KJB also ships is the same text`() {
         listOf("../ai-addon", "../dl-addon").forEach { module ->
             // Each NOTICE.txt is its own APK's.
@@ -150,6 +182,29 @@ class LicencesTest {
 
         /** What runs a download in the Downloads add-on: youtubedl-android and what it carries. */
         val DL_ENGINE: List<String> = listOf("youtubedl-android", "yt-dlp", "Python", "FFmpeg", "QuickJS", "Mutagen", "PyCryptodome")
+
+        /** The source bundle attached to each KJB release that ships the Downloads add-on (tools/make-dl-sources.sh). */
+        const val DL_SOURCES: String = "KJB-Downloads-<version>-sources.tar.gz"
+
+        /** A licence the Downloads add-on's NOTICE may name, and the file in the add-on that holds its text. */
+        val DL_LICENCE_TEXTS: List<Pair<String, String>> = listOf(
+            "GNU General Public License version 3" to "gpl-3.0.txt",
+            "GNU General Public License version 2" to "gpl-2.0.txt",
+            "GNU GPL, version 2" to "gpl-2.0.txt",
+            "GPL 2.0" to "gpl-2.0.txt",
+            "LGPL 2.0" to "lgpl-2.0.txt",
+            "LGPL 2.1" to "lgpl-2.1.txt",
+            "LGPL 3.0" to "lgpl-3.0.txt",
+            "Mozilla Public License" to "mpl-2.0.txt",
+            "MPL 2.0" to "mpl-2.0.txt",
+            "Apache License 2.0" to "apache-2.0.txt",
+            "LLVM Exceptions" to "llvm-exception.txt",
+            "Unlicense" to "unlicense-yt-dlp.txt",
+            "Python Software Foundation License" to "python-license.txt",
+            "NCSA" to "ncsa-libandroid-stub.txt",
+            "BSD" to "third-party-notices.txt",
+            "ISC" to "third-party-notices.txt",
+        )
 
         /** A [libraries] line of the catalog: its alias and its group. */
         val LIBRARY = Regex("""(?m)^([\w-]+)\s*=\s*\{\s*group\s*=\s*"([^"]+)"""")

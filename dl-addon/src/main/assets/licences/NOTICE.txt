@@ -8,25 +8,27 @@ Licences once the add-on is installed.
 
 Source code
 
-- KJB's own code in the add-on (dl-addon and addon-shared) is in KJB's repository, https://github.com/Mostafa-DE/KJB,
-  at the tag of each release.
+- The complete corresponding source of youtubedl-android and of the programs and libraries it carries is attached to
+  each KJB release on https://github.com/Mostafa-DE/KJB/releases as KJB-Downloads-<version>-sources.tar.gz, where
+  <version> is this add-on's version: youtubedl-android at its tag 0.18.1, each project's own release at the version
+  named below, and Termux's build scripts and patches for each. KJB's own code in the add-on (dl-addon and
+  addon-shared) is in the same repository, https://github.com/Mostafa-DE/KJB, at the tag of each release.
 - youtubedl-android 0.18.1 is used as published on Maven Central (io.github.junkfood02.youtubedl-android: library,
   ffmpeg and common). Its Java source is published beside it there, as library-0.18.1-sources.jar,
   ffmpeg-0.18.1-sources.jar and common-0.18.1-sources.jar
   (https://repo1.maven.org/maven2/io/github/junkfood02/youtubedl-android/), and its repository is
-  https://github.com/JunkFood02/youtubedl-android.
+  https://github.com/yausername/youtubedl-android (tag 0.18.1).
 - The programs and libraries youtubedl-android carries (Python, FFmpeg and every library listed under them below) are
   the Termux project's builds for Android, packed by youtubedl-android without change (Python's in libpython.zip.so,
   FFmpeg's in libffmpeg.zip.so). Termux's build script and patches for each are in
-  https://github.com/termux/termux-packages (packages/<name>/build.sh and the patches beside it). The source of each
-  project, at the version named below, is at the address named below.
+  https://github.com/termux/termux-packages (packages/<name>/build.sh and the patches beside it).
 - yt-dlp, yt-dlp-ejs, mutagen and PyCryptodome ship as their source (Python and JavaScript).
 
 The engine (youtubedl-android and what it carries)
 
-- youtubedl-android 0.18.1 (https://github.com/JunkFood02/youtubedl-android, a fork of
-  https://github.com/yausername/youtubedl-android), GNU General Public License version 3 (gpl-3.0.txt; its POM and
-  LICENSE), Copyright yausername, JunkFood02 and the youtubedl-android contributors. Its Java library, and the
+- youtubedl-android 0.18.1 (https://github.com/yausername/youtubedl-android, published on Maven Central by
+  JunkFood02, https://github.com/JunkFood02/youtubedl-android), GNU General Public License version 3 (gpl-3.0.txt; its
+  POM and LICENSE), Copyright yausername, JunkFood02 and the youtubedl-android contributors. Its Java library, and the
   programs and archives below.
 - yt-dlp 2025.11.12 (https://github.com/yt-dlp/yt-dlp), released into the public domain under the Unlicense
   (unlicense-yt-dlp.txt), by the yt-dlp contributors. In youtubedl-android's res/raw/ytdlp; the add-on later replaces it
@@ -91,36 +93,42 @@ Under the GNU GPL, version 2 or later (gpl-2.0.txt), which FFmpeg's GPL version 
 - FFTW 3.3.10 (libfftw3, libfftw3f, libfftw3l and their threads libraries, https://www.fftw.org), Copyright Matteo
   Frigo and the Massachusetts Institute of Technology.
 
-Under the GNU LGPL (lgpl-2.0.txt, lgpl-2.1.txt and lgpl-3.0.txt with gpl-3.0.txt), each at the version named or later:
-- GnuTLS 3.8.10 (libgnutls, libgnutls-dane and libgnutlsxx, https://www.gnutls.org), LGPL 2.1, Copyright Free
+Under the GNU LGPL (lgpl-2.0.txt, lgpl-2.1.txt and lgpl-3.0.txt with gpl-3.0.txt), at the versions named for each:
+- GnuTLS 3.8.10 (libgnutls, libgnutls-dane and libgnutlsxx, https://www.gnutls.org), LGPL 2.1 or later, Copyright Free
   Software Foundation, Inc. and others.
-- Nettle (libnettle and libhogweed, https://www.lysator.liu.se/~nisse/nettle/), LGPL 3.0 or GPL 2.0, Copyright the Nettle
-  authors.
-- GMP 6.3.0 (libgmp and libgmpxx, https://gmplib.org), LGPL 3.0 or GPL 2.0, Copyright Free Software Foundation, Inc.
-- libidn2 2.3.8 (https://gitlab.com/libidn/libidn2), LGPL 3.0 or GPL 2.0, Copyright Simon Josefsson and others.
-- libunistring (https://www.gnu.org/software/libunistring/), LGPL 3.0 or GPL 2.0, Copyright Free Software
+- Nettle 3.10.2 (libnettle and libhogweed, https://www.lysator.liu.se/~nisse/nettle/), LGPL 3.0 or later, or GPL 2.0 or
+  later (gpl-2.0.txt), Copyright the Nettle authors.
+- GMP 6.3.0 (libgmp and libgmpxx, https://gmplib.org), LGPL 3.0 or later, or GPL 2.0 or later, Copyright Free Software
   Foundation, Inc.
-- GNU libiconv (libiconv and libcharset, https://www.gnu.org/software/libiconv/), LGPL 2.1, Copyright Free Software
-  Foundation, Inc.
+- libidn2 2.3.8 (https://gitlab.com/libidn/libidn2), LGPL 3.0 or later, or GPL 2.0 or later, Copyright Simon Josefsson
+  and others.
+- libunistring 1.3 (https://www.gnu.org/software/libunistring/), LGPL 3.0 or later, or GPL 2.0 or later, Copyright
+  Free Software Foundation, Inc.
+- GNU libiconv 1.18 (libiconv and libcharset, https://www.gnu.org/software/libiconv/), LGPL 2.1 or later, Copyright
+  Free Software Foundation, Inc.
 - GLib 2.86.0 (libglib, libgio, libgobject, libgmodule, libgthread and libgirepository with their typelibs,
-  https://gitlab.gnome.org/GNOME/glib), LGPL 2.1, Copyright the GLib authors.
-- GNU FriBidi (https://github.com/fribidi/fribidi), LGPL 2.1, Copyright Behdad Esfahbod, Sharif FarsiWeb, Inc. and
-  others.
-- libbluray 1.3.4 (https://www.videolan.org/developers/libbluray.html), LGPL 2.1, Copyright the libbluray authors.
-- libudfread (https://code.videolan.org/videolan/libudfread), LGPL 2.1, Copyright VLC authors and
+  https://gitlab.gnome.org/GNOME/glib), LGPL 2.1 or later, Copyright the GLib authors.
+- GNU FriBidi 1.0.16 (https://github.com/fribidi/fribidi), LGPL 2.1 or later, Copyright Behdad Esfahbod, Sharif
+  FarsiWeb, Inc. and others.
+- libbluray 1.3.4 (https://www.videolan.org/developers/libbluray.html), LGPL 2.1 or later, Copyright the libbluray
+  authors.
+- libudfread 1.1.2 (https://code.videolan.org/videolan/libudfread), LGPL 2.1 or later, Copyright VLC authors and
   VideoLAN.
-- Game Music Emu (libgme, https://github.com/libgme/game-music-emu), LGPL 2.1, Copyright Shay Green and others.
-- LAME 3.100 (libmp3lame, https://lame.sourceforge.io), LGPL 2.0 (the GNU Library General Public License), Copyright
-  the LAME authors.
-- mpg123 1.33.2 (libmpg123, libout123 and libsyn123, https://www.mpg123.de), LGPL 2.1, Copyright the mpg123 project.
-- SoX Resampler 0.1.3 (libsoxr and libsoxr-lsr, https://sourceforge.net/projects/soxr/), LGPL 2.1, Copyright the SoX
-  Resampler authors.
-- libv4l (libv4l1, libv4l2, libv4lconvert, libv4l2rds and its plugins, https://git.linuxtv.org/v4l-utils.git),
-  LGPL 2.1, Copyright the v4l-utils authors.
-- libssh 0.11.3 (https://www.libssh.org), LGPL 2.1, with parts under the BSD 2-Clause License
+- Game Music Emu 0.6.4 (libgme, https://github.com/libgme/game-music-emu), LGPL 2.1 or later, Copyright Shay Green and
+  others.
+- LAME 3.100 (libmp3lame, https://lame.sourceforge.io), LGPL 2.0 (the GNU Library General Public License) or later,
+  Copyright the LAME authors.
+- mpg123 1.33.2 (libmpg123, libout123 and libsyn123, https://www.mpg123.de), LGPL 2.1 only, Copyright the mpg123
+  project.
+- SoX Resampler 0.1.3 (libsoxr and libsoxr-lsr, https://sourceforge.net/projects/soxr/), LGPL 2.1 or later, Copyright
+  the SoX Resampler authors.
+- libv4l 1.24.1 (libv4l1, libv4l2, libv4lconvert, libv4l2rds and its plugins, https://git.linuxtv.org/v4l-utils.git),
+  LGPL 2.1 or later, Copyright the v4l-utils authors. Its two helper programs, ov511-decomp and ov518-decomp, are under
+  the GNU GPL version 2 only (gpl-2.0.txt).
+- libssh 0.11.3 (https://www.libssh.org), LGPL 2.1 or later, with parts under the BSD 2-Clause License
   (third-party-notices.txt), Copyright Aris Adamantiadis, Andreas Schneider and the libssh contributors.
-- Graphite2 (libgraphite2, https://github.com/silnrsi/graphite), LGPL 2.1, or MPL 2.0, or GPL 2.0 or later,
-  Copyright SIL International.
+- Graphite2 1.3.14 (libgraphite2, https://github.com/silnrsi/graphite), LGPL 2.1 or later, or MPL 2.0, or GPL 2.0 or
+  later, Copyright SIL International.
 
 Under the Mozilla Public License 2.0 (mpl-2.0.txt):
 - SRT 1.5.4 (libsrt, https://github.com/Haivision/srt), Copyright Haivision Systems Inc.
@@ -144,8 +152,10 @@ Under permissive licences, their notices in third-party-notices.txt:
 - The LLVM OpenMP runtime, inside libvidstab and libsoxr, Apache License 2.0 with LLVM Exceptions (apache-2.0.txt,
   llvm-exception.txt), The LLVM Project.
 - Termux's libandroid-glob (BSD 3-Clause, Copyright The Regents of the University of California) and
-  libandroid-stub (libandroid.so, libmediandk.so and libOpenSLES.so, which pass calls on to Android's own; the
-  University of Illinois/NCSA Open Source License, per its Termux build script).
+  libandroid-stub (libandroid.so, libmediandk.so and libOpenSLES.so, which pass calls on to Android's own), built from
+  three wrapper files in termux-packages (packages/libandroid-stub) that Termux licenses under the University of
+  Illinois/NCSA Open Source License (ncsa-libandroid-stub.txt, the text Termux ships with it; the files name no
+  copyright holder).
 
 Java libraries in the add-on (Apache License 2.0, apache-2.0.txt)
 

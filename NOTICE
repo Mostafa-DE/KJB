@@ -38,7 +38,7 @@ Third-party software built into the AI add-on, KJB AI (AI lyrics)
 
 Third-party software built into the Downloads add-on, KJB Downloads (Downloads)
 
-- youtubedl-android 0.18.1 (io.github.junkfood02.youtubedl-android, https://github.com/JunkFood02/youtubedl-android),
+- youtubedl-android 0.18.1 (io.github.junkfood02.youtubedl-android, https://github.com/yausername/youtubedl-android),
   GNU General Public License version 3, Copyright yausername, JunkFood02 and the youtubedl-android contributors. It
   carries the programs below, as the Termux project (https://github.com/termux/termux-packages) builds them for
   Android.
@@ -52,10 +52,12 @@ Third-party software built into the Downloads add-on, KJB Downloads (Downloads)
 - The libraries Python and FFmpeg are built with (among them OpenSSL, SQLite, x264, x265, GnuTLS, libaom, dav1d,
   libvpx, Opus, FreeType and HarfBuzz, under the GPL, LGPL, MPL, Apache, BSD, MIT and other licences), and the Java
   libraries Jackson, Apache Commons IO and Apache Commons Compress (Apache License 2.0). The add-on's own NOTICE
-  (dl-addon/src/main/assets/licences/NOTICE.txt) lists each with its version, licence and copyright, and says where
-  the source of each is: this repository for KJB's own code, Maven Central for youtubedl-android's, and Termux's build
-  scripts with each project's own release for the rest. It ships in the add-on's APK with the notices those libraries
-  ask to keep (third-party-notices.txt) and the full text of every licence named.
+  (dl-addon/src/main/assets/licences/NOTICE.txt) lists each with its version, licence and copyright. It ships in the
+  add-on's APK with the notices those libraries ask to keep (third-party-notices.txt) and the full text of every
+  licence named.
+- The complete corresponding source of these components is attached to each KJB release on
+  https://github.com/Mostafa-DE/KJB/releases as KJB-Downloads-<version>-sources.tar.gz. KJB's own code is in this
+  repository.
 
 Third-party software and assets built into the app (player, screens and storage)
 

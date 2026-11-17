@@ -220,7 +220,10 @@ val DL_THIRD_PARTY: List<Shipped> = listOf(
             "FriBidi, libbluray, libudfread, Game Music Emu, LAME, mpg123, SoX Resampler, libv4l, libssh and Graphite2 (LGPL); " +
             "SRT and ZeroMQ (MPL); and the AV1, VP8, VP9, WebP, Xiph, font, image, audio and Termux libraries that NOTICE.txt names",
         "GPL 2.0 or later, LGPL, MPL 2.0, BSD, MIT and others", "Their authors",
-        listOf(NOTICES_TEXT, "gpl-2.0.txt", "lgpl-2.0.txt", "lgpl-2.1.txt", "lgpl-3.0.txt", GPL_3, "mpl-2.0.txt", APACHE_TEXT, "llvm-exception.txt"),
+        listOf(
+            NOTICES_TEXT, "gpl-2.0.txt", "lgpl-2.0.txt", "lgpl-2.1.txt", "lgpl-3.0.txt", GPL_3, "mpl-2.0.txt", APACHE_TEXT,
+            "llvm-exception.txt", "ncsa-libandroid-stub.txt",
+        ),
         addon = KjbAddons.DOWNLOADS,
     ),
     Shipped(
