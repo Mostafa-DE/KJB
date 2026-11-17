@@ -5,6 +5,7 @@ import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import app.lyrify.Lyrify
+import app.lyrify.data.SharedWrites
 import app.lyrify.dl.api.AudioQuality
 import app.lyrify.dl.api.DlEnd
 import app.lyrify.dl.api.DlInfo
@@ -16,9 +17,11 @@ import app.lyrify.downloads.DlLookupEvents
 import app.lyrify.downloads.DlSession
 import app.lyrify.downloads.DownloadFiles
 import app.lyrify.downloads.DownloadFinish
+import app.lyrify.downloads.DownloadFolders
 import app.lyrify.downloads.DownloadItem
 import app.lyrify.downloads.DownloadOutcome
 import app.lyrify.downloads.DownloadRunner
+import app.lyrify.downloads.DownloadSettings
 import app.lyrify.downloads.DownloadState
 import app.lyrify.downloads.FinishSteps
 import app.lyrify.downloads.PhoneSteps
@@ -29,6 +32,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -49,6 +53,30 @@ import java.io.File
 @RunWith(AndroidJUnit4::class)
 class DownloadsDeviceTest {
     private val context = InstrumentationRegistry.getInstrumentation().targetContext
+
+    /**
+     * KJB dev's test folder, the debug build's fence, and in it an audio folder of this test's own ([finish]), so that
+     * all that is in it is what the test's download made.
+     */
+    private val testFolder = File(Environment.getExternalStorageDirectory(), SharedWrites.TEST_FOLDER)
+    private val audioFolder = "${DownloadFolders.AUDIO} ${System.currentTimeMillis()}"
+    private val downloads = File(testFolder, audioFolder)
+
+    /**
+     * The folders on the way to [downloads] missing as the test began, deepest first: [downloads], then Music/ and the
+     * test folder if they were missing too.
+     */
+    private val missing = generateSequence(downloads) { it.parentFile }.takeWhile { it.startsWith(testFolder) }.filterNot(File::exists).toList()
+
+    /**
+     * What a test's download made goes, also when the test fails midway: what is in [downloads] (its song, or a part a
+     * stopped run left), then the folders it made, deepest first, each only once empty.
+     */
+    @After
+    fun cleanUp() {
+        downloads.listFiles()?.forEach(File::delete)
+        missing.forEach(File::delete)
+    }
 
     private fun connect(): DlSession = runBlocking {
         when (val connection = DlAddon.connect(context)) {
@@ -71,7 +99,7 @@ class DownloadsDeviceTest {
     private fun finish(steps: FinishSteps) = DownloadFinish(
         DownloadFiles(Environment.getExternalStorageDirectory(), File(context.filesDir, "download-covers"), Lyrify.writes, Environment::isExternalStorageManager),
         steps,
-    )
+    ).apply { settings = DownloadSettings(audioFolder = audioFolder) }
 
     @Test
     fun bindsTheAddonAfterItsChecksAndSpeaksItsApi() {
@@ -139,24 +167,18 @@ class DownloadsDeviceTest {
 
             assertTrue("$outcome", outcome is DownloadOutcome.Saved)
             val saved = File((outcome as DownloadOutcome.Saved).path)
-            try {
-                assertTrue(saved.path, saved.isFile && "/Music/KJB test/" in saved.path)
-                assertTrue(saved.name, saved.name.endsWith(".mp3"))
-                assertFalse(File(saved.parentFile, ".${saved.name}.part").exists())
-                val scanned: AudioFile? = steps.library()?.firstOrNull { it.path == saved.path }
-                assertTrue("the library lists it at once", scanned != null)
-                assertEquals(saved.path, steps.lyrics?.path)
-            } finally {
-                saved.delete()
-            }
+            assertTrue(saved.path, saved.isFile && "/Music/KJB test/" in saved.path)
+            assertTrue(saved.name, saved.name.endsWith(".mp3"))
+            assertFalse(File(saved.parentFile, ".${saved.name}.part").exists())
+            val scanned: AudioFile? = steps.library()?.firstOrNull { it.path == saved.path }
+            assertTrue("the library lists it at once", scanned != null)
+            assertEquals(saved.path, steps.lyrics?.path)
         }
     }
 
     @Test
     fun cancelStopsTheDownloadAndLeavesNoPart() {
         assumeTrue("All files access for KJB dev", Environment.isExternalStorageManager())
-        val folder = File(Environment.getExternalStorageDirectory(), "Music/KJB test/Music/KJB Downloads")
-        val before = folder.listFiles()?.map { it.name }.orEmpty().toSet()
         connect().use { session ->
             runBlocking {
                 val run = async { DownloadRunner(session.port, session.death, finish(Steps(PhoneSteps(context)))).run(item("devcancel${System.nanoTime()}")) {} }
@@ -165,7 +187,7 @@ class DownloadsDeviceTest {
                 run.join()
             }
         }
-        val parts = folder.listFiles()?.map { it.name }.orEmpty().filter { it !in before && it.endsWith(".part") }
+        val parts = downloads.listFiles()?.map { it.name }.orEmpty().filter { it.endsWith(".part") }
         assertEquals(emptyList<String>(), parts)
     }
 

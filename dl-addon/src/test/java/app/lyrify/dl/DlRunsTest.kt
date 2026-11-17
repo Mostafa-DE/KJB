@@ -11,8 +11,11 @@ import app.lyrify.dl.api.DlRequest
 import app.lyrify.dl.api.DlStage
 import app.lyrify.dl.api.DlUpdate
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
@@ -27,6 +30,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import org.junit.rules.Timeout
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
@@ -39,8 +43,16 @@ import java.net.InetAddress
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class DlRunsTest {
-    @get:Rule
+    @get:Rule(order = 0)
     val temp = TemporaryFolder()
+
+    /**
+     * Each test ends within this or fails, its tear-down included: a stopped run's settle waits NonCancellable on the
+     * virtual clock, so a run that never lets go loops on in runTest's tear-down, past runTest's own timeout, and would
+     * hold the gate for good. Inside [temp], whose folder still goes when a test times out.
+     */
+    @get:Rule(order = 1)
+    val timeout: Timeout = Timeout.seconds(10)
 
     private val day = 24 * 60 * 60_000L
 
@@ -96,7 +108,10 @@ class DlRunsTest {
             live.remove(id)?.complete(YtdlpExit.Killed)
         }
 
-        /** A killed process still in a folder, by its marker: how many more looks see it (it goes after them). */
+        /**
+         * A killed process still in a folder, by its marker: how many more looks see it (it goes after them, or when the
+         * test ends: [runs]).
+         */
         val lingering = HashMap<String, Int>()
 
         override fun running(marker: String): Boolean {
@@ -150,18 +165,29 @@ class DlRunsTest {
     /** Every host is out on the internet, but those the test gives an address of its own. */
     private val dns = mutableMapOf<String, String>()
 
-    private fun TestScope.runs() = DlRuns(
-        scope = backgroundScope,
-        ytdlp = ytdlp,
-        folder = root,
-        memory = memory,
-        clock = { now },
-        monotonic = { testScheduler.currentTime },
-        quickInfo = { quick(it) },
-        io = StandardTestDispatcher(testScheduler),
-        resolve = { host -> listOf(InetAddress.getByName(dns[host] ?: "93.184.216.34")) },
-        ended = { ends++ },
-    )
+    private fun TestScope.runs(): DlRuns {
+        // The test's killed processes go when it ends: a run that waits for one ends in the tear-down, so a test that
+        // fails while one lingers fails with its own message rather than looping on there.
+        backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            try {
+                awaitCancellation()
+            } finally {
+                ytdlp.lingering.clear()
+            }
+        }
+        return DlRuns(
+            scope = backgroundScope,
+            ytdlp = ytdlp,
+            folder = root,
+            memory = memory,
+            clock = { now },
+            monotonic = { testScheduler.currentTime },
+            quickInfo = { quick(it) },
+            io = StandardTestDispatcher(testScheduler),
+            resolve = { host -> listOf(InetAddress.getByName(dns[host] ?: "93.184.216.34")) },
+            ended = { ends++ },
+        )
+    }
 
     /** How many times the add-on said a run or a lookup ended: its foreground service is left when it is no longer busy. */
     private var ends = 0
