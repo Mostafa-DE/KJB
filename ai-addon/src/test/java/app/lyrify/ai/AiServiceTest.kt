@@ -738,6 +738,60 @@ class AiServiceTest {
     }
 
     @Test
+    fun `a job KJB gave up on as frozen stops at its chunk, its engine and foreground go, and the next job starts`() = runTest {
+        // KJB's AI page keeps the service bound: no onUnbind, so the one-way word is all that ends the job.
+        val port = Foreground()
+        val service = service(36, port, CompletableDeferred())
+        val heard = Heard()
+        val job = service.jobs.start(song, null, { heard }) { released += it; service.foreground.jobEnded() }
+        runCurrent()
+        service.foreground.start(1, kjb)
+        assertEquals("waiting at its chunk for KJB, which went", "chunk", heard.events.last())
+
+        service.jobs.abandon(job)
+        runCurrent()
+
+        assertEquals("stopped", heard.events.last())
+        assertEquals(listOf(job), released)
+        assertFalse(service.jobs.busy)
+        assertTrue("the engine closed, freeing the NPU (KJB sends no closeEngine after a freeze)", engines.single().closed)
+        assertEquals("out of the foreground, its notice gone", listOf("start mediaProcessing", "stopForeground", "stopSelf 1"), port.calls)
+
+        // The next night: a new job starts, on an engine opened anew.
+        val next = Heard()
+        val again = service.jobs.start(song, null, { next }) {}
+        runCurrent()
+        service.jobs.proceed(again)
+        runCurrent()
+        assertEquals("result Transcribed", next.events.last())
+        assertEquals(2, engines.size)
+    }
+
+    @Test
+    fun `KJB's word on a frozen job leaves a later job alone, and closes an engine no job holds`() = runTest {
+        val jobs = jobs(chunks = 1)
+        val first = jobs.start(song, null, { Heard() }) {}
+        runCurrent()
+        jobs.proceed(first)
+        runCurrent()
+
+        // The job ended before the word came: nothing holds the engine, which closes.
+        jobs.abandon(first)
+        assertTrue(engines.single().closed)
+
+        val heard = Heard()
+        val later = jobs.start(song, null, { heard }) {}
+        runCurrent()
+        jobs.abandon(first) // late, and for the job before
+        runCurrent()
+        assertTrue("the later job goes on", jobs.busy)
+        assertFalse(engines.last().closed)
+        jobs.proceed(later)
+        runCurrent()
+        assertEquals("result Transcribed", heard.events.last())
+    }
+
+    @Test
     fun `the download, then a job beside it, the download ending first, and the job goes on as mediaProcessing`() = runTest {
         val port = Foreground()
         val gate = CompletableDeferred<Unit>()

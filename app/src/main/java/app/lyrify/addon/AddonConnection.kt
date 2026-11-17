@@ -141,6 +141,8 @@ private class AidlPort(private val addon: IAiAddon) : AddonPort {
 
     override fun cancel(job: Long) = call { addon.cancel(job) }
 
+    override fun abandonJob(job: Long) = call { addon.abandonJob(job) }
+
     override fun result(job: Long): AiResult? = call { Wire.joined { part -> addon.result(job, part) }?.let(Wire::result) }
 
     override fun closeEngine() = call { addon.closeEngine() }

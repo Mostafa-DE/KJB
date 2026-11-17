@@ -84,6 +84,8 @@ class AddonClientTest {
 
         override fun cancel(job: Long) = call("cancel $job")
 
+        override fun abandonJob(job: Long) = call("abandonJob $job")
+
         /** The result the add-on keeps of the job that ended last. */
         var kept: AiResult? = null
 
@@ -551,7 +553,7 @@ class AddonClientTest {
     }
 
     @Test
-    fun `silent for 30 s once it beats, the add-on is frozen, let go of and its service stopped, with nothing asked of it`() = runTest {
+    fun `silent for 30 s once it beats, the add-on is frozen, its job dropped one way, let go of and its service stopped`() = runTest {
         val host = FakeHost()
         val session = session(host)
         val binding = host.bindings.single()
@@ -577,10 +579,44 @@ class AddonClientTest {
         assertTrue(error.toString(), error is AddonFrozenException && error.stage == AiStage.SEPARATE && error.silentMs == RemoteSongEngine.FROZEN_MS)
         assertTrue("let go of", binding.closed && session.closed)
         assertTrue("the service KJB started is stopped", binding.stopped)
-        // A call into a frozen process may wait for as long as the phone keeps it frozen: none is made.
-        assertEquals(listOf("apiVersion", "run Placeholder.mp3 200000 false", "foreground"), binding.port.calls)
+        // A call the add-on must answer could wait for as long as the phone keeps it frozen: only the one-way word it
+        // hears once it runs again, which also closes its engine.
+        assertEquals(listOf("apiVersion", "run Placeholder.mp3 200000 false", "foreground", "abandonJob 7"), binding.port.calls)
         engine.close()
         assertFalse("closeEngine" in binding.port.calls)
+    }
+
+    @Test
+    fun `a frozen job is dropped one way even while the AI page binds the add-on, and the next song's job runs`() = runTest {
+        val host = FakeHost()
+        // The AI page shows: its own binding keeps the add-on's service, which KJB's letting go then does not destroy.
+        val page = launch { AddonClient(host).views(MutableSharedFlow(), retryMs = 30_000, deathPauseMs = 1_000).collect {} }
+        runCurrent()
+        val screen = host.bindings.single()
+        val engine = RemoteSongEngine(session(host), notes = {})
+        val binding = host.bindings.last()
+        val run = async { runCatching { engine.run(track, null, {}) {} } }
+        runCurrent()
+        binding.port.events!!.onBeat()
+        binding.port.events!!.onStage("TRANSCRIBE")
+        runCurrent()
+        advanceTimeBy(RemoteSongEngine.FROZEN_MS + 1)
+        runCurrent()
+
+        assertTrue(run.await().exceptionOrNull() is AddonFrozenException)
+        // The add-on stops the job and closes its engine once it runs again, with no onUnbind.
+        assertEquals("abandonJob 7", binding.port.calls.last())
+        assertTrue("the worker's binding let go of and its service stopped", binding.closed && binding.stopped)
+        assertFalse("the page's binding stays", screen.closed)
+
+        // The next night's run binds anew, and its song runs as a job of its own.
+        val next = RemoteSongEngine(session(host), notes = {})
+        val song = async { next.run(track, null, {}) {} }
+        runCurrent()
+        assertEquals(listOf("apiVersion", "run Placeholder.mp3 200000 false", "foreground"), host.bindings.last().port.calls)
+        host.bindings.last().port.events!!.onResult(transcribed)
+        assertEquals(transcribed, song.await())
+        page.cancel()
     }
 
     @Test
@@ -697,6 +733,7 @@ class AddonClientTest {
         val error = run.await().exceptionOrNull()
         assertTrue(error.toString(), error is AddonFrozenException && error.stage == AiStage.TRANSCRIBE)
         assertFalse("proceed 7" in binding.port.calls)
+        assertEquals("abandonJob 7", binding.port.calls.last())
         assertTrue(binding.closed && binding.stopped)
     }
 

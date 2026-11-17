@@ -69,4 +69,10 @@ interface IAiAddon {
     // runs, even while KJB's AI page still binds it (Android then keeps its service, and onUnbind never comes). Added
     // after VERSION 1 shipped, without raising it: an add-on that lacks it drops the call unanswered.
     oneway void abandonDownload(long run) = 15;
+
+    // As abandonDownload, for a song's job (its id) KJB gave up on as frozen: once the add-on runs again the job stops
+    // after the step it is on, as with cancel, and the engine closes as it ends, freeing the NPU (KJB sends no closeEngine
+    // after a freeze); with no job left the add-on leaves the foreground. Without it, a job KJB's AI page kept bound
+    // waited at its next chunk for good, and the next job was refused. Added as abandonDownload was, VERSION kept.
+    oneway void abandonJob(long job) = 16;
 }

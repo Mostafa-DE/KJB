@@ -60,9 +60,9 @@ class AddonStalledException(val stage: AiStage?, val silentMs: Long) :
 /**
  * A song's job in the add-on beat, then said nothing for [silentMs] in [stage] (null: before its first stage, or the
  * models' download): the phone froze the add-on's process, as an app freezer does (Samsung's, others), beats and all
- * ([RemoteSongEngine]'s freeze watch, [AddonDownloads.follow]'s). Nothing it must answer was asked of it (a download is
- * told one way to stop); it was let go of and its service stopped. Not the song's doing: the song is tried again later,
- * and the night's run ends; a download goes on from its parts at its next run.
+ * ([RemoteSongEngine]'s freeze watch, [AddonDownloads.follow]'s). Nothing it must answer was asked of it (it is told one
+ * way to drop the job or the download); it was let go of and its service stopped. Not the song's doing: the song is
+ * tried again later, and the night's run ends; a download goes on from its parts at its next run.
  */
 class AddonFrozenException(val stage: AiStage?, val silentMs: Long) :
     Exception("the AI add-on was frozen: no word for ${silentMs / 1000} s during ${stage?.name?.lowercase() ?: "its start"}")
@@ -162,6 +162,12 @@ interface AddonPort {
     fun proceed(job: Long)
 
     fun cancel(job: Long)
+
+    /**
+     * Stops the song's job [job] KJB gave up on as frozen ([RemoteSongEngine]) and closes its engine, one way: it never
+     * waits, and the add-on hears it once it runs again. An add-on without it drops it.
+     */
+    fun abandonJob(job: Long)
 
     /** The result the add-on keeps of [job], which ended with one; null when it keeps none for that job. */
     fun result(job: Long): AiResult?
@@ -356,9 +362,10 @@ class AddonClient(private val host: AddonHost, private val minApi: Int = MIN_ADD
  * ([AddonSession.foreground]): a phone's app freezer leaves alone an app at work in the foreground. Should a phone freeze
  * it all the same, the freeze watch ends the song in seconds instead of minutes: the add-on beats every few seconds, from
  * a timer no step blocks, so [FROZEN_MS] without a word from an add-on that beat is a process the phone stopped. Nothing
- * more is asked of it (a call into a frozen process can wait for as long as it stays frozen); it is let go of and its
- * service stopped ([AddonSession.abandon]): [AddonFrozenException]. The beats are not progress: a step that never ends
- * still meets the limits above. An add-on that never beat is not watched.
+ * it must answer is asked of it (such a call could wait for as long as it stays frozen): it is told one way to drop the
+ * job ([AddonPort.abandonJob]), then let go of and its service stopped ([AddonSession.abandon]): [AddonFrozenException].
+ * The beats are not progress: a step that never ends still meets the limits above. An add-on that never beat is not
+ * watched.
  */
 class RemoteSongEngine(
     private val session: AddonSession,
@@ -457,9 +464,11 @@ class RemoteSongEngine(
                 session.abandon()
                 throw e
             } catch (e: AddonFrozenException) {
-                // Not asked to stop: the phone ends the job with the process, or the add-on does once it runs again
-                // and finds KJB gone.
+                // Nothing it must answer: told one way to drop the job, which the add-on hears once it runs again,
+                // even while KJB's AI page binds it and Android keeps its service; it then stops the job and closes its
+                // engine. An add-on without the call stops when nothing binds it.
                 stalled = true
+                runCatching { session.port.abandonJob(job) }
                 session.abandon()
                 throw e
             } finally {

@@ -273,6 +273,24 @@ class AddonJobs(
         synchronized(lock) { running?.takeIf { it.id == job } }?.let { stop(it, "KJB cancelled it") }
     }
 
+    /**
+     * KJB gave up on [job] as frozen (IAiAddon.abandonJob, heard once the add-on runs again): it stops after the step it
+     * is on, as for [cancel], and the engine closes as it ends, freeing the NPU, as KJB sends no closeEngine after a
+     * freeze. A job that ended before the word came leaves an engine no job holds, which closes now; a later job is left
+     * alone.
+     */
+    fun abandon(job: Long) {
+        val run = synchronized(lock) {
+            val run = running
+            when {
+                run == null -> closeNow()
+                run.id == job -> closeAfterJob = true
+            }
+            run?.takeIf { it.id == job }
+        } ?: return
+        stop(run, "KJB gave up on it as frozen")
+    }
+
     /** The result of [job], kept from its end until the next job's; null for a job unknown, running, stopped or replaced. */
     fun result(job: Long): AiResult? = synchronized(lock) { kept?.takeIf { it.first == job }?.second }
 
@@ -664,6 +682,9 @@ class AiService : Service() {
         override fun proceed(job: Long) = checked { jobs.proceed(job) }
 
         override fun cancel(job: Long) = checked { jobs.cancel(job) }
+
+        // One way, heard once a frozen add-on runs again, even while KJB's AI page keeps the service (no onUnbind then).
+        override fun abandonJob(job: Long) = checked { jobs.abandon(job) }
 
         // Returns once the sessions are closed, so KJB's unbind right after cannot outrun it.
         override fun closeEngine() = checked { runBlocking { jobs.closeEngine().join() } }
