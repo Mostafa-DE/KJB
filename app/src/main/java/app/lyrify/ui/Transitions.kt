@@ -703,7 +703,7 @@ fun reducedDragAlpha(offset: Float, height: Float): Float {
     return 1f - (1f - REDUCED_DRAG_ALPHA) * p
 }
 
-/** What a sheet makes of a finger on its content: [WAIT] until it has moved past the slop, then [TAKE] it, or [LEAVE] it to the content. */
+/** What a sheet, or the player ([playerSwipe]), makes of a finger on its content: [WAIT] until it has moved past the slop, then [TAKE] it, or [LEAVE] it to the content. */
 enum class SheetDrag { WAIT, TAKE, LEAVE }
 
 /**

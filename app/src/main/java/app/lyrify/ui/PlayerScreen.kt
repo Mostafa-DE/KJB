@@ -20,7 +20,21 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.systemGestures
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerInputScope
+import androidx.compose.ui.input.pointer.positionChangeIgnoreConsumed
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.semantics.dismiss
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.runtime.derivedStateOf
@@ -139,28 +153,25 @@ fun seekIcon(back: Boolean, seconds: Int): Int = when (seconds) {
 /** How many jumps a seek button held for [heldMs] has made: one on the press, then one every [HOLD_EVERY_MS] after [HOLD_DELAY_MS]. */
 fun jumpsWhileHeld(heldMs: Long): Int = if (heldMs < HOLD_DELAY_MS) 1 else 2 + ((heldMs - HOLD_DELAY_MS) / HOLD_EVERY_MS).toInt()
 
-// The cover's swipe (the prototype's coverSwipe), in dp
+// The cover's swipe (the prototype's coverSwipe) and the player's drag down, in dp
 
-/** How far a drag goes before it locks to an axis; how far sideways it skips; how far down it closes the player. */
+/** How far a drag goes before it locks to an axis; how far sideways it skips. */
 const val SWIPE_LOCK_DP: Float = 12f
 const val SWIPE_SKIP_DP: Float = 70f
-const val SWIPE_CLOSE_DP: Float = 90f
 
 /** The cover moves this share of the finger's way, and tilts a degree for each [TILT_DP] of it. */
 const val COVER_FOLLOW: Float = 0.6f
 const val TILT_DP: Float = 40f
 
-/** The axis a drag on the cover keeps once it is clear. */
+/** The axis a drag on the cover, or anywhere on the player, keeps once it is clear. */
 enum class SwipeAxis { SIDEWAYS, DOWN }
 
 /** A swipe to the left plays the next song, to the right the previous one. */
 enum class SkipWay { NEXT, PREVIOUS }
 
-/** What a released swipe does: skip, close the player, or spring back. */
+/** What a released swipe on the cover does: skip, or spring back. */
 sealed interface SwipeOutcome {
     data class Skip(val way: SkipWay) : SwipeOutcome
-
-    data object Close : SwipeOutcome
 
     data object Return : SwipeOutcome
 }
@@ -172,17 +183,47 @@ fun swipeAxis(dx: Float, dy: Float): SwipeAxis? = when {
     else -> null
 }
 
+/**
+ * What the player makes of a finger [dx], [dy] dp from where it landed that nothing on it has taken (the seek bar, the
+ * cover's sideways swipe, a list scrolling): down first ([swipeAxis]) it drags the player ([SheetDrag.TAKE]); sideways,
+ * or up past [SWIPE_LOCK_DP], it is left to what is under it; until then, wait. One that landed in the system's gesture
+ * edge ([inEdge]) is the system's back, never the player's.
+ */
+fun playerSwipe(dx: Float, dy: Float, inEdge: Boolean): SheetDrag {
+    if (inEdge) return SheetDrag.LEAVE
+    return when (swipeAxis(dx, dy)) {
+        SwipeAxis.DOWN -> SheetDrag.TAKE
+        SwipeAxis.SIDEWAYS -> SheetDrag.LEAVE
+        null -> if (dy < -SWIPE_LOCK_DP) SheetDrag.LEAVE else SheetDrag.WAIT
+    }
+}
+
+/**
+ * How much of a list's scroll the player takes once the list has had it ([available] px left over, down positive): a
+ * finger's pull down ([byFinger]; never a fling's) on a list already at its top, one that has not [scrolled] since the
+ * finger landed, while that finger is [held] on the player (it landed outside the gesture edges). A list that scrolled
+ * keeps the whole drag, as a sheet's content does ([sheetDrag]).
+ */
+fun listPull(available: Float, scrolled: Boolean, byFinger: Boolean, held: Boolean): Float =
+    if (byFinger && held && !scrolled && available > 0f) available else 0f
+
+/**
+ * How much of a finger's push up on a list ([available] px, up negative) the player takes before the list does: while a
+ * list's pull holds it [pulled] px down, it goes back up first, never past where it rests; the rest scrolls the list.
+ */
+fun listPush(available: Float, pulled: Float, byFinger: Boolean): Float =
+    if (byFinger && available < 0f && pulled > 0f) maxOf(available, -pulled) else 0f
+
 /** Where the cover is when the finger has moved [dx]: [COVER_FOLLOW] of the way. */
 fun coverShift(dx: Float): Float = dx * COVER_FOLLOW
 
 /** The cover's tilt, in degrees, when the finger has moved [dx] dp. */
 fun coverTilt(dx: Float): Float = dx / TILT_DP
 
-/** What letting go after a drag of [dx], [dy] (dp) on [axis] does. */
-fun swipeOutcome(axis: SwipeAxis?, dx: Float, dy: Float): SwipeOutcome = when {
+/** What letting go after a drag of [dx] dp on [axis] does to the cover; down is the player's own ([playerSwipe]). */
+fun swipeOutcome(axis: SwipeAxis?, dx: Float): SwipeOutcome = when {
     axis == SwipeAxis.SIDEWAYS && dx < -SWIPE_SKIP_DP -> SwipeOutcome.Skip(SkipWay.NEXT)
     axis == SwipeAxis.SIDEWAYS && dx > SWIPE_SKIP_DP -> SwipeOutcome.Skip(SkipWay.PREVIOUS)
-    axis == SwipeAxis.DOWN && dy > SWIPE_CLOSE_DP -> SwipeOutcome.Close
     else -> SwipeOutcome.Return
 }
 
@@ -435,14 +476,6 @@ fun PlayerView() {
     val toasts = LocalToasts.current
     val resources = LocalResources.current
     val close = { nav.close(FullScreen.Player) }
-    val reduced = LocalReducedMotion.current
-    val drag = remember(scope) { PlayerDrag(scope) }
-    val fling = with(LocalDensity.current) { DRAG_FLING_DP.dp.toPx() }
-    val intoBar = LocalContainer.current != null
-    val letGo = { drag.release(fling, intoBar, close) }
-    // Shown again while it was leaving (opened again at once), the player comes back whole.
-    val headed = LocalLayerHeaded.current
-    LaunchedEffect(headed) { if (headed) drag.reset() }
     var lyricsRoute by remember { mutableStateOf<PlayerRoute?>(null) }
     val extras = rememberPlayerExtras()
     // A book's part, however it plays: its cover only, never the lyrics (LyricsViews.kt songLyrics), nor Share lyrics. Not
@@ -471,29 +504,10 @@ fun PlayerView() {
         }
     }
 
-    Box(
-        Modifier
-            .fillMaxSize()
-            .onSizeChanged { drag.height = it.height.toFloat() }
-            .graphicsLayer {
-                // Dragged down, the player follows the finger, shrinking and rounding as it goes ([dragPeek]); with
-                // reduced motion it stays put and fades instead, so a drag never closes it unseen.
-                if (reduced) {
-                    alpha = reducedDragAlpha(drag.offset.value, size.height)
-                    return@graphicsLayer
-                }
-                val peek = dragPeek(drag.offset.value, size.height)
-                translationY = peek.shiftY
-                scaleX = peek.scale
-                scaleY = peek.scale
-                shape = RoundedCornerShape(PEEK_CORNER * peek.corner)
-                clip = peek.corner > 0f
-            }
-            .background(MaterialTheme.colorScheme.background),
-    ) {
+    PlayerFrame(onClose = close) {
         Backdrop(ui.item.song.path)
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
-            PlayerTopBar(ui, lyricsShare, tone = makesTone(book), onClose = close, onRoute = route, onDrag = drag::follow, onDragEnd = letGo)
+            PlayerTopBar(ui, lyricsShare, tone = makesTone(book), onClose = close, onRoute = route)
             Column(Modifier.weight(1f).padding(horizontal = 24.dp, vertical = 4.dp)) {
                 FlipArea(
                     ui = ui,
@@ -506,8 +520,6 @@ fun PlayerView() {
                     onPlay = connection::play,
                     onNext = connection::next,
                     onPrevious = connection::previous,
-                    onDownDrag = drag::follow,
-                    onDownEnd = letGo,
                     onRoute = route,
                     modifier = Modifier.weight(1f),
                 )
@@ -530,10 +542,105 @@ fun PlayerView() {
 }
 
 /**
- * The player dragged down by its top bar or its cover: it follows the finger ([dragPeek]); let go, it closes past a
- * quarter of its [height] or on a fling down ([dragCloses]), else springs back ([Motion.release]). Closing into the Now
- * bar, it lets go of the drag as the container shrinks, so the whole player lands in the bar; falling away, it leaves
- * from where the finger left it ([dragRelease]).
+ * The player's frame, around all of it: dragged down from anywhere on it, it follows the finger, shrinking and rounding
+ * as it goes ([dragPeek]; with reduced motion it stays put and fades instead, so a drag never closes it unseen), and let
+ * go it closes ([onClose]) or springs back ([PlayerDrag]). Whatever on the player takes a drag first keeps it: the seek
+ * bar, the A-B handles, the cover's sideways swipe, a list scrolling; a list already at its top hands a pull down over.
+ * A finger landing in the system's gesture edge is the system's back. TalkBack's dismiss closes it, as the chevron does.
+ */
+@Composable
+internal fun PlayerFrame(onClose: () -> Unit, content: @Composable BoxScope.() -> Unit) {
+    val scope = rememberCoroutineScope()
+    val reduced = LocalReducedMotion.current
+    val drag = remember(scope) { PlayerDrag(scope) }
+    val density = LocalDensity.current
+    val fling = with(density) { DRAG_FLING_DP.dp.toPx() }
+    val intoBar = LocalContainer.current != null
+    val close by rememberUpdatedState(onClose)
+    val letGo = rememberUpdatedState { drag.lift(fling, intoBar, close) }
+    // Shown again while it was leaving (opened again at once), the player comes back whole.
+    val headed = LocalLayerHeaded.current
+    LaunchedEffect(headed) { if (headed) drag.reset() }
+    // The system's gesture edges (back), in the window, and where the player sits in it: a finger landing there is the system's.
+    val direction = LocalLayoutDirection.current
+    val gestures = WindowInsets.systemGestures
+    val window = LocalWindowInfo.current
+    val origin = remember { Kept(Offset.Zero) }
+    val edge = rememberUpdatedState { at: Offset ->
+        inGestureEdge(origin.value.x + at.x, window.containerSize.width.toFloat(), gestures.getLeft(density, direction).toFloat(), gestures.getRight(density, direction).toFloat())
+    }
+    val label = stringResource(R.string.player_close)
+    Box(
+        Modifier
+            .fillMaxSize()
+            .onSizeChanged { drag.height = it.height.toFloat() }
+            .onGloballyPositioned { origin.value = it.positionInWindow() }
+            .graphicsLayer {
+                if (reduced) {
+                    alpha = reducedDragAlpha(drag.offset.value, size.height)
+                    return@graphicsLayer
+                }
+                val peek = dragPeek(drag.offset.value, size.height)
+                translationY = peek.shiftY
+                scaleX = peek.scale
+                scaleY = peek.scale
+                shape = RoundedCornerShape(PEEK_CORNER * peek.corner)
+                clip = peek.corner > 0f
+            }
+            .nestedScroll(drag.lists)
+            .pointerInput(drag) { dragsDown(drag, edge = { edge.value(it) }, letGo = { letGo.value() }) }
+            .semantics {
+                dismiss(label) {
+                    close()
+                    true
+                }
+            }
+            .background(MaterialTheme.colorScheme.background),
+        content = content,
+    )
+}
+
+/**
+ * Each finger on the player, seen after everything on it has had it (the Main pass, children first): one that nothing
+ * took and that goes down first ([playerSwipe]) drags the player, every move of it the player's from then on; its lift,
+ * or that of a finger whose list handed its pull over ([PlayerDrag.lists]), lets go ([letGo]). A finger landing in the
+ * system's gesture [edge] is left alone.
+ */
+private suspend fun PointerInputScope.dragsDown(drag: PlayerDrag, edge: (Offset) -> Boolean, letGo: () -> Unit) {
+    awaitEachGesture {
+        val down = awaitFirstDown(requireUnconsumed = false)
+        val inEdge = edge(down.position)
+        drag.land(down, inEdge)
+        var moved = Offset.Zero
+        var mine = SheetDrag.WAIT
+        while (true) {
+            val change = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: break
+            drag.track(change)
+            if (!change.pressed) break
+            if (mine == SheetDrag.WAIT) {
+                // Taken first by something on the player (the seek bar, the cover's skip, a list): it is theirs to the lift.
+                if (change.isConsumed) {
+                    mine = SheetDrag.LEAVE
+                } else {
+                    moved += change.positionChange()
+                    mine = playerSwipe(moved.x / density, moved.y / density, inEdge)
+                }
+            }
+            if (mine == SheetDrag.TAKE) {
+                drag.follow(change.positionChangeIgnoreConsumed().y)
+                change.consume()
+            }
+        }
+        letGo()
+    }
+}
+
+/**
+ * The player dragged down ([PlayerFrame]): by a finger nothing on it took ([follow]), or by a list at its top pulled
+ * further down ([lists]). It follows the finger ([dragPeek]); let go, it closes past a quarter of its [height] or on a
+ * fling down ([dragCloses]), else springs back ([Motion.release]). Closing into the Now bar, it lets go of the drag as the
+ * container shrinks, so the whole player lands in the bar; falling away, it leaves from where the finger left it
+ * ([dragRelease]).
  */
 @Stable
 private class PlayerDrag(private val scope: CoroutineScope) {
@@ -541,23 +648,81 @@ private class PlayerDrag(private val scope: CoroutineScope) {
     var height = 0f
     private val tracker = VelocityTracker()
 
-    fun follow(change: PointerInputChange, dy: Float) {
-        tracker.addPointerInputChange(change)
-        change.consume()
-        scope.launch { offset.snapTo((offset.value + dy).coerceAtLeast(0f)) }
+    // The finger on the player: whether it landed outside the gesture edges (only then may a list hand its pull over),
+    // whether the list under it has scrolled since, whether the player follows it and by a list's pull, and how far down
+    // it has taken it (ahead of the frame drawn).
+    private var held = false
+    private var scrolled = false
+    private var dragging = false
+    private var byList = false
+    private var at = 0f
+
+    // A list's pull let go at the lift: the list's fling, which comes after, is the player's, so the list never flings under it.
+    private var flingTaken = false
+
+    /** A finger lands, in the system's gesture edge ([inEdge]) or not: nothing is taken yet. */
+    fun land(down: PointerInputChange, inEdge: Boolean) {
+        held = !inEdge
+        scrolled = false
+        flingTaken = false
+        tracker.resetTracking()
+        tracker.addPointerInputChange(down)
     }
 
-    fun release(fling: Float, intoBar: Boolean, close: () -> Unit) {
+    /** Each move of that finger, whoever takes it: the speed it lets go at. */
+    fun track(change: PointerInputChange) = tracker.addPointerInputChange(change)
+
+    /** The player [dy] px further down (up when negative), never above where it rests; returns how far it went. */
+    fun follow(dy: Float): Float {
+        val from = if (dragging) at else offset.value
+        dragging = true
+        at = (from + dy).coerceAtLeast(0f)
+        val to = at
+        scope.launch { offset.snapTo(to) }
+        return to - from
+    }
+
+    /** The finger lifts: a drag, its own or a list's pull, lets go. */
+    fun lift(fling: Float, intoBar: Boolean, close: () -> Unit) {
+        held = false
+        if (!dragging) return
         val velocity = tracker.calculateVelocity().y
         tracker.resetTracking()
-        val closes = dragCloses(offset.value, velocity, height, fling)
+        val closes = dragCloses(at, velocity, height, fling)
+        flingTaken = byList && at > 0f
+        dragging = false
+        byList = false
         if (closes) close()
         val to = dragRelease(closes, intoBar) ?: return
         scope.launch { offset.animateTo(to, if (closes) tween(Motion.OPEN_MS, easing = Motion.Rise) else Motion.release) }
     }
 
+    /** A list on the player: pulled down at its top, it moves the player ([listPull]); pushed back up, the player goes home first ([listPush]). */
+    val lists = object : NestedScrollConnection {
+        override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+            val push = listPush(available.y, if (byList) at else 0f, byFinger = source == NestedScrollSource.UserInput)
+            return if (push == 0f) Offset.Zero else Offset(0f, follow(push))
+        }
+
+        override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+            if (consumed.y != 0f) scrolled = true
+            val pull = listPull(available.y, scrolled, byFinger = source == NestedScrollSource.UserInput, held = held)
+            if (pull == 0f) return Offset.Zero
+            byList = true
+            return Offset(0f, follow(pull))
+        }
+
+        override suspend fun onPreFling(available: Velocity): Velocity {
+            if (!flingTaken) return Velocity.Zero
+            flingTaken = false
+            return available
+        }
+    }
+
     /** Back to where it rests, as the player shows again. */
     suspend fun reset() {
+        dragging = false
+        byList = false
         if (offset.value != 0f) offset.animateTo(0f, Motion.release)
     }
 }
@@ -609,10 +774,10 @@ private fun Backdrop(path: String) {
 
 /**
  * The chevron, "From Album · Name", and "⋯" with every item of the menu; Share and Share lyrics ([lyricsShare]) for a song
- * of the library, Make a tone when [tone] ([makesTone]). Dragged down, the player follows ([onDrag]).
+ * of the library, Make a tone when [tone] ([makesTone]). Dragged down, as anywhere on it, the player follows ([PlayerFrame]).
  */
 @Composable
-private fun PlayerTopBar(ui: PlayerUi, lyricsShare: LyricsShare?, tone: Boolean, onClose: () -> Unit, onRoute: (PlayerRoute) -> Unit, onDrag: (PointerInputChange, Float) -> Unit, onDragEnd: () -> Unit) {
+private fun PlayerTopBar(ui: PlayerUi, lyricsShare: LyricsShare?, tone: Boolean, onClose: () -> Unit, onRoute: (PlayerRoute) -> Unit) {
     val context = LocalContext.current
     val nav = LocalNavigator.current
     var menu by remember { mutableStateOf(false) }
@@ -621,8 +786,7 @@ private fun PlayerTopBar(ui: PlayerUi, lyricsShare: LyricsShare?, tone: Boolean,
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = PLAYER_BAR)
-            .padding(horizontal = 8.dp)
-            .pointerInput(Unit) { detectVerticalDragGestures(onDragEnd = onDragEnd, onDragCancel = onDragEnd) { change, dy -> onDrag(change, dy) } },
+            .padding(horizontal = 8.dp),
     ) {
         ChromeIconButton(R.drawable.ic_keyboard_arrow_down, stringResource(R.string.player_close), onClose)
         // Where it plays from, without the time the queue started that the queue lists add.
@@ -662,8 +826,8 @@ private fun PlayerTopBar(ui: PlayerUi, lyricsShare: LyricsShare?, tone: Boolean,
 /**
  * The cover, and the lyrics panel on its back, in the free space: a tap flips it (a short 3D turn; a crossfade under
  * reduced motion), the "Lyrics" chip and the round cover chip are its visible twins; a book's part never [flips], so its
- * cover has neither tap nor chip ([showsLyrics]). A sideways swipe on the cover skips
- * (twins: Previous and Next), a swipe down closes the player (twin: the chevron).
+ * cover has neither tap nor chip ([showsLyrics]). A sideways swipe on the cover skips (twins: Previous and Next); a drag
+ * down closes the player, as anywhere on it ([PlayerFrame]; twin: the chevron).
  */
 @Composable
 private fun FlipArea(
@@ -675,8 +839,6 @@ private fun FlipArea(
     onPlay: () -> Unit,
     onNext: () -> Unit,
     onPrevious: () -> Unit,
-    onDownDrag: (PointerInputChange, Float) -> Unit,
-    onDownEnd: () -> Unit,
     onRoute: (PlayerRoute) -> Unit,
     modifier: Modifier,
 ) {
@@ -702,7 +864,7 @@ private fun FlipArea(
                     cameraDistance = CAMERA * density
                     alpha = frontAlpha
                 },
-            ) { CoverFace(ui, side, area, enabled = !lyricsShown, onFlip = if (flips) { { onFlip(true) } } else null, onNext, onPrevious, onDownDrag, onDownEnd) }
+            ) { CoverFace(ui, side, area, enabled = !lyricsShown, onFlip = if (flips) { { onFlip(true) } } else null, onNext, onPrevious) }
         }
         if (lyricsShown || (reduced && fade.value > 0f)) {
             Box(
@@ -724,7 +886,8 @@ private data class Landing(val way: SkipWay, val item: QueueItem)
  * cover rides in beside it from the screen's edge; past [SWIPE_SKIP_DP] it finishes the way (the prototype's 0.2 s ease)
  * and only then plays that song, with the incoming cover already in place, so nothing jumps. Short of it, or with no
  * song to slide in (Previous starting the song over, the end of the queue), it springs back. A tap flips to the lyrics
- * ([onFlip]; null for a book: no tap, no chip); down past [SWIPE_CLOSE_DP] closes the player.
+ * ([onFlip]; null for a book: no tap, no chip). A drag down is the player's own ([PlayerFrame]): the cover lets it go,
+ * and settles back if it was still moving.
  */
 @Composable
 private fun CoverFace(
@@ -735,8 +898,6 @@ private fun CoverFace(
     onFlip: (() -> Unit)?,
     onNext: () -> Unit,
     onPrevious: () -> Unit,
-    onDownDrag: (PointerInputChange, Float) -> Unit,
-    onDownEnd: () -> Unit,
 ) {
     val density = LocalDensity.current
     val reduced = LocalReducedMotion.current
@@ -821,16 +982,22 @@ private fun CoverFace(
                             }
                             moved += change.positionChange()
                             if (axis == null) axis = swipeAxis(moved.x / density.density, moved.y / density.density)
-                            if (axis != null) change.consume()
-                            if (axis == SwipeAxis.SIDEWAYS) dragging = start + coverShift(moved.x)
-                            // Down: the whole player follows the finger.
-                            if (axis == SwipeAxis.DOWN) onDownDrag(change, change.positionChange().y)
-                        }
-                        if (axis == SwipeAxis.DOWN) {
-                            onDownEnd()
+                            if (axis == SwipeAxis.SIDEWAYS) {
+                                change.consume()
+                                dragging = start + coverShift(moved.x)
+                                continue
+                            }
+                            if (axis == null) {
+                                // Not clear yet: wait and see, unless the player's drag down took this move first.
+                                awaitPointerEvent(PointerEventPass.Final)
+                                if (!change.isConsumed) continue
+                            }
+                            // Down: the player's drag ([PlayerFrame]), never a skip. A cover the finger caught on its way
+                            // goes back, as after a tap.
+                            if (landing == null && shift.value != 0f) scope.launch { shift.animateTo(0f, settle) }
                             return@awaitEachGesture
                         }
-                        val outcome = if (lifted) swipeOutcome(axis, moved.x / density.density, moved.y / density.density) else SwipeOutcome.Return
+                        val outcome = if (lifted) swipeOutcome(axis, moved.x / density.density) else SwipeOutcome.Return
                         val from = dragging ?: shift.value
                         val now = latest
                         val coming = (outcome as? SwipeOutcome.Skip)?.let { incoming(now.queue, it.way, now.repeat, now.positionAt(SystemClock.elapsedRealtime())) }
