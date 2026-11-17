@@ -36,6 +36,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import app.lyrify.R
+import app.lyrify.backup.ImportBundle
 import app.lyrify.backup.ImportFailure
 import app.lyrify.backup.ImportFormats
 import app.lyrify.backup.ImportKind
@@ -54,7 +55,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 // Import from another app (lane IM1): Settings > Backup > Import from app, and the one sheet it opens (pick, preview,
-// import, summary with Undo), shown from here over Settings as the restore sheet is.
+// import, summary with Undo), shown from here over Settings as the restore sheet is. The Playlists tab's Import hands
+// its picked files to the same sheet ([ImportHandoff]).
 
 /** One check box row of the preview: a kind the import holds, and how many. */
 internal data class ImportRow(val kind: ImportKind, val count: Int, val songs: Int? = null)
@@ -156,9 +158,9 @@ private object ShownSummary {
 
 /**
  * Picked files another page hands to the import sheet, which lives once, in the shell's backup actions: the Playlists
- * tab's Import sends Samsung Music's favourites file ([forImportSheet], [handOver]), so it is read as Pick file reads it.
- * This lives only as long as the process, so the page lets go of the files only once the sheet holds them in its own
- * saved pick (review panel-im3).
+ * tab's Import sends every file it picks ([handPicked], [handOver]), so they are read as Pick file reads them. This
+ * lives only as long as the process, so the page lets go of the files only once the sheet holds them in its own saved
+ * pick (review panel-im3).
  */
 internal class ImportHandoff {
     /** Picked files on their way, and the word that the sheet holds them. */
@@ -209,7 +211,7 @@ fun rememberImportFromApp(): () -> Unit {
     val scope = rememberCoroutineScope()
     val sheet = remember { mutableStateOf<ImportSheet?>(ShownSummary.done) }
     val picked = rememberSaveable { mutableStateOf(emptyList<String>()) }
-    val reads = remember { ImportReads(scope, picked, sheet) { what -> readPick(app, what) } }
+    val reads = remember { ImportReads(scope, picked, sheet) { what -> readPick(what, AppPickReader(app)) } }
     val load = reads::load
     val say = { text: Int, failed: Boolean ->
         scope.launch { toasts.show(if (failed) Toast(resources.getString(text), R.drawable.ic_error, Tone.ERROR) else Toast(resources.getString(text))) }
@@ -323,22 +325,46 @@ internal class ImportReads(
     }
 }
 
-/** The sheet the pick [what] reads as; [ImportReads] keeps a pick as its kind, then its documents. */
-private suspend fun readPick(app: Context, what: List<String>): ImportSheet {
-    val documents = what.drop(1).map(String::toUri)
+/** What the import sheet reads a pick with, documents by their URIs: the app's own ([AppPickReader]), a fake in tests. */
+internal interface PickReader {
+    suspend fun files(documents: List<String>): ImportPick
+
+    /** Null when [tree] is no folder KJB can list. */
+    suspend fun folder(tree: String): ImportPick?
+
+    suspend fun phone(): ImportPick
+
+    /** [bundle] matched against the library. */
+    suspend fun plan(bundle: ImportBundle): ImportPlan
+}
+
+/** [PickReader] through [Imports]: the picked documents, the playlists other apps saved, and the library as it is now. */
+private class AppPickReader(private val app: Context) : PickReader {
+    override suspend fun files(documents: List<String>): ImportPick = Imports.files(app, documents.map(String::toUri))
+
+    override suspend fun folder(tree: String): ImportPick? = Imports.folder(app, tree.toUri())
+
+    override suspend fun phone(): ImportPick = Imports.phone(app)
+
+    override suspend fun plan(bundle: ImportBundle): ImportPlan = Imports.plan(app, bundle)
+}
+
+/** The sheet the pick [what] reads as through [reader]; [ImportReads] keeps a pick as its kind, then its documents. */
+internal suspend fun readPick(what: List<String>, reader: PickReader): ImportSheet {
+    val documents = what.drop(1)
     val (source, pick) = when (what.first()) {
-        PICKED_FOLDER -> ImportSource.FOLDER to Imports.folder(app, documents.single())
-        PICKED_PHONE -> ImportSource.PHONE to Imports.phone(app)
-        else -> (if (documents.size == 1) ImportSource.FILE else ImportSource.FILES) to Imports.files(app, documents)
+        PICKED_FOLDER -> ImportSource.FOLDER to reader.folder(documents.single())
+        PICKED_PHONE -> ImportSource.PHONE to reader.phone()
+        else -> (if (documents.size == 1) ImportSource.FILE else ImportSource.FILES) to reader.files(documents)
     }
-    return loaded(source, pick, app)
+    return loaded(source, pick, reader)
 }
 
 /** What a pick read becomes: the preview when anything was read, else why nothing was. */
-private suspend fun loaded(source: ImportSource, pick: ImportPick?, app: Context): ImportSheet {
+private suspend fun loaded(source: ImportSource, pick: ImportPick?, reader: PickReader): ImportSheet {
     if (pick == null) return ImportSheet.Failed(emptyList(), none = true)
     if (pick.read == 0 || pick.bundle.size == 0) return ImportSheet.Failed(pick.failed, none = pick.failed.isEmpty())
-    val plan = Imports.plan(app, pick.bundle)
+    val plan = reader.plan(pick.bundle)
     return ImportSheet.Preview(source, plan, pick.failed, plan.defaultChosen())
 }
 

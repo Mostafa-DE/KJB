@@ -3,12 +3,19 @@ package app.lyrify.ui
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
 import app.lyrify.R
-import app.lyrify.backup.M3uEntry
-import app.lyrify.backup.M3uFound
-import app.lyrify.backup.M3uImport
-import app.lyrify.backup.M3uRead
-import app.lyrify.library.SongResolver
+import app.lyrify.backup.ImportBundle
+import app.lyrify.backup.ImportFormats
+import app.lyrify.backup.ImportKind
+import app.lyrify.backup.ImportOutcome
+import app.lyrify.backup.ImportPick
+import app.lyrify.backup.ImportPlan
+import app.lyrify.backup.ImportStores
+import app.lyrify.backup.ImportUndo
+import app.lyrify.library.Playlist
+import app.lyrify.library.PlaylistsState
 import app.lyrify.library.song
+import app.lyrify.player.QueueBook
+import app.lyrify.stats.LoggedPlay
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.awaitCancellation
@@ -16,6 +23,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestCoroutineScheduler
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -25,57 +33,90 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
 
-/** The import sheet: what each picked file found, and its words. Made-up names only. */
+/**
+ * The Playlists tab's Import: every picked file goes to Import from app's sheet, one preview for the pick, and the
+ * hand-off between the two never loses a file. Made-up names only.
+ */
 @OptIn(ExperimentalCoroutinesApi::class) // runCurrent, StandardTestDispatcher
 class M3uScreensTest {
-    private val lantern = song("Music/Harbour Glass/01 Paper Lantern.mp3", title = "Paper Lantern", durationMs = 201_000)
-    private val ferry = song("Music/Night Ferry/01 Low Water.mp3", title = "Low Water", artist = "Mira Solen", durationMs = 240_000)
-    private val resolver = SongResolver(listOf(lantern, ferry))
+    private val lantern = song("Music/Harbour Glass/01 Paper Lantern.mp3", title = "Paper Lantern", durationMs = 201_000, id = 11)
+    private val bell = song("Music/Harbour Glass/02 Tide Bell.mp3", title = "Tide Bell", durationMs = 185_000, id = 12)
+    private val ferry = song("Music/Night Ferry/01 Low Water.mp3", title = "Low Water", artist = "Mira Solen", durationMs = 240_000, id = 13)
+    private val phone = listOf(lantern, bell, ferry)
+
+    // Every file to Import from app's sheet
 
     @Test
-    fun `a file's result is named after it and holds the songs found and the ones missing`() {
-        val gone = M3uEntry("/storage/emulated/0/Music/Gone/03 Salt Road.mp3", "Mira Solen - Salt Road", 199_000)
-        val read = M3uRead.Entries("Road Trip.m3u8", folder = null, entries = listOf(M3uEntry(lantern.path), gone, M3uEntry("Night Ferry/01 Low Water.mp3")))
+    fun `a file picked in the Playlists tab's Import goes to Import from app's sheet, its playlist and the songs not found in one preview`() = runTest {
+        val preview = pickInPlaylists(ROAD_TRIP)
 
-        assertEquals(
-            ImportResult.Found(DOC, M3uImport("Road Trip", found = listOf(M3uFound(lantern, byName = false), M3uFound(ferry, byName = false)), missing = listOf(gone))),
-            importResult(DOC, read, resolver, untitled = "Imported playlist"),
-        )
+        assertEquals(ImportSource.FILE, preview.source)
+        assertEquals(listOf(ImportRow(ImportKind.PLAYLISTS, 1)), importRows(preview.plan))
+        assertEquals(setOf(ImportKind.PLAYLISTS), preview.chosen)
+        assertEquals(listOf("Road Trip"), preview.plan.bundle.playlists.map { it.name })
+        assertEquals(listOf("Odo Brannick - Glass Steps"), preview.plan.missing(preview.chosen).map { it.label })
+        assertEquals(emptyList<Any>(), preview.failed)
     }
 
     @Test
-    fun `relative paths are read against the file's folder`() {
-        val read = M3uRead.Entries("Mix.m3u", folder = "/storage/emulated/0/Music/Harbour Glass", entries = listOf(M3uEntry("01 Paper Lantern.mp3")))
+    fun `a playlist of the file's name gets its new songs at its end, each once, never a second playlist named Road Trip (2)`() = runTest {
+        val mine = Playlist("mine", "Road Trip", listOf(lantern.ref), 1)
+        val stores = Stores(PlaylistsState(listOf(mine)))
 
-        assertEquals(ImportResult.Found(DOC, M3uImport("Mix", listOf(M3uFound(lantern, byName = false)), emptyList())), importResult(DOC, read, resolver, "Imported playlist"))
+        val outcome = importNow(pickInPlaylists(ROAD_TRIP), stores)
+
+        assertEquals(listOf(mine.copy(songs = listOf(lantern.ref, ferry.ref))), stores.state.playlists)
+        assertEquals(SummaryTitle(R.plurals.import_done, 1), summaryTitle(outcome))
+        assertEquals(listOf(R.string.import_done_songs to 1), summaryLines(outcome))
     }
 
     @Test
-    fun `a file with no songs, too big, unreadable or not an m3u says why, under its name or a stand-in`() {
-        assertEquals(ImportResult.Failed(DOC, "Road Trip", R.string.m3u_no_songs), importResult(DOC, M3uRead.Entries("Road Trip.m3u", null, emptyList()), resolver, "Imported playlist"))
-        assertEquals(ImportResult.Failed(DOC, "Road Trip", R.string.m3u_too_big), importResult(DOC, M3uRead.TooBig("Road Trip.m3u8"), resolver, "Imported playlist"))
-        assertEquals(ImportResult.Failed(DOC, "Imported playlist", R.string.m3u_unreadable), importResult(DOC, M3uRead.Unreadable(null), resolver, "Imported playlist"))
-        assertEquals(ImportResult.Failed(DOC, "Notes.txt", R.string.m3u_not_m3u), importResult(DOC, M3uRead.NotM3u("Notes.txt"), resolver, "Imported playlist"))
-        assertEquals("Imported playlist", importResult(DOC, M3uRead.Entries(".m3u8", null, listOf(M3uEntry(lantern.path))), resolver, "Imported playlist").name)
+    fun `picking the same file again is Nothing new and changes nothing`() = runTest {
+        val stores = Stores(PlaylistsState())
+        importNow(pickInPlaylists(ROAD_TRIP), stores)
+        val once = stores.state
+
+        val again = importNow(pickInPlaylists(ROAD_TRIP), stores)
+
+        assertFalse(again.changed)
+        assertEquals(SummaryTitle(R.string.import_nothing_new), summaryTitle(again))
+        assertEquals(once, stores.state)
+        // The playlist the first import made, in the file's order, a song twice too.
+        assertEquals(listOf(listOf(lantern.ref, ferry.ref, ferry.ref)), stores.state.playlists.map { it.songs })
     }
 
     @Test
-    fun `Samsung Music's favourites file goes to Import from app, never to a playlist of its name, and the rest of the pick stays here`() {
-        val favourites = DOC to M3uRead.Entries("!#SamsungMusic_favorites#!.m3u", null, listOf(M3uEntry(lantern.path)))
-        val mix = OTHER to M3uRead.Entries("Mix.m3u8", null, listOf(M3uEntry(ferry.path)))
+    fun `Undo takes back what the Playlists tab's import added, and nothing of the user's`() = runTest {
+        val before = PlaylistsState(listOf(Playlist("mine", "Road Trip", listOf(bell.ref), 1), Playlist("eve", "Evening", listOf(ferry.ref), 2)))
+        val stores = Stores(before)
+        val outcome = importNow(pickInPlaylists(ROAD_TRIP), stores)
+        assertEquals(listOf(bell.ref, lantern.ref, ferry.ref), stores.state.playlists.first().songs)
 
-        assertEquals(listOf(DOC), forImportSheet(listOf(mix, favourites)))
-        assertEquals(listOf(DOC), forImportSheet(listOf(DOC to M3uRead.TooBig("!#samsungmusic_FAVORITES#!.M3U8"))))
-        // Every other pick stays here, a near name too.
-        assertEquals(emptyList<String>(), forImportSheet(listOf(mix, DOC to M3uRead.Entries("!#SamsungMusic_favorites#! (1).m3u", null, emptyList()), DOC to M3uRead.Unreadable(null))))
+        assertTrue(ImportPlan.undo(outcome.undo, stores))
+
+        assertEquals(before, stores.state)
     }
 
-    // The favourites file handed from this page's pick to the import sheet's (review panel-im3): held by one side at least,
+    @Test
+    fun `Samsung Music's favourites file picked with a playlist file goes to Favourites, the other to a playlist, in one preview`() = runTest {
+        val stores = Stores(PlaylistsState(favouriteSongs = listOf(ferry.ref)))
+
+        val preview = pickInPlaylists(ROAD_TRIP, FAVOURITES)
+        val outcome = importNow(preview, stores)
+
+        assertEquals(ImportSource.FILES, preview.source)
+        assertEquals(listOf(ImportRow(ImportKind.PLAYLISTS, 1), ImportRow(ImportKind.FAVOURITES, 2)), importRows(preview.plan))
+        assertEquals(listOf("Road Trip"), stores.state.playlists.map { it.name })
+        assertEquals(listOf(ferry.ref, bell.ref, lantern.ref), stores.state.favouriteSongs)
+        assertEquals(2, outcome.favouritesAdded)
+    }
+
+    // The picked files handed from this page's pick to the import sheet's (review panel-im3): held by one side at least,
     // in what the activity saves, until the user closes the import sheet.
 
     @Test
-    fun `the page lets go of the favourites file only once the import sheet holds it, and closing the sheet while it reads lets go of it`() = runTest {
-        val saved = Saved(pending = listOf(OTHER, DOC))
+    fun `the page lets go of a picked file only once the import sheet holds it, and closing the sheet while it reads lets go of it`() = runTest {
+        val saved = Saved()
         val handoff = ImportHandoff()
         val sheet = mutableStateOf<ImportSheet?>(null)
         var stopped = false
@@ -88,11 +129,11 @@ class M3uScreensTest {
         }
         backgroundScope.launch { handoff.receive(reads) }
 
-        backgroundScope.launch { handOver(listOf(DOC), saved.pending, handoff) }
+        backgroundScope.handPicked(listOf(DOC, DOC), saved.pending, handoff)
         runCurrent()
         assertFalse("held by neither side", saved.dropped)
-        assertEquals(listOf(OTHER), saved.pending.value)
-        assertTrue(DOC in saved.picked.value)
+        assertEquals(emptyList<String>(), saved.pending.value)
+        assertEquals("the sheet's pick: its kind, then each file once", listOf(DOC), saved.picked.value.drop(1))
         assertEquals(ImportSheet.Reading, sheet.value)
 
         // The user closes the sheet while it reads: the file is theirs to let go, and no read of it comes back.
@@ -105,15 +146,15 @@ class M3uScreensTest {
     }
 
     @Test
-    fun `a turn of the phone or the process ending at any step of the hand-off never loses the favourites file`() = runTest {
+    fun `handOver again after a turn of the phone or the process ending, at any step of the hand-off, never loses a picked file`() = runTest {
         for (sheetHoldsIt in listOf(false, true)) for (processEnds in listOf(false, true)) {
-            val saved = Saved(pending = listOf(DOC))
+            val saved = Saved()
             val handoff = ImportHandoff()
             // The page's steps run on their own, so the activity can end after the sheet holds the file and before the page hears so.
             val pageSteps = TestCoroutineScheduler()
             val page = CoroutineScope(StandardTestDispatcher(pageSteps))
             val shell = CoroutineScope(StandardTestDispatcher(testScheduler))
-            page.launch { handOver(listOf(DOC), saved.pending, handoff) }
+            page.handPicked(listOf(DOC), saved.pending, handoff)
             pageSteps.runCurrent()
             if (sheetHoldsIt) {
                 val reads = ImportReads(shell, saved.picked, mutableStateOf(null)) { awaitCancellation() }
@@ -131,8 +172,9 @@ class M3uScreensTest {
             val reads = ImportReads(backgroundScope, saved.picked, sheet) { read }
             reads.resume()
             backgroundScope.launch { again.receive(reads) }
-            // The page reads its picked files again and hands the favourites file on.
-            if (DOC in saved.pending.value) backgroundScope.launch { handOver(listOf(DOC), saved.pending, again) }
+            // What rememberM3uActions does with the picked files it kept, done here by hand; M3uScreensDeviceTest has the
+            // page made again do it itself.
+            if (saved.pending.value.isNotEmpty()) backgroundScope.launch { handOver(saved.pending.value, saved.pending, again) }
             runCurrent()
 
             val case = "sheet holds it: $sheetHoldsIt, process ends: $processEnds"
@@ -144,38 +186,94 @@ class M3uScreensTest {
     }
 
     @Test
-    fun `the summary reads 18 of 20 songs found, and 1 of 1 song found`() {
-        val found = plural("m3u_found")
-
-        assertEquals("18 of 20 songs found", found.getValue("other").format("18", "20"))
-        assertEquals("1 of 1 song found", found.getValue("one").format("1", "1"))
-        assertEquals("And 7 more", strings().getValue("m3u_more").format("7"))
-        assertEquals("3 matched by name", plural("m3u_by_name").getValue("other").format("3"))
-        assertEquals("1 matched by name", plural("m3u_by_name").getValue("one").format("1"))
-    }
-
-    @Test
     fun `labels are three words or fewer, and no text has an em-dash`() {
-        val labels = listOf("m3u_export", "m3u_export_all", "m3u_import", "m3u_create", "m3u_skip", "m3u_cancel", "m3u_close", "m3u_missing", "m3u_by_name_include")
-        labels.forEach { assertTrue(it, strings().getValue(it).split(' ').size <= 3) }
+        listOf("m3u_export", "m3u_export_all", "m3u_import").forEach { assertTrue(it, strings().getValue(it).split(' ').size <= 3) }
         assertFalse(FILE.readText().contains('—'))
     }
 
     /**
-     * What the activity saves of both sides, all a turn of the phone or the process ending leaves: this page's picked
-     * files not answered yet, and the import sheet's pick. While [held], a write that leaves [DOC] in neither is [dropped].
+     * The Playlists tab's "⋯ > Import" answered with [picked], and Import from app's sheet there to take them, as the
+     * shell has it: the preview the sheet shows once it has read them through [Reader].
      */
-    private class Saved(pending: List<String>) {
+    private fun TestScope.pickInPlaylists(vararg picked: String): ImportSheet.Preview {
+        val handoff = ImportHandoff()
+        val pending = mutableStateOf(emptyList<String>())
+        val sheet = mutableStateOf<ImportSheet?>(null)
+        val reads = ImportReads(backgroundScope, mutableStateOf(emptyList()), sheet) { what -> readPick(what, Reader()) }
+        backgroundScope.launch { handoff.receive(reads) }
+
+        backgroundScope.handPicked(picked.toList(), pending, handoff)
+        runCurrent()
+
+        val shown = sheet.value
+        assertTrue("Import from app's sheet shows the pick's preview, not $shown", shown is ImportSheet.Preview)
+        assertEquals("the page let go of the pick", emptyList<String>(), pending.value)
+        return shown as ImportSheet.Preview
+    }
+
+    /** Import now on [preview], into [stores], as the sheet's Import now writes it. */
+    private suspend fun importNow(preview: ImportSheet.Preview, stores: Stores): ImportOutcome {
+        var next = 0
+        return checkNotNull(preview.plan.apply(preview.chosen, stores, newId = { "p${++next}" }, now = NOW, untitled = UNTITLED))
+    }
+
+    /** Import from app's reading of a pick, the picked documents' text from [FILES], the library [phone]. */
+    private inner class Reader : PickReader {
+        override suspend fun files(documents: List<String>): ImportPick = ImportFormats.combine(
+            documents.map { document -> FILES.getValue(document).let { (name, folder, text) -> ImportFormats.read(text.encodeToByteArray(), name, folder) } },
+        )
+
+        override suspend fun folder(tree: String): ImportPick? = null
+
+        override suspend fun phone(): ImportPick = ImportPick(ImportBundle(), 0, emptyList())
+
+        override suspend fun plan(bundle: ImportBundle): ImportPlan = ImportPlan(bundle, phone)
+    }
+
+    /** The playlists' store in memory, as an import writes it; these imports hold no queues or plays. */
+    private class Stores(var state: PlaylistsState) : ImportStores {
+        private var journal: ImportUndo? = null
+
+        override suspend fun updatePlaylists(change: (PlaylistsState) -> PlaylistsState): Boolean {
+            state = change(state)
+            return true
+        }
+
+        override suspend fun updateQueues(change: (QueueBook) -> QueueBook): Boolean = true
+
+        override suspend fun plays(): List<LoggedPlay> = emptyList()
+
+        override suspend fun addPlays(plays: List<LoggedPlay>): Boolean = true
+
+        override suspend fun removePlays(plays: List<LoggedPlay>): Boolean = true
+
+        override suspend fun journal(undo: ImportUndo?): Boolean {
+            journal = undo
+            return true
+        }
+
+        override suspend fun journaled(): ImportUndo? = journal
+    }
+
+    /**
+     * What the activity saves of both sides, all a turn of the phone or the process ending leaves: this page's picked
+     * files not handed yet, and the import sheet's pick. While [held], a write that leaves [DOC] in neither once it was
+     * in one is [dropped].
+     */
+    private class Saved {
         var held: Boolean = true
         var dropped: Boolean = false
-        val pending: MutableState<List<String>> = Checked(pending)
-        val picked: MutableState<List<String>> = Checked(emptyList())
+        private var seen: Boolean = false
+        val pending: MutableState<List<String>> = Checked()
+        val picked: MutableState<List<String>> = Checked()
 
-        private inner class Checked(initial: List<String>) : MutableState<List<String>> {
-            override var value: List<String> = initial
+        private inner class Checked : MutableState<List<String>> {
+            override var value: List<String> = emptyList()
                 set(value) {
                     field = value
-                    if (held && DOC !in pending.value && DOC !in picked.value) dropped = true
+                    val kept = DOC in pending.value || DOC in picked.value
+                    if (held && seen && !kept) dropped = true
+                    seen = seen || kept
                 }
 
             override fun component1(): List<String> = value
@@ -185,21 +283,34 @@ class M3uScreensTest {
     }
 
     private fun strings(): Map<String, String> =
-        Regex("""<string name="([^"]+)">([^<]*)</string>""").findAll(FILE.readText()).associate { it.groupValues[1] to unescape(it.groupValues[2]) }
-
-    private fun plural(name: String): Map<String, String> {
-        val body = Regex("""<plurals name="$name">([\s\S]*?)</plurals>""").find(FILE.readText())?.groupValues?.get(1).orEmpty()
-        return Regex("""<item quantity="(\w+)">([^<]*)</item>""").findAll(body).associate { it.groupValues[1] to unescape(it.groupValues[2]) }
-    }
-
-    private fun unescape(text: String): String = text.replace("\\'", "'")
+        Regex("""<string name="([^"]+)">([^<]*)</string>""").findAll(FILE.readText()).associate { it.groupValues[1] to it.groupValues[2].replace("\\'", "'") }
 
     private companion object {
         /** Unit tests run in the module's folder. */
         val FILE = File("src/main/res/values/strings_backup.xml")
 
-        /** A picked file, as the sheet keeps it. */
-        const val DOC: String = "content://com.android.externalstorage.documents/document/primary%3AMusic%2FRoad%20Trip.m3u8"
-        const val OTHER: String = "content://com.android.externalstorage.documents/document/primary%3AMusic%2FMix.m3u8"
+        const val NOW: Long = 1_800_000_000_000L
+        const val UNTITLED: String = "Imported playlist"
+        const val MUSIC: String = "/storage/emulated/0/Music"
+
+        /** A picked file, as the page and the sheet keep it. */
+        const val DOC: String = "content://com.android.externalstorage.documents/document/primary%3AMusic%2FMix.m3u8"
+        const val ROAD_TRIP: String = "content://com.android.externalstorage.documents/document/primary%3AMusic%2FPlaylists%2FRoad%20Trip.m3u8"
+        const val FAVOURITES: String = "content://com.android.externalstorage.documents/document/primary%3AMusic%2F!%23SamsungMusic_favorites%23!.m3u"
+
+        /**
+         * Each picked document's name, folder and text. Road Trip: two songs of the phone by paths relative to its
+         * folder, one of them twice, and one song not on the phone. Samsung Music's favourites: two songs.
+         */
+        val FILES: Map<String, Triple<String, String, String>> = mapOf(
+            ROAD_TRIP to Triple(
+                "Road Trip.m3u8",
+                "$MUSIC/Playlists",
+                "#EXTM3U\n#EXTINF:201,Kit Calloway - Paper Lantern\n../Harbour Glass/01 Paper Lantern.mp3\n" +
+                    "#EXTINF:240,Mira Solen - Low Water\n../Night Ferry/01 Low Water.mp3\n../Night Ferry/01 Low Water.mp3\n" +
+                    "#EXTINF:175,Odo Brannick - Glass Steps\n../Gone/03 Glass Steps.mp3\n",
+            ),
+            FAVOURITES to Triple("!#SamsungMusic_favorites#!.m3u", MUSIC, "#EXTM3U\nHarbour Glass/02 Tide Bell.mp3\nHarbour Glass/01 Paper Lantern.mp3\n"),
+        )
     }
 }
