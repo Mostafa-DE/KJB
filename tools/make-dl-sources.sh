@@ -25,10 +25,13 @@
 # 4. README.txt (written below) and SHA256SUMS, the SHA-256 of every other file in the bundle.
 #
 # Every download is over HTTPS only and kept only once its SHA-256 (or, for the two git trees, its commit id) is the
-# pinned one; anything else stops the script with nothing written. Nothing downloaded is run. The tar is reproducible
-# (names sorted, owner 0, the youtubedl-android commit's time on every file, fixed modes, gzip -n), so the same VERSION
-# gives the same bytes. Needs bash 4, curl, git 2.27 or later, GNU tar, gzip and sha256sum.
+# pinned one; anything else stops the script with nothing written. Nothing downloaded is run. git runs with none of the
+# caller's settings (git() below), so a checkout is the commit's bytes on any machine. The tar is reproducible (names
+# sorted, owner 0, the youtubedl-android commit's time on every file, fixed modes, gzip -n), so the same VERSION gives
+# the same bytes. Needs bash 4, curl, git 2.27 or later, GNU tar, gzip and sha256sum.
 set -euo pipefail
+# No GIT_* variable of the caller's reaches git.
+unset "${!GIT_@}"
 
 YDLA_URL="https://github.com/yausername/youtubedl-android"
 YDLA_TAG="0.18.1"
@@ -108,6 +111,17 @@ die() {
   exit 1
 }
 
+# git with none of the caller's settings: no system or user config or attributes (HOME and XDG_CONFIG_HOME name a
+# folder that does not exist), and over the cache's own config no line-ending conversion, LFS filter or hook, symlinks
+# kept as symlinks, and HTTPS only. A checkout is then the commit's bytes, the same on every machine.
+git() {
+  HOME="$stage/no-home" XDG_CONFIG_HOME="$stage/no-home" \
+    GIT_CONFIG_NOSYSTEM=1 GIT_ATTR_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0 \
+    command git -c core.autocrlf=false -c core.eol=lf -c core.symlinks=true -c core.hooksPath=/dev/null \
+    -c filter.lfs.smudge= -c filter.lfs.clean= -c filter.lfs.process= \
+    -c protocol.allow=never -c protocol.https.allow=always "$@"
+}
+
 # pinned <file> <sha256>: true when the file is there and has that SHA-256.
 pinned() {
   [ -s "$1" ] && [ "$(sha256sum "$1" | cut -d ' ' -f 1)" = "$2" ]
@@ -163,8 +177,13 @@ version="$1"
 out_dir="$2"
 cache="${3:-${XDG_CACHE_HOME:-$HOME/.cache}/kjb-dl-sources}"
 [[ "$version" =~ ^[0-9]+(\.[0-9]+)*$ ]] || die "not a version: $version (say it as in dl-addon/build.gradle.kts, such as 3.0.3)"
+repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# The add-on's NOTICE sends people to the bundle named for the add-on's version, so it must be the one that ships.
+addon_version="$(sed -n 's/^ *versionName = "\([^"]*\)"$/\1/p' "$repo/dl-addon/build.gradle.kts")"
+[ "$version" = "$addon_version" ] || die "the add-on's versionName in dl-addon/build.gradle.kts is" \
+  "${addon_version:-not set}, not $version: give the version that ships"
 # Every pin here is for youtubedl-android 0.18.1: a KJB on any other version needs them all taken again.
-catalog="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/gradle/libs.versions.toml"
+catalog="$repo/gradle/libs.versions.toml"
 grep -qx "youtubedlAndroid = \"$YDLA_TAG\"" "$catalog" \
   || die "$catalog does not use youtubedl-android $YDLA_TAG: this bundle would not be its source; redo the pins first"
 mkdir -p "$out_dir" "$cache"
@@ -179,6 +198,14 @@ mkdir -p "$root"
 # 1. youtubedl-android: its tree at the tag, and Maven Central's -sources.jar files.
 tree "$YDLA_URL" "$YDLA_COMMIT" "$cache/youtubedl-android" \
   '/*' '!/*/src/main/jniLibs/' '!/library/src/main/res/raw/ytdlp' '!/gradle/wrapper/gradle-wrapper.jar'
+# A sparse checkout gone wrong stops here: the three modules' source is there, and none of the binaries left out is.
+for module in library ffmpeg common; do
+  [ -f "$cache/youtubedl-android/$module/src/main/AndroidManifest.xml" ] \
+    || die "youtubedl-android: the checkout has no $module module"
+done
+binaries="$(cd "$cache/youtubedl-android" && find . -path ./.git -prune -o \( -path '*/src/main/jniLibs' \
+  -o -path ./library/src/main/res/raw/ytdlp -o -path ./gradle/wrapper/gradle-wrapper.jar \) -print)"
+[ -z "$binaries" ] || die "youtubedl-android: the checkout has prebuilt binaries: $binaries"
 copy_tree "$cache/youtubedl-android" "$root/youtubedl-android-$YDLA_TAG"
 for jar in "${MAVEN_JARS[@]}"; do
   read -r file sha <<< "$jar"
