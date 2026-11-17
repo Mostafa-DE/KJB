@@ -146,7 +146,7 @@ class M3uScreensTest {
     }
 
     @Test
-    fun `a turn of the phone or the process ending at any step of the hand-off never loses a picked file`() = runTest {
+    fun `handOver again after a turn of the phone or the process ending, at any step of the hand-off, never loses a picked file`() = runTest {
         for (sheetHoldsIt in listOf(false, true)) for (processEnds in listOf(false, true)) {
             val saved = Saved()
             val handoff = ImportHandoff()
@@ -172,7 +172,8 @@ class M3uScreensTest {
             val reads = ImportReads(backgroundScope, saved.picked, sheet) { read }
             reads.resume()
             backgroundScope.launch { again.receive(reads) }
-            // The page hands the picked files it kept on again.
+            // What rememberM3uActions does with the picked files it kept, done here by hand; M3uScreensDeviceTest has the
+            // page made again do it itself.
             if (saved.pending.value.isNotEmpty()) backgroundScope.launch { handOver(saved.pending.value, saved.pending, again) }
             runCurrent()
 
