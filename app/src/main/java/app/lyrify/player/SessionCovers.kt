@@ -26,8 +26,8 @@ sealed interface CoverFound<out V : Any> {
  *   read yet when another song is asked for (a burst of Nexts) is set aside: read only if asked for again, so it never
  *   holds up the song playing now.
  * - Within [waitMs]: every answer comes by then, the cover or else the default ([fallback]); a read done later still is
- *   kept for the next ask. A read that throws (an Exception, or OutOfMemoryError) answers the default too, its error's
- *   name logged.
+ *   kept for the next ask. A read that throws anything answers the default too, its error's name logged, and frees its
+ *   reader. A cancelled answer stays cancelled, and its song set aside with no answer left goes.
  * [forget] lets every cover kept go, as KJB changes covers. Thread-safe; each read is a task on [run], and [later] runs
  * the waits.
  */
@@ -64,12 +64,18 @@ class SessionCovers<K : Any, V : Any>(
         val start = synchronized(lock) {
             val job = jobs.getOrPut(key) { Job(key) }
             job.answers += answer
-            if (job.step != Step.READING) job.step = Step.ASKED
-            jobs.values.filter { it !== job && it.step == Step.ASKED }.forEach(::setAside)
+            // A song being read is joined; else it is the newest asked for, and another one waiting to be read is set aside.
+            if (job.step != Step.READING) {
+                job.step = Step.ASKED
+                jobs.values.filter { it !== job && it.step == Step.ASKED }.forEach(::setAside)
+            }
             startable()
         }
         val wait = later(waitMs) { timedOut(key, answer) }
-        answer.addListener(wait, MoreExecutors.directExecutor())
+        answer.addListener({
+            wait.run()
+            if (answer.isCancelled) letGo(key, answer)
+        }, MoreExecutors.directExecutor())
         start(start)
         return answer
     }
@@ -100,6 +106,9 @@ class SessionCovers<K : Any, V : Any>(
         keptBytes = 0
     }
 
+    /** The songs to read, being read or set aside now: for tests. */
+    internal fun songsHeld(): Int = synchronized(lock) { jobs.size }
+
     /** Song [key]'s cover kept, used now; null when none is, or its no art is [NO_ART_KEEP_MS] old. Under [lock]. */
     private fun keptNow(key: K): Kept<V>? {
         val found = kept[key] ?: return null
@@ -129,7 +138,16 @@ class SessionCovers<K : Any, V : Any>(
 
     private fun start(started: List<Job<K, V>>) = started.forEach { job ->
         try {
-            run.execute { finish(job, guarded { read(job.key) }.getOrNull()) }
+            run.execute {
+                // Whatever a read throws fails that read only, as 3.0.2's io.submit did: never the reader's thread.
+                val found = try {
+                    read(job.key)
+                } catch (e: Throwable) {
+                    notRead(e)
+                    null
+                }
+                finish(job, found)
+            }
         } catch (e: RejectedExecutionException) {
             // The service is gone: the default cover, at once.
             finish(job, null)
@@ -164,22 +182,30 @@ class SessionCovers<K : Any, V : Any>(
         }
     }
 
-    /** [answer]'s wait is over: the default cover. Its song, set aside with no answer left, is not read. */
+    /** [answer]'s wait is over: the default cover. */
     private fun timedOut(key: K, answer: SettableFuture<V>) {
         if (answer.isDone) return
-        synchronized(lock) {
-            jobs[key]?.let { job ->
-                job.answers.remove(answer)
-                if (job.step == Step.ASIDE) setAside(job)
-            }
-        }
+        letGo(key, answer)
         settle(answer, null)
+    }
+
+    /** Nothing waits for [answer] any more (its wait is over, or it was cancelled); its song set aside with no answer left goes. */
+    private fun letGo(key: K, answer: SettableFuture<V>) {
+        synchronized(lock) {
+            val job = jobs[key] ?: return
+            job.answers.remove(answer)
+            if (job.step == Step.ASIDE) setAside(job)
+        }
     }
 
     private fun answered(cover: V?): ListenableFuture<V> = SettableFuture.create<V>().also { settle(it, cover) }
 
-    /** [answer] gets [cover], or the default cover; failing to make that, the error, so no answer waits for ever. */
+    /**
+     * [answer] gets [cover], or the default cover; failing to make that, the error, so no answer waits for ever. One
+     * already done (its wait over, or cancelled) is left as it is.
+     */
     private fun settle(answer: SettableFuture<V>, cover: V?) {
+        if (answer.isDone) return
         if (cover != null) {
             answer.set(cover)
             return
@@ -187,18 +213,19 @@ class SessionCovers<K : Any, V : Any>(
         guarded(fallback).fold({ answer.set(it) }, { answer.setException(it) })
     }
 
-    /** What [block] gives, or the Exception or OutOfMemoryError it threw, its name logged. */
+    /** What [block] gives (the default cover), or the Exception or OutOfMemoryError it threw, its name logged. */
     private inline fun <T> guarded(block: () -> T): Result<T> = try {
         Result.success(block())
     } catch (e: Exception) {
-        notRead(e)
+        Result.failure(notRead(e))
     } catch (e: OutOfMemoryError) {
-        notRead(e)
+        Result.failure(notRead(e))
     }
 
-    private fun <T> notRead(e: Throwable): Result<T> {
+    /** [e], its name logged. */
+    private fun notRead(e: Throwable): Throwable {
         log("session cover not read: ${e.javaClass.simpleName}")
-        return Result.failure(e)
+        return e
     }
 
     private class Kept<V>(val cover: V?, val bytes: Int, val atMs: Long)

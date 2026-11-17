@@ -5,9 +5,14 @@ import app.lyrify.player.SessionCovers.Companion.WAIT_MS
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.Collections
+import java.util.concurrent.CancellationException
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.Executor
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 /**
  * The covers of KJB's media session (the notification and the lock screen): kept, read ahead, the newest asked for read
@@ -219,6 +224,108 @@ class SessionCoversTest {
         readers.finishAll()
         assertEquals(listOf("60", "61", "60", "61"), reads)
         assertEquals("cover 61", covers.ask("61").now())
+    }
+
+    @Test
+    fun `a song asked for while it is read ahead gets that read's cover, or the default within its own wait`() {
+        val covers = covers()
+        covers.warm(listOf("n"))
+        val joined = covers.ask("n")
+        // The read ahead never ends in time: the answer still comes, and the read done later is kept.
+        clock.advance(WAIT_MS)
+        assertEquals("default", joined.now())
+        readers.finishAll()
+        assertEquals("cover n", covers.ask("n").now())
+        assertEquals(listOf("n"), reads)
+    }
+
+    @Test
+    fun `asking again for a song being read leaves the newer song asked for to be read next`() {
+        val covers = covers()
+        covers.warm(listOf("ahead"))
+        covers.ask("a")
+        val b = covers.ask("b")
+        // The notification asks for the song before as the lock screen already asked for the next one.
+        val again = covers.ask("a")
+        readers.finishAll()
+        assertEquals(listOf("ahead", "a", "b"), reads)
+        assertEquals("cover a", again.now())
+        assertEquals("cover b", b.now())
+    }
+
+    @Test
+    fun `a cancelled answer stays cancelled, and a song set aside with no answer left is let go at once`() {
+        val covers = covers()
+        covers.ask("s1")
+        covers.ask("s2")
+        val s3 = covers.ask("s3")
+        val s4 = covers.ask("s4")
+        assertEquals(4, covers.songsHeld())
+        s3.cancel(false)
+        assertEquals(3, covers.songsHeld())
+        // Cancelled while it waits to be read: still the newest asked for, so it is read and kept, as when its wait ends.
+        s4.cancel(false)
+        readers.finishAll()
+        assertEquals(listOf("s1", "s2", "s4"), reads)
+        assertTrue(s3.isCancelled && s4.isCancelled)
+        assertEquals(0, covers.songsHeld())
+        assertEquals("cover s4", covers.ask("s4").now())
+    }
+
+    @Test
+    fun `an Error a read throws answers the default, stays in its read, and frees the reader`() {
+        val covers = covers()
+        found["70"] = { throw StackOverflowError() }
+        val answer = covers.ask("70")
+        // As 3.0.2's io.submit: whatever a read throws fails that read only, never the reader's thread.
+        assertEquals(null, runCatching { readers.finishAll() }.exceptionOrNull()?.javaClass?.simpleName)
+        assertEquals("default", answer.now())
+        assertEquals(listOf("session cover not read: StackOverflowError"), logged)
+        covers.ask("71")
+        covers.ask("72")
+        assertEquals(2, readers.waiting)
+    }
+
+    @Test
+    fun `on real threads, with read ahead, forget and cancels, every answer comes within its wait and no song is left held`() {
+        val pool = Executors.newFixedThreadPool(SessionCovers.READERS)
+        val timers = Executors.newSingleThreadScheduledExecutor()
+        val problems = Collections.synchronizedList(mutableListOf<String>())
+        val covers = SessionCovers(
+            read = { song: String ->
+                Thread.sleep(song.length % 3L)
+                if (song.endsWith("7")) CoverFound.NoArt else CoverFound.Own("cover $song")
+            },
+            fallback = { "default" },
+            sizeOf = { 1 },
+            run = pool,
+            later = { delayMs, task ->
+                val timer = timers.schedule(task, delayMs, TimeUnit.MILLISECONDS)
+                Runnable { timer.cancel(false) }
+            },
+            clock = { System.nanoTime() / 1_000_000 },
+            log = { problems += it },
+            maxBytes = 8,
+            waitMs = 300,
+        )
+        val answers = (0 until 400).map { n ->
+            if (n % 7 == 0) covers.warm(listOf("s${(n + 1) % 30}", "s${(n + 29) % 30}"))
+            if (n % 97 == 0) covers.forget()
+            covers.ask("s${n % 30}").also { if (n % 11 == 0) it.cancel(false) }
+        }
+        val got = answers.map { answer ->
+            try {
+                answer.get(5, TimeUnit.SECONDS)
+            } catch (e: CancellationException) {
+                "cancelled"
+            }
+        }
+        assertTrue(got.all { it == "default" || it == "cancelled" || it.startsWith("cover s") })
+        pool.shutdown()
+        assertTrue(pool.awaitTermination(5, TimeUnit.SECONDS))
+        timers.shutdownNow()
+        assertEquals(0, covers.songsHeld())
+        assertEquals(emptyList<String>(), problems)
     }
 
     @Test
