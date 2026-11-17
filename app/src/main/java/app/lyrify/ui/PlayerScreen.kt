@@ -890,7 +890,7 @@ private data class Landing(val way: SkipWay, val item: QueueItem)
  * and settles back if it was still moving.
  */
 @Composable
-private fun CoverFace(
+internal fun CoverFace(
     ui: PlayerUi,
     side: Dp,
     area: Dp,

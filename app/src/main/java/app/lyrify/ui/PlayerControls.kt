@@ -175,7 +175,7 @@ internal fun MainRow(ui: PlayerUi, settings: Settings, connection: PlayerConnect
 
 /** A seek button: a press jumps once; held, the jump repeats ([jumpsWhileHeld]). TalkBack's tap jumps once. */
 @Composable
-private fun SeekJump(@DrawableRes icon: Int, label: String, jump: () -> Unit) {
+internal fun SeekJump(@DrawableRes icon: Int, label: String, jump: () -> Unit) {
     val scope = rememberCoroutineScope()
     val latest by rememberUpdatedState(jump)
     Box(
@@ -264,7 +264,7 @@ private fun repeatLabel(repeat: Repeat): Int = when (repeat) {
 }
 
 @Composable
-private fun RoundButton(@DrawableRes icon: Int, label: String, size: Dp = TOUCH, iconSize: Dp = 26.dp, onClick: () -> Unit) {
+internal fun RoundButton(@DrawableRes icon: Int, label: String, size: Dp = TOUCH, iconSize: Dp = 26.dp, onClick: () -> Unit) {
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier.size(size).clip(CircleShape).clickable(role = Role.Button, onClick = onClick).semantics { contentDescription = label },
