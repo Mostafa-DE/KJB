@@ -3,6 +3,7 @@ package app.lyrify.ui
 import app.lyrify.addon.AddonState
 import app.lyrify.addon.ExemptionChoices
 import app.lyrify.addon.KjbAddons
+import app.lyrify.models.ModelState
 import app.lyrify.models.NpuChips
 import app.lyrify.overnight.AiHold
 import org.junit.Assert.assertEquals
@@ -83,11 +84,19 @@ class LockedPhoneTest {
 
     // The AI page
 
-    private fun aiState(addon: AddonState?, exempt: Boolean, choices: ExemptionChoices, hold: AiHold? = null) = AiState(
+    private fun aiState(
+        addon: AddonState?,
+        exempt: Boolean,
+        choices: ExemptionChoices,
+        hold: AiHold? = null,
+        models: ModelState? = null,
+        enabled: Boolean = true,
+        downloadPaused: Boolean = false,
+    ) = AiState(
         chip = NpuChips.ALL.first(),
         newEnough = true,
-        models = null,
-        enabled = true,
+        models = models,
+        enabled = enabled,
         progress = null,
         hold = hold,
         pluggedIn = true,
@@ -96,6 +105,7 @@ class LockedPhoneTest {
         addon = addon,
         addonExempt = exempt,
         exemptions = choices,
+        downloadPaused = downloadPaused,
     )
 
     @Test
@@ -117,6 +127,16 @@ class LockedPhoneTest {
 
         assertFalse(aiState(AddonState.Ready, exempt = false, paused, hold = AiHold.FROZEN).locked.hint)
         assertTrue("the hold gone (the next run started), the hint stays", aiState(AddonState.Ready, exempt = false, paused).locked.hint)
+    }
+
+    @Test
+    fun `while a download the phone paused offers Allow itself, the hint does not ask the same`() {
+        val paused = none.turnedDown(ai).pausedOnce(ai)
+        val waiting = ModelState.Downloading(300, 980, waiting = true)
+
+        assertFalse(aiState(AddonState.Ready, exempt = false, paused, models = waiting, downloadPaused = true).locked.hint)
+        assertTrue("the AI off, its page says so instead: the hint asks", aiState(AddonState.Ready, exempt = false, paused, models = waiting, enabled = false, downloadPaused = true).locked.hint)
+        assertTrue("its next run went on, the hint stays", aiState(AddonState.Ready, exempt = false, paused, models = waiting).locked.hint)
     }
 
     // The copy as it ships

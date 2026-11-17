@@ -11,6 +11,7 @@ import app.lyrify.models.ModelState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 class WireTest {
     @Test
@@ -116,5 +117,26 @@ class WireTest {
         assertEquals("app.lyrify.ai.permission.BIND_AI", AddonNames.permission("app.lyrify.ai"))
         assertEquals("app.lyrify.ai.debug.permission.BIND_AI", AddonNames.permission("app.lyrify.ai.debug"))
         assertTrue(AddonNames.SERVICE.startsWith("app.lyrify.ai."))
+    }
+
+    // The binder calls (IAiAddon.aidl)
+
+    @Test
+    fun `the add-on's calls keep their codes, and the words for a frozen download or job are one way, added at the end`() {
+        val aidl = File("src/main/aidl/app/lyrify/ai/api/IAiAddon.aidl").also { assertTrue("run from the module: ${it.absolutePath}", it.isFile) }.readText()
+        // Each call: its name, its transaction code, and whether it is one way.
+        val calls = Regex("""^\s*(oneway\s+)?[\w<>]+\s+(\w+)\(.*\)\s*=\s*(\d+);""", RegexOption.MULTILINE).findAll(aidl)
+            .associate { it.groupValues[2] to Pair(it.groupValues[3].toInt(), it.groupValues[1].isNotBlank()) }
+        // What KJB 3.0.0 shipped as VERSION 1, in order from 1: each keeps its code, and KJB waits for its answer.
+        val shipped = listOf(
+            "apiVersion", "status", "watchStatus", "unwatchStatus", "download", "cancelDownload", "deleteModels",
+            "discardModel", "run", "proceed", "cancel", "closeEngine", "importModel", "result",
+        )
+        shipped.forEachIndexed { i, name -> assertEquals(name, Pair(i + 1, false), calls[name]) }
+        // Never waited for, so they can go to a frozen add-on; one that lacks them drops them, so VERSION stays.
+        assertEquals(Pair(15, true), calls["abandonDownload"])
+        assertEquals(Pair(16, true), calls["abandonJob"])
+        assertEquals(shipped.size + 2, calls.size)
+        assertTrue(Regex("""const int VERSION = 1;""").containsMatchIn(aidl))
     }
 }

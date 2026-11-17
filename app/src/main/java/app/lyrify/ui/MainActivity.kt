@@ -267,6 +267,8 @@ private fun App(ledger: LedgerStore, destination: Page?, view: FullScreen?, onVi
     val install by remember(context) { AddonInstalls.installer(context).state }.collectAsStateWithLifecycle()
     // KJB runs the add-on's download: whether it waits for Wi-Fi, or failed, is KJB's to say.
     val downloadPhase by remember(context) { AddonDownloads.phase(context) }.collectAsStateWithLifecycle(initialValue = null)
+    // A download the phone froze, which goes on at its next run (AD9's freeze watch).
+    val downloadPaused by AddonDownloads.paused.collectAsStateWithLifecycle()
     val handover by remember(context) { ModelHandover.state(context) }.collectAsStateWithLifecycle(initialValue = HandoverState.None)
     val aiEnabled by remember(context) { AiLyrics.enabled(context) }.collectAsStateWithLifecycle()
     // The AI add-on left out of the phone's battery optimisation (AD9): offered with the asks, its row and hint on the AI tab.
@@ -274,7 +276,10 @@ private fun App(ledger: LedgerStore, destination: Page?, view: FullScreen?, onVi
     val exemptionChoices by exemptions.choices.collectAsStateWithLifecycle()
     val aiLocked = lockedPhone(KjbAddons.AI, addon?.state == AddonState.Ready, aiExempt, exemptionChoices)
     val addonOffer by rememberUpdatedState(aiLocked.offer)
-    val requestAiExemption = rememberExemptionRequest(KjbAddons.AI) { aiExempt = AddonExemptions.exempt(context, KjbAddons.AI) }
+    val requestAiExemption = rememberExemptionRequest(KjbAddons.AI) {
+        aiExempt = AddonExemptions.exempt(context, KjbAddons.AI)
+        if (aiExempt) AddonDownloads.resumeIfPaused(context)
+    }
     val askFor: (Boolean) -> Unit = { switchedOn ->
         asks = aiAsks(switchedOn, notificationGrant(Build.VERSION.SDK_INT, notifications, denied), unrestricted, addonOffer)
     }
@@ -327,6 +332,7 @@ private fun App(ledger: LedgerStore, destination: Page?, view: FullScreen?, onVi
                     notifications = grant,
                     addonExempt = aiExempt,
                     exemptions = exemptionChoices,
+                    downloadPaused = downloadPaused,
                 ),
                 aiActions = remember(context) {
                     AiActions(

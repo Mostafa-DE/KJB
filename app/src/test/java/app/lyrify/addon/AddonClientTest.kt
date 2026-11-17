@@ -2,6 +2,7 @@ package app.lyrify.addon
 
 import android.content.Context
 import androidx.work.WorkInfo
+import app.lyrify.addon.shared.AddonKeepAlive
 import app.lyrify.ai.AiResult
 import app.lyrify.ai.AiStage
 import app.lyrify.ai.AiStats
@@ -22,6 +23,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -66,6 +68,8 @@ class AddonClientTest {
 
         override fun cancelDownload(run: Long) = call("cancelDownload $run")
 
+        override fun abandonDownload(run: Long) = call("abandonDownload $run")
+
         override fun deleteModels(): Boolean = true.also { call("deleteModels") }
 
         override fun discardModel(name: String): Boolean = true.also { call("discardModel $name") }
@@ -79,6 +83,8 @@ class AddonClientTest {
         override fun proceed(job: Long) = call("proceed $job")
 
         override fun cancel(job: Long) = call("cancel $job")
+
+        override fun abandonJob(job: Long) = call("abandonJob $job")
 
         /** The result the add-on keeps of the job that ended last. */
         var kept: AiResult? = null
@@ -547,7 +553,7 @@ class AddonClientTest {
     }
 
     @Test
-    fun `silent for 30 s once it beats, the add-on is frozen, let go of and its service stopped, with nothing asked of it`() = runTest {
+    fun `silent for 30 s once it beats, the add-on is frozen, its job dropped one way, let go of and its service stopped`() = runTest {
         val host = FakeHost()
         val session = session(host)
         val binding = host.bindings.single()
@@ -573,10 +579,44 @@ class AddonClientTest {
         assertTrue(error.toString(), error is AddonFrozenException && error.stage == AiStage.SEPARATE && error.silentMs == RemoteSongEngine.FROZEN_MS)
         assertTrue("let go of", binding.closed && session.closed)
         assertTrue("the service KJB started is stopped", binding.stopped)
-        // A call into a frozen process may wait for as long as the phone keeps it frozen: none is made.
-        assertEquals(listOf("apiVersion", "run Placeholder.mp3 200000 false", "foreground"), binding.port.calls)
+        // A call the add-on must answer could wait for as long as the phone keeps it frozen: only the one-way word it
+        // hears once it runs again, which also closes its engine.
+        assertEquals(listOf("apiVersion", "run Placeholder.mp3 200000 false", "foreground", "abandonJob 7"), binding.port.calls)
         engine.close()
         assertFalse("closeEngine" in binding.port.calls)
+    }
+
+    @Test
+    fun `a frozen job is dropped one way even while the AI page binds the add-on, and the next song's job runs`() = runTest {
+        val host = FakeHost()
+        // The AI page shows: its own binding keeps the add-on's service, which KJB's letting go then does not destroy.
+        val page = launch { AddonClient(host).views(MutableSharedFlow(), retryMs = 30_000, deathPauseMs = 1_000).collect {} }
+        runCurrent()
+        val screen = host.bindings.single()
+        val engine = RemoteSongEngine(session(host), notes = {})
+        val binding = host.bindings.last()
+        val run = async { runCatching { engine.run(track, null, {}) {} } }
+        runCurrent()
+        binding.port.events!!.onBeat()
+        binding.port.events!!.onStage("TRANSCRIBE")
+        runCurrent()
+        advanceTimeBy(RemoteSongEngine.FROZEN_MS + 1)
+        runCurrent()
+
+        assertTrue(run.await().exceptionOrNull() is AddonFrozenException)
+        // The add-on stops the job and closes its engine once it runs again, with no onUnbind.
+        assertEquals("abandonJob 7", binding.port.calls.last())
+        assertTrue("the worker's binding let go of and its service stopped", binding.closed && binding.stopped)
+        assertFalse("the page's binding stays", screen.closed)
+
+        // The next night's run binds anew, and its song runs as a job of its own.
+        val next = RemoteSongEngine(session(host), notes = {})
+        val song = async { next.run(track, null, {}) {} }
+        runCurrent()
+        assertEquals(listOf("apiVersion", "run Placeholder.mp3 200000 false", "foreground"), host.bindings.last().port.calls)
+        host.bindings.last().port.events!!.onResult(transcribed)
+        assertEquals(transcribed, song.await())
+        page.cancel()
     }
 
     @Test
@@ -693,6 +733,7 @@ class AddonClientTest {
         val error = run.await().exceptionOrNull()
         assertTrue(error.toString(), error is AddonFrozenException && error.stage == AiStage.TRANSCRIBE)
         assertFalse("proceed 7" in binding.port.calls)
+        assertEquals("abandonJob 7", binding.port.calls.last())
         assertTrue(binding.closed && binding.stopped)
     }
 
@@ -726,7 +767,8 @@ class AddonClientTest {
 
         val end = async { AddonDownloads.follow(session) { done, total -> shown += done to total } }
         runCurrent()
-        assertEquals("download", port.calls.last())
+        // The add-on took it, then KJB started the add-on's foreground service for it.
+        assertEquals(listOf("apiVersion", "download", "foreground"), port.calls)
         port.downloadEvents!!.onProgress(400, 980)
         port.downloadEvents!!.onProgress(980, 980)
         port.downloadEvents!!.onEnd(Download.Done)
@@ -761,6 +803,204 @@ class AddonClientTest {
         assertTrue(end.isCancelled)
         // Its own run only: a run another worker started goes on.
         assertEquals("cancelDownload 21", host.bindings.single().port.calls.last())
+    }
+
+    // The download in the add-on's own foreground service, and the same freeze watch as a song's job
+
+    @Test
+    fun `the download runs in the add-on's own foreground service, which KJB starts once the add-on took it`() = runTest {
+        val host = FakeHost()
+        val session = session(host)
+        val binding = host.bindings.single()
+        val end = async { AddonDownloads.follow(session) { _, _ -> } }
+        runCurrent()
+
+        assertEquals(listOf("apiVersion", "download", "foreground"), binding.port.calls)
+        binding.port.downloadEvents!!.onEnd(Download.Done)
+        assertEquals(Download.Done, end.await())
+        // Its end is the add-on's to leave the foreground by, as a job's is; KJB then lets go of it.
+        assertFalse(binding.stopped)
+    }
+
+    @Test
+    fun `a phone that refuses the add-on's foreground service still downloads, and the log says so`() = runTest {
+        val host = FakeHost()
+        val session = session(host)
+        val binding = host.bindings.single().apply { refusesForeground = true }
+        val notes = mutableListOf<String>()
+        val end = async { AddonDownloads.follow(session, notes::add) { _, _ -> } }
+        runCurrent()
+
+        binding.port.downloadEvents!!.onEnd(Download.Done)
+
+        assertEquals(Download.Done, end.await())
+        assertTrue(notes.toString(), notes.any { "foreground service" in it })
+    }
+
+    @Test
+    fun `silent for 30 s once it beats, a download is frozen, dropped one way, let go of and its service stopped`() = runTest {
+        val host = FakeHost()
+        val session = session(host)
+        val binding = host.bindings.single()
+        val end = async { runCatching { AddonDownloads.follow(session) { _, _ -> } } }
+        runCurrent()
+        val events = checkNotNull(binding.port.downloadEvents)
+        events.onBeat()
+        events.onProgress(100, 980)
+        runCurrent()
+        advanceTimeBy(BEAT_MS)
+        events.onBeat()
+        runCurrent()
+        assertFalse(AddonDownloads.paused.value)
+
+        advanceTimeBy(AddonKeepAlive.FROZEN_MS - 1)
+        runCurrent()
+        assertFalse("silent for less than 30 s", end.isCompleted)
+        advanceTimeBy(2)
+        runCurrent()
+
+        val error = end.await().exceptionOrNull()
+        assertTrue(error.toString(), error is AddonFrozenException && error.stage == null && error.silentMs == AddonKeepAlive.FROZEN_MS)
+        assertTrue("let go of", binding.closed && session.closed)
+        assertTrue("the service KJB started is stopped", binding.stopped)
+        // A call the add-on must answer could wait for as long as the phone keeps it frozen: no cancelDownload, only the
+        // one-way word it hears once it runs again.
+        assertEquals(listOf("apiVersion", "download", "foreground", "abandonDownload 21"), binding.port.calls)
+        assertTrue("the AI page says the phone paused it", AddonDownloads.paused.value)
+    }
+
+    @Test
+    fun `a frozen download is dropped one way even while the AI page binds the add-on, and the next run goes on`() = runTest {
+        val host = FakeHost()
+        // The AI page shows: its own binding keeps the add-on's service, which KJB's letting go then does not destroy.
+        val page = launch { AddonClient(host).views(MutableSharedFlow(), retryMs = 30_000, deathPauseMs = 1_000).collect {} }
+        runCurrent()
+        val screen = host.bindings.single()
+        val worker = session(host)
+        val binding = host.bindings.last()
+        val end = async { runCatching { AddonDownloads.follow(worker) { _, _ -> } } }
+        runCurrent()
+        binding.port.downloadEvents!!.onBeat()
+        advanceTimeBy(AddonKeepAlive.FROZEN_MS + 1)
+        runCurrent()
+
+        assertTrue(end.await().exceptionOrNull() is AddonFrozenException)
+        // The add-on stops the run, keeps its parts and leaves the foreground once it runs again, with no onUnbind.
+        assertEquals("abandonDownload 21", binding.port.calls.last())
+        assertTrue("the worker's binding let go of and its service stopped", binding.closed && binding.stopped)
+        assertFalse("the page's binding stays", screen.closed)
+        assertTrue("the page says the phone paused it", AddonDownloads.paused.value)
+
+        // Allow, or the worker's retry: a new run, which the add-on takes from its parts, and the page's word goes.
+        val next = async { AddonDownloads.follow(session(host)) { _, _ -> } }
+        runCurrent()
+        assertFalse(AddonDownloads.paused.value)
+        assertEquals(listOf("apiVersion", "download", "foreground"), host.bindings.last().port.calls)
+        host.bindings.last().port.downloadEvents!!.onEnd(Download.Done)
+        assertEquals(Download.Done, next.await())
+        page.cancel()
+    }
+
+    @Test
+    fun `the next run after a freeze starts the add-on's foreground service anew, and the page's word on the pause goes`() = runTest {
+        val host = FakeHost()
+        val frozen = async { runCatching { AddonDownloads.follow(session(host)) { _, _ -> } } }
+        runCurrent()
+        host.bindings.single().port.downloadEvents!!.onBeat()
+        advanceTimeBy(AddonKeepAlive.FROZEN_MS + 1)
+        runCurrent()
+        assertTrue(frozen.await().exceptionOrNull() is AddonFrozenException)
+        assertTrue(AddonDownloads.paused.value)
+
+        // The worker's retry, which goes on from the add-on's parts.
+        val next = async { AddonDownloads.follow(session(host)) { _, _ -> } }
+        runCurrent()
+
+        assertFalse(AddonDownloads.paused.value)
+        assertEquals(listOf("apiVersion", "download", "foreground"), host.bindings.last().port.calls)
+        host.bindings.last().port.downloadEvents!!.onEnd(Download.Done)
+        assertEquals(Download.Done, next.await())
+    }
+
+    @Test
+    fun `after the add-on's process died mid-download, the next run starts its foreground service anew`() = runTest {
+        val host = FakeHost()
+        val dying = async { runCatching { AddonDownloads.follow(session(host)) { _, _ -> } } }
+        runCurrent()
+        host.bindings.single().port.downloadEvents!!.onBeat()
+        host.bindings.single().kill()
+        runCurrent()
+        assertTrue(dying.await().exceptionOrNull() is AddonDiedException)
+        assertFalse("a death is no freeze", AddonDownloads.paused.value)
+
+        val next = async { AddonDownloads.follow(session(host)) { _, _ -> } }
+        runCurrent()
+
+        assertEquals(listOf("apiVersion", "download", "foreground"), host.bindings.last().port.calls)
+        host.bindings.last().port.downloadEvents!!.onEnd(Download.Done)
+        assertEquals(Download.Done, next.await())
+    }
+
+    @Test
+    fun `beats keep a download that waits on a slow server from looking frozen`() = runTest {
+        val host = FakeHost()
+        val session = session(host)
+        val port = host.bindings.single().port
+        val end = async { AddonDownloads.follow(session) { _, _ -> } }
+        runCurrent()
+        port.downloadEvents!!.onProgress(100, 980)
+
+        repeat(10 * 60_000 / BEAT_MS.toInt()) {
+            port.downloadEvents!!.onBeat()
+            advanceTimeBy(BEAT_MS)
+            runCurrent()
+        }
+        assertFalse(end.isCompleted)
+        port.downloadEvents!!.onEnd(Download.Done)
+
+        assertEquals(Download.Done, end.await())
+    }
+
+    @Test
+    fun `a download from an add-on that does not beat is not watched for freezes`() = runTest {
+        val host = FakeHost()
+        val session = session(host)
+        val binding = host.bindings.single()
+        val end = async { AddonDownloads.follow(session) { _, _ -> } }
+        runCurrent()
+        binding.port.downloadEvents!!.onProgress(100, 980)
+
+        advanceTimeBy(4 * AddonKeepAlive.FROZEN_MS)
+        runCurrent()
+        assertFalse(end.isCompleted)
+        binding.port.downloadEvents!!.onEnd(Download.Done)
+
+        assertEquals(Download.Done, end.await())
+        assertFalse(binding.closed || binding.stopped)
+    }
+
+    @Test
+    fun `an end that comes as the freeze watch gives up is the download's end, not a freeze`() = runTest {
+        val host = FakeHost()
+        val session = session(host)
+        val binding = host.bindings.single()
+        val end = async { runCatching { AddonDownloads.follow(session) { _, _ -> } } }
+        runCurrent()
+        val events = binding.port.downloadEvents!!
+        events.onBeat()
+        runCurrent()
+        // The end comes at the very moment the watch gives up: after its word is in, before the download reads it.
+        backgroundScope.launch {
+            delay(AddonKeepAlive.FROZEN_MS)
+            yield() // behind the watch, which wakes at the same moment
+            events.onEnd(Download.Done)
+        }
+
+        advanceTimeBy(AddonKeepAlive.FROZEN_MS + 1)
+        runCurrent()
+
+        assertEquals(Download.Done, end.await().getOrThrow())
+        assertFalse("never let go of as frozen", binding.closed || binding.stopped || AddonDownloads.paused.value)
     }
 
     @Test

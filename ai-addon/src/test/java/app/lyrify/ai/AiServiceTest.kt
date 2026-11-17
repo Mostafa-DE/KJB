@@ -1,6 +1,11 @@
 package app.lyrify.ai
 
 import android.content.pm.ServiceInfo
+import app.lyrify.addon.shared.ForegroundPort
+import app.lyrify.addon.shared.JobForeground
+import app.lyrify.models.Download
+import app.lyrify.models.DownloadEvents
+import app.lyrify.models.DownloadRun
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -11,6 +16,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.plus
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
@@ -627,7 +633,238 @@ class AiServiceTest {
     }
 
     @Test
-    fun `the notice says the same for every job, with no room for a song, its lyrics or a path`() {
+    fun `the models' download runs as dataSync on every Android version, a song's job as its own type`() = runTest {
+        // Android 15+ counts 6 hours in 24 for each type apart: the download alone never takes from the jobs' mediaProcessing
+        // time (a service in both types at once is timed as mediaProcessing).
+        assertEquals(ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC, downloadWork(DownloadRun(backgroundScope) { Download.Done }).type)
+        for (sdk in listOf(30, 34, 35, 36, 37)) assertEquals("$sdk", jobForegroundType(sdk), jobWork(sdk, jobs()).type)
+    }
+
+    // A song's job and the models' download at once, in the add-on's one foreground service
+
+    /** Android's side of the foreground service: what the service asked of it, the types joined as dumpsys names them. */
+    private class Foreground : ForegroundPort<String> {
+        val calls = mutableListOf<String>()
+
+        override fun startForeground(type: Int, tap: String?) {
+            calls += "start " + listOfNotNull(
+                "mediaProcessing".takeIf { type and ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING != 0 },
+                "dataSync".takeIf { type and ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC != 0 },
+            ).joinToString("|")
+        }
+
+        override fun stopForeground() {
+            calls += "stopForeground"
+        }
+
+        override fun stopSelf(startId: Int?) {
+            calls += "stopSelf ${startId ?: "all"}"
+        }
+    }
+
+    /** What the download's caller heard of its end. */
+    private class DownloadHeard : DownloadEvents {
+        val ends = mutableListOf<Download>()
+
+        override fun onProgress(done: Long, total: Long) {}
+
+        override fun onEnd(end: Download) {
+            ends += end
+        }
+
+        override fun onBeat() {}
+    }
+
+    /** The service on [sdk], as AiService wires it: a song's jobs (one chunk each), the download (done once [gate] opens). */
+    private class Wired(val jobs: AddonJobs, val downloads: DownloadRun, val foreground: JobForeground<String>)
+
+    private fun TestScope.service(sdk: Int, port: Foreground, gate: CompletableDeferred<Unit>): Wired {
+        lateinit var foreground: JobForeground<String>
+        val jobs = jobs(chunks = 1)
+        val downloads = DownloadRun(backgroundScope.plus(StandardTestDispatcher(testScheduler)), ended = { foreground.jobEnded() }) {
+            gate.await()
+            Download.Done
+        }
+        foreground = JobForeground(aiWork(sdk, jobs, downloads), port, fromKjb = { it == kjb })
+        return Wired(jobs, downloads, foreground)
+    }
+
+    /** A song's job, then the download beside it, each followed by KJB's start for it; the job's id and the download's caller. */
+    private fun TestScope.both(service: Wired): Pair<Long, DownloadHeard> {
+        val job = service.jobs.start(song, null, { Heard() }) { service.foreground.jobEnded() }
+        runCurrent()
+        service.foreground.start(1, kjb)
+        val download = DownloadHeard()
+        service.downloads.start(download)
+        runCurrent()
+        service.foreground.start(2, kjb)
+        return job to download
+    }
+
+    private val kjb = "KJB's AI page"
+
+    @Test
+    fun `a job, then the download beside it, in the foreground as both from Android 15, then as the download's alone`() = runTest {
+        for (sdk in listOf(36, 34)) {
+            val port = Foreground()
+            val gate = CompletableDeferred<Unit>()
+            val service = service(sdk, port, gate)
+            val (job, download) = both(service)
+
+            service.jobs.proceed(job) // its one chunk: the job ends first
+            runCurrent()
+            gate.complete(Unit)
+            runCurrent()
+
+            assertEquals(listOf<Download>(Download.Done), download.ends)
+            val expected = if (sdk >= 35) {
+                // The download's own type again once the job ended: Android times a service in both types as
+                // mediaProcessing alone (AOSP getTimeLimitedFgsType), so the download left alone goes back to dataSync's time.
+                listOf("start mediaProcessing", "start mediaProcessing|dataSync", "start dataSync")
+            } else {
+                listOf("start dataSync") // both dataSync before Android 15: nothing to change
+            }
+            assertEquals("$sdk", expected + listOf("stopForeground", "stopSelf 2"), port.calls)
+        }
+    }
+
+    @Test
+    fun `a start with no work under way goes in and out as dataSync, whose time a night of jobs never uses`() = runTest {
+        for (sdk in listOf(36, 34)) {
+            val port = Foreground()
+            service(sdk, port, CompletableDeferred()).foreground.start(1, kjb)
+            assertEquals("$sdk", listOf("start dataSync", "stopForeground", "stopSelf 1"), port.calls)
+        }
+    }
+
+    @Test
+    fun `a job KJB gave up on as frozen stops at its chunk, its engine and foreground go, and the next job starts`() = runTest {
+        // KJB's AI page keeps the service bound: no onUnbind, so the one-way word is all that ends the job.
+        val port = Foreground()
+        val service = service(36, port, CompletableDeferred())
+        val heard = Heard()
+        val job = service.jobs.start(song, null, { heard }) { released += it; service.foreground.jobEnded() }
+        runCurrent()
+        service.foreground.start(1, kjb)
+        assertEquals("waiting at its chunk for KJB, which went", "chunk", heard.events.last())
+
+        service.jobs.abandon(job)
+        runCurrent()
+
+        assertEquals("stopped", heard.events.last())
+        assertEquals(listOf(job), released)
+        assertFalse(service.jobs.busy)
+        assertTrue("the engine closed, freeing the NPU (KJB sends no closeEngine after a freeze)", engines.single().closed)
+        assertEquals("out of the foreground, its notice gone", listOf("start mediaProcessing", "stopForeground", "stopSelf 1"), port.calls)
+
+        // The next night: a new job starts, on an engine opened anew.
+        val next = Heard()
+        val again = service.jobs.start(song, null, { next }) {}
+        runCurrent()
+        service.jobs.proceed(again)
+        runCurrent()
+        assertEquals("result Transcribed", next.events.last())
+        assertEquals(2, engines.size)
+    }
+
+    @Test
+    fun `KJB's word on a frozen job leaves a later job alone, and closes an engine no job holds`() = runTest {
+        val jobs = jobs(chunks = 1)
+        val first = jobs.start(song, null, { Heard() }) {}
+        runCurrent()
+        jobs.proceed(first)
+        runCurrent()
+
+        // The job ended before the word came: nothing holds the engine, which closes.
+        jobs.abandon(first)
+        assertTrue(engines.single().closed)
+
+        val heard = Heard()
+        val later = jobs.start(song, null, { heard }) {}
+        runCurrent()
+        jobs.abandon(first) // late, and for the job before
+        runCurrent()
+        assertTrue("the later job goes on", jobs.busy)
+        assertFalse(engines.last().closed)
+        jobs.proceed(later)
+        runCurrent()
+        assertEquals("result Transcribed", heard.events.last())
+    }
+
+    @Test
+    fun `the download, then a job beside it, the download ending first, and the job goes on as mediaProcessing`() = runTest {
+        val port = Foreground()
+        val gate = CompletableDeferred<Unit>()
+        val service = service(36, port, gate)
+        val download = DownloadHeard()
+        service.downloads.start(download)
+        runCurrent()
+        service.foreground.start(1, kjb)
+        val job = service.jobs.start(song, null, { Heard() }) { service.foreground.jobEnded() }
+        runCurrent()
+        service.foreground.start(2, kjb)
+
+        gate.complete(Unit)
+        runCurrent()
+        assertEquals(listOf("start dataSync", "start mediaProcessing|dataSync", "start mediaProcessing"), port.calls)
+        service.jobs.proceed(job)
+        runCurrent()
+
+        assertEquals(listOf("start dataSync", "start mediaProcessing|dataSync", "start mediaProcessing", "stopForeground", "stopSelf 2"), port.calls)
+    }
+
+    @Test
+    fun `mediaProcessing's time running out ends the job as the NPU busy, and the download goes on as dataSync`() = runTest {
+        val port = Foreground()
+        val gate = CompletableDeferred<Unit>()
+        val service = service(36, port, gate)
+        val (job, download) = both(service)
+        port.calls.clear()
+
+        service.foreground.timeUp(ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING)
+        runCurrent()
+
+        val result = service.jobs.result(job)
+        assertTrue("$result", result is AiResult.Failed && result.npu)
+        assertTrue("the download goes on", download.ends.isEmpty() && service.downloads.busy)
+        assertEquals(listOf("start dataSync"), port.calls)
+        gate.complete(Unit)
+        runCurrent()
+        assertEquals(listOf<Download>(Download.Done), download.ends)
+        assertEquals(listOf("start dataSync", "stopForeground", "stopSelf 2"), port.calls)
+    }
+
+    @Test
+    fun `dataSync's time running out stops the download for later, and the job goes on as mediaProcessing`() = runTest {
+        val port = Foreground()
+        val gate = CompletableDeferred<Unit>()
+        val service = service(36, port, gate)
+        val (job, download) = both(service)
+        port.calls.clear()
+
+        service.foreground.timeUp(ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        runCurrent()
+
+        assertTrue("${download.ends}", download.ends.single() is Download.Interrupted) // its parts kept, KJB tries again later
+        assertTrue("the job goes on", service.jobs.busy)
+        assertEquals(listOf("start mediaProcessing"), port.calls)
+        service.jobs.proceed(job)
+        runCurrent()
+        assertTrue(service.jobs.result(job) is AiResult.Transcribed)
+        assertEquals(listOf("start mediaProcessing", "stopForeground", "stopSelf 2"), port.calls)
+    }
+
+    @Test
+    fun `the download's notice says how far it is in whole percents, never past whole`() {
+        assertEquals(41, downloadPercent(412, 981))
+        assertEquals(0, downloadPercent(0, 981))
+        assertEquals(100, downloadPercent(981, 981))
+        assertEquals(100, downloadPercent(990, 981))
+        assertEquals("no size told yet", 0, downloadPercent(5, 0))
+    }
+
+    @Test
+    fun `the notice says the same for every job and only numbers for the download, with no room for a song, its lyrics, a path or a link`() {
         val strings = File("src/main/res/values/strings.xml").also { assertTrue("run from the module: ${it.absolutePath}", it.isFile) }.readText()
         fun string(name: String): String? = Regex("""<string name="$name"[^>]*>([^<]*)</string>""").find(strings)?.groupValues?.get(1)
 
@@ -635,5 +872,8 @@ class AiServiceTest {
         assertEquals("KJB AI is working", string("work_title"))
         // No placeholder: nothing of a job can be put into either.
         assertFalse(listOf("work_channel", "work_title").any { '%' in string(it).orEmpty() })
+        // The download's: plain words, then its percent and two sizes, room for no file name or link.
+        assertEquals("Downloading the AI models", string("models_title"))
+        assertEquals("%1\$d%% (%2\$s of %3\$s)", string("models_progress"))
     }
 }

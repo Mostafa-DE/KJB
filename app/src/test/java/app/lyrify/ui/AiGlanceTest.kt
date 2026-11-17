@@ -29,7 +29,8 @@ class AiGlanceTest {
         unrestricted: Boolean = true,
         stopping: Boolean = false,
         addonExempt: Boolean = false,
-    ) = AiState(chip, newEnough, models, enabled, progress, hold, pluggedIn, unrestricted, stopping, addonExempt = addonExempt)
+        downloadPaused: Boolean = false,
+    ) = AiState(chip, newEnough, models, enabled, progress, hold, pluggedIn, unrestricted, stopping, addonExempt = addonExempt, downloadPaused = downloadPaused)
 
     private fun glance(state: AiState, waiting: Int = WAITING) = aiGlance(state, waiting)
 
@@ -115,6 +116,35 @@ class AiGlanceTest {
             ),
             glance(state(models = ModelState.Downloading(QUARTER, TOTAL, waiting = true))),
         )
+    }
+
+    @Test
+    fun `a download the phone paused says so, with one tap to Run when locked, until its next run goes on`() {
+        val waiting = ModelState.Downloading(QUARTER, TOTAL, waiting = true)
+        assertEquals(
+            AiGlance(
+                Ring(0.25f, RingColor.OUTLINE),
+                Centre.Icon(R.drawable.ic_pause_circle, CentreValue.Percent(25)),
+                text(R.string.ai_held_frozen),
+                text(R.string.ai_models_frozen_detail),
+                GlanceAction(AiActionKind.ALLOW_LOCKED, text(R.string.setup_allow)),
+            ),
+            glance(state(models = waiting, downloadPaused = true)),
+        )
+        assertEquals("already allowed: nothing to ask", null, glance(state(models = waiting, downloadPaused = true, addonExempt = true)).action)
+        // The add-on's last word, from before the phone froze it, is that it downloads: the pause is said all the same.
+        assertEquals(text(R.string.ai_held_frozen), glance(state(models = ModelState.Downloading(QUARTER, TOTAL, waiting = false), downloadPaused = true)).line)
+        // The download row and its sheet say the same, the AI on or off; the Now tile too.
+        assertEquals(text(R.string.ai_held_frozen), downloadLine(waiting, paused = true))
+        assertEquals(
+            AiTile(Ring(0.25f, RingColor.OUTLINE), TileValue.Text(R.string.ai_tile_paused), R.string.ai_tile_phone),
+            aiTile(state(models = waiting, downloadPaused = true), WAITING),
+        )
+        // Nothing paused, or a word of the download's own that is not about a run: as before.
+        assertEquals(text(R.string.ai_models_waiting), glance(state(models = waiting)).line)
+        assertEquals(text(R.string.ai_models_waiting), downloadLine(waiting, paused = false))
+        assertEquals(text(R.string.ai_models_failed), glance(state(models = ModelState.Failed(QUARTER, TOTAL), downloadPaused = true)).line)
+        assertEquals(text(R.string.ai_models_ready, GlanceArg.Bytes(TOTAL)), downloadLine(ready, paused = true))
     }
 
     @Test

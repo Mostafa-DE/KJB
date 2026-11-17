@@ -3,6 +3,7 @@ package app.lyrify.models
 import android.annotation.SuppressLint
 import android.content.Context
 import android.util.Log
+import app.lyrify.addon.shared.beating
 import app.lyrify.ai.LOG_TAG
 import app.lyrify.ai.USER_AGENT
 import kotlinx.coroutines.CancellationException
@@ -25,6 +26,8 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
+import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.EmptyCoroutineContext
 
 /** What one model download tells KJB (IAiDownloadCallback, as Kotlin). */
 interface DownloadEvents {
@@ -32,14 +35,17 @@ interface DownloadEvents {
     fun onProgress(done: Long, total: Long)
 
     fun onEnd(end: Download)
+
+    /** The run is alive: at its start, then every few seconds until its end, from a timer of its own. */
+    fun onBeat()
 }
 
 /** Where the add-on's download stands. */
 sealed interface RunState {
     data object Idle : RunState
 
-    /** [doneBytes] of all the models so far; null until the download first says. */
-    data class Running(val doneBytes: Long?) : RunState
+    /** [doneBytes] of all the models ([totalBytes]) so far; both null until the download first says. */
+    data class Running(val doneBytes: Long?, val totalBytes: Long? = null) : RunState
 
     /** The last one failed for good (a file not as pinned); the next start tries anew. */
     data object Failed : RunState
@@ -47,13 +53,25 @@ sealed interface RunState {
 
 /**
  * The add-on's model download ([download]: the downloader under the store's lock, so runs take the files one after the
- * other), in [scope]: the bound service's. KJB starts it from its own foreground service and shows its notification; the
- * add-on runs no foreground service and posts no notification. Each [start] is its own run with its own id and its own
- * caller ([DownloadEvents]): only that caller hears its progress and its end, and only [cancel] with that id stops it
- * (a run KJB replaced, still winding down, can never end or stop the one after it). Stopped, it ends as stopped and keeps
- * its parts: the next run goes on from them (HTTP Range) and checks every file's SHA-256 at the end.
+ * other), in [scope]: the bound service's. KJB starts it from its own foreground service, which shows its notification,
+ * then starts the add-on's for it, as for a song's job (ai/AiService.kt, JobForeground): the add-on is [busy] from a run's
+ * start to its end, each end told to [ended], and the newest run's progress to [moved], for the notice. A run beats from
+ * its start to its end, on [beats], so KJB tells a process a phone froze from a slow server. Each [start] is its own run
+ * with its own id and its own caller ([DownloadEvents]): only that caller hears its progress and its end, and only
+ * [cancel] with that id stops it (a run KJB replaced, still winding down, can never end or stop the one after it).
+ * Stopped, it ends as stopped and keeps its parts: the next run goes on from them (HTTP Range) and checks every file's
+ * SHA-256 at the end.
  */
-class DownloadRun(private val scope: CoroutineScope, private val download: suspend (progress: suspend (Long, Long) -> Unit) -> Download) {
+class DownloadRun(
+    private val scope: CoroutineScope,
+    /** Where a run's beats run (the main thread on the phone): apart from the download's own threads. */
+    private val beats: CoroutineContext = EmptyCoroutineContext,
+    /** The newest run's progress moved on ([state]). */
+    private val moved: () -> Unit = {},
+    /** A run ended (after [busy] says so). */
+    private val ended: () -> Unit = {},
+    private val download: suspend (progress: suspend (Long, Long) -> Unit) -> Download,
+) {
     private val _state = MutableStateFlow<RunState>(RunState.Idle)
 
     /** The newest run's state, for the status. */
@@ -75,16 +93,22 @@ class DownloadRun(private val scope: CoroutineScope, private val download: suspe
         _state.value = RunState.Running(null)
         // ATOMIC: the body runs, and the run ends to its caller, even when the scope goes before it was dispatched.
         run.job = scope.launch(start = CoroutineStart.ATOMIC) {
+            // The run's beats, apart from it: they go on while it waits on a slow server or on the files of a run stopped
+            // a moment ago.
+            val beating = scope.beating(beats) { events.onBeat() }
             val end = try {
                 download { done, total ->
-                    if (isNewest(run)) _state.value = RunState.Running(done)
+                    if (isNewest(run)) {
+                        _state.value = RunState.Running(done, total)
+                        moved()
+                    }
                     events.onProgress(done, total)
                 }
             } catch (e: CancellationException) {
-                finish(run, Download.Interrupted("stopped"))
+                finish(run, Download.Interrupted("stopped"), beating)
                 throw e
             }
-            finish(run, end)
+            finish(run, end, beating)
         }
         runs[run.id] = run
         return run.id
@@ -96,6 +120,15 @@ class DownloadRun(private val scope: CoroutineScope, private val download: suspe
         runs[id]?.job?.cancel()
     }
 
+    /** A run is under way: from its start until its end. */
+    val busy: Boolean get() = synchronized(this) { runs.isNotEmpty() }
+
+    /**
+     * Android's time for the add-on's foreground service ran out (onTimeout, Android 15+: 6 hours of dataSync in 24): every
+     * run stops as when KJB lets go, its parts kept for the next try.
+     */
+    fun timeUp() = cancelAll()
+
     /** Stops every run: KJB left, or the models are about to change (deleted, handed over). */
     @Synchronized
     fun cancelAll() {
@@ -105,13 +138,15 @@ class DownloadRun(private val scope: CoroutineScope, private val download: suspe
     @Synchronized
     private fun isNewest(run: Run): Boolean = run.id == newest
 
-    /** [run] ended: only the newest run sets the state, and only [run]'s own caller hears [end]. */
-    private fun finish(run: Run, end: Download) {
+    /** [run] ended: its [beating] stops, only the newest run sets the state, and only [run]'s own caller hears [end]. */
+    private fun finish(run: Run, end: Download, beating: Job) {
+        beating.cancel()
         synchronized(this) {
             runs.remove(run.id)
             if (run.id == newest) _state.value = if (end is Download.Failed) RunState.Failed else RunState.Idle
         }
         run.events.onEnd(end)
+        ended()
     }
 }
 

@@ -1,5 +1,9 @@
 package app.lyrify.models
 
+import android.content.pm.ServiceInfo
+import app.lyrify.addon.shared.ForegroundPort
+import app.lyrify.addon.shared.JobForeground
+import app.lyrify.ai.downloadWork
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import kotlinx.coroutines.CompletableDeferred
@@ -12,6 +16,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.plus
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
@@ -54,6 +60,13 @@ class ModelDownloadsTest {
             events += "end $end"
             ended.complete(end)
         }
+
+        /** Counted apart: they come with the virtual clock, not with the download's steps. */
+        var beats = 0
+
+        override fun onBeat() {
+            beats++
+        }
     }
 
     // The run, with a scripted download
@@ -71,7 +84,7 @@ class ModelDownloadsTest {
 
         run.start(heard)
         runCurrent()
-        assertEquals(RunState.Running(10), run.state.value)
+        assertEquals(RunState.Running(10, 100), run.state.value)
 
         gate.complete(Unit)
         runCurrent()
@@ -91,7 +104,7 @@ class ModelDownloadsTest {
 
     @Test
     fun `a run cancelled as the next one starts tells only its own caller, and leaves the next run alone`() = runTest {
-        val run = DownloadRun(backgroundScope.plus(StandardTestDispatcher(testScheduler)), gated)
+        val run = DownloadRun(backgroundScope.plus(StandardTestDispatcher(testScheduler)), download = gated)
         val first = Heard()
         val second = Heard()
         val a = run.start(first)
@@ -115,7 +128,7 @@ class ModelDownloadsTest {
 
     @Test
     fun `each start is its own run, and cancelling one leaves the other going`() = runTest {
-        val run = DownloadRun(backgroundScope.plus(StandardTestDispatcher(testScheduler)), gated)
+        val run = DownloadRun(backgroundScope.plus(StandardTestDispatcher(testScheduler)), download = gated)
         val first = Heard()
         val second = Heard()
         val a = run.start(first)
@@ -163,6 +176,176 @@ class ModelDownloadsTest {
         run.start(Heard())
         runCurrent()
         assertEquals(RunState.Idle, run.state.value)
+    }
+
+    // Its beats, and the add-on's foreground service while it runs (the logic: :addon-shared's AddonKeepAliveTest)
+
+    @Test
+    fun `a run beats at once and every 5 s until its end, whatever it waits on, and not after`() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val run = DownloadRun(backgroundScope.plus(StandardTestDispatcher(testScheduler)), beats = StandardTestDispatcher(testScheduler)) { progress ->
+            progress(10, 100)
+            gate.await() // a slow server, or the files of a run stopped a moment ago
+            Download.Done
+        }
+        val heard = Heard()
+        run.start(heard)
+        runCurrent()
+        assertEquals(1, heard.beats)
+
+        advanceTimeBy(60_000)
+        runCurrent()
+        assertEquals("one at once, then one every 5 s", 13, heard.beats)
+        gate.complete(Unit)
+        runCurrent()
+        advanceTimeBy(60_000)
+        runCurrent()
+
+        assertEquals("end Done", heard.events.last())
+        assertEquals("none once it ended", 13, heard.beats)
+    }
+
+    /** The add-on's foreground service as Android sees it: what the service asked of it, in order. */
+    private class Foreground : ForegroundPort<String> {
+        val calls = mutableListOf<String>()
+
+        override fun startForeground(type: Int, tap: String?) {
+            calls += if (type == ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC) "start dataSync" else "start $type"
+        }
+
+        override fun stopForeground() {
+            calls += "stopForeground"
+        }
+
+        override fun stopSelf(startId: Int?) {
+            calls += "stopSelf ${startId ?: "all"}"
+        }
+
+        override fun updateNotice(tap: String?) {
+            calls += "notice"
+        }
+    }
+
+    /**
+     * The download and the add-on's one foreground service, wired as AiService wires them, no song's job running
+     * (AiServiceTest runs one beside it).
+     */
+    private fun TestScope.wired(port: Foreground, download: suspend (suspend (Long, Long) -> Unit) -> Download): Pair<DownloadRun, JobForeground<String>> {
+        lateinit var foreground: JobForeground<String>
+        val run = DownloadRun(
+            backgroundScope.plus(StandardTestDispatcher(testScheduler)),
+            moved = { foreground.noticeChanged() },
+            ended = { foreground.jobEnded() },
+            download = download,
+        )
+        foreground = JobForeground(listOf(downloadWork(run)), port, fromKjb = { it == KJB })
+        return run to foreground
+    }
+
+    @Test
+    fun `the add-on's foreground service holds from KJB's start to the download's end, its notice following the progress`() = runTest {
+        val port = Foreground()
+        val halfway = CompletableDeferred<Unit>()
+        val whole = CompletableDeferred<Unit>()
+        val (run, foreground) = wired(port) { progress ->
+            progress(10, 100) // before KJB's start: nothing to post the notice into yet
+            halfway.await()
+            progress(50, 100)
+            whole.await()
+            progress(100, 100)
+            Download.Done
+        }
+        val heard = Heard()
+        run.start(heard)
+        runCurrent()
+        assertTrue(run.busy)
+
+        foreground.start(1, KJB) // KJB's start, once the add-on took the download
+        halfway.complete(Unit)
+        runCurrent()
+        assertEquals(RunState.Running(50, 100), run.state.value)
+        whole.complete(Unit)
+        runCurrent()
+
+        assertEquals("end Done", heard.events.last())
+        assertFalse(run.busy)
+        assertEquals(listOf("start dataSync", "notice", "notice", "stopForeground", "stopSelf 1"), port.calls)
+    }
+
+    @Test
+    fun `every end of a download leaves the foreground, done, failed, stopped for later, cancelled or KJB gone`() = runTest {
+        val ends = listOf<Pair<String, (DownloadRun, JobForeground<String>, Long) -> Unit>>(
+            "done" to { _, _, _ -> gates.last().complete(Unit) },
+            "KJB's cancel" to { run, _, id -> run.cancel(id) },
+            "KJB gone" to { run, _, _ -> run.cancelAll() },
+        )
+        for ((way, end) in ends) {
+            val port = Foreground()
+            val (run, foreground) = wired(port, gated)
+            val heard = Heard()
+            val id = run.start(heard)
+            runCurrent()
+            foreground.start(1, KJB)
+
+            end(run, foreground, id)
+            runCurrent()
+
+            assertEquals(way, 1, heard.events.count { it.startsWith("end") })
+            assertFalse(way, run.busy)
+            assertEquals(way, listOf("start dataSync", "stopForeground", "stopSelf 1"), port.calls)
+        }
+        for (told in listOf(Download.Failed("checksum mismatch"), Download.Interrupted("network"))) {
+            val port = Foreground()
+            val gate = CompletableDeferred<Unit>()
+            val (run, foreground) = wired(port) { gate.await(); told }
+            val heard = Heard()
+            run.start(heard)
+            runCurrent()
+            foreground.start(1, KJB)
+
+            gate.complete(Unit)
+            runCurrent()
+
+            assertEquals("end $told", heard.events.single())
+            assertEquals("$told", listOf("start dataSync", "stopForeground", "stopSelf 1"), port.calls)
+        }
+    }
+
+    @Test
+    fun `Android's time running out stops the download for later and leaves the foreground there and then`() = runTest {
+        val port = Foreground()
+        val (run, foreground) = wired(port, gated)
+        val heard = Heard()
+        run.start(heard)
+        runCurrent()
+        foreground.start(1, KJB)
+
+        foreground.timeUp(ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        runCurrent()
+
+        assertTrue(heard.events.toString(), heard.events.last().startsWith("end Interrupted"))
+        assertFalse(run.busy)
+        assertEquals(listOf("start dataSync", "stopForeground", "stopSelf all"), port.calls)
+    }
+
+    @Test
+    fun `after the add-on's process restarts, a start with no download goes in and out, and the next download holds it anew`() = runTest {
+        // A new process: nothing of the one that died, whose foreground went with it.
+        val port = Foreground()
+        val (run, foreground) = wired(port, gated)
+        foreground.start(1, KJB)
+        assertEquals("no download yet: in and out at once, as Android requires", listOf("start dataSync", "stopForeground", "stopSelf 1"), port.calls)
+
+        port.calls.clear()
+        val heard = Heard()
+        run.start(heard) // KJB's retry, going on from the parts
+        runCurrent()
+        foreground.start(2, KJB)
+        gates.last().complete(Unit)
+        runCurrent()
+
+        assertEquals("end Done", heard.events.last())
+        assertEquals(listOf("start dataSync", "stopForeground", "stopSelf 2"), port.calls)
     }
 
     // Against a local server: KJB swiped away mid-file, then bound again
@@ -241,6 +424,8 @@ class ModelDownloadsTest {
             }
 
             override fun onEnd(end: Download) {}
+
+            override fun onBeat() {}
         })
         withTimeout(30_000) { halfway.await() }
 
@@ -263,6 +448,64 @@ class ModelDownloadsTest {
     }
 
     @Test
+    fun `a run KJB gave up on as frozen stops once the add-on runs again, though KJB's page keeps it bound, and the next run goes on from its part`() = runBlocking {
+        val base = serve()
+        val store = store(base)
+        // The service KJB's AI page keeps bound: no onUnbind, no onDestroy, its scope lives on.
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val port = Foreground()
+        val left = CompletableDeferred<Unit>()
+        lateinit var foreground: JobForeground<String>
+        val run = DownloadRun(
+            scope,
+            ended = {
+                foreground.jobEnded()
+                left.complete(Unit)
+            },
+        ) { progress ->
+            retryWhileProgressing(store::bytesOnDisk) {
+                ModelDownloader(store, userAgent = "KJB-AI/test", hosts = loopback, io = Dispatchers.IO, freeBytes = { Long.MAX_VALUE }).downloadAll(progress)
+            }
+        }
+        foreground = JobForeground(listOf(downloadWork(run)), port, fromKjb = { it == KJB })
+        val halfway = CompletableDeferred<Unit>()
+        val first = object : DownloadEvents {
+            val ended = CompletableDeferred<Download>()
+
+            override fun onProgress(done: Long, total: Long) {
+                if (done >= body.size / 2) halfway.complete(Unit)
+            }
+
+            override fun onEnd(end: Download) {
+                ended.complete(end)
+            }
+
+            override fun onBeat() {}
+        }
+        val id = run.start(first)
+        foreground.start(1, KJB)
+        withTimeout(30_000) { halfway.await() }
+
+        // The phone froze the add-on; KJB heard no beat for 30 s, unbound it, stopped its service and said abandonDownload
+        // one way, which the add-on hears once it runs again.
+        run.cancel(id)
+        released.countDown()
+        assertTrue(withTimeout(30_000) { first.ended.await() } is Download.Interrupted)
+        withTimeout(30_000) { left.await() }
+        assertFalse(run.busy)
+        assertEquals(listOf("start dataSync", "stopForeground", "stopSelf 1"), port.calls)
+        assertEquals((body.size / 2).toLong(), store.part(store.specs.single()).length())
+
+        // Allow, or KJB's retry: the same service goes on from the part, then checks the whole file.
+        val second = Heard()
+        run.start(second)
+        assertEquals(Download.Done, withTimeout(30_000) { second.ended.await() })
+        assertEquals(listOf("", "bytes=${body.size / 2}-"), requests)
+        assertTrue(store.isReady())
+        scope.cancel()
+    }
+
+    @Test
     fun `a part torn when KJB was killed fails the check at the end, and is fetched once whole before giving up`() = runBlocking {
         val base = serve()
         cutFirst = false
@@ -279,12 +522,12 @@ class ModelDownloadsTest {
         assertArrayEquals(body, store.file(store.specs.single()).readBytes())
     }
 
-    // The add-on's download shows nothing of its own: KJB does
+    // The download's foreground service and notice are the add-on's one service's, its schedule KJB's
 
     @Test
-    fun `the add-on's download runs without a foreground service or notification of its own, KJB shows it`() {
-        // Its one foreground service is a song's job's (ai/AiService.kt, JobForeground), and it asks for no notification
-        // permission; WorkManager, and the download's foreground service and notification, are KJB's.
+    fun `the download holds the add-on's one foreground service and notice, never one of its own, and KJB schedules it`() {
+        // Its foreground service and notice are the song's jobs' (ai/AiService.kt, JobForeground), and it asks for no
+        // notification permission; WorkManager, and the download's schedule and own notification, are KJB's.
         val manifest = File("src/main/AndroidManifest.xml").readText()
         listOf("POST_NOTIFICATIONS", "SystemForegroundService").forEach { word -> assertFalse(word, word in manifest) }
         val download = File("src/main/java/app/lyrify/models").walkTopDown().filter { it.extension == "kt" }.joinToString("\n") { it.readText() }
@@ -293,5 +536,10 @@ class ModelDownloadsTest {
         }
         val sources = File("src/main/java").walkTopDown().filter { it.extension == "kt" }.joinToString("\n") { it.readText() }
         assertFalse("androidx.work" in sources)
+    }
+
+    private companion object {
+        /** KJB's tap on the notice, the proof that a start is KJB's. */
+        const val KJB = "KJB's AI page"
     }
 }

@@ -22,6 +22,7 @@ import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import app.lyrify.LOG_TAG
 import app.lyrify.R
+import app.lyrify.addon.shared.AddonKeepAlive
 import app.lyrify.models.Download
 import app.lyrify.models.DownloadPhase
 import app.lyrify.models.ModelState
@@ -37,17 +38,21 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * The AI's models download in the add-on, which owns them, but KJB runs it ([AddonDownloadWorker]): from KJB's own
  * foreground service, on an unmetered network only, with the progress in KJB's notification, fed by the add-on's
- * callbacks. The add-on runs no foreground service and posts no notification (it could not ask to post one); KJB holds
- * POST_NOTIFICATIONS and asks for it when the download starts. KJB swiped away or killed, the add-on stops with it,
- * keeps its parts, and the next run goes on from them.
+ * callbacks. KJB holds POST_NOTIFICATIONS and asks for it when the download starts. The add-on downloads in its own
+ * foreground service, which KJB starts for it as for a song's job, and KJB watches it for a phone's app freezer the same
+ * way ([follow]). KJB swiped away or killed, the add-on stops with it, keeps its parts, and the next run goes on from them.
  */
 object AddonDownloads {
     private const val WORK = "ai-models"
@@ -63,7 +68,18 @@ object AddonDownloads {
      * network error that got nowhere. One under way is replaced; the add-on goes on from its parts (HTTP Range). Models
      * already in place are not fetched again.
      */
-    fun start(context: Context) = enqueue(context, ExistingWorkPolicy.REPLACE)
+    fun start(context: Context) {
+        _paused.value = false
+        enqueue(context, ExistingWorkPolicy.REPLACE)
+    }
+
+    /**
+     * The AI add-on was just left out of the phone's battery optimisation: a download the phone paused goes on now, not
+     * after WorkManager's backoff.
+     */
+    fun resumeIfPaused(context: Context) {
+        if (_paused.value) start(context)
+    }
 
     /** Starts the download unless one is under way or waiting: an update that pins a new file, at the start. */
     fun startIfIdle(context: Context) = enqueue(context, ExistingWorkPolicy.KEEP)
@@ -78,8 +94,17 @@ object AddonDownloads {
 
     /** Stops KJB's download (the add-on stops with it; its parts stay): before the models are deleted. */
     fun cancel(context: Context) {
+        _paused.value = false
         WorkManager.getInstance(context).cancelUniqueWork(WORK)
     }
+
+    private val _paused = MutableStateFlow(false)
+
+    /**
+     * The phone froze the add-on during the last download run ([follow]), which goes on at its next run: until then the AI
+     * page says Paused by your phone. Kept while KJB's process lives, as the AI's holds are.
+     */
+    val paused: StateFlow<Boolean> = _paused.asStateFlow()
 
     /** Where KJB's download work stands, for the AI page ([withPhase]). */
     fun phase(context: Context): Flow<DownloadPhase?> =
@@ -125,30 +150,57 @@ object AddonDownloads {
         data class End(val end: Download) : Event
 
         data object Died : Event
+
+        /** Nothing for [AddonKeepAlive.FROZEN_MS] from an add-on that beat: the phone froze it. */
+        data object Frozen : Event
     }
 
     /**
      * Starts the add-on's download over [session] and follows it to its end, each step to [progress] (KJB's notification).
-     * The add-on dying is [AddonDiedException]; cancelled (KJB's work stopped), it tells the add-on to stop, which keeps
-     * its parts.
+     * Once the add-on took it, KJB starts the add-on's own foreground service for it ([AddonSession.foreground]), which the
+     * add-on leaves at the download's end; a phone that refuses it is told to [notes]. The add-on dying is
+     * [AddonDiedException]; cancelled (KJB's work stopped), it tells the add-on to stop, which keeps its parts.
+     *
+     * Watched as a song's job is ([FreezeWatch]): the add-on beats every few seconds, from a timer no download blocks, so a
+     * run that beat and then said nothing for [AddonKeepAlive.FROZEN_MS] is a process the phone froze. Nothing it must
+     * answer is asked of it (such a call could wait for as long as it stays frozen): it is told one way to stop the run
+     * ([AddonPort.abandonDownload]), which it hears once it runs again, even while KJB's AI page keeps it bound, then let
+     * go of and its service stopped ([AddonSession.abandon]). [paused] says so until the next run, and it is
+     * [AddonFrozenException]: its parts stay for the next run. An add-on that never beat is not watched.
      */
-    suspend fun follow(session: AddonSession, progress: suspend (Long, Long) -> Unit): Download {
+    suspend fun follow(session: AddonSession, notes: (String) -> Unit = {}, progress: suspend (Long, Long) -> Unit): Download {
+        _paused.value = false
         val events = Channel<Event>(Channel.UNLIMITED)
+        // The end, also kept apart from the channel: told as the watch gives up, it can come behind the watch's word.
+        val ended = AtomicReference<Download?>(null)
+        // Each word from the add-on, beats included, for the freeze watch, which starts with the first beat.
+        val watch = FreezeWatch()
         val run = session.port.download(
             object : DownloadEvents {
-                override fun onProgress(done: Long, total: Long) {
-                    events.trySend(Event.Progress(done, total))
-                }
+                override fun onProgress(done: Long, total: Long) = tell(Event.Progress(done, total))
 
                 override fun onEnd(end: Download) {
-                    events.trySend(Event.End(end))
+                    ended.compareAndSet(null, end)
+                    tell(Event.End(end))
+                }
+
+                override fun onBeat() = watch.beat()
+
+                private fun tell(event: Event) {
+                    watch.heard()
+                    events.trySend(event)
                 }
             },
         )
+        if (!session.foreground()) notes("the phone did not let the AI add-on download in its own foreground service")
         return coroutineScope {
             val death = launch {
                 session.death.await()
                 events.trySend(Event.Died)
+            }
+            val watching = launch {
+                watch.silence()
+                events.trySend(Event.Frozen)
             }
             try {
                 var end: Download? = null
@@ -157,6 +209,16 @@ object AddonDownloads {
                         is Event.Progress -> progress(event.done, event.total)
                         is Event.End -> end = event.end
                         Event.Died -> throw AddonDiedException()
+                        // An end told meanwhile follows in the channel: the run ended, the phone froze nothing.
+                        Event.Frozen -> if (ended.get() == null) {
+                            _paused.value = true
+                            // One way, so nothing waits on the frozen process: once it runs again, the add-on stops this
+                            // run (its parts stay) and leaves the foreground, even while KJB's AI page binds it and
+                            // Android keeps its service. An add-on without the call stops when nothing binds it.
+                            runCatching { session.port.abandonDownload(run) }
+                            session.abandon()
+                            throw AddonFrozenException(stage = null, silentMs = AddonKeepAlive.FROZEN_MS)
+                        }
                     }
                 }
                 end
@@ -166,6 +228,7 @@ object AddonDownloads {
                 throw e
             } finally {
                 death.cancel()
+                watching.cancel()
             }
         }
     }
@@ -206,9 +269,10 @@ object AddonDownloads {
 
 /**
  * KJB's run of the add-on's model download: bound to the add-on for the whole download, in a foreground service of type
- * dataSync (6 hours in 24 from Android 15; opening KJB resets that) whose notification shows the add-on's progress.
- * When the phone does not allow the foreground service, it runs as an ordinary job, which Android stops after 10
- * minutes: the add-on keeps its parts and the retry goes on from them. The handover of KJB 2.0's models comes first.
+ * dataSync (6 hours in 24 from Android 15; opening KJB resets that) whose notification shows the add-on's progress, the
+ * add-on in its own ([AddonDownloads.follow]). When the phone does not allow the foreground service, it runs as an
+ * ordinary job, which Android stops after 10 minutes: the add-on keeps its parts and the retry goes on from them, as it
+ * does after the add-on died or the phone froze it. The handover of KJB 2.0's models comes first.
  */
 class AddonDownloadWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
@@ -223,6 +287,11 @@ class AddonDownloadWorker(context: Context, params: WorkerParameters) : Coroutin
             session.use { download(it) }
         } catch (_: AddonDiedException) {
             Log.w(LOG_TAG, "models: the add-on stopped during the download; it goes on later from its parts")
+            Result.retry()
+        } catch (e: AddonFrozenException) {
+            Log.w(LOG_TAG, "models: the phone paused the AI add-on during the download (nothing for ${e.silentMs / 1000} s); it goes on later from its parts")
+            // The AI page now says plainly that a locked phone may pause the add-on, unless it is exempt.
+            AddonExemptions.store(app).update { it.pausedOnce(KjbAddons.AI) }
             Result.retry()
         }
     }
@@ -239,7 +308,7 @@ class AddonDownloadWorker(context: Context, params: WorkerParameters) : Coroutin
             is ModelState.Ready -> models.totalBytes
         }
         val inForeground = foreground(done, models.totalBytes)
-        val end = AddonDownloads.follow(session) { bytes, total ->
+        val end = AddonDownloads.follow(session, notes = { Log.w(LOG_TAG, "models: $it") }) { bytes, total ->
             setProgress(AddonDownloads.progressData(bytes, total))
             if (inForeground) foreground(bytes, total)
         }

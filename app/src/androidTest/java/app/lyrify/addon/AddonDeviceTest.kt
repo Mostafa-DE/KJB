@@ -16,6 +16,9 @@ import app.lyrify.lyrics.LocalTrack
 import app.lyrify.lyrics.LrcFormat
 import app.lyrify.models.ModelState
 import app.lyrify.tags.TagLibFile
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
@@ -45,7 +48,8 @@ import java.util.concurrent.TimeUnit
  *
  * The run also checks, from `dumpsys activity services`, that the add-on works in its own foreground service while the
  * job runs (mediaProcessing from Android 15, dataSync before it), that KJB binds it with BIND_IMPORTANT, and that it
- * leaves the foreground once the job ended: a phone's app freezer stopped it mid-job without them (phone session 10).
+ * leaves the foreground once the job ended: a phone's app freezer stopped it mid-job without them (phone session 10). The
+ * models' download checks the same, as dataSync, while the add-on lacks a model.
  */
 @RunWith(AndroidJUnit4::class)
 @FixMethodOrder(MethodSorters.NAME_ASCENDING)
@@ -172,6 +176,36 @@ class AddonDeviceTest {
             retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
         }.getOrNull()
     } ?: 180_000L
+
+    /**
+     * The models' download in the add-on's own foreground service, dataSync, which KJB starts once the add-on took it, and
+     * left once the download stopped. Runs only while the add-on lacks a model (deleting them is the phone session's call,
+     * over Wi-Fi), and stops at its first progress, its parts kept for the next run.
+     */
+    @Test
+    fun downloadsTheModelsInTheAddonsOwnForeground() {
+        connect().use { session ->
+            val models = session.port.status()?.models
+            assumeTrue("the add-on lacks a model: $models", models is ModelState.Missing || models is ModelState.Failed)
+            val during = runBlocking {
+                coroutineScope {
+                    val moved = CompletableDeferred<Unit>()
+                    val download = async { runCatching { AddonDownloads.follow(session, notes = { Log.i(TAG, it) }) { _, _ -> moved.complete(Unit) } } }
+                    withTimeout(60_000) { moved.await() }
+                    val dump = AddonServices.once(KjbAddons.AI, foreground = true)
+                    // KJB's work stopped: the add-on stops the download and keeps its parts.
+                    download.cancel()
+                    dump
+                }
+            }
+            Log.i(TAG, "the add-on during the download: ${AddonServices.summary(during)}")
+            assertTrue(during, "isForeground=true" in during)
+            assertTrue("dataSync: $during", "types=${AddonServices.DATA_SYNC}" in during)
+            assertTrue("bound with BIND_AUTO_CREATE and BIND_IMPORTANT: $during", "CR IMP " in during)
+            val after = AddonServices.once(KjbAddons.AI, foreground = false)
+            assertFalse("out of the foreground once the download stopped: $after", "isForeground=true" in after)
+        }
+    }
 
     @Test
     fun theAddonDyingIsACleanErrorAndANewBindWorks() {

@@ -54,8 +54,8 @@ object Addon {
 
 /**
  * The AI add-on through Android ([AndroidAddon]): its binder as an [AddonPort], and its service started for the foreground
- * for a job with KJB's AI page as the tap on its notice ([AddonKeepAlive.EXTRA_TAP]), which also tells the add-on the start
- * is KJB's.
+ * for a job or the models' download with KJB's AI page as the tap on its notice ([AddonKeepAlive.EXTRA_TAP]), which also
+ * tells the add-on the start is KJB's.
  */
 internal class AndroidAddonHost(private val context: Context, addon: KjbAddon) : AddonHost {
     private val android = AndroidAddon(context, addon)
@@ -101,11 +101,15 @@ private class AidlPort(private val addon: IAiAddon) : AddonPort {
             override fun onProgress(done: Long, total: Long) = events.onProgress(done, total)
 
             override fun onEnd(end: String) = events.onEnd(Wire.download(end))
+
+            override fun onBeat() = events.onBeat()
         }
         return call { addon.download(callback) }
     }
 
     override fun cancelDownload(run: Long) = call { addon.cancelDownload(run) }
+
+    override fun abandonDownload(run: Long) = call { addon.abandonDownload(run) }
 
     override fun deleteModels(): Boolean = call { addon.deleteModels() }
 
@@ -136,6 +140,8 @@ private class AidlPort(private val addon: IAiAddon) : AddonPort {
     override fun proceed(job: Long) = call { addon.proceed(job) }
 
     override fun cancel(job: Long) = call { addon.cancel(job) }
+
+    override fun abandonJob(job: Long) = call { addon.abandonJob(job) }
 
     override fun result(job: Long): AiResult? = call { Wire.joined { part -> addon.result(job, part) }?.let(Wire::result) }
 

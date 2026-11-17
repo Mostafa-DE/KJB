@@ -1,8 +1,10 @@
 // The AI add-on's bound service (app.lyrify.ai.AiService), as KJB calls it (lyrify-bench handoff/ai-addon-design.md).
 // Versioned: KJB asks apiVersion() before anything else (app.lyrify.addon.AddonClient). The wire is frozen from the
 // first public release (KJB 3.0.0, VERSION 1): from then on a method keeps its transaction code and signature for good,
-// and new ones are only added at the end with VERSION raised. Until that release, VERSION 1 is still being shaped. Every call checks that the caller is KJB, by
-// its uid and signing certificate. The strings carry JSON (app.lyrify.ai.api.Wire): AiResult, AddonStatus, ImportReply.
+// and new ones are only added at the end, with VERSION raised when KJB must know whether the add-on has them (a oneway
+// call an add-on lacks is dropped unanswered, so it needs no raise). Until that release, VERSION 1 is still being
+// shaped. Every call checks that the caller is KJB, by its uid and signing certificate. The strings carry JSON
+// (app.lyrify.ai.api.Wire): AiResult, AddonStatus, ImportReply.
 package app.lyrify.ai.api;
 
 import app.lyrify.ai.api.IAiDownloadCallback;
@@ -22,10 +24,11 @@ interface IAiAddon {
     void watchStatus(IAiStatusCallback callback) = 3;
     void unwatchStatus(IAiStatusCallback callback) = 4;
 
-    // Downloads the models the add-on lacks, from the parts it has, and tells the callback its progress and end. KJB runs
-    // it from its own foreground service and shows the notification (the add-on has neither), on the networks it allows.
-    // Returns the run's id. Each call is its own run, heard by its own callback; runs take the files one after the other.
-    // A run stops when its caller goes away (its parts stay).
+    // Downloads the models the add-on lacks, from the parts it has, and tells the callback its progress, its beats and its
+    // end. KJB runs it from its own foreground service, which shows the notification, on the networks it allows, and then
+    // starts the add-on's service for the foreground, as for a song's job. Returns the run's id. Each call is its own run,
+    // heard by its own callback; runs take the files one after the other. A run stops when its caller goes away (its
+    // parts stay).
     long download(IAiDownloadCallback callback) = 5;
 
     // Stops the model download run started by that download() call (its id), and no other; its parts stay.
@@ -58,4 +61,18 @@ interface IAiAddon {
     // part by part (Wire.RESULT_PART_CHARS each, "" past the end), for a result too long for onResult or whose callback
     // was lost. Null when the add-on keeps no result for that job (unknown, still running, stopped, or replaced).
     String result(long job, int part) = 14;
+
+    // As cancelDownload, one way: the run (its id) KJB gave up on because the phone froze the add-on (no beat for 30 s).
+    // KJB waits on nothing in a frozen process, and Android ends a frozen app that gets a call it must answer
+    // (CachedAppOptimizer: "received sync transactions while frozen, killing"); a one-way call waits in the binder until
+    // the add-on runs again. The run then stops, its parts stay, and the add-on leaves the foreground unless other work
+    // runs, even while KJB's AI page still binds it (Android then keeps its service, and onUnbind never comes). Added
+    // after VERSION 1 shipped, without raising it: an add-on that lacks it drops the call unanswered.
+    oneway void abandonDownload(long run) = 15;
+
+    // As abandonDownload, for a song's job (its id) KJB gave up on as frozen: once the add-on runs again the job stops
+    // after the step it is on, as with cancel, and the engine closes as it ends, freeing the NPU (KJB sends no closeEngine
+    // after a freeze); with no job left the add-on leaves the foreground. Without it, a job KJB's AI page kept bound
+    // waited at its next chunk for good, and the next job was refused. Added as abandonDownload was, VERSION kept.
+    oneway void abandonJob(long job) = 16;
 }
