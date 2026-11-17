@@ -35,6 +35,12 @@ import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.VisibilityThreshold
 import androidx.compose.animation.core.animateDp
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.unit.Velocity
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -256,7 +262,7 @@ class BackSwipe {
 
     /** [owner]'s swipe let go over a container transform: the shrink is let go of while the layer goes into the Now bar. */
     suspend fun settle(owner: BackTaking) {
-        animate(progress, 0f, animationSpec = tween(Motion.OPEN_MS, easing = Motion.Rise)) { value, _ -> if (owns(owner)) progress = value }
+        animate(progress, 0f, animationSpec = Motion.close()) { value, _ -> if (owns(owner)) progress = value }
     }
 
     /**
@@ -309,9 +315,37 @@ val PEEK_CORNER = 28.dp
 /**
  * One end of the container transform: the shell's shared transition scope, and the visibility of that end, the Now
  * bar's chrome ([bar]) or the player's layer. Null where nothing grows: outside the shell, and for a view that rises.
+ * The player's end also says how far it has closed into the bar ([closing], 0 in the player and 1 in the bar: the one
+ * progress its content, card, dim and drag follow, [closeProgress]) and takes what a finger lets go of ([letGo]).
  */
 @Stable
-class Container(val shared: SharedTransitionScope, val visibility: AnimatedVisibilityScope, val bar: Boolean)
+class Container(val shared: SharedTransitionScope, val visibility: AnimatedVisibilityScope, val bar: Boolean, val closing: () -> Float = { 0f }) {
+    // This end's card and cover while they are on screen ([containerBounds], [containerCover]): what [letGo] hands a
+    // finger's speed to. Only a shared state on screen can take it.
+    internal var surface: SharedTransitionScope.SharedContentState? = null
+    internal var cover: SharedTransitionScope.SharedContentState? = null
+
+    /** How small the drag left the cover when the finger let go of it; 1 when nothing was let go. */
+    var releaseScale: Float by mutableFloatStateOf(1f)
+        private set
+
+    /**
+     * A finger lets go of the player to close it into the bar, moving down at [velocity] px/s ([closeVelocity]), its
+     * cover drawn at [scale] of its size: the card and the cover carry on at the finger's speed, on the transform's own
+     * spring, and the cover grows back from [scale] as it lands ([closeCoverScale]). Before the player is closed.
+     */
+    fun letGo(velocity: Float, scale: Float) {
+        releaseScale = scale
+        val speed = Velocity(0f, velocity)
+        surface?.prepareTransitionWithInitialVelocity(speed)
+        cover?.prepareTransitionWithInitialVelocity(speed)
+    }
+
+    /** Shown again: nothing is let go any more. */
+    fun rest() {
+        releaseScale = 1f
+    }
+}
 
 val LocalContainer = compositionLocalOf<Container?> { null }
 
@@ -325,28 +359,46 @@ private const val CONTAINER_SURFACE = "player surface"
 private const val CONTAINER_COVER = "player cover"
 
 /**
- * The bounds a Now bar capsule or a player screen ([container]'s end) grow from and into, the content scaled to them
- * (ScaleToBounds, so the player is laid out once, not on every frame), the corners going from the capsule's to none.
- * The Now bar's end is an empty stand-in of the bar's size, out of the overlay ([containerInOverlay]), so the bar never
- * moves or fades, and the player's card, opaque from its first frame ([containerFill]), grows over it and over the dock.
- * Nothing with reduced motion.
+ * How far the player's end ([visibility]) has closed into the Now bar: 0 in the player, 1 in the bar. It moves only as
+ * it closes, on [Motion.close] from rest, the spring the card's and the cover's bounds take too, so they all go in
+ * step; shown again on the way, it goes back the same way. Read while drawing.
+ */
+@Composable
+fun closeProgress(visibility: AnimatedVisibilityScope): State<Float> =
+    visibility.transition.animateFloat(transitionSpec = { Motion.close(CLOSED_WITHIN) }, label = "closing") { state ->
+        if (state == EnterExitState.PostExit) 1f else 0f
+    }
+
+/**
+ * The bounds a Now bar capsule or a player screen ([container]'s end) grow from and into, the content scaled to their
+ * width and pinned to their top (ScaleToBounds, so the player is laid out once, not on every frame, and its content goes
+ * the card's way), the corners going from the capsule's to none. The Now bar's end is an empty stand-in of the bar's
+ * size, out of the overlay ([containerInOverlay]), so the bar never moves or fades, and the player's card, opaque from
+ * its first frame ([containerFill]), grows over it and over the dock. Growing takes [Motion.CONTAINER_MS]; closing goes
+ * on [Motion.close], from where the card was let go and at a finger's speed ([Container.letGo]). Nothing with reduced
+ * motion.
  */
 @Composable
 fun containerBounds(container: Container?): Modifier {
     if (container == null || LocalReducedMotion.current) return Modifier
     // The corner is read only when the overlay is drawn: one clip for the whole transform, nothing recomposed per frame.
-    val corner = container.visibility.transition.animateDp(transitionSpec = { tween(containerMs(targetState), easing = Motion.Rise) }, label = "container corner") { state ->
+    val corner = container.visibility.transition.animateDp(transitionSpec = { containerSpec(targetState, container.bar, Dp.VisibilityThreshold) }, label = "container corner") { state ->
         if ((state == EnterExitState.Visible) == container.bar) CAPSULE_CORNER else 0.dp
     }
     val density = LocalDensity.current
+    val state = with(container.shared) { rememberSharedContentState(CONTAINER_SURFACE) }
+    DisposableEffect(container, state) {
+        container.surface = state
+        onDispose { if (container.surface === state) container.surface = null }
+    }
     return with(container.shared) {
         Modifier.sharedBounds(
-            rememberSharedContentState(CONTAINER_SURFACE),
+            state,
             container.visibility,
             enter = EnterTransition.None,
             exit = ExitTransition.None,
             boundsTransform = ContainerTransform,
-            resizeMode = SharedTransitionScope.ResizeMode.scaleToBounds(ContentScale.FillWidth, Alignment.Center),
+            resizeMode = SharedTransitionScope.ResizeMode.scaleToBounds(ContentScale.FillWidth, Alignment.TopCenter),
             renderInOverlayDuringTransition = containerInOverlay(container.bar),
             clipInOverlayDuringTransition = remember(container) { OverlayClip(CornerShape { with(density) { corner.value.toPx() } }) },
         )
@@ -358,34 +410,54 @@ fun containerInOverlay(bar: Boolean): Boolean = !bar
 
 /**
  * The player's card as it grows out of the Now bar: the bar's own colour at first and the page's once in place, never
- * see-through on the way in, so the dock stays under it; going back into the bar it clears, so the bar shows through
- * as it lands. Read while drawing.
+ * see-through on the way in, so the dock stays under it. Going back into the bar it stays the page's and clears as it
+ * lands ([closeFillAlpha]), so the bar shows through. Read while drawing.
  */
 @Composable
 fun containerFill(visibility: AnimatedVisibilityScope, page: Color): State<Color> {
     val bar = LocalChromeColors.current.bar
-    return visibility.transition.animateColor(transitionSpec = { tween(containerMs(targetState), easing = Motion.Rise) }, label = "container fill") { state ->
-        when (state) {
-            EnterExitState.PreEnter -> bar
-            EnterExitState.Visible -> page
-            EnterExitState.PostExit -> page.copy(alpha = 0f)
-        }
+    return visibility.transition.animateColor(transitionSpec = { tween(Motion.CONTAINER_MS, easing = Motion.Rise) }, label = "container fill") { state ->
+        if (state == EnterExitState.PreEnter) bar else page
     }
 }
 
-/** The player's content inside its growing card: it fades in once the card has grown a little, and out first on the way back. */
+/** The player's content inside its growing card: it fades in once the card has grown a little ([closeContentAlpha] on the way back). */
 fun containerContentEnter(): EnterTransition = fadeIn(tween(Motion.FADE_IN_MS * 2, delayMillis = Motion.FADE_OUT_MS))
 
-fun containerContentExit(): ExitTransition = fadeOut(tween(Motion.FADE_IN_MS))
-
 /**
- * The cover as it moves between the Now bar's orb and the player: one shared element, clipped by the caller with the
- * player's corners (which at the orb's size round to its circle, so the shape follows the size).
+ * The cover as it moves between the Now bar's orb and the player. The bar's end is an empty stand-in where the orb's
+ * cover is, so the orb stays put; the player's own cover is the one drawn on the way, over the card, its size rounding
+ * it ([CoverShape]) from the player's corners to the orb's circle, never at a threshold. Let go by a finger, it lands
+ * growing back from the drag's shrink ([closeCoverScale]). Nothing with reduced motion.
  */
 @Composable
 fun containerCover(container: Container?): Modifier {
     if (container == null || LocalReducedMotion.current) return Modifier
-    return with(container.shared) { Modifier.sharedElement(rememberSharedContentState(CONTAINER_COVER), container.visibility, boundsTransform = ContainerTransform) }
+    val state = with(container.shared) { rememberSharedContentState(CONTAINER_COVER) }
+    DisposableEffect(container, state) {
+        container.cover = state
+        onDispose { if (container.cover === state) container.cover = null }
+    }
+    val shared = with(container.shared) {
+        Modifier.sharedBounds(
+            state,
+            container.visibility,
+            enter = EnterTransition.None,
+            exit = ExitTransition.None,
+            boundsTransform = ContainerTransform,
+            resizeMode = SharedTransitionScope.ResizeMode.RemeasureToBounds,
+            renderInOverlayDuringTransition = containerInOverlay(container.bar),
+        )
+    }
+    if (container.bar) return shared
+    val transition = container.visibility.transition
+    return shared.graphicsLayer {
+        if (transition.targetState != EnterExitState.PostExit) return@graphicsLayer
+        val scale = closeCoverScale(container.releaseScale, container.closing())
+        scaleX = scale
+        scaleY = scale
+        transformOrigin = TransformOrigin(0f, 0f)
+    }
 }
 
 /** A rounded rectangle whose corner [radius] (px) is read each time it is drawn, so an animated corner needs one shape. */
@@ -400,10 +472,63 @@ class CornerShape(private val radius: () -> Float) : Shape {
  */
 fun chromeStays(view: FullScreen?, barShown: Boolean): Boolean = view != null && viewMotion(view, barShown) == ViewMotion.CONTAINER
 
-/** Opening grows over [Motion.CONTAINER_MS]; closing, the smaller move back, over [Motion.OPEN_MS] (the spec's 0.7). */
-private fun containerMs(target: EnterExitState): Int = if (target == EnterExitState.Visible) Motion.CONTAINER_MS else Motion.OPEN_MS
+// The player closing into the Now bar (phone test 2026-11-17): one progress, 0 in the player and 1 in the bar
 
-private val ContainerTransform = BoundsTransform { from, to -> tween(if (to.width >= from.width) Motion.CONTAINER_MS else Motion.OPEN_MS, easing = Motion.Rise) }
+/** The player's own content (its controls, title, glow and lyrics) [p] of the way into the bar: gone half way. */
+fun closeContentAlpha(p: Float): Float = 1f - (p / CLOSE_CONTENT_GONE).coerceIn(0f, 1f)
+
+/** How much of its dim the layer under the player keeps [p] of the way: lit up again by 60%. */
+fun closeDimShare(p: Float): Float = 1f - (p / CLOSE_DIM_GONE).coerceIn(0f, 1f)
+
+/** The card's fill [p] of the way: whole until 60%, then clearing, so the bar's text and controls show through as it lands. */
+fun closeFillAlpha(p: Float): Float = 1f - ((p - CLOSE_FILL_FROM) / (1f - CLOSE_FILL_FROM)).coerceIn(0f, 1f)
+
+/** What is left of a drag's [offset] [p] of the way: the card takes the player on from where the finger left it. */
+fun closeHeld(offset: Float, p: Float): Float = offset * (1f - p.coerceIn(0f, 1f))
+
+/** The cover's scale [p] of the way, from how small the drag left it ([released]) to its own size in the orb. */
+fun closeCoverScale(released: Float, p: Float): Float = released + (1f - released) * p.coerceIn(0f, 1f)
+
+/** The finger's speed handed to the transform, px/s down: down only, and no faster than [max] ([CLOSE_MOMENTUM_DP]). */
+fun closeVelocity(velocity: Float, max: Float): Float = velocity.coerceIn(0f, max)
+
+/** The fastest finger the transform carries on with, in dp per second: a hard fling, which still lands without passing the bar. */
+const val CLOSE_MOMENTUM_DP: Float = 4000f
+
+private const val CLOSE_CONTENT_GONE = 0.5f
+private const val CLOSE_DIM_GONE = 0.6f
+private const val CLOSE_FILL_FROM = 0.6f
+
+/** Where [closeProgress] counts as arrived. */
+private const val CLOSED_WITHIN = 0.001f
+
+/**
+ * The cover's corner radius when drawn [side] px wide: [corner] at the player's [full] side, rounding with the size to
+ * a circle at the orb's [small] one, so it changes shape as it shrinks into the orb or grows out of it, never at a
+ * threshold. Past either end, that end's.
+ */
+fun coverCorner(side: Float, full: Float, small: Float, corner: Float): Float {
+    if (full <= small) return minOf(corner, side / 2)
+    val toOrb = ((full - side) / (full - small)).coerceIn(0f, 1f)
+    return minOf(corner + (side / 2 - corner) * toOrb, side / 2)
+}
+
+/** The player's cover at whatever size it is drawn: [corner] at its [full] side, round at the orb's ([coverCorner]). */
+data class CoverShape(val corner: Dp, val full: Dp) : Shape {
+    override fun createOutline(size: Size, layoutDirection: LayoutDirection, density: Density): Outline {
+        val radius = with(density) { coverCorner(size.minDimension, full.toPx(), ORB_COVER.toPx(), corner.toPx()) }
+        return Outline.Rounded(RoundRect(size.toRect(), CornerRadius(radius)))
+    }
+}
+
+/** An end's move: growing into the player over [Motion.CONTAINER_MS], or closing into the bar on [Motion.close]. */
+private fun <T> containerSpec(target: EnterExitState, bar: Boolean, threshold: T): FiniteAnimationSpec<T> =
+    if ((target == EnterExitState.Visible) != bar) tween(Motion.CONTAINER_MS, easing = Motion.Rise) else Motion.close(threshold)
+
+/** Growing out of the bar over [Motion.CONTAINER_MS]; closing into it on [Motion.close], the spring a finger's speed is carried on. */
+private val ContainerTransform = BoundsTransform { from, to ->
+    if (to.width >= from.width) tween(Motion.CONTAINER_MS, easing = Motion.Rise) else Motion.close(Rect.VisibilityThreshold)
+}
 
 /** The Now bar's capsule corners. */
 private val CAPSULE_CORNER = 32.dp
@@ -689,10 +814,18 @@ private const val DRAG_CLOSE_SHARE = 0.25f
 const val DRAG_FLING_DP: Float = 800f
 
 /**
- * Where the player's drag goes once let go: back to 0 when it springs back, or when it closes into the Now bar (the
- * container shrinks it whole); null when it falls away as it closes, leaving from where the finger left it.
+ * What letting go of a drag on the player does ([dragCloses]): short of closing it springs [BACK]; closing into the Now
+ * bar, the drag is held where the finger left it and the container transform takes it on with the finger's speed
+ * ([INTO_BAR], [Container.letGo]); with no bar, or with reduced motion (nothing grows), it leaves from where it is
+ * ([AWAY]), falling away or fading.
  */
-fun dragRelease(closes: Boolean, intoBar: Boolean): Float? = if (!closes || intoBar) 0f else null
+enum class DragLetGo { BACK, INTO_BAR, AWAY }
+
+fun dragLetGo(closes: Boolean, intoBar: Boolean, reduced: Boolean): DragLetGo = when {
+    !closes -> DragLetGo.BACK
+    intoBar && !reduced -> DragLetGo.INTO_BAR
+    else -> DragLetGo.AWAY
+}
 
 /** With reduced motion the player does not move under a drag; it fades to this as the drag nears what closes it. */
 const val REDUCED_DRAG_ALPHA: Float = 0.4f

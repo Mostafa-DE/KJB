@@ -544,9 +544,11 @@ fun PlayerView() {
 /**
  * The player's frame, around all of it: dragged down from anywhere on it, it follows the finger, shrinking and rounding
  * as it goes ([dragPeek]; with reduced motion it stays put and fades instead, so a drag never closes it unseen), and let
- * go it closes ([onClose]) or springs back ([PlayerDrag]). Whatever on the player takes a drag first keeps it: the seek
- * bar, the A-B handles, the cover's sideways swipe, a list scrolling; a list already at its top hands a pull down over.
- * A finger landing in the system's gesture edge is the system's back. TalkBack's dismiss closes it, as the chevron does.
+ * go it closes ([onClose]) or springs back ([PlayerDrag]). Closing into the Now bar, the drag is held where the finger
+ * left it and goes as the card closes ([closeHeld]), so the player carries on from there into the bar. Whatever on the
+ * player takes a drag first keeps it: the seek bar, the A-B handles, the cover's sideways swipe, a list scrolling; a list
+ * already at its top hands a pull down over. A finger landing in the system's gesture edge is the system's back.
+ * TalkBack's dismiss closes it, as the chevron does.
  */
 @Composable
 internal fun PlayerFrame(onClose: () -> Unit, content: @Composable BoxScope.() -> Unit) {
@@ -555,12 +557,17 @@ internal fun PlayerFrame(onClose: () -> Unit, content: @Composable BoxScope.() -
     val drag = remember(scope) { PlayerDrag(scope) }
     val density = LocalDensity.current
     val fling = with(density) { DRAG_FLING_DP.dp.toPx() }
-    val intoBar = LocalContainer.current != null
+    val momentum = with(density) { CLOSE_MOMENTUM_DP.dp.toPx() }
+    val container = LocalContainer.current
     val close by rememberUpdatedState(onClose)
-    val letGo = rememberUpdatedState { drag.lift(fling, intoBar, close) }
+    val letGo = rememberUpdatedState { drag.lift(fling, momentum, container, reduced, close) }
     // Shown again while it was leaving (opened again at once), the player comes back whole.
     val headed = LocalLayerHeaded.current
-    LaunchedEffect(headed) { if (headed) drag.reset() }
+    LaunchedEffect(headed) {
+        if (!headed) return@LaunchedEffect
+        container?.rest()
+        drag.reset()
+    }
     // The system's gesture edges (back), in the window, and where the player sits in it: a finger landing there is the system's.
     val direction = LocalLayoutDirection.current
     val gestures = WindowInsets.systemGestures
@@ -580,7 +587,7 @@ internal fun PlayerFrame(onClose: () -> Unit, content: @Composable BoxScope.() -
                     alpha = reducedDragAlpha(drag.offset.value, size.height)
                     return@graphicsLayer
                 }
-                val peek = dragPeek(drag.offset.value, size.height)
+                val peek = dragPeek(closeHeld(drag.offset.value, container?.closing?.invoke() ?: 0f), size.height)
                 translationY = peek.shiftY
                 scaleX = peek.scale
                 scaleY = peek.scale
@@ -638,9 +645,9 @@ private suspend fun PointerInputScope.dragsDown(drag: PlayerDrag, edge: (Offset)
 /**
  * The player dragged down ([PlayerFrame]): by a finger nothing on it took ([follow]), or by a list at its top pulled
  * further down ([lists]). It follows the finger ([dragPeek]); let go, it closes past a quarter of its [height] or on a
- * fling down ([dragCloses]), else springs back ([Motion.release]). Closing into the Now bar, it lets go of the drag as the
- * container shrinks, so the whole player lands in the bar; falling away, it leaves from where the finger left it
- * ([dragRelease]).
+ * fling down ([dragCloses]), else springs back on [Motion.close] at the finger's speed. Closing into the Now bar, it is
+ * held where the finger left it and the container transform takes it on with the finger's speed ([Container.letGo]);
+ * falling away, it leaves from where the finger left it ([dragLetGo]).
  */
 @Stable
 private class PlayerDrag(private val scope: CoroutineScope) {
@@ -682,8 +689,11 @@ private class PlayerDrag(private val scope: CoroutineScope) {
         return to - from
     }
 
-    /** The finger lifts: a drag, its own or a list's pull, lets go. */
-    fun lift(fling: Float, intoBar: Boolean, close: () -> Unit) {
+    /**
+     * The finger lifts: a drag, its own or a list's pull, lets go ([dragLetGo]), handing its speed to the [container]
+     * transform when it closes into the Now bar, at most [momentum] px/s.
+     */
+    fun lift(fling: Float, momentum: Float, container: Container?, reduced: Boolean, close: () -> Unit) {
         held = false
         if (!dragging) return
         val velocity = tracker.calculateVelocity().y
@@ -692,9 +702,14 @@ private class PlayerDrag(private val scope: CoroutineScope) {
         flingTaken = byList && at > 0f
         dragging = false
         byList = false
-        if (closes) close()
-        val to = dragRelease(closes, intoBar) ?: return
-        scope.launch { offset.animateTo(to, if (closes) tween(Motion.OPEN_MS, easing = Motion.Rise) else Motion.release) }
+        when (dragLetGo(closes, intoBar = container != null, reduced = reduced)) {
+            DragLetGo.BACK -> scope.launch { offset.animateTo(0f, Motion.close(), initialVelocity = velocity) }
+            DragLetGo.INTO_BAR -> {
+                container?.letGo(closeVelocity(velocity, momentum), dragPeek(at, height).scale)
+                close()
+            }
+            DragLetGo.AWAY -> close()
+        }
     }
 
     /** A list on the player: pulled down at its top, it moves the player ([listPull]); pushed back up, the player goes home first ([listPush]). */
@@ -723,7 +738,7 @@ private class PlayerDrag(private val scope: CoroutineScope) {
     suspend fun reset() {
         dragging = false
         byList = false
-        if (offset.value != 0f) offset.animateTo(0f, Motion.release)
+        if (offset.value != 0f) offset.animateTo(0f, Motion.close())
     }
 }
 
@@ -1022,7 +1037,8 @@ internal fun CoverFace(
                 .then(if (onFlip != null) Modifier.clickable(enabled = enabled, role = Role.Button, onClick = onFlip) else Modifier)
                 .semantics { contentDescription = label },
         ) {
-            SongCover(SongArt(ui.item.song.path), containerCover(LocalContainer.current), size = side, shape = shape)
+            // Its corners follow its size, so growing out of the Now bar's orb or shrinking into it, it rounds smoothly.
+            SongCover(SongArt(ui.item.song.path), containerCover(LocalContainer.current), size = side, shape = remember(side) { CoverShape(COVER_CORNER, side) })
         }
         if (onFlip != null) FlipChip(Modifier.align(Alignment.BottomEnd).padding(12.dp), enabled, onFlip)
     }
