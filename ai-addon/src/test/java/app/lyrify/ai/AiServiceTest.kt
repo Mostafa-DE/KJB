@@ -634,7 +634,8 @@ class AiServiceTest {
 
     @Test
     fun `the models' download runs as dataSync on every Android version, a song's job as its own type`() = runTest {
-        // Android 15+ counts 6 hours in 24 for each type apart: the download never takes from the jobs' mediaProcessing time.
+        // Android 15+ counts 6 hours in 24 for each type apart: the download alone never takes from the jobs' mediaProcessing
+        // time (a service in both types at once is timed as mediaProcessing).
         assertEquals(ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC, downloadWork(DownloadRun(backgroundScope) { Download.Done }).type)
         for (sdk in listOf(30, 34, 35, 36, 37)) assertEquals("$sdk", jobForegroundType(sdk), jobWork(sdk, jobs()).type)
     }
@@ -684,7 +685,7 @@ class AiServiceTest {
             gate.await()
             Download.Done
         }
-        foreground = JobForeground(listOf(jobWork(sdk, jobs), downloadWork(downloads)), port, fromKjb = { it == kjb })
+        foreground = JobForeground(aiWork(sdk, jobs, downloads), port, fromKjb = { it == kjb })
         return Wired(jobs, downloads, foreground)
     }
 
@@ -717,12 +718,22 @@ class AiServiceTest {
 
             assertEquals(listOf<Download>(Download.Done), download.ends)
             val expected = if (sdk >= 35) {
-                // The download's own type again once the job ended: it never runs on the jobs' mediaProcessing time alone.
+                // The download's own type again once the job ended: Android times a service in both types as
+                // mediaProcessing alone (AOSP getTimeLimitedFgsType), so the download left alone goes back to dataSync's time.
                 listOf("start mediaProcessing", "start mediaProcessing|dataSync", "start dataSync")
             } else {
                 listOf("start dataSync") // both dataSync before Android 15: nothing to change
             }
             assertEquals("$sdk", expected + listOf("stopForeground", "stopSelf 2"), port.calls)
+        }
+    }
+
+    @Test
+    fun `a start with no work under way goes in and out as dataSync, whose time a night of jobs never uses`() = runTest {
+        for (sdk in listOf(36, 34)) {
+            val port = Foreground()
+            service(sdk, port, CompletableDeferred()).foreground.start(1, kjb)
+            assertEquals("$sdk", listOf("start dataSync", "stopForeground", "stopSelf 1"), port.calls)
         }
     }
 

@@ -234,7 +234,7 @@ class AddonKeepAliveTest {
     }
 
     @Test
-    fun `a type Android refuses as work joins leaves the work under way as it was, one refused as work ends takes the service out`() {
+    fun `a type change Android refuses leaves the service in the foreground as it was, until no work is left`() {
         // The joining job's mediaProcessing refused (its day's time used up): the download keeps dataSync, the job runs without.
         val joined = FakeForeground(refuses = { it and MEDIA_PROCESSING != 0 })
         val foreground = twoKinds(joined)
@@ -250,7 +250,8 @@ class AddonKeepAliveTest {
             joined.calls,
         )
 
-        // Both held, then dataSync alone refused as the job ends: no work keeps a type it does not need, the download runs without.
+        // Both held, then dataSync alone refused as the job ends: the download keeps the foreground it is in, both types,
+        // rather than run without it (the reason for it: a phone's app freezer), until it ends too.
         jobBusy = false
         downloadBusy = false
         val ended = FakeForeground(refuses = { it == DATA_SYNC })
@@ -261,10 +262,31 @@ class AddonKeepAliveTest {
         other.start(2, kjb)
         jobBusy = false
         other.jobEnded()
+        other.noticeChanged()
+        downloadBusy = false
+        other.jobEnded()
         assertEquals(
-            listOf("start mediaProcessing $KJB_UID", "start mediaProcessing|dataSync $KJB_UID", "start dataSync $KJB_UID", "stopForeground", "stopSelf 2"),
+            listOf(
+                "start mediaProcessing $KJB_UID",
+                "start mediaProcessing|dataSync $KJB_UID",
+                "start dataSync $KJB_UID",
+                "notice $KJB_UID",
+                "stopForeground",
+                "stopSelf 2",
+            ),
             ended.calls,
         )
+    }
+
+    @Test
+    fun `a start with no work under way goes in and out as the first kind's type`() {
+        for ((first, name) in listOf(MEDIA_PROCESSING to "mediaProcessing", DATA_SYNC to "dataSync")) {
+            val port = FakeForeground()
+            val other = if (first == MEDIA_PROCESSING) DATA_SYNC else MEDIA_PROCESSING
+            JobForeground(listOf(ForegroundWork(first, { false }, {}), ForegroundWork(other, { false }, {})), port, fromKjb = { it.uid == KJB_UID })
+                .start(1, kjb)
+            assertEquals(listOf("start $name $KJB_UID", "stopForeground", "stopSelf 1"), port.calls)
+        }
     }
 
     @Test

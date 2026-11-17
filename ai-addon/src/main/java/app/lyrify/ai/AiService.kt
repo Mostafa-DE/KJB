@@ -406,14 +406,23 @@ fun jobForegroundType(sdk: Int): Int =
     if (sdk >= Build.VERSION_CODES.VANILLA_ICE_CREAM) ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING else ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
 
 /** A song's job in the add-on's foreground service ([JobForeground]), of [jobForegroundType] on [sdk]. */
-fun jobWork(sdk: Int, jobs: AddonJobs): ForegroundWork = ForegroundWork(jobForegroundType(sdk), busy = { jobs.busy }, timeUp = jobs::timeUp)
+fun jobWork(sdk: Int, jobs: AddonJobs): ForegroundWork =
+    ForegroundWork(jobForegroundType(sdk), busy = { jobs.busy }, timeUp = jobs::timeUp)
 
 /**
  * The models' download in the add-on's foreground service ([JobForeground]): dataSync on every Android version (a
- * download), which Android 15+ gives its own 6 hours in 24, apart from the jobs' mediaProcessing time.
+ * download), which Android 15+ gives its own 6 hours in 24, apart from the jobs' mediaProcessing time (while both run,
+ * the service is timed as mediaProcessing).
  */
 fun downloadWork(downloads: DownloadRun): ForegroundWork =
     ForegroundWork(ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC, busy = { downloads.busy }, timeUp = downloads::timeUp)
+
+/**
+ * The add-on's work in its one foreground service ([JobForeground]) on [sdk]: the download first, so that a start with no
+ * work under way goes in and out as dataSync, whose day's time a night of jobs never uses.
+ */
+fun aiWork(sdk: Int, jobs: AddonJobs, downloads: DownloadRun): List<ForegroundWork> =
+    listOf(downloadWork(downloads), jobWork(sdk, jobs))
 
 /** How far the models' download is, for its notice: whole percents of [total] bytes, 0 until the size is told, never past 100. */
 fun downloadPercent(done: Long, total: Long): Int = if (total <= 0) 0 else (done * PERCENT / total).toInt().coerceIn(0, PERCENT)
@@ -476,7 +485,7 @@ class AiService : Service() {
         JobForeground(
             // In the foreground as the work under way: a song's job, the download, or both while both run (seldom: KJB
             // downloads while the models are not in place, which a job needs).
-            listOf(jobWork(Build.VERSION.SDK_INT, jobs), downloadWork(downloads)),
+            aiWork(Build.VERSION.SDK_INT, jobs, downloads),
             object : ForegroundPort<PendingIntent> {
                 override fun startForeground(type: Int, tap: PendingIntent?) = this@AiService.startForeground(NOTICE_ID, notice(tap), type)
 
