@@ -122,27 +122,28 @@ over.
 
 ## Install
 
-1. On your phone, download `KJB-3.0.2.apk` (about 10 MB) from the
+1. On your phone, download `KJB-3.0.3.apk` (about 10 MB) from the
    [release page](https://github.com/Mostafa-DE/KJB/releases/latest).
 2. Open it. If asked, allow your browser or file manager to install apps.
 3. Open KJB and allow All files access. "See what's playing" and "Keep running" are optional.
 4. If a switch is greyed out ("Restricted setting"), your phone blocks it for apps from outside an app store: in KJB tap
    **Greyed out?**, open App info, tap the three dots at the top right, then **Allow restricted settings**, and try again.
 
-With adb instead: `adb install -r KJB-3.0.2.apk`.
+With adb instead: `adb install -r KJB-3.0.3.apk`.
 
 ## Add-ons
 
 Two parts of KJB come as separate apps, so KJB itself stays small. Both are optional; install only what you want.
 
-- **KJB AI** (`KJB-AI-3.0.0.apk`, about 70 MB): AI lyrics. It needs Android 15 or newer and a supported Snapdragon
+- **KJB AI** (`KJB-AI-3.0.3.apk`, about 70 MB): AI lyrics. It needs Android 15 or newer and a supported Snapdragon
   chip (see "Requirements").
-- **KJB Downloads** (`KJB-Downloads-3.0.1.apk`, about 54 MB): saves audio or video from a link you share to **Save to
+- **KJB Downloads** (`KJB-Downloads-3.0.3.apk`, about 54 MB): saves audio or video from a link you share to **Save to
   KJB**, or one you paste in Tools > Downloads. Save only what you have the right to save.
 
-In 3.0.2, KJB's own Get AI and Get Downloads buttons can't download the add-ons yet. Install them from the same
-[release page](https://github.com/Mostafa-DE/KJB/releases/latest) instead: download the APK on your phone and open it,
-before or after installing KJB. From the next version, KJB can get them itself.
+KJB gets the add-ons itself: tap **Get AI** in Tools > AI lyrics, or **Get Downloads** in Tools > Downloads. KJB
+downloads the add-on, then your phone asks you to confirm the install. The files are also on the same
+[release page](https://github.com/Mostafa-DE/KJB/releases/latest): download the APK on your phone and open it, before
+or after installing KJB.
 
 The add-ons have no icon of their own; they show in your phone's settings under Apps. They work only with KJB from the
 release page, as Android lets them talk only to an app signed with the same key.
