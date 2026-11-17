@@ -6,8 +6,9 @@ terms of the GNU General Public License version 3 as published by the Free Softw
 Foundation. See LICENSE for the full text.
 
 The app shows this file, and the full text of every licence named in it, in Settings > About > Licences
-(app/src/main/assets/licences). The AI add-on, KJB AI, ships the licences of what it is built with
-(ai-addon/src/main/assets/licences); KJB shows them on the same page once the add-on is installed.
+(app/src/main/assets/licences). The AI add-on, KJB AI, and the Downloads add-on, KJB Downloads, ship the licences of
+what they are built with (ai-addon/src/main/assets/licences, dl-addon/src/main/assets/licences); KJB shows them on the
+same page once each add-on is installed.
 
 Credits
 
@@ -34,6 +35,31 @@ Third-party software built into the AI add-on, KJB AI (AI lyrics)
 - The Whisper tokenizer files in ai-addon/src/main/assets/whisper (vocab.json, added_tokens.json,
   generation_config.json) are openai/whisper-large-v3-turbo's (https://huggingface.co/openai/whisper-large-v3-turbo),
   MIT License, Copyright (c) OpenAI.
+
+Third-party software built into the Downloads add-on, KJB Downloads (Downloads)
+
+- youtubedl-android 0.18.1 (io.github.junkfood02.youtubedl-android, https://github.com/yausername/youtubedl-android),
+  GNU General Public License version 3, Copyright yausername, JunkFood02 and the youtubedl-android contributors. It
+  carries the programs below, as the Termux project (https://github.com/termux/termux-packages) builds them for
+  Android.
+- yt-dlp 2025.11.12 (https://github.com/yt-dlp/yt-dlp), the Unlicense (public domain), with yt-dlp-ejs 0.3.1. The
+  add-on keeps yt-dlp up to date from yt-dlp's own releases.
+- Python 3.12.11 (https://www.python.org), Python Software Foundation License Version 2, with Mutagen 1.47.0 (GNU
+  General Public License version 2 or later) and PyCryptodome 3.23.0 (BSD 2-Clause License and public domain).
+- FFmpeg 7.1.1 (https://ffmpeg.org), configured with --enable-gpl --enable-version3, so under the GNU General Public
+  License version 3 or later.
+- QuickJS 2025-04-26 (https://bellard.org/quickjs/), MIT License, Copyright Fabrice Bellard and Charlie Gordon.
+- The libraries Python and FFmpeg are built with (among them OpenSSL, SQLite, x264, x265, GnuTLS, libaom, dav1d,
+  libvpx, Opus, FreeType and HarfBuzz, under the GPL, LGPL, MPL, Apache, BSD, MIT and other licences), and the Java
+  libraries Jackson, Apache Commons IO and Apache Commons Compress (Apache License 2.0). The add-on's own NOTICE
+  (dl-addon/src/main/assets/licences/NOTICE.txt) lists each with its version, licence and copyright. It ships in the
+  add-on's APK with the notices those libraries ask to keep (third-party-notices.txt) and the full text of every
+  licence named.
+- The complete corresponding source of the add-on's parts under the GNU GPL, the GNU LGPL and the Mozilla Public
+  License (youtubedl-android, FFmpeg, Mutagen and the libraries under those licences) is attached to each KJB release
+  on https://github.com/Mostafa-DE/KJB/releases as KJB-Downloads-<version>-sources.tar.gz, with Python's source and
+  Termux's build scripts and patches. The bundle does not hold the source of the other parts, which are under
+  permissive licences: it is at each project, named in the add-on's NOTICE. KJB's own code is in this repository.
 
 Third-party software and assets built into the app (player, screens and storage)
 

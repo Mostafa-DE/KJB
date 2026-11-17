@@ -80,6 +80,7 @@ import app.lyrify.R
 import app.lyrify.addon.AddonExemptions
 import app.lyrify.addon.AddonInstalls
 import app.lyrify.addon.AddonState
+import app.lyrify.addon.InstallFailure
 import app.lyrify.addon.InstallState
 import app.lyrify.addon.KjbAddons
 import app.lyrify.addon.packageChanges
@@ -310,6 +311,16 @@ private fun Banner(@DrawableRes icon: Int, text: String, action: String?, onActi
     }
 }
 
+/**
+ * The add-on card's sentence when getting the add-on failed: a KJB built with no add-on to download says so, as the AI
+ * page does (asking for the connection would send the user looking for a fault that is not there), else the connection.
+ */
+@StringRes
+internal fun addonFailedText(reason: InstallFailure): Int = when (reason) {
+    InstallFailure.NOT_PUBLISHED -> R.string.dl_addon_not_published
+    InstallFailure.NETWORK, InstallFailure.DOWNLOAD, InstallFailure.NOT_KJBS, InstallFailure.INSTALL -> R.string.dl_addon_failed
+}
+
 /** The add-on while it is not ready: getting it (the AI add-on's install flow and checks), updating it, or why it can't run. */
 @Composable
 private fun AddonCard(addon: AddonState?, install: InstallState, onGet: () -> Unit, onCancel: () -> Unit) {
@@ -325,7 +336,7 @@ private fun AddonCard(addon: AddonState?, install: InstallState, onGet: () -> Un
             context.startFirst(listOf(AddonInstalls.installSettings(context)))
         }
         InstallState.Installing -> Banner(R.drawable.ic_system_update, stringResource(R.string.dl_addon_confirm), stringResource(R.string.dl_cancel), onCancel)
-        is InstallState.Failed -> Banner(R.drawable.ic_error, stringResource(R.string.dl_addon_failed), stringResource(R.string.dl_try_again), onGet)
+        is InstallState.Failed -> Banner(R.drawable.ic_error, stringResource(addonFailedText(install.reason)), stringResource(R.string.dl_try_again), onGet)
         InstallState.Idle -> when (addon) {
             null, AddonState.Ready -> Unit
             AddonState.Missing -> Banner(R.drawable.ic_download, stringResource(R.string.dl_addon_needed), stringResource(R.string.dl_get), onGet)
