@@ -6,7 +6,6 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -254,13 +253,13 @@ private fun PartHandle(start: Boolean, ms: Long, durationMs: Long, width: Float,
                     CustomAccessibilityAction(later) { onSet(ms + 1_000); true },
                 )
             }
+            // Sideways it moves the handle; a mostly vertical drag is the player's, and moves nothing (detectSidewaysDrag).
             .pointerInput(width, durationMs) {
-                detectHorizontalDragGestures(
+                detectSidewaysDrag(
                     onDragStart = { dragX = at },
                     onDragEnd = { finish() },
                     onDragCancel = { finish() },
-                ) { change, amount ->
-                    change.consume()
+                ) { _, amount ->
                     dragX = (dragX + amount).coerceIn(0f, width)
                     drag((dragX / width * durationMs).toLong())
                 }

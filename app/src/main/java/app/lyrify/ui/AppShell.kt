@@ -52,6 +52,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
@@ -603,21 +604,25 @@ private fun SharedTransitionScope.ViewLayers(
             // Going back into the bar, the player lets go of the swipe's shrink as it shrinks to the bar.
             if (!visible.targetState && swiped != null && leaves == ViewMotion.CONTAINER) LaunchedEffect(swiped) { swipe.settle(swiped) }
             AnimatedVisibility(visibleState = visible, enter = EnterTransition.None, exit = ExitTransition.None) {
-                val end = remember(this) { Container(this@ViewLayers, this, bar = false) }
-                val container = end.takeIf { arrives == ViewMotion.CONTAINER || leaves == ViewMotion.CONTAINER }
+                val grows = arrives == ViewMotion.CONTAINER || leaves == ViewMotion.CONTAINER
+                val growing = grows && !reduced
+                // How far it has closed into the Now bar: the one progress its content, card, dim and drag follow.
+                val closing = rememberUpdatedState(if (growing) closeProgress(this) else null)
+                val end = remember(this) { Container(this@ViewLayers, this, bar = false) { closing.value?.value ?: 0f } }
+                val container = end.takeIf { grows }
                 Box(Modifier.fillMaxSize()) {
-                    // The layer under this one dims as it arrives, and lights up again under a back swipe.
+                    // The layer under this one dims as it arrives, and lights up again under a back swipe and as the
+                    // player closes into the bar.
                     Box(
                         Modifier
                             .fillMaxSize()
-                            .animateEnterExit(fadeIn(tween(if (reduced) Motion.REDUCED_MS else Motion.OPEN_MS)), fadeOut(tween(if (reduced) Motion.REDUCED_MS else Motion.SETTLE_MS)))
+                            .animateEnterExit(fadeIn(tween(if (reduced) Motion.REDUCED_MS else Motion.OPEN_MS)), if (growing) ExitTransition.None else fadeOut(tween(if (reduced) Motion.REDUCED_MS else Motion.SETTLE_MS)))
                             .drawBehind {
                                 val dim = if (swipe.taking == BackTaking.View(view)) backPeek(swipe.progress, swipe.fromLeft, size.width).dim else DIM_UNDER
-                                drawRect(Color.Black, alpha = dim)
+                                drawRect(Color.Black, alpha = dim * closeDimShare(end.closing()))
                             },
                     )
                     val page = MaterialTheme.colorScheme.background
-                    val growing = container != null && !reduced
                     val fill = if (growing) containerFill(this@AnimatedVisibility, page) else null
                     Surface(
                         Modifier
@@ -627,14 +632,16 @@ private fun SharedTransitionScope.ViewLayers(
                             .animateEnterExit(viewEnter(arrives, reduced), viewExit(leaves, reduced))
                             .then(containerBounds(container))
                             .backPeek(swipe) { swipe.taking == BackTaking.View(view) }
-                            // The card the player grows in: opaque from its first frame, so the dock stays under it.
-                            .drawBehind { drawRect(fill?.value ?: page) },
+                            // The card the player grows in: opaque from its first frame, so the dock stays under it; it
+                            // clears as it lands in the bar.
+                            .drawBehind { drawRect(fill?.value ?: page, alpha = closeFillAlpha(end.closing())) },
                         color = Color.Transparent,
                         // The card is drawn behind, so the Surface cannot tell the ink from it: the page's, light or dark.
                         contentColor = MaterialTheme.colorScheme.onBackground,
                     ) {
-                        // Inside the growing card, the player's own content fades in, and out first on the way back.
-                        val content = if (growing) Modifier.animateEnterExit(containerContentEnter(), containerContentExit()) else Modifier
+                        // Inside the growing card, the player's own content fades in, and out over the first half of its
+                        // way back into the bar.
+                        val content = if (growing) Modifier.animateEnterExit(containerContentEnter(), ExitTransition.None).graphicsLayer { alpha = closeContentAlpha(end.closing()) } else Modifier
                         Box(content) {
                             CompositionLocalProvider(LocalContainer provides container, LocalLayerHeaded provides visible.targetState) { content(view) }
                         }

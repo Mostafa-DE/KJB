@@ -46,13 +46,15 @@ class PlayerScreenTest {
     }
 
     @Test
-    fun `holding a seek button repeats the jump, once a short hold has passed`() {
+    fun `a seek button tapped jumps once on the lift, and held jumps from the short hold on, on every beat`() {
+        // A tap: one jump, at the lift (no longer at the press, which may be the start of a drag down, review 2026-11-17).
         assertEquals(1, jumpsWhileHeld(0))
         assertEquals(1, jumpsWhileHeld(HOLD_DELAY_MS - 1))
-        assertEquals(2, jumpsWhileHeld(HOLD_DELAY_MS))
-        assertEquals(2, jumpsWhileHeld(HOLD_DELAY_MS + HOLD_EVERY_MS - 1))
-        assertEquals(3, jumpsWhileHeld(HOLD_DELAY_MS + HOLD_EVERY_MS))
-        assertEquals(11, jumpsWhileHeld(HOLD_DELAY_MS + 9 * HOLD_EVERY_MS))
+        // Held: the first jump once the short hold has passed, then one every beat.
+        assertEquals(1, jumpsWhileHeld(HOLD_DELAY_MS))
+        assertEquals(1, jumpsWhileHeld(HOLD_DELAY_MS + HOLD_EVERY_MS - 1))
+        assertEquals(2, jumpsWhileHeld(HOLD_DELAY_MS + HOLD_EVERY_MS))
+        assertEquals(10, jumpsWhileHeld(HOLD_DELAY_MS + 9 * HOLD_EVERY_MS))
     }
 
     @Test

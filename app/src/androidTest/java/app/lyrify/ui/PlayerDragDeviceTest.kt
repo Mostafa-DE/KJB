@@ -20,7 +20,11 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.TouchInjectionScope
+import androidx.compose.ui.test.click
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.hasAnyAncestor
+import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -50,9 +54,10 @@ import org.junit.runner.RunWith
 /**
  * The player dragged down from anywhere on it (DR1, user request 2026-11-17), under a real finger, on the player's own
  * frame ([PlayerFrame]) around its own parts: a drag down from the title, from a button of the controls row, or on the
- * lyrics already at their top closes it, as the chevron does, and TalkBack's dismiss too. A drag along the seek bar
- * seeks, a sideways swipe on the cover skips, a drag on the lyrics that scrolled them first scrolls only, and a seek
- * button held still repeats: none of them closes it. Made-up names and lines only.
+ * lyrics already at their top closes it, as the chevron does, and TalkBack's dismiss on the chevron too. A drag along
+ * the seek bar seeks, a sideways swipe on the cover skips, a drag on the lyrics that scrolled them first scrolls only,
+ * and a seek button held still repeats: none of them closes it. A drag down from a seek button, or mostly down on the
+ * seek bar, closes it with no jump and no seek (review 2026-11-17). Made-up names and lines only.
  */
 @RunWith(AndroidJUnit4::class)
 class PlayerDragDeviceTest {
@@ -73,6 +78,7 @@ class PlayerDragDeviceTest {
                 CompositionLocalProvider(LocalToasts provides remember { ToastState() }) {
                     PlayerFrame(onClose = { closed++ }) {
                         Column(Modifier.fillMaxSize().padding(horizontal = 24.dp)) {
+                            PlayerCloseButton { closed++ }
                             Text(TITLE, Modifier.fillMaxWidth().padding(vertical = 16.dp))
                             Box(Modifier.size(COVER).align(Alignment.CenterHorizontally).testTag(COVER_TAG)) {
                                 CoverFace(ui, side = COVER, area = AREA, enabled = true, onFlip = null, onNext = { skips++ }, onPrevious = { skips++ })
@@ -181,6 +187,43 @@ class PlayerDragDeviceTest {
     }
 
     @Test
+    fun aDragDownFromASeekButtonClosesThePlayerWithNoJump() {
+        player()
+        val pull = pull()
+        compose.onNodeWithContentDescription(BACK).performTouchInput { drag(center, center + Offset(0f, pull)) }
+        compose.runOnIdle {
+            assertEquals(1, closed)
+            // Review 2026-11-17: it used to jump once at the press before the player took the drag.
+            assertEquals(0, jumps)
+        }
+    }
+
+    @Test
+    fun aTapOnASeekButtonJumpsOnceAtTheLift() {
+        player()
+        compose.onNodeWithContentDescription(FORWARD).performTouchInput { click(center) }
+        compose.runOnIdle {
+            assertEquals(1, jumps)
+            assertEquals(0, closed)
+        }
+    }
+
+    @Test
+    fun aMostlyDownDragOnTheSeekBarWithSomeWobbleClosesThePlayerWithNoSeek() {
+        player()
+        val pull = pull()
+        // Down, and sideways at 0.7 of that: the wobble alone passes the touch slop before the player's 12 dp lock.
+        compose.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.SetProgress)).performTouchInput {
+            val from = Offset(width * 0.1f, centerY)
+            drag(from, from + Offset(pull * 0.7f, pull))
+        }
+        compose.runOnIdle {
+            assertEquals(1, closed)
+            assertTrue("seeks $seeks", seeks.isEmpty())
+        }
+    }
+
+    @Test
     fun aSidewaysSwipeOnTheCoverSkipsAndNeverClosesThePlayer() {
         player()
         compose.onNodeWithTag(COVER_TAG).performTouchInput { swipe(Offset(width * 0.9f, centerY), Offset(width * 0.1f, centerY + 8f), durationMillis = 300) }
@@ -192,9 +235,14 @@ class PlayerDragDeviceTest {
     }
 
     @Test
-    fun talkBacksDismissClosesThePlayer() {
+    fun talkBacksDismissIsOnTheDownButtonItFocusesAndClosesThePlayerANamedPane() {
         player()
-        compose.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.Dismiss)).performSemanticsAction(SemanticsActions.Dismiss)
+        // Review 2026-11-17: it sat on the player's unnamed frame, which TalkBack never focuses. Now on the one node that
+        // has it, the down button: labelled and clickable, so TalkBack lands on it.
+        val dismiss = compose.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.Dismiss))
+        dismiss.assert(hasClickAction()).assert(hasContentDescription(CLOSE))
+        compose.onNode(SemanticsMatcher.keyIsDefined(SemanticsProperties.PaneTitle)).assert(SemanticsMatcher.expectValue(SemanticsProperties.PaneTitle, PANE))
+        dismiss.performSemanticsAction(SemanticsActions.Dismiss)
         compose.runOnIdle { assertEquals(1, closed) }
     }
 
@@ -226,6 +274,8 @@ class PlayerDragDeviceTest {
         const val FORWARD = "Forward 10 seconds"
         const val PREVIOUS = "Previous"
         const val NEXT = "Next"
+        const val CLOSE = "Close the player"
+        const val PANE = "Player"
         const val COVER_TAG = "cover"
         const val LYRICS = "lyrics"
         const val STEPS = 12

@@ -68,6 +68,7 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -129,6 +130,7 @@ import coil3.fetch.FetchResult
 import coil3.fetch.Fetcher
 import coil3.fetch.ImageFetchResult
 import coil3.key.Keyer
+import coil3.request.ImageRequest
 import coil3.request.Options
 import coil3.request.crossfade
 import coil3.size.pxOrElse
@@ -863,6 +865,9 @@ class SongArtKeyer : Keyer<SongArt> {
 /** A cover's key in the image loader: its path, and its version once Covers & tags changed the song (apply or Undo). */
 fun coverKey(art: SongArt): String = if (art.version == 0) art.path else "${art.path}#${art.version}"
 
+/** The image loader's key for [model]'s cover when it is a song's ([coverKey]), whatever size it was loaded at; null for anything else. */
+fun coverRequestKey(model: Any?): String? = (model as? SongArt)?.let(::coverKey)
+
 /** The image loader of the whole app: song covers from MediaStore, cross-fading in. No network. */
 fun songImageLoader(context: Context): ImageLoader =
     ImageLoader.Builder(context)
@@ -888,19 +893,22 @@ private fun audioUri(context: Context, path: String): android.net.Uri? {
 /**
  * A song's cover ([model]: a [SongArt], the player's bitmap, or null) on KJB's default cover ([R.drawable.kjb_default_cover],
  * the one the widget, the notification and Android Auto show too): the default shows until the cover is in, and stays
- * when there is none. With [status], its badge sits on the bottom-end corner. Decorative: the song's name and status
- * are text next to it.
+ * when there is none. A song's cover already in memory at another size (the Now bar's, as the player's cover grows out
+ * of it) shows while this size loads, never the default (phone test 2026-11-17). With [status], its badge sits on the
+ * bottom-end corner. Decorative: the song's name and status are text next to it.
  */
 @Composable
 fun SongCover(model: Any?, modifier: Modifier = Modifier, size: Dp = 48.dp, shape: Shape = MaterialTheme.shapes.small, status: LyricsStatus? = null) {
     // A song Covers & tags changed gets its new cover at once: its version is part of the key.
     val versions by CoverVersions.versions.collectAsState()
     val shown = (model as? SongArt)?.let { it.copy(version = versions[it.path] ?: 0) } ?: model
+    val context = LocalContext.current
     Box(modifier.size(size)) {
         Box(Modifier.fillMaxSize().clip(shape)) {
             Image(painterResource(R.drawable.kjb_default_cover), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
             if (shown != null) {
-                AsyncImage(model = shown, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                val request = remember(shown, context) { ImageRequest.Builder(context).data(shown).placeholderMemoryCacheKey(coverRequestKey(shown)).build() }
+                AsyncImage(model = request, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
             }
         }
         if (status != null) StatusBadge(status, Modifier.align(Alignment.BottomEnd).padding(1.dp))

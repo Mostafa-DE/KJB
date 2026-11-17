@@ -554,6 +554,14 @@ object Motion {
     /** Something the finger let go of short of its goal (the player dragged down, a back swipe given up): it settles back. */
     val release: SpringSpec<Float> = spring(dampingRatio = 0.9f, stiffness = 400f)
 
+    /**
+     * The player closing into the Now bar, whatever let it go (a finger, the chevron, Back), and a drag on it let go short
+     * of closing: critically damped, so it never overshoots the bar. From rest it is half way at about 85 ms and within
+     * 1% of the way at about 330 ms; a finger's speed carried in shapes its start, hardly its length (phone test
+     * 2026-11-17: a 300 ms tween with all its move in the first 3 to 6 frames read as a cut).
+     */
+    fun <T> close(visibilityThreshold: T? = null): SpringSpec<T> = spring(dampingRatio = 1f, stiffness = 400f, visibilityThreshold = visibilityThreshold)
+
     // Curves
 
     /** CSS "ease": the prototype's default (the cover springing back, a queue row moving). */

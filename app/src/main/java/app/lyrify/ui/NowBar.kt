@@ -417,9 +417,13 @@ private fun BarLine(text: AnnotatedString) {
     Text(text, style = BarLineStyle, color = ink.line, maxLines = 1, overflow = TextOverflow.Ellipsis)
 }
 
-/** The old Now orb: the cover in a ring that fills with the song's progress, and its lyrics status. */
+/**
+ * The old Now orb: the cover in a ring that fills with the song's progress, and its lyrics status. [shared]: the player's
+ * cover lands here and grows out of here ([containerCover]), on an empty stand-in of the cover's size, so the orb's own
+ * cover stays put under the player's as it goes.
+ */
 @Composable
-private fun Orb(cover: Any?, status: LyricsStatus?, ring: Float, coverModifier: Modifier) {
+private fun Orb(cover: Any?, status: LyricsStatus?, ring: Float, shared: Modifier) {
     val highlight = LocalBrandColors.current.highlight
     Box(
         Modifier.size(48.dp).drawBehind {
@@ -430,13 +434,17 @@ private fun Orb(cover: Any?, status: LyricsStatus?, ring: Float, coverModifier: 
             if (ring > 0f) drawArc(highlight, -90f, 360f * ring, useCenter = false, topLeft = Offset(inset, inset), size = arc, style = Stroke(stroke, cap = StrokeCap.Round))
         },
     ) {
-        SongCover(cover, Modifier.align(Alignment.Center).then(coverModifier), size = 38.dp, shape = CircleShape)
+        Box(Modifier.align(Alignment.Center).size(ORB_COVER).then(shared))
+        SongCover(cover, Modifier.align(Alignment.Center), size = ORB_COVER, shape = CircleShape)
         status?.let { StatusBadge(it, Modifier.align(Alignment.BottomEnd), size = 16.dp) }
     }
 }
 
 /** The bar's second line (.nowbar .s): 13/18. */
 private val BarLineStyle = body(13f, 18)
+
+/** The cover in the orb: the size the player's cover shrinks to, round, as it closes into the bar ([CoverShape]). */
+internal val ORB_COVER = 38.dp
 
 private val RING_STROKE = 2.5.dp
 private const val RING_TRACK_ALPHA = 0.2f

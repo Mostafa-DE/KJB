@@ -88,6 +88,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.paneTitle
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.border
 import androidx.compose.material3.minimumInteractiveComponentSize
@@ -150,8 +151,37 @@ fun seekIcon(back: Boolean, seconds: Int): Int = when (seconds) {
     else -> if (back) R.drawable.ic_replay_30 else R.drawable.ic_forward_10
 }
 
-/** How many jumps a seek button held for [heldMs] has made: one on the press, then one every [HOLD_EVERY_MS] after [HOLD_DELAY_MS]. */
-fun jumpsWhileHeld(heldMs: Long): Int = if (heldMs < HOLD_DELAY_MS) 1 else 2 + ((heldMs - HOLD_DELAY_MS) / HOLD_EVERY_MS).toInt()
+/**
+ * How many jumps a seek button pressed for [heldMs] has made: let go before [HOLD_DELAY_MS], one, at the lift; held, one
+ * at [HOLD_DELAY_MS], then one every [HOLD_EVERY_MS] ([seekPress]).
+ */
+fun jumpsWhileHeld(heldMs: Long): Int = if (heldMs < HOLD_DELAY_MS) 1 else 1 + ((heldMs - HOLD_DELAY_MS) / HOLD_EVERY_MS).toInt()
+
+/** What a finger pressed on a seek button is so far ([seekPress]). */
+enum class SeekPress { WAIT, JUMP, NONE }
+
+/**
+ * A finger pressed on a seek button, [moved] px from where it landed, the platform's touch [slop] apart: lifted within
+ * it, a tap ([SeekPress.JUMP], one jump); moved past it, or taken first by the player's drag ([consumed]), no press at
+ * all ([SeekPress.NONE]: a drag down that minimises, or a finger sliding off); else still a press ([SeekPress.WAIT]),
+ * which held past [HOLD_DELAY_MS] starts the jumps. Never a jump at the press itself: it may be a drag down's start.
+ */
+fun seekPress(moved: Offset, slop: Float, lifted: Boolean, consumed: Boolean): SeekPress = when {
+    consumed || moved.getDistance() > slop -> SeekPress.NONE
+    lifted -> SeekPress.JUMP
+    else -> SeekPress.WAIT
+}
+
+/**
+ * A drag on the seek bar or an A-B handle, [moved] px from where it landed: past the touch [slop], mostly sideways (45
+ * degrees too) it is theirs ([SheetDrag.TAKE]); mostly up or down it is left, unconsumed, to what is under it
+ * ([SheetDrag.LEAVE]), so a drag down from the bar minimises the player ([playerSwipe]); until then, wait.
+ */
+fun sidewaysDrag(moved: Offset, slop: Float): SheetDrag = when {
+    moved.getDistance() <= slop -> SheetDrag.WAIT
+    abs(moved.x) >= abs(moved.y) -> SheetDrag.TAKE
+    else -> SheetDrag.LEAVE
+}
 
 // The cover's swipe (the prototype's coverSwipe) and the player's drag down, in dp
 
@@ -213,6 +243,13 @@ fun listPull(available: Float, scrolled: Boolean, byFinger: Boolean, held: Boole
  */
 fun listPush(available: Float, pulled: Float, byFinger: Boolean): Float =
     if (byFinger && available < 0f && pulled > 0f) maxOf(available, -pulled) else 0f
+
+/**
+ * Whether the player takes a list's fling, all of it, so the list never flings under it: the fling after a list's pull
+ * the player let go of ([letGo], known at the lift), or one that comes before the player has seen that lift (the list
+ * handles the same lift first) while the pull still holds it [pulled] px down ([pulling]).
+ */
+fun listFling(letGo: Boolean, pulling: Boolean, pulled: Float): Boolean = letGo || (pulling && pulled > 0f)
 
 /** Where the cover is when the finger has moved [dx]: [COVER_FOLLOW] of the way. */
 fun coverShift(dx: Float): Float = dx * COVER_FOLLOW
@@ -544,9 +581,11 @@ fun PlayerView() {
 /**
  * The player's frame, around all of it: dragged down from anywhere on it, it follows the finger, shrinking and rounding
  * as it goes ([dragPeek]; with reduced motion it stays put and fades instead, so a drag never closes it unseen), and let
- * go it closes ([onClose]) or springs back ([PlayerDrag]). Whatever on the player takes a drag first keeps it: the seek
- * bar, the A-B handles, the cover's sideways swipe, a list scrolling; a list already at its top hands a pull down over.
- * A finger landing in the system's gesture edge is the system's back. TalkBack's dismiss closes it, as the chevron does.
+ * go it closes ([onClose]) or springs back ([PlayerDrag]). Closing into the Now bar, the drag is held where the finger
+ * left it and goes as the card closes ([closeHeld]), so the player carries on from there into the bar. Whatever on the
+ * player takes a drag first keeps it: the seek bar, the A-B handles, the cover's sideways swipe, a list scrolling; a list
+ * already at its top hands a pull down over. A finger landing in the system's gesture edge is the system's back. For
+ * TalkBack it is a pane named Player; its dismiss is on the chevron ([PlayerCloseButton]), the node TalkBack focuses.
  */
 @Composable
 internal fun PlayerFrame(onClose: () -> Unit, content: @Composable BoxScope.() -> Unit) {
@@ -555,12 +594,17 @@ internal fun PlayerFrame(onClose: () -> Unit, content: @Composable BoxScope.() -
     val drag = remember(scope) { PlayerDrag(scope) }
     val density = LocalDensity.current
     val fling = with(density) { DRAG_FLING_DP.dp.toPx() }
-    val intoBar = LocalContainer.current != null
+    val momentum = with(density) { CLOSE_MOMENTUM_DP.dp.toPx() }
+    val container = LocalContainer.current
     val close by rememberUpdatedState(onClose)
-    val letGo = rememberUpdatedState { drag.lift(fling, intoBar, close) }
+    val letGo = rememberUpdatedState { drag.lift(fling, momentum, container, reduced, close) }
     // Shown again while it was leaving (opened again at once), the player comes back whole.
     val headed = LocalLayerHeaded.current
-    LaunchedEffect(headed) { if (headed) drag.reset() }
+    LaunchedEffect(headed) {
+        if (!headed) return@LaunchedEffect
+        container?.rest()
+        drag.reset()
+    }
     // The system's gesture edges (back), in the window, and where the player sits in it: a finger landing there is the system's.
     val direction = LocalLayoutDirection.current
     val gestures = WindowInsets.systemGestures
@@ -569,7 +613,7 @@ internal fun PlayerFrame(onClose: () -> Unit, content: @Composable BoxScope.() -
     val edge = rememberUpdatedState { at: Offset ->
         inGestureEdge(origin.value.x + at.x, window.containerSize.width.toFloat(), gestures.getLeft(density, direction).toFloat(), gestures.getRight(density, direction).toFloat())
     }
-    val label = stringResource(R.string.player_close)
+    val pane = stringResource(R.string.player_pane)
     Box(
         Modifier
             .fillMaxSize()
@@ -580,7 +624,7 @@ internal fun PlayerFrame(onClose: () -> Unit, content: @Composable BoxScope.() -
                     alpha = reducedDragAlpha(drag.offset.value, size.height)
                     return@graphicsLayer
                 }
-                val peek = dragPeek(drag.offset.value, size.height)
+                val peek = dragPeek(closeHeld(drag.offset.value, container?.closing?.invoke() ?: 0f), size.height)
                 translationY = peek.shiftY
                 scaleX = peek.scale
                 scaleY = peek.scale
@@ -589,12 +633,7 @@ internal fun PlayerFrame(onClose: () -> Unit, content: @Composable BoxScope.() -
             }
             .nestedScroll(drag.lists)
             .pointerInput(drag) { dragsDown(drag, edge = { edge.value(it) }, letGo = { letGo.value() }) }
-            .semantics {
-                dismiss(label) {
-                    close()
-                    true
-                }
-            }
+            .semantics { paneTitle = pane }
             .background(MaterialTheme.colorScheme.background),
         content = content,
     )
@@ -638,9 +677,9 @@ private suspend fun PointerInputScope.dragsDown(drag: PlayerDrag, edge: (Offset)
 /**
  * The player dragged down ([PlayerFrame]): by a finger nothing on it took ([follow]), or by a list at its top pulled
  * further down ([lists]). It follows the finger ([dragPeek]); let go, it closes past a quarter of its [height] or on a
- * fling down ([dragCloses]), else springs back ([Motion.release]). Closing into the Now bar, it lets go of the drag as the
- * container shrinks, so the whole player lands in the bar; falling away, it leaves from where the finger left it
- * ([dragRelease]).
+ * fling down ([dragCloses]), else springs back on [Motion.close] at the finger's speed. Closing into the Now bar, it is
+ * held where the finger left it and the container transform takes it on with the finger's speed ([Container.letGo]);
+ * falling away, it leaves from where the finger left it ([dragLetGo]).
  */
 @Stable
 private class PlayerDrag(private val scope: CoroutineScope) {
@@ -657,7 +696,7 @@ private class PlayerDrag(private val scope: CoroutineScope) {
     private var byList = false
     private var at = 0f
 
-    // A list's pull let go at the lift: the list's fling, which comes after, is the player's, so the list never flings under it.
+    // A list's pull let go at the lift: the list's fling, before the lift is seen here or after, is the player's ([listFling]).
     private var flingTaken = false
 
     /** A finger lands, in the system's gesture edge ([inEdge]) or not: nothing is taken yet. */
@@ -682,8 +721,11 @@ private class PlayerDrag(private val scope: CoroutineScope) {
         return to - from
     }
 
-    /** The finger lifts: a drag, its own or a list's pull, lets go. */
-    fun lift(fling: Float, intoBar: Boolean, close: () -> Unit) {
+    /**
+     * The finger lifts: a drag, its own or a list's pull, lets go ([dragLetGo]), handing its speed to the [container]
+     * transform when it closes into the Now bar, at most [momentum] px/s.
+     */
+    fun lift(fling: Float, momentum: Float, container: Container?, reduced: Boolean, close: () -> Unit) {
         held = false
         if (!dragging) return
         val velocity = tracker.calculateVelocity().y
@@ -692,9 +734,14 @@ private class PlayerDrag(private val scope: CoroutineScope) {
         flingTaken = byList && at > 0f
         dragging = false
         byList = false
-        if (closes) close()
-        val to = dragRelease(closes, intoBar) ?: return
-        scope.launch { offset.animateTo(to, if (closes) tween(Motion.OPEN_MS, easing = Motion.Rise) else Motion.release) }
+        when (dragLetGo(closes, intoBar = container != null, reduced = reduced)) {
+            DragLetGo.BACK -> scope.launch { offset.animateTo(0f, Motion.close(), initialVelocity = velocity) }
+            DragLetGo.INTO_BAR -> {
+                container?.letGo(closeVelocity(velocity, momentum), dragPeek(at, height).scale)
+                close()
+            }
+            DragLetGo.AWAY -> close()
+        }
     }
 
     /** A list on the player: pulled down at its top, it moves the player ([listPull]); pushed back up, the player goes home first ([listPush]). */
@@ -713,7 +760,7 @@ private class PlayerDrag(private val scope: CoroutineScope) {
         }
 
         override suspend fun onPreFling(available: Velocity): Velocity {
-            if (!flingTaken) return Velocity.Zero
+            if (!listFling(flingTaken, byList, at)) return Velocity.Zero
             flingTaken = false
             return available
         }
@@ -723,7 +770,7 @@ private class PlayerDrag(private val scope: CoroutineScope) {
     suspend fun reset() {
         dragging = false
         byList = false
-        if (offset.value != 0f) offset.animateTo(0f, Motion.release)
+        if (offset.value != 0f) offset.animateTo(0f, Motion.close())
     }
 }
 
@@ -788,7 +835,7 @@ private fun PlayerTopBar(ui: PlayerUi, lyricsShare: LyricsShare?, tone: Boolean,
             .heightIn(min = PLAYER_BAR)
             .padding(horizontal = 8.dp),
     ) {
-        ChromeIconButton(R.drawable.ic_keyboard_arrow_down, stringResource(R.string.player_close), onClose)
+        PlayerCloseButton(onClose)
         // Where it plays from, without the time the queue started that the queue lists add.
         val name = ui.queue.name ?: sourceLabel(context, ui.queue.source, ui.queue.items.size)
         Text(
@@ -1022,10 +1069,31 @@ internal fun CoverFace(
                 .then(if (onFlip != null) Modifier.clickable(enabled = enabled, role = Role.Button, onClick = onFlip) else Modifier)
                 .semantics { contentDescription = label },
         ) {
-            SongCover(SongArt(ui.item.song.path), containerCover(LocalContainer.current), size = side, shape = shape)
+            // Its corners follow its size, so growing out of the Now bar's orb or shrinking into it, it rounds smoothly.
+            SongCover(SongArt(ui.item.song.path), containerCover(LocalContainer.current), size = side, shape = remember(side) { CoverShape(COVER_CORNER, side) })
         }
         if (onFlip != null) FlipChip(Modifier.align(Alignment.BottomEnd).padding(12.dp), enabled, onFlip)
     }
+}
+
+/**
+ * The chevron that closes the player ([onClose]), with TalkBack's dismiss on it: the labelled, clickable node TalkBack
+ * focuses, so the dismiss reaches it (review 2026-11-17: on the player's unnamed frame it never did).
+ */
+@Composable
+internal fun PlayerCloseButton(onClose: () -> Unit) {
+    val label = stringResource(R.string.player_close)
+    ChromeIconButton(
+        R.drawable.ic_keyboard_arrow_down,
+        label,
+        onClose,
+        modifier = Modifier.semantics {
+            dismiss(label) {
+                onClose()
+                true
+            }
+        },
+    )
 }
 
 /** "From [name]" with the name in semibold on-surface, as the prototype's .src b. */

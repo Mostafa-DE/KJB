@@ -3,9 +3,11 @@ package app.lyrify.ui
 import androidx.activity.BackEventCompat
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.AnimationVector1D
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.SnapSpec
 import androidx.compose.animation.core.TweenSpec
+import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -288,12 +290,16 @@ class TransitionsTest {
     }
 
     @Test
-    fun `let go short of closing the player springs back, closing into the bar lets go, closing as it falls keeps going`() {
-        assertEquals(0f, dragRelease(closes = false, intoBar = true))
-        assertEquals(0f, dragRelease(closes = false, intoBar = false))
-        assertEquals(0f, dragRelease(closes = true, intoBar = true))
+    fun `let go short of closing the player springs back, into the bar hands the finger over, with no bar it falls away`() {
+        assertEquals(DragLetGo.BACK, dragLetGo(closes = false, intoBar = true, reduced = false))
+        assertEquals(DragLetGo.BACK, dragLetGo(closes = false, intoBar = false, reduced = true))
+        // Into the bar the drag stays where the finger left it, and the container's progress takes it into the bar with
+        // the finger's speed (phone test 2026-11-17: it used to go home on its own 300 ms tween while the card shrank).
+        assertEquals(DragLetGo.INTO_BAR, dragLetGo(closes = true, intoBar = true, reduced = false))
         // Falling away, the player leaves from where the finger left it.
-        assertEquals(null, dragRelease(closes = true, intoBar = false))
+        assertEquals(DragLetGo.AWAY, dragLetGo(closes = true, intoBar = false, reduced = false))
+        // Reduced motion: nothing to hand over to; it fades from where it is.
+        assertEquals(DragLetGo.AWAY, dragLetGo(closes = true, intoBar = true, reduced = true))
     }
 
     @Test
@@ -368,6 +374,24 @@ class TransitionsTest {
         assertEquals(frames.map { it.second }.sorted(), frames.map { it.second })
         assertEquals(1f to 1f, frames.last())
         assertEquals(0f, backPeek(frames.last().first, fromLeft = true, width = 1000f).dim, 0.0001f)
+    }
+
+    @Test
+    fun `Back let go over the Now bar lets go of its shrink on the spring the player closes on, frame for frame`() = runTest {
+        val swipe = BackSwipe()
+        val player = BackTaking.View(FullScreen.Player)
+        swipe.start(player)
+        swipe.follow(BackEventCompat(touchX = 300f, touchY = 900f, progress = 0.4f, swipeEdge = BackEventCompat.EDGE_LEFT))
+        val frames = mutableListOf<Float>()
+        withContext(FrameClock { frames += swipe.progress }) { swipe.settle(player) }
+        // The card's progress into the bar, from rest as Back leaves it: the shrink goes as the card closes.
+        val closing = Motion.close<Float>().vectorize(Float.VectorConverter)
+        frames.forEachIndexed { frame, shrink ->
+            val p = closing.getValueFromNanos(frame * FRAME_NANOS, AnimationVector1D(0f), AnimationVector1D(1f), AnimationVector1D(0f)).value
+            assertEquals("frame $frame", 0.4f * (1f - p), shrink, 0.01f)
+        }
+        assertTrue(frames.size * FRAME_NANOS >= 250_000_000L)
+        assertEquals(0f, frames.last(), 0.001f)
     }
 
     @Test
