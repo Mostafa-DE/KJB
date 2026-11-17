@@ -397,6 +397,32 @@ class CarAccessTest {
     }
 
     @Test
+    fun `a cover read that throws anything else or runs out of memory is a read that failed, its error's name told`() {
+        val failed = mutableListOf<String>()
+        fun own(path: String): String? = try {
+            ownCover(path, { id ->
+                when (id) {
+                    // MediaStore's thumbnail did not decode, or the picture did not fit in memory now.
+                    25L -> throw IllegalStateException("made up")
+                    26L -> throw IllegalArgumentException("made up")
+                    27L -> throw OutOfMemoryError("made up")
+                    else -> throw IOException()
+                }
+            }, opened = { throw IllegalStateException("made up") }, failed = { failed += it.javaClass.simpleName }) { "default" }
+        } catch (e: Throwable) {
+            "threw ${e.javaClass.simpleName}"
+        }
+
+        // Null, as any read that failed: the session shows the default cover, the widget reads it again at its next update.
+        assertNull(own("25"))
+        assertNull(own("26"))
+        assertNull(own("27"))
+        assertNull(own("opened-1000-0"))
+        assertNull(own("28"))
+        assertEquals(listOf("IllegalStateException", "IllegalArgumentException", "OutOfMemoryError", "IllegalStateException", "IOException"), failed)
+    }
+
+    @Test
     fun `a car asking as KJB starts, before the library is read, is served a signed song's own cover at once`() {
         // Android Auto starts KJB as the car connects, asks for covers at once and keeps each by its uri: the signature
         // alone lets a song's cover out, so nothing waits for the library, and no song keeps the default for good.
