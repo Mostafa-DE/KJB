@@ -19,13 +19,13 @@ val kjbRepo = rootProject.extra["kjbRepo"] as String
 
 /**
  * The AI add-on's APK that KJB downloads (Tools > AI lyrics > Get AI): KJB-AI-<version>.apk, the release asset beside
- * KJB's own on the GitHub release, its SHA-256 (hex) and size. PLACEHOLDER: the release lane pins the published file
- * here. With no SHA-256 nothing is downloaded and Get AI says it could not get the add-on. -PaiAddonUrl,
+ * KJB's own on the GitHub release, its SHA-256 (hex) and size. The release lane pins the published file here: KJB AI
+ * 3.0.3 on v3.0.3. With no SHA-256 nothing is downloaded and Get AI says it could not get the add-on. -PaiAddonUrl,
  * -PaiAddonSha256 and -PaiAddonBytes point a test build at another file (GitHub only, and signed with this build's key).
  */
-val aiAddonUrl = findProperty("aiAddonUrl")?.toString() ?: "https://github.com/$kjbRepo/releases/download/v3.0.0/KJB-AI-3.0.0.apk"
-val aiAddonSha256 = findProperty("aiAddonSha256")?.toString() ?: "" // PLACEHOLDER: the release asset's SHA-256
-val aiAddonBytes = findProperty("aiAddonBytes")?.toString() ?: "0" // PLACEHOLDER: the release asset's size in bytes
+val aiAddonUrl = findProperty("aiAddonUrl")?.toString() ?: "https://github.com/$kjbRepo/releases/download/v3.0.3/KJB-AI-3.0.3.apk"
+val aiAddonSha256 = findProperty("aiAddonSha256")?.toString() ?: "eb829e372786b23dfa4a2290fa95dc3448d1c0bbaa41450fe0504472b033b6c1" // the release asset's SHA-256
+val aiAddonBytes = findProperty("aiAddonBytes")?.toString() ?: "72725922" // the release asset's size in bytes
 
 /**
  * The repository ("owner/name") whose latest release the update check reads (update/Updates.kt): KJB's own. GitHub's API
@@ -35,12 +35,12 @@ val updateRepo = findProperty("updateRepo")?.toString() ?: kjbRepo
 
 /**
  * The Downloads add-on's APK that KJB downloads (Tools > Downloads > Get Downloads): KJB-Downloads-<version>.apk on the same
- * release, pinned the same way. PLACEHOLDER until the release lane pins it; -PdlAddonUrl, -PdlAddonSha256 and
- * -PdlAddonBytes point a test build at another file.
+ * release, pinned the same way: KJB Downloads 3.0.3 on v3.0.3. -PdlAddonUrl, -PdlAddonSha256 and -PdlAddonBytes point
+ * a test build at another file.
  */
-val dlAddonUrl = findProperty("dlAddonUrl")?.toString() ?: "https://github.com/$kjbRepo/releases/download/v3.0.0/KJB-Downloads-3.0.0.apk"
-val dlAddonSha256 = findProperty("dlAddonSha256")?.toString() ?: "" // PLACEHOLDER: the release asset's SHA-256
-val dlAddonBytes = findProperty("dlAddonBytes")?.toString() ?: "0" // PLACEHOLDER: the release asset's size in bytes
+val dlAddonUrl = findProperty("dlAddonUrl")?.toString() ?: "https://github.com/$kjbRepo/releases/download/v3.0.3/KJB-Downloads-3.0.3.apk"
+val dlAddonSha256 = findProperty("dlAddonSha256")?.toString() ?: "4080c42a85cbc5b9add00bcd62e605844c04d74e82690f3e5631f2111fc03816" // the release asset's SHA-256
+val dlAddonBytes = findProperty("dlAddonBytes")?.toString() ?: "55912034" // the release asset's size in bytes
 
 android {
     namespace = "app.lyrify"
