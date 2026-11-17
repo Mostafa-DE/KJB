@@ -77,6 +77,20 @@ class SafeWriterTest {
     }
 
     @Test
+    fun `the edit's record keeps the song's length and bytes before and after the write`() {
+        val song = rig.song("Paper Lantern", 41, fields, listOf(back))
+        val (lengthBefore, before) = PayloadHash.fileHash(File(song.path).toPath())
+
+        write(WriteJob(song, edit))
+
+        val songEdit = rig.undo.memory().entries.single().songs.single()
+        val (lengthAfter, after) = PayloadHash.fileHash(File(song.path).toPath())
+        assertTrue(lengthAfter != lengthBefore)
+        assertEquals(listOf(before, after), listOf(songEdit.before, songEdit.after))
+        assertEquals(listOf(lengthBefore, lengthAfter), listOf(songEdit.lengthBefore, songEdit.lengthAfter))
+    }
+
+    @Test
     fun `the steps come in order - busy check, check, backup, private copy, write, verify, rescan, clean up`() {
         val song = rig.song("Paper Lantern", 41, fields)
         var journalAtOpen = -1

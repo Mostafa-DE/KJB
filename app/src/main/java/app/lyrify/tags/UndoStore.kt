@@ -29,7 +29,7 @@ data class PictureRef(val sha256: String, val description: String, val type: Str
 /**
  * What one edit did to one song, for History and Undo: the fields it changed (old and new values only), its front cover
  * before and after, the audio payload, and the whole file's SHA-256 [before] and [after] the write, which tells whether
- * the song changed since. Keyed by MediaStore id, with the [path] as a hint.
+ * the song changed since, with its length then. Keyed by MediaStore id, with the [path] as a hint.
  */
 @Serializable
 data class SongEdit(
@@ -45,6 +45,12 @@ data class SongEdit(
     /** The front cover the edit wrote (null: it removed it); only its hash matters. */
     val coverAfter: PictureRef? = null,
     val undone: Boolean = false,
+    /**
+     * The file's length in bytes before and after the write: with [before] and [after], how Duplicates tells a song
+     * only KJB changed since its scan. Null in records made before KJB kept them.
+     */
+    val lengthBefore: Long? = null,
+    val lengthAfter: Long? = null,
 )
 
 /** One edit in History: a song, an album, an artist, a merge or a Covers & tags album, with [label] to show. */
