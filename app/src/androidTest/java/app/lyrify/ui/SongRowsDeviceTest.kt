@@ -137,9 +137,9 @@ class SongRowsDeviceTest {
         var chosen by mutableIntStateOf(0)
         compose.setContent {
             Shell {
-                val pager = rememberTabPager(2, chosen) { chosen = it }
-                TabPages(pager, listOf("Songs", "Albums"), Modifier.fillMaxSize()) { at ->
-                    if (at == 0) Rows(listOf(lantern, bell, water), moves) else Box(Modifier.fillMaxSize().testTag("albums"))
+                val pager = rememberTabPager(listOf("Songs", "Albums"), chosen) { chosen = it }
+                TabPages(pager, Modifier.fillMaxSize()) { tab ->
+                    if (tab == "Songs") Rows(listOf(lantern, bell, water), moves) else Box(Modifier.fillMaxSize().testTag("albums"))
                 }
             }
         }

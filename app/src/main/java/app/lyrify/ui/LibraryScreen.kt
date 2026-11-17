@@ -103,11 +103,11 @@ fun LibraryPage() {
     val sheets = rememberSongSheets()
     // The Playlists tab's "⋯" rows (B1).
     val m3u = rememberM3uActions()
-    val pager = rememberTabPager(tabs.size, tabs.indexOf(tab)) { at -> tabs.getOrNull(at)?.takeIf { it != nav.state.libraryTab }?.let(nav::pickLibraryTab) }
+    val pager = rememberTabPager(tabs, tabs.indexOf(tab)) { at -> tabs.getOrNull(at)?.takeIf { it != nav.state.libraryTab }?.let(nav::pickLibraryTab) }
     val labels = tabs.map { stringResource(it.label) }
     val topBar: @Composable (Boolean, GlassBackdrop) -> Unit = { under, backdrop ->
         Column {
-            MainTopBar(DockTab.LIBRARY, under, backdrop, actions = { if (tabs.getOrNull(pager.pager.currentPage) == LibraryTab.PLAYLISTS) PlaylistsMenu(sheets, m3u) })
+            MainTopBar(DockTab.LIBRARY, under, backdrop, actions = { if (pager.current == LibraryTab.PLAYLISTS) PlaylistsMenu(sheets, m3u) })
             TopBand(under, backdrop) { PagerTabs(pager, labels, Modifier.tourTarget(TourStop.TABS)) }
         }
     }
@@ -115,8 +115,8 @@ fun LibraryPage() {
     if (library == null) {
         PageFrame(topBar = topBar) { padding -> LibraryUnavailable(ui.state, Modifier.padding(padding)) }
     } else {
-        TabsFrame(pager, tabs, topBar) { at ->
-            when (val shown = tabs[at]) {
+        TabsFrame(pager, topBar) { shown ->
+            when (shown) {
                 LibraryTab.SONGS -> SongsTab(ui, library, reselect, topBar)
                 else -> PageFrame(topBar = topBar) { padding ->
                     when (shown) {

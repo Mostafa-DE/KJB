@@ -33,6 +33,7 @@ import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeLeft
@@ -62,6 +63,11 @@ import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.unit.LayoutDirection
 import org.junit.Assume.assumeTrue
 import androidx.compose.foundation.clickable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.key
+import androidx.compose.ui.layout.layout
+import app.lyrify.settings.DockTab
+import app.lyrify.settings.LibraryTab
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -70,7 +76,7 @@ import org.junit.runner.RunWith
  * Top tabs that swipe (phone test 2026-11-11, points 2 and 4), on the phone: a swipe moves to the next tab and the tab
  * takes the chosen look, a tap glides there through the pages between, every tab keeps its list's place and is built
  * once, a sideways drag that belongs to a row stays the row's, and under a hero the hero scrolls away before the tabs'
- * lists do. Made-up names only.
+ * lists do. Library's tabs turned on, off or moved (CR3) never crash it and keep the tab shown. Made-up names only.
  */
 @RunWith(AndroidJUnit4::class)
 class TabPagerDeviceTest {
@@ -84,7 +90,7 @@ class TabPagerDeviceTest {
     /** Read inside the theme the tabs are drawn in, light or dark as the phone is: the pill's colour, and the edges. */
     private var pill = Color.Unspecified
     private val edges = GestureEdges()
-    private lateinit var tabPager: TabPager
+    private lateinit var tabPager: TabPager<String>
 
     @Test
     fun aSwipeMovesToTheNextTabAndBackAndTheTabsFollow() {
@@ -446,14 +452,14 @@ class TabPagerDeviceTest {
         compose.setContent {
             LyrifyTheme {
                 outer = rememberScrollState()
-                val pager = rememberTabPager(tabs.size, chosen) { chosen = it }
+                val pager = rememberTabPager(tabs, chosen) { chosen = it }
                 CollapsingTabs(
                     outer = outer,
                     padding = PaddingValues(top = 64.dp),
                     header = { Box(Modifier.fillMaxWidth().height(300.dp).testTag(HERO)) },
                     tabs = { PagerTabs(pager, tabs) },
                 ) {
-                    TabPages(pager, tabs, Modifier.fillMaxSize()) { at -> Rows(tabs[at], page(at)) }
+                    TabPages(pager, Modifier.fillMaxSize()) { name -> Rows(name, page(tabs.indexOf(name))) }
                 }
             }
         }
@@ -465,6 +471,179 @@ class TabPagerDeviceTest {
         val tabsNow = compose.onNodeWithText("Songs").getBoundsInRoot().top
         assertTrue("tabs at ${tabsNow.value}, were at ${tabsTop.value}", tabsNow < tabsTop && tabsNow.value >= 64f - 1f)
     }
+
+    // KJB 3.0.2 crash: turning the Genres tab on (CR3)
+
+    @Test
+    fun turningATabOnOrOffKeepsTheTabShownAndNeverCrashes() {
+        val nav = Navigator(NavState.start(DockTab.LIBRARY))
+        var tabs by mutableStateOf(FIVE)
+        compose.setContent { LibraryRoot(nav, tabs) }
+        compose.waitForIdle()
+        // Genres turned on at its place, the last. KJB 3.0.2 crashed here ("Index 5 out of bounds for length 5"): the
+        // pager counted six pages while the keys it read were still the five.
+        tabs = FIVE + LibraryTab.GENRES
+        compose.waitForIdle()
+        assertShows(nav, LibraryTab.SONGS)
+        // On Folders, its list scrolled down: Genres moved up before it, then turned off. Still Folders, where it was.
+        compose.onNodeWithText(LibraryTab.FOLDERS.name).performScrollTo().performClick()
+        compose.waitForIdle()
+        compose.onNodeWithTag(libraryPage(LibraryTab.FOLDERS)).performScrollToIndex(40)
+        tabs = FIVE.take(4) + LibraryTab.GENRES + LibraryTab.FOLDERS
+        compose.waitForIdle()
+        assertShows(nav, LibraryTab.FOLDERS)
+        tabs = FIVE
+        compose.waitForIdle()
+        assertShows(nav, LibraryTab.FOLDERS)
+        compose.onNodeWithText("FOLDERS row 40").assertIsDisplayed()
+        // On Genres, Genres turned off: Songs, as Library shows once its tab is gone, the navigator told so; and turned
+        // on again, still Songs.
+        tabs = FIVE + LibraryTab.GENRES
+        compose.waitForIdle()
+        compose.onNodeWithText(LibraryTab.GENRES.name).performScrollTo().performClick()
+        compose.waitForIdle()
+        assertShows(nav, LibraryTab.GENRES)
+        tabs = FIVE
+        compose.waitForIdle()
+        assertShows(nav, LibraryTab.SONGS)
+        tabs = FIVE + LibraryTab.GENRES
+        compose.waitForIdle()
+        assertShows(nav, LibraryTab.SONGS)
+    }
+
+    @Test
+    fun movingTheTabsKeepsTheTabShownAndEveryPageAsItWas() {
+        val nav = Navigator(NavState.start(DockTab.LIBRARY).pickLibraryTab(LibraryTab.ALBUMS))
+        var tabs by mutableStateOf(FIVE)
+        compose.setContent { LibraryRoot(nav, tabs) }
+        compose.waitForIdle()
+        assertShows(nav, LibraryTab.ALBUMS)
+        compose.onNodeWithTag(libraryPage(LibraryTab.ALBUMS)).performScrollToIndex(40)
+        // Albums moved up above Playlists, then to the front; Folders moved up past Artists.
+        tabs = listOf(LibraryTab.SONGS, LibraryTab.ALBUMS, LibraryTab.PLAYLISTS, LibraryTab.ARTISTS, LibraryTab.FOLDERS)
+        compose.waitForIdle()
+        assertShows(nav, LibraryTab.ALBUMS)
+        tabs = listOf(LibraryTab.ALBUMS, LibraryTab.SONGS, LibraryTab.PLAYLISTS, LibraryTab.ARTISTS, LibraryTab.FOLDERS)
+        compose.waitForIdle()
+        assertShows(nav, LibraryTab.ALBUMS)
+        tabs = listOf(LibraryTab.ALBUMS, LibraryTab.SONGS, LibraryTab.PLAYLISTS, LibraryTab.FOLDERS, LibraryTab.ARTISTS)
+        compose.waitForIdle()
+        assertShows(nav, LibraryTab.ALBUMS)
+        // Its list where it was, and no page built again, not even for a frame.
+        compose.onNodeWithText("ALBUMS row 40").assertIsDisplayed()
+        assertEquals(FIVE.associate { it.name to 1 }, built)
+    }
+
+    @Test
+    fun tabsChangedWhileLibraryIsBehindAPageShowTheRightTabWhenItComesBack() {
+        val nav = Navigator(NavState.start(DockTab.LIBRARY).pickLibraryTab(LibraryTab.GENRES))
+        var tabs by mutableStateOf(FIVE + LibraryTab.GENRES)
+        var shown by mutableStateOf(true)
+        compose.setContent { LibraryRoot(nav, tabs, shown) }
+        compose.waitForIdle()
+        assertShows(nav, LibraryTab.GENRES)
+        // Settings > Library tabs opened over Library, on Genres: Genres turned off, Albums moved to the front, Genres
+        // turned on again before Folders.
+        shown = false
+        compose.waitForIdle()
+        tabs = FIVE
+        compose.waitForIdle()
+        // Told at once, not when Library shows again.
+        compose.runOnIdle { assertEquals(LibraryTab.SONGS, nav.state.libraryTab) }
+        tabs = listOf(LibraryTab.ALBUMS, LibraryTab.SONGS, LibraryTab.PLAYLISTS, LibraryTab.ARTISTS, LibraryTab.FOLDERS)
+        compose.waitForIdle()
+        tabs = listOf(LibraryTab.ALBUMS, LibraryTab.SONGS, LibraryTab.PLAYLISTS, LibraryTab.ARTISTS, LibraryTab.GENRES, LibraryTab.FOLDERS)
+        compose.waitForIdle()
+        // Back on Library: on Songs, which it went to as Genres went, wherever Songs is now.
+        shown = true
+        compose.waitForIdle()
+        assertShows(nav, LibraryTab.SONGS)
+    }
+
+    @Test
+    fun aTabMovedWhileThePagesGlideToItHasThemThereAtOnceAndNoFurther() {
+        val nav = Navigator(NavState.start(DockTab.LIBRARY))
+        var tabs by mutableStateOf(FIVE)
+        compose.setContent { LibraryRoot(nav, tabs) }
+        compose.onNodeWithText(LibraryTab.ARTISTS.name).performScrollTo()
+        compose.waitForIdle()
+        compose.mainClock.autoAdvance = false
+        compose.onNodeWithText(LibraryTab.ARTISTS.name).performClick()
+        compose.mainClock.advanceTimeByFrame()
+        compose.mainClock.advanceTimeBy(Motion.OPEN_MS / 3L)
+        // A third of the way, Genres turned on just before Artists: on Artists at once, in its new place, and the
+        // glide's old distance never carries them on past it.
+        tabs = FIVE.take(3) + LibraryTab.GENRES + FIVE.drop(3)
+        compose.mainClock.advanceTimeByFrame()
+        compose.mainClock.advanceTimeByFrame()
+        assertEquals(0f, compose.onNodeWithTag(libraryPage(LibraryTab.ARTISTS)).getUnclippedBoundsInRoot().left.value, 1f)
+        compose.mainClock.advanceTimeBy(Motion.OPEN_MS * 3L)
+        compose.mainClock.autoAdvance = true
+        compose.waitForIdle()
+        assertShows(nav, LibraryTab.ARTISTS)
+    }
+
+    // Review of CR3: Library's icon tapped on another dock destination glided to Songs under the page's fade-in
+
+    @Test
+    fun libraryOpenedFromAnotherDockTabIsOnSongsAtOnceNothingGlidingBehindIt() {
+        val nav = Navigator(NavState.start(DockTab.PLAYLISTS).pickLibraryTab(LibraryTab.ARTISTS))
+        var shown by mutableStateOf(false)
+        compose.setContent { LibraryRoot(nav, FIVE, shown) }
+        compose.waitForIdle()
+        compose.mainClock.autoAdvance = false
+        // Library's icon tapped on Playlists: its root shows and goes to Songs in the same change.
+        compose.runOnUiThread {
+            nav.select(DockTab.LIBRARY)
+            shown = true
+        }
+        compose.mainClock.advanceTimeByFrame()
+        compose.mainClock.advanceTimeByFrame()
+        // Already on Songs two frames in, where a glide from Artists would still be on its way.
+        assertEquals(0f, compose.onNodeWithTag(libraryPage(LibraryTab.SONGS)).getUnclippedBoundsInRoot().left.value, 1f)
+        compose.mainClock.autoAdvance = true
+        compose.waitForIdle()
+        assertShows(nav, LibraryTab.SONGS)
+    }
+
+    /** Library shows [tab]: the navigator has it, its tab is the chosen one, and its page is the one on screen. */
+    private fun assertShows(nav: Navigator, tab: LibraryTab) {
+        compose.runOnIdle { assertEquals(tab, nav.state.libraryTab) }
+        compose.onNodeWithText(tab.name).assertIsSelected()
+        assertEquals(0f, compose.onNodeWithTag(libraryPage(tab)).getUnclippedBoundsInRoot().left.value, 1f)
+    }
+
+    /**
+     * Library's root wired as LibraryPage wires it: its [tabs] in a [TabsFrame] (the pages inside the frame's Scaffold,
+     * so composed as they are laid out, after the root: where KJB 3.0.2 crashed), on the navigator's tab while it is
+     * among them, else on the first, a settle or a tap told to the navigator. Each tab's page is a long list in a group
+     * of its own, as each of Library's tabs is in its `when`, so a page handed another tab for a frame is built again.
+     * Not [shown]: kept behind a page over it, laid out but not placed, as the shell keeps a root.
+     */
+    @Composable
+    private fun LibraryRoot(nav: Navigator, tabs: List<LibraryTab>, shown: Boolean = true) {
+        LyrifyTheme {
+            CompositionLocalProvider(LocalLayerHeaded provides shown) {
+                Box(
+                    Modifier.fillMaxSize().layout { measurable, constraints ->
+                        val placeable = measurable.measure(constraints)
+                        layout(placeable.width, placeable.height) { if (shown) placeable.place(0, 0) }
+                    },
+                ) {
+                    val tab = nav.state.libraryTab.takeIf { it in tabs } ?: tabs.first()
+                    val pager = rememberTabPager(tabs, tabs.indexOf(tab)) { at -> tabs.getOrNull(at)?.takeIf { it != nav.state.libraryTab }?.let(nav::pickLibraryTab) }
+                    TabsFrame(pager, topBar = { _, _ -> PagerTabs(pager, tabs.map { it.name }) }) { page ->
+                        key(page) {
+                            remember { built.merge(page.name, 1, Int::plus) }
+                            Rows(page.name, libraryPage(page))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun libraryPage(tab: LibraryTab) = "library ${tab.name}"
 
     /** A quick flick across the pages, a third of the width in 80 ms, well away from the screen's edges. */
     private fun flick(toNext: Boolean) {
@@ -485,15 +664,16 @@ class TabPagerDeviceTest {
         LyrifyTheme {
             pill = LocalChromeColors.current.action
             ReadGestureEdges(edges)
-            val pager = rememberTabPager(names.size, chosen) { chosen = it }
+            val pager = rememberTabPager(names, chosen) { chosen = it }
             tabPager = pager
             Column {
                 PagerTabs(pager, names, Modifier.testTag(TAB_ROW))
-                TabPages(pager, names, Modifier.fillMaxSize()) { at ->
-                    remember { built.merge(names[at], 1, Int::plus) }
+                TabPages(pager, Modifier.fillMaxSize()) { name ->
+                    val at = names.indexOf(name)
+                    remember { built.merge(name, 1, Int::plus) }
                     Column {
                         row?.invoke(at)
-                        Rows(names[at], page(at))
+                        Rows(name, page(at))
                     }
                 }
             }
@@ -514,6 +694,9 @@ class TabPagerDeviceTest {
 
     private companion object {
         const val TAB_ROW = "tab row"
+
+        /** Library's tabs shown with no books and Genres off, in their first order. */
+        val FIVE = listOf(LibraryTab.SONGS, LibraryTab.PLAYLISTS, LibraryTab.ALBUMS, LibraryTab.ARTISTS, LibraryTab.FOLDERS)
 
         /** More tabs than fit across any phone, held either way up. */
         val MANY = listOf("Songs", "Albums", "Artists", "Folders", "Genres", "Years", "Composers", "Playlists", "Moods", "Decades", "Languages", "Ratings")
