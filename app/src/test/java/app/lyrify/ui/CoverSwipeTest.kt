@@ -12,8 +12,8 @@ import org.junit.Test
 
 /**
  * The player cover's swipe (the prototype's coverSwipe): it locks to an axis after 12 dp, follows the finger at 0.6 with
- * a tilt of one degree per 40 dp, skips past 70 dp, closes the player past 90 dp down, and otherwise springs back. The
- * song that slides in is the one Next or Previous plays. Made-up paths only.
+ * a tilt of one degree per 40 dp, skips past 70 dp, and otherwise springs back; a drag down is the player's own, from
+ * anywhere on it (PlayerDragTest). The song that slides in is the one Next or Previous plays. Made-up paths only.
  */
 class CoverSwipeTest {
     private fun queue(size: Int, index: Int) = Queue(
@@ -43,17 +43,17 @@ class CoverSwipeTest {
 
     @Test
     fun `past 70 dp a swipe left plays the next song and a swipe right the previous one, else it springs back`() {
-        assertEquals(SwipeOutcome.Skip(SkipWay.NEXT), swipeOutcome(SwipeAxis.SIDEWAYS, dx = -71f, dy = 0f))
-        assertEquals(SwipeOutcome.Skip(SkipWay.PREVIOUS), swipeOutcome(SwipeAxis.SIDEWAYS, dx = 71f, dy = 0f))
-        assertEquals(SwipeOutcome.Return, swipeOutcome(SwipeAxis.SIDEWAYS, dx = -70f, dy = 0f))
-        assertEquals(SwipeOutcome.Return, swipeOutcome(SwipeAxis.SIDEWAYS, dx = 69f, dy = 0f))
-        assertEquals(SwipeOutcome.Return, swipeOutcome(null, dx = 0f, dy = 0f))
+        assertEquals(SwipeOutcome.Skip(SkipWay.NEXT), swipeOutcome(SwipeAxis.SIDEWAYS, dx = -71f))
+        assertEquals(SwipeOutcome.Skip(SkipWay.PREVIOUS), swipeOutcome(SwipeAxis.SIDEWAYS, dx = 71f))
+        assertEquals(SwipeOutcome.Return, swipeOutcome(SwipeAxis.SIDEWAYS, dx = -70f))
+        assertEquals(SwipeOutcome.Return, swipeOutcome(SwipeAxis.SIDEWAYS, dx = 69f))
+        assertEquals(SwipeOutcome.Return, swipeOutcome(null, dx = 0f))
     }
 
     @Test
-    fun `down past 90 dp closes the player, less springs back`() {
-        assertEquals(SwipeOutcome.Close, swipeOutcome(SwipeAxis.DOWN, dx = 0f, dy = 91f))
-        assertEquals(SwipeOutcome.Return, swipeOutcome(SwipeAxis.DOWN, dx = 0f, dy = 90f))
+    fun `down never skips nor closes from the cover itself, the player's own drag takes it (DR1)`() {
+        assertEquals(SwipeOutcome.Return, swipeOutcome(SwipeAxis.DOWN, dx = 0f))
+        assertEquals(SwipeOutcome.Return, swipeOutcome(SwipeAxis.DOWN, dx = -80f))
     }
 
     @Test
@@ -83,7 +83,6 @@ class CoverSwipeTest {
         assertEquals(travel, settleShift(SwipeOutcome.Skip(SkipWay.PREVIOUS), slides = true, travel = travel), 0.001f)
         assertEquals(0f, settleShift(SwipeOutcome.Skip(SkipWay.PREVIOUS), slides = false, travel = travel), 0.001f)
         assertEquals(0f, settleShift(SwipeOutcome.Return, slides = true, travel = travel), 0.001f)
-        assertEquals(0f, settleShift(SwipeOutcome.Close, slides = false, travel = travel), 0.001f)
     }
 
     @Test
