@@ -18,8 +18,9 @@
     <!-- A song's job and the model download run in the add-on's own foreground service (ai/AiService.kt,
          JobForeground), which KJB starts for them: a phone's app freezer leaves alone an app at work in the foreground,
          not a service another app binds. A job: mediaProcessing from Android 15 (long work on media files), dataSync
-         before it. The download: dataSync (a download). No notification permission: the add-on has no screen to ask
-         from; without it its notice shows in the phone's list of apps at work only, and the service runs all the same. -->
+         before it. The download: dataSync (a download). Both types at once while both run. No notification permission:
+         the add-on has no screen to ask from; without it its notice shows in the phone's list of apps at work only, and
+         the service runs all the same. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROCESSING" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />

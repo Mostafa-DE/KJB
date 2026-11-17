@@ -41,18 +41,14 @@ class AddonKeepAliveTest {
     /** What a tap on the notification opens, as its creator's uid: KJB's PendingIntent on the phone. */
     private data class Tap(val uid: Int)
 
-    private class FakeForeground(private val refuses: Boolean = false) : ForegroundPort<Tap> {
+    /** Android's side; [refuses] the types it will not have the service in the foreground as. */
+    private class FakeForeground(private val refuses: (Int) -> Boolean = { false }) : ForegroundPort<Tap> {
         val calls = mutableListOf<String>()
 
         override fun startForeground(type: Int, tap: Tap?) {
-            val name = when (type) {
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING -> "mediaProcessing"
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC -> "dataSync"
-                else -> "type $type"
-            }
-            calls += "start $name ${tap?.uid}"
+            calls += "start ${typeName(type)} ${tap?.uid}"
             // ForegroundServiceStartNotAllowedException is one: Android 12+ refusing it now, or Android 15+ after the day's time ran out.
-            if (refuses) throw IllegalStateException("not allowed now")
+            if (refuses(type)) throw IllegalStateException("not allowed now")
         }
 
         override fun stopForeground() {
@@ -72,8 +68,9 @@ class AddonKeepAliveTest {
     private var busy = true
     private var jobsEnded = 0
 
+    /** An add-on with one kind of work, mediaProcessing (a song's job on Android 15+). */
     private fun foreground(port: FakeForeground) =
-        JobForeground({ ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING }, port, busy = { busy }, fromKjb = { it.uid == KJB_UID }, endJob = { jobsEnded++ })
+        JobForeground(listOf(ForegroundWork(MEDIA_PROCESSING, busy = { busy }, timeUp = { jobsEnded++ })), port, fromKjb = { it.uid == KJB_UID })
 
     @Test
     fun `KJB's start while a job runs goes into the foreground at once, of the add-on's type, with KJB's tap`() {
@@ -82,25 +79,192 @@ class AddonKeepAliveTest {
 
         assertEquals(listOf("start mediaProcessing $KJB_UID"), port.calls)
         val dataSync = FakeForeground()
-        JobForeground({ ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC }, dataSync, busy = { true }, fromKjb = { it.uid == KJB_UID }, endJob = {}).start(1, kjb)
+        JobForeground(listOf(ForegroundWork(DATA_SYNC, busy = { true }, timeUp = {})), dataSync, fromKjb = { it.uid == KJB_UID }).start(1, kjb)
         assertEquals(listOf("start dataSync $KJB_UID"), dataSync.calls)
     }
 
+    // Two kinds of work, each of its own type: the AI add-on's song's job (mediaProcessing) and models' download (dataSync)
+
+    private var jobBusy = false
+    private var downloadBusy = false
+    private val timedOut = mutableListOf<String>()
+
+    private fun twoKinds(port: FakeForeground) = JobForeground(
+        listOf(
+            ForegroundWork(MEDIA_PROCESSING, busy = { jobBusy }, timeUp = { timedOut += "job" }),
+            ForegroundWork(DATA_SYNC, busy = { downloadBusy }, timeUp = { timedOut += "download" }),
+        ),
+        port,
+        fromKjb = { it.uid == KJB_UID },
+    )
+
     @Test
     fun `the type is the work's under way as each start goes into the foreground`() {
-        // The AI add-on: a song's job in mediaProcessing, the models' download in dataSync, one after the other.
-        var type = ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
         val port = FakeForeground()
-        val foreground = JobForeground({ type }, port, busy = { busy }, fromKjb = { it.uid == KJB_UID }, endJob = {})
+        val foreground = twoKinds(port)
 
+        downloadBusy = true
         foreground.start(1, kjb)
-        busy = false
+        downloadBusy = false
         foreground.jobEnded()
-        type = ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING
-        busy = true
+        jobBusy = true
         foreground.start(2, kjb)
 
         assertEquals(listOf("start dataSync $KJB_UID", "stopForeground", "stopSelf 1", "start mediaProcessing $KJB_UID"), port.calls)
+    }
+
+    @Test
+    fun `work that joins work under way adds its type, and the one that ends first takes its type away, in either order`() {
+        // startForeground replaces the types: each change is told to Android again, with the types of all the work left.
+        for (first in listOf("job", "download")) {
+            for (endsFirst in listOf("job", "download")) {
+                val case = "$first first, $endsFirst ends first"
+                val port = FakeForeground()
+                val foreground = twoKinds(port)
+                fun runs(kind: String, now: Boolean) {
+                    if (kind == "job") jobBusy = now else downloadBusy = now
+                }
+                val second = if (first == "job") "download" else "job"
+                val left = if (endsFirst == "job") "dataSync" else "mediaProcessing"
+
+                runs(first, true)
+                foreground.start(1, kjb)
+                runs(second, true)
+                foreground.start(2, kjb) // KJB's start for the work that joined
+                foreground.noticeChanged()
+                runs(endsFirst, false)
+                foreground.jobEnded()
+                runs(if (endsFirst == "job") "download" else "job", false)
+                foreground.jobEnded()
+
+                assertEquals(
+                    case,
+                    listOf(
+                        "start ${if (first == "job") "mediaProcessing" else "dataSync"} $KJB_UID",
+                        "start mediaProcessing|dataSync $KJB_UID",
+                        "notice $KJB_UID",
+                        "start $left $KJB_UID",
+                        "stopForeground",
+                        "stopSelf 2",
+                    ),
+                    port.calls,
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `a start or an end that leaves the types as they are tells Android nothing`() {
+        val port = FakeForeground()
+        val foreground = twoKinds(port)
+        jobBusy = true
+        foreground.start(1, kjb)
+
+        foreground.start(2, kjb) // the next song's start, its job already running
+        foreground.jobEnded() // the song before it ended, the next one runs
+
+        assertEquals(listOf("start mediaProcessing $KJB_UID"), port.calls)
+    }
+
+    @Test
+    fun `mediaProcessing's time running out ends the job only, and the download goes on in the foreground as dataSync`() {
+        val port = FakeForeground()
+        val foreground = twoKinds(port)
+        jobBusy = true
+        downloadBusy = true
+        foreground.start(1, kjb)
+        foreground.start(2, kjb)
+        port.calls.clear()
+
+        foreground.timeUp(MEDIA_PROCESSING)
+        assertEquals(listOf("job"), timedOut)
+        assertEquals("the type dropped there and then, the service kept", listOf("start dataSync $KJB_UID"), port.calls)
+
+        // The job winds down after its step: its type stays out, and the download's end takes the service out.
+        foreground.noticeChanged()
+        downloadBusy = false
+        foreground.jobEnded()
+        assertEquals(listOf("start dataSync $KJB_UID", "notice $KJB_UID", "stopForeground", "stopSelf 2"), port.calls)
+        jobBusy = false
+        foreground.jobEnded()
+        assertEquals("left already", 4, port.calls.size)
+    }
+
+    @Test
+    fun `dataSync's time running out ends the download only, and the job goes on in the foreground as mediaProcessing`() {
+        val port = FakeForeground()
+        val foreground = twoKinds(port)
+        downloadBusy = true
+        jobBusy = true
+        foreground.start(1, kjb)
+        foreground.start(2, kjb)
+        port.calls.clear()
+
+        foreground.timeUp(DATA_SYNC)
+        assertEquals(listOf("download"), timedOut)
+        assertEquals(listOf("start mediaProcessing $KJB_UID"), port.calls)
+
+        downloadBusy = false
+        foreground.jobEnded() // the download wound down: nothing changes
+        jobBusy = false
+        foreground.jobEnded()
+        assertEquals(listOf("start mediaProcessing $KJB_UID", "stopForeground", "stopSelf 2"), port.calls)
+    }
+
+    @Test
+    fun `the time running out for the only type in use leaves the foreground there and then, and a type none has ends all`() {
+        val port = FakeForeground()
+        val foreground = twoKinds(port)
+        downloadBusy = true
+        foreground.start(1, kjb)
+
+        foreground.timeUp(DATA_SYNC)
+        assertEquals(listOf("download"), timedOut)
+        assertEquals(listOf("start dataSync $KJB_UID", "stopForeground", "stopSelf all"), port.calls)
+
+        downloadBusy = false
+        foreground.jobEnded() // the download wound down
+        timedOut.clear()
+        jobBusy = true
+        downloadBusy = true
+        foreground.start(2, kjb)
+        foreground.timeUp(0)
+        assertEquals(listOf("job", "download"), timedOut)
+        assertEquals(listOf("start mediaProcessing|dataSync $KJB_UID", "stopForeground", "stopSelf all"), port.calls.drop(3))
+    }
+
+    @Test
+    fun `a type Android refuses as work joins leaves the work under way as it was, one refused as work ends takes the service out`() {
+        // The joining job's mediaProcessing refused (its day's time used up): the download keeps dataSync, the job runs without.
+        val joined = FakeForeground(refuses = { it and MEDIA_PROCESSING != 0 })
+        val foreground = twoKinds(joined)
+        downloadBusy = true
+        foreground.start(1, kjb)
+        jobBusy = true
+        foreground.start(2, kjb)
+        foreground.noticeChanged()
+        jobBusy = false
+        foreground.jobEnded()
+        assertEquals(
+            listOf("start dataSync $KJB_UID", "start mediaProcessing|dataSync $KJB_UID", "notice $KJB_UID"),
+            joined.calls,
+        )
+
+        // Both held, then dataSync alone refused as the job ends: no work keeps a type it does not need, the download runs without.
+        jobBusy = false
+        downloadBusy = false
+        val ended = FakeForeground(refuses = { it == DATA_SYNC })
+        val other = twoKinds(ended)
+        jobBusy = true
+        other.start(1, kjb)
+        downloadBusy = true
+        other.start(2, kjb)
+        jobBusy = false
+        other.jobEnded()
+        assertEquals(
+            listOf("start mediaProcessing $KJB_UID", "start mediaProcessing|dataSync $KJB_UID", "start dataSync $KJB_UID", "stopForeground", "stopSelf 2"),
+            ended.calls,
+        )
     }
 
     @Test
@@ -117,7 +281,7 @@ class AddonKeepAliveTest {
         foreground.noticeChanged() // left: nothing more
 
         assertEquals(listOf("start mediaProcessing $KJB_UID", "notice $KJB_UID", "notice $KJB_UID", "stopForeground", "stopSelf 1"), port.calls)
-        val refused = FakeForeground(refuses = true)
+        val refused = FakeForeground(refuses = { true })
         busy = true
         foreground(refused).apply {
             start(2, kjb)
@@ -210,7 +374,7 @@ class AddonKeepAliveTest {
 
     @Test
     fun `a phone that refuses the foreground service leaves the job to run without it, and nothing throws`() {
-        val port = FakeForeground(refuses = true)
+        val port = FakeForeground(refuses = { true })
         val foreground = foreground(port)
 
         foreground.start(1, kjb)
@@ -238,7 +402,7 @@ class AddonKeepAliveTest {
         val foreground = foreground(port)
         foreground.start(1, kjb)
 
-        foreground.timeUp()
+        foreground.timeUp(MEDIA_PROCESSING)
 
         assertEquals(1, jobsEnded)
         assertEquals(listOf("start mediaProcessing $KJB_UID", "stopForeground", "stopSelf all"), port.calls)
@@ -297,6 +461,15 @@ class AddonKeepAliveTest {
     }
 
     private companion object {
+        const val MEDIA_PROCESSING = ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING
+        const val DATA_SYNC = ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+
+        /** The types, as AOSP's dumpsys names them, joined. */
+        fun typeName(type: Int): String = listOfNotNull(
+            "mediaProcessing".takeIf { type and MEDIA_PROCESSING != 0 },
+            "dataSync".takeIf { type and DATA_SYNC != 0 },
+        ).joinToString("|").ifEmpty { "type $type" }
+
         const val KJB_UID = 10_279
         const val OTHER_UID = 10_301
         const val SAME_KEY_UID = 10_302

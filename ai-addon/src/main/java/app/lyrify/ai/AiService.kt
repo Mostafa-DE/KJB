@@ -27,6 +27,7 @@ import app.lyrify.addon.shared.AddonKeepAlive
 import app.lyrify.addon.shared.CallerCheck
 import app.lyrify.addon.shared.ExemptionActivity
 import app.lyrify.addon.shared.ForegroundPort
+import app.lyrify.addon.shared.ForegroundWork
 import app.lyrify.addon.shared.JobForeground
 import app.lyrify.addon.shared.beating
 import app.lyrify.ai.api.AddonNames
@@ -404,12 +405,15 @@ class AddonJobs(
 fun jobForegroundType(sdk: Int): Int =
     if (sdk >= Build.VERSION_CODES.VANILLA_ICE_CREAM) ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROCESSING else ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
 
+/** A song's job in the add-on's foreground service ([JobForeground]), of [jobForegroundType] on [sdk]. */
+fun jobWork(sdk: Int, jobs: AddonJobs): ForegroundWork = ForegroundWork(jobForegroundType(sdk), busy = { jobs.busy }, timeUp = jobs::timeUp)
+
 /**
- * The type of the add-on's foreground service for the work under way ([JobForeground]): a song's job's
- * ([jobForegroundType]) while one runs, else the models' download's, dataSync on every Android version (a download, which
- * Android 15+ gives its own 6 hours in 24, apart from the jobs' mediaProcessing time).
+ * The models' download in the add-on's foreground service ([JobForeground]): dataSync on every Android version (a
+ * download), which Android 15+ gives its own 6 hours in 24, apart from the jobs' mediaProcessing time.
  */
-fun foregroundType(sdk: Int, job: Boolean): Int = if (job) jobForegroundType(sdk) else ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+fun downloadWork(downloads: DownloadRun): ForegroundWork =
+    ForegroundWork(ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC, busy = { downloads.busy }, timeUp = downloads::timeUp)
 
 /** How far the models' download is, for its notice: whole percents of [total] bytes, 0 until the size is told, never past 100. */
 fun downloadPercent(done: Long, total: Long): Int = if (total <= 0) 0 else (done * PERCENT / total).toInt().coerceIn(0, PERCENT)
@@ -434,10 +438,10 @@ class AiExemptionActivity : ExemptionActivity() {
  * The add-on's one service, bound by KJB only ([CallerCheck] on every call, behind the signature permission): the AI
  * ([AddonJobs]), the model download ([ModelDownloads]) and the handover of KJB 2.0's models. KJB binds it while the AI
  * works or the models download, from its own foreground service, and while its AI page shows. While a song's job runs or
- * the models download, KJB also starts it, and it runs in the foreground with its own notification ([JobForeground], of
- * [foregroundType]): a phone's app freezer leaves alone an app at work in the foreground, not a service another app binds.
- * Nothing here touches ONNX Runtime until a song's engine opens, so the QNN EP registers its library path before any HTP
- * library loads in this process ([QnnEp]).
+ * the models download, KJB also starts it, and it runs in the foreground with its own notification ([JobForeground], as
+ * [jobWork]'s type, [downloadWork]'s, or both): a phone's app freezer leaves alone an app at work in the foreground, not a
+ * service another app binds. Nothing here touches ONNX Runtime until a song's engine opens, so the QNN EP registers its
+ * library path before any HTP library loads in this process ([QnnEp]).
  */
 class AiService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -470,9 +474,9 @@ class AiService : Service() {
 
     private val foreground: JobForeground<PendingIntent> by lazy {
         JobForeground(
-            // Each start goes into the foreground as the work under way: a song's job, else the download (KJB downloads
-            // while the models are not in place, which a job needs, so the two seldom meet).
-            { foregroundType(Build.VERSION.SDK_INT, job = jobs.busy) },
+            // In the foreground as the work under way: a song's job, the download, or both while both run (seldom: KJB
+            // downloads while the models are not in place, which a job needs).
+            listOf(jobWork(Build.VERSION.SDK_INT, jobs), downloadWork(downloads)),
             object : ForegroundPort<PendingIntent> {
                 override fun startForeground(type: Int, tap: PendingIntent?) = this@AiService.startForeground(NOTICE_ID, notice(tap), type)
 
@@ -493,12 +497,7 @@ class AiService : Service() {
                 @SuppressLint("NotificationPermission")
                 override fun updateNotice(tap: PendingIntent?) = getSystemService(NotificationManager::class.java).notify(NOTICE_ID, notice(tap))
             },
-            busy = { jobs.busy || downloads.busy },
             fromKjb = { tap -> AddonKeepAlive.fromKjb(tap, callers) },
-            endJob = {
-                jobs.timeUp()
-                downloads.timeUp()
-            },
             log = { Log.i(LOG_TAG, it) },
         )
     }
@@ -546,8 +545,11 @@ class AiService : Service() {
         return START_NOT_STICKY
     }
 
-    /** Android's time for the foreground service ran out (Android 15+): out of it within seconds, or Android ends the add-on. */
-    override fun onTimeout(startId: Int, fgsType: Int) = foreground.timeUp()
+    /**
+     * Android's time for [fgsType] ran out (Android 15+): the work of that type stops, and the service drops the type within
+     * seconds, or Android ends the add-on; other work goes on in the foreground as its own type.
+     */
+    override fun onTimeout(startId: Int, fgsType: Int) = foreground.timeUp(fgsType)
 
     /**
      * The notice while the add-on works, in a quiet channel. A job: the same words for every job, nothing of the song

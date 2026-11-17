@@ -94,29 +94,38 @@ interface ForegroundPort<Tap : Any> {
 }
 
 /**
- * An add-on's own foreground service while it works, of the [type] for the work under way. KJB starts the service for the
- * foreground once the add-on took a job ([start]: Context.startForegroundService on its explicit name, under KJB's own
- * foreground), and the add-on goes into the foreground at once, in onStartCommand, as Android requires within seconds. It
- * holds it while a job runs ([busy]), its notice posted again as the work moves on ([noticeChanged]), and leaves it when
- * none is left ([jobEnded]), when KJB lets go ([unbound]), and when Android's time for its type runs out ([timeUp],
- * Android 15+), which also ends the work under way ([endJob]). A start from anyone but KJB, by the creator of the [Tap]
- * it brings ([fromKjb]), is refused. Nothing here throws: a phone that refuses the foreground service leaves the job to
- * run without it.
+ * One kind of work an add-on runs in its own foreground service ([JobForeground]): its [type]
+ * (ServiceInfo.FOREGROUND_SERVICE_TYPE_*), whether some of it runs now ([busy]), and its end, as try later, when Android's
+ * time for that type runs out ([timeUp]).
+ */
+class ForegroundWork(val type: Int, val busy: () -> Boolean, val timeUp: () -> Unit)
+
+/**
+ * An add-on's own foreground service while it works, as the types of the [works] under way: each kind's own, and all of
+ * them while more than one runs (the AI add-on's song's job and models' download), as Android 15+ counts each type's
+ * daily time apart. KJB starts the service for the foreground once the add-on took a job ([start]:
+ * Context.startForegroundService on its explicit name, under KJB's own foreground), and the add-on goes into the
+ * foreground at once, in onStartCommand, as Android requires within seconds. It holds it while work runs, its notice
+ * posted again as the work moves on ([noticeChanged]). Each startForeground replaces the types, so they are told again
+ * whenever work joins (KJB's start for it) or ends ([jobEnded]) while other work goes on. It leaves the foreground when
+ * no work is left ([jobEnded]), when KJB lets go ([unbound]), and when Android's time runs out for the only type in use
+ * ([timeUp], Android 15+), which ends the work of that type and no other. A start from anyone but KJB, by the creator of
+ * the [Tap] it brings ([fromKjb]), is refused. Nothing here throws: a phone that refuses the foreground service, or a
+ * type of it, leaves the work to run without it.
  */
 class JobForeground<Tap : Any>(
-    /** The type for the work under way (ServiceInfo.FOREGROUND_SERVICE_TYPE_*), asked as the service goes into the foreground. */
-    private val type: () -> Int,
+    /** The kinds of work the service runs, each of its own type. */
+    private val works: List<ForegroundWork>,
     private val port: ForegroundPort<Tap>,
-    /** Whether a job runs now. */
-    private val busy: () -> Boolean,
     /** Whether KJB made [Tap] (its creator's uid and certificate, [CallerCheck]). */
     private val fromKjb: (Tap) -> Boolean,
-    /** Ends the work under way, as try later. */
-    private val endJob: () -> Unit,
     private val log: (String) -> Unit = {},
 ) {
-    /** In the foreground for KJB's job. */
-    private var held = false
+    /** The types the service is in the foreground as for KJB's work; 0 while it is out of it. */
+    private var types = 0
+
+    /** Types whose time ran out ([timeUp]): left out while their work winds down. */
+    private var expired = 0
 
     /** The tap of the start that holds the foreground, KJB's: the notice keeps it when it is posted again. */
     private var tap: Tap? = null
@@ -129,28 +138,32 @@ class JobForeground<Tap : Any>(
     fun start(startId: Int, tap: Tap?) {
         lastStart = startId
         val kjb = tap?.takeIf(fromKjb)
+        val wanted = wanted()
         when {
             kjb == null -> {
                 log("a start not from KJB was refused")
-                // Android ends a service started for the foreground that stays out of it: one in it for KJB's job has
+                // Android ends a service started for the foreground that stays out of it: one in it for KJB's work has
                 // nothing to answer, any other goes in and out at once.
-                if (!held) inAndOut(startId, tap = null)
+                if (types == 0) inAndOut(startId, tap = null)
             }
-            busy() -> if (enter(kjb)) hold(kjb) else if (!held) port.stopSelf(startId)
-            // The job ended before its start came: in and out, unless still in for it ([jobEnded] is on its way).
-            !held -> inAndOut(startId, kjb)
-            // Held: nothing to answer. A start for the foreground that Android delivers while the service is in the
-            // foreground has its requirement cleared there and then (ActiveServices.sendServiceArgsLocked: "Service
-            // already foreground; no new timeout", fgRequired = false), the same in android11 to android16-release
-            // (API 30 to 36); one delivered before the earlier start's startForeground waits on that one, which clears
-            // it (setServiceForegroundInnerLocked).
+            // Held: the work this start is for adds its type ([follow]); one for work that ended asks nothing ([jobEnded]
+            // is on its way). A start for the foreground that Android delivers while the service is in the foreground has
+            // its requirement cleared there and then (ActiveServices.sendServiceArgsLocked: "Service already foreground;
+            // no new timeout", fgRequired = false), the same in android11 to android16-release (API 30 to 36); one
+            // delivered before the earlier start's startForeground waits on that one, which clears it
+            // (setServiceForegroundInnerLocked).
+            types != 0 -> if (wanted != 0 && !follow(wanted)) leave(lastStart)
+            wanted != 0 -> if (enter(wanted, kjb)) hold(kjb, wanted) else port.stopSelf(startId)
+            // The work ended before its start came: in and out.
+            else -> inAndOut(startId, kjb)
         }
     }
 
-    /** A job ended: out of the foreground when no other runs. */
+    /** Work ended: out of the foreground when no other runs, else in it as the types of the work that goes on. */
     @Synchronized
     fun jobEnded() {
-        if (held && !busy()) leave(lastStart)
+        val wanted = wanted()
+        if (types != 0 && (wanted == 0 || !follow(wanted))) leave(lastStart)
     }
 
     /**
@@ -159,26 +172,57 @@ class JobForeground<Tap : Any>(
      */
     @Synchronized
     fun noticeChanged() {
-        if (held) port.updateNotice(tap)
+        if (types != 0) port.updateNotice(tap)
     }
 
     /** KJB let go of the add-on (onUnbind). */
     @Synchronized
     fun unbound() {
-        if (held) leave(lastStart)
+        if (types != 0) leave(lastStart)
     }
 
-    /** onTimeout (Android 15+): the work ends as try later, and the service leaves the foreground there and then. */
+    /**
+     * onTimeout (Android 15+): Android's time for [type] ran out. The work of that type ends as try later (all the work,
+     * should none be of that type), and the service drops the type there and then, as Android requires within seconds: it
+     * stays in the foreground as the types of the work that goes on, else leaves it.
+     */
     @Synchronized
-    fun timeUp() {
-        log("Android's time for the foreground service ran out")
-        endJob()
-        leave(startId = null)
+    fun timeUp(type: Int) {
+        log("Android's time for the foreground service ran out (type $type)")
+        val ending = works.filter { it.type and type != 0 }.ifEmpty { works }
+        ending.forEach { it.timeUp() }
+        expired = expired or ending.fold(0) { types, work -> types or work.type }
+        val rest = wanted()
+        if (types == 0 || rest == 0 || !follow(rest)) leave(startId = null)
     }
 
-    /** Into the foreground; false when Android refuses, and the job runs without it. */
-    private fun enter(tap: Tap?): Boolean = try {
-        port.startForeground(type(), tap)
+    /**
+     * The types of the work under way, less those whose time ran out while their work winds down. Once all its work has
+     * ended, such a type is Android's to refuse again, no longer this service's to leave out.
+     */
+    private fun wanted(): Int {
+        val running = works.fold(0) { types, work -> if (work.busy()) types or work.type else types }
+        expired = expired and running
+        return running and expired.inv()
+    }
+
+    /**
+     * In the foreground as [wanted] from now on, when the types of the work under way changed (startForeground again,
+     * which replaces them). False when Android refused and the service keeps a type no work under way needs; a type
+     * refused as its work joins is simply not added, and that work runs without it.
+     */
+    private fun follow(wanted: Int): Boolean {
+        if (wanted == types) return true
+        if (enter(wanted, tap)) {
+            types = wanted
+            return true
+        }
+        return wanted and types == types
+    }
+
+    /** Into the foreground as [types]; false when Android refuses, and the work runs without it. */
+    private fun enter(types: Int, tap: Tap?): Boolean = try {
+        port.startForeground(types, tap)
         true
     } catch (e: RuntimeException) {
         // ForegroundServiceStartNotAllowedException (Android 12+: no exemption at this moment; 15+: the day's time used
@@ -187,20 +231,21 @@ class JobForeground<Tap : Any>(
         false
     }
 
-    private fun hold(kjb: Tap) {
-        held = true
+    private fun hold(kjb: Tap, types: Int) {
+        this.types = types
         tap = kjb
     }
 
+    /** A start with no work of KJB's under way: in, as every type the service's work takes, and out at once. */
     private fun inAndOut(startId: Int, tap: Tap?) {
-        if (enter(tap)) port.stopForeground()
+        if (enter(works.fold(0) { types, work -> types or work.type }, tap)) port.stopForeground()
         port.stopSelf(startId)
     }
 
     private fun leave(startId: Int?) {
         port.stopForeground()
         port.stopSelf(startId)
-        held = false
+        types = 0
         tap = null
     }
 }

@@ -3,7 +3,7 @@ package app.lyrify.models
 import android.content.pm.ServiceInfo
 import app.lyrify.addon.shared.ForegroundPort
 import app.lyrify.addon.shared.JobForeground
-import app.lyrify.ai.foregroundType
+import app.lyrify.ai.downloadWork
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import kotlinx.coroutines.CompletableDeferred
@@ -226,7 +226,10 @@ class ModelDownloadsTest {
         }
     }
 
-    /** The download and the add-on's one foreground service, wired as AiService wires them, no song's job running. */
+    /**
+     * The download and the add-on's one foreground service, wired as AiService wires them, no song's job running
+     * (AiServiceTest runs one beside it).
+     */
     private fun TestScope.wired(port: Foreground, download: suspend (suspend (Long, Long) -> Unit) -> Download): Pair<DownloadRun, JobForeground<String>> {
         lateinit var foreground: JobForeground<String>
         val run = DownloadRun(
@@ -235,7 +238,7 @@ class ModelDownloadsTest {
             ended = { foreground.jobEnded() },
             download = download,
         )
-        foreground = JobForeground({ foregroundType(36, job = false) }, port, busy = { run.busy }, fromKjb = { it == KJB }, endJob = run::timeUp)
+        foreground = JobForeground(listOf(downloadWork(run)), port, fromKjb = { it == KJB })
         return run to foreground
     }
 
@@ -317,7 +320,7 @@ class ModelDownloadsTest {
         runCurrent()
         foreground.start(1, KJB)
 
-        foreground.timeUp()
+        foreground.timeUp(ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
         runCurrent()
 
         assertTrue(heard.events.toString(), heard.events.last().startsWith("end Interrupted"))
@@ -464,7 +467,7 @@ class ModelDownloadsTest {
                 ModelDownloader(store, userAgent = "KJB-AI/test", hosts = loopback, io = Dispatchers.IO, freeBytes = { Long.MAX_VALUE }).downloadAll(progress)
             }
         }
-        foreground = JobForeground({ foregroundType(36, job = false) }, port, busy = { run.busy }, fromKjb = { it == KJB }, endJob = run::timeUp)
+        foreground = JobForeground(listOf(downloadWork(run)), port, fromKjb = { it == KJB })
         val halfway = CompletableDeferred<Unit>()
         val first = object : DownloadEvents {
             val ended = CompletableDeferred<Download>()

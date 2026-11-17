@@ -20,6 +20,7 @@ import app.lyrify.addon.shared.AddonKeepAlive
 import app.lyrify.addon.shared.CallerCheck
 import app.lyrify.addon.shared.ExemptionActivity
 import app.lyrify.addon.shared.ForegroundPort
+import app.lyrify.addon.shared.ForegroundWork
 import app.lyrify.addon.shared.JobForeground
 import app.lyrify.dl.api.DlEnd
 import app.lyrify.dl.api.DlFile
@@ -110,7 +111,7 @@ class DlService : Service() {
 
     private val foreground: JobForeground<PendingIntent> by lazy {
         JobForeground(
-            { ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC },
+            listOf(ForegroundWork(ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC, busy = { runs.busy }, timeUp = runs::timeUp)),
             object : ForegroundPort<PendingIntent> {
                 override fun startForeground(type: Int, tap: PendingIntent?) = this@DlService.startForeground(NOTICE_ID, notice(tap), type)
 
@@ -120,9 +121,7 @@ class DlService : Service() {
                     if (startId == null) this@DlService.stopSelf() else this@DlService.stopSelfResult(startId)
                 }
             },
-            busy = { runs.busy },
             fromKjb = { tap -> AddonKeepAlive.fromKjb(tap, callers) },
-            endJob = { runs.timeUp() },
             log = { Log.i(LOG_TAG, it) },
         )
     }
@@ -154,7 +153,7 @@ class DlService : Service() {
     }
 
     /** Android's time for the foreground service ran out (Android 15+): out of it within seconds, or Android ends the add-on. */
-    override fun onTimeout(startId: Int, fgsType: Int) = foreground.timeUp()
+    override fun onTimeout(startId: Int, fgsType: Int) = foreground.timeUp(fgsType)
 
     /**
      * The notice while it works, in a quiet channel: the same words for every link, nothing of it (KJB's own notification
