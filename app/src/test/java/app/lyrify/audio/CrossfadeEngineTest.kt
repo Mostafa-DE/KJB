@@ -196,6 +196,40 @@ class CrossfadeEngineTest {
     }
 
     @Test
+    fun `each move to another song by hand is the engine's song at once and told, in a swap, in skip spam and in a fade`() = runTest {
+        // The lock screen's details are the session's state, read from the engine as the seek returns and when it says
+        // it changed: a move that left the engine on the song before, or said nothing, would keep the old title (CV1).
+        val rig = FadeRig(this, crossfadeSeconds = 6, songs = tones(6))
+        val told = mutableListOf<Int>()
+        rig.engine.addListener(object : EngineListener {
+            override fun onChanged() {
+                told += rig.engine.index
+            }
+        })
+        fun move(to: Int) {
+            told.clear()
+            rig.engine.seek(to, 0)
+            assertEquals(to, rig.engine.index)
+            assertEquals(rig.uids[to], rig.engine.loaded[rig.engine.index])
+            assertEquals(to, told.firstOrNull())
+        }
+        rig.run(10_000)
+        // A song sounding and nothing fading: the swap over the short fade.
+        move(1)
+        // Next again and again inside the short fade.
+        listOf(2, 3, 4).forEach { to ->
+            rig.run(50)
+            move(to)
+        }
+        // Another song during a natural fade.
+        rig.run(1_000)
+        rig.runToLeft(6_000)
+        rig.run(2_000)
+        rig.two(rig.live)
+        move(0)
+    }
+
+    @Test
     fun `pausing never fades, and a pause during a fade stops both players where they are until playing again`() = runTest {
         val rig = FadeRig(this, crossfadeSeconds = 6)
         rig.run(10_000)

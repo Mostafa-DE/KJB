@@ -9,6 +9,7 @@ import android.database.Cursor
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Bundle
+import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.os.Process
 import android.provider.MediaStore
@@ -426,18 +427,24 @@ fun <T : Any> coverFor(path: String, embedded: (Long) -> T?, fallback: () -> T):
  * Cover [path] as KJB's own surfaces read it in the process ([CarCovers.read]): song [path]'s embedded cover ([embedded],
  * by its MediaStore id), else the default cover ([fallback]) when MediaStore has none for it (FileNotFoundException:
  * no embedded art, or the song is gone) or the path is not a song's; the cover of the opened copy [path] names ([opened],
- * never a car's), else the default; null when a song's could not be read now (any other IOException, a
- * SecurityException), so a surface that keeps its cover per song reads it again later.
+ * never a car's), else the default; null when it could not be read now (any other IOException, a SecurityException or
+ * any other RuntimeException, such as a thumbnail that did not decode, or an OutOfMemoryError), told to [failed]: a
+ * surface that keeps its cover per song reads it again later, and the session shows the default cover, never a failure.
  */
-fun <T : Any> ownCover(path: String, embedded: (Long) -> T, opened: (String) -> T? = { null }, fallback: () -> T): T? {
-    val id = path.toLongOrNull() ?: return path.takeIf { openedCoverDir(it) != null }?.let(opened) ?: fallback()
+fun <T : Any> ownCover(path: String, embedded: (Long) -> T, opened: (String) -> T? = { null }, failed: (Throwable) -> Unit = {}, fallback: () -> T): T? {
+    val id = path.toLongOrNull()
     return try {
-        embedded(id)
+        if (id != null) embedded(id) else path.takeIf { openedCoverDir(it) != null }?.let(opened) ?: fallback()
     } catch (e: FileNotFoundException) {
         fallback()
     } catch (e: IOException) {
+        failed(e)
         null
-    } catch (e: SecurityException) {
+    } catch (e: RuntimeException) {
+        failed(e)
+        null
+    } catch (e: OutOfMemoryError) {
+        failed(e)
         null
     }
 }
@@ -526,14 +533,18 @@ class CarCovers : ContentProvider() {
          * ([OpenedFiles.cover]), else the default cover, which a uri KJB did not sign, and a read that failed, also get.
          * No library check: KJB hands out only its own songs' and copies' uris. Blocking.
          */
-        fun bitmap(context: Context, uri: Uri): Bitmap = read(context, uri) ?: defaultBitmap(context)
+        fun bitmap(context: Context, uri: Uri): Bitmap = read(context, uri, { it }) { defaultBitmap(context) } ?: defaultBitmap(context)
 
         /**
-         * The cover at [uri] as [bitmap] reads it, for the widgets, which keep it for the song: null when it could not be
-         * read now ([ownCover]), so they read it again rather than keep the default cover. Blocking.
+         * The cover at [uri] as [bitmap] reads it, for the widgets, which keep it for the song: [own] of the song's
+         * embedded cover or the opened copy's; [none] when it has none, or for a uri KJB did not sign; null when it could
+         * not be read now ([ownCover]), so they read it again rather than keep the default cover, the error's name
+         * logged. Blocking.
          */
-        fun read(context: Context, uri: Uri): Bitmap? =
-            ownCover(uris(context).pathOf(uri.pathSegments).orEmpty(), { thumbnail(context, it) }, { opened(context, it) }) { defaultBitmap(context) }
+        fun <T : Any> read(context: Context, uri: Uri, own: (Bitmap) -> T, none: () -> T): T? =
+            ownCover(uris(context).pathOf(uri.pathSegments).orEmpty(), { own(thumbnail(context, it)) }, { opened(context, it)?.let(own) }, ::notRead, none)
+
+        private fun notRead(e: Throwable) = Log.w(LOG_TAG, "cover not read: ${e.javaClass.simpleName}")
 
         /** The embedded cover of the opened copy [key] names, at most [COVER_PX] square; null when the copy is gone or has none. */
         private fun opened(context: Context, key: String): Bitmap? =
@@ -563,7 +574,19 @@ class CarCovers : ContentProvider() {
             return if (scale >= 1f) bitmap else bitmap.scale((bitmap.width * scale).roundToInt(), (bitmap.height * scale).roundToInt())
         }
 
-        private fun defaultBitmap(context: Context): Bitmap =
+        /**
+         * [bitmap] as KJB's session keeps and hands it on, made once: immutable, and from Android 12 in shared memory,
+         * as Media3 makes every bitmap it passes on (BitmapUtil.makeShared). So a kept cover is never copied again at
+         * each update, and nothing drawing into one can change it.
+         */
+        internal fun sessionCover(bitmap: Bitmap): Bitmap = when {
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> bitmap.asShared()
+            bitmap.isMutable -> bitmap.copy(Bitmap.Config.ARGB_8888, false)
+            else -> bitmap
+        }
+
+        /** KJB's default cover, [COVER_PX] square, made anew at each call. */
+        internal fun defaultBitmap(context: Context): Bitmap =
             checkNotNull(ContextCompat.getDrawable(context, R.drawable.kjb_default_cover)).toBitmap(COVER_PX, COVER_PX)
 
         private fun defaultJpeg(context: Context): ByteArray = madeDefault ?: jpeg(defaultBitmap(context)).also { madeDefault = it }

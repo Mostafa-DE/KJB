@@ -55,6 +55,7 @@ import app.lyrify.logFailures
 import app.lyrify.media.NowPlaying
 import app.lyrify.media.QueueSweep
 import app.lyrify.settings.Settings
+import app.lyrify.tags.CoverVersions
 import app.lyrify.ui.DESTINATION_PLAYER
 import app.lyrify.ui.EXTRA_DESTINATION
 import app.lyrify.ui.LockLyricsActivity
@@ -64,8 +65,6 @@ import app.lyrify.widget.WidgetPart
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
-import com.google.common.util.concurrent.ListeningExecutorService
-import com.google.common.util.concurrent.MoreExecutors
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -75,11 +74,13 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 /**
@@ -217,6 +218,8 @@ class PlaybackService : MediaLibraryService() {
                 .distinctUntilChanged()
                 .collect(offload::wanted)
         }
+        // Covers & tags changed a song's cover: the session's kept covers are read again.
+        scope.launch { CoverVersions.versions.drop(1).collect { thumbnails.forget() } }
         scope.launch { savePlaces(playing) { savePlace() } }
         scope.launch { repeatWhilePlaying(playing, POSITION_EVERY_MS) { tracker.position(engine.positionMs, playing = true) } }
         ownLyrics()
@@ -236,7 +239,7 @@ class PlaybackService : MediaLibraryService() {
         parts.forEach { it.stop() }
         session?.release()
         session = null
-        // Its thread would outlive the service; a cover still loading fails, and the notification is going anyway.
+        // Its threads would outlive the service; the notification is going anyway.
         thumbnails.shutdown()
         engine.release()
         player.release()
@@ -273,6 +276,15 @@ class PlaybackService : MediaLibraryService() {
         if (!::engine.isInitialized) return
         val uid = engine.loaded.getOrNull(engine.index) ?: return
         core.savePlace(uid, engine.positionMs)
+    }
+
+    /**
+     * The covers of the songs either side of the one playing, read ahead: Next and Previous then find theirs kept, so the
+     * lock screen gets the song's details and its cover in one update ([SessionCovers]).
+     */
+    private fun warmCovers() {
+        val items = engine.items
+        thumbnails.warm(aroundSong(engine.index, items.size).mapNotNull { items[it].mediaMetadata.artworkUri })
     }
 
     /** Where the song playing is now, for the play counter. */
@@ -314,6 +326,7 @@ class PlaybackService : MediaLibraryService() {
     private inner class Follower : EngineListener {
         override fun onSongStarted(uid: Long, lap: Boolean, natural: Boolean) {
             offload.songStarted()
+            warmCovers()
             val book = core.book.value
             val item = book.current?.items?.firstOrNull { it.uid == uid } ?: return
             if (!lap) core.change { it.at(uid, core.now()) }
@@ -456,24 +469,49 @@ class PlaybackService : MediaLibraryService() {
 
 /**
  * Covers for the notification, the lock screen and Bluetooth: a uri of KJB's cover provider ([metadataOf]'s artwork
- * uri) is read here in the process ([CarCovers.bitmap]): the song's embedded art, else KJB's default cover, at most
- * 512 px. Anything else goes to Media3's own loader.
+ * uri) is read here in the process ([CarCovers.read]): the song's embedded art, else KJB's default cover, at most
+ * 512 px; kept, read ahead, the newest asked for first, and each within its wait ([SessionCovers]). Anything else goes
+ * to Media3's own loader.
  */
 @OptIn(UnstableApi::class)
 private class ThumbnailLoader(private val context: Context) : BitmapLoader {
     private val fallback = DataSourceBitmapLoader.Builder(context).build()
-    private val io: ListeningExecutorService = MoreExecutors.listeningDecorator(Executors.newSingleThreadExecutor())
-    private val covers = CarCovers.uris(context)
+    private val io: ExecutorService = Executors.newFixedThreadPool(SessionCovers.READERS)
+    private val main = Handler(context.mainLooper)
+    private val uris = CarCovers.uris(context)
+
+    /** KJB's default cover, made once, as kept covers are ([CarCovers.sessionCover]). */
+    private val default: Bitmap by lazy { CarCovers.sessionCover(CarCovers.defaultBitmap(context)) }
+    private val covers = SessionCovers<Uri, Bitmap>(
+        read = { uri -> CarCovers.read<CoverFound<Bitmap>>(context, uri, { CoverFound.Own(CarCovers.sessionCover(it)) }) { CoverFound.NoArt } },
+        fallback = { default },
+        sizeOf = Bitmap::getAllocationByteCount,
+        run = io,
+        later = { delayMs, task ->
+            main.postDelayed(task, delayMs)
+            Runnable { main.removeCallbacks(task) }
+        },
+        clock = SystemClock::elapsedRealtime,
+        log = { line -> Log.w(LOG_TAG, line) },
+    )
 
     override fun supportsMimeType(mimeType: String): Boolean = fallback.supportsMimeType(mimeType)
 
     override fun decodeBitmap(data: ByteArray): ListenableFuture<Bitmap> = fallback.decodeBitmap(data)
 
-    override fun loadBitmap(uri: Uri): ListenableFuture<Bitmap> {
-        if (uri.scheme != ContentResolver.SCHEME_CONTENT || uri.authority != covers.authority) return fallback.loadBitmap(uri)
-        return io.submit<Bitmap> { CarCovers.bitmap(context, uri) }
-    }
+    override fun loadBitmap(uri: Uri): ListenableFuture<Bitmap> = if (ours(uri)) covers.ask(uri) else fallback.loadBitmap(uri)
 
-    /** Lets the loading thread go, with the service. */
+    /** The covers at [artwork] read ahead: the songs either side of the one playing. */
+    fun warm(artwork: List<Uri>) = covers.warm(artwork.filter(::ours))
+
+    /** KJB changed covers: the ones kept are read again. */
+    fun forget() = covers.forget()
+
+    private fun ours(uri: Uri): Boolean = uri.scheme == ContentResolver.SCHEME_CONTENT && uri.authority == uris.authority
+
+    /**
+     * Lets the reading threads go, with the service: a read going on ends as it would, and a cover not read yet gets the
+     * default at once.
+     */
     fun shutdown() = io.shutdown()
 }

@@ -394,7 +394,7 @@ class CarAccessTest {
         }) { "default" }
 
         assertEquals("cover 20", own("20"))
-        // No art: the default cover, which the widget keeps for the song, as the car shows it.
+        // No art: the default cover, which the widget keeps for the song (and reads once more a minute on), as the car shows it.
         assertEquals("default", own("22"))
         // A read that failed: no cover, so the widget reads it again at its next update rather than keep the default.
         assertNull(own("23"))
@@ -403,6 +403,32 @@ class CarAccessTest {
         assertEquals("default", own(DEFAULT_COVER))
         assertEquals("default", own(""))
         assertEquals(listOf(20L, 22L, 23L, 24L), read)
+    }
+
+    @Test
+    fun `a cover read that throws anything else or runs out of memory is a read that failed, its error's name told`() {
+        val failed = mutableListOf<String>()
+        fun own(path: String): String? = try {
+            ownCover(path, { id ->
+                when (id) {
+                    // MediaStore's thumbnail did not decode, or the picture did not fit in memory now.
+                    25L -> throw IllegalStateException("made up")
+                    26L -> throw IllegalArgumentException("made up")
+                    27L -> throw OutOfMemoryError("made up")
+                    else -> throw IOException()
+                }
+            }, opened = { throw IllegalStateException("made up") }, failed = { failed += it.javaClass.simpleName }) { "default" }
+        } catch (e: Throwable) {
+            "threw ${e.javaClass.simpleName}"
+        }
+
+        // Null, as any read that failed: the session shows the default cover, the widget reads it again at its next update.
+        assertNull(own("25"))
+        assertNull(own("26"))
+        assertNull(own("27"))
+        assertNull(own("opened-1000-0"))
+        assertNull(own("28"))
+        assertEquals(listOf("IllegalStateException", "IllegalArgumentException", "OutOfMemoryError", "IllegalStateException", "IOException"), failed)
     }
 
     @Test
