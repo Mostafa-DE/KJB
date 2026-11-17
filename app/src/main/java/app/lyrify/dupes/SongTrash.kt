@@ -9,12 +9,19 @@ import android.provider.MediaStore
 import app.lyrify.data.SharedWrite
 import app.lyrify.data.SharedWrites
 import app.lyrify.library.Song
+import app.lyrify.tags.PayloadHash
+import app.lyrify.tags.SongEdit
+import app.lyrify.tags.UndoMemory
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 /** Moving songs to the phone's trash: two confirmations, KJB's then the phone's. */
@@ -33,13 +40,19 @@ sealed interface TrashStep {
 
 /** What the phone's answer did. */
 sealed interface Trashed {
-    /** [count] songs are in the phone's trash; KJB's own lyrics for them are gone too. */
-    data class Moved(val count: Int) : Trashed
+    /**
+     * [count] of the [of] songs the phone was asked to move are in its trash; KJB's own lyrics for them are gone too. The
+     * others the phone did not move, though it said OK: they stay as they were.
+     */
+    data class Moved(val count: Int, val of: Int = count) : Trashed
 
     /** The phone's dialog was cancelled, or nothing waited for an answer: nothing changed. */
     data object Unchanged : Trashed
 
-    /** The phone said OK, but MediaStore could not say what is in its trash: nothing changed yet; the next scan settles it. */
+    /**
+     * The phone said OK, but MediaStore could not say what is in its trash: nothing changed yet; the files wait, and the
+     * next Move, scan or visit to Duplicates settles them.
+     */
     data object NotConfirmed : Trashed
 }
 
@@ -51,7 +64,10 @@ sealed interface Confirmation {
     /** A file changed since it was listed: nothing is asked (Duplicates: its group waits for the next scan). */
     data object Changed : Confirmation
 
-    /** MediaStore could not be read: nothing is asked; the user can try again. */
+    /**
+     * MediaStore could not be read, or could not say what an earlier request moved (its files still wait): nothing is
+     * asked; the user can try again.
+     */
     data object Unavailable : Confirmation
 
     /** KJB's dialog was not open: nothing is asked. */
@@ -135,7 +151,8 @@ interface TrashHost {
  * [confirm]) and settled after the phone's answer ([answered]): the lyrics KJB wrote go ([cleanup]) and the song is
  * listed as trashed until the phone deletes it. A listed song can be taken back out through the phone's dialog too
  * ([restore]). The files waiting for an answer are kept, so an answer the app did not live to hear is still settled
- * ([settlePending]). The log gets counts only, never titles or paths.
+ * ([settlePending]), and the next Move settles them before it asks ([settleLeftover], [confirm]): a request whose
+ * answer never came never blocks another. The log gets counts only, never titles or paths.
  */
 class SongTrash(
     private val host: TrashHost,
@@ -145,8 +162,17 @@ class SongTrash(
     private val phoneTrash: PhoneTrash,
     private val io: CoroutineDispatcher,
     private val clock: () -> Long,
+    /**
+     * Whether a file listed as `listed` and in MediaStore now as `now`, in the same place under the same name but of
+     * another size, was changed since only by KJB's own tag writes ([kjbTagWrites]): it is still the file listed.
+     * Blocking.
+     */
+    private val ownWrite: (listed: AudioFile, now: AudioFile) -> Boolean = { _, _ -> false },
     private val log: (String) -> Unit = {},
 ) {
+    /** One settling of the files waiting for an answer at a time: the phone's answer, a Move's, a scan's or the tab's. */
+    private val settling = Mutex()
+
     /** Which dialog is open: KJB's, the phone's to trash, or the phone's to restore. */
     val step: TrashStep get() = host.step
 
@@ -154,11 +180,13 @@ class SongTrash(
     val trashed: List<TrashedSong> get() = host.memory.trashed.sortedByDescending { it.trashedAt }
 
     /**
-     * "Move to trash" for [files]: KJB's own dialog asks first ([TrashStep.Confirm]). False while a dialog is open (KJB's,
-     * or the phone's to trash or restore), another answer is awaited, or nothing is given: nothing is asked.
+     * "Move to trash" for [files]: KJB's own dialog asks first ([TrashStep.Confirm]). False only when nothing is given. A
+     * dialog step still open gives way: KJB's dialogs and the phone's cover the screen, so a Move the user could tap
+     * means none of them is up, and the answer that step waited for is not coming (its screen went, or the app died with
+     * the dialog open). The files such a step left waiting are settled before the phone is asked again ([confirm]).
      */
     fun ask(files: List<AudioFile>): Boolean {
-        if (files.isEmpty() || host.memory.pending.isNotEmpty() || host.step != TrashStep.None) return false
+        if (files.isEmpty()) return false
         host.step { TrashStep.Confirm(files) }
         return true
     }
@@ -169,37 +197,18 @@ class SongTrash(
     }
 
     /**
-     * "Move to trash" in KJB's dialog, which shows [shown]: the files are remembered (so an answer the app does not live
-     * to hear is still settled), then their MediaStore ids are returned for the phone's own dialog
-     * ([MediaStoreTrash.request]). Nothing is asked unless that dialog is open on [shown], and a file that changed since it
-     * was listed blocks the request. Cancelled before it returns (the page went), the phone's dialog never opens, so
-     * nothing is left waiting for its answer and a later trash can ask.
+     * "Move to trash" in KJB's dialog, which shows [shown]: what an earlier request left waiting is settled first, then
+     * the files are remembered (so an answer the app does not live to hear is still settled), and their MediaStore ids
+     * are returned for the phone's own dialog ([MediaStoreTrash.request]). Nothing is asked unless that dialog is open on
+     * [shown], and a file that changed since it was listed blocks the request ([changed]). Cancelled before it returns
+     * (the page went), the phone's dialog never opens, so nothing is left waiting for its answer and a later trash can
+     * ask.
      */
     suspend fun confirm(shown: List<AudioFile>): Confirmation {
         if (host.step != TrashStep.Confirm(shown)) return Confirmation.NotAsked
         try {
-            val now = withContext(io) { rows(shown.map { it.id }) }
-            if (now == null) {
-                host.step { TrashStep.None }
-                return Confirmation.Unavailable
-            }
-            val changed = shown.any { file ->
-                val row = now[file.id]
-                row == null || row.path != file.path || row.size != file.size || row.displayName != file.displayName
-            }
-            if (changed) {
-                host.step { TrashStep.None }
-                host.changed(shown.map { it.id }.toSet())
-                return Confirmation.Changed
-            }
-            if (host.step != TrashStep.Confirm(shown)) return Confirmation.NotAsked
-            // The memory and the step change together, whatever happens to the caller meanwhile.
-            withContext(NonCancellable) {
-                host.commit(emptySet()) { it.copy(pending = shown) }
-                host.step { TrashStep.System(shown) }
-            }
-            currentCoroutineContext().ensureActive()
-            return Confirmation.Ask(shown.map { it.id })
+            host.loaded()
+            return settling.withLock { confirmSettled(shown) }
         } catch (e: CancellationException) {
             withContext(NonCancellable) {
                 host.step { if (it == TrashStep.Confirm(shown) || it == TrashStep.System(shown)) TrashStep.None else it }
@@ -210,20 +219,60 @@ class SongTrash(
     }
 
     /**
+     * [confirm] with no other settling running: what an earlier request left waiting goes first (its answer never came,
+     * or MediaStore could not say), so remembering [shown] in its place forgets none of it. The step changes to the
+     * phone's dialog with the memory, before any other settling can take [shown] for files whose answer was lost.
+     */
+    private suspend fun confirmSettled(shown: List<AudioFile>): Confirmation {
+        val settled = withContext(NonCancellable + io) { settleWaiting() }
+        val now = if (settled) withContext(io) { rows(shown.map { it.id }) } else null
+        if (now == null) {
+            close(shown)
+            return Confirmation.Unavailable
+        }
+        if (withContext(io) { shown.any { changed(it, now[it.id]) } }) {
+            close(shown)
+            host.changed(shown.map { it.id }.toSet())
+            return Confirmation.Changed
+        }
+        if (host.step != TrashStep.Confirm(shown)) return Confirmation.NotAsked
+        // The memory and the step change together, whatever happens to the caller meanwhile.
+        withContext(NonCancellable) {
+            host.commit(emptySet()) { it.copy(pending = shown) }
+            host.step { TrashStep.System(shown) }
+        }
+        currentCoroutineContext().ensureActive()
+        return Confirmation.Ask(shown.map { it.id })
+    }
+
+    /**
+     * Whether [file] is not the one MediaStore has now ([row]; null: no longer listed): another place, name or size. A
+     * size that only KJB's own tag writes changed ([ownWrite]) is still the same file. Blocking.
+     */
+    private fun changed(file: AudioFile, row: AudioFile?): Boolean =
+        row == null || row.path != file.path || row.displayName != file.displayName || row.size != file.size && !ownWrite(file, row)
+
+    /** KJB's dialog on [shown] closes, unless a newer step took its place. */
+    private fun close(shown: List<AudioFile>) = host.step { if (it == TrashStep.Confirm(shown)) TrashStep.None else it }
+
+    /**
      * The phone's dialog answered. [approved] (RESULT_OK): for each file MediaStore confirms is trashed, the lyrics KJB
-     * wrote go ([cleanup]). Not approved: nothing changes. Finishes even if the screen goes.
+     * wrote go ([cleanup]). Not approved: nothing changes. Only the phone's dialog step closes: KJB's own, open for a
+     * newer Move, stays. Finishes even if the screen goes.
      */
     suspend fun answered(approved: Boolean): Trashed = withContext(NonCancellable + io) {
         host.loaded()
-        val pending = host.memory.pending
-        host.step { TrashStep.None }
-        when {
-            pending.isEmpty() -> Trashed.Unchanged
-            !approved -> {
-                host.commit(emptySet()) { it.copy(pending = emptyList()) }
-                Trashed.Unchanged
+        host.step { if (it is TrashStep.System) TrashStep.None else it }
+        settling.withLock {
+            val pending = host.memory.pending
+            when {
+                pending.isEmpty() -> Trashed.Unchanged
+                !approved -> {
+                    host.commit(emptySet()) { it.copy(pending = emptyList()) }
+                    Trashed.Unchanged
+                }
+                else -> settle(pending)?.let { Trashed.Moved(it, of = pending.size) } ?: Trashed.NotConfirmed
             }
-            else -> settle(pending)?.let(Trashed::Moved) ?: Trashed.NotConfirmed
         }
     }
 
@@ -267,10 +316,29 @@ class SongTrash(
         log("trash: ${songs.size - kept.size} trashed songs off the list")
     }
 
-    /** A trash answer the app did not live to hear (no phone dialog open now): MediaStore says which files are trashed. */
-    suspend fun settlePending() {
+    /**
+     * A trash answer the app did not live to hear, unless the phone's dialog may still be open: MediaStore says which
+     * files are trashed. Before a scan, and as Duplicates opens.
+     */
+    suspend fun settlePending(): Unit = withContext(NonCancellable + io) {
+        host.loaded()
+        settling.withLock { if (host.step !is TrashStep.System) settleWaiting() }
+    }
+
+    /**
+     * What earlier requests left waiting, settled whatever dialog step is open: for a Move the user just tapped, when no
+     * dialog of the phone can be up ([ask]). False when MediaStore could not say, so the files still wait. Duplicates
+     * runs it before it checks a group's copies: one the phone did move is gone.
+     */
+    suspend fun settleLeftover(): Boolean = withContext(NonCancellable + io) {
+        host.loaded()
+        settling.withLock { settleWaiting() }
+    }
+
+    /** Settles the files waiting for an answer, if any; false when MediaStore could not say, so they still wait. Under [settling]. */
+    private suspend fun settleWaiting(): Boolean {
         val pending = host.memory.pending
-        if (pending.isNotEmpty() && host.step !is TrashStep.System) withContext(NonCancellable) { settle(pending) }
+        return pending.isEmpty() || settle(pending) != null
     }
 
     /**
@@ -278,7 +346,11 @@ class SongTrash(
      * as trashed until the phone deletes them. Returns how many; null when MediaStore could not say.
      */
     private suspend fun settle(pending: List<AudioFile>): Int? {
-        val expiries = phoneTrash.inTrash(pending.map { it.id }) ?: return null
+        val expiries = phoneTrash.inTrash(pending.map { it.id })
+        if (expiries == null) {
+            log("trash: MediaStore could not say what is in its trash, ${pending.size} files wait")
+            return null
+        }
         val trashed = pending.filter { it.id in expiries }
         for (file in trashed) cleanup.trashed(file.path)
         val ids = trashed.map { it.id }.toSet()
@@ -292,6 +364,47 @@ class SongTrash(
     private companion object {
         /** How long the phone keeps trashed files when MediaStore does not say (AOSP MediaProvider: 30 days). */
         const val TRASH_KEPT_MS: Long = 30 * 24 * 60 * 60_000L
+    }
+}
+
+/**
+ * Whether the song [listed] names, listed at one size and in MediaStore [now] at another (same place, same name), was
+ * changed since only by KJB's own tag writes: [edits] are History's records of it ([kjbEdits]), oldest first. The file
+ * must be byte for byte what the latest one wrote ([sha256]: of the file now; null when it can't be read), and, going
+ * back through the writes that follow one another (each from what the one before wrote), one must have started from a
+ * file of the listed size. That is the proof the size check gives, carried through KJB's own writes: a write by anyone
+ * else breaks the chain, and a record without sizes (made before KJB kept them) proves nothing.
+ */
+fun changedOnlyByKjb(listed: AudioFile, now: AudioFile, edits: List<SongEdit>, sha256: () -> String?): Boolean {
+    val latest = edits.lastOrNull() ?: return false
+    // The file is read only when MediaStore's size is the one KJB wrote.
+    if (latest.lengthAfter != now.size) return false
+    var bytes = sha256() ?: return false
+    for (edit in edits.asReversed()) {
+        if (edit.after != bytes) return false
+        if (edit.lengthBefore == listed.size) return true
+        bytes = edit.before
+    }
+    return false
+}
+
+/** History's records of the song [file] names (its MediaStore id and path), oldest first. */
+fun kjbEdits(history: UndoMemory, file: AudioFile): List<SongEdit> =
+    history.entries.sortedBy { it.id }.flatMap { entry -> entry.songs.filter { it.mediaStoreId == file.id && it.path == file.path } }
+
+/**
+ * [SongTrash]'s check for a file changed since it was listed only by KJB's own tag writes ([changedOnlyByKjb]), from
+ * History as [history] reads it then and the file's bytes on disk. Blocking.
+ */
+fun kjbTagWrites(history: () -> UndoMemory): (listed: AudioFile, now: AudioFile) -> Boolean = { listed, now ->
+    changedOnlyByKjb(listed, now, kjbEdits(history(), listed)) {
+        try {
+            PayloadHash.fileSha256(File(listed.path).toPath())
+        } catch (_: IOException) {
+            null // safe: a file that can't be read proves nothing, so it counts as changed
+        } catch (_: SecurityException) {
+            null // safe: as above
+        }
     }
 }
 

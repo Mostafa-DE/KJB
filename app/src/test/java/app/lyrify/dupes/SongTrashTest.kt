@@ -168,17 +168,83 @@ class SongTrashTest {
     }
 
     @Test
-    fun `nothing else is asked while the phone's answer is awaited`() = runTest {
+    fun `a Move while the phone's answer is still awaited means it is not coming, and the songs it left are settled first`() = runTest {
         val lantern = song(11, "Paper Lantern")
         val bell = song(12, "Tide Bell")
         val files = listOfNotNull(trashFile(lantern), trashFile(bell))
-        val trash = engine(files, pipeline()).trash
+        val pipeline = pipeline()
+        lyricsFor(lantern, pipeline)
+        val trash = engine(files, pipeline).trash
         advanceUntilIdle()
 
         trash.ask(files.take(1))
         trash.confirm(files.take(1))
-        assertFalse(trash.ask(files.drop(1)))
+        // The phone moved the song, but its answer never reached KJB (the screen went with the dialog open).
+        trashOnDisk(lantern.path, 11)
         assertFalse(trash.ask(emptyList()))
+        assertTrue(trash.ask(files.drop(1)))
+        assertEquals(Confirmation.Ask(listOf(12L)), trash.confirm(files.drop(1)))
+        assertFalse(lrc(lantern.path).exists())
+        assertEquals(listOf(lantern.path), forgotten)
+        assertEquals(listOf(11L), trash.trashed.map { it.file.id })
+        assertEquals(TrashStep.System(files.drop(1)), trash.step)
+    }
+
+    @Test
+    fun `songs an answer KJB never heard left waiting never block the next Move`() = runTest {
+        val files = listOfNotNull(trashFile(song(11, "Paper Lantern")), trashFile(song(12, "Tide Bell")))
+        // The app died with the phone's dialog open, and the user cancelled it: the song is not in the phone's trash.
+        val host = FakeTrashHost().apply { memory = TrashMemory(pending = files.take(1)) }
+        val trash = trash(host, files)
+
+        assertTrue(trash.ask(files.drop(1)))
+        assertEquals(Confirmation.Ask(listOf(12L)), trash.confirm(files.drop(1)))
+        assertEquals(TrashMemory(pending = files.drop(1)), host.memory)
+        assertEquals(TrashStep.System(files.drop(1)), trash.step)
+    }
+
+    @Test
+    fun `songs left waiting that MediaStore still can't settle are kept, and the Move asks nothing`() = runTest {
+        val files = listOfNotNull(trashFile(song(11, "Paper Lantern")), trashFile(song(12, "Tide Bell")))
+        val host = FakeTrashHost().apply { memory = TrashMemory(pending = files.take(1)) }
+        val trash = trash(host, files, inTrash = { null })
+
+        assertTrue(trash.ask(files.drop(1)))
+        assertEquals(Confirmation.Unavailable, trash.confirm(files.drop(1)))
+        assertEquals(TrashStep.None, trash.step)
+        assertEquals(TrashMemory(pending = files.take(1)), host.memory)
+        assertFalse(trash.settleLeftover())
+    }
+
+    @Test
+    fun `a late answer of the phone never closes KJB's dialog open for a newer Move`() = runTest {
+        val files = listOfNotNull(trashFile(song(11, "Paper Lantern")))
+        val host = FakeTrashHost()
+        val trash = trash(host, files)
+        assertTrue(trash.ask(files))
+        assertEquals(Trashed.Unchanged, trash.answered(approved = true))
+        assertEquals(TrashStep.Confirm(files), trash.step)
+    }
+
+    @Test
+    fun `a song whose size only KJB's own tag writes changed is still asked about, any other change is not`() = runTest {
+        val lantern = trashFile(song(11, "Paper Lantern")) ?: error("no file")
+        val bell = trashFile(song(12, "Tide Bell")) ?: error("no file")
+        // Both are bigger now; only the first by KJB's own writes.
+        val rows = listOf(lantern.copy(size = lantern.size + 10), bell.copy(size = bell.size + 10))
+        val ownWrites = mutableListOf<Pair<AudioFile, AudioFile>>()
+        val trash = trash(FakeTrashHost(), rows, ownWrite = { listed, now -> ownWrites += listed to now; listed.id == 11L })
+
+        assertTrue(trash.ask(listOf(lantern)))
+        assertEquals(Confirmation.Ask(listOf(11L)), trash.confirm(listOf(lantern)))
+        assertEquals(listOf(lantern to rows[0]), ownWrites)
+        trash.answered(approved = false)
+        assertTrue(trash.ask(listOf(bell)))
+        assertEquals(Confirmation.Changed, trash.confirm(listOf(bell)))
+        // KJB's own writes never excuse another place or name.
+        val moved = trash(FakeTrashHost(), listOf(lantern.copy(size = lantern.size + 10, displayName = "other.mp3")), ownWrite = { _, _ -> true })
+        assertTrue(moved.ask(listOf(lantern)))
+        assertEquals(Confirmation.Changed, moved.confirm(listOf(lantern)))
     }
 
     @Test
@@ -206,20 +272,22 @@ class SongTrashTest {
     }
 
     @Test
-    fun `nothing else is asked while KJB's dialog or a restore is open, and the dialog confirms only its own files`() = runTest {
+    fun `a new Move takes the place of a dialog left open, and a dialog confirms only its own files`() = runTest {
         val files = listOfNotNull(trashFile(song(11, "Paper Lantern")), trashFile(song(12, "Tide Bell")))
         val host = FakeTrashHost()
         val trash = trash(host, files)
 
         assertTrue(trash.ask(files.take(1)))
-        assertFalse(trash.ask(files.drop(1)))
-        assertEquals(TrashStep.Confirm(files.take(1)), trash.step)
-        assertEquals(Confirmation.NotAsked, trash.confirm(files.drop(1)))
-        assertEquals(TrashStep.Confirm(files.take(1)), trash.step)
+        assertTrue(trash.ask(files.drop(1)))
+        assertEquals(TrashStep.Confirm(files.drop(1)), trash.step)
+        assertEquals(Confirmation.NotAsked, trash.confirm(files.take(1)))
+        assertEquals(TrashStep.Confirm(files.drop(1)), trash.step)
         assertEquals(TrashMemory(), host.memory)
 
+        // A restore whose answer never came.
         host.step = TrashStep.Restoring(TrashedSong(files[1], BASE, BASE + DAY))
-        assertFalse(trash.ask(files.take(1)))
+        assertTrue(trash.ask(files.take(1)))
+        assertEquals(TrashStep.Confirm(files.take(1)), trash.step)
     }
 
     @Test
@@ -228,7 +296,7 @@ class SongTrashTest {
         for (cancelIn in listOf("rows", "commit")) {
             val host = FakeTrashHost()
             lateinit var confirming: Job
-            val trash = trash(host, files) { if (cancelIn == "rows") confirming.cancel() }
+            val trash = trash(host, files, onRows = { if (cancelIn == "rows") confirming.cancel() })
             if (cancelIn == "commit") host.onCommit = { confirming.cancel() }
             assertTrue(trash.ask(files))
             confirming = launch { trash.confirm(files) }
@@ -241,17 +309,27 @@ class SongTrashTest {
         }
     }
 
-    /** The flow over [host], with MediaStore's rows as [files] say (each read first runs [onRows]) and an empty phone trash. */
-    private fun TestScope.trash(host: TrashHost, files: List<AudioFile>, onRows: () -> Unit = {}) = SongTrash(
+    /**
+     * The flow over [host], with MediaStore's rows as [files] say (each read first runs [onRows]), the phone's trash as
+     * [inTrash] says (empty unless told), and KJB's own writes as [ownWrite] says (none unless told).
+     */
+    private fun TestScope.trash(
+        host: TrashHost,
+        files: List<AudioFile>,
+        inTrash: PhoneTrash = PhoneTrash { emptyMap() },
+        ownWrite: (AudioFile, AudioFile) -> Boolean = { _, _ -> false },
+        onRows: () -> Unit = {},
+    ) = SongTrash(
         host = host,
         rows = { ids ->
             onRows()
             files.filter { it.id in ids }.associateBy { it.id }
         },
         cleanup = {},
-        phoneTrash = { emptyMap() },
+        phoneTrash = inTrash,
         io = StandardTestDispatcher(testScheduler),
         clock = { BASE },
+        ownWrite = ownWrite,
     )
 
     /** The Duplicates engine's part made up: the step and the memory in fields, each commit first running [onCommit]. */

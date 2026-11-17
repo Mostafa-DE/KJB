@@ -8,9 +8,13 @@ import app.lyrify.dupes.DuplicatesMemory
 import app.lyrify.dupes.DuplicatesState
 import app.lyrify.dupes.ScanResults
 import app.lyrify.dupes.ScanStatus
+import app.lyrify.dupes.TrashAsk
+import app.lyrify.dupes.Trashed
 import app.lyrify.dupes.TrashedSong
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.LocalDateTime
 import java.time.ZoneId
@@ -99,6 +103,38 @@ class DuplicatesViewTest {
     }
 
     // Copy
+
+    @Test
+    fun `a Move that can't go ahead says why`() {
+        assertEquals(R.string.dupes_keep_one, moveRefused(TrashAsk.KEEP_ONE))
+        assertEquals(R.string.dupes_changed, moveRefused(TrashAsk.CHANGED))
+        assertEquals(R.string.dupes_trash_failed, moveRefused(TrashAsk.UNAVAILABLE))
+        assertNull(moveRefused(TrashAsk.ASKED))
+        assertNull(moveRefused(TrashAsk.NONE_CHECKED))
+    }
+
+    @Test
+    fun `every answer of the phone's trash dialog says what happened`() {
+        assertEquals(TrashSaid.Text(R.string.dupes_trash_cancelled), trashAnswered(approved = false, Trashed.Unchanged))
+        assertEquals(TrashSaid.Count(R.plurals.dupes_moved, 2), trashAnswered(approved = true, Trashed.Moved(2)))
+        assertEquals(TrashSaid.Count(R.plurals.dupes_moved_some, 3, listOf(1, 3)), trashAnswered(approved = true, Trashed.Moved(1, of = 3)))
+        assertEquals(TrashSaid.Count(R.plurals.dupes_moved_none, 2), trashAnswered(approved = true, Trashed.Moved(0, of = 2)))
+        assertEquals(TrashSaid.Text(R.string.dupes_trash_unconfirmed), trashAnswered(approved = true, Trashed.NotConfirmed))
+        // Nothing waited for this answer: there is nothing to say.
+        assertNull(trashAnswered(approved = true, Trashed.Unchanged))
+    }
+
+    @Test
+    fun `the trash messages take the tone that fits them, in plain words`() {
+        assertEquals(Toast("a", R.drawable.ic_delete, Tone.NONE), messageToast(R.plurals.dupes_moved_some, "a"))
+        assertEquals(Toast("a", R.drawable.ic_sync_problem, Tone.ERROR), messageToast(R.string.dupes_trash_unconfirmed, "a"))
+        listOf(R.plurals.dupes_moved_none, R.plurals.dupes_trash_refused).forEach { assertEquals(Toast("a", R.drawable.ic_error, Tone.ERROR), messageToast(it, "a")) }
+        assertEquals(Toast("a"), messageToast(R.string.dupes_trash_cancelled, "a"))
+        // Unit tests run in the module's folder.
+        val strings = java.io.File("src/main/res/values/strings_dupes.xml").readText()
+        assertTrue("""<string name="dupes_keep_one">KJB keeps one copy of each song.""" in strings)
+        assertFalse('\u2014' in strings)
+    }
 
     @Test
     fun `the last scan reads today, yesterday or its date`() {

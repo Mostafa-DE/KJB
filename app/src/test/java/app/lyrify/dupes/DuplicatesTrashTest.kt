@@ -107,7 +107,7 @@ class DuplicatesTrashTest {
         val group = scannedGroup(engine)
         val before = snapshot(files)
 
-        assertTrue(engine.askTrash(group, setOf(2L, 3L)))
+        assertEquals(TrashAsk.ASKED, engine.askTrash(group, setOf(2L, 3L)))
         assertEquals(Confirmation.Ask(listOf(2L, 3L)), engine.confirmShown())
         trashOnDisk(files[1])
         trashOnDisk(files[2])

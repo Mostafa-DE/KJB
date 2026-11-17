@@ -1,12 +1,15 @@
 package app.lyrify.ui
 
 import android.app.Activity
+import android.content.res.Resources
 import android.text.format.DateFormat
 import android.text.format.DateUtils
 import android.text.format.Formatter
+import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.annotation.PluralsRes
 import androidx.annotation.StringRes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -49,6 +52,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import app.lyrify.LOG_TAG
 import app.lyrify.Lyrify
 import app.lyrify.R
 import app.lyrify.dupes.AudioFile
@@ -62,6 +66,7 @@ import app.lyrify.dupes.Restored
 import app.lyrify.dupes.ScanResults
 import app.lyrify.dupes.ScanStatus
 import app.lyrify.dupes.SongTrash
+import app.lyrify.dupes.TrashAsk
 import app.lyrify.dupes.TrashStep
 import app.lyrify.dupes.Trashed
 import app.lyrify.dupes.TrashedSong
@@ -169,8 +174,43 @@ fun fileKbps(file: AudioFile): Int? = file.bitrate?.takeIf { it > 0 }?.let { ((i
 /** "Move to trash" with [checked] of a group's [copies] checked: at least one, and never every copy. */
 fun canMove(checked: Int, copies: Int): Boolean = checked in 1 until copies
 
-/** Every copy is checked: "Keep at least one copy." shows, and "Move to trash" waits. */
+/** Every copy is checked: "KJB keeps one copy of each song." shows, and "Move to trash" waits. */
 fun mustKeepOne(checked: Int, copies: Int): Boolean = copies > 0 && checked >= copies
+
+/** Why "Move to trash" in a group's sheet asked nothing ([Duplicates.askTrash]); null when KJB's dialog opens or nothing is checked. */
+@StringRes
+fun moveRefused(ask: TrashAsk): Int? = when (ask) {
+    TrashAsk.KEEP_ONE -> R.string.dupes_keep_one
+    TrashAsk.CHANGED -> R.string.dupes_changed
+    TrashAsk.UNAVAILABLE -> R.string.dupes_trash_failed
+    TrashAsk.ASKED, TrashAsk.NONE_CHECKED -> null
+}
+
+/** A message about the trash: a string, or a plural whose form [Count.count] picks, showing [Count.numbers]. */
+sealed interface TrashSaid {
+    data class Text(@StringRes val res: Int) : TrashSaid
+
+    data class Count(@PluralsRes val res: Int, val count: Int, val numbers: List<Int> = listOf(count)) : TrashSaid
+}
+
+/**
+ * What the screen says once the phone's trash dialog gave [answer], [approved] (its OK) or cancelled: how many moved,
+ * of how many; that nothing moved; or that KJB could not check yet. Null only when nothing waited for this answer.
+ */
+fun trashAnswered(approved: Boolean, answer: Trashed): TrashSaid? = when {
+    !approved -> TrashSaid.Text(R.string.dupes_trash_cancelled)
+    answer is Trashed.Moved && answer.count == 0 -> TrashSaid.Count(R.plurals.dupes_moved_none, answer.of)
+    answer is Trashed.Moved && answer.count < answer.of -> TrashSaid.Count(R.plurals.dupes_moved_some, answer.of, listOf(answer.count, answer.of))
+    answer is Trashed.Moved -> TrashSaid.Count(R.plurals.dupes_moved, answer.count)
+    answer == Trashed.NotConfirmed -> TrashSaid.Text(R.string.dupes_trash_unconfirmed)
+    else -> null
+}
+
+/** Shows [said] with the icon and tone that fit it ([messageToast]). */
+private suspend fun ToastState.say(resources: Resources, said: TrashSaid): Boolean = when (said) {
+    is TrashSaid.Text -> say(resources, said.res)
+    is TrashSaid.Count -> show(messageToast(said.res, resources.getQuantityString(said.res, said.count, *said.numbers.toTypedArray())))
+}
 
 // The tab
 
@@ -190,8 +230,8 @@ fun duplicatesBadge(): Int {
 
 /**
  * Opens the phone's own trash dialog for MediaStore ids (to the trash, or with trash false back out of it) and hands the
- * answer to the shared trash flow ([SongTrash]: Duplicates and the song sheet), whichever of its dialogs was open; the
- * result shows in [toasts].
+ * answer to the shared trash flow ([SongTrash]: Duplicates and the song sheet), whichever of its dialogs was open; what
+ * it did shows in [toasts] ([trashAnswered]), and so does a request the phone refused.
  */
 @Composable
 fun rememberPhoneTrash(songTrash: SongTrash, toasts: ToastState): (List<Long>, Boolean) -> Unit {
@@ -204,8 +244,7 @@ fun rememberPhoneTrash(songTrash: SongTrash, toasts: ToastState): (List<Long>, B
             if (songTrash.step is TrashStep.Restoring) {
                 if (songTrash.restoreAnswered(approved) == Restored.Back) toasts.say(resources, R.string.dupes_restored)
             } else {
-                val moved = songTrash.answered(approved) as? Trashed.Moved
-                if (moved != null && moved.count > 0) toasts.show(messageToast(R.plurals.dupes_moved, resources.getQuantityString(R.plurals.dupes_moved, moved.count, moved.count)))
+                trashAnswered(approved, songTrash.answered(approved))?.let { toasts.say(resources, it) }
             }
         }
     }
@@ -214,8 +253,14 @@ fun rememberPhoneTrash(songTrash: SongTrash, toasts: ToastState): (List<Long>, B
             when (val request = MediaStoreTrash(context.contentResolver, Lyrify.writes).request(ids, trash)) {
                 is MediaStoreTrash.Request.Ready -> launcher.launch(IntentSenderRequest.Builder(request.intent).build())
                 is MediaStoreTrash.Request.Unavailable -> scope.launch {
-                    if (trash) songTrash.answered(approved = false) else songTrash.restoreAnswered(approved = false)
-                    toasts.say(resources, R.string.dupes_trash_failed)
+                    Log.w(LOG_TAG, "trash: the phone refused the request (${request.cause})")
+                    if (trash) {
+                        songTrash.answered(approved = false)
+                        toasts.say(resources, TrashSaid.Count(R.plurals.dupes_trash_refused, ids.size))
+                    } else {
+                        songTrash.restoreAnswered(approved = false)
+                        toasts.say(resources, R.string.dupes_trash_failed)
+                    }
                 }
             }
         }
@@ -323,7 +368,10 @@ fun DuplicatesScreen(contentPadding: PaddingValues, toasts: ToastState) {
         GroupSheet(
             group = it,
             stale = it.key in state.stale,
-            onMove = { ids -> engine.askTrash(it, ids) },
+            onMove = { ids ->
+                // KJB's dialog opens, or a message says why it did not.
+                scope.launch { moveRefused(engine.askTrash(it, ids))?.let { message -> toasts.say(resources, message) } }
+            },
             onNotDuplicates = {
                 engine.notDuplicates(it)
                 open = null

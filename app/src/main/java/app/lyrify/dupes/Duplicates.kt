@@ -7,6 +7,7 @@ import app.lyrify.Lyrify
 import app.lyrify.library.LibraryGraph
 import app.lyrify.logFailures
 import app.lyrify.lyrics.LrcFormat
+import app.lyrify.tags.TagsGraph
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -26,6 +27,24 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.LinkOption
+
+/** What "Move to trash" in a group's sheet did ([Duplicates.askTrash]): all but [ASKED] asked nothing. */
+enum class TrashAsk {
+    /** KJB's own dialog asks now. */
+    ASKED,
+
+    /** Nothing is checked. */
+    NONE_CHECKED,
+
+    /** Every copy left is checked: KJB keeps one copy of each song. */
+    KEEP_ONE,
+
+    /** A checked file changed since the scan, or is no longer in the group: the group waits for the next scan. */
+    CHANGED,
+
+    /** MediaStore could not say what an earlier request moved, so which copies are left is not known: try again. */
+    UNAVAILABLE,
+}
 
 /** Where a scan is. */
 sealed interface ScanStatus {
@@ -82,6 +101,8 @@ class Duplicates(
     private val hasher: ContentHasher = ContentHasher(),
     /** Whether a `.lrc` is next to a file; asked for files in groups only. */
     private val hasLyrics: (AudioFile) -> Boolean = ::sidecarExists,
+    /** Whether a file of another size than at the scan was changed since only by KJB's own tag writes ([kjbTagWrites]). */
+    private val ownWrite: (listed: AudioFile, now: AudioFile) -> Boolean = { _, _ -> false },
     private val log: (String) -> Unit = {},
 ) {
     private val _state = MutableStateFlow(DuplicatesState())
@@ -124,6 +145,7 @@ class Duplicates(
         phoneTrash = phoneTrash,
         io = io,
         clock = clock,
+        ownWrite = ownWrite,
         log = log,
     )
 
@@ -198,14 +220,26 @@ class Duplicates(
 
     /**
      * "Move to trash" in [group]'s sheet with the files [ids] checked: KJB's own dialog asks first ([TrashStep.Confirm]).
-     * Any files of a group shown now, the suggested keep too (it is only a hint), but never all of them, so one copy
-     * always stays. False when [ids] are not such files: nothing is asked.
+     * Any files of the group, the suggested keep too (it is only a hint), but never every copy left, so one always stays.
+     * What an earlier request left waiting is settled first ([SongTrash.settleLeftover]): a copy the phone did move is
+     * gone, and the checked ones are weighed against the copies really left. The answer says what happened.
      */
-    fun askTrash(group: DuplicateGroup, ids: Set<Long>): Boolean {
-        val shown = state.value.results?.groups?.firstOrNull { it.key == group.key } ?: return false
+    suspend fun askTrash(group: DuplicateGroup, ids: Set<Long>): TrashAsk {
+        if (ids.isEmpty()) return TrashAsk.NONE_CHECKED
+        if (!trash.settleLeftover()) return TrashAsk.UNAVAILABLE
+        val now = state.value
+        val sheet = group.files.map { it.id }.toSet()
+        // The sheet's group as it is now: the same, or without the copies the phone moved meanwhile.
+        val shown = now.results?.groups?.let { groups ->
+            groups.firstOrNull { it.key == group.key } ?: groups.firstOrNull { left -> left.files.all { it.id in sheet } && left.files.any { it.id in ids } }
+        } ?: return TrashAsk.CHANGED
         val files = shown.files.filter { it.id in ids }
-        if (files.size != ids.size || files.size >= shown.files.size || shown.key in state.value.stale) return false
-        return trash.ask(files)
+        return when {
+            files.size != ids.size || shown.key in now.stale -> TrashAsk.CHANGED
+            files.size >= shown.files.size -> TrashAsk.KEEP_ONE
+            trash.ask(files) -> TrashAsk.ASKED
+            else -> TrashAsk.NONE_CHECKED
+        }
     }
 
     /** "Cancel" in KJB's dialog: nothing changes. */
@@ -223,8 +257,14 @@ class Duplicates(
     /** The phone's restore dialog answered ([SongTrash.restoreAnswered]). */
     suspend fun restoreAnswered(approved: Boolean): Restored = trash.restoreAnswered(approved)
 
-    /** Drops the trashed songs the phone no longer has in its trash, or that expired ([SongTrash.refresh]). */
-    suspend fun refreshTrashed(): Unit = trash.refresh()
+    /**
+     * As the tab opens and before a scan: a trash answer the app did not hear is settled ([SongTrash.settlePending]), then
+     * the trashed songs the phone no longer has in its trash, or that expired, drop off ([SongTrash.refresh]).
+     */
+    suspend fun refreshTrashed() {
+        trash.settlePending()
+        trash.refresh()
+    }
 
     /** Sets the scan status to [status] while [job] is the scan running and the status is one [replaces]. */
     private fun status(job: Job, status: ScanStatus, replaces: (ScanStatus) -> Boolean = { true }) {
@@ -233,7 +273,6 @@ class Duplicates(
 
     private suspend fun runScan(self: Job) {
         // A trash answer the app did not live to hear: MediaStore confirms which files are trashed.
-        trash.settlePending()
         refreshTrashed()
         val files = when (val read = library.read()) {
             is LibraryRead.Unavailable -> {
@@ -312,6 +351,7 @@ private object DuplicatesHolder {
             scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + logFailures),
             io = Dispatchers.IO,
             clock = System::currentTimeMillis,
+            ownWrite = kjbTagWrites { TagsGraph.undo(app).memory() },
             log = { Log.d(LOG_TAG, it) },
         )
     }.also { engine = it }

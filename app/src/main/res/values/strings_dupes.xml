@@ -65,7 +65,7 @@
     <string name="dupes_move">Move to trash (%1$d)</string>
     <string name="dupes_move_none">Move to trash</string>
     <string name="dupes_not_duplicates">Not duplicates</string>
-    <string name="dupes_keep_one">Keep at least one copy.</string>
+    <string name="dupes_keep_one">KJB keeps one copy of each song. Uncheck the one you want to keep.</string>
     <string name="dupes_changed">This song changed since the scan. Scan again.</string>
 
     <!-- Moving to the trash -->
@@ -80,6 +80,20 @@
         <item quantity="other">%d songs moved to trash</item>
     </plurals>
     <string name="dupes_trash_failed">Couldn\'t reach your phone\'s trash. Try again.</string>
+    <string name="dupes_trash_cancelled">Nothing moved to trash</string>
+    <string name="dupes_trash_unconfirmed">Couldn\'t check your phone\'s trash yet. KJB checks again later.</string>
+    <plurals name="dupes_moved_some">
+        <item quantity="one">%1$d of %2$d song moved to trash</item>
+        <item quantity="other">%1$d of %2$d songs moved to trash</item>
+    </plurals>
+    <plurals name="dupes_moved_none">
+        <item quantity="one">Your phone didn\'t move the song. Try again.</item>
+        <item quantity="other">Your phone didn\'t move the %d songs. Try again.</item>
+    </plurals>
+    <plurals name="dupes_trash_refused">
+        <item quantity="one">Your phone refused to move the song.</item>
+        <item quantity="other">Your phone refused to move the %d songs.</item>
+    </plurals>
 
     <!-- Trashed songs -->
     <string name="dupes_trashed_facts">%1$s · until %2$s</string>
