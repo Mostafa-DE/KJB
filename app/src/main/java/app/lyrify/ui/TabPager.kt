@@ -438,11 +438,14 @@ fun <K : Any> rememberTabPager(keys: List<K>, selected: Int, onChoose: (Int) -> 
     val reduced = LocalReducedMotion.current
     val choose = rememberUpdatedState(onChoose)
     val state = remember(pager, scope, reduced) { TabPager(pager, tabs, scope, reduced, choose) }
-    // On screen in the composition before this one: a kept root behind another dock destination is not.
+    // On screen in the composition before this one: a kept root behind another dock destination is not. Read as this one
+    // composes: the effect starts only after the side effect below has stored this composition's (Library's icon tapped
+    // on another dock destination glided to Songs under the page's fade-in).
     val headed = LocalLayerHeaded.current
     val onScreen = remember { Kept(headed) }
+    val wasOnScreen = onScreen.value
     LaunchedEffect(selected) {
-        when (tabMove(selected, state.reported, pager.targetPage, onScreen.value)) {
+        when (tabMove(selected, state.reported, pager.targetPage, wasOnScreen)) {
             TabMove.NONE -> Unit
             TabMove.GLIDE -> state.glide(selected)
             TabMove.JUMP -> pager.scrollToPage(selected)

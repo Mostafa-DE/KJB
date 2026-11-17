@@ -8,6 +8,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 import kotlin.math.abs
 
 /**
@@ -274,6 +275,16 @@ class TabPagerTest {
         // Never a page past the new last.
         assertEquals(0, tabAfterChange(before = three, after = listOf("To review", "Done"), heading = 2, selected = 7))
         assertEquals(0, tabAfterChange(before = emptyList(), after = three, heading = 0, selected = -1))
+    }
+
+    // Review of CR3: Library's icon tapped on another dock destination glided to Songs under the page's fade-in
+
+    @Test
+    fun `whether the page was on screen is read as the tab chosen elsewhere composes, not once the page shows`() {
+        val pager = File("src/main/java/app/lyrify/ui/TabPager.kt").readText().substringAfter("fun <K : Any> rememberTabPager(").substringBefore("\n}\n")
+        // The effect starts after its composition's side effects: read there, it found the page shown already.
+        assertTrue("val wasOnScreen = onScreen.value" in pager)
+        assertTrue("tabMove(selected, state.reported, pager.targetPage, wasOnScreen)" in pager)
     }
 
     private companion object {

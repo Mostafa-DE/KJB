@@ -583,6 +583,29 @@ class TabPagerDeviceTest {
         assertShows(nav, LibraryTab.ARTISTS)
     }
 
+    // Review of CR3: Library's icon tapped on another dock destination glided to Songs under the page's fade-in
+
+    @Test
+    fun libraryOpenedFromAnotherDockTabIsOnSongsAtOnceNothingGlidingBehindIt() {
+        val nav = Navigator(NavState.start(DockTab.PLAYLISTS).pickLibraryTab(LibraryTab.ARTISTS))
+        var shown by mutableStateOf(false)
+        compose.setContent { LibraryRoot(nav, FIVE, shown) }
+        compose.waitForIdle()
+        compose.mainClock.autoAdvance = false
+        // Library's icon tapped on Playlists: its root shows and goes to Songs in the same change.
+        compose.runOnUiThread {
+            nav.select(DockTab.LIBRARY)
+            shown = true
+        }
+        compose.mainClock.advanceTimeByFrame()
+        compose.mainClock.advanceTimeByFrame()
+        // Already on Songs two frames in, where a glide from Artists would still be on its way.
+        assertEquals(0f, compose.onNodeWithTag(libraryPage(LibraryTab.SONGS)).getUnclippedBoundsInRoot().left.value, 1f)
+        compose.mainClock.autoAdvance = true
+        compose.waitForIdle()
+        assertShows(nav, LibraryTab.SONGS)
+    }
+
     /** Library shows [tab]: the navigator has it, its tab is the chosen one, and its page is the one on screen. */
     private fun assertShows(nav: Navigator, tab: LibraryTab) {
         compose.runOnIdle { assertEquals(tab, nav.state.libraryTab) }
