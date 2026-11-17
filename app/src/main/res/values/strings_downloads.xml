@@ -34,6 +34,7 @@
     <string name="dl_addon_allow_action">Allow installs</string>
     <string name="dl_addon_confirm">Confirm the install on your phone.</string>
     <string name="dl_addon_failed">KJB could not get the add-on. Check your connection and try again.</string>
+    <string name="dl_addon_not_published">This version of KJB has no Downloads add-on to download.</string>
     <string name="dl_try_again">Try again</string>
     <string name="dl_app_info">App info</string>
 

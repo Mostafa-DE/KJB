@@ -2,6 +2,7 @@ package app.lyrify.ui
 
 import app.lyrify.R
 import app.lyrify.addon.AddonState
+import app.lyrify.addon.InstallFailure
 import app.lyrify.dl.api.AudioQuality
 import app.lyrify.dl.api.DlKind
 import app.lyrify.downloads.DownloadFailure
@@ -12,7 +13,10 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 
-/** Downloads' row on Tools: Get Downloads until the add-on is there, then what downloads now (the badge), failed or was saved. */
+/**
+ * Downloads' row on Tools: Get Downloads until the add-on is there, then what downloads now (the badge), failed or was
+ * saved. And the add-on card on the Downloads page when getting the add-on failed.
+ */
 class DownloadsRowTest {
     private fun item(key: String, state: DownloadState) =
         DownloadItem(key, "https://video.example.com/$key", DlKind.AUDIO, AudioQuality.MP3_320, null, true, "Paper Lantern", "The Quiet Hours", null, 0, 1, state)
@@ -39,5 +43,11 @@ class DownloadsRowTest {
         val empty = downloadsEntry(AddonState.Ready, ui())
         assertEquals(ToolLine.Text(R.string.dl_nothing_yet), empty.line)
         assertNull(empty.badge)
+    }
+
+    @Test
+    fun `a KJB with no add-on to download says so, as the AI page does, and the rest still say to try again`() {
+        assertEquals(R.string.dl_addon_not_published, addonFailedText(InstallFailure.NOT_PUBLISHED))
+        InstallFailure.entries.filter { it != InstallFailure.NOT_PUBLISHED }.forEach { assertEquals(it.name, R.string.dl_addon_failed, addonFailedText(it)) }
     }
 }
