@@ -60,9 +60,9 @@ class AddonStalledException(val stage: AiStage?, val silentMs: Long) :
 /**
  * A song's job in the add-on beat, then said nothing for [silentMs] in [stage] (null: before its first stage, or the
  * models' download): the phone froze the add-on's process, as an app freezer does (Samsung's, others), beats and all
- * ([RemoteSongEngine]'s freeze watch, [AddonDownloads.follow]'s). Nothing more was asked of it; it was let go of and its
- * service stopped. Not the song's doing: the song is tried again later, and the night's run ends; a download goes on
- * from its parts at its next run.
+ * ([RemoteSongEngine]'s freeze watch, [AddonDownloads.follow]'s). Nothing it must answer was asked of it (a download is
+ * told one way to stop); it was let go of and its service stopped. Not the song's doing: the song is tried again later,
+ * and the night's run ends; a download goes on from its parts at its next run.
  */
 class AddonFrozenException(val stage: AiStage?, val silentMs: Long) :
     Exception("the AI add-on was frozen: no word for ${silentMs / 1000} s during ${stage?.name?.lowercase() ?: "its start"}")
@@ -144,6 +144,12 @@ interface AddonPort {
 
     /** Stops the download run [run], and no other. */
     fun cancelDownload(run: Long)
+
+    /**
+     * Stops the download run [run] KJB gave up on as frozen ([AddonDownloads.follow]), one way: it never waits, and the
+     * add-on hears it once it runs again. An add-on without it drops it.
+     */
+    fun abandonDownload(run: Long)
 
     fun deleteModels(): Boolean
 

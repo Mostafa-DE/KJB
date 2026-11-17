@@ -162,10 +162,11 @@ object AddonDownloads {
      * [AddonDiedException]; cancelled (KJB's work stopped), it tells the add-on to stop, which keeps its parts.
      *
      * Watched as a song's job is ([FreezeWatch]): the add-on beats every few seconds, from a timer no download blocks, so a
-     * run that beat and then said nothing for [AddonKeepAlive.FROZEN_MS] is a process the phone froze. Nothing more is
-     * asked of it (a call into a frozen process can wait for as long as it stays frozen); it is let go of and its service
-     * stopped ([AddonSession.abandon]), [paused] says so until the next run, and it is [AddonFrozenException]: its parts stay
-     * for the next run. An add-on that never beat is not watched.
+     * run that beat and then said nothing for [AddonKeepAlive.FROZEN_MS] is a process the phone froze. Nothing it must
+     * answer is asked of it (such a call could wait for as long as it stays frozen): it is told one way to stop the run
+     * ([AddonPort.abandonDownload]), which it hears once it runs again, even while KJB's AI page keeps it bound, then let
+     * go of and its service stopped ([AddonSession.abandon]). [paused] says so until the next run, and it is
+     * [AddonFrozenException]: its parts stay for the next run. An add-on that never beat is not watched.
      */
     suspend fun follow(session: AddonSession, notes: (String) -> Unit = {}, progress: suspend (Long, Long) -> Unit): Download {
         _paused.value = false
@@ -211,6 +212,10 @@ object AddonDownloads {
                         // An end told meanwhile follows in the channel: the run ended, the phone froze nothing.
                         Event.Frozen -> if (ended.get() == null) {
                             _paused.value = true
+                            // One way, so nothing waits on the frozen process: once it runs again, the add-on stops this
+                            // run (its parts stay) and leaves the foreground, even while KJB's AI page binds it and
+                            // Android keeps its service. An add-on without the call stops when nothing binds it.
+                            runCatching { session.port.abandonDownload(run) }
                             session.abandon()
                             throw AddonFrozenException(stage = null, silentMs = AddonKeepAlive.FROZEN_MS)
                         }

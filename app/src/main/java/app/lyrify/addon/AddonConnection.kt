@@ -109,6 +109,8 @@ private class AidlPort(private val addon: IAiAddon) : AddonPort {
 
     override fun cancelDownload(run: Long) = call { addon.cancelDownload(run) }
 
+    override fun abandonDownload(run: Long) = call { addon.abandonDownload(run) }
+
     override fun deleteModels(): Boolean = call { addon.deleteModels() }
 
     override fun discardModel(name: String): Boolean = call { addon.discardModel(name) }

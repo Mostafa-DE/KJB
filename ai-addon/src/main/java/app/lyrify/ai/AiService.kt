@@ -616,6 +616,10 @@ class AiService : Service() {
 
         override fun cancelDownload(run: Long) = checked { downloads.cancel(run) }
 
+        // One way, heard once a frozen add-on runs again: the run ends as cancelDownload's does, and the add-on leaves the
+        // foreground unless other work runs, even while KJB's AI page keeps the service (no onUnbind then).
+        override fun abandonDownload(run: Long) = checked { downloads.cancel(run) }
+
         override fun deleteModels(): Boolean = checked {
             downloads.cancelAll()
             runBlocking {

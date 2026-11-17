@@ -68,6 +68,8 @@ class AddonClientTest {
 
         override fun cancelDownload(run: Long) = call("cancelDownload $run")
 
+        override fun abandonDownload(run: Long) = call("abandonDownload $run")
+
         override fun deleteModels(): Boolean = true.also { call("deleteModels") }
 
         override fun discardModel(name: String): Boolean = true.also { call("discardModel $name") }
@@ -799,7 +801,7 @@ class AddonClientTest {
     }
 
     @Test
-    fun `silent for 30 s once it beats, a download is frozen, let go of and its service stopped, with nothing asked of the add-on`() = runTest {
+    fun `silent for 30 s once it beats, a download is frozen, dropped one way, let go of and its service stopped`() = runTest {
         val host = FakeHost()
         val session = session(host)
         val binding = host.bindings.single()
@@ -824,9 +826,42 @@ class AddonClientTest {
         assertTrue(error.toString(), error is AddonFrozenException && error.stage == null && error.silentMs == AddonKeepAlive.FROZEN_MS)
         assertTrue("let go of", binding.closed && session.closed)
         assertTrue("the service KJB started is stopped", binding.stopped)
-        // A call into a frozen process may wait for as long as the phone keeps it frozen: no cancelDownload.
-        assertEquals(listOf("apiVersion", "download", "foreground"), binding.port.calls)
+        // A call the add-on must answer could wait for as long as the phone keeps it frozen: no cancelDownload, only the
+        // one-way word it hears once it runs again.
+        assertEquals(listOf("apiVersion", "download", "foreground", "abandonDownload 21"), binding.port.calls)
         assertTrue("the AI page says the phone paused it", AddonDownloads.paused.value)
+    }
+
+    @Test
+    fun `a frozen download is dropped one way even while the AI page binds the add-on, and the next run goes on`() = runTest {
+        val host = FakeHost()
+        // The AI page shows: its own binding keeps the add-on's service, which KJB's letting go then does not destroy.
+        val page = launch { AddonClient(host).views(MutableSharedFlow(), retryMs = 30_000, deathPauseMs = 1_000).collect {} }
+        runCurrent()
+        val screen = host.bindings.single()
+        val worker = session(host)
+        val binding = host.bindings.last()
+        val end = async { runCatching { AddonDownloads.follow(worker) { _, _ -> } } }
+        runCurrent()
+        binding.port.downloadEvents!!.onBeat()
+        advanceTimeBy(AddonKeepAlive.FROZEN_MS + 1)
+        runCurrent()
+
+        assertTrue(end.await().exceptionOrNull() is AddonFrozenException)
+        // The add-on stops the run, keeps its parts and leaves the foreground once it runs again, with no onUnbind.
+        assertEquals("abandonDownload 21", binding.port.calls.last())
+        assertTrue("the worker's binding let go of and its service stopped", binding.closed && binding.stopped)
+        assertFalse("the page's binding stays", screen.closed)
+        assertTrue("the page says the phone paused it", AddonDownloads.paused.value)
+
+        // Allow, or the worker's retry: a new run, which the add-on takes from its parts, and the page's word goes.
+        val next = async { AddonDownloads.follow(session(host)) { _, _ -> } }
+        runCurrent()
+        assertFalse(AddonDownloads.paused.value)
+        assertEquals(listOf("apiVersion", "download", "foreground"), host.bindings.last().port.calls)
+        host.bindings.last().port.downloadEvents!!.onEnd(Download.Done)
+        assertEquals(Download.Done, next.await())
+        page.cancel()
     }
 
     @Test

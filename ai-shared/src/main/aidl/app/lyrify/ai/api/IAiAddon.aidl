@@ -1,8 +1,10 @@
 // The AI add-on's bound service (app.lyrify.ai.AiService), as KJB calls it (lyrify-bench handoff/ai-addon-design.md).
 // Versioned: KJB asks apiVersion() before anything else (app.lyrify.addon.AddonClient). The wire is frozen from the
 // first public release (KJB 3.0.0, VERSION 1): from then on a method keeps its transaction code and signature for good,
-// and new ones are only added at the end with VERSION raised. Until that release, VERSION 1 is still being shaped. Every call checks that the caller is KJB, by
-// its uid and signing certificate. The strings carry JSON (app.lyrify.ai.api.Wire): AiResult, AddonStatus, ImportReply.
+// and new ones are only added at the end, with VERSION raised when KJB must know whether the add-on has them (a oneway
+// call an add-on lacks is dropped unanswered, so it needs no raise). Until that release, VERSION 1 is still being
+// shaped. Every call checks that the caller is KJB, by its uid and signing certificate. The strings carry JSON
+// (app.lyrify.ai.api.Wire): AiResult, AddonStatus, ImportReply.
 package app.lyrify.ai.api;
 
 import app.lyrify.ai.api.IAiDownloadCallback;
@@ -59,4 +61,12 @@ interface IAiAddon {
     // part by part (Wire.RESULT_PART_CHARS each, "" past the end), for a result too long for onResult or whose callback
     // was lost. Null when the add-on keeps no result for that job (unknown, still running, stopped, or replaced).
     String result(long job, int part) = 14;
+
+    // As cancelDownload, one way: the run (its id) KJB gave up on because the phone froze the add-on (no beat for 30 s).
+    // KJB waits on nothing in a frozen process, and Android ends a frozen app that gets a call it must answer
+    // (CachedAppOptimizer: "received sync transactions while frozen, killing"); a one-way call waits in the binder until
+    // the add-on runs again. The run then stops, its parts stay, and the add-on leaves the foreground unless other work
+    // runs, even while KJB's AI page still binds it (Android then keeps its service, and onUnbind never comes). Added
+    // after VERSION 1 shipped, without raising it: an add-on that lacks it drops the call unanswered.
+    oneway void abandonDownload(long run) = 15;
 }

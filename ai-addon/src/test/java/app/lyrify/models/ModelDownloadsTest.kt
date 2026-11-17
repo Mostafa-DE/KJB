@@ -445,6 +445,64 @@ class ModelDownloadsTest {
     }
 
     @Test
+    fun `a run KJB gave up on as frozen stops once the add-on runs again, though KJB's page keeps it bound, and the next run goes on from its part`() = runBlocking {
+        val base = serve()
+        val store = store(base)
+        // The service KJB's AI page keeps bound: no onUnbind, no onDestroy, its scope lives on.
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val port = Foreground()
+        val left = CompletableDeferred<Unit>()
+        lateinit var foreground: JobForeground<String>
+        val run = DownloadRun(
+            scope,
+            ended = {
+                foreground.jobEnded()
+                left.complete(Unit)
+            },
+        ) { progress ->
+            retryWhileProgressing(store::bytesOnDisk) {
+                ModelDownloader(store, userAgent = "KJB-AI/test", hosts = loopback, io = Dispatchers.IO, freeBytes = { Long.MAX_VALUE }).downloadAll(progress)
+            }
+        }
+        foreground = JobForeground({ foregroundType(36, job = false) }, port, busy = { run.busy }, fromKjb = { it == KJB }, endJob = run::timeUp)
+        val halfway = CompletableDeferred<Unit>()
+        val first = object : DownloadEvents {
+            val ended = CompletableDeferred<Download>()
+
+            override fun onProgress(done: Long, total: Long) {
+                if (done >= body.size / 2) halfway.complete(Unit)
+            }
+
+            override fun onEnd(end: Download) {
+                ended.complete(end)
+            }
+
+            override fun onBeat() {}
+        }
+        val id = run.start(first)
+        foreground.start(1, KJB)
+        withTimeout(30_000) { halfway.await() }
+
+        // The phone froze the add-on; KJB heard no beat for 30 s, unbound it, stopped its service and said abandonDownload
+        // one way, which the add-on hears once it runs again.
+        run.cancel(id)
+        released.countDown()
+        assertTrue(withTimeout(30_000) { first.ended.await() } is Download.Interrupted)
+        withTimeout(30_000) { left.await() }
+        assertFalse(run.busy)
+        assertEquals(listOf("start dataSync", "stopForeground", "stopSelf 1"), port.calls)
+        assertEquals((body.size / 2).toLong(), store.part(store.specs.single()).length())
+
+        // Allow, or KJB's retry: the same service goes on from the part, then checks the whole file.
+        val second = Heard()
+        run.start(second)
+        assertEquals(Download.Done, withTimeout(30_000) { second.ended.await() })
+        assertEquals(listOf("", "bytes=${body.size / 2}-"), requests)
+        assertTrue(store.isReady())
+        scope.cancel()
+    }
+
+    @Test
     fun `a part torn when KJB was killed fails the check at the end, and is fetched once whole before giving up`() = runBlocking {
         val base = serve()
         cutFirst = false
