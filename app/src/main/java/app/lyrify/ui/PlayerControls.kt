@@ -9,9 +9,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -36,7 +34,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerInputChange
+import androidx.compose.ui.input.pointer.PointerInputScope
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.painterResource
@@ -67,7 +70,10 @@ import kotlinx.coroutines.launch
 // The player's controls near the thumb (P1): the progress bar, the main row (seek back, Previous, Play/Pause, Next,
 // seek forward) and the secondary row (Shuffle, the heart, the sleep timer, Queue, Repeat). PlayerScreen.kt lays them out.
 
-/** The progress bar: a 6 dp track in a 48 dp touch area, a tap or a drag seeks (on release), and the times under it. */
+/**
+ * The progress bar: a 6 dp track in a 48 dp touch area, a tap or a sideways drag seeks (on release), and the times under
+ * it. A mostly vertical drag on it is the player's ([detectSidewaysDrag]).
+ */
 @Composable
 internal fun ProgressBar(ui: PlayerUi, onSeek: (Long) -> Unit, marks: @Composable () -> Unit = {}) {
     val now = rememberClock(ui.playing, everyMs = 500)
@@ -97,8 +103,7 @@ internal fun ProgressBar(ui: PlayerUi, onSeek: (Long) -> Unit, marks: @Composabl
                 detectTapGestures { offset -> if (duration > 0) seek((offset.x / size.width).coerceIn(0f, 1f).times(duration).toLong()) }
             }
             .pointerInput(duration) {
-                detectHorizontalDragGestures(
-                    onDragStart = { offset -> dragging = (offset.x / size.width).coerceIn(0f, 1f) },
+                detectSidewaysDrag(
                     onDragEnd = {
                         dragging?.let { if (duration > 0) seek((it * duration).toLong()) }
                         dragging = null
@@ -132,6 +137,56 @@ internal fun ProgressBar(ui: PlayerUi, onSeek: (Long) -> Unit, marks: @Composabl
         Text(clock(dragging?.let { (it * duration).toLong() } ?: position), style = style, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.weight(1f))
         Text(clock(duration), style = style, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+/**
+ * A drag along the seek bar or an A-B handle, decided once it has passed the touch slop ([sidewaysDrag]). Mostly
+ * sideways, it is taken: every move consumed, [onDragStart], then [onDrag] with the move's x (the first time all of it
+ * since the finger landed), and [onDragEnd] at the lift ([onDragCancel] if the finger is lost). Mostly up or down, or
+ * taken first by the player's drag (seen on the Final pass), it is left alone, unconsumed, and nothing is called.
+ */
+internal suspend fun PointerInputScope.detectSidewaysDrag(
+    onDragEnd: () -> Unit,
+    onDragCancel: () -> Unit,
+    onDragStart: () -> Unit = {},
+    onDrag: (change: PointerInputChange, dx: Float) -> Unit,
+) {
+    awaitEachGesture {
+        val down = awaitFirstDown(requireUnconsumed = false)
+        val slop = viewConfiguration.touchSlop
+        var moved = Offset.Zero
+        while (true) {
+            val change = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: return@awaitEachGesture
+            if (!change.pressed || change.isConsumed) return@awaitEachGesture
+            moved += change.positionChange()
+            when (sidewaysDrag(moved, slop)) {
+                SheetDrag.LEAVE -> return@awaitEachGesture
+                SheetDrag.TAKE -> {
+                    change.consume()
+                    onDragStart()
+                    onDrag(change, moved.x)
+                    break
+                }
+                SheetDrag.WAIT -> {
+                    awaitPointerEvent(PointerEventPass.Final)
+                    if (change.isConsumed) return@awaitEachGesture
+                }
+            }
+        }
+        while (true) {
+            val change = awaitPointerEvent().changes.firstOrNull { it.id == down.id }
+            if (change == null) {
+                onDragCancel()
+                return@awaitEachGesture
+            }
+            if (!change.pressed) {
+                onDragEnd()
+                return@awaitEachGesture
+            }
+            change.consume()
+            onDrag(change, change.positionChange().x)
+        }
     }
 }
 
@@ -173,7 +228,11 @@ internal fun MainRow(ui: PlayerUi, settings: Settings, connection: PlayerConnect
     }
 }
 
-/** A seek button: a press jumps once; held, the jump repeats ([jumpsWhileHeld]). TalkBack's tap jumps once. */
+/**
+ * A seek button: a tap jumps once, at the lift; held still, the jumps start after a short hold and repeat
+ * ([jumpsWhileHeld]), and the button keeps that finger to its lift. A finger that moves past the touch slop first is no
+ * press ([seekPress]): a drag down from the button minimises the player with no jump. TalkBack's tap jumps once.
+ */
 @Composable
 internal fun SeekJump(@DrawableRes icon: Int, label: String, jump: () -> Unit) {
     val scope = rememberCoroutineScope()
@@ -192,17 +251,52 @@ internal fun SeekJump(@DrawableRes icon: Int, label: String, jump: () -> Unit) {
             }
             .pointerInput(Unit) {
                 awaitEachGesture {
-                    awaitFirstDown()
-                    latest()
-                    val repeat = scope.launch {
-                        delay(HOLD_DELAY_MS)
-                        while (true) {
-                            latest()
-                            delay(HOLD_EVERY_MS)
+                    val down = awaitFirstDown()
+                    val slop = viewConfiguration.touchSlop
+                    var moved = Offset.Zero
+                    // A press, not yet a jump: nothing is consumed, so a drag down stays the player's.
+                    val press = withTimeoutOrNull(HOLD_DELAY_MS) {
+                        var now = SeekPress.WAIT
+                        while (now == SeekPress.WAIT) {
+                            val change = awaitPointerEvent().changes.firstOrNull { it.id == down.id }
+                            if (change == null) {
+                                now = SeekPress.NONE
+                            } else {
+                                moved += change.positionChange()
+                                now = seekPress(moved, slop, lifted = !change.pressed, consumed = change.isConsumed)
+                                // Still a press: unless the player's drag took this move after the button saw it.
+                                if (now == SeekPress.WAIT) {
+                                    awaitPointerEvent(PointerEventPass.Final)
+                                    if (change.isConsumed) now = SeekPress.NONE
+                                }
+                            }
                         }
+                        now
                     }
-                    waitForUpOrCancellation()
-                    repeat.cancel()
+                    when (press) {
+                        SeekPress.JUMP -> latest()
+                        // Held past the short hold: the jumps repeat while the finger stays, and it is the button's.
+                        null -> {
+                            val repeat = scope.launch {
+                                while (true) {
+                                    latest()
+                                    delay(HOLD_EVERY_MS)
+                                }
+                            }
+                            try {
+                                while (true) {
+                                    val change = awaitPointerEvent().changes.firstOrNull { it.id == down.id } ?: break
+                                    if (!change.pressed) break
+                                    moved += change.positionChange()
+                                    change.consume()
+                                    if (moved.getDistance() > slop) repeat.cancel()
+                                }
+                            } finally {
+                                repeat.cancel()
+                            }
+                        }
+                        else -> Unit
+                    }
                 }
             },
     ) { Icon(painterResource(icon), contentDescription = null, modifier = Modifier.size(27.dp)) }

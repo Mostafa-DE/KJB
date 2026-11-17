@@ -150,8 +150,37 @@ fun seekIcon(back: Boolean, seconds: Int): Int = when (seconds) {
     else -> if (back) R.drawable.ic_replay_30 else R.drawable.ic_forward_10
 }
 
-/** How many jumps a seek button held for [heldMs] has made: one on the press, then one every [HOLD_EVERY_MS] after [HOLD_DELAY_MS]. */
-fun jumpsWhileHeld(heldMs: Long): Int = if (heldMs < HOLD_DELAY_MS) 1 else 2 + ((heldMs - HOLD_DELAY_MS) / HOLD_EVERY_MS).toInt()
+/**
+ * How many jumps a seek button pressed for [heldMs] has made: let go before [HOLD_DELAY_MS], one, at the lift; held, one
+ * at [HOLD_DELAY_MS], then one every [HOLD_EVERY_MS] ([seekPress]).
+ */
+fun jumpsWhileHeld(heldMs: Long): Int = if (heldMs < HOLD_DELAY_MS) 1 else 1 + ((heldMs - HOLD_DELAY_MS) / HOLD_EVERY_MS).toInt()
+
+/** What a finger pressed on a seek button is so far ([seekPress]). */
+enum class SeekPress { WAIT, JUMP, NONE }
+
+/**
+ * A finger pressed on a seek button, [moved] px from where it landed, the platform's touch [slop] apart: lifted within
+ * it, a tap ([SeekPress.JUMP], one jump); moved past it, or taken first by the player's drag ([consumed]), no press at
+ * all ([SeekPress.NONE]: a drag down that minimises, or a finger sliding off); else still a press ([SeekPress.WAIT]),
+ * which held past [HOLD_DELAY_MS] starts the jumps. Never a jump at the press itself: it may be a drag down's start.
+ */
+fun seekPress(moved: Offset, slop: Float, lifted: Boolean, consumed: Boolean): SeekPress = when {
+    consumed || moved.getDistance() > slop -> SeekPress.NONE
+    lifted -> SeekPress.JUMP
+    else -> SeekPress.WAIT
+}
+
+/**
+ * A drag on the seek bar or an A-B handle, [moved] px from where it landed: past the touch [slop], mostly sideways (45
+ * degrees too) it is theirs ([SheetDrag.TAKE]); mostly up or down it is left, unconsumed, to what is under it
+ * ([SheetDrag.LEAVE]), so a drag down from the bar minimises the player ([playerSwipe]); until then, wait.
+ */
+fun sidewaysDrag(moved: Offset, slop: Float): SheetDrag = when {
+    moved.getDistance() <= slop -> SheetDrag.WAIT
+    abs(moved.x) >= abs(moved.y) -> SheetDrag.TAKE
+    else -> SheetDrag.LEAVE
+}
 
 // The cover's swipe (the prototype's coverSwipe) and the player's drag down, in dp
 
