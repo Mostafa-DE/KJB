@@ -227,8 +227,9 @@ class PlaybackService : MediaLibraryService() {
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? = session
 
     override fun onDestroy() {
-        // Written before the process may go.
+        // Written before the process may go; a queue change still waiting is written too, off the main thread.
         engine.loaded.getOrNull(engine.index)?.let { uid -> core.savePlaceNow(uid, engine.positionMs) }
+        core.flush()
         core.follow(null)
         heardSoFar()
         tracker.end()
@@ -326,6 +327,7 @@ class PlaybackService : MediaLibraryService() {
             PlayerGraph.audioSessionId = engine.audioSessionId
             tracker.position(engine.positionMs, playing)
             this@PlaybackService.playing.value = playing
+            if (!playing) core.flush()
         }
 
         override fun onSeeked(fromMs: Long, toMs: Long) = tracker.seeked(fromMs, toMs)
