@@ -87,6 +87,29 @@ class LicencesTest {
     }
 
     @Test
+    fun `the source bundle is said to hold the Downloads add-on's GPL, LGPL and MPL parts, not its permissive ones`() {
+        listOf(File("../dl-addon/src/main/assets/$LICENCE_DIR/NOTICE.txt"), File("../NOTICE")).forEach { file ->
+            val items = paragraphs(file.readText()).flatMap { it.split(" - ") }
+            // What tools/make-dl-sources.sh packs: the copyleft parts' source, and only Termux's recipes for the rest.
+            val bundle = items.single { it.contains(DL_SOURCES) }
+            assertTrue("${file.path}: $bundle", bundle.contains("source of the add-on's parts under the GNU GPL, the GNU LGPL and the Mozilla Public License"))
+            assertTrue(file.path, items.any { it.contains("The bundle does not hold the source of the other parts, which are under permissive licences") })
+        }
+    }
+
+    @Test
+    fun `each GPL, LGPL and MPL library of the Downloads add-on is named at the version whose source the bundle holds`() {
+        val notice = paragraphs(File("../dl-addon/src/main/assets/$LICENCE_DIR/NOTICE.txt").readText())
+        val script = File("../tools/make-dl-sources.sh").readText()
+        val parts = notice.filter { it.startsWith("Under the GNU") || it.startsWith("Under the Mozilla") }.flatMap { it.split(" - ").drop(1) }
+        assertTrue(parts.size > 20)
+        parts.forEach { part ->
+            val version = VERSION.find(part)?.value
+            assertTrue(part, version != null && script.contains(version))
+        }
+    }
+
+    @Test
     fun `every licence the Downloads add-on's NOTICE names has its text in the add-on`() {
         val addonFolder = File("../dl-addon/src/main/assets/$LICENCE_DIR")
         val notice = paragraphs(File(addonFolder, "NOTICE.txt").readText()).joinToString(" ")
@@ -108,6 +131,10 @@ class LicencesTest {
         lgpl.drop(1).forEach { part -> assertTrue(part, part.contains("or later") || part.contains("only")) }
         val mpg123 = lgpl.single { it.startsWith("mpg123") }
         assertTrue(mpg123, mpg123.contains("LGPL 2.1 only") && !mpg123.contains("or later"))
+        // Linked into the GPL 3 FFmpeg build, which LGPL 2.1 section 3 allows.
+        assertTrue(mpg123, mpg123.contains("section 3 of the LGPL 2.1") && mpg123.contains("GNU GPL version 3"))
+        val libv4l = lgpl.single { it.startsWith("libv4l") }
+        assertTrue(libv4l, libv4l.contains("GNU GPL version 2 only"))
     }
 
     @Test
@@ -205,6 +232,9 @@ class LicencesTest {
             "BSD" to "third-party-notices.txt",
             "ISC" to "third-party-notices.txt",
         )
+
+        /** A version such as 1.3.14 or 0.164.3191. */
+        val VERSION = Regex("""\d+(\.\d+)+""")
 
         /** A [libraries] line of the catalog: its alias and its group. */
         val LIBRARY = Regex("""(?m)^([\w-]+)\s*=\s*\{\s*group\s*=\s*"([^"]+)"""")

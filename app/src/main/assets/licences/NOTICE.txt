@@ -55,9 +55,11 @@ Third-party software built into the Downloads add-on, KJB Downloads (Downloads)
   (dl-addon/src/main/assets/licences/NOTICE.txt) lists each with its version, licence and copyright. It ships in the
   add-on's APK with the notices those libraries ask to keep (third-party-notices.txt) and the full text of every
   licence named.
-- The complete corresponding source of these components is attached to each KJB release on
-  https://github.com/Mostafa-DE/KJB/releases as KJB-Downloads-<version>-sources.tar.gz. KJB's own code is in this
-  repository.
+- The complete corresponding source of the add-on's parts under the GNU GPL, the GNU LGPL and the Mozilla Public
+  License (youtubedl-android, FFmpeg, Mutagen and the libraries under those licences) is attached to each KJB release
+  on https://github.com/Mostafa-DE/KJB/releases as KJB-Downloads-<version>-sources.tar.gz, with Python's source and
+  Termux's build scripts and patches. The bundle does not hold the source of the other parts, which are under
+  permissive licences: it is at each project, named in the add-on's NOTICE. KJB's own code is in this repository.
 
 Third-party software and assets built into the app (player, screens and storage)
 
