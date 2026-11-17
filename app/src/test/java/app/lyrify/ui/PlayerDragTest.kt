@@ -70,6 +70,17 @@ class PlayerDragTest {
     }
 
     @Test
+    fun `the fling after a list's pull is the player's, whether it comes before or after the player sees the lift`() {
+        // After the lift: the pull was let go of.
+        assertTrue(listFling(letGo = true, pulling = false, pulled = 0f))
+        // Before the player has seen the lift (the list handles the same lift first): the pull is still on (review 2026-11-17).
+        assertTrue(listFling(letGo = false, pulling = true, pulled = 30f))
+        // A pull pushed back home, or a plain scroll: the list flings.
+        assertFalse(listFling(letGo = false, pulling = true, pulled = 0f))
+        assertFalse(listFling(letGo = false, pulling = false, pulled = 0f))
+    }
+
+    @Test
     fun `let go, a drag from anywhere or a list's pull closes the player past a quarter of its height or on a fling down`() {
         val height = 2000f
         val fling = 2400f

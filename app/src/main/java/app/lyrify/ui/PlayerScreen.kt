@@ -243,6 +243,13 @@ fun listPull(available: Float, scrolled: Boolean, byFinger: Boolean, held: Boole
 fun listPush(available: Float, pulled: Float, byFinger: Boolean): Float =
     if (byFinger && available < 0f && pulled > 0f) maxOf(available, -pulled) else 0f
 
+/**
+ * Whether the player takes a list's fling, all of it, so the list never flings under it: the fling after a list's pull
+ * the player let go of ([letGo], known at the lift), or one that comes before the player has seen that lift (the list
+ * handles the same lift first) while the pull still holds it [pulled] px down ([pulling]).
+ */
+fun listFling(letGo: Boolean, pulling: Boolean, pulled: Float): Boolean = letGo || (pulling && pulled > 0f)
+
 /** Where the cover is when the finger has moved [dx]: [COVER_FOLLOW] of the way. */
 fun coverShift(dx: Float): Float = dx * COVER_FOLLOW
 
@@ -693,7 +700,7 @@ private class PlayerDrag(private val scope: CoroutineScope) {
     private var byList = false
     private var at = 0f
 
-    // A list's pull let go at the lift: the list's fling, which comes after, is the player's, so the list never flings under it.
+    // A list's pull let go at the lift: the list's fling, before the lift is seen here or after, is the player's ([listFling]).
     private var flingTaken = false
 
     /** A finger lands, in the system's gesture edge ([inEdge]) or not: nothing is taken yet. */
@@ -757,7 +764,7 @@ private class PlayerDrag(private val scope: CoroutineScope) {
         }
 
         override suspend fun onPreFling(available: Velocity): Velocity {
-            if (!flingTaken) return Velocity.Zero
+            if (!listFling(flingTaken, byList, at)) return Velocity.Zero
             flingTaken = false
             return available
         }
