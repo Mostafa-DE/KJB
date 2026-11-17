@@ -238,7 +238,7 @@ class PlaybackService : MediaLibraryService() {
         parts.forEach { it.stop() }
         session?.release()
         session = null
-        // Its threads would outlive the service; a cover not read yet gets the default, and the notification is going anyway.
+        // Its threads would outlive the service; the notification is going anyway.
         thumbnails.shutdown()
         engine.release()
         player.release()
@@ -478,10 +478,10 @@ private class ThumbnailLoader(private val context: Context) : BitmapLoader {
     private val main = Handler(context.mainLooper)
     private val uris = CarCovers.uris(context)
 
-    /** KJB's default cover, made once. */
-    private val default: Bitmap by lazy { CarCovers.defaultBitmap(context) }
+    /** KJB's default cover, made once, as kept covers are ([CarCovers.sessionCover]). */
+    private val default: Bitmap by lazy { CarCovers.sessionCover(CarCovers.defaultBitmap(context)) }
     private val covers = SessionCovers<Uri, Bitmap>(
-        read = { uri -> CarCovers.read<CoverFound<Bitmap>>(context, uri, { CoverFound.Own(it) }) { CoverFound.NoArt } },
+        read = { uri -> CarCovers.read<CoverFound<Bitmap>>(context, uri, { CoverFound.Own(CarCovers.sessionCover(it)) }) { CoverFound.NoArt } },
         fallback = { default },
         sizeOf = Bitmap::getAllocationByteCount,
         run = io,
@@ -507,6 +507,9 @@ private class ThumbnailLoader(private val context: Context) : BitmapLoader {
 
     private fun ours(uri: Uri): Boolean = uri.scheme == ContentResolver.SCHEME_CONTENT && uri.authority == uris.authority
 
-    /** Lets the reading threads go, with the service; a cover asked for after gets the default. */
+    /**
+     * Lets the reading threads go, with the service: a read going on ends as it would, and a cover not read yet gets the
+     * default at once.
+     */
     fun shutdown() = io.shutdown()
 }

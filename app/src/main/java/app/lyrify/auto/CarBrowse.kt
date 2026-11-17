@@ -9,6 +9,7 @@ import android.database.Cursor
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Bundle
+import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.os.Process
 import android.provider.MediaStore
@@ -571,6 +572,17 @@ class CarCovers : ContentProvider() {
         private fun capped(bitmap: Bitmap): Bitmap {
             val scale = COVER_PX.toFloat() / maxOf(bitmap.width, bitmap.height)
             return if (scale >= 1f) bitmap else bitmap.scale((bitmap.width * scale).roundToInt(), (bitmap.height * scale).roundToInt())
+        }
+
+        /**
+         * [bitmap] as KJB's session keeps and hands it on, made once: immutable, and from Android 12 in shared memory,
+         * as Media3 makes every bitmap it passes on (BitmapUtil.makeShared). So a kept cover is never copied again at
+         * each update, and nothing drawing into one can change it.
+         */
+        internal fun sessionCover(bitmap: Bitmap): Bitmap = when {
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> bitmap.asShared()
+            bitmap.isMutable -> bitmap.copy(Bitmap.Config.ARGB_8888, false)
+            else -> bitmap
         }
 
         /** KJB's default cover, [COVER_PX] square, made anew at each call. */

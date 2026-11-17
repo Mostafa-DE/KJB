@@ -1,8 +1,10 @@
 package app.lyrify.auto
 
 import android.content.ContentValues
+import android.graphics.Bitmap
 import android.media.MediaMetadata
 import android.net.Uri
+import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import androidx.annotation.OptIn
@@ -20,6 +22,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
@@ -143,6 +146,18 @@ class CoverDeviceTest {
         assertEquals(0, context.contentResolver.delete(uri, null, null))
         val listed = asShell("content query --uri $uri").decodeToString()
         assertFalse("the shell listed $listed", "Row:" in listed)
+    }
+
+    @Test
+    fun aSessionCoverIsMadeImmutableOnceSoMedia3HandsOnTheSameBitmapAtEveryUpdate() {
+        // The default cover is drawn into a mutable bitmap; a thumbnail scaled down may be one too.
+        val drawn = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888)
+        val cover = CarCovers.sessionCover(drawn)
+        assertFalse(cover.isMutable)
+        assertEquals(64, cover.width)
+        // Media3 makes every bitmap it hands on shared (BitmapUtil.makeShared): one already shared is not copied again.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) assertSame(cover, cover.asShared())
+        assertSame(cover, CarCovers.sessionCover(cover))
     }
 
     @Test
