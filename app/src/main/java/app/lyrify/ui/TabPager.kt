@@ -103,9 +103,11 @@ import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sign
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.SendChannel
 import kotlinx.coroutines.launch
+import java.io.Serializable
 
 // Top tabs that swipe (phone test 2026-11-11, points 2 and 4), as Samsung Music's: Library's, Favourites', and Covers and
 // tags' once it adopts them. The pages follow the finger left and right, the tabs' sung line follows the pages, a tap
@@ -250,14 +252,49 @@ fun tabSwipe(moved: Offset, slop: Float): TabSwipe = when {
  */
 fun keptBeyond(count: Int, frames: Int): Int = if (count <= 1) 0 else min(count - 1, 1 + frames)
 
+/**
+ * The key of the tab page at [at] of the tabs' [keys]. The pager reads its page count from the same tabs, so no page is
+ * past them; should one be asked for all the same, it gets a key of its own, equal to no tab's and saveable as a page's
+ * key must be, never a crash (KJB 3.0.2 crashed as Genres was turned on: the pager counted six pages while the keys it
+ * read were still the five).
+ */
+fun tabPageKey(keys: List<Any>, at: Int): Any = keys.getOrNull(at) ?: PastTheTabs(at)
+
+/** The key of a tab page asked for past the tabs ([tabPageKey]). */
+private data class PastTheTabs(val at: Int) : Serializable
+
+/**
+ * Where the pages land, at once, when their tabs change from [before] to [after] (one turned on, turned off or moved in
+ * Settings > Library tabs, or the library's Books coming or going) while they show, or go to, the page at [heading] of
+ * [before]: nowhere (null) while that page's tab keeps its place, so a change past it stops no swipe, and nowhere with
+ * no tabs left; on that tab wherever the change moved it, the one a swipe was going to even before the app hears of
+ * it; that tab gone, on the one the app has as shown instead ([selected], of [after]: Library's Songs), else the first.
+ * Never where the pager would find its own way to by a page's index or by a key gone.
+ */
+fun tabAfterChange(before: List<Any>, after: List<Any>, heading: Int, selected: Int): Int? {
+    val moved = before.getOrNull(heading)?.let(after::indexOf) ?: -1
+    return when {
+        after.isEmpty() || moved == heading -> null
+        moved >= 0 -> moved
+        selected in after.indices -> selected
+        else -> 0
+    }
+}
+
 // The tabs and their pages
 
 /**
- * Top tabs over their pages: where the pages are ([pager], [position]) and the tab a tap picks ([pick]). Made by
- * [rememberTabPager], drawn by [PagerTabs] over [TabPages] (in a [TabsFrame], or under a header in [CollapsingTabs]).
+ * Top tabs ([keys]) over their pages: where the pages are ([pager], [position]) and the tab a tap picks ([pick]). Made
+ * by [rememberTabPager], drawn by [PagerTabs] over [TabPages] (in a [TabsFrame], or under a header in [CollapsingTabs]).
  */
 @Stable
-class TabPager internal constructor(val pager: PagerState, private val scope: CoroutineScope, private val reduced: Boolean, private val chosen: State<(Int) -> Unit>) {
+class TabPager<K : Any> internal constructor(val pager: PagerState, private val tabs: State<List<K>>, private val scope: CoroutineScope, private val reduced: Boolean, private val chosen: State<(Int) -> Unit>) {
+    /** The tabs, a page each in their order: the pager's page count and every page's key are read from these alone. */
+    val keys: List<K> get() = tabs.value
+
+    /** The tab of the page shown. */
+    val current: K? get() = keys.getOrNull(pager.currentPage)
+
     /** The page shown plus the fraction of the way to the next one; read it while drawing, as it changes with every frame. */
     val position: Float get() = pager.currentPage + pager.currentPageOffsetFraction
 
@@ -270,6 +307,9 @@ class TabPager internal constructor(val pager: PagerState, private val scope: Co
 
     /** Whether a finger holds the pages (its drag, before its settle): a tap on a tab then wins over it. */
     private var fingerOnPages = false
+
+    /** The pages' own move under way, a tap's glide or a finger's swipe and its settle: a landing stops it ([land]). */
+    private var moving: Job? = null
 
     /**
      * The tab at [at] tapped: the app's record of the tab shown has it at once (so the dock tapped while the pages glide
@@ -286,11 +326,23 @@ class TabPager internal constructor(val pager: PagerState, private val scope: Co
     }
 
     /**
+     * The pages at once on the tab at [at] of tabs that have just changed ([tabAfterChange]), by the next time they are
+     * laid out: never on a tab the pager found by itself, not even for a frame. A glide or a swipe under way stops
+     * first, so none goes on by its old distance or settles where it was heading among the old tabs (the pager's own
+     * stop comes later, and never before a finger's). The owner is told, as of a settle.
+     */
+    internal fun land(at: Int) {
+        moving?.cancel()
+        pager.requestScrollToPage(at)
+        report(at)
+    }
+
+    /**
      * The pages to the tab at [at]: gliding there over a page's move, or with reduced motion there at once. Over a finger
      * holding them the glide wins ([tabGlidePriority]): the finger's drag ends there and its fling never runs.
      */
     internal fun glide(at: Int) {
-        scope.launch {
+        moving = scope.launch {
             pager.scroll(tabGlidePriority(fingerOnPages)) {
                 with(pager) { updateTargetPage(at) }
                 if (reduced) {
@@ -316,7 +368,7 @@ class TabPager internal constructor(val pager: PagerState, private val scope: Co
      */
     internal fun swipe(heading: Int?, minVelocity: Float): SendChannel<TabFinger> {
         val finger = Channel<TabFinger>(Channel.UNLIMITED)
-        scope.launch {
+        moving = scope.launch {
             var lift: TabFinger.Lift? = null
             pager.scroll(MutatePriority.UserInput) {
                 fingerOnPages = true
@@ -371,32 +423,45 @@ internal sealed interface TabFinger {
 }
 
 /**
- * Top tabs for [count] pages, kept in step both ways with the app's own record of the tab shown: [selected] chosen
- * elsewhere moves the pages ([tabMove], from where they are going), and the tab a tap picks, or the page a swipe
- * settles on, is told to [onChoose].
+ * Top tabs over a page for each of [keys] (stable and saveable: the tabs themselves), kept in step both ways with the
+ * app's own record of the tab shown: [selected] chosen elsewhere moves the pages ([tabMove], from where they are
+ * going), and the tab a tap picks, or the page a swipe settles on, is told to [onChoose]. The pager counts its pages and
+ * keys each one from the same state the tabs are kept in, so a change of the tabs never shows it a count its keys do not
+ * have (KJB 3.0.2 crashed so as Genres was turned on); and a change that moves the tab under the pages or takes it away
+ * lands them at once on the one the app has as shown ([tabAfterChange]).
  */
 @Composable
-fun rememberTabPager(count: Int, selected: Int, onChoose: (Int) -> Unit): TabPager {
-    val pager = rememberPagerState(initialPage = selected.coerceIn(0, (count - 1).coerceAtLeast(0))) { count }
+fun <K : Any> rememberTabPager(keys: List<K>, selected: Int, onChoose: (Int) -> Unit): TabPager<K> {
+    val tabs = rememberUpdatedState(keys)
+    val pager = rememberPagerState(initialPage = selected.coerceIn(0, (keys.size - 1).coerceAtLeast(0))) { tabs.value.size }
     val scope = rememberCoroutineScope()
     val reduced = LocalReducedMotion.current
     val choose = rememberUpdatedState(onChoose)
-    val tabs = remember(pager, scope, reduced) { TabPager(pager, scope, reduced, choose) }
+    val state = remember(pager, scope, reduced) { TabPager(pager, tabs, scope, reduced, choose) }
     // On screen in the composition before this one: a kept root behind another dock destination is not.
     val headed = LocalLayerHeaded.current
     val onScreen = remember { Kept(headed) }
     LaunchedEffect(selected) {
-        when (tabMove(selected, tabs.reported, pager.targetPage, onScreen.value)) {
+        when (tabMove(selected, state.reported, pager.targetPage, onScreen.value)) {
             TabMove.NONE -> Unit
-            TabMove.GLIDE -> tabs.glide(selected)
+            TabMove.GLIDE -> state.glide(selected)
             TabMove.JUMP -> pager.scrollToPage(selected)
         }
     }
     SideEffect { onScreen.value = headed }
-    LaunchedEffect(tabs) { snapshotFlow { pager.settledPage }.collect { tabs.report(it) } }
+    // The tabs changed (Settings > Library tabs, shown or kept behind a page): landed before the pages are laid out
+    // again, and before the effect above reads where they are going.
+    val landed = remember { Kept(keys) }
+    SideEffect {
+        if (landed.value != keys) {
+            tabAfterChange(landed.value, keys, pager.targetPage, selected)?.let(state::land)
+            landed.value = keys
+        }
+    }
+    LaunchedEffect(state) { snapshotFlow { pager.settledPage }.collect { state.report(it) } }
     // Restored between two tabs (the phone turned, or KJB restarted, mid-swipe): on the nearer one, whole.
     LaunchedEffect(pager) { if (tabNeedsLanding(pager.currentPageOffsetFraction, pager.isScrollInProgress)) pager.scrollToPage(pager.currentPage) }
-    return tabs
+    return state
 }
 
 /**
@@ -410,7 +475,7 @@ fun rememberTabPager(count: Int, selected: Int, onChoose: (Int) -> Unit): TabPag
  * tab the pages are nearest, over 100 ms.
  */
 @Composable
-fun PagerTabs(state: TabPager, labels: List<String>, modifier: Modifier = Modifier) {
+fun PagerTabs(state: TabPager<*>, labels: List<String>, modifier: Modifier = Modifier) {
     val colors = tabColors(MaterialTheme.colorScheme, LocalChromeColors.current)
     val hairline = MaterialTheme.colorScheme.outlineVariant
     val reduced = LocalReducedMotion.current
@@ -486,13 +551,13 @@ fun PagerTabs(state: TabPager, labels: List<String>, modifier: Modifier = Modifi
 }
 
 /**
- * The tabs' pages, one per [keys] (stable and saveable: the tabs themselves), each drawn by [page] and told whether it
- * is the one shown ([LocalTabCurrent]). They follow the finger left and right unless [swipe] is off (a page selecting
- * songs), and stay composed once the pager has settled in ([keptBeyond]): their lists keep their place and their rows.
+ * The tabs' pages, one per tab of [state] ([TabPager.keys]), each drawn by [page] for its tab and told whether it is the
+ * one shown ([LocalTabCurrent]). They follow the finger left and right unless [swipe] is off (a page selecting songs),
+ * and stay composed once the pager has settled in ([keptBeyond]): their lists keep their place and their rows.
  */
 @Composable
-fun TabPages(state: TabPager, keys: List<Any>, modifier: Modifier = Modifier, swipe: Boolean = true, page: @Composable (Int) -> Unit) {
-    val count = keys.size
+fun <K : Any> TabPages(state: TabPager<K>, modifier: Modifier = Modifier, swipe: Boolean = true, page: @Composable (K) -> Unit) {
+    val count = state.keys.size
     var frames by remember { mutableIntStateOf(0) }
     LaunchedEffect(count) {
         while (keptBeyond(count, frames) < count - 1) {
@@ -518,9 +583,8 @@ fun TabPages(state: TabPager, keys: List<Any>, modifier: Modifier = Modifier, sw
             .then(if (swipe) Modifier.pointerInput(state, rtl) { swipes(state, rtl) { edge.value(it) } } else Modifier)
             // The pager's own scroll actions go with its own touch scrolling: TalkBack's move one tab, as a tap does.
             .semantics {
-                val count = keys.size
-                fun step(forward: Boolean): Boolean = tabStep(forward, state.pager.currentPage, count)?.let { state.pick(it) } != null
-                horizontalScrollAxisRange = ScrollAxisRange(value = { state.position }, maxValue = { (count - 1).coerceAtLeast(0).toFloat() })
+                fun step(forward: Boolean): Boolean = tabStep(forward, state.pager.currentPage, state.keys.size)?.let { state.pick(it) } != null
+                horizontalScrollAxisRange = ScrollAxisRange(value = { state.position }, maxValue = { (state.keys.size - 1).coerceAtLeast(0).toFloat() })
                 scrollBy { x, _ -> step(if (rtl) x < 0f else x > 0f) }
                 pageRight { step(forward = !rtl) }
                 pageLeft { step(forward = rtl) }
@@ -528,9 +592,12 @@ fun TabPages(state: TabPager, keys: List<Any>, modifier: Modifier = Modifier, sw
         beyondViewportPageCount = keptBeyond(count, frames),
         verticalAlignment = Alignment.Top,
         userScrollEnabled = false,
-        key = { keys[it] },
+        // Read where the pager reads its page count, so in the same snapshot: never a count the keys do not have.
+        key = { at -> tabPageKey(state.keys, at) },
     ) { at ->
-        CompositionLocalProvider(LocalTabCurrent provides (at == state.pager.currentPage)) { page(at) }
+        // The page's tab read there too, never from a list handed down a moment before (a page's content can be the
+        // previous composition's for a frame, its index already the new tabs').
+        state.keys.getOrNull(at)?.let { tab -> CompositionLocalProvider(LocalTabCurrent provides (at == state.pager.currentPage)) { page(tab) } }
     }
 }
 
@@ -541,7 +608,7 @@ fun TabPages(state: TabPager, keys: List<Any>, modifier: Modifier = Modifier, sw
  * they settle on the tab its speed and place give ([tabFlingPage]); more upright, it is the list's (caught pages settle
  * on the nearer tab). A finger landing in the system's gesture [edge] is left alone. [rtl]: the next tab is to the left.
  */
-private suspend fun PointerInputScope.swipes(state: TabPager, rtl: Boolean, edge: (Offset) -> Boolean) {
+private suspend fun PointerInputScope.swipes(state: TabPager<*>, rtl: Boolean, edge: (Offset) -> Boolean) {
     val minVelocity = TAB_FLING.toPx()
     val maxVelocity = viewConfiguration.maximumFlingVelocity
     val slop = viewConfiguration.touchSlop
@@ -615,18 +682,18 @@ val LocalTabCurrent = compositionLocalOf { true }
 
 /**
  * A page whose top tabs sit in its top bar: [topBar] (the page's bar with [PagerTabs], given whether the content of the
- * tab shown is under it, and the glass to blur) over [TabPages], each page drawn by [page]. A page draws its content in
- * a [PageFrame] as any page does: here the frame keeps that page's own scroll and the room under the shared bar
- * ([TabPage]). A page that shows its own top bar (selecting songs) takes the shared bar's place and the pages stay
+ * tab shown is under it, and the glass to blur) over [TabPages], each tab's page drawn by [page]. A page draws its
+ * content in a [PageFrame] as any page does: here the frame keeps that page's own scroll and the room under the shared
+ * bar ([TabPage]). A page that shows its own top bar (selecting songs) takes the shared bar's place and the pages stay
  * still meanwhile.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun TabsFrame(state: TabPager, keys: List<Any>, topBar: @Composable (under: Boolean, backdrop: GlassBackdrop) -> Unit, page: @Composable (Int) -> Unit) {
+fun <K : Any> TabsFrame(state: TabPager<K>, topBar: @Composable (under: Boolean, backdrop: GlassBackdrop) -> Unit, page: @Composable (K) -> Unit) {
     val host = remember { TabsHost() }
     val own = rememberGlassBackdrop()
     val blur = LocalGlassBlur.current
-    val under = host.unders[keys.getOrNull(state.pager.currentPage)] == true
+    val under = state.current?.let { host.unders[it] } == true
     val bar = host.bar
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -636,9 +703,9 @@ fun TabsFrame(state: TabPager, keys: List<Any>, topBar: @Composable (under: Bool
         val top = padding.calculateTopPadding()
         // One glass for all the pages: the pager is one content, drawn once, whichever pages show.
         Box(Modifier.fillMaxSize().glassSource(own, blur)) {
-            TabPages(state, keys, Modifier.fillMaxSize(), swipe = bar == null) { at ->
-                val tab = remember(host, keys[at], top) { TabPage(host, keys[at], top) }
-                CompositionLocalProvider(LocalTabPage provides tab) { page(at) }
+            TabPages(state, Modifier.fillMaxSize(), swipe = bar == null) { tab ->
+                val frame = remember(host, tab, top) { TabPage(host, tab, top) }
+                CompositionLocalProvider(LocalTabPage provides frame) { page(tab) }
             }
         }
     }

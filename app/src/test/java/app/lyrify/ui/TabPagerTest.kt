@@ -213,6 +213,69 @@ class TabPagerTest {
         assertEquals(1, keptBeyond(count = 2, frames = 0))
     }
 
+    // KJB 3.0.2 crash: turning the Genres tab on (CR3)
+
+    @Test
+    fun `a page asked for past the tabs gets a key of its own, never a crash`() {
+        val five = listOf("Songs", "Playlists", "Albums", "Artists", "Folders")
+        assertEquals("Folders", tabPageKey(five, 4))
+        // The pager counting six while the keys it reads are still the five: "Index 5 out of bounds for length 5".
+        val sixth = tabPageKey(five, 5)
+        assertFalse(sixth in five)
+        assertEquals(sixth, tabPageKey(five, 5))
+        // One per page, and saveable on the phone as a page's key must be.
+        assertTrue(sixth != tabPageKey(five, 6))
+        assertTrue(sixth is java.io.Serializable)
+    }
+
+    @Test
+    fun `a tab turned on, off or moved past the one shown moves nothing, so a swipe goes on`() {
+        val five = listOf("Songs", "Playlists", "Albums", "Artists", "Folders")
+        // On Artists: Genres turned on after Folders, then off again, or moved up before Folders.
+        assertNull(tabAfterChange(before = five, after = five + "Genres", heading = 3, selected = 3))
+        assertNull(tabAfterChange(before = five + "Genres", after = five, heading = 3, selected = 3))
+        assertNull(tabAfterChange(before = five + "Genres", after = five.take(4) + "Genres" + "Folders", heading = 3, selected = 3))
+    }
+
+    @Test
+    fun `the tab shown stays shown wherever a change of the tabs moves it, and one turned off gives way to the app's choice`() {
+        val five = listOf("Songs", "Playlists", "Albums", "Artists", "Folders")
+        val withGenres = listOf("Songs", "Playlists", "Albums", "Artists", "Genres", "Folders")
+        // On Folders, Genres turned on just before it: still Folders, a place further on.
+        assertEquals(5, tabAfterChange(before = five, after = withGenres, heading = 4, selected = 5))
+        // On Folders, Genres turned off again: still Folders, a place back.
+        assertEquals(4, tabAfterChange(before = withGenres, after = five, heading = 5, selected = 4))
+        // On Genres, Genres turned off: the tab the app shows instead (Library's Songs).
+        assertEquals(0, tabAfterChange(before = withGenres, after = five, heading = 4, selected = 0))
+        // On Albums, moved up above Playlists: still Albums.
+        assertEquals(1, tabAfterChange(before = five, after = listOf("Songs", "Albums", "Playlists", "Artists", "Folders"), heading = 2, selected = 1))
+        // Albums tapped, the pages still gliding there when Genres is turned on before it: on Albums at once.
+        assertEquals(3, tabAfterChange(before = five, after = listOf("Songs", "Genres", "Playlists", "Albums", "Artists", "Folders"), heading = 2, selected = 3))
+    }
+
+    @Test
+    fun `a swipe on its way to a tab a change moves lands on that tab, not back on the one it left`() {
+        val five = listOf("Songs", "Playlists", "Albums", "Artists", "Folders")
+        // Flicked from Songs toward Albums, the app still on Songs until the pages settle, when Books comes in before
+        // Albums (the library read again): on Albums, where the finger sent them.
+        assertEquals(3, tabAfterChange(before = five, after = listOf("Songs", "Playlists", "Books", "Albums", "Artists", "Folders"), heading = 2, selected = 0))
+    }
+
+    @Test
+    fun `no tabs left, the pages land nowhere`() {
+        assertNull(tabAfterChange(before = listOf("Songs", "Albums"), after = emptyList(), heading = 1, selected = -1))
+    }
+
+    @Test
+    fun `with no tab of the app's among the new ones, the pages keep their own wherever it went, else go to the first`() {
+        val three = listOf("To review", "Done", "Skipped")
+        assertEquals(2, tabAfterChange(before = three, after = listOf("To review", "Later", "Done", "Skipped"), heading = 1, selected = -1))
+        assertEquals(0, tabAfterChange(before = three, after = listOf("To review", "Done"), heading = 2, selected = -1))
+        // Never a page past the new last.
+        assertEquals(0, tabAfterChange(before = three, after = listOf("To review", "Done"), heading = 2, selected = 7))
+        assertEquals(0, tabAfterChange(before = emptyList(), after = three, heading = 0, selected = -1))
+    }
+
     private companion object {
         /** How close to the midpoint of a swipe a label may be while its ink reads under 4.5:1. */
         const val CROSSING = 0.06f

@@ -349,7 +349,7 @@ fun CoversTagsPage() {
     val access = rememberNotificationAccess()
     var tab by rememberSaveable { mutableStateOf(ReviewTab.TO_REVIEW) }
     val tabs = reviewTabs(state)
-    val pager = rememberTabPager(tabs.size, tabs.indexOfFirst { it.first == tab }) { at -> tabs.getOrNull(at)?.let { tab = it.first } }
+    val pager = rememberTabPager(tabs.map { it.first }, tabs.indexOfFirst { it.first == tab }) { at -> tabs.getOrNull(at)?.let { tab = it.first } }
     val header = rememberScrollState()
     // The lines above the tabs gone under the top bar are content under it too.
     val headerUnder by remember(header) { derivedStateOf { header.value > 0 } }
@@ -428,9 +428,9 @@ fun CoversTagsPage() {
             },
             tabs = { PagerTabs(pager, tabs.map { (it, count) -> stringResource(R.string.lib_tab_count, stringResource(it.title), formatCount(count)) }) },
         ) {
-            TabPages(pager, tabs.map { it.first }, Modifier.fillMaxSize()) { page ->
+            TabPages(pager, Modifier.fillMaxSize()) { shown ->
                 LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = padding.calculateBottomPadding() + 24.dp)) {
-                    when (tabs[page].first) {
+                    when (shown) {
                         ReviewTab.TO_REVIEW -> {
                             item(key = "start", contentType = "start") { StartRow(state, busy, onCheck = tags::check, onCancel = tags::cancel) }
                             items(state.toReview, key = { "review ${it.album.id}" }, contentType = { "card" }) { waiting ->

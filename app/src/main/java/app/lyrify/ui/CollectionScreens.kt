@@ -684,7 +684,7 @@ private fun FavouritesPage(ui: LibraryUi, library: Library) {
     val header = rememberScrollState()
     // The hero gone under the top bar is content under it too.
     val heroUnder by remember(header) { derivedStateOf { header.value > 0 } }
-    val pager = rememberTabPager(tabs.size, tabs.indexOf(shown)) { at ->
+    val pager = rememberTabPager(tabs, tabs.indexOf(shown)) { at ->
         tabs.getOrNull(at)?.takeIf { it != shown }?.let { chosen ->
             picked = chosen
             change { if (it.nav.favouritesTab == chosen) it else it.copy(nav = it.nav.copy(favouritesTab = chosen)) }
@@ -716,9 +716,9 @@ private fun FavouritesPage(ui: LibraryUi, library: Library) {
                 header = { hero(list) },
                 tabs = { PagerTabs(pager, tabs.map { stringResource(R.string.lib_tab_count, stringResource(it.words), formatCount(favourites.count(it))) }) },
             ) {
-                TabPages(pager, tabs, Modifier.fillMaxSize(), swipe = !list.selection.active) { at ->
-                    LazyColumn(Modifier.fillMaxSize(), state = if (tabs[at] == FavouritesTab.SONGS) rows else rememberLazyListState(), contentPadding = bottom) {
-                        when (val tab = tabs[at]) {
+                TabPages(pager, Modifier.fillMaxSize(), swipe = !list.selection.active) { tab ->
+                    LazyColumn(Modifier.fillMaxSize(), state = if (tab == FavouritesTab.SONGS) rows else rememberLazyListState(), contentPadding = bottom) {
+                        when (tab) {
                             FavouritesTab.SONGS -> songRows(list, keys = entries.map { "entry ${entryKeys[it.first]}" }, reorder = reorder)
                             else -> favouriteRows(tab, favourites, library, reduced)
                         }
