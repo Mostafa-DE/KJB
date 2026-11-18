@@ -349,13 +349,17 @@ class CrossfadeEngine(
     override fun applyAll(edits: List<Edit>) {
         // No edits (a queue renamed) change nothing: the song waiting stays, ready for its fade (CR2).
         if (edits.isEmpty()) return
-        // The song waiting may not be the next one any more: it loads again at the look after the last edit, once for the
-        // whole change; a look the player's events ask for meanwhile waits for it.
-        dropStandby()
+        // A cover changed (Edit.Refresh): the same songs at the same places, so the song waiting stays, given the new
+        // details as the player playing is (both hold the queue's songs).
+        val refresh = edits.all { it is Edit.Refresh }
+        // Else the song waiting may not be the next one any more: it loads again at the look after the last edit, once
+        // for the whole change; a look the player's events ask for meanwhile waits for it.
+        if (!refresh) dropStandby()
         val held = looking
         looking = true
         try {
             active.applyAll(edits)
+            if (refresh) standby?.applyAll(edits)
         } finally {
             looking = held
         }
