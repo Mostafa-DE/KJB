@@ -1,6 +1,7 @@
 package app.lyrify.ui
 
 import android.content.ContextWrapper
+import androidx.activity.BackEventCompat
 import androidx.compose.animation.EnterExitState
 import androidx.compose.animation.core.AnimationVector1D
 import androidx.compose.animation.core.VectorConverter
@@ -17,6 +18,7 @@ import kotlinx.coroutines.plus
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
@@ -281,6 +283,37 @@ class PlayerCloseTest {
         }
         // On along() the content would have slid up against the cover by tens of px at the hardest fling.
         assertTrue("$slid px", slid > 40f)
+    }
+
+    /**
+     * 3.1 (PL1, left open by an2): closed by Back's gesture, the cover drawn above everything took none of the swipe's
+     * shrink ([backPeek]), so it was at its full size from the close's first frame while the player around it was still
+     * shrunk. It takes the swipe's shrink as it takes a drag's ([Container.drawnScale]), frame for frame as the swipe lets
+     * go of it on the closing spring (BackSwipe.settle), and is its own size by the orb.
+     */
+    @Test
+    fun `closed by a back swipe, the cover drawn above everything keeps the swipe's shrink and lets go of it with the player`() = runTest {
+        val swipe = BackSwipe()
+        val taking = BackTaking.View(FullScreen.Player)
+        val player = Container(unused(), unused(), bar = false, Kept(Float.NaN)).also { it.swipeScale = { swipe.scaleOf(taking) } }
+        swipe.start(taking)
+        swipe.follow(BackEventCompat(touchX = 300f, touchY = 900f, progress = 0.7f, swipeEdge = BackEventCompat.EDGE_LEFT))
+        fun cover() = overlayCoverScale(EnterExitState.Visible, EnterExitState.PostExit, running = true, player.drawnScale())
+        fun layer() = backPeek(swipe.progress, swipe.fromLeft, width = 1080f).scale
+        // As the close starts, the cover is drawn at the player's shrink, not its own size.
+        assertEquals(1f - (1f - BACK_SCALE) * 0.7f, layer(), 0.0001f)
+        assertEquals(layer(), cover(), 0f)
+        val drawn = mutableListOf<Pair<Float, Float>>()
+        withContext(Frames { drawn += cover() to layer() }) { swipe.settle(taking) }
+        assertTrue(drawn.size > 10)
+        drawn.forEachIndexed { frame, (cover, layer) -> assertEquals("frame $frame", layer, cover, 0f) }
+        // A little each frame, back to its own size.
+        drawn.zipWithNext().forEachIndexed { frame, (a, b) -> assertTrue("frame $frame: ${a.first} to ${b.first}", b.first >= a.first && b.first - a.first <= 0.01f) }
+        assertEquals(1f, drawn.last().first, 0.0005f)
+        // A swipe taking another view leaves the player's cover whole.
+        swipe.start(BackTaking.View(FullScreen.Equalizer))
+        swipe.follow(BackEventCompat(touchX = 300f, touchY = 900f, progress = 0.7f, swipeEdge = BackEventCompat.EDGE_LEFT))
+        assertEquals(1f, player.drawnScale(), 0f)
     }
 
     /** The shell's two ends, sharing where the bar sits: the player's, [closing] of the way into the bar, and the bar's. */

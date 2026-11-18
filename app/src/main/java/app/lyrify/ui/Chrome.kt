@@ -644,9 +644,13 @@ fun LyrifyMenu(expanded: Boolean, onDismiss: () -> Unit, content: @Composable Co
     )
 }
 
-/** A menu item: 48 dp, inset from the menu's edge; the selected one on the brand's container with a check, a destructive one in red. */
+/**
+ * A menu item: 48 dp, inset from the menu's edge; the selected one on the brand's container with a check, a destructive
+ * one in red. A [detail] (what a running sleep timer has left) shows under the text in the quieter ink; [description]
+ * is what TalkBack says for the row instead of its words.
+ */
 @Composable
-fun MenuRow(text: String, @DrawableRes icon: Int?, onClick: () -> Unit, selected: Boolean = false, destructive: Boolean = false) {
+fun MenuRow(text: String, @DrawableRes icon: Int?, onClick: () -> Unit, selected: Boolean = false, destructive: Boolean = false, detail: String? = null, description: String? = null) {
     val colors = MaterialTheme.colorScheme
     val brand = LocalBrandColors.current
     val content = when {
@@ -665,10 +669,18 @@ fun MenuRow(text: String, @DrawableRes icon: Int?, onClick: () -> Unit, selected
             .background(if (selected) brand.highlightContainer else Color.Transparent)
             .clickable(onClick = onClick)
             .then(if (selected) Modifier.semantics { this.selected = true } else Modifier)
+            .then(if (description != null) Modifier.semantics { contentDescription = description } else Modifier)
             .padding(horizontal = 12.dp),
     ) {
         if (icon != null) Icon(painterResource(icon), contentDescription = null, tint = if (destructive || selected) content else colors.onSurfaceVariant, modifier = Modifier.size(20.dp))
-        Text(text, style = MaterialTheme.typography.bodyLarge, color = content, modifier = Modifier.weight(1f))
+        if (detail == null) {
+            Text(text, style = MaterialTheme.typography.bodyLarge, color = content, modifier = Modifier.weight(1f))
+        } else {
+            Column(Modifier.weight(1f).padding(vertical = 6.dp)) {
+                Text(text, style = MaterialTheme.typography.bodyLarge, color = content)
+                Text(detail, style = MaterialTheme.typography.bodyMedium.tabular(), color = colors.onSurfaceVariant)
+            }
+        }
         if (selected) Icon(painterResource(R.drawable.ic_check), contentDescription = null, tint = content, modifier = Modifier.size(20.dp))
     }
 }

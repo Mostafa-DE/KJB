@@ -63,12 +63,13 @@ import app.lyrify.library.LibraryGraph
 import app.lyrify.player.PlayerConnection
 import app.lyrify.player.PlayerUi
 import app.lyrify.player.Repeat
+import app.lyrify.settings.DockTab
 import app.lyrify.settings.Settings
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 // The player's controls near the thumb (P1): the progress bar, the main row (seek back, Previous, Play/Pause, Next,
-// seek forward) and the secondary row (Shuffle, the heart, the sleep timer, Queue, Repeat). PlayerScreen.kt lays them out.
+// seek forward) and the secondary row (Shuffle, Queue, the heart, Library, Repeat). PlayerScreen.kt lays them out.
 
 /**
  * The progress bar: a 6 dp track in a 48 dp touch area, a tap or a sideways drag seeks (on release), and the times under
@@ -308,12 +309,33 @@ internal fun SeekJump(@DrawableRes icon: Int, label: String, jump: () -> Unit) {
     ) { Icon(painterResource(icon), contentDescription = null, modifier = Modifier.size(27.dp)) }
 }
 
+/** A place in the player's second row ([secondaryButtons]); [ROOM] is an empty one, so the others keep their places. */
+enum class PlayerButton { SHUFFLE, CHAPTERS, QUEUE, FAVOURITE, LIBRARY, REPEAT, ROOM }
+
 /**
- * Shuffle, the heart, the sleep timer (P2), Queue and Repeat. Toggles that are on show in the highlight colour, with a
- * bar. A [book] never shuffles or repeats: Chapters takes Shuffle's place (when it has chapters) and Repeat's stays empty.
+ * The second row, left to right (3.1, the user's: the heart in the middle, Library where the sleep timer was, which
+ * moved to the "⋯"): Shuffle, Queue, the heart, Library and Repeat. A [book] never shuffles or repeats: Chapters takes
+ * Shuffle's place when it has [chapters], and room is kept for what it lacks.
+ */
+fun secondaryButtons(book: Boolean, chapters: Boolean): List<PlayerButton> = listOf(
+    when {
+        !book -> PlayerButton.SHUFFLE
+        chapters -> PlayerButton.CHAPTERS
+        else -> PlayerButton.ROOM
+    },
+    PlayerButton.QUEUE,
+    PlayerButton.FAVOURITE,
+    PlayerButton.LIBRARY,
+    if (book) PlayerButton.ROOM else PlayerButton.REPEAT,
+)
+
+/**
+ * The second row ([secondaryButtons]): Shuffle, Queue, the heart, Library ([onLibrary]: the player closes onto the
+ * Library item of the bottom bar) and Repeat, each 48 dp to touch. Toggles that are on show in the highlight colour,
+ * with a bar. A [book] has Chapters in Shuffle's place when it has chapters.
  */
 @Composable
-internal fun SecondaryRow(ui: PlayerUi, connection: PlayerConnection, onQueue: () -> Unit, onRoute: (PlayerRoute) -> Unit, book: BookNow? = null, onChapters: () -> Unit = {}) {
+internal fun SecondaryRow(ui: PlayerUi, connection: PlayerConnection, onQueue: () -> Unit, onLibrary: () -> Unit, book: BookNow? = null, onChapters: () -> Unit = {}) {
     val context = LocalContext.current
     val toasts = LocalToasts.current
     val resources = LocalResources.current
@@ -322,36 +344,33 @@ internal fun SecondaryRow(ui: PlayerUi, connection: PlayerConnection, onQueue: (
     val favouriteSongs by favourites.songs.collectAsStateWithLifecycle(initialValue = emptyList())
     val favourite = favouriteSongs.any { it.path == ui.item.song.path }
     val shuffled = ui.queue.shuffled
+    val repeat = ui.repeat
     Row(horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 8.dp)) {
-        when {
-            book == null -> ToggleButton(R.drawable.ic_shuffle, stringResource(if (shuffled) R.string.player_shuffle_on else R.string.player_shuffle_off), on = shuffled) {
-                val on = connection.toggleShuffle()
-                scope.launch { toasts.show(Toast(resources.getString(if (on) R.string.player_shuffled else R.string.player_unshuffled), R.drawable.ic_shuffle)) }
-            }
-            book.chapters.isNotEmpty() -> RoundButton(R.drawable.ic_format_list_numbered, stringResource(R.string.books_chapters), onClick = onChapters)
-            else -> Spacer(Modifier.size(TOUCH))
-        }
-        ToggleButton(if (favourite) R.drawable.ic_favorite_fill else R.drawable.ic_favorite, stringResource(heartLabel(favourite)), on = favourite, bar = false) {
-            val song = listOf(ui.item.song)
-            scope.launch {
-                if (!favourites.setSongs(song, !favourite)) {
-                    toasts.show(Toast(resources.getString(R.string.player_favourite_failed), R.drawable.ic_sync_problem, Tone.ERROR))
-                    return@launch
+        secondaryButtons(book != null, book?.chapters?.isNotEmpty() == true).forEach { button ->
+            when (button) {
+                PlayerButton.SHUFFLE -> ToggleButton(R.drawable.ic_shuffle, stringResource(if (shuffled) R.string.player_shuffle_on else R.string.player_shuffle_off), on = shuffled) {
+                    val on = connection.toggleShuffle()
+                    scope.launch { toasts.show(Toast(resources.getString(if (on) R.string.player_shuffled else R.string.player_unshuffled), R.drawable.ic_shuffle)) }
                 }
-                val undo = toasts.show(Toast(resources.getString(if (favourite) R.string.player_unfavourited else R.string.player_favourited), R.drawable.ic_favorite, action = resources.getString(R.string.player_undo)))
-                if (undo) favourites.setSongs(song, favourite)
-            }
-        }
-        // The sleep timer (P2): its button, or its chip while it runs.
-        SleepButton(ui) { onRoute(PlayerRoute.SLEEP) }
-        RoundButton(R.drawable.ic_queue_music, stringResource(R.string.player_queue), onClick = onQueue)
-        val repeat = ui.repeat
-        if (book != null) {
-            Spacer(Modifier.size(TOUCH))
-        } else {
-            ToggleButton(if (repeat == Repeat.ONE) R.drawable.ic_repeat_one else R.drawable.ic_repeat, stringResource(repeatLabel(repeat)), on = repeat != Repeat.OFF) {
-                val next = connection.cycleRepeat()
-                scope.launch { toasts.show(Toast(resources.getString(repeatLabel(next)), if (next == Repeat.ONE) R.drawable.ic_repeat_one else R.drawable.ic_repeat)) }
+                PlayerButton.CHAPTERS -> RoundButton(R.drawable.ic_format_list_numbered, stringResource(R.string.books_chapters), onClick = onChapters)
+                PlayerButton.QUEUE -> RoundButton(R.drawable.ic_queue_music, stringResource(R.string.player_queue), onClick = onQueue)
+                PlayerButton.FAVOURITE -> ToggleButton(if (favourite) R.drawable.ic_favorite_fill else R.drawable.ic_favorite, stringResource(heartLabel(favourite)), on = favourite, bar = false) {
+                    val song = listOf(ui.item.song)
+                    scope.launch {
+                        if (!favourites.setSongs(song, !favourite)) {
+                            toasts.show(Toast(resources.getString(R.string.player_favourite_failed), R.drawable.ic_sync_problem, Tone.ERROR))
+                            return@launch
+                        }
+                        val undo = toasts.show(Toast(resources.getString(if (favourite) R.string.player_unfavourited else R.string.player_favourited), R.drawable.ic_favorite, action = resources.getString(R.string.player_undo)))
+                        if (undo) favourites.setSongs(song, favourite)
+                    }
+                }
+                PlayerButton.LIBRARY -> RoundButton(DockTab.LIBRARY.icon, stringResource(DockTab.LIBRARY.label), onClick = onLibrary)
+                PlayerButton.REPEAT -> ToggleButton(if (repeat == Repeat.ONE) R.drawable.ic_repeat_one else R.drawable.ic_repeat, stringResource(repeatLabel(repeat)), on = repeat != Repeat.OFF) {
+                    val next = connection.cycleRepeat()
+                    scope.launch { toasts.show(Toast(resources.getString(repeatLabel(next)), if (next == Repeat.ONE) R.drawable.ic_repeat_one else R.drawable.ic_repeat)) }
+                }
+                PlayerButton.ROOM -> Spacer(Modifier.size(TOUCH))
             }
         }
     }

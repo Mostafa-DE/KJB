@@ -1,5 +1,6 @@
 package app.lyrify.player
 
+import app.lyrify.books.inBook
 import app.lyrify.library.Song
 import app.lyrify.library.SongRef
 import app.lyrify.stats.PlayEvent
@@ -258,14 +259,24 @@ interface PlayerPort {
  * its place; a change to the queue playing reaches the player as a few edits ([plan]), however large, so the song
  * playing never stops; a song whose file moved is replaced with its new path ([Edit.Replace]), and one whose cover
  * changed ([coverVersion]: its version in this process, by path) is handed again in place ([refreshes]); a jump in the
- * book ([QueueBook.jumps]) moves the player to the current song at its position. A stop in the book ([QueueBook.stops]:
- * the song playing went to the trash with none after it) stops the player ([stop]) before any of that, so it waits where
- * the queue does. The player moving on by itself comes back through [QueueBook.at], which leaves the player as it is.
+ * book ([QueueBook.jumps]) moves the player to the current song at its position. The player moving on by itself comes
+ * back through [QueueBook.at], which leaves the player as it is.
+ *
+ * The song playing that leaves (Remove from queue, the trash, a controller's remove, its file gone from the phone) is
+ * never taken from under the player: it moves to the queue's song first, and only then the songs change. Media3 goes on
+ * with the next song after an edit takes the one playing, but with none it ends there (STATE_ENDED), and the service
+ * would take that for the queue played to its end: the song heard to its end, a book's last part finishing the book.
+ * With no song after it staying, the player stops ([stop]) before it moves, unless it goes round ([repeat] is the user's
+ * Repeat: Repeat all, never for a book), so it waits where the queue does ([stopsAsItLeaves]).
  */
-class QueueBridge(private val port: PlayerPort, private val coverVersion: (String) -> Int = { 0 }, private val stop: () -> Unit = {}) {
+class QueueBridge(
+    private val port: PlayerPort,
+    private val repeat: () -> Repeat = { Repeat.OFF },
+    private val coverVersion: (String) -> Int = { 0 },
+    private val stop: () -> Unit = {},
+) {
     private var loadedId: String? = null
     private var jumps: Long = 0
-    private var stops: Long = 0
 
     /** The path the player was handed for each song it holds, by uid. */
     private var paths: Map<Long, String> = emptyMap()
@@ -278,7 +289,6 @@ class QueueBridge(private val port: PlayerPort, private val coverVersion: (Strin
         if (queue == null) {
             if (loadedId != null || port.loaded.isNotEmpty()) port.load(emptyList(), -1, 0)
             loadedId = null
-            stops = book.stops
             paths = emptyMap()
             versions = emptyMap()
             return
@@ -292,37 +302,54 @@ class QueueBridge(private val port: PlayerPort, private val coverVersion: (Strin
             port.load(projected, start, position)
             loadedId = queue.id
             jumps = book.jumps
-            stops = book.stops
             paths = projected.associate { it.uid to it.song.path }
             versions = covers
             return
         }
-        if (book.stops != stops) {
-            stops = book.stops
-            stop()
-        }
+        val jumped = book.jumps != jumps
+        jumps = book.jumps
         val playing = port.loaded.getOrNull(port.index)
-        val plan = plan(port.loaded, projected, playing, paths)
+        val leaves = playing != null && projected.none { it.uid == playing }
+        if (leaves) {
+            // The song playing leaves: the player moves to the queue's song before any edit, stopped first when it would
+            // end there. A song it does not hold yet: the queue loads there.
+            if (stopsAsItLeaves(port.loaded, port.index, projected, round = repeat() == Repeat.ALL && !inBook(queue))) stop()
+            val at = projected.getOrNull(start)?.let { port.loaded.indexOf(it.uid) } ?: -1
+            if (at < 0) {
+                paths = projected.associate { it.uid to it.song.path }
+                versions = covers
+                port.load(projected, start, position)
+                return
+            }
+            port.seek(at, position)
+        }
+        val plan = plan(port.loaded, projected, port.loaded.getOrNull(port.index), paths)
         paths = projected.associate { it.uid to it.song.path }
         if (plan == null) {
             port.load(projected, start, position)
-            jumps = book.jumps
             versions = covers
             return
         }
         val edits = plan + refreshes(projected, versions, covers, plan)
         versions = covers
         if (edits.isNotEmpty()) port.applyAll(edits)
-        val lost = playing != null && projected.none { it.uid == playing }
-        if (book.jumps != jumps || lost) {
-            jumps = book.jumps
-            if (start >= 0) port.seek(start, position)
-        }
+        if (jumped && !leaves && start >= 0) port.seek(start, position)
     }
 
     /** The cover version of each of [projected] that is not 0, by uid. */
     private fun coversOf(projected: List<Projected>): Map<Long, Int> =
         projected.mapNotNull { item -> coverVersion(item.song.path).takeIf { it != 0 }?.let { item.uid to it } }.toMap()
+}
+
+/**
+ * Whether the player stops as the song at [index] of [from] leaves it ([to] holds it no more): no song after it stays,
+ * so the player would end there, and it does not go [round] (Repeat all; a book never repeats). It then waits, paused,
+ * at the queue's song.
+ */
+fun stopsAsItLeaves(from: List<Long>, index: Int, to: List<Projected>, round: Boolean): Boolean {
+    if (round) return false
+    val kept = to.mapTo(HashSet()) { it.uid }
+    return from.drop(index + 1).none { it in kept }
 }
 
 /**

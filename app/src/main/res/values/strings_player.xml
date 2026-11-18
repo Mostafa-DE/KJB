@@ -78,7 +78,6 @@
     <string name="player_favourited">Added to Favourites</string>
     <string name="player_unfavourited">Removed from Favourites</string>
     <string name="player_favourite_failed">Favourites could not be saved.</string>
-    <string name="player_sleep_off">Sleep timer, off</string>
     <string name="player_queue">Queue</string>
     <string name="player_repeat_off">Repeat off</string>
     <string name="player_repeat_all">Repeat all</string>

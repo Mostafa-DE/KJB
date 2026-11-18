@@ -539,6 +539,21 @@ class NavTest {
         assertEquals(emptyList<DockTab>(), top.history)
     }
 
+    /** 3.1 (user 2026-11-18): the player's Library button closes the player and does what the bar's Library item does. */
+    @Test
+    fun `the player's Library button closes the player onto Library, as the bar's Library item does`() {
+        // Over another tab: Library as it was left, its page kept.
+        val over = NavState.start(DockTab.LIBRARY).open(album).select(DockTab.PLAYLISTS).show(FullScreen.Player)
+        val library = over.select(DockTab.LIBRARY)
+        assertEquals(emptyList<FullScreen>(), library.views)
+        assertEquals(DockTab.LIBRARY, library.tab)
+        assertEquals(listOf<Page>(album), library.pages)
+        // Over Library itself: its root, as a tap on its item there.
+        val home = NavState.start(DockTab.LIBRARY).open(album).show(FullScreen.Player).select(DockTab.LIBRARY)
+        assertEquals(emptyList<FullScreen>(), home.views)
+        assertEquals(emptyList<Page>(), home.pages)
+    }
+
     @Test
     fun `tapping Playlists at its root asks its list to go to the top`() {
         val nav = NavState.start(DockTab.PLAYLISTS).open(Page.Queues)

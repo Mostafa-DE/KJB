@@ -34,12 +34,18 @@ class QueueBridgeTest {
     private val missing = mutableSetOf<String>()
     private val find: (SongRef) -> Song? = { ref -> songs.firstOrNull { it.path == ref.path }?.takeUnless { it.path in missing } }
 
-    /** A player that keeps a list of uids, as ExoPlayer keeps media items: removing the current item makes the next one current. */
+    /**
+     * A player that keeps a list of uids, as ExoPlayer keeps media items: removing the current item makes the next one
+     * current. [taken] counts the edits that took the song it was on: Media3 1.11.1 then goes on with the song after it,
+     * or with none ends there (removeMediaItemsInternal's STATE_ENDED), which the service hears as the queue played to
+     * its end.
+     */
     private class FakePort : PlayerPort {
         override var loaded: List<Long> = emptyList()
         override var index: Int = -1
         override var positionMs: Long = 0
         val calls = mutableListOf<String>()
+        var taken: Int = 0
 
         /** The path it was handed for each song, by uid. */
         val paths = mutableMapOf<Long, String>()
@@ -64,7 +70,10 @@ class QueueBridgeTest {
             val current = loaded.getOrNull(index)
             val list = loaded.toMutableList()
             when (edit) {
-                is Edit.Remove -> list.subList(edit.at, edit.at + edit.count).clear()
+                is Edit.Remove -> {
+                    if (current in list.subList(edit.at, edit.at + edit.count)) taken++
+                    list.subList(edit.at, edit.at + edit.count).clear()
+                }
                 is Edit.Insert -> {
                     list.addAll(edit.at, edit.items.map { it.uid })
                     edit.items.forEach { paths[it.uid] = it.song.path }
@@ -171,7 +180,8 @@ class QueueBridgeTest {
     private val findOnShelf: (SongRef) -> Song? = { ref -> shelf.firstOrNull { it.path == ref.path } }
 
     private val port = FakePort()
-    private val bridge = QueueBridge(port) { port.calls += "stop" }
+    private var repeat = Repeat.OFF
+    private val bridge = QueueBridge(port, { repeat }) { port.calls += "stop" }
 
     private fun uidsOf(book: QueueBook) = projection(book.current, find).map { it.uid }
 
@@ -272,16 +282,146 @@ class QueueBridgeTest {
         var book = QueueBook().play(refs.take(3), 2, albumSource, now = 1).book
         bridge.sync(book, find)
         port.positionMs = 20_000
-        book = book.forget(setOf(refs[2].path), Repeat.OFF)
+        book = book.forget(setOf(refs[2].path))
         bridge.sync(book, find)
-        assertEquals(listOf("load", "stop", "edit", "seek"), port.calls)
+        // 3.1 (PL1): the player moves to the queue's song before the edit, never left on the song that goes.
+        assertEquals(listOf("load", "stop", "seek", "edit"), port.calls)
         assertEquals(uidsOf(book), port.loaded)
         assertEquals(book.current!!.items.first().uid, port.current)
         assertEquals(0L, port.positionMs)
-        // The same count again, or a queue loaded afresh with any count, stops nothing.
+        // The same book again, or a queue loaded afresh, stops nothing.
         bridge.sync(book.place(1, 5_000), find)
         QueueBridge(port) { port.calls += "stop" }.sync(book, find)
         assertEquals(1, port.calls.count { it == "stop" })
+    }
+
+    /**
+     * 3.1 (PL1): an edit taking the song the player is on made ExoPlayer go on with the next one, or with none end there
+     * (STATE_ENDED), which the service took for the queue played to its end: that song's play heard to its end, a book's
+     * last part finishing the book. The player now moves to the queue's song first, and only then the songs change.
+     */
+    @Test
+    fun `the song playing taken out never goes from under the player, which moves to the queue's song first`() {
+        var book = QueueBook().play(refs.take(6), 1, albumSource, now = 1).book
+        bridge.sync(book, find)
+        port.positionMs = 20_000
+        // Remove from queue.
+        book = book.remove(book.currentId!!, book.current!!.current!!.uid)!!.book
+        bridge.sync(book, find)
+        assertEquals(listOf("load", "seek", "edit"), port.calls)
+        assertEquals(book.current!!.current!!.uid, port.current)
+        assertEquals(0L, port.positionMs)
+        // The trash, and a controller's remove.
+        book = book.forget(setOf(book.current!!.current!!.song.path))
+        bridge.sync(book, find)
+        assertEquals(book.current!!.current!!.uid, port.current)
+        book = book.removeUids(book.currentId!!, setOf(book.current!!.current!!.uid))
+        bridge.sync(book, find)
+        assertEquals(book.current!!.current!!.uid, port.current)
+        assertEquals(uidsOf(book), port.loaded)
+        assertEquals(0, port.taken)
+        // A song after it each time: playing goes on.
+        assertFalse("stop" in port.calls)
+    }
+
+    @Test
+    fun `the song playing taken out with none after it stops the player at the queue's song, never as if it had played to its end`() {
+        // Remove from queue: the song before it waits, paused.
+        var book = QueueBook().play(refs.take(4), 3, albumSource, now = 1).book
+        bridge.sync(book, find)
+        port.positionMs = 20_000
+        book = book.remove(book.currentId!!, book.current!!.current!!.uid)!!.book
+        bridge.sync(book, find)
+        assertEquals(listOf("load", "stop", "seek", "edit"), port.calls)
+        assertEquals(book.current!!.current!!.uid, port.current)
+        assertEquals(0L, port.positionMs)
+
+        // A controller's remove of the last song, then its file gone from the phone: the queue's first song waits.
+        book = book.removeUids(book.currentId!!, setOf(book.current!!.current!!.uid))
+        bridge.sync(book, find)
+        assertEquals(book.current!!.current!!.uid, port.current)
+        missing += book.current!!.current!!.song.path
+        bridge.sync(book, find)
+        assertEquals(projection(book.current, find).single().uid, port.current)
+        assertEquals(3, port.calls.count { it == "stop" })
+        assertEquals(0, port.taken)
+
+        // A book's last part: the same, so the book is never finished by it.
+        val parts = QueueSource(SourceKind.BOOK, "book:harbour", "Harbour Glass")
+        val bookPort = FakePort()
+        val bookBridge = QueueBridge(bookPort, { Repeat.ALL }) { bookPort.calls += "stop" }
+        var reading = QueueBook().play(refs.take(4), 3, parts, now = 1).book
+        bookBridge.sync(reading, find)
+        reading = reading.remove(reading.currentId!!, reading.current!!.current!!.uid)!!.book
+        bookBridge.sync(reading, find)
+        assertEquals(listOf("load", "stop", "seek", "edit"), bookPort.calls)
+        assertEquals(0, bookPort.taken)
+    }
+
+    @Test
+    fun `with nothing after the song playing that leaves, Repeat one stops the player too and Repeat all goes round`() {
+        // Repeat one: no next song, as the player's Next reads it.
+        repeat = Repeat.ONE
+        var book = QueueBook().play(refs.take(6), 5, albumSource, now = 1).book
+        bridge.sync(book, find)
+        book = book.forget(setOf(refs[5].path))
+        bridge.sync(book, find)
+        assertEquals(listOf("load", "stop", "seek", "edit"), port.calls)
+        // Every song after it moved too.
+        book = book.jump(book.currentId!!, 2, now = 2).book
+        bridge.sync(book, find)
+        book = book.forget(refs.drop(2).map { it.path }.toSet())
+        bridge.sync(book, find)
+        assertEquals(2, port.calls.count { it == "stop" })
+
+        // Repeat all goes on with the first song, playing.
+        repeat = Repeat.ALL
+        book = QueueBook().play(refs.take(6), 5, albumSource, now = 3).book
+        val round = FakePort()
+        val bridge = QueueBridge(round, { repeat }) { round.calls += "stop" }
+        bridge.sync(book, find)
+        book = book.forget(setOf(refs[5].path))
+        bridge.sync(book, find)
+        assertEquals(listOf("load", "seek", "edit"), round.calls)
+        assertEquals(book.current!!.items.first().uid, round.current)
+        assertEquals(0, port.taken + round.taken)
+    }
+
+    /** 3.1 (PL1B, Grok review of PL1): the song the queue goes on with may be one the player does not hold yet. */
+    @Test
+    fun `the song playing taken out for a song the player does not hold yet loads the queue there, never taking the song playing`() {
+        // The second song is not on the phone: the player holds the others.
+        missing += songs[1].path
+        var book = QueueBook().play(refs.take(4), 0, albumSource, now = 1).book
+        bridge.sync(book, find)
+        port.positionMs = 20_000
+        // Its file is back as the song playing is taken out, so the queue goes on with it.
+        missing -= songs[1].path
+        book = book.remove(book.currentId!!, book.current!!.current!!.uid)!!.book
+        bridge.sync(book, find)
+        assertEquals(listOf("load", "load"), port.calls)
+        assertEquals(uidsOf(book), port.loaded)
+        assertEquals(book.current!!.items.first().uid, port.current)
+        assertEquals(0L, port.positionMs)
+        assertEquals(0, port.taken)
+    }
+
+    /** 3.1 (PL1B, Grok review of PL1): CR2's two threads, as the song the main thread sees playing is taken out. */
+    @Test
+    fun `the song playing taken out just after it ended keeps the song the player went on to playing`() {
+        val threads = ThreadedPort()
+        val bridge = QueueBridge(threads) { threads.playing = null }
+        var book = QueueBook().play(refs.take(4), 1, albumSource, now = 1).book
+        bridge.sync(book, find)
+        val next = threads.loaded[2]
+        // The song ends on the playback thread; the main thread still sees it playing as Remove from queue comes.
+        threads.moveOn()
+        book = book.remove(book.currentId!!, book.current!!.current!!.uid)!!.book
+        bridge.sync(book, find)
+        assertEquals("the song playing", next, threads.playing)
+        assertFalse("started again", threads.restarted)
+        assertEquals(uidsOf(book), threads.loaded)
+        assertEquals(next, threads.loaded[threads.index])
     }
 
     @Test

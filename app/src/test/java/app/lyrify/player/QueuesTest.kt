@@ -681,7 +681,7 @@ class QueuesTest {
         val folderId = book.currentId!!
         book = book.keep(albumId)
 
-        val forgotten = book.forget(setOf(album[0].path, album[4].path, folder[0].path, folder[3].path), Repeat.OFF)
+        val forgotten = book.forget(setOf(album[0].path, album[4].path, folder[0].path, folder[3].path))
         assertNull(forgotten.queue(lone))
         assertFalse(lone in forgotten.recent)
         assertEquals(listOf("Harbour Glass 2", "Harbour Glass 3", "Harbour Glass 4", "Harbour Glass 6"), paths(forgotten.queue(albumId)))
@@ -695,58 +695,43 @@ class QueuesTest {
         assertEquals(12_000L, forgotten.current!!.positionMs)
         // The song playing stayed: the player is not moved.
         assertEquals(book.jumps, forgotten.jumps)
-        assertEquals(book.stops, forgotten.stops)
-        assertSame(book, book.forget(setOf("/storage/emulated/0/Music/Elsewhere.mp3"), Repeat.OFF))
+        assertSame(book, book.forget(setOf("/storage/emulated/0/Music/Elsewhere.mp3")))
     }
 
     @Test
     fun `the song playing moved to the trash gives way to the next song left, from its start`() {
         val book = playing(2).place(2, 30_000)
-        val forgotten = book.forget(setOf(album[2].path, album[3].path), Repeat.OFF)
+        val forgotten = book.forget(setOf(album[2].path, album[3].path))
         assertEquals(listOf("Harbour Glass 1", "Harbour Glass 2", "Harbour Glass 5", "Harbour Glass 6"), paths(forgotten.current))
         assertEquals("Harbour Glass 5", currentName(forgotten))
         assertEquals(0L, forgotten.current!!.positionMs)
         assertEquals(book.jumps + 1, forgotten.jumps)
-        assertEquals(book.stops, forgotten.stops)
 
         // Shuffled, the next song is the one that would play next, and the order before Shuffle loses the song too.
         val shuffled = playing(0).toggleShuffle(Random(7))
         val next = shuffled.current!!.items[1]
-        val left = shuffled.forget(setOf(album[0].path), Repeat.OFF)
+        val left = shuffled.forget(setOf(album[0].path))
         assertEquals(next.uid, left.current!!.current!!.uid)
         assertEquals(left.current!!.items.map { it.uid }.sorted(), left.current!!.unshuffled!!.sorted())
     }
 
     @Test
-    fun `the song playing moved to the trash with none after it stops the player at the queue's first song, unless Repeat all goes round`() {
+    fun `the song playing moved to the trash with none after it leaves the queue at its first song`() {
         val book = playing(5).place(5, 10_000)
-        val stopped = book.forget(setOf(album[5].path), Repeat.OFF)
+        val stopped = book.forget(setOf(album[5].path))
         assertEquals("Harbour Glass 1", currentName(stopped))
         assertEquals(0L, stopped.current!!.positionMs)
         assertEquals(book.jumps + 1, stopped.jumps)
-        assertEquals(book.stops + 1, stopped.stops)
-        // Repeat one goes to no next song, as the player's Next reads it.
-        assertEquals(book.stops + 1, book.forget(setOf(album[5].path), Repeat.ONE).stops)
         // Every song after it moved too.
-        assertEquals(book.stops + 1, playing(3).forget(album.drop(3).map { it.path }.toSet(), Repeat.OFF).stops)
-
-        val round = book.forget(setOf(album[5].path), Repeat.ALL)
-        assertEquals("Harbour Glass 1", currentName(round))
-        assertEquals(book.jumps + 1, round.jumps)
-        assertEquals(book.stops, round.stops)
-        // A book never repeats: its queue stops at its end whatever Repeat says.
-        val part = QueueBook().play(album, 5, QueueSource(SourceKind.BOOK, "book:harbour", "Harbour Glass"), now = 1).book
-        assertEquals(part.stops + 1, part.forget(setOf(album[5].path), Repeat.ALL).stops)
+        assertEquals("Harbour Glass 1", currentName(playing(3).forget(album.drop(3).map { it.path }.toSet())))
     }
 
     @Test
     fun `a queue playing that loses every song to the trash goes, and nothing is left playing`() {
         val book = QueueBook().play(folder.take(2), 1, folderSource, now = 1).book
-        val gone = book.forget(folder.take(2).map { it.path }.toSet(), Repeat.OFF)
+        val gone = book.forget(folder.take(2).map { it.path }.toSet())
         assertNull(gone.currentId)
         assertTrue(gone.queues.isEmpty())
-        // Nothing is loaded at all, so there is nothing to stop.
-        assertEquals(book.stops, gone.stops)
     }
 
     // Names

@@ -189,7 +189,7 @@ class PlayerCore(
 
     /** Songs the phone moved to its trash leave every queue ([QueueBook.forget]); before the queues are read, once they are. */
     fun trashed(paths: Set<String>) {
-        change { it.forget(paths, _repeat.value) }
+        change { it.forget(paths) }
     }
 
     /** Where the player is, while the service runs; null when it stops. */

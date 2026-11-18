@@ -1,7 +1,5 @@
 package app.lyrify.ui
 
-import androidx.compose.animation.SizeTransform
-import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -9,20 +7,18 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.FlowRowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -32,7 +28,6 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -69,9 +64,9 @@ import app.lyrify.player.withEnd
 import app.lyrify.player.withStart
 import kotlin.math.roundToInt
 
-// The player's extras on the player itself (milestone P2): the sleep button and its chip in the secondary row, the
-// chips row (speed, A-B), the A and B handles above the progress bar, and the bar's bookmark ticks and part. Their
-// sheets and actions are in PlayerSheets.kt.
+// The player's extras on the player itself (milestone P2): the chips row (speed, A-B, and the sleep timer while it runs;
+// its row is in the player's "⋯" since 3.1), the A and B handles above the progress bar, and the bar's bookmark ticks
+// and part. Their sheets and actions are in PlayerSheets.kt.
 
 // The sleep chip
 
@@ -98,33 +93,12 @@ fun sleepShown(timer: SleepTimer, leftMs: Long?, playing: Boolean): SleepShown =
 
 private const val MINUTE_MS: Long = 60_000
 
-/** The secondary row's sleep button: the snooze icon while off; a chip with what is left while a timer runs. */
-@Composable
-internal fun SleepButton(ui: PlayerUi, onOpen: () -> Unit) {
-    val context = LocalContext.current
-    val extras = remember(context) { PlayerExtras.of(context) }
-    val timer = extras.sleep.collectAsStateWithLifecycle().value
-    val reduced = LocalReducedMotion.current
-    // The icon and the chip fade through each other, the room between them following, never swapped at once.
-    val kept = remember { Kept(timer) }
-    if (timer != null) kept.value = timer
-    AnimatedContent(timer != null, transitionSpec = { fadeThrough(reduced) using SizeTransform(clip = false) }, contentAlignment = Alignment.Center, label = "sleep") { on ->
-        val running = kept.value
-        if (on && running != null) SleepChip(ui, running, onOpen) else SleepIcon(onOpen)
-    }
-}
+/** What the sleep chip and the "⋯" row say while a timer runs: the short [text], and the [spoken] sentence for TalkBack. */
+private data class SleepWords(val text: String, val spoken: String)
 
+/** What a running [timer] says now, read again every half second. */
 @Composable
-private fun SleepIcon(onOpen: () -> Unit) {
-    val label = stringResource(R.string.player_sleep_off)
-    Box(
-        contentAlignment = Alignment.Center,
-        modifier = Modifier.size(TOUCH).clip(CircleShape).clickable(role = Role.Button, onClick = onOpen).semantics { contentDescription = label },
-    ) { Icon(painterResource(R.drawable.ic_snooze), contentDescription = null, modifier = Modifier.size(26.dp)) }
-}
-
-@Composable
-private fun SleepChip(ui: PlayerUi, timer: SleepTimer, onOpen: () -> Unit) {
+private fun sleepWords(ui: PlayerUi, timer: SleepTimer): SleepWords {
     val now = rememberClock(true, everyMs = 500)
     val shown = sleepShown(timer, sleepLeftMs(timer, now, ui.positionAt(now), ui.durationMs, ui.speed), ui.playing)
     val text = when (shown) {
@@ -139,39 +113,45 @@ private fun SleepChip(ui: PlayerUi, timer: SleepTimer, onOpen: () -> Unit) {
         is SleepShown.Songs -> pluralStringResource(R.plurals.sleep_chip_songs, shown.songs, shown.songs)
         SleepShown.EndOfSong -> stringResource(R.string.sleep_chip_end)
     }
-    val label = if (shown is SleepShown.Clock && shown.fading) stringResource(R.string.sleep_chip_fading, spoken) else spoken
-    val brand = LocalBrandColors.current
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        modifier = Modifier
-            .minimumInteractiveComponentSize()
-            .clip(CircleShape)
-            .background(brand.highlightContainer, CircleShape)
-            .clickable(role = Role.Button, onClick = onOpen)
-            .semantics { contentDescription = label }
-            .heightIn(min = 40.dp)
-            .padding(start = 12.dp, end = 16.dp),
-    ) {
-        Icon(painterResource(R.drawable.ic_snooze), contentDescription = null, tint = brand.onHighlightContainer, modifier = Modifier.size(18.dp))
-        Text(text, style = MaterialTheme.typography.labelLarge.tabular(), color = brand.onHighlightContainer, maxLines = 1)
+    return SleepWords(text, if (shown is SleepShown.Clock && shown.fading) stringResource(R.string.sleep_chip_fading, spoken) else spoken)
+}
+
+/** The sleep timer's chip in the chips row while it runs, as the speed's: what is left; a tap opens its sheet. */
+@Composable
+private fun SleepChip(ui: PlayerUi, timer: SleepTimer, onOpen: () -> Unit) {
+    val words = sleepWords(ui, timer)
+    LyrifyChip(selected = true, onClick = onOpen, role = Role.Button, modifier = Modifier.semantics { contentDescription = words.spoken }, icon = R.drawable.ic_snooze) {
+        Text(words.text, style = MaterialTheme.typography.labelLarge.tabular(), maxLines = 1)
     }
+}
+
+/** The sleep timer's row in the player's "⋯" (3.1: its button left the second row): what is left, under its name, while one runs. */
+@Composable
+internal fun SleepMenuRow(ui: PlayerUi, onOpen: () -> Unit) {
+    val context = LocalContext.current
+    val timer = remember(context) { PlayerExtras.of(context) }.sleep.collectAsStateWithLifecycle().value
+    val words = timer?.let { sleepWords(ui, it) }
+    MenuRow(stringResource(R.string.sleep_title), R.drawable.ic_snooze, onOpen, detail = words?.text, description = words?.spoken)
 }
 
 // The chips row
 
-/** The chips row while something is on: the speed (not 1×, or a moved pitch) and the part repeating. */
+/** The chips row while something is on: the speed (not 1×, or a moved pitch), the part repeating, and the sleep timer running. */
 @Composable
 internal fun ExtrasChips(ui: PlayerUi, extras: PlayerExtrasUi) {
     val state = extras.extras.state.collectAsStateWithLifecycle().value
+    val timer = extras.extras.sleep.collectAsStateWithLifecycle().value
     val path = ui.path()
     // A book's own speed (BooksScreen.kt).
     val speed = rememberBookSpeed(ui)?.speed ?: state.speedOf(path)
     val part = partShown(state.part, path)
     val reduced = LocalReducedMotion.current
+    // The timer that just ended stays in its chip while the chip goes.
+    val kept = remember { Kept(timer) }
+    if (timer != null) kept.value = timer
     // The row opens its room and each chip pops in and out on its own, so the title and the bar never jump.
-    AnimatedVisibility(speed.shows || part, enter = expandIn(reduced), exit = shrinkOut(reduced)) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally), modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
+    AnimatedVisibility(speed.shows || part || timer != null, enter = expandIn(reduced), exit = shrinkOut(reduced)) {
+        ChipsRow {
             AnimatedVisibility(speed.shows, enter = chipIn(reduced), exit = chipOut(reduced)) {
                 val number = speedNumber(speed.speed)
                 val text = chipPitch(speed)?.let { stringResource(R.string.speed_value_pitch, number, it) } ?: stringResource(R.string.speed_value, number)
@@ -183,8 +163,25 @@ internal fun ExtrasChips(ui: PlayerUi, extras: PlayerExtrasUi) {
                     Icon(painterResource(R.drawable.ic_close), contentDescription = null, modifier = Modifier.size(16.dp))
                 }
             }
+            AnimatedVisibility(timer != null, enter = chipIn(reduced), exit = chipOut(reduced)) {
+                kept.value?.let { running -> SleepChip(ui, running) { extras.open = ExtrasSheet.SLEEP } }
+            }
         }
     }
+}
+
+/**
+ * The chips row's room: the chips side by side in the middle; on a narrow phone or at a large font the ones that do not
+ * fit go on a line under them, never squeezed and cut (three chips since the sleep timer's joined speed and A-B).
+ */
+@Composable
+internal fun ChipsRow(content: @Composable FlowRowScope.() -> Unit) {
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+        content = content,
+    )
 }
 
 // Repeat a part (A-B)
