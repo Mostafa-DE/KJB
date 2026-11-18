@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Songs with several artists (ui/ArtistNames.kt, Settings > Split artists) and Edit tags' suggestions (KJB 3.1, TA1). -->
+<resources>
+    <!-- Settings > Library -->
+    <string name="set_artists">Split artists</string>
+    <string name="set_artists_off">Off</string>
+    <string name="set_artists_none">On, nothing to split at</string>
+    <string name="set_artists_sentence">A song whose artist tag names several artists shows on each artist\'s page and in Search. Your files keep their tags.</string>
+    <string name="set_artists_switch">Split artists</string>
+    <string name="set_artists_switch_detail">On each artist\'s page</string>
+    <string name="set_artists_at">Split at</string>
+    <string name="set_artists_mark">Wherever it appears</string>
+    <string name="set_artists_word">As a whole word, in any case</string>
+    <string name="set_artists_add_separator">Add a separator</string>
+    <string name="set_artists_separator">Separator</string>
+    <string name="set_artists_never">Never split</string>
+    <string name="set_artists_add_name">Add a name</string>
+    <string name="set_artists_name">Name</string>
+    <string name="set_artists_add">Add</string>
+    <string name="set_artists_remove">Remove %1$s</string>
+
+    <!-- Edit tags: a value from the library, under the field being typed in -->
+    <string name="edit_suggestion_use">Use %1$s</string>
+</resources>

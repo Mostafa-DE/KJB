@@ -382,9 +382,20 @@ fun LyrifyField(
     )
 }
 
-/** [LyrifyField] with its text's selection, for a name that starts selected (a rename). */
+/**
+ * [LyrifyField] with its text's selection: a name that starts selected (a rename), a value an Edit tags suggestion
+ * fills (the caret after it).
+ */
 @Composable
-fun LyrifyField(value: TextFieldValue, onValueChange: (TextFieldValue) -> Unit, modifier: Modifier = Modifier, label: String? = null) {
+fun LyrifyField(
+    value: TextFieldValue,
+    onValueChange: (TextFieldValue) -> Unit,
+    modifier: Modifier = Modifier,
+    label: String? = null,
+    placeholder: String? = null,
+    isError: Boolean = false,
+    keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
+) {
     val colors = MaterialTheme.colorScheme
     var focused by remember { mutableStateOf(false) }
     BasicTextField(
@@ -394,7 +405,8 @@ fun LyrifyField(value: TextFieldValue, onValueChange: (TextFieldValue) -> Unit, 
         singleLine = true,
         textStyle = MaterialTheme.typography.bodyLarge.copy(color = colors.onSurface),
         cursorBrush = SolidColor(LocalBrandColors.current.highlight),
-        decorationBox = { field -> FieldFrame(field, value.text.isEmpty(), focused, label, placeholder = null, RoundedCornerShape(16.dp), 2.dp, leading = null, trailing = null, isError = false) },
+        keyboardOptions = keyboardOptions,
+        decorationBox = { field -> FieldFrame(field, value.text.isEmpty(), focused, label, placeholder, RoundedCornerShape(16.dp), 2.dp, leading = null, trailing = null, isError = isError) },
     )
 }
 
