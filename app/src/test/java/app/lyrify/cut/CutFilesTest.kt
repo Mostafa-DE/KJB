@@ -276,6 +276,70 @@ class CutFilesTest {
         assertEquals(emptyList<String>(), s.others(stray, result.file))
     }
 
+    // What a killed save left
+
+    /** [name] in [dir], last written [daysAgo] days ago. */
+    private fun leftOver(dir: File, name: String, daysAgo: Double = 2.0): File = File(dir, name).apply {
+        writeText("half a cut")
+        setLastModified(System.currentTimeMillis() - (daysAgo * DAY_MS).toLong())
+    }
+
+    @Test
+    fun `a part file a killed save left over a day ago goes at the next save, beside the song and in Music`() = runBlocking {
+        val s = Setup()
+        val beside = leftOver(s.album, ".Paper Lanterns (cut).m4a.part")
+        val inMusic = leftOver(s.music, ".Night Ferry (cut) (3).m4a.part")
+        val result = s.files.save(s.request()) {}
+
+        assertFalse(beside.exists())
+        assertFalse(inMusic.exists())
+        assertEquals(CutResult.Saved(File(s.album, "Paper Lanterns (cut).m4a"), tagged = true), result)
+        assertEquals(emptyList<String>(), s.others((result as CutResult.Saved).file))
+    }
+
+    @Test
+    fun `opening the cutter sweeps them too`() {
+        val s = Setup()
+        val beside = leftOver(s.album, ".Tin Roof (cut) (2).m4a.part")
+        val inMusic = leftOver(s.music, ".Cut.m4a.part")
+        s.files.sweep(s.song.path)
+
+        assertFalse(beside.exists())
+        assertFalse(inMusic.exists())
+        assertTrue(s.logs.toString(), s.logs.none { "Tin Roof" in it || "/" in it })
+    }
+
+    @Test
+    fun `only KJB's part names, last written over a day ago, in the cut's folders are swept`() {
+        val s = Setup()
+        val elsewhere = File(s.music, "Other Album").apply { mkdirs() }
+        val kept = listOf(
+            // A save writing now, or one from today.
+            leftOver(s.album, ".Paper Lanterns (cut).m4a.part", daysAgo = 0.0),
+            leftOver(s.album, ".Paper Lanterns (cut) (2).m4a.part", daysAgo = 0.9),
+            // Not KJB's part names.
+            leftOver(s.album, ".Paper Lanterns.mp3.part"),
+            leftOver(s.album, "Paper Lanterns (cut).m4a"),
+            leftOver(s.album, ".Paper Lanterns (cut).m4a"),
+            leftOver(s.music, ".Paper Lanterns (cut).m4a.part.bak"),
+            // A folder no cut of this song goes to.
+            leftOver(elsewhere, ".Paper Lanterns (cut).m4a.part"),
+        )
+        val folderNamedLikeOne = File(s.album, ".Tin Roof (cut).m4a.part").apply { mkdirs(); setLastModified(System.currentTimeMillis() - 2 * DAY_MS) }
+        s.files.sweep(s.song.path)
+
+        kept.forEach { assertTrue(it.path, it.exists()) }
+        assertTrue(folderNamedLikeOne.isDirectory)
+    }
+
+    @Test
+    fun `a debug build sweeps only its test folder`() {
+        val s = Setup(writes = SharedWrites(testFolderOnly = true, root = folder.root.toPath()))
+        val outside = leftOver(s.album, ".Paper Lanterns (cut).m4a.part")
+        s.files.sweep(s.song.path)
+        assertTrue(outside.exists())
+    }
+
     // Where it goes
 
     @Test
@@ -409,5 +473,6 @@ class CutFilesTest {
 
     private companion object {
         val TAGS = "TAGS".toByteArray()
+        const val DAY_MS: Long = 24 * 60 * 60 * 1_000L
     }
 }

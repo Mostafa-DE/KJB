@@ -258,7 +258,13 @@ private fun CutEditor(song: Song, files: CutFiles, player: TonePlayer, onSaved: 
     var draft by rememberSaveable(song.path, stateSaver = CutDraftSaver) { mutableStateOf(CutDraft(songDurationMs = song.durationMs)) }
     val peaks by produceState<FloatArray?>(null, song.path) { value = loadPeaks(context, song.path, draft.durationMs) { CutFiles.decoder(it) } }
     val encoders by produceState<Map<CutQuality, String>?>(null) { value = withContext(Dispatchers.IO) { CutQuality.offered(CutEncoders.phone()) } }
-    val folder by produceState<CutFolder?>(null, song.path) { value = withContext(Dispatchers.IO) { files.folder(song.path) } }
+    // Opening the cutter also clears what a save the app's death stopped left in these folders.
+    val folder by produceState<CutFolder?>(null, song.path) {
+        value = withContext(Dispatchers.IO) {
+            files.sweep(song.path)
+            files.folder(song.path)
+        }
+    }
     val tagBytes by produceState(0L, song.path) { value = withContext(Dispatchers.IO) { embeddedPictureBytes(File(song.path)) ?: 0L } }
     val saving by CutSaving.state.collectAsStateWithLifecycle()
     val playing by player.playing.collectAsStateWithLifecycle()

@@ -32,10 +32,13 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import java.io.FileDescriptor
+import java.io.IOException
 import java.io.RandomAccessFile
 import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.StandardCopyOption
+import java.nio.file.attribute.BasicFileAttributes
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.resume
 
@@ -88,7 +91,8 @@ enum class CutFailure {
  * storage, under [tags]' root), gets the song's tags and cover there, is copied into a hidden part file in its folder,
  * and only then takes a free name: a new empty file made under the first name nobody has, then the part moved over it in
  * one rename, so no other file is ever written over and no half-made cut ever shows under a song's name. A cancelled or
- * failed save removes the part file and whatever is in [work]; what a killed save left in [work] goes at the next one.
+ * failed save removes the part file and whatever is in [work]; what a killed save left in [work] goes at the next one,
+ * and its part file once it is a day old ([sweep]).
  *
  * The folder is the song's when KJB may write there ([canWrite], and [writes] for the cut's path), else [music] (the
  * debug build's test folder in a debug build), else none. The saved cut is handed to [scan] so the library shows it.
@@ -115,6 +119,25 @@ class CutFiles(
         return CutFolder.Nowhere
     }
 
+    /**
+     * Removes the hidden part files stopped saves left (the app killed while a cut was copied into its folder) from the
+     * folders a cut of the song at [songPath] goes to, beside it and Music/: only files with KJB's part names
+     * ([CutNames.isPart]), plain files (not a link or a folder) last written over a day ago (so never one a save is
+     * writing), where the build lets KJB delete. Run when the cutter opens and before each save. Blocking.
+     */
+    fun sweep(songPath: String) {
+        val song = File(songPath)
+        val base = CutNames.base(song.name)
+        val before = System.currentTimeMillis() - STALE_MS
+        var removed = 0
+        listOfNotNull(song.parentFile, music).distinct().filter { writable(it, base) }.forEach { folder ->
+            folder.listFiles { _, name -> CutNames.isPart(name) }.orEmpty().forEach { part ->
+                if (stale(part, before) && writes.allows(SharedWrite.CUT_DELETE, part.path) && part.delete()) removed++
+            }
+        }
+        if (removed > 0) log("cut: $removed part files of stopped saves removed")
+    }
+
     /** Saves [request]; [onProgress] hears the share done. Cancellable: a cancelled save leaves no file. */
     suspend fun save(request: CutRequest, onProgress: (Float) -> Unit): CutResult = withContext(io) {
         val song = File(request.songPath)
@@ -130,6 +153,7 @@ class CutFiles(
         val out = File(work, OUT_NAME)
         var part: File? = null
         try {
+            sweep(request.songPath)
             clearWork()
             val original = originalTags(song)
             currentCoroutineContext().ensureActive()
@@ -228,10 +252,18 @@ class CutFiles(
         return tagged
     }
 
+    /** Whether [part] is a plain file, not a link or a folder, last written before [before] (ms since the epoch). */
+    private fun stale(part: File, before: Long): Boolean = try {
+        val attributes = Files.readAttributes(part.toPath(), BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
+        attributes.isRegularFile && attributes.lastModifiedTime().toMillis() < before
+    } catch (_: IOException) {
+        false
+    }
+
     /** A new empty hidden part file in [folder] for the cut, made under a name no file has; null when none may be. */
     private fun freePart(folder: File, base: String): File? {
-        for (n in 1..NAME_TRIES) {
-            val part = File(folder, ".${CutNames.fileName(base, n)}$PART_SUFFIX")
+        for (n in 1..CutNames.MAX_NUMBER) {
+            val part = File(folder, CutNames.partName(base, n))
             if (!writes.allows(SharedWrite.CUT_SAVE, part.path)) return null
             try {
                 Files.createFile(part.toPath())
@@ -250,7 +282,7 @@ class CutFiles(
      * Null when it could not be moved there; the name it took is given back.
      */
     private fun publish(part: File, folder: File, base: String): File? {
-        for (n in 1..NAME_TRIES) {
+        for (n in 1..CutNames.MAX_NUMBER) {
             val saved = File(folder, CutNames.fileName(base, n))
             if (!writes.allows(SharedWrite.CUT_SAVE, saved.path)) return null
             try {
@@ -289,11 +321,10 @@ class CutFiles(
         private const val ENCODE_SHARE: Float = 0.95f
         private const val OUT_NAME: String = "cut.m4a"
         private const val COPY_NAME: String = "song"
-        private const val PART_SUFFIX: String = ".part"
         private const val TITLE: String = "TITLE"
 
-        /** How many names are tried before a save gives up. */
-        private const val NAME_TRIES: Int = 100
+        /** A part file this much older than now is a stopped save's: no save takes a day. */
+        private const val STALE_MS: Long = 24 * 60 * 60 * 1_000L
 
         private const val SCAN_TIMEOUT_MS: Long = 30_000
 

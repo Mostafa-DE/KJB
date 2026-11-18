@@ -155,6 +155,26 @@ object CutNames {
     /** The [n]th name for a cut of [base]: the first is plain, the next "base (2).m4a". */
     fun fileName(base: String, n: Int): String = if (n <= 1) "$base.$EXTENSION" else "$base ($n).$EXTENSION"
 
+    /** The last number a cut's name is given ("(100)"): a save finding every name taken gives up. */
+    const val MAX_NUMBER: Int = 100
+
+    private const val PART_SUFFIX: String = ".part"
+
+    /** [partName]'s shape: a base never starts with a dot ([ToneEntry.safeName]), and a number never with a 0. */
+    private val PART = Regex("""\.(?!\.)(.*(?i:${Regex.escape(MARK)})|${Regex.escape(FALLBACK)})(?: \(([1-9]\d{0,2})\))?${Regex.escape(".$EXTENSION$PART_SUFFIX")}""")
+
+    /** The hidden file a cut is copied into in its folder before it takes the [n]th name: ".base (n).m4a.part". */
+    fun partName(base: String, n: Int): String = ".${fileName(base, n)}$PART_SUFFIX"
+
+    /**
+     * Whether [name] is one [partName] gives: a dot, a cut's [base] (ending in the mark, or the fallback), a number from 2
+     * to [MAX_NUMBER] or none, then `.m4a.part`. Only files with these names are ever removed as a stopped save's.
+     */
+    fun isPart(name: String): Boolean {
+        val number = PART.matchEntire(name)?.groupValues?.get(2) ?: return false
+        return number.isEmpty() || number.toInt() in 2..MAX_NUMBER
+    }
+
     /** [text] cut to at most [bytes] UTF-8 bytes, whole characters only. */
     private fun shortened(text: String, bytes: Int): String {
         var used = 0

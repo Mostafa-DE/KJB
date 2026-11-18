@@ -211,6 +211,40 @@ class CutEditTest {
     }
 
     @Test
+    fun `a cut on its way is a hidden part file, and only KJB's part names read as one`() {
+        assertEquals(".Paper Lanterns (cut).m4a.part", CutNames.partName("Paper Lanterns (cut)", 1))
+        assertEquals(".Paper Lanterns (cut) (3).m4a.part", CutNames.partName("Paper Lanterns (cut)", 3))
+        for (name in listOf(
+            CutNames.partName("Paper Lanterns (cut)", 1),
+            CutNames.partName("Paper Lanterns (cut)", 2),
+            CutNames.partName("Paper Lanterns (cut)", CutNames.MAX_NUMBER),
+            CutNames.partName(CutNames.base("Paper Lanterns (Cut).mp3"), 1),
+            CutNames.partName(CutNames.base(".mp3"), 7),
+            CutNames.partName(CutNames.base("Café Nocturne.flac"), 1),
+        )) {
+            assertTrue(name, CutNames.isPart(name))
+        }
+        for (name in listOf(
+            // The cut itself, a hidden cut, another app's part, a download's part.
+            "Paper Lanterns (cut).m4a",
+            ".Paper Lanterns (cut).m4a",
+            "Paper Lanterns (cut).m4a.part",
+            ".Paper Lanterns.mp3.part",
+            ".Paper Lanterns (cut).mp3.part",
+            ".Paper Lanterns.m4a.part",
+            // Numbers KJB never gives, other endings, a doubled dot.
+            ".Paper Lanterns (cut) (1).m4a.part",
+            ".Paper Lanterns (cut) (101).m4a.part",
+            ".Paper Lanterns (cut) (02).m4a.part",
+            ".Paper Lanterns (cut).m4a.part.bak",
+            "..Paper Lanterns (cut).m4a.part",
+            ".Paper Lanterns (cut)(2).m4a.part",
+        )) {
+            assertFalse(name, CutNames.isPart(name))
+        }
+    }
+
+    @Test
     fun `a long file name is shortened, and the mark and a number still fit`() {
         val base = CutNames.base("x".repeat(400) + ".mp3")
         assertTrue(base, base.endsWith(" (cut)"))
