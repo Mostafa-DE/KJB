@@ -50,6 +50,54 @@ class ArtistSplitter(rules: ArtistSplit) {
         return start
     }
 
+    /**
+     * [tag] as Rename artist and Merge write it ([app.lyrify.tags.TagEdits.rename]): each name [names] reads in it that is
+     * one of [renamed] becomes [to], and everything else stays exactly as it was: the separators, brackets and spaces,
+     * and the other names, each piece of them given to [rest] (the credits TagEdits finds without the setting). One name
+     * spelled again in other letters is its first spelling for [names], so each spelling of a renamed one becomes [to]. A
+     * name that goes on past its credit's closing bracket ("Mira Solen (Live)" in "Kit Calloway (feat. Mira Solen)
+     * (Live)") becomes [to] inside the brackets, and its text after them goes. With the setting off, all of [tag] goes to
+     * [rest].
+     */
+    fun replace(tag: String, renamed: Set<String>, to: String, rest: (String) -> String): String {
+        if (separator == null) return rest(tag)
+        // The text between the cuts, by name: the piece after a cut that does not split stays with the name before it.
+        val names = mutableListOf(mutableListOf<IntRange>())
+        var at = 0
+        for (cut in cuts(tag)) {
+            names.last() += at until cut.range.first
+            if (cut.splits) names += mutableListOf<IntRange>()
+            at = cut.range.last + 1
+        }
+        names.last() += at until tag.length
+        val texts = names.map { pieces -> pieces.joinToString("") { tag.substring(it) }.trim() }
+        val firstSpelling = HashMap<String, String>()
+        texts.forEach { if (it.isNotEmpty()) firstSpelling.putIfAbsent(it.lowercase(), it) }
+        val out = StringBuilder(tag.length)
+        var copied = 0
+        names.forEachIndexed { n, pieces ->
+            val renaming = texts[n].isNotEmpty() && firstSpelling[texts[n].lowercase()] in renamed
+            var placed = false
+            for (piece in pieces) {
+                out.append(tag, copied, piece.first)
+                copied = piece.last + 1
+                val raw = tag.substring(piece)
+                when {
+                    !renaming -> out.append(rest(raw))
+                    raw.isBlank() -> out.append(raw)
+                    !placed -> {
+                        placed = true
+                        val name = raw.trim()
+                        val start = raw.indexOf(name)
+                        out.append(raw, 0, start).append(to).append(raw, start + name.length, raw.length)
+                    }
+                    // The renamed name's text past its credit's closing bracket goes with it.
+                }
+            }
+        }
+        return out.append(tag, copied, tag.length).toString()
+    }
+
     /** Text cut out of a tag at [range]: a separator, which [splits] it, or a bracketed credit's closing bracket, dropped. */
     private class Cut(val range: IntRange, val splits: Boolean)
 

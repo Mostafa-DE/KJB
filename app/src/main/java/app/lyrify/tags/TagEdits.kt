@@ -5,6 +5,7 @@ import android.content.Context
 import android.util.Log
 import app.lyrify.LOG_TAG
 import app.lyrify.library.Artist
+import app.lyrify.library.ArtistSplitter
 import app.lyrify.library.CollectionKind
 import app.lyrify.library.FavouriteCollection
 import app.lyrify.library.FavouritesPort
@@ -14,6 +15,7 @@ import app.lyrify.library.LibraryState
 import app.lyrify.library.Song
 import app.lyrify.library.albumKey
 import app.lyrify.lyrics.TrackNames
+import app.lyrify.settings.ArtistSplit
 import app.lyrify.tags.lookup.Body
 import app.lyrify.tags.lookup.CoverPipeline
 import app.lyrify.tags.lookup.ImageCodec
@@ -219,23 +221,30 @@ object TagEdits {
     /**
      * Rename artist ([names] one name) and Merge artists ([names] both): each of [names] becomes [to] in the artist and
      * album artist of [songs] where it is the whole value or one whole credited name ("Kit Calloway feat. Mira Okafor"),
-     * never a word inside another name ([replaceNames]). Case counts: a spelling in other letters is another artist,
-     * for Merge.
+     * never a word inside another name ([replaceNames]). With Artists with several names on ([splitter]: the library's),
+     * also where the tag names it among others by the user's separators ("Mira Okafor, Kit Calloway"), as its page lists
+     * the song: only that name is replaced, the rest of the tag kept as it was ([ArtistSplitter.replace]). Case counts:
+     * a spelling in other letters is another artist, for Merge.
      */
-    fun rename(songs: List<Song>, names: Collection<String>, to: String): List<SongPlan> {
+    fun rename(songs: List<Song>, names: Collection<String>, to: String, splitter: ArtistSplitter = WHOLE_NAMES): List<SongPlan> {
         val name = to.trim()
         if (name.isEmpty()) return emptyList()
+        val renamed = names.toSet()
+        val replace = { tag: String -> splitter.replace(tag, renamed, name) { replaceNames(it, names, name) } }
         return plans(songs, CoverEdit.Keep, emptyMap()) { song, _ ->
             listOfNotNull(
-                song.artist?.let { TagField.ARTIST to replaceNames(it, names, name) }?.takeIf { (_, new) -> new != song.artist },
-                song.albumArtist?.let { TagField.ALBUM_ARTIST to replaceNames(it, names, name) }?.takeIf { (_, new) -> new != song.albumArtist },
+                song.artist?.let { TagField.ARTIST to replace(it) }?.takeIf { (_, new) -> new != song.artist },
+                song.albumArtist?.let { TagField.ALBUM_ARTIST to replace(it) }?.takeIf { (_, new) -> new != song.albumArtist },
             ).toMap()
         }
     }
 
+    /** Artists with several names off: a tag is one name, but for the credits [replaceNames] finds. */
+    private val WHOLE_NAMES = ArtistSplitter(ArtistSplit(enabled = false))
+
     /**
      * A rename's or a merge's [plans] split for its preview: the songs whose whole artist or album artist is one of
-     * [names] (the artist's page and albums), then those that only credit one among others ("Also credited on").
+     * [names] (the artist's page and albums), then those that name one among others ("Also credited on").
      */
     fun credits(plans: List<SongPlan>, names: Collection<String>): CreditSplit {
         val whole = names.map(String::trim).toSet()
@@ -256,8 +265,8 @@ object TagEdits {
      * [text], a credit, with each part that is exactly one of [names] replaced by [to], in one pass so [to] is never
      * replaced again: the whole value, or a name between the joins a credit uses ("feat.", "ft.", "featuring", "(with
      * ...)", ";"). A word inside another name ("Glass" in "Glass Harbour") is never one, nor is a name beside "&" or ","
-     * ("Rowan & Fennick", "Rowan, the Lantern"): those are mostly one band's name. Blank names and [to] itself are left
-     * out.
+     * ("Rowan & Fennick", "Rowan, the Lantern"): those are mostly one band's name, unless the user's separators say
+     * otherwise ([rename] with Artists with several names on). Blank names and [to] itself are left out.
      */
     fun replaceNames(text: String, names: Collection<String>, to: String): String {
         val replaced = names.filter { it.isNotBlank() && it != to }.toSet()
