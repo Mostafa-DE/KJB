@@ -914,21 +914,21 @@ internal val FavouritesMeta = body(13.5f, 19)
 fun favouritesSideBySide(width: Int, head: Int, gap: Int, beside: Int): Boolean = width - head - gap >= beside
 
 /**
- * Favourites' head's height: [top], then the heart [tile] beside the title and counts ([words], however tall the font
- * scale makes them, so they are never cut under the tile), with the list header ([buttons]) under it or beside it ([side]).
- */
-/**
- * How many lines Favourites' title may take: one for a single word (it shrinks to fit rather than break inside the word),
- * two for more, so large words wrap between them.
- */
-/**
  * The title Favourites' head shows: its own, except as the bar's item ([root], KJB 3.1), whose header already has the name
  * (and is the page's heading), as Queues', Downloads' and Books' do; so it shows once.
  */
 fun favouritesHeadTitle(title: String, root: Boolean): String? = title.takeUnless { root }
 
+/**
+ * How many lines Favourites' title may take: one for a single word (it shrinks to fit rather than break inside the word),
+ * two for more, so large words wrap between them.
+ */
 fun favouritesTitleLines(title: String): Int = if (title.trim().contains(' ')) 2 else 1
 
+/**
+ * Favourites' head's height: [top], then the heart [tile] beside the title and counts ([words], however tall the font
+ * scale makes them, so they are never cut under the tile), with the list header ([buttons]) under it or beside it ([side]).
+ */
 fun favouritesHeadHeight(tile: Float, words: Float, buttons: Float, side: Boolean, top: Float): Float {
     val head = maxOf(tile, words)
     return top + if (side) maxOf(head, buttons) else head + buttons
