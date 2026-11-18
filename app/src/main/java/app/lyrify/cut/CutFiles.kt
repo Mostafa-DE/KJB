@@ -95,7 +95,8 @@ enum class CutFailure {
  * and its part file once it is a day old ([sweep]).
  *
  * The folder is the song's when KJB may write there ([canWrite], and [writes] for the cut's path), else [music] (the
- * debug build's test folder in a debug build), else none. The saved cut is handed to [scan] so the library shows it.
+ * debug build's test folder in a debug build), else none; a song's folder that refuses the new file ([createFile]) all
+ * the same sends the cut to [music]. The saved cut is handed to [scan] so the library shows it.
  * Blocking work runs on [io]. Logs name steps and exception classes only, never a title or a path.
  */
 class CutFiles(
@@ -109,6 +110,7 @@ class CutFiles(
     private val scan: suspend (File) -> Unit,
     private val log: (String) -> Unit,
     private val io: CoroutineContext = Dispatchers.IO,
+    private val createFile: (File) -> Unit = { Files.createFile(it.toPath()) },
 ) {
     /** Where a cut of the song at [songPath] would be saved now. Blocking (it asks the disk). */
     fun folder(songPath: String): CutFolder {
@@ -167,12 +169,12 @@ class CutFiles(
             source.use { encode(it, request, out, onProgress) }
             val tagged = tag(out, request, original)
             currentCoroutineContext().ensureActive()
-            val hidden = freePart(folder, base) ?: return@withContext CutResult.Failed(CutFailure.NOT_SAVED)
+            val (place, hidden) = partIn(folder, base) ?: return@withContext CutResult.Failed(CutFailure.NOT_SAVED)
             part = hidden
             Files.copy(out.toPath(), hidden.toPath(), StandardCopyOption.REPLACE_EXISTING)
             currentCoroutineContext().ensureActive()
             // From here the cut is whole: it takes its name and is scanned even if Cancel comes now.
-            val saved = withContext(NonCancellable) { publish(hidden, folder, base) } ?: return@withContext CutResult.Failed(CutFailure.NOT_SAVED)
+            val saved = withContext(NonCancellable) { publish(hidden, place, base) } ?: return@withContext CutResult.Failed(CutFailure.NOT_SAVED)
             part = null
             withContext(NonCancellable) { scanned(saved) }
             onProgress(1f)
@@ -260,13 +262,29 @@ class CutFiles(
         false
     }
 
-    /** A new empty hidden part file in [folder] for the cut, made under a name no file has; null when none may be. */
+    /**
+     * The folder the cut goes to and a new part file in it: [folder], else Music/ when [folder] is the song's and refuses
+     * the new file although it says KJB may write there (as a memory card's folder can). Null when no name is free;
+     * throws when the folder refuses and Music/ is no way out (it is [folder], KJB may not write there, or it refuses too).
+     */
+    private fun partIn(folder: File, base: String): Pair<File, File>? = try {
+        freePart(folder, base)?.let { folder to it }
+    } catch (e: IOException) {
+        if (folder == music || !writable(music, base)) throw e
+        log("cut: its folder refused the new file (${e.javaClass.simpleName}), so it goes in Music")
+        freePart(music, base)?.let { music to it }
+    }
+
+    /**
+     * A new empty hidden part file in [folder] for the cut, made under a name no file has; null when none may be. Throws
+     * when the folder refuses a new file.
+     */
     private fun freePart(folder: File, base: String): File? {
         for (n in 1..CutNames.MAX_NUMBER) {
             val part = File(folder, CutNames.partName(base, n))
             if (!writes.allows(SharedWrite.CUT_SAVE, part.path)) return null
             try {
-                Files.createFile(part.toPath())
+                createFile(part)
                 return part
             } catch (_: FileAlreadyExistsException) {
                 // Another file has the name (another save's, or one KJB did not make): never touched.
@@ -286,7 +304,7 @@ class CutFiles(
             val saved = File(folder, CutNames.fileName(base, n))
             if (!writes.allows(SharedWrite.CUT_SAVE, saved.path)) return null
             try {
-                Files.createFile(saved.toPath())
+                createFile(saved)
             } catch (_: FileAlreadyExistsException) {
                 continue
             }

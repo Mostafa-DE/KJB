@@ -31,6 +31,8 @@ import java.io.FileOutputStream
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.nio.file.AccessDeniedException
+import java.nio.file.Files
 import kotlin.math.PI
 import kotlin.math.sin
 
@@ -115,6 +117,8 @@ class CutFilesTest {
         val source: MixSource = ArrayMix(sine(), piece = 2_000),
         openSong: ((File) -> MixSource)? = null,
         val scanFails: Boolean = false,
+        /** Folders that say KJB may write ([refused] aside) but refuse every new file, as a memory card's can. */
+        val refusesFiles: Set<File> = emptySet(),
     ) {
         val root: File = folder.root
         val music = File(root, "Music").apply { mkdirs() }
@@ -139,6 +143,10 @@ class CutFilesTest {
             scan = { file -> scanned += file; if (scanFails) throw IOException("no scanner") },
             log = { logs += it },
             io = Dispatchers.Unconfined,
+            createFile = { file ->
+                if (file.parentFile in refusesFiles) throw AccessDeniedException(file.path)
+                Files.createFile(file.toPath())
+            },
         )
 
         fun request(range: CutRange = CutRange(1_000, 2_000), fadeIn: Fade = Fade(), fadeOut: Fade = Fade()) = CutRequest(
@@ -350,6 +358,28 @@ class CutFilesTest {
 
         assertEquals(CutResult.Saved(File(s.music, "Paper Lanterns (cut).m4a"), tagged = true), result)
         assertEquals(CutFolder.NextToSong(s.album), Setup().files.folder(s.song.path))
+    }
+
+    @Test
+    fun `a folder that says KJB may write but refuses the new file sends the cut to Music`() = runBlocking {
+        val s = Setup(refusesFiles = setOf(folder.root.resolve("Music/Harbour Glass")))
+        assertEquals(CutFolder.NextToSong(s.album), s.files.folder(s.song.path))
+        val result = s.files.save(s.request()) {}
+
+        val cut = File(s.music, "Paper Lanterns (cut).m4a")
+        assertEquals(CutResult.Saved(cut, tagged = true), result)
+        assertArrayEquals(s.songBytes, s.song.readBytes())
+        assertEquals(listOf(cut), s.scanned)
+        assertEquals(emptyList<String>(), s.others(cut))
+        assertFalse(s.logs.toString(), s.logs.any { "Paper" in it || "Harbour" in it || "/" in it })
+    }
+
+    @Test
+    fun `when Music refuses the new file too, the cut is not saved and nothing is left`() = runBlocking {
+        val s = Setup(refusesFiles = setOf(folder.root.resolve("Music/Harbour Glass"), folder.root.resolve("Music")))
+        assertEquals(CutResult.Failed(CutFailure.NOT_SAVED), s.files.save(s.request()) {})
+        assertEquals(emptyList<String>(), s.others())
+        assertEquals(emptyList<File>(), s.scanned)
     }
 
     @Test
