@@ -1,7 +1,7 @@
 package app.lyrify.ui
 
 import android.app.Activity
-import android.content.res.Resources
+import android.content.Context
 import android.text.format.DateFormat
 import android.text.format.DateUtils
 import android.text.format.Formatter
@@ -69,7 +69,6 @@ import app.lyrify.dupes.SongTrash
 import app.lyrify.dupes.TrashAsk
 import app.lyrify.dupes.TrashStep
 import app.lyrify.dupes.Trashed
-import app.lyrify.dupes.TrashedSong
 import app.lyrify.dupes.duplicates
 import app.lyrify.lyrics.TrackNames
 import kotlinx.coroutines.launch
@@ -96,8 +95,8 @@ sealed interface DupesView {
     /** The songs could not be read, and there are no results to show. */
     data object Failed : DupesView
 
-    /** The last scan's [results] and the songs in the phone's trash; [failed]: a scan since could not read the songs. */
-    data class Results(val results: ScanResults, val trashed: List<TrashedSong>, val failed: Boolean) : DupesView
+    /** The last scan's [results]; [failed]: a scan since could not read the songs. */
+    data class Results(val results: ScanResults, val failed: Boolean) : DupesView
 }
 
 fun dupesView(state: DuplicatesState): DupesView {
@@ -107,7 +106,7 @@ fun dupesView(state: DuplicatesState): DupesView {
         !state.loaded -> DupesView.Loading
         scan is ScanStatus.Running -> DupesView.Scanning(scan.done, scan.total)
         results == null -> if (scan == ScanStatus.Failed) DupesView.Failed else DupesView.FirstScan
-        else -> DupesView.Results(results, state.trashed, failed = scan == ScanStatus.Failed)
+        else -> DupesView.Results(results, failed = scan == ScanStatus.Failed)
     }
 }
 
@@ -186,11 +185,16 @@ fun moveRefused(ask: TrashAsk): Int? = when (ask) {
     TrashAsk.ASKED, TrashAsk.NONE_CHECKED -> null
 }
 
-/** A message about the trash: a string, or a plural whose form [Count.count] picks, showing [Count.numbers]. */
+/**
+ * A message about the trash: a string, or a plural whose form [Count.count] picks, showing [Count.numbers]; [Freed] shows
+ * the room freed after its numbers.
+ */
 sealed interface TrashSaid {
     data class Text(@StringRes val res: Int) : TrashSaid
 
     data class Count(@PluralsRes val res: Int, val count: Int, val numbers: List<Int> = listOf(count)) : TrashSaid
+
+    data class Freed(@PluralsRes val res: Int, val count: Int, val numbers: List<Int>, val bytes: Long) : TrashSaid
 }
 
 /**
@@ -207,9 +211,16 @@ fun trashAnswered(approved: Boolean, answer: Trashed): TrashSaid? = when {
 }
 
 /** Shows [said] with the icon and tone that fit it ([messageToast]). */
-private suspend fun ToastState.say(resources: Resources, said: TrashSaid): Boolean = when (said) {
-    is TrashSaid.Text -> say(resources, said.res)
-    is TrashSaid.Count -> show(messageToast(said.res, resources.getQuantityString(said.res, said.count, *said.numbers.toTypedArray())))
+internal suspend fun ToastState.say(context: Context, said: TrashSaid): Boolean {
+    val resources = context.resources
+    return when (said) {
+        is TrashSaid.Text -> say(resources, said.res)
+        is TrashSaid.Count -> show(messageToast(said.res, resources.getQuantityString(said.res, said.count, *said.numbers.toTypedArray())))
+        is TrashSaid.Freed -> {
+            val words = resources.getQuantityString(said.res, said.count, *said.numbers.toTypedArray(), Formatter.formatShortFileSize(context, said.bytes))
+            show(messageToast(said.res, words))
+        }
+    }
 }
 
 // The tab
@@ -244,7 +255,7 @@ fun rememberPhoneTrash(songTrash: SongTrash, toasts: ToastState): (List<Long>, B
             if (songTrash.step is TrashStep.Restoring) {
                 if (songTrash.restoreAnswered(approved) == Restored.Back) toasts.say(resources, R.string.dupes_restored)
             } else {
-                trashAnswered(approved, songTrash.answered(approved))?.let { toasts.say(resources, it) }
+                trashAnswered(approved, songTrash.answered(approved))?.let { toasts.say(context, it) }
             }
         }
     }
@@ -256,7 +267,7 @@ fun rememberPhoneTrash(songTrash: SongTrash, toasts: ToastState): (List<Long>, B
                     Log.w(LOG_TAG, "trash: the phone refused the request (${request.cause})")
                     if (trash) {
                         songTrash.answered(approved = false)
-                        toasts.say(resources, TrashSaid.Count(R.plurals.dupes_trash_refused, ids.size))
+                        toasts.say(context, TrashSaid.Count(R.plurals.dupes_trash_refused, ids.size))
                     } else {
                         songTrash.restoreAnswered(approved = false)
                         toasts.say(resources, R.string.dupes_trash_failed)
@@ -267,14 +278,14 @@ fun rememberPhoneTrash(songTrash: SongTrash, toasts: ToastState): (List<Long>, B
     }
 }
 
-/** Duplicates' top bar in Tools: back, its name and More options (Scan again, Trashed songs). */
+/** Duplicates' top bar in Tools: back, its name and More options (Scan again, and Trashed songs, which opens Tools > Trash). */
 @Composable
 fun DuplicatesTopBar(under: Boolean, backdrop: GlassBackdrop, onBack: () -> Unit) {
+    val nav = LocalNavigator.current
     val engine = rememberDuplicates()
     val state by engine.state.collectAsStateWithLifecycle()
-    val phoneTrash = rememberPhoneTrash(engine.trash, LocalToasts.current)
+    val trashed = rememberTrashSongs().orEmpty()
     var menu by remember { mutableStateOf(false) }
-    var trashed by rememberSaveable { mutableStateOf(false) }
     LyrifyTopBar(
         title = { Text(stringResource(R.string.dupes_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
         under = under,
@@ -282,7 +293,7 @@ fun DuplicatesTopBar(under: Boolean, backdrop: GlassBackdrop, onBack: () -> Unit
         navigation = { ChromeIconButton(R.drawable.ic_arrow_back, stringResource(R.string.check_back), onBack) },
         actions = {
             val scanAgain = state.results != null && state.scan !is ScanStatus.Running
-            if (scanAgain || state.trashed.isNotEmpty()) Box {
+            if (scanAgain || trashed.isNotEmpty()) Box {
                 ChromeIconButton(R.drawable.ic_more_horiz, stringResource(R.string.menu_more), { menu = true })
                 LyrifyMenu(expanded = menu, onDismiss = { menu = false }) {
                     if (scanAgain) {
@@ -295,13 +306,13 @@ fun DuplicatesTopBar(under: Boolean, backdrop: GlassBackdrop, onBack: () -> Unit
                             },
                         )
                     }
-                    if (state.trashed.isNotEmpty()) {
+                    if (trashed.isNotEmpty()) {
                         MenuRow(
                             stringResource(R.string.dupes_menu_trashed),
                             R.drawable.ic_restore_from_trash,
                             onClick = {
                                 menu = false
-                                trashed = true
+                                nav.open(Page.Trash)
                             },
                         )
                     }
@@ -309,14 +320,11 @@ fun DuplicatesTopBar(under: Boolean, backdrop: GlassBackdrop, onBack: () -> Unit
             }
         },
     )
-    if (trashed) {
-        TrashedSheet(state.trashed, onRestore = { song -> engine.restore(song).takeIf { it.isNotEmpty() }?.let { phoneTrash(it, false) } }) { trashed = false }
-    }
 }
 
 /**
- * The Duplicates tab: before the first scan, the scan's ring, or the groups found by confidence and the songs in the
- * phone's trash. A group opens its sheet; moving copies to the trash asks twice, KJB's dialog and then the phone's.
+ * The Duplicates tab: before the first scan, the scan's ring, or the groups found by confidence. A group opens its sheet;
+ * moving copies to the trash asks twice, KJB's dialog and then the phone's. The songs in the trash are in Tools > Trash.
  */
 @Composable
 fun DuplicatesScreen(contentPadding: PaddingValues, toasts: ToastState) {
@@ -354,7 +362,6 @@ fun DuplicatesScreen(contentPadding: PaddingValues, toasts: ToastState) {
                         engine.opened(group)
                         open = group.key
                     },
-                    onRestore = { song -> engine.restore(song).takeIf { it.isNotEmpty() }?.let { phoneTrash(it, false) } },
                 )
             }
         }
@@ -380,7 +387,7 @@ fun DuplicatesScreen(contentPadding: PaddingValues, toasts: ToastState) {
         )
     }
     (state.trash as? TrashStep.Confirm)?.let { confirm ->
-        TrashDialog(
+        SongTrashDialog(
             count = confirm.files.size,
             onCancel = engine::cancelTrash,
             onConfirm = {
@@ -399,9 +406,9 @@ fun DuplicatesScreen(contentPadding: PaddingValues, toasts: ToastState) {
     }
 }
 
-/** A state in the middle of the tab, scrolling when the phone's text is large. */
+/** A state in the middle of a page, scrolling when the phone's text is large. */
 @Composable
-private fun CenteredState(contentPadding: PaddingValues, content: @Composable () -> Unit) {
+internal fun CenteredState(contentPadding: PaddingValues, content: @Composable () -> Unit) {
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier.fillMaxSize().padding(contentPadding).verticalScroll(rememberScrollState()),
@@ -454,7 +461,6 @@ private fun ResultsList(
     contentPadding: PaddingValues,
     onScan: () -> Unit,
     onOpen: (DuplicateGroup) -> Unit,
-    onRestore: (TrashedSong) -> Unit,
 ) {
     val results = view.results
     val reduced = LocalReducedMotion.current
@@ -478,10 +484,6 @@ private fun ResultsList(
                 item(key = "section $confidence", contentType = "section") { Box(rowMotion(reduced)) { SectionHeader(stringResource(sectionTitle(confidence)), groups.size) } }
                 items(groups, key = { it.key }, contentType = { "group" }) { group -> GroupCard(group, rowMotion(reduced)) { onOpen(group) } }
             }
-        }
-        if (view.trashed.isNotEmpty()) {
-            item(key = "section trashed", contentType = "section") { Box(rowMotion(reduced)) { SectionHeader(stringResource(R.string.dupes_section_trashed), view.trashed.size) } }
-            items(view.trashed, key = { "trashed ${it.file.id}" }, contentType = { "trashed" }) { song -> TrashedRow(song, rowMotion(reduced)) { onRestore(song) } }
         }
     }
 }
@@ -569,32 +571,6 @@ private fun GroupCard(group: DuplicateGroup, modifier: Modifier, onOpen: () -> U
                 Text(copies, style = MaterialTheme.typography.bodySmall.tabular(), color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
-    }
-}
-
-/** A song KJB moved to the phone's trash: its title, where it was and until when it can come back, and Restore. */
-@Composable
-fun TrashedRow(song: TrashedSong, modifier: Modifier = Modifier, onRestore: () -> Unit) {
-    val context = LocalContext.current
-    val until = DateUtils.formatDateTime(context, song.expiresAt, DateUtils.FORMAT_SHOW_DATE or DateUtils.FORMAT_ABBREV_MONTH)
-    val restore = stringResource(R.string.dupes_restore_cd, song.file.title)
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
-        modifier = modifier.fillMaxWidth().heightIn(min = 64.dp).padding(start = ScreenPadding, end = 8.dp, top = 4.dp, bottom = 4.dp),
-    ) {
-        SongCover(null, size = 48.dp)
-        Column(Modifier.weight(1f)) {
-            Text(song.file.title, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(
-                stringResource(R.string.dupes_trashed_facts, fileLocation(song.file), until),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.MiddleEllipsis,
-            )
-        }
-        LyrifyButton(stringResource(R.string.dupes_restore), onClick = onRestore, modifier = Modifier.semantics { contentDescription = restore }, kind = ButtonKind.GHOST, compact = true)
     }
 }
 

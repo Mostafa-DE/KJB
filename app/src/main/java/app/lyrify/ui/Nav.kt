@@ -118,6 +118,10 @@ sealed interface Page {
     @Serializable @SerialName("duplicates")
     data object Duplicates : Page
 
+    /** Trash: the songs in the phone's trash, Restore and Delete forever (TrashScreen.kt). */
+    @Serializable @SerialName("trash")
+    data object Trash : Page
+
     @Serializable @SerialName("tones")
     data object Tones : Page
 
@@ -436,7 +440,7 @@ fun homeOf(page: Page, from: DockTab, viewOpen: Boolean): DockTab {
         is Page.CollectionPages -> here?.takeIf { it == DockTab.SEARCH || it == DockTab.PLAYLISTS } ?: DockTab.LIBRARY
         is Page.SearchAll -> DockTab.SEARCH
         is Page.Songs -> DockTab.LIBRARY
-        is Page.Check, Page.Duplicates, Page.Tones, Page.Ai, Page.Downloads, Page.CoversTags, Page.TagHistory, Page.Settings, Page.LibraryTabs, Page.FoldersToSkip, Page.HiddenSongs,
+        is Page.Check, Page.Duplicates, Page.Trash, Page.Tones, Page.Ai, Page.Downloads, Page.CoversTags, Page.TagHistory, Page.Settings, Page.LibraryTabs, Page.FoldersToSkip, Page.HiddenSongs,
         Page.Licences, is Page.Licence -> DockTab.TOOLS
     }
 }

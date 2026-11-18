@@ -30,7 +30,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
@@ -42,7 +41,6 @@ import androidx.compose.ui.unit.dp
 import app.lyrify.R
 import app.lyrify.dupes.AudioFile
 import app.lyrify.dupes.DuplicateGroup
-import app.lyrify.dupes.TrashedSong
 import app.lyrify.lyrics.TrackNames
 
 /**
@@ -148,35 +146,6 @@ fun SmallPill(@DrawableRes icon: Int, label: String, container: Color, content: 
             Icon(painterResource(icon), contentDescription = null, modifier = Modifier.size(14.dp))
             Text(label, style = MaterialTheme.typography.labelMedium)
         }
-    }
-}
-
-/** KJB's own dialog before the phone's: "Move 2 songs to trash?" */
-@Composable
-fun TrashDialog(count: Int, onCancel: () -> Unit, onConfirm: () -> Unit) {
-    ConfirmDialog(
-        title = pluralStringResource(R.plurals.dupes_trash_title, count, count),
-        text = stringResource(R.string.dupes_trash_text),
-        confirm = stringResource(R.string.dupes_trash_confirm),
-        dismiss = stringResource(R.string.remove_cancel),
-        onConfirm = onConfirm,
-        onDismiss = onCancel,
-    )
-}
-
-/** "Trashed songs" from the top bar's menu: the songs KJB moved to the phone's trash, each with Restore. */
-@Composable
-fun TrashedSheet(songs: List<TrashedSong>, onRestore: (TrashedSong) -> Unit, onDismiss: () -> Unit) {
-    LyrifySheet(onDismiss = onDismiss, spacing = 0.dp, padding = 0.dp) {
-        Text(
-            stringResource(R.string.dupes_section_trashed),
-            style = MaterialTheme.typography.titleLarge,
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp).semantics { heading() },
-        )
-        if (songs.isEmpty()) {
-            Text(stringResource(R.string.dupes_trashed_empty), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(horizontal = 20.dp))
-        }
-        songs.forEach { song -> TrashedRow(song) { onRestore(song) } }
     }
 }
 

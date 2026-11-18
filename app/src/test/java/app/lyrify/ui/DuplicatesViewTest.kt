@@ -62,12 +62,12 @@ class DuplicatesViewTest {
     @Test
     fun `a failed scan without results says so, and with results keeps them`() {
         assertEquals(DupesView.Failed, dupesView(state(scan = ScanStatus.Failed)))
-        assertEquals(DupesView.Results(results, listOf(trashed), failed = true), dupesView(state(scan = ScanStatus.Failed, results = results)))
+        assertEquals(DupesView.Results(results, failed = true), dupesView(state(scan = ScanStatus.Failed, results = results)))
     }
 
     @Test
-    fun `results come with the songs in the trash`() {
-        assertEquals(DupesView.Results(results, listOf(trashed), failed = false), dupesView(state(results = results)))
+    fun `results come without the songs in the trash, which Tools lists as Trash`() {
+        assertEquals(DupesView.Results(results, failed = false), dupesView(state(results = results)))
     }
 
     // Badge and sections
