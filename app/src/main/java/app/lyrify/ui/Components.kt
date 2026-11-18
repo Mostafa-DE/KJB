@@ -868,6 +868,16 @@ fun coverKey(art: SongArt): String = if (art.version == 0) art.path else "${art.
 /** The image loader's key for [model]'s cover when it is a song's ([coverKey]), whatever size it was loaded at; null for anything else. */
 fun coverRequestKey(model: Any?): String? = (model as? SongArt)?.let(::coverKey)
 
+/**
+ * A [SongCover]'s request for [model]: a song's cover is kept in memory under one key whatever size it is loaded at
+ * ([coverRequestKey]), and that key is its placeholder, so a size not loaded yet starts on the size already there (the
+ * Now bar's, as the player's cover grows out of it), never on the default.
+ */
+fun songCoverRequest(context: Context, model: Any): ImageRequest {
+    val key = coverRequestKey(model)
+    return ImageRequest.Builder(context).data(model).memoryCacheKey(key).placeholderMemoryCacheKey(key).build()
+}
+
 /** The image loader of the whole app: song covers from MediaStore, cross-fading in. No network. */
 fun songImageLoader(context: Context): ImageLoader =
     ImageLoader.Builder(context)
@@ -907,7 +917,7 @@ fun SongCover(model: Any?, modifier: Modifier = Modifier, size: Dp = 48.dp, shap
         Box(Modifier.fillMaxSize().clip(shape)) {
             Image(painterResource(R.drawable.kjb_default_cover), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
             if (shown != null) {
-                val request = remember(shown, context) { ImageRequest.Builder(context).data(shown).placeholderMemoryCacheKey(coverRequestKey(shown)).build() }
+                val request = remember(shown, context) { songCoverRequest(context, shown) }
                 AsyncImage(model = request, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
             }
         }

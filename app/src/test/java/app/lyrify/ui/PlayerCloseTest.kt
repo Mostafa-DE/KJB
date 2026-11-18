@@ -1,5 +1,6 @@
 package app.lyrify.ui
 
+import android.content.ContextWrapper
 import androidx.compose.animation.core.AnimationVector1D
 import androidx.compose.animation.core.VectorConverter
 import androidx.compose.ui.geometry.Size
@@ -7,6 +8,7 @@ import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import coil3.memory.MemoryCache
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -153,6 +155,22 @@ class PlayerCloseTest {
         assertEquals("/Music/Paper Lanterns/Harbour Glass.flac", coverRequestKey(SongArt("/Music/Paper Lanterns/Harbour Glass.flac", mediaStoreId = 7L)))
         assertEquals("/Music/Paper Lanterns/Harbour Glass.flac#2", coverRequestKey(SongArt("/Music/Paper Lanterns/Harbour Glass.flac", version = 2)))
         assertEquals(null, coverRequestKey(null))
+    }
+
+    @Test
+    fun `every size of a song's cover is one key in memory, the very key the next one's placeholder looks up`() {
+        // Review 2026-11-18: the bar's cached bitmap and the player's placeholder must be one key, whatever Coil would add
+        // to a key it makes itself. Each request names it: Coil stores the bitmap under that key and the request's extras
+        // (MemoryCacheService), and the next request of the song, at any size, looks that up as its placeholder.
+        val context = object : ContextWrapper(null) {}
+        val art = SongArt("/Music/Paper Lanterns/Harbour Glass.flac", mediaStoreId = 7L)
+        val bar = songCoverRequest(context, art)
+        assertEquals("/Music/Paper Lanterns/Harbour Glass.flac", bar.memoryCacheKey)
+        val stored = MemoryCache.Key(bar.memoryCacheKey!!, bar.memoryCacheKeyExtras)
+        assertEquals(stored, songCoverRequest(context, art).placeholderMemoryCacheKey)
+        assertEquals(MemoryCache.Key("/Music/Paper Lanterns/Harbour Glass.flac"), stored)
+        // A cover changed in Covers & tags is a new key, so the old bitmap never stands in for it.
+        assertEquals(MemoryCache.Key("/Music/Paper Lanterns/Harbour Glass.flac#2"), songCoverRequest(context, art.copy(version = 2)).placeholderMemoryCacheKey)
     }
 
     private companion object {
