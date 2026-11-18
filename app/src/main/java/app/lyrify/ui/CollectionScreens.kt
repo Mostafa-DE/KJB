@@ -440,7 +440,9 @@ private fun AlbumsRow(albums: List<Album>) {
     val reduced = LocalReducedMotion.current
     LazyRow(contentPadding = PaddingValues(horizontal = ScreenPadding), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         items(albums, key = { it.key }, contentType = { "album" }) { album ->
-            AlbumCard(album.title, album.year?.toString(), album.songs.firstOrNull(), rowMotion(reduced).width(ALBUM_CARD)) { nav.open(Page.Album(album.key)) }
+            AlbumCard(album.title, album.year?.toString(), album.songs.firstOrNull(), rowMotion(reduced).width(ALBUM_CARD), favourite = FavouriteTarget.album(album.key)) {
+                nav.open(Page.Album(album.key))
+            }
         }
     }
 }
@@ -860,13 +862,15 @@ private fun LazyListScope.favouriteRows(tab: FavouritesTab, favourites: Favourit
             val nav = LocalNavigator.current
             // Rows fade and move into place when the tab changes or a favourite comes or goes.
             Row(rowMotion(reduced).fillMaxWidth().padding(horizontal = ScreenPadding, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                pair.forEach { album -> AlbumCard(album.title, album.artist, album.songs.firstOrNull(), Modifier.weight(1f)) { nav.open(Page.Album(album.key)) } }
+                pair.forEach { album ->
+                    AlbumCard(album.title, album.artist, album.songs.firstOrNull(), Modifier.weight(1f), favourite = FavouriteTarget.album(album.key)) { nav.open(Page.Album(album.key)) }
+                }
                 if (pair.size == 1) Spacer(Modifier.weight(1f))
             }
         }
         FavouritesTab.ARTISTS -> items(favourites.artists, key = { "artist ${it.name}" }, contentType = { "row" }) { artist ->
             val nav = LocalNavigator.current
-            NavRow(artist.name, artistLine(artist), rowMotion(reduced), lead = { ArtistAvatar(artist) }) { nav.open(Page.Artist(artist.name)) }
+            NavRow(artist.name, artistLine(artist), rowMotion(reduced), favourite = FavouriteTarget.artist(artist.name), lead = { ArtistAvatar(artist) }) { nav.open(Page.Artist(artist.name)) }
         }
         FavouritesTab.FOLDERS -> items(favourites.folders, key = { "folder ${it.path}" }, contentType = { "row" }) { folder ->
             val nav = LocalNavigator.current
@@ -876,7 +880,9 @@ private fun LazyListScope.favouriteRows(tab: FavouritesTab, favourites: Favourit
         FavouritesTab.PLAYLISTS -> items(favourites.playlists, key = { "playlist ${it.id}" }, contentType = { "row" }) { playlist ->
             val nav = LocalNavigator.current
             val count = library.listed(playlist.songs).size
-            NavRow(playlist.name, pluralStringResource(R.plurals.lib_songs, count, count), rowMotion(reduced), lead = { PlaylistTile(playlist) }) { nav.open(Page.Playlist(playlist.id)) }
+            NavRow(playlist.name, pluralStringResource(R.plurals.lib_songs, count, count), rowMotion(reduced), favourite = FavouriteTarget.playlist(playlist.id), lead = { PlaylistTile(playlist) }) {
+                nav.open(Page.Playlist(playlist.id))
+            }
         }
     }
 }

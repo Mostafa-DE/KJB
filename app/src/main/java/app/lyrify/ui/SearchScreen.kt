@@ -408,14 +408,14 @@ private fun LazyListScope.resultRows(
         SearchGroup.ARTISTS -> items(results.artists.take(count), key = { "artist ${it.item.name}" }, contentType = { "result" }) { hit ->
             val songs = hit.item.songs.size
             Box(rowMotion(reduced)) {
-                NavResult(highlighted(hit.text, hit.match), pluralStringResource(R.plurals.search_songs, songs, formatCount(songs)), { onOpen(Page.Artist(hit.item.name)) }) {
+                NavResult(highlighted(hit.text, hit.match), pluralStringResource(R.plurals.search_songs, songs, formatCount(songs)), { onOpen(Page.Artist(hit.item.name)) }, FavouriteTarget.artist(hit.item.name)) {
                     SongCover(SongArt(hit.item.songs.first().path), shape = CircleShape)
                 }
             }
         }
         SearchGroup.ALBUMS -> items(results.albums.take(count), key = { "album ${it.item.key}" }, contentType = { "result" }) { hit ->
             Box(rowMotion(reduced)) {
-                NavResult(highlighted(hit.text, hit.match), hit.item.artist, { onOpen(Page.Album(hit.item.key)) }) {
+                NavResult(highlighted(hit.text, hit.match), hit.item.artist, { onOpen(Page.Album(hit.item.key)) }, FavouriteTarget.album(hit.item.key)) {
                     SongCover(SongArt(hit.item.songs.first().path))
                 }
             }
@@ -427,8 +427,10 @@ private fun LazyListScope.resultRows(
         }
         SearchGroup.PLAYLISTS -> items(results.lists.take(count), key = { "list ${it.item.page}" }, contentType = { "result" }) { hit ->
             val songs = hit.item.songs
+            // The user's playlists; the built-in lists have no heart of their own.
+            val favourite = (hit.item.page as? Page.Playlist)?.let { FavouriteTarget.playlist(it.id) }
             Box(rowMotion(reduced)) {
-                NavResult(highlighted(hit.text, hit.match), pluralStringResource(R.plurals.search_songs, songs, formatCount(songs)), { onOpen(hit.item.page) }) {
+                NavResult(highlighted(hit.text, hit.match), pluralStringResource(R.plurals.search_songs, songs, formatCount(songs)), { onOpen(hit.item.page) }, favourite) {
                     IconTile(hit.item.icon)
                 }
             }
@@ -612,12 +614,13 @@ private fun SongsHeader(count: Int, onShuffle: () -> Unit, onPlay: () -> Unit) {
 
 /** An artist, album, folder or list: its [lead], name (matched part highlighted) and one line under it; a tap opens it. */
 @Composable
-private fun NavResult(title: AnnotatedString, sub: String?, onClick: () -> Unit, lead: @Composable () -> Unit) {
-    ResultRow(title, sub, listOfNotNull(title.text, sub).joinToString(", "), stringResource(R.string.search_open), onClick, lead)
+private fun NavResult(title: AnnotatedString, sub: String?, onClick: () -> Unit, favourite: FavouriteTarget? = null, lead: @Composable () -> Unit) {
+    ResultRow(title, sub, listOfNotNull(title.text, sub).joinToString(", "), stringResource(R.string.search_open), onClick, favourite, lead)
 }
 
+/** A result that opens its page; with [favourite] a second tap soon after the one that opened it makes that a favourite. */
 @Composable
-private fun ResultRow(title: AnnotatedString, sub: String?, description: String, clickLabel: String, onClick: () -> Unit, lead: @Composable () -> Unit) {
+private fun ResultRow(title: AnnotatedString, sub: String?, description: String, clickLabel: String, onClick: () -> Unit, favourite: FavouriteTarget?, lead: @Composable () -> Unit) {
     // A NavRow (.nrow): 14 dp gaps and a chevron at the end.
     Column(
         modifier = Modifier
@@ -625,6 +628,7 @@ private fun ResultRow(title: AnnotatedString, sub: String?, description: String,
             // The press tints a pill inside the gutter, not a band across the screen.
             .padding(horizontal = 8.dp)
             .clip(RoundedCornerShape(16.dp))
+            .doubleTapFavourite(favourite)
             .clickable(onClickLabel = clickLabel, onClick = onClick)
             .semantics { contentDescription = description }
             .heightIn(min = 64.dp)
