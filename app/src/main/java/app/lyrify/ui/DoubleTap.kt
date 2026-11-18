@@ -22,6 +22,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEvent
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -30,6 +31,7 @@ import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.changedToDownIgnoreConsumed
 import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.layoutId
 import androidx.compose.ui.node.ModifierNodeElement
 import androidx.compose.ui.node.PointerInputModifierNode
@@ -81,10 +83,11 @@ sealed interface FavouriteTarget {
 
 /**
  * What makes a double tap, as the phone sets it ([rememberDoubleTaps]): the second tap's finger lands within [windowMs]
- * of the first one's lift, no sooner than [minGapMs] (sooner is the finger bouncing) and within [slopPx] of it. A tap
- * moves no further than [touchSlopPx] and lifts within [holdMs] (a long press). Times in ms, distances in px.
+ * of the first one's lift, no sooner than [minGapMs] (sooner is the finger bouncing), on the item the first was on (its
+ * bounds then, give or take [touchSlopPx]). A tap moves no further than [touchSlopPx] and lifts within [holdMs] (later
+ * is a long press). Times in ms, distances in px.
  */
-data class TapTiming(val windowMs: Long, val minGapMs: Long, val slopPx: Float, val touchSlopPx: Float, val holdMs: Long)
+data class TapTiming(val windowMs: Long, val minGapMs: Long, val touchSlopPx: Float, val holdMs: Long)
 
 /** A heart popping where a second tap landed ([position], in the window, px). */
 class HeartPop internal constructor(val id: Long, val position: Offset)
@@ -92,11 +95,12 @@ class HeartPop internal constructor(val id: Long, val position: Offset)
 /**
  * The double taps over one host ([doubleTapHost]). Items tell it their taps as they act on them ([tapped], through
  * [doubleTapFavourite]); the host passes it every touch first ([down], [move], [up]). The touch after a tap is that tap's
- * second when it lands within the double-tap time near it ([TapTiming]): wherever it lands, the host takes it whole
- * ([down] is true), and once it lifts as a tap a heart pops there ([pops]) and the first tap's target goes to
- * [onDouble]. A second touch that moves past the touch slop or is held is let go and does nothing. A further tap soon
- * after only pops another heart: nothing is stored again, so the message's Undo stays. Off ([enabled] false: TalkBack
- * explores), it records and takes nothing. Times are the touches' uptimes, places in the window. Main thread only.
+ * second when it lands within the double-tap time where the item was ([TapTiming]): whatever is there now (the page the
+ * tap opened), the host takes it whole ([down] is true), and once it lifts as a tap a heart pops there ([pops]) and the
+ * first tap's target goes to [onDouble]. A second touch that moves past the touch slop or is held is let go and does
+ * nothing. A further tap soon after only pops another heart: nothing is stored again, so the message's Undo stays. Off
+ * ([enabled] false: TalkBack explores), it records and takes nothing. Times are the touches' uptimes, places in the
+ * window. Main thread only.
  */
 @Stable
 class DoubleTaps(internal val timing: TapTiming, private val onDouble: (FavouriteTarget) -> Unit) {
@@ -111,12 +115,9 @@ class DoubleTaps(internal val timing: TapTiming, private val onDouble: (Favourit
     private var taken: Taken? = null
     private var ids = 0L
 
-    /** Whether the host holds a touch now: a second tap that has not lifted yet. */
-    val taking: Boolean get() = taken != null
-
-    /** A tap on [target], acted on as its finger lifted at [at], [position]; [onSecond]: what its second tap does besides. */
-    fun tapped(target: FavouriteTarget, at: Long, position: Offset, onSecond: (() -> Unit)? = null) {
-        if (enabled) first = FirstTap(target, at, position, onSecond, doubled = false)
+    /** A tap on [target], in [area], acted on as its finger lifted at [at]; [onSecond]: what its second tap does besides. */
+    fun tapped(target: FavouriteTarget, at: Long, area: Rect, onSecond: (() -> Unit)? = null) {
+        if (enabled) first = FirstTap(target, at, area, onSecond, doubled = false)
     }
 
     /** A finger down at [at], [position]: true when it is a tap's second, which the host then takes. Any touch ends the wait. */
@@ -126,7 +127,7 @@ class DoubleTaps(internal val timing: TapTiming, private val onDouble: (Favourit
         taken = null
         if (!enabled || tap == null) return false
         val gap = at - tap.at
-        if (gap < timing.minGapMs || gap > timing.windowMs || (position - tap.position).getDistance() > timing.slopPx) return false
+        if (gap < timing.minGapMs || gap > timing.windowMs || !tap.area.inflate(timing.touchSlopPx).contains(position)) return false
         taken = Taken(tap, at, position)
         return true
     }
@@ -145,8 +146,8 @@ class DoubleTaps(internal val timing: TapTiming, private val onDouble: (Favourit
         taken = null
         if (at - held.at >= timing.holdMs || (position - held.position).getDistance() > timing.touchSlopPx) return
         shown += HeartPop(++ids, held.position)
-        // A further tap soon after, near this one, carries on this double tap.
-        first = held.tap.copy(at = at, position = position, doubled = true)
+        // A further tap soon after, on the same item, carries on this double tap.
+        first = held.tap.copy(at = at, doubled = true)
         if (held.tap.doubled) return
         held.tap.onSecond?.invoke()
         onDouble(held.tap.target)
@@ -162,8 +163,8 @@ class DoubleTaps(internal val timing: TapTiming, private val onDouble: (Favourit
         shown -= pop
     }
 
-    /** A tap that a second may double; [doubled]: it was a second tap already, and a further one only pops a heart. */
-    private data class FirstTap(val target: FavouriteTarget, val at: Long, val position: Offset, val onSecond: (() -> Unit)?, val doubled: Boolean)
+    /** A tap that a second may double, on [area]; [doubled]: it was a second tap already, and a further one only pops a heart. */
+    private data class FirstTap(val target: FavouriteTarget, val at: Long, val area: Rect, val onSecond: (() -> Unit)?, val doubled: Boolean)
 
     private class Taken(val tap: FirstTap, val at: Long, val position: Offset)
 }
@@ -212,8 +213,7 @@ fun rememberDoubleTaps(): DoubleTaps {
     val config = LocalViewConfiguration.current
     val exploring = rememberTouchExploring()
     val timing = remember(context, config) {
-        val slop = android.view.ViewConfiguration.get(context).scaledDoubleTapSlop.toFloat()
-        TapTiming(config.doubleTapTimeoutMillis, config.doubleTapMinTimeMillis, slop, config.touchSlop, config.longPressTimeoutMillis)
+        TapTiming(config.doubleTapTimeoutMillis, config.doubleTapMinTimeMillis, config.touchSlop, config.longPressTimeoutMillis)
     }
     val favourite by rememberUpdatedState<(FavouriteTarget) -> Unit> { target ->
         scope.launch {
@@ -237,12 +237,12 @@ fun Modifier.doubleTapHost(taps: DoubleTaps): Modifier = this then DoubleTapHost
 
 /**
  * Double-tap to favourite on an item that acts on a single tap (a song's row plays it, an album's card opens its page):
- * its taps still act at once, and a second tap soon after, near it, makes [target] a favourite (taken by the host above
- * it, [doubleTapHost]). [onSecond]: what that second tap does besides (the player's cover turns back). Put it next to the
- * item's clickable, over the same bounds. Null [target]: no double tap (a list while it selects).
+ * its taps still act at once, and a second tap soon after, on the item, makes [target] a favourite (taken by the host
+ * above it, [doubleTapHost]). [onSecond]: what that second tap does besides (the player's cover turns back). Put it right
+ * before the item's clickable, over the same bounds. Null [target]: no double tap for now (a list while it selects); the
+ * node stays, so the chain keeps its shape as that changes.
  */
-fun Modifier.doubleTapFavourite(target: FavouriteTarget?, onSecond: (() -> Unit)? = null): Modifier =
-    if (target == null) this else this then DoubleTapElement(target, onSecond)
+fun Modifier.doubleTapFavourite(target: FavouriteTarget?, onSecond: (() -> Unit)? = null): Modifier = this then DoubleTapElement(target, onSecond)
 
 /**
  * Where [taps]' hearts pop: put it last in the host's content. It takes no room and draws each heart at its finger,
@@ -362,7 +362,7 @@ private class DoubleTapHostNode(var taps: DoubleTaps) : Modifier.Node(), Pointer
 
 private object DoubleTapHostKey
 
-private data class DoubleTapElement(val target: FavouriteTarget, val onSecond: (() -> Unit)?) : ModifierNodeElement<DoubleTapNode>() {
+private data class DoubleTapElement(val target: FavouriteTarget?, val onSecond: (() -> Unit)?) : ModifierNodeElement<DoubleTapNode>() {
     override fun create(): DoubleTapNode = DoubleTapNode(target, onSecond)
 
     override fun update(node: DoubleTapNode) {
@@ -376,7 +376,7 @@ private data class DoubleTapElement(val target: FavouriteTarget, val onSecond: (
  * the host took (consumed before it got here) is a second tap, never a first. Its moves are checked once everything
  * has had them (the Final pass): one taken by a scroll makes it no tap.
  */
-private class DoubleTapNode(var target: FavouriteTarget, var onSecond: (() -> Unit)?) : Modifier.Node(), PointerInputModifierNode {
+private class DoubleTapNode(var target: FavouriteTarget?, var onSecond: (() -> Unit)?) : Modifier.Node(), PointerInputModifierNode {
     private var watch: TapWatch? = null
     private var pointer: PointerId? = null
 
@@ -394,15 +394,15 @@ private class DoubleTapNode(var target: FavouriteTarget, var onSecond: (() -> Un
         when {
             change.changedToDownIgnoreConsumed() -> {
                 pointer = null
-                if (change.isConsumed || !taps.enabled) return
+                if (target == null || change.isConsumed || !taps.enabled) return
                 pointer = change.id
                 watch = TapWatch(taps.timing).also { it.down(change.uptimeMillis, change.position) }
             }
             change.id != pointer -> Unit
             change.changedToUpIgnoreConsumed() -> {
                 pointer = null
-                val tap = watch?.up(change.uptimeMillis, change.position) == true
-                if (tap) taps.tapped(target, change.uptimeMillis, requireLayoutCoordinates().localToWindow(change.position), onSecond)
+                val tapped = target?.takeIf { watch?.up(change.uptimeMillis, change.position) == true } ?: return
+                taps.tapped(tapped, change.uptimeMillis, requireLayoutCoordinates().boundsInWindow(), onSecond)
             }
             change.pressed -> watch?.move(change.position, taken = false)
         }
