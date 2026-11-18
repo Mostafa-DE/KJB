@@ -8,8 +8,9 @@ import app.lyrify.settings.ArtistSplit
  *
  * A separator of marks only (";", "/", ",") splits wherever it is. One with a letter ("feat.", "ft.", "featuring") splits
  * only as a whole word, in any case, with or without a dot after it, and also in brackets: "Kit Calloway (feat. Mira
- * Solen)" names both, its brackets dropped. An exception ("AC/DC", "Tyler, The Creator") is a whole name in any case
- * that is never split, alone or inside a longer tag. With the setting off, or nothing to split, the tag is one name.
+ * Solen)" names both, its brackets dropped (what follows the closing one stays with the last name). An exception
+ * ("AC/DC", "Tyler, The Creator") is a whole name in any case that is never split, alone or inside a longer tag. With
+ * the setting off, or nothing to split, the tag is one name.
  */
 class ArtistSplitter(rules: ArtistSplit) {
     private val separator: Regex? = rules.separators.takeIf { rules.enabled }?.let(::separatorPattern)
@@ -24,12 +25,17 @@ class ArtistSplitter(rules: ArtistSplit) {
         val cuts = cuts(text)
         if (cuts.isEmpty()) return listOf(text)
         val names = ArrayList<String>(cuts.size + 1)
+        val name = StringBuilder()
         var at = 0
         for (cut in cuts) {
-            names += text.substring(at, cut.first)
-            at = cut.last + 1
+            name.append(text, at, cut.range.first)
+            if (cut.splits) {
+                names += name.toString()
+                name.setLength(0)
+            }
+            at = cut.range.last + 1
         }
-        names += text.substring(at)
+        names += name.append(text, at, text.length).toString()
         val found = names.map(String::trim).filter(String::isNotEmpty).distinctBy { it.lowercase() }
         return found.ifEmpty { listOf(text) }
     }
@@ -39,29 +45,45 @@ class ArtistSplitter(rules: ArtistSplit) {
      * at "Mi"), so Edit tags can suggest that name alone; 0 when nothing splits it.
      */
     fun lastNameStart(typed: String): Int {
-        var start = cuts(typed).lastOrNull()?.let { it.last + 1 } ?: return 0
+        var start = cuts(typed).lastOrNull()?.let { it.range.last + 1 } ?: return 0
         while (start < typed.length && typed[start].isWhitespace()) start++
         return start
     }
 
+    /** Text cut out of a tag at [range]: a separator, which [splits] it, or a bracketed credit's closing bracket, dropped. */
+    private class Cut(val range: IntRange, val splits: Boolean)
+
     /**
-     * The separators in [text] to cut out, in order and apart: none inside an exception; a bracketed word's closing
-     * bracket too ("(feat. Mira Solen)").
+     * What to cut out of [text], in order and apart: the separators, none inside an exception; a bracketed word's closing
+     * bracket too ("(feat. Mira Solen)"), past any brackets of its kind opened inside it.
      */
-    private fun cuts(text: String): List<IntRange> {
+    private fun cuts(text: String): List<Cut> {
         val separator = separator ?: return emptyList()
         val kept = exception?.findAll(text)?.map { it.range }?.toList().orEmpty()
-        val cuts = ArrayList<IntRange>()
+        val cuts = ArrayList<Cut>()
         for (match in separator.findAll(text)) {
             if (kept.any { it.first <= match.range.last && match.range.first <= it.last }) continue
-            cuts += match.range
-            val bracket = match.groups[BRACKET]?.value ?: continue
-            val close = text.indexOf(if (bracket == "(") ')' else ']', match.range.last + 1)
-            if (close >= 0) cuts += close..close
+            cuts += Cut(match.range, splits = true)
+            val bracket = match.groups[BRACKET]?.value?.single() ?: continue
+            val close = closing(text, bracket, match.range.last + 1)
+            if (close >= 0) cuts += Cut(close..close, splits = false)
         }
-        cuts.sortBy { it.first }
+        cuts.sortBy { it.range.first }
         // A closing bracket another separator already took is cut once.
-        return cuts.fold(ArrayList<IntRange>()) { apart, cut -> apart.apply { if (isEmpty() || cut.first > last().last) add(cut) } }
+        return cuts.fold(ArrayList<Cut>()) { apart, cut -> apart.apply { if (isEmpty() || cut.range.first > last().range.last) add(cut) } }
+    }
+
+    /** Where the bracket [open], opened before [from] in [text], closes: past those of its kind opened inside it; -1 never. */
+    private fun closing(text: String, open: Char, from: Int): Int {
+        val close = if (open == '(') ')' else ']'
+        var inside = 0
+        for (at in from until text.length) {
+            when (text[at]) {
+                open -> inside++
+                close -> if (inside == 0) return at else inside--
+            }
+        }
+        return -1
     }
 
     private companion object {
@@ -86,12 +108,15 @@ class ArtistSplitter(rules: ArtistSplit) {
             return parts.takeIf { it.isNotEmpty() }?.let { Regex(it.joinToString("|"), RegexOption.IGNORE_CASE) }
         }
 
-        /** A word separator: whole, any spaces inside it as any run of spaces, a dot after it optional ("feat" or "feat."). */
+        /**
+         * A word separator: whole, any spaces inside it as any run of spaces, a dot after it optional ("feat" or "feat."),
+         * and with its dot it may touch the next name ("feat.Mira").
+         */
         fun wordPattern(word: String): String {
             val stem = word.removeSuffix(".").trim()
             val body = stem.split(Regex("""\s+""")).joinToString("""\s+""", transform = Regex::escape)
             val start = if (stem.first().isLetterOrDigit()) WORD_START else ""
-            val end = if (stem.last().isLetterOrDigit()) """\.?$WORD_END""" else ""
+            val end = if (stem.last().isLetterOrDigit()) """(?:\.|$WORD_END)""" else ""
             return start + body + end
         }
 

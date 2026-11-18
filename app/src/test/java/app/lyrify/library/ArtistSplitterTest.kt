@@ -35,6 +35,23 @@ class ArtistSplitterTest {
     }
 
     @Test
+    fun `a feat word's dot may touch the next name, and a bracketed credit keeps the brackets inside it and what follows it`() {
+        assertEquals(listOf("Kit Calloway", "Mira Solen"), split.names("Kit Calloway feat.Mira Solen"))
+        assertEquals(listOf("Kit Calloway", "Mira Solen (Live Band)"), split.names("Kit Calloway (feat. Mira Solen (Live Band))"))
+        assertEquals(listOf("Kit Calloway", "Mira Solen [Trio]"), split.names("Kit Calloway [ft. Mira Solen [Trio]]"))
+        // Its closing bracket starts no name: a word after it is never an artist of its own.
+        assertEquals(listOf("Kit Calloway", "Mira Solen (Remastered)"), split.names("Kit Calloway (feat. Mira Solen) (Remastered)"))
+        assertEquals(listOf("Kit Calloway", "Mira Solen", "Oren Vale"), split.names("Kit Calloway (feat. Mira Solen), Oren Vale"))
+    }
+
+    @Test
+    fun `an exception keeps its name whole in any case, beyond plain letters too`() {
+        val rules = ArtistSplit(exceptions = listOf("Bjørn, Ålund"))
+
+        assertEquals(listOf("BJØRN, ÅLUND", "Kit Calloway"), of("BJØRN, ÅLUND; Kit Calloway", rules))
+    }
+
+    @Test
     fun `feat words split only as whole words`() {
         listOf("Featherwick", "The Feats of Loftridge", "Craftsmen of Ftora", "Kit Calloway Featurings").forEach { assertEquals(it, listOf(it), split.names(it)) }
     }
