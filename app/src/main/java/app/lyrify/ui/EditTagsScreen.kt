@@ -14,8 +14,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -39,10 +41,12 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -89,6 +93,8 @@ import app.lyrify.tags.lookup.Proposal
 import app.lyrify.tags.pickedCover
 import app.lyrify.tags.wroteAny
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerializationException
@@ -410,9 +416,21 @@ private fun TagInput(field: TagField, form: TagForm, problems: Map<TagField, Fie
     val shown = if (typed.text == value) typed else TextFieldValue(value, TextRange(value.length))
     var focused by remember { mutableStateOf(false) }
     val offered = remember(suggestions, field, value, focused) { if (focused) suggestions?.of(field, value).orEmpty() else emptyList() }
+    // The chips scroll into sight as they appear, and again once the keyboard has come up under them (not on each of its
+    // frames: each one starts the wait over).
     val reveal = remember { BringIntoViewRequester() }
-    LaunchedEffect(offered.isNotEmpty()) { if (offered.isNotEmpty()) reveal.bringIntoView() }
-    Column(modifier.bringIntoViewRequester(reveal), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    val keyboard = WindowInsets.ime
+    val density = LocalDensity.current
+    val showing = offered.isNotEmpty()
+    LaunchedEffect(showing) {
+        if (showing) {
+            snapshotFlow { keyboard.getBottom(density) }.collectLatest {
+                delay(KEYBOARD_SETTLE_MS)
+                reveal.bringIntoView()
+            }
+        }
+    }
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         LyrifyField(
             value = shown,
             onValueChange = { next ->
@@ -430,7 +448,7 @@ private fun TagInput(field: TagField, form: TagForm, problems: Map<TagField, Fie
             Text(stringResource(problem.words(field)), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(start = 16.dp))
         }
         if (offered.isNotEmpty()) {
-            SuggestionChips(offered) { picked ->
+            SuggestionChips(offered, Modifier.bringIntoViewRequester(reveal)) { picked ->
                 val text = picked.take(length)
                 typed = TextFieldValue(text, TextRange(text.length))
                 onChange(text)
@@ -448,11 +466,11 @@ private fun rememberTagSuggestions(library: Library): TagSuggestions? {
 
 /** The values offered under a field being typed in: chips in a row that scrolls sideways, each read as "Use" its name. */
 @Composable
-private fun SuggestionChips(found: List<TagSuggestions.Suggestion>, onPick: (String) -> Unit) {
+private fun SuggestionChips(found: List<TagSuggestions.Suggestion>, modifier: Modifier, onPick: (String) -> Unit) {
     Row(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        modifier = modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
     ) {
         found.forEach { suggestion ->
             val use = stringResource(R.string.edit_suggestion_use, suggestion.name)
@@ -748,6 +766,7 @@ private val FORM_SAVER: Saver<TagForm, String> = Saver(
 
 private val COVER = 124.dp
 private val SUGGESTION_MAX = 220.dp
+private const val KEYBOARD_SETTLE_MS = 100L
 private const val TEXT_LENGTH = 200
 private const val NUMBER_LENGTH = 4
 private const val PHOTO_MAX_BYTES = 64 * 1024 * 1024
