@@ -1,6 +1,7 @@
 package app.lyrify.ui
 
 import android.content.ContextWrapper
+import androidx.compose.animation.EnterExitState
 import androidx.compose.animation.core.AnimationVector1D
 import androidx.compose.animation.core.VectorConverter
 import androidx.compose.ui.geometry.Size
@@ -107,11 +108,55 @@ class PlayerCloseTest {
         assertEquals(300f, closeHeld(300f, 0f), 0f)
         assertEquals(150f, closeHeld(300f, 0.5f), 0.0001f)
         assertEquals(0f, closeHeld(300f, 1f), 0f)
-        assertEquals(0.96f, closeCoverScale(0.96f, 0f), 0f)
-        assertEquals(0.98f, closeCoverScale(0.96f, 0.5f), 0.0001f)
-        assertEquals(1f, closeCoverScale(0.96f, 1f), 0f)
+        // The cover, drawn above everything on the way, takes the frame's scale: the drag's shrink at the lift, its own
+        // size by the orb. (It took a scale of its own from the lift before review 2026-11-18; the same values.)
+        val height = 2400f
+        val at = height * 0.3f
+        fun cover(p: Float) = overlayCoverScale(EnterExitState.Visible, EnterExitState.PostExit, running = true, dragPeek(closeHeld(at, p), height).scale)
+        assertEquals(dragPeek(at, height).scale, cover(0f), 0f)
+        assertEquals((dragPeek(at, height).scale + 1f) / 2, cover(0.5f), 0.0001f)
+        assertEquals(1f, cover(1f), 0f)
         // Closed by the chevron or Back, nothing was shrunk.
-        assertEquals(1f, closeCoverScale(1f, 0.3f), 0f)
+        assertEquals(1f, overlayCoverScale(EnterExitState.Visible, EnterExitState.PostExit, running = true, dragPeek(0f, height).scale), 0f)
+    }
+
+    @Test
+    fun `the cover drawn above everything keeps the frame's scale while the transform runs, shown again on the way too`() {
+        val frame = 0.96f
+        // Closing, from its first frame on.
+        assertEquals(frame, overlayCoverScale(EnterExitState.Visible, EnterExitState.PostExit, running = false, frame), 0f)
+        assertEquals(frame, overlayCoverScale(EnterExitState.Visible, EnterExitState.PostExit, running = true, frame), 0f)
+        // Review 2026-11-18: shown again mid-close, the transition runs back with the same current and target state, and
+        // the cover was drawn at its full size from that frame on.
+        assertEquals(frame, overlayCoverScale(EnterExitState.Visible, EnterExitState.Visible, running = true, frame), 0f)
+        // Growing out of the bar, nothing dragged.
+        assertEquals(1f, overlayCoverScale(EnterExitState.PreEnter, EnterExitState.Visible, running = true, 1f), 0f)
+        // At rest it is back in the frame, which scales it itself.
+        assertEquals(1f, overlayCoverScale(EnterExitState.Visible, EnterExitState.Visible, running = false, frame), 0f)
+    }
+
+    @Test
+    fun `shown again mid-close, the cover's drawn size goes home with the drag, a little each frame`() {
+        val height = 2400f
+        val at = height * 0.3f
+        // Closing for three frames: the drag held where the finger left it, the progress from rest. Then shown again:
+        // the progress goes back from there at its speed, the drag goes home from rest, and the transform runs 450 ms.
+        val closedMs = 3 * FRAME_MS
+        val p0 = spring(closedMs, 0f, 1f, 0f)
+        val v0 = spring.getVelocityFromNanos(closedMs * 1_000_000L, AnimationVector1D(0f), AnimationVector1D(1f), AnimationVector1D(0f)).value
+        val closing = (0..closedMs step FRAME_MS).map { ms ->
+            overlayCoverScale(EnterExitState.Visible, EnterExitState.PostExit, running = true, dragPeek(closeHeld(at, spring(ms, 0f, 1f, 0f)), height).scale)
+        }
+        val back = (FRAME_MS..900 step FRAME_MS).map { ms ->
+            val frame = dragPeek(closeHeld(spring(ms, at, 0f, 0f), spring(ms, p0, 0f, v0)), height).scale
+            val running = ms < Motion.CONTAINER_MS
+            // Above everything while it runs; back in the frame after, scaled by the frame.
+            if (running) overlayCoverScale(EnterExitState.Visible, EnterExitState.Visible, running = true, frame) else frame * overlayCoverScale(EnterExitState.Visible, EnterExitState.Visible, running = false, frame)
+        }
+        val drawn = closing + back
+        // The cover grows back as it closes, under 0.6% a frame; it used to pop by about 4% as it was shown again.
+        drawn.zipWithNext().forEachIndexed { i, (a, b) -> assertTrue("frame $i: $a to $b", abs(b - a) <= 0.008f) }
+        assertEquals(1f, drawn.last(), 0.0005f)
     }
 
     // The cover's shape

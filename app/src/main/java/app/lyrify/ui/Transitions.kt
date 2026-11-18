@@ -316,7 +316,7 @@ val PEEK_CORNER = 28.dp
  * One end of the container transform: the shell's shared transition scope, and the visibility of that end, the Now
  * bar's chrome ([bar]) or the player's layer. Null where nothing grows: outside the shell, and for a view that rises.
  * The player's end also says how far it has closed into the bar ([closing], 0 in the player and 1 in the bar: the one
- * progress its content, card, dim and drag follow, [closeProgress]) and takes what a finger lets go of ([letGo]).
+ * progress its content, card, dim, drag and cover follow, [closeProgress]) and takes what a finger lets go of ([letGo]).
  */
 @Stable
 class Container(val shared: SharedTransitionScope, val visibility: AnimatedVisibilityScope, val bar: Boolean, val closing: () -> Float = { 0f }) {
@@ -325,25 +325,35 @@ class Container(val shared: SharedTransitionScope, val visibility: AnimatedVisib
     internal var surface: SharedTransitionScope.SharedContentState? = null
     internal var cover: SharedTransitionScope.SharedContentState? = null
 
-    /** How small the drag left the cover when the finger let go of it; 1 when nothing was let go. */
-    var releaseScale: Float by mutableFloatStateOf(1f)
-        private set
+    /**
+     * The scale the player's frame draws its content at, its drag's shrink (PlayerFrame sets it): the cover, drawn above
+     * everything while the transform runs, misses the frame's layer and takes it from here ([overlayCoverScale]).
+     */
+    internal var frameScale: () -> Float = { 1f }
+
+    // Whether a finger's speed was handed over ([letGo]) and is still carried.
+    private var carried = false
 
     /**
-     * A finger lets go of the player to close it into the bar, moving down at [velocity] px/s ([closeVelocity]), its
-     * cover drawn at [scale] of its size: the card and the cover carry on at the finger's speed, on the transform's own
-     * spring, and the cover grows back from [scale] as it lands ([closeCoverScale]). Before the player is closed.
+     * A finger lets go of the player to close it into the bar, moving down at [velocity] px/s ([closeVelocity]): the
+     * card and the cover carry on at the finger's speed, on the transform's own spring. Before the player is closed.
      */
-    fun letGo(velocity: Float, scale: Float) {
-        releaseScale = scale
+    fun letGo(velocity: Float) {
         val speed = Velocity(0f, velocity)
         surface?.prepareTransitionWithInitialVelocity(speed)
         cover?.prepareTransitionWithInitialVelocity(speed)
+        carried = true
     }
 
-    /** Shown again: nothing is let go any more. */
+    /**
+     * Shown again on the way: what is left of a finger's speed is let go by the card and the cover (Compose eases their
+     * momentum home from where it is). Nothing to do when nothing was let go.
+     */
     fun rest() {
-        releaseScale = 1f
+        if (!carried) return
+        carried = false
+        surface?.prepareTransitionWithInitialVelocity(Velocity.Zero)
+        cover?.prepareTransitionWithInitialVelocity(Velocity.Zero)
     }
 }
 
@@ -428,7 +438,8 @@ fun containerContentEnter(): EnterTransition = fadeIn(tween(Motion.FADE_IN_MS * 
  * The cover as it moves between the Now bar's orb and the player. The bar's end is an empty stand-in where the orb's
  * cover is, so the orb stays put; the player's own cover is the one drawn on the way, over the card, its size rounding
  * it ([CoverShape]) from the player's corners to the orb's circle, never at a threshold. Let go by a finger, it lands
- * growing back from the drag's shrink ([closeCoverScale]). Nothing with reduced motion.
+ * growing back from the drag's shrink as the drag goes ([overlayCoverScale]), and the same shown again on the way.
+ * Nothing with reduced motion.
  */
 @Composable
 fun containerCover(container: Container?): Modifier {
@@ -452,10 +463,11 @@ fun containerCover(container: Container?): Modifier {
     if (container.bar) return shared
     val transition = container.visibility.transition
     return shared.graphicsLayer {
-        if (transition.targetState != EnterExitState.PostExit) return@graphicsLayer
-        val scale = closeCoverScale(container.releaseScale, container.closing())
+        val scale = overlayCoverScale(transition.currentState, transition.targetState, transition.isRunning, container.frameScale())
         scaleX = scale
         scaleY = scale
+        // About its top-left, not its centre as the frame scales it: the shared bounds take the cover's place through the
+        // frame's layer (the corner the frame's scale moved) and its size without it, so this lands it where it was drawn.
         transformOrigin = TransformOrigin(0f, 0f)
     }
 }
@@ -486,8 +498,14 @@ fun closeFillAlpha(p: Float): Float = 1f - ((p - CLOSE_FILL_FROM) / (1f - CLOSE_
 /** What is left of a drag's [offset] [p] of the way: the card takes the player on from where the finger left it. */
 fun closeHeld(offset: Float, p: Float): Float = offset * (1f - p.coerceIn(0f, 1f))
 
-/** The cover's scale [p] of the way, from how small the drag left it ([released]) to its own size in the orb. */
-fun closeCoverScale(released: Float, p: Float): Float = released + (1f - released) * p.coerceIn(0f, 1f)
+/**
+ * The scale the player's cover is drawn at above everything while the transform runs, from [current] to [target] or
+ * still [running] back after the player was shown again on the way: the frame's own ([frame], its drag's shrink), which
+ * the cover misses there; 1 at rest, back in the frame, which scales it itself. Shown again mid-close it keeps the
+ * frame's scale as the drag goes home, never its full size in one frame.
+ */
+fun overlayCoverScale(current: EnterExitState, target: EnterExitState, running: Boolean, frame: Float): Float =
+    if (current != target || running) frame else 1f
 
 /** The finger's speed handed to the transform, px/s down: down only, and no faster than [max] ([CLOSE_MOMENTUM_DP]). */
 fun closeVelocity(velocity: Float, max: Float): Float = velocity.coerceIn(0f, max)

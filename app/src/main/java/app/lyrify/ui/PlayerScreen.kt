@@ -64,6 +64,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -606,6 +607,11 @@ internal fun PlayerFrame(onClose: () -> Unit, content: @Composable BoxScope.() -
         container?.rest()
         drag.reset()
     }
+    // The cover, drawn above everything while the transform runs, takes the frame's drag shrink from here (containerCover).
+    DisposableEffect(container, drag) {
+        if (container != null) container.frameScale = { drag.peek(container.closing()).scale }
+        onDispose { container?.frameScale = { 1f } }
+    }
     // The system's gesture edges (back), in the window, and where the player sits in it: a finger landing there is the system's.
     val direction = LocalLayoutDirection.current
     val gestures = WindowInsets.systemGestures
@@ -625,7 +631,7 @@ internal fun PlayerFrame(onClose: () -> Unit, content: @Composable BoxScope.() -
                     alpha = reducedDragAlpha(drag.offset.value, size.height)
                     return@graphicsLayer
                 }
-                val peek = dragPeek(closeHeld(drag.offset.value, container?.closing?.invoke() ?: 0f), size.height)
+                val peek = drag.peek(container?.closing?.invoke() ?: 0f)
                 translationY = peek.shiftY
                 scaleX = peek.scale
                 scaleY = peek.scale
@@ -712,6 +718,9 @@ private class PlayerDrag(private val scope: CoroutineScope) {
     /** Each move of that finger, whoever takes it: the speed it lets go at. */
     fun track(change: PointerInputChange) = tracker.addPointerInputChange(change)
 
+    /** How the frame draws the drag [closing] of the way into the bar: what is left of it ([closeHeld]), as [dragPeek]. */
+    fun peek(closing: Float): Peek = dragPeek(closeHeld(offset.value, closing), height)
+
     /** The player [dy] px further down (up when negative), never above where it rests; returns how far it went. */
     fun follow(dy: Float): Float {
         val from = if (dragging) at else offset.value
@@ -738,7 +747,7 @@ private class PlayerDrag(private val scope: CoroutineScope) {
         when (dragLetGo(closes, intoBar = container != null, reduced = reduced)) {
             DragLetGo.BACK -> scope.launch { offset.animateTo(0f, Motion.close(), initialVelocity = velocity) }
             DragLetGo.INTO_BAR -> {
-                container?.letGo(closeVelocity(velocity, momentum), dragPeek(at, height).scale)
+                container?.letGo(closeVelocity(velocity, momentum))
                 close()
             }
             DragLetGo.AWAY -> close()
