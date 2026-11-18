@@ -3,7 +3,9 @@ package app.lyrify.lyrics
 import app.lyrify.data.LedgerEntry
 import app.lyrify.data.LyricsStatus
 import app.lyrify.data.SharedWrites
+import app.lyrify.library.ArtistSplitter
 import app.lyrify.overnight.AiQueue
+import app.lyrify.settings.ArtistSplit
 import app.lyrify.tags.TagFixtures
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -169,7 +171,11 @@ class LyricsSearchBenchTest {
         ledger = ledger,
         clock = { BASE + testScheduler.currentTime },
         writes = SharedWrites.ANYWHERE,
+        artistNames = { splitter.names(it) },
     )
+
+    /** "Artists with several names" at its defaults. */
+    private val splitter = ArtistSplitter(ArtistSplit())
 
     private fun outcome(entry: LedgerEntry?, audio: File): Outcome = when {
         entry == null -> Outcome.NONE

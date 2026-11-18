@@ -10,6 +10,7 @@ import app.lyrify.crash.CrashLog
 import app.lyrify.data.LedgerRepository
 import app.lyrify.data.PathLocks
 import app.lyrify.data.SharedWrites
+import app.lyrify.library.ArtistSplitter
 import app.lyrify.library.FavouritesPort
 import app.lyrify.library.LibraryGraph
 import app.lyrify.lyrics.Checked
@@ -42,6 +43,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -126,6 +128,8 @@ object Lyrify {
         locks = locks,
         // Books never get lyrics (books/): known by the library, waited for while it is read; by their path if it never is.
         isBook = context.applicationContext.let { app -> { path -> isBookPartOnceRead(path, LibraryGraph.repository(app).state) } },
+        // A tag naming several artists is also asked for by one of them, split as the user's "Artists with several names" says.
+        artistNames = context.applicationContext.let { app -> { tag -> ArtistSplitter(settings(app).settings.first().library.artistSplit).names(tag) } },
     ).also { created ->
         pipeline = created
         background.launch {

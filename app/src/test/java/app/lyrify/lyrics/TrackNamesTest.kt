@@ -284,6 +284,48 @@ class TrackNamesTest {
         assertEquals(queries, withFile.take(queries.size))
     }
 
+    // Several artists in one tag
+
+    @Test
+    fun `a tag naming several artists is also asked for by its first and its last artist, after the tag's own queries`() {
+        val tag = "Kel Varo; Mina Ost; Oda Venn"
+        val queries = TrackNames.queries(tag, "Glass Orchard", null, artists = listOf("Kel Varo", "Mina Ost", "Oda Venn"))
+
+        assertEquals(TrackNames.queries(tag, "Glass Orchard", null), queries.dropLast(2))
+        assertEquals(listOf(TrackQuery("Kel Varo", "Glass Orchard"), TrackQuery("Oda Venn", "Glass Orchard")), queries.takeLast(2))
+    }
+
+    @Test
+    fun `an artist alone is asked with the title without version tags or feat`() {
+        val queries = TrackNames.queries("Pell Drummond, Sora Vey", "Night Ferry (Live) (feat. Ilo Brand)", "Copper Days", artists = listOf("Pell Drummond", "Sora Vey"))
+
+        assertEquals(listOf(TrackQuery("Pell Drummond", "Night Ferry"), TrackQuery("Sora Vey", "Night Ferry")), queries.takeLast(2))
+    }
+
+    @Test
+    fun `one artist adds nothing, nor an artist the tag's own queries ask for already`() {
+        val alone = TrackNames.queries("Kel Varo", "Glass Orchard", null)
+        assertEquals(alone, TrackNames.queries("Kel Varo", "Glass Orchard", null, artists = listOf("Kel Varo")))
+
+        // "Without feat." already asks for the first artist: only the last one is new.
+        val featuring = TrackNames.queries("Vesna Kroll feat. Arlo Pike", "Saltwater Hymn", null, artists = listOf("Vesna Kroll", "Arlo Pike"))
+        assertEquals(TrackNames.queries("Vesna Kroll feat. Arlo Pike", "Saltwater Hymn", null) + TrackQuery("Arlo Pike", "Saltwater Hymn"), featuring)
+    }
+
+    @Test
+    fun `an artist alone is cleaned like a tag, and an unknown one is never asked for`() {
+        val queries = TrackNames.queries("Kel Varo - Topic; Unknown Artist", "Glass Orchard", null, artists = listOf("Kel Varo - Topic", "Unknown Artist"))
+
+        assertEquals(TrackQuery("Kel Varo", "Glass Orchard"), queries.last())
+        assertTrue(queries.none { it.artist == "Unknown Artist" })
+    }
+
+    @Test
+    fun `the artists' queries come on top of the cap, and so do their requests`() {
+        assertEquals(2, TrackNames.MAX_ARTIST_QUERIES)
+        assertEquals(2 * (TrackNames.MAX_QUERIES + TrackNames.MAX_ARTIST_QUERIES) + TrackNames.MAX_LOOSE_QUERIES, TrackNames.MAX_REQUESTS)
+    }
+
     // File names
 
     @Test

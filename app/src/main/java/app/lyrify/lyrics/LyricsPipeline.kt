@@ -180,6 +180,8 @@ class LyricsPipeline(
     private val locks: PathLocks = PathLocks(),
     /** Whether a file is a book's part (books/): a book never gets a lookup or a `.lrc`. It may wait for the library. */
     private val isBook: suspend (String) -> Boolean = { false },
+    /** The artists an artist tag names, as the user's "Artists with several names" splits it; the tag alone by default. */
+    private val artistNames: suspend (String) -> List<String> = { listOf(it) },
 ) : PathHold {
 
     /** Songs the AI is working on, for the queue sweep to skip (one set with the pipeline, so one per process). */
@@ -597,11 +599,12 @@ class LyricsPipeline(
 
     /**
      * At most [TrackNames.MAX_REQUESTS] requests: the [TrackNames.queries] (from the tags, and the file name when they
-     * say too little), then, when they found nothing of this recording ([Verdict.unsure]), the loose searches of
-     * [settle].
+     * say too little; a tag naming several artists ([artistNames]) by one of them last), then, when they found nothing
+     * of this recording ([Verdict.unsure]), the loose searches of [settle].
      */
     private suspend fun lookUpAndWrite(track: LocalTrack, sidecar: Path, previous: LedgerEntry?, lane: Lane): Processed {
-        val queries = TrackNames.queries(track.artist, track.title, track.album, File(track.path).name)
+        val artists = track.artist?.let { artistNames(it) }.orEmpty()
+        val queries = TrackNames.queries(track.artist, track.title, track.album, File(track.path).name, artists)
         val result = if (queries.isEmpty()) Lookup.Answer(Match.NotFound, emptyList(), emptySet()) else lookUp(track, queries, lane)
         return when (result) {
             // The file and its ledger entries go together, even if the listener moves on.

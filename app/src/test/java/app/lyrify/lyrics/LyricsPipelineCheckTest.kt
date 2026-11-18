@@ -148,13 +148,13 @@ class LyricsPipelineCheckTest {
     }
 
     @Test
-    fun `a lookup asks LRCLIB at most twelve times, and never the same search twice`() = runTest {
+    fun `a lookup asks LRCLIB at most sixteen times, and never the same search twice`() = runTest {
         // Artist and title in the title, another pair in the file name, nothing found anywhere.
         val track = audio("Band B - Song B.mp3", "Band A - Song A (Live)", null)
 
         assertEquals(LyricsStatus.NOT_FOUND, pipeline().process(track)?.status)
 
-        assertEquals(12, TrackNames.MAX_REQUESTS)
+        assertEquals(16, TrackNames.MAX_REQUESTS)
         assertEquals(10, client.requests)
         assertEquals(listOf("Band A - Song A", "Band B Song B"), client.searches.filter { it.artist == null }.map { it.title })
     }
