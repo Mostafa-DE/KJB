@@ -73,6 +73,7 @@ class SettingsStoreTest {
                 SongList.FAVOURITES to ListSort.OWN,
             ),
             hiddenSongs = listOf(SongRef("/storage/emulated/0/Music/Odds/Glass Steps.mp3", 13), SongRef("/storage/emulated/0/Music/Singles/Copper Moon.mp3")),
+            artistSplit = ArtistSplit(enabled = false, separators = listOf(";", "&", "with"), exceptions = listOf("Rowan & Fennick")),
         ),
         lyrics = LyricsSettings(showWhenLocked = true, textSize = LyricsSize.XL, textWeight = LyricsWeight.REGULAR, textAlign = LyricsAlign.CENTRE),
         playerUi = PlayerUiSettings(showLyrics = true, flipHintShown = true, recentQueueHintShown = true),
@@ -116,6 +117,8 @@ class SettingsStoreTest {
         assertEquals(listOf(false, false, false), listOf(s.library.songReversed, s.library.albumReversed, s.library.artistReversed))
         assertEquals(SongList.entries.associateWith { it.default }, SongList.entries.associateWith { s.library.sortOf(it) })
         assertEquals(emptyList<SongRef>(), s.library.hiddenSongs)
+        // Artists with several names: on, commas split and "&" does not, AC/DC and Tyler, The Creator never split (2026-11-18).
+        assertEquals(ArtistSplit(true, listOf(";", "/", ",", "feat.", "ft.", "featuring"), listOf("AC/DC", "Tyler, The Creator")), s.library.artistSplit)
         assertEquals((10..100 step 10).toList(), PlaybackSettings.PLAY_SHARES)
         assertEquals(listOf(5, 10, 15, 30), PlaybackSettings.SKIP_SECONDS)
     }
@@ -400,6 +403,16 @@ class SettingsStoreTest {
         assertEquals(listOf(SongRef(b, 7), SongRef(a), SongRef("/storage/emulated/0/Music/c.mp3")), SettingsJson.decode(text)?.library?.hiddenSongs)
         assertEquals(emptyList<SongRef>(), SettingsJson.decode("""{"library":{"hiddenSongs":"a.mp3"}}""")?.library?.hiddenSongs)
         assertTrue(""""hiddenSongs":[{"path":"$b","id":7}]""" in SettingsJson.encode(Settings(library = LibrarySettings(hiddenSongs = listOf(SongRef(b, 7))))))
+    }
+
+    @Test
+    fun `artists with several names keep each separator and exception once in any case, and only names`() {
+        val text = """{"library":{"artistSplit":{"enabled":"no","separators":[" & ","",3,"&","x",null,"WITH","with"],"exceptions":"AC/DC"}}}"""
+
+        assertEquals(ArtistSplit(enabled = true, separators = listOf("&", "x", "WITH"), exceptions = ArtistSplit.DEFAULT_EXCEPTIONS), SettingsJson.decode(text)?.library?.artistSplit)
+        // Every separator taken away is a choice: none split.
+        assertEquals(ArtistSplit(enabled = false, separators = emptyList()), SettingsJson.decode("""{"library":{"artistSplit":{"enabled":false,"separators":[]}}}""")?.library?.artistSplit)
+        assertEquals(ArtistSplit(), SettingsJson.decode("""{"library":{"artistSplit":[]}}""")?.library?.artistSplit)
     }
 
     // A file that is not settings at all
