@@ -55,6 +55,7 @@ import app.lyrify.player.queueLabels
 import app.lyrify.settings.LibrarySettings
 import app.lyrify.settings.Settings
 import app.lyrify.tags.CoverVersions
+import app.lyrify.tags.TagsGraph
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
@@ -529,8 +530,11 @@ class CarCovers : ContentProvider() {
         @Volatile
         private var made: CoverUris? = null
 
-        /** The covers' uris in this build, under this install's key. */
-        fun uris(context: Context): CoverUris = made ?: CoverUris(authority(context), CoverKey.of(context)).also { made = it }
+        /** The covers' uris in this build, under this install's key, at the covers' versions kept between runs. */
+        fun uris(context: Context): CoverUris = made ?: run {
+            TagsGraph.readCoverVersions(context)
+            CoverUris(authority(context), CoverKey.of(context))
+        }.also { made = it }
 
         /**
          * The cover at [uri] for KJB's own surfaces, read in this process at the uri the car reads (the session's bitmap

@@ -9,6 +9,8 @@ import app.lyrify.player.QueueSource
 import app.lyrify.player.SourceKind
 import app.lyrify.player.openedCoverDir
 import app.lyrify.player.openedCoverKey
+import app.lyrify.tags.CoverVersions
+import app.lyrify.tags.CoverVersionsFile
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
@@ -227,6 +229,44 @@ class CarAccessTest {
         assertNull(uris.pathOf(listOf("..", "3", uris.sign("../3"))))
         assertNull(CoverUris("app.lyrify.covers", ByteArray(32) { 1 }).pathOf(changed))
         assertNull(uris.pathOf(changed + "extra"))
+    }
+
+    @Test
+    fun `a cover changed before KJB closed keeps its version, so its uri is never its old cover's or an earlier change's`() {
+        val dir = java.nio.file.Files.createTempDirectory("covers").toFile()
+        val path = "/made/up/Quiet Ember.mp3"
+        fun read() = CoverVersions.read(CoverVersionsFile(File(dir, "cover-versions.json")))
+        fun uri() = uris.segments("20", CoverVersions.of(path))
+        try {
+            CoverVersions.forget()
+            read()
+            val old = uri()
+            CoverVersions.bump(listOf(path))
+            val first = uri()
+            // KJB closes: in the next run the cover is still the changed one, and a change then is a version never handed out.
+            CoverVersions.forget()
+            read()
+            assertEquals(first, uri())
+            CoverVersions.bump(listOf(path))
+            val second = uri()
+            assertTrue(second != first && second != old)
+            // A change made before the versions are read counts on from the kept one.
+            CoverVersions.forget()
+            CoverVersions.bump(listOf(path))
+            read()
+            assertEquals(3, CoverVersions.of(path))
+            CoverVersions.forget()
+            read()
+            assertEquals(3, CoverVersions.of(path))
+            // A file that holds no versions is none, never a crash.
+            File(dir, "cover-versions.json").writeText("{\"" + path + "\": \"x\"")
+            CoverVersions.forget()
+            read()
+            assertEquals(0, CoverVersions.of(path))
+        } finally {
+            CoverVersions.forget()
+            dir.deleteRecursively()
+        }
     }
 
     @Test

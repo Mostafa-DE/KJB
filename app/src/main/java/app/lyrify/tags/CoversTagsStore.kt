@@ -5,6 +5,8 @@ import app.lyrify.tags.lookup.MbRelease
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -248,3 +250,45 @@ class CoversTagsStore(private val file: File, private val log: (String) -> Unit 
 
 /** [path]'s size and modified time now, or null when it is not a file. Blocking. */
 fun fileMark(path: String): FileMark? = File(path).takeIf { it.isFile }?.let { FileMark(path, it.length(), it.lastModified()) }
+
+/**
+ * `cover-versions.json`, app-private: the covers' versions by song path ([CoverVersions]), so a changed cover's uri stays
+ * new after KJB closes. Read leniently: a file that can't be read is no versions (each cover counts from 0 again, as
+ * before they were kept). Written whole to a temporary file, then moved over; not fsynced (one lost to a crash is at
+ * worst a car showing a cover it kept until it reads it again). Logs exception class names only. Blocking.
+ */
+class CoverVersionsFile(private val file: File, private val log: (String) -> Unit = {}) {
+    fun load(): Map<String, Int> {
+        if (!file.isFile) return emptyMap()
+        return try {
+            Json.decodeFromString(VERSIONS, file.readText()).filterValues { it > 0 }
+        } catch (e: IOException) {
+            log("tags: cover versions not read (${e.javaClass.simpleName})")
+            emptyMap()
+        } catch (e: IllegalArgumentException) {
+            // A SerializationException is one.
+            log("tags: cover versions unreadable (${e.javaClass.simpleName}), counted from 0")
+            emptyMap()
+        }
+    }
+
+    /** False when not kept. */
+    fun save(versions: Map<String, Int>): Boolean {
+        val aside = File(file.path + TMP)
+        return try {
+            file.parentFile?.mkdirs()
+            aside.writeText(Json.encodeToString(VERSIONS, versions))
+            Files.move(aside.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+            true
+        } catch (e: IOException) {
+            aside.delete()
+            log("tags: cover versions not kept (${e.javaClass.simpleName})")
+            false
+        }
+    }
+
+    private companion object {
+        val VERSIONS = MapSerializer(String.serializer(), Int.serializer())
+        const val TMP = ".tmp"
+    }
+}

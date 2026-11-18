@@ -34,6 +34,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
@@ -306,17 +307,48 @@ sealed interface SearchOutcome {
 }
 
 /**
- * The covers' versions in this process, by song path: bumped on every apply and Undo, so the cover's key in the image
- * loader changes ([app.lyrify.ui.coverKey]) and KJB shows the new cover at once.
+ * The covers' versions by song path: bumped on every apply and Undo, so the cover's key in the image loader changes
+ * ([app.lyrify.ui.coverKey]) and KJB shows the new cover at once, and so does its uri ([app.lyrify.auto.CoverUris]) for
+ * the lock screen and the car. Kept between runs ([read]): a cover changed before KJB closed never gets its old cover's
+ * uri back, nor an earlier change's, which Android Auto may still keep a cover under.
  */
 object CoverVersions {
     private val _versions = MutableStateFlow<Map<String, Int>>(emptyMap())
 
     val versions: StateFlow<Map<String, Int>> = _versions.asStateFlow()
 
-    fun bump(paths: Collection<String>) = _versions.update { now -> now + paths.associateWith { (now[it] ?: 0) + 1 } }
+    /** Where the versions are kept, once [read]; a bump before that is kept by the read. */
+    private var kept: CoverVersionsFile? = null
+
+    @Synchronized
+    fun bump(paths: Collection<String>) {
+        val now = _versions.updateAndGet { now -> now + paths.associateWith { (now[it] ?: 0) + 1 } }
+        kept?.save(now)
+    }
 
     fun of(path: String): Int = _versions.value[path] ?: 0
+
+    /**
+     * The versions kept in [file] read into this process, once, before the first cover's uri is signed
+     * ([app.lyrify.auto.CarCovers.uris]): a change made before that counts on from its kept version, so no version is
+     * handed out twice. Blocking.
+     */
+    @Synchronized
+    fun read(file: CoverVersionsFile) {
+        if (kept != null) return
+        val before = file.load()
+        val bumped = _versions.value
+        _versions.value = before + bumped.mapValues { (path, times) -> (before[path] ?: 0) + times }
+        kept = file
+        if (bumped.isNotEmpty()) file.save(_versions.value)
+    }
+
+    /** No version, and none read yet, as in a new process: for tests. */
+    @Synchronized
+    internal fun forget() {
+        kept = null
+        _versions.value = emptyMap()
+    }
 }
 
 /** A library song as Covers & tags matches it: its tags as MediaStore read them from the file. */

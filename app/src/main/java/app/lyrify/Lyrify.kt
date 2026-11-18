@@ -82,6 +82,8 @@ class LyrifyApplication : Application() {
         Imports.startRecovery(this)
         // The covers' key is read now, off the main thread, where the playback service would read it first.
         CoverKey.warm(this, Lyrify.background)
+        // So are the covers' versions kept between runs, which the service's first cover uri needs too.
+        Lyrify.background.launch { TagsGraph.readCoverVersions(this@LyrifyApplication) }
     }
 }
 
