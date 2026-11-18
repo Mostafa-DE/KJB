@@ -586,6 +586,20 @@ class QueuesTest {
     }
 
     @Test
+    fun `Shuffle also brings a Play next song the queue jumped past right after the song playing`() {
+        // Rips 1 waits after the first song; a tap further down the list plays Harbour Glass 4 and leaves it waiting.
+        val book = playing(0).playNext(listOf(folder[0]), picked, now = 2)!!.book.play(album, 3, albumSource, now = 3).book
+        assertEquals("Harbour Glass 4", currentName(book))
+        assertEquals(listOf("Harbour Glass 1", "Rips 1"), paths(book.current).take(2))
+        assertTrue(book.current!!.items[1].playNext)
+        val on = book.toggleShuffle(Random(5))
+        assertEquals(listOf("Harbour Glass 4", "Rips 1"), paths(on.current).take(2))
+        val off = on.toggleShuffle(Random(5))
+        assertEquals(paths(book.current), paths(off.current))
+        assertEquals(4, off.current!!.index)
+    }
+
+    @Test
     fun `a list header's Shuffle plays a new queue in a random order`() {
         val book = QueueBook().shuffle(album, albumSource, Random(1), now = 1).book
         assertTrue(book.current!!.shuffled)
