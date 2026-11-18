@@ -536,6 +536,32 @@ class SongTrashTest {
         assertEquals(emptyList<TrashedSong>(), trash.elsewhere.value)
     }
 
+    @Test
+    fun `a trash MediaStore can't read leaves other apps' songs as last read, and unread before the first read`() = runTest {
+        val bin = Bin()
+        val other = TrashedSong(bin.files[1], BASE - DAY, BASE + 29 * DAY)
+        var listing: List<TrashedSong>? = null
+        val phone = object : PhoneTrash {
+            override fun inTrash(ids: Collection<Long>): Map<Long, Long?> = bin.inTrash.filterKeys { it in ids }
+
+            override fun songs(): List<TrashedSong>? = listing
+        }
+        bin.host.memory = TrashMemory()
+        val trash = trash(bin.host, bin.live, phone)
+
+        // Unread, not empty: Tools says nothing of the trash rather than Empty.
+        trash.refresh()
+        assertNull(trash.elsewhere.value)
+
+        listing = listOf(other)
+        trash.refresh()
+        assertEquals(listOf(other), trash.elsewhere.value)
+
+        listing = null
+        trash.refresh()
+        assertEquals(listOf(other), trash.elsewhere.value)
+    }
+
     /**
      * The flow over [host], with MediaStore's rows as [files] say (each read first runs [onRows]), the phone's trash as
      * [inTrash] says (empty unless told), and KJB's own writes as [ownWrite] says (none unless told).

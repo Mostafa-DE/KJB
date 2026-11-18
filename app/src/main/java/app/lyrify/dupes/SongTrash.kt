@@ -436,7 +436,8 @@ class SongTrash(
 
     /**
      * Drops the trashed songs the phone no longer has in its trash (restored elsewhere, deleted for good) or that expired,
-     * then reads what other apps moved there ([elsewhere]; as it was while MediaStore cannot be read).
+     * then reads what other apps moved there ([elsewhere]; as it was while MediaStore cannot be read, unread before its
+     * first read, so Tools never says Empty for a trash it could not see).
      */
     suspend fun refresh(): Unit = withContext(io) {
         host.loaded()
@@ -444,7 +445,7 @@ class SongTrash(
         val phone = phoneTrash.songs()
         val own = host.memory.trashed.mapTo(HashSet()) { it.file.id }
         val now = clock()
-        others.update { before -> phone?.filter { it.file.id !in own && it.expiresAt > now } ?: before.orEmpty() }
+        others.update { before -> phone?.filter { it.file.id !in own && it.expiresAt > now } ?: before }
     }
 
     /** [refresh] of the songs KJB moved there. */
