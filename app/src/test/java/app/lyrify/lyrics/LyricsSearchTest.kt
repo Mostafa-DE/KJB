@@ -110,6 +110,29 @@ class LyricsSearchTest {
         assertEquals(listOf("Lio Marsh & Cass Dunmore"), client.gets.map { it.artist }.distinct())
     }
 
+    // Relevance by score
+
+    @Test
+    fun `a title with one word written as two is written by itself`() = runTest {
+        val track = audio("a.mp3", "Dont Wake the River", "Pia Lund")
+        client.onGet = { LrclibResult.Found(listOf(record(7, track = "Don't Wake the River", artist = "Pia Lund"))) }
+
+        assertEquals(LyricsStatus.SYNCED, pipeline().process(track)?.status)
+
+        assertEquals(7L, ledger[track.path]?.lrclibId)
+    }
+
+    @Test
+    fun `a maybe the artist's own search found waits in Check these, never written without the user`() = runTest {
+        val track = audio("a.mp3", "Ember Road Part 2", "Kasimir Vell")
+        client.onSearch = { if (it.artist != null) LrclibResult.Found(listOf(record(7, track = "Ember Road Pt. 2", artist = "Kasimir Vell"))) else LrclibResult.Found(emptyList()) }
+
+        assertEquals(LyricsStatus.NEEDS_CHECK, pipeline().process(track)?.status)
+
+        assertEquals(listOf(7L), ledger[track.path]?.candidates?.map { it.id })
+        assertFalse(sidecar(track).exists())
+    }
+
     // Misses
 
     @Test

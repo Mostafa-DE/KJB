@@ -196,6 +196,54 @@ class MatcherTest {
         assertTrue(Matcher.isRelevant(record(1, track = "Vael (Instrumental)"), queries))
     }
 
+    // Relevance by score
+
+    private fun score(track: String, artist: String = "Quillmere", query: String = "Vael"): Double =
+        Matcher.score(record(1, track = track, artist = artist), listOf(TrackQuery("Quillmere", query)))
+
+    @Test
+    fun `equal titles are sure, and so is one word written as two`() {
+        assertEquals(1.0, score("Vael (Live)"), 0.0)
+        assertTrue(score("Don't Wait", query = "Dont Wait") >= Matcher.WRITE_SCORE)
+        assertTrue(Matcher.isRelevant(record(1, track = "Don't Wait"), listOf(TrackQuery("Quillmere", "Dont Wait"))))
+        assertTrue(score("Dont Wait", query = "Don't Wait") >= Matcher.WRITE_SCORE)
+    }
+
+    @Test
+    fun `words run together count only as one split word`() {
+        assertTrue(score("Do Nt Wa It", query = "Dont Wait") < Matcher.MAYBE_SCORE)
+    }
+
+    @Test
+    fun `a title with more words after it is a maybe, never written by itself`() {
+        val subtitle = score("Glass Harbor - From the Film Nightjar", query = "Glass Harbor")
+        assertTrue(subtitle >= Matcher.MAYBE_SCORE && subtitle < Matcher.WRITE_SCORE)
+        val part = score("Vael Part 2")
+        assertTrue(part >= Matcher.MAYBE_SCORE && part < Matcher.WRITE_SCORE)
+        assertEquals(Match.NotFound, match(record(1, track = "Glass Harbor - From the Film Nightjar"), queries = listOf(TrackQuery("Quillmere", "Glass Harbor"))))
+    }
+
+    @Test
+    fun `titles sharing most telling words are a maybe, sharing few are not`() {
+        val most = score("Ember Road Pt. 2", query = "Ember Road Part 2")
+        assertTrue(most >= Matcher.MAYBE_SCORE && most < Matcher.WRITE_SCORE)
+        assertTrue(score("Song of the Night", query = "Song of the Sea") < Matcher.MAYBE_SCORE)
+        assertTrue(score("Copper Kettle", query = "Glass Harbor") < Matcher.MAYBE_SCORE)
+    }
+
+    @Test
+    fun `another artist, or a query without one, scores nothing whatever the title`() {
+        assertEquals(0.0, score("Vael", artist = "Brennmoor"), 0.0)
+        assertEquals(0.0, Matcher.score(record(1), listOf(TrackQuery(null, "Vael"))), 0.0)
+        assertEquals(0.0, Matcher.score(record(1), emptyList()), 0.0)
+    }
+
+    @Test
+    fun `the best query decides`() {
+        val queries = listOf(TrackQuery("Brennmoor", "Vael"), TrackQuery("Quillmere", "Vael Part 2"), TrackQuery("Quillmere", "Vael"))
+        assertEquals(1.0, Matcher.score(record(1), queries), 0.0)
+    }
+
     // Candidates for the user to check
 
     /** "05- Song A" with no artist tag, 200 s long, in a file named after a band. */
@@ -326,6 +374,18 @@ class MatcherTest {
         // Letters of the alphabet, not lyrics.
         val arabic = "[00:01.00]ا ب ت\n[00:02.00]ث ج ح\n[00:03.00]خ د ذ"
         assertEquals(listOf(1L), offered(found(1, plain = "ا ب ت ث"), found(2, artist = "B", synced = arabic, plain = "w0001")))
+    }
+
+    @Test
+    fun `a maybe of the song's own artist is offered, though the song's names do not hold its title`() {
+        val track = LocalTrack("/music/Ember Road Part 2.mp3", "Ember Road Part 2", "Kasimir Vell", null, 200_000)
+        val maybe = found(1, track = "Ember Road Pt. 2", artist = "Kasimir Vell")
+        val queries = listOf(TrackQuery("Kasimir Vell", "Ember Road Part 2"))
+
+        assertEquals(emptyList<Long>(), Candidates.offered(listOf(maybe), track).map { it.id })
+        assertEquals(listOf(1L), Candidates.offered(listOf(maybe), track, queries).map { it.id })
+        // Still of the song's length.
+        assertEquals(emptyList<Long>(), Candidates.offered(listOf(maybe.copy(duration = 230.0)), track, queries).map { it.id })
     }
 
     @Test

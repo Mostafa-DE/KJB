@@ -613,7 +613,7 @@ class LyricsPipeline(
             is Lookup.Write -> withContext(NonCancellable) {
                 Processed(write(track, sidecar, previous, result.text, Written(LyricsStatus.SYNCED, LyricsSource.LRCLIB, result.record.id)))
             }
-            is Lookup.Answer -> settle(track, previous, if (queries.isEmpty()) Verdict(LyricsStatus.UNIDENTIFIED) else verdict(result.match), result, lane)
+            is Lookup.Answer -> settle(track, previous, if (queries.isEmpty()) Verdict(LyricsStatus.UNIDENTIFIED) else verdict(result.match), result, queries, lane)
             is Lookup.Failed -> busy(previous, track, result.cause)
         }
     }
@@ -625,10 +625,11 @@ class LyricsPipeline(
 
     /**
      * Records LRCLIB's [verdict]. When it holds nothing of this recording, the loose searches ([TrackNames.looseQueries],
-     * those the [answer] did not ask already) may find [Candidates]: the song then waits for the user's check. A song
-     * the user said none of the candidates is ([LedgerEntry.declined]) is not searched again, and stays not found.
+     * those the [answer] did not ask already) may find [Candidates], and so may the maybes of the lookup's own [queries]
+     * ([Matcher.MAYBE_SCORE]): the song then waits for the user's check. A song the user said none of the candidates is
+     * ([LedgerEntry.declined]) is not searched again, and stays not found.
      */
-    private suspend fun settle(track: LocalTrack, previous: LedgerEntry?, verdict: Verdict, answer: Lookup.Answer, lane: Lane): Processed {
+    private suspend fun settle(track: LocalTrack, previous: LedgerEntry?, verdict: Verdict, answer: Lookup.Answer, queries: List<TrackQuery>, lane: Lane): Processed {
         if (!verdict.unsure) return Processed(outcome(previous, track, verdict.status, verdict.lrclibId, verdict.durationMatched))
         if (previous?.declined == true) return Processed(outcome(previous, track, LyricsStatus.NOT_FOUND))
         var records = answer.records
@@ -640,7 +641,7 @@ class LyricsPipeline(
                 is LrclibResult.Found -> records = records + result.records
             }
         }
-        val candidates = Candidates.offered(records.distinctBy { it.id }, track)
+        val candidates = Candidates.offered(records.distinctBy { it.id }, track, queries)
         if (candidates.isEmpty()) return Processed(outcome(previous, track, verdict.status, verdict.lrclibId, verdict.durationMatched))
         return Processed(outcome(previous, track, LyricsStatus.NEEDS_CHECK, candidates = candidates))
     }
