@@ -47,13 +47,25 @@ class QueueScreensTest {
     }
 
     @Test
-    fun `a queue's list opens with the song here in view, the song before it above`() {
+    fun `the Queue sheet's list opens with the song here in view, the song before it above`() {
         // Among the first songs, the list opens at its top, with the head above its songs.
         assertEquals(0, firstShown(index = 0, head = 1))
         assertEquals(0, firstShown(index = 1, head = 2))
         // Further in, the song before it is the first row shown, and the song here the second.
         assertEquals(1 + 11, firstShown(index = 12, head = 1))
         assertEquals(2 + 46, firstShown(index = 47, head = 2))
+    }
+
+    @Test
+    fun `a queue's page folds its head into the top bar once it has gone, and lines its pinned buttons while songs run under them`() {
+        // At its top (the page opens there, 3.1), and while the head scrolls away: nothing folded.
+        assertEquals(QueueHeadFold(folded = false, edge = false), queueHeadFold(firstIndex = 0, firstOffset = 0))
+        assertEquals(QueueHeadFold(folded = false, edge = false), queueHeadFold(firstIndex = 0, firstOffset = 400))
+        // The head gone, the pinned buttons at their own place: the top bar names the queue.
+        assertEquals(QueueHeadFold(folded = true, edge = false), queueHeadFold(firstIndex = 1, firstOffset = 0))
+        // Songs under the pinned buttons: their line shows.
+        assertEquals(QueueHeadFold(folded = true, edge = true), queueHeadFold(firstIndex = 1, firstOffset = 1))
+        assertEquals(QueueHeadFold(folded = true, edge = true), queueHeadFold(firstIndex = 9, firstOffset = 0))
     }
 
     @Test
