@@ -101,6 +101,27 @@ class BottomBarTest {
     }
 
     @Test
+    fun `until the phone has said, Downloads and Books stay on the bar, so nothing pops in at every start`() {
+        assertTrue(DockOffers(downloads = null, books = null).offers(DockTab.DOWNLOADS))
+        assertTrue(DockOffers(downloads = null, books = null).offers(DockTab.BOOKS))
+        assertFalse(DockOffers(downloads = false, books = true).offers(DockTab.DOWNLOADS))
+        assertTrue(DockOffers(downloads = false, books = true).offers(DockTab.BOOKS))
+        assertFalse(DockOffers(downloads = true, books = false).offers(DockTab.BOOKS))
+        assertTrue(DockOffers(downloads = false, books = false).offers(DockTab.QUEUES))
+        val setting = on(DockTab.LIBRARY, DockTab.BOOKS, DockTab.DOWNLOADS)
+        assertEquals(listOf(DockTab.LIBRARY, DockTab.BOOKS, DockTab.DOWNLOADS), dockItems(setting, DockOffers(null, null)::offers))
+    }
+
+    @Test
+    fun `an item switched on but left off a full bar is named, so Settings never shows it as on the bar`() {
+        val seven = on(DockTab.LIBRARY, DockTab.PLAYLISTS, DockTab.QUEUES, DockTab.FAVOURITES, DockTab.DOWNLOADS, DockTab.SEARCH, DockTab.TOOLS)
+        assertEquals(setOf(DockTab.TOOLS), dockLeftOff(seven, everything))
+        // Its add-on gone, Downloads is not offered: nothing is left off then, and Downloads is not named.
+        assertEquals(emptySet<DockTab>(), dockLeftOff(seven) { dockOffers(it, downloads = false, books = true) })
+        assertEquals(emptySet<DockTab>(), dockLeftOff(default, everything))
+    }
+
+    @Test
     fun `the app opens on the last tab while it is on the bar, else on Library`() {
         assertEquals(DockTab.SEARCH, dockStart(DockTab.SEARCH, DOCK_TABS))
         assertEquals(DockTab.LIBRARY, dockStart(DockTab.FAVOURITES, DOCK_TABS))

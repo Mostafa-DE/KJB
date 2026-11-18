@@ -153,12 +153,10 @@ fun AppShell(
 ) {
     val display = settings.display
     val offers = rememberDockOffers()
-    // What the bar shows once the phone has said what it offers, and what stays in reach until it has.
-    val items = remember(display.dock, offers) { dockItems(display.dock) { dockOffers(it, offers.downloads == true, offers.books == true) } }
-    val reachable = remember(display.dock, offers) {
-        dockItems(display.dock) { dockOffers(it, offers.downloads != false, offers.books != false) }.toSet() + DockTab.SEARCH + DockTab.TOOLS
-    }
-    val lastTab = dockStart(settings.nav.lastTab, dockItems(display.dock) { true })
+    // Downloads and Books stay on until the phone says it can't offer them; Search and Tools are always in reach.
+    val items = remember(display.dock, offers) { dockItems(display.dock, offers::offers) }
+    val reachable = remember(items) { items.toSet() + DockTab.SEARCH + DockTab.TOOLS }
+    val lastTab = dockStart(settings.nav.lastTab, items)
     val nav = rememberSaveable(saver = NavState.saver(lastTab)) { Navigator(NavState.start(lastTab)) }
     val state = nav.state
     val context = LocalContext.current
@@ -253,7 +251,7 @@ fun AppShell(
         LocalNavigator provides nav,
         LocalLyrics provides lyrics,
         LocalPlayingPath provides (bar as? NowBarShows.Own)?.now?.path,
-        LocalDockBar provides DockBar(items, dot, offers.downloads == true, offers.books == true),
+        LocalDockBar provides DockBar(items, dot, offers),
     ) {
         SharedTransitionLayout(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
             // The page layer with its Now bar and dock: under the views, but over the views a back swipe from a page

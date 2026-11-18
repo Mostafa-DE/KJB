@@ -91,6 +91,15 @@ fun dockMoved(setting: List<DockItemSetting>, tab: DockTab, up: Boolean, offered
     }
 }
 
+/**
+ * The items switched on and [offered] that the bar has no room for ([dockItems]): only once an item the phone could not
+ * offer is back on a full bar. Settings says so on their rows rather than show them as on the bar.
+ */
+fun dockLeftOff(setting: List<DockItemSetting>, offered: (DockTab) -> Boolean): Set<DockTab> {
+    val items = dockItems(setting, offered)
+    return setting.filter { it.on && offered(it.tab) && it.tab !in items }.map { it.tab }.toSet()
+}
+
 /** Search and Tools when the bar ([items]) leaves them off: Library's top bar shows a button for each, so both stay in reach. */
 fun offBar(items: List<DockTab>): List<DockTab> = listOf(DockTab.SEARCH, DockTab.TOOLS).filter { it !in items }
 
@@ -152,11 +161,11 @@ private val DockItemSetting.on: Boolean get() = shown || tab == DockTab.LIBRARY
 
 /**
  * The bar as the shell shows it ([LocalDockBar]): its [items] in order, whether Tools has its dot ([toolsDot]), and what
- * the phone offers now ([downloads]: KJB Downloads installed; [books]: a book in the library).
+ * the phone offers now ([offered]: KJB Downloads installed, a book in the library).
  */
 @Immutable
-data class DockBar(val items: List<DockTab> = DOCK_TABS, val toolsDot: Boolean = false, val downloads: Boolean = false, val books: Boolean = false) {
-    fun offers(tab: DockTab): Boolean = dockOffers(tab, downloads, books)
+data class DockBar(val items: List<DockTab> = DOCK_TABS, val toolsDot: Boolean = false, val offered: DockOffers = DockOffers(downloads = false, books = false)) {
+    fun offers(tab: DockTab): Boolean = offered.offers(tab)
 }
 
 /** The shell's [DockBar], for Library's top bar and Settings > Bottom bar. */
@@ -164,11 +173,13 @@ val LocalDockBar = compositionLocalOf { DockBar() }
 
 /**
  * What the phone can put on the bar now: whether KJB Downloads is installed (looked at again whenever it is installed or
- * removed, and as the app comes back) and whether the library holds a book; each null until known, so nothing leaves
- * the bar, or the app's reach, before the phone has said.
+ * removed, and as the app comes back) and whether the library holds a book; each null until known.
  */
 @Immutable
-data class DockOffers(val downloads: Boolean?, val books: Boolean?)
+data class DockOffers(val downloads: Boolean?, val books: Boolean?) {
+    /** Whether [tab] is on offer: until the phone has said, it is, so the bar never fills in a moment after each start. */
+    fun offers(tab: DockTab): Boolean = dockOffers(tab, downloads != false, books != false)
+}
 
 @Composable
 fun rememberDockOffers(): DockOffers {

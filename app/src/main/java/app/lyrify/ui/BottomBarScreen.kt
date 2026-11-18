@@ -71,8 +71,9 @@ fun BottomBarScreen(settings: Settings, onChange: ((Settings) -> Settings) -> Un
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(start = ScreenPadding + 4.dp, end = ScreenPadding, bottom = 12.dp),
                     )
+                    val leftOff = dockLeftOff(display.dock, offered)
                     GroupedRows {
-                        listed.forEachIndexed { index, item -> ItemRow(item, index, listed.lastIndex, room, ::setDock, offered) }
+                        listed.forEachIndexed { index, item -> ItemRow(item, index, listed.lastIndex, room, item.tab in leftOff, ::setDock, offered) }
                     }
                 }
             }
@@ -89,7 +90,8 @@ fun BottomBarScreen(settings: Settings, onChange: ((Settings) -> Settings) -> Un
 
 /**
  * One item of the bar: its icon and name, the arrows that move it among the items listed (the first can't go up, the
- * last can't go down), and its switch: Library's always on, the others' off only while the bar is full ([room]).
+ * last can't go down), and its switch: Library's always on, the others' off only while the bar is full ([room]). An item
+ * switched on that the full bar has no room for ([leftOff]) says so.
  */
 @Composable
 private fun ItemRow(
@@ -97,6 +99,7 @@ private fun ItemRow(
     index: Int,
     last: Int,
     room: Boolean,
+    leftOff: Boolean,
     setDock: ((List<DockItemSetting>) -> List<DockItemSetting>) -> Unit,
     offered: (DockTab) -> Boolean,
 ) {
@@ -111,7 +114,11 @@ private fun ItemRow(
         onTile = MaterialTheme.colorScheme.onSurfaceVariant,
         first = index == 0,
         modifier = Modifier.toggleable(on, enabled = enabled, role = Role.Switch) { switched -> setDock { dockSwitched(it, item.tab, switched, offered) } },
-        supporting = if (library) ({ Text(stringResource(R.string.set_bar_library)) }) else null,
+        supporting = when {
+            library -> ({ Text(stringResource(R.string.set_bar_library)) })
+            leftOff -> ({ Text(stringResource(R.string.set_bar_left_off)) })
+            else -> null
+        },
         trailing = {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 ChromeIconButton(R.drawable.ic_arrow_upward, stringResource(R.string.set_tab_up, name), { setDock { dockMoved(it, item.tab, up = true, offered) } }, enabled = index > 0, glass = false, size = 36.dp)

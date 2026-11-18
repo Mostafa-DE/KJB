@@ -16,11 +16,12 @@
     <string name="set_bar_standard">Standard</string>
     <string name="set_bar_standard_detail">Each icon over its name</string>
     <string name="set_bar_slim">Slim</string>
-    <string name="set_bar_slim_detail">Icons only, and lower. Hold one to see its name.</string>
+    <string name="set_bar_slim_detail">Icons only, on a thinner bar. Hold an icon to see its name.</string>
     <string name="set_bar_icons">Icons</string>
     <string name="set_bar_icons_sheet">Up to 6, in the order you like. Use the arrows to move one. Library always stays.</string>
     <string name="set_bar_full">The bar is full. Switch one off to add another.</string>
     <string name="set_bar_library">Always on the bar</string>
+    <string name="set_bar_left_off">No room on the bar. Switch another off to show it.</string>
     <string name="set_bar_hide">Hide while scrolling</string>
     <string name="set_bar_hide_detail">Scroll down and the bar slides away</string>
 
