@@ -28,6 +28,8 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
+import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.util.concurrent.TimeUnit
 
 /** Moving songs to the phone's trash: two confirmations, KJB's then the phone's. */
@@ -111,10 +113,11 @@ sealed interface Restored {
 }
 
 /**
- * What happens to a song once the phone moved its audio file to its trash: the `.lrc` KJB wrote for it goes (only
- * while byte for byte what KJB wrote), its ledger entry is updated, and it leaves the playlists and Favourites. A `.lrc`
- * KJB did not write stays. The lyrics pipeline and the playlists store in the app. It has left the queues already
- * ([SongTrash]'s leaveQueues).
+ * What happens to a song once the phone moved its audio file to its trash, or deleted for good a song another app had
+ * moved there ([SongTrash.deleteAnswered]), by the path it had before: the `.lrc` KJB wrote for it goes (only while byte
+ * for byte what KJB wrote), its ledger entry is updated, and it leaves the playlists and Favourites. A `.lrc` KJB did
+ * not write stays. The lyrics pipeline and the playlists store in the app. A song KJB trashed has left the queues
+ * already ([SongTrash]'s leaveQueues).
  */
 fun interface TrashCleanup {
     suspend fun trashed(audioPath: String)
@@ -394,7 +397,9 @@ class SongTrash(
     /**
      * The phone's delete dialog answered. [approved] (RESULT_OK): the songs MediaStore lists nowhere now are gone for good,
      * with the room they freed; every song asked for that is out of the trash leaves the lists (one restored meanwhile is
-     * not counted). Not approved: nothing changes. Finishes even if the screen goes.
+     * not counted). Another app's song gone for good gets the cleanup KJB's own got as they went to the trash ([cleanup]:
+     * the lyrics KJB wrote for it, its playlists), unless a file is at its place again. Not approved: nothing changes.
+     * Finishes even if the screen goes.
      */
     suspend fun deleteAnswered(approved: Boolean): Deleted = withContext(NonCancellable + io) {
         host.loaded()
@@ -411,6 +416,8 @@ class SongTrash(
         }
         val out = ids.filterTo(HashSet()) { it !in left }
         val gone = songs.filter { it.file.id in out && it.file.id !in restored }
+        val own = host.memory.trashed.mapTo(HashSet()) { it.file.id }
+        for (song in gone) if (song.file.id !in own) vacated(song.file.path)?.let { cleanup.trashed(it) }
         forget(out)
         log("trash: ${gone.size} of ${songs.size} songs deleted for good")
         Deleted.Gone(gone.size, of = songs.size, bytes = gone.sumOf { it.file.size })
@@ -496,6 +503,17 @@ class SongTrash(
         log("trash: ${trashed.size} of ${pending.size} files moved to the trash")
         return trashed.size
     }
+}
+
+/**
+ * Where the file at [trashedPath] (`.trashed-<expiry>-<name>`, as the phone's trash keeps it) was before it went to the
+ * trash, which KJB's lyrics and playlists name it by; null while a file, or a link, is there again: the lyrics there may
+ * be its own. Blocking.
+ */
+private fun vacated(trashedPath: String): String? {
+    val file = File(trashedPath)
+    val place = File(file.parentFile, file.name.replace(TRASHED_PREFIX, ""))
+    return place.path.takeIf { Files.notExists(place.toPath(), LinkOption.NOFOLLOW_LINKS) }
 }
 
 /** How long the phone keeps trashed files when MediaStore does not say (AOSP MediaProvider: 30 days). */

@@ -65,8 +65,16 @@ class SongTrashTest {
 
     private fun lrc(path: String) = File(LrcFormat.sidecarPath(path) ?: error("no sidecar"))
 
-    /** The engine the app has: MediaStore's rows are the files on disk; trashing cleans up lyrics and playlists. */
-    private fun TestScope.engine(files: List<AudioFile>, pipeline: LyricsPipeline, queues: suspend (Set<String>) -> Unit = {}) = Duplicates(
+    /**
+     * The engine the app has: MediaStore's rows are the files on disk; trashing cleans up lyrics and playlists. The phone's
+     * trash also lists [elsewhere], songs other apps moved there.
+     */
+    private fun TestScope.engine(
+        files: List<AudioFile>,
+        pipeline: LyricsPipeline,
+        queues: suspend (Set<String>) -> Unit = {},
+        elsewhere: () -> List<TrashedSong> = { emptyList() },
+    ) = Duplicates(
         library = object : AudioLibrary {
             override fun read(): LibraryRead = LibraryRead.Files(files)
 
@@ -77,7 +85,11 @@ class SongTrashTest {
             pipeline.trashed(path)
             forgotten += path
         },
-        phoneTrash = { ids -> phoneTrash.filterKeys { it in ids } },
+        phoneTrash = object : PhoneTrash {
+            override fun inTrash(ids: Collection<Long>): Map<Long, Long?> = phoneTrash.filterKeys { it in ids }
+
+            override fun songs(): List<TrashedSong> = elsewhere()
+        },
         scope = this,
         io = StandardTestDispatcher(testScheduler),
         clock = { BASE + testScheduler.currentTime },
@@ -86,9 +98,12 @@ class SongTrashTest {
 
     private fun trashOnDisk(path: String, id: Long) {
         val audio = File(path)
-        assertTrue(audio.renameTo(File(audio.parentFile, ".trashed-1765000000-${audio.name}")))
+        assertTrue(audio.renameTo(inTrash(path)))
         phoneTrash[id] = BASE + 30 * DAY
     }
+
+    /** Where the phone's trash keeps the file at [path] (AOSP MediaProvider's name for it). */
+    private fun inTrash(path: String): File = File(path).let { File(it.parentFile, ".trashed-1765000000-${it.name}") }
 
     private suspend fun TestScope.lyricsFor(song: Song, pipeline: LyricsPipeline) {
         client.onGet = { LrclibResult.Found(listOf(LrclibRecord(1, song.title, "Kit Calloway", null, 200.0, plainLyrics = "w0001", syncedLyrics = synced))) }
@@ -471,6 +486,49 @@ class SongTrashTest {
         assertEquals(Deleted.Gone(2, of = 2, bytes = bin.files[0].size + bin.files[1].size), trash.deleteAnswered(approved = true))
         assertEquals(emptyList<TrashedSong>(), trash.elsewhere.value)
         assertEquals(emptyList<TrashedSong>(), bin.host.memory.trashed)
+    }
+
+    @Test
+    fun `Delete forever on songs another app moved to the trash takes the lyrics KJB wrote for them too, once each is really gone`() = runTest {
+        val songs = listOf(song(11, "Paper Lantern"), song(12, "Tide Bell"), song(13, "Salt Road"))
+        val (lantern, bell, road) = songs
+        val pipeline = pipeline()
+        songs.forEach { lyricsFor(it, pipeline) }
+        val files = songs.map { trashFile(it) ?: error("no file") }
+        // Another app moved them to the phone's trash, so KJB cleaned nothing up; MediaStore lists each at its trash name.
+        files.forEach { trashOnDisk(it.path, it.id) }
+        val listed = files.map { TrashedSong(it.copy(path = inTrash(it.path).path), BASE, BASE + 30 * DAY) }
+        // MediaStore knows Tide Bell's place by another id once a new file is there: only Salt Road can come back as it was.
+        val trash = engine(listOf(files[2]), pipeline, elsewhere = { listed.filter { it.file.id in phoneTrash } }).trash
+        advanceUntilIdle()
+        trash.refresh()
+        assertEquals(listed, trash.elsewhere.value)
+
+        assertTrue(trash.askDelete(listed))
+        assertEquals(Confirmation.Ask(listOf(11L, 12L, 13L)), trash.confirmDelete(listed))
+        assertEquals(Deleted.Unchanged, trash.deleteAnswered(approved = false))
+        songs.forEach { assertTrue(lrc(it.path).isFile) }
+
+        assertTrue(trash.askDelete(listed))
+        assertEquals(Confirmation.Ask(listOf(11L, 12L, 13L)), trash.confirmDelete(listed))
+        // The phone deletes Paper Lantern and Tide Bell for good; meanwhile a new file took Tide Bell's place, and Salt Road
+        // was restored.
+        listed.take(2).forEach { assertTrue(File(it.file.path).delete()) }
+        File(bell.path).writeText("audio bytes of a new Tide Bell")
+        assertTrue(inTrash(road.path).renameTo(File(road.path)))
+        phoneTrash.clear()
+        assertEquals(Deleted.Gone(2, of = 3, bytes = files[0].size + files[1].size), trash.deleteAnswered(approved = true))
+
+        assertFalse(lrc(lantern.path).exists())
+        assertNull(ledger[lantern.path])
+        assertEquals(listOf(lantern.path), forgotten)
+        // A file at its place again: the lyrics there may be its own.
+        assertTrue(lrc(bell.path).isFile)
+        assertEquals(LyricsStatus.SYNCED, ledger[bell.path]?.status)
+        // Restored, not gone.
+        assertTrue(lrc(road.path).isFile)
+        assertEquals(LyricsStatus.SYNCED, ledger[road.path]?.status)
+        assertEquals(emptyList<TrashedSong>(), trash.elsewhere.value)
     }
 
     /**
