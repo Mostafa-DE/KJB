@@ -74,6 +74,7 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.File
+import java.io.Serializable
 import kotlin.math.roundToLong
 
 /** Whether plain lyrics picked on the check list get synced: the AI syncs them when it is on, a phone it does not run on never. */
@@ -149,14 +150,22 @@ fun CheckScreen(ledger: LedgerState, timing: PlainTiming, actions: CheckActions,
     BackHandler(onBack = onBack)
     // A few songs out of a few thousand entries: one pass, cheap enough for the main thread.
     val songs = remember(ledger) { checkList(ledger) }
+    // The pager counts its pages, keys each one and draws it from this one state, read when it asks. Its count is set
+    // here, while its keys and pages come through the Scaffold, which composes its content only as it lays it out: a
+    // count from the new list and keys from the old crashed KJB 3.0.2 as a song joined the list while it was open.
     val latest by rememberUpdatedState(songs)
-    val pager = rememberPagerState(initialPage = songs.indexOfFirst { it.path == initialPath }.coerceAtLeast(0)) { songs.size }
+    val pager = rememberPagerState(initialPage = songs.indexOfFirst { it.path == initialPath }.coerceAtLeast(0)) { latest.size }
     // Only the slide runs in the screen's scope: a song leaves the pager as soon as its answer is in the ledger.
     val scope = rememberCoroutineScope()
     val busy by answers.busy.collectAsStateWithLifecycle()
     var info by remember { mutableStateOf(false) }
     var searching by remember { mutableStateOf<LedgerEntry?>(null) }
     val current = songs.getOrNull(pager.currentPage)
+
+    // The song on screen as a button is tapped. [current] can be a frame behind it: when the list changes, the pages find
+    // their song again by its key as they are laid out, and this screen hears where it went only the frame after, so a
+    // tap in between would answer the song now at the old place.
+    fun shown(): LedgerEntry? = latest.getOrNull(pager.currentPage)
 
     fun act(path: String, action: suspend () -> Checked) {
         val answer = answers.answer(path, timing, action) ?: return
@@ -201,14 +210,14 @@ fun CheckScreen(ledger: LedgerState, timing: PlainTiming, actions: CheckActions,
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(6.dp)) {
                             LyrifyButton(
                                 stringResource(R.string.check_none),
-                                onClick = { act(current.path) { actions.decline(current.path) } },
+                                onClick = { shown()?.let { song -> act(song.path) { actions.decline(song.path) } } },
                                 modifier = Modifier.weight(1f),
                                 kind = ButtonKind.SECONDARY,
                                 enabled = idle,
                             )
                             LyrifyButton(
                                 stringResource(R.string.check_search_myself),
-                                onClick = { searching = current },
+                                onClick = { searching = shown() },
                                 modifier = Modifier.weight(1f),
                                 kind = ButtonKind.SECONDARY,
                                 icon = R.drawable.ic_search,
@@ -225,9 +234,12 @@ fun CheckScreen(ledger: LedgerState, timing: PlainTiming, actions: CheckActions,
             if (songs.isEmpty()) {
                 EmptyState(EmptyArt.Icon(R.drawable.ic_task_alt, Tone.SYNCED), stringResource(R.string.check_empty_title), text = stringResource(R.string.check_empty))
             } else {
-                HorizontalPager(state = pager, key = { songs[it].path }, modifier = Modifier.fillMaxSize()) { page ->
-                    val entry = songs[page]
-                    CheckPage(entry, busy = entry.path in busy, preview = actions.preview) { id -> act(entry.path) { actions.choose(entry.path, id) } }
+                HorizontalPager(state = pager, key = { checkPageKey(latest, it) }, modifier = Modifier.fillMaxSize()) { page ->
+                    // The page's song read there too, never from a list handed down a moment before (a page's content can
+                    // be the previous composition's for a frame, its index already the new list's).
+                    latest.getOrNull(page)?.let { entry ->
+                        CheckPage(entry, busy = entry.path in busy, preview = actions.preview) { id -> act(entry.path) { actions.choose(entry.path, id) } }
+                    }
                 }
             }
         }
@@ -241,6 +253,17 @@ fun CheckScreen(ledger: LedgerState, timing: PlainTiming, actions: CheckActions,
         }
     }
 }
+
+/**
+ * The key of the page at [at] of the check list's [songs]: its song's path. The pager reads its page count from the same
+ * songs, so no page is past them; should one be asked for all the same, it gets a key of its own, equal to no song's and
+ * saveable as a page's key must be, never a crash (KJB 3.0.2 crashed as a song joined the list while it was open: the
+ * pager counted one page more than the songs its keys read).
+ */
+fun checkPageKey(songs: List<LedgerEntry>, at: Int): Any = songs.getOrNull(at)?.path ?: PastTheSongs(at)
+
+/** The key of a check page asked for past the songs ([checkPageKey]). */
+private data class PastTheSongs(val at: Int) : Serializable
 
 /** One song: its tags and file as found, and its matches. */
 @Composable
