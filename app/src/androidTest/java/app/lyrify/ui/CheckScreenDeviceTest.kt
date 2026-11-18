@@ -7,11 +7,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshots.Snapshot
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.isDisplayed
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import app.lyrify.R
@@ -22,6 +25,7 @@ import app.lyrify.lyrics.Candidate
 import app.lyrify.lyrics.Checked
 import app.lyrify.lyrics.LyricsPreview
 import app.lyrify.lyrics.Searched
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -31,7 +35,8 @@ import org.junit.runner.RunWith
  * Check these on the phone while its list changes under it (CR4): a song joining the list while it is open (a sweep, or
  * the song playing, found lyrics KJB is not sure about) never crashes it, as KJB 3.0.2 did, and the song shown stays
  * shown wherever the list moves it; a song answered gives way to its neighbour, never the first; the last one answered
- * leaves All checked. Made-up names only.
+ * leaves All checked; and None of these, tapped in the frame a song joins, answers the song on screen. Made-up names
+ * only.
  */
 @RunWith(AndroidJUnit4::class)
 class CheckScreenDeviceTest {
@@ -43,9 +48,15 @@ class CheckScreenDeviceTest {
     /** The ledger as the shell hands it to Check these: written by the test as a sweep or an answer would. */
     private var ledger by mutableStateOf(LedgerState())
 
+    /** The songs "None of these" was tapped for, in order. */
+    private val declined = mutableListOf<String>()
+
     private val actions = CheckActions(
         choose = { _, _ -> Checked.Done(LyricsStatus.SYNCED) },
-        decline = { Checked.Done(LyricsStatus.NOT_FOUND) },
+        decline = { path ->
+            declined += path
+            Checked.Done(LyricsStatus.NOT_FOUND)
+        },
         preview = { LyricsPreview.None },
         search = { _, _ -> Searched.Found(emptyList()) },
     )
@@ -84,9 +95,37 @@ class CheckScreenDeviceTest {
         compose.onNodeWithText(context.getString(R.string.check_empty_title)).assertIsDisplayed()
     }
 
-    /** The page on screen is [title]'s, the [at]th of [of] as the top bar says. A page beside it may be composed, off screen. */
+    @Test
+    fun noneOfTheseTappedAsASongJoinsAnswersTheSongOnScreen() {
+        ledger = THREE.fold(LedgerState()) { list, (title, since) -> list.put(waiting(title, since)) }
+        compose.setContent { Check(initial = WATER) }
+        assertShows(WATER, at = 2, of = 3)
+        compose.mainClock.autoAdvance = false
+        // A song joins at the top. The pages find Low Water again by its key as they are laid out, and the screen around
+        // them hears where it went a frame later: until then it still has the second of four as the one shown, now
+        // Paper Lanterns.
+        compose.runOnUiThread {
+            ledger = ledger.put(waiting(GLASS, since = 5_000))
+            Snapshot.sendApplyNotifications()
+        }
+        compose.mainClock.advanceTimeByFrame()
+        compose.onNodeWithText(context.getString(R.string.check_position, 2, 4)).assertExists()
+        assertOnScreen(WATER)
+        // A tap in that frame answers the song on screen.
+        compose.onNodeWithText(context.getString(R.string.check_none)).performSemanticsAction(SemanticsActions.OnClick)
+        compose.mainClock.autoAdvance = true
+        compose.waitForIdle()
+        compose.runOnIdle { assertEquals(listOf(path(WATER)), declined) }
+    }
+
+    /** The page on screen is [title]'s, the [at]th of [of] as the top bar says. */
     private fun assertShows(title: String, at: Int, of: Int) {
         compose.onNodeWithText(context.getString(R.string.check_position, at, of)).assertIsDisplayed()
+        assertOnScreen(title)
+    }
+
+    /** [title]'s page is on screen; a page beside it may be composed, off screen. */
+    private fun assertOnScreen(title: String) {
         val pages = compose.onAllNodesWithText(title)
         assertTrue("$title not on screen", pages.fetchSemanticsNodes().indices.any { pages[it].isDisplayed() })
     }

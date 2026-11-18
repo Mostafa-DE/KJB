@@ -162,6 +162,11 @@ fun CheckScreen(ledger: LedgerState, timing: PlainTiming, actions: CheckActions,
     var searching by remember { mutableStateOf<LedgerEntry?>(null) }
     val current = songs.getOrNull(pager.currentPage)
 
+    // The song on screen as a button is tapped. [current] can be a frame behind it: when the list changes, the pages find
+    // their song again by its key as they are laid out, and this screen hears where it went only the frame after, so a
+    // tap in between would answer the song now at the old place.
+    fun shown(): LedgerEntry? = latest.getOrNull(pager.currentPage)
+
     fun act(path: String, action: suspend () -> Checked) {
         val answer = answers.answer(path, timing, action) ?: return
         scope.launch {
@@ -205,14 +210,14 @@ fun CheckScreen(ledger: LedgerState, timing: PlainTiming, actions: CheckActions,
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(6.dp)) {
                             LyrifyButton(
                                 stringResource(R.string.check_none),
-                                onClick = { act(current.path) { actions.decline(current.path) } },
+                                onClick = { shown()?.let { song -> act(song.path) { actions.decline(song.path) } } },
                                 modifier = Modifier.weight(1f),
                                 kind = ButtonKind.SECONDARY,
                                 enabled = idle,
                             )
                             LyrifyButton(
                                 stringResource(R.string.check_search_myself),
-                                onClick = { searching = current },
+                                onClick = { searching = shown() },
                                 modifier = Modifier.weight(1f),
                                 kind = ButtonKind.SECONDARY,
                                 icon = R.drawable.ic_search,
