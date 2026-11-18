@@ -185,7 +185,7 @@ class LyricsSearchTest {
     }
 
     @Test
-    fun `plain lyrics in the file stand when LRCLIB cannot be asked, and LRCLIB is asked again a week later`() = runTest {
+    fun `plain lyrics in the file stand when LRCLIB cannot be asked, and LRCLIB is asked again as after an error`() = runTest {
         val track = audio("a.mp3", "Fernlight", "Clea Moss", withPlain())
         client.onGet = { LrclibResult.Transient("offline") }
         client.onSearch = { LrclibResult.Transient("offline") }
@@ -197,7 +197,40 @@ class LyricsSearchTest {
         val entry = ledger[track.path]!!
         assertTrue(entry.plainInTags)
         assertTrue(AiQueue.job(entry).times)
-        assertEquals(entry.updatedAt + Retry.FIRST_MISS_RECHECK_AFTER_MS, entry.nextAttemptAt)
+        assertEquals(entry.updatedAt + Retry.errorDelayMs(1), entry.nextAttemptAt)
+    }
+
+    @Test
+    fun `while LRCLIB stays out of reach the file's plain lyrics stand, and it is asked again on the errors' waits, then as usual once it answers`() = runTest {
+        val track = audio("a.mp3", "Fernlight", "Clea Moss", withPlain())
+        client.onGet = { LrclibResult.Transient("offline") }
+        client.onSearch = { LrclibResult.Transient("offline") }
+        val pipeline = pipeline()
+
+        for (failed in 1..8) {
+            assertEquals(LyricsStatus.PLAIN_ONLY, pipeline.process(track)?.status)
+            val entry = ledger[track.path]!!
+            assertTrue(entry.plainInTags)
+            // 30 minutes, doubling, at most a day.
+            assertEquals(entry.updatedAt + Retry.errorDelayMs(failed), entry.nextAttemptAt)
+            // The queue sweep's retries take it once it is due, not before.
+            delay(Retry.errorDelayMs(failed) - 1)
+            assertEquals(emptyList<LocalTrack>(), pipeline.dueErrors())
+            delay(1)
+            assertEquals(listOf(track), pipeline.dueErrors())
+        }
+        assertEquals(Retry.ERROR_MAX_DELAY_MS, Retry.errorDelayMs(8))
+
+        client.onGet = { LrclibResult.NotFound }
+        client.onSearch = { LrclibResult.Found(emptyList()) }
+        val answered = pipeline.process(track)
+
+        assertEquals(Processed(LyricsStatus.PLAIN_ONLY), answered)
+        val entry = ledger[track.path]!!
+        assertTrue(entry.plainInTags)
+        assertEquals(0, entry.attempts)
+        assertEquals(entry.updatedAt + Retry.RECHECK_AFTER_MS, entry.nextAttemptAt)
+        assertEquals(emptyList<LocalTrack>(), pipeline.dueErrors())
     }
 
     @Test
