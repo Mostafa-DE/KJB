@@ -255,15 +255,16 @@ class Duplicates(
     /** The phone's dialog answered ([SongTrash.answered]); the files it trashed leave the results. */
     suspend fun systemAnswered(approved: Boolean): Trashed = trash.answered(approved)
 
-    /** "Restore" on a song KJB trashed ([SongTrash.restore]). */
+    /** "Restore" on a song in the phone's trash ([SongTrash.restore]). */
     fun restore(song: TrashedSong): List<Long> = trash.restore(song)
 
     /** The phone's restore dialog answered ([SongTrash.restoreAnswered]). */
     suspend fun restoreAnswered(approved: Boolean): Restored = trash.restoreAnswered(approved)
 
     /**
-     * As the tab opens and before a scan: a trash answer the app did not hear is settled ([SongTrash.settlePending]), then
-     * the trashed songs the phone no longer has in its trash, or that expired, drop off ([SongTrash.refresh]).
+     * As the tab, Tools or Tools > Trash opens and before a scan: a trash answer the app did not hear is settled
+     * ([SongTrash.settlePending]), then the trashed songs the phone no longer has in its trash, or that expired, drop off,
+     * and what other apps moved there is read again ([SongTrash.refresh]).
      */
     suspend fun refreshTrashed() {
         trash.settlePending()
