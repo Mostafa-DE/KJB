@@ -2,6 +2,12 @@ package app.lyrify.ui
 
 import android.content.res.Configuration
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.Text
+import androidx.compose.ui.platform.testTag
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.runtime.Composable
@@ -17,6 +23,7 @@ import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.text.TextLayoutResult
@@ -173,6 +180,27 @@ class QueuesListDeviceTest {
         assertTrue("title, hint and chips in that order", title.bottom <= hint.top && hint.bottom <= chip.top)
         compose.onNodeWithText(labels.getValue(others.first().id)).performClick()
         assertEquals(listOf(others.first().id), opened)
+    }
+
+    /**
+     * 3.1 (Grok review): in a short window (a phone on its side, split screen) at the largest font, the sheet's foot
+     * keeps to its share of the window and scrolls past it, so the songs above it keep the rest.
+     */
+    @Test
+    fun theSheetsFootKeepsToItsShareOfAShortWindowAndTheSongsKeepTheRest() {
+        val book = (1..4).fold(QueueBook()) { book, n ->
+            book.play(listOf(song("Pier $n")), 0, QueueSource(SourceKind.FOLDER, "folder:Music/Pier $n", "Pier $n"), now = n.toLong()).book
+        }
+        val window = 360.dp
+        show(width = 640.dp, fontScale = 2f) {
+            Column(Modifier.height(window)) {
+                LazyColumn(Modifier.weight(1f, fill = false).testTag("songs")) { items((1..40).toList()) { Text("Song $it", Modifier.height(60.dp)) } }
+                QueueSheetFoot(book.others, queueLabels(context, book), queueSheetFootMax(window), onSave = {}, onOpen = {})
+            }
+        }
+        val songs = compose.onNodeWithTag("songs").getUnclippedBoundsInRoot()
+        assertTrue("the songs keep ${songs.bottom - songs.top} of $window", songs.bottom - songs.top >= window * 0.5f)
+        compose.onNodeWithText(context.getString(R.string.queue_save_playlist)).assertExists()
     }
 
     /** 3.1: a queue page's pinned buttons, both on one line at 360 dp and the largest font, each named for TalkBack. */

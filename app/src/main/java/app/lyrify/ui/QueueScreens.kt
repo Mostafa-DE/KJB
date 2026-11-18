@@ -11,6 +11,9 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.layout.Placeable
 import androidx.compose.ui.layout.SubcomposeLayout
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.mutableFloatStateOf
@@ -91,6 +94,7 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -540,9 +544,10 @@ private fun NameDialog(title: String, field: String, start: String, confirm: Str
 
 /**
  * The Queue sheet, from the player: the queue's name and where it is ("12 of 48") with "All queues", then the list,
- * opening with the current song marked and in view; "Save as playlist" under it, and at the foot, pinned whatever the
- * list's scroll, the other queues ([OtherQueues], as the Queues page lists them; each opens that queue's page, and none
- * shows without one). A lazy list in a sheet of its own, as LyrifySheet draws it: a queue may hold the whole library.
+ * opening with the current song marked and in view; at the foot ([QueueSheetFoot]), pinned whatever the list's scroll,
+ * "Save as playlist" and the other queues ([OtherQueues], as the Queues page lists them; each opens that queue's page,
+ * and none shows without one). A lazy list in a sheet of its own, as LyrifySheet draws it: a queue may hold the whole
+ * library.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -564,6 +569,7 @@ fun QueueSheet(onDismiss: () -> Unit) {
     val reorder = remember { Reorder() }
     SettleReorder(book.current?.items, reorder)
     val top = WindowInsets.statusBars.getTop(LocalDensity.current)
+    val footMax = with(LocalDensity.current) { queueSheetFootMax(LocalWindowInfo.current.containerSize.height.toDp()) }
     val open: (Page) -> Unit = { page ->
         onDismiss()
         nav.open(page)
@@ -619,8 +625,7 @@ fun QueueSheet(onDismiss: () -> Unit) {
                 })
             }
             ToastSlot(Modifier.padding(horizontal = 12.dp), padding = PaddingValues(bottom = 8.dp))
-            LyrifyButton(stringResource(R.string.queue_save_playlist), { saving = true }, Modifier.fillMaxWidth().padding(16.dp), kind = ButtonKind.SECONDARY, icon = R.drawable.ic_playlist_add)
-            if (others.isNotEmpty()) OtherQueues(others, labels) { open(Page.Queue(it)) }
+            QueueSheetFoot(others, labels, footMax, onSave = { saving = true }) { open(Page.Queue(it)) }
             if (saving) SaveAsPlaylistDialog(queue, connection) { saving = false }
         }
     }
@@ -643,6 +648,21 @@ internal fun OtherQueues(others: List<Queue>, labels: Map<String, String>, onOpe
             modifier = Modifier.padding(horizontal = 20.dp),
         )
         RecentChips(others, labels, onOpen)
+    }
+}
+
+/** The most of a window's height ([window]) the Queue sheet's foot takes ([QueueSheetFoot]); the songs get the rest. */
+internal fun queueSheetFootMax(window: Dp): Dp = window * FOOT_SHARE
+
+/**
+ * The Queue sheet's foot: Save as playlist, then the other queues ([OtherQueues]). It keeps to [maxHeight] and scrolls
+ * past it, so in a short window (a phone on its side, split screen, a large font) the songs above it keep their room.
+ */
+@Composable
+internal fun QueueSheetFoot(others: List<Queue>, labels: Map<String, String>, maxHeight: Dp, onSave: () -> Unit, onOpen: (String) -> Unit) {
+    Column(Modifier.heightIn(max = maxHeight).verticalScroll(rememberScrollState())) {
+        LyrifyButton(stringResource(R.string.queue_save_playlist), onSave, Modifier.fillMaxWidth().padding(16.dp), kind = ButtonKind.SECONDARY, icon = R.drawable.ic_playlist_add)
+        if (others.isNotEmpty()) OtherQueues(others, labels, onOpen)
     }
 }
 
@@ -922,6 +942,9 @@ private fun QueueSongRow(
 
 /** A queue row's height (.qrow, 60 dp), taller when its two lines need it at a large font scale; a drag moves a song by whole rows. */
 private val ROW = 60.dp
+
+/** The share of the window's height the Queue sheet's foot may take before it scrolls. */
+private const val FOOT_SHARE = 0.4f
 
 /** A Recent chip's widest name; a longer one ends in an ellipsis. */
 private val CHIP_NAME_MAX = 220.dp
