@@ -167,6 +167,9 @@ fun SettingsScreen(
                     display.pureBlack && !light,
                     enabled = !light,
                 ) { on -> onChange { it.copy(display = it.display.copy(pureBlack = on)) } }
+                // The bar the user makes (KJB 3.1): its look and how many icons it holds now.
+                val icons = LocalDockBar.current.items.size
+                ValueRow(R.drawable.ic_smartphone, R.string.set_bar, pluralStringResource(R.plurals.set_bar_value, icons, stringResource(display.dockStyle.label), icons)) { onOpen(Page.BottomBar) }
             }
             section(R.string.settings_lyrics) {
                 GrantRow(R.drawable.ic_notifications, R.string.setup_notifications_title, R.string.set_notifications_detail, grants.access.notifications, R.string.setup_done, R.string.settings_turn_on, grants.onOpenNotificationAccess, first = true)
@@ -293,13 +296,17 @@ fun SettingsScreen(
 }
 
 /**
- * Settings > Library tabs: every tab once, in its order, each with a switch and arrows to move it. The last tab shown
- * can't be switched off.
+ * Settings > Library tabs: the tab Library opens on (KJB 3.1: the first in the order, or the one chosen by holding it in
+ * Library, with a way back to the first), then every tab once, in its order, each with a switch and arrows to move it.
+ * The last tab shown can't be switched off.
  */
 @Composable
 fun LibraryTabsScreen(settings: Settings, onChange: ((Settings) -> Settings) -> Unit, onBack: () -> Unit) {
     BackHandler(onBack = onBack)
     val tabs = settings.library.tabs
+    val shown = shownLibraryTabs(settings.library, rememberLibraryUi()?.library)
+    val opensOn = libraryOpensOn(shown, settings.library.opensOn)
+    val chosen = settings.library.opensOn in shown
     fun move(from: Int, to: Int) = onChange { current ->
         val list = current.library.tabs.toMutableList().apply { add(to, removeAt(from)) }
         current.copy(library = current.library.copy(tabs = list))
@@ -322,6 +329,26 @@ fun LibraryTabsScreen(settings: Settings, onChange: ((Settings) -> Settings) -> 
                     modifier = Modifier.padding(start = ScreenPadding + 4.dp, end = ScreenPadding, top = 4.dp, bottom = 12.dp),
                 )
             }
+            item(contentType = "opens") {
+                val (tile, onTile) = neutralTile()
+                GroupedRows(Modifier.padding(bottom = 16.dp)) {
+                    GroupedRow(
+                        R.drawable.ic_flag,
+                        stringResource(R.string.set_tabs_opens, stringResource(opensOn.label)),
+                        tile = tile,
+                        onTile = onTile,
+                        first = true,
+                        supporting = { Text(stringResource(if (chosen) R.string.set_tabs_opens_chosen else R.string.set_tabs_opens_first)) },
+                        trailing = if (chosen) {
+                            {
+                                LyrifyButton(stringResource(R.string.set_tabs_opens_reset), onClick = { onChange { it.copy(library = it.library.copy(opensOn = null)) } }, kind = ButtonKind.GHOST, compact = true)
+                            }
+                        } else {
+                            null
+                        },
+                    )
+                }
+            }
             item(contentType = "group") {
                 GroupedRows {
                     tabs.forEachIndexed { index, setting ->
@@ -333,6 +360,7 @@ fun LibraryTabsScreen(settings: Settings, onChange: ((Settings) -> Settings) -> 
                             tile = MaterialTheme.colorScheme.surfaceContainerHighest,
                             onTile = MaterialTheme.colorScheme.onSurfaceVariant,
                             first = index == 0,
+                            supporting = if (setting.tab == opensOn) ({ Text(stringResource(R.string.set_tabs_opens_here)) }) else null,
                             modifier = Modifier.toggleable(setting.shown, enabled = !last, role = Role.Switch) { on ->
                                 onChange { current ->
                                     current.copy(library = current.library.copy(tabs = current.library.tabs.map { if (it.tab == setting.tab) it.copy(shown = on) else it }))
@@ -386,7 +414,7 @@ private fun ValueRow(@DrawableRes icon: Int, @StringRes title: Int, value: Strin
 
 /** A row with a switch: one TalkBack stop with its name, its line and its state. */
 @Composable
-private fun SwitchRow(
+internal fun SwitchRow(
     @DrawableRes icon: Int,
     @StringRes title: Int,
     detail: String?,
@@ -507,7 +535,7 @@ private fun Options(values: List<Int>, selected: Int, label: @Composable (Int) -
 
 /** One choice: its label and line; the chosen one on the brand's container with a check. */
 @Composable
-private fun ChoiceRow(label: String, detail: String, selected: Boolean, onClick: () -> Unit) {
+internal fun ChoiceRow(label: String, detail: String, selected: Boolean, onClick: () -> Unit) {
     val colors = MaterialTheme.colorScheme
     val brand = LocalBrandColors.current
     val content = if (selected) brand.onHighlightContainer else colors.onSurface

@@ -41,6 +41,7 @@ import androidx.compose.ui.test.swipeUp
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.onRoot
@@ -85,6 +86,9 @@ class TabPagerDeviceTest {
 
     private val tabs = listOf("Songs", "Albums", "Artists")
     private val built = mutableMapOf<String, Int>()
+
+    /** The tab [LibraryRoot] resolves as shown, as LibraryPage does: the navigator's, else the one Library opens on. */
+    private var resolved: LibraryTab? = null
     private var chosen by mutableIntStateOf(0)
 
     /** Read inside the theme the tabs are drawn in, light or dark as the phone is: the pill's colour, and the edges. */
@@ -548,16 +552,16 @@ class TabPagerDeviceTest {
         compose.waitForIdle()
         tabs = FIVE
         compose.waitForIdle()
-        // Told at once, not when Library shows again.
-        compose.runOnIdle { assertEquals(LibraryTab.SONGS, nav.state.libraryTab) }
+        // Told at once, not when Library shows again: the tab Library opens on (KJB 3.1), Songs first in the order here.
+        compose.runOnIdle { assertNull(nav.state.libraryTab) }
         tabs = listOf(LibraryTab.ALBUMS, LibraryTab.SONGS, LibraryTab.PLAYLISTS, LibraryTab.ARTISTS, LibraryTab.FOLDERS)
         compose.waitForIdle()
         tabs = listOf(LibraryTab.ALBUMS, LibraryTab.SONGS, LibraryTab.PLAYLISTS, LibraryTab.ARTISTS, LibraryTab.GENRES, LibraryTab.FOLDERS)
         compose.waitForIdle()
-        // Back on Library: on Songs, which it went to as Genres went, wherever Songs is now.
+        // Back on Library: on the tab it opens on, which it went to as Genres went: Albums, now first in the order (KJB 3.1).
         shown = true
         compose.waitForIdle()
-        assertShows(nav, LibraryTab.SONGS)
+        assertShows(nav, LibraryTab.ALBUMS)
     }
 
     @Test
@@ -606,9 +610,9 @@ class TabPagerDeviceTest {
         assertShows(nav, LibraryTab.SONGS)
     }
 
-    /** Library shows [tab]: the navigator has it, its tab is the chosen one, and its page is the one on screen. */
+    /** Library shows [tab]: it resolves the navigator's tab to it, its tab is the chosen one, and its page is the one on screen. */
     private fun assertShows(nav: Navigator, tab: LibraryTab) {
-        compose.runOnIdle { assertEquals(tab, nav.state.libraryTab) }
+        compose.runOnIdle { assertEquals(tab, resolved) }
         compose.onNodeWithText(tab.name).assertIsSelected()
         assertEquals(0f, compose.onNodeWithTag(libraryPage(tab)).getUnclippedBoundsInRoot().left.value, 1f)
     }
@@ -630,8 +634,10 @@ class TabPagerDeviceTest {
                         layout(placeable.width, placeable.height) { if (shown) placeable.place(0, 0) }
                     },
                 ) {
-                    val tab = nav.state.libraryTab.takeIf { it in tabs } ?: tabs.first()
-                    val pager = rememberTabPager(tabs, tabs.indexOf(tab)) { at -> tabs.getOrNull(at)?.takeIf { it != nav.state.libraryTab }?.let(nav::pickLibraryTab) }
+                    val opensOn = libraryOpensOn(tabs, chosen = null)
+                    val tab = nav.state.libraryTab?.takeIf { it in tabs } ?: opensOn
+                    resolved = tab
+                    val pager = rememberTabPager(tabs, tabs.indexOf(tab)) { at -> tabs.getOrNull(at)?.let { pickLibraryTabAt(nav, it, opensOn) } }
                     TabsFrame(pager, topBar = { _, _ -> PagerTabs(pager, tabs.map { it.name }) }) { page ->
                         key(page) {
                             remember { built.merge(page.name, 1, Int::plus) }

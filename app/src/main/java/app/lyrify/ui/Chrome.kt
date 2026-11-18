@@ -128,6 +128,17 @@ import androidx.compose.ui.unit.dp
 import app.lyrify.BuildConfig
 import app.lyrify.R
 import app.lyrify.settings.DockTab
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.material3.PlainTooltip
+import androidx.compose.material3.TooltipAnchorPosition
+import androidx.compose.material3.TooltipBox
+import androidx.compose.material3.TooltipDefaults
+import androidx.compose.material3.rememberTooltipState
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.rememberTextMeasurer
+import app.lyrify.settings.DockStyle
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -213,7 +224,7 @@ fun GlassSurface(
 
 // The dock
 
-/** The dock's four destinations, in order. */
+/** The dock's destinations by default, in order: Library, Playlists, Search and Tools (the user can change them, BottomBar.kt). */
 val DOCK_TABS: List<DockTab> = listOf(DockTab.LIBRARY, DockTab.PLAYLISTS, DockTab.SEARCH, DockTab.TOOLS)
 
 @get:StringRes
@@ -221,15 +232,23 @@ val DockTab.label: Int
     get() = when (this) {
         DockTab.LIBRARY -> R.string.nav_library
         DockTab.PLAYLISTS -> R.string.nav_playlists
+        DockTab.QUEUES -> R.string.nav_queues
+        DockTab.FAVOURITES -> R.string.nav_favourites
+        DockTab.DOWNLOADS -> R.string.nav_downloads
+        DockTab.BOOKS -> R.string.nav_books
         DockTab.SEARCH -> R.string.nav_search
         DockTab.TOOLS -> R.string.nav_tools
     }
 
 @get:DrawableRes
-private val DockTab.icon: Int
+val DockTab.icon: Int
     get() = when (this) {
         DockTab.LIBRARY -> R.drawable.ic_library_music
         DockTab.PLAYLISTS -> R.drawable.ic_queue_music
+        DockTab.QUEUES -> R.drawable.ic_queues
+        DockTab.FAVOURITES -> R.drawable.ic_favorite
+        DockTab.DOWNLOADS -> R.drawable.ic_download
+        DockTab.BOOKS -> R.drawable.ic_auto_stories
         DockTab.SEARCH -> R.drawable.ic_search
         DockTab.TOOLS -> R.drawable.ic_handyman
     }
@@ -238,17 +257,23 @@ private val DockTab.icon: Int
 private val DockTab.selectedIcon: Int
     get() = when (this) {
         DockTab.LIBRARY -> R.drawable.ic_library_music_fill
-        // Material Symbols' filled queue_music is the same shape as the outlined one.
-        DockTab.PLAYLISTS -> R.drawable.ic_queue_music
-        DockTab.SEARCH -> R.drawable.ic_search
+        DockTab.FAVOURITES -> R.drawable.ic_favorite_fill
         DockTab.TOOLS -> R.drawable.ic_handyman_fill
+        // Material Symbols' filled queue_music, download, auto_stories and search are the outlined shapes (or KJB has none).
+        else -> icon
     }
 
 /** The dot on Tools: songs to check, duplicate groups not opened yet, or the AI needing the user. */
 fun toolsDot(checks: Int, duplicates: Int, aiAttention: Boolean): Boolean = checks > 0 || duplicates > 0 || aiAttention
 
-/** Which side a new tab comes from: 1 from the end (a tab after the one shown), -1 from the start, 0 for the same tab. */
-fun tabSlide(from: DockTab, to: DockTab): Int = DOCK_TABS.indexOf(to).compareTo(DOCK_TABS.indexOf(from)).coerceIn(-1, 1)
+/**
+ * Which side a new tab comes from on the bar ([order]): 1 from the end (a tab after the one shown), -1 from the start, 0
+ * for the same tab. A tab off the bar (Search or Tools opened from Library's top bar) sits after its end.
+ */
+fun tabSlide(from: DockTab, to: DockTab, order: List<DockTab> = DOCK_TABS): Int {
+    fun place(tab: DockTab) = order.indexOf(tab).takeIf { it >= 0 } ?: order.size
+    return place(to).compareTo(place(from)).coerceIn(-1, 1)
+}
 
 /** The dot on a dock item: it pops in and out, never appearing at once. */
 @Composable
@@ -261,25 +286,35 @@ private fun DockDot(dot: Boolean, modifier: Modifier) {
 fun dockItemName(vararg parts: String?): String = parts.filterNotNull().joinToString(", ")
 
 /**
- * The dock: a glass capsule with Library, Playlists, Search and Tools, each an icon over its label, the selected one
- * marked by the sung line; a dot on Tools when something there needs the user.
+ * The dock: a glass capsule with the user's [items] (Library, Playlists, Search and Tools by default), the selected one
+ * marked by the sung line, none while the tab shown is off the bar; a dot on Tools when something there needs the user.
+ * [style]: Standard, 64 dp, each icon over its name (all names a little smaller when one would not fit, else icons
+ * only), or Slim, 48 dp, icons only (user 2026-11-18); without names, holding an icon shows its name. TalkBack hears
+ * every item's name either way.
  */
 @Composable
-fun Dock(selected: DockTab, dot: Boolean, onSelect: (DockTab) -> Unit, modifier: Modifier = Modifier) {
-    GlassSurface(null, CircleShape, modifier.fillMaxWidth().padding(horizontal = 12.dp), solid = true) {
-        DockItems(selected, dot, onSelect)
+fun Dock(items: List<DockTab>, selected: DockTab, style: DockStyle, dot: Boolean, onSelect: (DockTab) -> Unit, modifier: Modifier = Modifier) {
+    GlassSurface(null, CircleShape, modifier.fillMaxWidth().padding(horizontal = 12.dp).tourChrome(), solid = true) {
+        DockItems(items, selected, style, dot, onSelect)
     }
 }
 
-/** The items at equal widths, and the sung line under the selected one; its leading end travels faster, so it stretches on the way. */
+/**
+ * The items at equal widths, and the sung line under the selected one; its leading end travels faster, so it stretches
+ * on the way. The names' size is one for all ([dockLabelShare]), measured at the selected weight so none grows past its
+ * room when picked.
+ */
 @Composable
-private fun DockItems(selected: DockTab, dot: Boolean, onSelect: (DockTab) -> Unit) {
+private fun DockItems(items: List<DockTab>, selected: DockTab, style: DockStyle, dot: Boolean, onSelect: (DockTab) -> Unit) {
     val highlight = LocalBrandColors.current.highlight
     val reduced = LocalReducedMotion.current
-    val line = DOCK_TABS.indexOf(selected)
-    val start = remember { Animatable(line.toFloat()) }
-    val end = remember { Animatable(line.toFloat()) }
+    val density = LocalDensity.current
+    val line = items.indexOf(selected)
+    // Made again whenever the line comes back after a tab off the bar, so it shows at its item at once.
+    val start = remember(line >= 0) { Animatable(line.toFloat()) }
+    val end = remember(line >= 0) { Animatable(line.toFloat()) }
     LaunchedEffect(line, reduced) {
+        if (line < 0) return@LaunchedEffect
         val target = line.toFloat()
         if (reduced) {
             start.snapTo(target)
@@ -290,41 +325,56 @@ private fun DockItems(selected: DockTab, dot: Boolean, onSelect: (DockTab) -> Un
         launch { start.animateTo(target, if (forward) LINE_TRAIL else LINE_LEAD) }
         launch { end.animateTo(target, if (forward) LINE_LEAD else LINE_TRAIL) }
     }
-    Row(
-        Modifier
-            .selectableGroup()
-            .heightIn(min = 64.dp)
-            .padding(horizontal = 6.dp)
-            .drawBehind {
-                val item = size.width / DOCK_TABS.size
-                val width = SUNG_LINE_WIDTH.toPx()
-                val height = SUNG_LINE_HEIGHT.toPx()
-                val left = min(start.value, end.value) * item + (item - width) / 2
-                val right = max(start.value, end.value) * item + (item + width) / 2
-                val x = if (layoutDirection == LayoutDirection.Rtl) size.width - right else left
-                drawRoundRect(highlight, Offset(x, size.height - LINE_BOTTOM.toPx() - height), Size(right - left, height), CornerRadius(height / 2))
-            },
-    ) {
-        DOCK_TABS.forEach { tab -> DockItem(tab, tab == selected, dot && tab == DockTab.TOOLS, Modifier.weight(1f).tourTarget(dockStop(tab))) { onSelect(tab) } }
+    val slim = style == DockStyle.SLIM
+    val labels = items.map { stringResource(it.label) }
+    val full = MaterialTheme.typography.labelSmall
+    val measurer = rememberTextMeasurer()
+    BoxWithConstraints {
+        val room = (maxWidth - DOCK_SIDE * 2) / items.size.coerceAtLeast(1) - DOCK_LABEL_SIDE * 2
+        val share = if (slim) null else remember(labels, room, full, density) {
+            val widest = labels.maxOfOrNull { measurer.measure(it, full.copy(fontWeight = FontWeight(650)), maxLines = 1, softWrap = false).size.width } ?: 0
+            dockLabelShare(widest.toFloat(), with(density) { room.toPx() })
+        }
+        val names = share?.let { full.copy(fontSize = full.fontSize * it, lineHeight = full.lineHeight * it) }
+        val height = if (slim) SLIM_DOCK_HEIGHT else DOCK_HEIGHT
+        Row(
+            Modifier
+                .selectableGroup()
+                .heightIn(min = height)
+                .padding(horizontal = DOCK_SIDE)
+                .drawBehind {
+                    if (line < 0) return@drawBehind
+                    val item = size.width / items.size
+                    val width = SUNG_LINE_WIDTH.toPx()
+                    val thick = SUNG_LINE_HEIGHT.toPx()
+                    val left = min(start.value, end.value) * item + (item - width) / 2
+                    val right = max(start.value, end.value) * item + (item + width) / 2
+                    val x = if (layoutDirection == LayoutDirection.Rtl) size.width - right else left
+                    val bottom = (if (slim) SLIM_LINE_BOTTOM else LINE_BOTTOM).toPx()
+                    drawRoundRect(highlight, Offset(x, size.height - bottom - thick), Size(right - left, thick), CornerRadius(thick / 2))
+                },
+        ) {
+            items.forEachIndexed { index, tab ->
+                DockItem(tab, labels[index], tab == selected, dot && tab == DockTab.TOOLS, names, height, Modifier.weight(1f).tourTarget(dockStop(tab))) { onSelect(tab) }
+            }
+        }
     }
 }
 
+/**
+ * One item: its icon (filled while selected, maybe with its dot) over its name in [names]' style, or, with no [names],
+ * the icon alone in the middle of the bar's [height], where a hold shows the name in a tooltip.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun DockItem(tab: DockTab, selected: Boolean, dot: Boolean, modifier: Modifier, onClick: () -> Unit) {
+private fun DockItem(tab: DockTab, label: String, selected: Boolean, dot: Boolean, names: TextStyle?, height: Dp, modifier: Modifier, onClick: () -> Unit) {
     val colors = MaterialTheme.colorScheme
     val brand = LocalBrandColors.current
     // The label and icon take the selected look over the line's own travel time, never at once.
     val lit by animateFloatAsState(if (selected) 1f else 0f, motion(tween(Motion.SHORT_MS, easing = Motion.Standard), LocalReducedMotion.current), label = "dock item")
-    val label = stringResource(tab.label)
     val name = dockItemName(label, if (dot) stringResource(R.string.nav_attention) else null)
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = modifier
-            .selectable(selected, interactionSource = null, indication = PressIndication(RoundedCornerShape(20.dp), 0.92f), role = Role.Tab, onClick = onClick)
-            .semantics { contentDescription = name }
-            .heightIn(min = 56.dp)
-            .padding(top = 9.dp, bottom = 14.dp),
-    ) {
+    val press = PressIndication(RoundedCornerShape(20.dp), 0.92f)
+    val icon: @Composable () -> Unit = {
         Box {
             Icon(
                 painterResource(if (selected) tab.selectedIcon else tab.icon),
@@ -334,15 +384,47 @@ private fun DockItem(tab: DockTab, selected: Boolean, dot: Boolean, modifier: Mo
             )
             DockDot(dot, Modifier.align(Alignment.TopEnd).offset(x = 3.dp, y = (-3).dp))
         }
-        Text(
-            label,
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = lerp(FontWeight.Medium, FontWeight(650), lit),
-            color = lerp(colors.onSurfaceVariant, colors.onSurface, lit),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(top = 2.dp).clearAndSetSemantics {},
-        )
+    }
+    if (names != null) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = modifier
+                .selectable(selected, interactionSource = null, indication = press, role = Role.Tab, onClick = onClick)
+                .semantics { contentDescription = name }
+                .heightIn(min = 56.dp)
+                .padding(top = 9.dp, bottom = 14.dp),
+        ) {
+            icon()
+            Text(
+                label,
+                style = names,
+                fontWeight = lerp(FontWeight.Medium, FontWeight(650), lit),
+                color = lerp(colors.onSurfaceVariant, colors.onSurface, lit),
+                maxLines = 1,
+                softWrap = false,
+                modifier = Modifier.padding(top = 2.dp).clearAndSetSemantics {},
+            )
+        }
+        return
+    }
+    val tip = rememberTooltipState()
+    val scope = rememberCoroutineScope()
+    TooltipBox(
+        positionProvider = TooltipDefaults.rememberTooltipPositionProvider(TooltipAnchorPosition.Above),
+        tooltip = { PlainTooltip { Text(label) } },
+        state = tip,
+        modifier = modifier,
+        enableUserInput = false,
+    ) {
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .semantics { this.selected = selected }
+                .combinedClickable(interactionSource = null, indication = press, role = Role.Tab, onLongClick = { scope.launch { tip.show() } }, onClick = onClick)
+                .semantics { contentDescription = name }
+                .fillMaxWidth()
+                .heightIn(min = height),
+        ) { icon() }
     }
 }
 
@@ -855,8 +937,17 @@ private val GLASS_SHADOW = 16.dp
 private val BAR_HEIGHT = 64.dp
 private const val BAND_FADE_MS = 180
 
-/** The sung line sits this far above the capsule's bottom edge, under the labels. */
+/** The sung line sits this far above the capsule's bottom edge, under the labels; on the Slim bar a little lower. */
 private val LINE_BOTTOM = 7.dp
+private val SLIM_LINE_BOTTOM = 5.dp
+
+/** The bar's height: Standard, and Slim (user 2026-11-18). */
+private val DOCK_HEIGHT = 64.dp
+private val SLIM_DOCK_HEIGHT = 48.dp
+
+/** The room at the capsule's ends, and at each side of a name, so neighbours' names never touch. */
+private val DOCK_SIDE = 6.dp
+private val DOCK_LABEL_SIDE = 2.dp
 private val LINE_LEAD = spring(dampingRatio = 0.8f, stiffness = 700f, visibilityThreshold = 0.001f)
 private val LINE_TRAIL = spring(dampingRatio = 0.8f, stiffness = 260f, visibilityThreshold = 0.001f)
 private const val DISABLED_ALPHA = 0.38f

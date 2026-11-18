@@ -394,7 +394,7 @@ const val LARGE_TEXT: Float = 1.3f
 fun dockStop(tab: DockTab): TourStop? = when (tab) {
     DockTab.SEARCH -> TourStop.SEARCH
     DockTab.TOOLS -> TourStop.TOOLS
-    DockTab.LIBRARY, DockTab.PLAYLISTS -> null
+    else -> null
 }
 
 // Marking the controls the tour points at
@@ -407,7 +407,13 @@ fun dockStop(tab: DockTab): TourStop? = when (tab) {
 fun Modifier.tourTarget(stop: TourStop?, label: String? = null, onTap: (() -> Unit)? = null): Modifier =
     if (stop == null) this else this then TourTargetElement(stop, label, onTap)
 
-private data class TourTargetElement(val stop: TourStop, val label: String?, val onTap: (() -> Unit)?) : ModifierNodeElement<TourTargetNode>() {
+/**
+ * Marks the bottom chrome (the bar), which covers a list's end: a song the tour points at stays above it, whatever items
+ * the bar holds. Never a stop of its own.
+ */
+fun Modifier.tourChrome(): Modifier = this then TourTargetElement(null, null, null)
+
+private data class TourTargetElement(val stop: TourStop?, val label: String?, val onTap: (() -> Unit)?) : ModifierNodeElement<TourTargetNode>() {
     override fun create(): TourTargetNode = TourTargetNode(stop, label, onTap)
 
     override fun update(node: TourTargetNode) {
@@ -417,8 +423,11 @@ private data class TourTargetElement(val stop: TourStop, val label: String?, val
     }
 }
 
-/** A marked control from its first placement until it is detached: where it is now, and a way to bring it into view. */
-class TourTargetNode internal constructor(var stop: TourStop, var label: String?, var onTap: (() -> Unit)?) :
+/**
+ * A marked control from its first placement until it is detached: where it is now, and a way to bring it into view.
+ * Without a [stop] it is the bottom chrome ([tourChrome]).
+ */
+class TourTargetNode internal constructor(var stop: TourStop?, var label: String?, var onTap: (() -> Unit)?) :
     Modifier.Node(),
     CompositionLocalConsumerModifierNode,
     LayoutAwareModifierNode {
@@ -460,6 +469,9 @@ class TourTargets {
     }
 
     internal fun of(stop: TourStop): List<TourTargetNode> = nodes.filter { it.stop == stop }
+
+    /** The bottom chrome's marks ([tourChrome]). */
+    internal fun chrome(): List<TourTargetNode> = nodes.filter { it.stop == null }
 }
 
 // The tour over the shell
@@ -592,8 +604,9 @@ private fun TourLayer(tour: Tour, state: TourState, nav: Navigator) {
                     space.size.height - insets.getBottom(this).toFloat(),
                 )
             }
-            fun top(stop: TourStop) = tour.targets.of(stop).mapNotNull { it.bounds(space) }.minOfOrNull { it.top }
-            val chromeTop = listOfNotNull(top(TourStop.NOW_BAR), top(TourStop.SEARCH), top(TourStop.TOOLS)).minOrNull()?.let { it - with(density) { CHROME_CLEAR.toPx() } }
+            fun top(marks: List<TourTargetNode>) = marks.mapNotNull { it.bounds(space) }.minOfOrNull { it.top }
+            // The Now bar and the bar under it, whatever the bar holds (Search and Tools may be off it, KJB 3.1).
+            val chromeTop = listOfNotNull(top(tour.targets.of(TourStop.NOW_BAR)), top(tour.targets.chrome())).minOrNull()?.let { it - with(density) { CHROME_CLEAR.toPx() } }
             val tabsBottom = tour.targets.of(TourStop.TABS).mapNotNull { it.bounds(space) }.maxOfOrNull { it.bottom }
             val clear = targetRoom(state.stop, window, tabsBottom, chromeTop)
             val marks = tour.targets.of(state.stop).mapNotNull { node -> node.bounds(space)?.let { node to it } }
@@ -672,7 +685,8 @@ private fun TourLayer(tour: Tour, state: TourState, nav: Navigator) {
 
 /**
  * Goes where [stop]'s control shows: Library's Songs with nothing over it, the player for the lyrics, or just the shell's
- * own dock.
+ * own dock; Library's root for Search or Tools when the bar leaves them off ([Navigator.docked]), as its top bar then
+ * has their buttons.
  */
 internal fun Navigator.arrive(stop: TourStop) {
     if (stop == TourStop.LYRICS) {
@@ -680,10 +694,13 @@ internal fun Navigator.arrive(stop: TourStop) {
         return
     }
     state.views.firstOrNull()?.let(::close)
-    if (stop == TourStop.TABS || stop == TourStop.SONG) {
-        // A tap on Library's icon closes its pages and lands on Songs; once there another would scroll the list up.
-        repeat(LIBRARY_STEPS) { if (state.tab != DockTab.LIBRARY || state.pages.isNotEmpty() || state.libraryTab != LibraryTab.SONGS) select(DockTab.LIBRARY) }
+    val offBar = DockTab.entries.firstOrNull { dockStop(it) == stop }?.let { it !in docked } == true
+    if (stop == TourStop.TABS || stop == TourStop.SONG || offBar) {
+        // A tap on Library's icon closes its pages; once at its root another would scroll the list up.
+        repeat(LIBRARY_STEPS) { if (state.tab != DockTab.LIBRARY || state.pages.isNotEmpty()) select(DockTab.LIBRARY) }
     }
+    // The tabs and a song are shown on Songs, whichever tab Library opens on.
+    if ((stop == TourStop.TABS || stop == TourStop.SONG) && state.libraryTab != LibraryTab.SONGS) pickLibraryTab(LibraryTab.SONGS)
 }
 
 /** Where the card may go: the window inside the system bars, a little in from its top and bottom. */

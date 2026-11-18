@@ -84,6 +84,7 @@ import app.lyrify.library.Song
 import app.lyrify.library.recentlyAdded
 import app.lyrify.player.QueueSource
 import app.lyrify.player.SourceKind
+import app.lyrify.settings.DockTab
 import app.lyrify.settings.FavouritesTab
 import app.lyrify.settings.SongList
 import app.lyrify.settings.SortSongs
@@ -95,27 +96,30 @@ import kotlin.math.roundToInt
 
 // Collection pages: an album, artist, folder, genre or playlist, Built for you, Unknown album, and Favourites.
 
-/** An album, artist, folder, genre or playlist page, Built for you (Favourites among them), or Unknown album. */
+/**
+ * An album, artist, folder, genre or playlist page, Built for you (Favourites among them), or Unknown album. [root]:
+ * Favourites as the bar's own item (KJB 3.1), with the bar's header and no Back.
+ */
 @Composable
-fun CollectionPage(page: Page.CollectionPages) {
+fun CollectionPage(page: Page.CollectionPages, root: Boolean = false) {
     val ui = rememberLibraryUi() ?: return
-    val library = ui.library ?: return MissingPage(ui)
+    val library = ui.library ?: return MissingPage(ui, root)
     when (page) {
         is Page.Album -> AlbumPage(ui, library, page.key)
         is Page.Artist -> ArtistPage(ui, library, page.name)
         is Page.Folder -> FolderPage(ui, library, page.path)
         is Page.Genre -> GenrePage(ui, library, page.name)
         is Page.Playlist -> PlaylistPage(ui, library, page.id)
-        is Page.BuiltIn -> if (page.list == BuiltInList.FAVOURITES) FavouritesPage(ui, library) else BuiltInPage(ui, library, page.list)
+        is Page.BuiltIn -> if (page.list == BuiltInList.FAVOURITES) FavouritesPage(ui, library, root) else BuiltInPage(ui, library, page.list)
         Page.UnknownAlbum -> UnknownAlbumPage(ui, library)
     }
 }
 
-/** A page whose collection is gone from the phone (moved, deleted), or not read yet. */
+/** A page whose collection is gone from the phone (moved, deleted), or not read yet; the bar's Favourites while it is read ([root]). */
 @Composable
-private fun MissingPage(ui: LibraryUi) {
+private fun MissingPage(ui: LibraryUi, root: Boolean = false) {
     val nav = LocalNavigator.current
-    PageFrame(topBar = { under, backdrop -> BackTopBar("", under, backdrop) { nav.back() } }) { padding ->
+    PageFrame(topBar = { under, backdrop -> if (root) CollectionTopBar("", under, backdrop, ui, root = true) else BackTopBar("", under, backdrop) { nav.back() } }) { padding ->
         if (ui.library != null) {
             Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
                 EmptyState(EmptyArt.Icon(R.drawable.ic_search_off), stringResource(R.string.lib_gone_title), text = stringResource(R.string.lib_gone))
@@ -127,6 +131,7 @@ private fun MissingPage(ui: LibraryUi) {
 /**
  * A collection's top bar: Back with the [heart] beside it (favouriting the collection itself, apart from its songs),
  * the title once the page scrolls under the bar (or always, [alwaysTitle], for pages without a hero), and [actions].
+ * Favourites as the bar's item ([root]) has the bar's header instead, with its [actions].
  */
 @Composable
 private fun CollectionTopBar(
@@ -136,9 +141,11 @@ private fun CollectionTopBar(
     ui: LibraryUi,
     heart: FavouriteCollection? = null,
     alwaysTitle: Boolean = false,
+    root: Boolean = false,
     actions: @Composable RowScope.() -> Unit = {},
 ) {
     val nav = LocalNavigator.current
+    if (root) return MainTopBar(DockTab.FAVOURITES, under, backdrop, actions)
     LyrifyTopBar(
         title = { if (under || alwaysTitle) Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         under = under,
@@ -662,7 +669,7 @@ private fun BuiltInPage(ui: LibraryUi, library: Library, list: BuiltInList) {
  * something while that one is empty.
  */
 @Composable
-private fun FavouritesPage(ui: LibraryUi, library: Library) {
+private fun FavouritesPage(ui: LibraryUi, library: Library, root: Boolean) {
     val change = rememberSettingsChange()
     val title = stringResource(R.string.lib_favourites)
     val ordered = remember { OrderedEntries() }
@@ -684,6 +691,12 @@ private fun FavouritesPage(ui: LibraryUi, library: Library) {
     val header = rememberScrollState()
     // The hero gone under the top bar is content under it too.
     val heroUnder by remember(header) { derivedStateOf { header.value > 0 } }
+    if (root) {
+        ReselectToTop(LocalNavigator.current.state.reselectsOf(DockTab.FAVOURITES)) {
+            rows.animateScrollToItem(0)
+            header.animateScrollTo(0)
+        }
+    }
     val pager = rememberTabPager(tabs, tabs.indexOf(shown)) { at ->
         tabs.getOrNull(at)?.takeIf { it != shown }?.let { chosen ->
             picked = chosen
@@ -695,7 +708,7 @@ private fun FavouritesPage(ui: LibraryUi, library: Library) {
             ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll, sort = if (songs.isEmpty()) null else sortChip(order, R.string.lib_sort_custom), onSort = { sorting = true }, gutter = 0.dp)
         }
     }
-    SongPageFrame(ui, songs, QueueSource(SourceKind.FAVOURITES, "favourites", ""), topBar = { under, backdrop -> CollectionTopBar(title, under || heroUnder, backdrop, ui) }) { list, padding ->
+    SongPageFrame(ui, songs, QueueSource(SourceKind.FAVOURITES, "favourites", ""), topBar = { under, backdrop -> CollectionTopBar(title, under || heroUnder, backdrop, ui, root = root) }) { list, padding ->
         val bottom = PaddingValues(bottom = padding.calculateBottomPadding() + 16.dp)
         if (tabs.isEmpty()) {
             LazyColumn(Modifier.fillMaxSize(), state = rows, contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = padding.calculateBottomPadding() + 16.dp)) {

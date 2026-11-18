@@ -93,6 +93,7 @@ import app.lyrify.player.PlayerUi
 import app.lyrify.player.SleepTimer
 import app.lyrify.player.Speed
 import app.lyrify.player.sleepAfter
+import app.lyrify.settings.DockTab
 import app.lyrify.settings.LibraryTab
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -147,6 +148,16 @@ private fun play(connection: PlayerConnection, book: Book, state: BookState, nav
     val place = state.placeOf(book)
     connection.playFrom(book.parts.map { it.ref }, place.partIndex, place.positionMs, bookSource(book))
     nav.show(FullScreen.Player)
+}
+
+/** Books as the bar's own item (KJB 3.1): the Books tab's list under the bar's header; its icon tapped again goes to the top. */
+@Composable
+fun BooksPage() {
+    val nav = LocalNavigator.current
+    val ui = rememberLibraryUi() ?: return
+    PageFrame(topBar = { under, backdrop -> MainTopBar(DockTab.BOOKS, under, backdrop) }) { padding ->
+        ui.library?.let { BooksTab(it, padding, nav.state.reselectsOf(DockTab.BOOKS)) }
+    }
 }
 
 /**

@@ -86,6 +86,14 @@ import app.lyrify.tones.TonesState
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.foundation.layout.offset
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.IntOffset
+import kotlin.math.roundToInt
 
 /**
  * Lyrics as every page sees them (2.0's state, gathered by the shell): the ledger, how plain lyrics get timed, Remove
@@ -112,9 +120,10 @@ val LocalLyrics = compositionLocalOf<LyricsUi> { error("No LyricsUi: AppShell pr
  * and the dock over Library, Playlists, Search and Tools' root, Tools pages as full screens, and the full-screen views
  * over everything. Every page and view is drawn by its entry composable in its owner's file; this file only routes. Back
  * closes a sheet, dialog or menu first (their own windows), then a view, then a page, then walks back through the tab
- * history. The app reopens on the last tab ([Settings.nav]), on the page a notification names ([destination]), or on the
- * tab a launcher shortcut names ([tab]). What [checkAnswers] say shows here, also once Check these has closed or the phone
- * has turned.
+ * history. The app reopens on the last tab ([Settings.nav]) while the bar holds it, on the page a notification names
+ * ([destination]), or on the tab a launcher shortcut names ([tab]). What [checkAnswers] say shows here, also once Check
+ * these has closed or the phone has turned. The bar holds what the user chose (Settings > Display > Bottom bar, KJB 3.1),
+ * each item with its own stack, and can hide while a page scrolls ([DockHide]).
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -142,7 +151,14 @@ fun AppShell(
     tab: DockTab? = null,
     onTabOpened: () -> Unit = {},
 ) {
-    val lastTab = settings.nav.lastTab
+    val display = settings.display
+    val offers = rememberDockOffers()
+    // What the bar shows once the phone has said what it offers, and what stays in reach until it has.
+    val items = remember(display.dock, offers) { dockItems(display.dock) { dockOffers(it, offers.downloads == true, offers.books == true) } }
+    val reachable = remember(display.dock, offers) {
+        dockItems(display.dock) { dockOffers(it, offers.downloads != false, offers.books != false) }.toSet() + DockTab.SEARCH + DockTab.TOOLS
+    }
+    val lastTab = dockStart(settings.nav.lastTab, dockItems(display.dock) { true })
     val nav = rememberSaveable(saver = NavState.saver(lastTab)) { Navigator(NavState.start(lastTab)) }
     val state = nav.state
     val context = LocalContext.current
@@ -182,9 +198,21 @@ fun AppShell(
     val otherPlayback = other?.playback
     val bar = nowBarShows(own.now, track, otherPlayback?.playing == true)
     val backup = rememberBackupActions { on -> onSettings { it.copy(backup = it.backup.copy(automatic = on)) } }
-    val slot = bottomSlot(nav.selectionBar != null, state.chrome, WindowInsets.isImeVisible)
+    val ime = WindowInsets.isImeVisible
+    val slot = bottomSlot(nav.selectionBar != null, state.chrome, ime)
     val barOnScreen = slot == BottomSlot.BAR_AND_DOCK && bar != NowBarShows.Hidden
     val chromeStill = rememberChromeStill(slot != BottomSlot.NONE, state.views, barOnScreen, reduced)
+    val dot = toolsDot(checks, dupes.badge, aiAttention(ai, aiWaiting))
+    // Hide while scrolling: never during the tour or for TalkBack; back on another item, page or Library tab, on a
+    // selection or the keyboard (a full-screen view over it leaves it as it is, so the player closes into the bar where it is).
+    val hide = rememberDockHide()
+    val exploring = rememberTouchExploring()
+    val hides = display.hideDockOnScroll && LocalTour.current?.state == null && !exploring
+    SideEffect { hide.on = hides }
+    LaunchedEffect(state.tab, state.pages, state.libraryTab, nav.selectionBar != null, ime, hides) { hide.show() }
+
+    // First: what opens below goes by the bar.
+    LaunchedEffect(items, reachable) { nav.dock(items, reachable) }
 
     LaunchedEffect(state.tab) {
         val tab = state.tab
@@ -221,24 +249,36 @@ fun AppShell(
     TourShell(nav, bar) { pages.currentState.takeIf { it == pages.targetState } }
 
     // The song KJB plays shows as playing in the lists, while the Now bar shows KJB's own song (not another app's).
-    CompositionLocalProvider(LocalNavigator provides nav, LocalLyrics provides lyrics, LocalPlayingPath provides (bar as? NowBarShows.Own)?.now?.path) {
+    CompositionLocalProvider(
+        LocalNavigator provides nav,
+        LocalLyrics provides lyrics,
+        LocalPlayingPath provides (bar as? NowBarShows.Own)?.now?.path,
+        LocalDockBar provides DockBar(items, dot, offers.downloads == true, offers.books == true),
+    ) {
         SharedTransitionLayout(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
             // The page layer with its Now bar and dock: under the views, but over the views a back swipe from a page
             // goes back to (the player it was opened from), shrinking to show them.
             val overViews = swipe.taking is BackTaking.Pages
             Box(Modifier.fillMaxSize().zIndex(if (overViews) 2f else 0f).backPeek(swipe) { swipe.taking is BackTaking.Pages }) {
                 CompositionLocalProvider(LocalShellChrome provides ShellChrome(bottom)) {
-                    PageLayers(pages, swipe, rtl, reduced) { shown ->
-                        // Each page keeps its scroll and its fields while pages are pushed over it, and across a turn of the phone.
-                        holder.SaveableStateProvider(shown.key) {
-                            when (val page = shown.stack.lastOrNull()) {
-                                null -> when (shown.tab) {
-                                    DockTab.LIBRARY -> LibraryPage()
-                                    DockTab.PLAYLISTS -> PlaylistsPage()
-                                    DockTab.SEARCH -> SearchPage()
-                                    DockTab.TOOLS -> ToolsScreen(rows, nav::open)
+                    // Every page's scrolls pass here on their way up, for Hide while scrolling; nothing is taken from them.
+                    Box(Modifier.fillMaxSize().nestedScroll(hide)) {
+                        PageLayers(pages, swipe, rtl, reduced, order = items) { shown ->
+                            // Each page keeps its scroll and its fields while pages are pushed over it, and across a turn of the phone.
+                            holder.SaveableStateProvider(shown.key) {
+                                when (val page = shown.stack.lastOrNull()) {
+                                    null -> when (shown.tab) {
+                                        DockTab.LIBRARY -> LibraryPage()
+                                        DockTab.PLAYLISTS -> PlaylistsPage()
+                                        DockTab.QUEUES -> QueuePage(Page.Queues, root = true)
+                                        DockTab.FAVOURITES -> CollectionPage(Page.BuiltIn(BuiltInList.FAVOURITES), root = true)
+                                        DockTab.DOWNLOADS -> DownloadsPage(onBack = null)
+                                        DockTab.BOOKS -> BooksPage()
+                                        DockTab.SEARCH -> SearchPage()
+                                        DockTab.TOOLS -> ToolsScreen(rows, nav::open)
+                                    }
+                                    else -> PageContent(page, settings, onSettings, grants, ai, aiActions, aiWaiting, aiDoneToday, counts, backup, versionName, checkActions, checkAnswers)
                                 }
-                                else -> PageContent(page, settings, onSettings, grants, ai, aiActions, aiWaiting, aiDoneToday, counts, backup, versionName, checkActions, checkAnswers)
                             }
                         }
                     }
@@ -248,6 +288,7 @@ fun AppShell(
                     barTop = barTop,
                     slot = slot,
                     still = chromeStill,
+                    hidden = hides && hide.hidden,
                     selection = nav.selectionBar,
                     bar = {
                         NowBar(
@@ -258,7 +299,7 @@ fun AppShell(
                             onPlayPause = barPlayPause(bar, own::playPause, otherPlayback, other?.let { session -> session::playPause }),
                         )
                     },
-                    dock = { Dock(state.tab, dot = toolsDot(checks, dupes.badge, aiAttention(ai, aiWaiting)), onSelect = nav::select) },
+                    dock = { Dock(items, state.tab, display.dockStyle, dot = dot, onSelect = nav::select) },
                 )
             }
             // The views a back swipe from a page goes back to dim under it as the page does over a view.
@@ -357,6 +398,7 @@ private fun PageContent(
         Page.TagHistory -> TagHistoryPage()
         Page.Settings -> SettingsScreen(settings, onSettings, grants, ai, aiActions, backup, versionName, onOpen = nav::open) { back() }
         Page.LibraryTabs -> LibraryTabsScreen(settings, onSettings) { back() }
+        Page.BottomBar -> BottomBarScreen(settings, onSettings) { back() }
         Page.Licences -> LicencesPage()
         is Page.Licence -> LicencePage(page)
     }
@@ -367,7 +409,10 @@ private fun PageContent(
  * their place, faded through as selection starts and ends; nothing while the keyboard is up or a full screen shows (the
  * message stays). The chrome slides as a whole and never resizes while it moves, so the room it takes at the bottom
  * (what pages pad by) changes once, not on every frame. The Now bar's visibility is one end of the player's container
- * transform ([LocalContainer]), and it tells the other end where the bar sits ([barTop]).
+ * transform ([LocalContainer]), and it tells the other end where the bar sits ([barTop]). [hidden] (Hide while
+ * scrolling): the dock slides away and fades, the Now bar and the message move down into its place, all by placement
+ * only, so the room pages pad by stays the same and their last row stays in reach; with reduced motion nothing slides
+ * (the dock fades, the Now bar is put there). Hidden, the dock takes no touch and says nothing to TalkBack.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -376,6 +421,7 @@ private fun SharedTransitionScope.BottomChrome(
     barTop: Kept<Float>,
     slot: BottomSlot,
     still: Boolean,
+    hidden: Boolean,
     selection: (@Composable () -> Unit)?,
     bar: @Composable () -> Unit,
     dock: @Composable () -> Unit,
@@ -384,8 +430,19 @@ private fun SharedTransitionScope.BottomChrome(
     // The selection bar stays drawn while it fades out after selection ends.
     val lastSelection = remember { Kept(selection) }
     if (selection != null) lastSelection.value = selection
-    Column(modifier.fillMaxWidth().navigationBarsPadding().imePadding().padding(bottom = 12.dp)) {
-        ToastSlot(Modifier.padding(horizontal = ScreenPadding), padding = PaddingValues(bottom = TOAST_GAP))
+    val away = if (hidden) 1f else 0f
+    // Read while placing and drawing only, so a slide never recomposes the chrome.
+    val slide = animateFloatAsState(away, if (reduced) snap() else tween(DOCK_SLIDE_MS, easing = Motion.Standard), label = "dock slide")
+    val fade = animateFloatAsState(away, tween(if (reduced) Motion.REDUCED_MS else DOCK_SLIDE_MS, easing = Motion.Standard), label = "dock fade")
+    val density = LocalDensity.current
+    var dockHeight by remember { mutableIntStateOf(0) }
+    val gap = with(density) { NOW_BAR_GAP.roundToPx() }
+    val margin = with(density) { DOCK_MARGIN.roundToPx() }
+    // The Now bar ends where the dock's bottom was: down by the dock and the gap the bar keeps above it.
+    val barShift: Density.() -> IntOffset = { IntOffset(0, (slide.value * (dockHeight + gap)).roundToInt()) }
+    val taking by rememberUpdatedState(!hidden)
+    Column(modifier.fillMaxWidth().navigationBarsPadding().imePadding().padding(bottom = DOCK_MARGIN)) {
+        ToastSlot(Modifier.padding(horizontal = ScreenPadding).offset(barShift), padding = PaddingValues(bottom = TOAST_GAP))
         // While the Now bar grows into the player or the player shrinks into it, the chrome stays where it is: the bar is
         // one end of the transform, so it must not slide or fade under it; the player covers the dock meanwhile.
         AnimatedVisibility(
@@ -406,8 +463,15 @@ private fun SharedTransitionScope.BottomChrome(
                         lastSelection.value?.invoke()
                     } else {
                         Column {
-                            bar()
-                            dock()
+                            Box(Modifier.offset(barShift)) { bar() }
+                            Box(
+                                Modifier
+                                    .onSizeChanged { dockHeight = it.height }
+                                    .offset { IntOffset(0, (slide.value * (dockHeight + margin)).roundToInt()) }
+                                    .graphicsLayer { alpha = 1f - fade.value }
+                                    .inertUnless { taking }
+                                    .then(if (hidden) Modifier.clearAndSetSemantics {} else Modifier),
+                            ) { dock() }
                         }
                     }
                 }
@@ -475,7 +539,14 @@ internal fun PagesBack(nav: Navigator, pages: SeekableTransitionState<PageLayer>
  * Each dock destination's root is drawn by [KeptRoots], under the pages, and only holds its place in the change here.
  */
 @Composable
-internal fun PageLayers(pages: SeekableTransitionState<PageLayer>, swipe: BackSwipe, rtl: Boolean, reduced: Boolean, content: @Composable (PageLayer) -> Unit) {
+internal fun PageLayers(
+    pages: SeekableTransitionState<PageLayer>,
+    swipe: BackSwipe,
+    rtl: Boolean,
+    reduced: Boolean,
+    order: List<DockTab> = DOCK_TABS,
+    content: @Composable (PageLayer) -> Unit,
+) {
     val moves = rememberTransition(pages, label = "pages")
     Box(Modifier.fillMaxSize()) {
         // The roots in a box of their own, so their order among themselves never puts one over the pages; but a root a
@@ -483,7 +554,7 @@ internal fun PageLayers(pages: SeekableTransitionState<PageLayer>, swipe: BackSw
         Box(Modifier.fillMaxSize().zIndex(if (rootsOverPages(swipe.taking)) 1f else 0f)) { KeptRoots(moves, swipe, rtl, reduced, content) }
         moves.AnimatedContent(
             transitionSpec = {
-                val change = pageChange(initialState, targetState)
+                val change = pageChange(initialState, targetState, order)
                 val taking = swipe.taking
                 if (taking is BackTaking.Page) backTransition(enterSide(change, rtl), reduced, takenArrives = targetState.key == taking.key) else pageTransition(change, rtl, reduced)
             },
@@ -512,11 +583,11 @@ internal fun PageLayers(pages: SeekableTransitionState<PageLayer>, swipe: BackSw
 }
 
 /**
- * Each dock destination's root (Library with its tabs, Playlists, Search, Tools), composed once it has shown and kept
- * so: a dock switch, or Back to a root from a page over it, never builds it again, so its lists keep their place and
- * their rows, with nothing to load or fade in again (phone test 2026-11-11). A root is drawn and placed only while it
- * shows or moves; it moves as a page would under the same change ([rootFade], [rootSlide]), seeks with a back swipe,
- * and shrinks when one takes it. Hidden, it takes no touch, says nothing to TalkBack, lets go of the focus, its Back
+ * Each dock destination's root (Library with its tabs, Playlists, Search, Tools, and what else the bar holds), composed
+ * once it has shown and kept so: a dock switch, or Back to a root from a page over it, never builds it again, so its
+ * lists keep their place and their rows, with nothing to load or fade in again (phone test 2026-11-11). A root is drawn
+ * and placed only while it shows or moves; it moves as a page would under the same change ([rootFade], [rootSlide]),
+ * seeks with a back swipe, and shrinks when one takes it. Hidden, it takes no touch, says nothing to TalkBack, lets go of the focus, its Back
  * handlers stand down, and its selection leaves the bottom chrome ([LocalLayerHeaded]).
  */
 @Composable
@@ -524,7 +595,7 @@ private fun KeptRoots(moves: Transition<PageLayer>, swipe: BackSwipe, rtl: Boole
     val now = listOf(moves.currentState, moves.targetState).filter { it.stack.isEmpty() }.map { it.tab }
     val shown = remember { mutableSetOf<DockTab>() }
     SideEffect { shown += now }
-    DOCK_TABS.filter { it in shown || it in now }.forEach { tab ->
+    DockTab.entries.filter { it in shown || it in now }.forEach { tab ->
         key(tab) { KeptRoot(PageLayer(tab, emptyList()), moves, swipe, rtl, reduced, content) }
     }
 }
@@ -807,6 +878,13 @@ fun LyricsBanners(lyrics: LyricsUi, modifier: Modifier = Modifier, listener: Boo
         ) { sheet = null }
     }
 }
+
+/** The bar's margin above the gesture area, and the gap the Now bar keeps above the bar (NowBar.kt). */
+private val DOCK_MARGIN = 12.dp
+private val NOW_BAR_GAP = 8.dp
+
+/** Hide while scrolling: the preview's 280 ms on the standard curve (user pick 2026-11-18). */
+private const val DOCK_SLIDE_MS = 280
 
 private const val WHY = "why"
 private const val FIX = "fix"

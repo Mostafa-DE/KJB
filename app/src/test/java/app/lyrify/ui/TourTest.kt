@@ -446,6 +446,36 @@ class TourTest {
         assertEquals(listOf(Arrive.MOVE, Arrive.LOOK), arrive(TourStop.SONG, nav, layer))
     }
 
+    // The bar the user makes (KJB 3.1): the tour's stops still find their controls
+
+    @Test
+    fun `the tour's first stops show Songs, whichever tab Library opens on`() {
+        val nav = Navigator(NavState.start(DockTab.LIBRARY).pickLibraryTab(LibraryTab.ALBUMS))
+        nav.arrive(TourStop.TABS)
+        assertEquals(PageLayer(DockTab.LIBRARY, emptyList()), pageLayerOf(nav.state))
+        assertEquals(LibraryTab.SONGS, nav.state.libraryTab)
+        // From a page on another item of the bar, too.
+        val far = Navigator(NavState.start(DockTab.FAVOURITES).open(Page.Album("harbour-glass")))
+        far.arrive(TourStop.SONG)
+        assertEquals(PageLayer(DockTab.LIBRARY, emptyList()), pageLayerOf(far.state))
+        assertEquals(LibraryTab.SONGS, far.state.libraryTab)
+    }
+
+    @Test
+    fun `Search and Tools left off the bar are shown in Library's top bar, so their stops go to Library`() {
+        val nav = Navigator(NavState.start(DockTab.PLAYLISTS).open(Page.Queues))
+        nav.dock(listOf(DockTab.LIBRARY, DockTab.PLAYLISTS), reachable = setOf(DockTab.LIBRARY, DockTab.PLAYLISTS, DockTab.SEARCH, DockTab.TOOLS))
+        nav.arrive(TourStop.SEARCH)
+        assertEquals(PageLayer(DockTab.LIBRARY, emptyList()), pageLayerOf(nav.state))
+        nav.select(DockTab.PLAYLISTS)
+        nav.arrive(TourStop.TOOLS)
+        assertEquals(DockTab.LIBRARY, nav.state.tab)
+        // On the bar, the stop points at the bar wherever the app is.
+        val docked = Navigator(NavState.start(DockTab.PLAYLISTS))
+        docked.arrive(TourStop.SEARCH)
+        assertEquals(DockTab.PLAYLISTS, docked.state.tab)
+    }
+
     @Test
     fun `on the first run the tour looks at once, Library resting under it`() {
         val nav = Navigator(NavState.start(DockTab.LIBRARY))
