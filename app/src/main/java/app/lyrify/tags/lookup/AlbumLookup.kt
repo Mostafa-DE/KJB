@@ -29,9 +29,17 @@ class AlbumLookup(
     /** Where matching runs: never the caller's thread. */
     private val compute: CoroutineDispatcher = Dispatchers.Default,
 ) {
-    /** Looks [album] up. [fresh] ("Check again") skips the cache for every request of this album. */
+    /**
+     * Looks [album] up. [fresh] ("Check again") skips the cache for every request of this album. An album named only like
+     * the folder its songs sit in ([placeholder]) is not searched: no release has that name, so it would only cost
+     * requests.
+     */
     suspend fun check(album: PhoneAlbum, fresh: Boolean = false): Lookup {
-        val result = if (album.isSingle) single(album, fresh) else releases(album, searchTitle(album), searchArtist(album), fresh, searched = false)
+        val result = when {
+            album.isSingle -> single(album, fresh)
+            placeholder(album) -> Lookup.Done(AlbumMatch.propose(album, emptyList()))
+            else -> releases(album, searchTitle(album), searchArtist(album), fresh, searched = false)
+        }
         log("tags: album checked: ${summary(result)}")
         return result
     }
@@ -159,6 +167,12 @@ class AlbumLookup(
         }
         return Lookup.Done(withContext(compute) { AlbumMatch.proposeSingle(song, recordings) })
     }
+
+    /**
+     * The songs share a name like "Download", "Unknown album" or "Telegram Audio" (what a phone calls songs with no album
+     * tag) and no artist of their own: nothing to search for. "Music" by one artist is an album like any other.
+     */
+    private fun placeholder(album: PhoneAlbum): Boolean = album.artist == null && TrackNames.cleanAlbum(album.title, artist = null) == null
 
     /** The album title as searched: without what downloads add ("(320kbps)"); a title that is only that stays. */
     private fun searchTitle(album: PhoneAlbum): String {

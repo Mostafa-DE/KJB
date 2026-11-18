@@ -242,6 +242,25 @@ class AlbumLookupTest {
     }
 
     @Test
+    fun `an album named only like its folder, with no artist of its own, is not searched, so it costs no request`() = runTest {
+        val web = web()
+        fun songs(folder: String) = listOf(
+            PhoneSong("/storage/emulated/0/$folder/a.mp3", "Quiet Ember", "Mira Solen", folder, null, null, null, 254_000),
+            PhoneSong("/storage/emulated/0/$folder/b.mp3", "Kestrel Lights", "Quillmere", folder, null, null, null, 251_400),
+        )
+
+        listOf("Download", "Unknown album", "Telegram Audio").forEach { folder ->
+            assertEquals(Proposal.PickOne(emptyList(), setOf(Doubt.NO_CANDIDATE)), lookup(web).check(PhoneAlbum(folder, null, songs(folder))).proposal())
+        }
+        assertEquals(0, web.requests.size)
+
+        // With an artist of its own it is an album like any other ("Music" by someone), and is searched.
+        val named = songs("Music").map { it.copy(artist = "Mira Solen") }
+        lookup(web).check(PhoneAlbum("Music", null, named))
+        assertEquals(MusicBrainzUrls.releaseSearch("Music", "Mira Solen", 2).toString(), web.requests.first().uri)
+    }
+
+    @Test
     fun `nothing found is Pick one with nothing to pick`() = runTest {
         val web = web()
         web.on(search, ok("""{"count":0,"releases":[]}"""))
