@@ -64,7 +64,8 @@ class ArtistSplitter(rules: ArtistSplit) {
         for (match in separator.findAll(text)) {
             if (kept.any { it.first <= match.range.last && match.range.first <= it.last }) continue
             cuts += Cut(match.range, splits = true)
-            val bracket = match.groups[BRACKET]?.value?.single() ?: continue
+            // Marks alone make a pattern with no bracket group to ask for.
+            val bracket = match.groups.takeIf { it.size > BRACKET }?.get(BRACKET)?.value?.single() ?: continue
             val close = closing(text, bracket, match.range.last + 1)
             if (close >= 0) cuts += Cut(close..close, splits = false)
         }
