@@ -192,7 +192,7 @@ class CutEditTest {
         assertEquals("Paper Lanterns (cut)", CutNames.title("Paper Lanterns (cut)"))
         assertEquals("Paper Lanterns (Cut)", CutNames.title("Paper Lanterns (Cut)"))
         assertEquals("Cut", CutNames.title("  "))
-        assertFalse(CutNames.title("Paper Lanterns").contains('—'))
+        assertFalse(CutNames.title("Paper Lanterns").contains('\u2014'))
     }
 
     @Test
