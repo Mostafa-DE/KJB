@@ -22,6 +22,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -190,7 +192,11 @@ internal fun QueuesList(
     val playing = book.current
     val others = book.others
     if (playing == null && others.isEmpty()) {
-        EmptyState(EmptyArt.Icon(R.drawable.ic_queue_music), stringResource(R.string.queues_none), Modifier.padding(top = padding.calculateTopPadding()), text = stringResource(R.string.queues_none_text))
+        // In a scroller of its own, though nothing scrolls: a pull down still reaches the shell, which brings back a bar
+        // hidden while scrolling (KJB 3.1); on the bar's own Queues nothing else would.
+        Box(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+            EmptyState(EmptyArt.Icon(R.drawable.ic_queue_music), stringResource(R.string.queues_none), Modifier.padding(top = padding.calculateTopPadding()), text = stringResource(R.string.queues_none_text))
+        }
         return
     }
     LazyColumn(state = state, contentPadding = PaddingValues(start = ScreenPadding, end = ScreenPadding, top = padding.calculateTopPadding() + 4.dp, bottom = padding.calculateBottomPadding() + 16.dp)) {

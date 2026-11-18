@@ -3,11 +3,16 @@ package app.lyrify.ui
 import android.content.res.Configuration
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.SemanticsActions
@@ -18,7 +23,10 @@ import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
@@ -111,6 +119,26 @@ class QueuesListDeviceTest {
         compose.onNodeWithText(context.getString(R.string.queues_none)).assertExists()
         compose.onAllNodesWithText(playingNow).assertCountEquals(0)
         compose.onAllNodesWithText(recent).assertCountEquals(0)
+    }
+
+    @Test
+    fun withNoQueueAPullDownStillReachesTheShellSoAHiddenBarComesBack() {
+        // Hide while scrolling (KJB 3.1) brings the bar back on a pull with nothing left to scroll; the empty page
+        // must pass that pull up, or on the bar's own Queues nothing would bring the bar back.
+        var pulled = 0f
+        val shell = object : NestedScrollConnection {
+            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+                pulled += available.y
+                return Offset.Zero
+            }
+        }
+        show {
+            Box(Modifier.fillMaxSize().nestedScroll(shell)) {
+                QueuesList(QueueBook(), ui = null, library = null, names = LibrarySettings(), padding = PaddingValues(0.dp)) { opened += it }
+            }
+        }
+        compose.onRoot().performTouchInput { swipeDown() }
+        compose.runOnIdle { assertTrue("pulled $pulled", pulled > 0f) }
     }
 
     @Test
