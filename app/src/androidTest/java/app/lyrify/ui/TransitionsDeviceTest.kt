@@ -171,16 +171,17 @@ class TransitionsDeviceTest {
             Host {
                 CompositionLocalProvider(LocalReducedMotion provides false) {
                     SharedTransitionLayout {
+                        val barTop = remember { Kept(Float.NaN) }
                         Box(Modifier.fillMaxSize()) {
                             // The shell's two ends: the Now bar over the dock, and the player's card.
                             AnimatedVisibility(!open, Modifier.align(Alignment.BottomCenter), enter = EnterTransition.None, exit = ExitTransition.None) {
-                                val bar = remember(this) { Container(this@SharedTransitionLayout, this, bar = true) }
+                                val bar = remember(this) { Container(this@SharedTransitionLayout, this, bar = true, barTop) }
                                 CompositionLocalProvider(LocalContainer provides bar) {
                                     NowBar(NowBarShows.Own(OwnNow("Quiet Engines", "The Lamplighters", cover = null, playing = false, progress = 0.25f)), LedgerState(), other = null, onOpen = {}, onPlayPause = {})
                                 }
                             }
                             AnimatedVisibility(open, enter = EnterTransition.None, exit = ExitTransition.None) {
-                                val player = remember(this) { Container(this@SharedTransitionLayout, this, bar = false) }
+                                val player = remember(this) { Container(this@SharedTransitionLayout, this, bar = false, barTop) }
                                 Box(Modifier.fillMaxSize().then(containerBounds(player)).background(Color.DarkGray))
                             }
                         }

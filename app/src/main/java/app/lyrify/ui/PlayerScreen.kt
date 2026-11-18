@@ -609,7 +609,7 @@ internal fun PlayerFrame(onClose: () -> Unit, content: @Composable BoxScope.() -
     }
     // The cover, drawn above everything while the transform runs, takes the frame's drag shrink from here (containerCover).
     DisposableEffect(container, drag) {
-        if (container != null) container.frameScale = { drag.peek(container.closing()).scale }
+        if (container != null) container.frameScale = { drag.peek(container).scale }
         onDispose { container?.frameScale = { 1f } }
     }
     // The system's gesture edges (back), in the window, and where the player sits in it: a finger landing there is the system's.
@@ -631,7 +631,7 @@ internal fun PlayerFrame(onClose: () -> Unit, content: @Composable BoxScope.() -
                     alpha = reducedDragAlpha(drag.offset.value, size.height)
                     return@graphicsLayer
                 }
-                val peek = drag.peek(container?.closing?.invoke() ?: 0f)
+                val peek = drag.peek(container)
                 translationY = peek.shiftY
                 scaleX = peek.scale
                 scaleY = peek.scale
@@ -718,8 +718,8 @@ private class PlayerDrag(private val scope: CoroutineScope) {
     /** Each move of that finger, whoever takes it: the speed it lets go at. */
     fun track(change: PointerInputChange) = tracker.addPointerInputChange(change)
 
-    /** How the frame draws the drag [closing] of the way into the bar: what is left of it ([closeHeld]), as [dragPeek]. */
-    fun peek(closing: Float): Peek = dragPeek(closeHeld(offset.value, closing), height)
+    /** How the frame draws the drag closing into the bar with [container] ([Container.held]), or as it is with none. */
+    fun peek(container: Container?): Peek = container?.held(offset.value, height) ?: dragPeek(offset.value, height)
 
     /** The player [dy] px further down (up when negative), never above where it rests; returns how far it went. */
     fun follow(dy: Float): Float {
@@ -747,8 +747,7 @@ private class PlayerDrag(private val scope: CoroutineScope) {
         when (dragLetGo(closes, intoBar = container != null, reduced = reduced)) {
             DragLetGo.BACK -> scope.launch { offset.animateTo(0f, Motion.close(), initialVelocity = velocity) }
             DragLetGo.INTO_BAR -> {
-                // The card's way to the bar is most of the player's height: what a fling's lead is a share of.
-                container?.letGo(closeVelocity(velocity, momentum), way = height, scope)
+                container?.letGo(closeVelocity(velocity, momentum), scope)
                 close()
             }
             DragLetGo.AWAY -> close()
@@ -1081,7 +1080,7 @@ internal fun CoverFace(
                 .semantics { contentDescription = label },
         ) {
             // Its corners follow its size, so growing out of the Now bar's orb or shrinking into it, it rounds smoothly.
-            SongCover(SongArt(ui.item.song.path), containerCover(LocalContainer.current), size = side, shape = remember(side) { CoverShape(COVER_CORNER, side) })
+            SongCover(SongArt(ui.item.song.path), containerCover(LocalContainer.current), size = side, shape = remember(side) { CoverShape(COVER_CORNER, side) }, at = CoverAt.PLAYER)
         }
         if (onFlip != null) FlipChip(Modifier.align(Alignment.BottomEnd).padding(12.dp), enabled, onFlip)
     }

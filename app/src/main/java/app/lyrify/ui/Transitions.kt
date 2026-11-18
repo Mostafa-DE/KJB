@@ -75,6 +75,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import app.lyrify.settings.DockTab
@@ -318,12 +320,19 @@ val PEEK_CORNER = 28.dp
 /**
  * One end of the container transform: the shell's shared transition scope, and the visibility of that end, the Now
  * bar's chrome ([bar]) or the player's layer. Null where nothing grows: outside the shell, and for a view that rises.
- * The player's end also says how far it has closed into the bar ([closing], 0 in the player and 1 in the bar: the one
- * progress its card, its drag and its cover follow, [closeProgress]; its fades follow [along]) and takes what a finger
- * lets go of ([letGo]).
+ * Both ends share where the bar sits in the window ([barTop], its top in px, NaN until it is laid out). The player's
+ * end also says how far it has closed into the bar ([closing], 0 in the player and 1 in the bar: the one progress its
+ * card, its drag and its cover follow, [closeProgress]; its fades follow [along]) and takes what a finger lets go of
+ * ([letGo]).
  */
 @Stable
-class Container(val shared: SharedTransitionScope, val visibility: AnimatedVisibilityScope, val bar: Boolean, val closing: () -> Float = { 0f }) {
+class Container(
+    val shared: SharedTransitionScope,
+    val visibility: AnimatedVisibilityScope,
+    val bar: Boolean,
+    private val barTop: Kept<Float>,
+    val closing: () -> Float = { 0f },
+) {
     // This end's card and cover while they are on screen ([containerBounds], [containerCover]): what [letGo] hands a
     // finger's speed to. Only a shared state on screen can take it.
     internal var surface: SharedTransitionScope.SharedContentState? = null
@@ -341,16 +350,31 @@ class Container(val shared: SharedTransitionScope, val visibility: AnimatedVisib
     private var way = 0f
     private var carried = false
 
+    // Where the player's end is laid out in the window, px: where the card's way starts.
+    private var top = 0f
+    private var height = 0f
+
+    /** This end laid out at [top] in the window, [height] tall, px ([containerBounds]): the bar's top is where the card's way ends. */
+    internal fun placed(top: Float, height: Float) {
+        if (bar) {
+            barTop.value = top
+        } else {
+            this.top = top
+            this.height = height
+        }
+    }
+
     /**
-     * A finger lets go of the player to close it into the bar, moving down at [velocity] px/s ([closeVelocity]), the
-     * card about [way] px from the bar: the card and the cover carry on at the finger's speed, on the transform's own
-     * spring, and its fades keep pace ([along]). Before the player is closed; the lead runs in [scope].
+     * A finger lets go of the player to close it into the bar, moving down at [velocity] px/s ([closeVelocity]): the card
+     * and the cover carry on at the finger's speed, on the transform's own spring, and its fades keep pace ([along]),
+     * the lead a share of the card's way from where the player is laid out to the bar ([closeWay]). Before the player
+     * is closed; the lead runs in [scope].
      */
-    fun letGo(velocity: Float, way: Float, scope: CoroutineScope) {
+    fun letGo(velocity: Float, scope: CoroutineScope) {
         val speed = Velocity(0f, velocity)
         surface?.prepareTransitionWithInitialVelocity(speed)
         cover?.prepareTransitionWithInitialVelocity(speed)
-        this.way = way
+        way = closeWay(top, barTop.value, height)
         carried = true
         scope.launch {
             lead.snapTo(0f)
@@ -362,6 +386,15 @@ class Container(val shared: SharedTransitionScope, val visibility: AnimatedVisib
     fun along(): Float = closeAlong(closing(), lead.value, way)
 
     /**
+     * How the player's frame draws a drag let go [offset] px down over its [height] (PlayerFrame, and the cover above
+     * everything through [frameScale]): what is left of it as far as the card's own spring has come ([closing]), never
+     * with a fling's lead. Compose carries a fling as an offset on the card's bounds and the cover's alike, never on their
+     * size, so on this progress the content keeps its place around the cover and its scale goes with the bounds' size,
+     * whatever the finger's speed. On [along] the content would slow at the lift and slide up against the cover.
+     */
+    fun held(offset: Float, height: Float): Peek = dragPeek(closeHeld(offset, closing()), height)
+
+    /**
      * Shown again on the way: what is left of a finger's speed is let go, by the card and the cover (Compose eases their
      * momentum home from where it is) and by the fades the same way, in [scope]. Nothing to do when nothing was let go.
      */
@@ -370,7 +403,7 @@ class Container(val shared: SharedTransitionScope, val visibility: AnimatedVisib
         carried = false
         surface?.prepareTransitionWithInitialVelocity(Velocity.Zero)
         cover?.prepareTransitionWithInitialVelocity(Velocity.Zero)
-        scope.launch { lead.animateTo(0f, Motion.close()) }
+        scope.launch { lead.animateTo(0f, Motion.close(), initialVelocity = 0f) }
     }
 }
 
@@ -420,7 +453,8 @@ fun containerBounds(container: Container?): Modifier {
         onDispose { if (container.surface === state) container.surface = null }
     }
     return with(container.shared) {
-        Modifier.sharedBounds(
+        // Where this end is laid out, as the card's way's start or end ([Container.placed]), not where it is drawn on the way.
+        Modifier.onGloballyPositioned { container.placed(it.positionInWindow().y, it.size.height.toFloat()) }.sharedBounds(
             state,
             container.visibility,
             enter = EnterTransition.None,
@@ -515,6 +549,12 @@ fun closeFillAlpha(p: Float): Float = 1f - ((p - CLOSE_FILL_FROM) / (1f - CLOSE_
 
 /** What is left of a drag's [offset] [p] of the way: the card takes the player on from where the finger left it. */
 fun closeHeld(offset: Float, p: Float): Float = offset * (1f - p.coerceIn(0f, 1f))
+
+/**
+ * The card's way into the Now bar, px: its top goes from the player's ([from], in the window) to the bar's ([to]), above
+ * the dock, less than the player's [height]. Until the bar has been laid out, that height stands in.
+ */
+fun closeWay(from: Float, to: Float, height: Float): Float = if (to.isFinite() && to > from) to - from else height
 
 /**
  * How far along its way to the bar the card is drawn: [p] of the way on its own spring from rest ([closeProgress]), and
