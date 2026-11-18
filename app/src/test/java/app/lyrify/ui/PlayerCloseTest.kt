@@ -11,8 +11,10 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import coil3.memory.MemoryCache
+import coil3.size.Size as ImageSize
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.plus
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.yield
@@ -370,6 +372,27 @@ class PlayerCloseTest {
         assertEquals(barCoverKey(SongArt(PATH)), stored)
         // Anything but a song's cover (a picture another app shows) has no key of KJB's.
         assertEquals(null, songCoverRequest(context, Any(), CoverAt.PLAYER).placeholderMemoryCacheKey)
+    }
+
+    @Test
+    fun `the player's backdrop keeps its small cover under a key of its own, which a cover changed in Covers & tags changes`() {
+        // AN3: the backdrop's small bitmap was kept under the song's own key, where the player's and the rows' sizes are,
+        // and its key never had the cover's version: after Covers & tags changed the cover, the glow stayed the old one.
+        val context = object : ContextWrapper(null) {}
+        val art = SongArt(PATH)
+        val backdrop = backdropRequest(context, art)
+        val stored = MemoryCache.Key(checkNotNull(backdrop.memoryCacheKey), backdrop.memoryCacheKeyExtras)
+        assertEquals(backdropCoverKey(art), stored)
+        assertNotEquals(MemoryCache.Key(PATH), stored)
+        assertNotEquals(barCoverKey(art), stored)
+        assertEquals(ImageSize(BACKDROP_PX, BACKDROP_PX), runBlocking { backdrop.sizeResolver.size() })
+        // While its size loads it starts on whatever size of the song is in memory: the blur hides that it is another size.
+        assertEquals(MemoryCache.Key(PATH), backdrop.placeholderMemoryCacheKey)
+        // A changed cover is a new key, the old glow never standing in for it.
+        val changed = art.copy(version = 3)
+        assertEquals("$PATH#3", backdropCoverKey(changed).key)
+        assertEquals(backdropCoverKey(changed), backdropRequest(context, changed).let { MemoryCache.Key(checkNotNull(it.memoryCacheKey), it.memoryCacheKeyExtras) })
+        assertEquals(MemoryCache.Key("$PATH#3"), backdropRequest(context, changed).placeholderMemoryCacheKey)
     }
 
     private companion object {

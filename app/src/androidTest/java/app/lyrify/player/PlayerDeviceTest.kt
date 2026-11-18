@@ -5,6 +5,7 @@ import android.os.Environment
 import android.os.Looper
 import android.os.SystemClock
 import androidx.annotation.OptIn
+import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
@@ -19,6 +20,7 @@ import app.lyrify.library.Song
 import app.lyrify.library.SongRef
 import app.lyrify.settings.LibrarySettings
 import app.lyrify.settings.Settings
+import app.lyrify.tags.CoverVersions
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -42,9 +44,10 @@ import kotlin.math.sin
 /**
  * KJB's own player on the phone (debug build): made-up test tones written to the app's cache, never to shared storage.
  * The facade, the bridge and the engine together through a MediaController; two songs back to back with no gap, in WAV,
- * MP3, FLAC and M4A; a song that cannot be played skipped, under Repeat all too; the queues and the place read back by
- * a player built again over the same files, as after the service stopped; a saved queue left and resumed at its place,
- * on the real songs of `Music/KJB test/` (read only); the browse tree of the real service.
+ * MP3, FLAC and M4A; a cover changed while its song plays reaching the session in place; a song that cannot be played
+ * skipped, under Repeat all too; the queues and the place read back by a player built again over the same files, as
+ * after the service stopped; a saved queue left and resumed at its place, on the real songs of `Music/KJB test/` (read
+ * only); the browse tree of the real service.
  */
 @OptIn(UnstableApi::class)
 @RunWith(AndroidJUnit4::class)
@@ -151,7 +154,7 @@ class PlayerDeviceTest {
     private fun build(songs: List<Song>, storage: QueueStorage = MemoryStorage()): Built = onMain {
         val core = PlayerCore(storage, scope, System::currentTimeMillis)
         val engine = GaplessEngine(context, { Settings() }, NoLevels) { mediaItemOf(it, LibrarySettings(), CarCovers.uris(context)) }
-        val bridge = QueueBridge(engine)
+        val bridge = QueueBridge(engine, CoverVersions::of)
         val find: (SongRef) -> Song? = { ref -> songs.firstOrNull { it.path == ref.path } }
         val player = LyrifyPlayer(Looper.getMainLooper(), engine, core, { SkipAmounts(30_000, 10_000) }, { bridge.sync(core.book.value, find) })
         cleanups += {
@@ -331,6 +334,46 @@ class PlayerDeviceTest {
         val before = onMain { seeks }
         onMain { built.engine.seek(0, 200) }
         assertTrue("the engine's own jump was not told", waitFor(2_000) { seeks > before && controller.currentPosition < 1_000 })
+    }
+
+    /**
+     * FX1: a cover Covers & tags changed while its song plays reaches the session at a new uri (so the lock screen, the
+     * notification and the car read the new cover), and the song plays on with no seek and no new song.
+     */
+    @Test
+    fun aCoverChangedWhileItsSongPlaysReachesTheControllerAtANewUriAndTheSongPlaysOn() {
+        val songs = listOf(song(tone("kjb-cover-1.wav", 6, 440.0), "Cover One"), song(tone("kjb-cover-2.wav", 2, 550.0), "Cover Two"))
+        val built = build(songs)
+        val controller = controlled(built, songs, 0, "kjb-cover-test")
+        val before = onMain { controller.mediaMetadata.artworkUri }
+        var moves = 0
+        onMain {
+            controller.addListener(object : Player.Listener {
+                override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
+                    moves++
+                }
+
+                override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                    moves++
+                }
+            })
+            controller.play()
+        }
+        assertTrue("never got past 1 s", waitFor(5_000) { controller.currentPosition > 1_000 })
+
+        // As the service does when CoverVersions changes: the bridge hands the songs again, the session reads them.
+        onMain {
+            CoverVersions.bump(listOf(songs[0].path))
+            built.bridge.sync(built.core.book.value) { ref -> songs.firstOrNull { it.path == ref.path } }
+            built.player.changed()
+        }
+
+        assertTrue("the new cover's uri never reached the controller", waitFor(2_000) { controller.mediaMetadata.artworkUri != before })
+        assertEquals(3, onMain { controller.mediaMetadata.artworkUri?.pathSegments?.size })
+        val at = onMain { controller.currentPosition }
+        assertTrue("the song stopped", waitFor(2_000) { controller.isPlaying && controller.currentPosition > at })
+        assertEquals(0, onMain { controller.currentMediaItemIndex })
+        assertEquals("a seek or another song", 0, onMain { moves })
     }
 
     @Test

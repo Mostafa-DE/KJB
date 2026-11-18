@@ -86,6 +86,7 @@ class QueuePlaceTest {
                 is Edit.Insert -> list.addAll(edit.at, edit.items.map { it.uid })
                 is Edit.Move -> list.add(edit.to, list.removeAt(edit.from))
                 is Edit.Replace -> list[edit.at] = edit.item.uid
+                is Edit.Refresh -> Unit
             }
             loaded = list
             if (before != null && before in list) index = list.indexOf(before) else go(index.coerceAtMost(list.lastIndex), 0, before)

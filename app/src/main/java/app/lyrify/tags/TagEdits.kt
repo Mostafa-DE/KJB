@@ -5,6 +5,7 @@ import android.content.Context
 import android.util.Log
 import app.lyrify.LOG_TAG
 import app.lyrify.library.Artist
+import app.lyrify.library.ArtistSplitter
 import app.lyrify.library.CollectionKind
 import app.lyrify.library.FavouriteCollection
 import app.lyrify.library.FavouritesPort
@@ -14,6 +15,7 @@ import app.lyrify.library.LibraryState
 import app.lyrify.library.Song
 import app.lyrify.library.albumKey
 import app.lyrify.lyrics.TrackNames
+import app.lyrify.settings.ArtistSplit
 import app.lyrify.tags.lookup.Body
 import app.lyrify.tags.lookup.CoverPipeline
 import app.lyrify.tags.lookup.ImageCodec
@@ -219,23 +221,30 @@ object TagEdits {
     /**
      * Rename artist ([names] one name) and Merge artists ([names] both): each of [names] becomes [to] in the artist and
      * album artist of [songs] where it is the whole value or one whole credited name ("Kit Calloway feat. Mira Okafor"),
-     * never a word inside another name ([replaceNames]). Case counts: a spelling in other letters is another artist,
-     * for Merge.
+     * never a word inside another name ([replaceNames]). With Artists with several names on ([splitter]: the library's),
+     * also where the tag names it among others by the user's separators ("Mira Okafor, Kit Calloway"), as its page lists
+     * the song: only that name is replaced, the rest of the tag kept as it was ([ArtistSplitter.replace]). Case counts:
+     * a spelling in other letters is another artist, for Merge.
      */
-    fun rename(songs: List<Song>, names: Collection<String>, to: String): List<SongPlan> {
+    fun rename(songs: List<Song>, names: Collection<String>, to: String, splitter: ArtistSplitter = WHOLE_NAMES): List<SongPlan> {
         val name = to.trim()
         if (name.isEmpty()) return emptyList()
+        val renamed = names.toSet()
+        val replace = { tag: String -> splitter.replace(tag, renamed, name) { replaceNames(it, names, name) } }
         return plans(songs, CoverEdit.Keep, emptyMap()) { song, _ ->
             listOfNotNull(
-                song.artist?.let { TagField.ARTIST to replaceNames(it, names, name) }?.takeIf { (_, new) -> new != song.artist },
-                song.albumArtist?.let { TagField.ALBUM_ARTIST to replaceNames(it, names, name) }?.takeIf { (_, new) -> new != song.albumArtist },
+                song.artist?.let { TagField.ARTIST to replace(it) }?.takeIf { (_, new) -> new != song.artist },
+                song.albumArtist?.let { TagField.ALBUM_ARTIST to replace(it) }?.takeIf { (_, new) -> new != song.albumArtist },
             ).toMap()
         }
     }
 
+    /** Artists with several names off: a tag is one name, but for the credits [replaceNames] finds. */
+    private val WHOLE_NAMES = ArtistSplitter(ArtistSplit(enabled = false))
+
     /**
      * A rename's or a merge's [plans] split for its preview: the songs whose whole artist or album artist is one of
-     * [names] (the artist's page and albums), then those that only credit one among others ("Also credited on").
+     * [names] (the artist's page and albums), then those that name one among others ("Also credited on").
      */
     fun credits(plans: List<SongPlan>, names: Collection<String>): CreditSplit {
         val whole = names.map(String::trim).toSet()
@@ -256,8 +265,8 @@ object TagEdits {
      * [text], a credit, with each part that is exactly one of [names] replaced by [to], in one pass so [to] is never
      * replaced again: the whole value, or a name between the joins a credit uses ("feat.", "ft.", "featuring", "(with
      * ...)", ";"). A word inside another name ("Glass" in "Glass Harbour") is never one, nor is a name beside "&" or ","
-     * ("Rowan & Fennick", "Rowan, the Lantern"): those are mostly one band's name. Blank names and [to] itself are left
-     * out.
+     * ("Rowan & Fennick", "Rowan, the Lantern"): those are mostly one band's name, unless the user's separators say
+     * otherwise ([rename] with Artists with several names on). Blank names and [to] itself are left out.
      */
     fun replaceNames(text: String, names: Collection<String>, to: String): String {
         val replaced = names.filter { it.isNotBlank() && it != to }.toSet()
@@ -551,22 +560,32 @@ object FavouriteMoves {
 
 /**
  * Writes [plans] as one History entry of [kind] shown as [label], through the one tag writer, then moves the hearts
- * of the favourite albums and artists the edit renamed ([FavouriteMoves]).
+ * of the favourite albums and artists the edit renamed ([FavouriteMoves]). Each song whose cover it wrote gets a new
+ * cover version ([CoverVersions]), as Covers & tags gives one, so KJB, the lock screen, the car and the widget show it.
  */
 suspend fun writeEdit(context: Context, plans: List<SongPlan>, kind: EditKind, label: String): BatchResult =
     writeEdit(context, plans.mapNotNull { it.job }, plans.map { it.song to it.after }, kind, label)
 
 /**
  * Writes [jobs] as one History entry, as [writeEdit] does plans; [changed] is each song as the library reads it now and
- * as it will once written, for the hearts. Covers & tags writes through here, its fields being its own.
+ * as it will once written, for the hearts. Covers & tags writes through here, its fields being its own, and gives its
+ * songs their cover versions itself ([coversChanged] none).
  */
-suspend fun writeEdit(context: Context, jobs: List<WriteJob>, changed: List<Pair<Song, Song>>, kind: EditKind, label: String, progress: Progress = Progress.NONE): BatchResult {
+suspend fun writeEdit(
+    context: Context,
+    jobs: List<WriteJob>,
+    changed: List<Pair<Song, Song>>,
+    kind: EditKind,
+    label: String,
+    progress: Progress = Progress.NONE,
+    coversChanged: (Collection<String>) -> Unit = CoverVersions::bump,
+): BatchResult {
     val app = context.applicationContext
     val library = (LibraryGraph.repository(app).state.value as? LibraryState.Ready)?.library
-    return writeEdit(withContext(Dispatchers.IO) { TagsGraph.writer(app) }, LibraryGraph.favourites(app), library, jobs, changed, kind, label, progress)
+    return writeEdit(withContext(Dispatchers.IO) { TagsGraph.writer(app) }, LibraryGraph.favourites(app), library, jobs, changed, kind, label, progress, coversChanged)
 }
 
-/** [writeEdit] over its parts: [library] as it read the songs before the write. */
+/** [writeEdit] over its parts: [library] as it read the songs before the write; [coversChanged] hears the songs whose cover was written. */
 internal suspend fun writeEdit(
     writer: SafeWriter,
     favourites: FavouritesPort,
@@ -576,35 +595,54 @@ internal suspend fun writeEdit(
     kind: EditKind,
     label: String,
     progress: Progress = Progress.NONE,
+    coversChanged: (Collection<String>) -> Unit = {},
 ): BatchResult {
     val result = writer.write(jobs, kind, label, progress)
-    if (library != null && result is BatchResult.Done) {
+    if (result is BatchResult.Done) {
         val written = result.writtenPaths()
-        moveHearts(favourites) { FavouriteMoves.of(changed.filter { it.first.path in written }, library, it) }
+        newCovers(coversChanged, jobs.filter { it.edit.cover != CoverEdit.Keep && it.song.path in written }.map { it.song.path })
+        if (library != null) moveHearts(favourites) { FavouriteMoves.of(changed.filter { it.first.path in written }, library, it) }
     }
     return result
 }
 
 /**
- * Undoes History entry [entryId], and moves back the hearts its edit moved. Every Undo of a tag edit comes here: the
- * message's Undo, History's and Covers & tags'.
+ * Undoes History entry [entryId], and moves back the hearts its edit moved; each song whose cover it puts back gets a
+ * new cover version again ([CoverVersions]). Every Undo of a tag edit comes here: the message's Undo, History's and
+ * Covers & tags' (which gives its songs their versions itself, [coversChanged] none).
  */
-suspend fun undoEdit(context: Context, entryId: Long): BatchResult {
+suspend fun undoEdit(context: Context, entryId: Long, coversChanged: (Collection<String>) -> Unit = CoverVersions::bump): BatchResult {
     val app = context.applicationContext
     // Read again first: an Undo right after its edit must see the names the edit wrote.
     val library = freshLibrary(app)
     val (writer, undo) = withContext(Dispatchers.IO) { TagsGraph.writer(app) to TagsGraph.undo(app) }
-    return undoEdit(writer, undo, LibraryGraph.favourites(app), library, entryId)
+    return undoEdit(writer, undo, LibraryGraph.favourites(app), library, entryId, coversChanged)
 }
 
-/** [undoEdit] over its parts: [library] as it reads the songs the edit wrote. */
-internal suspend fun undoEdit(writer: SafeWriter, undo: UndoStore, favourites: FavouritesPort, library: Library?, entryId: Long): BatchResult {
+/** [undoEdit] over its parts: [library] as it reads the songs the edit wrote; [coversChanged] hears the songs whose cover went back. */
+internal suspend fun undoEdit(
+    writer: SafeWriter,
+    undo: UndoStore,
+    favourites: FavouritesPort,
+    library: Library?,
+    entryId: Long,
+    coversChanged: (Collection<String>) -> Unit = {},
+): BatchResult {
     val entry = withContext(Dispatchers.IO) { undo.memory() }.entries.firstOrNull { it.id == entryId }
     val result = writer.undo(entryId)
-    if (library != null && entry != null && result is BatchResult.Done) {
-        moveHearts(favourites) { FavouriteMoves.of(FavouriteMoves.undone(entry, result.writtenPaths(), library), library, it) }
+    if (entry != null && result is BatchResult.Done) {
+        val written = result.writtenPaths()
+        // The songs by MediaStore id: the entry's paths are hints, the Undo's are where the songs are now.
+        val covers = entry.songs.filter { it.coverChanged }.mapTo(HashSet()) { it.mediaStoreId }
+        newCovers(coversChanged, result.songs.filter { it.song.path in written && it.song.mediaStoreId in covers }.map { it.song.path })
+        if (library != null) moveHearts(favourites) { FavouriteMoves.of(FavouriteMoves.undone(entry, written, library), library, it) }
     }
     return result
+}
+
+/** [paths], whose covers were just written, to [coversChanged], off the main thread (the versions are kept in a file). */
+private suspend fun newCovers(coversChanged: (Collection<String>) -> Unit, paths: List<String>) {
+    if (paths.isNotEmpty()) withContext(Dispatchers.IO) { coversChanged(paths) }
 }
 
 private fun BatchResult.Done.writtenPaths(): Set<String> =

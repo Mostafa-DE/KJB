@@ -329,6 +329,75 @@ class ModelDownloadsTest {
     }
 
     @Test
+    fun `abandonDownload heard late stops only the run it names, and KJB's next run goes on in the foreground`() = runTest {
+        val port = Foreground()
+        val (run, foreground) = wired(port, gated)
+        val first = Heard()
+        val abandoned = run.start(first)
+        runCurrent()
+        foreground.start(1, KJB)
+        // The phone froze the add-on: KJB gave up on that run (abandonDownload, one way, which waits in the binder until
+        // the add-on runs again), then Allow started the next run, and the add-on's service for it, before the word came.
+        val second = Heard()
+        run.start(second)
+        runCurrent()
+        foreground.start(2, KJB)
+        port.calls.clear()
+
+        // The word comes in: AiService's abandonDownload, a binder call no JVM test reaches, is downloads.cancel(run).
+        run.cancel(abandoned)
+        runCurrent()
+
+        assertTrue(first.events.toString(), first.events.last().startsWith("end Interrupted"))
+        assertFalse(second.events.toString(), second.events.any { it.startsWith("end") })
+        assertTrue(run.busy)
+        assertEquals("the status follows the next run", RunState.Running(1, 100), run.state.value)
+        assertEquals("still in the foreground for the next run", emptyList<String>(), port.calls)
+
+        // Said again (KJB froze it twice), or for no run at all: nothing more.
+        run.cancel(abandoned)
+        run.cancel(0)
+        runCurrent()
+        assertEquals(1, first.events.count { it.startsWith("end") })
+        assertFalse(second.events.any { it.startsWith("end") })
+
+        gates.last().complete(Unit)
+        runCurrent()
+        assertEquals("end Done", second.events.last())
+        assertEquals(listOf("stopForeground", "stopSelf 2"), port.calls)
+    }
+
+    @Test
+    fun `abandonDownload for a run that ended before the word came leaves the foreground and the next run as they are`() = runTest {
+        val port = Foreground()
+        val (run, foreground) = wired(port, gated)
+        val first = Heard()
+        val ended = run.start(first)
+        runCurrent()
+        foreground.start(1, KJB)
+        // The run ended just as the phone froze the add-on, its end not heard by KJB, which gave up on it.
+        gates.last().complete(Unit)
+        runCurrent()
+        assertEquals("end Done", first.events.last())
+        val second = Heard()
+        run.start(second)
+        runCurrent()
+        foreground.start(2, KJB)
+        port.calls.clear()
+
+        run.cancel(ended)
+        runCurrent()
+
+        assertEquals(1, first.events.count { it.startsWith("end") })
+        assertFalse(second.events.any { it.startsWith("end") })
+        assertTrue(run.busy)
+        assertEquals(emptyList<String>(), port.calls)
+        gates.last().complete(Unit)
+        runCurrent()
+        assertEquals("end Done", second.events.last())
+    }
+
+    @Test
     fun `after the add-on's process restarts, a start with no download goes in and out, and the next download holds it anew`() = runTest {
         // A new process: nothing of the one that died, whose foreground went with it.
         val port = Foreground()

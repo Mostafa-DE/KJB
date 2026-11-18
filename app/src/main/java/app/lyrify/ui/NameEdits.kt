@@ -95,9 +95,10 @@ internal fun ArtistEditHost(library: Library, name: String) {
 }
 
 /**
- * Rename artist: a new name; then every song it changes, the artist's own and those that only credit it ("Also
- * credited on"); then one confirmation, and [name] becomes the new name in the artist and album artist of each. The
- * page follows the artist to the new name.
+ * Rename artist: a new name; then every song it changes, the artist's own and those that name it among others ("Also
+ * credited on": its credits, and with Artists with several names on, every tag its page reads it in); then one
+ * confirmation, and [name] becomes the new name in the artist and album artist of each. The page follows the artist to
+ * the new name.
  */
 @Composable
 private fun RenameArtist(library: Library, name: String, onDone: () -> Unit) {
@@ -106,11 +107,11 @@ private fun RenameArtist(library: Library, name: String, onDone: () -> Unit) {
     val resources = LocalResources.current
     val toasts = LocalToasts.current
     var to by rememberSaveable { mutableStateOf<String?>(null) }
-    val plans = remember(library, to) { to?.let { TagEdits.rename(library.songs, listOf(name), it) }.orEmpty() }
+    val plans = remember(library, to) { to?.let { TagEdits.rename(library.songs, listOf(name), it, library.artistSplitter) }.orEmpty() }
     val chosen = to
     if (chosen == null) {
         NameDialog(stringResource(R.string.edit_rename_artist), name, R.drawable.ic_edit, onDismiss = onDone, confirm = R.string.edit_next) { typed ->
-            if (TagEdits.rename(library.songs, listOf(name), typed).isEmpty()) {
+            if (TagEdits.rename(library.songs, listOf(name), typed, library.artistSplitter).isEmpty()) {
                 onDone()
                 toasts.later(Toast(resources.getString(R.string.edit_nothing_changed), R.drawable.ic_person))
             } else {
@@ -145,9 +146,9 @@ private fun RenameArtist(library: Library, name: String, onDone: () -> Unit) {
 }
 
 /**
- * "Changes 12 songs" and every song a rename or a merge changes: first the songs of the names themselves, then, under
- * "Also credited on", those that only credit one of [names] among other artists, which their pages do not list. An
- * album merge ([names] null) has no credits.
+ * "Changes 12 songs" and every song a rename or a merge changes: first the songs whose whole artist or album artist is
+ * one of [names], then, under "Also credited on", those that name one of them among other artists. An album merge
+ * ([names] null) has no credits.
  */
 @Composable
 private fun NameChanges(plans: List<SongPlan>, names: Collection<String>?) {
@@ -220,7 +221,7 @@ private fun MergeSheet(kind: NameKind, first: String, second: String?, library: 
     val plans = remember(a, b, keepName) {
         when {
             b == null || keepName.isEmpty() -> emptyList()
-            kind == NameKind.ARTIST -> TagEdits.rename(library.songs, listOf(a.name, b.name), keepName)
+            kind == NameKind.ARTIST -> TagEdits.rename(library.songs, listOf(a.name, b.name), keepName, library.artistSplitter)
             else -> TagEdits.mergeAlbums(listOfNotNull(library.album(a.id), library.album(b.id)), keepName)
         }
     }

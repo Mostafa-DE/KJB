@@ -119,6 +119,16 @@ class ArtistSplitterTest {
     }
 
     @Test
+    fun `marks alone as the separators, with no word among them, split a tag and never fail reading it`() {
+        // FX1: with no word separator the pattern has no bracket group, and asking it for one threw for every tag
+        // holding a separator, so the library could not be read.
+        val marks = ArtistSplit(separators = listOf(",", "&"), exceptions = listOf("Glass & Pane"))
+        assertEquals(listOf("Kit Calloway", "Mira Solen", "Glass & Pane"), of("Kit Calloway, Mira Solen & Glass & Pane", marks))
+        assertEquals(listOf("Kit Calloway feat. Mira Solen"), of("Kit Calloway feat. Mira Solen", marks))
+        assertEquals("Kit Calloway, ".length, ArtistSplitter(marks).lastNameStart("Kit Calloway, Mi"))
+    }
+
+    @Test
     fun `with the setting off, or no separators, a tag is one name`() {
         assertEquals(listOf("Kit Calloway; Mira Solen"), of(" Kit Calloway; Mira Solen ", ArtistSplit(enabled = false)))
         assertEquals(listOf("Kit Calloway feat. Mira Solen"), of("Kit Calloway feat. Mira Solen", ArtistSplit(separators = emptyList())))

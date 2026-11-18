@@ -15,6 +15,7 @@ import app.lyrify.player.POSITION_EVERY_MS
 import app.lyrify.player.PlayTracker
 import app.lyrify.player.PlayerExtras
 import app.lyrify.player.Playing
+import app.lyrify.player.Projected
 import app.lyrify.player.QueueBook
 import app.lyrify.player.Repeat
 import app.lyrify.player.SleepDriver
@@ -357,6 +358,28 @@ class CrossfadeEngineTest {
         rig.run(0)
         assertFalse(waiting.released)
         assertEquals("players made", 2, rig.slots.size)
+        rig.run(3_000)
+        assertEquals(rig.start(1, natural = true), rig.heard.starts.last())
+        assertTrue(waiting.isPlaying)
+    }
+
+    /**
+     * A cover Covers & tags changed (Edit.Refresh): the same songs at the same places, so the song waiting stays, given
+     * the new details as the player playing is, and its fade comes as planned.
+     */
+    @Test
+    fun `a cover refresh while the next song waits keeps it waiting with the new details, and its fade comes as planned`() = runTest {
+        val rig = FadeRig(this, crossfadeSeconds = 6)
+        rig.runToLeft(6_000 + 2_000)
+        val playing = rig.made(0)
+        val waiting = rig.made(1)
+        val refresh = Edit.Refresh(0, rig.uids.take(2).map { Projected(it, rig.songOf(it)) })
+        rig.engine.applyAll(listOf(refresh))
+        rig.run(0)
+        assertFalse(waiting.released)
+        assertEquals("players made", 2, rig.slots.size)
+        assertTrue("the playing player's refresh", "apply $refresh" in playing.calls)
+        assertTrue("the waiting player's refresh", "apply $refresh" in waiting.calls)
         rig.run(3_000)
         assertEquals(rig.start(1, natural = true), rig.heard.starts.last())
         assertTrue(waiting.isPlaying)

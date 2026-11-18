@@ -166,7 +166,7 @@ class PlaybackService : MediaLibraryService() {
         // The phone's sound effects panel needs the player's own session from the start (A1).
         PlayerGraph.audioSessionId = engine.audioSessionId
         // The song playing gone to the trash with none after it: the player stops where the queue waits (QueueBook.forget).
-        bridge = QueueBridge(engine) { engine.setPlayWhenReady(false) }
+        bridge = QueueBridge(engine, CoverVersions::of) { engine.setPlayWhenReady(false) }
         player = LyrifyPlayer(mainLooper, engine, core, skips = ::skips, sync = ::sync, beforeSeek = ::heardSoFar)
         engine.addListener(Follower())
         core.follow { engine.loaded.getOrNull(engine.index)?.let { PlayerAt(it, engine.positionMs) } }
@@ -219,8 +219,15 @@ class PlaybackService : MediaLibraryService() {
                 .distinctUntilChanged()
                 .collect(offload::wanted)
         }
-        // Covers & tags changed a song's cover: the session's kept covers are read again.
-        scope.launch { CoverVersions.versions.drop(1).collect { thumbnails.forget() } }
+        // Covers & tags changed a song's cover: the session's kept covers are read again, and the songs the player holds
+        // are handed to it again at the new cover's uri, so the lock screen, the notification and the car show it now.
+        scope.launch {
+            CoverVersions.versions.drop(1).collect {
+                thumbnails.forget()
+                sync()
+                player.changed()
+            }
+        }
         scope.launch { savePlaces(playing) { savePlace() } }
         scope.launch { repeatWhilePlaying(playing, POSITION_EVERY_MS) { tracker.position(engine.positionMs, playing = true) } }
         ownLyrics()

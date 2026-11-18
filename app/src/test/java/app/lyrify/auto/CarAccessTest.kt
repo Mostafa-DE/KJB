@@ -9,6 +9,8 @@ import app.lyrify.player.QueueSource
 import app.lyrify.player.SourceKind
 import app.lyrify.player.openedCoverDir
 import app.lyrify.player.openedCoverKey
+import app.lyrify.tags.CoverVersions
+import app.lyrify.tags.CoverVersionsFile
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
@@ -203,6 +205,68 @@ class CarAccessTest {
         assertNull(uris.pathOf(listOf(uris.sign("20"))))
         assertNull(uris.pathOf(segments("20") + "extra"))
         assertNull(uris.pathOf(listOf("x") + segments("20")))
+    }
+
+    @Test
+    fun `a cover Covers & tags changed is a new uri, its version under the same signature check`() {
+        // Version 0 (never changed in this process) keeps the uri every car already keeps the cover under.
+        assertEquals(segments("20"), uris.segments("20", version = 0))
+        // A changed cover: its version is a segment the signature covers, so the lock screen, the car and the widget
+        // read the new cover instead of keeping the old one by its uri.
+        val changed = uris.segments("20", version = 3)
+        assertEquals(listOf("20", "3", uris.sign("20/3")), changed)
+        assertFalse(changed == uris.segments("20", version = 4))
+        assertEquals("20", uris.pathOf(changed))
+        assertEquals(DEFAULT_COVER, uris.pathOf(uris.segments(DEFAULT_COVER, version = 1)))
+        assertEquals("opened-1000-0", uris.pathOf(uris.segments("opened-1000-0", version = 2)))
+        // Another version's signature, the plain path's, a version of another shape, or another key's: nothing.
+        assertNull(uris.pathOf(listOf("20", "4", uris.sign("20/3"))))
+        assertNull(uris.pathOf(listOf("20", "3", uris.sign("20"))))
+        assertNull(uris.pathOf(listOf("20", uris.sign("20/3"))))
+        listOf("0", "03", "-1", "+3", "x", "", "3 ", "1234567890", "３").forEach { version ->
+            assertNull(version, uris.pathOf(listOf("20", version, uris.sign("20/$version"))))
+        }
+        assertNull(uris.pathOf(listOf("..", "3", uris.sign("../3"))))
+        assertNull(CoverUris("app.lyrify.covers", ByteArray(32) { 1 }).pathOf(changed))
+        assertNull(uris.pathOf(changed + "extra"))
+    }
+
+    @Test
+    fun `a cover changed before KJB closed keeps its version, so its uri is never its old cover's or an earlier change's`() {
+        val dir = java.nio.file.Files.createTempDirectory("covers").toFile()
+        val path = "/made/up/Quiet Ember.mp3"
+        fun read() = CoverVersions.read(CoverVersionsFile(File(dir, "cover-versions.json")))
+        fun uri() = uris.segments("20", CoverVersions.of(path))
+        try {
+            CoverVersions.forget()
+            read()
+            val old = uri()
+            CoverVersions.bump(listOf(path))
+            val first = uri()
+            // KJB closes: in the next run the cover is still the changed one, and a change then is a version never handed out.
+            CoverVersions.forget()
+            read()
+            assertEquals(first, uri())
+            CoverVersions.bump(listOf(path))
+            val second = uri()
+            assertTrue(second != first && second != old)
+            // A change made before the versions are read counts on from the kept one.
+            CoverVersions.forget()
+            CoverVersions.bump(listOf(path))
+            read()
+            assertEquals(3, CoverVersions.of(path))
+            CoverVersions.forget()
+            read()
+            assertEquals(3, CoverVersions.of(path))
+            // A file that holds no versions is none, never a crash.
+            File(dir, "cover-versions.json").writeText("{\"" + path + "\": \"x\"")
+            CoverVersions.forget()
+            read()
+            assertEquals(0, CoverVersions.of(path))
+        } finally {
+            CoverVersions.forget()
+            dir.deleteRecursively()
+        }
     }
 
     @Test

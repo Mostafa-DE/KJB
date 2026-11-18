@@ -1,6 +1,7 @@
 package app.lyrify.tags
 
 import app.lyrify.library.Album
+import app.lyrify.library.ArtistSplitter
 import app.lyrify.library.CollectionKind
 import app.lyrify.library.FavouriteCollection
 import app.lyrify.library.FavouritesPort
@@ -434,6 +435,141 @@ class TagEditsTest {
         )
     }
 
+    // Rename and merge with Artists with several names on (the library's splitter, the user's separators and exceptions)
+
+    private val split = ArtistSplitter(ArtistSplit())
+
+    private val named = listOf(
+        song("Music/a.mp3", title = "Lamp Oil", artist = "Kit Calloway", albumArtist = "Kit Calloway", id = 1),
+        song("Music/b.mp3", title = "Porch Wire", artist = "Mira Okafor, Kit Calloway", albumArtist = "Mira Okafor / Kit Calloway", id = 2),
+        song("Music/c.mp3", title = "Tin Roof", artist = "Kit Calloway feat. Mira Okafor", id = 3),
+        song("Music/d.mp3", title = "Low Tide", artist = "Kit Calloway,Mira Okafor ;  Hollis Brandt", id = 4),
+        song("Music/e.mp3", title = "Ferry Bell", artist = "Kit Calloways, Mira Okafor", id = 5),
+        song("Music/f.mp3", title = "Moth Signal", artist = "Hollis Brandt (feat. Kit Calloway)", id = 6),
+        song("Music/g.mp3", title = "Glass Pier", artist = "Hollis Brandt", albumArtist = "Kit Calloway", id = 7),
+    )
+
+    @Test
+    fun `with Artists with several names on, a rename replaces only that artist's name in a tag of several, every separator kept`() {
+        val plans = TagEdits.rename(named, listOf("Kit Calloway"), "Kit Callaway", split)
+
+        assertEquals(
+            listOf(
+                "Lamp Oil" to mapOf(TagField.ARTIST to "Kit Callaway", TagField.ALBUM_ARTIST to "Kit Callaway"),
+                "Porch Wire" to mapOf(TagField.ARTIST to "Mira Okafor, Kit Callaway", TagField.ALBUM_ARTIST to "Mira Okafor / Kit Callaway"),
+                "Tin Roof" to mapOf(TagField.ARTIST to "Kit Callaway feat. Mira Okafor"),
+                "Low Tide" to mapOf(TagField.ARTIST to "Kit Callaway,Mira Okafor ;  Hollis Brandt"),
+                "Moth Signal" to mapOf(TagField.ARTIST to "Hollis Brandt (feat. Kit Callaway)"),
+                "Glass Pier" to mapOf(TagField.ALBUM_ARTIST to "Kit Callaway"),
+            ),
+            plans.map { it.song.title to it.fields },
+        )
+        // The preview lists the artist's own songs, then the songs naming it among others in their own group.
+        val credits = TagEdits.credits(plans, listOf("Kit Calloway"))
+        assertEquals(listOf("Lamp Oil", "Glass Pier"), credits.own.map { it.song.title })
+        assertEquals(listOf("Porch Wire", "Tin Roof", "Low Tide", "Moth Signal"), credits.credited.map { it.song.title })
+    }
+
+    @Test
+    fun `with Artists with several names off, a rename is as it was, names beside a comma or a slash left alone`() {
+        val off = ArtistSplitter(ArtistSplit(enabled = false))
+
+        val plans = TagEdits.rename(named, listOf("Kit Calloway"), "Kit Callaway", off)
+
+        assertEquals(TagEdits.rename(named, listOf("Kit Calloway"), "Kit Callaway").map { it.song.title to it.fields }, plans.map { it.song.title to it.fields })
+        assertEquals(listOf("Lamp Oil", "Tin Roof", "Moth Signal", "Glass Pier"), plans.map { it.song.title })
+    }
+
+    @Test
+    fun `a split rename follows the user's separators and keeps their never-split names whole`() {
+        val rules = ArtistSplit(separators = listOf(",", "&"), exceptions = listOf("Rowan, the Lantern", "Glass & Pane"))
+        val songs = listOf(
+            song("Music/a.mp3", title = "Lamp Oil", artist = "Rowan, the Lantern, Mira Okafor", id = 1),
+            song("Music/b.mp3", title = "Porch Wire", artist = "Glass & Pane & Rowan", id = 2),
+            song("Music/c.mp3", title = "Tin Roof", artist = "Rowan & Mira Okafor; Hollis Brandt", id = 3),
+        )
+
+        assertEquals(
+            listOf(
+                "Porch Wire" to mapOf(TagField.ARTIST to "Glass & Pane & Rowan Vale"),
+                "Tin Roof" to mapOf(TagField.ARTIST to "Rowan Vale & Mira Okafor; Hollis Brandt"),
+            ),
+            TagEdits.rename(songs, listOf("Rowan"), "Rowan Vale", ArtistSplitter(rules)).map { it.song.title to it.fields },
+        )
+        // A never-split name is renamed whole, inside a longer tag too.
+        assertEquals(
+            listOf("Lamp Oil" to mapOf(TagField.ARTIST to "Rowan and the Lantern, Mira Okafor")),
+            TagEdits.rename(songs, listOf("Rowan, the Lantern"), "Rowan and the Lantern", ArtistSplitter(rules)).map { it.song.title to it.fields },
+        )
+    }
+
+    @Test
+    fun `a split rename never renames inside a never-split name, even one holding a credit's join`() {
+        val rules = ArtistSplit(separators = listOf(",", "feat."), exceptions = listOf("Rowan feat. Ilse"))
+        val songs = listOf(
+            song("Music/a.mp3", title = "Lamp Oil", artist = "Rowan feat. Ilse", id = 1),
+            song("Music/b.mp3", title = "Porch Wire", artist = "Rowan feat. Ilse, Kit Calloway feat. Rowan", id = 2),
+            // ";" is no separator here: one name, the never-split one inside it.
+            song("Music/c.mp3", title = "Tin Roof", artist = "Rowan feat. Ilse; Mira Okafor", id = 3),
+            song("Music/d.mp3", title = "Low Tide", artist = "Rowan", id = 4),
+        )
+        fun renamed(name: String, to: String) = TagEdits.rename(songs, listOf(name), to, ArtistSplitter(rules)).map { it.song.title to it.fields[TagField.ARTIST] }
+
+        // "Rowan feat. Ilse" is one artist of its own, not Rowan's credit.
+        assertEquals(
+            listOf("Porch Wire" to "Rowan feat. Ilse, Kit Calloway feat. Rowan Vale", "Low Tide" to "Rowan Vale"),
+            renamed("Rowan", "Rowan Vale"),
+        )
+        // The credits beside it still rename, as without the split.
+        assertEquals(listOf("Tin Roof" to "Rowan feat. Ilse; Mira Okafor-Lee"), renamed("Mira Okafor", "Mira Okafor-Lee"))
+        // The never-split artist itself renames whole.
+        assertEquals(
+            listOf("Lamp Oil" to "Rowan with Ilse", "Porch Wire" to "Rowan with Ilse, Kit Calloway feat. Rowan"),
+            renamed("Rowan feat. Ilse", "Rowan with Ilse"),
+        )
+    }
+
+    @Test
+    fun `a split rename takes each spelling the artist's page gathers in a tag, never another artist's spelling`() {
+        val songs = listOf(
+            // One tag naming the artist twice: the page keeps its first spelling, so both are the artist.
+            song("Music/a.mp3", title = "Lamp Oil", artist = "Mira Okafor, mira okafor feat. Kit Calloway", id = 1),
+            // Spelled so first in its tag: another artist's page ("mira okafor"), as without the split.
+            song("Music/b.mp3", title = "Porch Wire", artist = "mira okafor, Kit Calloway", id = 2),
+        )
+
+        assertEquals(
+            listOf("Lamp Oil" to mapOf(TagField.ARTIST to "Mira Okafor-Lee, Mira Okafor-Lee feat. Kit Calloway")),
+            TagEdits.rename(songs, listOf("Mira Okafor"), "Mira Okafor-Lee", split).map { it.song.title to it.fields },
+        )
+    }
+
+    @Test
+    fun `a split rename of a bracketed credit keeps the brackets and what follows them`() {
+        val songs = listOf(song("Music/a.mp3", title = "Lamp Oil", artist = "Kit Calloway (feat. Mira Okafor) [Live], Hollis Brandt", id = 1))
+
+        fun renamed(name: String, to: String) = TagEdits.rename(songs, listOf(name), to, split).map { it.fields[TagField.ARTIST] }
+        assertEquals(listOf("Kit Callaway (feat. Mira Okafor) [Live], Hollis Brandt"), renamed("Kit Calloway", "Kit Callaway"))
+        assertEquals(listOf("Kit Calloway (feat. Mira Okafor) [Live], Hollis Brant"), renamed("Hollis Brandt", "Hollis Brant"))
+        // The library reads "Mira Okafor [Live]" as the credit (what follows its bracket stays with it): renamed, the new name
+        // goes inside the brackets and the rest of that credit goes.
+        assertEquals(listOf("Kit Calloway", "Mira Okafor [Live]", "Hollis Brandt"), split.names(songs.single().artist))
+        assertEquals(listOf("Kit Calloway (feat. Mira Okafor-Lee), Hollis Brandt"), renamed("Mira Okafor [Live]", "Mira Okafor-Lee"))
+    }
+
+    @Test
+    fun `a split merge keeps one spelling in a tag of several`() {
+        val songs = listOf(
+            song("Music/a.mp3", title = "Lamp Oil", artist = "Kit Caloway, Mira Okafor", id = 1),
+            song("Music/b.mp3", title = "Porch Wire", artist = "Kit Calloway", id = 2),
+        )
+
+        assertEquals(
+            listOf("Lamp Oil" to mapOf(TagField.ARTIST to "Kit Calloway, Mira Okafor")),
+            TagEdits.rename(songs, listOf("Kit Calloway", "Kit Caloway"), "Kit Calloway", split).map { it.song.title to it.fields },
+        )
+    }
+
     @Test
     fun `merging albums gives every song of both the album name kept`() {
         val a = listOf(
@@ -650,6 +786,54 @@ class TagEditsTest {
         assertEquals(listOf("Folk"), rig.fields(one)["GENRE"])
     }
 
+    @Test
+    fun `a split rename is one History entry, and its Undo gives the tag back exactly as it was`() {
+        val tag = "Mira Okafor,Kit Caloway ;  Hollis Brandt"
+        val one = rig.song("Lamp Oil", 61, mapOf("TITLE" to listOf("Lamp Oil"), "ARTIST" to listOf(tag)))
+        val song = libraryOf(one, "Lamp Oil", tag, "", null).copy(album = null, albumArtist = null)
+        val plans = TagEdits.rename(listOf(song), listOf("Kit Caloway"), "Kit Calloway", split)
+        assertEquals(listOf(mapOf(TagField.ARTIST to "Mira Okafor,Kit Calloway ;  Hollis Brandt")), plans.map { it.fields })
+
+        val entry = write(plans, EditKind.ARTIST)
+        assertEquals(listOf("Mira Okafor,Kit Calloway ;  Hollis Brandt"), rig.fields(one)["ARTIST"])
+        assertEquals(listOf(listOf("ARTIST")), rig.undo.memory().entries.single { it.id == entry }.songs.map { song -> song.fields.map { it.key } })
+
+        runBlocking { rig.writer.undo(entry) }
+        assertEquals(listOf(tag), rig.fields(one)["ARTIST"])
+    }
+
+    @Test
+    fun `a cover Edit tags changes gets a new version, as Covers & tags gives one, and so does its Undo, never a tags-only edit`() {
+        val front = TagPicture(byteArrayOf(1, 2, 3), "", FRONT_COVER, "image/jpeg")
+        val one = rig.song("Lamp Oil", 71)
+        val two = rig.song("Porch Wire", 72, pictures = listOf(TagPicture(byteArrayOf(4, 5), "", FRONT_COVER, "image/jpeg")))
+        val lamp = libraryOf(one, "Lamp Oil", "Kit Calloway", "Harbour Glass", null)
+        val porch = libraryOf(two, "Porch Wire", "Kit Calloway", "Harbour Glass", null)
+        val favourites = FakeFavourites(emptyList())
+        val bumped = mutableListOf<Set<String>>()
+        fun edited(plans: List<SongPlan>, kind: EditKind): Long = checkNotNull(
+            (runBlocking { writeEdit(rig.writer, favourites, null, plans.mapNotNull { it.job }, emptyList(), kind, "Lamp Oil") { bumped += it.toSet() } } as BatchResult.Done).entryId,
+        )
+        fun undone(entry: Long) = runBlocking { undoEdit(rig.writer, rig.undo, favourites, null, entry) { bumped += it.toSet() } }
+
+        // Edit tags on two songs, a new cover for both; then a title alone; then Edit album taking one's cover off.
+        val cover = edited(TagEdits.songs(listOf(lamp, porch), TagForm.of(listOf(lamp, porch)), CoverEdit.Replace(front)), EditKind.SONG)
+        assertEquals(listOf(setOf(one.path, two.path)), bumped)
+        val title = edited(TagEdits.songs(listOf(porch), TagForm.of(listOf(porch)).with(TagField.TITLE, "Porch Wire II"), CoverEdit.Keep), EditKind.SONG)
+        assertEquals(1, bumped.size)
+        val album = edited(TagEdits.album(listOf(lamp), TagForm.of(listOf(lamp), TagEdits.ALBUM_FIELDS), CoverEdit.Remove, false), EditKind.ALBUM)
+        assertEquals(setOf(one.path), bumped.last())
+
+        // Each Undo from History that puts a cover back gives it a new version again; the title's Undo none.
+        undone(album)
+        assertEquals(listOf(setOf(one.path, two.path), setOf(one.path), setOf(one.path)), bumped)
+        undone(title)
+        assertEquals(3, bumped.size)
+        undone(cover)
+        assertEquals(setOf(one.path, two.path), bumped.last())
+        assertEquals(4, bumped.size)
+    }
+
     // Favourites follow their albums and artists
 
     private val harbourSongs = listOf(
@@ -718,6 +902,20 @@ class TagEditsTest {
         // Porch Wire ("Kit Calloway feat. Mira Okafor-Lind") and Tin Roof both name the new spelling; Kit Calloway's
         // Lamp Oil was not written, and Porch Wire still credits them.
         assertEquals(listOf(artist("Mira Okafor") to artist("Mira Okafor-Lind")), moves)
+    }
+
+    @Test
+    fun `with Artists with several names on, a renamed artist's heart follows it into the tags naming it among others`() {
+        val songs = listOf(
+            song("Music/h/1.mp3", title = "Lamp Oil", artist = "Kit Calloway", album = "Harbour Glass", albumArtist = "Kit Calloway", id = 1),
+            song("Music/h/2.mp3", title = "Porch Wire", artist = "Mira Okafor, Kit Calloway", album = "Porch Lights", albumArtist = "Mira Okafor", id = 2),
+        )
+        val library = Library.of(songs, Settings())
+
+        val plans = TagEdits.rename(songs, listOf("Kit Calloway"), "Kit Callaway", library.artistSplitter)
+
+        // Porch Wire is on Kit Calloway's page: renamed there too, no song names Kit Calloway any more.
+        assertEquals(listOf(artist("Kit Calloway") to artist("Kit Callaway")), moved(plans, listOf(artist("Kit Calloway"), artist("Mira Okafor")), library = library))
     }
 
     @Test

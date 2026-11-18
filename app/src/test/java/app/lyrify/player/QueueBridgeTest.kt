@@ -76,6 +76,11 @@ class QueueBridgeTest {
                     calls += "replace ${edit.at} ${edit.item.song.path}"
                     return
                 }
+                is Edit.Refresh -> {
+                    check(edit.items.map { it.uid } == list.subList(edit.at, edit.at + edit.items.size)) { "a refresh hands the songs it holds" }
+                    calls += "refresh ${edit.at} ${edit.items.size}"
+                    return
+                }
             }
             loaded = list
             index = if (current != null && current in list) list.indexOf(current) else index.coerceAtMost(list.lastIndex)
@@ -144,6 +149,8 @@ class QueueBridgeTest {
                 is Edit.Insert -> emptySet<Long>().also { list.addAll(edit.at, edit.items.map { it.uid }) }
                 is Edit.Move -> emptySet<Long>().also { list.add(edit.to, list.removeAt(edit.from)) }
                 is Edit.Replace -> setOf(list[edit.at])
+                // The same files in place: nothing taken out (ExoPlayer's canUpdateMediaItem).
+                is Edit.Refresh -> emptySet()
             }
             loaded = list
             index = if (seen != null && seen in list) list.indexOf(seen) else index.coerceAtMost(list.lastIndex)
@@ -581,6 +588,61 @@ class QueueBridgeTest {
         port.calls.clear()
         bridge.sync(book.refresh { ref -> if (ref.path == songs[2].path) elsewhere.ref else ref }, findMoved)
         assertEquals(emptyList<String>(), port.calls)
+    }
+
+    @Test
+    fun `a song whose cover Covers & tags changed is handed to the player again in place, the song playing going on`() {
+        val versions = mutableMapOf<String, Int>()
+        val bridge = QueueBridge(port, coverVersion = { versions[it] ?: 0 })
+        var book = QueueBook().play(refs, 2, albumSource, now = 1).book.place(2, 42_000)
+        bridge.sync(book, find)
+        val uids = port.loaded
+        port.calls.clear()
+
+        // Covers & tags gave songs 3 to 5 (3 playing) and song 7 a new cover: each run side by side handed again, in
+        // one batch, never loaded or moved, so the session shows the new cover's uri and the song plays on.
+        listOf(2, 3, 4, 6).forEach { versions[songs[it].path] = 1 }
+        bridge.sync(book, find)
+        assertEquals(listOf("refresh 2 3", "refresh 6 1"), port.calls)
+        assertEquals(listOf(2), port.batches)
+        assertEquals(uids, port.loaded)
+        assertEquals(2, port.index)
+        assertEquals(42_000L, port.positionMs)
+
+        // Nothing changed since: nothing handed again.
+        port.calls.clear()
+        bridge.sync(book, find)
+        assertEquals(emptyList<String>(), port.calls)
+
+        // A queue edit and a new cover at once: the edits first, then the song refreshed at its place after them; a song
+        // coming in is handed with its cover as it is now, never again.
+        val id = book.currentId!!
+        book = book.remove(id, book.current!!.items.first().uid)!!.book
+        versions[songs[5].path] = 1
+        bridge.sync(book, find)
+        assertEquals(listOf("edit", "refresh 4 1"), port.calls)
+        port.calls.clear()
+        versions[songs[0].path] = 2
+        book = book.addTo(id, listOf(refs[0]))!!.book
+        bridge.sync(book, find)
+        assertEquals(listOf("edit"), port.calls)
+        assertEquals(uidsOf(book), port.loaded)
+    }
+
+    @Test
+    fun `covers changed all over a long queue are handed again in one edit, never one per song`() {
+        val versions = mutableMapOf<String, Int>()
+        val bridge = QueueBridge(port, coverVersion = { versions[it] ?: 0 })
+        val book = QueueBook().play(shelf.map { it.ref }, 10, albumSource, now = 1).book
+        bridge.sync(book, findOnShelf)
+        port.calls.clear()
+
+        (1 until 38 step 2).forEach { versions[shelf[it].path] = 1 }
+        bridge.sync(book, findOnShelf)
+
+        // Nineteen runs apart: one refresh from the first to the last, the songs between taken as they are.
+        assertEquals(listOf("refresh 1 37"), port.calls)
+        assertEquals(10, port.index)
     }
 
     // Playback resumption (a headset's or a car's play after KJB was closed)

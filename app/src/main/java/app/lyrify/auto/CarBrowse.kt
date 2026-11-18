@@ -54,6 +54,8 @@ import app.lyrify.player.queueLabel
 import app.lyrify.player.queueLabels
 import app.lyrify.settings.LibrarySettings
 import app.lyrify.settings.Settings
+import app.lyrify.tags.CoverVersions
+import app.lyrify.tags.TagsGraph
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
@@ -240,8 +242,9 @@ class CarBrowse(
     private fun rootItem(id: String): MediaItem = item(TreeNode(id, context.getString(R.string.app_name)), settings.value.library)
 
     /**
-     * [node] as a media item: a song with its tags, or a list; a song's or an album's cover from [CarCovers] ([nodeCover]:
-     * its own, or the default); its heading and grid as style hints.
+     * [node] as a media item: a song with its tags, or a list; a song's or an album's cover from [CarCovers] ([coverUri]:
+     * its own, or the default; none for a list of lists, which the car shows with its own icons); its heading and grid as
+     * style hints.
      */
     private fun item(node: TreeNode, library: LibrarySettings): MediaItem {
         val song = node.song
@@ -252,7 +255,7 @@ class CarBrowse(
         node.group?.let { extras.putString(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_GROUP_TITLE, it) }
         if (node.grid) extras.putInt(MediaConstants.EXTRAS_KEY_CONTENT_STYLE_BROWSABLE, MediaConstants.EXTRAS_VALUE_CONTENT_STYLE_GRID_ITEM)
         metadata.setIsBrowsable(node.browsable).setIsPlayable(node.playable)
-            .setArtworkUri(nodeCover(node)?.let(covers::of))
+            .setArtworkUri(node.cover?.let { coverUri(covers, it) })
         if (!extras.isEmpty) metadata.setExtras(extras)
         return MediaItem.Builder().setMediaId(node.id).setMediaMetadata(metadata.build()).build()
     }
@@ -410,8 +413,11 @@ const val DEFAULT_COVER: String = "default"
  */
 fun coverPath(song: Song): String = song.ref.mediaStoreId?.toString() ?: openedCoverKey(song.path) ?: DEFAULT_COVER
 
-/** The path of the cover a browse item shows at [CarCovers]: a song's, an album's; null for a list of lists (the car's own icons). */
-fun nodeCover(node: TreeNode): String? = node.cover?.let(::coverPath)
+/**
+ * The uri of [song]'s cover at [CarCovers] ([coverPath]), at its version in this process ([CoverVersions]): what the
+ * session and the car's lists hand out, so a cover Covers & tags changed is a new uri.
+ */
+fun coverUri(covers: CoverUris, song: Song): Uri = covers.of(coverPath(song), CoverVersions.of(song.path))
 
 /**
  * What [CarCovers] serves another app (the car) at [path]: song [path]'s embedded cover ([embedded], by its MediaStore id)
@@ -524,8 +530,11 @@ class CarCovers : ContentProvider() {
         @Volatile
         private var made: CoverUris? = null
 
-        /** The covers' uris in this build, under this install's key. */
-        fun uris(context: Context): CoverUris = made ?: CoverUris(authority(context), CoverKey.of(context)).also { made = it }
+        /** The covers' uris in this build, under this install's key, at the covers' versions kept between runs. */
+        fun uris(context: Context): CoverUris = made ?: run {
+            TagsGraph.readCoverVersions(context)
+            CoverUris(authority(context), CoverKey.of(context))
+        }.also { made = it }
 
         /**
          * The cover at [uri] for KJB's own surfaces, read in this process at the uri the car reads (the session's bitmap

@@ -905,6 +905,35 @@ fun songCoverRequest(context: Context, model: Any, at: CoverAt = CoverAt.ELSEWHE
 /** The extra on [barCoverKey] that sets the bar's bitmap apart. */
 private const val BAR_EXTRA = "kjb#bar"
 
+/** [path]'s cover as the player's backdrop asks for it: its version in this process ([CoverVersions]) is in its key. */
+@Composable
+fun backdropArt(path: String): SongArt {
+    val versions by CoverVersions.versions.collectAsState()
+    return SongArt(path, version = versions[path] ?: 0)
+}
+
+/**
+ * The key the player's backdrop keeps [art]'s small cover under in memory: the song's ([coverKey], so a cover Covers &
+ * tags changed is a new key) marked as the backdrop's, so its small bitmap never takes the place of a size the player or
+ * a row shows.
+ */
+fun backdropCoverKey(art: SongArt): MemoryCache.Key = MemoryCache.Key(coverKey(art), mapOf(BACKDROP_EXTRA to "1"))
+
+/**
+ * The player's backdrop's request for [art]: [BACKDROP_PX] square (blurred, a larger one would only cost decoding),
+ * kept under its own key ([backdropCoverKey]), and starting on whatever size of the song's cover is already in memory
+ * while it loads: the blur hides the size.
+ */
+fun backdropRequest(context: Context, art: SongArt): ImageRequest = ImageRequest.Builder(context)
+    .data(art)
+    .size(BACKDROP_PX)
+    .memoryCacheKey(backdropCoverKey(art))
+    .placeholderMemoryCacheKey(MemoryCache.Key(coverKey(art)))
+    .build()
+
+/** The extra on [backdropCoverKey] that sets the backdrop's bitmap apart. */
+private const val BACKDROP_EXTRA = "kjb#backdrop"
+
 /** The image loader of the whole app: song covers from MediaStore, cross-fading in. No network. */
 fun songImageLoader(context: Context): ImageLoader =
     ImageLoader.Builder(context)

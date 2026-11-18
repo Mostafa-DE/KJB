@@ -50,6 +50,78 @@ class ArtistSplitter(rules: ArtistSplit) {
         return start
     }
 
+    /**
+     * [tag] as Rename artist and Merge write it ([app.lyrify.tags.TagEdits.rename]): each name [names] reads in it that is
+     * one of [renamed] becomes [to], and everything else stays exactly as it was: the separators, brackets and spaces,
+     * and the other names, each piece of them given to [rest] (the credits TagEdits finds without the setting), the
+     * never-split names in it kept whole ("feat." inside one is no credit). One name spelled again in other letters is
+     * its first spelling for [names], so each spelling of a renamed one becomes [to]. A name that goes on past its
+     * credit's closing bracket ("Mira Solen (Live)" in "Kit Calloway (feat. Mira Solen) (Live)") becomes [to] inside the
+     * brackets, and its text after them goes. With the setting off, all of [tag] goes to [rest].
+     */
+    fun replace(tag: String, renamed: Set<String>, to: String, rest: (String) -> String): String {
+        if (separator == null) return rest(tag)
+        // The text between the cuts, by name: the piece after a cut that does not split stays with the name before it.
+        val names = mutableListOf(mutableListOf<IntRange>())
+        var at = 0
+        for (cut in cuts(tag)) {
+            names.last() += at until cut.range.first
+            if (cut.splits) names += mutableListOf<IntRange>()
+            at = cut.range.last + 1
+        }
+        names.last() += at until tag.length
+        val kept = exceptions(tag)
+        val texts = names.map { pieces -> pieces.joinToString("") { tag.substring(it) }.trim() }
+        val firstSpelling = HashMap<String, String>()
+        texts.forEach { if (it.isNotEmpty()) firstSpelling.putIfAbsent(it.lowercase(), it) }
+        val out = StringBuilder(tag.length)
+        var copied = 0
+        names.forEachIndexed { n, pieces ->
+            val renaming = texts[n].isNotEmpty() && firstSpelling[texts[n].lowercase()] in renamed
+            var placed = false
+            for (piece in pieces) {
+                out.append(tag, copied, piece.first)
+                copied = piece.last + 1
+                val raw = tag.substring(piece)
+                when {
+                    !renaming -> out.append(restOutside(tag, piece, kept, rest))
+                    raw.isBlank() -> out.append(raw)
+                    !placed -> {
+                        placed = true
+                        val name = raw.trim()
+                        val start = raw.indexOf(name)
+                        out.append(raw, 0, start).append(to).append(raw, start + name.length, raw.length)
+                    }
+                    // The renamed name's text past its credit's closing bracket goes with it.
+                }
+            }
+        }
+        return out.append(tag, copied, tag.length).toString()
+    }
+
+    /**
+     * [tag]'s text at [piece] through [rest], but for the never-split names ([kept], in [tag]) in it, copied as they are;
+     * all of it through [rest] when it holds none.
+     */
+    private fun restOutside(tag: String, piece: IntRange, kept: List<IntRange>, rest: (String) -> String): String {
+        val inside = kept.filter { it.first <= piece.last && piece.first <= it.last }
+        if (inside.isEmpty()) return rest(tag.substring(piece))
+        val out = StringBuilder()
+        var at = piece.first
+        for (name in inside) {
+            val from = maxOf(name.first, at)
+            val until = minOf(name.last, piece.last) + 1
+            if (from > at) out.append(rest(tag.substring(at, from)))
+            out.append(tag, from, until)
+            at = until
+        }
+        if (at <= piece.last) out.append(rest(tag.substring(at, piece.last + 1)))
+        return out.toString()
+    }
+
+    /** Where [text] holds a never-split name, in order and apart. */
+    private fun exceptions(text: String): List<IntRange> = exception?.findAll(text)?.map { it.range }?.toList().orEmpty()
+
     /** Text cut out of a tag at [range]: a separator, which [splits] it, or a bracketed credit's closing bracket, dropped. */
     private class Cut(val range: IntRange, val splits: Boolean)
 
@@ -59,12 +131,13 @@ class ArtistSplitter(rules: ArtistSplit) {
      */
     private fun cuts(text: String): List<Cut> {
         val separator = separator ?: return emptyList()
-        val kept = exception?.findAll(text)?.map { it.range }?.toList().orEmpty()
+        val kept = exceptions(text)
         val cuts = ArrayList<Cut>()
         for (match in separator.findAll(text)) {
             if (kept.any { it.first <= match.range.last && match.range.first <= it.last }) continue
             cuts += Cut(match.range, splits = true)
-            val bracket = match.groups[BRACKET]?.value?.single() ?: continue
+            // Marks alone make a pattern with no bracket group to ask for.
+            val bracket = match.groups.takeIf { it.size > BRACKET }?.get(BRACKET)?.value?.single() ?: continue
             val close = closing(text, bracket, match.range.last + 1)
             if (close >= 0) cuts += Cut(close..close, splits = false)
         }
