@@ -44,7 +44,7 @@ import kotlin.random.Random
  */
 const val LOOKUP_REV: Int = 2
 
-/** A local audio file with its MediaStore tags. [path] is absolute; the file itself is never opened. */
+/** A local audio file with its MediaStore tags. [path] is absolute; the file itself is only ever read, for its tags' lyrics. */
 data class LocalTrack(
     val path: String,
     val title: String,
