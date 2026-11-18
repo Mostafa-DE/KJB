@@ -86,7 +86,8 @@ sealed interface Restored {
 /**
  * What happens to a song once the phone moved its audio file to its trash: the `.lrc` KJB wrote for it goes (only
  * while byte for byte what KJB wrote), its ledger entry is updated, and it leaves the playlists and Favourites. A `.lrc`
- * KJB did not write stays. The lyrics pipeline and the playlists store in the app.
+ * KJB did not write stays. The lyrics pipeline and the playlists store in the app. It has left the queues already
+ * ([SongTrash]'s leaveQueues).
  */
 fun interface TrashCleanup {
     suspend fun trashed(audioPath: String)
@@ -360,6 +361,8 @@ class SongTrash(
             return null
         }
         val trashed = pending.filter { it.id in expiries }
+        // The queues first, all at once: a song playing among them gives way to the next one left straight away.
+        if (trashed.isNotEmpty()) leaveQueues(trashed.mapTo(LinkedHashSet()) { it.path })
         for (file in trashed) cleanup.trashed(file.path)
         val ids = trashed.map { it.id }.toSet()
         val now = clock()

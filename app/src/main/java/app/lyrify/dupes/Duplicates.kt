@@ -7,6 +7,7 @@ import app.lyrify.Lyrify
 import app.lyrify.library.LibraryGraph
 import app.lyrify.logFailures
 import app.lyrify.lyrics.LrcFormat
+import app.lyrify.player.PlayerGraph
 import app.lyrify.tags.TagsGraph
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -355,6 +356,7 @@ private object DuplicatesHolder {
             io = Dispatchers.IO,
             clock = System::currentTimeMillis,
             ownWrite = kjbTagWrites { TagsGraph.undo(app).memory() },
+            leaveQueues = { paths -> withContext(Dispatchers.Main) { PlayerGraph.core(app).trashed(paths) } },
             log = { Log.d(LOG_TAG, it) },
         )
     }.also { engine = it }
