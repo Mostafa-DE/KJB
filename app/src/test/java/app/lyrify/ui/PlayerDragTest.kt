@@ -1,6 +1,8 @@
 package app.lyrify.ui
 
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.PointerId
+import androidx.compose.ui.input.pointer.PointerInputChange
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -118,5 +120,21 @@ class PlayerDragTest {
         assertEquals(SheetDrag.LEAVE, sidewaysDrag(Offset(19f, 24f), slop))
         assertEquals(SheetDrag.LEAVE, sidewaysDrag(Offset(3f, 30f), slop))
         assertEquals(SheetDrag.LEAVE, sidewaysDrag(Offset(3f, -30f), slop))
+    }
+
+    @Test
+    fun `once a sideways drag is taken, every move of it counts to the lift, not only the first`() {
+        // Review 2026-11-18: the move was read after the change was consumed, and a consumed change reports none, so an
+        // A-B handle stopped following the finger once it had passed the slop.
+        var x = 100f
+        var dragged = 0f
+        repeat(4) { frame ->
+            val change = PointerInputChange(PointerId(1L), uptimeMillis = 16L * (frame + 1), position = Offset(x + 30f, 52f), pressed = true, previousUptimeMillis = 16L * frame, previousPosition = Offset(x, 50f), previousPressed = true, isInitiallyConsumed = false)
+            dragged += change.takeMoveX()
+            // Still taken: nothing under the bar or the handle sees it.
+            assertTrue(change.isConsumed)
+            x += 30f
+        }
+        assertEquals(120f, dragged, 0f)
     }
 }

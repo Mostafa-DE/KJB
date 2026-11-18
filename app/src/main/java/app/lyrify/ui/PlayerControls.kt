@@ -184,10 +184,16 @@ internal suspend fun PointerInputScope.detectSidewaysDrag(
                 onDragEnd()
                 return@awaitEachGesture
             }
-            change.consume()
-            onDrag(change, change.positionChange().x)
+            onDrag(change, change.takeMoveX())
         }
     }
+}
+
+/** This change's move along x, the change then consumed: read first, as a consumed change reports no move at all. */
+internal fun PointerInputChange.takeMoveX(): Float {
+    val dx = positionChange().x
+    consume()
+    return dx
 }
 
 /**

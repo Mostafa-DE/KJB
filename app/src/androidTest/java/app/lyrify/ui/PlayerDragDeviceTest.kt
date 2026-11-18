@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Text
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
@@ -15,6 +16,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.lerp
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
@@ -50,6 +52,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import kotlin.math.abs
 
 /**
  * The player dragged down from anywhere on it (DR1, user request 2026-11-17), under a real finger, on the player's own
@@ -187,6 +190,44 @@ class PlayerDragDeviceTest {
     }
 
     @Test
+    fun aDragAlongTheSeekBarFollowsTheFingerPastTheSlopToWhereItLifts() {
+        player()
+        compose.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.SetProgress)).performTouchInput {
+            swipe(Offset(width * 0.1f, centerY), Offset(width * 0.8f, centerY), durationMillis = 400)
+        }
+        compose.runOnIdle {
+            // Where the finger lifted, 80% of the song in: the bar followed it all the way, not only past the slop.
+            val seek = seeks.single()
+            assertTrue("seeked to $seek", abs(seek - DURATION_MS * 8 / 10) <= DURATION_MS / 50)
+            assertEquals(0, closed)
+        }
+    }
+
+    @Test
+    fun anABHandleDraggedSidewaysFollowsTheFingerAllTheWay() {
+        // Review 2026-11-18: the handle stopped once the finger had passed the touch slop (its move was read after the
+        // change was consumed). Dragged 40% of the bar to the right, the part's start moves 40% of the song.
+        var moved = -1L
+        var done = 0
+        compose.setContent {
+            LyrifyTheme {
+                Box(Modifier.width(BAR)) {
+                    val width = with(LocalDensity.current) { BAR.toPx() }
+                    PartHandle(start = true, ms = PART_START_MS, durationMs = DURATION_MS, width = width, onDrag = { moved = it }, onDone = { done++ }, onSet = {})
+                }
+            }
+        }
+        compose.onNodeWithContentDescription(PART_START).performTouchInput {
+            val by = with(compose.density) { BAR.toPx() } * 0.4f
+            swipe(center, center + Offset(by, 0f), durationMillis = 400)
+        }
+        compose.runOnIdle {
+            assertTrue("moved to $moved", abs(moved - (PART_START_MS + DURATION_MS * 4 / 10)) <= DURATION_MS / 50)
+            assertEquals(1, done)
+        }
+    }
+
+    @Test
     fun aDragDownFromASeekButtonClosesThePlayerWithNoJump() {
         player()
         val pull = pull()
@@ -265,7 +306,7 @@ class PlayerDragDeviceTest {
         val songs = listOf("Paper Lantern", "Harbour Glass").map { SongRef("/Music/KJB test/$it.mp3") }
         val book = QueueBook().play(songs, 0, QueueSource(SourceKind.ALBUM, "album:x", "Harbour Demo"), now = 1).book
         val queue = book.current!!
-        return PlayerUi(book, queue, queue.current!!, song = null, playing = false, positionMs = 0, at = 0, speed = 1f, durationMs = 200_000, repeat = Repeat.OFF, library = null)
+        return PlayerUi(book, queue, queue.current!!, song = null, playing = false, positionMs = 0, at = 0, speed = 1f, durationMs = DURATION_MS, repeat = Repeat.OFF, library = null)
     }
 
     private companion object {
@@ -276,6 +317,10 @@ class PlayerDragDeviceTest {
         const val NEXT = "Next"
         const val CLOSE = "Close the player"
         const val PANE = "Player"
+        const val PART_START = "Part start, A"
+        const val DURATION_MS = 200_000L
+        const val PART_START_MS = 50_000L
+        val BAR = 320.dp
         const val COVER_TAG = "cover"
         const val LYRICS = "lyrics"
         const val STEPS = 12
