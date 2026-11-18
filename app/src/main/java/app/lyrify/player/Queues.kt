@@ -316,16 +316,20 @@ data class QueueBook(
     }
 
     /**
-     * Shuffle on the queue playing: on, the songs after the current one are shuffled; off, the order before comes back,
-     * with songs added meanwhile at the end and Play next songs still waiting right after the current one.
+     * Shuffle on the queue playing: on, the current song goes first and plays on from where it is, the Play next songs
+     * still waiting right after it in their order, then every other song, before it or after it, in a random order (3.1;
+     * before, the songs before it stayed above it); off, the order before comes back, with songs added meanwhile at the
+     * end and Play next songs still waiting right after the current one.
      */
     fun toggleShuffle(random: Random): QueueBook {
         val queue = current ?: return this
-        val currentUid = queue.current?.uid ?: return this
+        val playing = queue.current ?: return this
+        val currentUid = playing.uid
         val unshuffled = queue.unshuffled
         if (unshuffled == null) {
-            val items = queue.items.take(queue.index + 1) + queue.items.drop(queue.index + 1).shuffled(random)
-            return edit(queue.id) { it.copy(items = items, unshuffled = queue.items.map { item -> item.uid }) }
+            val (waiting, rest) = queue.items.filterNot { it.uid == currentUid }.partition { it.playNext }
+            val items = listOf(playing) + waiting + rest.shuffled(random)
+            return edit(queue.id) { it.copy(items = items, index = 0, unshuffled = queue.items.map { item -> item.uid }) }
         }
         val byUid = queue.items.associateBy { it.uid }
         val known = unshuffled.toSet()

@@ -412,7 +412,7 @@ private fun CountLabel(count: Int, @PluralsRes noun: Int) {
 
 /** Shuffle or Play: a 40 dp capsule with its icon and word ([label]), or the icon alone in a circle; a 48 dp tap. */
 @Composable
-private fun HeaderButton(@DrawableRes icon: Int, text: String, enabled: Boolean, primary: Boolean, label: Boolean, onClick: () -> Unit) {
+internal fun HeaderButton(@DrawableRes icon: Int, text: String, enabled: Boolean, primary: Boolean, label: Boolean, onClick: () -> Unit) {
     val chrome = LocalChromeColors.current
     val colors = MaterialTheme.colorScheme
     val fill = when {

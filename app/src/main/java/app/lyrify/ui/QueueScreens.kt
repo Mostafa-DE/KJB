@@ -1,6 +1,19 @@
 package app.lyrify.ui
 
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.layout.Placeable
+import androidx.compose.ui.layout.SubcomposeLayout
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.mutableFloatStateOf
@@ -81,6 +94,7 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -107,8 +121,9 @@ import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 // Queues (P1, QF3): the Queue sheet from the player, the Queues page (the queue playing, then Recent; no Saved part
-// since the user's first day with 3.0.0), and a queue's own page. A queue's list opens with its song in view, reorders
-// by dragging its handle and loses a song by a swipe to the start; "Remove from queue" is the visible twin.
+// since the user's first day with 3.0.0), and a queue's own page. The sheet opens with its song in view, a queue's page
+// at its top (3.1); a queue's list reorders by dragging its handle and loses a song by a swipe to the start; "Remove
+// from queue" is the visible twin.
 
 /** Queues (the queue playing, then Recent), or one queue's page. */
 @Composable
@@ -120,10 +135,24 @@ fun QueuePage(page: Page.QueuePages) {
 }
 
 /**
- * The first row a queue's list shows as it opens, so the song at [index] is in view with the song before it above it;
- * while it is among the first two, the list opens at its top, its [head] rows (those above the songs) showing.
+ * The first row the Queue sheet's list shows as it opens, so the song at [index] is in view with the song before it
+ * above it; while it is among the first two, the list opens at its top, its [head] rows (those above the songs)
+ * showing.
  */
 fun firstShown(index: Int, head: Int): Int = if (index <= 1) 0 else head + index - 1
+
+/** A queue page's list: its head (row 0), then Resume and Play from start (row 1, pinned), then its songs. */
+private const val BUTTONS_ROW = 1
+
+/**
+ * How a queue page's head shows with its list at [firstIndex] (the first row shown) and [firstOffset] px into it:
+ * [folded] once the head (name, size, place) has scrolled away, the top bar naming the queue instead; [edge] while
+ * songs run under the pinned buttons, which then show a hairline under them.
+ */
+data class QueueHeadFold(val folded: Boolean, val edge: Boolean)
+
+fun queueHeadFold(firstIndex: Int, firstOffset: Int): QueueHeadFold =
+    QueueHeadFold(folded = firstIndex >= BUTTONS_ROW, edge = firstIndex > BUTTONS_ROW || (firstIndex == BUTTONS_ROW && firstOffset > 0))
 
 /** "Song 4 of 12 · 1:42": where a queue is, for the queue playing at the live [ui] position. */
 private fun place(context: Context, queue: Queue, ui: PlayerUi?): String {
@@ -260,9 +289,11 @@ private fun QueueLine(queue: Queue, book: QueueBook, onOpen: () -> Unit) {
 }
 
 /**
- * A queue's own page: its name and place, Resume (or Play/Pause while it plays) and Play from start, then its songs.
- * Delete sits in the top bar beside Add to; it goes back to where the page was opened from, and its toast's Undo brings
- * the queue back and opens it again.
+ * A queue's own page: its name and place, then Resume (or Play/Pause while it plays) and Play from start, pinned under
+ * the top bar while the songs scroll ([QueueButtons]), then its songs. It opens at its top, on those buttons, the song
+ * here marked further down (3.1: it opened at that song, the buttons scrolled away); once the head has scrolled away
+ * the top bar names the queue ([queueHeadFold]). Delete sits in the top bar beside Add to; it goes back to where the
+ * page was opened from, and its toast's Undo brings the queue back and opens it again.
  */
 @Composable
 private fun OneQueuePage(id: String) {
@@ -285,10 +316,17 @@ private fun OneQueuePage(id: String) {
     SettleReorder(queue?.items, reorder)
     var dialog by remember { mutableStateOf<QueueDialog?>(null) }
     val sheets = rememberSongSheets()
+    val list = rememberLazyListState()
+    val fold by remember(list) { derivedStateOf { queueHeadFold(list.firstVisibleItemIndex, list.firstVisibleItemScrollOffset) } }
+    val reduced = LocalReducedMotion.current
     PageFrame(
         topBar = { under, backdrop ->
             LyrifyTopBar(
-                title = {},
+                title = {
+                    AnimatedVisibility(queue != null && fold.folded, enter = fadeIn(motion(tween(Motion.QUICK_MS), reduced)), exit = fadeOut(motion(tween(Motion.QUICK_MS), reduced))) {
+                        queue?.let { Text(queueLabel(context, book, it), maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                    }
+                },
                 under = under,
                 backdrop = backdrop,
                 navigation = { ChromeIconButton(R.drawable.ic_arrow_back, stringResource(R.string.check_back), { nav.back() }) },
@@ -312,24 +350,32 @@ private fun OneQueuePage(id: String) {
             return@PageFrame
         }
         val playing = id == book.currentId
-        // The page opens with the song here in view, under the page's head.
-        val list = rememberLazyListState(firstShown(queue.index, head = 1))
-        LazyColumn(state = list, contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = padding.calculateBottomPadding() + 16.dp)) {
-            item {
-                Column(Modifier.fillMaxWidth().padding(horizontal = ScreenPadding, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        // Under the top bar, not behind it: the pinned buttons sit right under the bar, nothing showing above them.
+        LazyColumn(Modifier.padding(top = padding.calculateTopPadding()), state = list, contentPadding = PaddingValues(bottom = padding.calculateBottomPadding() + 16.dp)) {
+            item(key = "head", contentType = "head") {
+                Column(Modifier.fillMaxWidth().padding(start = ScreenPadding, end = ScreenPadding, top = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     if (playing) StatusPill(stringResource(R.string.queues_playing), tone = null, icon = R.drawable.ic_graphic_eq)
                     Text(queueLabel(context, book, queue), style = MaterialTheme.typography.headlineMedium, modifier = Modifier.semantics { heading() })
                     Text(pluralStringResource(R.plurals.queue_songs, queue.items.size, queue.items.size), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(place(context, queue, ui), style = MaterialTheme.typography.bodyMedium.tabular(), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
-                        if (playing) {
-                            val on = ui?.playing == true
-                            LyrifyButton(stringResource(if (on) R.string.player_pause else R.string.player_play), connection::playPause, icon = if (on) R.drawable.ic_pause_fill else R.drawable.ic_play_arrow_fill)
-                        } else {
-                            LyrifyButton(stringResource(R.string.queue_resume), { connection.resume(id) }, icon = R.drawable.ic_play_arrow_fill)
-                        }
-                        LyrifyButton(stringResource(R.string.queue_from_start), { connection.playFromStart(id) }, kind = ButtonKind.SECONDARY, icon = R.drawable.ic_replay)
-                    }
+                }
+            }
+            stickyHeader(key = "buttons", contentType = "buttons") {
+                // A hairline under the pinned buttons only while songs run under them, as Onboarding's pinned bar.
+                val line by animateColorAsState(if (fold.edge) MaterialTheme.colorScheme.outlineVariant else Color.Transparent, motion(tween(Motion.FADE_IN_MS), reduced), label = "queue buttons edge")
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(pageSurface)
+                        .drawBehind { drawRect(line, Offset(0f, size.height - 1.dp.toPx()), Size(size.width, 1.dp.toPx())) }
+                        .padding(horizontal = ScreenPadding, vertical = 10.dp),
+                ) {
+                    QueueButtons(
+                        playing = playing,
+                        on = playing && ui?.playing == true,
+                        onResume = { if (playing) connection.playPause() else connection.resume(id) },
+                        onFromStart = { connection.playFromStart(id) },
+                    )
                 }
             }
             queueSongs(queue, playing, library, names, connection, reorder, pageSurface, onRemoved = { undo ->
@@ -339,6 +385,46 @@ private fun OneQueuePage(id: String) {
     }
     QueueDialogs(dialog, queue, book, connection, onDone = { dialog = null }, onDeleting = { leaving = it })
     SongSheetsHost(sheets)
+}
+
+/**
+ * A queue page's Resume (Play or Pause while the queue plays) and Play from start, as a list header's Play and Shuffle
+ * ([ListHeader]): on a narrow screen or at a large font, Play from start drops its word first, then Resume
+ * ([headerFit]), so both stay on one line; TalkBack hears each by its name.
+ */
+@Composable
+internal fun QueueButtons(playing: Boolean, on: Boolean, onResume: () -> Unit, onFromStart: () -> Unit) {
+    val resume = stringResource(
+        when {
+            !playing -> R.string.queue_resume
+            on -> R.string.player_pause
+            else -> R.string.player_play
+        },
+    )
+    val resumeIcon = if (on) R.drawable.ic_pause_fill else R.drawable.ic_play_arrow_fill
+    val fromStart = stringResource(R.string.queue_from_start)
+    SubcomposeLayout(Modifier.fillMaxWidth()) { constraints ->
+        val loose = constraints.copy(minWidth = 0, minHeight = 0)
+        fun measure(slot: String, content: @Composable () -> Unit) = subcompose(slot, content).map { it.measure(loose) }
+        fun width(parts: Map<Boolean, List<Placeable>>) = PartWidth(parts.getValue(true).sumOf { it.width }, parts.getValue(false).sumOf { it.width })
+        val gap = 8.dp.roundToPx()
+        val resumes = listOf(true, false).associateWith { label ->
+            measure("resume $label") { HeaderButton(resumeIcon, resume, enabled = true, primary = true, label = label, onClick = onResume) }
+        }
+        val starts = listOf(true, false).associateWith { label ->
+            measure("start $label") { HeaderButton(R.drawable.ic_replay, fromStart, enabled = true, primary = false, label = label, onClick = onFromStart) }
+        }
+        // Play from start stands where a list header's Shuffle does: the first to drop its word.
+        val fit = headerFit(constraints.maxWidth, fixed = gap, shuffle = width(starts), play = width(resumes), chip = null)
+        val first = resumes.getValue(fit.playLabel)
+        val second = starts.getValue(fit.shuffleLabel)
+        val height = (first + second).maxOfOrNull { it.height } ?: 0
+        layout(constraints.maxWidth, height) {
+            first.forEach { it.placeRelative(0, (height - it.height) / 2) }
+            val x = first.sumOf { it.width } + gap
+            second.forEach { it.placeRelative(x, (height - it.height) / 2) }
+        }
+    }
 }
 
 /**
@@ -457,10 +543,11 @@ private fun NameDialog(title: String, field: String, start: String, confirm: Str
 }
 
 /**
- * The Queue sheet, from the player: the queue's name and where it is ("12 of 48") with "All queues", the Recent chips
- * (the other queues, as the Queues page lists them; each opens that queue's page, and none shows without one), then the
- * list, opening with the current song marked and in view; "Save as playlist" at the foot. A lazy list in a sheet of its
- * own, as LyrifySheet draws it: a queue may hold the whole library.
+ * The Queue sheet, from the player: the queue's name and where it is ("12 of 48") with "All queues", then the list,
+ * opening with the current song marked and in view; at the foot ([QueueSheetFoot]), pinned whatever the list's scroll,
+ * "Save as playlist" and the other queues ([OtherQueues], as the Queues page lists them; each opens that queue's page,
+ * and none shows without one). A lazy list in a sheet of its own, as LyrifySheet draws it: a queue may hold the whole
+ * library.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -482,6 +569,7 @@ fun QueueSheet(onDismiss: () -> Unit) {
     val reorder = remember { Reorder() }
     SettleReorder(book.current?.items, reorder)
     val top = WindowInsets.statusBars.getTop(LocalDensity.current)
+    val footMax = with(LocalDensity.current) { queueSheetFootMax(LocalWindowInfo.current.containerSize.height.toDp()) }
     val open: (Page) -> Unit = { page ->
         onDismiss()
         nav.open(page)
@@ -516,8 +604,8 @@ fun QueueSheet(onDismiss: () -> Unit) {
             }
             val others = book.others
             val labels = remember(context, book) { queueLabels(context, book) }
-            // The sheet opens with the song playing in view, under the head and the chips.
-            val list = rememberLazyListState(firstShown(queue.index, head = if (others.isEmpty()) 1 else 2))
+            // The sheet opens with the song playing in view, under the head.
+            val list = rememberLazyListState(firstShown(queue.index, head = 1))
             LazyColumn(Modifier.weight(1f, fill = false), state = list) {
                 item {
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 20.dp, end = 12.dp)) {
@@ -532,26 +620,55 @@ fun QueueSheet(onDismiss: () -> Unit) {
                         LyrifyButton(stringResource(R.string.queue_all), { open(Page.Queues) }, kind = ButtonKind.GHOST, compact = true)
                     }
                 }
-                if (others.isNotEmpty()) {
-                    item {
-                        SectionTitle(stringResource(R.string.queue_recent), Modifier.padding(start = 20.dp, end = 20.dp, top = 12.dp))
-                        RecentChips(others, labels) { open(Page.Queue(it)) }
-                    }
-                }
                 queueSongs(queue, playing = true, library, names, connection, reorder, sheetSurface, onRemoved = { undo ->
                     scope.launch { if (toasts.show(Toast(resources.getString(R.string.queue_removed), R.drawable.ic_playlist_remove, action = undo?.let { resources.getString(R.string.player_undo) }))) undo?.undo() }
                 })
             }
             ToastSlot(Modifier.padding(horizontal = 12.dp), padding = PaddingValues(bottom = 8.dp))
-            LyrifyButton(stringResource(R.string.queue_save_playlist), { saving = true }, Modifier.fillMaxWidth().padding(16.dp), kind = ButtonKind.SECONDARY, icon = R.drawable.ic_playlist_add)
+            QueueSheetFoot(others, labels, footMax, onSave = { saving = true }) { open(Page.Queue(it)) }
             if (saving) SaveAsPlaylistDialog(queue, connection) { saving = false }
         }
     }
 }
 
 /**
- * The Queue sheet's Recent chips: [others] by their names in [labels] ([queueLabels]), each one capped in width. A lazy
- * row, as every kept queue shows here; a tap opens that queue's page by its id ([onOpen]).
+ * The Queue sheet's other queues (3.1), pinned at its foot under a line: their title, a line saying what they are (the
+ * user took the chips under the old "Recent" for lyrics), then a chip for each ([RecentChips]), which opens that
+ * queue's page ([onOpen], by its id).
+ */
+@Composable
+internal fun OtherQueues(others: List<Queue>, labels: Map<String, String>, onOpen: (String) -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(bottom = 12.dp)) {
+        HorizontalDivider(Modifier.padding(horizontal = 8.dp), color = MaterialTheme.colorScheme.outlineVariant)
+        SectionTitle(stringResource(R.string.queue_others), Modifier.padding(start = 20.dp, end = 20.dp, top = 12.dp))
+        Text(
+            stringResource(R.string.queue_others_hint),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 20.dp),
+        )
+        RecentChips(others, labels, onOpen)
+    }
+}
+
+/** The most of a window's height ([window]) the Queue sheet's foot takes ([QueueSheetFoot]); the songs get the rest. */
+internal fun queueSheetFootMax(window: Dp): Dp = window * FOOT_SHARE
+
+/**
+ * The Queue sheet's foot: Save as playlist, then the other queues ([OtherQueues]). It keeps to [maxHeight] and scrolls
+ * past it, so in a short window (a phone on its side, split screen, a large font) the songs above it keep their room.
+ */
+@Composable
+internal fun QueueSheetFoot(others: List<Queue>, labels: Map<String, String>, maxHeight: Dp, onSave: () -> Unit, onOpen: (String) -> Unit) {
+    Column(Modifier.heightIn(max = maxHeight).verticalScroll(rememberScrollState())) {
+        LyrifyButton(stringResource(R.string.queue_save_playlist), onSave, Modifier.fillMaxWidth().padding(16.dp), kind = ButtonKind.SECONDARY, icon = R.drawable.ic_playlist_add)
+        if (others.isNotEmpty()) OtherQueues(others, labels, onOpen)
+    }
+}
+
+/**
+ * The Queue sheet's other queues as chips: [others] by their names in [labels] ([queueLabels]), each one capped in
+ * width. A lazy row, as every kept queue shows here; a tap opens that queue's page by its id ([onOpen]).
  */
 @Composable
 internal fun RecentChips(others: List<Queue>, labels: Map<String, String>, onOpen: (String) -> Unit) {
@@ -825,6 +942,9 @@ private fun QueueSongRow(
 
 /** A queue row's height (.qrow, 60 dp), taller when its two lines need it at a large font scale; a drag moves a song by whole rows. */
 private val ROW = 60.dp
+
+/** The share of the window's height the Queue sheet's foot may take before it scrolls. */
+private const val FOOT_SHARE = 0.4f
 
 /** A Recent chip's widest name; a longer one ends in an ellipsis. */
 private val CHIP_NAME_MAX = 220.dp

@@ -539,17 +539,42 @@ class QueuesTest {
 
     // Shuffle
 
+    // 3.1 (user 2026-11-18): Shuffle with a song playing puts that song first and shuffles every other one after it, the
+    // songs before it too; before, only the songs after it were shuffled and the ones before stayed above it.
     @Test
-    fun `Shuffle reorders only what comes next, and turning it off restores the order`() {
-        val book = playing(2)
+    fun `Shuffle puts the song playing first, where it is in it, and every other song after it, and off restores the order`() {
+        val book = playing(2).place(2, 61_000)
         val on = book.toggleShuffle(Random(7))
         assertTrue(on.current!!.shuffled)
-        assertEquals(paths(book.current).take(3), paths(on.current).take(3))
-        assertEquals(paths(book.current).drop(3).toSet(), paths(on.current).drop(3).toSet())
+        assertEquals(0, on.current!!.index)
+        assertEquals(book.current!!.current!!.uid, on.current!!.current!!.uid)
+        assertEquals(61_000L, on.current!!.positionMs)
+        assertEquals(paths(book.current).toSet() - "Harbour Glass 3", paths(on.current).drop(1).toSet())
+        // The songs before it mix in with the ones after it, rather than following them.
+        assertTrue((1..20).any { seed -> paths(book.toggleShuffle(Random(seed)).current)[1] in setOf("Harbour Glass 1", "Harbour Glass 2") })
         val off = on.toggleShuffle(Random(7))
         assertEquals(paths(book.current), paths(off.current))
         assertEquals("Harbour Glass 3", currentName(off))
+        assertEquals(2, off.current!!.index)
+        assertEquals(61_000L, off.current!!.positionMs)
         assertFalse(off.current!!.shuffled)
+    }
+
+    @Test
+    fun `Shuffle keeps the Play next songs waiting right after the song playing, in their order`() {
+        val book = playing(2).playNext(listOf(folder[0], folder[1]), picked, now = 2)!!.book
+        val before = listOf("Harbour Glass 1", "Harbour Glass 2", "Harbour Glass 3", "Rips 1", "Rips 2", "Harbour Glass 4", "Harbour Glass 5", "Harbour Glass 6")
+        assertEquals(before, paths(book.current))
+        (1..20).forEach { seed ->
+            val on = book.toggleShuffle(Random(seed))
+            assertEquals(listOf("Harbour Glass 3", "Rips 1", "Rips 2"), paths(on.current).take(3))
+            assertEquals(listOf(false, true, true), on.current!!.items.take(3).map { it.playNext })
+            assertEquals(setOf("Harbour Glass 1", "Harbour Glass 2", "Harbour Glass 4", "Harbour Glass 5", "Harbour Glass 6"), paths(on.current).drop(3).toSet())
+            assertEquals(before, paths(on.toggleShuffle(Random(seed)).current))
+        }
+        // Still waiting: another Play next goes after them.
+        val more = book.toggleShuffle(Random(1)).playNext(listOf(folder[2]), picked, now = 3)!!.book
+        assertEquals(listOf("Harbour Glass 3", "Rips 1", "Rips 2", "Rips 3"), paths(more.current).take(4))
     }
 
     @Test
@@ -559,6 +584,20 @@ class QueuesTest {
         val next = added.playNext(listOf(folder[1]), picked, now = 2)!!.book
         val off = next.toggleShuffle(Random(3))
         assertEquals(listOf("Harbour Glass 1", "Rips 2", "Harbour Glass 2", "Harbour Glass 3", "Harbour Glass 4", "Harbour Glass 5", "Harbour Glass 6", "Rips 1"), paths(off.current))
+    }
+
+    @Test
+    fun `Shuffle also brings a Play next song the queue jumped past right after the song playing`() {
+        // Rips 1 waits after the first song; a tap further down the list plays Harbour Glass 4 and leaves it waiting.
+        val book = playing(0).playNext(listOf(folder[0]), picked, now = 2)!!.book.play(album, 3, albumSource, now = 3).book
+        assertEquals("Harbour Glass 4", currentName(book))
+        assertEquals(listOf("Harbour Glass 1", "Rips 1"), paths(book.current).take(2))
+        assertTrue(book.current!!.items[1].playNext)
+        val on = book.toggleShuffle(Random(5))
+        assertEquals(listOf("Harbour Glass 4", "Rips 1"), paths(on.current).take(2))
+        val off = on.toggleShuffle(Random(5))
+        assertEquals(paths(book.current), paths(off.current))
+        assertEquals(4, off.current!!.index)
     }
 
     @Test
