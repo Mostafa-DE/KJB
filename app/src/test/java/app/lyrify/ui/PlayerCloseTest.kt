@@ -214,6 +214,27 @@ class PlayerCloseTest {
         assertEquals(spring(4 * FRAME_MS, 0f, 0f, velocity) / HEIGHT, guessed[4], 0.0005f)
     }
 
+    @Test
+    fun `shown again after a fling, the fades' lead goes home from where it is, never on down with the fling`() = runTest {
+        // Review 2026-11-18: shown again, the card and the cover let go of the fling's speed (rest), and the lead the fades
+        // follow kept it, still carrying them toward the bar for a few frames.
+        val (player, bar) = ends()
+        player.placed(top = 0f, height = HEIGHT)
+        bar.placed(top = BAR_TOP, height = 180f)
+        val drawn = mutableListOf<Float>()
+        lateinit var frames: CoroutineScope
+        frames = this + Frames {
+            drawn += player.along()
+            // Shown again 32 ms into the hardest fling, while the lead is still gaining.
+            if (drawn.size == 3) player.rest(frames)
+        }
+        player.letGo(CLOSE_MOMENTUM_DP * DENSITY, frames)
+        advanceUntilIdle()
+        assertTrue("${drawn[2]}", drawn[2] > 0.05f)
+        drawn.drop(2).zipWithNext().forEachIndexed { frame, (a, b) -> assertTrue("frame ${frame + 2}: $a to $b", b <= a) }
+        assertEquals(0f, drawn.last(), 0.001f)
+    }
+
     /** The shell's two ends, sharing where the bar sits: the player's, [closing] of the way into the bar, and the bar's. */
     private fun ends(closing: () -> Float = { 0f }): Pair<Container, Container> {
         val barTop = Kept(Float.NaN)

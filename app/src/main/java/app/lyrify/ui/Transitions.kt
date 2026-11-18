@@ -394,7 +394,7 @@ class Container(
         carried = false
         surface?.prepareTransitionWithInitialVelocity(Velocity.Zero)
         cover?.prepareTransitionWithInitialVelocity(Velocity.Zero)
-        scope.launch { lead.animateTo(0f, Motion.close()) }
+        scope.launch { lead.animateTo(0f, Motion.close(), initialVelocity = 0f) }
     }
 }
 
