@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The bottom bar the user makes, and the tab Library opens on (KJB 3.1, user feedback 2026-11-17 items 1 and 14). -->
+    <string name="nav_queues">Queues</string>
+    <string name="nav_favourites">Favourites</string>
+    <string name="nav_downloads">Downloads</string>
+    <string name="nav_books">Books</string>
+
+    <!-- Settings > Display > Bottom bar. -->
+    <string name="set_bar">Bottom bar</string>
+    <plurals name="set_bar_value">
+        <item quantity="one">%1$s, %2$d icon</item>
+        <item quantity="other">%1$s, %2$d icons</item>
+    </plurals>
+    <string name="set_bar_look">Look</string>
+    <string name="set_bar_standard">Standard</string>
+    <string name="set_bar_standard_detail">Each icon over its name</string>
+    <string name="set_bar_slim">Slim</string>
+    <string name="set_bar_slim_detail">Icons only, on a thinner bar. Hold an icon to see its name.</string>
+    <string name="set_bar_icons">Icons</string>
+    <string name="set_bar_icons_sheet">Up to 6, in the order you like. Use the arrows to move one. Library always stays.</string>
+    <string name="set_bar_full">The bar is full. Switch one off to add another.</string>
+    <string name="set_bar_library">Always on the bar</string>
+    <string name="set_bar_left_off">No room on the bar. Switch another off to show it.</string>
+    <string name="set_bar_hide">Hide while scrolling</string>
+    <string name="set_bar_hide_detail">Scroll down and the bar slides away</string>
+
+    <!-- Settings > Library tabs: where Library opens. -->
+    <string name="set_tabs_opens">Library opens on %1$s</string>
+    <string name="set_tabs_opens_first">The first tab in the order. Hold a tab in Library to choose another.</string>
+    <string name="set_tabs_opens_chosen">You chose it. Hold a tab in Library to change it.</string>
+    <string name="set_tabs_opens_reset">Use the first</string>
+    <string name="set_tabs_opens_here">Library opens here</string>
+
+    <!-- Library: hold a tab. -->
+    <string name="lib_tab_hold">Choose where Library opens</string>
+    <string name="lib_open_first">Open here first</string>
+    <string name="lib_opens_on">Library opens on %1$s</string>
+</resources>

@@ -35,6 +35,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -50,6 +52,7 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -116,6 +119,7 @@ import app.lyrify.player.queueLabel
 import app.lyrify.player.queueLabels
 import app.lyrify.player.sourceLabel
 import app.lyrify.settings.LibrarySettings
+import app.lyrify.settings.DockTab
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
@@ -125,11 +129,11 @@ import kotlin.math.roundToInt
 // at its top (3.1); a queue's list reorders by dragging its handle and loses a song by a swipe to the start; "Remove
 // from queue" is the visible twin.
 
-/** Queues (the queue playing, then Recent), or one queue's page. */
+/** Queues (the queue playing, then Recent), or one queue's page; [root]: Queues as the bar's own item (KJB 3.1). */
 @Composable
-fun QueuePage(page: Page.QueuePages) {
+fun QueuePage(page: Page.QueuePages, root: Boolean = false) {
     when (page) {
-        Page.Queues -> QueuesPage()
+        Page.Queues -> QueuesPage(root)
         is Page.Queue -> OneQueuePage(page.id)
     }
 }
@@ -166,9 +170,12 @@ private fun place(context: Context, queue: Queue, ui: PlayerUi?): String {
 private fun plainName(context: Context, queue: Queue): String =
     queue.name ?: queue.source.name.takeIf { it.isNotBlank() && queue.source.kind != SourceKind.PICKED } ?: sourceLabel(context, queue.source, queue.items.size)
 
-/** The Queues page: the queue playing, then Recent ([QueuesList]); each opens the queue's page. */
+/**
+ * The Queues page: the queue playing, then Recent ([QueuesList]); each opens the queue's page. As the bar's item
+ * ([root]) it has the bar's header and no Back, and its icon tapped again goes to the top.
+ */
 @Composable
-private fun QueuesPage() {
+private fun QueuesPage(root: Boolean) {
     val nav = LocalNavigator.current
     val context = LocalContext.current
     val connection = remember(context) { PlayerGraph.connection(context) }
@@ -176,17 +183,23 @@ private fun QueuesPage() {
     val ui by connection.ui.collectAsStateWithLifecycle()
     val library by connection.library.collectAsStateWithLifecycle()
     val names = rememberNames()
+    val list = rememberLazyListState()
+    if (root) ReselectToTop(nav.state.reselectsOf(DockTab.QUEUES)) { list.animateScrollToItem(0) }
     PageFrame(
         topBar = { under, backdrop ->
-            LyrifyTopBar(
-                title = { Text(stringResource(R.string.queues_title)) },
-                under = under,
-                backdrop = backdrop,
-                navigation = { ChromeIconButton(R.drawable.ic_arrow_back, stringResource(R.string.check_back), { nav.back() }) },
-            )
+            if (root) {
+                MainTopBar(DockTab.QUEUES, under, backdrop)
+            } else {
+                LyrifyTopBar(
+                    title = { Text(stringResource(R.string.queues_title)) },
+                    under = under,
+                    backdrop = backdrop,
+                    navigation = { ChromeIconButton(R.drawable.ic_arrow_back, stringResource(R.string.check_back), { nav.back() }) },
+                )
+            }
         },
     ) { padding ->
-        QueuesList(book, ui, library, names, padding) { nav.open(Page.Queue(it)) }
+        QueuesList(book, ui, library, names, padding, list) { nav.open(Page.Queue(it)) }
     }
 }
 
@@ -196,14 +209,26 @@ private fun QueuesPage() {
  * page shows one empty state. [onOpen] opens a queue's page by its id.
  */
 @Composable
-internal fun QueuesList(book: QueueBook, ui: PlayerUi?, library: Library?, names: LibrarySettings, padding: PaddingValues, onOpen: (String) -> Unit) {
+internal fun QueuesList(
+    book: QueueBook,
+    ui: PlayerUi?,
+    library: Library?,
+    names: LibrarySettings,
+    padding: PaddingValues,
+    state: LazyListState = rememberLazyListState(),
+    onOpen: (String) -> Unit,
+) {
     val playing = book.current
     val others = book.others
     if (playing == null && others.isEmpty()) {
-        EmptyState(EmptyArt.Icon(R.drawable.ic_queue_music), stringResource(R.string.queues_none), Modifier.padding(top = padding.calculateTopPadding()), text = stringResource(R.string.queues_none_text))
+        // In a scroller of its own, though nothing scrolls: a pull down still reaches the shell, which brings back a bar
+        // hidden while scrolling (KJB 3.1); on the bar's own Queues nothing else would.
+        Box(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+            EmptyState(EmptyArt.Icon(R.drawable.ic_queue_music), stringResource(R.string.queues_none), Modifier.padding(top = padding.calculateTopPadding()), text = stringResource(R.string.queues_none_text))
+        }
         return
     }
-    LazyColumn(contentPadding = PaddingValues(start = ScreenPadding, end = ScreenPadding, top = padding.calculateTopPadding() + 4.dp, bottom = padding.calculateBottomPadding() + 16.dp)) {
+    LazyColumn(state = state, contentPadding = PaddingValues(start = ScreenPadding, end = ScreenPadding, top = padding.calculateTopPadding() + 4.dp, bottom = padding.calculateBottomPadding() + 16.dp)) {
         if (playing != null) {
             item(key = "playing title") { SectionTitle(stringResource(R.string.queues_playing), Modifier.padding(vertical = 8.dp)) }
             item(key = "playing") { PlayingCard(playing, book, ui, library, names) { onOpen(playing.id) } }

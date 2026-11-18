@@ -9,6 +9,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 class NavTest {
     private val album = Page.Album("harbour-glass")
@@ -149,19 +150,41 @@ class NavTest {
 
     // The Library icon
 
+    // KJB 3.1 (user feedback 2026-11-17, item 1): the icon no longer always lands on Songs but on the tab Library opens on
+    // (null here: the first tab in the user's order, or the one they chose), which [libraryOpensOn] resolves.
+
     @Test
-    fun `the Library icon opens Library on Songs, never on the last top tab used`() {
+    fun `the Library icon opens Library on the tab it opens on, never on the last top tab used`() {
         val albums = NavState.start(DockTab.LIBRARY).pickLibraryTab(LibraryTab.ALBUMS)
         assertEquals(LibraryTab.ALBUMS, albums.libraryTab)
-        // From Albums to Search, then the Library icon: Songs.
-        assertEquals(LibraryTab.SONGS, albums.select(DockTab.SEARCH).select(DockTab.LIBRARY).libraryTab)
-        // On Library's root on Albums, the icon goes to Songs; on Songs, to the top of its list.
-        val songs = albums.select(DockTab.LIBRARY)
-        assertEquals(LibraryTab.SONGS, songs.libraryTab)
-        assertEquals(0, songs.reselectsOf(DockTab.LIBRARY))
-        assertEquals(1, songs.select(DockTab.LIBRARY).reselectsOf(DockTab.LIBRARY))
-        // A page popped to the root by the icon lands on Songs too.
-        assertEquals(LibraryTab.SONGS, albums.open(album).select(DockTab.LIBRARY).libraryTab)
+        // From Albums to Search, then the Library icon: the tab Library opens on.
+        assertNull(albums.select(DockTab.SEARCH).select(DockTab.LIBRARY).libraryTab)
+        // On Library's root on Albums, the icon goes to that tab; there, to the top of its list.
+        val first = albums.select(DockTab.LIBRARY)
+        assertNull(first.libraryTab)
+        assertEquals(0, first.reselectsOf(DockTab.LIBRARY))
+        assertEquals(1, first.select(DockTab.LIBRARY).reselectsOf(DockTab.LIBRARY))
+        // A page popped to the root by the icon lands there too.
+        assertNull(albums.open(album).select(DockTab.LIBRARY).libraryTab)
+    }
+
+    @Test
+    fun `Library opens on its first tab shown, or on the one the user chose while it shows`() {
+        val order = listOf(LibraryTab.ALBUMS, LibraryTab.SONGS, LibraryTab.FOLDERS)
+        assertEquals(LibraryTab.ALBUMS, libraryOpensOn(order, chosen = null))
+        assertEquals(LibraryTab.FOLDERS, libraryOpensOn(order, chosen = LibraryTab.FOLDERS))
+        // Chosen but hidden since (or Books with no book left): the first shown again.
+        assertEquals(LibraryTab.ALBUMS, libraryOpensOn(order, chosen = LibraryTab.BOOKS))
+        assertEquals(LibraryTab.SONGS, libraryOpensOn(listOf(LibraryTab.SONGS), chosen = LibraryTab.GENRES))
+    }
+
+    @Test
+    fun `swiping Library to the tab it opens on keeps nothing, so the icon goes straight to the top there`() {
+        // What Library's pager tells the navigator for the tab a swipe lands on.
+        assertNull(libraryTabPicked(LibraryTab.ALBUMS, opensOn = LibraryTab.ALBUMS))
+        assertEquals(LibraryTab.SONGS, libraryTabPicked(LibraryTab.SONGS, opensOn = LibraryTab.ALBUMS))
+        val back = NavState.start(DockTab.LIBRARY).pickLibraryTab(LibraryTab.SONGS).pickLibraryTab(libraryTabPicked(LibraryTab.ALBUMS, LibraryTab.ALBUMS))
+        assertEquals(1, back.select(DockTab.LIBRARY).reselectsOf(DockTab.LIBRARY))
     }
 
     @Test
@@ -185,7 +208,31 @@ class NavTest {
     }
 
     @Test
-    fun `only the Library icon takes Library back to Songs`() {
+    fun `Library's pages landing on a tab tell the navigator only what changes, the tab it opens on as nothing`() {
+        val nav = Navigator(NavState.start(DockTab.LIBRARY).pickLibraryTab(LibraryTab.GENRES))
+        // Genres switched off in Settings: the pages land on the first tab, the one Library opens on.
+        pickLibraryTabAt(nav, LibraryTab.SONGS, opensOn = LibraryTab.SONGS)
+        assertNull(nav.state.libraryTab)
+        val before = nav.state
+        pickLibraryTabAt(nav, LibraryTab.SONGS, opensOn = LibraryTab.SONGS)
+        assertTrue(before === nav.state)
+        pickLibraryTabAt(nav, LibraryTab.ALBUMS, opensOn = LibraryTab.SONGS)
+        assertEquals(LibraryTab.ALBUMS, nav.state.libraryTab)
+    }
+
+    @Test
+    fun `a kept tab that is the one Library opens on is forgotten, so one tap of the icon goes to the top`() {
+        // The tour's Songs, or "Open here first" on the tab shown: the navigator keeps the very tab Library opens on.
+        val nav = Navigator(NavState.start(DockTab.LIBRARY).pickLibraryTab(LibraryTab.SONGS))
+        // What Library's root does with the tab it shows ([LibraryPage]).
+        pickLibraryTabAt(nav, LibraryTab.SONGS, opensOn = LibraryTab.SONGS)
+        nav.select(DockTab.LIBRARY)
+        assertEquals(1, nav.state.reselectsOf(DockTab.LIBRARY))
+        assertTrue("LaunchedEffect(tab, opensOn) { pickLibraryTabAt(nav, tab, opensOn) }" in File("src/main/java/app/lyrify/ui/LibraryScreen.kt").readText())
+    }
+
+    @Test
+    fun `only the Library icon takes Library back to the tab it opens on`() {
         val playlists = NavState.start(DockTab.LIBRARY).pickLibraryTab(LibraryTab.PLAYLISTS)
         val others: List<(NavState) -> NavState> = listOf(
             { it.select(DockTab.PLAYLISTS) },
@@ -200,8 +247,8 @@ class NavTest {
             { it.show(FullScreen.Player).open(album).back()!!.back()!! },
         )
         others.forEach { move -> assertEquals(LibraryTab.PLAYLISTS, move(playlists).libraryTab) }
-        assertEquals(LibraryTab.SONGS, playlists.select(DockTab.LIBRARY).libraryTab)
-        assertEquals(LibraryTab.SONGS, playlists.select(DockTab.PLAYLISTS).select(DockTab.LIBRARY).libraryTab)
+        assertNull(playlists.select(DockTab.LIBRARY).libraryTab)
+        assertNull(playlists.select(DockTab.PLAYLISTS).select(DockTab.LIBRARY).libraryTab)
     }
 
     @Test
@@ -234,13 +281,87 @@ class NavTest {
     }
 
     @Test
-    fun `the app launched on Library opens on Songs, and a turn of the phone keeps the top tab shown`() {
-        assertEquals(LibraryTab.SONGS, NavState.start(DockTab.LIBRARY).libraryTab)
-        assertEquals(LibraryTab.SONGS, restoreNav(null, DockTab.LIBRARY).libraryTab)
-        assertEquals(LibraryTab.SONGS, restoreNav(Tab2x.NOW, DockTab.LIBRARY).libraryTab)
+    fun `the app launched on Library opens on the tab Library opens on, and a turn of the phone keeps the top tab shown`() {
+        assertNull(NavState.start(DockTab.LIBRARY).libraryTab)
+        assertNull(restoreNav(null, DockTab.LIBRARY).libraryTab)
+        assertNull(restoreNav(Tab2x.NOW, DockTab.LIBRARY).libraryTab)
+        // Saved before 3.1 on Songs, or on a tab this version does not know: the tab Library opens on.
+        assertNull(NavState.decode("""{"tab":"LIBRARY","libraryTab":"RADIO"}""")!!.libraryTab)
+        assertEquals(LibraryTab.SONGS, NavState.decode("""{"tab":"LIBRARY","libraryTab":"SONGS"}""")!!.libraryTab)
+        val first = NavState.start(DockTab.LIBRARY).select(DockTab.TOOLS)
+        assertEquals(first, NavState.decode(first.encode()))
         val albums = NavState.start(DockTab.LIBRARY).pickLibraryTab(LibraryTab.ALBUMS).select(DockTab.TOOLS)
         assertEquals(albums, NavState.decode(albums.encode()))
         assertEquals(LibraryTab.ALBUMS, restoreNav(albums.encode(), DockTab.LIBRARY).libraryTab)
+    }
+
+    // The bar the user makes (KJB 3.1): Queues, Favourites, Downloads and Books with stacks of their own
+
+    @Test
+    fun `each item on the bar keeps its own stack, the new ones too`() {
+        val bar = listOf(DockTab.LIBRARY, DockTab.QUEUES, DockTab.FAVOURITES, DockTab.DOWNLOADS, DockTab.BOOKS, DockTab.TOOLS)
+        val nav = NavState.start(DockTab.QUEUES).open(Page.Queue("q1"), docked = bar)
+            .select(DockTab.FAVOURITES).open(album, docked = bar)
+            .select(DockTab.BOOKS).open(Page.Folder("Audiobooks/Lantern Keeper"), docked = bar)
+            .select(DockTab.DOWNLOADS).open(artist, docked = bar)
+        assertEquals(DockTab.DOWNLOADS, nav.tab)
+        assertEquals(listOf<Page>(artist), nav.pages)
+        assertEquals(listOf<Page>(Page.Queue("q1")), nav.pagesOf(DockTab.QUEUES))
+        assertEquals(listOf<Page>(album), nav.pagesOf(DockTab.FAVOURITES))
+        assertEquals(listOf<Page>(Page.Folder("Audiobooks/Lantern Keeper")), nav.pagesOf(DockTab.BOOKS))
+        // Their icons on the bar at their roots: the list to the top, as the four's do.
+        assertEquals(1, NavState.start(DockTab.FAVOURITES).select(DockTab.FAVOURITES).reselectsOf(DockTab.FAVOURITES))
+        assertEquals(emptyList<Page>(), nav.select(DockTab.DOWNLOADS).pages)
+    }
+
+    @Test
+    fun `from the new items, Tools pages still open on Tools and Library's songs on Library`() {
+        DockTab.entries.filter { it in BAR_ROOTS }.forEach { root ->
+            assertEquals("$root", DockTab.TOOLS, NavState.start(root).open(Page.Settings).tab)
+            assertEquals("$root", DockTab.LIBRARY, NavState.start(root).open(Page.Songs(status = LyricsStatus.NOT_FOUND)).tab)
+            assertEquals("$root", DockTab.SEARCH, NavState.start(root).open(Page.SearchAll(SearchGroup.SONGS, "lantern")).tab)
+            // From the player over them, as from anywhere: an album on Library, a playlist on Playlists.
+            assertEquals("$root", DockTab.LIBRARY, NavState.start(root).show(FullScreen.Player).open(album).tab)
+            assertEquals("$root", DockTab.PLAYLISTS, NavState.start(root).show(FullScreen.Player).open(Page.Playlist("p3")).tab)
+        }
+        assertEquals(setOf(DockTab.QUEUES, DockTab.FAVOURITES, DockTab.DOWNLOADS, DockTab.BOOKS), BAR_ROOTS)
+    }
+
+    @Test
+    fun `with Playlists off the bar, a playlist opens where it was opened, and from the player or Tools in Library`() {
+        val bar = listOf(DockTab.LIBRARY, DockTab.SEARCH, DockTab.TOOLS)
+        val search = NavState.start(DockTab.SEARCH).open(Page.Playlist("p3"), docked = bar)
+        assertEquals(DockTab.SEARCH, search.tab)
+        assertEquals(listOf<Page>(Page.Playlist("p3")), search.pages)
+        assertEquals(DockTab.LIBRARY, NavState.start(DockTab.TOOLS).open(Page.BuiltIn(BuiltInList.FAVOURITES), docked = bar).tab)
+        assertEquals(DockTab.LIBRARY, NavState.start(DockTab.SEARCH).show(FullScreen.Player).open(Page.Queues, docked = bar).tab)
+        // Library's own Playlists tab keeps them inside Library, as before.
+        assertEquals(DockTab.LIBRARY, NavState.start(DockTab.LIBRARY).open(Page.Queue("q1"), docked = bar).tab)
+        // On the bar, nothing changes.
+        assertEquals(DockTab.PLAYLISTS, NavState.start(DockTab.SEARCH).open(Page.Playlist("p3"), docked = DOCK_TABS).tab)
+    }
+
+    @Test
+    fun `the navigator opens pages by the bar it was last given`() {
+        val nav = Navigator(NavState.start(DockTab.SEARCH))
+        nav.dock(listOf(DockTab.LIBRARY, DockTab.SEARCH), reachable = setOf(DockTab.LIBRARY, DockTab.SEARCH, DockTab.TOOLS))
+        nav.open(Page.Playlist("p3"))
+        assertEquals(DockTab.SEARCH, nav.state.tab)
+    }
+
+    @Test
+    fun `an item that leaves the bar leaves the history too, and the app goes to Library if it was on it`() {
+        val nav = NavState.start(DockTab.LIBRARY).select(DockTab.FAVOURITES).select(DockTab.QUEUES).select(DockTab.TOOLS)
+        val reachable = setOf(DockTab.LIBRARY, DockTab.QUEUES, DockTab.SEARCH, DockTab.TOOLS)
+        val kept = nav.within(reachable)
+        assertEquals(DockTab.TOOLS, kept.tab)
+        assertEquals(listOf(DockTab.LIBRARY, DockTab.QUEUES), kept.history)
+        // On an item that left: Library, whose way back is the rest of the history.
+        val gone = NavState.start(DockTab.LIBRARY).select(DockTab.DOWNLOADS).open(album, docked = listOf(DockTab.LIBRARY, DockTab.DOWNLOADS)).within(setOf(DockTab.LIBRARY, DockTab.SEARCH, DockTab.TOOLS))
+        assertEquals(DockTab.LIBRARY, gone.tab)
+        assertEquals(emptyList<DockTab>(), gone.history)
+        // Nothing gone, nothing changes.
+        assertEquals(nav, nav.within(DockTab.entries.toSet()))
     }
 
     @Test

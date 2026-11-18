@@ -32,6 +32,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -112,6 +113,7 @@ import app.lyrify.dupes.MediaStoreLibrary
 import app.lyrify.library.SongRef
 import app.lyrify.player.QueueSource
 import app.lyrify.player.SourceKind
+import app.lyrify.settings.DockTab
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.map
@@ -158,10 +160,11 @@ fun downloadsRow(): EntryRow? {
  * Tools > Downloads: the add-on to get (or update) until it is ready, then Run when locked offered once; then a link field
  * with Paste (a copied link is offered when Check clipboard is on), and the downloads: what downloads now with Cancel,
  * what did not save with Retry, and what was saved (VidGrab's Finished list), newest first. After a download stalled
- * with the phone locked, one plain line says so.
+ * with the phone locked, one plain line says so. Without [onBack] it is the bar's Downloads (KJB 3.1): the bar's header,
+ * no Back, and its icon tapped again goes to the top.
  */
 @Composable
-fun DownloadsPage(onBack: () -> Unit) {
+fun DownloadsPage(onBack: (() -> Unit)?) {
     val context = LocalContext.current
     val resources = LocalResources.current
     val toasts = LocalToasts.current
@@ -192,17 +195,24 @@ fun DownloadsPage(onBack: () -> Unit) {
         onPauseOrDispose { }
     }
     val reduced = LocalReducedMotion.current
+    val list = rememberLazyListState()
+    if (onBack == null) ReselectToTop(LocalNavigator.current.state.reselectsOf(DockTab.DOWNLOADS)) { list.animateScrollToItem(0) }
     PageFrame(
         topBar = { under, backdrop ->
-            LyrifyTopBar(
-                title = { Text(stringResource(R.string.dl_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                under = under,
-                backdrop = backdrop,
-                navigation = { ChromeIconButton(R.drawable.ic_arrow_back, stringResource(R.string.check_back), onBack) },
-            )
+            if (onBack == null) {
+                MainTopBar(DockTab.DOWNLOADS, under, backdrop)
+            } else {
+                LyrifyTopBar(
+                    title = { Text(stringResource(R.string.dl_title), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    under = under,
+                    backdrop = backdrop,
+                    navigation = { ChromeIconButton(R.drawable.ic_arrow_back, stringResource(R.string.check_back), onBack) },
+                )
+            }
         },
     ) { padding ->
         LazyColumn(
+            state = list,
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(top = padding.calculateTopPadding() + 8.dp, bottom = padding.calculateBottomPadding() + 24.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),

@@ -21,7 +21,12 @@ import app.lyrify.player.Repeat
 import app.lyrify.player.Speed
 import app.lyrify.settings.BackupSettings
 import app.lyrify.settings.ConnectDevice
+import app.lyrify.settings.DisplaySettings
+import app.lyrify.settings.DockItemSetting
+import app.lyrify.settings.DockStyle
+import app.lyrify.settings.DockTab
 import app.lyrify.settings.LibrarySettings
+import app.lyrify.settings.LibraryTab
 import app.lyrify.settings.Settings
 import app.lyrify.settings.SettingsJson
 import app.lyrify.tags.Settled
@@ -147,6 +152,17 @@ class BackupBundleTest {
     fun `settings come back with the AI switch, without Settings, Backup, which belongs to the phone`() {
         assertEquals(BackupFixtures.settings.copy(backup = BackupSettings()), contents().settings)
         assertEquals(true, contents().aiLyrics)
+    }
+
+    @Test
+    fun `the bottom bar, its style, Hide while scrolling and the tab Library opens on come back with the settings`() {
+        val dock = DisplaySettings.DEFAULT_DOCK.map { if (it.tab == DockTab.QUEUES || it.tab == DockTab.DOWNLOADS) it.copy(shown = true) else it }
+        val display = DisplaySettings(dock = listOf(DockItemSetting(DockTab.FAVOURITES, true)) + dock.filter { it.tab != DockTab.FAVOURITES }, dockStyle = DockStyle.SLIM, hideDockOnScroll = true)
+        val settings = BackupFixtures.settings.copy(display = display, library = BackupFixtures.settings.library.copy(opensOn = LibraryTab.ARTISTS))
+        val read = contents(zip(BackupFixtures.snapshot.copy(settings = settings)))
+
+        assertEquals(display, read.settings?.display)
+        assertEquals(LibraryTab.ARTISTS, read.settings?.library?.opensOn)
     }
 
     @Test

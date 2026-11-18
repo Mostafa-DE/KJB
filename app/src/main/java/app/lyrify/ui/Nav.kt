@@ -151,6 +151,10 @@ sealed interface Page {
     @Serializable @SerialName("libraryTabs")
     data object LibraryTabs : Page
 
+    /** Settings > Display > Bottom bar (BottomBarScreen.kt). */
+    @Serializable @SerialName("bottomBar")
+    data object BottomBar : Page
+
     /** Settings > About > Licences (LicencesScreen.kt, R1). */
     @Serializable @SerialName("licences")
     data object Licences : Page
@@ -225,7 +229,8 @@ data class SheetReturn(val at: String, val sheet: OpenSheet.Menu)
  * Where the user is: the [tab] shown, each tab's own page stack ([stacks], the pages above its root, the top last), the
  * tabs to go back to ([history], each once, the latest last), and the full-screen [views] over everything (the top
  * last). [reselects] counts, per tab, taps on it while at its root: its list goes to the top. [libraryTab] is the top
- * tab Library's root shows: Songs at a launch and whenever Library's icon lands on its root. [reopen] is the song sheet
+ * tab Library's root shows, null for the one Library opens on ([libraryOpensOn]: the first in the user's order, or the
+ * one they chose): null at a launch and whenever Library's icon lands on its root. [reopen] is the song sheet
  * Back has just come back to, until its host shows it ([Navigator.takeSheet]) or the next move. Pure, so the back
  * rules are tested on the JVM; the shell keeps it in a [Navigator].
  */
@@ -236,7 +241,7 @@ data class NavState(
     val history: List<DockTab> = emptyList(),
     val views: List<FullScreen> = emptyList(),
     val reselects: Map<DockTab, Int> = emptyMap(),
-    val libraryTab: LibraryTab = LibraryTab.SONGS,
+    val libraryTab: LibraryTab? = null,
     val reopen: SheetReturn? = null,
 ) {
     /** The shown tab's pages above its root. */
@@ -254,32 +259,33 @@ data class NavState(
     /**
      * A dock tap: another tab (the one left joins the history), or the tab shown popped to its root, or at its root to
      * the top. Opening Search also counts for Search: its field takes focus whenever the tab opens. Library's icon always
-     * lands on Songs: wherever it shows Library's root, Songs is its top tab, and only a tap while on Songs goes to the
-     * top. A page left open on Library keeps the top tab under it.
+     * lands on the tab Library opens on (KJB 3.1: no longer always Songs): wherever it shows Library's root, that is its
+     * top tab, and only a tap while there goes to the top. A page left open on Library keeps the top tab under it.
      */
     fun select(tab: DockTab): NavState = with(copy(views = emptyList(), reopen = null)) {
         when {
             tab == DockTab.SEARCH && tab != this.tab -> visit(tab).copy(reselects = reselects + (tab to reselectsOf(tab) + 1))
-            tab != this.tab -> visit(tab).onSongs()
-            pages.isNotEmpty() -> copy(stacks = stacks - tab).onSongs()
-            tab == DockTab.LIBRARY && libraryTab != LibraryTab.SONGS -> copy(libraryTab = LibraryTab.SONGS)
+            tab != this.tab -> visit(tab).onFirstTab()
+            pages.isNotEmpty() -> copy(stacks = stacks - tab).onFirstTab()
+            tab == DockTab.LIBRARY && libraryTab != null -> copy(libraryTab = null)
             else -> copy(reselects = reselects + (tab to reselectsOf(tab) + 1))
         }
     }
 
-    /** A tap on one of Library's top tabs. */
-    fun pickLibraryTab(tab: LibraryTab): NavState = copy(libraryTab = tab, reopen = null)
+    /** A tap on one of Library's top tabs; null for the tab Library opens on ([libraryTabPicked]). */
+    fun pickLibraryTab(tab: LibraryTab?): NavState = copy(libraryTab = tab, reopen = null)
 
-    /** Library at its root shows Songs; another tab, or Library with a page open, stays as it is. */
-    private fun onSongs(): NavState = if (tab == DockTab.LIBRARY && pages.isEmpty()) copy(libraryTab = LibraryTab.SONGS) else this
+    /** Library at its root shows the tab it opens on; another tab, or Library with a page open, stays as it is. */
+    private fun onFirstTab(): NavState = if (tab == DockTab.LIBRARY && pages.isEmpty()) copy(libraryTab = null) else this
 
     /**
-     * Opens [page] on its tab ([homeOf]), closing the views; the page on top already is not opened twice. Opened from a
-     * view (the player) or from a song's [sheet], it keeps where it came from ([Origin]), and Back from it goes there;
-     * the page already on top takes that new origin, so Back still goes back to the player or the sheet.
+     * Opens [page] on its tab ([homeOf], by the bar's items now, [docked]), closing the views; the page on top already is
+     * not opened twice. Opened from a view (the player) or from a song's [sheet], it keeps where it came from ([Origin]),
+     * and Back from it goes there; the page already on top takes that new origin, so Back still goes back to the player
+     * or the sheet.
      */
-    fun open(page: Page, sheet: SheetReturn? = null): NavState {
-        val home = homeOf(page, tab, views.isNotEmpty())
+    fun open(page: Page, sheet: SheetReturn? = null, docked: List<DockTab> = DOCK_TABS): NavState {
+        val home = homeOf(page, tab, views.isNotEmpty(), docked)
         val origin = Origin(tab, history, views, sheet).takeIf { views.isNotEmpty() || sheet != null }
         val moved = visit(home).copy(views = emptyList(), reopen = null)
         val stack = moved.stacks[home].orEmpty()
@@ -322,6 +328,18 @@ data class NavState(
 
     private fun visit(tab: DockTab): NavState = if (tab == this.tab) this else copy(tab = tab, history = history - tab + this.tab)
 
+    /**
+     * The state once only [reachable] tabs can be reached (the bar's items, and Search and Tools, whose buttons Library's
+     * top bar shows when the bar leaves them off): a tab out of reach leaves the history, with its pages; shown, Library
+     * takes its place. Nothing changes while every tab here is in reach.
+     */
+    fun within(reachable: Set<DockTab>): NavState {
+        val gone = (stacks.keys + history + tab).filterNot { it in reachable }.toSet()
+        if (gone.isEmpty()) return this
+        val kept = copy(stacks = stacks - gone, history = history - gone, reselects = reselects - gone)
+        return if (tab in reachable) kept else kept.copy(tab = DockTab.LIBRARY, history = kept.history - DockTab.LIBRARY, reopen = null)
+    }
+
     /** The state as text, for the saved instance state: tabs and pages by name, each page (with its origin) and view on its own. */
     fun encode(): String = JSON.encodeToString(
         JsonObject.serializer(),
@@ -332,7 +350,7 @@ data class NavState(
                 "history" to JsonArray(history.map { JsonPrimitive(it.name) }),
                 "views" to JsonArray(views.map { JSON.encodeToJsonElement(FullScreen.serializer(), it) }),
                 "reselects" to JsonObject(reselects.entries.associate { (tab, count) -> tab.name to JsonPrimitive(count) }),
-                "libraryTab" to JsonPrimitive(libraryTab.name),
+                "libraryTab" to JsonPrimitive(libraryTab?.name),
             ) + listOfNotNull(reopen?.let { REOPEN to JSON.encodeToJsonElement(SheetReturn.serializer(), it) }),
         ),
     )
@@ -343,7 +361,7 @@ data class NavState(
         /**
          * The state in [text], read leniently: a page, view or history tab this version does not know is dropped and the
          * rest kept, as is an origin it cannot read (its page stays); an unknown tab opens Library, and an unknown Library
-         * top tab Songs. Null when [text] is no saved state at all.
+         * top tab the one Library opens on. Null when [text] is no saved state at all.
          */
         fun decode(text: String): NavState? {
             val root = try {
@@ -367,7 +385,7 @@ data class NavState(
                     (count as? JsonPrimitive)?.takeUnless { it.isString }?.intOrNull?.let { tab to it }
                 }.toMap(),
                 libraryTab = (root["libraryTab"] as? JsonPrimitive)?.takeIf { it.isString }?.content
-                    ?.let { name -> LibraryTab.entries.firstOrNull { it.name == name } } ?: LibraryTab.SONGS,
+                    ?.let { name -> LibraryTab.entries.firstOrNull { it.name == name } },
                 reopen = root[REOPEN]?.let { decodeOrNull(it, SheetReturn.serializer()) },
             )
         }
@@ -435,22 +453,33 @@ fun pageKeys(state: NavState): Set<String> =
 fun restoreNav(saved: Any?, lastTab: DockTab): NavState = (saved as? String)?.let(NavState::decode) ?: NavState.start(lastTab)
 
 /**
+ * The items the user can put on the bar besides the four that always were (KJB 3.1): each a root with a stack of its
+ * own, which keeps what opens on it as Library and Playlists do.
+ */
+val BAR_ROOTS: Set<DockTab> = setOf(DockTab.QUEUES, DockTab.FAVOURITES, DockTab.DOWNLOADS, DockTab.BOOKS)
+
+/**
  * The tab [page] opens on from [from] ([viewOpen]: from a full-screen view, such as the player, over [from]): Tools
  * pages on Tools; Search's "View all" on Search; Library > Songs with a filter on Library. A playlist, Built for you
  * (Favourites among them), Queues and Your listening open inside Library or Playlists when opened there, else on
  * Playlists. An album, artist, folder or genre opens inside Search or Playlists when opened there, else on Library.
+ * Opened on Queues, Favourites, Downloads or Books ([BAR_ROOTS]), both stay there. With Playlists off the bar
+ * ([docked]), what would open on it stays where it was opened, or opens on Library from the player or Tools (whose
+ * pages are full screens).
  */
-fun homeOf(page: Page, from: DockTab, viewOpen: Boolean): DockTab {
+fun homeOf(page: Page, from: DockTab, viewOpen: Boolean, docked: List<DockTab> = DOCK_TABS): DockTab {
     val here = from.takeUnless { viewOpen }
-    return when (page) {
+    val own = here?.takeIf { it in BAR_ROOTS }
+    val home = when (page) {
         is Page.Playlist, is Page.BuiltIn, is Page.QueuePages, is Page.ListeningPages ->
-            here?.takeIf { it == DockTab.LIBRARY || it == DockTab.PLAYLISTS } ?: DockTab.PLAYLISTS
-        is Page.CollectionPages -> here?.takeIf { it == DockTab.SEARCH || it == DockTab.PLAYLISTS } ?: DockTab.LIBRARY
+            own ?: here?.takeIf { it == DockTab.LIBRARY || it == DockTab.PLAYLISTS } ?: DockTab.PLAYLISTS
+        is Page.CollectionPages -> own ?: here?.takeIf { it == DockTab.SEARCH || it == DockTab.PLAYLISTS } ?: DockTab.LIBRARY
         is Page.SearchAll -> DockTab.SEARCH
         is Page.Songs -> DockTab.LIBRARY
         is Page.Check, Page.Duplicates, Page.Trash, Page.Tones, Page.Ai, Page.Downloads, Page.CoversTags, Page.TagHistory, Page.Settings, Page.LibraryTabs, Page.FoldersToSkip, Page.HiddenSongs, Page.SplitArtists,
-        Page.Licences, is Page.Licence -> DockTab.TOOLS
+        Page.Licences, is Page.Licence, Page.BottomBar -> DockTab.TOOLS
     }
+    return if (home == DockTab.PLAYLISTS && DockTab.PLAYLISTS !in docked) here?.takeUnless { it == DockTab.TOOLS } ?: DockTab.LIBRARY else home
 }
 
 private val JSON = Json { ignoreUnknownKeys = true }
@@ -467,12 +496,22 @@ class Navigator(initial: NavState) {
         state = state.select(tab)
     }
 
-    fun pickLibraryTab(tab: LibraryTab) {
+    fun pickLibraryTab(tab: LibraryTab?) {
         state = state.pickLibraryTab(tab)
     }
 
+    /** The bar now holds [items], and the app reaches [reachable] tabs ([NavState.within]). */
+    fun dock(items: List<DockTab>, reachable: Set<DockTab>) {
+        docked = items
+        state = state.within(reachable)
+    }
+
+    /** The bar's items now, which pages open by ([homeOf]); the shell keeps them current ([dock]). */
+    var docked: List<DockTab> = DOCK_TABS
+        private set
+
     fun open(page: Page, sheet: SheetReturn? = null) {
-        state = state.open(page, sheet)
+        state = state.open(page, sheet, docked)
     }
 
     fun show(view: FullScreen) {

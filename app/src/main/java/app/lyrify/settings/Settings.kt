@@ -115,6 +115,11 @@ data class LibrarySettings(
     val hiddenSongs: List<SongRef> = emptyList(),
     /** "Artists with several names": how the lists read a tag that names several artists. */
     val artistSplit: ArtistSplit = ArtistSplit(),
+    /**
+     * The tab Library opens on, chosen by holding it in Library ("Open here first"); null for the first tab shown in
+     * [tabs]' order. A chosen tab that is hidden, or Books while the library holds no book, gives way to that first one.
+     */
+    val opensOn: LibraryTab? = null,
 ) {
     /** [list]'s order: as the user left it, else its default. */
     fun sortOf(list: SongList): ListSort = listSorts[list] ?: list.default
@@ -256,8 +261,8 @@ data class AboutSettings(
 enum class NotificationButtons { FAVOURITE, SHUFFLE_REPEAT }
 
 /**
- * Where the app reopens, and what the first run and its asks have shown. Library itself always opens on Songs, so its tab
- * is not kept here.
+ * Where the app reopens, and what the first run and its asks have shown. Library's own tab is not kept here: it opens on
+ * [LibrarySettings.opensOn].
  */
 data class NavSettings(
     /** The dock tab last open. */
@@ -277,7 +282,12 @@ data class NavSettings(
     val notificationDenials: Int = 0,
 )
 
-enum class DockTab { LIBRARY, PLAYLISTS, SEARCH, TOOLS }
+/**
+ * What the bottom bar (the dock) can hold, each with its own page stack: Library, Playlists, Search and Tools by default,
+ * and Queues, Favourites, Downloads (only with KJB Downloads installed) and Books (only while the library holds a book)
+ * when the user puts them there (Settings > Display > Bottom bar).
+ */
+enum class DockTab { LIBRARY, PLAYLISTS, QUEUES, FAVOURITES, DOWNLOADS, BOOKS, SEARCH, TOOLS }
 
 /** Settings > Display. */
 data class DisplaySettings(
@@ -285,7 +295,32 @@ data class DisplaySettings(
     val theme: ThemeChoice = ThemeChoice.SYSTEM,
     /** "Pure black": the dark theme's pages on black, for OLED screens; nothing changes while the theme is light. */
     val pureBlack: Boolean = false,
-)
+    /**
+     * "Bottom bar": every item once, in the order shown, each on the bar or not; Library always on. An item the phone
+     * can't offer now (Downloads without its add-on, Books without a book) keeps its place here and comes back with it.
+     */
+    val dock: List<DockItemSetting> = DEFAULT_DOCK,
+    /** "Bottom bar" style: Standard, each icon over its name, or Slim. */
+    val dockStyle: DockStyle = DockStyle.STANDARD,
+    /** "Hide while scrolling": scrolling a page down slides the bottom bar away (off by default, user 2026-11-18). */
+    val hideDockOnScroll: Boolean = false,
+) {
+    companion object {
+        // First: the default below reads it as it is made.
+        private val DEFAULT_ON = setOf(DockTab.LIBRARY, DockTab.PLAYLISTS, DockTab.SEARCH, DockTab.TOOLS)
+
+        /** Library, Playlists, Search and Tools on the bar, as before it could change; the others off, in their places. */
+        val DEFAULT_DOCK: List<DockItemSetting> = DockTab.entries.map { DockItemSetting(it, shown = it in DEFAULT_ON) }
+
+        /** The most items the bar holds (user 2026-11-18). */
+        const val MAX_DOCK: Int = 6
+    }
+}
+
+data class DockItemSetting(val tab: DockTab, val shown: Boolean)
+
+/** The bottom bar's look: Standard (64 dp, each icon over its name) or Slim (48 dp, icons only; a hold shows the name). */
+enum class DockStyle { STANDARD, SLIM }
 
 enum class ThemeChoice { SYSTEM, LIGHT, DARK }
 
@@ -305,6 +340,8 @@ enum class FavouritesTab { SONGS, ALBUMS, ARTISTS, FOLDERS, PLAYLISTS }
  * phone's own ([decode]'s base), so what the backup does not carry stays as the phone has it. The sort keys, the song
  * pages' orders, the hidden songs and Display came later as new keys (features 2026-11-15), and "Artists with several
  * names" (3.1): a file without them reads as the defaults, a page order this version cannot use as that page's default.
+ * The bottom bar, its style, Hide while scrolling and the tab Library opens on came in 3.1 as new keys too: a file
+ * without them reads today's bar, Standard, never hiding, and Library on the first tab in its order.
  */
 object SettingsJson {
     const val VERSION: Int = 4
@@ -346,6 +383,7 @@ object SettingsJson {
                             "artistSplit" to it.artistSplit.let { split ->
                                 obj("enabled" to split.enabled, "separators" to JsonArray(split.separators.map(::JsonPrimitive)), "exceptions" to JsonArray(split.exceptions.map(::JsonPrimitive)))
                             },
+                            "opensOn" to (it.opensOn?.name?.let(::JsonPrimitive) ?: JsonNull),
                         ),
                     )
                 },
@@ -380,7 +418,15 @@ object SettingsJson {
                         "notificationDenials" to it.notificationDenials,
                     )
                 },
-                "display" to settings.display.let { obj("theme" to it.theme.name, "pureBlack" to it.pureBlack) },
+                "display" to settings.display.let {
+                    obj(
+                        "theme" to it.theme.name,
+                        "pureBlack" to it.pureBlack,
+                        "dock" to JsonArray(it.dock.map { item -> obj("tab" to item.tab.name, "shown" to item.shown) }),
+                        "dockStyle" to it.dockStyle.name,
+                        "hideDockOnScroll" to it.hideDockOnScroll,
+                    )
+                },
                 "about" to settings.about.let { obj("checkForUpdates" to it.checkForUpdates) },
             ),
         ),
@@ -432,6 +478,7 @@ object SettingsJson {
                     listSorts = (it["listSorts"] as? JsonObject)?.let(::listSorts) ?: d.library.listSorts,
                     hiddenSongs = (it["hiddenSongs"] as? JsonArray)?.let(::hiddenSongs) ?: d.library.hiddenSongs,
                     artistSplit = (it["artistSplit"] as? JsonObject)?.let { split -> artistSplit(split, d.library.artistSplit) } ?: d.library.artistSplit,
+                    opensOn = if ("opensOn" in it) it.choiceOrNull<LibraryTab>("opensOn") else d.library.opensOn,
                 )
             } ?: d.library,
             lyrics = root.section("lyrics")?.let {
@@ -472,7 +519,13 @@ object SettingsJson {
                 )
             } ?: d.nav,
             display = root.section("display")?.let {
-                DisplaySettings(theme = it.choice("theme", d.display.theme), pureBlack = it.flag("pureBlack", d.display.pureBlack))
+                DisplaySettings(
+                    theme = it.choice("theme", d.display.theme),
+                    pureBlack = it.flag("pureBlack", d.display.pureBlack),
+                    dock = (it["dock"] as? JsonArray)?.let(::dock) ?: d.display.dock,
+                    dockStyle = it.choice("dockStyle", d.display.dockStyle),
+                    hideDockOnScroll = it.flag("hideDockOnScroll", d.display.hideDockOnScroll),
+                )
             } ?: d.display,
             about = root.section("about")?.let { AboutSettings(checkForUpdates = it.flag("checkForUpdates", d.about.checkForUpdates)) } ?: d.about,
         )
@@ -532,6 +585,21 @@ object SettingsJson {
             .let { if (read.none { it.tab == LibraryTab.BOOKS }) booksAfterFolders(it) else it }
             .let { if (version < PLAYLISTS_AFTER_SONGS) playlistsAfterSongs(it) else it }
         return if (all.any { it.shown }) all else LibrarySettings.DEFAULT_TABS
+    }
+
+    /**
+     * The bottom bar as stored, every item once in its order: unknown and repeated ones dropped, a missing "shown" read as
+     * the item's default, Library always on, and the items not stored (new in a later version) after them in their
+     * default order. How many fit on the bar is the bar's own rule (ui/BottomBar.kt), so an item the phone can't offer
+     * for a while keeps its place here.
+     */
+    private fun dock(stored: JsonArray): List<DockItemSetting> {
+        val read = stored.mapNotNull { item ->
+            val entry = item as? JsonObject ?: return@mapNotNull null
+            val tab = entry.choiceOrNull<DockTab>("tab") ?: return@mapNotNull null
+            DockItemSetting(tab, tab == DockTab.LIBRARY || entry.flag("shown", DisplaySettings.DEFAULT_DOCK.first { it.tab == tab }.shown))
+        }.distinctBy { it.tab }
+        return read + DisplaySettings.DEFAULT_DOCK.filter { default -> read.none { it.tab == default.tab } }
     }
 
     /** [tabs], every tab once, with Playlists moved right after Songs. */

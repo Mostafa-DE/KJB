@@ -8,6 +8,7 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.MutatePriority
 import androidx.compose.foundation.ScrollState
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.horizontalScroll
@@ -15,6 +16,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
@@ -91,6 +93,7 @@ import androidx.compose.ui.semantics.horizontalScrollAxisRange
 import androidx.compose.ui.semantics.pageLeft
 import androidx.compose.ui.semantics.pageRight
 import androidx.compose.ui.semantics.scrollBy
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
@@ -475,10 +478,11 @@ fun <K : Any> rememberTabPager(keys: List<K>, selected: Int, onChoose: (Int) -> 
  * nothing. Too many to fit, the row scrolls to keep the pill in view, centred where it can, whenever the pages move;
  * scrolled by hand, it stays where the finger left it until they move again. Each tab is 48 dp tall to
  * touch, keeps the Tab role and says which is chosen. With reduced motion the pill does not slide: it fades in at the
- * tab the pages are nearest, over 100 ms.
+ * tab the pages are nearest, over 100 ms. With [hold], holding a tab opens its small menu beside it (TalkBack offers
+ * the hold as an action, named by [TabHold.label]).
  */
 @Composable
-fun PagerTabs(state: TabPager<*>, labels: List<String>, modifier: Modifier = Modifier) {
+fun PagerTabs(state: TabPager<*>, labels: List<String>, modifier: Modifier = Modifier, hold: TabHold? = null) {
     val colors = tabColors(MaterialTheme.colorScheme, LocalChromeColors.current)
     val hairline = MaterialTheme.colorScheme.outlineVariant
     val reduced = LocalReducedMotion.current
@@ -488,6 +492,8 @@ fun PagerTabs(state: TabPager<*>, labels: List<String>, modifier: Modifier = Mod
     // Every tab is laid out (a handful at most, review of 5b488d2), so the pill always knows both tabs it is between.
     val widths = remember(labels.size) { mutableStateListOf<Float>().apply { repeat(labels.size) { add(0f) } } }
     val nearest by remember(state) { derivedStateOf { state.position.roundToInt() } }
+    // The tab whose menu is open, by its place; none while no tab is held.
+    var held by remember { mutableStateOf<Int?>(null) }
     val fade = remember { Animatable(1f) }
     LaunchedEffect(nearest, reduced) {
         if (!reduced) return@LaunchedEffect fade.snapTo(1f)
@@ -543,15 +549,28 @@ fun PagerTabs(state: TabPager<*>, labels: List<String>, modifier: Modifier = Mod
                     .minimumInteractiveComponentSize()
                     .height(TAB_PILL_HEIGHT)
                     .clip(CircleShape)
-                    .selectable(index == current, role = Role.Tab) { state.pick(index) }
+                    .then(
+                        if (hold == null) {
+                            Modifier.selectable(index == current, role = Role.Tab) { state.pick(index) }
+                        } else {
+                            Modifier
+                                .semantics { selected = index == current }
+                                .combinedClickable(role = Role.Tab, onLongClickLabel = hold.label, onLongClick = { held = index }) { state.pick(index) }
+                        },
+                    )
                     .padding(horizontal = TAB_PADDING),
             ) {
                 val share = { if (reduced) (if (index == nearest) fade.value else 0f) else tabInkShare(state.position, index) }
                 BasicText(name, style = TabText, maxLines = 1, color = { tabInk(colors, share()) })
+                // A popup, so the chip's clip leaves it whole; it opens from the chip held.
+                if (hold != null) LyrifyMenu(expanded = held == index, onDismiss = { held = null }) { hold.menu(this, index) { held = null } }
             }
         }
     }
 }
+
+/** What holding one of [PagerTabs]' tabs offers: its [menu] for the tab at an index, which closes it with `close`; [label] names the hold for TalkBack. */
+class TabHold(val label: String, val menu: @Composable ColumnScope.(index: Int, close: () -> Unit) -> Unit)
 
 /**
  * The tabs' pages, one per tab of [state] ([TabPager.keys]), each drawn by [page] for its tab and told whether it is the

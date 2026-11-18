@@ -664,9 +664,9 @@ sealed interface PageChange {
     data object None : PageChange
 }
 
-/** What changed between the layers [from] and [to]: the stack decides, not the tab alone (motion spec F1). */
-fun pageChange(from: PageLayer, to: PageLayer): PageChange = when {
-    from.tab != to.tab -> PageChange.Tab(tabSlide(from.tab, to.tab))
+/** What changed between the layers [from] and [to]: the stack decides, not the tab alone (motion spec F1); [order]: the bar's. */
+fun pageChange(from: PageLayer, to: PageLayer, order: List<DockTab> = DOCK_TABS): PageChange = when {
+    from.tab != to.tab -> PageChange.Tab(tabSlide(from.tab, to.tab, order))
     from.stack == to.stack -> PageChange.None
     to.stack.size == from.stack.size + 1 && to.stack.startsWith(from.stack) -> PageChange.Push
     to.stack.size == from.stack.size - 1 && from.stack.startsWith(to.stack) -> PageChange.Pop

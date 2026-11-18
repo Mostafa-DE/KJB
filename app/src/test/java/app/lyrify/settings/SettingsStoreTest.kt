@@ -74,6 +74,7 @@ class SettingsStoreTest {
             ),
             hiddenSongs = listOf(SongRef("/storage/emulated/0/Music/Odds/Glass Steps.mp3", 13), SongRef("/storage/emulated/0/Music/Singles/Copper Moon.mp3")),
             artistSplit = ArtistSplit(enabled = false, separators = listOf(";", "&", "with"), exceptions = listOf("Rowan & Fennick")),
+            opensOn = LibraryTab.ALBUMS,
         ),
         lyrics = LyricsSettings(showWhenLocked = true, textSize = LyricsSize.XL, textWeight = LyricsWeight.REGULAR, textAlign = LyricsAlign.CENTRE),
         playerUi = PlayerUiSettings(showLyrics = true, flipHintShown = true, recentQueueHintShown = true),
@@ -86,7 +87,22 @@ class SettingsStoreTest {
             keepAlbumsGapless = false,
         ),
         nav = NavSettings(lastTab = DockTab.PLAYLISTS, favouritesTab = FavouritesTab.ARTISTS),
-        display = DisplaySettings(theme = ThemeChoice.DARK, pureBlack = true),
+        display = DisplaySettings(
+            theme = ThemeChoice.DARK,
+            pureBlack = true,
+            dock = listOf(
+                DockItemSetting(DockTab.FAVOURITES, true),
+                DockItemSetting(DockTab.LIBRARY, true),
+                DockItemSetting(DockTab.QUEUES, true),
+                DockItemSetting(DockTab.PLAYLISTS, false),
+                DockItemSetting(DockTab.BOOKS, true),
+                DockItemSetting(DockTab.DOWNLOADS, false),
+                DockItemSetting(DockTab.TOOLS, false),
+                DockItemSetting(DockTab.SEARCH, true),
+            ),
+            dockStyle = DockStyle.SLIM,
+            hideDockOnScroll = true,
+        ),
     )
 
     // Defaults
@@ -113,6 +129,14 @@ class SettingsStoreTest {
         assertEquals(NavSettings(DockTab.LIBRARY, FavouritesTab.SONGS, setupDone = false), s.nav)
         // Theme as the phone is, Pure black off (features 2026-11-15, item 3).
         assertEquals(DisplaySettings(ThemeChoice.SYSTEM, pureBlack = false), s.display)
+        // The bottom bar as before it could change: Library, Playlists, Search and Tools, Standard, never hiding (3.1).
+        assertEquals(DockTab.entries, s.display.dock.map { it.tab })
+        assertEquals(listOf(DockTab.LIBRARY, DockTab.PLAYLISTS, DockTab.SEARCH, DockTab.TOOLS), s.display.dock.filter { it.shown }.map { it.tab })
+        assertEquals(DockStyle.STANDARD, s.display.dockStyle)
+        assertFalse(s.display.hideDockOnScroll)
+        assertEquals(6, DisplaySettings.MAX_DOCK)
+        // Library opens on the first tab in its order until the user picks one.
+        assertNull(s.library.opensOn)
         // Every list in its usual direction, the song pages in their own order or default key; nothing hidden.
         assertEquals(listOf(false, false, false), listOf(s.library.songReversed, s.library.albumReversed, s.library.artistReversed))
         assertEquals(SongList.entries.associateWith { it.default }, SongList.entries.associateWith { s.library.sortOf(it) })
@@ -464,5 +488,64 @@ class SettingsStoreTest {
         val moved = listOf(LibraryTab.BOOKS) + before
         assertEquals(moved, tabs(moved.joinToString(",") { tab(it) }))
         assertTrue(LibrarySettings.DEFAULT_TABS.single { it.tab == LibraryTab.BOOKS }.shown)
+    }
+
+    // The bottom bar and the tab Library opens on (KJB 3.1, user feedback 2026-11-17 items 1 and 14)
+
+    @Test
+    fun `the bottom bar keeps its order, Library always on, each item once, and one this version does not know is dropped`() {
+        fun dock(json: String) = SettingsJson.decode("""{"display":{"dock":$json}}""")?.display?.dock
+        fun item(tab: String, shown: Any?) = """{"tab":"$tab","shown":$shown}"""
+        val stored = listOf(item("TOOLS", true), item("QUEUES", true), item("RADIO", true), item("LIBRARY", false), item("QUEUES", false), item("SEARCH", "\"yes\""), "7")
+        val read = dock(stored.joinToString(",", "[", "]"))
+
+        // Library switched on again, the repeated Queues and the unknown item left out, a "shown" of another type as its default.
+        assertEquals(
+            listOf(DockItemSetting(DockTab.TOOLS, true), DockItemSetting(DockTab.QUEUES, true), DockItemSetting(DockTab.LIBRARY, true), DockItemSetting(DockTab.SEARCH, true)),
+            read?.take(4),
+        )
+        // The items the file does not carry follow, in their default order, on or off as by default.
+        assertEquals(listOf(DockTab.PLAYLISTS, DockTab.FAVOURITES, DockTab.DOWNLOADS, DockTab.BOOKS), read?.drop(4)?.map { it.tab })
+        assertEquals(listOf(true, false, false, false), read?.drop(4)?.map { it.shown })
+        // Not a list, or nothing in it: the default bar.
+        assertEquals(DisplaySettings.DEFAULT_DOCK, dock("""{"tab":"QUEUES"}"""))
+        assertEquals(DisplaySettings.DEFAULT_DOCK, dock("[]"))
+    }
+
+    @Test
+    fun `a settings file from before the bottom bar could change reads today's bar, Standard, never hiding`() {
+        val before = """{"version":4,"display":{"theme":"DARK","pureBlack":true},"nav":{"lastTab":"SEARCH"},"library":{"showFileNames":true}}"""
+        val read = SettingsJson.decode(before)
+
+        assertEquals(DisplaySettings(ThemeChoice.DARK, pureBlack = true), read?.display)
+        assertEquals(DockTab.SEARCH, read?.nav?.lastTab)
+        assertNull(read?.library?.opensOn)
+        // A last tab only the new bar has reads back.
+        assertEquals(DockTab.FAVOURITES, SettingsJson.decode("""{"nav":{"lastTab":"FAVOURITES"}}""")?.nav?.lastTab)
+    }
+
+    @Test
+    fun `the bar's style and Hide while scrolling are stored, and a style this version does not know reads as Standard`() {
+        fun display(json: String) = SettingsJson.decode("""{"display":$json}""")?.display
+        assertEquals(DockStyle.SLIM, display("""{"dockStyle":"SLIM"}""")?.dockStyle)
+        assertEquals(DockStyle.STANDARD, display("""{"dockStyle":"TINY"}""")?.dockStyle)
+        assertEquals(true, display("""{"hideDockOnScroll":true}""")?.hideDockOnScroll)
+        assertEquals(false, display("""{"hideDockOnScroll":"on"}""")?.hideDockOnScroll)
+        val encoded = SettingsJson.encode(changed)
+        assertTrue(""""dockStyle":"SLIM"""" in encoded && """"hideDockOnScroll":true""" in encoded)
+    }
+
+    @Test
+    fun `the tab Library opens on reads back, none or one this version does not know reads as the first in the order`() {
+        fun opensOn(json: String, base: Settings = Settings()) = SettingsJson.decode("""{"library":$json}""", base)?.library?.opensOn
+        assertEquals(LibraryTab.GENRES, opensOn("""{"opensOn":"GENRES"}"""))
+        assertNull(opensOn("""{"opensOn":"PODCASTS"}"""))
+        assertNull(opensOn("""{"opensOn":null}"""))
+        assertNull(opensOn("""{"opensOn":3}"""))
+        assertNull(opensOn("{}"))
+        // A backup without it keeps the phone's own; one that went back to the first in the order says so.
+        val phone = Settings(library = LibrarySettings(opensOn = LibraryTab.FOLDERS))
+        assertEquals(LibraryTab.FOLDERS, opensOn("{}", phone))
+        assertNull(opensOn("""{"opensOn":null}""", phone))
     }
 }

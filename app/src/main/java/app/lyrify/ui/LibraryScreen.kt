@@ -36,6 +36,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.platform.LocalResources
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -90,25 +93,35 @@ import java.time.ZoneId
 /**
  * Library, the first tab, at its root: the text tabs ("Library tabs" in Settings shows, hides and orders them) over
  * Songs, Playlists, Albums, Artists, Folders and Genres, as pages that follow the finger left and right ([TabsFrame]):
- * each keeps its list and its place while another shows. Library's icon always opens it on Songs ([NavState.libraryTab]);
- * tapping it again on Songs goes to the top of its list.
+ * each keeps its list and its place while another shows. Library's icon opens it on the tab it opens on
+ * ([libraryOpensOn]: the first in the order, or the one chosen by holding it, "Open here first"); tapping it again there
+ * goes to the top of its list. While the bar leaves Search or Tools off, their buttons sit in its top bar ([OffBarButtons]).
  */
 @Composable
 fun LibraryPage() {
     val nav = LocalNavigator.current
     val ui = rememberLibraryUi() ?: return
-    val tabs = ui.settings.library.tabs.filter { it.shown && libraryTabShows(it.tab, ui.library) }.map { it.tab }.ifEmpty { listOf(LibraryTab.SONGS) }
-    val tab = nav.state.libraryTab.takeIf { it in tabs } ?: tabs.first()
+    val dock = LocalDockBar.current
+    val tabs = shownLibraryTabs(ui.settings.library, ui.library)
+    val opensOn = libraryOpensOn(tabs, ui.settings.library.opensOn)
+    val tab = nav.state.libraryTab?.takeIf { it in tabs } ?: opensOn
     val reselect = nav.state.reselectsOf(DockTab.LIBRARY)
     val sheets = rememberSongSheets()
     // The Playlists tab's "⋯" rows (B1).
     val m3u = rememberM3uActions()
-    val pager = rememberTabPager(tabs, tabs.indexOf(tab)) { at -> tabs.getOrNull(at)?.takeIf { it != nav.state.libraryTab }?.let(nav::pickLibraryTab) }
+    val pager = rememberTabPager(tabs, tabs.indexOf(tab)) { at -> tabs.getOrNull(at)?.let { pickLibraryTabAt(nav, it, opensOn) } }
+    // A kept tab that is the one Library opens on (the tour's Songs, "Open here first" on the tab shown) is forgotten,
+    // so one tap of the icon there goes to the top.
+    LaunchedEffect(tab, opensOn) { pickLibraryTabAt(nav, tab, opensOn) }
     val labels = tabs.map { stringResource(it.label) }
+    val hold = rememberOpenHereFirst(tabs, opensOn)
     val topBar: @Composable (Boolean, GlassBackdrop) -> Unit = { under, backdrop ->
         Column {
-            MainTopBar(DockTab.LIBRARY, under, backdrop, actions = { if (pager.current == LibraryTab.PLAYLISTS) PlaylistsMenu(sheets, m3u) })
-            TopBand(under, backdrop) { PagerTabs(pager, labels, Modifier.tourTarget(TourStop.TABS)) }
+            MainTopBar(DockTab.LIBRARY, under, backdrop, actions = {
+                if (pager.current == LibraryTab.PLAYLISTS) PlaylistsMenu(sheets, m3u)
+                OffBarButtons(dock, nav::select)
+            })
+            TopBand(under, backdrop) { PagerTabs(pager, labels, Modifier.tourTarget(TourStop.TABS), hold) }
         }
     }
     val library = ui.library
@@ -135,6 +148,28 @@ fun LibraryPage() {
     SongSheetsHost(sheets, ui)
 }
 
+/** Library's tabs as it shows them: those shown in [settings]' order that [library] has (Books only with a book); Songs at least. */
+fun shownLibraryTabs(settings: LibrarySettings, library: Library?): List<LibraryTab> =
+    settings.tabs.filter { it.shown && libraryTabShows(it.tab, library) }.map { it.tab }.ifEmpty { listOf(LibraryTab.SONGS) }
+
+/**
+ * The tab Library opens on (user feedback 2026-11-17, item 1): the one the user [chosen] by holding it ("Open here
+ * first") while it is among the [shown] tabs, else the first of them in their order. [shown] is never empty.
+ */
+fun libraryOpensOn(shown: List<LibraryTab>, chosen: LibraryTab?): LibraryTab = chosen?.takeIf { it in shown } ?: shown.first()
+
+/**
+ * What the navigator keeps for [tab] chosen in Library's tabs: nothing (null) for the tab Library opens on, so the
+ * Library icon there goes straight to the top of its list, as it went on Songs before.
+ */
+fun libraryTabPicked(tab: LibraryTab, opensOn: LibraryTab): LibraryTab? = tab.takeUnless { it == opensOn }
+
+/** Tells [nav] the tab Library's pages are on now ([libraryTabPicked]), only when that changes what it keeps. */
+internal fun pickLibraryTabAt(nav: Navigator, tab: LibraryTab, opensOn: LibraryTab) {
+    val kept = libraryTabPicked(tab, opensOn)
+    if (kept != nav.state.libraryTab) nav.pickLibraryTab(kept)
+}
+
 /**
  * Playlists, the second tab, at its root: the same list as Library's Playlists tab ([PlaylistsTab]) and the same "⋯",
  * under its own top bar. Tapping Playlists again goes to the top of the list.
@@ -156,6 +191,33 @@ fun PlaylistsPage() {
         }
     }
     SongSheetsHost(sheets, ui)
+}
+
+/**
+ * Holding one of Library's tabs: "Open here first", on (checked) for the tab Library opens on; picked, Library opens
+ * there whatever the order (Settings > Library tabs goes back to the first in the order), and a message says so.
+ */
+@Composable
+private fun rememberOpenHereFirst(tabs: List<LibraryTab>, opensOn: LibraryTab): TabHold {
+    val change = rememberSettingsChange()
+    val toasts = LocalToasts.current
+    val resources = LocalResources.current
+    val scope = rememberCoroutineScope()
+    val label = stringResource(R.string.lib_tab_hold)
+    val picked by rememberUpdatedState(tabs to opensOn)
+    return remember(label) {
+        TabHold(label) { index, close ->
+            val (shown, first) = picked
+            val chosen = shown.getOrNull(index)
+            MenuRow(stringResource(R.string.lib_open_first), R.drawable.ic_flag, selected = chosen == first, onClick = {
+                close()
+                if (chosen != null) {
+                    change { it.copy(library = it.library.copy(opensOn = chosen)) }
+                    scope.launch { toasts.say(resources, R.string.lib_opens_on, resources.getString(chosen.label)) }
+                }
+            })
+        }
+    }
 }
 
 /** The Playlists list's "⋯": New playlist, then Export all and Import (B1). */
