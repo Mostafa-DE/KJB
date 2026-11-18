@@ -1,5 +1,7 @@
 package app.lyrify.ui
 
+import android.content.ContextWrapper
+import androidx.compose.animation.EnterExitState
 import androidx.compose.animation.core.AnimationVector1D
 import androidx.compose.animation.core.VectorConverter
 import androidx.compose.ui.geometry.Size
@@ -7,6 +9,7 @@ import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import coil3.memory.MemoryCache
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -105,11 +108,77 @@ class PlayerCloseTest {
         assertEquals(300f, closeHeld(300f, 0f), 0f)
         assertEquals(150f, closeHeld(300f, 0.5f), 0.0001f)
         assertEquals(0f, closeHeld(300f, 1f), 0f)
-        assertEquals(0.96f, closeCoverScale(0.96f, 0f), 0f)
-        assertEquals(0.98f, closeCoverScale(0.96f, 0.5f), 0.0001f)
-        assertEquals(1f, closeCoverScale(0.96f, 1f), 0f)
+        // The cover, drawn above everything on the way, takes the frame's scale: the drag's shrink at the lift, its own
+        // size by the orb. (It took a scale of its own from the lift before review 2026-11-18; the same values.)
+        val height = 2400f
+        val at = height * 0.3f
+        fun cover(p: Float) = overlayCoverScale(EnterExitState.Visible, EnterExitState.PostExit, running = true, dragPeek(closeHeld(at, p), height).scale)
+        assertEquals(dragPeek(at, height).scale, cover(0f), 0f)
+        assertEquals((dragPeek(at, height).scale + 1f) / 2, cover(0.5f), 0.0001f)
+        assertEquals(1f, cover(1f), 0f)
         // Closed by the chevron or Back, nothing was shrunk.
-        assertEquals(1f, closeCoverScale(1f, 0.3f), 0f)
+        assertEquals(1f, overlayCoverScale(EnterExitState.Visible, EnterExitState.PostExit, running = true, dragPeek(0f, height).scale), 0f)
+    }
+
+    @Test
+    fun `the cover drawn above everything keeps the frame's scale while the transform runs, shown again on the way too`() {
+        val frame = 0.96f
+        // Closing, from its first frame on.
+        assertEquals(frame, overlayCoverScale(EnterExitState.Visible, EnterExitState.PostExit, running = false, frame), 0f)
+        assertEquals(frame, overlayCoverScale(EnterExitState.Visible, EnterExitState.PostExit, running = true, frame), 0f)
+        // Review 2026-11-18: shown again mid-close, the transition runs back with the same current and target state, and
+        // the cover was drawn at its full size from that frame on.
+        assertEquals(frame, overlayCoverScale(EnterExitState.Visible, EnterExitState.Visible, running = true, frame), 0f)
+        // Growing out of the bar, nothing dragged.
+        assertEquals(1f, overlayCoverScale(EnterExitState.PreEnter, EnterExitState.Visible, running = true, 1f), 0f)
+        // At rest it is back in the frame, which scales it itself.
+        assertEquals(1f, overlayCoverScale(EnterExitState.Visible, EnterExitState.Visible, running = false, frame), 0f)
+    }
+
+    @Test
+    fun `shown again mid-close, the cover's drawn size goes home with the drag, a little each frame`() {
+        val height = 2400f
+        val at = height * 0.3f
+        // Closing for three frames: the drag held where the finger left it, the progress from rest. Then shown again:
+        // the progress goes back from there at its speed, the drag goes home from rest, and the transform runs 450 ms.
+        val closedMs = 3 * FRAME_MS
+        val p0 = spring(closedMs, 0f, 1f, 0f)
+        val v0 = spring.getVelocityFromNanos(closedMs * 1_000_000L, AnimationVector1D(0f), AnimationVector1D(1f), AnimationVector1D(0f)).value
+        val closing = (0..closedMs step FRAME_MS).map { ms ->
+            overlayCoverScale(EnterExitState.Visible, EnterExitState.PostExit, running = true, dragPeek(closeHeld(at, spring(ms, 0f, 1f, 0f)), height).scale)
+        }
+        val back = (FRAME_MS..900 step FRAME_MS).map { ms ->
+            val frame = dragPeek(closeHeld(spring(ms, at, 0f, 0f), spring(ms, p0, 0f, v0)), height).scale
+            val running = ms < Motion.CONTAINER_MS
+            // Above everything while it runs; back in the frame after, scaled by the frame.
+            if (running) overlayCoverScale(EnterExitState.Visible, EnterExitState.Visible, running = true, frame) else frame * overlayCoverScale(EnterExitState.Visible, EnterExitState.Visible, running = false, frame)
+        }
+        val drawn = closing + back
+        // The cover grows back as it closes, under 0.6% a frame; it used to pop by about 4% as it was shown again.
+        drawn.zipWithNext().forEachIndexed { i, (a, b) -> assertTrue("frame $i: $a to $b", abs(b - a) <= 0.008f) }
+        assertEquals(1f, drawn.last(), 0.0005f)
+    }
+
+    @Test
+    fun `after a fling the fades keep pace with the card, as if the progress itself had taken the finger's speed`() {
+        for (velocity in listOf(1000f, 3000f, CLOSE_MOMENTUM_DP * DENSITY)) {
+            for (ms in 0..600 step 4) {
+                // The card's own spring from rest, and Compose's momentum on the same spring (the lead, mirrored).
+                val along = closeAlong(spring(ms, 0f, 1f, 0f), spring(ms, 0f, 0f, velocity), TRAVEL)
+                // Where the card is drawn, as a share of its way ...
+                assertEquals("$velocity px/s at $ms ms", come(ms, TRAVEL, velocity) / TRAVEL, along, 0.0005f)
+                // ... is the progress driven from the finger's speed, normalised to the way (review 2026-11-18).
+                assertEquals("$velocity px/s at $ms ms", spring(ms, 0f, 1f, velocity / TRAVEL), along, 0.0005f)
+            }
+            // A frame after the lift, the content has gone further than from rest.
+            val frame = closeAlong(spring(FRAME_MS, 0f, 1f, 0f), spring(FRAME_MS, 0f, 0f, velocity), TRAVEL)
+            assertTrue("$velocity px/s", closeContentAlpha(frame) < closeContentAlpha(spring(FRAME_MS, 0f, 1f, 0f)))
+        }
+        // The chevron and Back carry nothing: the card's own progress.
+        assertEquals(0.3f, closeAlong(0.3f, 0f, TRAVEL), 0f)
+        // Never past the bar; with no way known, nothing is added.
+        assertEquals(1f, closeAlong(0.98f, 200f, 1000f), 0f)
+        assertEquals(0.3f, closeAlong(0.3f, 40f, 0f), 0f)
     }
 
     // The cover's shape
@@ -153,6 +222,22 @@ class PlayerCloseTest {
         assertEquals("/Music/Paper Lanterns/Harbour Glass.flac", coverRequestKey(SongArt("/Music/Paper Lanterns/Harbour Glass.flac", mediaStoreId = 7L)))
         assertEquals("/Music/Paper Lanterns/Harbour Glass.flac#2", coverRequestKey(SongArt("/Music/Paper Lanterns/Harbour Glass.flac", version = 2)))
         assertEquals(null, coverRequestKey(null))
+    }
+
+    @Test
+    fun `every size of a song's cover is one key in memory, the very key the next one's placeholder looks up`() {
+        // Review 2026-11-18: the bar's cached bitmap and the player's placeholder must be one key, whatever Coil would add
+        // to a key it makes itself. Each request names it: Coil stores the bitmap under that key and the request's extras
+        // (MemoryCacheService), and the next request of the song, at any size, looks that up as its placeholder.
+        val context = object : ContextWrapper(null) {}
+        val art = SongArt("/Music/Paper Lanterns/Harbour Glass.flac", mediaStoreId = 7L)
+        val bar = songCoverRequest(context, art)
+        assertEquals("/Music/Paper Lanterns/Harbour Glass.flac", bar.memoryCacheKey)
+        val stored = MemoryCache.Key(bar.memoryCacheKey!!, bar.memoryCacheKeyExtras)
+        assertEquals(stored, songCoverRequest(context, art).placeholderMemoryCacheKey)
+        assertEquals(MemoryCache.Key("/Music/Paper Lanterns/Harbour Glass.flac"), stored)
+        // A cover changed in Covers & tags is a new key, so the old bitmap never stands in for it.
+        assertEquals(MemoryCache.Key("/Music/Paper Lanterns/Harbour Glass.flac#2"), songCoverRequest(context, art.copy(version = 2)).placeholderMemoryCacheKey)
     }
 
     private companion object {

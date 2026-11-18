@@ -217,7 +217,7 @@ internal fun PartHandles(ui: PlayerUi, extras: PlayerExtrasUi) {
 }
 
 @Composable
-private fun PartHandle(start: Boolean, ms: Long, durationMs: Long, width: Float, onDrag: (Long) -> Unit, onDone: () -> Unit, onSet: (Long) -> Unit) {
+internal fun PartHandle(start: Boolean, ms: Long, durationMs: Long, width: Float, onDrag: (Long) -> Unit, onDone: () -> Unit, onSet: (Long) -> Unit) {
     val density = LocalDensity.current
     val brand = LocalBrandColors.current
     val x = width * (ms.toFloat() / durationMs).coerceIn(0f, 1f)

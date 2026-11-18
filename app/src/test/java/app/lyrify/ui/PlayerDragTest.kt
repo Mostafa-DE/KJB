@@ -1,6 +1,8 @@
 package app.lyrify.ui
 
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.pointer.PointerId
+import androidx.compose.ui.input.pointer.PointerInputChange
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -95,16 +97,26 @@ class PlayerDragTest {
 
     @Test
     fun `a seek button jumps on a tap, never on a drag down or a finger the player took, and waits while pressed`() {
-        val slop = 18f
-        assertEquals(SeekPress.WAIT, seekPress(Offset(3f, 4f), slop, lifted = false, consumed = false))
-        assertEquals(SeekPress.JUMP, seekPress(Offset(3f, 4f), slop, lifted = true, consumed = false))
-        // A drag down from it is the player's: no jump, then or at the lift.
-        assertEquals(SeekPress.NONE, seekPress(Offset(2f, 19f), slop, lifted = false, consumed = false))
-        assertEquals(SeekPress.NONE, seekPress(Offset(2f, 40f), slop, lifted = true, consumed = false))
-        // Sliding off sideways is no tap either.
-        assertEquals(SeekPress.NONE, seekPress(Offset(-25f, 0f), slop, lifted = true, consumed = false))
-        // The player's drag took it first (on a phone whose slop is past the player's 12 dp): nothing.
-        assertEquals(SeekPress.NONE, seekPress(Offset(0f, 10f), slop, lifted = false, consumed = true))
+        assertEquals(SeekPress.WAIT, seekPress(Offset(3f, 4f), lifted = false, consumed = false))
+        assertEquals(SeekPress.JUMP, seekPress(Offset(3f, 4f), lifted = true, consumed = false))
+        // A drag down from it is the player's once it has gone down first past 12 dp: no jump, then or at the lift.
+        assertEquals(SeekPress.NONE, seekPress(Offset(2f, 13f), lifted = false, consumed = false))
+        assertEquals(SeekPress.NONE, seekPress(Offset(2f, 40f), lifted = true, consumed = false))
+        // Sliding off sideways or up is no tap either.
+        assertEquals(SeekPress.NONE, seekPress(Offset(-25f, 0f), lifted = true, consumed = false))
+        assertEquals(SeekPress.NONE, seekPress(Offset(0f, -13f), lifted = true, consumed = false))
+        // The player's drag took it first: nothing.
+        assertEquals(SeekPress.NONE, seekPress(Offset(0f, 10f), lifted = false, consumed = true))
+    }
+
+    @Test
+    fun `a tap that drifts past the touch slop but short of the player's 12 dp lock still jumps`() {
+        // Review 2026-11-18: past the 8 dp touch slop the button let go, and short of 12 dp the player had not taken the
+        // finger, so a lift there did nothing. Until the player takes the finger or it slides off, it is a press.
+        assertEquals(SeekPress.JUMP, seekPress(Offset(0f, 10f), lifted = true, consumed = false))
+        assertEquals(SeekPress.JUMP, seekPress(Offset(9f, 9f), lifted = true, consumed = false))
+        assertEquals(SeekPress.JUMP, seekPress(Offset(-11f, 3f), lifted = true, consumed = false))
+        assertEquals(SeekPress.WAIT, seekPress(Offset(0f, 11f), lifted = false, consumed = false))
     }
 
     @Test
@@ -118,5 +130,21 @@ class PlayerDragTest {
         assertEquals(SheetDrag.LEAVE, sidewaysDrag(Offset(19f, 24f), slop))
         assertEquals(SheetDrag.LEAVE, sidewaysDrag(Offset(3f, 30f), slop))
         assertEquals(SheetDrag.LEAVE, sidewaysDrag(Offset(3f, -30f), slop))
+    }
+
+    @Test
+    fun `once a sideways drag is taken, every move of it counts to the lift, not only the first`() {
+        // Review 2026-11-18: the move was read after the change was consumed, and a consumed change reports none, so an
+        // A-B handle stopped following the finger once it had passed the slop.
+        var x = 100f
+        var dragged = 0f
+        repeat(4) { frame ->
+            val change = PointerInputChange(PointerId(1L), uptimeMillis = 16L * (frame + 1), position = Offset(x + 30f, 52f), pressed = true, previousUptimeMillis = 16L * frame, previousPosition = Offset(x, 50f), previousPressed = true, isInitiallyConsumed = false)
+            dragged += change.takeMoveX()
+            // Still taken: nothing under the bar or the handle sees it.
+            assertTrue(change.isConsumed)
+            x += 30f
+        }
+        assertEquals(120f, dragged, 0f)
     }
 }

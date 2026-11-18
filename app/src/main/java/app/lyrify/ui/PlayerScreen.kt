@@ -64,6 +64,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -161,13 +162,14 @@ fun jumpsWhileHeld(heldMs: Long): Int = if (heldMs < HOLD_DELAY_MS) 1 else 1 + (
 enum class SeekPress { WAIT, JUMP, NONE }
 
 /**
- * A finger pressed on a seek button, [moved] px from where it landed, the platform's touch [slop] apart: lifted within
- * it, a tap ([SeekPress.JUMP], one jump); moved past it, or taken first by the player's drag ([consumed]), no press at
- * all ([SeekPress.NONE]: a drag down that minimises, or a finger sliding off); else still a press ([SeekPress.WAIT]),
- * which held past [HOLD_DELAY_MS] starts the jumps. Never a jump at the press itself: it may be a drag down's start.
+ * A finger pressed on a seek button, [moved] dp from where it landed: once the player's drag would decide on it
+ * ([playerSwipe], past its 12 dp lock), or has taken it first ([consumed]), no press at all ([SeekPress.NONE]: a drag
+ * down that minimises, or a finger sliding off); lifted before that, a tap ([SeekPress.JUMP], one jump, a small drift
+ * too); else still a press ([SeekPress.WAIT]), which held past [HOLD_DELAY_MS] starts the jumps. Never a jump at the
+ * press itself: it may be a drag down's start.
  */
-fun seekPress(moved: Offset, slop: Float, lifted: Boolean, consumed: Boolean): SeekPress = when {
-    consumed || moved.getDistance() > slop -> SeekPress.NONE
+fun seekPress(moved: Offset, lifted: Boolean, consumed: Boolean): SeekPress = when {
+    consumed || playerSwipe(moved.x, moved.y, inEdge = false) != SheetDrag.WAIT -> SeekPress.NONE
     lifted -> SeekPress.JUMP
     else -> SeekPress.WAIT
 }
@@ -602,8 +604,13 @@ internal fun PlayerFrame(onClose: () -> Unit, content: @Composable BoxScope.() -
     val headed = LocalLayerHeaded.current
     LaunchedEffect(headed) {
         if (!headed) return@LaunchedEffect
-        container?.rest()
+        container?.rest(scope)
         drag.reset()
+    }
+    // The cover, drawn above everything while the transform runs, takes the frame's drag shrink from here (containerCover).
+    DisposableEffect(container, drag) {
+        if (container != null) container.frameScale = { drag.peek(container.closing()).scale }
+        onDispose { container?.frameScale = { 1f } }
     }
     // The system's gesture edges (back), in the window, and where the player sits in it: a finger landing there is the system's.
     val direction = LocalLayoutDirection.current
@@ -624,7 +631,7 @@ internal fun PlayerFrame(onClose: () -> Unit, content: @Composable BoxScope.() -
                     alpha = reducedDragAlpha(drag.offset.value, size.height)
                     return@graphicsLayer
                 }
-                val peek = dragPeek(closeHeld(drag.offset.value, container?.closing?.invoke() ?: 0f), size.height)
+                val peek = drag.peek(container?.closing?.invoke() ?: 0f)
                 translationY = peek.shiftY
                 scaleX = peek.scale
                 scaleY = peek.scale
@@ -711,6 +718,9 @@ private class PlayerDrag(private val scope: CoroutineScope) {
     /** Each move of that finger, whoever takes it: the speed it lets go at. */
     fun track(change: PointerInputChange) = tracker.addPointerInputChange(change)
 
+    /** How the frame draws the drag [closing] of the way into the bar: what is left of it ([closeHeld]), as [dragPeek]. */
+    fun peek(closing: Float): Peek = dragPeek(closeHeld(offset.value, closing), height)
+
     /** The player [dy] px further down (up when negative), never above where it rests; returns how far it went. */
     fun follow(dy: Float): Float {
         val from = if (dragging) at else offset.value
@@ -737,7 +747,8 @@ private class PlayerDrag(private val scope: CoroutineScope) {
         when (dragLetGo(closes, intoBar = container != null, reduced = reduced)) {
             DragLetGo.BACK -> scope.launch { offset.animateTo(0f, Motion.close(), initialVelocity = velocity) }
             DragLetGo.INTO_BAR -> {
-                container?.letGo(closeVelocity(velocity, momentum), dragPeek(at, height).scale)
+                // The card's way to the bar is most of the player's height: what a fling's lead is a share of.
+                container?.letGo(closeVelocity(velocity, momentum), way = height, scope)
                 close()
             }
             DragLetGo.AWAY -> close()

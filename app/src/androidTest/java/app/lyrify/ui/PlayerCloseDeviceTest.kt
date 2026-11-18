@@ -21,12 +21,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.lerp
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Outline
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.test.TouchInjectionScope
+import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -34,23 +38,28 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.lyrify.data.LedgerState
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.abs
 
 /**
  * The player closing into the Now bar on the phone, frame by frame with the test clock held (phone test 2026-11-17: let
  * go, it reached the bar in 3 to 6 frames, and its cover turned round in one frame while still large). Inside the
  * shell's two ends, the player's own frame ([PlayerFrame]) with a cover on the container's cover: a drag let go past
- * the threshold carries on from the finger into the bar, its content and its cover moving a little each frame, the
- * cover rounding as it shrinks, settled in time; the chevron closes the same way from rest; a short drag springs back
- * the same way. Made-up names only.
+ * the threshold, or flung, carries on from the finger into the bar, its content and its cover moving a little each
+ * frame, the cover rounding as it shrinks, settled in time; the chevron closes the same way from rest; a short drag
+ * springs back the same way. The corner is the one each frame drew (review 2026-11-18), never worked out again here.
+ * Made-up names only.
  */
 @RunWith(AndroidJUnit4::class)
 class PlayerCloseDeviceTest {
@@ -63,6 +72,19 @@ class PlayerCloseDeviceTest {
     private data class Look(val top: Float, val side: Float, val corner: Float)
 
     private var height = 0f
+
+    /**
+     * The cover's shape, telling each outline it gives: its corner radius by the width it was drawn at, in px. Drawn on
+     * the main thread, read from the test's.
+     */
+    private class DrawnCorners(private val shape: Shape) : Shape {
+        val radii = ConcurrentHashMap<Float, Float>()
+
+        override fun createOutline(size: Size, layoutDirection: LayoutDirection, density: Density): Outline =
+            shape.createOutline(size, layoutDirection, density).also { radii[size.width] = (it as Outline.Rounded).roundRect.topLeftCornerRadius.x }
+    }
+
+    private val drawn = DrawnCorners(CoverShape(CORNER, SIDE))
     private var sidePx = 0f
     private var orbPx = 0f
     private var cornerPx = 0f
@@ -90,7 +112,7 @@ class PlayerCloseDeviceTest {
                                             Column(Modifier.fillMaxSize().testTag(CONTENT).padding(24.dp)) {
                                                 Box(Modifier.size(48.dp).clickable { open = false }.semantics { contentDescription = CHEVRON })
                                                 Text(SONG, Modifier.fillMaxWidth().padding(vertical = 16.dp))
-                                                SongCover(null, containerCover(player).testTag(COVER), size = SIDE, shape = CoverShape(CORNER, SIDE))
+                                                SongCover(null, containerCover(player).testTag(COVER), size = SIDE, shape = drawn)
                                             }
                                         }
                                     }
@@ -110,12 +132,20 @@ class PlayerCloseDeviceTest {
         }
     }
 
-    /** The player as this frame draws it, or null once it has gone into the bar. */
+    /**
+     * The player as this frame draws it, or null once it has gone into the bar. The cover's corner is read from the
+     * outline its clip was drawn with at this frame's size (the frame drawn first), scaled as the cover is drawn.
+     */
     private fun look(): Look? {
+        if (compose.onAllNodesWithTag(COVER).fetchSemanticsNodes().isEmpty()) return null
+        compose.onRoot().captureToImage()
         val content = compose.onAllNodesWithTag(CONTENT).fetchSemanticsNodes().firstOrNull() ?: return null
         val cover = compose.onAllNodesWithTag(COVER).fetchSemanticsNodes().firstOrNull() ?: return null
+        val laidOut = cover.size.width.toFloat()
+        val radius = drawn.radii[laidOut]
+        assertNotNull("the cover was not drawn at its size, $laidOut px", radius)
         val side = cover.boundsInRoot.width
-        return Look(content.boundsInRoot.top, side, coverCorner(side, sidePx, orbPx, cornerPx))
+        return Look(content.boundsInRoot.top, side, radius!! * side / laidOut)
     }
 
     /** Every frame from now until the player has gone (or [MAX_FRAMES]), the clock held. */
@@ -160,6 +190,30 @@ class PlayerCloseDeviceTest {
         looks.zipWithNext().forEach { (a, b) -> assertTrue("cover ${a.side} to ${b.side}", b.side <= a.side + 1f) }
         assertEquals(orbPx / 2, looks.last().corner, 2f)
         // Settled within 450 ms, and never in less than 220.
+        val settled = settledFrames(looks) * FRAME_MS
+        assertTrue("settled at $settled ms", settled in 220..450 + 2 * FRAME_MS)
+    }
+
+    @Test
+    fun aFlingLetGoCarriesOnAtItsSpeedIntoTheBarWithNoCut() {
+        shell()
+        compose.mainClock.autoAdvance = false
+        val song = compose.onNodeWithText(SONG)
+        val pull = height * PULL
+        // The same pull in a few frames: as fast as the transform takes a finger (CLOSE_MOMENTUM_DP), or faster.
+        song.performTouchInput {
+            down(center)
+            for (step in 1..FLING_STEPS) moveTo(lerp(center, center + Offset(0f, pull), step / FLING_STEPS.toFloat()))
+        }
+        val held = look()!!
+        song.performTouchInput { up() }
+        val looks = listOf(held) + frames()
+        assertEquals(false, open)
+        // Handed over at its speed, still a move: no frame takes anything more than a small step, nor past the orb.
+        assertNoJump(looks)
+        looks.zipWithNext().forEach { (a, b) -> assertTrue("cover ${a.side} to ${b.side}", b.side <= a.side + 1f) }
+        assertTrue(looks.all { it.side >= orbPx - 1f })
+        assertEquals(orbPx / 2, looks.last().corner, 2f)
         val settled = settledFrames(looks) * FRAME_MS
         assertTrue("settled at $settled ms", settled in 220..450 + 2 * FRAME_MS)
     }
@@ -220,6 +274,7 @@ class PlayerCloseDeviceTest {
         const val PULL = 0.32f
         const val SHORT_PULL = 0.1f
         const val STEPS = 12
+        const val FLING_STEPS = 4
 
         /** The most a frame may move anything, as a share of its whole way. */
         const val STEP = 0.14f
