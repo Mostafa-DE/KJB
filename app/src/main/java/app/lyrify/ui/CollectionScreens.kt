@@ -153,7 +153,10 @@ private fun CollectionTopBar(
     )
 }
 
-/** The collection's heart: TalkBack hears what a tap does ("Favourite this album", "Remove from Favourites"); Added or Removed with Undo. */
+/**
+ * The collection's heart: TalkBack hears what a tap does ("Favourite this album", "Remove from Favourites"); Added or
+ * Removed with Undo. An artist's is on too while a heart kept on a whole tag naming them stands for them ([artistHearts]).
+ */
 @Composable
 private fun HeartButton(collection: FavouriteCollection, ui: LibraryUi) {
     val chrome = LocalChromeColors.current
@@ -162,12 +165,17 @@ private fun HeartButton(collection: FavouriteCollection, ui: LibraryUi) {
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val actions = rememberSongActions()
-    val on = collection in ui.playlists.favouriteCollections
+    val stored = ui.playlists.favouriteCollections
+    val library = ui.library?.takeIf { collection.kind == CollectionKind.ARTIST }
+    val on = if (library != null) artistHearts(collection.key, stored, library).isNotEmpty() else collection in stored
     val name = stringResource(heartLabel(collection.kind, on))
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
-            .clickable(role = Role.Button) { scope.launch { toasts.say(resources, actions.favourite(collection, !on)) } }
+            .clickable(role = Role.Button) {
+                val change = if (on && library != null) artistHeartOff(collection.key, stored, library) else null
+                scope.launch { toasts.say(resources, change?.let { actions.favourite(it) } ?: actions.favourite(collection, !on)) }
+            }
             .semantics { contentDescription = name }
             .minimumInteractiveComponentSize(),
     ) {
@@ -817,7 +825,7 @@ internal class Favourites(
                 songs = found.map { it.second },
                 songPlaces = found.map { it.first },
                 albums = keys(CollectionKind.ALBUM).mapNotNull(library::album),
-                artists = keys(CollectionKind.ARTIST).mapNotNull(library::artist),
+                artists = keys(CollectionKind.ARTIST).flatMap { heartedArtists(it, library) }.distinctBy { it.name },
                 folders = keys(CollectionKind.FOLDER).mapNotNull(library::folder),
                 playlists = keys(CollectionKind.PLAYLIST).mapNotNull(state::playlist),
             )

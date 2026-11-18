@@ -88,6 +88,15 @@ class FavouritesPageTest {
     }
 
     @Test
+    fun `a heart kept on a whole tag of several artists shows each of them, once`() {
+        val duet = song("Music/Duets/Ember Road.mp3", title = "Ember Road", artist = "Kit Calloway feat. Mira Solen")
+        val library = Library.of(listOf(lantern, water, duet), Settings())
+        val state = PlaylistsState(favouriteCollections = listOf(FavouriteCollection(CollectionKind.ARTIST, "Kit Calloway feat. Mira Solen"), mira))
+
+        assertEquals(listOf("Kit Calloway", "Mira Solen"), Favourites.of(state, library).artists.map { it.name })
+    }
+
+    @Test
     fun `favourites gone from the phone or the library are left out`() {
         val state = PlaylistsState(
             favouriteSongs = listOf(lantern.ref, song("Music/Gone/Old Tape.mp3").ref),

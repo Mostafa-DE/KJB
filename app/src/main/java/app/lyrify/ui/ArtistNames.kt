@@ -24,6 +24,10 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import app.lyrify.R
+import app.lyrify.library.Artist
+import app.lyrify.library.CollectionKind
+import app.lyrify.library.FavouriteCollection
+import app.lyrify.library.Library
 import app.lyrify.settings.ArtistSplit
 
 // Songs with several artists (user feedback 2026-11-17, item 18): Go to artist when a tag names several, and Settings >
@@ -34,6 +38,32 @@ fun artistTap(names: List<String>, onOpen: (String) -> Unit, onChoose: (List<Str
     0 -> null
     1 -> { { onOpen(names.single()) } }
     else -> { { onChoose(names) } }
+}
+
+/**
+ * The artists a stored artist heart ([key]) stands for: its artist, or, for a heart kept on a whole tag of several artists
+ * that is no artist now (hearted in 3.0, or while Split artists was off), each artist the tag names. The heart is kept
+ * as it was, so it is the tag's own again with the setting off or the name among the exceptions.
+ */
+fun heartedArtists(key: String, library: Library): List<Artist> = library.artist(key)?.let(::listOf) ?: library.artistsIn(key)
+
+/** The stored hearts that make artist [name] a favourite: its own, and a whole tag's that stands for it ([heartedArtists]). */
+fun artistHearts(name: String, stored: List<FavouriteCollection>, library: Library): List<FavouriteCollection> = stored.filter { heart ->
+    heart.kind == CollectionKind.ARTIST && (heart.key == name || library.artist(heart.key) == null && name in library.artistNames(heart.key))
+}
+
+/** What a heart's tap changes: the hearts that go ([off]) and those that come ([on]). */
+data class HeartChange(val off: List<FavouriteCollection>, val on: List<FavouriteCollection>)
+
+/**
+ * What taking artist [name]'s heart off changes in [stored]: its hearts go ([artistHearts]), and the other artists a whole
+ * tag's heart stood for each get their own, so they stay favourites.
+ */
+fun artistHeartOff(name: String, stored: List<FavouriteCollection>, library: Library): HeartChange {
+    val off = artistHearts(name, stored, library)
+    val on = off.filter { it.key != name }.flatMap { whole -> heartedArtists(whole.key, library) }.map { FavouriteCollection(CollectionKind.ARTIST, it.name) }
+        .filter { it.key != name && it !in stored }.distinct()
+    return HeartChange(off, on)
 }
 
 /** The small menu Go to artist opens for a song of several artists while [names] is set: each name opens its page. */
