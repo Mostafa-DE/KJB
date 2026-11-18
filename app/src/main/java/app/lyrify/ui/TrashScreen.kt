@@ -57,20 +57,36 @@ import kotlinx.coroutines.launch
  * there that the library would list ([SongTrash.elsewhere]), each once, the latest moved first (the phone keeps each the
  * same time, so the furthest expiry). Null until both are read.
  */
-fun trashSongs(state: DuplicatesState, elsewhere: List<TrashedSong>?): List<TrashedSong>? = null
+fun trashSongs(state: DuplicatesState, elsewhere: List<TrashedSong>?): List<TrashedSong>? {
+    if (!state.loaded || elsewhere == null) return null
+    val own = state.trashed
+    val ids = own.mapTo(HashSet()) { it.file.id }
+    return (own + elsewhere.filter { it.file.id !in ids }).sortedWith(compareByDescending<TrashedSong> { it.expiresAt }.thenByDescending { it.trashedAt })
+}
 
 /** The room [songs] take on the phone: what deleting them for good frees. */
-fun trashBytes(songs: List<TrashedSong>): Long = 0
+fun trashBytes(songs: List<TrashedSong>): Long = songs.sumOf { it.file.size }
 
 /** Trash's line in Tools: nothing until the trash is read, then "Empty" or "3 songs · 24 MB". */
-fun trashLine(songs: List<TrashedSong>?): ToolLine? = null
+fun trashLine(songs: List<TrashedSong>?): ToolLine? = when {
+    songs == null -> null
+    songs.isEmpty() -> ToolLine.Text(R.string.tools_trash_none)
+    else -> ToolLine.CountBytes(R.plurals.tools_trash, songs.size, trashBytes(songs))
+}
 
 /**
  * What the page says once the phone's delete dialog gave [answer], [approved] (its OK) or cancelled: how many went for
  * good, of how many, and the room freed; that none went; or that KJB could not check yet. Null only when nothing waited
  * for this answer.
  */
-fun deleteSaid(approved: Boolean, answer: Deleted): TrashSaid? = null
+fun deleteSaid(approved: Boolean, answer: Deleted): TrashSaid? = when {
+    !approved -> TrashSaid.Text(R.string.trash_delete_cancelled)
+    answer is Deleted.Gone && answer.count == 0 -> TrashSaid.Count(R.plurals.trash_deleted_none, answer.of)
+    answer is Deleted.Gone && answer.count < answer.of -> TrashSaid.Freed(R.plurals.trash_deleted_some, answer.of, listOf(answer.count, answer.of), answer.bytes)
+    answer is Deleted.Gone -> TrashSaid.Freed(R.plurals.trash_deleted, answer.count, listOf(answer.count), answer.bytes)
+    answer == Deleted.NotConfirmed -> TrashSaid.Text(R.string.dupes_trash_unconfirmed)
+    else -> null
+}
 
 /** The trash's songs for Tools and its page ([trashSongs]), as the Duplicates engine and the phone's trash have them. */
 @Composable
