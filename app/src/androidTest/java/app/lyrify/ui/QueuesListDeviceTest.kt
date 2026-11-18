@@ -45,7 +45,8 @@ import org.junit.runner.RunWith
  * The Queues page's list (QF3) on the phone, at a width and font scale set here rather than the phone's, light and dark:
  * "Playing now" with the queue playing first and only there, Recent under it holding a queue kept with Keep in 3.0.0,
  * no Saved part, and one empty state when there is no queue. The book alone: nothing plays, but for the card told
- * playing or paused. Also the Queue sheet's Recent chips, many queues of them. Made-up names only.
+ * playing or paused. Also the Queue sheet's Recent chips, many queues of them, its Other queues with their title and
+ * hint, and a queue page's Resume and Play from start at the largest font. Made-up names only.
  */
 @RunWith(AndroidJUnit4::class)
 class QueuesListDeviceTest {
@@ -155,6 +156,37 @@ class QueuesListDeviceTest {
         assertTrue("the long name is $width wide", width <= 220.dp)
         compose.onNodeWithText(long).performClick()
         assertEquals(listOf(target), opened)
+    }
+
+    /** 3.1: the sheet's other queues, pinned at its foot: a title, a line saying what they are, then chips. */
+    @Test
+    fun theSheetsOtherQueuesHaveATitleAndAHintAndOpenAQueueAtFontScaleTwo() {
+        val book = (1..3).fold(QueueBook()) { book, n ->
+            book.play(listOf(song("Pier $n")), 0, QueueSource(SourceKind.FOLDER, "folder:Music/Pier $n", "Pier $n"), now = n.toLong()).book
+        }
+        val others = book.others
+        val labels = queueLabels(context, book)
+        show(width = 360.dp, fontScale = 2f, dark = true) { OtherQueues(others, labels) { opened += it } }
+        val title = compose.onNodeWithText(context.getString(R.string.queue_others)).getUnclippedBoundsInRoot()
+        val hint = compose.onNodeWithText(context.getString(R.string.queue_others_hint)).getUnclippedBoundsInRoot()
+        val chip = compose.onNodeWithText(labels.getValue(others.first().id)).getUnclippedBoundsInRoot()
+        assertTrue("title, hint and chips in that order", title.bottom <= hint.top && hint.bottom <= chip.top)
+        compose.onNodeWithText(labels.getValue(others.first().id)).performClick()
+        assertEquals(listOf(others.first().id), opened)
+    }
+
+    /** 3.1: a queue page's pinned buttons, both on one line at 360 dp and the largest font, each named for TalkBack. */
+    @Test
+    fun aQueuePagesResumeAndPlayFromStartBothFitOnOneLineAtFontScaleTwo() {
+        val taps = mutableListOf<String>()
+        show(width = 360.dp, fontScale = 2f) { QueueButtons(playing = false, on = false, onResume = { taps += "resume" }, onFromStart = { taps += "start" }) }
+        val resume = compose.onNodeWithContentDescription(context.getString(R.string.queue_resume)).getUnclippedBoundsInRoot()
+        val start = compose.onNodeWithContentDescription(context.getString(R.string.queue_from_start)).getUnclippedBoundsInRoot()
+        assertTrue("Play from start ends at ${start.right}", start.right <= 360.dp)
+        assertTrue("one line", start.top < resume.bottom && resume.top < start.bottom)
+        compose.onNodeWithContentDescription(context.getString(R.string.queue_resume)).performClick()
+        compose.onNodeWithContentDescription(context.getString(R.string.queue_from_start)).performClick()
+        assertEquals(listOf("resume", "start"), taps)
     }
 
     /** The list alone, [width] wide (beyond the phone's own if need be), at [fontScale], light or [dark]. */

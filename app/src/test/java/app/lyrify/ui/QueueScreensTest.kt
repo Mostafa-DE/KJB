@@ -69,6 +69,15 @@ class QueueScreensTest {
     }
 
     @Test
+    fun `the Queue sheet's other queues say what they are, so they never read as lyrics`() {
+        assertEquals("Other queues", named(player, "queue_others"))
+        val hint = checkNotNull(named(player, "queue_others_hint"))
+        assertTrue(hint, "waiting to play" in hint)
+        assertTrue(hint, hint.length <= 60)
+        assertNull(named(player, "queue_recent"))
+    }
+
+    @Test
     fun `the Queues row counts every queue, and says nothing when there are none`() {
         assertNull(queuesCount(emptyList()))
         val playing = QueueTarget("q1", "Album · Harbour Glass · 21:30", 12, playing = true)

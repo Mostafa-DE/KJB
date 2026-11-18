@@ -97,7 +97,9 @@
     <!-- Queues -->
     <string name="queue_title">Queue</string>
     <string name="queue_from">From %1$s · %2$s</string>
-    <string name="queue_recent">Recent</string>
+    <string name="queue_others">Other queues</string>
+    <!-- Under "Other queues" in the player's Queue sheet: what the chips are (3.1; the user took them for lyrics). -->
+    <string name="queue_others_hint">Saved queues waiting to play. Tap one to open it.</string>
     <string name="queue_all">All queues</string>
     <string name="queue_nothing">Nothing queued</string>
     <string name="queue_save_playlist">Save as playlist</string>

@@ -4,6 +4,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
@@ -538,10 +539,10 @@ private fun NameDialog(title: String, field: String, start: String, confirm: Str
 }
 
 /**
- * The Queue sheet, from the player: the queue's name and where it is ("12 of 48") with "All queues", the Recent chips
- * (the other queues, as the Queues page lists them; each opens that queue's page, and none shows without one), then the
- * list, opening with the current song marked and in view; "Save as playlist" at the foot. A lazy list in a sheet of its
- * own, as LyrifySheet draws it: a queue may hold the whole library.
+ * The Queue sheet, from the player: the queue's name and where it is ("12 of 48") with "All queues", then the list,
+ * opening with the current song marked and in view; "Save as playlist" under it, and at the foot, pinned whatever the
+ * list's scroll, the other queues ([OtherQueues], as the Queues page lists them; each opens that queue's page, and none
+ * shows without one). A lazy list in a sheet of its own, as LyrifySheet draws it: a queue may hold the whole library.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -597,8 +598,8 @@ fun QueueSheet(onDismiss: () -> Unit) {
             }
             val others = book.others
             val labels = remember(context, book) { queueLabels(context, book) }
-            // The sheet opens with the song playing in view, under the head and the chips.
-            val list = rememberLazyListState(firstShown(queue.index, head = if (others.isEmpty()) 1 else 2))
+            // The sheet opens with the song playing in view, under the head.
+            val list = rememberLazyListState(firstShown(queue.index, head = 1))
             LazyColumn(Modifier.weight(1f, fill = false), state = list) {
                 item {
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 20.dp, end = 12.dp)) {
@@ -613,26 +614,41 @@ fun QueueSheet(onDismiss: () -> Unit) {
                         LyrifyButton(stringResource(R.string.queue_all), { open(Page.Queues) }, kind = ButtonKind.GHOST, compact = true)
                     }
                 }
-                if (others.isNotEmpty()) {
-                    item {
-                        SectionTitle(stringResource(R.string.queue_recent), Modifier.padding(start = 20.dp, end = 20.dp, top = 12.dp))
-                        RecentChips(others, labels) { open(Page.Queue(it)) }
-                    }
-                }
                 queueSongs(queue, playing = true, library, names, connection, reorder, sheetSurface, onRemoved = { undo ->
                     scope.launch { if (toasts.show(Toast(resources.getString(R.string.queue_removed), R.drawable.ic_playlist_remove, action = undo?.let { resources.getString(R.string.player_undo) }))) undo?.undo() }
                 })
             }
             ToastSlot(Modifier.padding(horizontal = 12.dp), padding = PaddingValues(bottom = 8.dp))
             LyrifyButton(stringResource(R.string.queue_save_playlist), { saving = true }, Modifier.fillMaxWidth().padding(16.dp), kind = ButtonKind.SECONDARY, icon = R.drawable.ic_playlist_add)
+            if (others.isNotEmpty()) OtherQueues(others, labels) { open(Page.Queue(it)) }
             if (saving) SaveAsPlaylistDialog(queue, connection) { saving = false }
         }
     }
 }
 
 /**
- * The Queue sheet's Recent chips: [others] by their names in [labels] ([queueLabels]), each one capped in width. A lazy
- * row, as every kept queue shows here; a tap opens that queue's page by its id ([onOpen]).
+ * The Queue sheet's other queues (3.1), pinned at its foot under a line: their title, a line saying what they are (the
+ * user took the chips under the old "Recent" for lyrics), then a chip for each ([RecentChips]), which opens that
+ * queue's page ([onOpen], by its id).
+ */
+@Composable
+internal fun OtherQueues(others: List<Queue>, labels: Map<String, String>, onOpen: (String) -> Unit) {
+    Column(Modifier.fillMaxWidth().padding(bottom = 12.dp)) {
+        HorizontalDivider(Modifier.padding(horizontal = 8.dp), color = MaterialTheme.colorScheme.outlineVariant)
+        SectionTitle(stringResource(R.string.queue_others), Modifier.padding(start = 20.dp, end = 20.dp, top = 12.dp))
+        Text(
+            stringResource(R.string.queue_others_hint),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 20.dp),
+        )
+        RecentChips(others, labels, onOpen)
+    }
+}
+
+/**
+ * The Queue sheet's other queues as chips: [others] by their names in [labels] ([queueLabels]), each one capped in
+ * width. A lazy row, as every kept queue shows here; a tap opens that queue's page by its id ([onOpen]).
  */
 @Composable
 internal fun RecentChips(others: List<Queue>, labels: Map<String, String>, onOpen: (String) -> Unit) {
