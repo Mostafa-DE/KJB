@@ -69,6 +69,6 @@ class TrashViewTest {
         val library = File("src/main/res/values/strings_library.xml").readText()
         assertTrue("its playlists and queues. You can restore them in Tools, Trash for about 30 days." in library)
         assertFalse("Tools, Duplicates" in library)
-        assertFalse('—' in trash)
+        assertFalse('\u2014' in trash)
     }
 }
