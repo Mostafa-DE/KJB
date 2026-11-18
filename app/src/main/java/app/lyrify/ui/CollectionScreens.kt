@@ -704,7 +704,7 @@ private fun FavouritesPage(ui: LibraryUi, library: Library, root: Boolean) {
         }
     }
     val hero: @Composable (PageSongs) -> Unit = { list ->
-        FavouritesHead(title, songsMeta(songs, null).let { if (others > 0) stringResource(R.string.lib_after, it, pluralStringResource(R.plurals.lib_more_count, others, others)) else it }) {
+        FavouritesHead(favouritesHeadTitle(title, root), songsMeta(songs, null).let { if (others > 0) stringResource(R.string.lib_after, it, pluralStringResource(R.plurals.lib_more_count, others, others)) else it }) {
             ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll, sort = if (songs.isEmpty()) null else sortChip(order, R.string.lib_sort_custom), onSort = { sorting = true }, gutter = 0.dp)
         }
     }
@@ -749,9 +749,10 @@ private fun FavouritesPage(ui: LibraryUi, library: Library, root: Boolean) {
  * title and its counts line, then [buttons], the list header (Shuffle, Play, Add all, the sort), under them; on the same
  * row where the width leaves it room ([favouritesSideBySide]). Large words wrap and the row grows with them, the tile
  * beside their middle ([favouritesHeadHeight]). TalkBack hears the title as the page's heading; the tile is decorative.
+ * Without a [title] (the bar's Favourites, [favouritesHeadTitle]) the tile has the counts line alone beside it.
  */
 @Composable
-internal fun FavouritesHead(title: String, meta: String, buttons: @Composable () -> Unit) {
+internal fun FavouritesHead(title: String?, meta: String, buttons: @Composable () -> Unit) {
     Layout(
         content = {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -759,13 +760,15 @@ internal fun FavouritesHead(title: String, meta: String, buttons: @Composable ()
                 Column(Modifier.padding(start = FAV_HEAD_GAP)) {
                     // Shrunk to fit its lines where large words would not (phone session 9: it was cut at font scale 2).
                     val style = MaterialTheme.typography.titleLarge
-                    Text(
-                        title,
-                        style = style,
-                        maxLines = favouritesTitleLines(title),
-                        autoSize = TextAutoSize.StepBased(minFontSize = FAV_TITLE_SMALLEST, maxFontSize = style.fontSize),
-                        modifier = Modifier.semantics { heading() },
-                    )
+                    if (title != null) {
+                        Text(
+                            title,
+                            style = style,
+                            maxLines = favouritesTitleLines(title),
+                            autoSize = TextAutoSize.StepBased(minFontSize = FAV_TITLE_SMALLEST, maxFontSize = style.fontSize),
+                            modifier = Modifier.semantics { heading() },
+                        )
+                    }
                     Text(meta, style = FavouritesMeta.tabular(), color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 3, overflow = TextOverflow.Ellipsis)
                 }
             }
@@ -904,6 +907,12 @@ fun favouritesSideBySide(width: Int, head: Int, gap: Int, beside: Int): Boolean 
  * How many lines Favourites' title may take: one for a single word (it shrinks to fit rather than break inside the word),
  * two for more, so large words wrap between them.
  */
+/**
+ * The title Favourites' head shows: its own, except as the bar's item ([root], KJB 3.1), whose header already has the name
+ * (and is the page's heading), as Queues', Downloads' and Books' do; so it shows once.
+ */
+fun favouritesHeadTitle(title: String, root: Boolean): String? = title.takeUnless { root }
+
 fun favouritesTitleLines(title: String): Int = if (title.trim().contains(' ')) 2 else 1
 
 fun favouritesHeadHeight(tile: Float, words: Float, buttons: Float, side: Boolean, top: Float): Float {

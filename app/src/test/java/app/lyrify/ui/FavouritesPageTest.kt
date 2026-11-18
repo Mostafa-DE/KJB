@@ -148,6 +148,17 @@ class FavouritesPageTest {
         assertEquals(FAV_HEAD_TOP.value + words + LIST_HEADER_HEIGHT.value, stacked)
     }
 
+    // KJB 3.1: Favourites as a bar item has the bar's header with its name, as Queues, Downloads and Books do.
+
+    @Test
+    fun `as a bar item its head leaves the title to the bar's header, so the name shows once`() {
+        assertNull(favouritesHeadTitle("Favourites", root = true))
+        assertEquals("Favourites", favouritesHeadTitle("Favourites", root = false))
+        val page = File("src/main/java/app/lyrify/ui/CollectionScreens.kt").readText()
+        val favourites = page.substringAfter("private fun FavouritesPage(").substringBefore("\n}\n")
+        assertTrue("FavouritesHead(favouritesHeadTitle(title, root)," in favourites)
+    }
+
     // Phone session 9: at font scale 2 the title was cut.
 
     @Test
