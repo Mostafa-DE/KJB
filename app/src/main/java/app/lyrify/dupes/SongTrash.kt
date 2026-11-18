@@ -168,6 +168,11 @@ class SongTrash(
      * Blocking.
      */
     private val ownWrite: (listed: AudioFile, now: AudioFile) -> Boolean = { _, _ -> false },
+    /**
+     * The songs at these paths are in the phone's trash now, all of one answer: they leave KJB's queues, the song playing
+     * among them giving way to the next ([app.lyrify.player.PlayerCore.trashed]).
+     */
+    private val leaveQueues: suspend (Set<String>) -> Unit = {},
     private val log: (String) -> Unit = {},
 ) {
     /** One settling of the files waiting for an answer at a time: the phone's answer, a Move's, a scan's or the tab's. */

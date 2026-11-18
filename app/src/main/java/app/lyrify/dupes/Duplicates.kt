@@ -103,6 +103,8 @@ class Duplicates(
     private val hasLyrics: (AudioFile) -> Boolean = ::sidecarExists,
     /** Whether a file of another size than at the scan was changed since only by KJB's own tag writes ([kjbTagWrites]). */
     private val ownWrite: (listed: AudioFile, now: AudioFile) -> Boolean = { _, _ -> false },
+    /** Songs now in the phone's trash leave KJB's queues, all of one answer at once ([SongTrash]). */
+    private val leaveQueues: suspend (Set<String>) -> Unit = {},
     private val log: (String) -> Unit = {},
 ) {
     private val _state = MutableStateFlow(DuplicatesState())
@@ -146,6 +148,7 @@ class Duplicates(
         io = io,
         clock = clock,
         ownWrite = ownWrite,
+        leaveQueues = leaveQueues,
         log = log,
     )
 

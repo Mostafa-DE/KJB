@@ -66,7 +66,7 @@ class SongTrashTest {
     private fun lrc(path: String) = File(LrcFormat.sidecarPath(path) ?: error("no sidecar"))
 
     /** The engine the app has: MediaStore's rows are the files on disk; trashing cleans up lyrics and playlists. */
-    private fun TestScope.engine(files: List<AudioFile>, pipeline: LyricsPipeline) = Duplicates(
+    private fun TestScope.engine(files: List<AudioFile>, pipeline: LyricsPipeline, queues: suspend (Set<String>) -> Unit = {}) = Duplicates(
         library = object : AudioLibrary {
             override fun read(): LibraryRead = LibraryRead.Files(files)
 
@@ -81,6 +81,7 @@ class SongTrashTest {
         scope = this,
         io = StandardTestDispatcher(testScheduler),
         clock = { BASE + testScheduler.currentTime },
+        leaveQueues = queues,
     )
 
     private fun trashOnDisk(path: String, id: Long) {
@@ -131,6 +132,30 @@ class SongTrashTest {
         assertEquals(listOf(lantern.path), forgotten)
         assertEquals(listOf(11L), trash.trashed.map { it.file.id })
         assertEquals(TrashStep.None, trash.step)
+    }
+
+    @Test
+    fun `the songs the phone moved leave the queues together, before their lyrics and playlists, and only after its OK`() = runTest {
+        val lantern = song(11, "Paper Lantern")
+        val bell = song(12, "Tide Bell")
+        val files = listOfNotNull(trashFile(lantern), trashFile(bell))
+        // Each time the queues heard, with what the playlists had been told by then.
+        val left = mutableListOf<Pair<Set<String>, List<String>>>()
+        val trash = engine(files, pipeline(), queues = { left += it to forgotten.toList() }).trash
+        advanceUntilIdle()
+
+        assertTrue(trash.ask(files))
+        assertEquals(Confirmation.Ask(listOf(11L, 12L)), trash.confirm(files))
+        assertEquals(Trashed.Unchanged, trash.answered(approved = false))
+        assertEquals(emptyList<Pair<Set<String>, List<String>>>(), left)
+
+        assertTrue(trash.ask(files))
+        assertEquals(Confirmation.Ask(listOf(11L, 12L)), trash.confirm(files))
+        trashOnDisk(lantern.path, 11)
+        trashOnDisk(bell.path, 12)
+        assertEquals(Trashed.Moved(2), trash.answered(approved = true))
+        assertEquals(listOf(setOf(lantern.path, bell.path) to emptyList<String>()), left)
+        assertEquals(listOf(lantern.path, bell.path), forgotten)
     }
 
     @Test
