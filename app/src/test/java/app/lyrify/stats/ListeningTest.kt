@@ -191,6 +191,15 @@ class ListeningTest {
     }
 
     @Test
+    fun `a song with several artists counts for each of them in the top artists`() {
+        val duet = song("Music/Duets/Lamp Oil.mp3", artist = "Wren Halloran feat. Kit Calloway", id = 5)
+        val library = Library.of(listOf(alder, ember, duet), Settings())
+        val totals = listOf(SongPlays(alder.ref, 1, 100, 10_000), SongPlays(ember.ref, 1, 400, 20_000), SongPlays(duet.ref, 2, 300, 30_000))
+
+        assertEquals(listOf("Wren Halloran" to 3, "Kit Calloway" to 3), listeningOf(totals, library).artists.map { it.item.name to it.plays })
+    }
+
+    @Test
     fun `a song moved or renamed keeps its plays through its id, one gone leaves the top lists but not the totals, and one hidden leaves both`() {
         val moved = alder.copy(ref = SongRef(VOLUME + "Music/Harbour Glass/Alder Smoke (live).mp3", 1))
         val hidden = Library.of(listOf(moved, birch, ember, salt), Settings(library = LibrarySettings(foldersToSkip = listOf("Music/Night Ferry"))))

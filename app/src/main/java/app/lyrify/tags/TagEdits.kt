@@ -494,7 +494,9 @@ data class FavouriteMove(val from: FavouriteCollection, val to: FavouriteCollect
 /**
  * A favourite album or artist keeps its heart when an edit gives it a new name or key: a rename, a merge, Edit album,
  * and their Undo. It moves only when every one of its songs was written and all now share one new key; an album or
- * artist an edit split (a song in use, a field changed since) keeps its heart where it is. Pure, apart from [apply].
+ * artist an edit split (a song in use, a field changed since) keeps its heart where it is. An artist is a name its
+ * songs' tags give ([Library.artistNames]), so one still named by a song keeps its heart, and one renamed inside a tag
+ * of several names ("Kit Calloway feat. Mira Okafor") moves to the name the edit gave it. Pure, apart from [apply].
  */
 object FavouriteMoves {
     /** The hearts to move after [changed] songs were written: each as [library] read it before, and as it is now. */
@@ -507,10 +509,25 @@ object FavouriteMoves {
                 CollectionKind.FOLDER, CollectionKind.PLAYLIST -> null
             }
             if (songs.isNullOrEmpty() || songs.any { it.path !in now }) return@mapNotNull null
-            val keys = songs.map { keyOf(favourite.kind, now.getValue(it.path)) }.distinct()
-            val key = keys.singleOrNull()?.takeIf { it != favourite.key } ?: return@mapNotNull null
+            val key = when (favourite.kind) {
+                CollectionKind.ARTIST -> renamedArtist(favourite.key, songs.map { it to now.getValue(it.path) }, library)
+                else -> songs.map { albumKey(now.getValue(it.path)) }.distinct().singleOrNull()?.takeIf { it != favourite.key }
+            } ?: return@mapNotNull null
             FavouriteMove(favourite, FavouriteCollection(favourite.kind, key))
         }
+    }
+
+    /**
+     * The name artist [name] has after the edit of its [songs] (each before and after): none while a song's artist tag
+     * still names it (its page is still there); else the one name that took its place in every song, in the tag that
+     * named it (the artist tag, or the album artist tag of a song on its page as the album's artist).
+     */
+    private fun renamedArtist(name: String, songs: List<Pair<Song, Song>>, library: Library): String? {
+        if (songs.any { (_, after) -> name in library.artistNames(after.artist) }) return null
+        return songs.map { (before, after) ->
+            val tag: (Song) -> String? = if (name in library.artistNames(before.artist)) Song::artist else Song::albumArtist
+            library.artistNames(tag(after)).toSet() - library.artistNames(tag(before)).toSet()
+        }.reduce { common, new -> common intersect new }.singleOrNull()
     }
 
     /**
@@ -530,12 +547,6 @@ object FavouriteMoves {
     /** Each heart on at its new key, then off at the old one (kept when the new one could not be stored). */
     suspend fun apply(moves: List<FavouriteMove>, favourites: FavouritesPort): Boolean =
         moves.fold(true) { stored, move -> favourites.setCollection(move.to, true) && favourites.setCollection(move.from, false) && stored }
-
-    private fun keyOf(kind: CollectionKind, song: Song): String? = when (kind) {
-        CollectionKind.ARTIST -> song.artist?.trim()?.takeIf(String::isNotEmpty)
-        CollectionKind.ALBUM -> albumKey(song)
-        CollectionKind.FOLDER, CollectionKind.PLAYLIST -> null
-    }
 }
 
 /**

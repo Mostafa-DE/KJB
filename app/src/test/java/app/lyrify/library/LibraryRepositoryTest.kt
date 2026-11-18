@@ -1,6 +1,7 @@
 package app.lyrify.library
 
 import app.lyrify.books.BookMarks
+import app.lyrify.settings.ArtistSplit
 import app.lyrify.settings.LibrarySettings
 import app.lyrify.settings.PlaybackSettings
 import app.lyrify.settings.Settings
@@ -110,6 +111,19 @@ class LibraryRepositoryTest {
         settings.value = Settings(library = LibrarySettings(foldersToSkip = listOf("Music/Harbour Glass")))
         runCurrent()
         assertEquals(emptyList<Song>(), repository.library().songs)
+        assertEquals(1, source.reads)
+    }
+
+    @Test
+    fun `changing Artists with several names regroups the artists without reading the songs again`() = runTest {
+        source.result = SongsRead.Songs(listOf(song("Music/Duets/Tin Roof.mp3", artist = "Kit Calloway; Mira Solen")))
+        val repository = repository()
+        runCurrent()
+        assertEquals(listOf("Kit Calloway", "Mira Solen"), repository.library().artists.map { it.name })
+
+        settings.value = Settings(library = LibrarySettings(artistSplit = ArtistSplit(enabled = false)))
+        runCurrent()
+        assertEquals(listOf("Kit Calloway; Mira Solen"), repository.library().artists.map { it.name })
         assertEquals(1, source.reads)
     }
 

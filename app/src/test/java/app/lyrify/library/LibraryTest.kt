@@ -1,6 +1,7 @@
 package app.lyrify.library
 
 import app.lyrify.books.BookMarks
+import app.lyrify.settings.ArtistSplit
 import app.lyrify.settings.LibrarySettings
 import app.lyrify.settings.PlaybackSettings
 import app.lyrify.settings.Settings
@@ -180,10 +181,78 @@ class LibraryTest {
         assertEquals(listOf("Kit Calloway", "Mira Solen"), lib.artists.map { it.name })
         val kit = checkNotNull(lib.artist("Kit Calloway"))
         assertEquals(listOf("Night Ferry", "Harbour Glass Live", "Harbour Glass"), kit.albums.map { it.title })
-        assertEquals(listOf("01 Tide Bell", "02 Low Water", "01 Paper Lantern", "Salt Road"), titles(kit.songs))
+        // Two Lights is Mira Solen's song on Kit Calloway's album: on both pages (2026-11-18, album-artist songs show).
+        assertEquals(listOf("01 Tide Bell", "02 Low Water", "01 Two Lights", "01 Paper Lantern", "Salt Road"), titles(kit.songs))
         assertEquals(listOf("01 Two Lights"), titles(checkNotNull(lib.artist("Mira Solen")).songs))
         assertEquals(emptyList<Album>(), checkNotNull(lib.artist("Mira Solen")).albums)
         assertNull(lib.artist("Nobody"))
+    }
+
+    @Test
+    fun `a tag naming several artists puts the song on each one's page, and the Artists tab lists each artist once`() {
+        val lib = library(
+            song("Music/A/Tin Roof.mp3", artist = "Kit Calloway, Mira Solen, Oren Vale"),
+            song("Music/A/Low Water.mp3", artist = "Mira Solen"),
+            song("Music/A/Salt Road.mp3", artist = "Oren Vale feat. Kit Calloway"),
+            song("Music/A/Lamp Oil.mp3", artist = "Hollis Brandt (ft. Mira Solen)"),
+        )
+
+        assertEquals(listOf("Hollis Brandt", "Kit Calloway", "Mira Solen", "Oren Vale"), lib.artists.map { it.name })
+        assertEquals(listOf("Salt Road", "Tin Roof"), titles(checkNotNull(lib.artist("Kit Calloway")).songs).sorted())
+        assertEquals(listOf("Lamp Oil", "Low Water", "Tin Roof"), titles(checkNotNull(lib.artist("Mira Solen")).songs).sorted())
+        assertEquals(listOf("Salt Road", "Tin Roof"), titles(checkNotNull(lib.artist("Oren Vale")).songs).sorted())
+        assertNull(lib.artist("Kit Calloway, Mira Solen, Oren Vale"))
+    }
+
+    @Test
+    fun `an artist's page holds the songs whose album artist they are, each once, and the albums an album artist tag of several names credits`() {
+        val lib = library(
+            song("Music/H/01 Lamp Oil.mp3", artist = "Kit Calloway", album = "Harbour Glass", albumArtist = "Kit Calloway", track = 1, year = 2020),
+            song("Music/H/02 Porch Wire.mp3", artist = "Mira Solen", album = "Harbour Glass", albumArtist = "Kit Calloway", track = 2, year = 2020),
+            song("Music/H/03 Tin Roof.mp3", artist = "Mira Solen feat. Kit Calloway", album = "Harbour Glass", albumArtist = "Kit Calloway", track = 3, year = 2020),
+            song("Music/D/01 Ferry Bell.mp3", artist = "Oren Vale", album = "Duets", albumArtist = "Kit Calloway; Mira Solen", track = 1, year = 2022),
+            song("Music/S/01 Score.mp3", artist = "Oren Vale", album = "Score", albumArtist = "Hollis Brandt", track = 1, year = 2021),
+        )
+
+        val kit = checkNotNull(lib.artist("Kit Calloway"))
+        assertEquals(listOf("01 Ferry Bell", "01 Lamp Oil", "02 Porch Wire", "03 Tin Roof"), titles(kit.songs))
+        assertEquals(listOf("Duets", "Harbour Glass"), kit.albums.map { it.title })
+        val mira = checkNotNull(lib.artist("Mira Solen"))
+        assertEquals(listOf("01 Ferry Bell", "02 Porch Wire", "03 Tin Roof"), titles(mira.songs))
+        assertEquals(listOf("Duets"), mira.albums.map { it.title })
+        // An album artist who is no song's artist has no page, as before.
+        assertNull(lib.artist("Hollis Brandt"))
+        assertEquals(listOf("Kit Calloway", "Mira Solen", "Oren Vale"), lib.artists.map { it.name })
+    }
+
+    @Test
+    fun `with Artists with several names off, a tag is one artist as written`() {
+        val off = Settings(library = LibrarySettings(artistSplit = ArtistSplit(enabled = false)))
+        val lib = library(
+            song("Music/A/Tin Roof.mp3", artist = "Kit Calloway, Mira Solen"),
+            song("Music/A/Low Water.mp3", artist = "Mira Solen", album = "Night Ferry", albumArtist = "Kit Calloway, Mira Solen"),
+            settings = off,
+        )
+
+        assertEquals(listOf("Kit Calloway, Mira Solen", "Mira Solen"), lib.artists.map { it.name })
+        // The album artist's songs are on their page all the same.
+        assertEquals(listOf("Low Water", "Tin Roof"), titles(checkNotNull(lib.artist("Kit Calloway, Mira Solen")).songs).sorted())
+        assertEquals(listOf("Kit Calloway, Mira Solen"), lib.artistNames("Kit Calloway, Mira Solen"))
+    }
+
+    @Test
+    fun `a song's artists are the names its artist tag gives that have a page, read once per library`() {
+        val tin = song("Music/A/Tin Roof.mp3", artist = "Kit Calloway feat. Mira Solen")
+        val lib = library(tin, song("Music/A/Low Water.mp3", artist = "Mira Solen"))
+
+        assertEquals(listOf("Kit Calloway", "Mira Solen"), lib.artistsOf(tin).map { it.name })
+        assertEquals(listOf("Kit Calloway", "Mira Solen"), lib.artistNames(" Kit Calloway feat. Mira Solen "))
+        // A tag the library holds is split when the library is built, never again as a list draws its rows.
+        assertSame(lib.artistNames("Kit Calloway feat. Mira Solen"), lib.artistNames("Kit Calloway feat. Mira Solen"))
+        // One it does not hold is read by the same rules.
+        assertEquals(listOf("Oren Vale", "Hollis Brandt"), lib.artistNames("Oren Vale; Hollis Brandt"))
+        assertEquals(emptyList<String>(), lib.artistNames(null))
+        assertEquals(emptyList<Artist>(), lib.artistsOf(song("Music/B/x.mp3", artist = "Nobody Here")))
     }
 
     @Test

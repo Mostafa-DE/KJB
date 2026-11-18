@@ -9,6 +9,8 @@ import app.lyrify.library.Song
 import app.lyrify.library.SongRef
 import app.lyrify.library.albumKey
 import app.lyrify.library.song
+import app.lyrify.settings.ArtistSplit
+import app.lyrify.settings.LibrarySettings
 import app.lyrify.settings.Settings
 import app.lyrify.tags.lookup.ImageCodec
 import app.lyrify.tags.lookup.ImageSize
@@ -650,28 +652,41 @@ class TagEditsTest {
 
     // Favourites follow their albums and artists
 
-    private val harbour = Library.of(
-        listOf(
-            song("Music/h/1.mp3", title = "Lamp Oil", artist = "Kit Calloway", album = "Harbour Glass", albumArtist = "Kit Calloway", id = 1),
-            song("Music/h/2.mp3", title = "Porch Wire", artist = "Kit Calloway feat. Mira Okafor", album = "Harbour Glass", albumArtist = "Kit Calloway", id = 2),
-            song("Music/p/3.mp3", title = "Tin Roof", artist = "Mira Okafor", album = "Porch Lights", albumArtist = "Mira Okafor", id = 3),
-            song("Music/k/4.mp3", title = "Low Tide", artist = "Kit Caloway", album = "Ferry Bell", albumArtist = "Kit Caloway", id = 4),
-        ),
-        Settings(),
+    private val harbourSongs = listOf(
+        song("Music/h/1.mp3", title = "Lamp Oil", artist = "Kit Calloway", album = "Harbour Glass", albumArtist = "Kit Calloway", id = 1),
+        song("Music/h/2.mp3", title = "Porch Wire", artist = "Kit Calloway feat. Mira Okafor", album = "Harbour Glass", albumArtist = "Kit Calloway", id = 2),
+        song("Music/p/3.mp3", title = "Tin Roof", artist = "Mira Okafor", album = "Porch Lights", albumArtist = "Mira Okafor", id = 3),
+        song("Music/k/4.mp3", title = "Low Tide", artist = "Kit Caloway", album = "Ferry Bell", albumArtist = "Kit Caloway", id = 4),
     )
+
+    /** Artists with several names on, as it is by default: Porch Wire is on Kit Calloway's page and on Mira Okafor's. */
+    private val harbour = Library.of(harbourSongs, Settings())
+
+    /** The same songs with Artists with several names off: Porch Wire's artist is one name. */
+    private val harbourWhole = Library.of(harbourSongs, Settings(library = LibrarySettings(artistSplit = ArtistSplit(enabled = false))))
 
     private fun artist(name: String) = FavouriteCollection(CollectionKind.ARTIST, name)
 
     private fun album(artist: String, title: String) = FavouriteCollection(CollectionKind.ALBUM, checkNotNull(albumKey(song("Music/x.mp3", artist = artist, album = title))))
 
-    private fun moved(plans: List<SongPlan>, favourites: List<FavouriteCollection>, written: Set<String> = plans.map { it.song.path }.toSet()) =
-        FavouriteMoves.of(plans.filter { it.song.path in written }.map { it.song to it.after }, harbour, favourites).map { it.from to it.to }
+    private fun moved(plans: List<SongPlan>, favourites: List<FavouriteCollection>, written: Set<String> = plans.map { it.song.path }.toSet(), library: Library = harbour) =
+        FavouriteMoves.of(plans.filter { it.song.path in written }.map { it.song to it.after }, library, favourites).map { it.from to it.to }
 
     @Test
     fun `a renamed artist keeps its heart under the new name, as do its credits and its albums`() {
+        // "Kit Calloway feat. Mira Okafor" is no artist of its own while names are split (TA1, 2026-11-18): its old heart stays put.
         val favourites = listOf(artist("Kit Calloway"), artist("Kit Calloway feat. Mira Okafor"), artist("Mira Okafor"), album("Kit Calloway", "Harbour Glass"), album("Mira Okafor", "Porch Lights"))
 
         val moves = moved(TagEdits.rename(harbour.songs, listOf("Kit Calloway"), "Kit Callaway"), favourites)
+
+        assertEquals(listOf(artist("Kit Calloway") to artist("Kit Callaway"), album("Kit Calloway", "Harbour Glass") to album("Kit Callaway", "Harbour Glass")), moves)
+    }
+
+    @Test
+    fun `with Artists with several names off, a renamed artist's credits keep their hearts under the new whole name`() {
+        val favourites = listOf(artist("Kit Calloway"), artist("Kit Calloway feat. Mira Okafor"), artist("Mira Okafor"), album("Kit Calloway", "Harbour Glass"), album("Mira Okafor", "Porch Lights"))
+
+        val moves = moved(TagEdits.rename(harbourWhole.songs, listOf("Kit Calloway"), "Kit Callaway"), favourites, library = harbourWhole)
 
         assertEquals(
             listOf(
@@ -689,8 +704,28 @@ class TagEditsTest {
 
         val moves = moved(plans, listOf(artist("Kit Calloway"), album("Kit Calloway", "Harbour Glass")), written = setOf(harbour.songs[0].path))
 
-        // Porch Wire was in use: the album is split for now, so its heart stays.
-        assertEquals(listOf(artist("Kit Calloway") to artist("Kit Callaway")), moves)
+        // Porch Wire, on Kit Calloway's page (it credits them) and on the album, was in use: both are split for now, so
+        // their hearts stay (TA1: before the split, the artist's page held Lamp Oil alone and its heart moved).
+        assertEquals(emptyList<Any>(), moves)
+    }
+
+    @Test
+    fun `an artist renamed in a tag of several names takes its heart along, and one still credited keeps it`() {
+        val plans = TagEdits.rename(harbour.songs, listOf("Mira Okafor"), "Mira Okafor-Lind")
+
+        val moves = moved(plans, listOf(artist("Mira Okafor"), artist("Kit Calloway")))
+
+        // Porch Wire ("Kit Calloway feat. Mira Okafor-Lind") and Tin Roof both name the new spelling; Kit Calloway's
+        // Lamp Oil was not written, and Porch Wire still credits them.
+        assertEquals(listOf(artist("Mira Okafor") to artist("Mira Okafor-Lind")), moves)
+    }
+
+    @Test
+    fun `adding a guest to an artist's only song keeps the artist's heart where it is`() {
+        val low = harbour.songs.single { it.title == "Low Tide" }
+        val plans = TagEdits.songs(listOf(low), TagForm.of(listOf(low)).with(TagField.ARTIST, "Kit Caloway feat. Oren Vale"), CoverEdit.Keep)
+
+        assertEquals(emptyList<Any>(), moved(plans, listOf(artist("Kit Caloway"))))
     }
 
     @Test

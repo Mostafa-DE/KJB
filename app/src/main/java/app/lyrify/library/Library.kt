@@ -6,6 +6,7 @@ import app.lyrify.books.autoBook
 import app.lyrify.books.booksOf
 import app.lyrify.books.oldFolderBookId
 import app.lyrify.books.userMark
+import app.lyrify.settings.ArtistSplit
 import app.lyrify.settings.LibrarySettings
 import app.lyrify.settings.Settings
 import app.lyrify.settings.SortAlbums
@@ -37,8 +38,9 @@ data class Album(
 }
 
 /**
- * An artist, by the artist tag as written: its [songs] (the newest album first, each in track order, songs without an
- * album last) and the [albums] it is the album artist of (the newest first).
+ * An artist, by a name an artist tag gives ([Library.artistNames]: a tag of several names gives several artists): its
+ * [songs], those whose artist or album artist tag names it (the newest album first, each in track order, songs without
+ * an album last), and the [albums] whose album artist names it (the newest first).
  */
 data class Artist(val name: String, val songs: List<Song>, val albums: List<Album>)
 
@@ -97,6 +99,10 @@ class Library private constructor(
     val books: List<Book> = emptyList(),
     /** The files the filters hide that are books by a sign of their own ([of]): in no book, and no song for the lyrics. */
     private val hiddenBooks: Set<String> = emptySet(),
+    /** How this library reads an artist tag ("Artists with several names", as the settings were when it was built). */
+    val artistSplitter: ArtistSplitter = ArtistSplitter(ArtistSplit()),
+    /** The names of each artist and album artist tag of [songs] (trimmed), read once as the library was built. */
+    private val namesByTag: Map<String, List<String>> = emptyMap(),
 ) {
     private val byPath: Map<String, Song> = songs.associateBy { it.path }
     private val albumsByKey: Map<String, Album> = albums.associateBy { it.key }
@@ -122,6 +128,21 @@ class Library private constructor(
     fun book(id: String): Book? = booksById[id] ?: listOfNotNull(bookByPath[id], booksByOldId[id]).distinct().singleOrNull()
 
     fun artist(name: String): Artist? = artistsByName[name]
+
+    /**
+     * The artists [tag] names, as [artistSplitter] reads it; none for no tag. A tag of the library's songs was read as it
+     * was built, so a list asking for each row reads nothing again.
+     */
+    fun artistNames(tag: String?): List<String> {
+        val text = tag?.trim()?.takeIf(String::isNotEmpty) ?: return emptyList()
+        return namesByTag[text] ?: artistSplitter.names(text)
+    }
+
+    /** The artists [tag] names that have a page, in the tag's order: where Go to artist leads. */
+    fun artistsIn(tag: String?): List<Artist> = artistNames(tag).mapNotNull(artistsByName::get)
+
+    /** The artists of [song]'s artist tag that have a page, in the tag's order. */
+    fun artistsOf(song: Song): List<Artist> = artistsIn(song.artist)
 
     fun genre(name: String): Genre? = genresByName[name]
 
@@ -179,23 +200,39 @@ class Library private constructor(
                 )
             }.let { sortAlbums(it, SortAlbums.TITLE) }
             val albumOf = albums.flatMap { album -> album.songs.map { it.path to album } }.toMap()
-            val artists = songs.groupBy { text(it.artist) }.mapNotNull { (name, its) ->
-                if (name == null) return@mapNotNull null
-                Artist(
-                    name = name,
-                    songs = its.sortedWith(
-                        compareBy<Song, Int?>(nullsLast(reverseOrder())) { albumOf[it.path]?.year ?: it.year }
-                            .thenBy(nullsLast(nameOrder(collator))) { albumOf[it.path]?.title }
-                            .then(trackOrder(collator)),
-                    ),
-                    albums = albums.filter { it.artist == name }
-                        .sortedWith(compareBy<Album, Int?>(nullsLast(reverseOrder())) { it.year }.thenBy(nameOrder(collator)) { it.title }),
-                )
-            }.let { sortArtists(it, SortArtists.NAME) }
+            val splitter = ArtistSplitter(settings.library.artistSplit)
+            // Each tag read once, however many songs share it.
+            val namesByTag = HashMap<String, List<String>>()
+            val names: (String?) -> List<String> = { tag -> text(tag)?.let { namesByTag.getOrPut(it) { splitter.names(it) } }.orEmpty() }
+            val artists = artistsOf(songs, albums, albumOf, names, collator)
             val genres = songs.groupBy { text(it.genre) }
                 .mapNotNull { (name, its) -> name?.let { Genre(it, its) } }
                 .sortedWith(compareBy(nameOrder(collator)) { it.name })
-            return Library(all, songs, albums, byAlbum[null].orEmpty(), artists, genres, root, resolver, books, hiddenBooks)
+            return Library(all, songs, albums, byAlbum[null].orEmpty(), artists, genres, root, resolver, books, hiddenBooks, splitter, namesByTag)
+        }
+
+        /**
+         * The artists of [songs], by name: each name an artist tag gives ([names]), with every song that names them in
+         * its artist tag, or in its album artist tag (an artist's own album with a guest's song on it), each song once;
+         * and the [albums] whose album artist names them. A name only an album artist tag gives has no page, as before.
+         */
+        private fun artistsOf(songs: List<Song>, albums: List<Album>, albumOf: Map<String, Album>, names: (String?) -> List<String>, collator: Collator): List<Artist> {
+            val credited = LinkedHashMap<String, MutableList<Song>>()
+            songs.forEach { song -> names(song.artist).forEach { credited.getOrPut(it) { ArrayList() } } }
+            // In path order: each song under its artists, then under the album artists with a page it does not name.
+            songs.forEach { song ->
+                val own = names(song.artist)
+                own.forEach { credited.getValue(it) += song }
+                names(song.albumArtist).forEach { name -> if (name !in own) credited[name]?.add(song) }
+            }
+            val albumsBy = HashMap<String, MutableList<Album>>()
+            albums.forEach { album -> names(album.artist).forEach { albumsBy.getOrPut(it) { ArrayList() } += album } }
+            val newest = compareBy<Song, Int?>(nullsLast(reverseOrder())) { albumOf[it.path]?.year ?: it.year }
+                .thenBy(nullsLast(nameOrder(collator))) { albumOf[it.path]?.title }
+                .then(trackOrder(collator))
+            val newestAlbum = compareBy<Album, Int?>(nullsLast(reverseOrder())) { it.year }.thenBy(nameOrder(collator)) { it.title }
+            return credited.map { (name, its) -> Artist(name, its.sortedWith(newest), albumsBy[name].orEmpty().sortedWith(newestAlbum)) }
+                .let { sortArtists(it, SortArtists.NAME) }
         }
 
         /** The folder [name] at [path] holding [songs] at or below it ([Song.folder] relative to its volume). */
