@@ -174,8 +174,9 @@ object TagsGraph {
         CoversTags(
             songs = { (LibraryGraph.repository(app).state.first { it !is LibraryState.Loading } as? LibraryState.Ready)?.library?.all },
             source = PhoneAlbumSource(lookup(app), CoverPipeline(AndroidImageCodec), client(app).busy),
-            write = { jobs, changed, kind, label, progress -> writeEdit(app, jobs, changed, kind, label, progress) },
-            undoEntry = { undoEdit(app, it) },
+            // Covers & tags gives the songs it writes or puts back their cover versions itself (coversChanged below).
+            write = { jobs, changed, kind, label, progress -> writeEdit(app, jobs, changed, kind, label, progress, coversChanged = {}) },
+            undoEntry = { undoEdit(app, it, coversChanged = {}) },
             undo = parts(app).undo,
             store = CoversTagsStore(File(app.filesDir, "covers-tags.json"), ::log),
             lyrics = { track, changed -> Lyrify.pipeline(app).retagged(track, changed) },

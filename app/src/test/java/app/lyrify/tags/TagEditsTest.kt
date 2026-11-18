@@ -802,6 +802,38 @@ class TagEditsTest {
         assertEquals(listOf(tag), rig.fields(one)["ARTIST"])
     }
 
+    @Test
+    fun `a cover Edit tags changes gets a new version, as Covers & tags gives one, and so does its Undo, never a tags-only edit`() {
+        val front = TagPicture(byteArrayOf(1, 2, 3), "", FRONT_COVER, "image/jpeg")
+        val one = rig.song("Lamp Oil", 71)
+        val two = rig.song("Porch Wire", 72, pictures = listOf(TagPicture(byteArrayOf(4, 5), "", FRONT_COVER, "image/jpeg")))
+        val lamp = libraryOf(one, "Lamp Oil", "Kit Calloway", "Harbour Glass", null)
+        val porch = libraryOf(two, "Porch Wire", "Kit Calloway", "Harbour Glass", null)
+        val favourites = FakeFavourites(emptyList())
+        val bumped = mutableListOf<Set<String>>()
+        fun edited(plans: List<SongPlan>, kind: EditKind): Long = checkNotNull(
+            (runBlocking { writeEdit(rig.writer, favourites, null, plans.mapNotNull { it.job }, emptyList(), kind, "Lamp Oil") { bumped += it.toSet() } } as BatchResult.Done).entryId,
+        )
+        fun undone(entry: Long) = runBlocking { undoEdit(rig.writer, rig.undo, favourites, null, entry) { bumped += it.toSet() } }
+
+        // Edit tags on two songs, a new cover for both; then a title alone; then Edit album taking one's cover off.
+        val cover = edited(TagEdits.songs(listOf(lamp, porch), TagForm.of(listOf(lamp, porch)), CoverEdit.Replace(front)), EditKind.SONG)
+        assertEquals(listOf(setOf(one.path, two.path)), bumped)
+        val title = edited(TagEdits.songs(listOf(porch), TagForm.of(listOf(porch)).with(TagField.TITLE, "Porch Wire II"), CoverEdit.Keep), EditKind.SONG)
+        assertEquals(1, bumped.size)
+        val album = edited(TagEdits.album(listOf(lamp), TagForm.of(listOf(lamp), TagEdits.ALBUM_FIELDS), CoverEdit.Remove, false), EditKind.ALBUM)
+        assertEquals(setOf(one.path), bumped.last())
+
+        // Each Undo from History that puts a cover back gives it a new version again; the title's Undo none.
+        undone(album)
+        assertEquals(listOf(setOf(one.path, two.path), setOf(one.path), setOf(one.path)), bumped)
+        undone(title)
+        assertEquals(3, bumped.size)
+        undone(cover)
+        assertEquals(setOf(one.path, two.path), bumped.last())
+        assertEquals(4, bumped.size)
+    }
+
     // Favourites follow their albums and artists
 
     private val harbourSongs = listOf(
