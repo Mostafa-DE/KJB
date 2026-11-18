@@ -18,26 +18,57 @@ import java.nio.ByteOrder
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
+import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.cos
 import kotlin.math.roundToInt
 
+/** How a fade's volume moves from silence to full volume; a fade out runs it backwards from the window's end. */
+enum class FadeCurve {
+    /** A straight line: what tones have always used. */
+    LINEAR,
+
+    /** Half a cosine, S-shaped: it leaves silence and arrives at full volume gently, with no corner at either end. */
+    SMOOTH,
+
+    /** A straight line squared: it stays quiet for longer, which the ear hears as an even change in loudness. */
+    EVEN,
+    ;
+
+    /** The volume [t] of the way through the fade (0 to 1, clamped): 0 at the silent end, 1 at full volume. Pure. */
+    fun gain(t: Double): Double {
+        val x = t.coerceIn(0.0, 1.0)
+        return when (this) {
+            LINEAR -> x
+            SMOOTH -> (1 - cos(PI * x)) / 2
+            EVEN -> x * x
+        }
+    }
+}
+
 /**
- * The fades of a window of [totalFrames]: a straight line from silence on the first frame to full volume after
- * [fadeInFrames], and from full volume to silence on the last frame over [fadeOutFrames]. Fades longer than a short
- * window meet in the middle (the quieter of the two wins). Pure: the gain of any frame, 0 outside the window.
+ * The fades of a window of [totalFrames]: from silence on the first frame to full volume after [fadeInFrames] along
+ * [inCurve], and from full volume to silence on the last frame over [fadeOutFrames] along [outCurve]. Fades longer than
+ * a short window meet in the middle (the quieter of the two wins). Pure: the gain of any frame, 0 outside the window.
  */
-data class FadeEnvelope(val totalFrames: Long, val fadeInFrames: Long, val fadeOutFrames: Long) {
+data class FadeEnvelope(
+    val totalFrames: Long,
+    val fadeInFrames: Long,
+    val fadeOutFrames: Long,
+    val inCurve: FadeCurve = FadeCurve.LINEAR,
+    val outCurve: FadeCurve = FadeCurve.LINEAR,
+) {
     fun gain(frame: Long): Float {
         if (frame < 0 || frame >= totalFrames) return 0f
-        val fadeIn = if (fadeInFrames > 0) frame.toDouble() / fadeInFrames else 1.0
-        val fadeOut = if (fadeOutFrames > 0) (totalFrames - 1 - frame).toDouble() / fadeOutFrames else 1.0
-        return minOf(1.0, fadeIn, fadeOut).toFloat()
+        val fadeIn = if (fadeInFrames > 0) inCurve.gain(frame.toDouble() / fadeInFrames) else 1.0
+        val fadeOut = if (fadeOutFrames > 0) outCurve.gain((totalFrames - 1 - frame).toDouble() / fadeOutFrames) else 1.0
+        return minOf(fadeIn, fadeOut).toFloat()
     }
 
     companion object {
         /** The fades of [window], given in milliseconds, at 44.1 kHz. */
-        fun of(window: ToneWindow, fadeInMs: Long, fadeOutMs: Long): FadeEnvelope =
-            FadeEnvelope(ToneAudio.frames(window.lengthMs), ToneAudio.frames(fadeInMs), ToneAudio.frames(fadeOutMs))
+        fun of(window: ToneWindow, fadeInMs: Long, fadeOutMs: Long, inCurve: FadeCurve = FadeCurve.LINEAR, outCurve: FadeCurve = FadeCurve.LINEAR): FadeEnvelope =
+            FadeEnvelope(ToneAudio.frames(window.lengthMs), ToneAudio.frames(fadeInMs), ToneAudio.frames(fadeOutMs), inCurve, outCurve)
     }
 }
 
@@ -262,12 +293,13 @@ class PeaksCache(private val dir: File, private val maxFiles: Int = MAX_FILES) {
 }
 
 /**
- * A tone file: AAC-LC at [BIT_RATE], 44.1 kHz stereo, in an MPEG-4 (`.m4a`) container on [fd], with MediaCodec in
- * synchronous mode and MediaMuxer. The muxer track is added from the encoder's output format (it carries the codec
+ * A tone file (or a cut): AAC-LC at [bitRate] ([BIT_RATE] for a tone), 44.1 kHz stereo, in an MPEG-4 (`.m4a`) container on
+ * [fd], with MediaCodec in synchronous mode and MediaMuxer. The encoder is [codecName] when given (the one that said it
+ * takes the bit rate), else the phone's first AAC encoder. The muxer track is added from the encoder's output format (it carries the codec
  * specific data), so codec-config buffers are not written as samples (MediaMuxer reference, addTrack). Presentation
  * times count the frames queued. [DecodeDeadline] ends an encoder that stops moving. [fd] stays the caller's to close.
  */
-class AacToneEncoder(fd: FileDescriptor) : ToneEncoder {
+class AacToneEncoder(fd: FileDescriptor, bitRate: Int = BIT_RATE, codecName: String? = null) : ToneEncoder {
     private val muxer = MediaMuxer(fd, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
     private val codec: MediaCodec
     private val info = MediaCodec.BufferInfo()
@@ -280,10 +312,10 @@ class AacToneEncoder(fd: FileDescriptor) : ToneEncoder {
     init {
         val format = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, ToneAudio.RATE, CHANNELS).apply {
             setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
-            setInteger(MediaFormat.KEY_BIT_RATE, BIT_RATE)
+            setInteger(MediaFormat.KEY_BIT_RATE, bitRate)
         }
         codec = try {
-            MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC)
+            if (codecName != null) MediaCodec.createByCodecName(codecName) else MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC)
         } catch (e: Exception) {
             muxer.release()
             throw e

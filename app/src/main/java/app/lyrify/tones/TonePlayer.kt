@@ -33,8 +33,23 @@ sealed interface PreviewSource {
     /** Tells the screens which preview is playing. */
     val key: String
 
-    data class Window(val songPath: String, val window: ToneWindow, val fadeInMs: Long, val fadeOutMs: Long) : PreviewSource {
+    /**
+     * [window] of the song at [songPath] with its fades along their curves, played from [fromMs] into the window (a cut's
+     * end is heard from shortly before it).
+     */
+    data class Window(
+        val songPath: String,
+        val window: ToneWindow,
+        val fadeInMs: Long,
+        val fadeOutMs: Long,
+        val fadeInCurve: FadeCurve = FadeCurve.LINEAR,
+        val fadeOutCurve: FadeCurve = FadeCurve.LINEAR,
+        val fromMs: Long = 0,
+    ) : PreviewSource {
         override val key: String get() = "song:$songPath"
+
+        /** The volume [positionMs] into the window ([previewGain]). */
+        fun gainAt(positionMs: Long): Float = previewGain(positionMs, window, fadeInMs, fadeOutMs, fadeInCurve, fadeOutCurve)
     }
 
     data class Tone(val id: Long) : PreviewSource {
@@ -45,13 +60,20 @@ sealed interface PreviewSource {
 /** A preview playing: which one, and how far into it (0 to 1). */
 data class PreviewPlaying(val key: String, val progress: Float)
 
-/** The volume of a window preview at [positionMs] into the window: the saved tone's fades, so the preview sounds like it. Pure. */
-fun previewGain(positionMs: Long, window: ToneWindow, fadeInMs: Long, fadeOutMs: Long): Float =
-    FadeEnvelope.of(window, fadeInMs, fadeOutMs).gain(ToneAudio.frames(positionMs.coerceIn(0, (window.lengthMs - 1).coerceAtLeast(0))))
+/** The volume of a window preview at [positionMs] into the window: the saved file's fades, so the preview sounds like it. Pure. */
+fun previewGain(
+    positionMs: Long,
+    window: ToneWindow,
+    fadeInMs: Long,
+    fadeOutMs: Long,
+    inCurve: FadeCurve = FadeCurve.LINEAR,
+    outCurve: FadeCurve = FadeCurve.LINEAR,
+): Float = FadeEnvelope.of(window, fadeInMs, fadeOutMs, inCurve, outCurve).gain(ToneAudio.frames(positionMs.coerceIn(0, (window.lengthMs - 1).coerceAtLeast(0))))
 
 /**
  * Plays previews with MediaPlayer on [scope] (the screen's), one at a time, looping off: a window of a song (sought to
- * its exact start, its fades as volume, stopped at its end, moved by [jump] while it plays) or a saved tone. It holds transient audio focus while it
+ * its exact start or to [PreviewSource.Window.fromMs] into it, its fades as volume along their curves, stopped at its
+ * end, moved by [jump] while it plays) or a saved tone or cut. It holds transient audio focus while it
  * plays, so music pauses, and stops when another app takes focus. The song file is only read. A screen that goes away
  * calls [stop].
  */
@@ -141,21 +163,21 @@ class TonePlayer(context: Context, private val scope: CoroutineScope) {
         // A part changed while the file opened plays from its own start.
         var source = jumpTo ?: first
         jumpTo = null
-        player.setGain(previewGain(0, source.window, source.fadeInMs, source.fadeOutMs))
-        seek(player, source.window.startMs)
+        player.setGain(source.gainAt(source.fromMs))
+        seek(player, source.window.startMs + source.fromMs)
         player.start()
         while (currentCoroutineContext().isActive) {
             jumpTo?.let { next ->
-                // The part changed while it played: on from its new start, the file stays open.
+                // The part changed while it played: on from its new start (or the place it is heard from), the file stays open.
                 jumpTo = null
                 source = next
-                player.setGain(previewGain(0, next.window, next.fadeInMs, next.fadeOutMs))
-                seek(player, next.window.startMs)
+                player.setGain(next.gainAt(next.fromMs))
+                seek(player, next.window.startMs + next.fromMs)
             }
             val window = source.window
             val at = player.currentPosition - window.startMs
             if (at >= window.lengthMs || !player.isPlaying) break
-            player.setGain(previewGain(at, window, source.fadeInMs, source.fadeOutMs))
+            player.setGain(source.gainAt(at))
             state.value = PreviewPlaying(source.key, (at.toFloat() / window.lengthMs).coerceIn(0f, 1f))
             delay(TICK_MS)
         }

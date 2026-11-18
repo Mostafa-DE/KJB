@@ -67,8 +67,8 @@ data class ToneEntry(val displayName: String, val title: String, val kind: ToneK
             return ToneEntry("$name (KJB).$EXTENSION", "$name · KJB", kind)
         }
 
-        /** [text] as a file name's base: characters a file name cannot hold become spaces, no leading dot, "Tone" when blank. */
-        fun safeName(text: String): String = tidy(text.replace(NOT_IN_FILE_NAMES, " ")).trimStart('.').trim().ifBlank { FALLBACK }
+        /** [text] as a file name's base: characters a file name cannot hold become spaces, no leading dot, [fallback] when blank. */
+        fun safeName(text: String, fallback: String = FALLBACK): String = tidy(text.replace(NOT_IN_FILE_NAMES, " ")).trimStart('.').trim().ifBlank { fallback }
 
         /** The update that renames a tone's file to [name] (made safe); MediaStore moves the file and rescans it. */
         fun renameValues(name: String): Map<String, Any> = mapOf(MediaStore.MediaColumns.DISPLAY_NAME to "${safeName(name)}.$EXTENSION")
