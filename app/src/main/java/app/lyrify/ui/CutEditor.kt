@@ -85,6 +85,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -101,11 +102,14 @@ enum class CutGrab { START, END, WHOLE }
 /**
  * What a finger put down at [x] takes, the cut's ends drawn at [startX] and [endX]: an end within [slop] of it (the nearer
  * one when both are), else the whole cut when it is inside, else the nearer end (a drag from outside pulls that end out).
+ * A cut narrower than two slops has no room for that middle: anywhere strictly between its ends takes the whole cut, so
+ * a short cut still slides, and its ends are taken from outside it.
  */
 fun cutGrab(x: Float, startX: Float, endX: Float, slop: Float): CutGrab {
     val toStart = abs(x - startX)
     val toEnd = abs(x - endX)
-    if (minOf(toStart, toEnd) >= slop && x in startX..endX) return CutGrab.WHOLE
+    val inside = if (endX - startX < 2 * slop) x > startX && x < endX else minOf(toStart, toEnd) >= slop && x in startX..endX
+    if (inside) return CutGrab.WHOLE
     return when {
         toStart < toEnd -> CutGrab.START
         toEnd < toStart -> CutGrab.END
@@ -166,38 +170,64 @@ val CutDraftSaver: Saver<CutDraft, Any> = listSaver(
 sealed interface CutSaveState {
     data object Idle : CutSaveState
 
-    data class Saving(val progress: Float) : CutSaveState
+    /** Save number [id] has done [progress]. */
+    data class Saving(val progress: Float, val id: Long = 0) : CutSaveState
 
     data class Finished(val result: CutResult) : CutSaveState
 }
 
-/** The one cut save that can run at a time, outside any screen's lifetime; cancelling leaves no file. */
-object CutSaving {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+/**
+ * Runs cut saves on [scope], one at a time. Only the save started last, until it is cancelled, changes [state]: each of
+ * its updates is a compare-and-set on its own number, so a cancelled save's late progress (the encoder reports a piece
+ * before it sees the cancel) or result is dropped. A save waits for the one before it to have left its cleanup,
+ * cancelled or not, so two saves never use KJB's work folder at once. [start] and [cancel] run on one thread (the main).
+ */
+class CutSaver(private val scope: CoroutineScope) {
     private val current = MutableStateFlow<CutSaveState>(CutSaveState.Idle)
-    private var job: Job? = null
+    private var last: Job? = null
+    private var count = 0L
 
     val state: StateFlow<CutSaveState> = current.asStateFlow()
 
-    fun start(files: CutFiles, request: CutRequest) {
+    /** Runs [save] unless one is shown saving; it hears its own progress reporter. */
+    fun start(save: suspend (onProgress: (Float) -> Unit) -> CutResult) {
         if (current.value is CutSaveState.Saving) return
-        current.value = CutSaveState.Saving(0f)
-        job = scope.launch {
-            val result = files.save(request) { current.value = CutSaveState.Saving(it) }
-            current.value = CutSaveState.Finished(result)
+        val id = ++count
+        val before = last
+        current.value = CutSaveState.Saving(0f, id)
+        last = scope.launch {
+            before?.join()
+            val result = save { progress -> current.update { if (it.isSaving(id)) CutSaveState.Saving(progress, id) else it } }
+            current.update { if (it.isSaving(id)) CutSaveState.Finished(result) else it }
         }
     }
 
+    /** Stops the save shown saving; it removes what it made in its own time, and the next save waits for that. */
     fun cancel() {
-        job?.cancel()
-        job = null
-        current.value = CutSaveState.Idle
+        last?.cancel()
+        current.update { if (it is CutSaveState.Saving) CutSaveState.Idle else it }
     }
 
     /** The screen showed the result. */
     fun consume() {
-        if (current.value is CutSaveState.Finished) current.value = CutSaveState.Idle
+        current.update { if (it is CutSaveState.Finished) CutSaveState.Idle else it }
     }
+
+    private fun CutSaveState.isSaving(id: Long): Boolean = this is CutSaveState.Saving && this.id == id
+}
+
+/** The one cut save that can run at a time, outside any screen's lifetime; cancelling leaves no file. */
+object CutSaving {
+    private val saver = CutSaver(CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate))
+
+    val state: StateFlow<CutSaveState> = saver.state
+
+    fun start(files: CutFiles, request: CutRequest) = saver.start { files.save(request, it) }
+
+    fun cancel() = saver.cancel()
+
+    /** The screen showed the result. */
+    fun consume() = saver.consume()
 }
 
 /** The cutter for a library song, with its own player and files; [onSaved] hears the new file. */

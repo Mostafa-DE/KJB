@@ -57,6 +57,12 @@ sealed interface PreviewSource {
     }
 }
 
+/** Where a preview's progress starts: a window played from part way in starts there. */
+fun PreviewSource.startProgress(): Float = when (this) {
+    is PreviewSource.Window -> if (window.lengthMs > 0) (fromMs.toFloat() / window.lengthMs).coerceIn(0f, 1f) else 0f
+    is PreviewSource.Tone -> 0f
+}
+
 /** A preview playing: which one, and how far into it (0 to 1). */
 data class PreviewPlaying(val key: String, val progress: Float)
 
@@ -96,7 +102,7 @@ class TonePlayer(context: Context, private val scope: CoroutineScope) {
     /** Plays [source], stopping any other preview first; [onFailed] hears when the file could not be played. */
     fun play(source: PreviewSource, onFailed: () -> Unit) {
         stop()
-        state.value = PreviewPlaying(source.key, 0f)
+        state.value = PreviewPlaying(source.key, source.startProgress())
         job = scope.launch {
             val player = MediaPlayer()
             // The song is busy for the tag writer while its preview plays; one the writer or its recovery holds is not played.

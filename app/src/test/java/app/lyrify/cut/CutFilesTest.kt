@@ -62,6 +62,7 @@ class CutFilesTest {
         val written = mutableListOf<Pair<Map<String, List<String>>, List<TagPicture>?>>()
         val outside = mutableListOf<File>()
         var results = ArrayDeque(listOf(true))
+        var onWrite: () -> Unit = {}
 
         override fun read(file: File): SongTags? {
             calls += "read ${file.name}"
@@ -74,6 +75,7 @@ class CutFilesTest {
             calls += "write ${file.name}"
             if (!file.canonicalPath.startsWith(work.canonicalPath)) outside += file
             written += fields to pictures
+            onWrite()
             val ok = results.removeFirstOrNull() ?: true
             if (ok) file.appendBytes(TAGS)
             return ok
@@ -334,6 +336,32 @@ class CutFilesTest {
 
         assertTrue(job.isCancelled)
         assertEquals(emptyList<String>(), s.others())
+        assertEquals(emptyList<File>(), s.scanned)
+    }
+
+    @Test
+    fun `a save cancelled after its audio is made, while tagging, leaves no file anywhere`() = runBlocking {
+        val s = Setup()
+        var job: Job? = null
+        s.tags.onWrite = { job?.cancel() }
+        job = launch(Dispatchers.Unconfined, start = CoroutineStart.LAZY) { s.files.save(s.request()) {} }
+        job.start()
+        job.join()
+
+        assertTrue(job.isCancelled)
+        assertEquals(listOf("read song.mp3", "write cut.m4a"), s.tags.calls)
+        assertEquals(emptyList<String>(), s.others())
+        assertEquals(emptyList<File>(), s.scanned)
+    }
+
+    @Test
+    fun `a cut with no free name is not saved, its part file goes and the files there stay`() = runBlocking {
+        val s = Setup()
+        val taken = (1..100).map { n -> File(s.album, CutNames.fileName("Paper Lanterns (cut)", n)).apply { writeText("taken $n") } }
+        assertEquals(CutResult.Failed(CutFailure.NOT_SAVED), s.files.save(s.request()) {})
+
+        taken.forEachIndexed { i, file -> assertEquals("taken ${i + 1}", file.readText()) }
+        assertEquals(emptyList<String>(), s.others(*taken.toTypedArray()))
         assertEquals(emptyList<File>(), s.scanned)
     }
 

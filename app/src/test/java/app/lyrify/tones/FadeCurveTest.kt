@@ -73,4 +73,13 @@ class FadeCurveTest {
         // Tones keep the straight line.
         assertEquals(0.5f, previewGain(500, window, 1_000, 0), 1e-3f)
     }
+
+    @Test
+    fun `a preview played from part way in shows its place from the first moment`() {
+        val window = ToneWindow(10_000, 20_000)
+        assertEquals(0.75f, PreviewSource.Window("/m/Paper Lanterns.mp3", window, 0, 0, fromMs = 15_000).startProgress(), 1e-6f)
+        assertEquals(0f, PreviewSource.Window("/m/Paper Lanterns.mp3", window, 0, 0).startProgress(), 0f)
+        assertEquals(0f, PreviewSource.Window("/m/Paper Lanterns.mp3", ToneWindow(0, 0), 0, 0, fromMs = 500).startProgress(), 0f)
+        assertEquals(0f, PreviewSource.Tone(41).startProgress(), 0f)
+    }
 }

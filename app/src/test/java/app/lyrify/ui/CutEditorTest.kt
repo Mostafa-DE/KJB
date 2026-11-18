@@ -6,9 +6,18 @@ import app.lyrify.cut.CutDraft
 import app.lyrify.cut.CutEnd
 import app.lyrify.cut.CutFailure
 import app.lyrify.cut.CutQuality
+import app.lyrify.cut.CutResult
 import app.lyrify.cut.Fade
 import app.lyrify.tones.FadeCurve
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Test
 import java.util.Locale
 
@@ -20,12 +29,91 @@ class CutEditorTest {
     fun `a finger near an end takes that end, the nearer one when both are near`() {
         assertEquals(CutGrab.START, cutGrab(x = 110f, startX = 100f, endX = 400f, slop = slop))
         assertEquals(CutGrab.END, cutGrab(x = 385f, startX = 100f, endX = 400f, slop = slop))
-        // A short cut: both ends are near the finger.
-        assertEquals(CutGrab.START, cutGrab(x = 104f, startX = 100f, endX = 120f, slop = slop))
-        assertEquals(CutGrab.END, cutGrab(x = 117f, startX = 100f, endX = 120f, slop = slop))
-        // Just outside a short cut, each side takes its own end.
+        // Ends that meet: each side takes its own end.
         assertEquals(CutGrab.START, cutGrab(x = 95f, startX = 100f, endX = 100f, slop = slop))
         assertEquals(CutGrab.END, cutGrab(x = 105f, startX = 100f, endX = 100f, slop = slop))
+    }
+
+    @Test
+    fun `a cut too narrow for a middle still slides from inside, and its ends are taken from outside`() {
+        // 20 px wide, under two slops: a finger between the ends moves the whole cut.
+        assertEquals(CutGrab.WHOLE, cutGrab(x = 104f, startX = 100f, endX = 120f, slop = slop))
+        assertEquals(CutGrab.WHOLE, cutGrab(x = 117f, startX = 100f, endX = 120f, slop = slop))
+        assertEquals(CutGrab.START, cutGrab(x = 90f, startX = 100f, endX = 120f, slop = slop))
+        assertEquals(CutGrab.START, cutGrab(x = 100f, startX = 100f, endX = 120f, slop = slop))
+        assertEquals(CutGrab.END, cutGrab(x = 130f, startX = 100f, endX = 120f, slop = slop))
+        assertEquals(CutGrab.END, cutGrab(x = 120f, startX = 100f, endX = 120f, slop = slop))
+    }
+
+    // Saving
+
+    private val failed = CutResult.Failed(CutFailure.NOT_SAVED)
+
+    @Test
+    fun `a cancelled save's late progress and result change nothing`() = runBlocking {
+        val saver = CutSaver(CoroutineScope(Dispatchers.Unconfined))
+        val cleanup = CompletableDeferred<Unit>()
+        saver.start { progress ->
+            progress(0.2f)
+            try {
+                awaitCancellation()
+            } finally {
+                // The save's own cleanup still reports, as ToneAudio.render reports a piece before it sees the cancel.
+                withContext(NonCancellable) {
+                    cleanup.await()
+                    progress(0.9f)
+                }
+            }
+        }
+        assertEquals(CutSaveState.Saving(0.2f, 1), saver.state.value)
+
+        saver.cancel()
+        assertEquals(CutSaveState.Idle, saver.state.value)
+        cleanup.complete(Unit)
+        assertEquals(CutSaveState.Idle, saver.state.value)
+    }
+
+    @Test
+    fun `a new save waits until a cancelled one has cleaned up, so two never share the work folder`() = runBlocking {
+        val saver = CutSaver(CoroutineScope(Dispatchers.Unconfined))
+        val events = mutableListOf<String>()
+        val cleanup = CompletableDeferred<Unit>()
+        saver.start {
+            try {
+                awaitCancellation()
+            } finally {
+                withContext(NonCancellable) {
+                    cleanup.await()
+                    events += "first cleaned up"
+                }
+            }
+        }
+        saver.cancel()
+        saver.start { progress ->
+            events += "second began"
+            progress(0.5f)
+            failed
+        }
+        assertEquals(emptyList<String>(), events)
+        assertEquals(CutSaveState.Saving(0f, 2), saver.state.value)
+
+        cleanup.complete(Unit)
+        assertEquals(listOf("first cleaned up", "second began"), events)
+        assertEquals(CutSaveState.Finished(failed), saver.state.value)
+        saver.consume()
+        assertEquals(CutSaveState.Idle, saver.state.value)
+    }
+
+    @Test
+    fun `while a save runs another is not started`() = runBlocking {
+        val saver = CutSaver(CoroutineScope(Dispatchers.Unconfined))
+        val first = CompletableDeferred<CutResult>()
+        var second = false
+        saver.start { first.await() }
+        saver.start { second = true; failed }
+        assertFalse(second)
+        first.complete(failed)
+        assertEquals(CutSaveState.Finished(failed), saver.state.value)
     }
 
     @Test
