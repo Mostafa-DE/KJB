@@ -94,14 +94,16 @@ sealed interface SheetPlace {
 }
 
 /** The song sheet's rows, in the order they show. Move to trash sits apart at the bottom. */
-enum class SheetRow { PLAY_NEXT, ADD_TO, FAVOURITE, LYRICS, MAKE_TONE, SHARE, SHARE_LYRICS, SONG_INFO, EDIT_TAGS, BOOK, COVERS_TAGS, REMOVE_FROM_QUEUE, REMOVE_FROM_PLAYLIST, HIDE, MOVE_TO_TRASH }
+enum class SheetRow { PLAY_NEXT, ADD_TO, FAVOURITE, LYRICS, MAKE_TONE, CUT, SHARE, SHARE_LYRICS, SONG_INFO, EDIT_TAGS, BOOK, COVERS_TAGS, REMOVE_FROM_QUEUE, REMOVE_FROM_PLAYLIST, HIDE, MOVE_TO_TRASH }
 
 /**
  * The rows the song sheet shows when opened at [place]. [coversTags] and [removeFromQueue]: their slots are filled
- * ([SongSheetSlots]); an empty slot's row does not show. Share lyrics only for a song with [lyrics] ([lyricsShare]).
+ * ([SongSheetSlots]); an empty slot's row does not show. Share lyrics only for a song with [lyrics] ([lyricsShare]); Cut
+ * only for a song KJB can [cut] (a format the phone decodes, not a book).
  */
-fun sheetRows(place: SheetPlace, coversTags: Boolean, removeFromQueue: Boolean, lyrics: Boolean): List<SheetRow> = SheetRow.entries.filter { row ->
+fun sheetRows(place: SheetPlace, coversTags: Boolean, removeFromQueue: Boolean, lyrics: Boolean, cut: Boolean = false): List<SheetRow> = SheetRow.entries.filter { row ->
     when (row) {
+        SheetRow.CUT -> cut
         SheetRow.SHARE_LYRICS -> lyrics
         SheetRow.COVERS_TAGS -> coversTags
         SheetRow.REMOVE_FROM_QUEUE -> removeFromQueue && place is SheetPlace.Queue
@@ -667,6 +669,7 @@ fun SongSheetsHost(sheets: SongSheets, ui: LibraryUi, onActed: () -> Unit = {}) 
                         SheetRow.FAVOURITE -> scope.launch { toasts.say(resources, actions.favourite(listOf(song.ref), ui.playlists.favouriteSongs)) }
                         SheetRow.LYRICS -> sheets.show(OpenSheet.Lyrics(song.ref))
                         SheetRow.MAKE_TONE -> sheets.show(OpenSheet.MakeTone(song.ref))
+                        SheetRow.CUT -> Unit
                         SheetRow.SHARE -> {
                             sheets.close()
                             scope.launch { toasts.say(resources, shareSongs(context, listOf(song), ui::title)) }
