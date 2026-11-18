@@ -25,13 +25,20 @@ import app.lyrify.tags.lookup.PhoneAlbum
 import app.lyrify.tags.lookup.Proposal
 import app.lyrify.tags.lookup.ReleaseMatch
 import app.lyrify.tags.lookup.SongFields
+import app.lyrify.ui.DESTINATION_COVERS_TAGS
+import app.lyrify.ui.Page
+import app.lyrify.ui.destinationPage
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
@@ -69,7 +76,11 @@ class CoversTagsTest {
     /** The library as the app reads [library]; null while it is not read. */
     private fun read(): Library? = library?.let { Library.of(it, Settings()) }
 
-    private fun TestScope.flow(): CoversTags = CoversTags(
+    /** Checks with albums to look up that started KJB's foreground service. */
+    private var started = 0
+
+    /** Covers & tags as KJB builds it, in [scope]: the test's own, or one a test cancels as Android closing KJB. */
+    private fun TestScope.flow(scope: CoroutineScope = this): CoversTags = CoversTags(
         songs = { library },
         source = source,
         write = { jobs, changed, kind, label, given -> writeEdit(rig.writer, favourites, read(), jobs, changed, kind, label, progress(given)) },
@@ -79,7 +90,8 @@ class CoversTagsTest {
         lyrics = { track, changed -> handedToLyrics += track to changed },
         coversChanged = { bumped += it },
         access = { access },
-        scope = this,
+        scope = scope,
+        checkStarted = { started++ },
         io = StandardTestDispatcher(testScheduler),
         compute = StandardTestDispatcher(testScheduler),
         clock = { BASE + testScheduler.currentTime },
@@ -270,6 +282,138 @@ class CoversTagsTest {
         assertEquals(songs[0].path, flow.state.value.focus?.song)
         assertEquals(1, flow.state.value.ready.size)
         assertFalse(flow.state.value.waitingBusy)
+    }
+
+    // Keeps going
+
+    @Test
+    fun `opening Covers & tags after a full check checks only the new and the changed albums, with no Check press`() = runTest {
+        val songs = harbourSongs()
+        library = lanternsSongs() + songs
+        answers("Lanterns" to lanterns, "Harbour" to harbour)
+        checked(flow())
+        File(songs[0].path).appendBytes(byteArrayOf(0))
+        library = library!! + song("Lone Kestrel", 61, "Lone Kestrel", album = null)
+
+        val again = flow()
+        advanceUntilIdle()
+        assertEquals(2, source.checked.size)
+        again.opened()
+        advanceUntilIdle()
+
+        assertEquals(listOf("Lanterns", "Harbour", "Harbour", null), source.checked.map { it.first })
+        assertEquals(2, started)
+        assertNull(again.state.value.checking)
+        assertEquals(3, again.state.value.waiting.size)
+    }
+
+    @Test
+    fun `before a full check, and with nothing new or changed, opening Covers & tags asks nothing and shows no progress`() = runTest {
+        library = lanternsSongs() + harbourSongs()
+        answers("Lanterns" to lanterns)
+        val first = flow()
+        advanceUntilIdle()
+        first.opened()
+        advanceUntilIdle()
+        assertEquals(emptyList<Pair<String?, Boolean>>(), source.checked)
+        assertEquals(0, started)
+
+        first.check()
+        advanceUntilIdle()
+        assertEquals(2, source.checked.size)
+        val again = flow()
+        val shown = mutableListOf<Checking?>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { again.state.collect { shown += it.checking } }
+        advanceUntilIdle()
+        again.opened()
+        advanceUntilIdle()
+
+        assertEquals(2, source.checked.size)
+        assertEquals(1, started)
+        assertTrue(shown.toString(), shown.all { it == null })
+    }
+
+    @Test
+    fun `a check cut short by KJB closing goes on with the albums left when Covers & tags opens again`() = runTest {
+        library = lanternsSongs() + harbourSongs() + song("Lone Kestrel", 61, "Lone Kestrel", album = null)
+        answers("Lanterns" to lanterns, "Harbour" to harbour)
+        val answer = source.answer
+        source.answer = { album -> delay(1_000).let { answer(album) } }
+        val closing = CoroutineScope(coroutineContext + Job(coroutineContext[Job]))
+        val first = flow(closing)
+        advanceUntilIdle()
+        first.check()
+        advanceTimeBy(1_500)
+        runCurrent()
+        assertEquals(1, first.state.value.waiting.size)
+        // Android closes KJB in the middle of the second album.
+        closing.cancel()
+        advanceUntilIdle()
+
+        val again = flow()
+        advanceUntilIdle()
+        assertTrue(again.state.value.memory.unfinished)
+        again.opened()
+        advanceUntilIdle()
+
+        assertEquals(listOf("Lanterns", "Harbour", "Harbour", null), source.checked.map { it.first })
+        assertEquals(3, again.state.value.waiting.size)
+        assertFalse(again.state.value.memory.unfinished)
+        assertTrue(again.state.value.memory.checkedAll)
+    }
+
+    @Test
+    fun `Cancel stops the check, and opening Covers & tags does not start it again before a full check`() = runTest {
+        library = lanternsSongs() + harbourSongs()
+        answers("Lanterns" to lanterns)
+        val answer = source.answer
+        source.answer = { album -> delay(1_000).let { answer(album) } }
+        val flow = flow()
+        advanceUntilIdle()
+        flow.check()
+        advanceTimeBy(1_500)
+        runCurrent()
+        flow.cancel()
+        advanceUntilIdle()
+
+        val again = flow()
+        advanceUntilIdle()
+        again.opened()
+        advanceUntilIdle()
+
+        assertEquals(2, source.checked.size)
+        assertFalse(again.state.value.memory.unfinished)
+        assertFalse(again.state.value.memory.checkedAll)
+        assertEquals(1, started)
+    }
+
+    @Test
+    fun `a check goes on when the page that started it is left, in KJB's foreground service, started only for albums to look up`() = runTest {
+        library = lanternsSongs() + harbourSongs()
+        answers("Lanterns" to lanterns)
+        val answer = source.answer
+        source.answer = { album -> delay(1_000).let { answer(album) } }
+        val flow = flow()
+        advanceUntilIdle()
+        val page = launch {
+            flow.check()
+            delay(Long.MAX_VALUE)
+        }
+        advanceTimeBy(500)
+        page.cancel()
+        advanceUntilIdle()
+
+        assertEquals(2, source.checked.size)
+        assertEquals(2, flow.state.value.waiting.size)
+        assertEquals(1, started)
+        // The service: dataSync, not exported, and started by the check alone.
+        val manifest = File("src/main/AndroidManifest.xml").readText()
+        val service = Regex("""<service\s+android:name="\.tags\.CheckService"[^>]*/>""").find(manifest)?.value.orEmpty()
+        assertTrue(manifest, "android:exported=\"false\"" in service && "android:foregroundServiceType=\"dataSync\"" in service)
+        assertTrue(File("src/main/java/app/lyrify/tags/TagsGraph.kt").readText().contains("checkStarted = { CheckService.start(app) }"))
+        // Its notification opens Covers & tags.
+        assertTrue(File("src/main/java/app/lyrify/tags/CheckService.kt").readText().contains(".putExtra(EXTRA_DESTINATION, DESTINATION_COVERS_TAGS)"))
+        assertEquals(Page.CoversTags, destinationPage(DESTINATION_COVERS_TAGS))
     }
 
     // Applying

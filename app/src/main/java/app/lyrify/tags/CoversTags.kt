@@ -398,8 +398,10 @@ private class Recent<T>(private val limit: Int) {
 }
 
 /**
- * Covers & tags: checks the library's albums against MusicBrainz ([source]) one at a time in [scope] while the app is
- * open, never by itself; keeps what waits for the user; applies a release to the songs and the fields the user ticked,
+ * Covers & tags: checks the library's albums against MusicBrainz ([source]) one at a time in [scope], only when the user
+ * asks (Check, or opening Covers & tags once a check ran to its end: [opened]), and on while they leave the page, in
+ * KJB's foreground service ([checkStarted]); keeps what waits for the user between runs, so a check looks up only new
+ * and changed albums; applies a release to the songs and the fields the user ticked,
  * and to nothing else, through the one safe writer ([write], T3's [writeEdit], one file at a time with its progress,
  * busy and recovering songs left as they are and listed, favourite hearts following the album's new name); and takes
  * edits back through it ([undoEntry], [undo] holds History). Writing needs notification [access]. After an apply, each
@@ -420,6 +422,8 @@ class CoversTags(
     private val coversChanged: (Collection<String>) -> Unit,
     private val access: () -> Boolean,
     private val scope: CoroutineScope,
+    /** A check with albums to look up began: KJB's foreground service keeps KJB running until it ends ([CheckService]). */
+    private val checkStarted: () -> Unit = {},
     private val io: CoroutineDispatcher = Dispatchers.IO,
     private val compute: CoroutineDispatcher = Dispatchers.Default,
     private val clock: () -> Long = System::currentTimeMillis,
@@ -474,6 +478,9 @@ class CoversTags(
     @Volatile
     private var running: Job? = null
 
+    /** Held while a check starts, so two at once (a tap as the page opens) start one. */
+    private val starting = Any()
+
     private val covers = Recent<Cover>(COVERS_KEPT)
     private val previews = Recent<ByteArray>(PREVIEWS_KEPT)
 
@@ -486,23 +493,51 @@ class CoversTags(
 
     // Checking
 
-    /** "Check my albums": every album not done or skipped (or changed since), one at a time; unless one is running. */
-    fun check() {
+    /**
+     * "Check my albums": every album not done, skipped or checked before (unless one of its files changed since), one at
+     * a time; unless a check runs.
+     */
+    fun check() = start(asked = true)
+
+    /**
+     * Covers & tags opened: once a check ran to its end ([CoversTagsMemory.checkedAll]), or one was cut short by KJB
+     * closing ([CoversTagsMemory.unfinished]), the albums new or changed since are looked up with no Check press. Before
+     * that, or with nothing new or changed, nothing is asked and no progress shows. Never called from anywhere else:
+     * lookups happen only when the user asks.
+     */
+    fun opened() {
+        scope.launch(compute) {
+            loading.join()
+            val memory = _state.value.memory
+            if (memory.checkedAll || memory.unfinished) start(asked = false)
+        }
+    }
+
+    /**
+     * A check, unless one runs: the progress shows at once when the user [asked] for it, and when opening the page
+     * started it only once there are albums to look up. While it runs, [CoversTagsMemory.unfinished] says so; it ends
+     * with [CoversTagsMemory.checkedAll].
+     */
+    private fun start(asked: Boolean): Unit = synchronized(starting) {
         if (running?.isActive == true) return
-        _state.update { it.copy(checking = Checking(0, 0), notChecked = 0, unreadable = false) }
+        if (asked) _state.update { it.copy(checking = Checking(0, 0), notChecked = 0, unreadable = false) }
         val job = scope.launch(compute, start = CoroutineStart.LAZY) {
             val self = coroutineContext.job
             try {
                 restoring.join()
                 val library = songs()?.let(::albumsOf)
                 if (library == null) {
-                    _state.update { it.copy(unreadable = true) }
+                    if (asked) _state.update { it.copy(unreadable = true) }
                     return@launch
                 }
                 forgetGone(library.map { it.id }.toSet())
                 val albums = toCheck(library)
-                commit { it.copy(checkedOnce = true) }
+                if (albums.isEmpty() && !asked) return@launch
+                _state.update { it.copy(checking = Checking(0, albums.size), notChecked = 0, unreadable = false) }
+                commit { it.copy(checkedOnce = true, unfinished = true) }
+                if (albums.isNotEmpty()) checkStarted()
                 lookUp(albums, fresh = false, progress = true)
+                commit { it.copy(checkedAll = true, unfinished = false) }
                 log("tags: check done, ${albums.size} of ${library.size} albums checked, ${_state.value.toReview.size} to review")
             } finally {
                 if (running === self) _state.update { it.copy(checking = null) }
@@ -512,11 +547,15 @@ class CoversTags(
         job.start()
     }
 
-    /** "Cancel": the check stops after the album it is on; what it found stays. */
+    /**
+     * "Cancel": the check stops at once; what it found stays. Opening Covers & tags does not carry it on, unless a check
+     * ran to its end before.
+     */
     fun cancel() {
         running?.cancel()
         running = null
         _state.update { it.copy(checking = null) }
+        scope.launch(io) { commit { it.copy(unfinished = false) } }
     }
 
     /** "Check again" on a skipped album: looked up afresh, skipping the cache. */

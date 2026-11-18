@@ -377,6 +377,8 @@ fun CoversTagsPage() {
     }
 
     LaunchedEffect(tags) { tags.refreshHistory() }
+    // After a full check, opening the page looks up the albums new or changed since, with no Check press.
+    LaunchedEffect(tags) { tags.opened() }
     LaunchedEffect(tags) {
         asked.collect { ask ->
             if (ask != null) {

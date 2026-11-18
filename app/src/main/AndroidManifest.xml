@@ -229,6 +229,14 @@
             android:name=".downloads.DownloadCancelReceiver"
             android:exported="false" />
 
+        <!-- tags -->
+        <!-- Covers & tags' check (tags/CheckService.kt): dataSync while a check the user asked for looks albums up, so it
+             goes on when they leave the page. Started only while KJB is in front, never again by itself. Not exported. -->
+        <service
+            android:name=".tags.CheckService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
         <!-- Bound by the system while notification access is granted (sample manifest in the
              NotificationListenerService reference uses exported="false"). -->
         <service
