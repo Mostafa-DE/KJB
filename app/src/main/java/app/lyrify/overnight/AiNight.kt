@@ -31,6 +31,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.util.Locale
@@ -208,8 +209,11 @@ class AiRunner(
     private val badModel: suspend (String) -> Unit = {},
     private val onProgress: suspend (AiProgress) -> Unit = {},
     private val runLog: (String) -> Unit = {},
-    /** The plain words a song's file holds in its own tags ([EmbeddedLyrics]), read when the song is timed; null for none. Blocking. */
-    private val tagLyrics: (String) -> String? = { path -> EmbeddedLyrics.read(File(path))?.words?.takeIf(String::isNotBlank) },
+    /**
+     * The plain words a song's file holds in its own tags ([EmbeddedLyrics]), read when the song is timed; null for none.
+     * Throws an IOException when the file cannot be read now. Blocking.
+     */
+    private val tagLyrics: (String) -> String? = { path -> EmbeddedLyrics.readOrThrow(File(path))?.words?.takeIf(String::isNotBlank) },
 ) {
     private var engine: SongEngine? = null
 
@@ -222,10 +226,17 @@ class AiRunner(
         }
     }
 
-    /** The plain lyrics [job] times: LRCLIB's by its record, or those in the song's own tags (None when gone since); null to transcribe. */
+    /**
+     * The plain lyrics [job] times: LRCLIB's by its record, or those in the song's own tags (None when gone since,
+     * Unavailable while its file cannot be read); null to transcribe.
+     */
     private suspend fun knownLyrics(job: AiJob): PlainLyrics? = when {
         job.lrclibId != null -> plainLyrics(job.lrclibId)
-        job.plainInTags -> withContext(Dispatchers.IO) { tagLyrics(job.track.path) }?.let(PlainLyrics::Found) ?: PlainLyrics.None
+        job.plainInTags -> try {
+            withContext(Dispatchers.IO) { tagLyrics(job.track.path) }?.let(PlainLyrics::Found) ?: PlainLyrics.None
+        } catch (e: IOException) {
+            PlainLyrics.Unavailable(e.javaClass.simpleName)
+        }
         else -> null
     }
 
@@ -289,7 +300,7 @@ class AiRunner(
                     null, PlainLyrics.None -> null
                     is PlainLyrics.Found -> lyrics.text
                     is PlainLyrics.Unavailable -> {
-                        runLog("AI: $title waits, LRCLIB unavailable (${lyrics.cause})")
+                        runLog("AI: $title waits, ${if (current.plainInTags) "its file" else "LRCLIB"} unavailable (${lyrics.cause})")
                         continue
                     }
                 }

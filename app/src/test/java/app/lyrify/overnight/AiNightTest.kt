@@ -44,6 +44,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeFalse
 import org.junit.Assume.assumeTrue
 import org.junit.Rule
 import org.junit.Test
@@ -376,6 +377,22 @@ class AiNightTest {
         assertEquals(AiRunEnd.DONE, runner().run())
 
         assertEquals(listOf<String?>(null), calls.map { it.plain })
+    }
+
+    @Test
+    fun `a song whose file cannot be read now waits for another run, never transcribed`() = runTest {
+        val file = File(folder.root, "Own.mp3").apply { writeBytes(LyricsTagFixtures.mp3(LyricsTagFixtures.frame("USLT", LyricsTagFixtures.uslt("placeholder own")))) }
+        file.setReadable(false)
+        // As root every file can be read.
+        assumeFalse(file.canRead())
+        val own = LocalTrack(file.path, "Own", "Artist", null, 200_000)
+        memory.put(recorded(null, own, LyricsStatus.PLAIN_ONLY, null, now - day, durationMatched = true, plainInTags = true))
+
+        runner().run()
+
+        assertEquals(emptyList<String?>(), calls.map { it.plain })
+        assertEquals(LyricsStatus.PLAIN_ONLY, memory[own.path]?.status)
+        assertTrue(memory[own.path]!!.plainInTags)
     }
 
     @Test

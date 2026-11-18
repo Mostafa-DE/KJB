@@ -36,6 +36,14 @@ sealed interface TagLyrics {
  */
 object EmbeddedLyrics {
     fun read(file: File): TagLyrics? = try {
+        readOrThrow(file)
+    } catch (_: IOException) {
+        null
+    }
+
+    /** [read], but a file that cannot be read now throws its IOException, told apart from one without lyrics. Blocking. */
+    @Throws(IOException::class)
+    fun readOrThrow(file: File): TagLyrics? = try {
         FileInputStream(file).use { input ->
             val reader = Reader(input.channel)
             val found = when (file.extension.lowercase()) {
@@ -47,8 +55,6 @@ object EmbeddedLyrics {
             }
             found.firstOrNull { it is TagLyrics.Synced } ?: found.firstOrNull()
         }
-    } catch (_: IOException) {
-        null
     } catch (_: Malformed) {
         null
     }

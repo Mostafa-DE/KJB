@@ -76,7 +76,10 @@ sealed interface PlainLyrics {
     /** The record is gone, instrumental or holds no lyrics: the song is transcribed instead. */
     data object None : PlainLyrics
 
-    /** LRCLIB could not be asked (overloaded, offline): the song waits for another run. [cause] is for the log. */
+    /**
+     * LRCLIB could not be asked (overloaded, offline), or the song's file could not be read for the lyrics in its tags: the
+     * song waits for another run. [cause] is for the log.
+     */
     data class Unavailable(val cause: String) : PlainLyrics
 }
 
