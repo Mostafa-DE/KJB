@@ -48,21 +48,27 @@ class UnsupportedAudioException(message: String) : UnfitAudioException(RejectRea
  * container's (HE-AAC doubles the rate).
  *
  * Nothing in the file is trusted for sizes or time: the claimed duration is only [expectedFrames], decoding stops past
- * [PcmToMix.MAX_AUDIO_SEC] of audio ([AudioTooLongException]), and [DecodeDeadline] ends a decoder that stops moving or
- * never signals end of stream; the time the reader spends between reads is not the decoder's.
+ * [maxAudioSec] of audio ([AudioTooLongException]; the AI's [PcmToMix.MAX_AUDIO_SEC] unless a reader that stops by itself,
+ * the audio cutter, opens the file with a longer one), and [DecodeDeadline] ends a decoder that stops moving or never
+ * signals end of stream; the time the reader spends between reads is not the decoder's.
  */
-class MixDecoder private constructor(fd: FileDescriptor, private val owned: ParcelFileDescriptor?) : MixSource {
-    constructor(file: File) : this(ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY))
+class MixDecoder private constructor(
+    fd: FileDescriptor,
+    private val owned: ParcelFileDescriptor?,
+    private val maxAudioSec: Long,
+) : MixSource {
+    constructor(file: File, maxAudioSec: Long = PcmToMix.MAX_AUDIO_SEC) :
+        this(ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY), maxAudioSec)
 
-    constructor(fd: FileDescriptor) : this(fd, null)
+    constructor(fd: FileDescriptor) : this(fd, null, PcmToMix.MAX_AUDIO_SEC)
 
-    private constructor(pfd: ParcelFileDescriptor) : this(pfd.fileDescriptor, pfd)
+    private constructor(pfd: ParcelFileDescriptor, maxAudioSec: Long) : this(pfd.fileDescriptor, pfd, maxAudioSec)
 
     private val extractor = MediaExtractor()
     private val codec: MediaCodec
     private val durationUs: Long
     private val info = MediaCodec.BufferInfo()
-    private val deadline = DecodeDeadline(SystemClock::uptimeMillis)
+    private val deadline = DecodeDeadline(DecodeDeadline.maxMsFor(maxAudioSec), SystemClock::uptimeMillis)
     private var pcm: PcmToMix? = null
     private var inputDone = false
     private var outputDone = false
@@ -91,7 +97,7 @@ class MixDecoder private constructor(fd: FileDescriptor, private val owned: Parc
         }
     }
 
-    override val expectedFrames: Int get() = PcmToMix.expectedFrames(durationUs)
+    override val expectedFrames: Int get() = PcmToMix.expectedFrames(durationUs, maxAudioSec)
 
     override fun read(left: FloatArray, right: FloatArray, offset: Int, count: Int): Int {
         deadline.resume()
@@ -163,7 +169,7 @@ class MixDecoder private constructor(fd: FileDescriptor, private val owned: Parc
             out.encoding = encoding
             return out
         }
-        return PcmToMix(rate, channels, encoding).also { pcm = it }
+        return PcmToMix(rate, channels, encoding, maxAudioSec).also { pcm = it }
     }
 
     private companion object {
@@ -187,17 +193,18 @@ class MixDecoder private constructor(fd: FileDescriptor, private val owned: Parc
  * Decoder output to the mix: interleaved PCM of any encoding MediaCodec gives ([append]) to planar float stereo at
  * 44.1 kHz ([read]). A mono file is repeated on both channels (the separation spec's "mono files: copy the channel"),
  * only the first two of more channels are kept, and another rate is resampled as it arrives ([Resampler.Stream]); the
- * values are those the whole-file path made. Only what has not been read yet is held. Past [MAX_AUDIO_SEC] of audio
- * [append] throws [AudioTooLongException]; a format it cannot use (no rate or channels, an encoding it does not convert,
- * a rate whose ratio to 44.1 kHz needs more filter phases than [Resampler.MAX_PHASES], such as 44056 Hz) throws
- * [UnsupportedAudioException]: the same file would fail the same way every time.
+ * values are those the whole-file path made. Only what has not been read yet is held. Past [maxAudioSec] of audio
+ * ([MAX_AUDIO_SEC] unless told otherwise) [append] throws [AudioTooLongException]; a format it cannot use (no rate or
+ * channels, an encoding it does not convert, a rate whose ratio to 44.1 kHz needs more filter phases than
+ * [Resampler.MAX_PHASES], such as 44056 Hz) throws [UnsupportedAudioException]: the same file would fail the same way
+ * every time.
  */
-class PcmToMix(val sampleRate: Int, val channelCount: Int, var encoding: Int) {
+class PcmToMix(val sampleRate: Int, val channelCount: Int, var encoding: Int, maxAudioSec: Long = MAX_AUDIO_SEC) {
     init {
         if (sampleRate <= 0 || channelCount <= 0) throw UnsupportedAudioException("unusable output format: $sampleRate Hz x $channelCount channels")
     }
 
-    private val maxFrames: Long = MAX_AUDIO_SEC * sampleRate
+    private val maxFrames: Long = maxAudioSec.coerceAtMost(Long.MAX_VALUE / sampleRate) * sampleRate
     private var decoded = 0L
     private val streams = if (sampleRate == Rates.MIX) {
         null
@@ -225,7 +232,7 @@ class PcmToMix(val sampleRate: Int, val channelCount: Int, var encoding: Int) {
             else -> throw UnsupportedAudioException("unsupported PCM encoding $encoding")
         }
         val count = bytes.remaining() / (bytesPerSample * channelCount)
-        if (decoded + count > maxFrames) throw AudioTooLongException("too long: over ${MAX_AUDIO_SEC / 60} minutes of audio")
+        if (decoded + count > maxFrames) throw AudioTooLongException("too long: over ${maxFrames / sampleRate / 60} minutes of audio")
         val target = if (streams == null) arrayOf(left, right) else source
         for (i in 0 until count) {
             for (c in 0 until channelCount) {
@@ -273,19 +280,25 @@ class PcmToMix(val sampleRate: Int, val channelCount: Int, var encoding: Int) {
         /** Audio decoded at most: the library's longest songs are about 15 minutes. */
         const val MAX_AUDIO_SEC: Long = 20 * 60
 
-        /** 44.1 kHz frames of a file that claims [durationUs] (any value a header holds), at most [MAX_AUDIO_SEC]. */
-        fun expectedFrames(durationUs: Long): Int = (durationUs.coerceIn(0L, MAX_AUDIO_SEC * 1_000_000L) * Rates.MIX / 1_000_000L).toInt()
+        /**
+         * 44.1 kHz frames of a file that claims [durationUs] (any value a header holds), at most [maxAudioSec] and at most
+         * what an Int holds (13.5 hours).
+         */
+        fun expectedFrames(durationUs: Long, maxAudioSec: Long = MAX_AUDIO_SEC): Int {
+            val maxUs = maxAudioSec.coerceAtMost(Int.MAX_VALUE.toLong() / Rates.MIX) * 1_000_000L
+            return (durationUs.coerceIn(0L, maxUs) * Rates.MIX / 1_000_000L).toInt()
+        }
     }
 }
 
 /**
  * Ends a decode that hangs: MediaCodec has no timeout of its own, so a decoder that never signals end of stream would
  * keep [MixDecoder]'s loop going forever. [verify] throws when no input or output buffer moved ([progressed]) for
- * [STALL_MS], or when the decoder has worked for [MAX_MS]. Only the decoder's time counts: between [pause] and
+ * [STALL_MS], or when the decoder has worked for [maxMs] ([MAX_MS] for the AI's 20 minutes, [maxMsFor] another cap). Only the decoder's time counts: between [pause] and
  * [resume] the reader works (the separation), which is neither a stall nor decoding time. [now] is a monotonic clock in
  * milliseconds; on the phone `uptimeMillis`, which stops in deep sleep, so a sleeping phone is not a stall.
  */
-class DecodeDeadline(private val now: () -> Long) {
+class DecodeDeadline(private val maxMs: Long = MAX_MS, private val now: () -> Long) {
     private var since = now()
     private var before = 0L
     private var lastProgress = since
@@ -308,7 +321,7 @@ class DecodeDeadline(private val now: () -> Long) {
     fun verify() {
         val t = now()
         check(t - lastProgress < STALL_MS) { "the decoder made no progress for ${STALL_MS / 1000} s" }
-        check(before + t - since < MAX_MS) { "decoding took over ${MAX_MS / 60_000} minutes" }
+        check(before + t - since < maxMs) { "decoding took over ${maxMs / 60_000} minutes" }
     }
 
     companion object {
@@ -316,5 +329,13 @@ class DecodeDeadline(private val now: () -> Long) {
 
         /** The spike decoded a 4-minute song in 2.9 s on the phone (lyrify-bench HANDOFF.md, run 1). */
         const val MAX_MS: Long = 10 * 60_000
+
+        /**
+         * The decoding time allowed for a decoder that stops at [maxAudioSec] of audio: [MAX_MS] for the AI's
+         * [PcmToMix.MAX_AUDIO_SEC], in proportion for another cap, and no total for a reader that stops by itself (the
+         * audio cutter, which reads only to the cut's end); the stall check still ends a decoder that hangs.
+         */
+        fun maxMsFor(maxAudioSec: Long): Long =
+            if (maxAudioSec > Long.MAX_VALUE / MAX_MS) Long.MAX_VALUE else MAX_MS * maxAudioSec.coerceAtLeast(0) / PcmToMix.MAX_AUDIO_SEC
     }
 }

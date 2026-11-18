@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The cutter: a part of a song saved as a new M4A file, with fades. The song itself never changes. -->
+<resources>
+    <!-- The song sheet's row -->
+    <string name="cut_row">Cut</string>
+
+    <!-- The screen -->
+    <string name="cut_title">Cut song</string>
+    <string name="cut_part_cd">Cut part</string>
+    <!-- TalkBack state of the cut: "From 0:12.25 to 1:24.50". -->
+    <string name="cut_part_state">From %1$s to %2$s</string>
+    <string name="cut_start">Start</string>
+    <string name="cut_end">End</string>
+    <string name="cut_start_earlier">Start a quarter second earlier</string>
+    <string name="cut_start_later">Start a quarter second later</string>
+    <string name="cut_end_earlier">End a quarter second earlier</string>
+    <string name="cut_end_later">End a quarter second later</string>
+    <!-- The cut's length and its estimated size: "1:12.25 · about 2.9 MB". -->
+    <string name="cut_length_size">%1$s · about %2$s</string>
+    <string name="cut_play_end">Play the end</string>
+    <string name="cut_fade_off">Off</string>
+    <!-- A fade's length in seconds: "0.5 s", "2 s". -->
+    <string name="cut_seconds">%1$s s</string>
+    <string name="cut_curve">Curve</string>
+    <string name="cut_curve_linear">Linear</string>
+    <string name="cut_curve_smooth">Smooth</string>
+    <string name="cut_curve_even">Even</string>
+    <string name="cut_quality">Quality</string>
+    <!-- A bit rate: "256 kbps". -->
+    <string name="cut_kbps">%1$d kbps</string>
+    <string name="cut_format">Saved as M4A (AAC). The song stays as it is.</string>
+    <string name="cut_next_to_song">The cut is a new file next to the song.</string>
+    <!-- %1$s is the folder's name: "Music". -->
+    <string name="cut_in_folder">KJB can\'t write next to this song, so the cut is a new file in %1$s.</string>
+    <string name="cut_nowhere">KJB can\'t write next to this song or in Music, so it can\'t save a cut.</string>
+    <string name="cut_no_encoder">Your phone can\'t make M4A files, so KJB can\'t save a cut on it.</string>
+    <string name="cut_save">Save cut</string>
+
+    <!-- After saving: the file's name, then its folder's -->
+    <string name="cut_saved">Saved as %1$s in %2$s.</string>
+    <string name="cut_saved_untagged">Saved as %1$s in %2$s, without the song\'s tags.</string>
+    <string name="cut_not_saved">Couldn\'t save the cut. Try again.</string>
+</resources>

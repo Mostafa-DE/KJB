@@ -257,6 +257,27 @@ class AudioTest {
     }
 
     @Test
+    fun `a reader that stops by itself (the audio cutter) may decode past 20 minutes`() {
+        val pcm = PcmToMix(44_100, 1, AudioFormat.ENCODING_PCM_16BIT, maxAudioSec = Long.MAX_VALUE)
+        val minute = pcm16(44_100 * 60)
+        repeat(21) {
+            pcm.append(minute.duplicate().order(ByteOrder.nativeOrder()))
+            assertEquals(44_100 * 60, drain(pcm)[0].size)
+        }
+        // Another cap is kept to the second.
+        val short = PcmToMix(44_100, 1, AudioFormat.ENCODING_PCM_16BIT, maxAudioSec = 1)
+        short.append(pcm16(44_100))
+        assertThrows(AudioTooLongException::class.java) { short.append(pcm16(1)) }
+    }
+
+    @Test
+    fun `without a cap the claimed length still estimates the frames, as an Int`() {
+        assertEquals(3 * 3_600 * 44_100, PcmToMix.expectedFrames(3 * 3_600_000_000L, maxAudioSec = Long.MAX_VALUE))
+        assertEquals(Int.MAX_VALUE / 44_100 * 44_100, PcmToMix.expectedFrames(Long.MAX_VALUE, maxAudioSec = Long.MAX_VALUE))
+        assertEquals(0, PcmToMix.expectedFrames(-5, maxAudioSec = Long.MAX_VALUE))
+    }
+
+    @Test
     fun `audio the mix cannot be made from is unsupported, a verdict rather than a failure`() {
         // No rate or channels.
         assertThrows(UnsupportedAudioException::class.java) { PcmToMix(0, 2, AudioFormat.ENCODING_PCM_16BIT) }
@@ -292,6 +313,25 @@ class AudioTest {
         now += 150_000
         deadline.progressed()
         assertEquals("decoding took over 10 minutes", assertThrows(IllegalStateException::class.java) { deadline.verify() }.message)
+    }
+
+    @Test
+    fun `the decoding time allowed follows the audio cap, and a reader that stops by itself has no total`() {
+        assertEquals(DecodeDeadline.MAX_MS, DecodeDeadline.maxMsFor(PcmToMix.MAX_AUDIO_SEC))
+        assertEquals(DecodeDeadline.MAX_MS / 2, DecodeDeadline.maxMsFor(PcmToMix.MAX_AUDIO_SEC / 2))
+        assertEquals(Long.MAX_VALUE, DecodeDeadline.maxMsFor(Long.MAX_VALUE))
+
+        var now = 0L
+        val deadline = DecodeDeadline(maxMs = Long.MAX_VALUE) { now }
+        deadline.resume()
+        repeat(360) {
+            now += 20_000 // two hours of decoding a long mix, buffers moving
+            deadline.progressed()
+            deadline.verify()
+        }
+        // A decoder that hangs still ends.
+        now += 30_000
+        assertEquals("the decoder made no progress for 30 s", assertThrows(IllegalStateException::class.java) { deadline.verify() }.message)
     }
 
     @Test

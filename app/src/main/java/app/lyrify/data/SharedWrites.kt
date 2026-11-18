@@ -29,6 +29,15 @@ enum class SharedWrite {
     TONE_RENAME,
     TONE_DELETE,
 
+    /**
+     * A cut of a song: a new file next to it, or in Music/, written as a hidden part file and then given a free name
+     * (3.1, cut/CutFiles.kt). Never over another file.
+     */
+    CUT_SAVE,
+
+    /** A cut's own hidden part file, or the empty name it took, when its save did not finish (cut/CutFiles.kt). */
+    CUT_DELETE,
+
     /** Tags and cover written into a song (3.0, tags/SafeWriter.kt). */
     TAG_WRITE,
 

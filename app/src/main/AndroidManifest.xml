@@ -9,7 +9,7 @@
     <uses-permission android:name="android.permission.INTERNET" />
 
     <!-- All files access: find songs in MediaStore and create .lrc files next to them in any
-         folder. Granted by the user in Settings. KJB changes a song file only when the user confirms (Covers & tags),
+         folder, and save a cut of a song as a new file next to it. Granted by the user in Settings. KJB changes a song file only when the user confirms (Covers & tags),
          and only its tags and cover, never the music; every change can be undone. Songs leave only when the user
          moves them to the system trash (MediaStore.createTrashRequest, confirmed twice). -->
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />

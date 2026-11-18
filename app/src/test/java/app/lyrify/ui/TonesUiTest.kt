@@ -2,23 +2,37 @@ package app.lyrify.ui
 
 import androidx.compose.runtime.saveable.SaverScope
 import app.lyrify.R
+import app.lyrify.ai.ArrayMix
 import app.lyrify.data.LedgerEntry
 import app.lyrify.data.LyricsStatus
+import app.lyrify.data.SharedWrites
 import app.lyrify.lyrics.LrcLine
 import app.lyrify.tones.DefaultOutcome
+import app.lyrify.tones.FakeEncoder
+import app.lyrify.tones.FakeMedia
 import app.lyrify.tones.FakeSounds
+import app.lyrify.tones.MemoryToneList
 import app.lyrify.tones.SaveFailure
+import app.lyrify.tones.ToneAudio
 import app.lyrify.tones.ToneDefaults
 import app.lyrify.tones.ToneEdit
+import app.lyrify.tones.ToneFiles
 import app.lyrify.tones.ToneKind
+import app.lyrify.tones.ToneMedia
 import app.lyrify.tones.ToneRequest
 import app.lyrify.tones.ToneWindow
 import app.lyrify.tones.tone
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.setMain
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.FileDescriptor
 
 /** The Tones tab's logic and copy: made-up songs, placeholder lyric text only. */
 class TonesUiTest {
@@ -250,6 +264,50 @@ class TonesUiTest {
             assertEquals(ask.copy(step = step), ask.copy(step = step).resumed(ToneDefaults(sounds), tone(41)))
         }
         assertEquals(emptyList<String>(), sounds.calls)
+    }
+
+    // Saving a tone
+
+    private val saveRequest = ToneRequest("/m/Paper Lanterns.mp3", "Paper Lanterns", ToneWindow(1_000, 1_000), 100, 100, ToneKind.RINGTONE)
+
+    private fun toneFiles(media: ToneMedia, encoder: FakeEncoder) = ToneFiles(
+        media = media,
+        writes = SharedWrites.ANYWHERE,
+        openSong = { ArrayMix(FloatArray(3 * ToneAudio.RATE) { 0.5f }, piece = 2_000) },
+        newEncoder = { encoder },
+        list = MemoryToneList(),
+        clock = { 5_000 },
+        log = {},
+        io = Dispatchers.Unconfined,
+    )
+
+    @Test
+    fun `progress a tone save reports after Cancel does not bring it back, and Save works again`() = runBlocking {
+        Dispatchers.setMain(Dispatchers.Unconfined)
+        try {
+            // The file is opened for writing only once the test lets it, so Cancel comes from outside the save.
+            val opened = CompletableDeferred<Unit>()
+            val media = FakeMedia()
+            val held = object : ToneMedia by media {
+                override suspend fun <T> write(id: Long, block: suspend (FileDescriptor) -> T): T {
+                    opened.await()
+                    return media.write(id, block)
+                }
+            }
+            val encoder = FakeEncoder()
+            ToneSaving.start(toneFiles(held, encoder), saveRequest)
+            // Cancel pressed while a piece is encoded: the save reports that piece before it sees the cancel.
+            encoder.onEncode = { if (it == 1) ToneSaving.cancel() }
+            opened.complete(Unit)
+            assertEquals(SaveState.Idle, ToneSaving.state.value)
+
+            ToneSaving.start(toneFiles(FakeMedia(), FakeEncoder()), saveRequest)
+            assertTrue(ToneSaving.state.value.toString(), ToneSaving.state.value is SaveState.Finished)
+        } finally {
+            ToneSaving.cancel()
+            ToneSaving.consume()
+            Dispatchers.resetMain()
+        }
     }
 
     @Test

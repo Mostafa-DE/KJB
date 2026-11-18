@@ -242,8 +242,8 @@ class ToneAudioTest {
         val song = folder.newFile("Paper Lanterns.mp3").apply { writeBytes(ByteArray(10)) }
         val cache = PeaksCache(folder.newFolder("peaks"))
         val peaks = floatArrayOf(0f, 0.1f, 0.5f, 0.999f, 1f, 1.7f)
-        cache.write(song, peaks)
-        val back = cache.read(song)
+        cache.write(song, 3_000, peaks)
+        val back = cache.read(song, 3_000)
         assertArrayEquals(floatArrayOf(0f, 0.1f, 0.5f, 0.999f, 1f, 1f), back, 1 / 255f)
     }
 
@@ -252,21 +252,21 @@ class ToneAudioTest {
         val dir = folder.newFolder("peaks")
         val song = folder.newFile("Glass Harbor.mp3").apply { writeBytes(ByteArray(10)) }
         val cache = PeaksCache(dir)
-        cache.write(song, floatArrayOf(0.5f, 0.5f))
+        cache.write(song, 3_000, floatArrayOf(0.5f, 0.5f))
 
         song.writeBytes(ByteArray(11))
-        assertNull(cache.read(song))
+        assertNull(cache.read(song, 3_000))
 
-        cache.write(song, floatArrayOf(0.5f, 0.5f))
+        cache.write(song, 3_000, floatArrayOf(0.5f, 0.5f))
         dir.listFiles().orEmpty().forEach { it.writeBytes(byteArrayOf(1, 2)) }
-        assertNull(cache.read(song))
+        assertNull(cache.read(song, 3_000))
     }
 
     @Test
     fun `cache file names say nothing about the song`() {
         val dir = folder.newFolder("peaks")
         val song = folder.newFile("Low Orbit.mp3").apply { writeBytes(ByteArray(10)) }
-        PeaksCache(dir).write(song, floatArrayOf(0.5f))
+        PeaksCache(dir).write(song, 3_000, floatArrayOf(0.5f))
         val names = dir.listFiles().orEmpty().map(File::getName)
         assertEquals(1, names.size)
         assertFalse(names.single().contains("Orbit"))
@@ -277,8 +277,37 @@ class ToneAudioTest {
         val dir = folder.newFolder("peaks")
         val cache = PeaksCache(dir, maxFiles = 3)
         val songs = (1..5).map { n -> folder.newFile("Song $n.mp3").apply { writeBytes(ByteArray(n)) } }
-        songs.forEach { cache.write(it, floatArrayOf(0.5f)) }
+        songs.forEach { cache.write(it, 3_000, floatArrayOf(0.5f)) }
         assertEquals(3, dir.listFiles().orEmpty().size)
-        assertArrayEquals(floatArrayOf(0.5f), cache.read(songs.last()), 1 / 255f)
+        assertArrayEquals(floatArrayOf(0.5f), cache.read(songs.last(), 3_000), 1 / 255f)
+    }
+
+    @Test
+    fun `peaks read to another length are kept apart, so Tones' first 20 minutes never stand for the cutter's whole song`() {
+        val dir = folder.newFolder("peaks")
+        val song = folder.newFile("Night Ferry.mp3").apply { writeBytes(ByteArray(10)) }
+        val cache = PeaksCache(dir)
+        cache.write(song, 1_000, floatArrayOf(0.2f))
+        assertNull(cache.read(song, 3_000))
+
+        cache.write(song, 3_000, floatArrayOf(0.4f, 0.4f, 0.4f))
+        assertArrayEquals(floatArrayOf(0.2f), cache.read(song, 1_000), 1 / 255f)
+        assertArrayEquals(floatArrayOf(0.4f, 0.4f, 0.4f), cache.read(song, 3_000), 1 / 255f)
+    }
+
+    // A long song's waveform
+
+    @Test
+    fun `peaks over a limit are pooled, each bar the loudest of the points it covers`() {
+        val peaks = floatArrayOf(0.1f, 0.9f, 0.2f, 0.3f, 0.8f, 0.1f, 0.4f, 0.5f, 0.2f, 0.6f)
+        // Ten points in four bars of 2, 3, 2 and 3 points.
+        assertArrayEquals(floatArrayOf(0.9f, 0.8f, 0.4f, 0.6f), Peaks.pooled(peaks, 4), 0f)
+        assertArrayEquals(floatArrayOf(0.9f), Peaks.pooled(peaks, 1), 0f)
+        // Within the limit nothing changes.
+        assertArrayEquals(peaks, Peaks.pooled(peaks, 10), 0f)
+        assertArrayEquals(peaks, Peaks.pooled(peaks, 2_400), 0f)
+        assertEquals(0, Peaks.pooled(FloatArray(0), 4).size)
+        // A three-hour song's 21 600 points draw no more bars than a 20-minute song's.
+        assertEquals(2_400, Peaks.pooled(FloatArray(3 * 3_600 * Peaks.POINTS_PER_SECOND) { 0.5f }, 2_400).size)
     }
 }

@@ -134,6 +134,14 @@ class SongActionsTest {
         assertFalse(SheetRow.SHARE_LYRICS in without)
     }
 
+    @Test
+    fun `the song sheet has Cut right after Make a tone, only for a song KJB can cut`() {
+        val with = sheetRows(SheetPlace.List, coversTags = false, removeFromQueue = false, lyrics = false, cut = true)
+        assertEquals(listOf(SheetRow.MAKE_TONE, SheetRow.CUT, SheetRow.SHARE), with.subList(with.indexOf(SheetRow.MAKE_TONE), with.indexOf(SheetRow.SHARE) + 1))
+        assertTrue(SheetRow.CUT in sheetRows(SheetPlace.Queue("q1", 3), coversTags = true, removeFromQueue = true, lyrics = true, cut = true))
+        assertFalse(SheetRow.CUT in sheetRows(SheetPlace.List, coversTags = false, removeFromQueue = false, lyrics = false, cut = false))
+    }
+
     // An album's or an artist's "⋯"
 
     @Test

@@ -18,26 +18,57 @@ import java.nio.ByteOrder
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
+import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.cos
 import kotlin.math.roundToInt
 
+/** How a fade's volume moves from silence to full volume; a fade out runs it backwards from the window's end. */
+enum class FadeCurve {
+    /** A straight line: what tones have always used. */
+    LINEAR,
+
+    /** Half a cosine, S-shaped: it leaves silence and arrives at full volume gently, with no corner at either end. */
+    SMOOTH,
+
+    /** A straight line squared: it stays quiet for longer, which the ear hears as an even change in loudness. */
+    EVEN,
+    ;
+
+    /** The volume [t] of the way through the fade (0 to 1, clamped): 0 at the silent end, 1 at full volume. Pure. */
+    fun gain(t: Double): Double {
+        val x = t.coerceIn(0.0, 1.0)
+        return when (this) {
+            LINEAR -> x
+            SMOOTH -> (1 - cos(PI * x)) / 2
+            EVEN -> x * x
+        }
+    }
+}
+
 /**
- * The fades of a window of [totalFrames]: a straight line from silence on the first frame to full volume after
- * [fadeInFrames], and from full volume to silence on the last frame over [fadeOutFrames]. Fades longer than a short
- * window meet in the middle (the quieter of the two wins). Pure: the gain of any frame, 0 outside the window.
+ * The fades of a window of [totalFrames]: from silence on the first frame to full volume after [fadeInFrames] along
+ * [inCurve], and from full volume to silence on the last frame over [fadeOutFrames] along [outCurve]. Fades longer than
+ * a short window meet in the middle (the quieter of the two wins). Pure: the gain of any frame, 0 outside the window.
  */
-data class FadeEnvelope(val totalFrames: Long, val fadeInFrames: Long, val fadeOutFrames: Long) {
+data class FadeEnvelope(
+    val totalFrames: Long,
+    val fadeInFrames: Long,
+    val fadeOutFrames: Long,
+    val inCurve: FadeCurve = FadeCurve.LINEAR,
+    val outCurve: FadeCurve = FadeCurve.LINEAR,
+) {
     fun gain(frame: Long): Float {
         if (frame < 0 || frame >= totalFrames) return 0f
-        val fadeIn = if (fadeInFrames > 0) frame.toDouble() / fadeInFrames else 1.0
-        val fadeOut = if (fadeOutFrames > 0) (totalFrames - 1 - frame).toDouble() / fadeOutFrames else 1.0
-        return minOf(1.0, fadeIn, fadeOut).toFloat()
+        val fadeIn = if (fadeInFrames > 0) inCurve.gain(frame.toDouble() / fadeInFrames) else 1.0
+        val fadeOut = if (fadeOutFrames > 0) outCurve.gain((totalFrames - 1 - frame).toDouble() / fadeOutFrames) else 1.0
+        return minOf(fadeIn, fadeOut).toFloat()
     }
 
     companion object {
         /** The fades of [window], given in milliseconds, at 44.1 kHz. */
-        fun of(window: ToneWindow, fadeInMs: Long, fadeOutMs: Long): FadeEnvelope =
-            FadeEnvelope(ToneAudio.frames(window.lengthMs), ToneAudio.frames(fadeInMs), ToneAudio.frames(fadeOutMs))
+        fun of(window: ToneWindow, fadeInMs: Long, fadeOutMs: Long, inCurve: FadeCurve = FadeCurve.LINEAR, outCurve: FadeCurve = FadeCurve.LINEAR): FadeEnvelope =
+            FadeEnvelope(ToneAudio.frames(window.lengthMs), ToneAudio.frames(fadeInMs), ToneAudio.frames(fadeOutMs), inCurve, outCurve)
     }
 }
 
@@ -179,6 +210,21 @@ object Peaks {
     const val POINTS_PER_SECOND: Int = 2
     const val FRAMES_PER_POINT: Int = ToneAudio.RATE / POINTS_PER_SECOND
 
+    /**
+     * [peaks] as at most [points] bars, each the loudest of the points it covers (a long song's waveform draws no more
+     * bars than fit); unchanged within the limit. Pure.
+     */
+    fun pooled(peaks: FloatArray, points: Int): FloatArray {
+        if (peaks.size <= points) return peaks
+        return FloatArray(points) { bar ->
+            val from = (bar.toLong() * peaks.size / points).toInt()
+            val to = ((bar + 1L) * peaks.size / points).toInt()
+            var loudest = 0f
+            for (i in from until to) loudest = maxOf(loudest, peaks[i])
+            loudest
+        }
+    }
+
     /** The peaks of a song held whole. Pure. */
     fun of(left: FloatArray, right: FloatArray, framesPerPoint: Int = FRAMES_PER_POINT): FloatArray =
         PeakMeter(framesPerPoint).apply { add(left, right, left.size) }.peaks()
@@ -207,14 +253,16 @@ object Peaks {
 }
 
 /**
- * Waveform peaks kept in app-private storage ([dir], under the cache directory in the app), one small file per song
- * named by a hash of its path, size and modification time: a song changed since is a miss, and no file name says which
- * song it is. Values are kept to a 255th (one byte each). At most [maxFiles] files: the oldest go, never the one just
- * written. A file that cannot be read is a miss; a failed write only means computing again next time.
+ * Waveform peaks kept in app-private storage ([dir], under the cache directory in the app), one small file per song and
+ * length read (Tones reads a long song's first 20 minutes, the cutter all of it), named by a hash of its path, size,
+ * modification time and the frames read: a song changed since is a miss, and no file name says which song it is.
+ * Values are kept to a 255th (one byte each). At most [maxFiles] files: the oldest go, never the one just written. A
+ * file that cannot be read is a miss; a failed write only means computing again next time.
  */
 class PeaksCache(private val dir: File, private val maxFiles: Int = MAX_FILES) {
-    fun read(song: File): FloatArray? {
-        val file = File(dir, key(song))
+    /** The peaks of [song]'s first [frames] frames, as [write] kept them; null when they are not here. */
+    fun read(song: File, frames: Long): FloatArray? {
+        val file = File(dir, key(song, frames))
         val bytes = try {
             if (!file.isFile) return null
             file.readBytes()
@@ -229,13 +277,16 @@ class PeaksCache(private val dir: File, private val maxFiles: Int = MAX_FILES) {
         return FloatArray(count) { (bytes[HEADER_BYTES + it].toInt() and 0xff) / 255f }
     }
 
-    /** Throws an IOException when the file cannot be written; the caller just goes without the cache. */
-    fun write(song: File, peaks: FloatArray) {
+    /**
+     * Keeps [peaks] of [song]'s first [frames] frames. Throws an IOException when the file cannot be written; the caller
+     * just goes without the cache.
+     */
+    fun write(song: File, frames: Long, peaks: FloatArray) {
         dir.mkdirs()
         val bytes = ByteBuffer.allocate(HEADER_BYTES + peaks.size).order(ByteOrder.BIG_ENDIAN)
         bytes.putInt(MAGIC).putInt(peaks.size)
         peaks.forEach { bytes.put((it.coerceIn(0f, 1f) * 255f).roundToInt().toByte()) }
-        val file = File(dir, key(song))
+        val file = File(dir, key(song, frames))
         val temp = File(dir, file.name + TEMP_SUFFIX)
         Files.write(temp.toPath(), bytes.array())
         Files.move(temp.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
@@ -246,8 +297,8 @@ class PeaksCache(private val dir: File, private val maxFiles: Int = MAX_FILES) {
             .forEach { it.delete() }
     }
 
-    private fun key(song: File): String {
-        val digest = MessageDigest.getInstance("SHA-256").digest("${song.path}\u0000${song.length()}\u0000${song.lastModified()}".toByteArray())
+    private fun key(song: File, frames: Long): String {
+        val digest = MessageDigest.getInstance("SHA-256").digest("${song.path}\u0000${song.length()}\u0000${song.lastModified()}\u0000$frames".toByteArray())
         return digest.joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') } + SUFFIX
     }
 
@@ -262,16 +313,23 @@ class PeaksCache(private val dir: File, private val maxFiles: Int = MAX_FILES) {
 }
 
 /**
- * A tone file: AAC-LC at [BIT_RATE], 44.1 kHz stereo, in an MPEG-4 (`.m4a`) container on [fd], with MediaCodec in
- * synchronous mode and MediaMuxer. The muxer track is added from the encoder's output format (it carries the codec
+ * A tone file (or a cut): AAC-LC at [bitRate] ([BIT_RATE] for a tone), 44.1 kHz stereo, in an MPEG-4 (`.m4a`) container on
+ * [fd], with MediaCodec in synchronous mode and MediaMuxer. The encoder is [codecName] when given (the one that said it
+ * takes the bit rate), else the phone's first AAC encoder. The muxer track is added from the encoder's output format (it carries the codec
  * specific data), so codec-config buffers are not written as samples (MediaMuxer reference, addTrack). Presentation
- * times count the frames queued. [DecodeDeadline] ends an encoder that stops moving. [fd] stays the caller's to close.
+ * times count the frames queued. [DecodeDeadline] ends an encoder that stops moving, or that has worked for [maxMs] (a
+ * cut of a long song has no total). [fd] stays the caller's to close.
  */
-class AacToneEncoder(fd: FileDescriptor) : ToneEncoder {
+class AacToneEncoder(
+    fd: FileDescriptor,
+    bitRate: Int = BIT_RATE,
+    codecName: String? = null,
+    maxMs: Long = DecodeDeadline.MAX_MS,
+) : ToneEncoder {
     private val muxer = MediaMuxer(fd, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
     private val codec: MediaCodec
     private val info = MediaCodec.BufferInfo()
-    private val deadline = DecodeDeadline(SystemClock::uptimeMillis)
+    private val deadline = DecodeDeadline(maxMs, SystemClock::uptimeMillis)
     private var track = -1
     private var queued = 0L
     private var muxing = false
@@ -280,10 +338,10 @@ class AacToneEncoder(fd: FileDescriptor) : ToneEncoder {
     init {
         val format = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, ToneAudio.RATE, CHANNELS).apply {
             setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
-            setInteger(MediaFormat.KEY_BIT_RATE, BIT_RATE)
+            setInteger(MediaFormat.KEY_BIT_RATE, bitRate)
         }
         codec = try {
-            MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC)
+            if (codecName != null) MediaCodec.createByCodecName(codecName) else MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC)
         } catch (e: Exception) {
             muxer.release()
             throw e

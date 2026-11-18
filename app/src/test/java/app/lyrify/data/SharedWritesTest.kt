@@ -405,6 +405,7 @@ class SharedWritesTest {
         val SHARED: Set<String> = setOf(
             "backup/AutoBackup.kt",
             "backup/M3u.kt",
+            "cut/CutFiles.kt",
             "downloads/DownloadRunner.kt",
             "dupes/SongTrash.kt",
             "lyrics/LrcEdits.kt",
