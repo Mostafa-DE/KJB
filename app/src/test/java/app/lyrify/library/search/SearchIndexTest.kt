@@ -104,6 +104,18 @@ class SearchIndexTest {
     }
 
     @Test
+    fun `a song with several artists is found by each of them, under that artist's own name`() {
+        val duet = song("Music/Duets/Ember Road.mp3", title = "Ember Road", artist = "Kit Calloway feat. Mira Okafor")
+        val index = index(library(glow, duet))
+
+        val found = index.find("okafor")
+
+        assertEquals(listOf("Mira Okafor"), found.artists.map { it.item.name })
+        assertEquals(listOf(duet, glow), found.artists.single().item.songs.sortedBy { it.title })
+        assertEquals(listOf(duet), index.find("calloway").artists.single().item.songs)
+    }
+
+    @Test
     fun `titles are matched as they are shown`() {
         val library = library(lantern)
         assertTrue(index(library).find("01 paper").songs.isEmpty())

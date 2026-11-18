@@ -838,6 +838,8 @@ private fun PlayerTopBar(ui: PlayerUi, lyricsShare: LyricsShare?, tone: Boolean,
     val context = LocalContext.current
     val nav = LocalNavigator.current
     var menu by remember { mutableStateOf(false) }
+    // Go to artist for a song of several artists: which one, under the same button (ArtistNames.kt).
+    var artists by remember { mutableStateOf<List<String>?>(null) }
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
@@ -864,7 +866,8 @@ private fun PlayerTopBar(ui: PlayerUi, lyricsShare: LyricsShare?, tone: Boolean,
                 val pick: (() -> Unit) -> () -> Unit = { action -> { menu = false; action() } }
                 MenuRow(stringResource(R.string.player_menu_add_to), R.drawable.ic_playlist_add, pick { onRoute(PlayerRoute.ADD_TO) })
                 song?.let(::albumKey)?.let { key -> MenuRow(stringResource(R.string.player_menu_album), R.drawable.ic_album, pick { nav.open(Page.Album(key)) }) }
-                song?.artist?.takeIf(String::isNotBlank)?.let { artist -> MenuRow(stringResource(R.string.player_menu_artist), R.drawable.ic_person, pick { nav.open(Page.Artist(artist)) }) }
+                val pages = song?.let { ui.library?.artistsOf(it) }.orEmpty().map { it.name }
+                artistTap(pages, { nav.open(Page.Artist(it)) }) { artists = it }?.let { go -> MenuRow(stringResource(R.string.player_menu_artist), R.drawable.ic_person, pick(go)) }
                 MenuRow(stringResource(R.string.player_menu_speed), R.drawable.ic_speed, pick { onRoute(PlayerRoute.SPEED) })
                 MenuRow(stringResource(if (rememberPartOn(ui)) R.string.part_stop else R.string.player_menu_ab), R.drawable.ic_repeat, pick { onRoute(PlayerRoute.REPEAT_PART) })
                 MenuRow(stringResource(R.string.player_menu_bookmark), R.drawable.ic_bookmark_add, pick { onRoute(PlayerRoute.BOOKMARK) })
@@ -876,6 +879,7 @@ private fun PlayerTopBar(ui: PlayerUi, lyricsShare: LyricsShare?, tone: Boolean,
                 if (song != null && lyricsShare != null) MenuRow(stringResource(R.string.share_lyrics), R.drawable.ic_share, pick { onRoute(PlayerRoute.SHARE_LYRICS) })
                 MenuRow(stringResource(R.string.player_menu_info), R.drawable.ic_info, pick { onRoute(PlayerRoute.SONG_INFO) })
             }
+            ArtistsMenu(artists, { artists = null }) { nav.open(Page.Artist(it)) }
         }
     }
 }
@@ -1257,8 +1261,11 @@ private fun TitleAndLinks(ui: PlayerUi, settings: LibrarySettings, book: BookNow
             return@Row
         }
         val meta = metaLine(song.artist, song.album)
-        val artist = song.artist
-        PlayerLink(meta.artist.text ?: stringResource(R.string.player_no_artist), artist?.takeIf { meta.artist.tappable }?.let { { nav.open(Page.Artist(it)) } }, Modifier.weight(1f, fill = false))
+        // A tag of several artists asks which one first (ArtistNames.kt).
+        val artists = remember(ui.library, song) { ui.library?.artistsOf(song)?.map { it.name }.orEmpty() }
+        ArtistLink(artists, { nav.open(Page.Artist(it)) }, Modifier.weight(1f, fill = false)) { go ->
+            PlayerLink(meta.artist.text ?: stringResource(R.string.player_no_artist), go?.takeIf { meta.artist.tappable }, Modifier)
+        }
         Text("·", style = MetaStyle, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 8.dp))
         val key = albumKey(song)
         PlayerLink(meta.album.text ?: stringResource(R.string.player_no_album), key?.takeIf { meta.album.tappable }?.let { { nav.open(Page.Album(it)) } }, Modifier.weight(1f, fill = false))

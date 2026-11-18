@@ -58,6 +58,10 @@ sealed interface Page {
     @Serializable @SerialName("hiddenSongs")
     data object HiddenSongs : Page
 
+    /** Settings > Split artists: the separators and the names never split (ArtistNames.kt, TA1). */
+    @Serializable @SerialName("splitArtists")
+    data object SplitArtists : Page
+
     /** A collection's page (CollectionScreens.kt, L1). */
     sealed interface CollectionPages : Page
 
@@ -436,7 +440,7 @@ fun homeOf(page: Page, from: DockTab, viewOpen: Boolean): DockTab {
         is Page.CollectionPages -> here?.takeIf { it == DockTab.SEARCH || it == DockTab.PLAYLISTS } ?: DockTab.LIBRARY
         is Page.SearchAll -> DockTab.SEARCH
         is Page.Songs -> DockTab.LIBRARY
-        is Page.Check, Page.Duplicates, Page.Tones, Page.Ai, Page.Downloads, Page.CoversTags, Page.TagHistory, Page.Settings, Page.LibraryTabs, Page.FoldersToSkip, Page.HiddenSongs,
+        is Page.Check, Page.Duplicates, Page.Tones, Page.Ai, Page.Downloads, Page.CoversTags, Page.TagHistory, Page.Settings, Page.LibraryTabs, Page.FoldersToSkip, Page.HiddenSongs, Page.SplitArtists,
         Page.Licences, is Page.Licence -> DockTab.TOOLS
     }
 }
