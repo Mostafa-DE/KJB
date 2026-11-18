@@ -386,6 +386,15 @@ class Container(
     fun along(): Float = closeAlong(closing(), lead.value, way)
 
     /**
+     * How the player's frame draws a drag let go [offset] px down over its [height] (PlayerFrame, and the cover above
+     * everything through [frameScale]): what is left of it as far as the card's own spring has come ([closing]), never
+     * with a fling's lead. Compose carries a fling as an offset on the card's bounds and the cover's alike, never on their
+     * size, so on this progress the content keeps its place around the cover and its scale goes with the bounds' size,
+     * whatever the finger's speed. On [along] the content would slow at the lift and slide up against the cover.
+     */
+    fun held(offset: Float, height: Float): Peek = dragPeek(closeHeld(offset, closing()), height)
+
+    /**
      * Shown again on the way: what is left of a finger's speed is let go, by the card and the cover (Compose eases their
      * momentum home from where it is) and by the fades the same way, in [scope]. Nothing to do when nothing was let go.
      */

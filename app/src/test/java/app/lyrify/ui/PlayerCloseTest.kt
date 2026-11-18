@@ -235,6 +235,52 @@ class PlayerCloseTest {
         assertEquals(0f, drawn.last(), 0.001f)
     }
 
+    @Test
+    fun `after a fling the held drag and the cover's scale stay on the card's own spring, so the content keeps its place around the cover`() = runTest {
+        // Review 2026-11-18 (not taken, with this reason): Compose carries a fling as an offset on the card's bounds and the
+        // cover's alike (SharedElement.momentumAnimation), never on their size. With the drag held on the spring from rest,
+        // the cover's place in the content and the cover drawn above everything keep the gap a close from rest has, at any
+        // finger's speed. Held on along(), the content would slide up against the cover and slow at the lift.
+        val at = HEIGHT * 0.32f
+        val way = BAR_TOP - PLAYER_TOP
+        val coverTop = 600f
+        val orbTop = BAR_TOP + 20f
+        val barWidth = 0.94f
+        var ms = 0
+
+        // The cover's top in the content as the frame draws it with [peek], less the top of the cover drawn above
+        // everything, px, [ms] after the lift at [velocity].
+        fun gap(peek: Peek, velocity: Float): Float {
+            val p = spring(ms, 0f, 1f, 0f)
+            val momentum = spring(ms, 0f, 0f, velocity)
+            // The content is scaled to the card's width (its size, on the spring from rest) and pinned to its top.
+            val card = PLAYER_TOP + way * p + momentum
+            val slot = card + (1f + (barWidth - 1f) * p) * (peek.shiftY + HEIGHT / 2 + peek.scale * (coverTop - HEIGHT / 2))
+            val start = PLAYER_TOP + at + HEIGHT / 2 + dragPeek(at, HEIGHT).scale * (coverTop - HEIGHT / 2)
+            return slot - (start + (orbTop - start) * p + momentum)
+        }
+        var slid = 0f
+        for (velocity in listOf(1000f, 3000f, CLOSE_MOMENTUM_DP * DENSITY)) {
+            val (player, bar) = ends { spring(ms, 0f, 1f, 0f) }
+            player.placed(top = PLAYER_TOP, height = HEIGHT)
+            bar.placed(top = BAR_TOP, height = 180f)
+            var frame = 0
+            player.letGo(
+                velocity,
+                this + Frames {
+                    ms = frame++ * FRAME_MS
+                    val still = gap(dragPeek(closeHeld(at, spring(ms, 0f, 1f, 0f)), HEIGHT), 0f)
+                    assertEquals("$velocity px/s at $ms ms", still, gap(player.held(at, HEIGHT), velocity), 0.01f)
+                    slid = maxOf(slid, still - gap(dragPeek(closeHeld(at, player.along()), HEIGHT), velocity))
+                },
+            )
+            advanceUntilIdle()
+            assertTrue(frame > 10)
+        }
+        // On along() the content would have slid up against the cover by tens of px at the hardest fling.
+        assertTrue("$slid px", slid > 40f)
+    }
+
     /** The shell's two ends, sharing where the bar sits: the player's, [closing] of the way into the bar, and the bar's. */
     private fun ends(closing: () -> Float = { 0f }): Pair<Container, Container> {
         val barTop = Kept(Float.NaN)
