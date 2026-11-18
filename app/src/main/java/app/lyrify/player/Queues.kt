@@ -398,7 +398,16 @@ data class QueueBook(
      * it the player stops there ([stops]), unless [repeat] is Repeat all, which goes round as the player would (a book
      * never repeats).
      */
-    fun forget(paths: Set<String>, repeat: Repeat): QueueBook = this
+    fun forget(paths: Set<String>, repeat: Repeat): QueueBook {
+        val left = queues.associate { it.id to it.without(paths) }
+        if (queues.all { left[it.id] === it }) return this
+        val gone = left.filterValues { it == null }.keys
+        val book = copy(queues = queues.map { left[it.id] ?: it }).dropped(gone, evenCurrent = true)
+        val playing = current?.takeIf { queue -> queue.id !in gone && queue.current?.song?.path in paths } ?: return book
+        val last = playing.items.drop(playing.index + 1).all { it.song.path in paths }
+        val round = repeat == Repeat.ALL && playing.source.kind != SourceKind.BOOK
+        return book.copy(jumps = jumps + 1, stops = if (last && !round) stops + 1 else stops)
+    }
 
     // The steps the operations share
 
@@ -507,6 +516,25 @@ data class QueueBook(
         /** Recent keeps this many queues, the newest first. */
         const val MAX_RECENT: Int = 10
     }
+}
+
+/**
+ * This queue without the songs at [paths]; null when none is left. Its current song gone, the next one left is current
+ * from its start, or with none after it the first.
+ */
+private fun Queue.without(paths: Set<String>): Queue? {
+    val kept = items.filterNot { it.song.path in paths }
+    if (kept.size == items.size) return this
+    if (kept.isEmpty()) return null
+    val stays = current?.takeIf { it.song.path !in paths }
+    val next = stays ?: items.drop(index + 1).firstOrNull { it.song.path !in paths }
+    val uids = kept.mapTo(HashSet()) { it.uid }
+    return copy(
+        items = kept,
+        index = next?.let { song -> kept.indexOfFirst { it.uid == song.uid } } ?: 0,
+        positionMs = if (stays != null) positionMs else 0,
+        unshuffled = unshuffled?.filter { it in uids },
+    )
 }
 
 /** These items with the one at [index] no longer waiting as a Play next song: it is playing. */
