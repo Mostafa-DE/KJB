@@ -686,7 +686,10 @@ private fun SharedTransitionScope.ViewLayers(
                 // How far it has closed into the Now bar: the progress its card and drag follow; its content, dim and fill
                 // follow it with a fling's lead ([Container.along]).
                 val closing = rememberUpdatedState(if (growing) closeProgress(this) else null)
-                val end = remember(this) { Container(this@ViewLayers, this, bar = false, barTop) { closing.value?.value ?: 0f } }
+                // Closed by Back's gesture, the cover above everything keeps the swipe's shrink as a drag's ([Container.drawnScale]).
+                val end = remember(this) {
+                    Container(this@ViewLayers, this, bar = false, barTop) { closing.value?.value ?: 0f }.also { it.swipeScale = { swipe.scaleOf(BackTaking.View(view)) } }
+                }
                 val container = end.takeIf { grows }
                 Box(Modifier.fillMaxSize()) {
                     // The layer under this one dims as it arrives, and lights up again under a back swipe and as the

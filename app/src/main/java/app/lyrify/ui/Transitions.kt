@@ -285,6 +285,9 @@ class BackSwipe {
         }
     }
 
+    /** The scale [backPeek] draws [what] at: shrunk while this swipe takes it, whole otherwise. Read while drawing. */
+    fun scaleOf(what: BackTaking): Float = if (taking == what) backScale(progress) else 1f
+
     /** Whether [owner] (the taking a swipe started with, by identity) is still the swipe in progress. */
     fun owns(owner: BackTaking): Boolean = taking === owner
 
@@ -343,6 +346,16 @@ class Container(
      * everything while the transform runs, misses the frame's layer and takes it from here ([overlayCoverScale]).
      */
     internal var frameScale: () -> Float = { 1f }
+
+    /** The scale a back swipe draws the player's layer at ([BackSwipe.scaleOf]; the shell's views set it), which the cover misses too. */
+    internal var swipeScale: () -> Float = { 1f }
+
+    /**
+     * The scale the layers the cover misses above everything draw the player's content at, read while drawing: its
+     * frame's drag shrink ([frameScale]) and its layer's back swipe shrink ([swipeScale]). Closed by either, the cover
+     * takes that shrink and lets go of it with the player, one motion ([overlayCoverScale]).
+     */
+    fun drawnScale(): Float = frameScale() * swipeScale()
 
     // The finger's speed carried on past the card's own spring, px ahead of it: the momentum Compose adds to the shared
     // bounds once [letGo] hands it over (on the same spring), mirrored for the fades, and the card's way it is a share of.
@@ -490,8 +503,8 @@ fun containerContentEnter(): EnterTransition = fadeIn(tween(Motion.FADE_IN_MS * 
  * The cover as it moves between the Now bar's orb and the player. The bar's end is an empty stand-in where the orb's
  * cover is, so the orb stays put; the player's own cover is the one drawn on the way, over the card, its size rounding
  * it ([CoverShape]) from the player's corners to the orb's circle, never at a threshold. Let go by a finger, it lands
- * growing back from the drag's shrink as the drag goes ([overlayCoverScale]), and the same shown again on the way.
- * Nothing with reduced motion.
+ * growing back from the drag's shrink as the drag goes ([overlayCoverScale]), and the same shown again on the way; let
+ * go by Back's gesture, from the swipe's shrink the same way ([Container.drawnScale]). Nothing with reduced motion.
  */
 @Composable
 fun containerCover(container: Container?): Modifier {
@@ -515,7 +528,7 @@ fun containerCover(container: Container?): Modifier {
     if (container.bar) return shared
     val transition = container.visibility.transition
     return shared.graphicsLayer {
-        val scale = overlayCoverScale(transition.currentState, transition.targetState, transition.isRunning, container.frameScale())
+        val scale = overlayCoverScale(transition.currentState, transition.targetState, transition.isRunning, container.drawnScale())
         scaleX = scale
         scaleY = scale
         // About its top-left, not its centre as the frame scales it: the shared bounds take the cover's place through the
@@ -871,8 +884,11 @@ const val DRAG_SCALE: Float = 0.92f
 fun backPeek(progress: Float, fromLeft: Boolean, width: Float): Peek {
     val p = progress.coerceIn(0f, 1f)
     val shift = p * width / BACK_SHIFT_SHARE
-    return Peek(scale = 1f - (1f - BACK_SCALE) * p, shiftX = if (fromLeft) shift else -shift, shiftY = 0f, corner = p, dim = DIM_UNDER * (1f - p))
+    return Peek(scale = backScale(p), shiftX = if (fromLeft) shift else -shift, shiftY = 0f, corner = p, dim = DIM_UNDER * (1f - p))
 }
+
+/** The scale of a layer a back swipe has taken [progress] of the way ([backPeek]): whole at 0, [BACK_SCALE] at 1. */
+fun backScale(progress: Float): Float = 1f - (1f - BACK_SCALE) * progress.coerceIn(0f, 1f)
 
 private const val BACK_SHIFT_SHARE = 20f
 
