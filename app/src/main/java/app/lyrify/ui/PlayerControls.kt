@@ -236,8 +236,9 @@ internal fun MainRow(ui: PlayerUi, settings: Settings, connection: PlayerConnect
 
 /**
  * A seek button: a tap jumps once, at the lift; held still, the jumps start after a short hold and repeat
- * ([jumpsWhileHeld]), and the button keeps that finger to its lift. A finger that moves past the touch slop first is no
- * press ([seekPress]): a drag down from the button minimises the player with no jump. TalkBack's tap jumps once.
+ * ([jumpsWhileHeld]), and the button keeps that finger to its lift. A finger the player's drag takes first, or that
+ * slides off, is no press ([seekPress]): a drag down from the button minimises the player with no jump; a tap that
+ * drifts a little short of that still jumps. TalkBack's tap jumps once.
  */
 @Composable
 internal fun SeekJump(@DrawableRes icon: Int, label: String, jump: () -> Unit) {
@@ -258,7 +259,6 @@ internal fun SeekJump(@DrawableRes icon: Int, label: String, jump: () -> Unit) {
             .pointerInput(Unit) {
                 awaitEachGesture {
                     val down = awaitFirstDown()
-                    val slop = viewConfiguration.touchSlop
                     var moved = Offset.Zero
                     // A press, not yet a jump: nothing is consumed, so a drag down stays the player's.
                     val press = withTimeoutOrNull(HOLD_DELAY_MS) {
@@ -269,7 +269,7 @@ internal fun SeekJump(@DrawableRes icon: Int, label: String, jump: () -> Unit) {
                                 now = SeekPress.NONE
                             } else {
                                 moved += change.positionChange()
-                                now = seekPress(moved, slop, lifted = !change.pressed, consumed = change.isConsumed)
+                                now = seekPress(moved / density, lifted = !change.pressed, consumed = change.isConsumed)
                                 // Still a press: unless the player's drag took this move after the button saw it.
                                 if (now == SeekPress.WAIT) {
                                     awaitPointerEvent(PointerEventPass.Final)
@@ -295,7 +295,7 @@ internal fun SeekJump(@DrawableRes icon: Int, label: String, jump: () -> Unit) {
                                     if (!change.pressed) break
                                     moved += change.positionChange()
                                     change.consume()
-                                    if (moved.getDistance() > slop) repeat.cancel()
+                                    if (seekPress(moved / density, lifted = false, consumed = false) == SeekPress.NONE) repeat.cancel()
                                 }
                             } finally {
                                 repeat.cancel()

@@ -161,13 +161,14 @@ fun jumpsWhileHeld(heldMs: Long): Int = if (heldMs < HOLD_DELAY_MS) 1 else 1 + (
 enum class SeekPress { WAIT, JUMP, NONE }
 
 /**
- * A finger pressed on a seek button, [moved] px from where it landed, the platform's touch [slop] apart: lifted within
- * it, a tap ([SeekPress.JUMP], one jump); moved past it, or taken first by the player's drag ([consumed]), no press at
- * all ([SeekPress.NONE]: a drag down that minimises, or a finger sliding off); else still a press ([SeekPress.WAIT]),
- * which held past [HOLD_DELAY_MS] starts the jumps. Never a jump at the press itself: it may be a drag down's start.
+ * A finger pressed on a seek button, [moved] dp from where it landed: once the player's drag would decide on it
+ * ([playerSwipe], past its 12 dp lock), or has taken it first ([consumed]), no press at all ([SeekPress.NONE]: a drag
+ * down that minimises, or a finger sliding off); lifted before that, a tap ([SeekPress.JUMP], one jump, a small drift
+ * too); else still a press ([SeekPress.WAIT]), which held past [HOLD_DELAY_MS] starts the jumps. Never a jump at the
+ * press itself: it may be a drag down's start.
  */
-fun seekPress(moved: Offset, slop: Float, lifted: Boolean, consumed: Boolean): SeekPress = when {
-    consumed || moved.getDistance() > slop -> SeekPress.NONE
+fun seekPress(moved: Offset, lifted: Boolean, consumed: Boolean): SeekPress = when {
+    consumed || playerSwipe(moved.x, moved.y, inEdge = false) != SheetDrag.WAIT -> SeekPress.NONE
     lifted -> SeekPress.JUMP
     else -> SeekPress.WAIT
 }
