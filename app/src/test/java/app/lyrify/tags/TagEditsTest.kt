@@ -504,6 +504,32 @@ class TagEditsTest {
     }
 
     @Test
+    fun `a split rename never renames inside a never-split name, even one holding a credit's join`() {
+        val rules = ArtistSplit(separators = listOf(",", "feat."), exceptions = listOf("Rowan feat. Ilse"))
+        val songs = listOf(
+            song("Music/a.mp3", title = "Lamp Oil", artist = "Rowan feat. Ilse", id = 1),
+            song("Music/b.mp3", title = "Porch Wire", artist = "Rowan feat. Ilse, Kit Calloway feat. Rowan", id = 2),
+            // ";" is no separator here: one name, the never-split one inside it.
+            song("Music/c.mp3", title = "Tin Roof", artist = "Rowan feat. Ilse; Mira Okafor", id = 3),
+            song("Music/d.mp3", title = "Low Tide", artist = "Rowan", id = 4),
+        )
+        fun renamed(name: String, to: String) = TagEdits.rename(songs, listOf(name), to, ArtistSplitter(rules)).map { it.song.title to it.fields[TagField.ARTIST] }
+
+        // "Rowan feat. Ilse" is one artist of its own, not Rowan's credit.
+        assertEquals(
+            listOf("Porch Wire" to "Rowan feat. Ilse, Kit Calloway feat. Rowan Vale", "Low Tide" to "Rowan Vale"),
+            renamed("Rowan", "Rowan Vale"),
+        )
+        // The credits beside it still rename, as without the split.
+        assertEquals(listOf("Tin Roof" to "Rowan feat. Ilse; Mira Okafor-Lee"), renamed("Mira Okafor", "Mira Okafor-Lee"))
+        // The never-split artist itself renames whole.
+        assertEquals(
+            listOf("Lamp Oil" to "Rowan with Ilse", "Porch Wire" to "Rowan with Ilse, Kit Calloway feat. Rowan"),
+            renamed("Rowan feat. Ilse", "Rowan with Ilse"),
+        )
+    }
+
+    @Test
     fun `a split rename takes each spelling the artist's page gathers in a tag, never another artist's spelling`() {
         val songs = listOf(
             // One tag naming the artist twice: the page keeps its first spelling, so both are the artist.
