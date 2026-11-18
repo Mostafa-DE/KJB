@@ -489,7 +489,7 @@ class SongTrashTest {
     }
 
     @Test
-    fun `Delete forever on songs another app moved to the trash takes the lyrics KJB wrote for them too, once each is really gone`() = runTest {
+    fun `Delete forever on songs another app moved to the trash takes them out of the queues and the lyrics KJB wrote, once each is really gone`() = runTest {
         val songs = listOf(song(11, "Paper Lantern"), song(12, "Tide Bell"), song(13, "Salt Road"))
         val (lantern, bell, road) = songs
         val pipeline = pipeline()
@@ -498,8 +498,10 @@ class SongTrashTest {
         // Another app moved them to the phone's trash, so KJB cleaned nothing up; MediaStore lists each at its trash name.
         files.forEach { trashOnDisk(it.path, it.id) }
         val listed = files.map { TrashedSong(it.copy(path = inTrash(it.path).path), BASE, BASE + 30 * DAY) }
+        // Each time the queues heard, with what the playlists had been told by then.
+        val left = mutableListOf<Pair<Set<String>, List<String>>>()
         // MediaStore knows Tide Bell's place by another id once a new file is there: only Salt Road can come back as it was.
-        val trash = engine(listOf(files[2]), pipeline, elsewhere = { listed.filter { it.file.id in phoneTrash } }).trash
+        val trash = engine(listOf(files[2]), pipeline, queues = { left += it to forgotten.toList() }, elsewhere = { listed.filter { it.file.id in phoneTrash } }).trash
         advanceUntilIdle()
         trash.refresh()
         assertEquals(listed, trash.elsewhere.value)
@@ -508,6 +510,7 @@ class SongTrashTest {
         assertEquals(Confirmation.Ask(listOf(11L, 12L, 13L)), trash.confirmDelete(listed))
         assertEquals(Deleted.Unchanged, trash.deleteAnswered(approved = false))
         songs.forEach { assertTrue(lrc(it.path).isFile) }
+        assertEquals(emptyList<Pair<Set<String>, List<String>>>(), left)
 
         assertTrue(trash.askDelete(listed))
         assertEquals(Confirmation.Ask(listOf(11L, 12L, 13L)), trash.confirmDelete(listed))
@@ -519,6 +522,8 @@ class SongTrashTest {
         phoneTrash.clear()
         assertEquals(Deleted.Gone(2, of = 3, bytes = files[0].size + files[1].size), trash.deleteAnswered(approved = true))
 
+        // The queues first, as for a song KJB moves to the trash, then its lyrics and playlists.
+        assertEquals(listOf(setOf(lantern.path) to emptyList<String>()), left)
         assertFalse(lrc(lantern.path).exists())
         assertNull(ledger[lantern.path])
         assertEquals(listOf(lantern.path), forgotten)

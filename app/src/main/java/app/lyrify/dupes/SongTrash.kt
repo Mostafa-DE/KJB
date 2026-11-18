@@ -116,8 +116,8 @@ sealed interface Restored {
  * What happens to a song once the phone moved its audio file to its trash, or deleted for good a song another app had
  * moved there ([SongTrash.deleteAnswered]), by the path it had before: the `.lrc` KJB wrote for it goes (only while byte
  * for byte what KJB wrote), its ledger entry is updated, and it leaves the playlists and Favourites. A `.lrc` KJB did
- * not write stays. The lyrics pipeline and the playlists store in the app. A song KJB trashed has left the queues
- * already ([SongTrash]'s leaveQueues).
+ * not write stays. The lyrics pipeline and the playlists store in the app. It has left the queues already ([SongTrash]'s
+ * leaveQueues).
  */
 fun interface TrashCleanup {
     suspend fun trashed(audioPath: String)
@@ -206,8 +206,9 @@ class SongTrash(
      */
     private val ownWrite: (listed: AudioFile, now: AudioFile) -> Boolean = { _, _ -> false },
     /**
-     * The songs at these paths are in the phone's trash now, all of one answer: they leave KJB's queues, the song playing
-     * among them giving way to the next ([app.lyrify.player.PlayerCore.trashed]).
+     * The songs at these paths are in the phone's trash now, all of one answer, or gone for good from it
+     * ([deleteAnswered]): they leave KJB's queues, the song playing among them giving way to the next
+     * ([app.lyrify.player.PlayerCore.trashed]).
      */
     private val leaveQueues: suspend (Set<String>) -> Unit = {},
     private val log: (String) -> Unit = {},
@@ -397,9 +398,9 @@ class SongTrash(
     /**
      * The phone's delete dialog answered. [approved] (RESULT_OK): the songs MediaStore lists nowhere now are gone for good,
      * with the room they freed; every song asked for that is out of the trash leaves the lists (one restored meanwhile is
-     * not counted). Another app's song gone for good gets the cleanup KJB's own got as they went to the trash ([cleanup]:
-     * the lyrics KJB wrote for it, its playlists), unless a file is at its place again. Not approved: nothing changes.
-     * Finishes even if the screen goes.
+     * not counted). Another app's song gone for good gets what KJB's own got as they went to the trash: it leaves the
+     * queues ([leaveQueues]), then the lyrics KJB wrote for it and its playlists go ([cleanup]), unless a file is at its
+     * place again. Not approved: nothing changes. Finishes even if the screen goes.
      */
     suspend fun deleteAnswered(approved: Boolean): Deleted = withContext(NonCancellable + io) {
         host.loaded()
@@ -416,8 +417,11 @@ class SongTrash(
         }
         val out = ids.filterTo(HashSet()) { it !in left }
         val gone = songs.filter { it.file.id in out && it.file.id !in restored }
+        // Another app's songs gone for good, by the place each had: what KJB's own got as they went to the trash.
         val own = host.memory.trashed.mapTo(HashSet()) { it.file.id }
-        for (song in gone) if (song.file.id !in own) vacated(song.file.path)?.let { cleanup.trashed(it) }
+        val places = gone.filter { it.file.id !in own }.mapNotNullTo(LinkedHashSet()) { vacated(it.file.path) }
+        if (places.isNotEmpty()) leaveQueues(places)
+        for (place in places) cleanup.trashed(place)
         forget(out)
         log("trash: ${gone.size} of ${songs.size} songs deleted for good")
         Deleted.Gone(gone.size, of = songs.size, bytes = gone.sumOf { it.file.size })
