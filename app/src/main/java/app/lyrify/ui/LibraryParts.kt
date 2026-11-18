@@ -481,11 +481,12 @@ fun <T> SortSheet(title: String, options: List<Pair<T, String>>, selected: T, on
 /**
  * A song's row: its cover, title and artist, the lyrics icon after the artist for a song with lyrics, and for the song
  * playing its coral title, the equalizer mark and the green dot before the artist ([rowMarks]), which fade from row to
- * row as the song changes; a tap plays, a second tap soon after also makes it a favourite ([doubleTapFavourite], not
- * while selecting), "⋯" opens the song sheet, a long press selects (none without [onLongPress]). Search passes its
- * [shownTitle] with the match highlighted, and for a song found in its lyrics the matching [line] under the artist.
- * While selecting, a tap on the row or on its round check ([onCheck], 48 dp) picks or unpicks it, and a picked row has
- * its own rounded fill ([rowFill]). In a custom order a [handle] comes before "⋯", and TalkBack gets the row's [moves].
+ * row as the song changes; a tap plays once a moment has passed with no second tap ([WaitingTap]), a double tap only
+ * makes it a favourite ([doubleTapFavourite]; while selecting a tap acts at once), "⋯" opens the song sheet, a long
+ * press selects (none without [onLongPress]). Search passes its [shownTitle] with the match highlighted, and for a song
+ * found in its lyrics the matching [line] under the artist. While selecting, a tap on the row or on its round check
+ * ([onCheck], 48 dp) picks or unpicks it, and a picked row has its own rounded fill ([rowFill]). In a custom order a
+ * [handle] comes before "⋯", and TalkBack gets the row's [moves].
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -517,6 +518,7 @@ fun SongRow(
     val description = songRowWords(title, artist, markWords, note, line?.text, if (marks.playing) stringResource(R.string.lib_playing) else null)
     val tapLabel = stringResource(if (selecting) R.string.lib_select else R.string.lib_play)
     val holdLabel = if (onLongPress != null) stringResource(R.string.lib_select) else null
+    val tap = rememberWaitingTap(onTap)
     val brand = LocalBrandColors.current
     val playing = marks.playing
     val reduced = LocalReducedMotion.current
@@ -538,8 +540,8 @@ fun SongRow(
             modifier = Modifier
                 .weight(1f)
                 .clip(RoundedCornerShape(ROW_FILL_CORNER))
-                .doubleTapFavourite(if (selecting) null else FavouriteTarget.Song(song.ref))
-                .combinedClickable(onClickLabel = tapLabel, onLongClickLabel = holdLabel, onLongClick = onLongPress?.takeUnless { selecting }, onClick = onTap)
+                .doubleTapFavourite(if (selecting) null else FavouriteTarget.Song(song.ref), waiting = tap)
+                .combinedClickable(onClickLabel = tapLabel, onLongClickLabel = holdLabel, onLongClick = onLongPress?.takeUnless { selecting }, onClick = tap::click)
                 .semantics {
                     contentDescription = description
                     if (selecting) this.selected = selected
