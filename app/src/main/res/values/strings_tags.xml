@@ -16,7 +16,7 @@
     </plurals>
 
     <!-- The page -->
-    <string name="tags_intro">KJB looks your albums up on MusicBrainz and shows what would change. Nothing changes until you confirm.</string>
+    <string name="tags_intro">KJB looks your albums up on MusicBrainz and shows what would change. Nothing changes until you confirm. After a full check, opening this page looks up only new or changed albums.</string>
     <string name="tags_check">Check my albums</string>
     <string name="tags_checking">Checking %1$s/%2$s</string>
     <string name="tags_checking_start">Reading your albums</string>
@@ -25,7 +25,10 @@
         <item quantity="other">Checking %d albums</item>
     </plurals>
     <string name="tags_cancel">Cancel</string>
-    <string name="tags_busy">MusicBrainz is busy</string>
+    <string name="tags_busy">MusicBrainz is busy. Try again in a few minutes.</string>
+    <string name="tags_waiting">MusicBrainz is busy. KJB waits a little and carries on by itself.</string>
+    <!-- The check's notification channel, as Android's settings list it -->
+    <string name="tags_channel">Covers &amp; tags check</string>
     <string name="tags_unreadable">KJB can\'t read your songs right now.</string>
     <plurals name="tags_not_checked">
         <item quantity="one">Couldn\'t check %d album</item>

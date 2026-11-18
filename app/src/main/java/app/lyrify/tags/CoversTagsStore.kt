@@ -1,5 +1,7 @@
 package app.lyrify.tags
 
+import app.lyrify.tags.lookup.Doubt
+import app.lyrify.tags.lookup.MbRelease
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
@@ -16,7 +18,8 @@ import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 
-// What Covers & tags keeps between runs (`covers-tags.json`): the albums done or skipped, read leniently.
+// What Covers & tags keeps between runs, read leniently: the albums done or skipped (`covers-tags.json`), and what each
+// album's last check found (`covers-tags-checks/`).
 
 /** A file as it was when its album was settled: a change to its size or modified time brings the album back. */
 @Serializable
@@ -47,20 +50,53 @@ data class AlbumRecord(
     val restored: Boolean = false,
 )
 
+/** A release offered for an album, as kept: the release whole, and its [distance] from the album as the check found it. */
+@Serializable
+data class KeptCandidate(val release: MbRelease, val distance: Double)
+
+/**
+ * What an album's last check found, kept so it stays after KJB closes: the album's files as they were then ([marks]),
+ * Ready with its one release or Pick one with its [candidates] (best first) and [doubts], and when it was checked ([at],
+ * the order To review lists them in). An album with nothing to suggest is kept too: a later check leaves it out until
+ * one of its files changes.
+ */
+@Serializable
+data class CheckedAlbum(
+    val id: String,
+    val marks: List<FileMark>,
+    val ready: Boolean,
+    val doubts: Set<Doubt> = emptySet(),
+    val candidates: List<KeptCandidate> = emptyList(),
+    val at: Long = 0,
+)
+
 /**
  * What `covers-tags.json` keeps: the albums settled, whether a check ever ran, whether the sync note was shown, and the
  * newest Covers & tags History entry it has settled ([historySeen]): a newer one without a Done album lost its record to
  * the app's death, and the album is rebuilt from History. [historySeen] is null for a file from before it was kept:
- * what that file settled is unknown, so nothing is rebuilt from it.
+ * what that file settled is unknown, so nothing is rebuilt from it. [checkedAll]: a check ran to its end once, so
+ * opening Covers & tags checks new and changed albums by itself; [unfinished]: a check started and was neither done nor
+ * cancelled (KJB was closed), so opening Covers & tags carries it on.
  */
-data class CoversTagsMemory(val albums: List<AlbumRecord> = emptyList(), val checkedOnce: Boolean = false, val noted: Boolean = false, val historySeen: Long? = 0)
+data class CoversTagsMemory(
+    val albums: List<AlbumRecord> = emptyList(),
+    val checkedOnce: Boolean = false,
+    val noted: Boolean = false,
+    val historySeen: Long? = 0,
+    val checkedAll: Boolean = false,
+    val unfinished: Boolean = false,
+)
 
 /**
  * `covers-tags.json`, app-private: the albums done or skipped, and two flags. Read leniently, as the ledger is: unknown
  * keys ignored, an album this version can't read left out, a file that can't be read at all kept aside and started over.
- * Written to a temporary file, fsynced, then moved over. Logs counts and exception class names only. Blocking.
+ * Written to a temporary file, fsynced, then moved over. Beside it, `covers-tags-checks/` holds one file per album
+ * checked ([CheckedAlbum]), so a check writes only the album it placed. Logs counts and exception class names only.
+ * Blocking.
  */
 class CoversTagsStore(private val file: File, private val log: (String) -> Unit = {}) {
+    private val checks = File(file.parentFile, CHECKS)
+
     fun load(): CoversTagsMemory {
         if (!file.isFile) return CoversTagsMemory()
         val text = try {
@@ -83,7 +119,14 @@ class CoversTagsStore(private val file: File, private val log: (String) -> Unit 
         val albums = items.mapNotNull { decode(it, AlbumRecord.serializer()) }
         if (albums.size < items.size) log("tags: ${items.size - albums.size} stored albums unreadable, left out")
         // No historySeen: a file from before it was kept (null, never 0, which would take every History entry for lost).
-        return CoversTagsMemory(albums, flag(root, CHECKED), flag(root, NOTED), (root[HISTORY_SEEN] as? JsonPrimitive)?.longOrNull)
+        return CoversTagsMemory(
+            albums,
+            flag(root, CHECKED),
+            flag(root, NOTED),
+            (root[HISTORY_SEEN] as? JsonPrimitive)?.longOrNull,
+            checkedAll = flag(root, CHECKED_ALL),
+            unfinished = flag(root, UNFINISHED),
+        )
     }
 
     fun save(memory: CoversTagsMemory): Boolean {
@@ -92,6 +135,8 @@ class CoversTagsStore(private val file: File, private val log: (String) -> Unit 
                 VERSION_KEY to JsonPrimitive(VERSION),
                 CHECKED to JsonPrimitive(memory.checkedOnce),
                 NOTED to JsonPrimitive(memory.noted),
+                CHECKED_ALL to JsonPrimitive(memory.checkedAll),
+                UNFINISHED to JsonPrimitive(memory.unfinished),
                 memory.historySeen?.let { HISTORY_SEEN to JsonPrimitive(it) },
                 ALBUMS to JsonArray(memory.albums.map { json.encodeToJsonElement(AlbumRecord.serializer(), it) }),
             ).toMap(),
@@ -112,6 +157,59 @@ class CoversTagsStore(private val file: File, private val log: (String) -> Unit 
         }
     }
 
+    /**
+     * Every album check kept. A file this version can't read is deleted: its album is only checked again. One that can't
+     * be read now (an IOException) is left for the next start. Unknown keys are ignored.
+     */
+    fun loadChecks(): List<CheckedAlbum> {
+        val files = checks.listFiles { one: File -> one.isFile && one.name.endsWith(JSON) }.orEmpty()
+        val kept = files.mapNotNull { one ->
+            val text = try {
+                one.readText()
+            } catch (_: IOException) {
+                return@mapNotNull null
+            }
+            readCheck(one.name, text).also { if (it == null) one.delete() }
+        }
+        if (kept.size < files.size) log("tags: ${files.size - kept.size} kept checks not read")
+        return kept
+    }
+
+    /** The check in [text], when it reads and is the album its file [name] says. */
+    private fun readCheck(name: String, text: String): CheckedAlbum? = try {
+        checksJson.decodeFromString(CheckedAlbum.serializer(), text).takeIf { name == it.id + JSON }
+    } catch (_: IllegalArgumentException) {
+        // A SerializationException is one.
+        null
+    }
+
+    /**
+     * Keeps [checked] in a file of its own, replacing the album's last one. Not fsynced: one lost to a crash is only an
+     * album checked again. False when not stored.
+     */
+    fun saveCheck(checked: CheckedAlbum): Boolean {
+        val target = checkFile(checked.id) ?: return false
+        val aside = File(target.path + TMP)
+        return try {
+            checks.mkdirs()
+            aside.writeText(checksJson.encodeToString(CheckedAlbum.serializer(), checked))
+            Files.move(aside.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+            true
+        } catch (e: IOException) {
+            aside.delete()
+            log("tags: a check not kept (${e.javaClass.simpleName})")
+            false
+        }
+    }
+
+    /** Forgets the check kept for album [id]. */
+    fun removeCheck(id: String) {
+        checkFile(id)?.delete()
+    }
+
+    /** The file of album [id]'s check; null for an id that is not an album id ([albumId]: hex digits). */
+    private fun checkFile(id: String): File? = if (ALBUM_ID.matches(id)) File(checks, id + JSON) else null
+
     private fun <T> decode(element: JsonElement, serializer: KSerializer<T>): T? = try {
         json.decodeFromJsonElement(serializer, element)
     } catch (_: IllegalArgumentException) {
@@ -127,12 +225,23 @@ class CoversTagsStore(private val file: File, private val log: (String) -> Unit 
         const val ALBUMS = "albums"
         const val CHECKED = "checkedOnce"
         const val NOTED = "noted"
+        const val CHECKED_ALL = "checkedAll"
+        const val UNFINISHED = "unfinished"
         const val HISTORY_SEEN = "historySeen"
         const val TMP = ".tmp"
+        const val CHECKS = "covers-tags-checks"
+        const val JSON = ".json"
+        val ALBUM_ID = Regex("^[0-9a-f]{1,64}$")
 
         val json = Json {
             ignoreUnknownKeys = true
             encodeDefaults = true
+        }
+
+        /** Kept checks, small: values left at their defaults, and nulls, are not written. */
+        val checksJson = Json {
+            ignoreUnknownKeys = true
+            explicitNulls = false
         }
     }
 }

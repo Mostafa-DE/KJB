@@ -175,6 +175,7 @@ object TagsGraph {
             coversChanged = CoverVersions::bump,
             access = { app.packageName in NotificationManagerCompat.getEnabledListenerPackages(app) },
             scope = background,
+            checkStarted = { CheckService.start(app) },
             log = ::log,
         )
     }.also { coversTags = it }

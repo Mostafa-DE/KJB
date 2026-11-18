@@ -84,6 +84,13 @@ class CoversTagsScreenTest {
     // The page's rows: each needs a key of its own, or the list crashes
 
     @Test
+    fun `Cancel is offered while a check runs, and while an album opened from its song is checked`() {
+        assertFalse(offersCancel(CoversTagsState()))
+        assertTrue(offersCancel(CoversTagsState(checking = Checking(1, 3))))
+        assertTrue(offersCancel(CoversTagsState(checkingAlbums = setOf("a1"))))
+    }
+
+    @Test
     fun `two rows of one id still get keys of their own, and the first keeps its key when the second comes`() {
         assertEquals(listOf("done a", "done b", "done a#2"), rowKeys("done", listOf("a", "b", "a")))
         assertEquals(rowKeys("done", listOf("a")).first(), rowKeys("done", listOf("a", "a")).first())

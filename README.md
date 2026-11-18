@@ -44,7 +44,8 @@ in an app store.
 **Your library**
 
 - Covers & tags: KJB checks your albums against MusicBrainz and the Cover Art Archive when you ask, and shows what it
-  would change. Nothing is written until you apply it.
+  would change. After a full check, opening Covers & tags looks up only new or changed albums. Nothing is written until
+  you apply it.
 - Edit tags for a song or many songs, Edit album, Rename artist and Merge artists, with suggestions for names that
   look like two spellings of one. Every edit is listed in History with Undo.
 - Duplicates: finds songs stored twice. You pick which copies go to your phone's trash.

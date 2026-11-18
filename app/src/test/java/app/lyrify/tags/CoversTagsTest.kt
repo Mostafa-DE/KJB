@@ -25,13 +25,20 @@ import app.lyrify.tags.lookup.PhoneAlbum
 import app.lyrify.tags.lookup.Proposal
 import app.lyrify.tags.lookup.ReleaseMatch
 import app.lyrify.tags.lookup.SongFields
+import app.lyrify.ui.DESTINATION_COVERS_TAGS
+import app.lyrify.ui.Page
+import app.lyrify.ui.destinationPage
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
@@ -42,6 +49,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeFalse
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -69,8 +77,18 @@ class CoversTagsTest {
     /** The library as the app reads [library]; null while it is not read. */
     private fun read(): Library? = library?.let { Library.of(it, Settings()) }
 
-    private fun TestScope.flow(): CoversTags = CoversTags(
-        songs = { library },
+    /** Checks with albums to look up that started KJB's foreground service. */
+    private var started = 0
+
+    /** How long reading the library takes, in the test's time. */
+    private var songsDelay = 0L
+
+    /** Covers & tags as KJB builds it, in [scope]: the test's own, or one a test cancels as Android closing KJB. */
+    private fun TestScope.flow(scope: CoroutineScope = this): CoversTags = CoversTags(
+        songs = {
+            delay(songsDelay)
+            library
+        },
         source = source,
         write = { jobs, changed, kind, label, given -> writeEdit(rig.writer, favourites, read(), jobs, changed, kind, label, progress(given)) },
         undoEntry = { undoEdit(rig.writer, rig.undo, favourites, read(), it) },
@@ -79,7 +97,8 @@ class CoversTagsTest {
         lyrics = { track, changed -> handedToLyrics += track to changed },
         coversChanged = { bumped += it },
         access = { access },
-        scope = this,
+        scope = scope,
+        checkStarted = { started++ },
         io = StandardTestDispatcher(testScheduler),
         compute = StandardTestDispatcher(testScheduler),
         clock = { BASE + testScheduler.currentTime },
@@ -195,21 +214,214 @@ class CoversTagsTest {
     }
 
     @Test
-    fun `MusicBrainz still busy stops the check and says so, a failed album is counted and the check goes on`() = runTest {
+    fun `MusicBrainz still busy never stops the check, it says it waits, asks again for the same album, and carries on`() = runTest {
         library = lanternsSongs() + harbourSongs() + song("Lone Kestrel", 61, "Lone Kestrel", album = null)
+        var busy = 2
+        val asked = mutableListOf<Long>()
         source.answer = { album ->
             when (album.title) {
                 "Lanterns" -> Lookup.Failed("offline")
-                "Harbour" -> Lookup.Busy
+                "Harbour" -> {
+                    asked += testScheduler.currentTime
+                    if (busy-- > 0) Lookup.Busy else Lookup.Done(Proposal.Ready(AlbumMatch.match(album, harbour)))
+                }
                 else -> Lookup.Done(Proposal.PickOne(emptyList(), setOf(Doubt.SINGLE)))
             }
         }
+        val flow = flow()
+        advanceUntilIdle()
 
-        val state = checked(flow())
+        flow.check()
+        runCurrent()
+        assertTrue(flow.state.value.waitingBusy)
+        assertEquals(Checking(1, 3), flow.state.value.checking)
+        advanceUntilIdle()
 
-        assertTrue(state.stoppedBusy)
-        assertEquals(3, state.notChecked)
+        val state = flow.state.value
+        assertFalse(state.waitingBusy)
+        assertNull(state.checking)
+        // Only the album that failed is not checked; the busy one was asked again after 1 min, then 2 min.
+        assertEquals(1, state.notChecked)
+        assertEquals(listOf("Lanterns", "Harbour", "Harbour", "Harbour", null), source.checked.map { it.first })
+        assertEquals(listOf(0L, 60_000L, 180_000L), asked.map { it - asked.first() })
+        assertEquals(listOf("Harbour"), state.ready.map { it.album.album.title })
+        assertEquals(listOf(60_000L, 120_000L, 240_000L, 300_000L), CoversTags.BUSY_WAITS_MS)
+    }
+
+    @Test
+    fun `the waits for MusicBrainz grow to 5 minutes and stay there, and Cancel stops one at once`() = runTest {
+        library = lanternsSongs()
+        val asked = mutableListOf<Long>()
+        source.answer = {
+            asked += testScheduler.currentTime
+            Lookup.Busy
+        }
+        val flow = flow()
+        advanceUntilIdle()
+
+        flow.check()
+        advanceTimeBy(30 * 60_000L)
+        runCurrent()
+        assertEquals(listOf(0L, 60_000L, 180_000L, 420_000L, 720_000L, 1_020_000L, 1_320_000L, 1_620_000L), asked)
+        assertTrue(flow.state.value.waitingBusy)
+
+        flow.cancel()
+        advanceUntilIdle()
+        assertFalse(flow.state.value.waitingBusy)
+        assertNull(flow.state.value.checking)
+        assertEquals(8, asked.size)
+    }
+
+    @Test
+    fun `an album opened from its song while MusicBrainz is busy waits too, and opens once it is checked`() = runTest {
+        val songs = lanternsSongs()
+        library = songs
+        var busy = 1
+        source.answer = { album -> if (busy-- > 0) Lookup.Busy else Lookup.Done(Proposal.Ready(AlbumMatch.match(album, lanterns))) }
+        val flow = flow()
+        advanceUntilIdle()
+
+        flow.open(songs[0].path)
+        runCurrent()
+        assertTrue(flow.state.value.waitingBusy)
+        advanceUntilIdle()
+
+        assertEquals(songs[0].path, flow.state.value.focus?.song)
+        assertEquals(1, flow.state.value.ready.size)
+        assertFalse(flow.state.value.waitingBusy)
+    }
+
+    // Keeps going
+
+    @Test
+    fun `opening Covers & tags after a full check checks only the new and the changed albums, with no Check press`() = runTest {
+        val songs = harbourSongs()
+        library = lanternsSongs() + songs
+        answers("Lanterns" to lanterns, "Harbour" to harbour)
+        checked(flow())
+        File(songs[0].path).appendBytes(byteArrayOf(0))
+        library = library!! + song("Lone Kestrel", 61, "Lone Kestrel", album = null)
+
+        val again = flow()
+        advanceUntilIdle()
         assertEquals(2, source.checked.size)
+        again.opened()
+        advanceUntilIdle()
+
+        assertEquals(listOf("Lanterns", "Harbour", "Harbour", null), source.checked.map { it.first })
+        assertEquals(2, started)
+        assertNull(again.state.value.checking)
+        assertEquals(3, again.state.value.waiting.size)
+    }
+
+    @Test
+    fun `before a full check, and with nothing new or changed, opening Covers & tags asks nothing and shows no progress`() = runTest {
+        library = lanternsSongs() + harbourSongs()
+        answers("Lanterns" to lanterns)
+        val first = flow()
+        advanceUntilIdle()
+        first.opened()
+        advanceUntilIdle()
+        assertEquals(emptyList<Pair<String?, Boolean>>(), source.checked)
+        assertEquals(0, started)
+
+        first.check()
+        advanceUntilIdle()
+        assertEquals(2, source.checked.size)
+        val again = flow()
+        val shown = mutableListOf<Checking?>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { again.state.collect { shown += it.checking } }
+        advanceUntilIdle()
+        again.opened()
+        advanceUntilIdle()
+
+        assertEquals(2, source.checked.size)
+        assertEquals(1, started)
+        assertTrue(shown.toString(), shown.all { it == null })
+    }
+
+    @Test
+    fun `a check cut short by KJB closing goes on with the albums left when Covers & tags opens again`() = runTest {
+        library = lanternsSongs() + harbourSongs() + song("Lone Kestrel", 61, "Lone Kestrel", album = null)
+        answers("Lanterns" to lanterns, "Harbour" to harbour)
+        val answer = source.answer
+        source.answer = { album -> delay(1_000).let { answer(album) } }
+        val closing = CoroutineScope(coroutineContext + Job(coroutineContext[Job]))
+        val first = flow(closing)
+        advanceUntilIdle()
+        first.check()
+        advanceTimeBy(1_500)
+        runCurrent()
+        assertEquals(1, first.state.value.waiting.size)
+        // Android closes KJB in the middle of the second album.
+        closing.cancel()
+        advanceUntilIdle()
+
+        val again = flow()
+        advanceUntilIdle()
+        assertTrue(again.state.value.memory.unfinished)
+        again.opened()
+        advanceUntilIdle()
+
+        assertEquals(listOf("Lanterns", "Harbour", "Harbour", null), source.checked.map { it.first })
+        assertEquals(3, again.state.value.waiting.size)
+        assertFalse(again.state.value.memory.unfinished)
+        assertTrue(again.state.value.memory.checkedAll)
+    }
+
+    @Test
+    fun `Cancel stops the check, and opening Covers & tags does not start it again before a full check`() = runTest {
+        library = lanternsSongs() + harbourSongs()
+        answers("Lanterns" to lanterns)
+        val answer = source.answer
+        source.answer = { album -> delay(1_000).let { answer(album) } }
+        val flow = flow()
+        advanceUntilIdle()
+        flow.check()
+        advanceTimeBy(1_500)
+        runCurrent()
+        flow.cancel()
+        advanceUntilIdle()
+
+        val again = flow()
+        advanceUntilIdle()
+        again.opened()
+        advanceUntilIdle()
+
+        assertEquals(2, source.checked.size)
+        assertFalse(again.state.value.memory.unfinished)
+        assertFalse(again.state.value.memory.checkedAll)
+        assertEquals(1, started)
+    }
+
+    @Test
+    fun `a check goes on when the page that started it is left, in KJB's foreground service, started only for albums to look up`() = runTest {
+        library = lanternsSongs() + harbourSongs()
+        answers("Lanterns" to lanterns)
+        val answer = source.answer
+        source.answer = { album -> delay(1_000).let { answer(album) } }
+        val flow = flow()
+        advanceUntilIdle()
+        val page = launch {
+            flow.check()
+            delay(Long.MAX_VALUE)
+        }
+        advanceTimeBy(500)
+        page.cancel()
+        advanceUntilIdle()
+
+        assertEquals(2, source.checked.size)
+        assertEquals(2, flow.state.value.waiting.size)
+        assertEquals(1, started)
+        // The service: dataSync, not exported, and started by the check alone.
+        val manifest = File("src/main/AndroidManifest.xml").readText()
+        val service = Regex("""<service\s+android:name="\.tags\.CheckService"[^>]*/>""").find(manifest)?.value.orEmpty()
+        assertTrue(manifest, "android:exported=\"false\"" in service && "android:foregroundServiceType=\"dataSync\"" in service)
+        assertTrue(File("src/main/java/app/lyrify/tags/TagsGraph.kt").readText().contains("checkStarted = { CheckService.start(app) }"))
+        // Its notification opens Covers & tags, also when KJB is open already (onNewIntent, as the player's does).
+        val notice = File("src/main/java/app/lyrify/tags/CheckService.kt").readText()
+        assertTrue(notice.contains(".addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP).putExtra(EXTRA_DESTINATION, DESTINATION_COVERS_TAGS)"))
+        assertEquals(Page.CoversTags, destinationPage(DESTINATION_COVERS_TAGS))
     }
 
     // Applying
@@ -812,6 +1024,236 @@ class CoversTagsTest {
         assertEquals(1, again.state.value.done.size)
         assertEquals(1, again.state.value.skipped.size)
         assertTrue(again.state.value.memory.checkedOnce)
+    }
+
+    @Test
+    fun `what a check found stays after KJB closes, and comes back without asking MusicBrainz`() = runTest {
+        library = lanternsSongs() + harbourSongs() + song("Lone Kestrel", 61, "Lone Kestrel", album = null)
+        answers("Lanterns" to lanterns)
+        val state = checked(flow())
+
+        val again = flow()
+        advanceUntilIdle()
+
+        assertEquals(3, state.waiting.size)
+        assertEquals(state.waiting.toSet(), again.state.value.waiting.toSet())
+        assertEquals(1, again.state.value.badge)
+        assertEquals(3, source.checked.size)
+    }
+
+    @Test
+    fun `a check leaves out the albums checked before and unchanged since, and checks the new and the changed`() = runTest {
+        val songs = lanternsSongs()
+        library = songs + harbourSongs()
+        answers("Lanterns" to lanterns)
+        val flow = flow()
+        checked(flow)
+        File(songs[1].path).appendBytes(byteArrayOf(0))
+        library = library!! + song("Lone Kestrel", 61, "Lone Kestrel", album = null)
+
+        flow.check()
+        advanceUntilIdle()
+
+        assertEquals(listOf("Lanterns", "Harbour", "Lanterns", null), source.checked.map { it.first })
+        assertEquals(3, flow.state.value.waiting.size)
+    }
+
+    @Test
+    fun `a suggestion kept from before KJB closed can be applied at any time, with its Undo in History`() = runTest {
+        val songs = lanternsSongs()
+        library = songs
+        answers("Lanterns" to lanterns)
+        checked(flow())
+
+        val again = flow()
+        advanceUntilIdle()
+        val applied = again.applyWhole(again.state.value.waiting("Lanterns")) as Applied.Done
+
+        assertEquals(2, applied.songs)
+        assertEquals(listOf("Quiet Ember"), rig.fields(songs[0].target())["TITLE"])
+        assertEquals(applied.entryId, again.state.value.done.single().entryId)
+        assertEquals(applied.entryId, rig.undo.memory().entries.single().id)
+        // Applied, it waits no more, after the next start either.
+        val third = flow()
+        advanceUntilIdle()
+        assertEquals(emptyList<Waiting>(), third.state.value.waiting)
+        assertEquals(1, source.checked.size)
+    }
+
+    @Test
+    fun `Not this one, Search myself and an album's year found later are kept after KJB closes`() = runTest {
+        library = lanternsSongs() + harbourSongs()
+        answers("Lanterns" to lanterns, "Harbour" to harbour)
+        val flow = flow()
+        val state = checked(flow)
+        flow.notThisOne(state.waiting("Lanterns").album.id, state.waiting("Lanterns").match())
+        source.searchAnswer = { album, _, _ -> Lookup.Done(Proposal.PickOne(listOf(AlbumMatch.match(album, harbour.copy(releaseGroup = MbReleaseGroup(GROUP)))), setOf(Doubt.SEARCHED))) }
+        val harbourId = state.waiting("Harbour").album.id
+        flow.search(harbourId, "Harbour Glass", "Kit Calloway")
+        source.datedOf = { MetaAnswer.Ok(it.copy(release = it.release.copy(releaseGroup = MbReleaseGroup(GROUP, "2001-05-02")))) }
+        flow.date(harbourId, (flow.state.value.waiting("Harbour").proposal as Proposal.PickOne).candidates.single())
+        advanceUntilIdle()
+
+        val again = flow()
+        advanceUntilIdle()
+
+        assertEquals(flow.state.value.waiting.toSet(), again.state.value.waiting.toSet())
+        assertEquals(Proposal.PickOne(emptyList(), emptySet()), again.state.value.waiting("Lanterns").proposal)
+        val searched = again.state.value.waiting("Harbour").proposal as Proposal.PickOne
+        assertEquals(setOf(Doubt.SEARCHED), searched.doubts)
+        assertEquals(2001, searched.candidates.single().release.releaseGroup?.originalYear)
+    }
+
+    @Test
+    fun `an album changed or gone since its check is not brought back, and the changed one is checked again`() = runTest {
+        val songs = lanternsSongs()
+        library = songs + harbourSongs()
+        answers("Lanterns" to lanterns)
+        checked(flow())
+        val kept = File(folder.root, "files/covers-tags-checks")
+        assertEquals(2, kept.list()!!.size)
+        File(songs[0].path).appendBytes(byteArrayOf(0))
+        library = songs
+
+        val again = flow()
+        advanceUntilIdle()
+        assertEquals(emptyList<Waiting>(), again.state.value.waiting)
+        assertEquals(0, kept.list()!!.size)
+
+        again.check()
+        advanceUntilIdle()
+        assertEquals(listOf("Lanterns", "Harbour", "Lanterns"), source.checked.map { it.first })
+        assertEquals(1, again.state.value.ready.size)
+        assertEquals(1, kept.list()!!.size)
+    }
+
+    // Review fixes (Grok, panel-ct1)
+
+    @Test
+    fun `a suggestion kept from before KJB closed applies even when the library lists its songs in another order`() = runTest {
+        val songs = lanternsSongs()
+        library = songs
+        answers("Lanterns" to lanterns)
+        checked(flow())
+        library = songs.reversed()
+
+        val again = flow()
+        advanceUntilIdle()
+        val applied = again.applyWhole(again.state.value.waiting("Lanterns"))
+
+        assertTrue(applied.toString(), applied is Applied.Done)
+        assertEquals(2, (applied as Applied.Done).songs)
+        assertEquals(listOf("Quiet Ember"), rig.fields(songs[0].target())["TITLE"])
+    }
+
+    @Test
+    fun `To review keeps its order after KJB closes, albums checked in the same moment included`() = runTest {
+        library = lanternsSongs() + harbourSongs() + (1..4).map { song("Lone $it", 60L + it, "Lone Kestrel $it", album = null) }
+        answers("Lanterns" to lanterns)
+        val state = checked(flow())
+
+        val again = flow()
+        advanceUntilIdle()
+
+        assertEquals(6, state.waiting.size)
+        assertEquals(state.waiting.map { it.album.id }, again.state.value.waiting.map { it.album.id })
+    }
+
+    @Test
+    fun `Cancel stops an album opened from its song that waits for MusicBrainz`() = runTest {
+        val songs = lanternsSongs()
+        library = songs
+        source.answer = { Lookup.Busy }
+        val flow = flow()
+        advanceUntilIdle()
+
+        flow.open(songs[0].path)
+        advanceTimeBy(10 * 60_000L)
+        runCurrent()
+        assertTrue(flow.state.value.waitingBusy)
+        val asked = source.checked.size
+        flow.cancel()
+        advanceTimeBy(60 * 60_000L)
+        runCurrent()
+
+        assertFalse(flow.state.value.waitingBusy)
+        assertEquals(emptySet<String>(), flow.state.value.checkingAlbums)
+        assertEquals(asked, source.checked.size)
+    }
+
+    @Test
+    fun `a check cut short by KJB closing after its last album counts as a full check at the next opening, asking nothing`() = runTest {
+        library = lanternsSongs() + harbourSongs()
+        answers("Lanterns" to lanterns)
+        checked(flow())
+        val store = CoversTagsStore(storeFile)
+        store.save(store.load().copy(checkedAll = false, unfinished = true))
+
+        val again = flow()
+        advanceUntilIdle()
+        again.opened()
+        advanceUntilIdle()
+
+        assertEquals(2, source.checked.size)
+        assertFalse(again.state.value.memory.unfinished)
+        assertTrue(again.state.value.memory.checkedAll)
+        assertTrue(CoversTagsStore(storeFile).load().checkedAll)
+    }
+
+    @Test
+    fun `Check pressed while opening the page is still deciding shows the ring`() = runTest {
+        library = lanternsSongs()
+        answers("Lanterns" to lanterns)
+        checked(flow())
+        val again = flow()
+        advanceUntilIdle()
+        songsDelay = 1_000
+
+        again.opened()
+        advanceTimeBy(500)
+        runCurrent()
+        again.check()
+        runCurrent()
+
+        assertNotNull(again.state.value.checking)
+        advanceUntilIdle()
+        assertNull(again.state.value.checking)
+    }
+
+    @Test
+    fun `a kept check that can't be read for now is left in place for the next start`() {
+        val store = CoversTagsStore(storeFile)
+        val one = CheckedAlbum("0a1b2c", emptyList(), ready = false)
+        assertTrue(store.saveCheck(one))
+        val file = File(storeFile.parentFile, "covers-tags-checks/0a1b2c.json")
+        file.setReadable(false)
+        assumeFalse("the tests run as a user who reads every file", file.canRead())
+
+        assertEquals(emptyList<CheckedAlbum>(), store.loadChecks())
+        assertTrue(file.exists())
+        file.setReadable(true)
+        assertEquals(listOf(one), store.loadChecks())
+    }
+
+    @Test
+    fun `the checks kept read leniently, and a file this version can't read is dropped`() {
+        val store = CoversTagsStore(storeFile)
+        val one = CheckedAlbum("0a1b2c", listOf(FileMark("/m/a.mp3", 10, 5)), ready = true, candidates = listOf(KeptCandidate(lanterns, 0.01)), at = 7)
+        val two = CheckedAlbum("0d0e0f", emptyList(), ready = false, doubts = setOf(Doubt.SINGLE, Doubt.NO_CANDIDATE))
+        assertTrue(store.saveCheck(one))
+        assertTrue(store.saveCheck(two))
+        assertFalse(store.saveCheck(two.copy(id = "../x")))
+        val folder = File(storeFile.parentFile, "covers-tags-checks")
+        File(folder, "0d0e0f.json").writeText(File(folder, "0d0e0f.json").readText().replace("{", """{"later":1,"""))
+        File(folder, "0bad.json").writeText("{not json")
+        File(folder, "0cad.json").writeText("""{"id":"0cad","marks":[],"ready":false,"doubts":["MADE_UP"]}""")
+        File(folder, "0aaa.json").writeText("""{"id":"0bbb","marks":[],"ready":false}""")
+
+        assertEquals(setOf(one, two), store.loadChecks().toSet())
+        assertEquals(setOf("0a1b2c.json", "0d0e0f.json"), folder.list()!!.toSet())
+
+        store.removeCheck("0a1b2c")
+        assertEquals(listOf(two), store.loadChecks())
     }
 
     @Test

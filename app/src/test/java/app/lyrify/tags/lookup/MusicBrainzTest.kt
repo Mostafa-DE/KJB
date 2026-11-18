@@ -69,6 +69,28 @@ class MusicBrainzTest {
     }
 
     @Test
+    fun `a release group's editions are browsed in one request, with their tracks, credits and release group, 100 at most`() {
+        assertEquals(browseUri(GROUP_A), MusicBrainzUrls.releasesOfGroup(GROUP_A).toString())
+        assertEquals(browseUri(GROUP_A), MusicBrainzUrls.releasesOfGroup(GROUP_A.uppercase()).toString())
+        assertThrows(IllegalArgumentException::class.java) { MusicBrainzUrls.releasesOfGroup("../x") }
+    }
+
+    @Test
+    fun `a browse lists each release whole, as a lookup does`() {
+        val tracks = listOf(T("Quiet Ember", 254_000), T("Salt Road", 198_500, artist = "Glass Harbour"))
+        val body = browseJson(releaseJson(ID_A, discs = listOf(tracks)), releaseJson(ID_B, discs = listOf(tracks), front = false)).encodeToByteArray()
+
+        val releases = MusicBrainzJson.releases(body)
+
+        assertEquals(listOf(ID_A, ID_B), releases.map { it.id })
+        assertEquals(releases.map { MusicBrainzJson.release(releaseJson(it.id, discs = listOf(tracks), front = it.id == ID_A).encodeToByteArray()) }, releases)
+        assertTrue(releases.all { it.hasAllTracks })
+        assertEquals("Glass Harbour", releases.first().tracks[1].track.artist.text)
+        assertEquals(1998, releases.first().releaseGroup?.originalYear)
+        assertEquals(listOf(true, false), releases.map { it.hasFront })
+    }
+
+    @Test
     fun `a single is searched by title, artist and length within 10 s`() {
         assertEquals(
             "https://musicbrainz.org/ws/2/recording/?query=recording%3A%28Kestrel+Lights%29+AND+artist%3A%28Quillmere%29+AND+dur%3A%5B241428+TO+261428%5D&fmt=json&limit=10",

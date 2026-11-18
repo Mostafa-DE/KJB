@@ -157,12 +157,25 @@ internal fun releaseJson(
         """"media":[${media.joinToString(",")}],"cover-art-archive":{"front":$front,"count":1}}"""
 }
 
-/** A release search answer listing [releases] as (id, track count, score). */
-internal fun searchJson(vararg releases: Triple<String, Int, Int>, title: String = "Lanterns of Ulso", artist: String = "Mira Solen"): String =
+/** A release search answer listing [releases] as (id, track count, score), each in the release group [groupOf] names. */
+internal fun searchJson(
+    vararg releases: Triple<String, Int, Int>,
+    title: String = "Lanterns of Ulso",
+    artist: String = "Mira Solen",
+    groupOf: (String) -> String = { GROUP_A },
+): String =
     """{"count":${releases.size},"offset":0,"releases":[""" + releases.joinToString(",") { (id, tracks, score) ->
         """{"id":"$id","score":$score,"title":${quote(title)},"artist-credit":[{"name":${quote(artist)}}],""" +
-            """"release-group":{"id":"$GROUP_A","primary-type":"Album"},"track-count":$tracks,"media":[{"format":"CD","track-count":$tracks}]}"""
+            """"release-group":{"id":"${groupOf(id)}","primary-type":"Album"},"track-count":$tracks,"media":[{"format":"CD","track-count":$tracks}]}"""
     } + "]}"
+
+/** A browse of a release group's releases, as MusicBrainz shapes it: each of [releases] a whole [releaseJson]. */
+internal fun browseJson(vararg releases: String): String =
+    """{"release-offset":0,"release-count":${releases.size},"releases":[${releases.joinToString(",")}]}"""
+
+/** The browse of [group]'s releases with their tracks, as the lookup asks for it (spelled out, so a test pins it). */
+internal fun browseUri(group: String): String =
+    "https://musicbrainz.org/ws/2/release?release-group=$group&inc=artist-credits+recordings+release-groups&limit=100&fmt=json"
 
 private fun quote(text: String): String = "\"" + text.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 

@@ -402,10 +402,14 @@ const val DESTINATION_AI: String = "ai"
 /** The downloads' notifications open Tools > Downloads. */
 const val DESTINATION_DOWNLOADS: String = "downloads"
 
+/** The notification of a Covers & tags check (tags/CheckService.kt) opens Tools > Covers & tags. */
+const val DESTINATION_COVERS_TAGS: String = "covers-tags"
+
 /** The page [destination] names; null for none, or one this version does not know. */
 fun destinationPage(destination: String?): Page? = when (destination) {
     DESTINATION_AI -> Page.Ai
     DESTINATION_DOWNLOADS -> Page.Downloads
+    DESTINATION_COVERS_TAGS -> Page.CoversTags
     else -> null
 }
 
