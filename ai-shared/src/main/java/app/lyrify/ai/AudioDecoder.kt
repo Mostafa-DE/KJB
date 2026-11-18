@@ -68,7 +68,7 @@ class MixDecoder private constructor(
     private val codec: MediaCodec
     private val durationUs: Long
     private val info = MediaCodec.BufferInfo()
-    private val deadline = DecodeDeadline(SystemClock::uptimeMillis)
+    private val deadline = DecodeDeadline(DecodeDeadline.maxMsFor(maxAudioSec), SystemClock::uptimeMillis)
     private var pcm: PcmToMix? = null
     private var inputDone = false
     private var outputDone = false
@@ -294,11 +294,11 @@ class PcmToMix(val sampleRate: Int, val channelCount: Int, var encoding: Int, ma
 /**
  * Ends a decode that hangs: MediaCodec has no timeout of its own, so a decoder that never signals end of stream would
  * keep [MixDecoder]'s loop going forever. [verify] throws when no input or output buffer moved ([progressed]) for
- * [STALL_MS], or when the decoder has worked for [MAX_MS]. Only the decoder's time counts: between [pause] and
+ * [STALL_MS], or when the decoder has worked for [maxMs] ([MAX_MS] for the AI's 20 minutes, [maxMsFor] another cap). Only the decoder's time counts: between [pause] and
  * [resume] the reader works (the separation), which is neither a stall nor decoding time. [now] is a monotonic clock in
  * milliseconds; on the phone `uptimeMillis`, which stops in deep sleep, so a sleeping phone is not a stall.
  */
-class DecodeDeadline(private val now: () -> Long) {
+class DecodeDeadline(private val maxMs: Long = MAX_MS, private val now: () -> Long) {
     private var since = now()
     private var before = 0L
     private var lastProgress = since
@@ -321,7 +321,7 @@ class DecodeDeadline(private val now: () -> Long) {
     fun verify() {
         val t = now()
         check(t - lastProgress < STALL_MS) { "the decoder made no progress for ${STALL_MS / 1000} s" }
-        check(before + t - since < MAX_MS) { "decoding took over ${MAX_MS / 60_000} minutes" }
+        check(before + t - since < maxMs) { "decoding took over ${maxMs / 60_000} minutes" }
     }
 
     companion object {
@@ -329,5 +329,13 @@ class DecodeDeadline(private val now: () -> Long) {
 
         /** The spike decoded a 4-minute song in 2.9 s on the phone (lyrify-bench HANDOFF.md, run 1). */
         const val MAX_MS: Long = 10 * 60_000
+
+        /**
+         * The decoding time allowed for a decoder that stops at [maxAudioSec] of audio: [MAX_MS] for the AI's
+         * [PcmToMix.MAX_AUDIO_SEC], in proportion for another cap, and no total for a reader that stops by itself (the
+         * audio cutter, which reads only to the cut's end); the stall check still ends a decoder that hangs.
+         */
+        fun maxMsFor(maxAudioSec: Long): Long =
+            if (maxAudioSec > Long.MAX_VALUE / MAX_MS) Long.MAX_VALUE else MAX_MS * maxAudioSec.coerceAtLeast(0) / PcmToMix.MAX_AUDIO_SEC
     }
 }

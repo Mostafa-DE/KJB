@@ -316,6 +316,25 @@ class AudioTest {
     }
 
     @Test
+    fun `the decoding time allowed follows the audio cap, and a reader that stops by itself has no total`() {
+        assertEquals(DecodeDeadline.MAX_MS, DecodeDeadline.maxMsFor(PcmToMix.MAX_AUDIO_SEC))
+        assertEquals(DecodeDeadline.MAX_MS / 2, DecodeDeadline.maxMsFor(PcmToMix.MAX_AUDIO_SEC / 2))
+        assertEquals(Long.MAX_VALUE, DecodeDeadline.maxMsFor(Long.MAX_VALUE))
+
+        var now = 0L
+        val deadline = DecodeDeadline(maxMs = Long.MAX_VALUE) { now }
+        deadline.resume()
+        repeat(360) {
+            now += 20_000 // two hours of decoding a long mix, buffers moving
+            deadline.progressed()
+            deadline.verify()
+        }
+        // A decoder that hangs still ends.
+        now += 30_000
+        assertEquals("the decoder made no progress for 30 s", assertThrows(IllegalStateException::class.java) { deadline.verify() }.message)
+    }
+
+    @Test
     fun `a decode fails after 30 s without a buffer moving`() {
         var now = 5_000L
         val deadline = DecodeDeadline { now }

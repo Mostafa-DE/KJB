@@ -360,7 +360,8 @@ class CutFiles(
                 work = File(app.filesDir, WORK_DIR),
                 tags = TagLibFile(app.filesDir),
                 openSong = ::decoder,
-                newEncoder = { fd, bitRate, codec -> AacToneEncoder(fd, bitRate, codec) },
+                // As the decoder: a cut of any length, so no total time; the stall check still ends an encoder that hangs.
+                newEncoder = { fd, bitRate, codec -> AacToneEncoder(fd, bitRate, codec, maxMs = Long.MAX_VALUE) },
                 music = if (writes.testFolderOnly) File(root, SharedWrites.TEST_FOLDER.trimEnd('/')) else File(root, Environment.DIRECTORY_MUSIC),
                 canWrite = { it.isDirectory && it.canWrite() },
                 scan = { file ->
@@ -379,9 +380,9 @@ class CutFiles(
         private const val WORK_DIR: String = "cut-work"
 
         /**
-         * The song's decoder for the cutter, for a song of any length: without the AI's 20-minute cap, as the cutter
-         * reads only to the cut's end (and its waveform to the song's length), a piece at a time. The decoder's own
-         * deadline still ends one that hangs.
+         * The song's decoder for the cutter, for a song of any length: without the AI's 20-minute cap or its 10 minutes
+         * of decoding time in all, as the cutter reads only to the cut's end (and its waveform to the song's length), a
+         * piece at a time. The decoder's stall check still ends one that hangs.
          */
         fun decoder(song: File): MixSource = MixDecoder(song, maxAudioSec = Long.MAX_VALUE)
     }

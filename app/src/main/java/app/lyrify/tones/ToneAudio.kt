@@ -317,13 +317,19 @@ class PeaksCache(private val dir: File, private val maxFiles: Int = MAX_FILES) {
  * [fd], with MediaCodec in synchronous mode and MediaMuxer. The encoder is [codecName] when given (the one that said it
  * takes the bit rate), else the phone's first AAC encoder. The muxer track is added from the encoder's output format (it carries the codec
  * specific data), so codec-config buffers are not written as samples (MediaMuxer reference, addTrack). Presentation
- * times count the frames queued. [DecodeDeadline] ends an encoder that stops moving. [fd] stays the caller's to close.
+ * times count the frames queued. [DecodeDeadline] ends an encoder that stops moving, or that has worked for [maxMs] (a
+ * cut of a long song has no total). [fd] stays the caller's to close.
  */
-class AacToneEncoder(fd: FileDescriptor, bitRate: Int = BIT_RATE, codecName: String? = null) : ToneEncoder {
+class AacToneEncoder(
+    fd: FileDescriptor,
+    bitRate: Int = BIT_RATE,
+    codecName: String? = null,
+    maxMs: Long = DecodeDeadline.MAX_MS,
+) : ToneEncoder {
     private val muxer = MediaMuxer(fd, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
     private val codec: MediaCodec
     private val info = MediaCodec.BufferInfo()
-    private val deadline = DecodeDeadline(SystemClock::uptimeMillis)
+    private val deadline = DecodeDeadline(maxMs, SystemClock::uptimeMillis)
     private var track = -1
     private var queued = 0L
     private var muxing = false
