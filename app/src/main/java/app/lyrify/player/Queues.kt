@@ -77,7 +77,8 @@ data class Removed(val book: QueueBook, val queueId: String, val item: QueueItem
  * player/PlayerCore.kt keeps the latest. Queue ids and item uids come from counters kept with the book, so they never
  * repeat. [jumps] counts the user's moves inside or between queues (a tap, Resume, Play from start): on each new count
  * the player goes to the current queue's [Queue.index] and [Queue.positionMs]; a song changing by itself does not
- * count.
+ * count. [stops] counts the times the song playing went to the phone's trash with no song after it ([forget]): on each
+ * new count the player stops, before it goes there. Neither count is stored.
  */
 data class QueueBook(
     val queues: List<Queue> = emptyList(),
@@ -87,6 +88,7 @@ data class QueueBook(
     val nextId: Long = 1,
     val nextUid: Long = 1,
     val jumps: Long = 0,
+    val stops: Long = 0,
 ) {
     val current: Queue? get() = currentId?.let(::queue)
 
@@ -388,6 +390,15 @@ data class QueueBook(
         val book = if (queues == this.queues) this else copy(queues = queues)
         return if (empty.isEmpty()) book else book.dropped(empty.filterNot { it == currentId }.toSet(), evenCurrent = false, evenSaved = true)
     }
+
+    /**
+     * Songs the phone moved to its trash ([paths]) leave every queue: the one playing, Recent and Saved. A queue left
+     * without songs goes, the one playing too. A queue whose current song went goes on at the next song left, from its
+     * start, or with none after it at its first song. In the queue playing that is a jump ([jumps]); with no song after
+     * it the player stops there ([stops]), unless [repeat] is Repeat all, which goes round as the player would (a book
+     * never repeats).
+     */
+    fun forget(paths: Set<String>, repeat: Repeat): QueueBook = this
 
     // The steps the operations share
 
