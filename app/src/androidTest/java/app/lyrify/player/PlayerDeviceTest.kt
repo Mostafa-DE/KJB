@@ -154,7 +154,7 @@ class PlayerDeviceTest {
     private fun build(songs: List<Song>, storage: QueueStorage = MemoryStorage()): Built = onMain {
         val core = PlayerCore(storage, scope, System::currentTimeMillis)
         val engine = GaplessEngine(context, { Settings() }, NoLevels) { mediaItemOf(it, LibrarySettings(), CarCovers.uris(context)) }
-        val bridge = QueueBridge(engine, CoverVersions::of)
+        val bridge = QueueBridge(engine, coverVersion = CoverVersions::of)
         val find: (SongRef) -> Song? = { ref -> songs.firstOrNull { it.path == ref.path } }
         val player = LyrifyPlayer(Looper.getMainLooper(), engine, core, { SkipAmounts(30_000, 10_000) }, { bridge.sync(core.book.value, find) })
         cleanups += {
