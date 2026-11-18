@@ -158,21 +158,26 @@ class CoversTagsStore(private val file: File, private val log: (String) -> Unit 
     }
 
     /**
-     * Every album check kept. A file this version can't read is deleted: its album is only checked again. Unknown keys
-     * are ignored.
+     * Every album check kept. A file this version can't read is deleted: its album is only checked again. One that can't
+     * be read now (an IOException) is left for the next start. Unknown keys are ignored.
      */
     fun loadChecks(): List<CheckedAlbum> {
         val files = checks.listFiles { one: File -> one.isFile && one.name.endsWith(JSON) }.orEmpty()
-        val kept = files.mapNotNull { one -> readCheck(one).also { if (it == null) one.delete() } }
-        if (kept.size < files.size) log("tags: ${files.size - kept.size} kept checks unreadable, dropped")
+        val kept = files.mapNotNull { one ->
+            val text = try {
+                one.readText()
+            } catch (_: IOException) {
+                return@mapNotNull null
+            }
+            readCheck(one.name, text).also { if (it == null) one.delete() }
+        }
+        if (kept.size < files.size) log("tags: ${files.size - kept.size} kept checks not read")
         return kept
     }
 
-    /** The check in [one], when it reads and is the album its name says. */
-    private fun readCheck(one: File): CheckedAlbum? = try {
-        checksJson.decodeFromString(CheckedAlbum.serializer(), one.readText()).takeIf { one.name == it.id + JSON }
-    } catch (_: IOException) {
-        null
+    /** The check in [text], when it reads and is the album its file [name] says. */
+    private fun readCheck(name: String, text: String): CheckedAlbum? = try {
+        checksJson.decodeFromString(CheckedAlbum.serializer(), text).takeIf { name == it.id + JSON }
     } catch (_: IllegalArgumentException) {
         // A SerializationException is one.
         null

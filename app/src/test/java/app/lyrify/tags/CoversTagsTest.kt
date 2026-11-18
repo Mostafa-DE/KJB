@@ -49,6 +49,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeFalse
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -79,9 +80,15 @@ class CoversTagsTest {
     /** Checks with albums to look up that started KJB's foreground service. */
     private var started = 0
 
+    /** How long reading the library takes, in the test's time. */
+    private var songsDelay = 0L
+
     /** Covers & tags as KJB builds it, in [scope]: the test's own, or one a test cancels as Android closing KJB. */
     private fun TestScope.flow(scope: CoroutineScope = this): CoversTags = CoversTags(
-        songs = { library },
+        songs = {
+            delay(songsDelay)
+            library
+        },
         source = source,
         write = { jobs, changed, kind, label, given -> writeEdit(rig.writer, favourites, read(), jobs, changed, kind, label, progress(given)) },
         undoEntry = { undoEdit(rig.writer, rig.undo, favourites, read(), it) },
@@ -411,8 +418,9 @@ class CoversTagsTest {
         val service = Regex("""<service\s+android:name="\.tags\.CheckService"[^>]*/>""").find(manifest)?.value.orEmpty()
         assertTrue(manifest, "android:exported=\"false\"" in service && "android:foregroundServiceType=\"dataSync\"" in service)
         assertTrue(File("src/main/java/app/lyrify/tags/TagsGraph.kt").readText().contains("checkStarted = { CheckService.start(app) }"))
-        // Its notification opens Covers & tags.
-        assertTrue(File("src/main/java/app/lyrify/tags/CheckService.kt").readText().contains(".putExtra(EXTRA_DESTINATION, DESTINATION_COVERS_TAGS)"))
+        // Its notification opens Covers & tags, also when KJB is open already (onNewIntent, as the player's does).
+        val notice = File("src/main/java/app/lyrify/tags/CheckService.kt").readText()
+        assertTrue(notice.contains(".addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP).putExtra(EXTRA_DESTINATION, DESTINATION_COVERS_TAGS)"))
         assertEquals(Page.CoversTags, destinationPage(DESTINATION_COVERS_TAGS))
     }
 
@@ -1117,6 +1125,114 @@ class CoversTagsTest {
         assertEquals(listOf("Lanterns", "Harbour", "Lanterns"), source.checked.map { it.first })
         assertEquals(1, again.state.value.ready.size)
         assertEquals(1, kept.list()!!.size)
+    }
+
+    // Review fixes (Grok, panel-ct1)
+
+    @Test
+    fun `a suggestion kept from before KJB closed applies even when the library lists its songs in another order`() = runTest {
+        val songs = lanternsSongs()
+        library = songs
+        answers("Lanterns" to lanterns)
+        checked(flow())
+        library = songs.reversed()
+
+        val again = flow()
+        advanceUntilIdle()
+        val applied = again.applyWhole(again.state.value.waiting("Lanterns"))
+
+        assertTrue(applied.toString(), applied is Applied.Done)
+        assertEquals(2, (applied as Applied.Done).songs)
+        assertEquals(listOf("Quiet Ember"), rig.fields(songs[0].target())["TITLE"])
+    }
+
+    @Test
+    fun `To review keeps its order after KJB closes, albums checked in the same moment included`() = runTest {
+        library = lanternsSongs() + harbourSongs() + (1..4).map { song("Lone $it", 60L + it, "Lone Kestrel $it", album = null) }
+        answers("Lanterns" to lanterns)
+        val state = checked(flow())
+
+        val again = flow()
+        advanceUntilIdle()
+
+        assertEquals(6, state.waiting.size)
+        assertEquals(state.waiting.map { it.album.id }, again.state.value.waiting.map { it.album.id })
+    }
+
+    @Test
+    fun `Cancel stops an album opened from its song that waits for MusicBrainz`() = runTest {
+        val songs = lanternsSongs()
+        library = songs
+        source.answer = { Lookup.Busy }
+        val flow = flow()
+        advanceUntilIdle()
+
+        flow.open(songs[0].path)
+        advanceTimeBy(10 * 60_000L)
+        runCurrent()
+        assertTrue(flow.state.value.waitingBusy)
+        val asked = source.checked.size
+        flow.cancel()
+        advanceTimeBy(60 * 60_000L)
+        runCurrent()
+
+        assertFalse(flow.state.value.waitingBusy)
+        assertEquals(emptySet<String>(), flow.state.value.checkingAlbums)
+        assertEquals(asked, source.checked.size)
+    }
+
+    @Test
+    fun `a check cut short by KJB closing after its last album counts as a full check at the next opening, asking nothing`() = runTest {
+        library = lanternsSongs() + harbourSongs()
+        answers("Lanterns" to lanterns)
+        checked(flow())
+        val store = CoversTagsStore(storeFile)
+        store.save(store.load().copy(checkedAll = false, unfinished = true))
+
+        val again = flow()
+        advanceUntilIdle()
+        again.opened()
+        advanceUntilIdle()
+
+        assertEquals(2, source.checked.size)
+        assertFalse(again.state.value.memory.unfinished)
+        assertTrue(again.state.value.memory.checkedAll)
+        assertTrue(CoversTagsStore(storeFile).load().checkedAll)
+    }
+
+    @Test
+    fun `Check pressed while opening the page is still deciding shows the ring`() = runTest {
+        library = lanternsSongs()
+        answers("Lanterns" to lanterns)
+        checked(flow())
+        val again = flow()
+        advanceUntilIdle()
+        songsDelay = 1_000
+
+        again.opened()
+        advanceTimeBy(500)
+        runCurrent()
+        again.check()
+        runCurrent()
+
+        assertNotNull(again.state.value.checking)
+        advanceUntilIdle()
+        assertNull(again.state.value.checking)
+    }
+
+    @Test
+    fun `a kept check that can't be read for now is left in place for the next start`() {
+        val store = CoversTagsStore(storeFile)
+        val one = CheckedAlbum("0a1b2c", emptyList(), ready = false)
+        assertTrue(store.saveCheck(one))
+        val file = File(storeFile.parentFile, "covers-tags-checks/0a1b2c.json")
+        file.setReadable(false)
+        assumeFalse("the tests run as a user who reads every file", file.canRead())
+
+        assertEquals(emptyList<CheckedAlbum>(), store.loadChecks())
+        assertTrue(file.exists())
+        file.setReadable(true)
+        assertEquals(listOf(one), store.loadChecks())
     }
 
     @Test

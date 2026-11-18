@@ -105,6 +105,9 @@ fun coversTagsEntry(state: CoversTagsState): EntryRow {
     return EntryRow(line, state.badge.takeIf { it > 0 })
 }
 
+/** Cancel shows while a check runs, and while an album opened from its song is checked (it may wait for MusicBrainz). */
+fun offersCancel(state: CoversTagsState): Boolean = state.checking != null || state.checkingAlbums.isNotEmpty()
+
 /** Writing needs notification access (plan decision 1), and one apply at a time. */
 fun canWrite(access: Boolean, state: CoversTagsState): Boolean = access && state.applying == null
 
@@ -586,6 +589,8 @@ private fun StartRow(state: CoversTagsState, busy: Boolean, onCheck: () -> Unit,
             stringResource(R.string.tags_line_none).takeIf { !first && checking == null && state.checkingAlbums.isEmpty() && state.toReview.isEmpty() },
         )
         lines.forEach { Text(it, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center) }
+        // The ring has its own Cancel; an album checked on its own gets one under its line.
+        if (checking == null && offersCancel(state)) LyrifyButton(stringResource(R.string.tags_cancel), onClick = onCancel, kind = ButtonKind.SECONDARY, compact = true)
     }
 }
 

@@ -28,6 +28,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -462,6 +463,7 @@ class CoversTags(
         val albums = albumsOf(songs() ?: return@launch).associateBy { it.id }
         val (still, gone) = kept.partition { checked -> albums[checked.id]?.let { it.paths.mapNotNull(files).toSet() == checked.marks.toSet() } == true }
         gone.forEach { store.removeCheck(it.id) }
+        still.maxOfOrNull { it.at }?.let { newest -> lastPlaced.accumulateAndGet(newest, ::maxOf) }
         val restored = withContext(compute) { still.sortedBy { it.at }.map { waitingAgain(albums.getValue(it.id), it) } }
         _state.update { state -> state.copy(waiting = restored.filter { again -> state.waiting.none { it.album.id == again.album.id } } + state.waiting) }
         log("tags: ${restored.size} albums waiting from earlier checks, ${gone.size} changed or gone")
@@ -480,6 +482,12 @@ class CoversTags(
 
     /** Held while a check starts, so two at once (a tap as the page opens) start one. */
     private val starting = Any()
+
+    /** Albums checked on their own (the song sheet, Check again): Cancel stops them too, as they may wait for MusicBrainz. */
+    private val singles: MutableSet<Job> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+    /** The time each album placed is kept with: never the same twice, so To review keeps its order between runs. */
+    private val lastPlaced = java.util.concurrent.atomic.AtomicLong()
 
     private val covers = Recent<Cover>(COVERS_KEPT)
     private val previews = Recent<ByteArray>(PREVIEWS_KEPT)
@@ -519,7 +527,11 @@ class CoversTags(
      * with [CoversTagsMemory.checkedAll].
      */
     private fun start(asked: Boolean): Unit = synchronized(starting) {
-        if (running?.isActive == true) return
+        if (running?.isActive == true) {
+            // A Check while opening the page decides whether to check: the ring shows at once all the same.
+            if (asked) _state.update { it.copy(checking = it.checking ?: Checking(0, 0)) }
+            return
+        }
         if (asked) _state.update { it.copy(checking = Checking(0, 0), notChecked = 0, unreadable = false) }
         val job = scope.launch(compute, start = CoroutineStart.LAZY) {
             val self = coroutineContext.job
@@ -532,7 +544,11 @@ class CoversTags(
                 }
                 forgetGone(library.map { it.id }.toSet())
                 val albums = toCheck(library)
-                if (albums.isEmpty() && !asked) return@launch
+                if (albums.isEmpty() && !asked) {
+                    // A check KJB's closing cut short after its last album: it was a full check.
+                    if (_state.value.memory.unfinished) commit { it.copy(checkedAll = true, unfinished = false) }
+                    return@launch
+                }
                 _state.update { it.copy(checking = Checking(0, albums.size), notChecked = 0, unreadable = false) }
                 commit { it.copy(checkedOnce = true, unfinished = true) }
                 if (albums.isNotEmpty()) checkStarted()
@@ -548,12 +564,13 @@ class CoversTags(
     }
 
     /**
-     * "Cancel": the check stops at once; what it found stays. Opening Covers & tags does not carry it on, unless a check
-     * ran to its end before.
+     * "Cancel": the check stops at once, and so do albums checked on their own; what they found stays. Opening Covers &
+     * tags does not carry the check on, unless a check ran to its end before.
      */
     fun cancel() {
         running?.cancel()
         running = null
+        singles.forEach { it.cancel() }
         _state.update { it.copy(checking = null) }
         scope.launch(io) { commit { it.copy(unfinished = false) } }
     }
@@ -667,11 +684,14 @@ class CoversTags(
      * when the album waits for the user now.
      */
     private suspend fun single(album: TagAlbum, fresh: Boolean, focus: Focus? = null): Boolean {
+        val self = currentCoroutineContext().job
+        singles += self
         _state.update { it.copy(checkingAlbums = it.checkingAlbums + album.id, focus = focus ?: it.focus) }
         try {
             lookUp(listOf(album), fresh, progress = false)
         } finally {
             _state.update { it.copy(checkingAlbums = it.checkingAlbums - album.id) }
+            singles -= self
         }
         return waiting(album.id) != null
     }
@@ -680,13 +700,16 @@ class CoversTags(
     private suspend fun place(album: TagAlbum, proposal: Proposal, marks: List<FileMark>) {
         _state.update { state ->
             val at = state.waiting.indexOfFirst { it.album.id == album.id }
-            val waiting = Waiting(album, proposal, marks, state.waiting.getOrNull(at)?.checkedAt ?: clock())
+            val waiting = Waiting(album, proposal, marks, state.waiting.getOrNull(at)?.checkedAt ?: placedAt())
             state.copy(waiting = if (at < 0) state.waiting + waiting else state.waiting.toMutableList().also { it[at] = waiting })
         }
         keep(album.id)
     }
 
     private fun waiting(albumId: String): Waiting? = _state.value.waiting.firstOrNull { it.album.id == albumId }
+
+    /** Now, or just after the album placed last when that was in the same moment. */
+    private fun placedAt(): Long = lastPlaced.updateAndGet { last -> maxOf(clock(), last + 1) }
 
     /** Keeps album [albumId] as it waits now, or forgets it when it waits no more. */
     private suspend fun keep(albumId: String) {
@@ -843,7 +866,8 @@ class CoversTags(
 
     private suspend fun applyOne(waiting: Waiting, match: ReleaseMatch, ticked: Set<String>, parts: Set<Part>): Applied {
         // A file replaced since the check would get another song's names: the album waits for the next check.
-        if (marks(waiting.album) != waiting.marks) {
+        // As a set: the library may list the album's songs in another order after a restart.
+        if (marks(waiting.album).toSet() != waiting.marks.toSet()) {
             _state.update { state -> state.copy(waiting = state.waiting.filterNot { it.album.id == waiting.album.id }) }
             keep(waiting.album.id)
             log("tags: album changed since the check, not written")

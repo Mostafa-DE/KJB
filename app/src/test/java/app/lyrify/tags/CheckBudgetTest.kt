@@ -26,6 +26,7 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -160,6 +161,10 @@ class CheckBudgetTest {
         assertEquals(line, 14, first.state.value.waiting.size)
         assertEquals(line, 29, firstCheck)
         assertEquals(line, 0, secondCheck)
+        // Never faster than MusicBrainz allows: each request starts 1.1 s or more after the one before it (the scripted
+        // web answers at once, so a request ends when it starts).
+        val gaps = web.requests.zipWithNext { a, b -> b.at - a.at }
+        assertTrue(gaps.toString(), gaps.all { it >= MetaGate.SPACING_MS })
         assertEquals(line, first.state.value.waiting.map { it.album.id }.toSet(), reopened.state.value.waiting.map { it.album.id }.toSet())
     }
 
