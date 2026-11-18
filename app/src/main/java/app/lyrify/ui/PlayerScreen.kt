@@ -955,8 +955,8 @@ private data class Landing(val way: SkipWay, val item: QueueItem)
  * and only then plays that song, with the incoming cover already in place, so nothing jumps. Short of it, or with no
  * song to slide in (Previous starting the song over, the end of the queue), it springs back. A tap flips to the lyrics
  * ([onFlip]; null for a book: no tap, no chip). The turn starts at once, never waiting for a second tap: one soon after
- * turns it back ([onFlipBack]) and makes the song a favourite ([doubleTapFavourite]). A drag down is the player's own
- * ([PlayerFrame]): the cover lets it go, and settles back if it was still moving.
+ * turns it back ([onFlipBack]) and makes the song a favourite ([doubleTapFavourite]; a book's part too, as its heart
+ * does). A drag down is the player's own ([PlayerFrame]): the cover lets it go, and settles back if it was still moving.
  */
 @Composable
 internal fun CoverFace(
@@ -1089,7 +1089,7 @@ internal fun CoverFace(
                         }
                     }
                 }
-                .doubleTapFavourite(if (onFlip != null && enabled) FavouriteTarget.Song(ui.item.song) else null, onSecond = onFlipBack)
+                .doubleTapFavourite(FavouriteTarget.Song(ui.item.song).takeIf { enabled }, onSecond = onFlipBack.takeIf { onFlip != null })
                 .then(if (onFlip != null) Modifier.clickable(enabled = enabled, role = Role.Button, onClick = onFlip) else Modifier)
                 .semantics { contentDescription = label },
         ) {

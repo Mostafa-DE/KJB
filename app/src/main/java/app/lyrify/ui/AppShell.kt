@@ -254,6 +254,7 @@ fun AppShell(
         LocalLyrics provides lyrics,
         LocalPlayingPath provides (bar as? NowBarShows.Own)?.now?.path,
         LocalDockBar provides DockBar(items, dot, offers),
+        LocalDoubleTaps provides doubleTaps,
     ) {
         SharedTransitionLayout(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).doubleTapHost(doubleTaps)) {
             // The page layer with its Now bar and dock: under the views, but over the views a back swipe from a page
