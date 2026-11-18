@@ -228,7 +228,7 @@ interface PlayerPort {
  * ([QueueBook.jumps]) moves the player to the current song at its position. The player moving on by itself comes back
  * through [QueueBook.at], which leaves the player as it is.
  */
-class QueueBridge(private val port: PlayerPort) {
+class QueueBridge(private val port: PlayerPort, private val stop: () -> Unit = {}) {
     private var loadedId: String? = null
     private var jumps: Long = 0
 
