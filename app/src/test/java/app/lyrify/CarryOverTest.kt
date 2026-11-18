@@ -107,10 +107,12 @@ class CarryOverTest {
         assertEquals(stored.keys, state.entries.keys)
         assertTrue(state.unknownEntries.isEmpty())
         assertEquals("every status 2.0.2 has", LyricsStatus.entries.toSet() - LyricsStatus.EXISTING_PLAIN, state.entries.values.map { it.status }.toSet())
-        // Each entry as 2.0.2 wrote it, plus 3.0's two fields at their defaults: not the user's own lyrics, no whole write.
+        // Each entry as 2.0.2 wrote it, plus 3.0's two fields at their defaults (not the user's own lyrics, no whole write)
+        // and 3.1's two (no plain lyrics in the file's tags, nothing to time anew).
         val now = entries(LedgerJson.encode(state))
+        val added = mapOf("mine" to JsonPrimitive(false), "whole" to JsonNull, "plainInTags" to JsonPrimitive(false), "retime" to JsonPrimitive(false))
         for ((path, entry) in stored) {
-            assertEquals(path, JsonObject(entry.jsonObject + mapOf("mine" to JsonPrimitive(false), "whole" to JsonNull)), now.getValue(path))
+            assertEquals(path, JsonObject(entry.jsonObject + added), now.getValue(path))
         }
         assertTrue(state.entries.values.none { it.mine })
         assertEquals(emptyList<String>(), logs)

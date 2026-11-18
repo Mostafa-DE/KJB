@@ -34,6 +34,21 @@ object Matcher {
     /** Synced lyrics are used only when LRCLIB's duration is this close to the file's. */
     const val DURATION_TOLERANCE_SECONDS: Double = 3.0
 
+    /** A record at least this sure ([score]) is the song: its lyrics may be written by themselves, its length allowing. */
+    const val WRITE_SCORE: Double = 0.9
+
+    /** From this up to [WRITE_SCORE] a record may be the song: offered in Check these ([Candidates.offered]), never written without the user. */
+    const val MAYBE_SCORE: Double = 0.6
+
+    /** Equal titles but for one word written as two ("Dont" and "Don t"). */
+    private const val SPLIT_WORD_SCORE: Double = 0.95
+
+    /** One title is the other with more words after it: a subtitle ("Glass Harbor - From the Film"), a part ("Part 2"). */
+    private const val LONGER_SCORE: Double = 0.8
+
+    /** Titles that only share words score less than one that holds the other. */
+    private const val SHARED_WORDS_MAX: Double = 0.79
+
     /**
      * In order (closest duration wins each step, ties keep list order): synced within the
      * tolerance, instrumental, plain lyrics within the tolerance (the text of this exact
@@ -56,22 +71,50 @@ object Matcher {
     }
 
     /**
-     * The record names the same song as one of [queries] that has an artist: equal titles
-     * once version tags, feat. and punctuation are set aside, and the query's artist found as
-     * whole words in the record's artist (or the other way round). A title-only query never
-     * counts: "Intro" would match anyone's. Instrumental tags are kept, so vocal lyrics never
-     * match an instrumental title.
+     * The record names the same song as one of [queries] that has an artist, sure enough to write it ([WRITE_SCORE]):
+     * equal titles once version tags, feat. and punctuation are set aside (or but for one word written as two), and the
+     * query's artist found as whole words in the record's artist (or the other way round). A title-only query never
+     * counts: "Intro" would match anyone's. Instrumental tags are kept, so vocal lyrics never match an instrumental title.
      */
-    fun isRelevant(record: LrclibRecord, queries: List<TrackQuery>): Boolean {
-        val title = comparableTitle(record.trackName)
+    fun isRelevant(record: LrclibRecord, queries: List<TrackQuery>): Boolean = score(record, queries) >= WRITE_SCORE
+
+    /**
+     * How sure KJB is that [record] is the song, 0 to 1, by the best of [queries] that has an artist: 0 unless the
+     * record's artist is the query's ([sameArtist]); then by the titles' words, version tags, feat. and punctuation
+     * aside: 1 when equal, [SPLIT_WORD_SCORE] when equal but for one word written as two, [LONGER_SCORE] when one is the
+     * other with more words after it, else the share of telling words they have in common (Dice), at most
+     * [SHARED_WORDS_MAX]. At least [WRITE_SCORE] is the song; from [MAYBE_SCORE], maybe.
+     */
+    fun score(record: LrclibRecord, queries: List<TrackQuery>): Double {
+        val title = titleWords(record.trackName)
         val artist = TrackNames.normalize(record.artistName)
-        return queries.any { query ->
-            query.artist != null && comparableTitle(query.title) == title && sameArtist(query.artist, artist)
-        }
+        return queries.maxOfOrNull { query ->
+            if (query.artist == null || !sameArtist(query.artist, artist)) 0.0 else titleScore(titleWords(query.title), title)
+        } ?: 0.0
     }
 
-    private fun comparableTitle(title: String): String =
-        TrackNames.normalize(TrackNames.withoutFeat(TrackNames.withoutVersionTags(title)))
+    private fun titleScore(wanted: List<String>, found: List<String>): Double = when {
+        wanted.isEmpty() || found.isEmpty() -> 0.0
+        wanted == found -> 1.0
+        oneSplit(wanted, found) || oneSplit(found, wanted) -> SPLIT_WORD_SCORE
+        startsWith(found, wanted) || startsWith(wanted, found) -> LONGER_SCORE
+        else -> minOf(sharedWords(wanted, found), SHARED_WORDS_MAX)
+    }
+
+    private fun startsWith(longer: List<String>, shorter: List<String>): Boolean = longer.size > shorter.size && longer.subList(0, shorter.size) == shorter
+
+    /** Dice's share of the words two titles have in common, small words ([TITLE_SMALL_WORDS]) aside unless that is all they have. */
+    private fun sharedWords(a: List<String>, b: List<String>): Double {
+        val telling = a.filterNot { it in TITLE_SMALL_WORDS }.toSet() to b.filterNot { it in TITLE_SMALL_WORDS }.toSet()
+        val (x, y) = if (telling.first.isEmpty() || telling.second.isEmpty()) a.toSet() to b.toSet() else telling
+        return 2.0 * x.intersect(y).size / (x.size + y.size)
+    }
+
+    private fun titleWords(title: String): List<String> =
+        TrackNames.normalize(TrackNames.withoutFeat(TrackNames.withoutVersionTags(title))).split(' ').filter { it.isNotEmpty() }
+
+    /** Words of a title that say little about which song it is. */
+    private val TITLE_SMALL_WORDS: Set<String> = setOf("the", "a", "an", "of", "and", "in", "on", "to", "my", "your", "i", "you", "me", "for")
 
     /**
      * Equal names, or one held in the other as whole words when the shorter one has a telling word ([tellingWord]):
@@ -117,11 +160,14 @@ object Candidates {
 
     /**
      * What a loose search found that may be [track]: also named like the song ([TrackNames.names]), the candidate's
-     * title equal to one of its names or one holding the other as whole words, version tags and feat. aside.
+     * title equal to one of its names or one holding the other as whole words, version tags and feat. aside; or a maybe
+     * by its title and artist against the lookup's [queries] ([Matcher.MAYBE_SCORE]).
      */
-    fun offered(records: List<LrclibRecord>, track: LocalTrack): List<Candidate> {
+    fun offered(records: List<LrclibRecord>, track: LocalTrack, queries: List<TrackQuery> = emptyList()): List<Candidate> {
         val names = TrackNames.names(track.title, File(track.path).name).map(::words).filter { it.isNotEmpty() }
-        return ranked(records, track, MAX_OFFERED) { record -> words(record.trackName).let { title -> names.any { sameName(it, title) } } }
+        return ranked(records, track, MAX_OFFERED) { record ->
+            words(record.trackName).let { title -> names.any { sameName(it, title) } } || Matcher.score(record, queries) >= Matcher.MAYBE_SCORE
+        }
     }
 
     /** What the user's own search found for [track]: any title, of the song's length. */
@@ -247,14 +293,6 @@ object Candidates {
     private fun sameName(name: List<String>, title: List<String>): Boolean =
         name == title || oneSplit(name, title) || oneSplit(title, name) || holds(name, title) || holds(title, name)
 
-    /** [split] is [whole] with exactly one of its words written as two. */
-    private fun oneSplit(split: List<String>, whole: List<String>): Boolean {
-        if (split.size != whole.size + 1) return false
-        // The first word that differs is the one split; with none, [split] only has a word more.
-        val at = whole.indices.firstOrNull { split[it] != whole[it] } ?: return false
-        return split[at] + split[at + 1] == whole[at] && split.drop(at + 2) == whole.drop(at + 1)
-    }
-
     private fun holds(outer: List<String>, inner: List<String>): Boolean = inner.isNotEmpty() && Collections.indexOfSubList(outer, inner) >= 0
 
     /** The artist's whole name, or one of its telling words, is a whole word of the song's tags, title or file name. */
@@ -278,6 +316,14 @@ object Candidates {
 
     /** Punctuation, symbols and spaces between words. */
     private val NOT_WORD = Regex("""[^\p{L}\p{M}\p{N}]+""")
+}
+
+/** [split] is [whole] with exactly one of its words written as two. */
+private fun oneSplit(split: List<String>, whole: List<String>): Boolean {
+    if (split.size != whole.size + 1) return false
+    // The first word that differs is the one split; with none, [split] only has a word more.
+    val at = whole.indices.firstOrNull { split[it] != whole[it] } ?: return false
+    return split[at] + split[at + 1] == whole[at] && split.drop(at + 2) == whole.drop(at + 1)
 }
 
 /** Words that say nothing about an artist on their own; shorter words than [MIN_ARTIST_WORD] never do. */

@@ -85,6 +85,7 @@ import app.lyrify.books.knownBookPart
 import app.lyrify.data.LedgerEntry
 import app.lyrify.data.LyricsStatus
 import app.lyrify.library.Song
+import app.lyrify.lyrics.EmbeddedLyrics
 import app.lyrify.lyrics.LocalTrack
 import app.lyrify.lyrics.LrcFormat
 import app.lyrify.lyrics.LrcLine
@@ -149,6 +150,12 @@ fun LyricsLook.style(base: TextStyle, playing: Boolean, still: Boolean = false):
  */
 fun plainRecord(entry: LedgerEntry?): Long? = entry?.takeIf { it.status == LyricsStatus.PLAIN_ONLY }?.lrclibId
 
+/** Whether [entry]'s plain lyrics (PLAIN_ONLY) are the song's own, in its file's tags ([LedgerEntry.plainInTags]). */
+fun plainInTags(entry: LedgerEntry?): Boolean = entry?.status == LyricsStatus.PLAIN_ONLY && entry.plainInTags
+
+/** The plain words the song at [path] holds in its own tags ([EmbeddedLyrics]), read when shown, never kept; null without. Blocking. */
+fun tagPlainText(path: String): String? = EmbeddedLyrics.read(File(path))?.words?.takeIf(String::isNotBlank)
+
 /** Plain lyrics as lines: each trimmed, without empty lines and header tags (`[ar:...]`). */
 fun plainLines(text: String): List<String> = text.removePrefix("\uFEFF").lines().map(String::trim).filter { it.isNotEmpty() && !HEADER_LINE.matches(it) }
 
@@ -203,16 +210,25 @@ suspend fun plainText(context: Context, id: Long): String? {
 
 /**
  * The lyrics of the song at [path] as the views show them: its `.lrc` ([lrc] reads it) as [panelLyrics] tells it with its
- * ledger [entry]; without a file, the plain lyrics LRCLIB has for it ([plainRecord], [plain] asks). A [book]'s part is
+ * ledger [entry]; without a file, the plain lyrics LRCLIB has for it ([plainRecord], [plain] asks) or those in its own
+ * tags ([plainInTags], [tags] reads them). A [book]'s part is
  * [PanelLyrics.Book] at once: books never have lyrics, so nothing beside it is read and LRCLIB is never asked, whatever
  * its ledger still says from before it was a book. [book] null, not known yet ([knownBookPart]): null, nothing read.
  */
-suspend fun songLyrics(path: String, entry: LedgerEntry?, book: Boolean?, lrc: suspend (String) -> String?, plain: suspend (Long) -> String?): PanelLyrics? {
+suspend fun songLyrics(
+    path: String,
+    entry: LedgerEntry?,
+    book: Boolean?,
+    lrc: suspend (String) -> String?,
+    plain: suspend (Long) -> String?,
+    tags: suspend (String) -> String? = { tagPlainText(it) },
+): PanelLyrics? {
     if (book == null) return null
     if (book) return PanelLyrics.Book
     val read = panelLyrics(lrc(path), entry?.status)
-    val id = plainRecord(entry)
-    return if (read == PanelLyrics.None && id != null) plain(id)?.let(::plainLines)?.takeIf { it.isNotEmpty() }?.let(PanelLyrics::Plain) ?: read else read
+    if (read != PanelLyrics.None) return read
+    val text = plainRecord(entry)?.let { plain(it) } ?: path.takeIf { plainInTags(entry) }?.let { tags(it) }
+    return text?.let(::plainLines)?.takeIf { it.isNotEmpty() }?.let(PanelLyrics::Plain) ?: read
 }
 
 /**

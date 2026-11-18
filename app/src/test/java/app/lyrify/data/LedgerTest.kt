@@ -88,13 +88,11 @@ class LedgerTest {
     }
 
     @Test
-    fun `not found, plain only, mismatch, instrumental and no artist are checked again after 30 days`() {
+    fun `plain only, mismatch, instrumental and a song to check are checked again after 30 days`() {
         listOf(
-            LyricsStatus.NOT_FOUND,
             LyricsStatus.PLAIN_ONLY,
             LyricsStatus.DURATION_MISMATCH,
             LyricsStatus.INSTRUMENTAL,
-            LyricsStatus.UNIDENTIFIED,
             LyricsStatus.NEEDS_CHECK,
         ).forEach {
             val entry = recorded(null, track, it, lrclibId = 9, now = now)
@@ -102,6 +100,68 @@ class LedgerTest {
             assertFalse(entry.isDue(now + 29 * day))
             assertTrue(entry.isDue(now + 30 * day))
         }
+    }
+
+    @Test
+    fun `a miss is looked up again once after a week, then every 30 days`() {
+        listOf(LyricsStatus.NOT_FOUND, LyricsStatus.UNIDENTIFIED).forEach {
+            val first = recorded(null, track, it, lrclibId = null, now = now)
+            assertEquals(it.name, now + 7 * day, first.nextAttemptAt)
+            assertFalse(first.isDue(now + 6 * day))
+            assertTrue(first.isDue(now + 7 * day))
+
+            val second = recorded(first, track, it, lrclibId = null, now = now + 7 * day)
+            assertEquals(it.name, now + 37 * day, second.nextAttemptAt)
+            assertEquals(it.name, now + 67 * day, recorded(second, track, it, lrclibId = null, now = now + 37 * day).nextAttemptAt)
+        }
+        // A miss after another kind of miss, too; after anything else it is a first miss again.
+        val unidentified = recorded(null, track, LyricsStatus.UNIDENTIFIED, lrclibId = null, now = now)
+        assertEquals(now + 30 * day, recorded(unidentified, track, LyricsStatus.NOT_FOUND, null, now).nextAttemptAt)
+        val toCheck = recorded(null, track, LyricsStatus.NEEDS_CHECK, lrclibId = null, now = now)
+        assertEquals(now + 7 * day, recorded(toCheck, track, LyricsStatus.NOT_FOUND, null, now, declined = true).nextAttemptAt)
+    }
+
+    @Test
+    fun `the song's own plain lyrics stay with it through the AI's runs, and only there`() {
+        val plain = recorded(null, track, LyricsStatus.PLAIN_ONLY, null, now, durationMatched = true, plainInTags = true)
+        assertTrue(plain.plainInTags)
+        val failed = recorded(plain, track, LyricsStatus.AI_FAILED, null, now, durationMatched = true)
+        assertTrue(failed.plainInTags)
+        val writing = recorded(failed, track, LyricsStatus.WRITING, null, now, source = LyricsSource.AI)
+        assertTrue(writing.plainInTags)
+        assertTrue(recorded(writing, track, LyricsStatus.AI_ALIGNED, null, now, source = LyricsSource.AI).plainInTags)
+        // Anything a lookup records anew says again where its lyrics are.
+        assertFalse(recorded(plain, track, LyricsStatus.PLAIN_ONLY, 7, now, durationMatched = true).plainInTags)
+        assertFalse(recorded(plain, track, LyricsStatus.NOT_FOUND, null, now).plainInTags)
+        assertFalse(recorded(null, track, LyricsStatus.NOT_FOUND, null, now, plainInTags = true).plainInTags)
+    }
+
+    @Test
+    fun `lyrics of another length to time anew stay with the song through the AI's runs`() {
+        val plain = recorded(null, track, LyricsStatus.PLAIN_ONLY, 7, now, durationMatched = false, retime = true)
+        assertTrue(plain.retime)
+        val failed = recorded(plain, track, LyricsStatus.AI_FAILED, 7, now, durationMatched = false)
+        assertTrue(failed.retime)
+        assertTrue(recorded(failed, track, LyricsStatus.AI_REJECTED, 7, now, durationMatched = false).retime)
+        assertFalse(recorded(plain, track, LyricsStatus.PLAIN_ONLY, 7, now, durationMatched = false).retime)
+        assertFalse(recorded(null, track, LyricsStatus.DURATION_MISMATCH, 7, now, retime = true).retime)
+        assertEquals(LedgerState().put(plain), LedgerJson.decode(LedgerJson.encode(LedgerState().put(plain))))
+    }
+
+    @Test
+    fun `the song's own lyrics survive a round trip, and plain lyrics from before 3_1 read as LRCLIB's`() {
+        val ledger = LedgerState()
+            .put(recorded(null, track, LyricsStatus.SYNCED, null, now, sha256 = "ab12", size = 40, source = LyricsSource.TAGS))
+            .put(recorded(null, track.copy(path = "/b.mp3"), LyricsStatus.PLAIN_ONLY, null, now, durationMatched = true, plainInTags = true))
+        assertEquals(ledger, LedgerJson.decode(LedgerJson.encode(ledger)))
+        // As 3.0 wrote it: no "plainInTags", no "retime".
+        val text = """{"schemaVersion":2,"entries":{"/m/a.mp3":{"path":"/m/a.mp3","title":"Paper Lantern","artist":"Kit Calloway",""" +
+            """"durationMs":201000,"status":"PLAIN_ONLY","lrclibId":4,"updatedAt":5,"durationMatched":false,"lookupRev":1}}}"""
+        val old = LedgerJson.decode(text).entries.getValue("/m/a.mp3")
+        assertEquals(LyricsStatus.PLAIN_ONLY, old.status)
+        assertEquals(4L, old.lrclibId)
+        assertFalse(old.plainInTags)
+        assertFalse(old.retime)
     }
 
     @Test

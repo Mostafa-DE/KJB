@@ -775,7 +775,7 @@ class LyricsPipelineTest {
     // What LRCLIB has
 
     @Test
-    fun `not found asks every query, then searches by title once, and is checked again after 30 days`() = runTest {
+    fun `not found asks every query, then searches by title once, and is checked again after a week`() = runTest {
         val track = audio(title = "04. Vael (Live)")
         val pipeline = pipeline()
 
@@ -783,7 +783,8 @@ class LyricsPipelineTest {
 
         assertEquals(listOf("Vael (Live)", "Vael"), client.gets.map { it.title })
         assertEquals(listOf(TrackQuery("Quillmere", "Vael (Live)"), TrackQuery("Quillmere", "Vael"), TrackQuery(null, "Vael")), client.searches)
-        assertEquals(BASE + 30 * DAY, ledger[track.path]?.nextAttemptAt)
+        // A first miss: LRCLIB grows every day (3.1, rb4).
+        assertEquals(BASE + 7 * DAY, ledger[track.path]?.nextAttemptAt)
         val requests = client.requests
         pipeline.process(track)
         assertEquals(requests, client.requests)
@@ -808,7 +809,7 @@ class LyricsPipelineTest {
 
         assertEquals(0, client.gets.size)
         assertEquals(listOf(TrackQuery(null, "Intro"), TrackQuery(null, "Vael")), client.searches)
-        assertEquals(BASE + 30 * DAY, ledger[track.path]?.nextAttemptAt)
+        assertEquals(BASE + 7 * DAY, ledger[track.path]?.nextAttemptAt)
         assertFalse(sidecar(track).exists())
     }
 

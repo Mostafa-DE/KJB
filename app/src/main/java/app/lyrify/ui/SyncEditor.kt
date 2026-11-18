@@ -248,13 +248,21 @@ data class SyncEdit(
 
 /**
  * The editor for the file at [path]: its `.lrc` ([lrc] reads it), else the plain lyrics LRCLIB has for its ledger
- * [entry] ([plainRecord], [plain] asks), as [SyncEdit.from] tells them. Null for a [book]'s part: books never have
+ * [entry] ([plainRecord], [plain] asks) or those in its own tags ([plainInTags], [tags] reads them), as [SyncEdit.from]
+ * tells them. Null for a [book]'s part: books never have
  * lyrics, so nothing beside it is read and LRCLIB is never asked, whatever its ledger still says from before.
  */
-suspend fun editorLyrics(path: String, entry: LedgerEntry?, book: Boolean, lrc: suspend (String) -> String?, plain: suspend (Long) -> String?): SyncEdit? {
+suspend fun editorLyrics(
+    path: String,
+    entry: LedgerEntry?,
+    book: Boolean,
+    lrc: suspend (String) -> String?,
+    plain: suspend (Long) -> String?,
+    tags: suspend (String) -> String? = { withContext(Dispatchers.IO) { tagPlainText(it) } },
+): SyncEdit? {
     if (book) return null
-    val read = lrc(path)
-    return SyncEdit.from(read, if (read == null) plainRecord(entry)?.let { plain(it) } else null)
+    val read = lrc(path) ?: return SyncEdit.from(null, plainRecord(entry)?.let { plain(it) } ?: path.takeIf { plainInTags(entry) }?.let { tags(it) })
+    return SyncEdit.from(read, null)
 }
 
 /** The editor's lines across a turn of the phone: as JSON in the saved state (the lines stay in memory, never in a log). */
@@ -311,7 +319,7 @@ fun SyncEditorView(view: FullScreen.SyncEditor) {
     LaunchedEffect(song?.path) {
         val path = song?.path ?: return@LaunchedEffect
         if (edit == null || book) {
-            edit = editorLyrics(path, entry, book, { withContext(Dispatchers.IO) { readLrc(it) } }) { plainText(context, it) }
+            edit = editorLyrics(path, entry, book, { withContext(Dispatchers.IO) { readLrc(it) } }, plain = { plainText(context, it) })
             nothing = edit == null
         }
         if (edit != null && player.open(path)) {

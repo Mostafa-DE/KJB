@@ -19,8 +19,11 @@ object TrackNames {
     /** At most this many loose (`q=`) searches per track ([looseQueries]): one request each. */
     const val MAX_LOOSE_QUERIES: Int = 2
 
+    /** At most this many more queries for a tag naming several artists, one by each of two of them ([queries]). */
+    const val MAX_ARTIST_QUERIES: Int = 2
+
     /** Requests of one lookup at most, each asked again while LRCLIB is busy: two per query, one per loose search. */
-    const val MAX_REQUESTS: Int = 2 * MAX_QUERIES + MAX_LOOSE_QUERIES
+    const val MAX_REQUESTS: Int = 2 * (MAX_QUERIES + MAX_ARTIST_QUERIES) + MAX_LOOSE_QUERIES
 
     private val CONTROL = Regex("""\p{Cc}""")
     private val FORMAT = Regex("""\p{Cf}""")
@@ -89,12 +92,29 @@ object TrackNames {
      * An artist tag is always used as it is: an artist named only in the title or the file
      * name next to another artist tag (an uploader's) is left to the user's check. Empty
      * when no artist can be told: a title alone could match anyone's song.
+     *
+     * When the tag names several [artists] (the user's split of [artist], in its order), at most [MAX_ARTIST_QUERIES]
+     * more come last, so they are asked only when all the others miss: its first artist, then its last, each with the
+     * title bare of version tags and feat. Each one cleaned as a tag is; one the others ask for already is left out.
      */
-    fun queries(artist: String?, title: String, album: String?, fileName: String? = null): List<TrackQuery> {
+    fun queries(artist: String?, title: String, album: String?, fileName: String? = null, artists: List<String> = emptyList()): List<TrackQuery> {
         val cleanArtist = cleanArtist(artist)
+        val cleanTitle = cleanTitle(title)
         val fromFile = fileName?.takeIf { cleanArtist == null || normalize(title) == normalize(baseName(it)) }?.let(::fileTitle)
-        val all = fromTags(cleanArtist, cleanTitle(title), album, artist) + fromFile?.let { fromTags(cleanArtist, it, album, artist) }.orEmpty()
-        return all.distinctBy { normalize(it.artist.orEmpty()) to normalize(it.title) }.take(MAX_QUERIES)
+        val all = fromTags(cleanArtist, cleanTitle, album, artist) + fromFile?.let { fromTags(cleanArtist, it, album, artist) }.orEmpty()
+        val tagged = all.distinctBy(::key).take(MAX_QUERIES)
+        val alone = cleanArtist?.let { byArtist(artists, withoutArtistPrefix(cleanTitle, it)) }.orEmpty()
+        return tagged + alone.filter { query -> tagged.none { key(it) == key(query) } }.distinctBy(::key).take(MAX_ARTIST_QUERIES)
+    }
+
+    /** What makes two queries the same: their artists and titles, normalised. */
+    private fun key(query: TrackQuery): Pair<String, String> = normalize(query.artist.orEmpty()) to normalize(query.title)
+
+    /** [title] (bare) asked for by the first and the last of several [artists]; none for one artist. */
+    private fun byArtist(artists: List<String>, title: String): List<TrackQuery> {
+        if (artists.size < 2) return emptyList()
+        val bare = withoutFeat(withoutVersionTags(title))
+        return listOf(artists.first(), artists.last()).mapNotNull(::cleanArtist).map { TrackQuery(it, bare) }
     }
 
     private fun fromTags(cleanArtist: String?, cleanTitle: String, album: String?, artist: String?): List<TrackQuery> {

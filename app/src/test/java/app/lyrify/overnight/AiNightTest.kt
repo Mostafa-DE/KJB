@@ -21,6 +21,7 @@ import app.lyrify.lyrics.LOOKUP_REV
 import app.lyrify.lyrics.LocalTrack
 import app.lyrify.lyrics.LrcFormat
 import app.lyrify.lyrics.LrclibRecord
+import app.lyrify.lyrics.LyricsTagFixtures
 import app.lyrify.lyrics.LrclibResult
 import app.lyrify.lyrics.LyricsPipeline
 import app.lyrify.lyrics.MemoryLedger
@@ -43,6 +44,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeFalse
 import org.junit.Assume.assumeTrue
 import org.junit.Rule
 import org.junit.Test
@@ -85,6 +87,30 @@ class AiNightTest {
 
         assertEquals(listOf("b", "a", "c", "e", "d"), jobs.map { it.track.title })
         assertEquals(listOf(2L, 1L, null, null, null), jobs.map { it.lrclibId })
+    }
+
+    @Test
+    fun `a song whose own tags hold plain lyrics is timed with them, among the first`() {
+        val own = recorded(null, track("own"), LyricsStatus.PLAIN_ONLY, null, now - 5, durationMatched = true, plainInTags = true)
+        val ledger = ledgerOf(entry("c", LyricsStatus.NOT_FOUND, now), own, entry("b", LyricsStatus.PLAIN_ONLY, now - 1, id = 2, matched = true))
+
+        val jobs = AiQueue.of(ledger, now, canAll)
+
+        assertEquals(listOf("b", "own", "c"), jobs.map { it.track.title })
+        assertEquals(listOf(true, true, false), jobs.map { it.times })
+        assertTrue(jobs[1].plainInTags)
+        assertEquals(listOf("c"), AiQueue.of(ledger, now, canAll, align = false).map { it.track.title })
+    }
+
+    @Test
+    fun `LRCLIB's lyrics of another length marked to time anew are timed, the others of another length transcribed`() {
+        val anew = recorded(null, track("anew"), LyricsStatus.PLAIN_ONLY, 3, now - 5, durationMatched = false, retime = true)
+        val ledger = ledgerOf(entry("other", LyricsStatus.PLAIN_ONLY, now, id = 4, matched = false), anew)
+
+        val jobs = AiQueue.of(ledger, now, canAll)
+
+        assertEquals(listOf("anew", "other"), jobs.map { it.track.title })
+        assertEquals(listOf(3L, null), jobs.map { it.lrclibId })
     }
 
     @Test
@@ -326,6 +352,47 @@ class AiNightTest {
         assertEquals(lrc("h"), sidecar(heard).readText())
         assertEquals(AiProgress(0, 2, "Timed"), progress.first())
         assertEquals(AiProgress(1, 2, "Heard"), progress.last())
+    }
+
+    @Test
+    fun `a song's own plain lyrics are read from its file to time it, never from LRCLIB`() = runTest {
+        val file = File(folder.root, "Own.mp3").apply { writeBytes(LyricsTagFixtures.mp3(LyricsTagFixtures.frame("USLT", LyricsTagFixtures.uslt("placeholder own\nplaceholder two")))) }
+        val own = LocalTrack(file.path, "Own", "Artist", null, 200_000)
+        memory.put(recorded(null, own, LyricsStatus.PLAIN_ONLY, null, now - day, durationMatched = true, plainInTags = true))
+        results = { AiResult.Aligned(lrc("o"), 0.8, stats) }
+
+        assertEquals(AiRunEnd.DONE, runner().run())
+
+        assertEquals(listOf("placeholder own\nplaceholder two"), calls.map { it.plain })
+        assertEquals(0, client.requests)
+        assertEquals(LyricsStatus.AI_ALIGNED, memory[own.path]?.status)
+        assertEquals(lrc("o"), sidecar(own).readText())
+    }
+
+    @Test
+    fun `a song whose file lost its lyrics since is transcribed`() = runTest {
+        val own = audio("Own")
+        memory.put(recorded(null, own, LyricsStatus.PLAIN_ONLY, null, now - day, durationMatched = true, plainInTags = true))
+
+        assertEquals(AiRunEnd.DONE, runner().run())
+
+        assertEquals(listOf<String?>(null), calls.map { it.plain })
+    }
+
+    @Test
+    fun `a song whose file cannot be read now waits for another run, never transcribed`() = runTest {
+        val file = File(folder.root, "Own.mp3").apply { writeBytes(LyricsTagFixtures.mp3(LyricsTagFixtures.frame("USLT", LyricsTagFixtures.uslt("placeholder own")))) }
+        file.setReadable(false)
+        // As root every file can be read.
+        assumeFalse(file.canRead())
+        val own = LocalTrack(file.path, "Own", "Artist", null, 200_000)
+        memory.put(recorded(null, own, LyricsStatus.PLAIN_ONLY, null, now - day, durationMatched = true, plainInTags = true))
+
+        runner().run()
+
+        assertEquals(emptyList<String?>(), calls.map { it.plain })
+        assertEquals(LyricsStatus.PLAIN_ONLY, memory[own.path]?.status)
+        assertTrue(memory[own.path]!!.plainInTags)
     }
 
     @Test
