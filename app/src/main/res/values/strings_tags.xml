@@ -25,7 +25,8 @@
         <item quantity="other">Checking %d albums</item>
     </plurals>
     <string name="tags_cancel">Cancel</string>
-    <string name="tags_busy">MusicBrainz is busy</string>
+    <string name="tags_busy">MusicBrainz is busy. Try again in a few minutes.</string>
+    <string name="tags_waiting">MusicBrainz is busy. KJB waits a little and carries on by itself.</string>
     <string name="tags_unreadable">KJB can\'t read your songs right now.</string>
     <plurals name="tags_not_checked">
         <item quantity="one">Couldn\'t check %d album</item>

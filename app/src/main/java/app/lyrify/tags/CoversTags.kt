@@ -28,6 +28,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -208,10 +209,10 @@ data class CoversTagsState(
      */
     val waiting: List<Waiting> = emptyList(),
     val memory: CoversTagsMemory = CoversTagsMemory(),
-    /** Albums the last check could not look up: offline, refused, or left when MusicBrainz stayed busy. */
+    /** Albums the last check could not look up (offline, or an answer refused): the next check looks them up again. */
     val notChecked: Int = 0,
-    /** The last check stopped because MusicBrainz stayed busy. */
-    val stoppedBusy: Boolean = false,
+    /** Lookups waiting for MusicBrainz, which stayed busy, before they ask again ([waitingBusy]). */
+    val busyWaits: Int = 0,
     /** The songs could not be read at all. */
     val unreadable: Boolean = false,
     /** The album the song sheet asked for: the page opens its review, then [CoversTags.focused]. */
@@ -234,6 +235,9 @@ data class CoversTagsState(
     val done: List<AlbumRecord> get() = memory.albums.filter { it.state == Settled.DONE }.sortedWith(compareByDescending<AlbumRecord> { it.at }.thenByDescending { it.entryId ?: 0 })
 
     val skipped: List<AlbumRecord> get() = memory.albums.filter { it.state == Settled.SKIPPED }.sortedByDescending { it.at }
+
+    /** A check waits for MusicBrainz, busy, and will ask again by itself. */
+    val waitingBusy: Boolean get() = busyWaits > 0
 
     /** The albums to review: the badge on its Tools row. */
     val badge: Int get() = toReview.size
@@ -485,7 +489,7 @@ class CoversTags(
     /** "Check my albums": every album not done or skipped (or changed since), one at a time; unless one is running. */
     fun check() {
         if (running?.isActive == true) return
-        _state.update { it.copy(checking = Checking(0, 0), notChecked = 0, stoppedBusy = false, unreadable = false) }
+        _state.update { it.copy(checking = Checking(0, 0), notChecked = 0, unreadable = false) }
         val job = scope.launch(compute, start = CoroutineStart.LAZY) {
             val self = coroutineContext.job
             try {
@@ -578,21 +582,45 @@ class CoversTags(
         return check
     }
 
-    /** Looks [albums] up one by one, each answer taking the album's place. False when MusicBrainz stayed busy. */
-    private suspend fun lookUp(albums: List<TagAlbum>, fresh: Boolean, progress: Boolean): Boolean {
+    /** Looks [albums] up one by one, each answer taking the album's place. */
+    private suspend fun lookUp(albums: List<TagAlbum>, fresh: Boolean, progress: Boolean) {
         for ((index, album) in albums.withIndex()) {
             if (progress) _state.update { it.copy(checking = Checking(index, albums.size)) }
-            when (val result = source.check(album.album, fresh)) {
-                is Lookup.Done -> place(album, result.proposal, marks(album))
-                Lookup.Busy -> {
-                    _state.update { it.copy(stoppedBusy = true, notChecked = it.notChecked + albums.size - index) }
-                    return false
-                }
-                is Lookup.Failed -> _state.update { it.copy(notChecked = it.notChecked + 1) }
-            }
+            lookUp(album, fresh)
         }
         if (progress) _state.update { it.copy(checking = Checking(albums.size, albums.size)) }
-        return true
+    }
+
+    /**
+     * Looks [album] up until MusicBrainz answers: still busy after its gate's own backoff, the lookup says it waits
+     * ([CoversTagsState.waitingBusy]), waits [BUSY_WAITS_MS] and asks again, so a busy MusicBrainz never stops a check;
+     * only Cancel does. One that could not be looked up (offline, an answer refused) is counted, and left to the next
+     * check.
+     */
+    private suspend fun lookUp(album: TagAlbum, fresh: Boolean) {
+        var waits = 0
+        try {
+            while (true) {
+                when (val result = source.check(album.album, fresh)) {
+                    is Lookup.Done -> {
+                        place(album, result.proposal, marks(album))
+                        return
+                    }
+                    is Lookup.Failed -> {
+                        _state.update { it.copy(notChecked = it.notChecked + 1) }
+                        return
+                    }
+                    Lookup.Busy -> {
+                        val wait = BUSY_WAITS_MS[minOf(waits, BUSY_WAITS_MS.lastIndex)]
+                        if (waits++ == 0) _state.update { it.copy(busyWaits = it.busyWaits + 1) }
+                        log("tags: MusicBrainz still busy, asking again in ${wait / MS_PER_SECOND} s")
+                        delay(wait)
+                    }
+                }
+            }
+        } finally {
+            if (waits > 0) _state.update { it.copy(busyWaits = it.busyWaits - 1) }
+        }
     }
 
     /**
@@ -600,7 +628,7 @@ class CoversTags(
      * when the album waits for the user now.
      */
     private suspend fun single(album: TagAlbum, fresh: Boolean, focus: Focus? = null): Boolean {
-        _state.update { it.copy(checkingAlbums = it.checkingAlbums + album.id, stoppedBusy = false, focus = focus ?: it.focus) }
+        _state.update { it.copy(checkingAlbums = it.checkingAlbums + album.id, focus = focus ?: it.focus) }
         try {
             lookUp(listOf(album), fresh, progress = false)
         } finally {
@@ -1003,7 +1031,16 @@ class CoversTags(
         withContext(io) { store.save(memory) }
     }
 
-    private companion object {
-        const val OPUS_KEY = "opus:"
+    companion object {
+        private const val OPUS_KEY = "opus:"
+
+        /**
+         * How long a check waits for MusicBrainz before it asks again for an album that stayed busy through its gate's
+         * own backoff ([app.lyrify.tags.lookup.MetaGate.BACKOFF_MS], about 2 minutes): longer each time, then the last
+         * one again and again, until MusicBrainz answers or the user cancels.
+         */
+        val BUSY_WAITS_MS: List<Long> = listOf(60_000, 120_000, 240_000, 300_000)
+
+        private const val MS_PER_SECOND = 1_000
     }
 }

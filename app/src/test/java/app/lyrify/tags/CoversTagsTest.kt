@@ -195,21 +195,81 @@ class CoversTagsTest {
     }
 
     @Test
-    fun `MusicBrainz still busy stops the check and says so, a failed album is counted and the check goes on`() = runTest {
+    fun `MusicBrainz still busy never stops the check, it says it waits, asks again for the same album, and carries on`() = runTest {
         library = lanternsSongs() + harbourSongs() + song("Lone Kestrel", 61, "Lone Kestrel", album = null)
+        var busy = 2
+        val asked = mutableListOf<Long>()
         source.answer = { album ->
             when (album.title) {
                 "Lanterns" -> Lookup.Failed("offline")
-                "Harbour" -> Lookup.Busy
+                "Harbour" -> {
+                    asked += testScheduler.currentTime
+                    if (busy-- > 0) Lookup.Busy else Lookup.Done(Proposal.Ready(AlbumMatch.match(album, harbour)))
+                }
                 else -> Lookup.Done(Proposal.PickOne(emptyList(), setOf(Doubt.SINGLE)))
             }
         }
+        val flow = flow()
+        advanceUntilIdle()
 
-        val state = checked(flow())
+        flow.check()
+        runCurrent()
+        assertTrue(flow.state.value.waitingBusy)
+        assertEquals(Checking(1, 3), flow.state.value.checking)
+        advanceUntilIdle()
 
-        assertTrue(state.stoppedBusy)
-        assertEquals(3, state.notChecked)
-        assertEquals(2, source.checked.size)
+        val state = flow.state.value
+        assertFalse(state.waitingBusy)
+        assertNull(state.checking)
+        // Only the album that failed is not checked; the busy one was asked again after 1 min, then 2 min.
+        assertEquals(1, state.notChecked)
+        assertEquals(listOf("Lanterns", "Harbour", "Harbour", "Harbour", null), source.checked.map { it.first })
+        assertEquals(listOf(0L, 60_000L, 180_000L), asked.map { it - asked.first() })
+        assertEquals(listOf("Harbour"), state.ready.map { it.album.album.title })
+        assertEquals(listOf(60_000L, 120_000L, 240_000L, 300_000L), CoversTags.BUSY_WAITS_MS)
+    }
+
+    @Test
+    fun `the waits for MusicBrainz grow to 5 minutes and stay there, and Cancel stops one at once`() = runTest {
+        library = lanternsSongs()
+        val asked = mutableListOf<Long>()
+        source.answer = {
+            asked += testScheduler.currentTime
+            Lookup.Busy
+        }
+        val flow = flow()
+        advanceUntilIdle()
+
+        flow.check()
+        advanceTimeBy(30 * 60_000L)
+        runCurrent()
+        assertEquals(listOf(0L, 60_000L, 180_000L, 420_000L, 720_000L, 1_020_000L, 1_320_000L, 1_620_000L), asked)
+        assertTrue(flow.state.value.waitingBusy)
+
+        flow.cancel()
+        advanceUntilIdle()
+        assertFalse(flow.state.value.waitingBusy)
+        assertNull(flow.state.value.checking)
+        assertEquals(8, asked.size)
+    }
+
+    @Test
+    fun `an album opened from its song while MusicBrainz is busy waits too, and opens once it is checked`() = runTest {
+        val songs = lanternsSongs()
+        library = songs
+        var busy = 1
+        source.answer = { album -> if (busy-- > 0) Lookup.Busy else Lookup.Done(Proposal.Ready(AlbumMatch.match(album, lanterns))) }
+        val flow = flow()
+        advanceUntilIdle()
+
+        flow.open(songs[0].path)
+        runCurrent()
+        assertTrue(flow.state.value.waitingBusy)
+        advanceUntilIdle()
+
+        assertEquals(songs[0].path, flow.state.value.focus?.song)
+        assertEquals(1, flow.state.value.ready.size)
+        assertFalse(flow.state.value.waitingBusy)
     }
 
     // Applying

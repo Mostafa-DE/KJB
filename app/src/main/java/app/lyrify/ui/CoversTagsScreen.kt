@@ -577,7 +577,7 @@ private fun StartRow(state: CoversTagsState, busy: Boolean, onCheck: () -> Unit,
             else -> LyrifyButton(stringResource(R.string.tags_check), onClick = onCheck, kind = ButtonKind.SECONDARY, compact = true)
         }
         val lines = listOfNotNull(
-            stringResource(R.string.tags_busy).takeIf { busy || (state.stoppedBusy && checking == null) },
+            stringResource(R.string.tags_waiting).takeIf { busy || state.waitingBusy },
             state.checkingAlbums.size.takeIf { it > 0 }?.let { pluralStringResource(R.plurals.tags_checking_albums, it, it) },
             state.notChecked.takeIf { it > 0 && checking == null }?.let { pluralStringResource(R.plurals.tags_not_checked, it, it) },
             stringResource(R.string.tags_unreadable).takeIf { state.unreadable },
