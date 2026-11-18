@@ -797,7 +797,8 @@ fun SaveSheet(url: String, onDismiss: () -> Unit, onStarted: () -> Unit) {
                 lookup.addon != null && lookup.addon != AddonState.Ready -> {
                     Text(stringResource(R.string.dl_get_first), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     LyrifyButton(stringResource(R.string.dl_open_kjb), onClick = {
-                        context.startActivity(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra(EXTRA_DESTINATION, DESTINATION_DOWNLOADS))
+                        // SINGLE_TOP: with KJB open already, MainActivity gets the destination in onNewIntent.
+                        context.startActivity(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP).putExtra(EXTRA_DESTINATION, DESTINATION_DOWNLOADS))
                         onDismiss()
                     }, modifier = Modifier.fillMaxWidth())
                 }

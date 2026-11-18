@@ -598,6 +598,29 @@ class NavTest {
     }
 
     @Test
+    fun `a notification's tap, and Save to KJB's Open KJB, open their page also while KJB is open`() {
+        // MainActivity is launched as standard: NEW_TASK alone brings KJB's task forward as it was and the page never
+        // opens. With SINGLE_TOP the open MainActivity gets the destination in onNewIntent, as the player's notification
+        // and Covers & tags' check do (CT1).
+        val opens = mapOf(
+            "downloads/DownloadService.kt" to "DESTINATION_DOWNLOADS",
+            "overnight/AiWorker.kt" to "DESTINATION_AI",
+            "addon/AddonDownload.kt" to "DESTINATION_AI",
+            "ui/DownloadsScreen.kt" to "DESTINATION_DOWNLOADS",
+            "tags/CheckService.kt" to "DESTINATION_COVERS_TAGS",
+        )
+        opens.forEach { (path, destination) ->
+            val source = File("src/main/java/app/lyrify/$path").readText()
+            assertTrue(path, source.contains("MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP).putExtra(EXTRA_DESTINATION, $destination)"))
+        }
+        // Nowhere does KJB open MainActivity from outside its screens with NEW_TASK alone.
+        val loose = File("src/main/java").walkTopDown().filter { it.extension == "kt" }
+            .filter { it.readText().contains("MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)") }
+            .map { it.name }.toList()
+        assertEquals(emptyList<String>(), loose)
+    }
+
+    @Test
     fun `the night run never starts the models' download from its own foreground service`() {
         // A second foreground type on WorkManager's one service could take mediaProcessing from the run: a model that did
         // not load is fetched again at the next hourly look, which starts the download before it goes into the foreground.
