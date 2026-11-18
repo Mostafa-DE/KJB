@@ -346,6 +346,22 @@ class QueueBridgeTest {
         }
     }
 
+    /** 3.1: Shuffle moves the song playing to the top; the player keeps playing it, never loading or seeking. */
+    @Test
+    fun `Shuffle with a song playing far into a long queue moves it first, and it goes on from where it is`() {
+        var book = QueueBook().play(shelf.map { it.ref }, 25, albumSource, now = 1).book
+        bridge.sync(book, findOnShelf)
+        port.positionMs = 95_000
+        val playing = port.current
+        book = book.toggleShuffle(Random(9))
+        bridge.sync(book, findOnShelf)
+        assertEquals(projection(book.current, findOnShelf).map { it.uid }, port.loaded)
+        assertEquals(0, port.index)
+        assertEquals(playing, port.current)
+        assertEquals(95_000L, port.positionMs)
+        assertEquals(listOf("load"), port.calls.filter { it != "edit" })
+    }
+
     /** CR2 (Codex review P1 on CR1): the main thread's place is behind the playback thread's at a song's end. */
     @Test
     fun `a Shuffle whose edits come just after the song playing ended keeps the song the player went on to playing`() {
