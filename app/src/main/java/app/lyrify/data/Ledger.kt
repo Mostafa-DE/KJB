@@ -265,6 +265,9 @@ object Retry {
     /** Not found, plain only, another version, instrumental, no artist, to check: LRCLIB (and the tags) change, so look again after 30 days. */
     const val RECHECK_AFTER_MS: Long = 30 * 24 * 60 * 60_000L
 
+    /** A first miss (not found, no artist) is looked up again sooner, once: LRCLIB grows every day. */
+    const val FIRST_MISS_RECHECK_AFTER_MS: Long = 7 * 24 * 60 * 60_000L
+
     /** AI runs that failed are tried again after a day (the next night), doubling, at most 30 days. */
     const val AI_FIRST_DELAY_MS: Long = 24 * 60 * 60_000L
     const val AI_MAX_DELAY_MS: Long = 30 * AI_FIRST_DELAY_MS
@@ -362,11 +365,12 @@ fun recorded(
             LyricsStatus.AI_FAILED,
             -> null
             LyricsStatus.ERROR -> now + Retry.errorDelayMs(attempts)
+            // A miss after a miss waits the 30 days; a first one, a week.
+            LyricsStatus.NOT_FOUND, LyricsStatus.UNIDENTIFIED ->
+                now + if (previous?.status in MISSES) Retry.RECHECK_AFTER_MS else Retry.FIRST_MISS_RECHECK_AFTER_MS
             LyricsStatus.PLAIN_ONLY,
-            LyricsStatus.NOT_FOUND,
             LyricsStatus.INSTRUMENTAL,
             LyricsStatus.DURATION_MISMATCH,
-            LyricsStatus.UNIDENTIFIED,
             LyricsStatus.NEEDS_CHECK,
             -> now + Retry.RECHECK_AFTER_MS
         },
@@ -385,6 +389,9 @@ fun recorded(
         candidatesCompared = status == LyricsStatus.NEEDS_CHECK,
     )
 }
+
+/** A lookup that found nothing: looked up again sooner the first time ([Retry.FIRST_MISS_RECHECK_AFTER_MS]). */
+private val MISSES: Set<LyricsStatus> = setOf(LyricsStatus.NOT_FOUND, LyricsStatus.UNIDENTIFIED)
 
 /** What only a lookup (or the user's check of one) records: this version's lookup when recorded now. */
 private val LOOKUP_STATUSES: Set<LyricsStatus> = setOf(

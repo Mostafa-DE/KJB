@@ -88,13 +88,11 @@ class LedgerTest {
     }
 
     @Test
-    fun `not found, plain only, mismatch, instrumental and no artist are checked again after 30 days`() {
+    fun `plain only, mismatch, instrumental and a song to check are checked again after 30 days`() {
         listOf(
-            LyricsStatus.NOT_FOUND,
             LyricsStatus.PLAIN_ONLY,
             LyricsStatus.DURATION_MISMATCH,
             LyricsStatus.INSTRUMENTAL,
-            LyricsStatus.UNIDENTIFIED,
             LyricsStatus.NEEDS_CHECK,
         ).forEach {
             val entry = recorded(null, track, it, lrclibId = 9, now = now)
@@ -102,6 +100,25 @@ class LedgerTest {
             assertFalse(entry.isDue(now + 29 * day))
             assertTrue(entry.isDue(now + 30 * day))
         }
+    }
+
+    @Test
+    fun `a miss is looked up again once after a week, then every 30 days`() {
+        listOf(LyricsStatus.NOT_FOUND, LyricsStatus.UNIDENTIFIED).forEach {
+            val first = recorded(null, track, it, lrclibId = null, now = now)
+            assertEquals(it.name, now + 7 * day, first.nextAttemptAt)
+            assertFalse(first.isDue(now + 6 * day))
+            assertTrue(first.isDue(now + 7 * day))
+
+            val second = recorded(first, track, it, lrclibId = null, now = now + 7 * day)
+            assertEquals(it.name, now + 37 * day, second.nextAttemptAt)
+            assertEquals(it.name, now + 67 * day, recorded(second, track, it, lrclibId = null, now = now + 37 * day).nextAttemptAt)
+        }
+        // A miss after another kind of miss, too; after anything else it is a first miss again.
+        val unidentified = recorded(null, track, LyricsStatus.UNIDENTIFIED, lrclibId = null, now = now)
+        assertEquals(now + 30 * day, recorded(unidentified, track, LyricsStatus.NOT_FOUND, null, now).nextAttemptAt)
+        val toCheck = recorded(null, track, LyricsStatus.NEEDS_CHECK, lrclibId = null, now = now)
+        assertEquals(now + 7 * day, recorded(toCheck, track, LyricsStatus.NOT_FOUND, null, now, declined = true).nextAttemptAt)
     }
 
     @Test

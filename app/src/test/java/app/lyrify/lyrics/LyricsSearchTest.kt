@@ -5,6 +5,7 @@ import app.lyrify.data.SharedWrites
 import app.lyrify.library.ArtistSplitter
 import app.lyrify.settings.ArtistSplit
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -109,7 +110,31 @@ class LyricsSearchTest {
         assertEquals(listOf("Lio Marsh & Cass Dunmore"), client.gets.map { it.artist }.distinct())
     }
 
+    // Misses
+
+    @Test
+    fun `a miss is looked up again a week later, once, then after 30 days, and never on every scan`() = runTest {
+        val track = audio("a.mp3", "Saffron Tide", "Ola Brenn")
+        val pipeline = pipeline()
+        pipeline.process(track)
+        val once = client.requests
+
+        delay(6 * DAY)
+        pipeline.process(track)
+        assertEquals(once, client.requests)
+        delay(DAY)
+        pipeline.process(track)
+        assertEquals(2 * once, client.requests)
+        delay(29 * DAY)
+        pipeline.process(track)
+        assertEquals(2 * once, client.requests)
+        delay(DAY)
+        pipeline.process(track)
+        assertEquals(3 * once, client.requests)
+    }
+
     private companion object {
         const val BASE: Long = 1_800_000_000_000L
+        const val DAY: Long = 24 * 60 * 60_000L
     }
 }

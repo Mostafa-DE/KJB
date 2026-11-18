@@ -38,9 +38,11 @@ import kotlin.random.Random
 
 /**
  * The version of the lookup: raised when it can find more than before, so songs an older one found nothing for
- * ([LedgerEntry.lookupStale]) are looked up once more. 1: file names, loose searches and the check list.
+ * ([LedgerEntry.lookupStale]) are looked up once more. 1: file names, loose searches and the check list. 2 (3.1): a tag
+ * naming several artists asked for by one of them, lyrics in the file's own tags, relevance by score, another length
+ * timed by the AI.
  */
-const val LOOKUP_REV: Int = 1
+const val LOOKUP_REV: Int = 2
 
 /** A local audio file with its MediaStore tags. [path] is absolute; the file itself is never opened. */
 data class LocalTrack(
