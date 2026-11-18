@@ -59,50 +59,95 @@ class AlbumLookupTest {
         compute = compute,
     )
 
-    /** The usual answers: a search finding A and B (one release group, same tracks) and C (6 tracks, another group). */
+    /**
+     * The usual answers: a search finding A and B (one release group, same tracks) and C (6 tracks, another group); A
+     * and B also come together in one browse of their group.
+     */
     private fun FakeWeb.lanterns() {
-        on(search, ok(searchJson(Triple(ID_C, 6, 100), Triple(ID_B, 5, 90), Triple(ID_A, 5, 95))))
+        on(search, ok(searchJson(Triple(ID_C, 6, 100), Triple(ID_B, 5, 90), Triple(ID_A, 5, 95), groupOf = { if (it == ID_C) GROUP_B else GROUP_A })))
         on(MusicBrainzUrls.release(ID_A), ok(releaseJson(ID_A, discs = tracks)))
         on(MusicBrainzUrls.release(ID_B), ok(releaseJson(ID_B, discs = tracks)))
+        on(browseUri(GROUP_A), ok(browseJson(releaseJson(ID_A, discs = tracks), releaseJson(ID_B, discs = tracks))))
         on(MusicBrainzUrls.release(ID_C), ok(releaseJson(ID_C, group = GROUP_B, discs = listOf(tracks[0], tracks[1] + T("Kestrel Lights", 240_000)))))
     }
 
     private fun Lookup.proposal(): Proposal = (this as Lookup.Done).proposal
 
     @Test
-    fun `an album is searched by title, artist and track count, then its best releases in detail`() = runTest {
+    fun `an album is searched by title, artist and track count, then its best releases in detail, one browse per release group`() = runTest {
         val web = web().apply { lanterns() }
 
         val proposal = lookup(web).check(album).proposal()
 
         assertEquals(ID_A, (proposal as Proposal.Ready).match.release.id)
         assertEquals(1998, proposal.match.release.releaseGroup?.originalYear)
-        // The exact track count first, then MusicBrainz's score.
-        assertEquals(
-            listOf(search, MusicBrainzUrls.release(ID_A), MusicBrainzUrls.release(ID_B), MusicBrainzUrls.release(ID_C)).map { it.toString() },
-            web.requests.map { it.uri },
-        )
+        // A and B, one release group: one browse of it. C, alone in its group: its own lookup.
+        assertEquals(listOf(search.toString(), browseUri(GROUP_A), MusicBrainzUrls.release(ID_C).toString()), web.requests.map { it.uri })
         assertTrue(web.requests.all { it.userAgent == TEST_AGENT })
     }
 
     @Test
-    fun `every hit with the album's track count is asked for in detail`() = runTest {
+    fun `every hit with the album's track count is asked for in detail, all of one release group in one browse`() = runTest {
         val web = web()
         val ids = (0 until 8).map { "0b7c1f4e-5a2d-4c3b-9e8f-1a2b3c4d5f0$it" }
         web.on(search, ok(searchJson(*ids.map { Triple(it, 5, 100 - it.last().digitToInt()) }.toTypedArray())))
         ids.forEach { web.on(MusicBrainzUrls.release(it), ok(releaseJson(it, discs = tracks))) }
+        web.on(browseUri(GROUP_A), ok(browseJson(*ids.map { releaseJson(it, discs = tracks) }.toTypedArray())))
 
         lookup(web).check(album)
 
-        assertEquals(ids.size + 1, web.requests.size)
+        assertEquals(listOf(search.toString(), browseUri(GROUP_A)), web.requests.map { it.uri })
+    }
+
+    @Test
+    fun `a release the browse did not list, or listed without every track, is asked for on its own`() = runTest {
+        val web = web()
+        val ids = (0 until 8).map { "0b7c1f4e-5a2d-4c3b-9e8f-1a2b3c4d5f0$it" }
+        web.on(search, ok(searchJson(*ids.map { Triple(it, 5, 100 - it.last().digitToInt()) }.toTypedArray())))
+        ids.forEach { web.on(MusicBrainzUrls.release(it), ok(releaseJson(it, discs = tracks))) }
+        // MusicBrainz lists at most 500 tracks per answer: a big group's browse holds some of its releases only.
+        val listed = ids.take(5).map { releaseJson(it, discs = tracks) }
+        val partly = releaseJson(ids[1], discs = tracks).replace(Regex(""""tracks":\[.*?\]\}\]"""), """"tracks":[]}]""")
+        web.on(browseUri(GROUP_A), ok(browseJson(*(listOf(listed[0], partly) + listed.drop(2)).toTypedArray())))
+
+        val proposal = lookup(web).check(album).proposal()
+
+        val alone = listOf(ids[1]) + ids.drop(5)
+        assertEquals(listOf(search.toString(), browseUri(GROUP_A)) + alone.map { MusicBrainzUrls.release(it).toString() }, web.requests.map { it.uri })
+        assertTrue(proposal is Proposal.Ready)
+    }
+
+    @Test
+    fun `a browse that fails, finds nothing or can't be read leaves each release to its own lookup`() = runTest {
+        listOf(status(500), status(404), ok("<html>"), ok("""{"release-count":0,"releases":[]}""")).forEach { answer ->
+            val web = web().apply { lanterns() }
+            web.on(browseUri(GROUP_A), answer)
+
+            val proposal = lookup(web).check(album).proposal()
+
+            assertTrue(proposal.toString(), proposal is Proposal.Ready)
+            val asked = listOf(search.toString(), browseUri(GROUP_A)) + listOf(ID_A, ID_B, ID_C).map { MusicBrainzUrls.release(it).toString() }
+            assertEquals(asked, web.requests.map { it.uri })
+        }
+    }
+
+    @Test
+    fun `MusicBrainz busy through a browse's every backoff is busy`() = runTest {
+        val web = web().apply { lanterns() }
+        web.on(browseUri(GROUP_A), status(503))
+
+        assertEquals(Lookup.Busy, lookup(web).check(album))
+        assertEquals(0, web.count(MusicBrainzUrls.release(ID_A)))
     }
 
     @Test
     fun `a rival beyond the first five is never left out`() = runTest {
         val web = web()
         val twins = (0 until 6).map { "0b7c1f4e-5a2d-4c3b-9e8f-1a2b3c4d5f0$it" }
-        web.on(search, ok(searchJson(*(twins.map { Triple(it, 5, 100 - it.last().digitToInt()) } + Triple(ID_D, 5, 50)).toTypedArray())))
+        val hits = twins.map { Triple(it, 5, 100 - it.last().digitToInt()) } + Triple(ID_D, 5, 50)
+        web.on(search, ok(searchJson(*hits.toTypedArray(), groupOf = { if (it == ID_D) GROUP_B else GROUP_A })))
         twins.forEach { web.on(MusicBrainzUrls.release(it), ok(releaseJson(it, discs = tracks))) }
+        web.on(browseUri(GROUP_A), ok(browseJson(*twins.map { releaseJson(it, discs = tracks) }.toTypedArray())))
         // The same tracks in another release group: as close as the twins, so no release is sure.
         web.on(MusicBrainzUrls.release(ID_D), ok(releaseJson(ID_D, group = GROUP_B, discs = tracks)))
 
@@ -126,14 +171,13 @@ class AlbumLookupTest {
     fun `more releases with the album's track count than the search lists is Pick one`() = runTest {
         val web = web()
         web.on(search, ok(fixture("release-search-more.json")))
-        web.on(MusicBrainzUrls.release(ID_A), ok(releaseJson(ID_A, discs = tracks)))
-        web.on(MusicBrainzUrls.release(ID_B), ok(releaseJson(ID_B, discs = tracks)))
+        web.on(browseUri(GROUP_A), ok(browseJson(releaseJson(ID_A, discs = tracks), releaseJson(ID_B, discs = tracks))))
 
         val proposal = lookup(web).check(album).proposal() as Proposal.PickOne
 
         assertTrue(Doubt.GAP in proposal.doubts)
         assertEquals(ID_A, proposal.candidates.first().release.id)
-        assertEquals(listOf(search, MusicBrainzUrls.release(ID_A), MusicBrainzUrls.release(ID_B)).map { it.toString() }, web.requests.map { it.uri })
+        assertEquals(listOf(search.toString(), browseUri(GROUP_A)), web.requests.map { it.uri })
     }
 
     @Test
@@ -142,7 +186,8 @@ class AlbumLookupTest {
         val anyCount = MusicBrainzUrls.releaseSearch("Lanterns of Ulso", "Mira Solen", null)
         val ids = (0 until 8).map { "0b7c1f4e-5a2d-4c3b-9e8f-1a2b3c4d5f0$it" }
         web.on(search, ok("""{"count":0,"releases":[]}"""))
-        web.on(anyCount, ok(searchJson(*ids.map { Triple(it, 6, 100) }.toTypedArray())))
+        // Each in a release group of its own: no browse, so every release asked for shows.
+        web.on(anyCount, ok(searchJson(*ids.map { Triple(it, 6, 100) }.toTypedArray(), groupOf = { "6f1e2d3c-4b5a-4968-8776-5a4b3c2d1f0" + it.last() })))
         ids.forEach { web.on(MusicBrainzUrls.release(it), ok(releaseJson(it, discs = listOf(tracks[0], tracks[1] + T("Kestrel Lights", 240_000))))) }
 
         lookup(web).check(album)
@@ -178,7 +223,7 @@ class AlbumLookupTest {
     fun `an id that is not a MusicBrainz id is never sent`() = runTest {
         val web = web().apply { lanterns() }
         lookup(web).check(PhoneAlbum("Lanterns of Ulso", "Mira Solen", songs(releaseId = "../../ws/2/x")))
-        assertEquals(4, web.requests.size)
+        assertEquals(3, web.requests.size)
     }
 
     @Test
@@ -206,6 +251,7 @@ class AlbumLookupTest {
     @Test
     fun `a failed request never yields Ready on the answers that came`() = runTest {
         val web = web().apply { lanterns() }
+        web.on(browseUri(GROUP_A), status(500))
         web.on(MusicBrainzUrls.release(ID_B), status(500))
         assertTrue(lookup(web).check(album) is Lookup.Failed)
 
@@ -229,10 +275,10 @@ class AlbumLookupTest {
 
         lookup.check(album)
         lookup.check(album)
-        assertEquals(4, web.requests.size)
+        assertEquals(3, web.requests.size)
 
         assertTrue(lookup.check(album, fresh = true).proposal() is Proposal.Ready)
-        assertEquals(8, web.requests.size)
+        assertEquals(6, web.requests.size)
     }
 
     @Test
@@ -322,6 +368,7 @@ class AlbumLookupTest {
     fun `no log line holds a name, a path or an address`() = runTest {
         val web = web().apply { lanterns() }
         web.on(search, status(503), ok(searchJson(Triple(ID_A, 5, 100), Triple(ID_B, 5, 90))))
+        web.on(browseUri(GROUP_A), FakeWeb.Reply(200, error = IOException("${browseUri(GROUP_A)} Lanterns of Ulso")))
         web.on(MusicBrainzUrls.release(ID_B), FakeWeb.Reply(200, error = IOException("https://musicbrainz.org/ws/2/release/$ID_B Lanterns of Ulso")))
         web.on(MusicBrainzUrls.front(ID_A, CoverSize.FRONT_1200), redirect(307, "https://example.com/Lanterns%20of%20Ulso.jpg"))
         val lookup = lookup(web)

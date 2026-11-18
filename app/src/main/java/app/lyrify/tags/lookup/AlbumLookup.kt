@@ -19,8 +19,9 @@ sealed interface Lookup {
 /**
  * Checks albums against MusicBrainz: a release search by album title, artist and track count; the details of every
  * result with that track count (no rival is left out) and of the best others, and of any release id already in the
- * files, as one more candidate; then [AlbumMatch], on [compute]. A single is looked up by a recording search instead.
- * Song titles and lengths are matched on the phone, never sent one by one.
+ * files, as one more candidate; then [AlbumMatch], on [compute]. The details of releases that share a release group come
+ * in one browse of that group ([details]). A single is looked up by a recording search instead. Song titles and lengths
+ * are matched on the phone, never sent one by one.
  */
 class AlbumLookup(
     private val musicBrainz: MusicBrainz,
@@ -98,21 +99,51 @@ class AlbumLookup(
         val (exact, other) = found.sortedByDescending { it.score ?: 0 }.partition { it.trackCount == album.songs.size }
         val best = exact + other.take((MAX_DETAILED - exact.size).coerceAtLeast(0))
         val ids = (best.map { it.id } + listOfNotNull(album.releaseId.takeUnless { searched })).distinct()
-        val releases = mutableListOf<MbRelease>()
-        for (id in ids) {
-            when (val answer = musicBrainz.release(id, fresh)) {
-                is MetaAnswer.Ok -> releases += answer.value
-                // Gone from MusicBrainz (merged or removed): not a candidate.
-                MetaAnswer.NotFound -> Unit
-                // A missing rival could make another release look sure: no answer for this album yet.
-                else -> return stopped(answer)
-            }
+        val groups = found.associate { it.id to it.releaseGroup?.id }
+        val releases = when (val answer = details(ids, groups, fresh)) {
+            is MetaAnswer.Ok -> answer.value
+            else -> return stopped(answer)
         }
         val proposal = withContext(compute) { AlbumMatch.propose(album, releases, searched, unseenRivals) }
         if (proposal !is Proposal.Ready) return Lookup.Done(proposal)
         // Without the release group, the album stays Ready and no year is written (as when MusicBrainz has none).
         val dated = (withOriginalYear(proposal.match, fresh) as? MetaAnswer.Ok)?.value ?: proposal.match
         return Lookup.Done(Proposal.Ready(dated))
+    }
+
+    /**
+     * The releases [ids] in detail, in that order, the same ones as one lookup each would give: those of a release group
+     * ([groups], from the search) that holds two or more of them come in one browse of it, the rest one lookup each, as
+     * do any the browse did not list whole (MusicBrainz caps a browse at 500 tracks) or could not give. A release gone
+     * from MusicBrainz is no candidate; MusicBrainz busy, or a lookup that failed, is no answer for the album yet, since
+     * a missing rival could make another release look sure.
+     */
+    private suspend fun details(ids: List<String>, groups: Map<String, String?>, fresh: Boolean): MetaAnswer<List<MbRelease>> {
+        val browsed = mutableMapOf<String, MbRelease>()
+        val shared = ids.groupBy { groups[it] }.filter { (group, members) -> group != null && members.size >= 2 }
+        for ((group, members) in shared) {
+            when (val answer = musicBrainz.releasesOfGroup(checkNotNull(group), fresh)) {
+                is MetaAnswer.Ok -> answer.value.filter { it.id in members && it.hasAllTracks }.forEach { browsed[it.id] = it }
+                MetaAnswer.Busy -> return MetaAnswer.Busy
+                // Each is asked for on its own below.
+                MetaAnswer.NotFound, is MetaAnswer.Failed -> Unit
+            }
+        }
+        val releases = mutableListOf<MbRelease>()
+        for (id in ids) {
+            val known = browsed[id]
+            if (known != null) {
+                releases += known
+                continue
+            }
+            when (val answer = musicBrainz.release(id, fresh)) {
+                is MetaAnswer.Ok -> releases += answer.value
+                MetaAnswer.NotFound -> Unit
+                MetaAnswer.Busy -> return MetaAnswer.Busy
+                is MetaAnswer.Failed -> return answer
+            }
+        }
+        return MetaAnswer.Ok(releases)
     }
 
     /** A single: a recording search by its title, artist and length; always Pick one. */

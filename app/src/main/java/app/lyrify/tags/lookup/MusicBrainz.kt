@@ -105,6 +105,9 @@ internal object MusicBrainzUrls {
     /** At most this many releases or recordings per search. */
     const val SEARCH_LIMIT: Int = 10
 
+    /** At most this many releases per browse of a release group: MusicBrainz's own maximum. */
+    const val BROWSE_LIMIT: Int = 100
+
     /** A recording search asks for lengths this close to the song's. */
     const val LENGTH_WINDOW_MS: Long = 10_000
 
@@ -124,6 +127,15 @@ internal object MusicBrainzUrls {
     fun release(id: String): URI = URI("$API/release/${checked(id)}?inc=artists+recordings+artist-credits+release-groups&fmt=json")
 
     fun releaseGroup(id: String): URI = URI("$API/release-group/${checked(id)}?fmt=json")
+
+    /**
+     * Every edition of release group [id] in one request (a browse), each as whole as [release] has it: discs, tracks,
+     * recordings, lengths, artist credits and release group. At most [BROWSE_LIMIT] releases, and MusicBrainz stops a
+     * browse's list at 500 tracks (https://musicbrainz.org/doc/MusicBrainz_API, "Browse"), so a big group's answer may
+     * leave some out.
+     */
+    fun releasesOfGroup(id: String): URI =
+        URI("$API/release?release-group=${checked(id)}&inc=artist-credits+recordings+release-groups&limit=$BROWSE_LIMIT&fmt=json")
 
     /** A recording search by title, artist and length (within [LENGTH_WINDOW_MS]), for singles. */
     fun recordingSearch(title: String, artist: String?, durationMs: Long?): URI = search(
@@ -309,6 +321,10 @@ class MusicBrainz(private val client: MetaClient) {
 
     suspend fun release(id: String, fresh: Boolean = false): MetaAnswer<MbRelease> =
         ifId(id) { client.get(MusicBrainzUrls.release(id), Body.JSON, fresh, read = MusicBrainzJson::release) }
+
+    /** The editions of release group [id], whole, in one request ([MusicBrainzUrls.releasesOfGroup]); none found is not cached. */
+    suspend fun releasesOfGroup(id: String, fresh: Boolean = false): MetaAnswer<List<MbRelease>> =
+        ifId(id) { client.get(MusicBrainzUrls.releasesOfGroup(id), Body.JSON, fresh, keep = { it.isNotEmpty() }, read = MusicBrainzJson::releases) }
 
     suspend fun releaseGroup(id: String, fresh: Boolean = false): MetaAnswer<MbReleaseGroup> =
         ifId(id) { client.get(MusicBrainzUrls.releaseGroup(id), Body.JSON, fresh, read = MusicBrainzJson::releaseGroup) }
