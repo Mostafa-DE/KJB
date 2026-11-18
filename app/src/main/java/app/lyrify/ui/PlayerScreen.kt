@@ -2,7 +2,6 @@ package app.lyrify.ui
 
 import kotlinx.coroutines.CoroutineScope
 import androidx.compose.runtime.Stable
-import coil3.request.ImageRequest
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.BlurredEdgeTreatment
 import androidx.compose.ui.graphics.BlendMode
@@ -789,8 +788,9 @@ private class PlayerDrag(private val scope: CoroutineScope) {
 /**
  * Behind the top of the player: the cover blurred into a glow that fades into the page by 60% of the height, one
  * seamless gradient with no edge anywhere (the glow and its tint are masked to nothing, never cut at a box's edge), light
- * or dark. It cross-fades from song to song; it is drawn from a small image (the blur hides it), and only once the player
- * has finished growing out of the Now bar, so the transform never re-blurs on every frame.
+ * or dark. It cross-fades from song to song and to a cover Covers & tags changed; it is drawn from a small image (the
+ * blur hides it) kept apart from the cover's own sizes ([backdropRequest]), and only once the player has finished growing
+ * out of the Now bar, so the transform never re-blurs on every frame.
  */
 @Composable
 private fun Backdrop(path: String) {
@@ -800,8 +800,9 @@ private fun Backdrop(path: String) {
     val container = LocalContainer.current
     val arriving = container != null && container.visibility.transition.run { currentState != targetState }
     val shown by animateFloatAsState(if (arriving) 0f else 1f, motion(tween(Motion.FADE_IN_MS * 2), reduced), label = "backdrop")
-    Crossfade(path, Modifier.fillMaxWidth().fillMaxHeight(BACKDROP_SHARE).graphicsLayer { alpha = shown }, animationSpec = tween(if (reduced) Motion.REDUCED_MS else Motion.OPEN_MS), label = "backdrop") { song ->
-        val request = remember(song) { ImageRequest.Builder(context).data(SongArt(song)).size(BACKDROP_PX).build() }
+    // Keyed by the cover's version too: a cover Covers & tags changed cross-fades in, never the old glow from memory.
+    Crossfade(backdropArt(path), Modifier.fillMaxWidth().fillMaxHeight(BACKDROP_SHARE).graphicsLayer { alpha = shown }, animationSpec = tween(if (reduced) Motion.REDUCED_MS else Motion.OPEN_MS), label = "backdrop") { art ->
+        val request = remember(art, context) { backdropRequest(context, art) }
         Box(
             Modifier
                 .fillMaxSize()
