@@ -88,6 +88,21 @@ class LyricsViewsTest {
         assertEquals(emptyList<String>(), plainLines(" \n\n"))
     }
 
+    @Test
+    fun `a song whose own tags hold its plain lyrics shows them, read from its file`() = kotlinx.coroutines.test.runTest {
+        val own = recorded(null, track, LyricsStatus.PLAIN_ONLY, null, 1, durationMatched = true, plainInTags = true)
+        assertTrue(plainInTags(own))
+        assertFalse(plainInTags(recorded(null, track, LyricsStatus.PLAIN_ONLY, 7, 1)))
+        assertFalse(plainInTags(null))
+
+        val shown = songLyrics(track.path, own, book = false, lrc = { null }, plain = { error("LRCLIB is not asked") }, tags = { "Paper lanterns rise\n\nOver the harbour glass" })
+        assertEquals(PanelLyrics.Plain(listOf("Paper lanterns rise", "Over the harbour glass")), shown)
+        // A file of its own wins, as it does over LRCLIB's.
+        assertEquals(PanelLyrics.Synced(listOf(LrcLine(1_000, "Lit"))), songLyrics(track.path, own, false, lrc = { "[00:01.00]Lit" }, plain = { null }, tags = { "Not shown" }))
+        assertEquals(SyncMode.MAKE, editorLyrics(track.path, own, false, lrc = { null }, plain = { null }, tags = { "Paper lanterns rise" })?.mode)
+        assertEquals(LyricsShare.PLAIN, lyricsShare(null, own))
+    }
+
     // The editor the "⋯" opens
 
     @Test

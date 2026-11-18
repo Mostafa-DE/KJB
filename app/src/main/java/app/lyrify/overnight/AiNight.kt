@@ -10,6 +10,7 @@ import app.lyrify.data.LedgerState
 import app.lyrify.data.LedgerStore
 import app.lyrify.data.LyricsStatus
 import app.lyrify.lyrics.AiPaths
+import app.lyrify.lyrics.EmbeddedLyrics
 import app.lyrify.lyrics.LocalTrack
 import app.lyrify.lyrics.LrcFormat
 import app.lyrify.lyrics.PlainLyrics
@@ -25,6 +26,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -52,13 +54,19 @@ interface SongEngine : AutoCloseable {
     suspend fun run(track: LocalTrack, plainLyrics: String?, onStage: (AiStage) -> Unit, beforeChunk: suspend () -> Unit): AiResult
 }
 
-/** One song for the AI. With [lrclibId], LRCLIB's plain lyrics of this very recording are timed; without, the song is transcribed. */
-data class AiJob(val track: LocalTrack, val lrclibId: Long?)
+/**
+ * One song for the AI. With [lrclibId], LRCLIB's plain lyrics of this very recording are timed; with [plainInTags], those
+ * the song's file holds in its own tags; with neither, the song is transcribed.
+ */
+data class AiJob(val track: LocalTrack, val lrclibId: Long?, val plainInTags: Boolean = false) {
+    /** Known lyrics are timed, not heard. */
+    val times: Boolean get() = lrclibId != null || plainInTags
+}
 
 /**
- * Which songs the AI takes, in which order: songs whose LRCLIB plain lyrics are for this recording (they can be
- * timed) first, then songs LRCLIB has nothing for and the other plain-only ones, each most recently played first
- * (by the ledger's last update), then failed runs due again, the longest waiting first.
+ * Which songs the AI takes, in which order: songs whose plain lyrics of this recording are known, LRCLIB's or those in
+ * their own tags (they can be timed), first, then songs LRCLIB has nothing for and the other plain-only ones, each most
+ * recently played first (by the ledger's last update), then failed runs due again, the longest waiting first.
  */
 object AiQueue {
     /**
@@ -76,7 +84,7 @@ object AiQueue {
     fun of(ledger: LedgerState, now: Long, canTake: (String) -> Boolean, align: Boolean = true): List<AiJob> =
         ledger.entries.values.filter { wants(it, now) && (align || !timeable(it)) && canTake(it.path) }.sortedWith(ORDER).map(::job)
 
-    fun job(entry: LedgerEntry): AiJob = AiJob(entry.track, entry.lrclibId.takeIf { timeable(entry) })
+    fun job(entry: LedgerEntry): AiJob = AiJob(entry.track, entry.lrclibId.takeIf { timeable(entry) }, plainInTags = entry.plainInTags && timeable(entry))
 
     /** What counts as done for the AI: lyrics written, or a final verdict. A failed run is not done (it is tried again). */
     val DONE: Set<LyricsStatus> = setOf(LyricsStatus.AI_TRANSCRIBED, LyricsStatus.AI_ALIGNED, LyricsStatus.AI_INSTRUMENTAL, LyricsStatus.AI_REJECTED)
@@ -84,7 +92,8 @@ object AiQueue {
     /** Songs the AI got done ([DONE]) since [since], for the card. */
     fun doneSince(ledger: LedgerState, since: Long): Int = ledger.entries.values.count { it.status in DONE && (it.lastAttemptAt ?: 0) >= since }
 
-    private fun timeable(entry: LedgerEntry): Boolean = entry.durationMatched == true && entry.lrclibId != null
+    /** Plain lyrics of this recording are known: LRCLIB's, or the song's own in its tags. */
+    private fun timeable(entry: LedgerEntry): Boolean = entry.durationMatched == true && (entry.lrclibId != null || entry.plainInTags)
 
     private fun group(entry: LedgerEntry): Int = when {
         entry.status == LyricsStatus.AI_FAILED -> 2
@@ -195,6 +204,8 @@ class AiRunner(
     private val badModel: suspend (String) -> Unit = {},
     private val onProgress: suspend (AiProgress) -> Unit = {},
     private val runLog: (String) -> Unit = {},
+    /** The plain words a song's file holds in its own tags ([EmbeddedLyrics]), read when the song is timed; null for none. Blocking. */
+    private val tagLyrics: (String) -> String? = { path -> EmbeddedLyrics.read(File(path))?.words?.takeIf(String::isNotBlank) },
 ) {
     private var engine: SongEngine? = null
 
@@ -205,6 +216,13 @@ class AiRunner(
         } finally {
             closeEngine()
         }
+    }
+
+    /** The plain lyrics [job] times: LRCLIB's by its record, or those in the song's own tags (None when gone since); null to transcribe. */
+    private suspend fun knownLyrics(job: AiJob): PlainLyrics? = when {
+        job.lrclibId != null -> plainLyrics(job.lrclibId)
+        job.plainInTags -> withContext(Dispatchers.IO) { tagLyrics(job.track.path) }?.let(PlainLyrics::Found) ?: PlainLyrics.None
+        else -> null
     }
 
     private fun closeEngine() {
@@ -251,7 +269,7 @@ class AiRunner(
                 }
                 val current = AiQueue.job(entry)
                 val title = current.track.title
-                if (!align && current.lrclibId != null) {
+                if (!align && current.times) {
                     runLog("AI: $title waits, timing known lyrics is off")
                     continue
                 }
@@ -263,7 +281,7 @@ class AiRunner(
                     runLog("AI: $title: given up for now, the app died during it ${song.deaths} times (last during $stage); now $status")
                     continue
                 }
-                val plain = when (val lyrics = current.lrclibId?.let { plainLyrics(it) }) {
+                val plain = when (val lyrics = knownLyrics(current)) {
                     null, PlainLyrics.None -> null
                     is PlainLyrics.Found -> lyrics.text
                     is PlainLyrics.Unavailable -> {

@@ -149,15 +149,16 @@ enum class Removal {
 }
 
 /**
- * Gets lyrics for one file: skips files that have a sidecar or are not due, asks LRCLIB
- * with [TrackNames] queries, picks with [Matcher], writes Samsung-safe synced lyrics with
- * [LrcFormat], and records every outcome in the ledger. When nothing of this recording can
+ * Gets lyrics for one file: skips files that have a sidecar or are not due, reads the lyrics the file holds in its own
+ * tags ([EmbeddedLyrics]), asks LRCLIB with [TrackNames] queries, picks with [Matcher], writes Samsung-safe synced lyrics
+ * with [LrcFormat], and records every outcome in the ledger. When nothing of this recording can
  * be written, a loose search by title may find [Candidates] for the user to check
  * ([LyricsStatus.NEEDS_CHECK]); the user's pick is written here too ([choose]). The
  * on-device AI's lyrics are written and recorded here too ([recordAi]), through the same path.
  *
  * Files: only ever creates `<audio name>.lrc` next to the audio, and only where nothing
- * exists ([SidecarFile]). Never opens the audio file. Deletes only what [SidecarFile] allows. Every create and delete
+ * exists ([SidecarFile]). Opens the audio file only to read its tags' lyrics, read-only ([tagLyrics]); never changes
+ * it. Deletes only what [SidecarFile] allows. Every create and delete
  * asks [writes] first; a song whose `.lrc` it would refuse is skipped before any lookup.
  * A write is marked in the ledger before the file is created ([LyricsStatus.WRITING]), so one
  * the app's death interrupted is settled the next time the track is seen ([reconcile]).
@@ -184,6 +185,8 @@ class LyricsPipeline(
     private val isBook: suspend (String) -> Boolean = { false },
     /** The artists an artist tag names, as the user's "Artists with several names" splits it; the tag alone by default. */
     private val artistNames: suspend (String) -> List<String> = { listOf(it) },
+    /** The lyrics a song file holds in its own tags, read (only read) before any request. Blocking. */
+    private val tagLyrics: (String) -> TagLyrics? = { EmbeddedLyrics.read(File(it)) },
 ) : PathHold {
 
     /** Songs the AI is working on, for the queue sweep to skip (one set with the pipeline, so one per process). */
@@ -600,11 +603,24 @@ class LyricsPipeline(
     private suspend fun <T> exclusive(path: String, block: suspend () -> T): T = locks.exclusive(path, block)
 
     /**
-     * At most [TrackNames.MAX_REQUESTS] requests: the [TrackNames.queries] (from the tags, and the file name when they
-     * say too little; a tag naming several artists ([artistNames]) by one of them last), then, when they found nothing
-     * of this recording ([Verdict.unsure]), the loose searches of [settle].
+     * The lyrics the file holds in its own tags first ([tagLyrics]): synced ones Samsung Music can show are written as
+     * they are, with no request. Then at most [TrackNames.MAX_REQUESTS] requests: the [TrackNames.queries] (from the
+     * tags, and the file name when they say too little; a tag naming several artists ([artistNames]) by one of them
+     * last), then, when they found nothing of this recording ([Verdict.unsure]), the loose searches of [settle]. Plain
+     * lyrics in the tags (or synced ones Samsung could not show) still let LRCLIB's synced ones win; without those they
+     * are the song's plain lyrics, for the AI to time, and nothing waits for a check.
      */
     private suspend fun lookUpAndWrite(track: LocalTrack, sidecar: Path, previous: LedgerEntry?, lane: Lane): Processed {
+        val inTags = tagLyrics(track.path)
+        if (inTags is TagLyrics.Synced) {
+            when (val lrc = LrcFormat.convert(inTags.lrc, track.durationMs)) {
+                // The file and its ledger entries go together, even if the listener moves on.
+                is Conversion.Ready -> return withContext(NonCancellable) {
+                    Processed(write(track, sidecar, previous, lrc.text, Written(LyricsStatus.SYNCED, LyricsSource.TAGS, lrclibId = null)))
+                }
+                is Conversion.Rejected -> log("lyrics: a song's own synced lyrics unusable (${lrc.problem}), kept as plain")
+            }
+        }
         val artists = track.artist?.let { artistNames(it) }.orEmpty()
         val queries = TrackNames.queries(track.artist, track.title, track.album, File(track.path).name, artists)
         val result = if (queries.isEmpty()) Lookup.Answer(Match.NotFound, emptyList(), emptySet()) else lookUp(track, queries, lane)
@@ -613,7 +629,12 @@ class LyricsPipeline(
             is Lookup.Write -> withContext(NonCancellable) {
                 Processed(write(track, sidecar, previous, result.text, Written(LyricsStatus.SYNCED, LyricsSource.LRCLIB, result.record.id)))
             }
-            is Lookup.Answer -> settle(track, previous, if (queries.isEmpty()) Verdict(LyricsStatus.UNIDENTIFIED) else verdict(result.match), result, queries, lane)
+            is Lookup.Answer ->
+                if (inTags != null) {
+                    Processed(outcome(previous, track, LyricsStatus.PLAIN_ONLY, durationMatched = true, plainInTags = true))
+                } else {
+                    settle(track, previous, if (queries.isEmpty()) Verdict(LyricsStatus.UNIDENTIFIED) else verdict(result.match), result, queries, lane)
+                }
             is Lookup.Failed -> busy(previous, track, result.cause)
         }
     }
@@ -911,10 +932,11 @@ class LyricsPipeline(
         aiReason: String? = null,
         candidates: List<Candidate> = emptyList(),
         declined: Boolean = false,
+        plainInTags: Boolean = false,
     ): Boolean {
         val entry = recorded(
             previous, track, status, lrclibId, clock(), durationMatched, sha256, size,
-            source = source, agreement = agreement, aiReason = aiReason, candidates = candidates, declined = declined,
+            source = source, agreement = agreement, aiReason = aiReason, candidates = candidates, declined = declined, plainInTags = plainInTags,
         )
         val stored = ledger.put(entry)
         log("lyrics: $status${if (stored) "" else ", not stored"}")
@@ -965,8 +987,9 @@ class LyricsPipeline(
         agreement: Double? = null,
         aiReason: String? = null,
         candidates: List<Candidate> = emptyList(),
+        plainInTags: Boolean = false,
     ): LyricsStatus {
-        record(previous, track, status, lrclibId, durationMatched, agreement = agreement, aiReason = aiReason, candidates = candidates)
+        record(previous, track, status, lrclibId, durationMatched, agreement = agreement, aiReason = aiReason, candidates = candidates, plainInTags = plainInTags)
         return status
     }
 

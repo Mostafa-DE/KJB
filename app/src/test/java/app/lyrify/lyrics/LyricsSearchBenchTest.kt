@@ -181,7 +181,7 @@ class LyricsSearchBenchTest {
         entry == null -> Outcome.NONE
         entry.status == LyricsStatus.SYNCED && File(LrcFormat.sidecarPath(audio.path)!!).isFile -> Outcome.WRITTEN
         entry.status == LyricsStatus.NEEDS_CHECK -> Outcome.CHECK
-        AiQueue.wants(entry, BASE) && AiQueue.job(entry).lrclibId != null -> Outcome.AI
+        AiQueue.wants(entry, BASE) && AiQueue.job(entry).times -> Outcome.AI
         else -> Outcome.NONE
     }
 

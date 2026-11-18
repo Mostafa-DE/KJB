@@ -108,13 +108,13 @@ enum class LyricsShare { PLAIN, SYNCED }
 
 /**
  * What the song with the `.lrc` text [lrc] (null without one) and the ledger [entry] can share: SYNCED for timed lines
- * with words, PLAIN for untimed words or LRCLIB's plain lyrics the player shows without a file ([plainRecord]); null
- * without words.
+ * with words, PLAIN for untimed words or the plain lyrics the player shows without a file (LRCLIB's, [plainRecord], or
+ * the song's own, [plainInTags]); null without words.
  */
 fun lyricsShare(lrc: String?, entry: LedgerEntry?): LyricsShare? = when {
     lrc != null && LrcFormat.timed(lrc) -> LyricsShare.SYNCED
     lrc != null && words(lrc).isNotEmpty() -> LyricsShare.PLAIN
-    plainRecord(entry) != null -> LyricsShare.PLAIN
+    plainRecord(entry) != null || plainInTags(entry) -> LyricsShare.PLAIN
     else -> null
 }
 
@@ -248,11 +248,12 @@ suspend fun shareSongs(context: Context, songs: List<Song>, title: (Song) -> Str
     return launchShare(songs.size) { context.startActivity(shareSheet(songsShare(shared) { count -> context.resources.getQuantityString(R.plurals.lib_songs, count, count) }, context.packageName)) }
 }
 
-/** "As text": the song's `.lrc` as words ([lyricsText]), else LRCLIB's plain lyrics the player shows ([plainRecord]). */
+/** "As text": the song's `.lrc` as words ([lyricsText]), else the plain lyrics the player shows (LRCLIB's or the song's own). */
 suspend fun shareLyricsText(context: Context, song: Song, title: String, entry: LedgerEntry?): Shared {
     val lrc = withContext(Dispatchers.IO) { readLrc(song.path) }
     val text = lrc?.let { lyricsText(title, song.artist, it) }
-        ?: plainRecord(entry)?.let { plainText(context, it) }?.let { lyricsText(title, song.artist, it) }
+        ?: (plainRecord(entry)?.let { plainText(context, it) } ?: song.path.takeIf { plainInTags(entry) }?.let { withContext(Dispatchers.IO) { tagPlainText(it) } })
+            ?.let { lyricsText(title, song.artist, it) }
         ?: return Shared.NoLyrics
     return launchShare(1) { context.startActivity(shareSheet(lyricsTextShare(title, text), context.packageName)) }
 }

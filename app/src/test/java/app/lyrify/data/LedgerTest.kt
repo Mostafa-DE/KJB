@@ -122,6 +122,30 @@ class LedgerTest {
     }
 
     @Test
+    fun `the song's own plain lyrics stay with it through the AI's runs, and only there`() {
+        val plain = recorded(null, track, LyricsStatus.PLAIN_ONLY, null, now, durationMatched = true, plainInTags = true)
+        assertTrue(plain.plainInTags)
+        val failed = recorded(plain, track, LyricsStatus.AI_FAILED, null, now, durationMatched = true)
+        assertTrue(failed.plainInTags)
+        val writing = recorded(failed, track, LyricsStatus.WRITING, null, now, source = LyricsSource.AI)
+        assertTrue(writing.plainInTags)
+        assertTrue(recorded(writing, track, LyricsStatus.AI_ALIGNED, null, now, source = LyricsSource.AI).plainInTags)
+        // Anything a lookup records anew says again where its lyrics are.
+        assertFalse(recorded(plain, track, LyricsStatus.PLAIN_ONLY, 7, now, durationMatched = true).plainInTags)
+        assertFalse(recorded(plain, track, LyricsStatus.NOT_FOUND, null, now).plainInTags)
+        assertFalse(recorded(null, track, LyricsStatus.NOT_FOUND, null, now, plainInTags = true).plainInTags)
+    }
+
+    @Test
+    fun `the song's own lyrics survive a round trip, and an older ledger reads them as LRCLIB's`() {
+        val ledger = LedgerState()
+            .put(recorded(null, track, LyricsStatus.SYNCED, null, now, sha256 = "ab12", size = 40, source = LyricsSource.TAGS))
+            .put(recorded(null, track.copy(path = "/b.mp3"), LyricsStatus.PLAIN_ONLY, null, now, durationMatched = true, plainInTags = true))
+        assertEquals(ledger, LedgerJson.decode(LedgerJson.encode(ledger)))
+        assertFalse(LedgerJson.decode(LedgerJson.encode(LedgerState().put(recorded(null, track, LyricsStatus.PLAIN_ONLY, 7, now)))).entries.getValue(track.path).plainInTags)
+    }
+
+    @Test
     fun `written and existing lyrics are never looked up again`() {
         listOf(LyricsStatus.SYNCED, LyricsStatus.EXISTING).forEach {
             val entry = recorded(null, track, it, lrclibId = null, now = now)

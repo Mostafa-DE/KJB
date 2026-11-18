@@ -1,15 +1,19 @@
 package app.lyrify.lyrics
 
+import app.lyrify.data.LyricsSource
 import app.lyrify.data.LyricsStatus
 import app.lyrify.data.SharedWrites
 import app.lyrify.library.ArtistSplitter
+import app.lyrify.overnight.AiQueue
 import app.lyrify.settings.ArtistSplit
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -108,6 +112,78 @@ class LyricsSearchTest {
         pipeline().process(track)
 
         assertEquals(listOf("Lio Marsh & Cass Dunmore"), client.gets.map { it.artist }.distinct())
+    }
+
+    // Lyrics in the file's own tags
+
+    private val tagLines = listOf(10_000L to "Made-up dawn", 25_000L to "Made-up noon", 40_000L to "Made-up dusk")
+
+    private fun withPlain(text: String = "Made-up rook\nMade-up rye") = LyricsTagFixtures.mp3(LyricsTagFixtures.frame("USLT", LyricsTagFixtures.uslt(text)))
+
+    @Test
+    fun `synced lyrics in the file are written before any request, as the file's own`() = runTest {
+        val bytes = LyricsTagFixtures.mp3(LyricsTagFixtures.frame("SYLT", LyricsTagFixtures.sylt(tagLines)))
+        val track = audio("a.mp3", "Ember Choir", "Nadia Fenn", bytes)
+        client.onGet = { LrclibResult.Found(listOf(record(7, track = "Ember Choir", artist = "Nadia Fenn"))) }
+
+        assertEquals(LyricsStatus.SYNCED, pipeline().process(track)?.status)
+
+        assertEquals(0, client.requests)
+        assertEquals("[00:10.000]Made-up dawn\n[00:25.000]Made-up noon\n[00:40.000]Made-up dusk\n", sidecar(track).readText())
+        val entry = ledger[track.path]!!
+        assertEquals(LyricsSource.TAGS, entry.source)
+        assertNull(entry.lrclibId)
+        assertTrue(canRemove(entry))
+        assertArrayEquals(bytes, File(track.path).readBytes())
+    }
+
+    @Test
+    fun `plain lyrics in the file still ask LRCLIB for synced ones, which win`() = runTest {
+        val track = audio("a.mp3", "Rook and Rye", "Wil Sander", withPlain())
+        client.onGet = { LrclibResult.Found(listOf(record(7, track = "Rook and Rye", artist = "Wil Sander"))) }
+
+        assertEquals(LyricsStatus.SYNCED, pipeline().process(track)?.status)
+
+        assertEquals(7L, ledger[track.path]?.lrclibId)
+        assertEquals(LyricsSource.LRCLIB, ledger[track.path]?.source)
+    }
+
+    @Test
+    fun `plain lyrics in the file are the song's plain lyrics when LRCLIB has none, with nothing to check`() = runTest {
+        val track = audio("a.mp3", "Fernlight", "Clea Moss", withPlain())
+        // A loose search would offer this one.
+        client.onSearch = { if (it.artist == null) LrclibResult.Found(listOf(record(7, track = "Fernlight", artist = "Somebody"))) else LrclibResult.Found(emptyList()) }
+
+        assertEquals(LyricsStatus.PLAIN_ONLY, pipeline().process(track)?.status)
+
+        val entry = ledger[track.path]!!
+        assertTrue(entry.plainInTags)
+        assertNull(entry.lrclibId)
+        assertEquals(true, entry.durationMatched)
+        assertEquals(emptyList<Candidate>(), entry.candidates)
+        assertTrue(client.searches.none { it.artist == null })
+        assertFalse(sidecar(track).exists())
+        assertTrue(AiQueue.job(entry).times)
+    }
+
+    @Test
+    fun `synced lyrics in the file that Samsung Music could not show are kept as plain`() = runTest {
+        val bytes = LyricsTagFixtures.mp3(LyricsTagFixtures.frame("SYLT", LyricsTagFixtures.sylt(tagLines.take(2))))
+        val track = audio("a.mp3", "Ember Choir", "Nadia Fenn", bytes)
+
+        assertEquals(LyricsStatus.PLAIN_ONLY, pipeline().process(track)?.status)
+
+        assertTrue(ledger[track.path]!!.plainInTags)
+        assertFalse(sidecar(track).exists())
+    }
+
+    @Test
+    fun `a song with no artist keeps the plain lyrics of its file`() = runTest {
+        val track = audio("a.mp3", "Voice Memo 12", null, withPlain())
+
+        assertEquals(LyricsStatus.PLAIN_ONLY, pipeline().process(track)?.status)
+
+        assertTrue(ledger[track.path]!!.plainInTags)
     }
 
     // Relevance by score

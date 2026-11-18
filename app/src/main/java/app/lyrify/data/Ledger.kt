@@ -94,6 +94,9 @@ enum class LyricsSource {
 
     /** The on-device AI, from the audio (with LRCLIB's plain lyrics when it timed them). */
     AI,
+
+    /** The song file's own tags: synced lyrics it holds, put in a `.lrc` as they are (3.1). */
+    TAGS,
 }
 
 /** One audio file's lyrics history, keyed by its absolute [path]. Times are wall-clock millis. */
@@ -159,6 +162,12 @@ data class LedgerEntry(
      * file and what was there before, so the next start settles it by the `.lrc` alone; null for any other entry.
      */
     val whole: WholeWrite? = null,
+    /**
+     * For [LyricsStatus.PLAIN_ONLY], and the AI's statuses after it: the plain lyrics are the song's own, in its file's
+     * tags (app.lyrify.lyrics.EmbeddedLyrics), read from there when the AI times them or a view shows them; [lrclibId] is
+     * null then. False otherwise, and in entries from before 3.1.
+     */
+    val plainInTags: Boolean = false,
 ) {
     val track: LocalTrack get() = LocalTrack(path, title, artist, album, durationMs)
 
@@ -324,7 +333,8 @@ suspend fun writeWithRetries(onFailure: (IOException) -> Unit, write: suspend ()
  * WRITING only. [source] says who made those lyrics; [agreement] is the AI's, when it timed them; [aiReason] why the AI
  * rejected its lyrics, kept for [LyricsStatus.AI_REJECTED] only; [candidates] are kept for [LyricsStatus.NEEDS_CHECK]
  * only, their lyrics compared ([app.lyrify.lyrics.Candidates.offered]). [declined] stays once set. A status only a
- * lookup gives ([LOOKUP_STATUSES]) carries this version's [LOOKUP_REV]; any other keeps the one before.
+ * lookup gives ([LOOKUP_STATUSES]) carries this version's [LOOKUP_REV]; any other keeps the one before. [plainInTags]
+ * is kept for [LyricsStatus.PLAIN_ONLY], and through the AI's statuses from the entry before.
  */
 fun recorded(
     previous: LedgerEntry?,
@@ -341,6 +351,7 @@ fun recorded(
     aiReason: String? = null,
     candidates: List<Candidate> = emptyList(),
     declined: Boolean = false,
+    plainInTags: Boolean = false,
 ): LedgerEntry {
     // Failures in a row: lookups for ERROR, AI runs for AI_FAILED.
     val counted = status == LyricsStatus.ERROR || status == LyricsStatus.AI_FAILED
@@ -387,6 +398,12 @@ fun recorded(
         declined = declined || previous?.declined == true,
         lookupRev = if (status in LOOKUP_STATUSES) LOOKUP_REV else previous?.lookupRev ?: 0,
         candidatesCompared = status == LyricsStatus.NEEDS_CHECK,
+        plainInTags = when {
+            status == LyricsStatus.PLAIN_ONLY -> plainInTags
+            // The AI times them: they stay with the song through its runs, as its record and length do.
+            status.byAi || (status == LyricsStatus.WRITING && source == LyricsSource.AI) -> previous?.plainInTags == true
+            else -> false
+        },
     )
 }
 
