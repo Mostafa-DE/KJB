@@ -572,7 +572,7 @@ private fun NameDialog(title: String, field: String, start: String, confirm: Str
  * opening with the current song marked and in view; at the foot ([QueueSheetFoot]), pinned whatever the list's scroll,
  * "Save as playlist" and the other queues ([OtherQueues], as the Queues page lists them; each opens that queue's page,
  * and none shows without one). A lazy list in a sheet of its own, as LyrifySheet draws it: a queue may hold the whole
- * library.
+ * library. A window of its own, so it hosts its songs' double taps itself ([doubleTapHost]).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -593,6 +593,7 @@ fun QueueSheet(onDismiss: () -> Unit) {
     val names = rememberNames()
     val reorder = remember { Reorder() }
     SettleReorder(book.current?.items, reorder)
+    val doubleTaps = rememberDoubleTaps()
     val top = WindowInsets.statusBars.getTop(LocalDensity.current)
     val footMax = with(LocalDensity.current) { queueSheetFootMax(LocalWindowInfo.current.containerSize.height.toDp()) }
     val open: (Page) -> Unit = { page ->
@@ -619,7 +620,8 @@ fun QueueSheet(onDismiss: () -> Unit) {
                 .navigationBarsPadding()
                 .padding(bottom = 8.dp)
                 .shadow(16.dp, RoundedCornerShape(32.dp), ambientColor = chrome.shadow, spotColor = chrome.shadow)
-                .background(chrome.sheet, RoundedCornerShape(32.dp)),
+                .background(chrome.sheet, RoundedCornerShape(32.dp))
+                .doubleTapHost(doubleTaps),
         ) {
             Box(Modifier.align(Alignment.CenterHorizontally).padding(vertical = 12.dp).size(36.dp, 4.dp).background(colors.onSurfaceVariant.copy(alpha = 0.4f), CircleShape))
             val queue = book.current
@@ -652,6 +654,7 @@ fun QueueSheet(onDismiss: () -> Unit) {
             ToastSlot(Modifier.padding(horizontal = 12.dp), padding = PaddingValues(bottom = 8.dp))
             QueueSheetFoot(others, labels, footMax, onSave = { saving = true }) { open(Page.Queue(it)) }
             if (saving) SaveAsPlaylistDialog(queue, connection) { saving = false }
+            HeartPops(doubleTaps)
         }
     }
 }
@@ -707,10 +710,11 @@ internal fun RecentChips(others: List<Queue>, labels: Map<String, String>, onOpe
 }
 
 /**
- * A queue's songs, the place marked: a tap plays the queue from that song; the handle drags a song to another place, the
- * others sliding out of its way ([Reorder]); a swipe to the start, or "Remove from queue" in the row's menu, takes it
- * out (with Undo through [onRemoved]), the rows under it closing up. Songs not on the phone stay listed, quietly marked,
- * and are skipped.
+ * A queue's songs, the place marked: a tap plays the queue from that song, and a second tap soon after also makes the
+ * song a favourite ([doubleTapFavourite]); the handle drags a song to another place, the others sliding out of its way
+ * ([Reorder]); a swipe to the start, or "Remove from queue" in the row's menu, takes it out (with Undo through
+ * [onRemoved]), the rows under it closing up. Songs not on the phone stay listed, quietly marked, and are skipped (and
+ * have no double tap).
  */
 private fun LazyListScope.queueSongs(queue: Queue, playing: Boolean, library: Library?, names: LibrarySettings, connection: PlayerConnection, reorder: Reorder, surface: Color, onRemoved: (Undo?) -> Unit) {
     // Each row acts on its place in the queue itself, also while a drag shows another order.
@@ -909,6 +913,7 @@ private fun QueueSongRow(
                 modifier = Modifier
                     .weight(1f)
                     .heightIn(min = ROW)
+                    .doubleTapFavourite(song?.let { FavouriteTarget.Song(item.song) })
                     .clickable(role = Role.Button) { connection.jump(queue.id, index) }
                     .semantics(mergeDescendants = true) { contentDescription = "$label, $sub" }
                     .padding(start = ScreenPadding, top = 8.dp, bottom = 8.dp),

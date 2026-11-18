@@ -59,6 +59,7 @@ import app.lyrify.library.Library
 import app.lyrify.library.LibraryGraph
 import app.lyrify.library.Playlist
 import app.lyrify.library.PlaylistStore
+import app.lyrify.library.PlaylistsState
 import app.lyrify.library.Song
 import app.lyrify.library.SongRef
 import app.lyrify.library.albumKey
@@ -259,6 +260,9 @@ sealed interface Said {
 
     data class Favourites(val added: Boolean) : Said
 
+    /** A double tap on one that is a favourite already: it only ever adds, so nothing changed. */
+    data object AlreadyFavourite : Said
+
     /** The empty playlist [name] was made. */
     data class Made(val name: String) : Said
 
@@ -321,6 +325,22 @@ class SongActions(private val playback: PlaybackCommands, private val playlists:
     suspend fun favourite(collection: FavouriteCollection, on: Boolean): Outcome {
         if (!favourites.setCollection(collection, on)) return Outcome(Said.NotSaved)
         return Outcome(Said.Favourites(on)) { favourites.setCollection(collection, !on) }
+    }
+
+    /**
+     * A double tap's heart ([FavouriteTarget]), which only ever adds: one not a favourite in [now] becomes one, with
+     * Undo; one that is already (an artist also through a whole tag's heart, [artistHearts], read in [library]) stays as
+     * it is, and the toast says so.
+     */
+    suspend fun addFavourite(target: FavouriteTarget, now: PlaylistsState, library: Library?): Outcome = when (target) {
+        is FavouriteTarget.Song ->
+            if (now.favouriteSongs.any { it.path == target.ref.path }) Outcome(Said.AlreadyFavourite) else favourite(listOf(target.ref), now.favouriteSongs)
+        is FavouriteTarget.Collection -> {
+            val collection = target.collection
+            val stored = now.favouriteCollections
+            val on = if (collection.kind == CollectionKind.ARTIST && library != null) artistHearts(collection.key, stored, library).isNotEmpty() else collection in stored
+            if (on) Outcome(Said.AlreadyFavourite) else favourite(collection, on = true)
+        }
     }
 
     /** An artist's heart taken off with a whole tag's that stood for them ([artistHeartOff]). Undo puts both back. */
@@ -541,6 +561,7 @@ fun saidText(resources: Resources, said: Said): String = when (said) {
     is Said.AlreadyIn ->
         if (said.count == 1) resources.getString(R.string.lib_already_in, said.name) else resources.getQuantityString(R.plurals.lib_all_already_in, said.count, said.count, said.name)
     is Said.Favourites -> resources.getString(if (said.added) R.string.lib_favourites_added else R.string.lib_favourites_removed)
+    Said.AlreadyFavourite -> resources.getString(R.string.lib_already_in, resources.getString(R.string.lib_favourites))
     is Said.Made -> resources.getString(R.string.lib_made, said.name)
     is Said.RemovedFrom -> resources.getString(R.string.lib_removed_from, said.name)
     Said.RemovedFromQueue -> resources.getString(R.string.lib_removed_from_queue)
@@ -559,6 +580,7 @@ private fun saidIcon(said: Said): Int = when (said) {
     Said.AddedToQueue, is Said.AlreadyIn -> R.drawable.ic_queue_music
     is Said.AddedTo, is Said.Made -> R.drawable.ic_playlist_add
     is Said.Favourites -> if (said.added) R.drawable.ic_favorite_fill else R.drawable.ic_favorite
+    Said.AlreadyFavourite -> R.drawable.ic_favorite_fill
     is Said.RemovedFrom, Said.RemovedFromQueue -> R.drawable.ic_playlist_remove
     Said.Renamed -> R.drawable.ic_edit
     Said.PlaylistDeleted -> R.drawable.ic_delete

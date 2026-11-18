@@ -466,7 +466,7 @@ private fun AlbumsTab(ui: LibraryUi, library: Library, padding: PaddingValues, r
         }
         item(key = "same", span = { GridItemSpan(maxLineSpan) }, contentType = "same") { SameNamesLine(NameKind.ALBUM, library, rowMotion(reduced)) }
         items(albums, key = { it.key }, contentType = { "album" }) { album ->
-            AlbumCard(album.title, album.artist, album.songs.firstOrNull(), rowMotion(reduced)) { nav.open(Page.Album(album.key)) }
+            AlbumCard(album.title, album.artist, album.songs.firstOrNull(), rowMotion(reduced), favourite = FavouriteTarget.album(album.key)) { nav.open(Page.Album(album.key)) }
         }
         if (library.unknownAlbum.isNotEmpty()) {
             item(key = "unknown", contentType = "album") {
@@ -558,7 +558,7 @@ private fun ArtistsTab(ui: LibraryUi, library: Library, padding: PaddingValues, 
         item(key = "same", contentType = "same") { SameNamesLine(NameKind.ARTIST, library, rowMotion(reduced).padding(horizontal = ScreenPadding)) }
         // Prefixed: an artist named "header" or "same" would take a fixed row's key, and two rows with one key crash the list.
         items(artists, key = { "artist ${it.name}" }, contentType = { "row" }) { artist ->
-            NavRow(artist.name, artistLine(artist), rowMotion(reduced), lead = { ArtistAvatar(artist) }) { nav.open(Page.Artist(artist.name)) }
+            NavRow(artist.name, artistLine(artist), rowMotion(reduced), favourite = FavouriteTarget.artist(artist.name), lead = { ArtistAvatar(artist) }) { nav.open(Page.Artist(artist.name)) }
         }
     }
     if (sorting) {
@@ -658,7 +658,9 @@ private fun PlaylistsTab(ui: LibraryUi, library: Library, padding: PaddingValues
         item(key = "yours heading", contentType = "heading") { Box(rowMotion(reduced)) { ListHeading(stringResource(R.string.lib_your_playlists)) } }
         items(playlists, key = { "playlist ${it.id}" }, contentType = { "row" }) { playlist ->
             val count = library.listed(playlist.songs).size
-            NavRow(playlist.name, pluralStringResource(R.plurals.lib_songs, count, count), rowMotion(reduced), lead = { PlaylistTile(playlist) }) { nav.open(Page.Playlist(playlist.id)) }
+            NavRow(playlist.name, pluralStringResource(R.plurals.lib_songs, count, count), rowMotion(reduced), favourite = FavouriteTarget.playlist(playlist.id), lead = { PlaylistTile(playlist) }) {
+                nav.open(Page.Playlist(playlist.id))
+            }
         }
         item(key = "new", contentType = "new") { Box(rowMotion(reduced)) { NewRow(stringResource(R.string.lib_new_playlist)) { sheets.show(OpenSheet.NewPlaylist(emptyList())) } } }
     }

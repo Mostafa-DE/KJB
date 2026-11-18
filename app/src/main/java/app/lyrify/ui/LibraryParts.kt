@@ -481,10 +481,11 @@ fun <T> SortSheet(title: String, options: List<Pair<T, String>>, selected: T, on
 /**
  * A song's row: its cover, title and artist, the lyrics icon after the artist for a song with lyrics, and for the song
  * playing its coral title, the equalizer mark and the green dot before the artist ([rowMarks]), which fade from row to
- * row as the song changes; a tap plays, "⋯" opens the song sheet, a long press selects (none without [onLongPress]). Search passes its [shownTitle] with the match highlighted, and for a song found
- * in its lyrics the matching [line] under the artist. While selecting, a tap on the row or on its round check ([onCheck],
- * 48 dp) picks or unpicks it, and a picked row has its own rounded fill ([rowFill]). In a custom order a [handle] comes
- * before "⋯", and TalkBack gets the row's [moves].
+ * row as the song changes; a tap plays, a second tap soon after also makes it a favourite ([doubleTapFavourite], not
+ * while selecting), "⋯" opens the song sheet, a long press selects (none without [onLongPress]). Search passes its
+ * [shownTitle] with the match highlighted, and for a song found in its lyrics the matching [line] under the artist.
+ * While selecting, a tap on the row or on its round check ([onCheck], 48 dp) picks or unpicks it, and a picked row has
+ * its own rounded fill ([rowFill]). In a custom order a [handle] comes before "⋯", and TalkBack gets the row's [moves].
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -537,6 +538,7 @@ fun SongRow(
             modifier = Modifier
                 .weight(1f)
                 .clip(RoundedCornerShape(ROW_FILL_CORNER))
+                .doubleTapFavourite(if (selecting) null else FavouriteTarget.Song(song.ref))
                 .combinedClickable(onClickLabel = tapLabel, onLongClickLabel = holdLabel, onLongClick = onLongPress?.takeUnless { selecting }, onClick = onTap)
                 .semantics {
                     contentDescription = description
@@ -639,7 +641,11 @@ fun LyricsIcon(modifier: Modifier = Modifier) {
     Icon(painterResource(R.drawable.ic_lyrics), contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = modifier.size(15.dp))
 }
 
-/** A row that opens something (a folder, an artist, a playlist, a queue): its tile, title, line and a chevron. One TalkBack stop. */
+/**
+ * A row that opens something (a folder, an artist, a playlist, a queue): its tile, title, line and a chevron. One
+ * TalkBack stop. With [favourite] a second tap soon after the one that opened it makes that a favourite
+ * ([doubleTapFavourite]).
+ */
 @Composable
 fun NavRow(
     title: String,
@@ -647,6 +653,7 @@ fun NavRow(
     modifier: Modifier = Modifier,
     titleColor: Color = Color.Unspecified,
     description: String? = null,
+    favourite: FavouriteTarget? = null,
     lead: @Composable () -> Unit,
     trailing: (@Composable () -> Unit)? = { Icon(painterResource(R.drawable.ic_chevron_right), contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp)) },
     onClick: () -> Unit,
@@ -659,6 +666,7 @@ fun NavRow(
             .fillMaxWidth()
             .padding(horizontal = 8.dp)
             .clip(RoundedCornerShape(16.dp))
+            .doubleTapFavourite(favourite)
             .clickable(role = Role.Button, onClick = onClick)
             .semantics(mergeDescendants = true) { contentDescription = words }
             .heightIn(min = 64.dp)
@@ -742,15 +750,17 @@ fun ArtistAvatar(artist: Artist, size: Dp = 48.dp) {
 }
 
 /**
- * An album as a card: its cover filling the width, its title and a line under it ([sub]: the artist, or the year). Its
+ * An album as a card: its cover filling the width, its title and a line under it ([sub]: the artist, or the year). With
+ * [favourite] a second tap soon after the one that opened it makes the album a favourite ([doubleTapFavourite]). Its
  * [ALBUM_CARD_TAG] reaches UiAutomator as a resource id, so a device test opens an album without knowing any.
  */
 @Composable
-fun AlbumCard(title: String, sub: String?, cover: Song?, modifier: Modifier = Modifier, onClick: () -> Unit) {
+fun AlbumCard(title: String, sub: String?, cover: Song?, modifier: Modifier = Modifier, favourite: FavouriteTarget? = null, onClick: () -> Unit) {
     val words = listOfNotNull(title, sub).joinToString(", ")
     Column(
         modifier
             .clip(RoundedCornerShape(22.dp))
+            .doubleTapFavourite(favourite)
             .clickable(role = Role.Button, onClick = onClick)
             .semantics(mergeDescendants = true) {
                 contentDescription = words

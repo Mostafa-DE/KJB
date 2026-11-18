@@ -205,6 +205,8 @@ fun AppShell(
     // selection or the keyboard (a full-screen view over it leaves it as it is, so the player closes into the bar where it is).
     val hide = rememberDockHide()
     val exploring = rememberTouchExploring()
+    // Double-tap to favourite over the pages and the views (DoubleTap.kt).
+    val doubleTaps = rememberDoubleTaps()
     val hides = display.hideDockOnScroll && LocalTour.current?.state == null && !exploring
     SideEffect { hide.on = hides }
     LaunchedEffect(state.tab, state.pages, state.libraryTab, nav.selectionBar != null, ime, hides) { hide.show() }
@@ -252,8 +254,9 @@ fun AppShell(
         LocalLyrics provides lyrics,
         LocalPlayingPath provides (bar as? NowBarShows.Own)?.now?.path,
         LocalDockBar provides DockBar(items, dot, offers),
+        LocalDoubleTaps provides doubleTaps,
     ) {
-        SharedTransitionLayout(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+        SharedTransitionLayout(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).doubleTapHost(doubleTaps)) {
             // The page layer with its Now bar and dock: under the views, but over the views a back swipe from a page
             // goes back to (the player it was opened from), shrinking to show them.
             val overViews = swipe.taking is BackTaking.Pages
@@ -346,6 +349,7 @@ fun AppShell(
                     )
                 }
             }
+            HeartPops(doubleTaps, Modifier.zIndex(HEARTS_Z))
         }
         RemoveLyricsDialog(removal)
         // The sync editor's "Synced lyrics saved" and its Undo (P3).
@@ -888,6 +892,9 @@ private val NOW_BAR_GAP = 8.dp
 
 /** Hide while scrolling: the preview's 280 ms on the standard curve (user pick 2026-11-18). */
 private const val DOCK_SLIDE_MS = 280
+
+/** Double-tap to favourite's hearts draw over the page layer (at most 2) and the views. */
+private const val HEARTS_Z = 3f
 
 private const val WHY = "why"
 private const val FIX = "fix"

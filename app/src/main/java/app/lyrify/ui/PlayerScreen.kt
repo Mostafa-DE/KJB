@@ -966,7 +966,7 @@ private fun FlipArea(
                     cameraDistance = CAMERA * density
                     alpha = frontAlpha
                 },
-            ) { CoverFace(ui, side, area, enabled = !lyricsShown, onFlip = if (flips) { { onFlip(true) } } else null, onNext, onPrevious) }
+            ) { CoverFace(ui, side, area, enabled = !lyricsShown, onFlip = if (flips) { { onFlip(true) } } else null, onNext, onPrevious, onFlipBack = { onFlip(false) }) }
         }
         if (lyricsShown || (reduced && fade.value > 0f)) {
             Box(
@@ -988,8 +988,9 @@ private data class Landing(val way: SkipWay, val item: QueueItem)
  * cover rides in beside it from the screen's edge; past [SWIPE_SKIP_DP] it finishes the way (the prototype's 0.2 s ease)
  * and only then plays that song, with the incoming cover already in place, so nothing jumps. Short of it, or with no
  * song to slide in (Previous starting the song over, the end of the queue), it springs back. A tap flips to the lyrics
- * ([onFlip]; null for a book: no tap, no chip). A drag down is the player's own ([PlayerFrame]): the cover lets it go,
- * and settles back if it was still moving.
+ * ([onFlip]; null for a book: no tap, no chip). The turn starts at once, never waiting for a second tap: one soon after
+ * turns it back ([onFlipBack]) and makes the song a favourite ([doubleTapFavourite]; a book's part too, as its heart
+ * does). A drag down is the player's own ([PlayerFrame]): the cover lets it go, and settles back if it was still moving.
  */
 @Composable
 internal fun CoverFace(
@@ -1000,6 +1001,7 @@ internal fun CoverFace(
     onFlip: (() -> Unit)?,
     onNext: () -> Unit,
     onPrevious: () -> Unit,
+    onFlipBack: () -> Unit = {},
 ) {
     val density = LocalDensity.current
     val reduced = LocalReducedMotion.current
@@ -1121,6 +1123,7 @@ internal fun CoverFace(
                         }
                     }
                 }
+                .doubleTapFavourite(FavouriteTarget.Song(ui.item.song).takeIf { enabled }, onSecond = onFlipBack.takeIf { onFlip != null })
                 .then(if (onFlip != null) Modifier.clickable(enabled = enabled, role = Role.Button, onClick = onFlip) else Modifier)
                 .semantics { contentDescription = label },
         ) {

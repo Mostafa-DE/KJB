@@ -6,6 +6,7 @@ import androidx.compose.ui.text.TextRange
 import app.lyrify.R
 import app.lyrify.library.CollectionKind
 import app.lyrify.library.FavouriteCollection
+import app.lyrify.library.Library
 import app.lyrify.library.Playlist
 import app.lyrify.library.PlaylistStore
 import app.lyrify.library.PlaylistsState
@@ -523,6 +524,61 @@ class SongActionsTest {
         assertEquals(emptyList<SongRef>(), store.now.favouriteSongs)
         removed.undo?.invoke()
         assertEquals(listOf(lantern.ref), store.now.favouriteSongs)
+    }
+
+    @Test
+    fun `a double tap only adds, so a song not yet a favourite comes with Undo and one already there stays and says so`() = runBlocking {
+        val store = MemoryPlaylists(PlaylistsState(favouriteSongs = listOf(lantern.ref)))
+        val actions = SongActions(NoPlayback, store)
+
+        val added = actions.addFavourite(FavouriteTarget.Song(bell.ref), store.now, library = null)
+        assertEquals(Said.Favourites(added = true), added.said)
+        assertEquals(listOf(bell.ref, lantern.ref), store.now.favouriteSongs)
+        assertEquals(true, added.undo?.invoke())
+        assertEquals(listOf(lantern.ref), store.now.favouriteSongs)
+
+        val already = actions.addFavourite(FavouriteTarget.Song(lantern.ref), store.now, library = null)
+        assertEquals(Said.AlreadyFavourite, already.said)
+        assertNull(already.undo)
+        assertEquals(listOf(lantern.ref), store.now.favouriteSongs)
+    }
+
+    @Test
+    fun `a double tap on an album, artist or playlist only adds, and an artist a whole tag's heart stands for is one already`() = runBlocking {
+        val album = FavouriteCollection(CollectionKind.ALBUM, """["Kit Calloway","Harbour Glass"]""")
+        // A heart kept on a whole tag of two artists stands for each of them (ArtistNames.kt).
+        val duet = FavouriteCollection(CollectionKind.ARTIST, "Kit Calloway, Mira Solen")
+        val library = Library.of(listOf(song("Music/a/Tin Roof.mp3", artist = "Kit Calloway, Mira Solen")), Settings())
+        val store = MemoryPlaylists(PlaylistsState(listOf(roadTrip), favouriteCollections = listOf(duet)))
+        val actions = SongActions(NoPlayback, store)
+
+        val added = actions.addFavourite(FavouriteTarget.album(album.key), store.now, library)
+        assertEquals(Said.Favourites(added = true), added.said)
+        assertEquals(listOf(album, duet), store.now.favouriteCollections)
+        assertEquals(true, added.undo?.invoke())
+        assertEquals(listOf(duet), store.now.favouriteCollections)
+
+        val artist = actions.addFavourite(FavouriteTarget.artist("Mira Solen"), store.now, library)
+        assertEquals(Said.AlreadyFavourite, artist.said)
+        assertNull(artist.undo)
+        assertEquals(listOf(duet), store.now.favouriteCollections)
+
+        assertEquals(Said.Favourites(added = true), actions.addFavourite(FavouriteTarget.playlist("p1"), store.now, library).said)
+        assertEquals(Said.AlreadyFavourite, actions.addFavourite(FavouriteTarget.playlist("p1"), store.now, library).said)
+        assertEquals(listOf(FavouriteCollection(CollectionKind.PLAYLIST, "p1"), duet), store.now.favouriteCollections)
+    }
+
+    @Test
+    fun `a double tap's favourite that could not be stored says so and offers no Undo`() = runBlocking {
+        val store = MemoryPlaylists(fail = true)
+        val actions = SongActions(NoPlayback, store)
+        listOf(
+            actions.addFavourite(FavouriteTarget.Song(bell.ref), store.now, library = null),
+            actions.addFavourite(FavouriteTarget.album("""["Kit Calloway","Harbour Glass"]"""), store.now, library = null),
+        ).forEach {
+            assertEquals(Said.NotSaved, it.said)
+            assertNull(it.undo)
+        }
     }
 
     @Test
