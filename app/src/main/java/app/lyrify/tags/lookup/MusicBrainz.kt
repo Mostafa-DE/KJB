@@ -6,8 +6,13 @@ import kotlinx.serialization.json.Json
 import java.net.URI
 import java.net.URLEncoder
 
-/** An artist credit as MusicBrainz gives it: who is credited, under which name, with the join phrases between them. */
+/**
+ * An artist credit as MusicBrainz gives it: who is credited, under which name, with the join phrases between them. This
+ * and the other answers below are serializable so an album's check can be kept between runs (`covers-tags-checks/`).
+ */
+@Serializable
 data class Credit(val parts: List<Part>) {
+    @Serializable
     data class Part(val name: String, val joinPhrase: String = "", val artistId: String? = null)
 
     /** ONE credited name, join phrases included ("Mira Solen feat. Glass Harbour"): what the ARTIST field gets. */
@@ -21,6 +26,7 @@ data class Credit(val parts: List<Part>) {
 }
 
 /** The abstract album every edition belongs to; [firstReleaseDate] is the earliest release in the group. */
+@Serializable
 data class MbReleaseGroup(
     val id: String,
     val firstReleaseDate: String? = null,
@@ -34,6 +40,7 @@ data class MbReleaseGroup(
 }
 
 /** A track on a release: [position] on its medium (from 1), the recording it is, and its length here. */
+@Serializable
 data class MbTrack(
     val id: String,
     val recordingId: String,
@@ -44,12 +51,14 @@ data class MbTrack(
 )
 
 /** One disc of a release: [position] is its disc number, [trackCount] its tracks even when [tracks] lists only some. */
+@Serializable
 data class MbMedium(val position: Int, val format: String?, val trackCount: Int, val tracks: List<MbTrack>)
 
 /**
  * One edition of an album. A release lookup lists every track; a search lists none, and a recording search lists only
  * the track that was found ([hasAllTracks] tells them apart).
  */
+@Serializable
 data class MbRelease(
     val id: String,
     val title: String,

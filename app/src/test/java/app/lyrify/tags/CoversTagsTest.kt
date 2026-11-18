@@ -815,6 +815,128 @@ class CoversTagsTest {
     }
 
     @Test
+    fun `what a check found stays after KJB closes, and comes back without asking MusicBrainz`() = runTest {
+        library = lanternsSongs() + harbourSongs() + song("Lone Kestrel", 61, "Lone Kestrel", album = null)
+        answers("Lanterns" to lanterns)
+        val state = checked(flow())
+
+        val again = flow()
+        advanceUntilIdle()
+
+        assertEquals(3, state.waiting.size)
+        assertEquals(state.waiting.toSet(), again.state.value.waiting.toSet())
+        assertEquals(1, again.state.value.badge)
+        assertEquals(3, source.checked.size)
+    }
+
+    @Test
+    fun `a check leaves out the albums checked before and unchanged since, and checks the new and the changed`() = runTest {
+        val songs = lanternsSongs()
+        library = songs + harbourSongs()
+        answers("Lanterns" to lanterns)
+        val flow = flow()
+        checked(flow)
+        File(songs[1].path).appendBytes(byteArrayOf(0))
+        library = library!! + song("Lone Kestrel", 61, "Lone Kestrel", album = null)
+
+        flow.check()
+        advanceUntilIdle()
+
+        assertEquals(listOf("Lanterns", "Harbour", "Lanterns", null), source.checked.map { it.first })
+        assertEquals(3, flow.state.value.waiting.size)
+    }
+
+    @Test
+    fun `a suggestion kept from before KJB closed can be applied at any time, with its Undo in History`() = runTest {
+        val songs = lanternsSongs()
+        library = songs
+        answers("Lanterns" to lanterns)
+        checked(flow())
+
+        val again = flow()
+        advanceUntilIdle()
+        val applied = again.applyWhole(again.state.value.waiting("Lanterns")) as Applied.Done
+
+        assertEquals(2, applied.songs)
+        assertEquals(listOf("Quiet Ember"), rig.fields(songs[0].target())["TITLE"])
+        assertEquals(applied.entryId, again.state.value.done.single().entryId)
+        assertEquals(applied.entryId, rig.undo.memory().entries.single().id)
+        // Applied, it waits no more, after the next start either.
+        val third = flow()
+        advanceUntilIdle()
+        assertEquals(emptyList<Waiting>(), third.state.value.waiting)
+        assertEquals(1, source.checked.size)
+    }
+
+    @Test
+    fun `Not this one, Search myself and an album's year found later are kept after KJB closes`() = runTest {
+        library = lanternsSongs() + harbourSongs()
+        answers("Lanterns" to lanterns, "Harbour" to harbour)
+        val flow = flow()
+        val state = checked(flow)
+        flow.notThisOne(state.waiting("Lanterns").album.id, state.waiting("Lanterns").match())
+        source.searchAnswer = { album, _, _ -> Lookup.Done(Proposal.PickOne(listOf(AlbumMatch.match(album, harbour.copy(releaseGroup = MbReleaseGroup(GROUP)))), setOf(Doubt.SEARCHED))) }
+        val harbourId = state.waiting("Harbour").album.id
+        flow.search(harbourId, "Harbour Glass", "Kit Calloway")
+        source.datedOf = { MetaAnswer.Ok(it.copy(release = it.release.copy(releaseGroup = MbReleaseGroup(GROUP, "2001-05-02")))) }
+        flow.date(harbourId, (flow.state.value.waiting("Harbour").proposal as Proposal.PickOne).candidates.single())
+        advanceUntilIdle()
+
+        val again = flow()
+        advanceUntilIdle()
+
+        assertEquals(flow.state.value.waiting.toSet(), again.state.value.waiting.toSet())
+        assertEquals(Proposal.PickOne(emptyList(), emptySet()), again.state.value.waiting("Lanterns").proposal)
+        val searched = again.state.value.waiting("Harbour").proposal as Proposal.PickOne
+        assertEquals(setOf(Doubt.SEARCHED), searched.doubts)
+        assertEquals(2001, searched.candidates.single().release.releaseGroup?.originalYear)
+    }
+
+    @Test
+    fun `an album changed or gone since its check is not brought back, and the changed one is checked again`() = runTest {
+        val songs = lanternsSongs()
+        library = songs + harbourSongs()
+        answers("Lanterns" to lanterns)
+        checked(flow())
+        val kept = File(folder.root, "files/covers-tags-checks")
+        assertEquals(2, kept.list()!!.size)
+        File(songs[0].path).appendBytes(byteArrayOf(0))
+        library = songs
+
+        val again = flow()
+        advanceUntilIdle()
+        assertEquals(emptyList<Waiting>(), again.state.value.waiting)
+        assertEquals(0, kept.list()!!.size)
+
+        again.check()
+        advanceUntilIdle()
+        assertEquals(listOf("Lanterns", "Harbour", "Lanterns"), source.checked.map { it.first })
+        assertEquals(1, again.state.value.ready.size)
+        assertEquals(1, kept.list()!!.size)
+    }
+
+    @Test
+    fun `the checks kept read leniently, and a file this version can't read is dropped`() {
+        val store = CoversTagsStore(storeFile)
+        val one = CheckedAlbum("0a1b2c", listOf(FileMark("/m/a.mp3", 10, 5)), ready = true, candidates = listOf(KeptCandidate(lanterns, 0.01)), at = 7)
+        val two = CheckedAlbum("0d0e0f", emptyList(), ready = false, doubts = setOf(Doubt.SINGLE, Doubt.NO_CANDIDATE))
+        assertTrue(store.saveCheck(one))
+        assertTrue(store.saveCheck(two))
+        assertFalse(store.saveCheck(two.copy(id = "../x")))
+        val folder = File(storeFile.parentFile, "covers-tags-checks")
+        File(folder, "0d0e0f.json").writeText(File(folder, "0d0e0f.json").readText().replace("{", """{"later":1,"""))
+        File(folder, "0bad.json").writeText("{not json")
+        File(folder, "0cad.json").writeText("""{"id":"0cad","marks":[],"ready":false,"doubts":["MADE_UP"]}""")
+        File(folder, "0aaa.json").writeText("""{"id":"0bbb","marks":[],"ready":false}""")
+
+        assertEquals(setOf(one, two), store.loadChecks().toSet())
+        assertEquals(setOf("0a1b2c.json", "0d0e0f.json"), folder.list()!!.toSet())
+
+        store.removeCheck("0a1b2c")
+        assertEquals(listOf(two), store.loadChecks())
+    }
+
+    @Test
     fun `the store reads leniently, leaving out what it can't read`() {
         val file = File(folder.root, "covers-tags.json")
         val mark = """{"path":"/m/a.mp3","size":10,"modified":5}"""
