@@ -7,7 +7,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.FlowRowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
@@ -150,7 +151,7 @@ internal fun ExtrasChips(ui: PlayerUi, extras: PlayerExtrasUi) {
     if (timer != null) kept.value = timer
     // The row opens its room and each chip pops in and out on its own, so the title and the bar never jump.
     AnimatedVisibility(speed.shows || part || timer != null, enter = expandIn(reduced), exit = shrinkOut(reduced)) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally), modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
+        ChipsRow {
             AnimatedVisibility(speed.shows, enter = chipIn(reduced), exit = chipOut(reduced)) {
                 val number = speedNumber(speed.speed)
                 val text = chipPitch(speed)?.let { stringResource(R.string.speed_value_pitch, number, it) } ?: stringResource(R.string.speed_value, number)
@@ -167,6 +168,20 @@ internal fun ExtrasChips(ui: PlayerUi, extras: PlayerExtrasUi) {
             }
         }
     }
+}
+
+/**
+ * The chips row's room: the chips side by side in the middle; on a narrow phone or at a large font the ones that do not
+ * fit go on a line under them, never squeezed and cut (three chips since the sleep timer's joined speed and A-B).
+ */
+@Composable
+internal fun ChipsRow(content: @Composable FlowRowScope.() -> Unit) {
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+        content = content,
+    )
 }
 
 // Repeat a part (A-B)

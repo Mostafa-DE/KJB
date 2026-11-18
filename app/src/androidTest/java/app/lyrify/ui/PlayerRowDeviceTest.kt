@@ -3,6 +3,7 @@ package app.lyrify.ui
 import android.content.res.Configuration
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.requiredWidth
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
@@ -10,6 +11,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.v2.createComposeRule
@@ -43,7 +45,8 @@ import org.junit.runner.RunWith
  * middle, Library where the sleep timer was, the timer in the "⋯"), at font scale 2.0, light and dark: on a 360 dp phone's
  * player (24 dp margins) Shuffle, Queue, the heart, Library and Repeat show left to right, each named for TalkBack, 48 dp
  * to touch and whole inside the row, and Library hands over to the shell; the menu row of a running timer keeps its name
- * and what is left whole, and TalkBack says the sentence. Made-up names only.
+ * and what is left whole, and TalkBack says the sentence; the chips row keeps speed, A-B and the sleep timer whole.
+ * Made-up names only.
  */
 @RunWith(AndroidJUnit4::class)
 class PlayerRowDeviceTest {
@@ -69,6 +72,38 @@ class PlayerRowDeviceTest {
             assertFalse("$words cut", laid.hasVisualOverflow || laid.isLineEllipsized(laid.lineCount - 1))
         }
         compose.onNodeWithContentDescription(spoken).assertExists()
+    }
+
+    /**
+     * 3.1 (PL1B): the sleep timer's chip joined speed and A-B in the chips row; at font scale 2.0 on a 360 dp phone the
+     * three no longer fit side by side, and the last one was squeezed, its words cut. The ones that do not fit go on a
+     * line under the others, each whole inside the player.
+     */
+    @Test
+    fun atFontScaleTwoTheSpeedPartAndSleepChipsStayWholeOnA360DpPlayer() {
+        val chips = listOf(
+            context.getString(R.string.speed_value_pitch, "1.25", "+2"),
+            context.getString(R.string.part_chip),
+            context.getString(R.string.sleep_end_of_song),
+        )
+        show(dark = false) {
+            Box(Modifier.requiredWidth(ROW).testTag(ROW_TAG)) {
+                ChipsRow {
+                    chips.forEachIndexed { i, words ->
+                        LyrifyChip(selected = true, onClick = {}, role = Role.Button, modifier = Modifier.testTag("chip $i"), icon = R.drawable.ic_snooze) {
+                            Text(words, maxLines = 1)
+                        }
+                    }
+                }
+            }
+        }
+        val row = compose.onNodeWithTag(ROW_TAG).getUnclippedBoundsInRoot()
+        chips.forEachIndexed { i, words ->
+            val laid = layoutOf(words)
+            assertFalse("$words cut", laid.hasVisualOverflow || laid.lineCount > 1)
+            val chip = compose.onNodeWithTag("chip $i").getUnclippedBoundsInRoot()
+            assertTrue("$words: $chip outside $row", chip.left >= row.left && chip.right <= row.right)
+        }
     }
 
     private fun assertRow(dark: Boolean) {
