@@ -3,6 +3,7 @@ package app.lyrify.ai
 import android.media.AudioFormat
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -223,6 +224,56 @@ class AudioTest {
         assertArrayEquals(whole.process(FloatArray(4_801) { samples[2 * it] / 32768f }), l, 0f)
         assertArrayEquals(whole.process(FloatArray(4_801) { samples[2 * it + 1] / 32768f }), r, 0f)
         assertEquals(4_411, l.size) // 4801 x 44100 / 48000, rounded up
+    }
+
+    @Test
+    fun `frames dropped are never handed out, those ready now and those still to come`() {
+        val pcm = PcmToMix(44_100, 1, AudioFormat.ENCODING_PCM_16BIT)
+        pcm.append(pcm16(3) { i -> (i + 1).toShort() })
+        pcm.drop(5)
+        assertEquals(0, pcm.available)
+        pcm.append(pcm16(4) { i -> (i + 4).toShort() })
+        assertArrayEquals(floatArrayOf(6 / 32768f, 7 / 32768f), drain(pcm)[0], 0f)
+        assertEquals(7L, pcm.decoded)
+    }
+
+    @Test
+    fun `frames dropped from resampled audio leave the rest as resampling the whole file gives it`() {
+        val rnd = java.util.Random(3)
+        val samples = ShortArray(4_801) { (rnd.nextGaussian() * 6_000).toInt().toShort() }
+        val pcm = PcmToMix(48_000, 1, AudioFormat.ENCODING_PCM_16BIT)
+        pcm.drop(1_000)
+        var frame = 0
+        for (size in listOf(700, 1_000, 2_048, 1_053)) {
+            pcm.append(pcm16(size) { i -> samples[frame + i] })
+            frame += size
+        }
+        pcm.finish()
+        val whole = Resampler(48_000, 44_100).process(FloatArray(4_801) { samples[it] / 32768f })
+        assertArrayEquals(whole.copyOfRange(1_000, whole.size), drain(pcm)[0], 0f)
+    }
+
+    @Test
+    fun `a seek lands exactly only where the extractor's times are exact, AAC and PCM, never MP3`() {
+        assertTrue(MixSeek.exact("audio/mp4a-latm"))
+        assertTrue(MixSeek.exact("audio/raw"))
+        for (mime in listOf("audio/mpeg", "audio/vorbis", "audio/opus", "audio/flac", "audio/3gpp", null)) {
+            assertFalse("$mime", MixSeek.exact(mime))
+        }
+    }
+
+    @Test
+    fun `the frames to drop come from an anchor buffer's time and the frames decoded before it`() {
+        // 0.5 s decoded ahead of a buffer at 9.5 s: the frame at 10 s is a second into what was decoded.
+        assertEquals(44_100L, MixSeek.toDrop(target = 441_000, ptsUs = 9_500_000, before = 22_050, rate = 44_100))
+        // At 48 kHz the frames before are the file's, resampled.
+        assertEquals(44_100L, MixSeek.toDrop(target = 441_000, ptsUs = 9_500_000, before = 24_000, rate = 48_000))
+        // A decoder that trimmed its first 2112 frames after the jump: the anchor's time still places the target.
+        assertEquals(44_100L - 2_112, MixSeek.toDrop(target = 441_000, ptsUs = 9_500_000, before = 22_050 - 2_112, rate = 44_100))
+        // An AAC frame's time is in whole microseconds: the nearest frame.
+        assertEquals(22_344L, MixSeek.toDrop(target = 441_000, ptsUs = 9_493_333, before = 0, rate = 48_000))
+        // An anchor past the target: nothing before it to keep.
+        assertTrue(MixSeek.toDrop(target = 441_000, ptsUs = 10_500_000, before = 0, rate = 44_100) < 0)
     }
 
     @Test

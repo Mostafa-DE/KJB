@@ -124,6 +124,28 @@ class ToneAudioTest {
     }
 
     @Test
+    fun `a song that can jump to the window is not read before it, and progress counts the window alone`() = runBlocking {
+        val left = FloatArray(20 * second) { it / 1e6f }
+        val song = ArrayMix(left, FloatArray(left.size) { -left[it] }, piece = 1_000, jumps = true)
+        val encoder = FakeEncoder()
+        val seen = mutableListOf<Float>()
+        var beforeFirstPiece: Float? = -1f
+        encoder.onEncode = { if (it == 1) beforeFirstPiece = seen.lastOrNull() }
+        val window = ToneWindow(15_000, 1_000)
+        val frames = ToneAudio.render(song, window, FadeEnvelope.of(window, 0, 0), encoder) { seen += it }
+
+        assertEquals(second.toLong(), frames)
+        assertEquals(second.toLong(), song.handedOut)
+        // The first frame encoded is the song's frame at 15 s, the last the one before 16 s, both channels.
+        assertEquals(ToneAudio.pcm16(15 * second / 1e6f), encoder.samples[0])
+        assertEquals(ToneAudio.pcm16(-15 * second / 1e6f), encoder.samples[1])
+        assertEquals(ToneAudio.pcm16((16 * second - 1) / 1e6f), encoder.samples[2 * second - 2])
+        // Nothing to report before the window's first piece; then up to 1.
+        assertNull(beforeFirstPiece)
+        assertEquals(1f, seen.last(), 0f)
+    }
+
+    @Test
     fun `a song that ends inside the window gives what it has`() = runBlocking {
         val encoder = FakeEncoder()
         val frames = ToneAudio.render(numbered(seconds = 2), ToneWindow(1_500, 1_000), FadeEnvelope(second.toLong(), 0, 0), encoder) {}

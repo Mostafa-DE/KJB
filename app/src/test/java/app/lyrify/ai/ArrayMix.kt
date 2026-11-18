@@ -6,11 +6,19 @@ package app.lyrify.ai
 
 /**
  * A mix held whole, read as the decoder gives it: at most [piece] frames per read (a decoder hands out what it has),
- * then 0 at the end. [closed] tells whether the reader closed it.
+ * then 0 at the end. [closed] tells whether the reader closed it. With [jumps], it [seek]s before its first read as a
+ * decoder that can seek its file does; [handedOut] counts the frames read.
  */
-class ArrayMix(private val left: FloatArray, private val right: FloatArray = left, private val piece: Int = Int.MAX_VALUE) : MixSource {
+class ArrayMix(
+    private val left: FloatArray,
+    private val right: FloatArray = left,
+    private val piece: Int = Int.MAX_VALUE,
+    private val jumps: Boolean = false,
+) : MixSource {
     private var at = 0
     var closed = false
+        private set
+    var handedOut = 0L
         private set
 
     constructor(stereo: Array<FloatArray>, piece: Int = Int.MAX_VALUE) : this(stereo[0], stereo[1], piece)
@@ -22,7 +30,14 @@ class ArrayMix(private val left: FloatArray, private val right: FloatArray = lef
         this.left.copyInto(left, offset, at, at + n)
         this.right.copyInto(right, offset, at, at + n)
         at += n
+        handedOut += n
         return n
+    }
+
+    override fun seek(frame: Long): Boolean {
+        if (!jumps || handedOut > 0) return false
+        at = frame.coerceAtMost(left.size.toLong()).toInt()
+        return true
     }
 
     override fun close() {

@@ -216,6 +216,29 @@ class CutFilesTest {
     }
 
     @Test
+    fun `a cut late in a song that can jump there decodes nothing before it, and keeps the song's samples and its fades`() = runBlocking {
+        val wave = sine(seconds = 20)
+        val source = ArrayMix(wave, piece = 2_000, jumps = true)
+        val s = Setup(source = source)
+        val range = CutRange(15_000, 17_000)
+        val fadeIn = Fade(100, FadeCurve.SMOOTH)
+        val fadeOut = Fade(200, FadeCurve.EVEN)
+        s.files.save(s.request(range, fadeIn, fadeOut)) {}
+
+        assertEquals(2L * rate, source.handedOut)
+        val fade = FadeEnvelope.of(range.window, fadeIn.lengthMs, fadeOut.lengthMs, fadeIn.curve, fadeOut.curve)
+        val samples = s.encoders.single().samples
+        assertEquals(rate * 4, samples.size)
+        for (frame in listOf(0, 1_000, 2_205, 4_410, 40_000, 80_000, 86_000, 2 * rate - 1)) {
+            val expected = ToneAudio.pcm16(wave[15 * rate + frame] * fade.gain(frame.toLong()))
+            assertEquals("frame $frame", expected, samples[2 * frame])
+            assertEquals("frame $frame", expected, samples[2 * frame + 1])
+        }
+        assertEquals(0.toShort(), samples[0])
+        assertEquals(0.toShort(), samples[samples.size - 1])
+    }
+
+    @Test
     fun `the cut carries the song's tags and cover, read from a private copy, with its own title`() = runBlocking {
         val s = Setup()
         s.files.save(s.request()) {}

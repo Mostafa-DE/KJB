@@ -103,14 +103,17 @@ object ToneAudio {
     fun pcm16(sample: Float): Short = (sample * 32_767f).roundToInt().coerceIn(-32_768, 32_767).toShort()
 
     /**
-     * Reads [source] from its start, skips to [window], and hands the window's frames with [fade] to [encoder] in
-     * pieces of at most [CHUNK_FRAMES], then finishes it. [onProgress] hears the share done (skipped and window frames
-     * alike) at each new whole percent, ending with 1. Returns the frames encoded: fewer than the window's when the
-     * song ends inside it. Cancellable between pieces; the encoder is then not finished. A song that fails to decode or
-     * ends before the window throws [ToneSourceException]; an encoder failure is thrown as it is. Never closes either.
+     * Jumps [source] to [window] where it can ([MixSource.seek]: a long song's late cut decodes nothing before it), else
+     * reads it from its start and skips there, and hands the window's frames with [fade] to [encoder] in pieces of at
+     * most [CHUNK_FRAMES], then finishes it. [onProgress] hears the share done (skipped and window frames alike) at each
+     * new whole percent, ending with 1. Returns the frames encoded: fewer than the window's when the song ends inside it.
+     * Cancellable between pieces; the encoder is then not finished. A song that fails to decode or ends before the window
+     * throws [ToneSourceException]; an encoder failure is thrown as it is. Never closes either.
      */
     suspend fun render(source: MixSource, window: ToneWindow, fade: FadeEnvelope, encoder: ToneEncoder, onProgress: (Float) -> Unit): Long {
-        val skip = frames(window.startMs)
+        val start = frames(window.startMs)
+        // The frames read on the way to the window: none when the source jumps there.
+        val skip = if (seekSong(source, start)) 0L else start
         val total = frames(window.lengthMs)
         val left = FloatArray(CHUNK_FRAMES)
         val right = FloatArray(CHUNK_FRAMES)
@@ -142,6 +145,13 @@ object ToneAudio {
         encoder.finish()
         progress.done()
         return written
+    }
+
+    private fun seekSong(source: MixSource, frame: Long): Boolean = try {
+        source.seek(frame)
+    } catch (e: Exception) {
+        // MixSource.seek is blocking, not suspending: nothing here is a cancellation.
+        throw ToneSourceException("the song failed to seek: ${e.javaClass.simpleName}", e)
     }
 
     private fun readSong(source: MixSource, left: FloatArray, right: FloatArray, count: Int): Int = try {
