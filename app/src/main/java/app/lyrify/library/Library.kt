@@ -204,7 +204,7 @@ class Library private constructor(
             // Each tag read once, however many songs share it.
             val namesByTag = HashMap<String, List<String>>()
             val names: (String?) -> List<String> = { tag -> text(tag)?.let { namesByTag.getOrPut(it) { splitter.names(it) } }.orEmpty() }
-            val artists = artistsOf(songs, albums, albumOf, names, collator)
+            val artists = groupArtists(songs, albums, albumOf, names, collator)
             val genres = songs.groupBy { text(it.genre) }
                 .mapNotNull { (name, its) -> name?.let { Genre(it, its) } }
                 .sortedWith(compareBy(nameOrder(collator)) { it.name })
@@ -216,7 +216,7 @@ class Library private constructor(
          * its artist tag, or in its album artist tag (an artist's own album with a guest's song on it), each song once;
          * and the [albums] whose album artist names them. A name only an album artist tag gives has no page, as before.
          */
-        private fun artistsOf(songs: List<Song>, albums: List<Album>, albumOf: Map<String, Album>, names: (String?) -> List<String>, collator: Collator): List<Artist> {
+        private fun groupArtists(songs: List<Song>, albums: List<Album>, albumOf: Map<String, Album>, names: (String?) -> List<String>, collator: Collator): List<Artist> {
             val credited = LinkedHashMap<String, MutableList<Song>>()
             songs.forEach { song -> names(song.artist).forEach { credited.getOrPut(it) { ArrayList() } } }
             // In path order: each song under its artists, then under the album artists with a page it does not name.
