@@ -149,12 +149,19 @@ class LedgerTest {
     }
 
     @Test
-    fun `the song's own lyrics survive a round trip, and an older ledger reads them as LRCLIB's`() {
+    fun `the song's own lyrics survive a round trip, and plain lyrics from before 3_1 read as LRCLIB's`() {
         val ledger = LedgerState()
             .put(recorded(null, track, LyricsStatus.SYNCED, null, now, sha256 = "ab12", size = 40, source = LyricsSource.TAGS))
             .put(recorded(null, track.copy(path = "/b.mp3"), LyricsStatus.PLAIN_ONLY, null, now, durationMatched = true, plainInTags = true))
         assertEquals(ledger, LedgerJson.decode(LedgerJson.encode(ledger)))
-        assertFalse(LedgerJson.decode(LedgerJson.encode(LedgerState().put(recorded(null, track, LyricsStatus.PLAIN_ONLY, 7, now)))).entries.getValue(track.path).plainInTags)
+        // As 3.0 wrote it: no "plainInTags", no "retime".
+        val text = """{"schemaVersion":2,"entries":{"/m/a.mp3":{"path":"/m/a.mp3","title":"Paper Lantern","artist":"Kit Calloway",""" +
+            """"durationMs":201000,"status":"PLAIN_ONLY","lrclibId":4,"updatedAt":5,"durationMatched":false,"lookupRev":1}}}"""
+        val old = LedgerJson.decode(text).entries.getValue("/m/a.mp3")
+        assertEquals(LyricsStatus.PLAIN_ONLY, old.status)
+        assertEquals(4L, old.lrclibId)
+        assertFalse(old.plainInTags)
+        assertFalse(old.retime)
     }
 
     @Test
