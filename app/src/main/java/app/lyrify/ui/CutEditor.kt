@@ -81,12 +81,8 @@ import app.lyrify.tones.ToneAudio
 import app.lyrify.tones.TonePlayer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -167,68 +163,18 @@ val CutDraftSaver: Saver<CutDraft, Any> = listSaver(
     },
 )
 
-/** Where a cut save is: kept by the process, so turning the phone neither stops it nor loses its result. */
-sealed interface CutSaveState {
-    data object Idle : CutSaveState
-
-    /** Save number [id] has done [progress]. */
-    data class Saving(val progress: Float, val id: Long = 0) : CutSaveState
-
-    data class Finished(val result: CutResult) : CutSaveState
-}
-
-/**
- * Runs cut saves on [scope], one at a time. Only the save started last, until it is cancelled, changes [state]: each of
- * its updates is a compare-and-set on its own number, so a cancelled save's late progress (the encoder reports a piece
- * before it sees the cancel) or result is dropped. A save waits for the one before it to have left its cleanup,
- * cancelled or not, so two saves never use KJB's work folder at once. [start] and [cancel] run on one thread (the main).
- */
-class CutSaver(private val scope: CoroutineScope) {
-    private val current = MutableStateFlow<CutSaveState>(CutSaveState.Idle)
-    private var last: Job? = null
-    private var count = 0L
-
-    val state: StateFlow<CutSaveState> = current.asStateFlow()
-
-    /** Runs [save] unless one is shown saving; it hears its own progress reporter. */
-    fun start(save: suspend (onProgress: (Float) -> Unit) -> CutResult) {
-        if (current.value is CutSaveState.Saving) return
-        val id = ++count
-        val before = last
-        current.value = CutSaveState.Saving(0f, id)
-        last = scope.launch {
-            before?.join()
-            val result = save { progress -> current.update { if (it.isSaving(id)) CutSaveState.Saving(progress, id) else it } }
-            current.update { if (it.isSaving(id)) CutSaveState.Finished(result) else it }
-        }
-    }
-
-    /** Stops the save shown saving; it removes what it made in its own time, and the next save waits for that. */
-    fun cancel() {
-        last?.cancel()
-        current.update { if (it is CutSaveState.Saving) CutSaveState.Idle else it }
-    }
-
-    /** The screen showed the result. */
-    fun consume() {
-        current.update { if (it is CutSaveState.Finished) CutSaveState.Idle else it }
-    }
-
-    private fun CutSaveState.isSaving(id: Long): Boolean = this is CutSaveState.Saving && this.id == id
-}
-
 /** The one cut save that can run at a time, outside any screen's lifetime; cancelling leaves no file. */
 object CutSaving {
-    private val saver = CutSaver(CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate))
+    private val runner = SaveRunner<CutResult>(CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate))
 
-    val state: StateFlow<CutSaveState> = saver.state
+    val state: StateFlow<SaveState<CutResult>> = runner.state
 
-    fun start(files: CutFiles, request: CutRequest) = saver.start { files.save(request, it) }
+    fun start(files: CutFiles, request: CutRequest) = runner.start { files.save(request, it) }
 
-    fun cancel() = saver.cancel()
+    fun cancel() = runner.cancel()
 
     /** The screen showed the result. */
-    fun consume() = saver.consume()
+    fun consume() = runner.consume()
 }
 
 /** The cutter for a library song, with its own player and files; [onSaved] hears the new file. */
@@ -287,7 +233,7 @@ private fun CutEditor(song: Song, files: CutFiles, player: TonePlayer, onSaved: 
         follow(previewState.onPlay(draft.preview(song.path)))
     }
     val close = {
-        if (saving is CutSaveState.Saving) CutSaving.cancel()
+        if (saving is SaveState.Saving) CutSaving.cancel()
         player.stop()
         onClose()
     }
@@ -306,7 +252,7 @@ private fun CutEditor(song: Song, files: CutFiles, player: TonePlayer, onSaved: 
     }
     LaunchedEffect(saving) {
         val shown = saving
-        if (shown !is CutSaveState.Finished) return@LaunchedEffect
+        if (shown !is SaveState.Finished) return@LaunchedEffect
         CutSaving.consume()
         when (val result = shown.result) {
             is CutResult.Saved -> onSaved(result)
@@ -327,7 +273,7 @@ private fun CutEditor(song: Song, files: CutFiles, player: TonePlayer, onSaved: 
                 Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 12.dp)) {
                     ToastSlot(Modifier.padding(horizontal = ScreenPadding), padding = PaddingValues(bottom = 8.dp))
                     SaveDock(
-                        progress = (saving as? CutSaveState.Saving)?.progress,
+                        progress = (saving as? SaveState.Saving)?.progress,
                         saveLabel = stringResource(R.string.cut_save),
                         enabled = canSave,
                         onSave = {

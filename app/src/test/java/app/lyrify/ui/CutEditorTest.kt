@@ -51,7 +51,7 @@ class CutEditorTest {
 
     @Test
     fun `a cancelled save's late progress and result change nothing`() = runBlocking {
-        val saver = CutSaver(CoroutineScope(Dispatchers.Unconfined))
+        val saver = SaveRunner<CutResult>(CoroutineScope(Dispatchers.Unconfined))
         val cleanup = CompletableDeferred<Unit>()
         saver.start { progress ->
             progress(0.2f)
@@ -65,17 +65,17 @@ class CutEditorTest {
                 }
             }
         }
-        assertEquals(CutSaveState.Saving(0.2f, 1), saver.state.value)
+        assertEquals(SaveState.Saving(0.2f, 1), saver.state.value)
 
         saver.cancel()
-        assertEquals(CutSaveState.Idle, saver.state.value)
+        assertEquals(SaveState.Idle, saver.state.value)
         cleanup.complete(Unit)
-        assertEquals(CutSaveState.Idle, saver.state.value)
+        assertEquals(SaveState.Idle, saver.state.value)
     }
 
     @Test
     fun `a new save waits until a cancelled one has cleaned up, so two never share the work folder`() = runBlocking {
-        val saver = CutSaver(CoroutineScope(Dispatchers.Unconfined))
+        val saver = SaveRunner<CutResult>(CoroutineScope(Dispatchers.Unconfined))
         val events = mutableListOf<String>()
         val cleanup = CompletableDeferred<Unit>()
         saver.start {
@@ -95,25 +95,25 @@ class CutEditorTest {
             failed
         }
         assertEquals(emptyList<String>(), events)
-        assertEquals(CutSaveState.Saving(0f, 2), saver.state.value)
+        assertEquals(SaveState.Saving(0f, 2), saver.state.value)
 
         cleanup.complete(Unit)
         assertEquals(listOf("first cleaned up", "second began"), events)
-        assertEquals(CutSaveState.Finished(failed), saver.state.value)
+        assertEquals(SaveState.Finished(failed), saver.state.value)
         saver.consume()
-        assertEquals(CutSaveState.Idle, saver.state.value)
+        assertEquals(SaveState.Idle, saver.state.value)
     }
 
     @Test
     fun `while a save runs another is not started`() = runBlocking {
-        val saver = CutSaver(CoroutineScope(Dispatchers.Unconfined))
+        val saver = SaveRunner<CutResult>(CoroutineScope(Dispatchers.Unconfined))
         val first = CompletableDeferred<CutResult>()
         var second = false
         saver.start { first.await() }
         saver.start { second = true; failed }
         assertFalse(second)
         first.complete(failed)
-        assertEquals(CutSaveState.Finished(failed), saver.state.value)
+        assertEquals(SaveState.Finished(failed), saver.state.value)
     }
 
     @Test

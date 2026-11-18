@@ -97,6 +97,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -186,42 +187,69 @@ fun toneTime(ms: Long): String {
     return "${seconds / 60}:${(seconds % 60).toString().padStart(2, '0')}"
 }
 
-/** Where a save is: kept by the process, so turning the phone neither stops it nor loses its result. */
-sealed interface SaveState {
-    data object Idle : SaveState
+/** Where a tone's or a cut's save is: kept by the process, so turning the phone neither stops it nor loses its result. */
+sealed interface SaveState<out R> {
+    data object Idle : SaveState<Nothing>
 
-    data class Saving(val progress: Float) : SaveState
+    /** Save number [id] has done [progress]. */
+    data class Saving(val progress: Float, val id: Long = 0) : SaveState<Nothing>
 
-    data class Finished(val result: SaveResult) : SaveState
+    data class Finished<out R>(val result: R) : SaveState<R>
 }
 
-/** The one tone save that can run at a time, outside any screen's lifetime; cancelling leaves no file. */
-object ToneSaving {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private val current = MutableStateFlow<SaveState>(SaveState.Idle)
-    private var job: Job? = null
+/**
+ * Runs saves (a tone's or a cut's) on [scope], one at a time. Only the save started last, until it is cancelled,
+ * changes [state]: each of its updates is a compare-and-set on its own number, so a cancelled save's late progress (the
+ * encoder reports a piece before it sees the cancel) or result is dropped. A save waits for the one before it to have
+ * left its cleanup, cancelled or not, so two saves never use the same work files at once. [start] and [cancel] run on
+ * one thread (the main).
+ */
+class SaveRunner<R>(private val scope: CoroutineScope) {
+    private val current = MutableStateFlow<SaveState<R>>(SaveState.Idle)
+    private var last: Job? = null
+    private var count = 0L
 
-    val state: StateFlow<SaveState> = current.asStateFlow()
+    val state: StateFlow<SaveState<R>> = current.asStateFlow()
 
-    fun start(files: ToneFiles, request: ToneRequest) {
+    /** Runs [save] unless one is shown saving; it hears its own progress reporter. */
+    fun start(save: suspend (onProgress: (Float) -> Unit) -> R) {
         if (current.value is SaveState.Saving) return
-        current.value = SaveState.Saving(0f)
-        job = scope.launch {
-            val result = files.save(request) { current.value = SaveState.Saving(it) }
-            current.value = SaveState.Finished(result)
+        val id = ++count
+        val before = last
+        current.value = SaveState.Saving(0f, id)
+        last = scope.launch {
+            before?.join()
+            val result = save { progress -> current.update { if (it.isSaving(id)) SaveState.Saving(progress, id) else it } }
+            current.update { if (it.isSaving(id)) SaveState.Finished(result) else it }
         }
     }
 
+    /** Stops the save shown saving; it removes what it made in its own time, and the next save waits for that. */
     fun cancel() {
-        job?.cancel()
-        job = null
-        current.value = SaveState.Idle
+        last?.cancel()
+        current.update { if (it is SaveState.Saving) SaveState.Idle else it }
     }
 
     /** The screen showed the result. */
     fun consume() {
-        if (current.value is SaveState.Finished) current.value = SaveState.Idle
+        current.update { if (it is SaveState.Finished) SaveState.Idle else it }
     }
+
+    private fun SaveState<R>.isSaving(id: Long): Boolean = this is SaveState.Saving && this.id == id
+}
+
+/** The one tone save that can run at a time, outside any screen's lifetime; cancelling leaves no file. */
+object ToneSaving {
+    private val runner = SaveRunner<SaveResult>(CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate))
+
+    val state: StateFlow<SaveState<SaveResult>> = runner.state
+
+    fun start(files: ToneFiles, request: ToneRequest) = runner.start { files.save(request, it) }
+
+    fun cancel() = runner.cancel()
+
+    /** The screen showed the result. */
+    fun consume() = runner.consume()
 }
 
 /** What the message says when a save failed. */
