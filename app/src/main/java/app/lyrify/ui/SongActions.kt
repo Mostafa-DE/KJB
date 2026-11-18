@@ -57,6 +57,7 @@ import app.lyrify.library.FavouriteCollection
 import app.lyrify.library.FavouritesPort
 import app.lyrify.library.Library
 import app.lyrify.library.LibraryGraph
+import app.lyrify.cut.CutFormats
 import app.lyrify.library.Playlist
 import app.lyrify.library.PlaylistStore
 import app.lyrify.library.Song
@@ -452,12 +453,19 @@ sealed interface OpenSheet {
     @Serializable @SerialName("tone")
     data class MakeTone(val song: SongRef) : OpenSheet
 
+    /** The cutter with the song. */
+    @Serializable @SerialName("cut")
+    data class Cut(val song: SongRef) : OpenSheet
+
     /** Share lyrics: as text, and as the `.lrc` for [synced] lyrics. */
     @Serializable @SerialName("shareLyrics")
     data class ShareLyrics(val song: SongRef, val synced: Boolean) : OpenSheet
 }
 
-/** Whether [this] is a sheet of the song sheets' one window ([SheetFlow]); the name dialogs, Move to trash and the Tone editor are their own windows. */
+/**
+ * Whether [this] is a sheet of the song sheets' one window ([SheetFlow]); the name dialogs, Move to trash, the Tone editor
+ * and the cutter are their own windows.
+ */
 val OpenSheet.inSheet: Boolean
     get() = this is OpenSheet.Menu || this is OpenSheet.AddTo || this is OpenSheet.Lyrics || this is OpenSheet.Info || this is OpenSheet.More || this is OpenSheet.ShareLyrics
 
@@ -615,9 +623,9 @@ fun SongSheetsHost(sheets: SongSheets) {
 
 /**
  * The sheet or dialog [sheets] has open, over the page: the song sheet, Add to, Lyrics, Song info, the selection's More,
- * the name dialogs, Move to trash (KJB's dialog, then the phone's) and the Tone editor. Each action closes it and says
- * what it did, with Undo; [onActed] hears it too, so a selection ends. The song sheet's album and artist open their pages
- * with this host's place, so Back from them shows the sheet here again.
+ * the name dialogs, Move to trash (KJB's dialog, then the phone's), the Tone editor and the cutter. Each action closes it
+ * and says what it did, with Undo; [onActed] hears it too, so a selection ends. The song sheet's album and artist open
+ * their pages with this host's place, so Back from them shows the sheet here again.
  */
 @Composable
 fun SongSheetsHost(sheets: SongSheets, ui: LibraryUi, onActed: () -> Unit = {}) {
@@ -646,13 +654,14 @@ fun SongSheetsHost(sheets: SongSheets, ui: LibraryUi, onActed: () -> Unit = {}) 
         onActed()
         scope.launch { toasts.say(resources, action()) }
     }
-    // The sheets lead to one another in one window; the dialogs and the Tone editor open over it once it has gone.
+    // The sheets lead to one another in one window; the dialogs, the Tone editor and the cutter open over it once it has gone.
     SheetFlow(open.takeIf { it.inSheet }, onDismiss = sheets::close) { step ->
         when (step) {
             is OpenSheet.Menu -> {
                 val song = songOf(step.song) ?: return@SheetFlow Gone(sheets)
                 val lyrics = rememberLyricsShare(song.path, ui.ledger.entries[song.path])
-                val rows = sheetRows(step.place, SongSheetSlots.coversTags != null, SongSheetSlots.removeFromQueue != null, lyrics = lyrics != null)
+                val cut = CutFormats.reads(song.path) && library.bookOf(song.path) == null
+                val rows = sheetRows(step.place, SongSheetSlots.coversTags != null, SongSheetSlots.removeFromQueue != null, lyrics = lyrics != null, cut = cut)
                 SongMenuSheet(
                     song = song,
                     ui = ui,
@@ -669,7 +678,7 @@ fun SongSheetsHost(sheets: SongSheets, ui: LibraryUi, onActed: () -> Unit = {}) 
                         SheetRow.FAVOURITE -> scope.launch { toasts.say(resources, actions.favourite(listOf(song.ref), ui.playlists.favouriteSongs)) }
                         SheetRow.LYRICS -> sheets.show(OpenSheet.Lyrics(song.ref))
                         SheetRow.MAKE_TONE -> sheets.show(OpenSheet.MakeTone(song.ref))
-                        SheetRow.CUT -> Unit
+                        SheetRow.CUT -> sheets.show(OpenSheet.Cut(song.ref))
                         SheetRow.SHARE -> {
                             sheets.close()
                             scope.launch { toasts.say(resources, shareSongs(context, listOf(song), ui::title)) }
@@ -783,6 +792,14 @@ fun SongSheetsHost(sheets: SongSheets, ui: LibraryUi, onActed: () -> Unit = {}) 
             ToneEditorFor(song, ui.ledger.entries[song.path], onSaved = { tone ->
                 sheets.close()
                 scope.launch { toasts.say(resources, R.string.tones_saved_as, tone.name) }
+            }, onClose = sheets::close)
+        }
+        is OpenSheet.Cut -> {
+            val song = songOf(open.song) ?: return Gone(sheets)
+            CutEditorFor(song, onSaved = { saved ->
+                sheets.close()
+                val words = if (saved.tagged) R.string.cut_saved else R.string.cut_saved_untagged
+                scope.launch { toasts.say(resources, words, saved.file.name, saved.file.parentFile?.name.orEmpty()) }
             }, onClose = sheets::close)
         }
         else -> Unit

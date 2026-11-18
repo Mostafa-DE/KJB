@@ -300,7 +300,13 @@ fun ToneEditor(song: LedgerEntry, files: ToneFiles, player: TonePlayer, onSaved:
                 // The message floats above the save dock, so it never covers Save.
                 Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 12.dp)) {
                     ToastSlot(Modifier.padding(horizontal = ScreenPadding), padding = PaddingValues(bottom = 8.dp))
-                    SaveDock(saving, enabled = window.lengthMs > 0, onSave = { ToneSaving.start(files, draft.request(song, lines)) }, onCancel = ToneSaving::cancel)
+                    SaveDock(
+                        progress = (saving as? SaveState.Saving)?.progress,
+                        saveLabel = stringResource(R.string.tones_save),
+                        enabled = window.lengthMs > 0,
+                        onSave = { ToneSaving.start(files, draft.request(song, lines)) },
+                        onCancel = ToneSaving::cancel,
+                    )
                 }
             },
             containerColor = MaterialTheme.colorScheme.background,
@@ -309,7 +315,7 @@ fun ToneEditor(song: LedgerEntry, files: ToneFiles, player: TonePlayer, onSaved:
                 verticalArrangement = Arrangement.spacedBy(16.dp),
                 modifier = Modifier.padding(padding).verticalScroll(rememberScrollState()).padding(vertical = 8.dp),
             ) {
-                SongHeader(song)
+                EditorSongHeader(song.path, song.title, artistOf(song))
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(horizontal = ScreenPadding)) {
                     Waveform(
                         peaks = peaks,
@@ -346,7 +352,7 @@ fun ToneEditor(song: LedgerEntry, files: ToneFiles, player: TonePlayer, onSaved:
 }
 
 /** The waveform from the cache, else decoded and cached; empty when the song cannot be decoded (the bar stays plain). */
-private suspend fun loadPeaks(context: Context, path: String, durationMs: Long): FloatArray = withContext(Dispatchers.IO) {
+internal suspend fun loadPeaks(context: Context, path: String, durationMs: Long): FloatArray = withContext(Dispatchers.IO) {
     val song = File(path)
     val cache = PeaksCache(File(context.cacheDir, PEAKS_DIR))
     cache.read(song)?.let { return@withContext it }
@@ -366,17 +372,18 @@ private suspend fun loadPeaks(context: Context, path: String, durationMs: Long):
     peaks
 }
 
+/** The editors' head: the song's cover, its title (a heading) and its artist, one TalkBack stop. */
 @Composable
-private fun SongHeader(song: LedgerEntry) {
+internal fun EditorSongHeader(path: String, title: String, artist: String) {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(16.dp),
         modifier = Modifier.padding(horizontal = ScreenPadding).semantics(mergeDescendants = true) {},
     ) {
-        SongCover(SongArt(song.path), size = 64.dp, shape = MaterialTheme.shapes.medium)
+        SongCover(SongArt(path), size = 64.dp, shape = MaterialTheme.shapes.medium)
         Column(Modifier.weight(1f)) {
-            Text(song.title, style = MaterialTheme.typography.titleLarge, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.semantics { heading() })
-            Text(artistOf(song), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(title, style = MaterialTheme.typography.titleLarge, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.semantics { heading() })
+            Text(artist, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
@@ -485,9 +492,9 @@ private fun Waveform(
     }
 }
 
-/** The big preview button: plays exactly the tone's part with its fades, or stops it. */
+/** The big preview button: plays exactly the part with its fades (a tone's, a cut's), or stops it. */
 @Composable
-private fun PreviewButton(playing: Boolean, onClick: () -> Unit) {
+internal fun PreviewButton(playing: Boolean, onClick: () -> Unit) {
     ChromeIconButton(
         if (playing) R.drawable.ic_pause_circle else R.drawable.ic_play_circle,
         stringResource(if (playing) R.string.tones_preview_stop else R.string.tones_preview_play),
@@ -570,35 +577,35 @@ private fun UseAs(kind: ToneKind, onKind: (ToneKind) -> Unit) {
     }
 }
 
-/** The floating save dock: Save tone, or while it saves, its progress and Cancel. */
+/** The floating save dock: [saveLabel] (Save tone, Save cut), or while it saves ([progress] known), its progress and Cancel. */
 @Composable
-private fun SaveDock(saving: SaveState, enabled: Boolean, onSave: () -> Unit, onCancel: () -> Unit) {
+internal fun SaveDock(progress: Float?, saveLabel: String, enabled: Boolean, onSave: () -> Unit, onCancel: () -> Unit) {
     GlassSurface(null, CircleShape, Modifier.padding(horizontal = ScreenPadding).fillMaxWidth()) {
         Box(Modifier.fillMaxWidth().padding(6.dp)) {
-            if (saving is SaveState.Saving) {
+            if (progress != null) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.heightIn(min = 52.dp).padding(start = 18.dp)) {
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text(stringResource(R.string.tones_saving), style = MaterialTheme.typography.labelLarge)
-                        SungBar(saving.progress, Modifier.fillMaxWidth())
+                        SungBar(progress, Modifier.fillMaxWidth())
                     }
                     LyrifyButton(stringResource(R.string.tones_cancel), onClick = onCancel, kind = ButtonKind.SECONDARY, compact = true)
                 }
             } else {
-                LyrifyButton(stringResource(R.string.tones_save), onClick = onSave, modifier = Modifier.fillMaxWidth(), icon = R.drawable.ic_save, enabled = enabled)
+                LyrifyButton(saveLabel, onClick = onSave, modifier = Modifier.fillMaxWidth(), icon = R.drawable.ic_save, enabled = enabled)
             }
         }
     }
 }
 
-private val WAVEFORM_HEIGHT = 112.dp
+internal val WAVEFORM_HEIGHT = 112.dp
 
-/** How near the start a drag moves only the start. */
-private val HANDLE_SLOP = 24.dp
+/** How near the start (a cut's start or end) a drag moves only that end. */
+internal val HANDLE_SLOP = 24.dp
 
 /** TalkBack's step for the start. */
 private const val NUDGE_MS: Long = 1_000
 
 /** A quiet song's waveform is scaled up to its loudest point, but never more than this allows. */
-private const val MIN_PEAK = 0.05f
+internal const val MIN_PEAK = 0.05f
 
 private const val PEAKS_DIR = "tone-peaks"

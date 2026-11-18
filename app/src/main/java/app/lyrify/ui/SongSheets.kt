@@ -68,7 +68,7 @@ import java.util.Locale
 
 /**
  * The song sheet: the cover, the title, the artist and the album as links, then [rows] (Play next, Add to, the heart,
- * Lyrics with its status, Make a tone, Share, Share lyrics, Song info, Edit tags and the rows of where it was opened),
+ * Lyrics with its status, Make a tone, Cut, Share, Share lyrics, Song info, Edit tags and the rows of where it was opened),
  * the [bookmarks] slot, and Move to trash apart at the bottom, in the danger colour.
  */
 @Composable
@@ -95,7 +95,7 @@ internal fun SongMenuSheet(
                     SheetRow.FAVOURITE -> FavouriteRow(favourite) { onRow(row) }
                     SheetRow.LYRICS -> ActionRow(R.drawable.ic_lyrics, stringResource(R.string.lib_lyrics), chevron = true, trailing = status?.let { { StatusPill(it) } }) { onRow(row) }
                     SheetRow.MAKE_TONE -> ActionRow(R.drawable.ic_ring_volume, stringResource(R.string.lib_make_tone)) { onRow(row) }
-                    SheetRow.CUT -> Unit
+                    SheetRow.CUT -> ActionRow(R.drawable.ic_content_cut, stringResource(R.string.cut_row)) { onRow(row) }
                     SheetRow.SHARE -> ActionRow(R.drawable.ic_share, stringResource(R.string.share)) { onRow(row) }
                     SheetRow.SHARE_LYRICS -> ActionRow(R.drawable.ic_share, stringResource(R.string.share_lyrics), chevron = true) { onRow(row) }
                     SheetRow.SONG_INFO -> ActionRow(R.drawable.ic_info, stringResource(R.string.lib_song_info)) { onRow(row) }
