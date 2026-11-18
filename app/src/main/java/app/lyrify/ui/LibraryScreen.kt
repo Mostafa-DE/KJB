@@ -110,6 +110,9 @@ fun LibraryPage() {
     // The Playlists tab's "⋯" rows (B1).
     val m3u = rememberM3uActions()
     val pager = rememberTabPager(tabs, tabs.indexOf(tab)) { at -> tabs.getOrNull(at)?.let { pickLibraryTabAt(nav, it, opensOn) } }
+    // A kept tab that is the one Library opens on (the tour's Songs, "Open here first" on the tab shown) is forgotten,
+    // so one tap of the icon there goes to the top.
+    LaunchedEffect(tab, opensOn) { pickLibraryTabAt(nav, tab, opensOn) }
     val labels = tabs.map { stringResource(it.label) }
     val hold = rememberOpenHereFirst(tabs, opensOn)
     val topBar: @Composable (Boolean, GlassBackdrop) -> Unit = { under, backdrop ->

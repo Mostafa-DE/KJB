@@ -9,6 +9,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 class NavTest {
     private val album = Page.Album("harbour-glass")
@@ -203,6 +204,30 @@ class NavTest {
             LibraryTab.entries.forEach { top -> assertEquals(top, NavState.start(DockTab.LIBRARY).pickLibraryTab(from).pickLibraryTab(top).libraryTab) }
         }
         assertEquals(LibraryTab.PLAYLISTS, NavState.start(DockTab.LIBRARY).select(DockTab.LIBRARY).pickLibraryTab(LibraryTab.PLAYLISTS).libraryTab)
+    }
+
+    @Test
+    fun `Library's pages landing on a tab tell the navigator only what changes, the tab it opens on as nothing`() {
+        val nav = Navigator(NavState.start(DockTab.LIBRARY).pickLibraryTab(LibraryTab.GENRES))
+        // Genres switched off in Settings: the pages land on the first tab, the one Library opens on.
+        pickLibraryTabAt(nav, LibraryTab.SONGS, opensOn = LibraryTab.SONGS)
+        assertNull(nav.state.libraryTab)
+        val before = nav.state
+        pickLibraryTabAt(nav, LibraryTab.SONGS, opensOn = LibraryTab.SONGS)
+        assertTrue(before === nav.state)
+        pickLibraryTabAt(nav, LibraryTab.ALBUMS, opensOn = LibraryTab.SONGS)
+        assertEquals(LibraryTab.ALBUMS, nav.state.libraryTab)
+    }
+
+    @Test
+    fun `a kept tab that is the one Library opens on is forgotten, so one tap of the icon goes to the top`() {
+        // The tour's Songs, or "Open here first" on the tab shown: the navigator keeps the very tab Library opens on.
+        val nav = Navigator(NavState.start(DockTab.LIBRARY).pickLibraryTab(LibraryTab.SONGS))
+        // What Library's root does with the tab it shows ([LibraryPage]).
+        pickLibraryTabAt(nav, LibraryTab.SONGS, opensOn = LibraryTab.SONGS)
+        nav.select(DockTab.LIBRARY)
+        assertEquals(1, nav.state.reselectsOf(DockTab.LIBRARY))
+        assertTrue("LaunchedEffect(tab, opensOn) { pickLibraryTabAt(nav, tab, opensOn) }" in File("src/main/java/app/lyrify/ui/LibraryScreen.kt").readText())
     }
 
     @Test
