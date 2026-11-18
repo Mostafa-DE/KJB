@@ -102,6 +102,17 @@ class AiNightTest {
     }
 
     @Test
+    fun `LRCLIB's lyrics of another length marked to time anew are timed, the others of another length transcribed`() {
+        val anew = recorded(null, track("anew"), LyricsStatus.PLAIN_ONLY, 3, now - 5, durationMatched = false, retime = true)
+        val ledger = ledgerOf(entry("other", LyricsStatus.PLAIN_ONLY, now, id = 4, matched = false), anew)
+
+        val jobs = AiQueue.of(ledger, now, canAll)
+
+        assertEquals(listOf("anew", "other"), jobs.map { it.track.title })
+        assertEquals(listOf(3L, null), jobs.map { it.lrclibId })
+    }
+
+    @Test
     fun `only songs without lyrics and without an AI verdict are queued`() {
         val ledger = ledgerOf(*LyricsStatus.entries.mapIndexed { i, status -> entry(status.name, status, now - i, id = 9, matched = true) }.toTypedArray())
 

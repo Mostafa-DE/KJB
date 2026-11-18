@@ -22,6 +22,8 @@ import app.lyrify.lyrics.Removal
 import app.lyrify.lyrics.Searched
 import app.lyrify.addon.Addon
 import app.lyrify.addon.AddonDownloads
+import app.lyrify.addon.AndroidAddon
+import app.lyrify.addon.KjbAddons
 import app.lyrify.addon.ModelHandover
 import app.lyrify.auto.CoverKey
 import app.lyrify.overnight.AiLyrics
@@ -130,6 +132,8 @@ object Lyrify {
         isBook = context.applicationContext.let { app -> { path -> isBookPartOnceRead(path, LibraryGraph.repository(app).state) } },
         // A tag naming several artists is also asked for by one of them, split as the user's "Artists with several names" says.
         artistNames = context.applicationContext.let { app -> { tag -> ArtistSplitter(settings(app).settings.first().library.artistSplit).names(tag) } },
+        // LRCLIB's lyrics of another length are left for the AI add-on to time anew, when it is installed and KJB's own.
+        aiTimes = context.applicationContext.let { app -> { AndroidAddon(app, KjbAddons.AI).let { it.installed() && it.trusted() } } },
     ).also { created ->
         pipeline = created
         background.launch {

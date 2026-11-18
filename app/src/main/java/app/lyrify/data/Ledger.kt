@@ -168,6 +168,12 @@ data class LedgerEntry(
      * null then. False otherwise, and in entries from before 3.1.
      */
     val plainInTags: Boolean = false,
+    /**
+     * For [LyricsStatus.PLAIN_ONLY], and the AI's statuses after it: LRCLIB's lyrics ([lrclibId]) are only of another
+     * length, a little off, and the AI add-on was there to time them anew (3.1); [durationMatched] stays false. False
+     * otherwise, and in entries from before 3.1.
+     */
+    val retime: Boolean = false,
 ) {
     val track: LocalTrack get() = LocalTrack(path, title, artist, album, durationMs)
 
@@ -334,7 +340,7 @@ suspend fun writeWithRetries(onFailure: (IOException) -> Unit, write: suspend ()
  * rejected its lyrics, kept for [LyricsStatus.AI_REJECTED] only; [candidates] are kept for [LyricsStatus.NEEDS_CHECK]
  * only, their lyrics compared ([app.lyrify.lyrics.Candidates.offered]). [declined] stays once set. A status only a
  * lookup gives ([LOOKUP_STATUSES]) carries this version's [LOOKUP_REV]; any other keeps the one before. [plainInTags]
- * is kept for [LyricsStatus.PLAIN_ONLY], and through the AI's statuses from the entry before.
+ * and [retime] are kept for [LyricsStatus.PLAIN_ONLY], and through the AI's statuses from the entry before.
  */
 fun recorded(
     previous: LedgerEntry?,
@@ -352,9 +358,12 @@ fun recorded(
     candidates: List<Candidate> = emptyList(),
     declined: Boolean = false,
     plainInTags: Boolean = false,
+    retime: Boolean = false,
 ): LedgerEntry {
     // Failures in a row: lookups for ERROR, AI runs for AI_FAILED.
     val counted = status == LyricsStatus.ERROR || status == LyricsStatus.AI_FAILED
+    // What the AI times stays with the song through its runs, as its record and length do.
+    val aiRun = status.byAi || (status == LyricsStatus.WRITING && source == LyricsSource.AI)
     val attempts = if (counted) (previous?.takeIf { it.status == status }?.attempts ?: 0) + 1 else 0
     return LedgerEntry(
         path = track.path,
@@ -398,12 +407,8 @@ fun recorded(
         declined = declined || previous?.declined == true,
         lookupRev = if (status in LOOKUP_STATUSES) LOOKUP_REV else previous?.lookupRev ?: 0,
         candidatesCompared = status == LyricsStatus.NEEDS_CHECK,
-        plainInTags = when {
-            status == LyricsStatus.PLAIN_ONLY -> plainInTags
-            // The AI times them: they stay with the song through its runs, as its record and length do.
-            status.byAi || (status == LyricsStatus.WRITING && source == LyricsSource.AI) -> previous?.plainInTags == true
-            else -> false
-        },
+        plainInTags = if (status == LyricsStatus.PLAIN_ONLY) plainInTags else aiRun && previous?.plainInTags == true,
+        retime = if (status == LyricsStatus.PLAIN_ONLY) retime else aiRun && previous?.retime == true,
     )
 }
 

@@ -172,6 +172,7 @@ class LyricsSearchBenchTest {
         clock = { BASE + testScheduler.currentTime },
         writes = SharedWrites.ANYWHERE,
         artistNames = { splitter.names(it) },
+        aiTimes = { aiThere },
     )
 
     /** "Artists with several names" at its defaults. */

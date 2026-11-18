@@ -50,6 +50,9 @@ class LyricsSearchTest {
     /** The user's "Artists with several names", at its defaults: ";", "/", ",", feat. split; "&" does not. */
     private val splitter = ArtistSplitter(ArtistSplit())
 
+    /** Whether the AI add-on is on the phone. */
+    private var aiThere = false
+
     private fun TestScope.pipeline() = LyricsPipeline(
         client = client,
         ledger = ledger,
@@ -57,6 +60,7 @@ class LyricsSearchTest {
         writes = SharedWrites.ANYWHERE,
         random = MiddleRandom,
         artistNames = { splitter.names(it) },
+        aiTimes = { aiThere },
     )
 
     private fun audio(name: String, title: String, artist: String?, bytes: ByteArray = byteArrayOf(1, 2, 3), durationMs: Long = 200_000): LocalTrack {
@@ -207,6 +211,68 @@ class LyricsSearchTest {
 
         assertEquals(listOf(7L), ledger[track.path]?.candidates?.map { it.id })
         assertFalse(sidecar(track).exists())
+    }
+
+    // Another length
+
+    /** A 250 s song LRCLIB has only at [seconds]: its search finds it, the exact lookup (2 s) does not. */
+    private fun anotherLength(seconds: Double, synced: String? = this.synced): LocalTrack {
+        client.onSearch = { if (it.artist != null) LrclibResult.Found(listOf(record(7, track = "Blue Static", artist = "Ines Darrow", duration = seconds, synced = synced))) else LrclibResult.Found(emptyList()) }
+        return audio("a.mp3", "Blue Static", "Ines Darrow", durationMs = 250_000)
+    }
+
+    @Test
+    fun `synced lyrics only of another length are left for the AI add-on to time anew`() = runTest {
+        aiThere = true
+        val track = anotherLength(241.0)
+
+        assertEquals(LyricsStatus.PLAIN_ONLY, pipeline().process(track)?.status)
+
+        val entry = ledger[track.path]!!
+        assertEquals(7L, entry.lrclibId)
+        assertTrue(entry.retime)
+        assertEquals(false, entry.durationMatched)
+        assertEquals(emptyList<Candidate>(), entry.candidates)
+        assertTrue(client.searches.none { it.artist == null })
+        assertTrue(AiQueue.job(entry).times)
+        assertFalse(sidecar(track).exists())
+    }
+
+    @Test
+    fun `plain lyrics only of another length are timed anew too`() = runTest {
+        aiThere = true
+        val track = anotherLength(262.0, synced = null)
+
+        assertEquals(LyricsStatus.PLAIN_ONLY, pipeline().process(track)?.status)
+
+        assertTrue(ledger[track.path]!!.retime)
+    }
+
+    @Test
+    fun `without the AI add-on another length is as before`() = runTest {
+        val track = anotherLength(241.0)
+
+        assertEquals(LyricsStatus.DURATION_MISMATCH, pipeline().process(track)?.status)
+
+        assertFalse(ledger[track.path]!!.retime)
+    }
+
+    @Test
+    fun `more than 15 s off is as before, add-on or not`() = runTest {
+        aiThere = true
+        val track = anotherLength(234.0)
+
+        assertEquals(LyricsStatus.DURATION_MISMATCH, pipeline().process(track)?.status)
+
+        assertFalse(ledger[track.path]!!.retime)
+        assertFalse(AiQueue.job(ledger[track.path]!!).times)
+    }
+
+    @Test
+    fun `a record with synced lyrics only gives their words as its plain lyrics`() = runTest {
+        client.onId = { LrclibResult.Found(listOf(record(it, synced = "[00:01.00]w0001\n[00:02.00]\n[00:03.00]w0002").copy(plainLyrics = null))) }
+
+        assertEquals(PlainLyrics.Found("w0001\nw0002"), pipeline().plainLyrics(7))
     }
 
     // Misses

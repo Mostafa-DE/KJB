@@ -92,8 +92,12 @@ object AiQueue {
     /** Songs the AI got done ([DONE]) since [since], for the card. */
     fun doneSince(ledger: LedgerState, since: Long): Int = ledger.entries.values.count { it.status in DONE && (it.lastAttemptAt ?: 0) >= since }
 
-    /** Plain lyrics of this recording are known: LRCLIB's, or the song's own in its tags. */
-    private fun timeable(entry: LedgerEntry): Boolean = entry.durationMatched == true && (entry.lrclibId != null || entry.plainInTags)
+    /**
+     * Plain lyrics of this recording are known (LRCLIB's, or the song's own in its tags), or LRCLIB's of another length
+     * were marked to be timed anew ([LedgerEntry.retime]).
+     */
+    private fun timeable(entry: LedgerEntry): Boolean =
+        entry.durationMatched == true && (entry.lrclibId != null || entry.plainInTags) || entry.retime && entry.lrclibId != null
 
     private fun group(entry: LedgerEntry): Int = when {
         entry.status == LyricsStatus.AI_FAILED -> 2

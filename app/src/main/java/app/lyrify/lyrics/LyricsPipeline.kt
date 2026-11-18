@@ -73,7 +73,7 @@ fun canRemove(entry: LedgerEntry): Boolean =
 sealed interface PlainLyrics {
     data class Found(val text: String) : PlainLyrics
 
-    /** The record is gone, instrumental or holds no plain lyrics: the song is transcribed instead. */
+    /** The record is gone, instrumental or holds no lyrics: the song is transcribed instead. */
     data object None : PlainLyrics
 
     /** LRCLIB could not be asked (overloaded, offline): the song waits for another run. [cause] is for the log. */
@@ -187,6 +187,11 @@ class LyricsPipeline(
     private val artistNames: suspend (String) -> List<String> = { listOf(it) },
     /** The lyrics a song file holds in its own tags, read (only read) before any request. Blocking. */
     private val tagLyrics: (String) -> TagLyrics? = { EmbeddedLyrics.read(File(it)) },
+    /**
+     * Whether KJB's AI add-on is on the phone: LRCLIB's lyrics only of another length, a little off
+     * ([RETIME_MAX_SECONDS]), are then left for it to time anew instead of waiting as another length. Blocking.
+     */
+    private val aiTimes: () -> Boolean = { false },
 ) : PathHold {
 
     /** Songs the AI is working on, for the queue sweep to skip (one set with the pipeline, so one per process). */
@@ -276,14 +281,20 @@ class LyricsPipeline(
 
     /**
      * LRCLIB's plain lyrics of record [id], for the AI to time (`/api/get/{id}` in the LOW lane, asked again while busy
-     * as lookups are). Fetched when needed and never stored.
+     * as lookups are); for a record with synced lyrics only, their lines' words. Fetched when needed and never stored.
      */
     suspend fun plainLyrics(id: Long): PlainLyrics = when (val result = withRetries { client.byId(id, Lane.LOW) }) {
         is LrclibResult.Found ->
-            result.records.firstOrNull { it.id == id && !it.instrumental && it.hasPlainLyrics }?.plainLyrics?.let(PlainLyrics::Found)
-                ?: PlainLyrics.None
+            result.records.firstOrNull { it.id == id && !it.instrumental }?.let(::plainWords)?.let(PlainLyrics::Found) ?: PlainLyrics.None
         LrclibResult.NotFound -> PlainLyrics.None
         is LrclibResult.Transient -> PlainLyrics.Unavailable(result.cause)
+    }
+
+    /** [record]'s plain lyrics, else the words of its synced lines, a line each; null for none. */
+    private fun plainWords(record: LrclibRecord): String? {
+        if (record.hasPlainLyrics) return record.plainLyrics
+        if (!record.hasSyncedLyrics) return null
+        return LrcFormat.parseLrclib(record.syncedLyrics.orEmpty()).map { it.text }.filter(String::isNotBlank).joinToString("\n").ifEmpty { null }
     }
 
     /**
@@ -633,7 +644,8 @@ class LyricsPipeline(
                 if (inTags != null) {
                     Processed(outcome(previous, track, LyricsStatus.PLAIN_ONLY, durationMatched = true, plainInTags = true))
                 } else {
-                    settle(track, previous, if (queries.isEmpty()) Verdict(LyricsStatus.UNIDENTIFIED) else verdict(result.match), result, queries, lane)
+                    val verdict = if (queries.isEmpty()) Verdict(LyricsStatus.UNIDENTIFIED) else verdict(result.match, track.durationMs / MS_PER_SECOND)
+                    settle(track, previous, verdict, result, queries, lane)
                 }
             is Lookup.Failed -> busy(previous, track, result.cause)
         }
@@ -651,7 +663,7 @@ class LyricsPipeline(
      * ([LedgerEntry.declined]) is not searched again, and stays not found.
      */
     private suspend fun settle(track: LocalTrack, previous: LedgerEntry?, verdict: Verdict, answer: Lookup.Answer, queries: List<TrackQuery>, lane: Lane): Processed {
-        if (!verdict.unsure) return Processed(outcome(previous, track, verdict.status, verdict.lrclibId, verdict.durationMatched))
+        if (!verdict.unsure) return Processed(outcome(previous, track, verdict.status, verdict.lrclibId, verdict.durationMatched, retime = verdict.retime))
         if (previous?.declined == true) return Processed(outcome(previous, track, LyricsStatus.NOT_FOUND))
         var records = answer.records
         for (text in TrackNames.looseQueries(track.title, File(track.path).name)) {
@@ -822,25 +834,40 @@ class LyricsPipeline(
         return Processed(if (ledger.put(settled)) settled.status else LyricsStatus.WRITING)
     }
 
-    /** What LRCLIB's answer means for the ledger. */
-    private data class Verdict(val status: LyricsStatus, val lrclibId: Long? = null, val durationMatched: Boolean? = null) {
+    /** What LRCLIB's answer means for the ledger. [retime]: lyrics of another length the AI times anew ([LedgerEntry.retime]). */
+    private data class Verdict(val status: LyricsStatus, val lrclibId: Long? = null, val durationMatched: Boolean? = null, val retime: Boolean = false) {
         /** Nothing of this recording's lyrics: a loose search may still find some for the user to check. */
         val unsure: Boolean get() = when (status) {
             LyricsStatus.NOT_FOUND, LyricsStatus.DURATION_MISMATCH, LyricsStatus.UNIDENTIFIED -> true
-            LyricsStatus.PLAIN_ONLY -> durationMatched == false
+            LyricsStatus.PLAIN_ONLY -> durationMatched == false && !retime
             else -> false
         }
     }
 
-    private fun verdict(match: Match): Verdict = when (match) {
+    /**
+     * [match] for a song of [seconds]. Lyrics of the song only of another length, at most [RETIME_MAX_SECONDS] off, are
+     * left for the AI to time anew when its add-on is there ([aiTimes]): plain lyrics, as LRCLIB's of this recording
+     * are, only marked [Verdict.retime]. Otherwise, or further off, another length is as it was.
+     */
+    private fun verdict(match: Match, seconds: Double): Verdict = when (match) {
         is Match.Instrumental -> Verdict(LyricsStatus.INSTRUMENTAL, match.record.id)
-        is Match.DurationMismatch -> Verdict(LyricsStatus.DURATION_MISMATCH, match.record.id)
-        is Match.PlainOnly -> Verdict(LyricsStatus.PLAIN_ONLY, match.record.id, match.durationMatched)
+        is Match.DurationMismatch ->
+            if (retimes(match.record, seconds)) {
+                Verdict(LyricsStatus.PLAIN_ONLY, match.record.id, durationMatched = false, retime = true)
+            } else {
+                Verdict(LyricsStatus.DURATION_MISMATCH, match.record.id)
+            }
+        is Match.PlainOnly ->
+            Verdict(LyricsStatus.PLAIN_ONLY, match.record.id, match.durationMatched, retime = !match.durationMatched && retimes(match.record, seconds))
         // Synced lyrics Samsung could not show (the reason is logged by firstWritable): their text is still worth keeping for v2.
         is Match.Synced ->
             if (match.record.hasPlainLyrics) Verdict(LyricsStatus.PLAIN_ONLY, match.record.id, durationMatched = true) else Verdict(LyricsStatus.NOT_FOUND)
         Match.NotFound -> Verdict(LyricsStatus.NOT_FOUND)
     }
+
+    /** [record] is a little off a song of [seconds] ([RETIME_MAX_SECONDS]), and the AI add-on is there to time it anew. */
+    private fun retimes(record: LrclibRecord, seconds: Double): Boolean =
+        record.duration?.let { abs(it - seconds) <= RETIME_MAX_SECONDS } == true && aiTimes()
 
     private sealed interface Lookup {
         data class Write(val record: LrclibRecord, val text: String) : Lookup
@@ -933,10 +960,11 @@ class LyricsPipeline(
         candidates: List<Candidate> = emptyList(),
         declined: Boolean = false,
         plainInTags: Boolean = false,
+        retime: Boolean = false,
     ): Boolean {
         val entry = recorded(
-            previous, track, status, lrclibId, clock(), durationMatched, sha256, size,
-            source = source, agreement = agreement, aiReason = aiReason, candidates = candidates, declined = declined, plainInTags = plainInTags,
+            previous, track, status, lrclibId, clock(), durationMatched, sha256, size, source = source, agreement = agreement,
+            aiReason = aiReason, candidates = candidates, declined = declined, plainInTags = plainInTags, retime = retime,
         )
         val stored = ledger.put(entry)
         log("lyrics: $status${if (stored) "" else ", not stored"}")
@@ -988,13 +1016,23 @@ class LyricsPipeline(
         aiReason: String? = null,
         candidates: List<Candidate> = emptyList(),
         plainInTags: Boolean = false,
+        retime: Boolean = false,
     ): LyricsStatus {
-        record(previous, track, status, lrclibId, durationMatched, agreement = agreement, aiReason = aiReason, candidates = candidates, plainInTags = plainInTags)
+        record(
+            previous, track, status, lrclibId, durationMatched, agreement = agreement, aiReason = aiReason, candidates = candidates,
+            plainInTags = plainInTags, retime = retime,
+        )
         return status
     }
 
     private companion object {
         const val MS_PER_SECOND: Double = 1_000.0
+
+        /**
+         * LRCLIB's lyrics at most this far off the song's length are timed anew by the AI ([aiTimes]): an intro or an
+         * ending of another cut. Further off, the words likely differ too (another version).
+         */
+        const val RETIME_MAX_SECONDS: Double = 15.0
 
         /** "Show lyrics" shows this many lines. */
         const val PREVIEW_LINES: Int = 4

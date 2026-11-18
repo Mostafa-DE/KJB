@@ -137,6 +137,18 @@ class LedgerTest {
     }
 
     @Test
+    fun `lyrics of another length to time anew stay with the song through the AI's runs`() {
+        val plain = recorded(null, track, LyricsStatus.PLAIN_ONLY, 7, now, durationMatched = false, retime = true)
+        assertTrue(plain.retime)
+        val failed = recorded(plain, track, LyricsStatus.AI_FAILED, 7, now, durationMatched = false)
+        assertTrue(failed.retime)
+        assertTrue(recorded(failed, track, LyricsStatus.AI_REJECTED, 7, now, durationMatched = false).retime)
+        assertFalse(recorded(plain, track, LyricsStatus.PLAIN_ONLY, 7, now, durationMatched = false).retime)
+        assertFalse(recorded(null, track, LyricsStatus.DURATION_MISMATCH, 7, now, retime = true).retime)
+        assertEquals(LedgerState().put(plain), LedgerJson.decode(LedgerJson.encode(LedgerState().put(plain))))
+    }
+
+    @Test
     fun `the song's own lyrics survive a round trip, and an older ledger reads them as LRCLIB's`() {
         val ledger = LedgerState()
             .put(recorded(null, track, LyricsStatus.SYNCED, null, now, sha256 = "ab12", size = 40, source = LyricsSource.TAGS))
