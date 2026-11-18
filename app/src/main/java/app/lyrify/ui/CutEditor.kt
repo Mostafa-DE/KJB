@@ -73,6 +73,7 @@ import app.lyrify.lyrics.TrackNames
 import app.lyrify.player.embeddedPictureBytes
 import app.lyrify.tones.FadeCurve
 import app.lyrify.tones.FadeEnvelope
+import app.lyrify.tones.Peaks
 import app.lyrify.tones.PreviewCommand
 import app.lyrify.tones.PreviewState
 import app.lyrify.tones.PreviewStep
@@ -255,7 +256,7 @@ private fun CutEditor(song: Song, files: CutFiles, player: TonePlayer, onSaved: 
     val scope = rememberCoroutineScope()
     val toasts = LocalToasts.current
     var draft by rememberSaveable(song.path, stateSaver = CutDraftSaver) { mutableStateOf(CutDraft(songDurationMs = song.durationMs)) }
-    val peaks by produceState<FloatArray?>(null, song.path) { value = loadPeaks(context, song.path, draft.durationMs) }
+    val peaks by produceState<FloatArray?>(null, song.path) { value = loadPeaks(context, song.path, draft.durationMs) { CutFiles.decoder(it) } }
     val encoders by produceState<Map<CutQuality, String>?>(null) { value = withContext(Dispatchers.IO) { CutQuality.offered(CutEncoders.phone()) } }
     val folder by produceState<CutFolder?>(null, song.path) { value = withContext(Dispatchers.IO) { files.folder(song.path) } }
     val tagBytes by produceState(0L, song.path) { value = withContext(Dispatchers.IO) { embeddedPictureBytes(File(song.path)) ?: 0L } }
@@ -349,7 +350,6 @@ private fun CutEditor(song: Song, files: CutFiles, player: TonePlayer, onSaved: 
                         onNudge = { end, steps -> draft = draft.nudged(end, steps) },
                         onDrag = { dragging = it },
                     )
-                    if (draft.limited) Fact(R.drawable.ic_info, stringResource(R.string.tones_first_20_minutes))
                     if (!readable) Fact(R.drawable.ic_error, stringResource(R.string.tones_song_unreadable))
                     PreviewRow(
                         playing = previewing != null,
@@ -427,6 +427,7 @@ private fun CutWaveform(
             true
         }
     }
+    val bars = remember(peaks) { peaks?.let { Peaks.pooled(it, MAX_BARS) } }
     val fade = remember(range, draft.fadeIn, draft.fadeOut) {
         FadeEnvelope.of(range.window, draft.fadeIn.lengthMs, draft.fadeOut.lengthMs, draft.fadeIn.curve, draft.fadeOut.curve)
     }
@@ -483,7 +484,7 @@ private fun CutWaveform(
             val startX = range.startMs / total * size.width
             val endX = range.endMs / total * size.width
             drawRect(highlight.copy(alpha = 0.16f), Offset(startX, 0f), Size((endX - startX).coerceAtLeast(1f), size.height))
-            val shown = peaks
+            val shown = bars
             if (shown != null && shown.isNotEmpty()) {
                 val loudest = (shown.maxOrNull() ?: 0f).coerceAtLeast(MIN_PEAK)
                 val middle = size.height / 2
@@ -602,3 +603,6 @@ private fun QualitySection(offered: Map<CutQuality, String>?, quality: CutQualit
         Fact(R.drawable.ic_info, stringResource(R.string.cut_format))
     }
 }
+
+/** The waveform's bars at most: a 20-minute song's points, so a longer song's waveform costs no more to draw. */
+private const val MAX_BARS: Int = 20 * 60 * Peaks.POINTS_PER_SECOND

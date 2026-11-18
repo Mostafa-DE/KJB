@@ -210,6 +210,21 @@ object Peaks {
     const val POINTS_PER_SECOND: Int = 2
     const val FRAMES_PER_POINT: Int = ToneAudio.RATE / POINTS_PER_SECOND
 
+    /**
+     * [peaks] as at most [points] bars, each the loudest of the points it covers (a long song's waveform draws no more
+     * bars than fit); unchanged within the limit. Pure.
+     */
+    fun pooled(peaks: FloatArray, points: Int): FloatArray {
+        if (peaks.size <= points) return peaks
+        return FloatArray(points) { bar ->
+            val from = (bar.toLong() * peaks.size / points).toInt()
+            val to = ((bar + 1L) * peaks.size / points).toInt()
+            var loudest = 0f
+            for (i in from until to) loudest = maxOf(loudest, peaks[i])
+            loudest
+        }
+    }
+
     /** The peaks of a song held whole. Pure. */
     fun of(left: FloatArray, right: FloatArray, framesPerPoint: Int = FRAMES_PER_POINT): FloatArray =
         PeakMeter(framesPerPoint).apply { add(left, right, left.size) }.peaks()
@@ -238,14 +253,16 @@ object Peaks {
 }
 
 /**
- * Waveform peaks kept in app-private storage ([dir], under the cache directory in the app), one small file per song
- * named by a hash of its path, size and modification time: a song changed since is a miss, and no file name says which
- * song it is. Values are kept to a 255th (one byte each). At most [maxFiles] files: the oldest go, never the one just
- * written. A file that cannot be read is a miss; a failed write only means computing again next time.
+ * Waveform peaks kept in app-private storage ([dir], under the cache directory in the app), one small file per song and
+ * length read (Tones reads a long song's first 20 minutes, the cutter all of it), named by a hash of its path, size,
+ * modification time and the frames read: a song changed since is a miss, and no file name says which song it is.
+ * Values are kept to a 255th (one byte each). At most [maxFiles] files: the oldest go, never the one just written. A
+ * file that cannot be read is a miss; a failed write only means computing again next time.
  */
 class PeaksCache(private val dir: File, private val maxFiles: Int = MAX_FILES) {
-    fun read(song: File): FloatArray? {
-        val file = File(dir, key(song))
+    /** The peaks of [song]'s first [frames] frames, as [write] kept them; null when they are not here. */
+    fun read(song: File, frames: Long): FloatArray? {
+        val file = File(dir, key(song, frames))
         val bytes = try {
             if (!file.isFile) return null
             file.readBytes()
@@ -260,13 +277,16 @@ class PeaksCache(private val dir: File, private val maxFiles: Int = MAX_FILES) {
         return FloatArray(count) { (bytes[HEADER_BYTES + it].toInt() and 0xff) / 255f }
     }
 
-    /** Throws an IOException when the file cannot be written; the caller just goes without the cache. */
-    fun write(song: File, peaks: FloatArray) {
+    /**
+     * Keeps [peaks] of [song]'s first [frames] frames. Throws an IOException when the file cannot be written; the caller
+     * just goes without the cache.
+     */
+    fun write(song: File, frames: Long, peaks: FloatArray) {
         dir.mkdirs()
         val bytes = ByteBuffer.allocate(HEADER_BYTES + peaks.size).order(ByteOrder.BIG_ENDIAN)
         bytes.putInt(MAGIC).putInt(peaks.size)
         peaks.forEach { bytes.put((it.coerceIn(0f, 1f) * 255f).roundToInt().toByte()) }
-        val file = File(dir, key(song))
+        val file = File(dir, key(song, frames))
         val temp = File(dir, file.name + TEMP_SUFFIX)
         Files.write(temp.toPath(), bytes.array())
         Files.move(temp.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
@@ -277,8 +297,8 @@ class PeaksCache(private val dir: File, private val maxFiles: Int = MAX_FILES) {
             .forEach { it.delete() }
     }
 
-    private fun key(song: File): String {
-        val digest = MessageDigest.getInstance("SHA-256").digest("${song.path}\u0000${song.length()}\u0000${song.lastModified()}".toByteArray())
+    private fun key(song: File, frames: Long): String {
+        val digest = MessageDigest.getInstance("SHA-256").digest("${song.path}\u0000${song.length()}\u0000${song.lastModified()}\u0000$frames".toByteArray())
         return digest.joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') } + SUFFIX
     }
 

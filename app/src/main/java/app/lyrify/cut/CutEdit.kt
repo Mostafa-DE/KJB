@@ -12,9 +12,9 @@ import app.lyrify.tones.ToneWindow
 enum class CutEnd { START, END }
 
 /**
- * The part of a song a cut keeps, from [startMs] to [endMs]. Each change keeps it inside the song's usable length
- * (`durationMs`, at most [ToneWindow.MAX_SOURCE_MS]) with at least [MIN_LENGTH_MS] between the ends; neither end pushes
- * the other, it stops a second short of it. A song shorter than [MIN_LENGTH_MS] is cut whole.
+ * The part of a song a cut keeps, from [startMs] to [endMs]. Each change keeps it inside the song (`durationMs`, however
+ * long) with at least [MIN_LENGTH_MS] between the ends; neither end pushes the other, it stops a second short of it. A
+ * song shorter than [MIN_LENGTH_MS] is cut whole.
  */
 data class CutRange(val startMs: Long, val endMs: Long) {
     val lengthMs: Long get() = endMs - startMs
@@ -56,7 +56,7 @@ data class CutRange(val startMs: Long, val endMs: Long) {
         /** The shortest cut. */
         const val MIN_LENGTH_MS: Long = 1_000
 
-        /** The whole of a song of [durationMs] (its usable length); empty when the length is unknown (0). */
+        /** The whole of a song of [durationMs]; empty when the length is unknown (0). */
         fun whole(durationMs: Long): CutRange = CutRange(0, durationMs.coerceAtLeast(0))
     }
 }
@@ -235,20 +235,19 @@ fun previewFromMs(range: CutRange, fadeOut: Fade, focus: CutEnd): Long = when (f
 }
 
 /**
- * What the cutter holds for a song of [songDurationMs]: the cut's ends, its fades, the quality, and which end the preview
- * follows ([focus]: the one that changed last, so a nudge of the end is heard at the end). Only the first
- * [ToneWindow.MAX_SOURCE_MS] of a longer song can be cut ([limited]).
+ * What the cutter holds for a song of [songDurationMs], however long (unlike Tones, the cutter reads the song only to
+ * the cut's end, a piece at a time): the cut's ends, its fades, the quality, and which end the preview follows
+ * ([focus]: the one that changed last, so a nudge of the end is heard at the end).
  */
 data class CutDraft(
     val songDurationMs: Long,
-    val range: CutRange = CutRange.whole(ToneWindow.usableDurationMs(songDurationMs)),
+    val range: CutRange = CutRange.whole(songDurationMs),
     val fadeIn: Fade = Fade(),
     val fadeOut: Fade = Fade(),
     val quality: CutQuality = CutQuality.DEFAULT,
     val focus: CutEnd = CutEnd.START,
 ) {
-    val durationMs: Long get() = ToneWindow.usableDurationMs(songDurationMs)
-    val limited: Boolean get() = songDurationMs > durationMs
+    val durationMs: Long get() = songDurationMs.coerceAtLeast(0)
 
     fun withStart(ms: Long): CutDraft = copy(range = range.withStart(ms, durationMs), focus = CutEnd.START)
 

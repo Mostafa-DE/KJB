@@ -310,7 +310,7 @@ class CutFiles(
                 writes = writes,
                 work = File(app.filesDir, WORK_DIR),
                 tags = TagLibFile(app.filesDir),
-                openSong = ::MixDecoder,
+                openSong = ::decoder,
                 newEncoder = { fd, bitRate, codec -> AacToneEncoder(fd, bitRate, codec) },
                 music = if (writes.testFolderOnly) File(root, SharedWrites.TEST_FOLDER.trimEnd('/')) else File(root, Environment.DIRECTORY_MUSIC),
                 canWrite = { it.isDirectory && it.canWrite() },
@@ -328,6 +328,13 @@ class CutFiles(
 
         /** KJB's own folder for a cut on its way, under its files (TagLib writes only there). */
         private const val WORK_DIR: String = "cut-work"
+
+        /**
+         * The song's decoder for the cutter, for a song of any length: without the AI's 20-minute cap, as the cutter
+         * reads only to the cut's end (and its waveform to the song's length), a piece at a time. The decoder's own
+         * deadline still ends one that hangs.
+         */
+        fun decoder(song: File): MixSource = MixDecoder(song, maxAudioSec = Long.MAX_VALUE)
     }
 }
 

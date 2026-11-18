@@ -69,6 +69,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import app.lyrify.LOG_TAG
 import app.lyrify.R
 import app.lyrify.ai.MixDecoder
+import app.lyrify.ai.MixSource
 import app.lyrify.data.LedgerEntry
 import app.lyrify.lyrics.LrcLine
 import app.lyrify.lyrics.TrackNames
@@ -351,13 +352,16 @@ fun ToneEditor(song: LedgerEntry, files: ToneFiles, player: TonePlayer, onSaved:
     }
 }
 
-/** The waveform from the cache, else decoded and cached; empty when the song cannot be decoded (the bar stays plain). */
-internal suspend fun loadPeaks(context: Context, path: String, durationMs: Long): FloatArray = withContext(Dispatchers.IO) {
+/**
+ * The waveform of the song's first [durationMs], from the cache, else decoded by [open] (the shared decoder, which stops
+ * at 20 minutes; the cutter's reads any length) and cached; empty when the song cannot be decoded (the bar stays plain).
+ */
+internal suspend fun loadPeaks(context: Context, path: String, durationMs: Long, open: (File) -> MixSource = ::MixDecoder): FloatArray = withContext(Dispatchers.IO) {
     val song = File(path)
     val cache = PeaksCache(File(context.cacheDir, PEAKS_DIR))
-    cache.read(song)?.let { return@withContext it }
+    cache.read(song, ToneAudio.frames(durationMs))?.let { return@withContext it }
     val peaks = try {
-        MixDecoder(song).use { Peaks.read(it, maxFrames = ToneAudio.frames(durationMs)) {} }
+        open(song).use { Peaks.read(it, maxFrames = ToneAudio.frames(durationMs)) {} }
     } catch (e: Exception) {
         if (e is CancellationException) throw e
         // The class only: a decoder's message can hold the file name.
@@ -365,7 +369,7 @@ internal suspend fun loadPeaks(context: Context, path: String, durationMs: Long)
         return@withContext FloatArray(0)
     }
     try {
-        cache.write(song, peaks)
+        cache.write(song, ToneAudio.frames(durationMs), peaks)
     } catch (e: IOException) {
         Log.w(LOG_TAG, "waveform not cached: ${e.javaClass.simpleName}")
     }

@@ -16,13 +16,15 @@ class CutEditTest {
     // The two ends
 
     @Test
-    fun `a cut starts as the whole song, or its first 20 minutes less a second`() {
+    fun `a cut starts as the whole song, however long it is`() {
         assertEquals(CutRange(0, song), CutRange.whole(song))
         assertEquals(CutRange(0, 0), CutRange.whole(0))
-        val long = CutDraft(songDurationMs = 25 * 60_000L)
-        assertEquals(CutRange(0, ToneWindow.MAX_SOURCE_MS), long.range)
-        assertTrue(long.limited)
-        assertFalse(CutDraft(songDurationMs = song).limited)
+        // Past the 20 minutes Tones can use: a three-hour mix is cut whole, and its end reaches the song's.
+        val threeHours = 3 * 3_600_000L
+        val long = CutDraft(songDurationMs = threeHours)
+        assertEquals(CutRange(0, threeHours), long.range)
+        assertEquals(CutRange(threeHours - 61_000, threeHours), long.withStart(threeHours - 61_000).withEnd(threeHours + 5_000).range)
+        assertEquals(threeHours, long.nudged(CutEnd.END, 1).range.endMs)
     }
 
     @Test

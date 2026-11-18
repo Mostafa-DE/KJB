@@ -2,6 +2,7 @@ package app.lyrify.cut
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import app.lyrify.ai.AudioTooLongException
 import app.lyrify.ai.MixDecoder
 import app.lyrify.ai.MixSource
 import app.lyrify.data.SharedWrites
@@ -17,11 +18,15 @@ import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
+import java.io.RandomAccessFile
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.sin
@@ -29,7 +34,8 @@ import kotlin.math.sin
 /**
  * The cutter on the phone, with its real AAC encoders and TagLib: every quality the phone offers saves an M4A that
  * decodes to the cut's length, carries the fixture's tags and both its covers with "(cut)" in its title and without its
- * ReplayGain, and is about the size shown before saving; a cancelled save leaves nothing. The audio is a made-up sine;
+ * ReplayGain, and is about the size shown before saving; a cancelled save leaves nothing; a song past 20 minutes is read
+ * to its end. The audio is a made-up sine or silence;
  * the song is the tag tests' made-up `northbound-tide.m4a`. Everything stays in the debug app's private storage.
  */
 @RunWith(AndroidJUnit4::class)
@@ -135,6 +141,26 @@ class CutDeviceTest {
         assertEquals(listOf(song.name), album.list().orEmpty().toList())
         assertEquals(emptyList<String>(), music.list().orEmpty().toList())
         assertEquals(emptyList<String>(), File(root, "work").list().orEmpty().toList())
+    }
+
+    @Test
+    fun aSongPastTwentyMinutesIsReadToItsEndByTheCuttersDecoder() {
+        // 21 minutes of silence as an 8 kHz mono WAV (20 MB, its data left as zeros).
+        val long = File(album, "long-mix.wav")
+        val rate = 8_000
+        val dataBytes = 21 * 60 * rate * 2
+        RandomAccessFile(long, "rw").use { file ->
+            val header = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN)
+            header.put("RIFF".toByteArray()).putInt(36 + dataBytes).put("WAVE".toByteArray())
+            header.put("fmt ".toByteArray()).putInt(16).putShort(1).putShort(1).putInt(rate).putInt(rate * 2).putShort(2).putShort(16)
+            header.put("data".toByteArray()).putInt(dataBytes)
+            file.write(header.array())
+            file.setLength(44L + dataBytes)
+        }
+        val frames = CutFiles.decoder(long).use { decoder -> countFrames(decoder) }
+        assertTrue("$frames frames", abs(frames - 21 * 60 * ToneAudio.RATE) <= 4_096)
+        // The AI's decoder stops at 20 minutes.
+        assertThrows(AudioTooLongException::class.java) { MixDecoder(long).use { decoder -> countFrames(decoder) } }
     }
 
     private fun countFrames(source: MixSource): Int {
