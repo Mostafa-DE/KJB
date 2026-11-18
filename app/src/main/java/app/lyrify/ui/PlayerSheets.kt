@@ -170,7 +170,7 @@ class PlayerExtrasUi internal constructor(
         private set
 
     /**
-     * P2's routes of the player's "⋯" and the sleep button, Share's, and Move to trash (the song sheet's own dialogs, then
+     * P2's routes of the player's "⋯" and the sleep chip, Share's, and Move to trash (the song sheet's own dialogs, then
      * the phone's: the song playing gives way to the next once it is in the trash); false for a route it does not fill.
      * [names]: "Show file names"; [lyrics]: what the song's lyrics can be shared as.
      */

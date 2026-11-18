@@ -65,6 +65,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
@@ -123,6 +124,7 @@ import app.lyrify.player.QueueItem
 import app.lyrify.player.Repeat
 import app.lyrify.player.SourceKind
 import app.lyrify.player.sourceLabel
+import app.lyrify.settings.DockTab
 import app.lyrify.settings.LibrarySettings
 import app.lyrify.settings.PlayerUiSettings
 import app.lyrify.settings.Settings
@@ -429,7 +431,7 @@ fun ownNow(ui: PlayerUi?, settings: LibrarySettings, now: Long): OwnNow? {
     )
 }
 
-/** Where the player's "⋯", its sleep button and its lyrics panel lead: P2's extras ([PlayerExtrasUi]) and P3's lyrics. */
+/** Where the player's "⋯", its sleep chip and its lyrics panel lead: P2's extras ([PlayerExtrasUi]) and P3's lyrics. */
 enum class PlayerRoute {
     ADD_TO,
     SPEED,
@@ -570,7 +572,7 @@ fun PlayerView() {
                 PartHandles(ui, extras)
                 ProgressBar(ui, onSeek = connection::seekTo, marks = { BarMarks(ui); ChapterTicks(ui) })
                 MainRow(ui, settings, connection, bookNow)
-                SecondaryRow(ui, connection, onQueue = { queueSheet = true }, onRoute = route, book = bookNow, onChapters = { chapterSheet = true })
+                SecondaryRow(ui, connection, onQueue = { queueSheet = true }, onLibrary = { nav.select(DockTab.LIBRARY) }, book = bookNow, onChapters = { chapterSheet = true })
             }
         }
         // The message floats down from under the top bar, over the cover, as the prototype's does; the controls stay clear.
@@ -831,10 +833,29 @@ private fun Backdrop(path: String) {
     }
 }
 
+/** The rows of the player's "⋯", in the order they show; Move to trash sits apart at the bottom, as on the song sheet. */
+enum class PlayerMenuRow { ADD_TO, ALBUM, ARTIST, SPEED, SLEEP, REPEAT_PART, BOOKMARK, PLAY_ON, EQUALIZER, TONE, SHARE, SHARE_LYRICS, SONG_INFO, EDIT_TAGS, MOVE_TO_TRASH }
+
 /**
- * The chevron, "From Album · Name", and "⋯" with every item of the menu; Share, Share lyrics ([lyricsShare]) and Move to
- * trash (apart at the bottom, in red, as on the song sheet) for a song of the library, Make a tone when [tone]
- * ([makesTone]). Dragged down, as anywhere on it, the player follows ([PlayerFrame]).
+ * The rows the player's "⋯" shows. A [song] of the library has Share, Edit tags and Move to trash, as on its sheet (a file
+ * another app opened has none of them), and Share lyrics when it has [lyrics]; Go to album and Go to artist when the
+ * song has their pages ([album], [artist]); Make a tone when [tone] ([makesTone]).
+ */
+fun playerMenuRows(song: Boolean, album: Boolean, artist: Boolean, tone: Boolean, lyrics: Boolean): List<PlayerMenuRow> = PlayerMenuRow.entries.filter { row ->
+    when (row) {
+        PlayerMenuRow.ALBUM -> album
+        PlayerMenuRow.ARTIST -> artist
+        PlayerMenuRow.TONE -> tone
+        PlayerMenuRow.SHARE, PlayerMenuRow.EDIT_TAGS, PlayerMenuRow.MOVE_TO_TRASH -> song
+        PlayerMenuRow.SHARE_LYRICS -> song && lyrics
+        else -> true
+    }
+}
+
+/**
+ * The chevron, "From Album · Name", and "⋯" with the rows [playerMenuRows] gives: Share, Share lyrics ([lyricsShare]),
+ * Edit tags and Move to trash (apart at the bottom, in red, as on the song sheet) for a song of the library, Make a tone
+ * when [tone] ([makesTone]). Dragged down, as anywhere on it, the player follows ([PlayerFrame]).
  */
 @Composable
 private fun PlayerTopBar(ui: PlayerUi, lyricsShare: LyricsShare?, tone: Boolean, onClose: () -> Unit, onRoute: (PlayerRoute) -> Unit) {
@@ -867,23 +888,35 @@ private fun PlayerTopBar(ui: PlayerUi, lyricsShare: LyricsShare?, tone: Boolean,
             LyrifyMenu(expanded = menu, onDismiss = { menu = false }) {
                 val song = ui.song
                 val pick: (() -> Unit) -> () -> Unit = { action -> { menu = false; action() } }
-                MenuRow(stringResource(R.string.player_menu_add_to), R.drawable.ic_playlist_add, pick { onRoute(PlayerRoute.ADD_TO) })
-                song?.let(::albumKey)?.let { key -> MenuRow(stringResource(R.string.player_menu_album), R.drawable.ic_album, pick { nav.open(Page.Album(key)) }) }
+                val album = song?.let(::albumKey)
                 val pages = song?.let { ui.library?.artistsOf(it) }.orEmpty().map { it.name }
-                artistTap(pages, { nav.open(Page.Artist(it)) }) { artists = it }?.let { go -> MenuRow(stringResource(R.string.player_menu_artist), R.drawable.ic_person, pick(go)) }
-                MenuRow(stringResource(R.string.player_menu_speed), R.drawable.ic_speed, pick { onRoute(PlayerRoute.SPEED) })
-                MenuRow(stringResource(if (rememberPartOn(ui)) R.string.part_stop else R.string.player_menu_ab), R.drawable.ic_repeat, pick { onRoute(PlayerRoute.REPEAT_PART) })
-                MenuRow(stringResource(R.string.player_menu_bookmark), R.drawable.ic_bookmark_add, pick { onRoute(PlayerRoute.BOOKMARK) })
-                MenuRow(stringResource(R.string.player_menu_play_on), R.drawable.ic_speaker, pick { onRoute(PlayerRoute.PLAY_ON) })
-                // KJB's equalizer (AudioScreens.kt); the phone's own sound effects open from inside it.
-                MenuRow(stringResource(R.string.player_menu_equalizer), R.drawable.ic_equalizer, pick { nav.show(FullScreen.Equalizer) })
-                if (tone) MenuRow(stringResource(R.string.player_menu_tone), R.drawable.ic_ring_volume, pick { onRoute(PlayerRoute.MAKE_TONE) })
-                if (song != null) MenuRow(stringResource(R.string.share), R.drawable.ic_share, pick { onRoute(PlayerRoute.SHARE) })
-                if (song != null && lyricsShare != null) MenuRow(stringResource(R.string.share_lyrics), R.drawable.ic_share, pick { onRoute(PlayerRoute.SHARE_LYRICS) })
-                MenuRow(stringResource(R.string.player_menu_info), R.drawable.ic_info, pick { onRoute(PlayerRoute.SONG_INFO) })
-                if (song != null) {
-                    HorizontalDivider(Modifier.padding(horizontal = 12.dp, vertical = 4.dp), color = MaterialTheme.colorScheme.outlineVariant)
-                    MenuRow(stringResource(R.string.lib_move_to_trash), R.drawable.ic_delete, pick { onRoute(PlayerRoute.MOVE_TO_TRASH) }, destructive = true)
+                val artist = artistTap(pages, { nav.open(Page.Artist(it)) }) { artists = it }
+                playerMenuRows(song != null, album != null, artist != null, tone, lyricsShare != null).forEach { row ->
+                    key(row) {
+                        when (row) {
+                            PlayerMenuRow.ADD_TO -> MenuRow(stringResource(R.string.player_menu_add_to), R.drawable.ic_playlist_add, pick { onRoute(PlayerRoute.ADD_TO) })
+                            PlayerMenuRow.ALBUM -> album?.let { at -> MenuRow(stringResource(R.string.player_menu_album), R.drawable.ic_album, pick { nav.open(Page.Album(at)) }) }
+                            PlayerMenuRow.ARTIST -> artist?.let { go -> MenuRow(stringResource(R.string.player_menu_artist), R.drawable.ic_person, pick(go)) }
+                            PlayerMenuRow.SPEED -> MenuRow(stringResource(R.string.player_menu_speed), R.drawable.ic_speed, pick { onRoute(PlayerRoute.SPEED) })
+                            // Out of the second row since 3.1; what a running timer has left shows under its name.
+                            PlayerMenuRow.SLEEP -> SleepMenuRow(ui, pick { onRoute(PlayerRoute.SLEEP) })
+                            PlayerMenuRow.REPEAT_PART -> MenuRow(stringResource(if (rememberPartOn(ui)) R.string.part_stop else R.string.player_menu_ab), R.drawable.ic_repeat, pick { onRoute(PlayerRoute.REPEAT_PART) })
+                            PlayerMenuRow.BOOKMARK -> MenuRow(stringResource(R.string.player_menu_bookmark), R.drawable.ic_bookmark_add, pick { onRoute(PlayerRoute.BOOKMARK) })
+                            PlayerMenuRow.PLAY_ON -> MenuRow(stringResource(R.string.player_menu_play_on), R.drawable.ic_speaker, pick { onRoute(PlayerRoute.PLAY_ON) })
+                            // KJB's equalizer (AudioScreens.kt); the phone's own sound effects open from inside it.
+                            PlayerMenuRow.EQUALIZER -> MenuRow(stringResource(R.string.player_menu_equalizer), R.drawable.ic_equalizer, pick { nav.show(FullScreen.Equalizer) })
+                            PlayerMenuRow.TONE -> MenuRow(stringResource(R.string.player_menu_tone), R.drawable.ic_ring_volume, pick { onRoute(PlayerRoute.MAKE_TONE) })
+                            PlayerMenuRow.SHARE -> MenuRow(stringResource(R.string.share), R.drawable.ic_share, pick { onRoute(PlayerRoute.SHARE) })
+                            PlayerMenuRow.SHARE_LYRICS -> MenuRow(stringResource(R.string.share_lyrics), R.drawable.ic_share, pick { onRoute(PlayerRoute.SHARE_LYRICS) })
+                            PlayerMenuRow.SONG_INFO -> MenuRow(stringResource(R.string.player_menu_info), R.drawable.ic_info, pick { onRoute(PlayerRoute.SONG_INFO) })
+                            // The tag editor over the player, as from the song's sheet; Back comes back here.
+                            PlayerMenuRow.EDIT_TAGS -> song?.let { MenuRow(stringResource(R.string.lib_edit_tags), R.drawable.ic_sell, pick { nav.show(FullScreen.EditTags(listOf(it.ref))) }) }
+                            PlayerMenuRow.MOVE_TO_TRASH -> {
+                                HorizontalDivider(Modifier.padding(horizontal = 12.dp, vertical = 4.dp), color = MaterialTheme.colorScheme.outlineVariant)
+                                MenuRow(stringResource(R.string.lib_move_to_trash), R.drawable.ic_delete, pick { onRoute(PlayerRoute.MOVE_TO_TRASH) }, destructive = true)
+                            }
+                        }
+                    }
                 }
             }
             ArtistsMenu(artists, { artists = null }) { nav.open(Page.Artist(it)) }

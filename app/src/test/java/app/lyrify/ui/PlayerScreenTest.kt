@@ -142,6 +142,42 @@ class PlayerScreenTest {
         assertFalse(makesTone(book = null))
     }
 
+    // The second row and the "⋯" (3.1, user 2026-11-18)
+
+    @Test
+    fun `the second row is Shuffle, Queue, the heart, Library and Repeat, and a book keeps the heart in the middle`() {
+        val music = secondaryButtons(book = false, chapters = false)
+        assertEquals(listOf(PlayerButton.SHUFFLE, PlayerButton.QUEUE, PlayerButton.FAVOURITE, PlayerButton.LIBRARY, PlayerButton.REPEAT), music)
+        // A book never shuffles or repeats: Chapters in Shuffle's place when it has some, room for the rest.
+        assertEquals(listOf(PlayerButton.CHAPTERS, PlayerButton.QUEUE, PlayerButton.FAVOURITE, PlayerButton.LIBRARY, PlayerButton.ROOM), secondaryButtons(book = true, chapters = true))
+        assertEquals(listOf(PlayerButton.ROOM, PlayerButton.QUEUE, PlayerButton.FAVOURITE, PlayerButton.LIBRARY, PlayerButton.ROOM), secondaryButtons(book = true, chapters = false))
+        assertEquals(music, secondaryButtons(book = false, chapters = true))
+        // Five places whatever plays, the heart in the middle one; the sleep timer is in the "⋯" now.
+        for (book in listOf(false, true)) for (chapters in listOf(false, true)) assertEquals(PlayerButton.FAVOURITE, secondaryButtons(book, chapters)[2])
+    }
+
+    @Test
+    fun `the player's menu has the sleep timer after Speed, and Edit tags after Song info for a song of the library only`() {
+        val all = playerMenuRows(song = true, album = true, artist = true, tone = true, lyrics = true)
+        assertEquals(PlayerMenuRow.entries, all)
+        assertEquals(PlayerMenuRow.SLEEP, all[all.indexOf(PlayerMenuRow.SPEED) + 1])
+        assertEquals(PlayerMenuRow.EDIT_TAGS, all[all.indexOf(PlayerMenuRow.SONG_INFO) + 1])
+        assertEquals(PlayerMenuRow.MOVE_TO_TRASH, all.last())
+        // A song of the library with no album or artist page, no lyrics, a book's part (no tone): Edit tags still, as on its sheet.
+        assertEquals(
+            listOf(
+                PlayerMenuRow.ADD_TO, PlayerMenuRow.SPEED, PlayerMenuRow.SLEEP, PlayerMenuRow.REPEAT_PART, PlayerMenuRow.BOOKMARK, PlayerMenuRow.PLAY_ON,
+                PlayerMenuRow.EQUALIZER, PlayerMenuRow.SHARE, PlayerMenuRow.SONG_INFO, PlayerMenuRow.EDIT_TAGS, PlayerMenuRow.MOVE_TO_TRASH,
+            ),
+            playerMenuRows(song = true, album = false, artist = false, tone = false, lyrics = false),
+        )
+        // A file another app opened, not in the library: nothing KJB could write to, share or trash.
+        assertEquals(
+            listOf(PlayerMenuRow.ADD_TO, PlayerMenuRow.SPEED, PlayerMenuRow.SLEEP, PlayerMenuRow.REPEAT_PART, PlayerMenuRow.BOOKMARK, PlayerMenuRow.PLAY_ON, PlayerMenuRow.EQUALIZER, PlayerMenuRow.TONE, PlayerMenuRow.SONG_INFO),
+            playerMenuRows(song = false, album = false, artist = false, tone = true, lyrics = true),
+        )
+    }
+
     @Test
     fun `a file not known yet as a song or a book has nothing read until the library tells`() = runTest {
         val path = "/storage/emulated/0/Music/Lantern Keeper/01 Lantern Keeper.mp3"
