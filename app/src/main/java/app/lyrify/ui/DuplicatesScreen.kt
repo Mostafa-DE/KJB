@@ -70,7 +70,12 @@ import app.lyrify.dupes.TrashAsk
 import app.lyrify.dupes.TrashStep
 import app.lyrify.dupes.Trashed
 import app.lyrify.dupes.duplicates
+import app.lyrify.logFailures
 import app.lyrify.lyrics.TrackNames
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.ZoneId
@@ -240,9 +245,31 @@ fun duplicatesBadge(): Int {
 }
 
 /**
+ * The phone's trash answers are settled and said here, the app's own scope: settling one can close the screen that asked
+ * (the player, once the song it played was the last in its queue), and what it did still shows then, as
+ * [ToastState.later]'s messages do. Made on first use, so this file's other functions need no main thread.
+ */
+private val phoneAnswers: CoroutineScope by lazy { CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + logFailures) }
+
+/**
+ * The phone's trash dialog answered, [approved] (its OK) or not: [songTrash] settles it in [scope]
+ * ([SongTrash.restoreAnswered] while a restore waited for it, else [SongTrash.answered]) and [say] gets what it did
+ * ([trashAnswered]). The screens give [phoneAnswers]: in their own scope the message would go with them.
+ */
+internal fun settlePhoneAnswer(scope: CoroutineScope, songTrash: SongTrash, approved: Boolean, say: suspend (TrashSaid) -> Unit): Job = scope.launch {
+    val said = if (songTrash.step is TrashStep.Restoring) {
+        TrashSaid.Text(R.string.dupes_restored).takeIf { songTrash.restoreAnswered(approved) == Restored.Back }
+    } else {
+        trashAnswered(approved, songTrash.answered(approved))
+    }
+    said?.let { say(it) }
+}
+
+/**
  * Opens the phone's own trash dialog for MediaStore ids (to the trash, or with trash false back out of it) and hands the
- * answer to the shared trash flow ([SongTrash]: Duplicates and the song sheet), whichever of its dialogs was open; what
- * it did shows in [toasts] ([trashAnswered]), and so does a request the phone refused.
+ * answer to the shared trash flow ([SongTrash]: Duplicates, the song sheet and the player), whichever of its dialogs was
+ * open; what it did shows in [toasts] ([settlePhoneAnswer]), even once the screen has closed, and so does a request the
+ * phone refused.
  */
 @Composable
 fun rememberPhoneTrash(songTrash: SongTrash, toasts: ToastState): (List<Long>, Boolean) -> Unit {
@@ -250,14 +277,7 @@ fun rememberPhoneTrash(songTrash: SongTrash, toasts: ToastState): (List<Long>, B
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
-        val approved = result.resultCode == Activity.RESULT_OK
-        scope.launch {
-            if (songTrash.step is TrashStep.Restoring) {
-                if (songTrash.restoreAnswered(approved) == Restored.Back) toasts.say(resources, R.string.dupes_restored)
-            } else {
-                trashAnswered(approved, songTrash.answered(approved))?.let { toasts.say(context, it) }
-            }
-        }
+        settlePhoneAnswer(phoneAnswers, songTrash, approved = result.resultCode == Activity.RESULT_OK) { toasts.say(context, it) }
     }
     return remember(launcher, songTrash) {
         { ids, trash ->

@@ -8,9 +8,22 @@ import app.lyrify.dupes.DuplicatesMemory
 import app.lyrify.dupes.DuplicatesState
 import app.lyrify.dupes.ScanResults
 import app.lyrify.dupes.ScanStatus
+import app.lyrify.dupes.SongTrash
 import app.lyrify.dupes.TrashAsk
+import app.lyrify.dupes.TrashHost
+import app.lyrify.dupes.TrashMemory
+import app.lyrify.dupes.TrashStep
 import app.lyrify.dupes.Trashed
 import app.lyrify.dupes.TrashedSong
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -19,6 +32,7 @@ import org.junit.Test
 import java.time.LocalDateTime
 import java.time.ZoneId
 
+@OptIn(ExperimentalCoroutinesApi::class) // testScheduler: virtual time
 class DuplicatesViewTest {
     private val zone = ZoneId.of("Asia/Amman")
 
@@ -122,6 +136,66 @@ class DuplicatesViewTest {
         assertEquals(TrashSaid.Text(R.string.dupes_trash_unconfirmed), trashAnswered(approved = true, Trashed.NotConfirmed))
         // Nothing waited for this answer: there is nothing to say.
         assertNull(trashAnswered(approved = true, Trashed.Unchanged))
+    }
+
+    /** The trash flow's own part, made up: the step and the memory in fields. */
+    private class Host(override var step: TrashStep, override var memory: TrashMemory) : TrashHost {
+        override fun step(change: (TrashStep) -> TrashStep) {
+            step = change(step)
+        }
+
+        override suspend fun loaded() = Unit
+
+        override suspend fun commit(moved: Set<Long>, change: (TrashMemory) -> TrashMemory) {
+            // Stored on disk: a suspension, during which the screen may go.
+            yield()
+            memory = change(memory)
+        }
+
+        override fun changed(ids: Set<Long>) = Unit
+    }
+
+    /** The trash flow with [step] and [memory]; the phone's trash holds [inTrash], and [onQueues] hears songs leave the queues. */
+    private fun TestScope.flow(step: TrashStep, memory: TrashMemory, inTrash: Set<Long> = emptySet(), onQueues: () -> Unit = {}) = SongTrash(
+        host = Host(step, memory),
+        rows = { emptyMap() },
+        cleanup = {},
+        phoneTrash = { ids -> ids.filter { it in inTrash }.associateWith { 2L } },
+        io = StandardTestDispatcher(testScheduler),
+        clock = { 1 },
+        leaveQueues = { onQueues() },
+    )
+
+    /** The phone's dialog is open to move [song] to its trash, and moves it. */
+    private fun TestScope.moving(song: AudioFile, onQueues: () -> Unit = {}) =
+        flow(TrashStep.System(listOf(song)), TrashMemory(pending = listOf(song)), setOf(song.id), onQueues)
+
+    @Test
+    fun `what the phone's trash answer did is still said when settling it closes the screen that asked, as the player's last song does`() = runTest {
+        val song = file(6)
+        // The player's scope: its song was the last in the only queue, so the player closes as the song leaves it.
+        val player = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
+        val said = mutableListOf<TrashSaid>()
+
+        // Settled in the player's own scope, the message would go with the player.
+        settlePhoneAnswer(player, moving(song) { player.cancel() }, approved = true) { said += it }
+        advanceUntilIdle()
+        assertEquals(emptyList<TrashSaid>(), said)
+
+        // The screens settle it in the app's.
+        val app = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
+        val screen = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler))
+        settlePhoneAnswer(app, moving(song) { screen.cancel() }, approved = true) { said += it }
+        advanceUntilIdle()
+        assertEquals(listOf(TrashSaid.Count(R.plurals.dupes_moved, 1)), said)
+
+        said.clear()
+        settlePhoneAnswer(app, moving(song), approved = false) { said += it }
+        advanceUntilIdle()
+        val restoring = TrashedSong(song, 1, 2)
+        settlePhoneAnswer(app, flow(TrashStep.Restoring(restoring), TrashMemory(trashed = listOf(restoring))), approved = true) { said += it }
+        advanceUntilIdle()
+        assertEquals(listOf(TrashSaid.Text(R.string.dupes_trash_cancelled), TrashSaid.Text(R.string.dupes_restored)), said)
     }
 
     @Test
