@@ -380,6 +380,43 @@ class QueueBridgeTest {
         assertEquals(0, port.taken + round.taken)
     }
 
+    /** 3.1 (PL1B, Grok review of PL1): the song the queue goes on with may be one the player does not hold yet. */
+    @Test
+    fun `the song playing taken out for a song the player does not hold yet loads the queue there, never taking the song playing`() {
+        // The second song is not on the phone: the player holds the others.
+        missing += songs[1].path
+        var book = QueueBook().play(refs.take(4), 0, albumSource, now = 1).book
+        bridge.sync(book, find)
+        port.positionMs = 20_000
+        // Its file is back as the song playing is taken out, so the queue goes on with it.
+        missing -= songs[1].path
+        book = book.remove(book.currentId!!, book.current!!.current!!.uid)!!.book
+        bridge.sync(book, find)
+        assertEquals(listOf("load", "load"), port.calls)
+        assertEquals(uidsOf(book), port.loaded)
+        assertEquals(book.current!!.items.first().uid, port.current)
+        assertEquals(0L, port.positionMs)
+        assertEquals(0, port.taken)
+    }
+
+    /** 3.1 (PL1B, Grok review of PL1): CR2's two threads, as the song the main thread sees playing is taken out. */
+    @Test
+    fun `the song playing taken out just after it ended keeps the song the player went on to playing`() {
+        val threads = ThreadedPort()
+        val bridge = QueueBridge(threads) { threads.playing = null }
+        var book = QueueBook().play(refs.take(4), 1, albumSource, now = 1).book
+        bridge.sync(book, find)
+        val next = threads.loaded[2]
+        // The song ends on the playback thread; the main thread still sees it playing as Remove from queue comes.
+        threads.moveOn()
+        book = book.remove(book.currentId!!, book.current!!.current!!.uid)!!.book
+        bridge.sync(book, find)
+        assertEquals("the song playing", next, threads.playing)
+        assertFalse("started again", threads.restarted)
+        assertEquals(uidsOf(book), threads.loaded)
+        assertEquals(next, threads.loaded[threads.index])
+    }
+
     @Test
     fun `switching queues loads the other one at its place, and nothing playing empties the player`() {
         var book = QueueBook().play(refs.take(3), 0, albumSource, now = 1).book
