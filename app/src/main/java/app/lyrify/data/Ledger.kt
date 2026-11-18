@@ -280,7 +280,10 @@ object Retry {
     /** Not found, plain only, another version, instrumental, no artist, to check: LRCLIB (and the tags) change, so look again after 30 days. */
     const val RECHECK_AFTER_MS: Long = 30 * 24 * 60 * 60_000L
 
-    /** A first miss (not found, no artist) is looked up again sooner, once: LRCLIB grows every day. */
+    /**
+     * A first miss (not found, no artist) is looked up again sooner, once: LRCLIB grows every day. So is a song whose own
+     * plain lyrics stand while LRCLIB could not be asked.
+     */
     const val FIRST_MISS_RECHECK_AFTER_MS: Long = 7 * 24 * 60 * 60_000L
 
     /** AI runs that failed are tried again after a day (the next night), doubling, at most 30 days. */
@@ -340,7 +343,9 @@ suspend fun writeWithRetries(onFailure: (IOException) -> Unit, write: suspend ()
  * rejected its lyrics, kept for [LyricsStatus.AI_REJECTED] only; [candidates] are kept for [LyricsStatus.NEEDS_CHECK]
  * only, their lyrics compared ([app.lyrify.lyrics.Candidates.offered]). [declined] stays once set. A status only a
  * lookup gives ([LOOKUP_STATUSES]) carries this version's [LOOKUP_REV]; any other keeps the one before. [plainInTags]
- * and [retime] are kept for [LyricsStatus.PLAIN_ONLY], and through the AI's statuses from the entry before.
+ * and [retime] are kept for [LyricsStatus.PLAIN_ONLY], and through the AI's statuses from the entry before. [unasked]: a
+ * PLAIN_ONLY of the file's own lyrics while LRCLIB could not be asked, which asks it again after
+ * [Retry.FIRST_MISS_RECHECK_AFTER_MS].
  */
 fun recorded(
     previous: LedgerEntry?,
@@ -359,6 +364,7 @@ fun recorded(
     declined: Boolean = false,
     plainInTags: Boolean = false,
     retime: Boolean = false,
+    unasked: Boolean = false,
 ): LedgerEntry {
     // Failures in a row: lookups for ERROR, AI runs for AI_FAILED.
     val counted = status == LyricsStatus.ERROR || status == LyricsStatus.AI_FAILED
@@ -388,7 +394,7 @@ fun recorded(
             // A miss after a miss waits the 30 days; a first one, a week.
             LyricsStatus.NOT_FOUND, LyricsStatus.UNIDENTIFIED ->
                 now + if (previous?.status in MISSES) Retry.RECHECK_AFTER_MS else Retry.FIRST_MISS_RECHECK_AFTER_MS
-            LyricsStatus.PLAIN_ONLY,
+            LyricsStatus.PLAIN_ONLY -> now + if (unasked) Retry.FIRST_MISS_RECHECK_AFTER_MS else Retry.RECHECK_AFTER_MS
             LyricsStatus.INSTRUMENTAL,
             LyricsStatus.DURATION_MISMATCH,
             LyricsStatus.NEEDS_CHECK,

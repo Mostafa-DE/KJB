@@ -650,13 +650,22 @@ class LyricsPipeline(
                     val verdict = if (queries.isEmpty()) Verdict(LyricsStatus.UNIDENTIFIED) else verdict(result.match, track.durationMs / MS_PER_SECOND)
                     settle(track, previous, verdict, result, queries, lane)
                 }
-            is Lookup.Failed -> busy(previous, track, result.cause)
+            is Lookup.Failed -> busy(previous, track, result.cause, plainInTags = inTags != null)
         }
     }
 
-    private suspend fun busy(previous: LedgerEntry?, track: LocalTrack, cause: String): Processed {
+    /**
+     * LRCLIB could not be asked: an error, tried again soon ([Retry.errorDelayMs]). With [plainInTags], the plain lyrics
+     * in the file's own tags stand meanwhile, as when LRCLIB has none, and LRCLIB is asked again in a week.
+     */
+    private suspend fun busy(previous: LedgerEntry?, track: LocalTrack, cause: String, plainInTags: Boolean = false): Processed {
         log("lyrics: LRCLIB unavailable ($cause)")
-        return Processed(outcome(previous, track, LyricsStatus.ERROR), lrclibBusy = true)
+        val status = if (plainInTags) {
+            outcome(previous, track, LyricsStatus.PLAIN_ONLY, durationMatched = true, plainInTags = true, unasked = true)
+        } else {
+            outcome(previous, track, LyricsStatus.ERROR)
+        }
+        return Processed(status, lrclibBusy = true)
     }
 
     /**
@@ -967,10 +976,12 @@ class LyricsPipeline(
         declined: Boolean = false,
         plainInTags: Boolean = false,
         retime: Boolean = false,
+        unasked: Boolean = false,
     ): Boolean {
         val entry = recorded(
             previous, track, status, lrclibId, clock(), durationMatched, sha256, size, source = source, agreement = agreement,
             aiReason = aiReason, candidates = candidates, declined = declined, plainInTags = plainInTags, retime = retime,
+            unasked = unasked,
         )
         val stored = ledger.put(entry)
         log("lyrics: $status${if (stored) "" else ", not stored"}")
@@ -1023,10 +1034,11 @@ class LyricsPipeline(
         candidates: List<Candidate> = emptyList(),
         plainInTags: Boolean = false,
         retime: Boolean = false,
+        unasked: Boolean = false,
     ): LyricsStatus {
         record(
             previous, track, status, lrclibId, durationMatched, agreement = agreement, aiReason = aiReason, candidates = candidates,
-            plainInTags = plainInTags, retime = retime,
+            plainInTags = plainInTags, retime = retime, unasked = unasked,
         )
         return status
     }

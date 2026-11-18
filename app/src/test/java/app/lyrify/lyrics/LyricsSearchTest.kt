@@ -2,6 +2,7 @@ package app.lyrify.lyrics
 
 import app.lyrify.data.LyricsSource
 import app.lyrify.data.LyricsStatus
+import app.lyrify.data.Retry
 import app.lyrify.data.SharedWrites
 import app.lyrify.library.ArtistSplitter
 import app.lyrify.overnight.AiQueue
@@ -181,6 +182,22 @@ class LyricsSearchTest {
         assertTrue(client.searches.none { it.artist == null })
         assertFalse(sidecar(track).exists())
         assertTrue(AiQueue.job(entry).times)
+    }
+
+    @Test
+    fun `plain lyrics in the file stand when LRCLIB cannot be asked, and LRCLIB is asked again a week later`() = runTest {
+        val track = audio("a.mp3", "Fernlight", "Clea Moss", withPlain())
+        client.onGet = { LrclibResult.Transient("offline") }
+        client.onSearch = { LrclibResult.Transient("offline") }
+
+        val processed = pipeline().process(track)
+
+        assertEquals(LyricsStatus.PLAIN_ONLY, processed?.status)
+        assertTrue(processed!!.lrclibBusy)
+        val entry = ledger[track.path]!!
+        assertTrue(entry.plainInTags)
+        assertTrue(AiQueue.job(entry).times)
+        assertEquals(entry.updatedAt + Retry.FIRST_MISS_RECHECK_AFTER_MS, entry.nextAttemptAt)
     }
 
     @Test
