@@ -30,7 +30,7 @@ import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.extractor.mp4.Mp4Extractor
 import app.lyrify.audio.FadeSlot
 import app.lyrify.auto.CoverUris
-import app.lyrify.auto.coverPath
+import app.lyrify.auto.coverUri
 import app.lyrify.audio.LiveEq
 import app.lyrify.library.Song
 import app.lyrify.library.displayTitle
@@ -215,6 +215,9 @@ class GaplessEngine(context: Context, settings: () -> Settings, levels: SongLeve
                 player.replaceMediaItem(edit.at, itemOf(edit.item))
                 if (current) player.seekTo(edit.at, position)
             }
+            // The same files with new details (a cover Covers & tags changed): ExoPlayer takes them in place, as their
+            // uris are the same (canUpdateMediaItem), so the song playing goes on undisturbed.
+            is Edit.Refresh -> player.replaceMediaItems(edit.at, edit.at + edit.items.size, edit.items.map(itemOf))
         }
     }
 
@@ -347,7 +350,8 @@ fun mediaItemOf(projected: Projected, settings: LibrarySettings, covers: CoverUr
 /**
  * What a song shows on the session and in the browse tree. Its cover is a uri of KJB's cover provider ([covers]): by
  * MediaStore id and signed, never a path, and KJB's default cover for a song without one, so Android Auto (which cannot
- * read MediaStore's audio uris) and the notification always have one. Never artwork bytes.
+ * read MediaStore's audio uris) and the notification always have one; a cover Covers & tags changed is a new uri
+ * ([coverUri]). Never artwork bytes.
  */
 @OptIn(UnstableApi::class)
 fun metadataOf(song: Song, settings: LibrarySettings, covers: CoverUris): MediaMetadata = MediaMetadata.Builder()
@@ -360,6 +364,6 @@ fun metadataOf(song: Song, settings: LibrarySettings, covers: CoverUris): MediaM
     .setReleaseYear(song.year)
     .setGenre(song.genre)
     .setDurationMs(song.durationMs.takeIf { it > 0 })
-    .setArtworkUri(covers.of(coverPath(song)))
+    .setArtworkUri(coverUri(covers, song))
     .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
     .build()

@@ -231,6 +231,35 @@ class WidgetTest {
         assertEquals(listOf("42", "42"), reads)
     }
 
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `a cover Covers & tags changed is read again at once, for the song playing only`() = runTest(UnconfinedTestDispatcher()) {
+        // The state carries the version of the song playing's cover (CoverVersions), and only that song's.
+        val changed = loaded(1, playing = true).copy(coverVersion = 2)
+        assertEquals(changed, widgetState(playingSecond, library, playing = true, favourites = emptyList(), settings, versions = mapOf(refs[1].path to 2, refs[0].path to 5)))
+        assertEquals(loaded(1, playing = true), widgetState(playingSecond, library, playing = true, favourites = emptyList(), settings, versions = mapOf(refs[0].path to 5)))
+
+        // The cover read before the change is read again, then kept as any cover read.
+        val reads = mutableListOf<String>()
+        val read: suspend (String) -> CoverRead? = { reads += it; CoverRead.NoArt }
+        val before = Widgets.withCover(loaded(1, playing = true), Shown(WidgetState.Empty), now = 1_000, read)
+        val after = Widgets.withCover(changed, before, now = 1_001, read)
+        Widgets.withCover(changed.copy(playing = false), after, now = 1_002, read)
+        assertEquals(listOf("42", "42"), reads)
+
+        // The widgets are pushed the new state when the song playing's cover changes, not another song's.
+        val versions = MutableStateFlow<Map<String, Int>>(emptyMap())
+        val pushed = mutableListOf<WidgetState>()
+        val job = launch {
+            widgetStates(MutableStateFlow(playingSecond), MutableStateFlow(library), MutableStateFlow(true), MutableStateFlow(emptyList()), MutableStateFlow(settings), versions)
+                .collect { pushed += it }
+        }
+        versions.value = mapOf(refs[0].path to 1)
+        versions.value = mapOf(refs[0].path to 1, refs[1].path to 2)
+        assertEquals(listOf(loaded(1, playing = true), changed), pushed)
+        job.cancel()
+    }
+
     @Test
     fun `a song with no art keeps the default cover, and is read once more at the first update a minute on`() = runTest {
         val reads = mutableListOf<String>()

@@ -49,6 +49,12 @@ sealed interface Edit {
 
     /** The song at [at] is [item] at another path (its file moved): the player reads it from there, at the same place. */
     data class Replace(val at: Int, val item: Projected) : Edit
+
+    /**
+     * The songs side by side from [at] are [items] again, the same songs from the same files with new details (a cover
+     * Covers & tags changed): the player takes them in place, and the song playing goes on undisturbed.
+     */
+    data class Refresh(val at: Int, val items: List<Projected>) : Edit
 }
 
 /**
@@ -198,6 +204,32 @@ fun plan(from: List<Long>, to: List<Projected>, playing: Long?, paths: Map<Long,
 }
 
 /**
+ * The songs of [to] whose cover changed since the player was handed them ([before] and [now]: each song's cover version
+ * then and now, by uid, 0 left out), handed again as runs of songs side by side ([Edit.Refresh]) at their places in [to],
+ * once [planned] is applied: a song [planned] brings in or replaces is handed with its cover as it is now. More runs than
+ * fit in [MAX_EDITS] beside [planned] are one run, from the first to the last, the songs between taken as they are.
+ */
+fun refreshes(to: List<Projected>, before: Map<Long, Int>, now: Map<Long, Int>, planned: List<Edit>): List<Edit.Refresh> {
+    if (before.isEmpty() && now.isEmpty()) return emptyList()
+    val fresh = planned.flatMapTo(HashSet()) { edit ->
+        when (edit) {
+            is Edit.Insert -> edit.items.map { it.uid }
+            is Edit.Replace -> listOf(edit.item.uid)
+            else -> emptyList()
+        }
+    }
+    val changed = to.indices.filter { at -> to[at].uid.let { uid -> before[uid] != now[uid] && uid !in fresh } }
+    if (changed.isEmpty()) return emptyList()
+    val runs = mutableListOf<IntRange>()
+    for (at in changed) {
+        val last = runs.lastOrNull()
+        if (last != null && last.last == at - 1) runs[runs.lastIndex] = last.first..at else runs += at..at
+    }
+    val whole = if (runs.size > maxOf(1, MAX_EDITS - planned.size)) listOf(changed.first()..changed.last()) else runs
+    return whole.map { run -> Edit.Refresh(run.first, to.subList(run.first, run.last + 1).toList()) }
+}
+
+/**
  * What the queue bridge, place saving and play counting need from a player: its songs by uid, the current one, the
  * position, and the changes. The engine implements it; JVM tests use a fake. Main thread only.
  */
@@ -224,18 +256,22 @@ interface PlayerPort {
 /**
  * Applies the queue model to the player ([sync] on every change of the book or the library): another queue is loaded at
  * its place; a change to the queue playing reaches the player as a few edits ([plan]), however large, so the song
- * playing never stops; a song whose file moved is replaced with its new path ([Edit.Replace]); a jump in the book
- * ([QueueBook.jumps]) moves the player to the current song at its position. A stop in the book ([QueueBook.stops]: the
- * song playing went to the trash with none after it) stops the player ([stop]) before any of that, so it waits where
+ * playing never stops; a song whose file moved is replaced with its new path ([Edit.Replace]), and one whose cover
+ * changed ([coverVersion]: its version in this process, by path) is handed again in place ([refreshes]); a jump in the
+ * book ([QueueBook.jumps]) moves the player to the current song at its position. A stop in the book ([QueueBook.stops]:
+ * the song playing went to the trash with none after it) stops the player ([stop]) before any of that, so it waits where
  * the queue does. The player moving on by itself comes back through [QueueBook.at], which leaves the player as it is.
  */
-class QueueBridge(private val port: PlayerPort, private val stop: () -> Unit = {}) {
+class QueueBridge(private val port: PlayerPort, private val coverVersion: (String) -> Int = { 0 }, private val stop: () -> Unit = {}) {
     private var loadedId: String? = null
     private var jumps: Long = 0
     private var stops: Long = 0
 
     /** The path the player was handed for each song it holds, by uid. */
     private var paths: Map<Long, String> = emptyMap()
+
+    /** The cover version the player was handed for each song it holds, by uid; 0 left out. */
+    private var versions: Map<Long, Int> = emptyMap()
 
     fun sync(book: QueueBook, find: (SongRef) -> Song?) {
         val queue = book.current
@@ -244,9 +280,12 @@ class QueueBridge(private val port: PlayerPort, private val stop: () -> Unit = {
             loadedId = null
             stops = book.stops
             paths = emptyMap()
+            versions = emptyMap()
             return
         }
         val projected = projection(queue, find)
+        // Read before any song is handed over: a cover changed meanwhile is handed again at the next sync.
+        val covers = coversOf(projected)
         val start = startOf(queue, projected)
         val position = if (start >= 0 && projected[start].uid == queue.current?.uid) queue.positionMs else 0
         if (queue.id != loadedId) {
@@ -255,6 +294,7 @@ class QueueBridge(private val port: PlayerPort, private val stop: () -> Unit = {
             jumps = book.jumps
             stops = book.stops
             paths = projected.associate { it.uid to it.song.path }
+            versions = covers
             return
         }
         if (book.stops != stops) {
@@ -267,15 +307,22 @@ class QueueBridge(private val port: PlayerPort, private val stop: () -> Unit = {
         if (plan == null) {
             port.load(projected, start, position)
             jumps = book.jumps
+            versions = covers
             return
         }
-        if (plan.isNotEmpty()) port.applyAll(plan)
+        val edits = plan + refreshes(projected, versions, covers, plan)
+        versions = covers
+        if (edits.isNotEmpty()) port.applyAll(edits)
         val lost = playing != null && projected.none { it.uid == playing }
         if (book.jumps != jumps || lost) {
             jumps = book.jumps
             if (start >= 0) port.seek(start, position)
         }
     }
+
+    /** The cover version of each of [projected] that is not 0, by uid. */
+    private fun coversOf(projected: List<Projected>): Map<Long, Int> =
+        projected.mapNotNull { item -> coverVersion(item.song.path).takeIf { it != 0 }?.let { item.uid to it } }.toMap()
 }
 
 /**

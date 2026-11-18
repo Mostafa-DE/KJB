@@ -4,7 +4,6 @@ import androidx.media3.common.C
 import androidx.media3.common.Player
 import app.lyrify.auto.DEFAULT_COVER
 import app.lyrify.auto.coverPath
-import app.lyrify.auto.nodeCover
 import app.lyrify.library.Library
 import app.lyrify.library.Playlist
 import app.lyrify.library.Song
@@ -153,10 +152,10 @@ class OwnPlaybackTest {
         // "Loose Thread" has no MediaStore id: the default cover.
         assertTrue(songNodes.any { it.song!!.ref.mediaStoreId == null })
         (songNodes + LibraryTree.children(LibraryTree.ALBUMS, tree)!!).forEach { node ->
-            assertEquals(node.id, node.cover!!.ref.mediaStoreId?.toString() ?: DEFAULT_COVER, nodeCover(node))
+            assertEquals(node.id, node.cover!!.ref.mediaStoreId?.toString() ?: DEFAULT_COVER, coverPath(node.cover!!))
         }
         // The top lists show the car's own icons, never a cover.
-        LibraryTree.children(LibraryTree.ROOT, tree)!!.forEach { assertNull(nodeCover(it)) }
+        LibraryTree.children(LibraryTree.ROOT, tree)!!.forEach { assertNull(it.cover) }
         // The queue playing, as the session hands it to the notification and the car.
         val queue = projection(book.current, find)
         assertEquals(songs.size, queue.size)

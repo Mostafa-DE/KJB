@@ -68,6 +68,7 @@ import app.lyrify.logFailures
 import app.lyrify.player.PlaybackService
 import app.lyrify.player.PlayerGraph
 import app.lyrify.player.ServicePart
+import app.lyrify.tags.CoverVersions
 import app.lyrify.ui.EXTRA_DESTINATION
 import app.lyrify.ui.MainActivity
 import app.lyrify.ui.heartLabel
@@ -94,8 +95,9 @@ import kotlin.math.roundToInt
 
 /**
  * What the widgets draw: [state], and its own cover read once and sized to each widget's slot ([small], [large]), null
- * without one (KJB's default cover is drawn). [coverOf] is the cover's path ([WidgetState.Loaded.cover]) it was read for:
- * null while no widget is placed, or after a read that failed, so the next update reads it again. [noArtAt] is when a read
+ * without one (KJB's default cover is drawn). [coverOf] is the cover it was read for ([WidgetState.Loaded.coverKey]: its
+ * path, and its version once Covers & tags changed it): null while no widget is placed, or after a read that failed, so
+ * the next update reads it again. [noArtAt] is when a read
  * found no art for it (SystemClock.elapsedRealtime), until it is read once more ([NO_ART_RECHECK_MS]); else null.
  */
 internal class Shown(val state: WidgetState, val small: Bitmap? = null, val large: Bitmap? = null, val coverOf: String? = null, val noArtAt: Long? = null)
@@ -171,18 +173,21 @@ internal object Widgets {
     }
 
     /**
-     * [state] with its cover: [before]'s when it was read for the same song, else [read] now ([thumbnails]); a read that
-     * failed (null) records no path, so the next update reads it again. No art is kept for the song with the time it was
-     * read ([now]), and read once more at the first update [NO_ART_RECHECK_MS] on; what that read finds stays.
+     * [state] with its cover: [before]'s when it was read for the same cover (the song's, at the same version), else [read]
+     * now ([thumbnails]); a read that failed (null) records no cover, so the next update reads it again. No art is kept
+     * for the song with the time it was read ([now]), and read once more at the first update [NO_ART_RECHECK_MS] on; what
+     * that read finds stays.
      */
     internal suspend fun withCover(state: WidgetState, before: Shown, now: Long, read: suspend (String) -> CoverRead?): Shown {
-        val path = (state as? WidgetState.Loaded)?.cover ?: return Shown(state)
-        if (coverToRead(state, before.coverOf, before.noArtAt, now) == null) return Shown(state, before.small, before.large, path, before.noArtAt)
+        val loaded = state as? WidgetState.Loaded
+        val path = loaded?.cover ?: return Shown(state)
+        val key = loaded.coverKey
+        if (coverToRead(state, before.coverOf, before.noArtAt, now) == null) return Shown(state, before.small, before.large, key, before.noArtAt)
         return when (val cover = read(path)) {
             null -> Shown(state)
-            is CoverRead.Own -> Shown(state, cover.small, cover.large, path)
-            // The same path as before: this was the read once more, so no art stays for the song.
-            CoverRead.NoArt -> Shown(state, coverOf = path, noArtAt = now.takeIf { path != before.coverOf })
+            is CoverRead.Own -> Shown(state, cover.small, cover.large, key)
+            // The same cover as before: this was the read once more, so no art stays for the song.
+            CoverRead.NoArt -> Shown(state, coverOf = key, noArtAt = now.takeIf { key != before.coverOf })
         }
     }
 
@@ -237,6 +242,7 @@ class WidgetPart : ServicePart {
                 playing = playing,
                 favourites = LibraryGraph.favourites(context).songs,
                 settings = Lyrify.settings(context).settings.map { it.library },
+                versions = CoverVersions.versions,
             ).collect { state ->
                 try {
                     Widgets.show(context, state)

@@ -14,6 +14,7 @@ import app.lyrify.ui.DESTINATION_PLAYER
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flowOf
 import kotlin.math.roundToInt
 
 /**
@@ -37,16 +38,21 @@ sealed interface WidgetState {
         val cover: String?,
         val playing: Boolean,
         val favourite: Boolean,
-    ) : WidgetState
+        /** Its cover's version in this process ([app.lyrify.tags.CoverVersions]): a cover Covers & tags changed is read again. */
+        val coverVersion: Int = 0,
+    ) : WidgetState {
+        /** What its cover is read for ([coverToRead]): its [cover], and its [coverVersion] once that is not 0. */
+        val coverKey: String? get() = cover?.let { if (coverVersion == 0) it else "$it#$coverVersion" }
+    }
 }
 
 /**
  * The widgets' state from the player's: the current song of the queue playing as the library has it ("Show file names"
- * applies; a song not on the phone shows its file's name, and a file another app opened its own cover), whether the
- * player plays, and whether that song is a favourite. Nothing is loaded without a queue, or before the library is read
- * (the player waits for it too).
+ * applies; a song not on the phone shows its file's name, and a file another app opened its own cover), its cover's
+ * version among the covers' [versions] by path, whether the player plays, and whether that song is a favourite. Nothing
+ * is loaded without a queue, or before the library is read (the player waits for it too).
  */
-fun widgetState(book: QueueBook, library: Library?, playing: Boolean, favourites: List<SongRef>, settings: LibrarySettings): WidgetState {
+fun widgetState(book: QueueBook, library: Library?, playing: Boolean, favourites: List<SongRef>, settings: LibrarySettings, versions: Map<String, Int> = emptyMap()): WidgetState {
     val ref = book.current?.current?.song ?: return WidgetState.Empty
     library ?: return WidgetState.Empty
     val song = library.resolver.find(ref)
@@ -57,13 +63,15 @@ fun widgetState(book: QueueBook, library: Library?, playing: Boolean, favourites
         cover = song?.ref?.mediaStoreId?.toString() ?: openedCoverKey(ref.path),
         playing = playing,
         favourite = favourites.any { it.path == ref.path },
+        coverVersion = song?.let { versions[it.path] } ?: 0,
     )
 }
 
 /**
  * The states to push to the widgets: one each time the song, the play state or the favourite changes (or what the song
- * shows, after a tag edit or "Show file names"), never for the place moving, other queues, or a library read that
- * changes nothing here. There is no progress bar, so the widgets are not updated while a song plays on.
+ * shows, after a tag edit, "Show file names" or a new cover from Covers & tags), never for the place moving, other
+ * queues, another song's cover, or a library read that changes nothing here. There is no progress bar, so the widgets
+ * are not updated while a song plays on.
  */
 fun widgetStates(
     book: Flow<QueueBook>,
@@ -71,7 +79,10 @@ fun widgetStates(
     playing: Flow<Boolean>,
     favourites: Flow<List<SongRef>>,
     settings: Flow<LibrarySettings>,
-): Flow<WidgetState> = combine(book, library, playing, favourites, settings, ::widgetState).distinctUntilChanged()
+    versions: Flow<Map<String, Int>> = flowOf(emptyMap()),
+): Flow<WidgetState> = combine(book, library, playing, favourites, combine(settings, versions, ::Pair)) { queues, songs, on, hearts, (shown, covers) ->
+    widgetState(queues, songs, on, hearts, shown, covers)
+}.distinctUntilChanged()
 
 /** The two widgets: "KJB", 4×1, and "KJB large", 4×2, with the width of their cover's slot. */
 enum class WidgetSize(val coverDp: Int) {
@@ -143,14 +154,16 @@ fun coverDestination(state: WidgetState): String = DESTINATION_PLAYER
 const val NO_ART_RECHECK_MS: Long = 60_000
 
 /**
- * The path of [state]'s cover to read now, given the path a cover was last read for ([readFor]) and, when that read
- * found no art, when it did ([noArtAt], on [now]'s clock); null when there is nothing to read. A read that failed
- * records no path, so the next update tries again; no art is read once more from [NO_ART_RECHECK_MS] after.
+ * The path of [state]'s cover to read now, given the cover one was last read for ([readFor]: its
+ * [WidgetState.Loaded.coverKey], so a cover Covers & tags changed is read again) and, when that read found no art, when
+ * it did ([noArtAt], on [now]'s clock); null when there is nothing to read. A read that failed records no cover, so the
+ * next update tries again; no art is read once more from [NO_ART_RECHECK_MS] after.
  */
 fun coverToRead(state: WidgetState, readFor: String?, noArtAt: Long?, now: Long): String? {
-    val path = (state as? WidgetState.Loaded)?.cover ?: return null
+    val loaded = state as? WidgetState.Loaded ?: return null
+    val path = loaded.cover ?: return null
     val recheck = noArtAt != null && now - noArtAt >= NO_ART_RECHECK_MS
-    return path.takeIf { it != readFor || recheck }
+    return path.takeIf { loaded.coverKey != readFor || recheck }
 }
 
 /** The cover's size in pixels for [size]'s slot on a screen of [density]. */

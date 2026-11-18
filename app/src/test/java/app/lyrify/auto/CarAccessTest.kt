@@ -206,6 +206,30 @@ class CarAccessTest {
     }
 
     @Test
+    fun `a cover Covers & tags changed is a new uri, its version under the same signature check`() {
+        // Version 0 (never changed in this process) keeps the uri every car already keeps the cover under.
+        assertEquals(segments("20"), uris.segments("20", version = 0))
+        // A changed cover: its version is a segment the signature covers, so the lock screen, the car and the widget
+        // read the new cover instead of keeping the old one by its uri.
+        val changed = uris.segments("20", version = 3)
+        assertEquals(listOf("20", "3", uris.sign("20/3")), changed)
+        assertFalse(changed == uris.segments("20", version = 4))
+        assertEquals("20", uris.pathOf(changed))
+        assertEquals(DEFAULT_COVER, uris.pathOf(uris.segments(DEFAULT_COVER, version = 1)))
+        assertEquals("opened-1000-0", uris.pathOf(uris.segments("opened-1000-0", version = 2)))
+        // Another version's signature, the plain path's, a version of another shape, or another key's: nothing.
+        assertNull(uris.pathOf(listOf("20", "4", uris.sign("20/3"))))
+        assertNull(uris.pathOf(listOf("20", "3", uris.sign("20"))))
+        assertNull(uris.pathOf(listOf("20", uris.sign("20/3"))))
+        listOf("0", "03", "-1", "+3", "x", "", "3 ", "1234567890", "３").forEach { version ->
+            assertNull(version, uris.pathOf(listOf("20", version, uris.sign("20/$version"))))
+        }
+        assertNull(uris.pathOf(listOf("..", "3", uris.sign("../3"))))
+        assertNull(CoverUris("app.lyrify.covers", ByteArray(32) { 1 }).pathOf(changed))
+        assertNull(uris.pathOf(changed + "extra"))
+    }
+
+    @Test
     fun `an opened copy's uri names its key and a signature, and opens only a key of that exact shape`() {
         // The key coverPath gives a copy in KJB's cache (openedCoverKey) opens, signed.
         val key = checkNotNull(openedCoverKey("/data/user/0/app.lyrify/cache/opened/1763290000000/12/Paper Harbour.mp3"))

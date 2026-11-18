@@ -52,6 +52,7 @@ class BigQueueTest {
                 is Edit.Insert -> list.addAll(edit.at, edit.items.map { it.uid })
                 is Edit.Move -> list.add(edit.to, list.removeAt(edit.from))
                 is Edit.Replace -> list[edit.at] = edit.item.uid
+                is Edit.Refresh -> Unit
             }
             loaded = list
             val at = if (current == null) -1 else list.indexOf(current)
