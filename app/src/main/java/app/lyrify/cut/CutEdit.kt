@@ -143,13 +143,19 @@ object CutNames {
         }
     }
 
-    /** The cut's file name before its number and extension, from the song's [songFileName]. */
+    /**
+     * The cut's file name before its number and extension, from the song's [songFileName]. A name that already ends in
+     * the mark keeps it as it is; one too long for it is shortened before its mark, never through it.
+     */
     fun base(songFileName: String): String {
         val stem = songFileName.substringBeforeLast('.')
         val safe = ToneEntry.safeName(stem, fallback = "")
-        if (safe.isEmpty()) return FALLBACK
-        val marked = if (safe.endsWith(MARK, ignoreCase = true)) safe else "${shortened(safe, MAX_BASE_BYTES - MARK.length - 1)} $MARK"
-        return shortened(marked, MAX_BASE_BYTES)
+        return when {
+            safe.isEmpty() -> FALLBACK
+            !safe.endsWith(MARK, ignoreCase = true) -> "${shortened(safe, MAX_BASE_BYTES - MARK.length - 1)} $MARK"
+            safe.toByteArray(Charsets.UTF_8).size <= MAX_BASE_BYTES -> safe
+            else -> "${shortened(safe.dropLast(MARK.length).trimEnd(), MAX_BASE_BYTES - MARK.length - 1)} ${safe.takeLast(MARK.length)}"
+        }
     }
 
     /** The [n]th name for a cut of [base]: the first is plain, the next "base (2).m4a". */
@@ -167,12 +173,20 @@ object CutNames {
     fun partName(base: String, n: Int): String = ".${fileName(base, n)}$PART_SUFFIX"
 
     /**
-     * Whether [name] is one [partName] gives: a dot, a cut's [base] (ending in the mark, or the fallback), a number from 2
-     * to [MAX_NUMBER] or none, then `.m4a.part`. Only files with these names are ever removed as a stopped save's.
+     * Whether [name] is one [partName] gives: a dot, a base [base] gives (the fallback, or a name it leaves as it is and
+     * the mark, at most [MAX_BASE_BYTES]), a number from 2 to [MAX_NUMBER] or none, then `.m4a.part`. Only files with these
+     * names are ever removed as a stopped save's.
      */
     fun isPart(name: String): Boolean {
-        val number = PART.matchEntire(name)?.groupValues?.get(2) ?: return false
-        return number.isEmpty() || number.toInt() in 2..MAX_NUMBER
+        val match = PART.matchEntire(name) ?: return false
+        val (base, number) = match.destructured
+        return (number.isEmpty() || number.toInt() in 2..MAX_NUMBER) && (base == FALLBACK || isMarkedBase(base))
+    }
+
+    /** A base ending in the mark that [base] could give: within its bytes, and before the mark a name made safe. */
+    private fun isMarkedBase(base: String): Boolean {
+        val name = base.dropLast(MARK.length).trimEnd()
+        return base.toByteArray(Charsets.UTF_8).size <= MAX_BASE_BYTES && ToneEntry.safeName(name, fallback = "") == name
     }
 
     /** [text] cut to at most [bytes] UTF-8 bytes, whole characters only. */

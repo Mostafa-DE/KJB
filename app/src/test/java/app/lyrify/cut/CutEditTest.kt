@@ -239,9 +239,28 @@ class CutEditTest {
             ".Paper Lanterns (cut).m4a.part.bak",
             "..Paper Lanterns (cut).m4a.part",
             ".Paper Lanterns (cut)(2).m4a.part",
+            // Bases KJB never makes: characters a file name of KJB's never holds, spaces it tidies, too long.
+            ".Paper:Lanterns (cut).m4a.part",
+            ".Paper\u200bLanterns (cut).m4a.part",
+            ".Paper  Lanterns (cut).m4a.part",
+            ".Paper\tLanterns (cut).m4a.part",
+            ". Paper Lanterns (cut).m4a.part",
+            "." + "\u30a2".repeat(70) + " (cut).m4a.part",
         )) {
             assertFalse(name, CutNames.isPart(name))
         }
+    }
+
+    @Test
+    fun `a long name that already ends in (cut) keeps its mark when shortened, so its part file reads as KJB's`() {
+        // 94 three-byte characters and the mark: 288 bytes.
+        val base = CutNames.base("\u30a2".repeat(94) + " (cut).mp3")
+        assertTrue(base, base.endsWith(" (cut)"))
+        assertTrue("${base.toByteArray().size}", base.toByteArray().size <= 200)
+        assertTrue(CutNames.isPart(CutNames.partName(base, CutNames.MAX_NUMBER)))
+        // The mark keeps its case, and a short name stays as it is.
+        assertTrue(CutNames.base("\u30a2".repeat(94) + " (Cut).flac").endsWith(" (Cut)"))
+        assertEquals("Paper Lanterns(cut)", CutNames.base("Paper Lanterns(cut).ogg"))
     }
 
     @Test

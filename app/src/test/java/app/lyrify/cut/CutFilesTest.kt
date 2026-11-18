@@ -33,6 +33,9 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.file.AccessDeniedException
 import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.attribute.BasicFileAttributeView
+import java.nio.file.attribute.FileTime
 import kotlin.math.PI
 import kotlin.math.sin
 
@@ -338,6 +341,19 @@ class CutFilesTest {
 
         kept.forEach { assertTrue(it.path, it.exists()) }
         assertTrue(folderNamedLikeOne.isDirectory)
+    }
+
+    @Test
+    fun `a link named like a part file is never swept, nor what it points to`() {
+        val s = Setup()
+        val target = leftOver(s.music, "Night Ferry.mp3")
+        val link = Files.createSymbolicLink(File(s.album, ".Paper Lanterns (cut).m4a.part").toPath(), target.toPath())
+        val old = FileTime.fromMillis(System.currentTimeMillis() - 2 * DAY_MS)
+        Files.getFileAttributeView(link, BasicFileAttributeView::class.java, LinkOption.NOFOLLOW_LINKS).setTimes(old, null, null)
+        s.files.sweep(s.song.path)
+
+        assertTrue(Files.isSymbolicLink(link))
+        assertEquals("half a cut", target.readText())
     }
 
     @Test
