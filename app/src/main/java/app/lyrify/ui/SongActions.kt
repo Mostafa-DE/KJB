@@ -323,6 +323,13 @@ class SongActions(private val playback: PlaybackCommands, private val playlists:
         return Outcome(Said.Favourites(on)) { favourites.setCollection(collection, !on) }
     }
 
+    /** An artist's heart taken off with a whole tag's that stood for them ([artistHeartOff]). Undo puts both back. */
+    suspend fun favourite(change: HeartChange): Outcome {
+        val stored = change.off.all { favourites.setCollection(it, false) } && change.on.all { favourites.setCollection(it, true) }
+        if (!stored) return Outcome(Said.NotSaved)
+        return Outcome(Said.Favourites(false)) { change.on.all { favourites.setCollection(it, false) } && change.off.all { favourites.setCollection(it, true) } }
+    }
+
     // A playlist's Undo changes the playlist as it is then, never putting back a copy from before: a change made while the
     // toast was up (another page, an import, songs moved to the trash) stays.
 
@@ -648,7 +655,8 @@ fun SongSheetsHost(sheets: SongSheets, ui: LibraryUi, onActed: () -> Unit = {}) 
                     song = song,
                     ui = ui,
                     rows = rows,
-                    onArtist = song.artist?.takeIf { library.artist(it) != null }?.let { name -> { sheets.close(); nav.open(Page.Artist(name), SheetReturn(at, step)) } },
+                    artists = library.artistsOf(song).map { it.name },
+                    onArtist = { name -> sheets.close(); nav.open(Page.Artist(name), SheetReturn(at, step)) },
                     onAlbum = albumPageOf(song, library)?.let { page -> { sheets.close(); nav.open(page, SheetReturn(at, step)) } },
                     bookmarks = SongSheetSlots.bookmarks?.let { slot -> { slot(song.ref, sheets::close) } },
                     onDismiss = sheets::close,

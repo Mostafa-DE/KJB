@@ -113,6 +113,8 @@ data class LibrarySettings(
      * phone and their plays stay counted. In the order hidden, each once.
      */
     val hiddenSongs: List<SongRef> = emptyList(),
+    /** "Artists with several names": how the lists read a tag that names several artists. */
+    val artistSplit: ArtistSplit = ArtistSplit(),
 ) {
     /** [list]'s order: as the user left it, else its default. */
     fun sortOf(list: SongList): ListSort = listSorts[list] ?: list.default
@@ -120,6 +122,23 @@ data class LibrarySettings(
     companion object {
         /** Songs, Playlists, Albums, Artists, Folders and Books shown; Genres hidden. */
         val DEFAULT_TABS: List<LibraryTabSetting> = LibraryTab.entries.map { LibraryTabSetting(it, shown = it != LibraryTab.GENRES) }
+    }
+}
+
+/**
+ * "Artists with several names" (user feedback 2026-11-17, item 18): a tag such as "Kit Calloway feat. Mira Solen" puts
+ * the song on both artists' pages, for the lists, pages and Search only; KJB never writes a tag for it. Each of the
+ * [separators] splits a tag, a mark (";") wherever it is, a word ("feat.") only as a whole word (library/ArtistNames.kt).
+ * The [exceptions] are names never split ("AC/DC"). Commas split by default and "&" does not (lead's default, 2026-11-18).
+ */
+data class ArtistSplit(
+    val enabled: Boolean = true,
+    val separators: List<String> = DEFAULT_SEPARATORS,
+    val exceptions: List<String> = DEFAULT_EXCEPTIONS,
+) {
+    companion object {
+        val DEFAULT_SEPARATORS: List<String> = listOf(";", "/", ",", "feat.", "ft.", "featuring")
+        val DEFAULT_EXCEPTIONS: List<String> = listOf("AC/DC", "Tyler, The Creator")
     }
 }
 
@@ -284,8 +303,8 @@ enum class FavouritesTab { SONGS, ALBUMS, ARTISTS, FOLDERS, PLAYLISTS }
  * as a missing one does (the default, Long songs), while the other values are kept; from version 4 every value is kept.
  * A file without a version reads as this version. A backup's settings are read the same way over the
  * phone's own ([decode]'s base), so what the backup does not carry stays as the phone has it. The sort keys, the song
- * pages' orders, the hidden songs and Display came later as new keys (features 2026-11-15): a file without them reads
- * as the defaults, a page order this version cannot use as that page's default.
+ * pages' orders, the hidden songs and Display came later as new keys (features 2026-11-15), and "Artists with several
+ * names" (3.1): a file without them reads as the defaults, a page order this version cannot use as that page's default.
  */
 object SettingsJson {
     const val VERSION: Int = 4
@@ -324,6 +343,9 @@ object SettingsJson {
                                 it.listSorts.entries.associate { (list, sort) -> list.name to obj("key" to (sort.key?.name ?: OWN_ORDER), "reversed" to sort.reversed) },
                             ),
                             "hiddenSongs" to JsonArray(it.hiddenSongs.map { song -> obj("path" to song.path, "id" to song.mediaStoreId?.let(::JsonPrimitive)).withoutNulls() }),
+                            "artistSplit" to it.artistSplit.let { split ->
+                                obj("enabled" to split.enabled, "separators" to JsonArray(split.separators.map(::JsonPrimitive)), "exceptions" to JsonArray(split.exceptions.map(::JsonPrimitive)))
+                            },
                         ),
                     )
                 },
@@ -409,6 +431,7 @@ object SettingsJson {
                     artistReversed = it.flag("artistReversed", d.library.artistReversed),
                     listSorts = (it["listSorts"] as? JsonObject)?.let(::listSorts) ?: d.library.listSorts,
                     hiddenSongs = (it["hiddenSongs"] as? JsonArray)?.let(::hiddenSongs) ?: d.library.hiddenSongs,
+                    artistSplit = (it["artistSplit"] as? JsonObject)?.let { split -> artistSplit(split, d.library.artistSplit) } ?: d.library.artistSplit,
                 )
             } ?: d.library,
             lyrics = root.section("lyrics")?.let {
@@ -479,6 +502,16 @@ object SettingsJson {
         val path = song["path"]?.text()?.takeIf(String::isNotBlank) ?: return@mapNotNull null
         SongRef(path, (song["id"] as? JsonPrimitive)?.takeUnless { it.isString }?.longOrNull)
     }.distinctBy { it.path }
+
+    /**
+     * "Artists with several names" as stored: a list missing or not a list reads as [base]'s, an empty one is the user's
+     * (nothing splits); its entries trimmed, each once in any case, only text.
+     */
+    private fun artistSplit(stored: JsonObject, base: ArtistSplit): ArtistSplit {
+        fun names(key: String, default: List<String>): List<String> =
+            (stored[key] as? JsonArray)?.mapNotNull { it.text()?.trim()?.takeIf(String::isNotEmpty) }?.distinctBy { it.lowercase() } ?: default
+        return ArtistSplit(stored.flag("enabled", base.enabled), names("separators", base.separators), names("exceptions", base.exceptions))
+    }
 
     /** A page's own order (an album's tracks, a playlist's custom order) as stored. */
     private const val OWN_ORDER: String = "OWN"

@@ -49,8 +49,8 @@ sealed interface LibraryState {
  * The current [Library] for every screen, the player and the play counter. Songs are read on [io] once, then again
  * only when MediaStore reports a change to them, after [DEBOUNCE_MS] without another (it reports a burst while it scans),
  * and only if its version and generation moved ([LibrarySource.stamp]). The library is regrouped on [compute] when the
- * songs, the user's filters ("Skip short clips", "Folders to skip", "Hidden songs") or their book marks change; other
- * settings change nothing here. A read that fails keeps the library as it was. The log gets counts, times and exception
+ * songs, the user's filters ("Skip short clips", "Folders to skip", "Hidden songs"), "Artists with several names" or
+ * their book marks change; other settings change nothing here. A read that fails keeps the library as it was. The log gets counts, times and exception
  * names only.
  */
 @OptIn(FlowPreview::class, ExperimentalCoroutinesApi::class)
@@ -93,7 +93,8 @@ class LibraryRepository(
     val state: StateFlow<LibraryState> = combine(
         songs,
         settings.distinctUntilChanged { a, b ->
-            a.playback.skipShortClips == b.playback.skipShortClips && a.library.foldersToSkip == b.library.foldersToSkip && a.library.hiddenSongs == b.library.hiddenSongs
+            a.playback.skipShortClips == b.playback.skipShortClips && a.library.foldersToSkip == b.library.foldersToSkip &&
+                a.library.hiddenSongs == b.library.hiddenSongs && a.library.artistSplit == b.library.artistSplit
         },
         marks.distinctUntilChanged(),
     ) { all, filters, books -> Triple(all, filters, books) }

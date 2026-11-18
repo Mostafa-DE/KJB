@@ -8,14 +8,22 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -33,22 +41,29 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import app.lyrify.R
+import app.lyrify.library.Library
 import app.lyrify.library.Song
 import app.lyrify.library.albumKey
 import app.lyrify.library.sortSongs
@@ -65,6 +80,7 @@ import app.lyrify.tags.TagEdits
 import app.lyrify.tags.TagField
 import app.lyrify.tags.TagForm
 import app.lyrify.tags.TagPicture
+import app.lyrify.tags.TagSuggestions
 import app.lyrify.tags.TagsGraph
 import app.lyrify.tags.lookup.AlbumLookup
 import app.lyrify.tags.lookup.AndroidImageCodec
@@ -77,6 +93,8 @@ import app.lyrify.tags.lookup.Proposal
 import app.lyrify.tags.pickedCover
 import app.lyrify.tags.wroteAny
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerializationException
@@ -113,6 +131,7 @@ fun EditTagsView(view: FullScreen.EditTags) {
     var asking by remember { mutableStateOf<List<SongPlan>?>(null) }
     var saving by remember { mutableStateOf(false) }
     val plans = remember(songs, form, cover, opus) { opus?.let { TagEdits.songs(songs, form, cover, it) }.orEmpty() }
+    val suggestions = rememberTagSuggestions(library)
 
     EditorFrame(
         title = stringResource(R.string.lib_edit_tags),
@@ -139,7 +158,7 @@ fun EditTagsView(view: FullScreen.EditTags) {
             Sentence(pluralStringResource(R.plurals.edit_selected, songs.size, songs.size))
         }
         val field: @Composable (TagField, Modifier) -> Unit = { which, modifier ->
-            TagInput(which, form, problems, modifier) {
+            TagInput(which, form, problems, suggestions, modifier) {
                 form = form.with(which, it)
                 problems = problems - which
             }
@@ -201,6 +220,7 @@ fun EditAlbumView(view: FullScreen.EditAlbum) {
     var asking by remember { mutableStateOf(false) }
     var saving by remember { mutableStateOf(false) }
     val plans = remember(songs, form, cover, numberInOrder, opus) { opus?.let { TagEdits.album(songs, form, cover, numberInOrder, it) }.orEmpty() }
+    val suggestions = rememberTagSuggestions(library)
 
     EditorFrame(
         title = stringResource(R.string.lib_edit_album),
@@ -223,7 +243,7 @@ fun EditAlbumView(view: FullScreen.EditAlbum) {
         CoverEditor(songs, opus.orEmpty(), cover, { cover = it }, album = form.value(TagField.ALBUM), artist = form.value(TagField.ALBUM_ARTIST).ifBlank { album.artist.orEmpty() })
         Sentence(stringResource(R.string.edit_album_sentence))
         val field: @Composable (TagField, Modifier) -> Unit = { which, modifier ->
-            TagInput(which, form, problems, modifier) {
+            TagInput(which, form, problems, suggestions, modifier) {
                 form = form.with(which, it)
                 problems = problems - which
             }
@@ -295,7 +315,13 @@ private fun EditorFrame(title: String, edited: Boolean, ready: Boolean, saving: 
     ) { padding ->
         Column(
             verticalArrangement = Arrangement.spacedBy(14.dp),
-            modifier = Modifier.padding(padding).verticalScroll(rememberScrollState()).padding(start = ScreenPadding, end = ScreenPadding, top = 4.dp, bottom = 8.dp),
+            // Above the keyboard, so a field being typed in and its suggestions scroll into sight.
+            modifier = Modifier
+                .padding(padding)
+                .consumeWindowInsets(padding)
+                .imePadding()
+                .verticalScroll(rememberScrollState())
+                .padding(start = ScreenPadding, end = ScreenPadding, top = 4.dp, bottom = 8.dp),
         ) {
             if (!access) AccessLine()
             content()
@@ -373,26 +399,84 @@ private fun Changes(plans: List<SongPlan>, lines: List<ChangeLine>) {
     if (lines.isNotEmpty()) ChangeList(lines)
 }
 
-/** One field: its label above, "Keep as is" while the songs do not share it, its problem under it. */
+/**
+ * One field: its label above, "Keep as is" while the songs do not share it, its problem under it; while it is typed in,
+ * the library's values that match ([suggestions], for the fields whose values repeat) as chips under it, a tap filling
+ * it with the caret after the value and the keyboard up.
+ */
 @Composable
-private fun TagInput(field: TagField, form: TagForm, problems: Map<TagField, FieldProblem>, modifier: Modifier, onChange: (String) -> Unit) {
+private fun TagInput(field: TagField, form: TagForm, problems: Map<TagField, FieldProblem>, suggestions: TagSuggestions?, modifier: Modifier, onChange: (String) -> Unit) {
     val problem = problems[field]
+    val number = field.isNumber || field == TagField.YEAR
+    val length = if (number) NUMBER_LENGTH else TEXT_LENGTH
+    val value = form.value(field)
+    // The form keeps the text; this the caret and the keyboard's word in progress. A value set here (a suggestion, a
+    // text cut to length) starts with the caret at its end.
+    var typed by remember { mutableStateOf(TextFieldValue(value, TextRange(value.length))) }
+    val shown = if (typed.text == value) typed else TextFieldValue(value, TextRange(value.length))
+    var focused by remember { mutableStateOf(false) }
+    val offered = remember(suggestions, field, value, focused) { if (focused) suggestions?.of(field, value).orEmpty() else emptyList() }
+    // The chips scroll into sight as they appear, and again once the keyboard has come up under them (not on each of its
+    // frames: each one starts the wait over).
+    val reveal = remember { BringIntoViewRequester() }
+    val keyboard = WindowInsets.ime
+    val density = LocalDensity.current
+    val showing = offered.isNotEmpty()
+    LaunchedEffect(showing) {
+        if (showing) {
+            snapshotFlow { keyboard.getBottom(density) }.collectLatest {
+                delay(KEYBOARD_SETTLE_MS)
+                reveal.bringIntoView()
+            }
+        }
+    }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         LyrifyField(
-            value = form.value(field),
-            onValueChange = { onChange(it.take(if (field.isNumber || field == TagField.YEAR) NUMBER_LENGTH else TEXT_LENGTH)) },
+            value = shown,
+            onValueChange = { next ->
+                val changed = next.text != shown.text
+                typed = next
+                if (changed) onChange(next.text.take(length))
+            },
             label = stringResource(field.label),
             placeholder = if (field in form.mixed) stringResource(R.string.edit_keep_as_is) else null,
             isError = problem != null,
-            keyboardOptions = if (field.isNumber || field == TagField.YEAR) {
-                KeyboardOptions(keyboardType = KeyboardType.Number)
-            } else {
-                KeyboardOptions(capitalization = KeyboardCapitalization.Words)
-            },
-            modifier = Modifier.fillMaxWidth(),
+            keyboardOptions = if (number) KeyboardOptions(keyboardType = KeyboardType.Number) else KeyboardOptions(capitalization = KeyboardCapitalization.Words),
+            modifier = Modifier.fillMaxWidth().onFocusChanged { focused = it.isFocused },
         )
         if (problem != null) {
             Text(stringResource(problem.words(field)), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(start = 16.dp))
+        }
+        if (offered.isNotEmpty()) {
+            SuggestionChips(offered, Modifier.bringIntoViewRequester(reveal)) { picked ->
+                val text = picked.take(length)
+                typed = TextFieldValue(text, TextRange(text.length))
+                onChange(text)
+            }
+        }
+    }
+}
+
+/** Edit tags' suggestions for a field, built off the main thread once per library; null until built. */
+@Composable
+private fun rememberTagSuggestions(library: Library): TagSuggestions? {
+    val built by produceState<TagSuggestions?>(null, library) { value = withContext(Dispatchers.Default) { TagSuggestions.of(library) } }
+    return built
+}
+
+/** The values offered under a field being typed in: chips in a row that scrolls sideways, each read as "Use" its name. */
+@Composable
+private fun SuggestionChips(found: List<TagSuggestions.Suggestion>, modifier: Modifier, onPick: (String) -> Unit) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+    ) {
+        found.forEach { suggestion ->
+            val use = stringResource(R.string.edit_suggestion_use, suggestion.name)
+            LyrifyChip(selected = false, onClick = { onPick(suggestion.value) }, role = Role.Button, modifier = Modifier.semantics { contentDescription = use }) {
+                Text(suggestion.name, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = SUGGESTION_MAX))
+            }
         }
     }
 }
@@ -681,6 +765,8 @@ private val FORM_SAVER: Saver<TagForm, String> = Saver(
 )
 
 private val COVER = 124.dp
+private val SUGGESTION_MAX = 220.dp
+private const val KEYBOARD_SETTLE_MS = 100L
 private const val TEXT_LENGTH = 200
 private const val NUMBER_LENGTH = 4
 private const val PHOTO_MAX_BYTES = 64 * 1024 * 1024

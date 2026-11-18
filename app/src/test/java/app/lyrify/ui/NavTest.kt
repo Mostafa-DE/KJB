@@ -39,6 +39,7 @@ class NavTest {
         assertEquals(DockTab.TOOLS, start.open(Page.Settings).tab)
         assertEquals(DockTab.TOOLS, start.open(Page.FoldersToSkip).tab)
         assertEquals(DockTab.TOOLS, start.open(Page.HiddenSongs).tab)
+        assertEquals(DockTab.TOOLS, start.open(Page.SplitArtists).tab)
         assertEquals(DockTab.TOOLS, start.open(Page.Licences).tab)
         assertEquals(DockTab.TOOLS, NavState.start(DockTab.LIBRARY).open(Page.Licence("Media3")).tab)
         assertEquals(DockTab.LIBRARY, NavState.start(DockTab.TOOLS).open(Page.Songs(status = LyricsStatus.AI_ALIGNED)).tab)
@@ -515,7 +516,7 @@ class NavTest {
             .show(FullScreen.EditTags(listOf(SongRef("/music/a.mp3", 7), SongRef("/music/b.flac"))))
         assertEquals(nav, NavState.decode(nav.encode()))
         val every = listOf(
-            Page.Songs(SongGroup.NO_LYRICS, LyricsStatus.NOT_FOUND), Page.FoldersToSkip, Page.HiddenSongs, Page.Folder("Music/Rips"), Page.Genre("Folk"),
+            Page.Songs(SongGroup.NO_LYRICS, LyricsStatus.NOT_FOUND), Page.FoldersToSkip, Page.HiddenSongs, Page.SplitArtists, Page.Folder("Music/Rips"), Page.Genre("Folk"),
             Page.Playlist("p3"), Page.BuiltIn(BuiltInList.MOST_PLAYED), Page.UnknownAlbum,
             Page.Queue("q1"), Page.Listening, Page.TopList(TopKind.ARTISTS), Page.Tones, Page.Ai, Page.CoversTags, Page.TagHistory, Page.LibraryTabs,
             Page.Licences, Page.Licence("Media3"),

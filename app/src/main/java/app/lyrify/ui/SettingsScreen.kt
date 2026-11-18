@@ -151,6 +151,7 @@ fun SettingsScreen(
                 ValueRow(R.drawable.ic_visibility_off, R.string.set_hidden, if (hidden > 0) pluralStringResource(R.plurals.set_hidden_value, hidden, hidden) else stringResource(R.string.set_hidden_none)) {
                     onOpen(Page.HiddenSongs)
                 }
+                ValueRow(R.drawable.ic_person, R.string.set_artists, splitArtistsValue(library.artistSplit)) { onOpen(Page.SplitArtists) }
                 SwitchRow(R.drawable.ic_description, R.string.set_filenames, stringResource(R.string.set_filenames_detail), library.showFileNames) { on ->
                     onChange { it.copy(library = it.library.copy(showFileNames = on)) }
                 }

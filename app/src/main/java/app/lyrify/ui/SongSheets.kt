@@ -76,7 +76,8 @@ internal fun SongMenuSheet(
     song: Song,
     ui: LibraryUi,
     rows: List<SheetRow>,
-    onArtist: (() -> Unit)?,
+    artists: List<String>,
+    onArtist: (String) -> Unit,
     onAlbum: (() -> Unit)?,
     bookmarks: (@Composable () -> Unit)?,
     onDismiss: () -> Unit,
@@ -85,7 +86,7 @@ internal fun SongMenuSheet(
     val favourite = ui.isFavourite(song)
     val status = ui.status(song)
     LyrifySheet(onDismiss = onDismiss, spacing = 14.dp, padding = 12.dp) {
-        SongSheetHeader(song, ui.title(song), onArtist, onAlbum, Modifier.padding(horizontal = 8.dp))
+        SongSheetHeader(song, ui.title(song), artists, onArtist, onAlbum, Modifier.padding(horizontal = 8.dp))
         Column {
             rows.forEach { row ->
                 when (row) {
@@ -159,14 +160,17 @@ internal fun CollectionMenuSheet(title: String, line: String, art: @Composable (
     }
 }
 
-/** The sheet's head: the cover, the title, and the artist and album as links when their pages exist, with the length. */
+/**
+ * The sheet's head: the cover, the title, and the artist and album as links when their pages exist, with the length. A
+ * tag of several [artists] asks which one first ([ArtistLink]).
+ */
 @Composable
-private fun SongSheetHeader(song: Song, title: String, onArtist: (() -> Unit)?, onAlbum: (() -> Unit)?, modifier: Modifier = Modifier) {
+private fun SongSheetHeader(song: Song, title: String, artists: List<String>, onArtist: (String) -> Unit, onAlbum: (() -> Unit)?, modifier: Modifier = Modifier) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp), modifier = modifier) {
         SongCover(SongArt(song.path, song.ref.mediaStoreId), size = 72.dp, shape = MaterialTheme.shapes.medium)
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(title, style = SheetSongTitle, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.semantics { heading() })
-            LinkText(song.artist ?: stringResource(R.string.check_no_artist), onArtist)
+            ArtistLink(artists, onArtist) { go -> LinkText(song.artist ?: stringResource(R.string.check_no_artist), go) }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 LinkText(song.album ?: stringResource(R.string.lib_unknown_album), onAlbum, Modifier.weight(1f, fill = false))
                 Text(

@@ -84,7 +84,8 @@ fun listeningOf(totals: List<SongPlays>, library: Library?): Listening {
     if (library == null) return Listening(heard, plays, emptyList(), emptyList(), emptyList())
     val collator = Collator.getInstance()
     val songs = bySong(counted, library, shownOnly = true)
-    val artists = songs.mapNotNull { top -> top.item.artist?.trim()?.let(library::artist)?.let { top to it } }
+    // A song of several artists counts for each ("Artists with several names").
+    val artists = songs.flatMap { top -> library.artistsOf(top.item).map { top to it } }
         .groupBy { it.second.name }
         .map { (_, its) -> sum(its.first().second, its.map { it.first }) }
     val albums = songs.mapNotNull { top -> albumKey(top.item)?.let(library::album)?.let { top to it } }

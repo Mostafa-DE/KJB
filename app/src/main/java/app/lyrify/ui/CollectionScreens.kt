@@ -153,7 +153,10 @@ private fun CollectionTopBar(
     )
 }
 
-/** The collection's heart: TalkBack hears what a tap does ("Favourite this album", "Remove from Favourites"); Added or Removed with Undo. */
+/**
+ * The collection's heart: TalkBack hears what a tap does ("Favourite this album", "Remove from Favourites"); Added or
+ * Removed with Undo. An artist's is on too while a heart kept on a whole tag naming them stands for them ([artistHearts]).
+ */
 @Composable
 private fun HeartButton(collection: FavouriteCollection, ui: LibraryUi) {
     val chrome = LocalChromeColors.current
@@ -162,12 +165,17 @@ private fun HeartButton(collection: FavouriteCollection, ui: LibraryUi) {
     val resources = LocalResources.current
     val scope = rememberCoroutineScope()
     val actions = rememberSongActions()
-    val on = collection in ui.playlists.favouriteCollections
+    val stored = ui.playlists.favouriteCollections
+    val library = ui.library?.takeIf { collection.kind == CollectionKind.ARTIST }
+    val on = if (library != null) artistHearts(collection.key, stored, library).isNotEmpty() else collection in stored
     val name = stringResource(heartLabel(collection.kind, on))
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
-            .clickable(role = Role.Button) { scope.launch { toasts.say(resources, actions.favourite(collection, !on)) } }
+            .clickable(role = Role.Button) {
+                val change = if (on && library != null) artistHeartOff(collection.key, stored, library) else null
+                scope.launch { toasts.say(resources, change?.let { actions.favourite(it) } ?: actions.favourite(collection, !on)) }
+            }
             .semantics { contentDescription = name }
             .minimumInteractiveComponentSize(),
     ) {
@@ -254,22 +262,27 @@ private fun AlbumPage(ui: LibraryUi, library: Library, key: String) {
     val byTitle = sort.key == SortSongs.TITLE
     var sorting by rememberSaveable { mutableStateOf(false) }
     var menu by rememberSaveable { mutableStateOf(false) }
+    // The album artists to choose from when its album artist tag names several (Go to artist, ArtistNames.kt).
+    var artists by remember { mutableStateOf<List<String>?>(null) }
     val sorted = rememberInOrder(album.songs, sort, ui.settings.library) { it }
     val songs = sorted.orEmpty()
     val source = QueueSource(SourceKind.ALBUM, key, album.title)
     val reduced = LocalReducedMotion.current
     SongListFrame(ui, songs, source, loaded = sorted != null, topBar = { under, backdrop ->
         CollectionTopBar(album.title, under, backdrop, ui, heart = FavouriteCollection(CollectionKind.ALBUM, key)) {
-            ChromeIconButton(R.drawable.ic_more_horiz, stringResource(R.string.lib_more_album), { menu = true })
+            Box {
+                ChromeIconButton(R.drawable.ic_more_horiz, stringResource(R.string.lib_more_album), { menu = true })
+                ArtistsMenu(artists, { artists = null }) { nav.open(Page.Artist(it)) }
+            }
         }
-    }, sheet = { list -> AlbumMenu(menu, album, library, list, byTitle) { menu = false } }) { list ->
+    }, sheet = { list -> AlbumMenu(menu, album, library, list, byTitle, onChooseArtist = { artists = it }) { menu = false } }) { list ->
         item(key = "hero", contentType = "hero") {
             Box(rowMotion(reduced)) {
                 Hero(
                     album.title,
                     songsMeta(songs, album.year?.toString()),
                     art = { BigCover(album.songs.firstOrNull()) },
-                    link = album.artist?.let { name -> { LinkText(name, library.artist(name)?.let { { nav.open(Page.Artist(name)) } }) } },
+                    link = album.artist?.let { name -> { ArtistLink(library.artistsIn(name).map { it.name }, { nav.open(Page.Artist(it)) }) { go -> LinkText(name, go) } } },
                     glow = album.songs.firstOrNull()?.let { SongArt(it.path, it.ref.mediaStoreId) },
                 )
             }
@@ -322,14 +335,15 @@ private fun ArtistPage(ui: LibraryUi, library: Library, name: String) {
 
 /**
  * An album's "⋯" while [open]: Play next and Add to for its songs in album order (whatever order the page shows),
- * Shuffle as the header's, Go to artist when the artist has a page, Covers & tags at this album's review, Edit album.
+ * Shuffle as the header's, Go to artist when the artist has a page (an album artist tag of several names asks which,
+ * [onChooseArtist]), Covers & tags at this album's review, Edit album.
  */
 @Composable
-private fun AlbumMenu(open: Boolean, album: Album, library: Library, list: PageSongs, byTitle: Boolean, onClose: () -> Unit) {
+private fun AlbumMenu(open: Boolean, album: Album, library: Library, list: PageSongs, byTitle: Boolean, onChooseArtist: (List<String>) -> Unit, onClose: () -> Unit) {
     val nav = LocalNavigator.current
     val playSongsNext = rememberPlayNext()
     if (!open) return
-    val artist = album.artist?.takeIf { library.artist(it) != null }
+    val artists = library.artistsIn(album.artist).map { it.name }
     val first = album.songs.firstOrNull()
     val review = SongSheetSlots.coversTags
     val actions = object : CollectionActions {
@@ -340,7 +354,7 @@ private fun AlbumMenu(open: Boolean, album: Album, library: Library, list: PageS
         override fun shuffle() = list.shuffle()
 
         override fun goToArtist() {
-            artist?.let { nav.open(Page.Artist(it)) }
+            artistTap(artists, { nav.open(Page.Artist(it)) }, onChooseArtist)?.invoke()
         }
 
         // The review of this album, through its first song, with no song ticked: "Select all" is one tap.
@@ -359,7 +373,7 @@ private fun AlbumMenu(open: Boolean, album: Album, library: Library, list: PageS
         title = album.title,
         line = songsMeta(album.songs, album.artist),
         art = { SongCover(first?.let { SongArt(it.path, it.ref.mediaStoreId) }, size = MENU_ART, shape = MaterialTheme.shapes.medium) },
-        rows = albumRows(artistPage = artist != null, coversTags = review != null && first != null),
+        rows = albumRows(artistPage = artists.isNotEmpty(), coversTags = review != null && first != null),
         onDismiss = onClose,
     ) { row ->
         onClose()
@@ -811,7 +825,7 @@ internal class Favourites(
                 songs = found.map { it.second },
                 songPlaces = found.map { it.first },
                 albums = keys(CollectionKind.ALBUM).mapNotNull(library::album),
-                artists = keys(CollectionKind.ARTIST).mapNotNull(library::artist),
+                artists = keys(CollectionKind.ARTIST).flatMap { heartedArtists(it, library) }.distinctBy { it.name },
                 folders = keys(CollectionKind.FOLDER).mapNotNull(library::folder),
                 playlists = keys(CollectionKind.PLAYLIST).mapNotNull(state::playlist),
             )
