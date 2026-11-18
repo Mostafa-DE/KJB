@@ -4,12 +4,16 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
@@ -34,10 +38,11 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * Double-tap to favourite on a real window: a tap acts at once (nothing waits for a second), and a second tap soon after
- * has its lift taken by the host, so neither the row again nor the page the first tap opened acts on it; a long press
- * soon after a tap is still the row's. The player's cover of a book's part, which has no tap of its own, double-taps
- * too. Made-up names only.
+ * Double-tap to favourite on a real window: a card's tap acts at once (nothing waits for a second), and a second tap
+ * soon after has its lift taken by the host, so neither the card again nor the page the first tap opened acts on it; a
+ * long press soon after a tap is still the item's. A song row's tap waits a moment and plays only if no second tap
+ * comes: a double tap there only favourites, a long press soon after only selects, and a tap on another row plays the
+ * first at once. The player's cover of a book's part, which has no tap of its own, double-taps too. Made-up names only.
  */
 @RunWith(AndroidJUnit4::class)
 class DoubleTapDeviceTest {
@@ -45,36 +50,127 @@ class DoubleTapDeviceTest {
     val compose = createComposeRule()
 
     private val album = FavouriteTarget.album("""["Kit Calloway","Harbour Glass"]""")
+    private val lantern = FavouriteTarget.Song(SongRef("/Music/Harbour Glass/01 Paper Lantern.mp3"))
+    private val ferry = FavouriteTarget.Song(SongRef("/Music/Harbour Glass/02 Night Ferry.mp3"))
     private val favourited = mutableListOf<FavouriteTarget>()
-    private val taps = DoubleTaps(TapTiming(windowMs = 300, minGapMs = 40, touchSlopPx = 24f, holdMs = 400)) { favourited += it }
+    private val timing = TapTiming(windowMs = 300, minGapMs = 40, touchSlopPx = 24f, holdMs = 400)
+
+    /** TalkBack exploring: the host's double taps are off. */
+    private var talkBack = false
+    private lateinit var taps: DoubleTaps
+
+    /** The host of [content]'s double taps, its waits on the test's clock. */
+    @Composable
+    private fun Host(content: @Composable BoxScope.() -> Unit) {
+        val scope = rememberCoroutineScope()
+        val host = remember { DoubleTaps(timing, scope) { favourited += it }.also { it.enabled = !talkBack } }
+        taps = host
+        Box(Modifier.fillMaxSize().doubleTapHost(host), content = content)
+    }
+
+    /** A song's row, as [SongRow] wires it: its tap waits, and its click is the waiting tap's. */
+    @OptIn(ExperimentalFoundationApi::class)
+    @Composable
+    private fun SongRowBox(tag: String, target: FavouriteTarget, onLongClick: (() -> Unit)? = null, onPlay: () -> Unit) {
+        val tap = rememberWaitingTap(onPlay)
+        Box(Modifier.size(200.dp).testTag(tag).doubleTapFavourite(target, waiting = tap).combinedClickable(onLongClick = onLongClick, onClick = tap::click))
+    }
 
     @Test
-    fun aTapActsAtOnceWithoutWaitingForASecond() {
-        var plays = 0
+    fun aCardsTapActsAtOnceWithoutWaitingForASecond() {
+        var opens = 0
         compose.setContent {
-            Box(Modifier.fillMaxSize().doubleTapHost(taps)) {
-                Box(Modifier.size(200.dp).testTag(ROW).doubleTapFavourite(album).clickable { plays++ })
+            Host {
+                Box(Modifier.size(200.dp).testTag(ROW).doubleTapFavourite(album).clickable { opens++ })
             }
         }
         compose.mainClock.autoAdvance = false
         compose.onNodeWithTag(ROW).performTouchInput { click() }
-        assertEquals(1, plays)
+        assertEquals(1, opens)
         assertEquals(emptyList<FavouriteTarget>(), favourited)
     }
 
+    // Was aDoubleTapOnARowPlaysOnceAndFavourites: a song row's tap no longer acts at once (dt2), so a card's tap
+    // opening once is what it shows now; a song row's double tap is aDoubleTapOnASongRowFavouritesItAndNeverPlaysIt.
     @Test
-    fun aDoubleTapOnARowPlaysOnceAndFavourites() {
-        var plays = 0
+    fun aDoubleTapOnACardOpensItOnceAndFavourites() {
+        var opens = 0
         compose.setContent {
-            Box(Modifier.fillMaxSize().doubleTapHost(taps)) {
-                Box(Modifier.size(200.dp).testTag(ROW).doubleTapFavourite(album).clickable { plays++ })
+            Host {
+                Box(Modifier.size(200.dp).testTag(ROW).doubleTapFavourite(album).clickable { opens++ })
                 HeartPops(taps)
             }
         }
         compose.onNodeWithTag(ROW).performTouchInput { doubleClick() }
         compose.runOnIdle {
-            assertEquals(1, plays)
+            assertEquals(1, opens)
             assertEquals(listOf(album), favourited)
+        }
+    }
+
+    @Test
+    fun aTapOnASongRowPlaysOnceTheWaitIsOverAndNotBefore() {
+        var plays = 0
+        compose.setContent { Host { SongRowBox(ROW, lantern) { plays++ } } }
+        compose.mainClock.autoAdvance = false
+        compose.onNodeWithTag(ROW).performTouchInput { click() }
+        compose.mainClock.advanceTimeBy(TAP_WAIT_MS - 100)
+        assertEquals(0, plays)
+        compose.mainClock.advanceTimeBy(200)
+        assertEquals(1, plays)
+        assertEquals(emptyList<FavouriteTarget>(), favourited)
+    }
+
+    @Test
+    fun aDoubleTapOnASongRowFavouritesItAndNeverPlaysIt() {
+        var plays = 0
+        compose.setContent { Host { SongRowBox(ROW, lantern) { plays++ } } }
+        compose.onNodeWithTag(ROW).performTouchInput { doubleClick() }
+        compose.mainClock.advanceTimeBy(1_000)
+        compose.runOnIdle {
+            assertEquals(0, plays)
+            assertEquals(listOf(lantern), favourited)
+        }
+    }
+
+    @Test
+    fun aTapOnAnotherSongRowInsideTheWaitPlaysTheFirstAtOnceThenWaits() {
+        val plays = mutableListOf<FavouriteTarget>()
+        compose.setContent {
+            Host {
+                Column {
+                    SongRowBox(ROW, lantern) { plays += lantern }
+                    SongRowBox(NEXT, ferry) { plays += ferry }
+                }
+            }
+        }
+        compose.mainClock.autoAdvance = false
+        compose.onNodeWithTag(ROW).performTouchInput { click() }
+        compose.onNodeWithTag(NEXT).performTouchInput {
+            advanceEventTime(80)
+            click()
+        }
+        assertEquals(listOf(lantern), plays)
+        compose.mainClock.advanceTimeBy(1_000)
+        assertEquals(listOf(lantern, ferry), plays)
+        assertEquals(emptyList<FavouriteTarget>(), favourited)
+    }
+
+    @Test
+    fun aLongPressSoonAfterATapOnASongRowSelectsAndNeverPlays() {
+        var plays = 0
+        var selects = 0
+        compose.setContent { Host { SongRowBox(ROW, lantern, onLongClick = { selects++ }) { plays++ } } }
+        compose.onNodeWithTag(ROW).performTouchInput {
+            click()
+            advanceEventTime(100)
+            longClick()
+        }
+        compose.mainClock.advanceTimeBy(1_000)
+        compose.runOnIdle {
+            assertEquals(0, plays)
+            assertEquals(1, selects)
+            assertEquals(emptyList<FavouriteTarget>(), favourited)
         }
     }
 
@@ -83,7 +179,7 @@ class DoubleTapDeviceTest {
         var opened by mutableStateOf(false)
         var pageTaps = 0
         compose.setContent {
-            Box(Modifier.fillMaxSize().doubleTapHost(taps)) {
+            Host {
                 if (opened) {
                     Box(Modifier.size(200.dp).testTag(PAGE).clickable { pageTaps++ })
                 } else {
@@ -113,7 +209,7 @@ class DoubleTapDeviceTest {
         var plays = 0
         var selects = 0
         compose.setContent {
-            Box(Modifier.fillMaxSize().doubleTapHost(taps)) {
+            Host {
                 Box(Modifier.size(200.dp).testTag(ROW).doubleTapFavourite(album).combinedClickable(onLongClick = { selects++ }) { plays++ })
             }
         }
@@ -135,7 +231,7 @@ class DoubleTapDeviceTest {
         compose.setContent {
             LyrifyTheme {
                 CompositionLocalProvider(LocalToasts provides remember { ToastState() }) {
-                    Box(Modifier.fillMaxSize().doubleTapHost(taps)) {
+                    Host {
                         Box(Modifier.size(COVER).testTag(ROW)) {
                             CoverFace(ui, side = COVER, area = COVER, enabled = true, onFlip = null, onNext = {}, onPrevious = {})
                         }
@@ -149,18 +245,24 @@ class DoubleTapDeviceTest {
 
     @Test
     fun withTalkBackOnNothingIsTakenAndEveryTapActs() {
+        var opens = 0
         var plays = 0
-        taps.enabled = false
+        talkBack = true
         compose.setContent {
-            Box(Modifier.fillMaxSize().doubleTapHost(taps)) {
-                Box(Modifier.size(200.dp).testTag(ROW).doubleTapFavourite(album).clickable { plays++ })
+            Host {
+                Column {
+                    Box(Modifier.size(200.dp).testTag(ROW).doubleTapFavourite(album).clickable { opens++ })
+                    SongRowBox(NEXT, lantern) { plays++ }
+                }
             }
         }
+        compose.mainClock.autoAdvance = false
         compose.onNodeWithTag(ROW).performTouchInput { doubleClick() }
-        compose.runOnIdle {
-            assertEquals(2, plays)
-            assertEquals(emptyList<FavouriteTarget>(), favourited)
-        }
+        // A song's row never waits either: each tap plays at once.
+        compose.onNodeWithTag(NEXT).performTouchInput { doubleClick() }
+        assertEquals(2, opens)
+        assertEquals(2, plays)
+        assertEquals(emptyList<FavouriteTarget>(), favourited)
     }
 
     /** A part of a made-up book playing: its cover has no tap of its own. */
@@ -173,6 +275,7 @@ class DoubleTapDeviceTest {
 
     private companion object {
         const val ROW = "row"
+        const val NEXT = "next"
         const val PAGE = "page"
         val COVER = 200.dp
     }
