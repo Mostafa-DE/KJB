@@ -118,6 +118,19 @@ class LyricsSearchTest {
         assertEquals(listOf("Lio Marsh & Cass Dunmore"), client.gets.map { it.artist }.distinct())
     }
 
+    @Test
+    fun `a record of one artist alone counts only once that artist is asked for, after the whole tag`() = runTest {
+        val track = audio("a.mp3", "Glass Orchard", "Kel Varo feat. Mina Ost")
+        // The whole tag's search also turns up the featured artist's record; the main artist's comes a query later.
+        client.onSearch = { if (it.artist == "Kel Varo feat. Mina Ost") LrclibResult.Found(listOf(record(8, artist = "Mina Ost"))) else LrclibResult.Found(emptyList()) }
+        client.onGet = { if (it.artist == "Kel Varo") LrclibResult.Found(listOf(record(7, artist = "Kel Varo"))) else LrclibResult.NotFound }
+
+        assertEquals(LyricsStatus.SYNCED, pipeline().process(track)?.status)
+
+        assertEquals(7L, ledger[track.path]?.lrclibId)
+        assertEquals(listOf("Kel Varo feat. Mina Ost", "Kel Varo"), client.gets.map { it.artist })
+    }
+
     // Lyrics in the file's own tags
 
     private val tagLines = listOf(10_000L to "Made-up dawn", 25_000L to "Made-up noon", 40_000L to "Made-up dusk")

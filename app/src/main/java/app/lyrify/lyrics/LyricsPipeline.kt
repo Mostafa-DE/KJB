@@ -633,8 +633,11 @@ class LyricsPipeline(
             }
         }
         val artists = track.artist?.let { artistNames(it) }.orEmpty()
-        val queries = TrackNames.queries(track.artist, track.title, track.album, File(track.path).name, artists)
-        val result = if (queries.isEmpty()) Lookup.Answer(Match.NotFound, emptyList(), emptySet()) else lookUp(track, queries, lane)
+        val fileName = File(track.path).name
+        val queries = TrackNames.queries(track.artist, track.title, track.album, fileName, artists)
+        // The tag's own queries come first, those by one artist alone last.
+        val tagged = TrackNames.queries(track.artist, track.title, track.album, fileName).size
+        val result = if (queries.isEmpty()) Lookup.Answer(Match.NotFound, emptyList(), emptySet()) else lookUp(track, queries, tagged, lane)
         return when (result) {
             // The file and its ledger entries go together, even if the listener moves on.
             is Lookup.Write -> withContext(NonCancellable) {
@@ -880,19 +883,22 @@ class LyricsPipeline(
 
     /**
      * Queries in order, `/api/get` then `/api/search` each, until synced lyrics Samsung can
-     * show turn up. Records gathered so far are matched again after every answer.
+     * show turn up. Records gathered so far are matched again after every answer, against the first [tagged] queries
+     * (the tag's own) and those asked so far: a record that only names one artist of several ([TrackNames.queries]' last
+     * queries) counts once that artist is asked for, after the whole tag missed.
      */
-    private suspend fun lookUp(track: LocalTrack, queries: List<TrackQuery>, lane: Lane): Lookup {
+    private suspend fun lookUp(track: LocalTrack, queries: List<TrackQuery>, tagged: Int, lane: Lane): Lookup {
         val durationSeconds = track.durationMs / MS_PER_SECOND
         var pool = Pool(emptyList(), emptySet())
-        for (query in queries) {
+        for ((index, query) in queries.withIndex()) {
+            val counted = queries.take(maxOf(tagged, index + 1))
             for (request in requests(query, track.durationMs, lane)) {
                 when (val result = withRetries(request)) {
                     is LrclibResult.Transient -> return Lookup.Failed(result.cause)
                     LrclibResult.NotFound -> Unit
                     is LrclibResult.Found -> pool = pool.with(result.records)
                 }
-                val (write, checked) = firstWritable(pool, queries, track.durationMs)
+                val (write, checked) = firstWritable(pool, counted, track.durationMs)
                 if (write != null) return write
                 pool = checked
             }
