@@ -604,7 +604,7 @@ internal fun PlayerFrame(onClose: () -> Unit, content: @Composable BoxScope.() -
     val headed = LocalLayerHeaded.current
     LaunchedEffect(headed) {
         if (!headed) return@LaunchedEffect
-        container?.rest()
+        container?.rest(scope)
         drag.reset()
     }
     // The cover, drawn above everything while the transform runs, takes the frame's drag shrink from here (containerCover).
@@ -747,7 +747,8 @@ private class PlayerDrag(private val scope: CoroutineScope) {
         when (dragLetGo(closes, intoBar = container != null, reduced = reduced)) {
             DragLetGo.BACK -> scope.launch { offset.animateTo(0f, Motion.close(), initialVelocity = velocity) }
             DragLetGo.INTO_BAR -> {
-                container?.letGo(closeVelocity(velocity, momentum))
+                // The card's way to the bar is most of the player's height: what a fling's lead is a share of.
+                container?.letGo(closeVelocity(velocity, momentum), way = height, scope)
                 close()
             }
             DragLetGo.AWAY -> close()

@@ -159,6 +159,28 @@ class PlayerCloseTest {
         assertEquals(1f, drawn.last(), 0.0005f)
     }
 
+    @Test
+    fun `after a fling the fades keep pace with the card, as if the progress itself had taken the finger's speed`() {
+        for (velocity in listOf(1000f, 3000f, CLOSE_MOMENTUM_DP * DENSITY)) {
+            for (ms in 0..600 step 4) {
+                // The card's own spring from rest, and Compose's momentum on the same spring (the lead, mirrored).
+                val along = closeAlong(spring(ms, 0f, 1f, 0f), spring(ms, 0f, 0f, velocity), TRAVEL)
+                // Where the card is drawn, as a share of its way ...
+                assertEquals("$velocity px/s at $ms ms", come(ms, TRAVEL, velocity) / TRAVEL, along, 0.0005f)
+                // ... is the progress driven from the finger's speed, normalised to the way (review 2026-11-18).
+                assertEquals("$velocity px/s at $ms ms", spring(ms, 0f, 1f, velocity / TRAVEL), along, 0.0005f)
+            }
+            // A frame after the lift, the content has gone further than from rest.
+            val frame = closeAlong(spring(FRAME_MS, 0f, 1f, 0f), spring(FRAME_MS, 0f, 0f, velocity), TRAVEL)
+            assertTrue("$velocity px/s", closeContentAlpha(frame) < closeContentAlpha(spring(FRAME_MS, 0f, 1f, 0f)))
+        }
+        // The chevron and Back carry nothing: the card's own progress.
+        assertEquals(0.3f, closeAlong(0.3f, 0f, TRAVEL), 0f)
+        // Never past the bar; with no way known, nothing is added.
+        assertEquals(1f, closeAlong(0.98f, 200f, 1000f), 0f)
+        assertEquals(0.3f, closeAlong(0.3f, 40f, 0f), 0f)
+    }
+
     // The cover's shape
 
     @Test

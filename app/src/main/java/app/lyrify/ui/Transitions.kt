@@ -1,6 +1,9 @@
 package app.lyrify.ui
 
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Easing
 import androidx.compose.ui.graphics.Color
 import androidx.compose.runtime.State
@@ -316,7 +319,8 @@ val PEEK_CORNER = 28.dp
  * One end of the container transform: the shell's shared transition scope, and the visibility of that end, the Now
  * bar's chrome ([bar]) or the player's layer. Null where nothing grows: outside the shell, and for a view that rises.
  * The player's end also says how far it has closed into the bar ([closing], 0 in the player and 1 in the bar: the one
- * progress its content, card, dim, drag and cover follow, [closeProgress]) and takes what a finger lets go of ([letGo]).
+ * progress its card, its drag and its cover follow, [closeProgress]; its fades follow [along]) and takes what a finger
+ * lets go of ([letGo]).
  */
 @Stable
 class Container(val shared: SharedTransitionScope, val visibility: AnimatedVisibilityScope, val bar: Boolean, val closing: () -> Float = { 0f }) {
@@ -331,29 +335,42 @@ class Container(val shared: SharedTransitionScope, val visibility: AnimatedVisib
      */
     internal var frameScale: () -> Float = { 1f }
 
-    // Whether a finger's speed was handed over ([letGo]) and is still carried.
+    // The finger's speed carried on past the card's own spring, px ahead of it: the momentum Compose adds to the shared
+    // bounds once [letGo] hands it over (on the same spring), mirrored for the fades, and the card's way it is a share of.
+    private val lead = Animatable(0f)
+    private var way = 0f
     private var carried = false
 
     /**
-     * A finger lets go of the player to close it into the bar, moving down at [velocity] px/s ([closeVelocity]): the
-     * card and the cover carry on at the finger's speed, on the transform's own spring. Before the player is closed.
+     * A finger lets go of the player to close it into the bar, moving down at [velocity] px/s ([closeVelocity]), the
+     * card about [way] px from the bar: the card and the cover carry on at the finger's speed, on the transform's own
+     * spring, and its fades keep pace ([along]). Before the player is closed; the lead runs in [scope].
      */
-    fun letGo(velocity: Float) {
+    fun letGo(velocity: Float, way: Float, scope: CoroutineScope) {
         val speed = Velocity(0f, velocity)
         surface?.prepareTransitionWithInitialVelocity(speed)
         cover?.prepareTransitionWithInitialVelocity(speed)
+        this.way = way
         carried = true
+        scope.launch {
+            lead.snapTo(0f)
+            lead.animateTo(0f, Motion.close(), initialVelocity = velocity)
+        }
     }
 
+    /** How far along its way into the bar the card is drawn, read while drawing: [closing], and a fling's lead ([closeAlong]). */
+    fun along(): Float = closeAlong(closing(), lead.value, way)
+
     /**
-     * Shown again on the way: what is left of a finger's speed is let go by the card and the cover (Compose eases their
-     * momentum home from where it is). Nothing to do when nothing was let go.
+     * Shown again on the way: what is left of a finger's speed is let go, by the card and the cover (Compose eases their
+     * momentum home from where it is) and by the fades the same way, in [scope]. Nothing to do when nothing was let go.
      */
-    fun rest() {
+    fun rest(scope: CoroutineScope) {
         if (!carried) return
         carried = false
         surface?.prepareTransitionWithInitialVelocity(Velocity.Zero)
         cover?.prepareTransitionWithInitialVelocity(Velocity.Zero)
+        scope.launch { lead.animateTo(0f, Motion.close()) }
     }
 }
 
@@ -370,8 +387,9 @@ private const val CONTAINER_COVER = "player cover"
 
 /**
  * How far the player's end ([visibility]) has closed into the Now bar: 0 in the player, 1 in the bar. It moves only as
- * it closes, on [Motion.close] from rest, the spring the card's and the cover's bounds take too, so they all go in
- * step; shown again on the way, it goes back the same way. Read while drawing.
+ * it closes, on [Motion.close] from rest, the spring the card's and the cover's bounds take too (a finger's speed is
+ * Compose's momentum on top, [Container.along]), so they all go in step; shown again on the way, it goes back the same
+ * way. Read while drawing.
  */
 @Composable
 fun closeProgress(visibility: AnimatedVisibilityScope): State<Float> =
@@ -497,6 +515,13 @@ fun closeFillAlpha(p: Float): Float = 1f - ((p - CLOSE_FILL_FROM) / (1f - CLOSE_
 
 /** What is left of a drag's [offset] [p] of the way: the card takes the player on from where the finger left it. */
 fun closeHeld(offset: Float, p: Float): Float = offset * (1f - p.coerceIn(0f, 1f))
+
+/**
+ * How far along its way to the bar the card is drawn: [p] of the way on its own spring from rest ([closeProgress]), and
+ * a finger's [lead] px on top as a share of the card's [way] px ([Container.letGo]). The same spring, so this is the
+ * progress driven from the finger's speed: the fades keep pace with a fling. Never past either end.
+ */
+fun closeAlong(p: Float, lead: Float, way: Float): Float = if (way > 0f) (p + lead / way).coerceIn(0f, 1f) else p
 
 /**
  * The scale the player's cover is drawn at above everything while the transform runs, from [current] to [target] or
