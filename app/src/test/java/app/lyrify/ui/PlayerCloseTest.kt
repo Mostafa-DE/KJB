@@ -11,6 +11,7 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import coil3.memory.MemoryCache
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.math.abs
@@ -218,29 +219,43 @@ class PlayerCloseTest {
     // Opening
 
     @Test
-    fun `the cover growing out of the bar starts on the bitmap the bar shows, under the same key`() {
-        assertEquals("/Music/Paper Lanterns/Harbour Glass.flac", coverRequestKey(SongArt("/Music/Paper Lanterns/Harbour Glass.flac", mediaStoreId = 7L)))
-        assertEquals("/Music/Paper Lanterns/Harbour Glass.flac#2", coverRequestKey(SongArt("/Music/Paper Lanterns/Harbour Glass.flac", version = 2)))
-        assertEquals(null, coverRequestKey(null))
-    }
-
-    @Test
-    fun `every size of a song's cover is one key in memory, the very key the next one's placeholder looks up`() {
-        // Review 2026-11-18: the bar's cached bitmap and the player's placeholder must be one key, whatever Coil would add
-        // to a key it makes itself. Each request names it: Coil stores the bitmap under that key and the request's extras
-        // (MemoryCacheService), and the next request of the song, at any size, looks that up as its placeholder.
+    fun `the bar keeps its cover under a key of its own, the one the player's cover starts on while its own size loads`() {
+        // Review 2026-11-18: one key for every size let the bar's small bitmap and the player's full one take each other's
+        // place. The bar stores its bitmap under a key of its own (Coil stores it under the request's key and extras,
+        // MemoryCacheService.newCacheKey) ...
         val context = object : ContextWrapper(null) {}
-        val art = SongArt("/Music/Paper Lanterns/Harbour Glass.flac", mediaStoreId = 7L)
-        val bar = songCoverRequest(context, art)
-        assertEquals("/Music/Paper Lanterns/Harbour Glass.flac", bar.memoryCacheKey)
+        val art = SongArt(PATH, mediaStoreId = 7L)
+        val bar = songCoverRequest(context, art, CoverAt.BAR)
         val stored = MemoryCache.Key(bar.memoryCacheKey!!, bar.memoryCacheKeyExtras)
-        assertEquals(stored, songCoverRequest(context, art).placeholderMemoryCacheKey)
-        assertEquals(MemoryCache.Key("/Music/Paper Lanterns/Harbour Glass.flac"), stored)
-        // A cover changed in Covers & tags is a new key, so the old bitmap never stands in for it.
-        assertEquals(MemoryCache.Key("/Music/Paper Lanterns/Harbour Glass.flac#2"), songCoverRequest(context, art.copy(version = 2)).placeholderMemoryCacheKey)
+        assertEquals(barCoverKey(art), stored)
+        // ... never the key Coil makes itself for the song (its path, no extras: SongCover's requests have no
+        // transformations), where every other size is kept.
+        val own = MemoryCache.Key(PATH)
+        assertNotEquals(own, stored)
+        // The player's cover keeps Coil's own key, so it loads and keeps its own size (and finds the one the bar prewarmed),
+        // and starts on the bar's bitmap meanwhile.
+        val player = songCoverRequest(context, art, CoverAt.PLAYER)
+        assertEquals(null, player.memoryCacheKey)
+        assertEquals(emptyMap<String, String>(), player.memoryCacheKeyExtras)
+        assertEquals(stored, player.placeholderMemoryCacheKey)
+        // The bar, and any other cover, start on whatever size of the song is already there.
+        assertEquals(own, bar.placeholderMemoryCacheKey)
+        val row = songCoverRequest(context, art)
+        assertEquals(null, row.memoryCacheKey)
+        assertEquals(own, row.placeholderMemoryCacheKey)
+        // The song's key is its path (not the library's id), and a cover changed in Covers & tags is a new key, so the old
+        // bitmap never stands in for it.
+        val changed = art.copy(version = 2)
+        assertEquals("$PATH#2", barCoverKey(changed).key)
+        assertEquals(barCoverKey(changed), songCoverRequest(context, changed, CoverAt.PLAYER).placeholderMemoryCacheKey)
+        assertEquals(barCoverKey(SongArt(PATH)), stored)
+        // Anything but a song's cover (a picture another app shows) has no key of KJB's.
+        assertEquals(null, songCoverRequest(context, Any(), CoverAt.PLAYER).placeholderMemoryCacheKey)
     }
 
     private companion object {
+        const val PATH = "/Music/Paper Lanterns/Harbour Glass.flac"
+
         /** About where a player let go a quarter down still has to go to reach the bar, in px. */
         const val TRAVEL = 1500f
         const val DENSITY = 2.75f

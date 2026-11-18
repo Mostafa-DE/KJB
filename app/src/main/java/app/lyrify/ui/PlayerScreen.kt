@@ -1081,7 +1081,7 @@ internal fun CoverFace(
                 .semantics { contentDescription = label },
         ) {
             // Its corners follow its size, so growing out of the Now bar's orb or shrinking into it, it rounds smoothly.
-            SongCover(SongArt(ui.item.song.path), containerCover(LocalContainer.current), size = side, shape = remember(side) { CoverShape(COVER_CORNER, side) })
+            SongCover(SongArt(ui.item.song.path), containerCover(LocalContainer.current), size = side, shape = remember(side) { CoverShape(COVER_CORNER, side) }, at = CoverAt.PLAYER)
         }
         if (onFlip != null) FlipChip(Modifier.align(Alignment.BottomEnd).padding(12.dp), enabled, onFlip)
     }

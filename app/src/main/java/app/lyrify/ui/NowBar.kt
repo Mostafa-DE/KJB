@@ -330,7 +330,8 @@ fun metaText(meta: MetaLine, artist: String, album: String, ink: Color, placehol
 
 /**
  * The player's cover, loaded at the player's size while the bar shows its song: the cover that grows out of the bar
- * is already in memory, so its first frame is never an empty tile.
+ * is already in memory, under the key the player's own request looks up ([CoverAt.PLAYER], Coil's own for the song), so
+ * its first frame is never an empty tile.
  */
 @Composable
 private fun PrewarmCover(cover: Any?) {
@@ -435,7 +436,7 @@ private fun Orb(cover: Any?, status: LyricsStatus?, ring: Float, shared: Modifie
         },
     ) {
         Box(Modifier.align(Alignment.Center).size(ORB_COVER).then(shared))
-        SongCover(cover, Modifier.align(Alignment.Center), size = ORB_COVER, shape = CircleShape)
+        SongCover(cover, Modifier.align(Alignment.Center), size = ORB_COVER, shape = CircleShape, at = CoverAt.BAR)
         status?.let { StatusBadge(it, Modifier.align(Alignment.BottomEnd), size = 16.dp) }
     }
 }

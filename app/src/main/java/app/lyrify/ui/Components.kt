@@ -130,6 +130,7 @@ import coil3.fetch.FetchResult
 import coil3.fetch.Fetcher
 import coil3.fetch.ImageFetchResult
 import coil3.key.Keyer
+import coil3.memory.MemoryCache
 import coil3.request.ImageRequest
 import coil3.request.Options
 import coil3.request.crossfade
@@ -865,18 +866,44 @@ class SongArtKeyer : Keyer<SongArt> {
 /** A cover's key in the image loader: its path, and its version once Covers & tags changed the song (apply or Undo). */
 fun coverKey(art: SongArt): String = if (art.version == 0) art.path else "${art.path}#${art.version}"
 
-/** The image loader's key for [model]'s cover when it is a song's ([coverKey]), whatever size it was loaded at; null for anything else. */
-fun coverRequestKey(model: Any?): String? = (model as? SongArt)?.let(::coverKey)
+/** Where a [SongCover] is drawn, for where its bitmap is kept in memory ([songCoverRequest]). */
+enum class CoverAt {
+    /** The Now bar's orb: its bitmap under a key of its own ([barCoverKey]), the one the player's cover starts on. */
+    BAR,
+
+    /** The player's: its own size, starting on the bar's bitmap while it loads (as it grows out of the bar). */
+    PLAYER,
+
+    /** Anywhere else: starting on whatever size of the song's cover is already in memory. */
+    ELSEWHERE,
+}
 
 /**
- * A [SongCover]'s request for [model]: a song's cover is kept in memory under one key whatever size it is loaded at
- * ([coverRequestKey]), and that key is its placeholder, so a size not loaded yet starts on the size already there (the
- * Now bar's, as the player's cover grows out of it), never on the default.
+ * The key the Now bar keeps [art]'s cover under in memory: the song's ([coverKey]) marked as the bar's, never the key
+ * Coil makes itself for the song (the same, with no extras), so a size loaded elsewhere and the bar's small one never
+ * take each other's place.
  */
-fun songCoverRequest(context: Context, model: Any): ImageRequest {
-    val key = coverRequestKey(model)
-    return ImageRequest.Builder(context).data(model).memoryCacheKey(key).placeholderMemoryCacheKey(key).build()
+fun barCoverKey(art: SongArt): MemoryCache.Key = MemoryCache.Key(coverKey(art), mapOf(BAR_EXTRA to "1"))
+
+/**
+ * A [SongCover]'s request for [model], drawn [at] the bar, in the player or elsewhere. Coil keeps a cover under its own
+ * key for the song at the size it was loaded at, and a smaller one in memory never stands in for a larger request; the
+ * bar's is kept apart ([barCoverKey]). A size not loaded yet starts on one already there, never on the default: the
+ * player's on the bar's (as it grows out of the bar), any other on the song's own key.
+ */
+fun songCoverRequest(context: Context, model: Any, at: CoverAt = CoverAt.ELSEWHERE): ImageRequest {
+    val request = ImageRequest.Builder(context).data(model)
+    val art = model as? SongArt ?: return request.build()
+    val own = MemoryCache.Key(coverKey(art))
+    return when (at) {
+        CoverAt.BAR -> request.memoryCacheKey(barCoverKey(art)).placeholderMemoryCacheKey(own)
+        CoverAt.PLAYER -> request.placeholderMemoryCacheKey(barCoverKey(art))
+        CoverAt.ELSEWHERE -> request.placeholderMemoryCacheKey(own)
+    }.build()
 }
+
+/** The extra on [barCoverKey] that sets the bar's bitmap apart. */
+private const val BAR_EXTRA = "kjb#bar"
 
 /** The image loader of the whole app: song covers from MediaStore, cross-fading in. No network. */
 fun songImageLoader(context: Context): ImageLoader =
@@ -904,11 +931,19 @@ private fun audioUri(context: Context, path: String): android.net.Uri? {
  * A song's cover ([model]: a [SongArt], the player's bitmap, or null) on KJB's default cover ([R.drawable.kjb_default_cover],
  * the one the widget, the notification and Android Auto show too): the default shows until the cover is in, and stays
  * when there is none. A song's cover already in memory at another size (the Now bar's, as the player's cover grows out
- * of it) shows while this size loads, never the default (phone test 2026-11-17). With [status], its badge sits on the
- * bottom-end corner. Decorative: the song's name and status are text next to it.
+ * of it) shows while this size loads, never the default (phone test 2026-11-17); [at] says where it is drawn, for its
+ * place in memory ([songCoverRequest]). With [status], its badge sits on the bottom-end corner. Decorative: the song's
+ * name and status are text next to it.
  */
 @Composable
-fun SongCover(model: Any?, modifier: Modifier = Modifier, size: Dp = 48.dp, shape: Shape = MaterialTheme.shapes.small, status: LyricsStatus? = null) {
+fun SongCover(
+    model: Any?,
+    modifier: Modifier = Modifier,
+    size: Dp = 48.dp,
+    shape: Shape = MaterialTheme.shapes.small,
+    status: LyricsStatus? = null,
+    at: CoverAt = CoverAt.ELSEWHERE,
+) {
     // A song Covers & tags changed gets its new cover at once: its version is part of the key.
     val versions by CoverVersions.versions.collectAsState()
     val shown = (model as? SongArt)?.let { it.copy(version = versions[it.path] ?: 0) } ?: model
@@ -917,7 +952,7 @@ fun SongCover(model: Any?, modifier: Modifier = Modifier, size: Dp = 48.dp, shap
         Box(Modifier.fillMaxSize().clip(shape)) {
             Image(painterResource(R.drawable.kjb_default_cover), contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
             if (shown != null) {
-                val request = remember(shown, context) { songCoverRequest(context, shown) }
+                val request = remember(shown, context, at) { songCoverRequest(context, shown, at) }
                 AsyncImage(model = request, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
             }
         }
