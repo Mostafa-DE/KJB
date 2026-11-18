@@ -3,11 +3,13 @@ package app.lyrify.dupes
 import android.app.PendingIntent
 import android.content.ContentResolver
 import android.content.ContentUris
+import android.database.Cursor
 import android.net.Uri
 import android.os.Bundle
 import android.provider.MediaStore
 import app.lyrify.data.SharedWrite
 import app.lyrify.data.SharedWrites
+import app.lyrify.library.LibraryReader
 import app.lyrify.library.Song
 import app.lyrify.tags.PayloadHash
 import app.lyrify.tags.SongEdit
@@ -17,11 +19,17 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
+import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.util.concurrent.TimeUnit
 
 /** Moving songs to the phone's trash: two confirmations, KJB's then the phone's. */
@@ -36,6 +44,12 @@ sealed interface TrashStep {
 
     /** The phone's dialog is open to take [song] back out of its trash; its answer goes to [SongTrash.restoreAnswered]. */
     data class Restoring(val song: TrashedSong) : TrashStep
+
+    /** KJB's own dialog asks: "Delete 2 songs forever?" (Tools > Trash: Delete forever, Empty trash). */
+    data class ConfirmDelete(val songs: List<TrashedSong>) : TrashStep
+
+    /** The phone's dialog is open to delete [songs] for good ([MediaStoreTrash.deleteRequest]); its answer goes to [SongTrash.deleteAnswered]. */
+    data class Deleting(val songs: List<TrashedSong>) : TrashStep
 }
 
 /** What the phone's answer did. */
@@ -56,12 +70,27 @@ sealed interface Trashed {
     data object NotConfirmed : Trashed
 }
 
-/** What "Move to trash" in KJB's dialog did ([SongTrash.confirm]). */
+/** What the phone's answer to "Delete forever" did. */
+sealed interface Deleted {
+    /** [count] of the [of] songs asked for are gone for good, freeing [bytes]; the others are where they were. */
+    data class Gone(val count: Int, val of: Int, val bytes: Long) : Deleted
+
+    /** The dialog was cancelled, or nothing waited for an answer: nothing changed. */
+    data object Unchanged : Deleted
+
+    /** The phone said OK, but MediaStore could not say what is left: the list catches up on its next look. */
+    data object NotConfirmed : Deleted
+}
+
+/** What "Move to trash" in KJB's dialog did ([SongTrash.confirm]), and "Delete forever" in it ([SongTrash.confirmDelete]). */
 sealed interface Confirmation {
     /** The phone's own dialog is to open for these MediaStore [ids]. */
     data class Ask(val ids: List<Long>) : Confirmation
 
-    /** A file changed since it was listed: nothing is asked (Duplicates: its group waits for the next scan). */
+    /**
+     * A file changed since it was listed: nothing is asked (Duplicates: its group waits for the next scan). For a delete,
+     * a song is no longer in the phone's trash.
+     */
     data object Changed : Confirmation
 
     /**
@@ -84,9 +113,11 @@ sealed interface Restored {
 }
 
 /**
- * What happens to a song once the phone moved its audio file to its trash: the `.lrc` KJB wrote for it goes (only
- * while byte for byte what KJB wrote), its ledger entry is updated, and it leaves the playlists and Favourites. A `.lrc`
- * KJB did not write stays. The lyrics pipeline and the playlists store in the app.
+ * What happens to a song once the phone moved its audio file to its trash, or deleted for good a song another app had
+ * moved there ([SongTrash.deleteAnswered]), by the path it had before: the `.lrc` KJB wrote for it goes (only while byte
+ * for byte what KJB wrote), its ledger entry is updated, and it leaves the playlists and Favourites. A `.lrc` KJB did
+ * not write stays. The lyrics pipeline and the playlists store in the app. It has left the queues already ([SongTrash]'s
+ * leaveQueues).
  */
 fun interface TrashCleanup {
     suspend fun trashed(audioPath: String)
@@ -99,6 +130,12 @@ fun interface PhoneTrash {
      * millis; null when MediaStore does not say). Null when MediaStore could not be read. Blocking.
      */
     fun inTrash(ids: Collection<Long>): Map<Long, Long?>?
+
+    /**
+     * Every song in the phone's trash that KJB's library would list were it not trashed, whichever app moved it there
+     * ([trashedSongs]); null when MediaStore could not be read. None unless a test says. Blocking.
+     */
+    fun songs(): List<TrashedSong>? = emptyList()
 }
 
 /**
@@ -168,6 +205,12 @@ class SongTrash(
      * Blocking.
      */
     private val ownWrite: (listed: AudioFile, now: AudioFile) -> Boolean = { _, _ -> false },
+    /**
+     * The songs at these paths are in the phone's trash now, all of one answer, or gone for good from it
+     * ([deleteAnswered]): they leave KJB's queues, the song playing among them giving way to the next
+     * ([app.lyrify.player.PlayerCore.trashed]).
+     */
+    private val leaveQueues: suspend (Set<String>) -> Unit = {},
     private val log: (String) -> Unit = {},
 ) {
     /** One settling of the files waiting for an answer at a time: the phone's answer, a Move's, a scan's or the tab's. */
@@ -178,6 +221,14 @@ class SongTrash(
 
     /** Songs KJB moved to the phone's trash and can still restore, the latest first. */
     val trashed: List<TrashedSong> get() = host.memory.trashed.sortedByDescending { it.trashedAt }
+
+    private val others = MutableStateFlow<List<TrashedSong>?>(null)
+
+    /**
+     * Songs another app moved to the phone's trash that KJB's library would list, as last read ([refresh]); null until
+     * then. Not kept between runs: MediaStore has them.
+     */
+    val elsewhere: StateFlow<List<TrashedSong>?> = others.asStateFlow()
 
     /**
      * "Move to trash" for [files]: KJB's own dialog asks first ([TrashStep.Confirm]). False only when nothing is given. A
@@ -191,9 +242,9 @@ class SongTrash(
         return true
     }
 
-    /** "Cancel" in KJB's dialog: nothing changes. */
+    /** "Cancel" in KJB's dialog, to move or to delete: nothing changes. */
     fun cancel() {
-        host.step { if (it is TrashStep.Confirm) TrashStep.None else it }
+        host.step { if (it is TrashStep.Confirm || it is TrashStep.ConfirmDelete) TrashStep.None else it }
     }
 
     /**
@@ -280,11 +331,12 @@ class SongTrash(
     }
 
     /**
-     * "Restore" on a song KJB trashed: its MediaStore id for the phone's own dialog ([MediaStoreTrash.request] with
-     * trash false). Empty while another dialog is open or the song is not listed.
+     * "Restore" on a song in the phone's trash, KJB's or another app's ([elsewhere]): its MediaStore id for the phone's
+     * own dialog ([MediaStoreTrash.request] with trash false). Empty while another dialog is open or the song is not
+     * listed.
      */
     fun restore(song: TrashedSong): List<Long> {
-        val listed = host.memory.trashed.any { it.file.id == song.file.id }
+        val listed = (host.memory.trashed + others.value.orEmpty()).any { it.file.id == song.file.id }
         if (!listed || host.step != TrashStep.None) return emptyList()
         host.step { TrashStep.Restoring(song) }
         return listOf(song.file.id)
@@ -299,19 +351,110 @@ class SongTrash(
         host.step { if (it is TrashStep.Restoring) TrashStep.None else it }
         val back = song != null && approved && phoneTrash.inTrash(listOf(song.file.id))?.let { song.file.id !in it } == true
         if (song == null || !back) return@withContext Restored.Unchanged
-        host.commit(emptySet()) { memory -> memory.copy(trashed = memory.trashed.filter { it.file.id != song.file.id }) }
+        forget(setOf(song.file.id))
         log("trash: 1 song restored")
         Restored.Back
     }
 
-    /** Drops the trashed songs the phone no longer has in its trash (restored elsewhere, deleted for good) or that expired. */
+    /**
+     * "Delete forever" on [songs] (one, or every song listed: Empty trash): KJB's own dialog asks first
+     * ([TrashStep.ConfirmDelete]). False only when none is given. A dialog step still open gives way, as for [ask].
+     */
+    fun askDelete(songs: List<TrashedSong>): Boolean {
+        if (songs.isEmpty()) return false
+        host.step { TrashStep.ConfirmDelete(songs) }
+        return true
+    }
+
+    /**
+     * "Delete forever" in KJB's dialog, which shows [shown]: their MediaStore ids for the phone's own dialog
+     * ([MediaStoreTrash.deleteRequest]), once MediaStore says each one is still in its trash. One that is not (restored
+     * meanwhile, or gone) asks nothing ([Confirmation.Changed]), so a delete never reaches a song out of the trash. Nothing
+     * is asked unless that dialog is open on [shown].
+     */
+    suspend fun confirmDelete(shown: List<TrashedSong>): Confirmation {
+        if (host.step != TrashStep.ConfirmDelete(shown)) return Confirmation.NotAsked
+        val ids = shown.map { it.file.id }
+        val inTrash = try {
+            withContext(io) { phoneTrash.inTrash(ids) }
+        } catch (e: CancellationException) {
+            closeDelete(shown)
+            throw e
+        }
+        val answer = when {
+            host.step != TrashStep.ConfirmDelete(shown) -> return Confirmation.NotAsked
+            inTrash == null -> Confirmation.Unavailable
+            ids.any { it !in inTrash } -> Confirmation.Changed
+            else -> Confirmation.Ask(ids)
+        }
+        // Nothing suspends from here on: the step is the phone's dialog only for a caller that opens it.
+        if (answer is Confirmation.Ask) host.step { TrashStep.Deleting(shown) } else closeDelete(shown)
+        return answer
+    }
+
+    /** KJB's delete dialog on [shown] closes, unless a newer step took its place. */
+    private fun closeDelete(shown: List<TrashedSong>) = host.step { if (it == TrashStep.ConfirmDelete(shown)) TrashStep.None else it }
+
+    /**
+     * The phone's delete dialog answered. [approved] (RESULT_OK): the songs MediaStore lists nowhere now are gone for good,
+     * with the room they freed; every song asked for that is out of the trash leaves the lists (one restored meanwhile is
+     * not counted). Another app's song gone for good gets what KJB's own got as they went to the trash: it leaves the
+     * queues ([leaveQueues]), then the lyrics KJB wrote for it and its playlists go ([cleanup]), unless a file is at its
+     * place again. Not approved: nothing changes. Finishes even if the screen goes.
+     */
+    suspend fun deleteAnswered(approved: Boolean): Deleted = withContext(NonCancellable + io) {
+        host.loaded()
+        val songs = (host.step as? TrashStep.Deleting)?.songs
+        host.step { if (it is TrashStep.Deleting) TrashStep.None else it }
+        if (songs == null || !approved) return@withContext Deleted.Unchanged
+        val ids = songs.map { it.file.id }
+        val left = phoneTrash.inTrash(ids)
+        // Out of the trash and listed nowhere else: gone for good. One MediaStore lists again was restored meanwhile.
+        val restored = left?.let { rows(ids.filter { id -> id !in it }) }
+        if (left == null || restored == null) {
+            log("trash: MediaStore could not say what is left in its trash, ${songs.size} songs unconfirmed")
+            return@withContext Deleted.NotConfirmed
+        }
+        val out = ids.filterTo(HashSet()) { it !in left }
+        val gone = songs.filter { it.file.id in out && it.file.id !in restored }
+        // Another app's songs gone for good, by the place each had: what KJB's own got as they went to the trash.
+        val own = host.memory.trashed.mapTo(HashSet()) { it.file.id }
+        val places = gone.filter { it.file.id !in own }.mapNotNullTo(LinkedHashSet()) { vacated(it.file.path) }
+        if (places.isNotEmpty()) leaveQueues(places)
+        for (place in places) cleanup.trashed(place)
+        forget(out)
+        log("trash: ${gone.size} of ${songs.size} songs deleted for good")
+        Deleted.Gone(gone.size, of = songs.size, bytes = gone.sumOf { it.file.size })
+    }
+
+    /** The songs with MediaStore [ids] are out of the phone's trash (restored, or deleted for good): they leave the lists. */
+    private suspend fun forget(ids: Set<Long>) {
+        others.update { songs -> songs?.filter { it.file.id !in ids } }
+        if (host.memory.trashed.none { it.file.id in ids }) return
+        host.commit(emptySet()) { memory -> memory.copy(trashed = memory.trashed.filter { it.file.id !in ids }) }
+    }
+
+    /**
+     * Drops the trashed songs the phone no longer has in its trash (restored elsewhere, deleted for good) or that expired,
+     * then reads what other apps moved there ([elsewhere]; as it was while MediaStore cannot be read, unread before its
+     * first read, so Tools never says Empty for a trash it could not see).
+     */
     suspend fun refresh(): Unit = withContext(io) {
         host.loaded()
+        refreshOwn()
+        val phone = phoneTrash.songs()
+        val own = host.memory.trashed.mapTo(HashSet()) { it.file.id }
+        val now = clock()
+        others.update { before -> phone?.filter { it.file.id !in own && it.expiresAt > now } ?: before }
+    }
+
+    /** [refresh] of the songs KJB moved there. */
+    private suspend fun refreshOwn() {
         val songs = host.memory.trashed
-        if (songs.isEmpty()) return@withContext
+        if (songs.isEmpty()) return
         val ids = songs.map { it.file.id }.toSet()
         val kept = stillTrashed(songs, phoneTrash.inTrash(ids), clock()).associateBy { it.file.id }
-        if (kept.values.toList() == songs) return@withContext
+        if (kept.values.toList() == songs) return
         withContext(NonCancellable) {
             // Songs listed meanwhile stay as they are.
             host.commit(emptySet()) { memory -> memory.copy(trashed = memory.trashed.mapNotNull { if (it.file.id in ids) kept[it.file.id] else it }) }
@@ -355,6 +498,8 @@ class SongTrash(
             return null
         }
         val trashed = pending.filter { it.id in expiries }
+        // The queues first, all at once: a song playing among them gives way to the next one left straight away.
+        if (trashed.isNotEmpty()) leaveQueues(trashed.mapTo(LinkedHashSet()) { it.path })
         for (file in trashed) cleanup.trashed(file.path)
         val ids = trashed.map { it.id }.toSet()
         val now = clock()
@@ -363,12 +508,21 @@ class SongTrash(
         log("trash: ${trashed.size} of ${pending.size} files moved to the trash")
         return trashed.size
     }
-
-    private companion object {
-        /** How long the phone keeps trashed files when MediaStore does not say (AOSP MediaProvider: 30 days). */
-        const val TRASH_KEPT_MS: Long = 30 * 24 * 60 * 60_000L
-    }
 }
+
+/**
+ * Where the file at [trashedPath] (`.trashed-<expiry>-<name>`, as the phone's trash keeps it) was before it went to the
+ * trash, which KJB's lyrics and playlists name it by; null while a file, or a link, is there again: the lyrics there may
+ * be its own. Blocking.
+ */
+private fun vacated(trashedPath: String): String? {
+    val file = File(trashedPath)
+    val place = File(file.parentFile, file.name.replace(TRASHED_PREFIX, ""))
+    return place.path.takeIf { Files.notExists(place.toPath(), LinkOption.NOFOLLOW_LINKS) }
+}
+
+/** How long the phone keeps trashed files when MediaStore does not say (AOSP MediaProvider: 30 days). */
+private const val TRASH_KEPT_MS: Long = 30 * 24 * 60 * 60_000L
 
 /**
  * Whether the song [listed] names, listed at one size and in MediaStore [now] at another (same place, same name), was
@@ -416,11 +570,13 @@ fun kjbTagWrites(history: () -> UndoMemory): (listed: AudioFile, now: AudioFile)
 
 /**
  * The phone's trash through MediaStore (Android 11 and later). [request] makes the phone's own dialog that moves songs to
- * its trash or back (`MediaStore.createTrashRequest`), launched by the screen with
- * `ActivityResultContracts.StartIntentSenderForResult`; RESULT_OK means it is done. The phone shows that dialog to every
+ * its trash or back (`MediaStore.createTrashRequest`), and [deleteRequest] the one that deletes songs in it for good
+ * (`MediaStore.createDeleteRequest`), each launched by the screen with
+ * `ActivityResultContracts.StartIntentSenderForResult`; RESULT_OK means it is done. The phone shows those dialogs to every
  * app without the Media management permission (MANAGE_MEDIA), which KJB never asks for: the phone always asks the user
  * itself. Trashed files keep their MediaStore id and can be restored for about 30 days; then the phone deletes them.
- * Every request asks [writes] first; a debug build asks only for songs in its test folder.
+ * [songs] lists them, whichever app moved them there. Every request asks [writes] first; a debug build asks only for
+ * songs in its test folder.
  */
 class MediaStoreTrash(private val resolver: ContentResolver, private val writes: SharedWrites) : PhoneTrash {
     sealed interface Request {
@@ -441,6 +597,32 @@ class MediaStoreTrash(private val resolver: ContentResolver, private val writes:
         Request.Unavailable(e.javaClass.simpleName)
     } catch (e: SecurityException) {
         Request.Unavailable(e.javaClass.simpleName)
+    }
+
+    /**
+     * The phone's dialog deleting the songs with MediaStore [ids] for good (`MediaStore.createDeleteRequest`), asked only
+     * for songs in its trash ([SongTrash.confirmDelete]). It names each by its id, which MediaProvider matches trashed or
+     * not; RESULT_OK means it is done.
+     */
+    fun deleteRequest(ids: List<Long>): Request = try {
+        if (!writes.allowsIds(SharedWrite.TRASH_DELETE, ids, ::paths)) {
+            Request.Unavailable("refused by this build")
+        } else {
+            Request.Ready(MediaStore.createDeleteRequest(resolver, ids.map(::uri)))
+        }
+    } catch (e: IllegalArgumentException) {
+        Request.Unavailable(e.javaClass.simpleName)
+    } catch (e: SecurityException) {
+        Request.Unavailable(e.javaClass.simpleName)
+    }
+
+    override fun songs(): List<TrashedSong>? = try {
+        val only = Bundle().apply { putInt(MediaStore.QUERY_ARG_MATCH_TRASHED, MediaStore.MATCH_ONLY) }
+        resolver.query(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, TRASHED_PROJECTION, only, null)?.use { trashedSongs(it, writes) }
+    } catch (_: SecurityException) {
+        null
+    } catch (_: IllegalArgumentException) {
+        null
     }
 
     /** The absolute paths of the songs with MediaStore [ids], trashed ones included; null when MediaStore gives no answer. */
@@ -487,13 +669,84 @@ class MediaStoreTrash(private val resolver: ContentResolver, private val writes:
 
     private fun uri(id: Long): Uri = ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, id)
 
-    private companion object {
+    internal companion object {
         /** Well under SQLite's limit of query arguments. */
-        const val MAX_IDS_PER_QUERY: Int = 500
+        private const val MAX_IDS_PER_QUERY: Int = 500
 
         /** A file's absolute path (MediaStore's `_data`), for [writes]. */
         const val DATA: String = "_data"
 
-        val PROJECTION: Array<String> = arrayOf(MediaStore.Audio.Media._ID, MediaStore.Audio.Media.IS_TRASHED, MediaStore.Audio.Media.DATE_EXPIRES)
+        private val PROJECTION: Array<String> = arrayOf(MediaStore.Audio.Media._ID, MediaStore.Audio.Media.IS_TRASHED, MediaStore.Audio.Media.DATE_EXPIRES)
+
+        /** What [trashedSongs] reads of each trashed song, the library's own columns for whether it would list it among them. */
+        val TRASHED_PROJECTION: Array<String> = arrayOf(
+            MediaStore.Audio.Media._ID,
+            DATA,
+            MediaStore.Audio.Media.RELATIVE_PATH,
+            MediaStore.Audio.Media.DISPLAY_NAME,
+            MediaStore.Audio.Media.TITLE,
+            MediaStore.Audio.Media.ARTIST,
+            MediaStore.Audio.Media.ALBUM,
+            MediaStore.Audio.Media.DURATION,
+            MediaStore.Audio.Media.SIZE,
+            MediaStore.Audio.Media.MIME_TYPE,
+            MediaStore.Audio.Media.DATE_EXPIRES,
+            MediaStore.Audio.Media.IS_MUSIC,
+            MediaStore.Audio.Media.IS_AUDIOBOOK,
+        )
     }
 }
+
+/**
+ * The songs of [cursor]'s rows, MediaStore's trashed audio ([MediaStoreTrash.TRASHED_PROJECTION]), that KJB's library
+ * would list were they not trashed: by the library's own rule ([LibraryReader.inScope]: marked as music, in a Music
+ * folder, or an audiobook; never a ringtone, a recording or other sounds) and only those [writes] lists (a debug build:
+ * its test folders). Each as the phone's trash has it: its path is the file's there (`.trashed-<expiry>-<name>`), its
+ * name and size as it was, gone for good at its expiry. A row without an expiry is left out: no date to show.
+ */
+fun trashedSongs(cursor: Cursor, writes: SharedWrites): List<TrashedSong> {
+    val id = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
+    val data = cursor.getColumnIndexOrThrow(MediaStoreTrash.DATA)
+    val relativePath = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.RELATIVE_PATH)
+    val displayName = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DISPLAY_NAME)
+    val title = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
+    val artist = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)
+    val album = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM)
+    val duration = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
+    val size = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.SIZE)
+    val mimeType = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.MIME_TYPE)
+    val expires = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DATE_EXPIRES)
+    val isMusic = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.IS_MUSIC)
+    val isAudiobook = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.IS_AUDIOBOOK)
+    fun text(column: Int): String? = cursor.getString(column)?.trim()?.takeIf { it.isNotEmpty() && it != UNKNOWN }
+    return buildList {
+        while (cursor.moveToNext()) {
+            val path = cursor.getString(data) ?: continue
+            val folder = cursor.getString(relativePath)
+            if (cursor.isNull(expires) || !writes.lists(path)) continue
+            if (!LibraryReader.inScope(cursor.getInt(isMusic) != 0, cursor.getInt(isAudiobook) != 0, folder)) continue
+            val name = text(displayName) ?: File(path).name.replace(TRASHED_PREFIX, "")
+            val expiresAt = TimeUnit.SECONDS.toMillis(cursor.getLong(expires))
+            val file = AudioFile(
+                id = cursor.getLong(id),
+                path = path,
+                relativePath = folder,
+                displayName = name,
+                title = text(title) ?: name.substringBeforeLast('.'),
+                artist = text(artist),
+                album = text(album),
+                durationMs = cursor.getLong(duration),
+                size = cursor.getLong(size),
+                mimeType = cursor.getString(mimeType),
+            )
+            // When it was moved there is not kept: about when, from its expiry.
+            add(TrashedSong(file, trashedAt = expiresAt - TRASH_KEPT_MS, expiresAt = expiresAt))
+        }
+    }
+}
+
+/** MediaStore.UNKNOWN_STRING, its artist for a song without one (the stubs give no constant to test with). */
+private const val UNKNOWN: String = "<unknown>"
+
+/** How a trashed file's name starts on disk (AOSP MediaProvider): `.trashed-<expiry>-`. */
+private val TRASHED_PREFIX = Regex("""^\.trashed-\d+-""")

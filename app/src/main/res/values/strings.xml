@@ -27,6 +27,11 @@
         <item quantity="other">%d tones</item>
     </plurals>
     <string name="tools_tones_none">No tones yet</string>
+    <plurals name="tools_trash">
+        <item quantity="one">%1$d song · %2$s</item>
+        <item quantity="other">%1$d songs · %2$s</item>
+    </plurals>
+    <string name="tools_trash_none">Empty</string>
     <string name="tools_covers">Covers &amp; tags</string>
     <string name="tools_ai_no_chip">Not supported</string>
     <string name="tools_ai_update">Needs an update</string>

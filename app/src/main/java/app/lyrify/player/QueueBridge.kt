@@ -225,12 +225,14 @@ interface PlayerPort {
  * Applies the queue model to the player ([sync] on every change of the book or the library): another queue is loaded at
  * its place; a change to the queue playing reaches the player as a few edits ([plan]), however large, so the song
  * playing never stops; a song whose file moved is replaced with its new path ([Edit.Replace]); a jump in the book
- * ([QueueBook.jumps]) moves the player to the current song at its position. The player moving on by itself comes back
- * through [QueueBook.at], which leaves the player as it is.
+ * ([QueueBook.jumps]) moves the player to the current song at its position. A stop in the book ([QueueBook.stops]: the
+ * song playing went to the trash with none after it) stops the player ([stop]) before any of that, so it waits where
+ * the queue does. The player moving on by itself comes back through [QueueBook.at], which leaves the player as it is.
  */
-class QueueBridge(private val port: PlayerPort) {
+class QueueBridge(private val port: PlayerPort, private val stop: () -> Unit = {}) {
     private var loadedId: String? = null
     private var jumps: Long = 0
+    private var stops: Long = 0
 
     /** The path the player was handed for each song it holds, by uid. */
     private var paths: Map<Long, String> = emptyMap()
@@ -240,6 +242,7 @@ class QueueBridge(private val port: PlayerPort) {
         if (queue == null) {
             if (loadedId != null || port.loaded.isNotEmpty()) port.load(emptyList(), -1, 0)
             loadedId = null
+            stops = book.stops
             paths = emptyMap()
             return
         }
@@ -250,8 +253,13 @@ class QueueBridge(private val port: PlayerPort) {
             port.load(projected, start, position)
             loadedId = queue.id
             jumps = book.jumps
+            stops = book.stops
             paths = projected.associate { it.uid to it.song.path }
             return
+        }
+        if (book.stops != stops) {
+            stops = book.stops
+            stop()
         }
         val playing = port.loaded.getOrNull(port.index)
         val plan = plan(port.loaded, projected, playing, paths)

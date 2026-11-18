@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Tools > Trash (ui/TrashScreen.kt): the songs in the phone's trash. Labels are three words or fewer; sentences only in dialogs, empty states and the note. -->
+<resources>
+    <string name="trash_title">Trash</string>
+    <string name="trash_note">Your phone deletes them for good about 30 days after they were moved. A song you restore doesn\'t go back into its playlists or queues.</string>
+    <string name="trash_empty_all">Empty trash (%1$s)</string>
+    <string name="trash_empty_title">Nothing in the trash</string>
+    <string name="trash_empty_text">Songs you move to the trash wait here for about 30 days. Then your phone deletes them.</string>
+    <string name="trash_facts">%1$s · %2$s · until %3$s</string>
+    <string name="trash_delete_cd">Delete %1$s forever</string>
+
+    <!-- Delete forever, Empty trash -->
+    <plurals name="trash_delete_title">
+        <item quantity="one">Delete %d song forever?</item>
+        <item quantity="other">Delete %d songs forever?</item>
+    </plurals>
+    <string name="trash_delete_text">This frees %1$s. You can\'t undo this.</string>
+    <string name="trash_delete_confirm">Delete forever</string>
+    <string name="trash_delete_cancelled">Nothing deleted</string>
+    <string name="trash_changed">Your trash changed. Check it and try again.</string>
+    <plurals name="trash_deleted">
+        <item quantity="one">Song deleted forever. %2$s freed.</item>
+        <item quantity="other">%1$d songs deleted forever. %2$s freed.</item>
+    </plurals>
+    <plurals name="trash_deleted_some">
+        <item quantity="one">%1$d of %2$d song deleted forever. %3$s freed.</item>
+        <item quantity="other">%1$d of %2$d songs deleted forever. %3$s freed.</item>
+    </plurals>
+    <plurals name="trash_deleted_none">
+        <item quantity="one">Your phone didn\'t delete the song. Try again.</item>
+        <item quantity="other">Your phone didn\'t delete the %d songs. Try again.</item>
+    </plurals>
+    <plurals name="trash_delete_refused">
+        <item quantity="one">Your phone refused to delete the song.</item>
+        <item quantity="other">Your phone refused to delete the %d songs.</item>
+    </plurals>
+</resources>

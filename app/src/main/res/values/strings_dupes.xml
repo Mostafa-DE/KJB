@@ -37,7 +37,6 @@
     <string name="dupes_section_identical">Identical</string>
     <string name="dupes_section_same">Same song</string>
     <string name="dupes_section_maybe">Maybe</string>
-    <string name="dupes_section_trashed">Trashed</string>
     <string name="dupes_section">%1$s · %2$s</string>
     <plurals name="dupes_copies">
         <item quantity="one">%1$d copy · %2$s extra</item>
@@ -73,7 +72,6 @@
         <item quantity="one">Move %d song to trash?</item>
         <item quantity="other">Move %d songs to trash?</item>
     </plurals>
-    <string name="dupes_trash_text">They leave your music app and its playlists. You can restore them here for about 30 days.</string>
     <string name="dupes_trash_confirm">Move to trash</string>
     <plurals name="dupes_moved">
         <item quantity="one">%d song moved to trash</item>
@@ -95,9 +93,7 @@
         <item quantity="other">Your phone refused to move the %d songs.</item>
     </plurals>
 
-    <!-- Trashed songs -->
-    <string name="dupes_trashed_facts">%1$s · until %2$s</string>
-    <string name="dupes_trashed_empty">Nothing in the trash</string>
+    <!-- Restoring (Tools > Trash) -->
     <string name="dupes_restore">Restore</string>
     <string name="dupes_restore_cd">Restore %1$s</string>
     <string name="dupes_restored">Song restored</string>

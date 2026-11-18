@@ -165,7 +165,8 @@ class PlaybackService : MediaLibraryService() {
         )
         // The phone's sound effects panel needs the player's own session from the start (A1).
         PlayerGraph.audioSessionId = engine.audioSessionId
-        bridge = QueueBridge(engine)
+        // The song playing gone to the trash with none after it: the player stops where the queue waits (QueueBook.forget).
+        bridge = QueueBridge(engine) { engine.setPlayWhenReady(false) }
         player = LyrifyPlayer(mainLooper, engine, core, skips = ::skips, sync = ::sync, beforeSeek = ::heardSoFar)
         engine.addListener(Follower())
         core.follow { engine.loaded.getOrNull(engine.index)?.let { PlayerAt(it, engine.positionMs) } }

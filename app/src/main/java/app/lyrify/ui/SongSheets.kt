@@ -477,7 +477,7 @@ internal fun NameField(name: TextFieldValue, onName: (TextFieldValue) -> Unit, l
 /** A name field's start: [start] all selected, so typing replaces it; empty for a new name. */
 fun nameField(start: String): TextFieldValue = TextFieldValue(start, TextRange(0, start.length))
 
-/** KJB's own "Move 2 songs to trash?", before the phone's. */
+/** KJB's own "Move 2 songs to trash?", before the phone's: from the song sheet, a selection, the player and Duplicates. */
 @Composable
 internal fun SongTrashDialog(count: Int, onCancel: () -> Unit, onConfirm: () -> Unit) {
     ConfirmDialog(

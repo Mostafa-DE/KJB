@@ -149,9 +149,9 @@ internal fun PlayerUi.ref(): SongRef = song?.ref ?: item.song
 enum class ExtrasSheet { SLEEP, SLEEP_MINUTES, SLEEP_SONGS, SPEED, BOOKMARK }
 
 /**
- * The player's extras on screen: which sheet is open, and the actions of P2's routes ([route]). Add to, Song info and
- * Make a tone open the library's sheets ([songSheets], L1's one door). The state lives in [PlayerExtras]; the service
- * applies it. Main thread.
+ * The player's extras on screen: which sheet is open, and the actions of P2's routes ([route]). Add to, Song info, Make a
+ * tone and Move to trash open the library's sheets ([songSheets], L1's one door, drawn over the player by
+ * [PlayerExtrasHost]). The state lives in [PlayerExtras]; the service applies it. Main thread.
  */
 @Stable
 class PlayerExtrasUi internal constructor(
@@ -170,8 +170,9 @@ class PlayerExtrasUi internal constructor(
         private set
 
     /**
-     * P2's routes of the player's "⋯" and the sleep button, and Share's; false for a route it does not fill. [names]: "Show
-     * file names"; [lyrics]: what the song's lyrics can be shared as.
+     * P2's routes of the player's "⋯" and the sleep button, Share's, and Move to trash (the song sheet's own dialogs, then
+     * the phone's: the song playing gives way to the next once it is in the trash); false for a route it does not fill.
+     * [names]: "Show file names"; [lyrics]: what the song's lyrics can be shared as.
      */
     fun route(route: PlayerRoute, ui: PlayerUi, names: LibrarySettings, lyrics: LyricsShare?): Boolean {
         val song = ui.song?.ref ?: ui.item.song
@@ -181,6 +182,7 @@ class PlayerExtrasUi internal constructor(
             PlayerRoute.MAKE_TONE -> songSheets.show(OpenSheet.MakeTone(song))
             PlayerRoute.SHARE -> scope.launch { toasts.say(resources, shareSongs(context, listOfNotNull(ui.song)) { displayTitle(it, names) }) }
             PlayerRoute.SHARE_LYRICS -> lyrics?.let { songSheets.show(OpenSheet.ShareLyrics(song, it == LyricsShare.SYNCED)) }
+            PlayerRoute.MOVE_TO_TRASH -> ui.song?.let { songSheets.show(OpenSheet.Trash(listOf(it.ref))) }
             PlayerRoute.SPEED -> open = ExtrasSheet.SPEED
             PlayerRoute.SLEEP -> open = ExtrasSheet.SLEEP
             PlayerRoute.REPEAT_PART -> togglePart(ui)

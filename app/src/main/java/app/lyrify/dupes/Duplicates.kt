@@ -7,6 +7,7 @@ import app.lyrify.Lyrify
 import app.lyrify.library.LibraryGraph
 import app.lyrify.logFailures
 import app.lyrify.lyrics.LrcFormat
+import app.lyrify.player.PlayerGraph
 import app.lyrify.tags.TagsGraph
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -103,6 +104,8 @@ class Duplicates(
     private val hasLyrics: (AudioFile) -> Boolean = ::sidecarExists,
     /** Whether a file of another size than at the scan was changed since only by KJB's own tag writes ([kjbTagWrites]). */
     private val ownWrite: (listed: AudioFile, now: AudioFile) -> Boolean = { _, _ -> false },
+    /** Songs now in the phone's trash leave KJB's queues, all of one answer at once ([SongTrash]). */
+    private val leaveQueues: suspend (Set<String>) -> Unit = {},
     private val log: (String) -> Unit = {},
 ) {
     private val _state = MutableStateFlow(DuplicatesState())
@@ -146,6 +149,7 @@ class Duplicates(
         io = io,
         clock = clock,
         ownWrite = ownWrite,
+        leaveQueues = leaveQueues,
         log = log,
     )
 
@@ -251,15 +255,16 @@ class Duplicates(
     /** The phone's dialog answered ([SongTrash.answered]); the files it trashed leave the results. */
     suspend fun systemAnswered(approved: Boolean): Trashed = trash.answered(approved)
 
-    /** "Restore" on a song KJB trashed ([SongTrash.restore]). */
+    /** "Restore" on a song in the phone's trash ([SongTrash.restore]). */
     fun restore(song: TrashedSong): List<Long> = trash.restore(song)
 
     /** The phone's restore dialog answered ([SongTrash.restoreAnswered]). */
     suspend fun restoreAnswered(approved: Boolean): Restored = trash.restoreAnswered(approved)
 
     /**
-     * As the tab opens and before a scan: a trash answer the app did not hear is settled ([SongTrash.settlePending]), then
-     * the trashed songs the phone no longer has in its trash, or that expired, drop off ([SongTrash.refresh]).
+     * As the tab, Tools or Tools > Trash opens and before a scan: a trash answer the app did not hear is settled
+     * ([SongTrash.settlePending]), then the trashed songs the phone no longer has in its trash, or that expired, drop off,
+     * and what other apps moved there is read again ([SongTrash.refresh]).
      */
     suspend fun refreshTrashed() {
         trash.settlePending()
@@ -352,6 +357,7 @@ private object DuplicatesHolder {
             io = Dispatchers.IO,
             clock = System::currentTimeMillis,
             ownWrite = kjbTagWrites { TagsGraph.undo(app).memory() },
+            leaveQueues = { paths -> withContext(Dispatchers.Main) { PlayerGraph.core(app).trashed(paths) } },
             log = { Log.d(LOG_TAG, it) },
         )
     }.also { engine = it }

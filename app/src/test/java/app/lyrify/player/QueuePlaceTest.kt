@@ -129,7 +129,7 @@ class QueuePlaceTest {
         private val life = CoroutineScope(test.backgroundScope.coroutineContext + Job(test.backgroundScope.coroutineContext[Job]))
         val core = PlayerCore(files, life, wall = { test.currentTime })
         val player = FakePlayer(core, clock = { test.currentTime })
-        private val bridge = QueueBridge(player)
+        private val bridge = QueueBridge(player, stop = player::pause)
         private val find: (SongRef) -> Song? = { ref -> library.firstOrNull { it.path == ref.path } }
 
         init {
@@ -158,6 +158,12 @@ class QueuePlaceTest {
         /** "New queue" in Add to: a saved queue named [name], waiting. */
         fun newQueue(name: String, list: List<SongRef>): String =
             core.edit { book -> book.newQueue(name, list, picked, core.now())?.let { it.book to it.book.saved.first() } }!!.also { test.runCurrent() }
+
+        /** The phone moved the songs at [paths] to its trash, after its dialog's OK (dupes/SongTrash.kt). */
+        fun trash(paths: Set<String>) {
+            core.trashed(paths)
+            test.runCurrent()
+        }
 
         fun listen(ms: Long) {
             test.advanceTimeBy(ms)
@@ -382,5 +388,29 @@ class QueuePlaceTest {
 
         kjb.resume(trip)
         assertPlaying(kjb, trip, current, 33_000)
+    }
+
+    @Test
+    fun `a song moved to the trash while it plays gives way to the next one, and the last one stops the player at the queue's first song`() = runTest {
+        val kjb = Kjb(this, Files())
+        kjb.tap(songs.take(4), 1, album)
+        kjb.listen(30_000)
+
+        kjb.trash(setOf(songs[1].path, songs[2].path))
+        // The next song left plays at once, from its start.
+        assertEquals(songs[3].path, kjb.song)
+        assertEquals(0L, kjb.player.positionMs)
+        assertTrue(kjb.player.playing.value)
+        assertEquals(listOf(songs[0].path, songs[3].path), kjb.book.current!!.items.map { it.song.path })
+        assertEquals(kjb.book.current!!.items.map { it.uid }, kjb.player.loaded)
+
+        kjb.listen(10_000)
+        kjb.trash(setOf(songs[3].path))
+        // No song after it: the player stops, at the queue's first song.
+        assertEquals(songs[0].path, kjb.song)
+        assertEquals(0L, kjb.player.positionMs)
+        assertFalse(kjb.player.playing.value)
+        assertEquals(0, kjb.book.current!!.index)
+        assertEquals(listOf(kjb.book.current!!.items.single().uid), kjb.player.loaded)
     }
 }

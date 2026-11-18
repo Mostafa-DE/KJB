@@ -158,7 +158,7 @@
     <string name="lib_remove_from_queue">Remove from queue</string>
     <string name="lib_remove_from_playlist">Remove from playlist</string>
     <string name="lib_move_to_trash">Move to trash</string>
-    <string name="lib_trash_text">They leave your music app and its playlists. You can restore them in Tools, Duplicates for about 30 days.</string>
+    <string name="lib_trash_text">They leave your music app, its playlists and queues. You can restore them in Tools, Trash for about 30 days.</string>
     <string name="lib_trash_changed">This song changed. Try again.</string>
 
     <!-- The Lyrics row's sheet -->

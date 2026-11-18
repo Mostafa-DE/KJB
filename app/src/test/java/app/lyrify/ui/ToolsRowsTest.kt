@@ -1,9 +1,11 @@
 package app.lyrify.ui
 
 import app.lyrify.R
+import app.lyrify.dupes.AudioFile
 import app.lyrify.dupes.Confidence
 import app.lyrify.dupes.DuplicateGroup
 import app.lyrify.dupes.ScanResults
+import app.lyrify.dupes.TrashedSong
 import app.lyrify.models.ModelState
 import app.lyrify.models.NpuChip
 import app.lyrify.models.NpuChips
@@ -29,11 +31,12 @@ class ToolsRowsTest {
         coversTags: EntryRow? = null,
         ai: AiState = ai(enabled = false),
         aiWaiting: Int = 0,
-    ): Map<Tool, ToolRow> = toolRows(checks, dupes, dupesBadge, tones, coversTags, ai, aiWaiting).associateBy { it.tool }
+        trash: List<TrashedSong>? = null,
+    ): Map<Tool, ToolRow> = toolRows(checks, dupes, dupesBadge, tones, coversTags, ai, aiWaiting, trash = trash).associateBy { it.tool }
 
     @Test
-    fun `the rows come in the prototype's order, Settings last`() {
-        assertEquals(listOf(Tool.CHECK, Tool.DUPLICATES, Tool.TONES, Tool.COVERS_TAGS, Tool.DOWNLOADS, Tool.AI, Tool.SETTINGS), toolRows(0, DupesView.Loading, 0, 0, null, ai(), 0).map { it.tool })
+    fun `the rows come in the prototype's order, Trash after Duplicates, Settings last`() {
+        assertEquals(listOf(Tool.CHECK, Tool.DUPLICATES, Tool.TRASH, Tool.TONES, Tool.COVERS_TAGS, Tool.DOWNLOADS, Tool.AI, Tool.SETTINGS), toolRows(0, DupesView.Loading, 0, 0, null, ai(), 0).map { it.tool })
     }
 
     @Test
@@ -48,10 +51,18 @@ class ToolsRowsTest {
         assertEquals(ToolLine.Text(R.string.tools_dupes_not_scanned), rows(dupes = DupesView.FirstScan).getValue(Tool.DUPLICATES).line)
         assertEquals(ToolLine.Text(R.string.tools_dupes_failed), rows(dupes = DupesView.Failed).getValue(Tool.DUPLICATES).line)
         assertEquals(ToolLine.Text(R.string.tools_dupes_scanning), rows(dupes = DupesView.Scanning(10, 400)).getValue(Tool.DUPLICATES).line)
-        val none = DupesView.Results(ScanResults(scannedAt = 0, scanned = 400, groups = emptyList()), trashed = emptyList(), failed = false)
+        val none = DupesView.Results(ScanResults(scannedAt = 0, scanned = 400, groups = emptyList()), failed = false)
         assertEquals(ToolRow(Tool.DUPLICATES, ToolLine.Text(R.string.tools_dupes_none)), rows(dupes = none).getValue(Tool.DUPLICATES))
-        val twelve = DupesView.Results(ScanResults(scannedAt = 0, scanned = 400, groups = List(12) { DuplicateGroup(Confidence.IDENTICAL, emptyList()) }), trashed = emptyList(), failed = false)
+        val twelve = DupesView.Results(ScanResults(scannedAt = 0, scanned = 400, groups = List(12) { DuplicateGroup(Confidence.IDENTICAL, emptyList()) }), failed = false)
         assertEquals(ToolRow(Tool.DUPLICATES, ToolLine.Count(R.plurals.dupes_groups, 12), badge = 4), rows(dupes = twelve, dupesBadge = 4).getValue(Tool.DUPLICATES))
+    }
+
+    @Test
+    fun `Trash says nothing until the phone's trash is read, then Empty, or its songs and the room they take, with no badge`() {
+        assertNull(rows().getValue(Tool.TRASH).line)
+        assertEquals(ToolRow(Tool.TRASH, ToolLine.Text(R.string.tools_trash_none)), rows(trash = emptyList()).getValue(Tool.TRASH))
+        val song = TrashedSong(AudioFile(id = 1, path = "/storage/emulated/0/Music/Paper Lantern.mp3", displayName = "Paper Lantern.mp3", title = "Paper Lantern", durationMs = 1, size = 4_000), 0, 1)
+        assertEquals(ToolRow(Tool.TRASH, ToolLine.CountBytes(R.plurals.tools_trash, 2, 8_000)), rows(trash = listOf(song, song.copy(file = song.file.copy(id = 2)))).getValue(Tool.TRASH))
     }
 
     @Test

@@ -59,6 +59,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -442,6 +443,7 @@ enum class PlayerRoute {
     SLEEP,
     SEARCH_LYRICS,
     LYRICS_TEXT,
+    MOVE_TO_TRASH,
 }
 
 // The Now bar's own player
@@ -830,8 +832,9 @@ private fun Backdrop(path: String) {
 }
 
 /**
- * The chevron, "From Album · Name", and "⋯" with every item of the menu; Share and Share lyrics ([lyricsShare]) for a song
- * of the library, Make a tone when [tone] ([makesTone]). Dragged down, as anywhere on it, the player follows ([PlayerFrame]).
+ * The chevron, "From Album · Name", and "⋯" with every item of the menu; Share, Share lyrics ([lyricsShare]) and Move to
+ * trash (apart at the bottom, in red, as on the song sheet) for a song of the library, Make a tone when [tone]
+ * ([makesTone]). Dragged down, as anywhere on it, the player follows ([PlayerFrame]).
  */
 @Composable
 private fun PlayerTopBar(ui: PlayerUi, lyricsShare: LyricsShare?, tone: Boolean, onClose: () -> Unit, onRoute: (PlayerRoute) -> Unit) {
@@ -875,6 +878,10 @@ private fun PlayerTopBar(ui: PlayerUi, lyricsShare: LyricsShare?, tone: Boolean,
                 if (song != null) MenuRow(stringResource(R.string.share), R.drawable.ic_share, pick { onRoute(PlayerRoute.SHARE) })
                 if (song != null && lyricsShare != null) MenuRow(stringResource(R.string.share_lyrics), R.drawable.ic_share, pick { onRoute(PlayerRoute.SHARE_LYRICS) })
                 MenuRow(stringResource(R.string.player_menu_info), R.drawable.ic_info, pick { onRoute(PlayerRoute.SONG_INFO) })
+                if (song != null) {
+                    HorizontalDivider(Modifier.padding(horizontal = 12.dp, vertical = 4.dp), color = MaterialTheme.colorScheme.outlineVariant)
+                    MenuRow(stringResource(R.string.lib_move_to_trash), R.drawable.ic_delete, pick { onRoute(PlayerRoute.MOVE_TO_TRASH) }, destructive = true)
+                }
             }
         }
     }

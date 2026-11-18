@@ -1,5 +1,6 @@
 package app.lyrify.ui
 
+import android.text.format.Formatter
 import androidx.annotation.DrawableRes
 import androidx.annotation.PluralsRes
 import androidx.annotation.StringRes
@@ -19,6 +20,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -27,6 +29,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
@@ -38,14 +41,16 @@ import app.lyrify.R
 import app.lyrify.addon.AddonState
 import app.lyrify.data.LedgerState
 import app.lyrify.data.LyricsStatus
+import app.lyrify.dupes.TrashedSong
 import app.lyrify.overnight.NightStatus
 import app.lyrify.settings.DockTab
 import kotlinx.coroutines.launch
 
-/** The rows of Tools, in order: KJB's 2.0 features, Covers & tags, then Settings. */
+/** The rows of Tools, in order: KJB's 2.0 features with Trash after Duplicates, Covers & tags, then Settings. */
 enum class Tool(@StringRes val title: Int, @DrawableRes val icon: Int, val page: Page) {
     CHECK(R.string.check_title, R.drawable.ic_help_fill, Page.Check(null)),
     DUPLICATES(R.string.dupes_title, R.drawable.ic_content_copy, Page.Duplicates),
+    TRASH(R.string.trash_title, R.drawable.ic_delete, Page.Trash),
     TONES(R.string.tones_title, R.drawable.ic_ring_volume, Page.Tones),
     COVERS_TAGS(R.string.tools_covers, R.drawable.ic_sell, Page.CoversTags),
     DOWNLOADS(R.string.dl_title, R.drawable.ic_download, Page.Downloads),
@@ -54,13 +59,15 @@ enum class Tool(@StringRes val title: Int, @DrawableRes val icon: Int, val page:
 }
 
 /**
- * A row's one-line status (on Tools, and the Favourites row on Songs): a string, a plural with its count, or the AI
- * tile's value and label.
+ * A row's one-line status (on Tools, and the Favourites row on Songs): a string, a plural with its count, a plural with
+ * its count and a size ("3 songs · 24 MB"), or the AI tile's value and label.
  */
 sealed interface ToolLine {
     data class Text(@StringRes val res: Int) : ToolLine
 
     data class Count(@PluralsRes val res: Int, val count: Int) : ToolLine
+
+    data class CountBytes(@PluralsRes val res: Int, val count: Int, val bytes: Long) : ToolLine
 
     data class Ai(val value: TileValue, @StringRes val label: Int) : ToolLine
 }
@@ -70,13 +77,24 @@ data class ToolRow(val tool: Tool, val line: ToolLine?, val badge: Int? = null, 
 
 /**
  * The rows of Tools for what each feature says now: [checks] songs to check, Duplicates' [dupes] view and [dupesBadge]
- * groups not opened yet, [tones] made, Covers & tags' line and badge ([coversTags], from its milestone), and the AI's
- * state with [aiWaiting] songs waiting for it. On a phone the AI does not run on there is no AI row at all, no dead
- * button (the AI add-on design).
+ * groups not opened yet, the songs in the phone's [trash] ([trashSongs]; null until read), [tones] made, Covers & tags'
+ * line and badge ([coversTags], from its milestone), and the AI's state with [aiWaiting] songs waiting for it. On a phone
+ * the AI does not run on there is no AI row at all, no dead button (the AI add-on design).
  */
-fun toolRows(checks: Int, dupes: DupesView, dupesBadge: Int, tones: Int, coversTags: EntryRow?, ai: AiState, aiWaiting: Int, downloads: EntryRow? = null): List<ToolRow> = listOfNotNull(
+fun toolRows(
+    checks: Int,
+    dupes: DupesView,
+    dupesBadge: Int,
+    tones: Int,
+    coversTags: EntryRow?,
+    ai: AiState,
+    aiWaiting: Int,
+    downloads: EntryRow? = null,
+    trash: List<TrashedSong>? = null,
+): List<ToolRow> = listOfNotNull(
     ToolRow(Tool.CHECK, if (checks > 0) ToolLine.Count(R.plurals.tools_check, checks) else ToolLine.Text(R.string.tools_check_none), badge = checks.takeIf { it > 0 }),
     ToolRow(Tool.DUPLICATES, dupesLine(dupes), badge = dupesBadge.takeIf { it > 0 }),
+    ToolRow(Tool.TRASH, trashLine(trash)),
     ToolRow(Tool.TONES, if (tones > 0) ToolLine.Count(R.plurals.tools_tones, tones) else ToolLine.Text(R.string.tools_tones_none)),
     ToolRow(Tool.COVERS_TAGS, coversTags?.line, badge = coversTags?.badge),
     ToolRow(Tool.DOWNLOADS, downloads?.line, badge = downloads?.badge),
@@ -109,20 +127,24 @@ private fun aiLine(ai: AiState, waiting: Int): ToolLine {
 internal fun ToolLine.text(): String = when (this) {
     is ToolLine.Text -> stringResource(res)
     is ToolLine.Count -> pluralStringResource(res, count, count)
+    is ToolLine.CountBytes -> pluralStringResource(res, count, count, Formatter.formatShortFileSize(LocalContext.current, bytes))
     is ToolLine.Ai -> stringResource(R.string.tools_ai_line, tileText(value), stringResource(label))
 }
 
 // The screens
 
 /**
- * Tools, the third tab: Check these, Duplicates, Tones, Covers & tags and AI lyrics, each with its status and badge,
- * then Settings on its own. The banners say when the song list can't be read or KJB can't see the music app; while
+ * Tools, the third tab: Check these, Duplicates, Trash, Tones, Covers & tags and AI lyrics, each with its status and
+ * badge, then Settings on its own. The banners say when the song list can't be read or KJB can't see the music app; while
  * lookups failed, "Retry" is here too, whatever plays (2.0 had it on its Now tab).
  */
 @Composable
 fun ToolsScreen(rows: List<ToolRow>, onOpen: (Page) -> Unit) {
     val lyrics = LocalLyrics.current
     val failed = remember(lyrics.ledger) { lyrics.ledger.counts()[LyricsStatus.ERROR] ?: 0 }
+    val dupes = rememberDuplicates()
+    // Trash's line: what the phone's trash holds now, whichever app moved songs there.
+    LaunchedEffect(dupes) { dupes.refreshTrashed() }
     PageFrame(
         topBar = { under, backdrop ->
             MainTopBar(DockTab.TOOLS, under, backdrop)

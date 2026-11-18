@@ -65,8 +65,16 @@ class SongTrashTest {
 
     private fun lrc(path: String) = File(LrcFormat.sidecarPath(path) ?: error("no sidecar"))
 
-    /** The engine the app has: MediaStore's rows are the files on disk; trashing cleans up lyrics and playlists. */
-    private fun TestScope.engine(files: List<AudioFile>, pipeline: LyricsPipeline) = Duplicates(
+    /**
+     * The engine the app has: MediaStore's rows are the files on disk; trashing cleans up lyrics and playlists. The phone's
+     * trash also lists [elsewhere], songs other apps moved there.
+     */
+    private fun TestScope.engine(
+        files: List<AudioFile>,
+        pipeline: LyricsPipeline,
+        queues: suspend (Set<String>) -> Unit = {},
+        elsewhere: () -> List<TrashedSong> = { emptyList() },
+    ) = Duplicates(
         library = object : AudioLibrary {
             override fun read(): LibraryRead = LibraryRead.Files(files)
 
@@ -77,17 +85,25 @@ class SongTrashTest {
             pipeline.trashed(path)
             forgotten += path
         },
-        phoneTrash = { ids -> phoneTrash.filterKeys { it in ids } },
+        phoneTrash = object : PhoneTrash {
+            override fun inTrash(ids: Collection<Long>): Map<Long, Long?> = phoneTrash.filterKeys { it in ids }
+
+            override fun songs(): List<TrashedSong> = elsewhere()
+        },
         scope = this,
         io = StandardTestDispatcher(testScheduler),
         clock = { BASE + testScheduler.currentTime },
+        leaveQueues = queues,
     )
 
     private fun trashOnDisk(path: String, id: Long) {
         val audio = File(path)
-        assertTrue(audio.renameTo(File(audio.parentFile, ".trashed-1765000000-${audio.name}")))
+        assertTrue(audio.renameTo(inTrash(path)))
         phoneTrash[id] = BASE + 30 * DAY
     }
+
+    /** Where the phone's trash keeps the file at [path] (AOSP MediaProvider's name for it). */
+    private fun inTrash(path: String): File = File(path).let { File(it.parentFile, ".trashed-1765000000-${it.name}") }
 
     private suspend fun TestScope.lyricsFor(song: Song, pipeline: LyricsPipeline) {
         client.onGet = { LrclibResult.Found(listOf(LrclibRecord(1, song.title, "Kit Calloway", null, 200.0, plainLyrics = "w0001", syncedLyrics = synced))) }
@@ -131,6 +147,30 @@ class SongTrashTest {
         assertEquals(listOf(lantern.path), forgotten)
         assertEquals(listOf(11L), trash.trashed.map { it.file.id })
         assertEquals(TrashStep.None, trash.step)
+    }
+
+    @Test
+    fun `the songs the phone moved leave the queues together, before their lyrics and playlists, and only after its OK`() = runTest {
+        val lantern = song(11, "Paper Lantern")
+        val bell = song(12, "Tide Bell")
+        val files = listOfNotNull(trashFile(lantern), trashFile(bell))
+        // Each time the queues heard, with what the playlists had been told by then.
+        val left = mutableListOf<Pair<Set<String>, List<String>>>()
+        val trash = engine(files, pipeline(), queues = { left += it to forgotten.toList() }).trash
+        advanceUntilIdle()
+
+        assertTrue(trash.ask(files))
+        assertEquals(Confirmation.Ask(listOf(11L, 12L)), trash.confirm(files))
+        assertEquals(Trashed.Unchanged, trash.answered(approved = false))
+        assertEquals(emptyList<Pair<Set<String>, List<String>>>(), left)
+
+        assertTrue(trash.ask(files))
+        assertEquals(Confirmation.Ask(listOf(11L, 12L)), trash.confirm(files))
+        trashOnDisk(lantern.path, 11)
+        trashOnDisk(bell.path, 12)
+        assertEquals(Trashed.Moved(2), trash.answered(approved = true))
+        assertEquals(listOf(setOf(lantern.path, bell.path) to emptyList<String>()), left)
+        assertEquals(listOf(lantern.path, bell.path), forgotten)
     }
 
     @Test
@@ -326,6 +366,200 @@ class SongTrashTest {
         assertTrue(confirming.isCancelled)
         assertEquals(TrashMemory(pending = files), host.memory)
         assertEquals(TrashStep.None, trash.step)
+    }
+
+    // Delete forever and the phone's whole trash (Tools > Trash)
+
+    /** Three songs in the phone's trash, KJB's own; [inTrash] and [live] say what MediaStore has of them now. */
+    private inner class Bin {
+        val files = listOfNotNull(trashFile(song(11, "Paper Lantern")), trashFile(song(12, "Tide Bell")), trashFile(song(13, "Salt Road")))
+        val songs = files.map { TrashedSong(it, BASE, BASE + DAY) }
+        val inTrash = files.associateTo(mutableMapOf<Long, Long?>()) { it.id to BASE + DAY }
+
+        /** Songs MediaStore lists out of its trash: restored ones. */
+        val live = mutableListOf<AudioFile>()
+        val host = FakeTrashHost().apply { memory = TrashMemory(trashed = songs) }
+    }
+
+    @Test
+    fun `Delete forever asks KJB's dialog, then the phone's, and its OK says how many went for good and the room they freed`() = runTest {
+        val bin = Bin()
+        val trash = trash(bin.host, bin.live, PhoneTrash { ids -> bin.inTrash.filterKeys { it in ids } })
+        val two = bin.songs.take(2)
+
+        assertFalse(trash.askDelete(emptyList()))
+        assertTrue(trash.askDelete(two))
+        assertEquals(TrashStep.ConfirmDelete(two), trash.step)
+        trash.cancel()
+        assertEquals(TrashStep.None, trash.step)
+        // KJB's dialog is not open: nothing is asked.
+        assertEquals(Confirmation.NotAsked, trash.confirmDelete(two))
+
+        assertTrue(trash.askDelete(two))
+        assertEquals(Confirmation.NotAsked, trash.confirmDelete(bin.songs))
+        assertEquals(Confirmation.Ask(listOf(11L, 12L)), trash.confirmDelete(two))
+        assertEquals(TrashStep.Deleting(two), trash.step)
+        // The phone deleted the first; the second was restored meanwhile, so it is not counted, though it leaves the list.
+        bin.inTrash.remove(11L)
+        bin.inTrash.remove(12L)
+        bin.live += bin.files[1]
+        assertEquals(Deleted.Gone(1, of = 2, bytes = bin.files[0].size), trash.deleteAnswered(approved = true))
+        assertEquals(TrashStep.None, trash.step)
+        assertEquals(listOf(13L), bin.host.memory.trashed.map { it.file.id })
+        // No dialog waits for an answer now.
+        assertEquals(Deleted.Unchanged, trash.deleteAnswered(approved = true))
+    }
+
+    @Test
+    fun `cancel in the phone's delete dialog, or an OK MediaStore can't check, changes nothing`() = runTest {
+        val bin = Bin()
+        var readable = true
+        val trash = trash(bin.host, bin.live, PhoneTrash { ids -> bin.inTrash.filterKeys { it in ids }.takeIf { readable } })
+
+        assertTrue(trash.askDelete(bin.songs))
+        assertEquals(Confirmation.Ask(listOf(11L, 12L, 13L)), trash.confirmDelete(bin.songs))
+        assertEquals(Deleted.Unchanged, trash.deleteAnswered(approved = false))
+        assertEquals(TrashStep.None, trash.step)
+        assertEquals(bin.songs, bin.host.memory.trashed)
+
+        assertTrue(trash.askDelete(bin.songs))
+        assertEquals(Confirmation.Ask(listOf(11L, 12L, 13L)), trash.confirmDelete(bin.songs))
+        readable = false
+        assertEquals(Deleted.NotConfirmed, trash.deleteAnswered(approved = true))
+        assertEquals(TrashStep.None, trash.step)
+        assertEquals(bin.songs, bin.host.memory.trashed)
+    }
+
+    @Test
+    fun `Delete forever never asks for a song out of the trash, nor when MediaStore can't say`() = runTest {
+        val bin = Bin()
+        var readable = true
+        val trash = trash(bin.host, bin.live, PhoneTrash { ids -> bin.inTrash.filterKeys { it in ids }.takeIf { readable } })
+
+        // Restored elsewhere after the list was read.
+        bin.inTrash.remove(13L)
+        assertTrue(trash.askDelete(bin.songs))
+        assertEquals(Confirmation.Changed, trash.confirmDelete(bin.songs))
+        assertEquals(TrashStep.None, trash.step)
+
+        readable = false
+        assertTrue(trash.askDelete(bin.songs.take(2)))
+        assertEquals(Confirmation.Unavailable, trash.confirmDelete(bin.songs.take(2)))
+        assertEquals(TrashStep.None, trash.step)
+        assertEquals(bin.songs, bin.host.memory.trashed)
+    }
+
+    @Test
+    fun `songs another app moved to the trash are listed beside KJB's, come back through the phone's restore, and go for good too`() = runTest {
+        val bin = Bin()
+        val other = TrashedSong(bin.files[1], BASE - DAY, BASE + 29 * DAY)
+        val gone = TrashedSong(bin.files[2], BASE - 31 * DAY, BASE - 1)
+        val kjb = bin.songs[0]
+        bin.host.memory = TrashMemory(trashed = listOf(kjb))
+        val phone = object : PhoneTrash {
+            override fun inTrash(ids: Collection<Long>): Map<Long, Long?> = bin.inTrash.filterKeys { it in ids }
+
+            // KJB's own song as MediaStore has it too, and one past its expiry the phone has not deleted yet.
+            override fun songs(): List<TrashedSong> = listOf(kjb.copy(trashedAt = 0), other, gone).filter { it.file.id in bin.inTrash }
+        }
+        val trash = trash(bin.host, bin.live, phone)
+        assertNull(trash.elsewhere.value)
+
+        trash.refresh()
+        assertEquals(listOf(other), trash.elsewhere.value)
+        assertEquals(listOf(kjb), bin.host.memory.trashed)
+
+        assertEquals(listOf(12L), trash.restore(other))
+        bin.inTrash.remove(12L)
+        bin.live += bin.files[1]
+        assertEquals(Restored.Back, trash.restoreAnswered(approved = true))
+        assertEquals(emptyList<TrashedSong>(), trash.elsewhere.value)
+        assertEquals(listOf(kjb), bin.host.memory.trashed)
+
+        bin.inTrash[12L] = BASE + 29 * DAY
+        bin.live.clear()
+        trash.refresh()
+        assertTrue(trash.askDelete(listOf(other, kjb)))
+        assertEquals(Confirmation.Ask(listOf(12L, 11L)), trash.confirmDelete(listOf(other, kjb)))
+        bin.inTrash.remove(11L)
+        bin.inTrash.remove(12L)
+        assertEquals(Deleted.Gone(2, of = 2, bytes = bin.files[0].size + bin.files[1].size), trash.deleteAnswered(approved = true))
+        assertEquals(emptyList<TrashedSong>(), trash.elsewhere.value)
+        assertEquals(emptyList<TrashedSong>(), bin.host.memory.trashed)
+    }
+
+    @Test
+    fun `Delete forever on songs another app moved to the trash takes them out of the queues and the lyrics KJB wrote, once each is really gone`() = runTest {
+        val songs = listOf(song(11, "Paper Lantern"), song(12, "Tide Bell"), song(13, "Salt Road"))
+        val (lantern, bell, road) = songs
+        val pipeline = pipeline()
+        songs.forEach { lyricsFor(it, pipeline) }
+        val files = songs.map { trashFile(it) ?: error("no file") }
+        // Another app moved them to the phone's trash, so KJB cleaned nothing up; MediaStore lists each at its trash name.
+        files.forEach { trashOnDisk(it.path, it.id) }
+        val listed = files.map { TrashedSong(it.copy(path = inTrash(it.path).path), BASE, BASE + 30 * DAY) }
+        // Each time the queues heard, with what the playlists had been told by then.
+        val left = mutableListOf<Pair<Set<String>, List<String>>>()
+        // MediaStore knows Tide Bell's place by another id once a new file is there: only Salt Road can come back as it was.
+        val trash = engine(listOf(files[2]), pipeline, queues = { left += it to forgotten.toList() }, elsewhere = { listed.filter { it.file.id in phoneTrash } }).trash
+        advanceUntilIdle()
+        trash.refresh()
+        assertEquals(listed, trash.elsewhere.value)
+
+        assertTrue(trash.askDelete(listed))
+        assertEquals(Confirmation.Ask(listOf(11L, 12L, 13L)), trash.confirmDelete(listed))
+        assertEquals(Deleted.Unchanged, trash.deleteAnswered(approved = false))
+        songs.forEach { assertTrue(lrc(it.path).isFile) }
+        assertEquals(emptyList<Pair<Set<String>, List<String>>>(), left)
+
+        assertTrue(trash.askDelete(listed))
+        assertEquals(Confirmation.Ask(listOf(11L, 12L, 13L)), trash.confirmDelete(listed))
+        // The phone deletes Paper Lantern and Tide Bell for good; meanwhile a new file took Tide Bell's place, and Salt Road
+        // was restored.
+        listed.take(2).forEach { assertTrue(File(it.file.path).delete()) }
+        File(bell.path).writeText("audio bytes of a new Tide Bell")
+        assertTrue(inTrash(road.path).renameTo(File(road.path)))
+        phoneTrash.clear()
+        assertEquals(Deleted.Gone(2, of = 3, bytes = files[0].size + files[1].size), trash.deleteAnswered(approved = true))
+
+        // The queues first, as for a song KJB moves to the trash, then its lyrics and playlists.
+        assertEquals(listOf(setOf(lantern.path) to emptyList<String>()), left)
+        assertFalse(lrc(lantern.path).exists())
+        assertNull(ledger[lantern.path])
+        assertEquals(listOf(lantern.path), forgotten)
+        // A file at its place again: the lyrics there may be its own.
+        assertTrue(lrc(bell.path).isFile)
+        assertEquals(LyricsStatus.SYNCED, ledger[bell.path]?.status)
+        // Restored, not gone.
+        assertTrue(lrc(road.path).isFile)
+        assertEquals(LyricsStatus.SYNCED, ledger[road.path]?.status)
+        assertEquals(emptyList<TrashedSong>(), trash.elsewhere.value)
+    }
+
+    @Test
+    fun `a trash MediaStore can't read leaves other apps' songs as last read, and unread before the first read`() = runTest {
+        val bin = Bin()
+        val other = TrashedSong(bin.files[1], BASE - DAY, BASE + 29 * DAY)
+        var listing: List<TrashedSong>? = null
+        val phone = object : PhoneTrash {
+            override fun inTrash(ids: Collection<Long>): Map<Long, Long?> = bin.inTrash.filterKeys { it in ids }
+
+            override fun songs(): List<TrashedSong>? = listing
+        }
+        bin.host.memory = TrashMemory()
+        val trash = trash(bin.host, bin.live, phone)
+
+        // Unread, not empty: Tools says nothing of the trash rather than Empty.
+        trash.refresh()
+        assertNull(trash.elsewhere.value)
+
+        listing = listOf(other)
+        trash.refresh()
+        assertEquals(listOf(other), trash.elsewhere.value)
+
+        listing = null
+        trash.refresh()
+        assertEquals(listOf(other), trash.elsewhere.value)
     }
 
     /**

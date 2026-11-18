@@ -481,11 +481,11 @@ class LyricsPipeline(
     }
 
     /**
-     * The audio file at [audioPath] is in the phone's trash: the user moved it there from the Duplicates tab, and
-     * MediaStore confirmed IS_TRASHED. The `.lrc` KJB wrote for it is deleted as [remove] deletes it (only while byte for
-     * byte what KJB wrote), then its ledger entry goes, so a song restored from the trash later is new to KJB. A
-     * `.lrc` KJB did not write, or one changed since, stays. The entry stays when the `.lrc` could not be deleted
-     * (FAILED), so it can still be removed from the app.
+     * The audio file at [audioPath] left its place: the user moved it to the phone's trash from KJB, and MediaStore
+     * confirmed IS_TRASHED, or deleted it for good in Tools > Trash after another app moved it there. The `.lrc` KJB
+     * wrote for it is deleted as [remove] deletes it (only while byte for byte what KJB wrote), then its ledger entry
+     * goes, so a song restored from the trash later is new to KJB. A `.lrc` KJB did not write, or one changed since,
+     * stays. The entry stays when the `.lrc` could not be deleted (FAILED), so it can still be removed from the app.
      */
     suspend fun trashed(audioPath: String): Removal = exclusive(audioPath) {
         val entry = ledger.entry(audioPath)

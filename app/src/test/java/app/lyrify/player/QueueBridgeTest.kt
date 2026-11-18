@@ -164,7 +164,7 @@ class QueueBridgeTest {
     private val findOnShelf: (SongRef) -> Song? = { ref -> shelf.firstOrNull { it.path == ref.path } }
 
     private val port = FakePort()
-    private val bridge = QueueBridge(port)
+    private val bridge = QueueBridge(port) { port.calls += "stop" }
 
     private fun uidsOf(book: QueueBook) = projection(book.current, find).map { it.uid }
 
@@ -258,6 +258,23 @@ class QueueBridgeTest {
         assertEquals(uidsOf(book), port.loaded)
         assertEquals(book.current!!.current!!.uid, port.current)
         assertEquals(0L, port.positionMs)
+    }
+
+    @Test
+    fun `the song playing moved to the trash with none after it stops the player before it moves, once`() {
+        var book = QueueBook().play(refs.take(3), 2, albumSource, now = 1).book
+        bridge.sync(book, find)
+        port.positionMs = 20_000
+        book = book.forget(setOf(refs[2].path), Repeat.OFF)
+        bridge.sync(book, find)
+        assertEquals(listOf("load", "stop", "edit", "seek"), port.calls)
+        assertEquals(uidsOf(book), port.loaded)
+        assertEquals(book.current!!.items.first().uid, port.current)
+        assertEquals(0L, port.positionMs)
+        // The same count again, or a queue loaded afresh with any count, stops nothing.
+        bridge.sync(book.place(1, 5_000), find)
+        QueueBridge(port) { port.calls += "stop" }.sync(book, find)
+        assertEquals(1, port.calls.count { it == "stop" })
     }
 
     @Test
