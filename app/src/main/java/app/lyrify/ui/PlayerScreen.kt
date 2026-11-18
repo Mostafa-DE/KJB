@@ -747,8 +747,7 @@ private class PlayerDrag(private val scope: CoroutineScope) {
         when (dragLetGo(closes, intoBar = container != null, reduced = reduced)) {
             DragLetGo.BACK -> scope.launch { offset.animateTo(0f, Motion.close(), initialVelocity = velocity) }
             DragLetGo.INTO_BAR -> {
-                // The card's way to the bar is most of the player's height: what a fling's lead is a share of.
-                container?.letGo(closeVelocity(velocity, momentum), way = height, scope)
+                container?.letGo(closeVelocity(velocity, momentum), scope)
                 close()
             }
             DragLetGo.AWAY -> close()

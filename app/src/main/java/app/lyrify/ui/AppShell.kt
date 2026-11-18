@@ -153,6 +153,8 @@ fun AppShell(
     val reduced = LocalReducedMotion.current
     val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
     var bottom by remember { mutableStateOf(0.dp) }
+    // Where the Now bar's end of the container transform sits in the window, its top in px: the player's card ends there.
+    val barTop = remember { Kept(Float.NaN) }
     // The page layer moves as its stack changes; a back swipe seeks it toward the page it goes back to.
     val pages = remember { SeekableTransitionState(pageLayerOf(state)) }
     val swipe = remember { BackSwipe() }
@@ -243,6 +245,7 @@ fun AppShell(
                 }
                 BottomChrome(
                     modifier = Modifier.align(Alignment.BottomCenter).onSizeChanged { bottom = with(density) { it.height.toDp() } },
+                    barTop = barTop,
                     slot = slot,
                     still = chromeStill,
                     selection = nav.selectionBar,
@@ -279,7 +282,7 @@ fun AppShell(
                 }
             }
             val preview = (swipe.taking as? BackTaking.Pages)?.views.orEmpty()
-            ViewLayers(state.views, preview, barOnScreen, swipe, reduced) { view ->
+            ViewLayers(state.views, preview, barOnScreen, swipe, reduced, barTop) { view ->
                 when (view) {
                     FullScreen.Player -> PlayerView()
                     FullScreen.FullLyrics -> FullLyricsView()
@@ -364,12 +367,13 @@ private fun PageContent(
  * their place, faded through as selection starts and ends; nothing while the keyboard is up or a full screen shows (the
  * message stays). The chrome slides as a whole and never resizes while it moves, so the room it takes at the bottom
  * (what pages pad by) changes once, not on every frame. The Now bar's visibility is one end of the player's container
- * transform ([LocalContainer]).
+ * transform ([LocalContainer]), and it tells the other end where the bar sits ([barTop]).
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SharedTransitionScope.BottomChrome(
     modifier: Modifier,
+    barTop: Kept<Float>,
     slot: BottomSlot,
     still: Boolean,
     selection: (@Composable () -> Unit)?,
@@ -390,7 +394,7 @@ private fun SharedTransitionScope.BottomChrome(
             // No exit of its own: the shared bounds keep the chrome composed, as it was, until the transform has ended.
             exit = if (still) ExitTransition.None else chromeExit(reduced),
         ) {
-            val container = remember(this) { Container(this@BottomChrome, this, bar = true) }
+            val container = remember(this) { Container(this@BottomChrome, this, bar = true, barTop) }
             CompositionLocalProvider(LocalContainer provides container) {
                 AnimatedContent(
                     targetState = slot == BottomSlot.SELECTION,
@@ -569,6 +573,7 @@ private fun KeptRoot(root: PageLayer, moves: Transition<PageLayer>, swipe: BackS
  * of the Now bar and goes back into it when the bar is on screen ([barOnScreen]), every other view rises. A view that
  * closes stays drawn until it has left ([drawnViews]); the layer under a view dims; a back swipe shrinks the top one.
  * [preview]: the views a back swipe from a page goes back to, drawn under that page at once, without arriving.
+ * [barTop]: where the Now bar sits, the end of the player's way into it.
  */
 @Composable
 private fun SharedTransitionScope.ViewLayers(
@@ -577,6 +582,7 @@ private fun SharedTransitionScope.ViewLayers(
     barOnScreen: Boolean,
     swipe: BackSwipe,
     reduced: Boolean,
+    barTop: Kept<Float>,
     content: @Composable (FullScreen) -> Unit,
 ) {
     val wanted = shown + preview.filterNot { it in shown }
@@ -609,7 +615,7 @@ private fun SharedTransitionScope.ViewLayers(
                 // How far it has closed into the Now bar: the progress its card and drag follow; its content, dim and fill
                 // follow it with a fling's lead ([Container.along]).
                 val closing = rememberUpdatedState(if (growing) closeProgress(this) else null)
-                val end = remember(this) { Container(this@ViewLayers, this, bar = false) { closing.value?.value ?: 0f } }
+                val end = remember(this) { Container(this@ViewLayers, this, bar = false, barTop) { closing.value?.value ?: 0f } }
                 val container = end.takeIf { grows }
                 Box(Modifier.fillMaxSize()) {
                     // The layer under this one dims as it arrives, and lights up again under a back swipe and as the

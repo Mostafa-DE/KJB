@@ -94,10 +94,11 @@ class PlayerCloseDeviceTest {
             LyrifyTheme {
                 CompositionLocalProvider(LocalToasts provides remember { ToastState() }, LocalReducedMotion provides false) {
                     SharedTransitionLayout {
+                        val barTop = remember { Kept(Float.NaN) }
                         Box(Modifier.fillMaxSize()) {
                             // The bar's end, over where the dock would be, only while the player is closed or closing.
                             AnimatedVisibility(!open, Modifier.align(Alignment.BottomCenter).padding(bottom = 80.dp), enter = EnterTransition.None, exit = ExitTransition.None) {
-                                val bar = remember(this) { Container(this@SharedTransitionLayout, this, bar = true) }
+                                val bar = remember(this) { Container(this@SharedTransitionLayout, this, bar = true, barTop) }
                                 CompositionLocalProvider(LocalContainer provides bar) {
                                     NowBar(NowBarShows.Own(OwnNow(TITLE, "The Lamplighters", cover = null, playing = false, progress = 0.25f)), LedgerState(), other = null, onOpen = { open = true }, onPlayPause = {})
                                 }
@@ -105,7 +106,7 @@ class PlayerCloseDeviceTest {
                             // The player's end, as the shell's views draw it.
                             AnimatedVisibility(open, enter = EnterTransition.None, exit = ExitTransition.None) {
                                 val closing = closeProgress(this)
-                                val player = remember(this) { Container(this@SharedTransitionLayout, this, bar = false) { closing.value } }
+                                val player = remember(this) { Container(this@SharedTransitionLayout, this, bar = false, barTop) { closing.value } }
                                 Box(Modifier.fillMaxSize().then(containerBounds(player)).background(Color.DarkGray)) {
                                     CompositionLocalProvider(LocalContainer provides player) {
                                         PlayerFrame(onClose = { open = false }) {

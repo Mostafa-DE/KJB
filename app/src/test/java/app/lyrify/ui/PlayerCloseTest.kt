@@ -4,16 +4,23 @@ import android.content.ContextWrapper
 import androidx.compose.animation.EnterExitState
 import androidx.compose.animation.core.AnimationVector1D
 import androidx.compose.animation.core.VectorConverter
+import androidx.compose.runtime.MonotonicFrameClock
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import coil3.memory.MemoryCache
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.plus
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.lang.reflect.Proxy
 import kotlin.math.abs
 
 /**
@@ -182,6 +189,51 @@ class PlayerCloseTest {
         assertEquals(0.3f, closeAlong(0.3f, 40f, 0f), 0f)
     }
 
+    // The player's end of the transform with a finger let go, as the shell makes it (nothing on screen: the lead alone)
+
+    @Test
+    fun `a fling's lead is a share of the card's own way, from the player's top to the bar's, not the player's height`() = runTest {
+        // Review 2026-11-18: the card's top goes from where the player is laid out to the bar, which sits above the dock,
+        // a shorter way than the player's height. The fades are the share of that way the card has come.
+        val (player, bar) = ends()
+        player.placed(top = PLAYER_TOP, height = HEIGHT)
+        bar.placed(top = BAR_TOP, height = 180f)
+        val velocity = CLOSE_MOMENTUM_DP * DENSITY
+        val drawn = mutableListOf<Float>()
+        player.letGo(velocity, this + Frames { drawn += player.along() })
+        advanceUntilIdle()
+        // Each frame draws the lead as far as Compose's momentum has come by then (the first frame starts its clock).
+        drawn.forEachIndexed { frame, along -> assertEquals("frame $frame", spring(frame * FRAME_MS, 0f, 0f, velocity) / (BAR_TOP - PLAYER_TOP), along, 0.0005f) }
+        assertTrue(drawn.max() > 0.08f)
+        // Before the bar was ever laid out, the player's own height stands in for the way.
+        val (alone, _) = ends()
+        alone.placed(top = 0f, height = HEIGHT)
+        val guessed = mutableListOf<Float>()
+        alone.letGo(velocity, this + Frames { guessed += alone.along() })
+        advanceUntilIdle()
+        assertEquals(spring(4 * FRAME_MS, 0f, 0f, velocity) / HEIGHT, guessed[4], 0.0005f)
+    }
+
+    /** The shell's two ends, sharing where the bar sits: the player's, [closing] of the way into the bar, and the bar's. */
+    private fun ends(closing: () -> Float = { 0f }): Pair<Container, Container> {
+        val barTop = Kept(Float.NaN)
+        return Container(unused(), unused(), bar = false, barTop, closing) to Container(unused(), unused(), bar = true, barTop)
+    }
+
+    /** A scope the ends are never asked anything of here (nothing is on screen). */
+    private inline fun <reified T : Any> unused(): T = Proxy.newProxyInstance(T::class.java.classLoader, arrayOf(T::class.java)) { _, _, _ -> null } as T
+
+    /** Frames at 60 Hz, as fast as the test runs; [after] looks at what each frame has drawn. */
+    private class Frames(private val after: () -> Unit) : MonotonicFrameClock {
+        private var time = 0L
+
+        override suspend fun <R> withFrameNanos(onFrame: (frameTimeNanos: Long) -> R): R {
+            yield()
+            time += FRAME_MS * 1_000_000L
+            return onFrame(time).also { after() }
+        }
+    }
+
     // The cover's shape
 
     @Test
@@ -255,6 +307,11 @@ class PlayerCloseTest {
 
     private companion object {
         const val PATH = "/Music/Paper Lanterns/Harbour Glass.flac"
+
+        /** A phone's player, laid out from the window's top, and its Now bar above the dock, in px. */
+        const val HEIGHT = 2400f
+        const val PLAYER_TOP = 40f
+        const val BAR_TOP = 2050f
 
         /** About where a player let go a quarter down still has to go to reach the bar, in px. */
         const val TRAVEL = 1500f
