@@ -84,7 +84,7 @@ class PlayerRowDeviceTest {
         val row = compose.onNodeWithTag(ROW_TAG).getUnclippedBoundsInRoot()
         val buttons = names.map { compose.onNodeWithContentDescription(it).getUnclippedBoundsInRoot() }
         buttons.forEachIndexed { i, button ->
-            assertTrue("${names[i]}: $button", button.width >= 48.dp && button.height >= 48.dp)
+            assertTrue("${names[i]}: $button", button.right - button.left >= 48.dp && button.bottom - button.top >= 48.dp)
             assertTrue("${names[i]}: $button outside $row", button.left >= row.left && button.right <= row.right)
         }
         // Left to right in that order, never on top of each other; the heart in the middle of the row.
