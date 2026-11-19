@@ -135,8 +135,9 @@ class MixDecoder private constructor(
      * Lands on [frame] as [MixSeek] tells, when it is at least [MixSeek.FROM_FRAMES] in, the container's seeks and times
      * are exact ([MixSeek.exact]) and nothing was read yet: the extractor jumps to the sync point at or before
      * [MixSeek.PREROLL_US] ahead of it, and the frames before it are dropped, counted from an anchor buffer. A jump that
-     * lands after that point, a decoder whose times reach no anchor within [MixSeek.GIVE_UP_US] of audio, or an anchor
-     * that does not fit, is undone: back at the start, false, and the reader reads its way there.
+     * lands after that point, a decoder whose times reach no anchor within [MixSeek.GIVE_UP_US] of audio, no audio at all
+     * after the jump, or an anchor that does not fit, is undone: back at the start, false, and the reader reads its way
+     * there.
      */
     override fun seek(frame: Long): Boolean {
         if (started || frame < MixSeek.FROM_FRAMES || !MixSeek.exact(mime)) return false
@@ -155,8 +156,9 @@ class MixDecoder private constructor(
         } finally {
             deadline.pause()
         }
-        // No audio after the jump: the reads find the end. The audio ended before an anchor: its last buffer is one.
-        val out = pcm ?: return true
+        // No audio after the jump: undone, the reader reads its way there and finds what is there (a read would find no
+        // mix to read). The audio ended before an anchor: its last buffer is one.
+        val out = pcm ?: return rewind()
         val drop = MixSeek.toDrop(frame, lastPtsUs, lastBefore, out.sampleRate)
         // An anchor past the target, or times the jump cannot explain.
         if (drop !in 0..MixSeek.GIVE_UP_US * Rates.MIX / 1_000_000) return rewind()

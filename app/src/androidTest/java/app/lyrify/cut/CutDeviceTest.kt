@@ -180,15 +180,22 @@ class CutDeviceTest {
     }
 
     @Test
+    fun aStartInTheFirstTenSecondsIsReadToNotJumpedTo() {
+        val song = wav(File(album, "short-start.wav"), ToneAudio.RATE, seconds = 20)
+        CutFiles.decoder(song).use { decoder -> assertFalse(decoder.seek(9L * ToneAudio.RATE)) }
+    }
+
+    @Test
     fun aLateStartInA48kHzWavLandsWhereAReadFromTheStartDoes() {
         val song = wav(File(album, "long-mix-48.wav"), 48_000, seconds = 40)
-        assertLandsAsFromTheStart(song, 30L * ToneAudio.RATE + 77)
+        // PCM: the jump lands on the read's frame, give or take the resampler's half frame.
+        assertLandsAsFromTheStart(song, 30L * ToneAudio.RATE + 77, slack = 1)
     }
 
     @Test
     fun aLateStartInAnM4aLandsWhereAReadFromTheStartDoes() {
         val song = m4a(File(album, "long-mix.m4a"), seconds = 40)
-        assertLandsAsFromTheStart(song, 30L * ToneAudio.RATE + 77)
+        assertLandsAsFromTheStart(song, 30L * ToneAudio.RATE + 77, slack = AAC_FRAME)
     }
 
     @Test
@@ -205,10 +212,10 @@ class CutDeviceTest {
     }
 
     /**
-     * The first frames from [frame] of [song], jumped to and read to, agree within an AAC frame and nearly sample for
+     * The first frames from [frame] of [song], jumped to and read to, agree within [slack] frames and nearly sample for
      * sample (a resampled song's jump may sit half a frame off the read's grid).
      */
-    private fun assertLandsAsFromTheStart(song: File, frame: Long) {
+    private fun assertLandsAsFromTheStart(song: File, frame: Long, slack: Int) {
         val (jumped, b) = CutFiles.decoder(song).use { decoder -> decoder.seek(frame) to readFrames(decoder, 16_384) }
         assertTrue(jumped)
         val a = FromStart(CutFiles.decoder(song)).use { decoder ->
@@ -216,7 +223,7 @@ class CutDeviceTest {
             readFrames(decoder, 16_384)
         }
         val (lag, rms) = bestLag(a, b, range = 2_048)
-        assertTrue("landed $lag frames off", abs(lag) <= AAC_FRAME)
+        assertTrue("landed $lag frames off", abs(lag) <= slack)
         assertTrue("landed $lag frames off, differing by $rms RMS", rms < 0.01)
     }
 
