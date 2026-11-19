@@ -11,16 +11,16 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
-import androidx.core.graphics.scale
 import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
-import androidx.glance.GlanceTheme
 import androidx.glance.Image
 import androidx.glance.ImageProvider
 import androidx.glance.LocalContext
+import androidx.glance.LocalSize
 import androidx.glance.action.ActionParameters
 import androidx.glance.action.actionParametersOf
 import androidx.glance.action.clickable
@@ -28,6 +28,7 @@ import androidx.glance.action.mutableActionParametersOf
 import androidx.glance.appwidget.GlanceAppWidget
 import androidx.glance.appwidget.GlanceAppWidgetManager
 import androidx.glance.appwidget.GlanceAppWidgetReceiver
+import androidx.glance.appwidget.SizeMode
 import androidx.glance.appwidget.action.ActionCallback
 import androidx.glance.appwidget.action.actionRunCallback
 import androidx.glance.appwidget.action.actionStartActivity
@@ -37,6 +38,7 @@ import androidx.glance.appwidget.cornerRadius
 import androidx.glance.appwidget.provideContent
 import androidx.glance.appwidget.updateAll
 import androidx.glance.background
+import androidx.glance.color.ColorProvider
 import androidx.glance.layout.Alignment
 import androidx.glance.layout.Box
 import androidx.glance.layout.Column
@@ -45,12 +47,15 @@ import androidx.glance.layout.Row
 import androidx.glance.layout.Spacer
 import androidx.glance.layout.fillMaxSize
 import androidx.glance.layout.fillMaxWidth
+import androidx.glance.layout.height
 import androidx.glance.layout.padding
 import androidx.glance.layout.size
+import androidx.glance.layout.width
 import androidx.glance.state.GlanceStateDefinition
 import androidx.glance.text.FontWeight
 import androidx.glance.text.Text
 import androidx.glance.text.TextStyle
+import androidx.glance.unit.ColorProvider
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.common.util.Util
@@ -69,9 +74,13 @@ import app.lyrify.player.PlaybackService
 import app.lyrify.player.PlayerGraph
 import app.lyrify.player.ServicePart
 import app.lyrify.tags.CoverVersions
+import app.lyrify.ui.DarkColors
 import app.lyrify.ui.EXTRA_DESTINATION
+import app.lyrify.ui.LauncherCoral
+import app.lyrify.ui.LightColors
 import app.lyrify.ui.MainActivity
 import app.lyrify.ui.heartLabel
+import app.lyrify.ui.queueDestination
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -91,21 +100,20 @@ import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.ExecutionException
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.coroutines.resume
-import kotlin.math.roundToInt
 
 /**
- * What the widgets draw: [state], and its own cover read once and sized to each widget's slot ([small], [large]), null
- * without one (KJB's default cover is drawn). [coverOf] is the cover it was read for ([WidgetState.Loaded.coverKey]: its
- * path, and its version once Covers & tags changed it): null while no widget is placed, or after a read that failed, so
- * the next update reads it again. [noArtAt] is when a read
+ * What the widgets draw: [state], and its own cover read once: sharp for the cover's slot ([cover]) and its glow behind
+ * each layout ([glow]), null without one (KJB's default cover is drawn, on its glow). [coverOf] is the cover it was read
+ * for ([WidgetState.Loaded.coverKey]: its path, and its version once Covers & tags changed it), the key both are kept by:
+ * null while no widget is placed, or after a read that failed, so the next update reads it again. [noArtAt] is when a read
  * found no art for it (SystemClock.elapsedRealtime), until it is read once more ([NO_ART_RECHECK_MS]); else null.
  */
-internal class Shown(val state: WidgetState, val small: Bitmap? = null, val large: Bitmap? = null, val coverOf: String? = null, val noArtAt: Long? = null)
+internal class Shown(val state: WidgetState, val cover: Bitmap? = null, val glow: Map<GlowLayout, Bitmap>? = null, val coverOf: String? = null, val noArtAt: Long? = null)
 
 /** A cover read for the widgets ([Widgets.withCover]): its own, or none; a read that failed gives null. */
 internal sealed interface CoverRead {
-    /** A song's embedded art, or the cover of a file another app opened, sized to the small and the large slot. */
-    class Own(val small: Bitmap, val large: Bitmap) : CoverRead
+    /** A song's embedded art, or the cover of a file another app opened: sharp for its slot, and its glow for each layout. */
+    class Own(val cover: Bitmap, val glow: Map<GlowLayout, Bitmap>) : CoverRead
 
     /** None: MediaStore has no art for the song (or the song is gone), or the copy has no cover. The default is drawn. */
     data object NoArt : CoverRead
@@ -182,10 +190,10 @@ internal object Widgets {
         val loaded = state as? WidgetState.Loaded
         val path = loaded?.cover ?: return Shown(state)
         val key = loaded.coverKey
-        if (coverToRead(state, before.coverOf, before.noArtAt, now) == null) return Shown(state, before.small, before.large, key, before.noArtAt)
+        if (coverToRead(state, before.coverOf, before.noArtAt, now) == null) return Shown(state, before.cover, before.glow, key, before.noArtAt)
         return when (val cover = read(path)) {
             null -> Shown(state)
-            is CoverRead.Own -> Shown(state, cover.small, cover.large, key)
+            is CoverRead.Own -> Shown(state, cover.cover, cover.glow, key)
             // The same cover as before: this was the read once more, so no art stays for the song.
             CoverRead.NoArt -> Shown(state, coverOf = key, noArtAt = now.takeIf { key != before.coverOf })
         }
@@ -193,20 +201,15 @@ internal object Widgets {
 
     /**
      * The own cover at [path] (a song's, or a file another app opened), read once at the uri the session and the car
-     * have for it, in this process as the notification reads it ([CarCovers.read]); sized to the small and the large
-     * slot on this screen. [CoverRead.NoArt] when it has none, null when it could not be read now.
+     * have for it, in this process as the notification reads it ([CarCovers.read]), off the main thread: sharp at the
+     * cover's slot on this screen ([sharpCover]), and its glow for each layout ([glowBitmap]). [CoverRead.NoArt] when it
+     * has none, null when it could not be read now.
      */
     private suspend fun thumbnails(context: Context, path: String): CoverRead? = withContext(Dispatchers.IO) {
-        val density = context.resources.displayMetrics.density
+        val px = coverPx(context.resources.displayMetrics.density)
         CarCovers.read(context, CarCovers.uris(context).of(path), { own ->
-            CoverRead.Own(fitted(own, coverPx(WidgetSize.SMALL, density)), fitted(own, coverPx(WidgetSize.LARGE, density)))
+            CoverRead.Own(sharpCover(own, px), GlowLayout.entries.associateWith { glowBitmap(own, it) })
         }) { CoverRead.NoArt }
-    }
-
-    /** [bitmap] scaled down to fit [px] square. */
-    private fun fitted(bitmap: Bitmap, px: Int): Bitmap {
-        val scale = px.toFloat() / maxOf(bitmap.width, bitmap.height)
-        return if (scale >= 1f) bitmap else bitmap.scale((bitmap.width * scale).roundToInt(), (bitmap.height * scale).roundToInt())
     }
 
     /** Long enough for Glance to take the update, short enough for the service's onDestroy on the main thread. */
@@ -243,6 +246,7 @@ class WidgetPart : ServicePart {
                 favourites = LibraryGraph.favourites(context).songs,
                 settings = Lyrify.settings(context).settings.map { it.library },
                 versions = CoverVersions.versions,
+                playback = Lyrify.settings(context).settings.map { it.playback },
             ).collect { state ->
                 try {
                     Widgets.show(context, state)
@@ -265,19 +269,29 @@ class WidgetPart : ServicePart {
 
 // The widgets
 
-/** "KJB", the small widget (4×1): cover, title, Play or Pause, Next. */
+/**
+ * The sizes Glance draws the Glow widget at: each layout from its least height ([GlowLayout.fromHeightDp]). The home
+ * screen shows the largest that fits the widget, so a widget resized to more rows gets the next layout at once.
+ */
+private val GLOW_SIZES = SizeMode.Responsive(GlowLayout.entries.map { DpSize(GLOW_FROM_WIDTH_DP.dp, it.fromHeightDp.dp) }.toSet())
+
+/** "KJB", placed at 4×1: the Glow widget, its layout from its size ([GlowLayout]), as "KJB large"'s. */
 class SmallWidget : GlanceAppWidget() {
     // The state lives in memory ([Widgets]), not in a file per widget.
     override val stateDefinition: GlanceStateDefinition<*>? = null
 
-    override suspend fun provideGlance(context: Context, id: GlanceId) = provideWidget(context, WidgetSize.SMALL)
+    override val sizeMode: SizeMode = GLOW_SIZES
+
+    override suspend fun provideGlance(context: Context, id: GlanceId) = provideGlow(context)
 }
 
-/** "KJB large", the large widget (4×2): cover, title, artist, Previous, Play or Pause, Next, and the heart. */
+/** "KJB large", placed at 4×3: the same Glow widget; kept apart so widgets placed before 3.1 go on working. */
 class LargeWidget : GlanceAppWidget() {
     override val stateDefinition: GlanceStateDefinition<*>? = null
 
-    override suspend fun provideGlance(context: Context, id: GlanceId) = provideWidget(context, WidgetSize.LARGE)
+    override val sizeMode: SizeMode = GLOW_SIZES
+
+    override suspend fun provideGlance(context: Context, id: GlanceId) = provideGlow(context)
 }
 
 class SmallWidgetReceiver : GlanceAppWidgetReceiver() {
@@ -289,110 +303,146 @@ class LargeWidgetReceiver : GlanceAppWidgetReceiver() {
 }
 
 /**
- * The widget drawn from [Widgets.shown], and again whenever it changes while Glance keeps the widget's session. Its
- * colours come from the wallpaper (Android 12 and later).
+ * The widget drawn from [Widgets.shown], and again whenever it changes while Glance keeps the widget's session, at each
+ * of [GLOW_SIZES]. A song without its own cover shows KJB's default cover on the default cover's glow, made off the main
+ * thread here once per process ([defaultGlow]).
  */
-private suspend fun GlanceAppWidget.provideWidget(context: Context, size: WidgetSize): Nothing {
+private suspend fun GlanceAppWidget.provideGlow(context: Context): Nothing {
     Widgets.reconcile(context)
+    val fallback = withContext(Dispatchers.IO) { defaultGlow(context) }
     provideContent {
         val shown by Widgets.shown.collectAsState()
-        GlanceTheme {
-            when (size) {
-                WidgetSize.SMALL -> Small(shown)
-                WidgetSize.LARGE -> Large(shown)
-            }
+        val layout = glowLayout(LocalSize.current.height.value)
+        when (val state = shown.state) {
+            WidgetState.Empty -> Empty(layout)
+            is WidgetState.Loaded -> Playing(shown, state, layout, (shown.glow ?: fallback)[layout])
         }
     }
 }
 
-@Composable
-private fun Small(shown: Shown) {
-    val state = shown.state
-    Row(
-        modifier = GlanceModifier.fillMaxSize().appWidgetBackground().background(GlanceTheme.colors.widgetBackground).padding(horizontal = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Cover(shown, WidgetSize.SMALL)
-        Text(
-            text = title(state),
-            modifier = GlanceModifier.defaultWeight().padding(horizontal = 12.dp),
-            style = TextStyle(color = GlanceTheme.colors.onSurface, fontSize = 15.sp, fontWeight = FontWeight.Medium),
-            maxLines = 1,
-        )
-        widgetButtons(state, WidgetSize.SMALL).forEach { Transport(it) }
-    }
+// Glow: white words and icons on the darkened cover, the same in light and dark mode ([GLOW_MAX_LUMINANCE]).
+
+private val OnGlow = ColorProvider(Color.White)
+private val OnGlowSoft = ColorProvider(Color.White.copy(alpha = 0.82f))
+
+/** The icon on the white Play or Pause button: the preview's deep ink. */
+private val OnPlay = ColorProvider(Color(0xFF1A1426))
+
+/** The heart while the song is a favourite: the coral of the K's note. */
+private val HeartOn = ColorProvider(LauncherCoral)
+
+/** Under the glow, seen only if it is missing (Android 12 and later, where the widget's corners clip it). */
+private val GlowBase = Color(0xFF1A1426)
+
+/** The widget's frame: the whole cell, its corners the home screen's own on Android 12 and later (the glow draws them on 11). */
+private fun frame(): GlanceModifier {
+    val modifier = GlanceModifier.fillMaxSize().appWidgetBackground()
+    return if (homeRoundsCorners) modifier.cornerRadius(android.R.dimen.system_app_widget_background_radius) else modifier
 }
 
+/** The song playing in [layout]: [glow] over the whole widget, the sharp cover on the left, white words and buttons. */
 @Composable
-private fun Large(shown: Shown) {
-    val state = shown.state
-    Row(
-        modifier = GlanceModifier.fillMaxSize().appWidgetBackground().background(GlanceTheme.colors.widgetBackground).padding(12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Cover(shown, WidgetSize.LARGE)
-        Column(modifier = GlanceModifier.defaultWeight().padding(start = 12.dp)) {
-            Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Column(modifier = GlanceModifier.defaultWeight()) {
-                    Text(title(state), style = TextStyle(color = GlanceTheme.colors.onSurface, fontSize = 16.sp, fontWeight = FontWeight.Medium), maxLines = 1)
-                    (state as? WidgetState.Loaded)?.artist?.let {
-                        Text(it, style = TextStyle(color = GlanceTheme.colors.onSurfaceVariant, fontSize = 14.sp), maxLines = 1)
+private fun Playing(shown: Shown, state: WidgetState.Loaded, layout: GlowLayout, glow: Bitmap?) {
+    Box(modifier = if (homeRoundsCorners) frame().background(GlowBase) else frame()) {
+        if (glow != null) Image(ImageProvider(glow), contentDescription = null, modifier = GlanceModifier.fillMaxSize(), contentScale = ContentScale.FillBounds)
+        when (layout) {
+            GlowLayout.SMALL -> Row(
+                modifier = GlanceModifier.fillMaxSize().padding(start = layout.paddingDp.dp, end = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                SharpCover(shown, layout)
+                Words(state, album = false, GlanceModifier.defaultWeight().padding(horizontal = 12.dp))
+                widgetButtons(state, layout).forEachIndexed { i, button ->
+                    if (i > 0) Spacer(GlanceModifier.width(2.dp))
+                    Transport(button)
+                }
+            }
+            GlowLayout.MEDIUM -> Column(modifier = GlanceModifier.fillMaxSize().padding(layout.paddingDp.dp)) {
+                Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    SharpCover(shown, layout)
+                    Words(state, album = false, GlanceModifier.defaultWeight().padding(start = 12.dp))
+                    Box(modifier = GlanceModifier.height(layout.coverDp.dp), contentAlignment = Alignment.TopEnd) {
+                        Row { Heart(state); Queue(state) }
                     }
                 }
-                if (state is WidgetState.Loaded) Heart(state)
+                Spacer(GlanceModifier.defaultWeight())
+                Controls(state, layout)
             }
-            Spacer(GlanceModifier.defaultWeight())
-            Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                widgetButtons(state, WidgetSize.LARGE).forEach { button ->
-                    Box(modifier = GlanceModifier.defaultWeight(), contentAlignment = Alignment.Center) { Transport(button) }
+            GlowLayout.LARGE -> Column(modifier = GlanceModifier.fillMaxSize().padding(layout.paddingDp.dp)) {
+                Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+                    SharpCover(shown, layout)
+                    Column(modifier = GlanceModifier.defaultWeight().padding(start = 14.dp)) {
+                        Row(modifier = GlanceModifier.fillMaxWidth(), horizontalAlignment = Alignment.End) { Heart(state); Queue(state) }
+                        Spacer(GlanceModifier.height(8.dp))
+                        Words(state, album = true, GlanceModifier.fillMaxWidth())
+                    }
                 }
+                Spacer(GlanceModifier.defaultWeight())
+                Controls(state, layout)
             }
         }
     }
 }
 
+/** The title, then the artist and (with [album]) the album softer, one line each; a song without them shows its title only. */
 @Composable
-private fun title(state: WidgetState): String = when (state) {
-    is WidgetState.Loaded -> state.title
-    WidgetState.Empty -> LocalContext.current.getString(R.string.app_name)
+private fun Words(state: WidgetState.Loaded, album: Boolean, modifier: GlanceModifier) {
+    Column(modifier = modifier) {
+        Text(state.title, style = TextStyle(color = OnGlow, fontSize = 15.sp, fontWeight = FontWeight.Medium), maxLines = 1)
+        val soft = TextStyle(color = OnGlowSoft, fontSize = 13.sp)
+        state.artist?.let { Text(it, style = soft, maxLines = 1) }
+        if (album) state.album?.let { Text(it, style = soft, maxLines = 1) }
+    }
 }
 
-/** The song's cover, KJB's default cover for a song without one, or the K on its black tile with nothing loaded; a tap opens the player. */
+/** The medium and large layouts' five buttons, across the widget's width with even room between them. */
 @Composable
-private fun Cover(shown: Shown, slot: WidgetSize) {
-    val context = LocalContext.current
-    val label = context.getString(R.string.widget_open_player)
-    val open = Intent(context, MainActivity::class.java)
-        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-        .putExtra(EXTRA_DESTINATION, coverDestination(shown.state))
-    val size = slot.coverDp.dp
-    val modifier = GlanceModifier.size(size).cornerRadius(12.dp).clickable(actionStartActivity(open))
-    val cover = if (slot == WidgetSize.SMALL) shown.small else shown.large
-    if (cover != null) {
-        Image(ImageProvider(cover), label, modifier, contentScale = ContentScale.Crop)
-    } else if (shown.state is WidgetState.Loaded) {
-        Image(ImageProvider(R.drawable.kjb_default_cover), label, modifier, contentScale = ContentScale.Crop)
-    } else {
-        Box(modifier = modifier.background(Color.Black), contentAlignment = Alignment.Center) {
-            Image(ImageProvider(R.drawable.ic_brand_k), label, GlanceModifier.size(size / 2))
+private fun Controls(state: WidgetState.Loaded, layout: GlowLayout) {
+    Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        widgetButtons(state, layout).forEachIndexed { i, button ->
+            if (i > 0) Spacer(GlanceModifier.defaultWeight())
+            Transport(button)
         }
     }
 }
 
-/** A transport button; Play or Pause stands out in the wallpaper's main colour. */
+/** The song's cover, sharp, or KJB's default cover for a song without one; a tap opens the player. */
 @Composable
-private fun Transport(button: WidgetButton) {
-    val main = button.command == WidgetCommand.PLAY || button.command == WidgetCommand.PAUSE
-    CircleIconButton(
-        imageProvider = ImageProvider(button.icon),
-        contentDescription = LocalContext.current.getString(button.label),
-        onClick = actionRunCallback<WidgetTransport>(actionParametersOf(COMMAND to button.command.name)),
-        modifier = GlanceModifier.size(44.dp),
-        backgroundColor = if (main) GlanceTheme.colors.primary else null,
-        contentColor = if (main) GlanceTheme.colors.onPrimary else GlanceTheme.colors.onSurface,
+private fun SharpCover(shown: Shown, layout: GlowLayout) {
+    val context = LocalContext.current
+    val image = shown.cover?.let { ImageProvider(it) } ?: ImageProvider(R.drawable.kjb_default_cover)
+    Image(
+        provider = image,
+        contentDescription = context.getString(R.string.widget_open_player),
+        modifier = GlanceModifier.size(layout.coverDp.dp).cornerRadius(layout.coverCornerDp.dp).clickable(actionStartActivity(opening(context, coverDestination(shown.state)))),
+        contentScale = ContentScale.Crop,
     )
 }
 
+/** KJB opened at [destination] (Nav.kt), on top of what it shows, as a notification's tap opens it. */
+private fun opening(context: Context, destination: String): Intent = Intent(context, MainActivity::class.java)
+    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+    .putExtra(EXTRA_DESTINATION, destination)
+
+/**
+ * A transport button: Play or Pause filled ([background] behind [content]), white on the glow by default, the others
+ * white with no fill. TalkBack reads its label, the seek jumps' with their seconds.
+ */
+@Composable
+private fun Transport(button: WidgetButton, background: ColorProvider = OnGlow, content: ColorProvider = OnPlay) {
+    val resources = LocalContext.current.resources
+    val main = button.command == WidgetCommand.PLAY || button.command == WidgetCommand.PAUSE
+    CircleIconButton(
+        imageProvider = ImageProvider(button.icon),
+        contentDescription = button.seconds?.let { resources.getQuantityString(button.label, it, it) } ?: resources.getString(button.label),
+        onClick = actionRunCallback<WidgetTransport>(actionParametersOf(COMMAND to button.command.name)),
+        modifier = GlanceModifier.size(if (main) GLOW_PLAY_DP.dp else GLOW_BUTTON_DP.dp),
+        backgroundColor = if (main) background else null,
+        contentColor = if (main) content else OnGlow,
+    )
+}
+
+/** The heart: the song into Favourites, or out of them; coral while it is in. */
 @Composable
 private fun Heart(state: WidgetState.Loaded) {
     val parameters = mutableActionParametersOf(SONG_PATH to state.song.path, FAVOURITE to state.favourite)
@@ -401,10 +451,59 @@ private fun Heart(state: WidgetState.Loaded) {
         imageProvider = ImageProvider(if (state.favourite) R.drawable.ic_favorite_fill else R.drawable.ic_favorite),
         contentDescription = LocalContext.current.getString(heartLabel(state.favourite)),
         onClick = actionRunCallback<WidgetHeart>(parameters),
-        modifier = GlanceModifier.size(40.dp),
+        modifier = GlanceModifier.size(GLOW_BUTTON_DP.dp),
         backgroundColor = null,
-        contentColor = if (state.favourite) GlanceTheme.colors.primary else GlanceTheme.colors.onSurfaceVariant,
+        contentColor = if (state.favourite) HeartOn else OnGlow,
     )
+}
+
+/** Queue: KJB opened on the page of the queue playing ([queueDestination]). */
+@Composable
+private fun Queue(state: WidgetState.Loaded) {
+    val queue = state.queue ?: return
+    val context = LocalContext.current
+    CircleIconButton(
+        imageProvider = ImageProvider(R.drawable.ic_queues),
+        contentDescription = context.getString(R.string.widget_open_queue),
+        onClick = actionStartActivity(opening(context, queueDestination(queue))),
+        modifier = GlanceModifier.size(GLOW_BUTTON_DP.dp),
+        backgroundColor = null,
+        contentColor = OnGlow,
+    )
+}
+
+// Nothing playing: KJB's own colours ([LightColors], [DarkColors]), as the phone's light or dark mode has them.
+
+private val EmptyText = ColorProvider(day = LightColors.onSurface, night = DarkColors.onSurface)
+private val EmptyTextSoft = ColorProvider(day = LightColors.onSurfaceVariant, night = DarkColors.onSurfaceVariant)
+private val EmptyPlay = ColorProvider(day = LightColors.primary, night = DarkColors.primary)
+private val EmptyOnPlay = ColorProvider(day = LightColors.onPrimary, night = DarkColors.onPrimary)
+
+/**
+ * Nothing loaded (the player is not running, or it was ended): the K on its black tile, "KJB" and "Nothing playing", and
+ * Play, which resumes the last queue; the tile opens the player. Its corners drawn by its background on Android 11.
+ */
+@Composable
+private fun Empty(layout: GlowLayout) {
+    val context = LocalContext.current
+    Row(
+        modifier = frame().background(ImageProvider(R.drawable.widget_empty_background)).padding(horizontal = layout.paddingDp.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        val size = layout.coverDp.dp
+        Box(
+            modifier = GlanceModifier.size(size).cornerRadius(layout.coverCornerDp.dp).background(Color.Black)
+                .clickable(actionStartActivity(opening(context, coverDestination(WidgetState.Empty)))),
+            contentAlignment = Alignment.Center,
+        ) {
+            Image(ImageProvider(R.drawable.ic_brand_k), context.getString(R.string.widget_open_player), GlanceModifier.size(size / 2))
+        }
+        Column(modifier = GlanceModifier.defaultWeight().padding(horizontal = 12.dp)) {
+            Text(context.getString(R.string.app_name), style = TextStyle(color = EmptyText, fontSize = 15.sp, fontWeight = FontWeight.Medium), maxLines = 1)
+            Text(context.getString(R.string.playing_idle), style = TextStyle(color = EmptyTextSoft, fontSize = 13.sp), maxLines = 1)
+        }
+        widgetButtons(WidgetState.Empty, layout).forEach { Transport(it, background = EmptyPlay, content = EmptyOnPlay) }
+    }
 }
 
 // The buttons' actions
@@ -483,7 +582,7 @@ class WidgetTransport : ActionCallback {
     }
 }
 
-/** The large widget's heart: the song shown into Favourites, or out of them; the playback service pushes the new heart. */
+/** The heart: the song shown into Favourites, or out of them; the playback service pushes the new heart. */
 class WidgetHeart : ActionCallback {
     override suspend fun onAction(context: Context, glanceId: GlanceId, parameters: ActionParameters) {
         val path = parameters[SONG_PATH] ?: return
