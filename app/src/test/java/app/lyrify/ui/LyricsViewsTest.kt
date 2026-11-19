@@ -269,6 +269,30 @@ class LyricsViewsTest {
         }
     }
 
+    // A song's lines giving way to the next song's (CR5): an old place is no place in the new lines.
+
+    @Test
+    fun `the next song's lines arriving with fewer lines than the old line's place are a jump, never the old place read in them`() {
+        fun lines(count: Int, step: Long) = (0 until count).map { LrcLine(it * step, "Line $it") }
+        val long = lines(50, step = 4_000)
+        val short = lines(20, step = 10_000)
+        val paused = LyricsFollow().touched(now = 10_000)
+        // The next song began at 2:40 (a queue or a book resumed there): the old song's lines, still shown until the new
+        // ones are read, had their line 40 lit; the new ones light their line 16. The old 40 read in the new 20 lines was
+        // an IndexOutOfBoundsException.
+        val after = runCatching { followed(paused, from = LinePlace(long, 40), to = 16, lines = short) }
+        assertTrue("the old place read in the new lines: ${after.exceptionOrNull()}", after.isSuccess)
+        // Another song's lines are a jump: the pause ends at once, and under a finger they follow as it lifts.
+        assertTrue(after.getOrThrow().follows(now = 10_500))
+        val held = followed(LyricsFollow().down(now = 1_000), from = LinePlace(long, 40), to = 16, lines = short)
+        assertFalse(held.follows(now = 60_000))
+        assertTrue(held.up(now = 61_000).follows(now = 61_000))
+        // In the same lines nothing changes: on to the next line the pause goes on, a seek ends it.
+        assertFalse(followed(paused, from = LinePlace(long, 4), to = 5, lines = long).follows(now = 10_500))
+        assertTrue(followed(paused, from = LinePlace(long, 4), to = 12, lines = long).follows(now = 10_500))
+        assertFalse(followed(paused, from = LinePlace(long, 49), to = 49, lines = long).follows(now = 10_500))
+    }
+
     @Test
     fun `a jump of the song while a finger rests on the lines keeps them still, and they follow as it lifts`() {
         val down = LyricsFollow().down(now = 1_000)

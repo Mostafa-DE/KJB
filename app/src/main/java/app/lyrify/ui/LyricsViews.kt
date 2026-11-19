@@ -323,6 +323,18 @@ private fun nextStart(lines: List<LrcLine>, at: Int): Int {
     return (at + 1 until lines.size).firstOrNull { lines[it].timeMs > time } ?: lines.size
 }
 
+/** The line playing, [at] (-1 before the first), with the [lines] it is a place in: in other lines it is no place. */
+data class LinePlace(val lines: List<LrcLine>, val at: Int)
+
+/**
+ * [follow] as the line playing goes [from] a place [to] the line [to] of [lines]. In the same lines, on to the next group
+ * ([nextStart]) the wait goes on and anything else is a jump ([LyricsFollow.moved]). From a place in other lines (the
+ * next song's arriving while the old ones showed, the lyrics read again) it is a jump too, never the old place read in
+ * these lines: it was, and the old song's line 40 in a next song of 20 lines threw an IndexOutOfBoundsException.
+ */
+fun followed(follow: LyricsFollow, from: LinePlace, to: Int, lines: List<LrcLine>): LyricsFollow =
+    if (from.lines == lines) follow.moved(from.at, to, nextStart(lines, from.at)) else follow.jump()
+
 /**
  * Synced lines with the "Aa" choices, every one in the same [style] (the line playing never grows, so nothing reflows):
  * the line playing is lit whole by its colour, as Samsung Music does (lines sharing its time with it), never word by
@@ -347,17 +359,17 @@ fun SyncedLyrics(
     val reduced = LocalReducedMotion.current
     val at = currentLine(lines, positionMs)
     var follow by remember { mutableStateOf(LyricsFollow()) }
-    // The line the list last went toward: a jump from it (a seek) ends the wait.
-    val last = remember { Kept(at) }
+    // The line the list last went toward, with the lines it is a place in: a jump from it (a seek) ends the wait.
+    val last = remember { Kept(LinePlace(lines, at)) }
     // Whether a tap on a line seeks, decided as each finger touches ([lineTapSeeks]).
     val taps = remember { Kept(true) }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val viewport = constraints.maxHeight
         val padTop = (viewport * frame.top).roundToInt()
         LaunchedEffect(at, follow, viewport) {
-            if (last.value != at) {
-                val moved = follow.moved(last.value, at, nextStart(lines, last.value))
-                last.value = at
+            if (last.value.at != at) {
+                val moved = followed(follow, last.value, at, lines)
+                last.value = LinePlace(lines, at)
                 if (moved != follow) {
                     follow = moved
                     return@LaunchedEffect
@@ -546,11 +558,10 @@ data class LyricsFollow(val touchedAt: Long = NEVER, val held: Boolean = false, 
      * The line playing went [from] one line [to] another: on to the [next] (or nowhere) the wait goes on; a seek ends it,
      * though never under a finger, where it waits for the lift.
      */
-    fun moved(from: Int, to: Int, next: Int = from + 1): LyricsFollow = when {
-        to == from || to == next -> this
-        held -> copy(jumped = true)
-        else -> tapped()
-    }
+    fun moved(from: Int, to: Int, next: Int = from + 1): LyricsFollow = if (to == from || to == next) this else jump()
+
+    /** The song went elsewhere (a seek, other lines): it follows at once, or under a finger as it lifts. */
+    fun jump(): LyricsFollow = if (held) copy(jumped = true) else tapped()
 
     /** How long until it follows again: 0 when it does. */
     fun waitMs(now: Long): Long = (touchedAt + LEAVE_ALONE_MS - now).coerceAtLeast(0)
