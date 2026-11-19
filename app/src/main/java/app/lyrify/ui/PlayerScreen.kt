@@ -110,7 +110,9 @@ import app.lyrify.Lyrify
 import app.lyrify.R
 import app.lyrify.books.BookNow
 import app.lyrify.books.knownBookPart
+import app.lyrify.cut.CutFormats
 import app.lyrify.data.LyricsStatus
+import app.lyrify.library.Song
 import app.lyrify.library.albumKey
 import app.lyrify.library.displayTitle
 import app.lyrify.lyrics.LrcFormat
@@ -352,6 +354,13 @@ fun flipped(ui: PlayerUiSettings, lyrics: Boolean, book: Boolean): PlayerUiSetti
  */
 fun makesTone(book: Boolean?): Boolean = book == false
 
+/**
+ * Whether the player's "⋯" offers Cut, under the song sheet's rule ([sheetRows]): for a [song] of the library (the
+ * cutter takes only those) in a format every phone decodes ([CutFormats]), not a book's part, nor one not known yet
+ * ([knownBookPart] null, [book]) while the library is read.
+ */
+fun cutsSong(song: Song?, book: Boolean?): Boolean = song != null && book == false && CutFormats.reads(song.path)
+
 /** The links row and the progress bar each take a 48 dp touch area; this much clear space separates them, chips or not. */
 private val LINKS_GAP = 16.dp
 private val CHIPS_GAP = 16.dp
@@ -438,6 +447,7 @@ enum class PlayerRoute {
     BOOKMARK,
     PLAY_ON,
     MAKE_TONE,
+    CUT,
     SHARE,
     SHARE_LYRICS,
     SONG_INFO,
@@ -549,7 +559,7 @@ fun PlayerView() {
     PlayerFrame(onClose = close) {
         Backdrop(ui.item.song.path)
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
-            PlayerTopBar(ui, lyricsShare, tone = makesTone(book), onClose = close, onRoute = route)
+            PlayerTopBar(ui, lyricsShare, tone = makesTone(book), cut = cutsSong(ui.song, book), onClose = close, onRoute = route)
             Column(Modifier.weight(1f).padding(horizontal = 24.dp, vertical = 4.dp)) {
                 FlipArea(
                     ui = ui,
@@ -835,18 +845,20 @@ private fun Backdrop(path: String) {
 }
 
 /** The rows of the player's "⋯", in the order they show; Move to trash sits apart at the bottom, as on the song sheet. */
-enum class PlayerMenuRow { ADD_TO, ALBUM, ARTIST, SPEED, SLEEP, REPEAT_PART, BOOKMARK, PLAY_ON, EQUALIZER, TONE, SHARE, SHARE_LYRICS, SONG_INFO, EDIT_TAGS, MOVE_TO_TRASH }
+enum class PlayerMenuRow { ADD_TO, ALBUM, ARTIST, SPEED, SLEEP, REPEAT_PART, BOOKMARK, PLAY_ON, EQUALIZER, TONE, CUT, SHARE, SHARE_LYRICS, SONG_INFO, EDIT_TAGS, MOVE_TO_TRASH }
 
 /**
  * The rows the player's "⋯" shows. A [song] of the library has Share, Edit tags and Move to trash, as on its sheet (a file
  * another app opened has none of them), and Share lyrics when it has [lyrics]; Go to album and Go to artist when the
- * song has their pages ([album], [artist]); Make a tone when [tone] ([makesTone]).
+ * song has their pages ([album], [artist]); Make a tone when [tone] ([makesTone]), and Cut right after it when [cut]
+ * ([cutsSong]).
  */
-fun playerMenuRows(song: Boolean, album: Boolean, artist: Boolean, tone: Boolean, lyrics: Boolean): List<PlayerMenuRow> = PlayerMenuRow.entries.filter { row ->
+fun playerMenuRows(song: Boolean, album: Boolean, artist: Boolean, tone: Boolean, cut: Boolean, lyrics: Boolean): List<PlayerMenuRow> = PlayerMenuRow.entries.filter { row ->
     when (row) {
         PlayerMenuRow.ALBUM -> album
         PlayerMenuRow.ARTIST -> artist
         PlayerMenuRow.TONE -> tone
+        PlayerMenuRow.CUT -> cut
         PlayerMenuRow.SHARE, PlayerMenuRow.EDIT_TAGS, PlayerMenuRow.MOVE_TO_TRASH -> song
         PlayerMenuRow.SHARE_LYRICS -> song && lyrics
         else -> true
@@ -856,10 +868,11 @@ fun playerMenuRows(song: Boolean, album: Boolean, artist: Boolean, tone: Boolean
 /**
  * The chevron, "From Album · Name", and "⋯" with the rows [playerMenuRows] gives: Share, Share lyrics ([lyricsShare]),
  * Edit tags and Move to trash (apart at the bottom, in red, as on the song sheet) for a song of the library, Make a tone
- * when [tone] ([makesTone]). Dragged down, as anywhere on it, the player follows ([PlayerFrame]).
+ * when [tone] ([makesTone]) and Cut when [cut] ([cutsSong]). Dragged down, as anywhere on it, the player follows
+ * ([PlayerFrame]).
  */
 @Composable
-private fun PlayerTopBar(ui: PlayerUi, lyricsShare: LyricsShare?, tone: Boolean, onClose: () -> Unit, onRoute: (PlayerRoute) -> Unit) {
+private fun PlayerTopBar(ui: PlayerUi, lyricsShare: LyricsShare?, tone: Boolean, cut: Boolean, onClose: () -> Unit, onRoute: (PlayerRoute) -> Unit) {
     val context = LocalContext.current
     val nav = LocalNavigator.current
     var menu by remember { mutableStateOf(false) }
@@ -892,7 +905,7 @@ private fun PlayerTopBar(ui: PlayerUi, lyricsShare: LyricsShare?, tone: Boolean,
                 val album = song?.let(::albumKey)
                 val pages = song?.let { ui.library?.artistsOf(it) }.orEmpty().map { it.name }
                 val artist = artistTap(pages, { nav.open(Page.Artist(it)) }) { artists = it }
-                playerMenuRows(song != null, album != null, artist != null, tone, lyricsShare != null).forEach { row ->
+                playerMenuRows(song != null, album != null, artist != null, tone, cut, lyricsShare != null).forEach { row ->
                     key(row) {
                         when (row) {
                             PlayerMenuRow.ADD_TO -> MenuRow(stringResource(R.string.player_menu_add_to), R.drawable.ic_playlist_add, pick { onRoute(PlayerRoute.ADD_TO) })
@@ -907,6 +920,8 @@ private fun PlayerTopBar(ui: PlayerUi, lyricsShare: LyricsShare?, tone: Boolean,
                             // KJB's equalizer (AudioScreens.kt); the phone's own sound effects open from inside it.
                             PlayerMenuRow.EQUALIZER -> MenuRow(stringResource(R.string.player_menu_equalizer), R.drawable.ic_equalizer, pick { nav.show(FullScreen.Equalizer) })
                             PlayerMenuRow.TONE -> MenuRow(stringResource(R.string.player_menu_tone), R.drawable.ic_ring_volume, pick { onRoute(PlayerRoute.MAKE_TONE) })
+                            // The song sheet's cutter, over the player.
+                            PlayerMenuRow.CUT -> MenuRow(stringResource(R.string.cut_row), R.drawable.ic_content_cut, pick { onRoute(PlayerRoute.CUT) })
                             PlayerMenuRow.SHARE -> MenuRow(stringResource(R.string.share), R.drawable.ic_share, pick { onRoute(PlayerRoute.SHARE) })
                             PlayerMenuRow.SHARE_LYRICS -> MenuRow(stringResource(R.string.share_lyrics), R.drawable.ic_share, pick { onRoute(PlayerRoute.SHARE_LYRICS) })
                             PlayerMenuRow.SONG_INFO -> MenuRow(stringResource(R.string.player_menu_info), R.drawable.ic_info, pick { onRoute(PlayerRoute.SONG_INFO) })
