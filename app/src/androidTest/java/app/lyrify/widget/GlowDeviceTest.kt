@@ -67,7 +67,7 @@ class GlowDeviceTest {
     }
 
     @Test
-    fun aCoversPicturesStayForTheSongUntilItsCoverChanges() = runBlocking {
+    fun aCoversPicturesStayForTheSongUntilItsCoverChanges() = runBlocking<Unit> {
         val art = cover(300, 300, Color.rgb(200, 60, 40))
         val own = CoverRead.Own(sharpCover(art, 128), GlowLayout.entries.associateWith { glowBitmap(art, it) })
         val song = WidgetState.Loaded(
