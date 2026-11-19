@@ -1,4 +1,6 @@
+import com.android.build.api.artifact.SingleArtifact
 import java.util.Properties
+import javax.inject.Inject
 
 plugins {
     alias(libs.plugins.android.application)
@@ -183,6 +185,103 @@ abstract class CheckWriteFence : DefaultTask() {
     }
 }
 
+/**
+ * Fails unless every widget button's callback in a release APK keeps its no-argument constructor. Glance makes a
+ * callback (an androidx.glance ActionCallback, widget/Widgets.kt) by its name, with getDeclaredConstructor().newInstance(),
+ * which R8 cannot see: without the keep rule in proguard-rules.pro it removed the constructors, and every widget tap
+ * failed with NoSuchMethodException in 3.0.2 to 3.0.4 (debug builds are not shrunk, so they never showed it). Reads the
+ * APK's dex with the SDK's dexdump, the interface by the name R8's [mapping] gives it; a class implementing it through a
+ * superclass or another interface counts, abstract ones do not. Finding none fails too, so a dexdump that changed its
+ * output never passes unseen. [report] lists the callbacks checked.
+ */
+abstract class CheckWidgetCallbacks @Inject constructor(private val exec: ExecOperations) : DefaultTask() {
+    @get:InputDirectory
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val apk: DirectoryProperty
+
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val mapping: RegularFileProperty
+
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val dexdump: RegularFileProperty
+
+    @get:OutputFile
+    abstract val report: RegularFileProperty
+
+    /** A class in the dex, by its descriptor ("Lapp/lyrify/widget/WidgetHeart;"), as dexdump's plain layout lists it. */
+    private class DexClass(val name: String) {
+        var superclass: String? = null
+        var instantiable = true
+        val interfaces = mutableListOf<String>()
+        var noArgConstructor = false
+    }
+
+    @TaskAction
+    fun check() {
+        val file = apk.get().asFile.listFiles { it: File -> it.extension == "apk" }?.singleOrNull()
+            ?: throw GradleException("widget callbacks: no single APK in ${apk.get().asFile}")
+        val callback = "androidx.glance.appwidget.action.ActionCallback"
+        val renamed = mapping.get().asFile.useLines { lines -> lines.firstOrNull { it.startsWith("$callback -> ") } }
+        val target = "L" + (renamed?.substringAfter(" -> ")?.removeSuffix(":") ?: callback).replace('.', '/') + ";"
+        val dump = temporaryDir.resolve("dexdump.txt")
+        dump.outputStream().use { out ->
+            exec.exec {
+                commandLine(dexdump.get().asFile.path, "-n", file.path)
+                standardOutput = out
+            }
+        }
+        val classes = dump.useLines { parse(it) }.associateBy { it.name }
+        fun implements(name: String?, seen: Set<String> = emptySet()): Boolean {
+            val dexClass = classes[name ?: return false] ?: return false
+            if (name in seen) return false
+            return target in dexClass.interfaces || (dexClass.interfaces + listOfNotNull(dexClass.superclass)).any { implements(it, seen + name) }
+        }
+        val callbacks = classes.values.filter { it.instantiable && implements(it.name) }
+        if (callbacks.isEmpty()) throw GradleException("widget callbacks: no class implements $callback ($target) in ${file.name}: is the check still reading dexdump right?")
+        val stripped = callbacks.filterNot { it.noArgConstructor }.map { dotted(it.name) }
+        if (stripped.isNotEmpty()) {
+            throw GradleException(
+                "widget callbacks: R8 removed the no-argument constructor of ${stripped.joinToString()} in ${file.name}. Glance makes " +
+                    "them by reflection, so every widget tap would fail: keep them in app/proguard-rules.pro.",
+            )
+        }
+        report.get().asFile.writeText(callbacks.joinToString("") { "${dotted(it.name)} <init>()\n" })
+    }
+
+    /** A class's descriptor as its name: "Lapp/lyrify/widget/WidgetHeart;" is app.lyrify.widget.WidgetHeart. */
+    private fun dotted(descriptor: String): String = descriptor.removePrefix("L").removeSuffix(";").replace('/', '.')
+
+    /** The classes in dexdump's plain layout (-n): each one's superclass, interfaces, flags and no-argument constructor. */
+    private fun parse(lines: Sequence<String>): List<DexClass> {
+        val found = mutableListOf<DexClass>()
+        var current: DexClass? = null
+        var section = ""
+        var method: String? = null
+        for (raw in lines) {
+            val line = raw.trim()
+            val value = line.substringAfter(": ", "").removeSurrounding("'")
+            when {
+                line.startsWith("Class descriptor") -> current = DexClass(value).also(found::add).also { section = "" }
+                current == null -> Unit
+                line.startsWith("Access flags") -> current.instantiable = "ABSTRACT" !in line && "INTERFACE" !in line
+                line.startsWith("Superclass") -> current.superclass = value
+                line.endsWith(" -") && line.removeSuffix(" -").trim() in SECTIONS -> section = line.removeSuffix(" -").trim()
+                section == "Interfaces" && line.startsWith("#") -> current.interfaces += value
+                section == "Direct methods" && line.startsWith("name ") -> method = value
+                section == "Direct methods" && line.startsWith("type ") && method == "<init>" && value == "()V" -> current.noArgConstructor = true
+            }
+        }
+        return found
+    }
+
+    private companion object {
+        /** A class's parts in dexdump's plain layout; each method's own "code -" is not one. */
+        val SECTIONS = setOf("Interfaces", "Static fields", "Instance fields", "Direct methods", "Virtual methods")
+    }
+}
+
 androidComponents {
     // Only release may change the user's files outside Music/KJB test/: a variant without TEST_FOLDER_ONLY on, the
     // Baseline Profile's bench builds included, fails before its BuildConfig is made, so it never reaches a phone.
@@ -198,6 +297,15 @@ androidComponents {
     // The release asset: KJB-<version>.apk.
     onVariants(selector().withBuildType("release")) { variant ->
         variant.outputs.forEach { output -> output.outputFileName.set(output.versionName.map { "KJB-$it.apk" }) }
+        // Its widget buttons work: assembleRelease fails when R8 removed a callback's constructor (CheckWidgetCallbacks).
+        val name = variant.name.replaceFirstChar(Char::uppercase)
+        val callbacks = tasks.register<CheckWidgetCallbacks>("check${name}WidgetCallbacks") {
+            apk.set(variant.artifacts.get(SingleArtifact.APK))
+            mapping.set(variant.artifacts.get(SingleArtifact.OBFUSCATION_MAPPING_FILE))
+            dexdump.set(androidComponents.sdkComponents.sdkDirectory.map { it.file("build-tools/${android.buildToolsVersion}/dexdump") })
+            report.set(layout.buildDirectory.file("reports/widget-callbacks-${variant.name}.txt"))
+        }
+        tasks.matching { it.name == "assemble$name" }.configureEach { dependsOn(callbacks) }
     }
 }
 
