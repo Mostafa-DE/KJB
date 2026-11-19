@@ -88,6 +88,29 @@ class LedgerTest {
     }
 
     @Test
+    fun `the file's own plain lyrics standing while LRCLIB could not be asked wait as an error does, counted with errors`() {
+        fun unasked(previous: LedgerEntry?, at: Long) =
+            recorded(previous, track, LyricsStatus.PLAIN_ONLY, null, at, durationMatched = true, plainInTags = true, unasked = true)
+        val first = unasked(null, now)
+        assertEquals(1, first.attempts)
+        assertEquals(now + 30 * minute, first.nextAttemptAt)
+        val second = unasked(first, now + hour)
+        assertEquals(2, second.attempts)
+        assertEquals(now + hour + 60 * minute, second.nextAttemptAt)
+        // The file lost its lyrics meanwhile: LRCLIB is still out of reach, so the count goes on, and back again.
+        val error = recorded(second, track, LyricsStatus.ERROR, null, now + 3 * hour)
+        assertEquals(3, error.attempts)
+        assertEquals(now + 3 * hour + 2 * hour, error.nextAttemptAt)
+        val third = unasked(error, now + 6 * hour)
+        assertEquals(4, third.attempts)
+        assertEquals(now + 6 * hour + 4 * hour, third.nextAttemptAt)
+        // LRCLIB answered, with nothing to write: the plain lyrics' usual 30 days, the count gone.
+        val answered = recorded(third, track, LyricsStatus.PLAIN_ONLY, null, now + day, durationMatched = true, plainInTags = true)
+        assertEquals(0, answered.attempts)
+        assertEquals(now + day + 30 * day, answered.nextAttemptAt)
+    }
+
+    @Test
     fun `plain only, mismatch, instrumental and a song to check are checked again after 30 days`() {
         listOf(
             LyricsStatus.PLAIN_ONLY,
@@ -320,6 +343,16 @@ class LedgerTest {
             .put(entry("/later.mp3", LyricsStatus.ERROR, now))
             .put(entry("/found.mp3", LyricsStatus.NOT_FOUND, now - 40 * day))
         assertEquals(listOf("/due.mp3"), ledger.retryDue(now).map { it.path })
+    }
+
+    @Test
+    fun `the file's own plain lyrics standing while LRCLIB could not be asked are retried with the errors, never listed as failed`() {
+        val unasked = recorded(null, track.copy(path = "/unasked.mp3"), LyricsStatus.PLAIN_ONLY, null, now - hour, durationMatched = true, plainInTags = true, unasked = true)
+        val answered = recorded(null, track.copy(path = "/answered.mp3"), LyricsStatus.PLAIN_ONLY, null, now - 40 * day, durationMatched = true, plainInTags = true)
+        val ledger = LedgerState().put(unasked).put(answered).put(entry("/error.mp3", LyricsStatus.ERROR, now - hour))
+        assertEquals(setOf("/unasked.mp3", "/error.mp3"), ledger.retryDue(now).map { it.path }.toSet())
+        assertEquals(emptyList<LedgerEntry>(), LedgerState().put(unasked).retryDue(now - hour + 30 * minute - 1))
+        assertEquals(listOf("/error.mp3"), ledger.failed().map { it.path })
     }
 
     // Writing the ledger

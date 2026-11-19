@@ -35,7 +35,8 @@ import kotlin.math.sin
  * The cutter on the phone, with its real AAC encoders and TagLib: every quality the phone offers saves an M4A that
  * decodes to the cut's length, carries the fixture's tags and both its covers with "(cut)" in its title and without its
  * ReplayGain, and is about the size shown before saving; a cancelled save leaves nothing; a song past 20 minutes is read
- * to its end. The audio is a made-up sine or silence;
+ * to its end; a late start jumps there and lands on the frame a read from the start gives, in a WAV, a 48 kHz WAV and
+ * an M4A, the saved cut and its fades too. The audio is a made-up sine, a sum of tones, or silence;
  * the song is the tag tests' made-up `northbound-tide.m4a`. Everything stays in the debug app's private storage.
  */
 @RunWith(AndroidJUnit4::class)
@@ -66,11 +67,16 @@ class CutDeviceTest {
         }
     }
 
-    private fun files(onEncode: () -> Unit = {}) = CutFiles(
+    /** [source] read from its start only, as a decoder that cannot jump. */
+    private class FromStart(private val source: MixSource) : MixSource by source {
+        override fun seek(frame: Long): Boolean = false
+    }
+
+    private fun files(onEncode: () -> Unit = {}, open: (File) -> MixSource = { Sine(seconds = 30) }) = CutFiles(
         writes = SharedWrites.ANYWHERE,
         work = File(root, "work"),
         tags = tags,
-        openSong = { Sine(seconds = 30) },
+        openSong = open,
         newEncoder = { fd, bitRate, codec -> AacToneEncoder(fd, bitRate, codec).also { onEncode() } },
         music = music,
         canWrite = { it.isDirectory },
@@ -163,6 +169,140 @@ class CutDeviceTest {
         assertThrows(AudioTooLongException::class.java) { MixDecoder(long).use { decoder -> countFrames(decoder) } }
     }
 
+    @Test
+    fun aLateStartInAWavLandsOnItsVeryFrame() {
+        val rate = ToneAudio.RATE
+        val song = wav(File(album, "long-mix.wav"), rate, seconds = 40)
+        val at = 30L * rate + 123
+        val (jumped, read) = CutFiles.decoder(song).use { decoder -> decoder.seek(at) to readFrames(decoder, 8_192) }
+        assertTrue(jumped)
+        for (i in read.indices) assertEquals("frame $i", ToneAudio.pcm16(tones(at + i, rate)) / 32768f, read[i], 1e-6f)
+    }
+
+    @Test
+    fun aStartInTheFirstTenSecondsIsReadToNotJumpedTo() {
+        val song = wav(File(album, "short-start.wav"), ToneAudio.RATE, seconds = 20)
+        CutFiles.decoder(song).use { decoder -> assertFalse(decoder.seek(9L * ToneAudio.RATE)) }
+    }
+
+    @Test
+    fun aLateStartInA48kHzWavLandsWhereAReadFromTheStartDoes() {
+        val song = wav(File(album, "long-mix-48.wav"), 48_000, seconds = 40)
+        // PCM: the jump lands on the read's frame, give or take the resampler's half frame.
+        assertLandsAsFromTheStart(song, 30L * ToneAudio.RATE + 77, slack = 1)
+    }
+
+    @Test
+    fun aLateStartInAnM4aLandsWhereAReadFromTheStartDoes() {
+        val song = m4a(File(album, "long-mix.m4a"), seconds = 40)
+        assertLandsAsFromTheStart(song, 30L * ToneAudio.RATE + 77, slack = AAC_FRAME)
+    }
+
+    @Test
+    fun aLateCutOfAnM4aIsTheCutReadFromTheStartFadesAndAll() = runBlocking<Unit> {
+        val song = m4a(File(album, "long-mix.m4a"), seconds = 40)
+        val cut = request(CutQuality.DEFAULT, null).copy(songPath = song.path, range = CutRange(30_000, 34_000))
+        val jumped = (files(open = { CutFiles.decoder(it) }).save(cut) {} as CutResult.Saved).file
+        val read = (files(open = { FromStart(CutFiles.decoder(it)) }).save(cut) {} as CutResult.Saved).file
+        val a = MixDecoder(read).use { decoder -> readFrames(decoder, 4 * ToneAudio.RATE) }
+        val b = MixDecoder(jumped).use { decoder -> readFrames(decoder, 4 * ToneAudio.RATE) }
+        val (lag, rms) = bestLag(a, b, range = 2_048)
+        assertTrue("the jumped cut is $lag frames off", abs(lag) <= AAC_FRAME)
+        assertTrue("the cuts differ by $rms RMS at their best", rms < 0.01)
+    }
+
+    /**
+     * The first frames from [frame] of [song], jumped to and read to, agree within [slack] frames and nearly sample for
+     * sample (a resampled song's jump may sit half a frame off the read's grid).
+     */
+    private fun assertLandsAsFromTheStart(song: File, frame: Long, slack: Int) {
+        val (jumped, b) = CutFiles.decoder(song).use { decoder -> decoder.seek(frame) to readFrames(decoder, 16_384) }
+        assertTrue(jumped)
+        val a = FromStart(CutFiles.decoder(song)).use { decoder ->
+            readFrames(decoder, frame.toInt())
+            readFrames(decoder, 16_384)
+        }
+        val (lag, rms) = bestLag(a, b, range = 2_048)
+        assertTrue("landed $lag frames off", abs(lag) <= slack)
+        assertTrue("landed $lag frames off, differing by $rms RMS", rms < 0.01)
+    }
+
+    /** A sum of tones under 1 kHz with no common period near a second: frame [i] at [rate]. */
+    private fun tones(i: Long, rate: Int): Float =
+        TONES.sumOf { (hz, phase) -> 0.08 * sin(2 * PI * hz * i / rate + phase) }.toFloat()
+
+    /** [seconds] of [tones] as a 16-bit stereo WAV at [rate]. */
+    private fun wav(file: File, rate: Int, seconds: Int): File {
+        val frames = seconds * rate
+        RandomAccessFile(file, "rw").use { out ->
+            val header = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN)
+            header.put("RIFF".toByteArray()).putInt(36 + frames * 4).put("WAVE".toByteArray())
+            header.put("fmt ".toByteArray()).putInt(16).putShort(1).putShort(2).putInt(rate).putInt(rate * 4).putShort(4).putShort(16)
+            header.put("data".toByteArray()).putInt(frames * 4)
+            out.write(header.array())
+            val piece = ByteBuffer.allocate(4_096 * 4).order(ByteOrder.LITTLE_ENDIAN)
+            for (start in 0 until frames step 4_096) {
+                piece.clear()
+                for (i in start until minOf(frames, start + 4_096)) {
+                    val v = ToneAudio.pcm16(tones(i.toLong(), rate))
+                    piece.putShort(v).putShort(v)
+                }
+                out.write(piece.array(), 0, piece.position())
+            }
+        }
+        return file
+    }
+
+    /** [seconds] of [tones] at 44.1 kHz as an M4A, by the phone's AAC encoder (as tones and cuts are made). */
+    private fun m4a(file: File, seconds: Int): File {
+        val frames = seconds * ToneAudio.RATE
+        RandomAccessFile(file, "rw").use { out ->
+            AacToneEncoder(out.fd).use { encoder ->
+                val pcm = ShortArray(ToneAudio.CHUNK_FRAMES * 2)
+                for (start in 0 until frames step ToneAudio.CHUNK_FRAMES) {
+                    val n = minOf(ToneAudio.CHUNK_FRAMES, frames - start)
+                    for (i in 0 until n) {
+                        val v = ToneAudio.pcm16(tones((start + i).toLong(), ToneAudio.RATE))
+                        pcm[2 * i] = v
+                        pcm[2 * i + 1] = v
+                    }
+                    encoder.encode(pcm, n)
+                }
+                encoder.finish()
+            }
+        }
+        return file
+    }
+
+    /** Up to [count] left-channel frames of [source]. */
+    private fun readFrames(source: MixSource, count: Int): FloatArray {
+        val out = FloatArray(count)
+        val right = FloatArray(count)
+        var at = 0
+        while (at < count) {
+            val n = source.read(out, right, at, count - at)
+            if (n == 0) break
+            at += n
+        }
+        return out.copyOf(at)
+    }
+
+    /** The shift of [b] against [a], within [range] frames either way, where they differ least, and that difference's RMS. */
+    private fun bestLag(a: FloatArray, b: FloatArray, range: Int): Pair<Int, Double> {
+        val n = minOf(a.size, b.size) - 2 * range
+        var best = 0 to Double.MAX_VALUE
+        for (lag in -range..range) {
+            var sum = 0.0
+            for (i in range until range + n) {
+                val d = a[i + lag] - b[i]
+                sum += d * d
+            }
+            val rms = kotlin.math.sqrt(sum / n)
+            if (rms < best.second) best = lag to rms
+        }
+        return best
+    }
+
     private fun countFrames(source: MixSource): Int {
         val left = FloatArray(ToneAudio.CHUNK_FRAMES)
         val right = FloatArray(ToneAudio.CHUNK_FRAMES)
@@ -172,5 +312,13 @@ class CutDeviceTest {
             if (n == 0) return total
             total += n
         }
+    }
+
+    private companion object {
+        /** An AAC frame's frames: how far a jump may land from a read, at most. */
+        const val AAC_FRAME: Int = 1_024
+
+        /** The tones' frequencies (Hz) and phases. */
+        val TONES: List<Pair<Double, Double>> = listOf(113.0 to 0.3, 197.0 to 1.1, 283.0 to 2.0, 419.0 to 0.7, 523.0 to 2.9, 661.0 to 1.6, 787.0 to 0.2, 953.0 to 2.4)
     }
 }

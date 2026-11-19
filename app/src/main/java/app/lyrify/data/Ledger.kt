@@ -110,7 +110,10 @@ data class LedgerEntry(
     val status: LyricsStatus,
     /** The LRCLIB record behind [status]: the lyrics written, or the plain lyrics v2 will time. */
     val lrclibId: Long? = null,
-    /** Lookups in a row that ended in [LyricsStatus.ERROR] (AI runs, for [LyricsStatus.AI_FAILED]); 0 otherwise. */
+    /**
+     * Lookups in a row that could not ask LRCLIB ([lookupFailed]); AI runs in a row that failed, for
+     * [LyricsStatus.AI_FAILED]; 0 otherwise.
+     */
     val attempts: Int = 0,
     /** The last lookup, or the last AI run for the AI statuses. */
     val lastAttemptAt: Long? = null,
@@ -188,6 +191,12 @@ data class LedgerEntry(
 
     fun isDue(now: Long): Boolean = nextAttemptAt != null && now >= nextAttemptAt
 
+    /**
+     * The last lookup could not ask LRCLIB: [LyricsStatus.ERROR], or [LyricsStatus.PLAIN_ONLY] of the file's own plain
+     * lyrics standing meanwhile ([attempts] counts it then). Asked again on the errors' waits ([Retry.errorDelayMs]).
+     */
+    val lookupFailed: Boolean get() = status == LyricsStatus.ERROR || (status == LyricsStatus.PLAIN_ONLY && attempts > 0)
+
     /** For [LyricsStatus.AI_FAILED]: when the AI may try this song again; null for any other status. */
     val aiRetryAt: Long? get() = if (status == LyricsStatus.AI_FAILED) (lastAttemptAt ?: updatedAt) + Retry.aiDelayMs(attempts) else null
 
@@ -245,8 +254,8 @@ data class LedgerState(
     /** Tracks waiting for a retry after an error, newest first. */
     fun failed(): List<LedgerEntry> = entries.values.filter { it.status == LyricsStatus.ERROR }.sortedByDescending { it.updatedAt }
 
-    /** Tracks whose last lookup failed and that are due again at [now]. */
-    fun retryDue(now: Long): List<LedgerEntry> = entries.values.filter { it.status == LyricsStatus.ERROR && it.isDue(now) }
+    /** Tracks whose last lookup could not ask LRCLIB ([LedgerEntry.lookupFailed]) and that are due again at [now]. */
+    fun retryDue(now: Long): List<LedgerEntry> = entries.values.filter { it.lookupFailed && it.isDue(now) }
 
     companion object {
         /** What the app sees while its ledger file cannot be read ([readable] false): never an empty ledger, which would mean no song is known. */
@@ -280,10 +289,7 @@ object Retry {
     /** Not found, plain only, another version, instrumental, no artist, to check: LRCLIB (and the tags) change, so look again after 30 days. */
     const val RECHECK_AFTER_MS: Long = 30 * 24 * 60 * 60_000L
 
-    /**
-     * A first miss (not found, no artist) is looked up again sooner, once: LRCLIB grows every day. So is a song whose own
-     * plain lyrics stand while LRCLIB could not be asked.
-     */
+    /** A first miss (not found, no artist) is looked up again sooner, once: LRCLIB grows every day. */
     const val FIRST_MISS_RECHECK_AFTER_MS: Long = 7 * 24 * 60 * 60_000L
 
     /** AI runs that failed are tried again after a day (the next night), doubling, at most 30 days. */
@@ -344,8 +350,8 @@ suspend fun writeWithRetries(onFailure: (IOException) -> Unit, write: suspend ()
  * only, their lyrics compared ([app.lyrify.lyrics.Candidates.offered]). [declined] stays once set. A status only a
  * lookup gives ([LOOKUP_STATUSES]) carries this version's [LOOKUP_REV]; any other keeps the one before. [plainInTags]
  * and [retime] are kept for [LyricsStatus.PLAIN_ONLY], and through the AI's statuses from the entry before. [unasked]: a
- * PLAIN_ONLY of the file's own lyrics while LRCLIB could not be asked, which asks it again after
- * [Retry.FIRST_MISS_RECHECK_AFTER_MS].
+ * PLAIN_ONLY of the file's own lyrics while LRCLIB could not be asked, which waits as an error does and counts with the
+ * errors before it ([LedgerEntry.lookupFailed]).
  */
 fun recorded(
     previous: LedgerEntry?,
@@ -366,11 +372,15 @@ fun recorded(
     retime: Boolean = false,
     unasked: Boolean = false,
 ): LedgerEntry {
-    // Failures in a row: lookups for ERROR, AI runs for AI_FAILED.
-    val counted = status == LyricsStatus.ERROR || status == LyricsStatus.AI_FAILED
+    // Failures in a row: lookups that could not ask LRCLIB (the file's plain lyrics standing or not), AI runs for AI_FAILED.
+    val lookupFailed = status == LyricsStatus.ERROR || (status == LyricsStatus.PLAIN_ONLY && unasked)
     // What the AI times stays with the song through its runs, as its record and length do.
     val aiRun = status.byAi || (status == LyricsStatus.WRITING && source == LyricsSource.AI)
-    val attempts = if (counted) (previous?.takeIf { it.status == status }?.attempts ?: 0) + 1 else 0
+    val attempts = when {
+        lookupFailed -> (previous?.takeIf { it.lookupFailed }?.attempts ?: 0) + 1
+        status == LyricsStatus.AI_FAILED -> (previous?.takeIf { it.status == status }?.attempts ?: 0) + 1
+        else -> 0
+    }
     return LedgerEntry(
         path = track.path,
         title = track.title,
@@ -394,7 +404,7 @@ fun recorded(
             // A miss after a miss waits the 30 days; a first one, a week.
             LyricsStatus.NOT_FOUND, LyricsStatus.UNIDENTIFIED ->
                 now + if (previous?.status in MISSES) Retry.RECHECK_AFTER_MS else Retry.FIRST_MISS_RECHECK_AFTER_MS
-            LyricsStatus.PLAIN_ONLY -> now + if (unasked) Retry.FIRST_MISS_RECHECK_AFTER_MS else Retry.RECHECK_AFTER_MS
+            LyricsStatus.PLAIN_ONLY -> now + if (lookupFailed) Retry.errorDelayMs(attempts) else Retry.RECHECK_AFTER_MS
             LyricsStatus.INSTRUMENTAL,
             LyricsStatus.DURATION_MISMATCH,
             LyricsStatus.NEEDS_CHECK,

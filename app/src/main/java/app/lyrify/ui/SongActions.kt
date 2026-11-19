@@ -96,17 +96,16 @@ sealed interface SheetPlace {
 }
 
 /** The song sheet's rows, in the order they show. Move to trash sits apart at the bottom. */
-enum class SheetRow { PLAY_NEXT, ADD_TO, FAVOURITE, LYRICS, MAKE_TONE, CUT, SHARE, SHARE_LYRICS, SONG_INFO, EDIT_TAGS, BOOK, COVERS_TAGS, REMOVE_FROM_QUEUE, REMOVE_FROM_PLAYLIST, HIDE, MOVE_TO_TRASH }
+enum class SheetRow { PLAY_NEXT, ADD_TO, FAVOURITE, LYRICS, MAKE_TONE, CUT, SHARE, SONG_INFO, EDIT_TAGS, BOOK, COVERS_TAGS, REMOVE_FROM_QUEUE, REMOVE_FROM_PLAYLIST, HIDE, MOVE_TO_TRASH }
 
 /**
  * The rows the song sheet shows when opened at [place]. [coversTags] and [removeFromQueue]: their slots are filled
- * ([SongSheetSlots]); an empty slot's row does not show. Share lyrics only for a song with [lyrics] ([lyricsShare]); Cut
- * only for a song KJB can [cut] (a format the phone decodes, not a book).
+ * ([SongSheetSlots]); an empty slot's row does not show. Cut only for a song KJB can [cut] (a format the phone decodes,
+ * not a book). One Share for every song: Song or Lyrics is asked from it for a song with lyrics ([ShareChoice]).
  */
-fun sheetRows(place: SheetPlace, coversTags: Boolean, removeFromQueue: Boolean, lyrics: Boolean, cut: Boolean = false): List<SheetRow> = SheetRow.entries.filter { row ->
+fun sheetRows(place: SheetPlace, coversTags: Boolean, removeFromQueue: Boolean, cut: Boolean = false): List<SheetRow> = SheetRow.entries.filter { row ->
     when (row) {
         SheetRow.CUT -> cut
-        SheetRow.SHARE_LYRICS -> lyrics
         SheetRow.COVERS_TAGS -> coversTags
         SheetRow.REMOVE_FROM_QUEUE -> removeFromQueue && place is SheetPlace.Queue
         SheetRow.REMOVE_FROM_PLAYLIST -> place is SheetPlace.Playlist
@@ -587,7 +586,7 @@ fun saidText(resources: Resources, said: Said): String = when (said) {
 @DrawableRes
 private fun saidIcon(said: Said): Int = when (said) {
     Said.PlaysNext -> R.drawable.ic_queue_play_next
-    Said.AddedToQueue, is Said.AlreadyIn -> R.drawable.ic_queue_music
+    Said.AddedToQueue, is Said.AlreadyIn -> R.drawable.ic_queues
     is Said.AddedTo, is Said.Made -> R.drawable.ic_playlist_add
     is Said.Favourites -> if (said.added) R.drawable.ic_favorite_fill else R.drawable.ic_favorite
     Said.AlreadyFavourite -> R.drawable.ic_favorite_fill
@@ -683,7 +682,7 @@ fun SongSheetsHost(sheets: SongSheets, ui: LibraryUi, onActed: () -> Unit = {}) 
                 val song = songOf(step.song) ?: return@SheetFlow Gone(sheets)
                 val lyrics = rememberLyricsShare(song.path, ui.ledger.entries[song.path])
                 val cut = CutFormats.reads(song.path) && library.bookOf(song.path) == null
-                val rows = sheetRows(step.place, SongSheetSlots.coversTags != null, SongSheetSlots.removeFromQueue != null, lyrics = lyrics != null, cut = cut)
+                val rows = sheetRows(step.place, SongSheetSlots.coversTags != null, SongSheetSlots.removeFromQueue != null, cut = cut)
                 SongMenuSheet(
                     song = song,
                     ui = ui,
@@ -692,6 +691,7 @@ fun SongSheetsHost(sheets: SongSheets, ui: LibraryUi, onActed: () -> Unit = {}) 
                     onArtist = { name -> sheets.close(); nav.open(Page.Artist(name), SheetReturn(at, step)) },
                     onAlbum = albumPageOf(song, library)?.let { page -> { sheets.close(); nav.open(page, SheetReturn(at, step)) } },
                     bookmarks = SongSheetSlots.bookmarks?.let { slot -> { slot(song.ref, sheets::close) } },
+                    onShareLyrics = lyrics?.let { share -> { sheets.show(OpenSheet.ShareLyrics(song.ref, share == LyricsShare.SYNCED)) } },
                     onDismiss = sheets::close,
                 ) { row ->
                     when (row) {
@@ -705,7 +705,6 @@ fun SongSheetsHost(sheets: SongSheets, ui: LibraryUi, onActed: () -> Unit = {}) 
                             sheets.close()
                             scope.launch { toasts.say(resources, shareSongs(context, listOf(song), ui::title)) }
                         }
-                        SheetRow.SHARE_LYRICS -> lyrics?.let { sheets.show(OpenSheet.ShareLyrics(song.ref, it == LyricsShare.SYNCED)) }
                         SheetRow.SONG_INFO -> sheets.show(OpenSheet.Info(song.ref))
                         SheetRow.EDIT_TAGS -> {
                             sheets.close()
@@ -781,7 +780,7 @@ fun SongSheetsHost(sheets: SongSheets, ui: LibraryUi, onActed: () -> Unit = {}) 
         }
     }
     when (open) {
-        is OpenSheet.NewQueue -> NameDialog(stringResource(R.string.lib_new_queue), open.name, R.drawable.ic_queue_music, onDismiss = sheets::close) { name ->
+        is OpenSheet.NewQueue -> NameDialog(stringResource(R.string.lib_new_queue), open.name, R.drawable.ic_queues, onDismiss = sheets::close) { name ->
             done(actions.newQueue(name, open.songs, open.source))
         }
         is OpenSheet.NewPlaylist -> {

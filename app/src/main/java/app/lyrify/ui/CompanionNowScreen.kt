@@ -364,7 +364,7 @@ private fun QueueLine(sweep: SweepProgress) {
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         modifier = Modifier.clearAndSetSemantics { contentDescription = description },
     ) {
-        Icon(painterResource(if (sweep.paused) R.drawable.ic_pause else R.drawable.ic_queue_music), contentDescription = null, tint = muted, modifier = Modifier.size(18.dp))
+        Icon(painterResource(if (sweep.paused) R.drawable.ic_pause else R.drawable.ic_queues), contentDescription = null, tint = muted, modifier = Modifier.size(18.dp))
         if (sweep.paused) Text(stringResource(R.string.sweep_paused_short), style = MaterialTheme.typography.labelMedium, color = muted)
         SungBar(progress, Modifier.width(120.dp), paused = sweep.paused)
         Text(stringResource(R.string.sweep_count, sweep.checked, sweep.total), style = MaterialTheme.typography.labelMedium.tabular(), color = muted)

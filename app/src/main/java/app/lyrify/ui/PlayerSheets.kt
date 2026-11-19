@@ -150,7 +150,7 @@ enum class ExtrasSheet { SLEEP, SLEEP_MINUTES, SLEEP_SONGS, SPEED, BOOKMARK }
 
 /**
  * The player's extras on screen: which sheet is open, and the actions of P2's routes ([route]). Add to, Song info, Make a
- * tone and Move to trash open the library's sheets ([songSheets], L1's one door, drawn over the player by
+ * tone, Cut and Move to trash open the library's sheets ([songSheets], L1's one door, drawn over the player by
  * [PlayerExtrasHost]). The state lives in [PlayerExtras]; the service applies it. Main thread.
  */
 @Stable
@@ -180,6 +180,7 @@ class PlayerExtrasUi internal constructor(
             PlayerRoute.ADD_TO -> songSheets.show(OpenSheet.AddTo(listOf(song), null, ui.song?.let { displayTitle(it, names) } ?: song.path.substringAfterLast('/')))
             PlayerRoute.SONG_INFO -> songSheets.show(OpenSheet.Info(song))
             PlayerRoute.MAKE_TONE -> songSheets.show(OpenSheet.MakeTone(song))
+            PlayerRoute.CUT -> songSheets.show(OpenSheet.Cut(song))
             PlayerRoute.SHARE -> scope.launch { toasts.say(resources, shareSongs(context, listOfNotNull(ui.song)) { displayTitle(it, names) }) }
             PlayerRoute.SHARE_LYRICS -> lyrics?.let { songSheets.show(OpenSheet.ShareLyrics(song, it == LyricsShare.SYNCED)) }
             PlayerRoute.MOVE_TO_TRASH -> ui.song?.let { songSheets.show(OpenSheet.Trash(listOf(it.ref))) }

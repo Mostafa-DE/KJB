@@ -212,6 +212,25 @@ class SleepTest {
     }
 
     @Test
+    fun `nothing left to play ends a timer by songs as when it fires, saying so, and a timer by time runs on`() = runTest {
+        // The queue's last song taken out while it played: the service stopped the player first (QueueBridge).
+        val songs = driving(SleepTimer.BySongs(songs = 3, left = 2)) { playing = false }
+        songs.driver.queueEnded()
+        runCurrent()
+        assertNull(songs.timer.value)
+        assertEquals(1, songs.stops)
+        assertEquals(1f, songs.port.volume, 0f)
+        assertEquals(0, songs.parks)
+
+        val set = sleepFor(30, now = testScheduler.currentTime)
+        val time = driving(set) { playing = false }
+        time.driver.queueEnded()
+        runCurrent()
+        assertEquals(set, time.timer.value)
+        assertEquals(0, time.stops)
+    }
+
+    @Test
     fun `the end of the queue ends a timer by songs, with no timer a song's end changes nothing`() = runTest {
         val run = driving(sleepAfter(5))
         run.driver.queueEnded()

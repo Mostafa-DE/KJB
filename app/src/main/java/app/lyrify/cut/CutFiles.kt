@@ -382,7 +382,8 @@ class CutFiles(
         /**
          * The song's decoder for the cutter, for a song of any length: without the AI's 20-minute cap or its 10 minutes
          * of decoding time in all, as the cutter reads only to the cut's end (and its waveform to the song's length), a
-         * piece at a time. The decoder's stall check still ends one that hangs.
+         * piece at a time. A late cut of an AAC or PCM song starts by jumping to its start ([MixDecoder.seek]); an MP3
+         * is read from its start. The decoder's stall check still ends one that hangs.
          */
         fun decoder(song: File): MixSource = MixDecoder(song, maxAudioSec = Long.MAX_VALUE)
     }

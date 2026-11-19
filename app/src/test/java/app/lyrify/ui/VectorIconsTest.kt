@@ -1,5 +1,7 @@
 package app.lyrify.ui
 
+import app.lyrify.R
+import app.lyrify.settings.DockTab
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -172,6 +174,41 @@ class VectorIconsTest {
         assertEquals(NOTE_ARM + DEV_TAB, monochrome.map { it.attr("pathData") })
         assertTrue(monochrome.all { it.attr("fillColor") == "#FF000000" && gradient(it) == null })
         assertEquals("evenOdd", monochrome.last().attr("fillType"))
+    }
+
+    @Test
+    fun `the Queue icon is the Up next list the user picked, in strokes that tint as every icon does`() {
+        val queues = parse(File(drawables, "ic_queues.xml"))
+        assertEquals(listOf("24dp", "24dp", "24", "24"), listOf("width", "height", "viewportWidth", "viewportHeight").map { queues.attr(it) })
+        assertEquals(UP_NEXT, paths(queues).map { it.first.attr("pathData") })
+        paths(queues).forEach { (path, offset) ->
+            assertEquals(0f to 0f, offset)
+            assertEquals("#FF000000", path.attr("strokeColor"))
+            assertEquals("2", path.attr("strokeWidth"))
+            assertEquals("round", path.attr("strokeLineCap"))
+            assertEquals("round", path.attr("strokeLineJoin"))
+            assertEquals(null, path.attr("fillColor"))
+        }
+    }
+
+    @Test
+    fun `every queue shows the Queue icon, and Playlists keep theirs`() {
+        val ui = File("src/main/java/app/lyrify/ui").listFiles { file -> file.extension == "kt" }.orEmpty().associate { it.name to it.readText() }
+        // The bar's Queues item in both states, Playlists' its own.
+        assertEquals(R.drawable.ic_queues, DockTab.QUEUES.icon)
+        assertEquals(R.drawable.ic_queue_music, DockTab.PLAYLISTS.icon)
+        // The player's Queue button, the Queue sheet and every queue page.
+        assertTrue(Regex("""PlayerButton\.QUEUE -> RoundButton\(R\.drawable\.ic_queues,""").containsMatchIn(ui.getValue("PlayerControls.kt")))
+        assertFalse("ic_queue_music" in ui.getValue("QueueScreens.kt"))
+        // Playlists' row for Queues, Add to's queues, a new queue's name, and the toasts of songs added to a queue.
+        assertTrue(Regex("""R\.string\.lib_queues\), [^\n]*Tile\(R\.drawable\.ic_queues,""").containsMatchIn(ui.getValue("LibraryScreen.kt")))
+        assertTrue(Regex("""is AddTarget\.Queue -> NavRow\([\s\S]*?lead = \{ Tile\(R\.drawable\.ic_queues\) \}""").containsMatchIn(ui.getValue("SongSheets.kt")))
+        assertTrue(Regex("""OpenSheet\.NewQueue -> NameDialog\([^\n]*R\.drawable\.ic_queues,""").containsMatchIn(ui.getValue("SongActions.kt")))
+        assertTrue("Said.AddedToQueue, is Said.AlreadyIn -> R.drawable.ic_queues" in ui.getValue("SongActions.kt"))
+        // Companion Now's line for getting lyrics for the queue playing.
+        assertTrue("if (sweep.paused) R.drawable.ic_pause else R.drawable.ic_queues" in ui.getValue("CompanionNowScreen.kt"))
+        // A playlist with no covers yet keeps the playlists' icon.
+        assertTrue(Regex("""0 -> Tile\(R\.drawable\.ic_queue_music, size = size\)""").containsMatchIn(ui.getValue("LibraryParts.kt")))
     }
 
     @Test
@@ -358,5 +395,8 @@ class VectorIconsTest {
         )
 
         val SMALL_ICON = Regex("""setSmallIcon\(([^)]*)\)""")
+
+        /** Queues' "Up next" (the user's pick, 2026-11-18): two lines, then a third turning into an arrow at its end. */
+        val UP_NEXT = listOf("M4 5h15", "M4 10h15", "M6 14v1.5A2.5 2.5 0 0 0 8.5 18H19", "M16 15l3 3-3 3")
     }
 }

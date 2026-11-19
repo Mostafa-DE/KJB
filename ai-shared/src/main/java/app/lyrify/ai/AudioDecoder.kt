@@ -10,6 +10,7 @@ import java.io.File
 import java.io.FileDescriptor
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import kotlin.math.roundToLong
 
 /**
  * The mix as the separation reads it: planar stereo at 44.1 kHz, pulled a piece at a time, so a song is never held whole.
@@ -20,6 +21,13 @@ interface MixSource : AutoCloseable {
 
     /** Up to [count] frames into [left] and [right] from [offset]; 0 once the audio has ended. */
     fun read(left: FloatArray, right: FloatArray, offset: Int, count: Int): Int
+
+    /**
+     * Before the first [read]: the next read starts at [frame] (from the audio's start) without decoding what comes
+     * before, where the source can land there exactly; false when it cannot (nothing changed: the reader reads its way
+     * there). A source that ends before [frame] then reads as ended.
+     */
+    fun seek(frame: Long): Boolean = false
 
     override fun close() {}
 }
@@ -51,6 +59,9 @@ class UnsupportedAudioException(message: String) : UnfitAudioException(RejectRea
  * [maxAudioSec] of audio ([AudioTooLongException]; the AI's [PcmToMix.MAX_AUDIO_SEC] unless a reader that stops by itself,
  * the audio cutter, opens the file with a longer one), and [DecodeDeadline] ends a decoder that stops moving or never
  * signals end of stream; the time the reader spends between reads is not the decoder's.
+ *
+ * [seek] lands on a frame far into the file without decoding what comes before, where the container's seeks and times
+ * are exact ([MixSeek]); the AI never seeks.
  */
 class MixDecoder private constructor(
     fd: FileDescriptor,
@@ -67,11 +78,19 @@ class MixDecoder private constructor(
     private val extractor = MediaExtractor()
     private val codec: MediaCodec
     private val durationUs: Long
+    private val mime: String?
     private val info = MediaCodec.BufferInfo()
     private val deadline = DecodeDeadline(DecodeDeadline.maxMsFor(maxAudioSec), SystemClock::uptimeMillis)
     private var pcm: PcmToMix? = null
     private var inputDone = false
     private var outputDone = false
+
+    /** A [read] or a [seek] has begun: the next seek is too late. */
+    private var started = false
+
+    /** The latest output buffer with audio: its presentation time, and the frames decoded before it (a [seek]'s anchor). */
+    private var lastPtsUs = -1L
+    private var lastBefore = 0L
 
     init {
         try {
@@ -82,7 +101,8 @@ class MixDecoder private constructor(
             extractor.selectTrack(track)
             val format = extractor.getTrackFormat(track)
             durationUs = if (format.containsKey(MediaFormat.KEY_DURATION)) format.getLong(MediaFormat.KEY_DURATION) else 0L
-            codec = MediaCodec.createDecoderByType(requireNotNull(format.getString(MediaFormat.KEY_MIME)))
+            mime = format.getString(MediaFormat.KEY_MIME)
+            codec = MediaCodec.createDecoderByType(requireNotNull(mime))
             try {
                 configure(codec, format)
                 codec.start()
@@ -100,6 +120,7 @@ class MixDecoder private constructor(
     override val expectedFrames: Int get() = PcmToMix.expectedFrames(durationUs, maxAudioSec)
 
     override fun read(left: FloatArray, right: FloatArray, offset: Int, count: Int): Int {
+        started = true
         deadline.resume()
         try {
             while (!outputDone && (pcm?.available ?: 0) < count) step()
@@ -108,6 +129,53 @@ class MixDecoder private constructor(
         } finally {
             deadline.pause()
         }
+    }
+
+    /**
+     * Lands on [frame] as [MixSeek] tells, when it is at least [MixSeek.FROM_FRAMES] in, the container's seeks and times
+     * are exact ([MixSeek.exact]) and nothing was read yet: the extractor jumps to the sync point at or before
+     * [MixSeek.PREROLL_US] ahead of it, and the frames before it are dropped, counted from an anchor buffer. A jump that
+     * lands after that point, a decoder whose times reach no anchor within [MixSeek.GIVE_UP_US] of audio, no audio at all
+     * after the jump, or an anchor that does not fit, is undone: back at the start, false, and the reader reads its way
+     * there.
+     */
+    override fun seek(frame: Long): Boolean {
+        if (started || frame < MixSeek.FROM_FRAMES || !MixSeek.exact(mime)) return false
+        started = true
+        val fromUs = frame * 1_000_000 / Rates.MIX - MixSeek.PREROLL_US
+        extractor.seekTo(fromUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
+        if (extractor.sampleTime !in 0..fromUs) return rewind()
+        deadline.resume()
+        try {
+            while (!outputDone) {
+                val out = pcm
+                if (out != null && lastPtsUs >= fromUs + MixSeek.ANCHOR_US) break
+                if (out != null && out.decoded > MixSeek.GIVE_UP_US * out.sampleRate / 1_000_000) return rewind()
+                step()
+            }
+        } finally {
+            deadline.pause()
+        }
+        // No audio after the jump: undone, the reader reads its way there and finds what is there (a read would find no
+        // mix to read). The audio ended before an anchor: its last buffer is one.
+        val out = pcm ?: return rewind()
+        val drop = MixSeek.toDrop(frame, lastPtsUs, lastBefore, out.sampleRate)
+        // An anchor past the target, or times the jump cannot explain.
+        if (drop !in 0..MixSeek.GIVE_UP_US * Rates.MIX / 1_000_000) return rewind()
+        out.drop(drop)
+        return true
+    }
+
+    /** A [seek] undone: the file from its start, nothing decoded. */
+    private fun rewind(): Boolean {
+        extractor.seekTo(0, MediaExtractor.SEEK_TO_CLOSEST_SYNC)
+        codec.flush()
+        pcm = null
+        inputDone = false
+        outputDone = false
+        lastPtsUs = -1L
+        lastBefore = 0L
+        return false
     }
 
     override fun close() {
@@ -145,6 +213,8 @@ class MixDecoder private constructor(
             deadline.progressed()
             if (info.size > 0) {
                 val out = pcm ?: reformat(codec.getOutputFormat(outIndex))
+                lastPtsUs = info.presentationTimeUs
+                lastBefore = out.decoded
                 val buffer = requireNotNull(codec.getOutputBuffer(outIndex))
                 buffer.position(info.offset)
                 buffer.limit(info.offset + info.size)
@@ -205,7 +275,11 @@ class PcmToMix(val sampleRate: Int, val channelCount: Int, var encoding: Int, ma
     }
 
     private val maxFrames: Long = maxAudioSec.coerceAtMost(Long.MAX_VALUE / sampleRate) * sampleRate
-    private var decoded = 0L
+
+    /** Frames [append]ed, at [sampleRate]. */
+    var decoded = 0L
+        private set
+
     private val streams = if (sampleRate == Rates.MIX) {
         null
     } else {
@@ -219,6 +293,9 @@ class PcmToMix(val sampleRate: Int, val channelCount: Int, var encoding: Int, ma
     private val source = arrayOf(Floats(), Floats())
     private val left = Floats()
     private val right = Floats()
+
+    /** Frames still to [drop] before any is handed out. */
+    private var dropping = 0L
 
     /** Frames ready to [read]. */
     val available: Int get() = left.size
@@ -250,10 +327,23 @@ class PcmToMix(val sampleRate: Int, val channelCount: Int, var encoding: Int, ma
         }
         decoded += count
         resample(end = false)
+        dropReady()
     }
 
     /** The decoder signalled the end: the resampler's last samples. */
-    fun finish() = resample(end = true)
+    fun finish() {
+        resample(end = true)
+        dropReady()
+    }
+
+    /**
+     * The next [frames] frames are never handed out: those ready now, then those to come. After resampling, so the
+     * resampler's filter has the audio before the first frame kept, as when the whole file is read.
+     */
+    fun drop(frames: Long) {
+        dropping += frames
+        dropReady()
+    }
 
     fun read(outLeft: FloatArray, outRight: FloatArray, offset: Int, count: Int): Int {
         val n = minOf(count, left.size)
@@ -262,6 +352,14 @@ class PcmToMix(val sampleRate: Int, val channelCount: Int, var encoding: Int, ma
         left.drop(n)
         right.drop(n)
         return n
+    }
+
+    private fun dropReady() {
+        val n = minOf(dropping, left.size.toLong()).toInt()
+        if (n == 0) return
+        left.drop(n)
+        right.drop(n)
+        dropping -= n
     }
 
     private fun resample(end: Boolean) {
@@ -338,4 +436,40 @@ class DecodeDeadline(private val maxMs: Long = MAX_MS, private val now: () -> Lo
         fun maxMsFor(maxAudioSec: Long): Long =
             if (maxAudioSec > Long.MAX_VALUE / MAX_MS) Long.MAX_VALUE else MAX_MS * maxAudioSec.coerceAtLeast(0) / PcmToMix.MAX_AUDIO_SEC
     }
+}
+
+/**
+ * How [MixDecoder.seek] lands exactly on a frame far into a file. The extractor jumps to the sync point at or before
+ * [PREROLL_US] ahead of the target, so the decoder (an AAC frame's overlap) and the resampler settle on audio that is
+ * then dropped. The frames to drop are counted from an anchor, an output buffer presented at least [ANCHOR_US] after
+ * the jump's point, by its time ([toDrop]): whatever a decoder does with its first buffers after a jump (an encoder
+ * delay trimmed, a frame rebuilt from nothing) cannot move the target.
+ *
+ * Only where the extractor's seeks and times are exact ([exact]): AAC (an MPEG-4 file's sample table, an ADTS file's
+ * frames) and PCM (WAV, and FLAC where the extractor hands it out decoded). Not MP3: its extractor's seeks are
+ * estimates (a Xing table, the bit rate) stamped with the time asked for, so a cut could start seconds off; nor Ogg,
+ * whose times after a seek are not checked here. Those are read from their start.
+ */
+internal object MixSeek {
+    /** Below this (10 s), reading from the start costs little: no seek. */
+    const val FROM_FRAMES: Long = 10L * Rates.MIX
+
+    const val PREROLL_US: Long = 1_000_000
+    const val ANCHOR_US: Long = 500_000
+
+    /** A decoder whose times reach no anchor in this much audio after the jump is not trusted with one. */
+    const val GIVE_UP_US: Long = PREROLL_US + 2_000_000
+
+    private val EXACT: Set<String> = setOf(MediaFormat.MIMETYPE_AUDIO_AAC, MediaFormat.MIMETYPE_AUDIO_RAW)
+
+    /** Whether a track of [mime] seeks to exact times. */
+    fun exact(mime: String?): Boolean = mime in EXACT
+
+    /**
+     * The mix frames to drop for the first one handed out to be [target] (44.1 kHz frames from the file's start), when
+     * [before] frames at [rate] were decoded ahead of an anchor buffer presented at [ptsUs]. Negative when the anchor is
+     * past the target.
+     */
+    fun toDrop(target: Long, ptsUs: Long, before: Long, rate: Int): Long =
+        (target + before.toDouble() * Rates.MIX / rate - ptsUs.toDouble() * Rates.MIX / 1_000_000).roundToLong()
 }

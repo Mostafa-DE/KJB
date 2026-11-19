@@ -68,8 +68,9 @@ import java.util.Locale
 
 /**
  * The song sheet: the cover, the title, the artist and the album as links, then [rows] (Play next, Add to, the heart,
- * Lyrics with its status, Make a tone, Cut, Share, Share lyrics, Song info, Edit tags and the rows of where it was opened),
- * the [bookmarks] slot, and Move to trash apart at the bottom, in the danger colour.
+ * Lyrics with its status, Make a tone, Cut, Share, Song info, Edit tags and the rows of where it was opened), the
+ * [bookmarks] slot, and Move to trash apart at the bottom, in the danger colour. Share asks Song or Lyrics first for a song
+ * with lyrics to share ([onShareLyrics], [ShareChoice]).
  */
 @Composable
 internal fun SongMenuSheet(
@@ -80,6 +81,7 @@ internal fun SongMenuSheet(
     onArtist: (String) -> Unit,
     onAlbum: (() -> Unit)?,
     bookmarks: (@Composable () -> Unit)?,
+    onShareLyrics: (() -> Unit)?,
     onDismiss: () -> Unit,
     onRow: (SheetRow) -> Unit,
 ) {
@@ -96,8 +98,9 @@ internal fun SongMenuSheet(
                     SheetRow.LYRICS -> ActionRow(R.drawable.ic_lyrics, stringResource(R.string.lib_lyrics), chevron = true, trailing = status?.let { { StatusPill(it) } }) { onRow(row) }
                     SheetRow.MAKE_TONE -> ActionRow(R.drawable.ic_ring_volume, stringResource(R.string.lib_make_tone)) { onRow(row) }
                     SheetRow.CUT -> ActionRow(R.drawable.ic_content_cut, stringResource(R.string.cut_row)) { onRow(row) }
-                    SheetRow.SHARE -> ActionRow(R.drawable.ic_share, stringResource(R.string.share)) { onRow(row) }
-                    SheetRow.SHARE_LYRICS -> ActionRow(R.drawable.ic_share, stringResource(R.string.share_lyrics), chevron = true) { onRow(row) }
+                    SheetRow.SHARE -> ShareChoice(lyrics = onShareLyrics != null, onSong = { onRow(row) }, onLyrics = { onShareLyrics?.invoke() }) { tap ->
+                        ActionRow(R.drawable.ic_share, stringResource(R.string.share), onClick = tap)
+                    }
                     SheetRow.SONG_INFO -> ActionRow(R.drawable.ic_info, stringResource(R.string.lib_song_info)) { onRow(row) }
                     SheetRow.EDIT_TAGS -> ActionRow(R.drawable.ic_sell, stringResource(R.string.lib_edit_tags)) { onRow(row) }
                     SheetRow.BOOK -> {
@@ -334,7 +337,7 @@ internal fun AddToSheet(songs: List<SongRef>, title: String, ui: LibraryUi, onDi
                 is AddTarget.Queue -> NavRow(
                     title = target.queue.name,
                     sub = pluralStringResource(R.plurals.lib_songs, target.queue.songs, target.queue.songs),
-                    lead = { Tile(R.drawable.ic_queue_music) },
+                    lead = { Tile(R.drawable.ic_queues) },
                     trailing = null,
                 ) { onTarget(target) }
                 AddTarget.NewQueue -> NewRow(stringResource(R.string.lib_new_queue)) { onTarget(target) }

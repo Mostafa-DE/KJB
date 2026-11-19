@@ -161,7 +161,11 @@ class SleepDriver(
         stop()
     }
 
-    /** The queue played to its end with Repeat off: the player waits paused already, and the timer is done. */
+    /**
+     * Nothing is left to play: the queue played to its end with Repeat off, or the song playing left it with none after
+     * it ([ServicePart.queueStopped]). The player waits paused already; a timer by songs is done, as when it fires, and
+     * one by time runs on.
+     */
     fun queueEnded() {
         if (timer.value is SleepTimer.BySongs) stop()
     }
@@ -174,10 +178,14 @@ class SleepDriver(
     }
 }
 
-/** The sleep timer in the service: [SleepDriver] on the engine, told of the songs that end. A timer ends with the service. */
+/**
+ * The sleep timer in the service: [SleepDriver] on the engine, told of the songs that end and of the queue left with
+ * nothing to play. A timer ends with the service.
+ */
 class SleepPart : ServicePart {
     private var scope: CoroutineScope? = null
     private var extras: PlayerExtras? = null
+    private var driver: SleepDriver? = null
 
     override fun start(service: PlaybackService, session: MediaLibraryService.MediaLibrarySession) {
         val engine = service.playbackEngine
@@ -188,7 +196,7 @@ class SleepPart : ServicePart {
             SystemClock::elapsedRealtime,
             stopped = { shared.say(ExtrasSaid.SleepEnded) },
             parked = { shared.parked = engine.loaded.getOrNull(engine.index) },
-        )
+        ).also { this.driver = it }
         engine.addListener(object : EngineListener {
             override fun onSongStarted(uid: Long, lap: Boolean, natural: Boolean) {
                 if (natural) driver.songEnded()
@@ -201,9 +209,14 @@ class SleepPart : ServicePart {
         scope = partScope().also { it.launch { driver.run() } }
     }
 
+    override fun queueStopped() {
+        driver?.queueEnded()
+    }
+
     override fun stop() {
         scope?.cancel()
         scope = null
+        driver = null
         extras?.sleep?.value = null
     }
 }

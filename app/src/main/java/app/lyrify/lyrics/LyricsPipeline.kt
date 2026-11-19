@@ -659,7 +659,7 @@ class LyricsPipeline(
 
     /**
      * LRCLIB could not be asked: an error, tried again soon ([Retry.errorDelayMs]). With [plainInTags], the plain lyrics
-     * in the file's own tags stand meanwhile, as when LRCLIB has none, and LRCLIB is asked again in a week.
+     * in the file's own tags stand meanwhile, as when LRCLIB has none, and LRCLIB is asked again on the same waits.
      */
     private suspend fun busy(previous: LedgerEntry?, track: LocalTrack, cause: String, plainInTags: Boolean = false): Processed {
         log("lyrics: LRCLIB unavailable ($cause)")

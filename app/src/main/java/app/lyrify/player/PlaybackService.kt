@@ -101,6 +101,13 @@ interface ServicePart {
 
     /** A media button (a headset, Bluetooth, a car); true when this part took it, false to leave it to the session. */
     fun onMediaButton(session: MediaSession, controller: MediaSession.ControllerInfo, intent: Intent): Boolean = false
+
+    /**
+     * The player stopped where the queue waits, as the song playing left it with none after it (Remove from queue, the
+     * trash, its file gone; [QueueBridge]): nothing is left to play, as when the queue plays to its end (the engine's
+     * onEnded).
+     */
+    fun queueStopped() {}
 }
 
 /**
@@ -165,8 +172,12 @@ class PlaybackService : MediaLibraryService() {
         )
         // The phone's sound effects panel needs the player's own session from the start (A1).
         PlayerGraph.audioSessionId = engine.audioSessionId
-        // The song playing gone with none after it (Remove from queue, the trash): the player stops where the queue waits.
-        bridge = QueueBridge(engine, repeat = { core.repeat.value }, coverVersion = CoverVersions::of) { engine.setPlayWhenReady(false) }
+        // The song playing gone with none after it (Remove from queue, the trash): the player stops where the queue waits,
+        // and the parts hear that nothing is left to play (a sleep timer by songs ends).
+        bridge = QueueBridge(engine, repeat = { core.repeat.value }, coverVersion = CoverVersions::of) {
+            engine.setPlayWhenReady(false)
+            parts.forEach(ServicePart::queueStopped)
+        }
         player = LyrifyPlayer(mainLooper, engine, core, skips = ::skips, sync = ::sync, beforeSeek = ::heardSoFar)
         engine.addListener(Follower())
         core.follow { engine.loaded.getOrNull(engine.index)?.let { PlayerAt(it, engine.positionMs) } }
