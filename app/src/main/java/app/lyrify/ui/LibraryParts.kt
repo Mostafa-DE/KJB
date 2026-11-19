@@ -103,6 +103,7 @@ import app.lyrify.player.QueueSource
 import app.lyrify.player.QueueTarget
 import app.lyrify.settings.Settings
 import kotlinx.coroutines.launch
+import java.io.Serializable
 
 // What every Library page is built from: the state it reads, the list header, rows and tiles, and the song-list frame.
 
@@ -272,11 +273,11 @@ fun LazyListScope.songRows(
 ) {
     // Places in [shown]: while a row is dragged, in the drag's order.
     val places = reorder?.shown(shown) ?: shown.indices.toList()
-    items(places, key = { keys[it] }, contentType = { "song" }) { at ->
+    items(places, key = { songRowKey(keys, it) }, contentType = { "song" }) { at ->
         val song = shown[at]
         val index = offset + at
         val reduced = LocalReducedMotion.current
-        val key = keys[at]
+        val key = songRowKey(keys, at)
         val lift = reorder?.let { animateFloatAsState(if (it.heldKey == key) 1f else 0f, motion(Motion.press, reduced), label = "row lift") }
         var height by remember { mutableFloatStateOf(0f) }
         val resources = LocalResources.current
@@ -307,6 +308,16 @@ fun LazyListScope.songRows(
  * each one new. A list that may hold a song twice keys its rows by entry instead ([OrderedEntries]).
  */
 fun songRowKeys(songs: List<Song>): List<Any> = songs.map { "song ${it.path}" }
+
+/**
+ * The key of the row at [at] of a list's rows, by place ([keys]). A page takes its rows and their keys from one list
+ * ([ListedEntry]), so no row is past the keys; should one be asked for all the same, it gets a key of its own, equal to
+ * no row's and saveable as a lazy list's key must be, never a crash.
+ */
+fun songRowKey(keys: List<Any>, at: Int): Any = keys.getOrNull(at) ?: PastTheKeys(at)
+
+/** The key of a song row asked for past its list's keys ([songRowKey]). */
+private data class PastTheKeys(val at: Int) : Serializable
 
 // The list header
 
