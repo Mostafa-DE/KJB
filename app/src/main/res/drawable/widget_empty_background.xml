@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The widget with nothing playing (widget/Widgets.kt): KJB's surface, its corners its own on Android 11, where the
+     widget's corner radius is not drawn (Android 12 and later clip it to the home screen's). -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="@color/widget_empty" />
+    <corners android:radius="24dp" />
+</shape>

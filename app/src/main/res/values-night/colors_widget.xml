@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The home-screen widget with nothing playing, in dark mode: KJB's surfaceContainer (ui/Theme.kt DarkColors). -->
+<resources>
+    <color name="widget_empty">#FF201E27</color>
+</resources>

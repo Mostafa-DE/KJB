@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The home-screen widget with nothing playing (widget/Widgets.kt): KJB's surfaceContainer, light (ui/Theme.kt
+     LightColors); values-night has the dark one. -->
+<resources>
+    <color name="widget_empty">#FFF1ECF7</color>
+</resources>

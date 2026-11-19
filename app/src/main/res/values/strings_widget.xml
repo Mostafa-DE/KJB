@@ -3,8 +3,10 @@
 <resources>
     <!-- The widget picker: the large widget's name ("KJB" is the small one's) and what each holds. -->
     <string name="widget_large">KJB large</string>
-    <string name="widget_small_description">The song playing, with Play and Next.</string>
-    <string name="widget_large_description">The song playing, its controls and the heart.</string>
+    <string name="widget_small_description">The song playing on its own cover, with Previous, Play and Next. Taller, it shows more.</string>
+    <string name="widget_large_description">The song playing on its own cover, with its controls, the heart and the queue.</string>
     <!-- The cover: opens the player. -->
     <string name="widget_open_player">Open the player</string>
+    <!-- The Queue button (medium and large layouts): opens the page of the queue playing. -->
+    <string name="widget_open_queue">Open the queue</string>
 </resources>

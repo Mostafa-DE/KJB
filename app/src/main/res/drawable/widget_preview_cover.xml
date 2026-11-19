@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The rounded slot of the sharp cover in the widget picker's picture (clipToOutline). -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="#FF0A0A0B" />
+    <corners android:radius="14dp" />
+</shape>
