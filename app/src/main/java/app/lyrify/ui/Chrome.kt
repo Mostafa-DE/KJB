@@ -100,12 +100,14 @@ import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.AccessibilityManager
 import androidx.compose.ui.platform.LocalAccessibilityManager
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -145,6 +147,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.roundToInt
 
 // Glass
 
@@ -301,9 +304,9 @@ fun Dock(items: List<DockTab>, selected: DockTab, style: DockStyle, dot: Boolean
 }
 
 /**
- * The items at equal widths, and the sung line under the selected one; its leading end travels faster, so it stretches
- * on the way. The names' size is one for all ([dockLabelShare]), measured at the selected weight so none grows past its
- * room when picked.
+ * The items in equal slots ([DockSlots]), and the sung line under the selected one; its leading end travels faster, so
+ * it stretches on the way. The names' size is one for all ([dockLabelShare]), measured at the selected weight so none
+ * grows past its room when picked.
  */
 @Composable
 private fun DockItems(items: List<DockTab>, selected: DockTab, style: DockStyle, dot: Boolean, onSelect: (DockTab) -> Unit) {
@@ -338,25 +341,38 @@ private fun DockItems(items: List<DockTab>, selected: DockTab, style: DockStyle,
         }
         val names = share?.let { full.copy(fontSize = full.fontSize * it, lineHeight = full.lineHeight * it) }
         val height = if (slim) SLIM_DOCK_HEIGHT else DOCK_HEIGHT
-        Row(
-            Modifier
+        Layout(
+            content = {
+                items.forEachIndexed { index, tab ->
+                    DockItem(tab, labels[index], tab == selected, dot && tab == DockTab.TOOLS, names, height, Modifier.tourTarget(dockStop(tab))) { onSelect(tab) }
+                }
+            },
+            modifier = Modifier
                 .selectableGroup()
                 .heightIn(min = height)
                 .padding(horizontal = DOCK_SIDE)
                 .drawBehind {
                     if (line < 0) return@drawBehind
-                    val item = size.width / items.size
-                    val width = SUNG_LINE_WIDTH.toPx()
+                    val slots = DockSlots(items.size, size.width.roundToInt())
+                    val half = SUNG_LINE_WIDTH.toPx() / 2
                     val thick = SUNG_LINE_HEIGHT.toPx()
-                    val left = min(start.value, end.value) * item + (item - width) / 2
-                    val right = max(start.value, end.value) * item + (item + width) / 2
+                    val left = slots.middle(min(start.value, end.value)) - half
+                    val right = slots.middle(max(start.value, end.value)) + half
                     val x = if (layoutDirection == LayoutDirection.Rtl) size.width - right else left
                     val bottom = (if (slim) SLIM_LINE_BOTTOM else LINE_BOTTOM).toPx()
                     drawRoundRect(highlight, Offset(x, size.height - bottom - thick), Size(right - left, thick), CornerRadius(thick / 2))
                 },
-        ) {
-            items.forEachIndexed { index, tab ->
-                DockItem(tab, labels[index], tab == selected, dot && tab == DockTab.TOOLS, names, height, Modifier.weight(1f).tourTarget(dockStop(tab))) { onSelect(tab) }
+        ) { measurables, constraints ->
+            // Each item gets its slot here, not from a Row's weight: Material's TooltipBox puts the modifier it is
+            // given on a box inside one of its own, so the weight of an item without a name (Slim, or Standard with
+            // its names left out) never reached the Row, and the first such item took the whole bar (user 2026-11-19).
+            val slots = DockSlots(measurables.size, constraints.maxWidth)
+            val placeables = measurables.mapIndexed { index, item ->
+                item.measure(Constraints(minWidth = slots.size(index), maxWidth = slots.size(index), maxHeight = constraints.maxHeight))
+            }
+            val tallest = (placeables.maxOfOrNull { it.height } ?: 0).coerceIn(constraints.minHeight, constraints.maxHeight)
+            layout(constraints.maxWidth, tallest) {
+                placeables.forEachIndexed { index, item -> item.placeRelative(slots.start(index), 0) }
             }
         }
     }
@@ -376,7 +392,7 @@ private fun DockItem(tab: DockTab, label: String, selected: Boolean, dot: Boolea
     val name = dockItemName(label, if (dot) stringResource(R.string.nav_attention) else null)
     val press = PressIndication(RoundedCornerShape(20.dp), 0.92f)
     val icon: @Composable () -> Unit = {
-        Box {
+        Box(Modifier.testTag(DOCK_ICON_TAG)) {
             Icon(
                 painterResource(if (selected) tab.selectedIcon else tab.icon),
                 contentDescription = null,
@@ -428,6 +444,9 @@ private fun DockItem(tab: DockTab, label: String, selected: Boolean, dot: Boolea
         ) { icon() }
     }
 }
+
+/** A bar item's icon's test tag: it is no TalkBack stop of its own, so device tests find it by this. */
+const val DOCK_ICON_TAG: String = "dock icon"
 
 /** A count on a row or a dock item: a coral capsule ringed in the glass colour, so it reads as cut out of it. Decorative. */
 @Composable

@@ -124,6 +124,28 @@ fun dockLabelShare(widest: Float, room: Float): Float? {
 const val DOCK_LABEL_SMALLEST: Float = 0.75f
 
 /**
+ * Where the bar's items sit: [count] of them share the [width] (px) between the capsule's ends equally, from its start.
+ * The items are laid out in these slots and the sung line is drawn at their middles, both from here, so the line is
+ * always under its item. Each slot starts on a whole pixel and together they cover the width exactly, none more than
+ * a pixel wider than another.
+ */
+class DockSlots(count: Int, private val width: Int) {
+    private val count = count.coerceAtLeast(1)
+
+    /**
+     * Where slot [index] starts, px from the bar's start, at the pixel nearest its share, so its middle is within
+     * half a pixel of the line's; slot [count]'s start is the bar's end.
+     */
+    fun start(index: Int): Int = ((index.toLong() * width * 2 + count) / (2L * count)).toInt()
+
+    /** How wide slot [index] is. */
+    fun size(index: Int): Int = start(index + 1) - start(index)
+
+    /** The middle of the place [at], px from the bar's start: a slot's index, or between two while the line travels. */
+    fun middle(at: Float): Float = (at + 0.5f) * width / count
+}
+
+/**
  * Hide while scrolling: whether the bar is [hidden] after the page's scrolls, and how far the content has moved the same
  * way since it last turned ([travel], px, toward its end when positive). Pure, so its rules are tested on the JVM.
  */

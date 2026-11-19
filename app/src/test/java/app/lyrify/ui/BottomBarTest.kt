@@ -151,6 +151,43 @@ class BottomBarTest {
         assertTrue(DOCK_LABEL_SMALLEST in 0.7f..0.85f)
     }
 
+    // Where the items sit (user 2026-11-19: on Slim only Library showed, in the bar's middle, the line at the start)
+
+    @Test
+    fun `every item has a slot of its own, all alike, together exactly the bar's width`() {
+        CAPSULES.forEach { width ->
+            (1..DisplaySettings.MAX_DOCK).forEach { count ->
+                val slots = DockSlots(count, width)
+                assertEquals("$count in $width", 0, slots.start(0))
+                assertEquals("$count in $width", width, slots.start(count))
+                (0 until count).forEach { index ->
+                    val size = slots.size(index)
+                    assertEquals("$count in $width, slot $index", slots.start(index + 1), slots.start(index) + size)
+                    assertTrue("$count in $width, slot $index is $size", size == width / count || size == width / count + 1)
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `the sung line sits at the middle of its item's slot, and between the two while it travels`() {
+        CAPSULES.forEach { width ->
+            (4..DisplaySettings.MAX_DOCK).forEach { count ->
+                val slots = DockSlots(count, width)
+                (0 until count).forEach { index ->
+                    val middle = slots.start(index) + slots.size(index) / 2f
+                    assertEquals("$count in $width, slot $index", middle, slots.middle(index.toFloat()), 0.5f)
+                    // Its own share of the bar, never the whole bar's middle.
+                    assertEquals("$count in $width, slot $index", (index + 0.5f) * width / count, slots.middle(index.toFloat()), 0.5f)
+                }
+                (0 until count - 1).forEach { index ->
+                    val halfway = (slots.middle(index.toFloat()) + slots.middle(index + 1f)) / 2f
+                    assertEquals("$count in $width, after slot $index", halfway, slots.middle(index + 0.5f), 0.01f)
+                }
+            }
+        }
+    }
+
     // Hide while scrolling
 
     @Test
@@ -182,5 +219,13 @@ class BottomBarTest {
         // A drag up on a page that can't scroll moves nothing, so nothing changes.
         assertEquals(DockScroll(), DockScroll().scrolled(consumedY = 0f, availableY = -80f, threshold = 24f))
         assertEquals(hidden, hidden.scrolled(consumedY = 0f, availableY = -80f, threshold = 24f))
+    }
+
+    private companion object {
+        /**
+         * The room between the capsule's ends (px): the screen less the bar's 12 dp margins and 6 dp ends, on 360 dp
+         * phones at 2x and 3x, a 384 dp one at 2.8125x and a 412 dp one at 2.625x, and an odd width.
+         */
+        val CAPSULES = listOf(648, 972, 979, 987, 1001)
     }
 }
