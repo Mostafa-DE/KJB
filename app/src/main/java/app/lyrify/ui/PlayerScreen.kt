@@ -877,8 +877,9 @@ private fun PlayerTopBar(ui: PlayerUi, lyricsShare: LyricsShare?, tone: Boolean,
     var menu by remember { mutableStateOf(false) }
     // Go to artist for a song of several artists: which one, under the same button (ArtistNames.kt).
     var artists by remember { mutableStateOf<List<String>?>(null) }
-    // Share for a song with lyrics: which one first (ShareMenu), under the same button.
-    var sharing by remember { mutableStateOf(false) }
+    // Share for a song with lyrics: which one first (ShareMenu), under the same button. The next song closes it, so it
+    // never offers lyrics the new song may not have.
+    var sharing by remember(ui.item.uid) { mutableStateOf(false) }
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
