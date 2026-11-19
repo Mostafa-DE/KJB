@@ -427,12 +427,18 @@ const val DESTINATION_DOWNLOADS: String = "downloads"
 /** The notification of a Covers & tags check (tags/CheckService.kt) opens Tools > Covers & tags. */
 const val DESTINATION_COVERS_TAGS: String = "covers-tags"
 
+/** The home-screen widget's Queue button: this, then the id of the queue playing ([queueDestination]). */
+private const val DESTINATION_QUEUE: String = "queue/"
+
+/** Where the widget's Queue button opens KJB: the page of queue [id] (widget/, 3.1). */
+fun queueDestination(id: String): String = DESTINATION_QUEUE + id
+
 /** The page [destination] names; null for none, or one this version does not know. */
 fun destinationPage(destination: String?): Page? = when (destination) {
     DESTINATION_AI -> Page.Ai
     DESTINATION_DOWNLOADS -> Page.Downloads
     DESTINATION_COVERS_TAGS -> Page.CoversTags
-    else -> null
+    else -> destination?.removePrefix(DESTINATION_QUEUE)?.takeIf { it != destination && it.isNotEmpty() }?.let { Page.Queue(it) }
 }
 
 /** The home-screen widget's cover opens the player (widget/, A3). */

@@ -1,16 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- "KJB large", the large home-screen widget (widget/Widgets.kt), 4 by 2. Drawn by Glance and updated only when the
-     playback service pushes a change, never on a timer (updatePeriodMillis 0). -->
+<!-- "KJB large", the Glow widget placed at 4 by 3 (widget/Widgets.kt); one placed at 4 by 2 before 3.1 draws the medium
+     layout, and it may be resized down to one row. Drawn by Glance and updated only when the playback service pushes a
+     change, never on a timer (updatePeriodMillis 0). minHeight is three rows where the home screen places by it
+     (Android 11). -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
     android:description="@string/widget_large_description"
     android:initialLayout="@layout/glance_default_loading_layout"
     android:minWidth="250dp"
-    android:minHeight="110dp"
+    android:minHeight="180dp"
+    android:minResizeHeight="40dp"
     android:previewLayout="@layout/widget_preview_large"
     android:resizeMode="horizontal|vertical"
     android:targetCellWidth="4"
-    android:targetCellHeight="2"
+    android:targetCellHeight="3"
     android:updatePeriodMillis="0"
     android:widgetCategory="home_screen"
     tools:targetApi="31" />

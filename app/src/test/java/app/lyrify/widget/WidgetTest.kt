@@ -14,12 +14,16 @@ import app.lyrify.player.QueueSource
 import app.lyrify.player.SourceKind
 import app.lyrify.player.withPlace
 import app.lyrify.settings.LibrarySettings
+import app.lyrify.settings.PlaybackSettings
 import app.lyrify.settings.Settings
 import app.lyrify.settings.SortSongs
 import app.lyrify.ui.DESTINATION_AI
 import app.lyrify.ui.DESTINATION_PLAYER
 import app.lyrify.ui.FullScreen
+import app.lyrify.ui.Page
+import app.lyrify.ui.destinationPage
 import app.lyrify.ui.destinationView
+import app.lyrify.ui.queueDestination
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
@@ -27,6 +31,7 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.lang.reflect.Proxy
 
@@ -44,6 +49,10 @@ class WidgetTest {
     private val playingSecond = QueueBook().play(refs, 1, album, now = 1).book
     private val settings = LibrarySettings()
 
+    /** A 4-cell widget on a common phone, in dp: no button left out. */
+    private val WIDE = 344f
+
+    // The jumps of the player's seek buttons by default ("Skip amounts": 30 s back, 10 s forward).
     private fun loaded(index: Int, playing: Boolean, favourite: Boolean = false) = WidgetState.Loaded(
         song = refs[index],
         title = "Paper Lantern ${index + 1}",
@@ -51,13 +60,27 @@ class WidgetTest {
         cover = "${41 + index}",
         playing = playing,
         favourite = favourite,
+        album = "Harbour Glass",
+        queue = playingSecond.currentId,
+        backSeconds = 30,
+        forwardSeconds = 10,
     )
 
     // The state from the player's
 
     @Test
-    fun `a song playing shows its title, artist, cover and Pause`() {
+    fun `a song playing shows its title, artist, album, cover and Pause, with its queue and the player's jumps`() {
         assertEquals(loaded(1, playing = true), widgetState(playingSecond, library, playing = true, favourites = emptyList(), settings))
+        assertEquals("q1", playingSecond.currentId)
+    }
+
+    @Test
+    fun `the seek buttons jump as the player's do, by Skip amounts, and 30 s each way in a book`() {
+        val chosen = widgetState(playingSecond, library, playing = true, favourites = emptyList(), settings, playback = PlaybackSettings(skipBackSeconds = 5, skipForwardSeconds = 15))
+        assertEquals(loaded(1, playing = true).copy(backSeconds = 5, forwardSeconds = 15), chosen)
+        val book = QueueBook().play(refs, 0, QueueSource(SourceKind.BOOK, "book:harbour", "Harbour Glass"), now = 1).book
+        val inBook = widgetState(book, library, playing = true, favourites = emptyList(), settings, playback = PlaybackSettings(skipBackSeconds = 5, skipForwardSeconds = 15)) as WidgetState.Loaded
+        assertEquals(30 to 30, inBook.backSeconds to inBook.forwardSeconds)
     }
 
     @Test
@@ -86,7 +109,7 @@ class WidgetTest {
         val gone = SongRef("/storage/emulated/0/Music/Gone/Lost Signal.mp3")
         val missing = QueueBook().play(listOf(gone), 0, album, now = 1).book
         assertEquals(
-            WidgetState.Loaded(gone, "Lost Signal.mp3", artist = null, cover = null, playing = false, favourite = false),
+            WidgetState.Loaded(gone, "Lost Signal.mp3", artist = null, cover = null, playing = false, favourite = false, album = null, queue = missing.currentId, backSeconds = 30, forwardSeconds = 10),
             widgetState(missing, library, playing = false, favourites = emptyList(), settings),
         )
     }
@@ -101,8 +124,9 @@ class WidgetTest {
         val playing = MutableStateFlow(false)
         val favourites = MutableStateFlow<List<SongRef>>(emptyList())
         val librarySettings = MutableStateFlow(settings)
+        val playback = MutableStateFlow(PlaybackSettings())
         val pushed = mutableListOf<WidgetState>()
-        val job = launch { widgetStates(book, songs, playing, favourites, librarySettings).collect { pushed += it } }
+        val job = launch { widgetStates(book, songs, playing, favourites, librarySettings, playback = playback).collect { pushed += it } }
 
         assertEquals(listOf<WidgetState>(WidgetState.Empty), pushed)
         songs.value = library
@@ -120,7 +144,14 @@ class WidgetTest {
         songs.value = Library.of(this@WidgetTest.songs, Settings())
         favourites.value = listOf(refs[2])
         librarySettings.value = settings.copy(songSort = SortSongs.entries.last())
+        playback.value = playback.value.copy(countPlayAfterPercent = 80)
         assertEquals(emptyList<WidgetState>(), pushed)
+
+        // A new jump for the seek buttons is drawn at once.
+        playback.value = playback.value.copy(skipBackSeconds = 10)
+        assertEquals(listOf(loaded(1, playing = true).copy(backSeconds = 10)), pushed)
+        playback.value = playback.value.copy(skipBackSeconds = 30)
+        pushed.clear()
 
         favourites.value = listOf(refs[2], refs[1])
         assertEquals(listOf(loaded(1, playing = true, favourite = true)), pushed)
@@ -137,30 +168,94 @@ class WidgetTest {
         job.cancel()
     }
 
-    // The buttons
+    // The layouts and their buttons
 
     @Test
-    fun `Small shows Play or Pause and Next, Large adds Previous first, the empty state only Play`() {
-        val playing = loaded(1, playing = true)
-        val paused = loaded(1, playing = false)
-        assertEquals(listOf(WidgetCommand.PAUSE, WidgetCommand.NEXT), widgetButtons(playing, WidgetSize.SMALL).map { it.command })
-        assertEquals(listOf(WidgetCommand.PLAY, WidgetCommand.NEXT), widgetButtons(paused, WidgetSize.SMALL).map { it.command })
-        assertEquals(listOf(WidgetCommand.PREVIOUS, WidgetCommand.PAUSE, WidgetCommand.NEXT), widgetButtons(playing, WidgetSize.LARGE).map { it.command })
-        assertEquals(listOf(WidgetCommand.PREVIOUS, WidgetCommand.PLAY, WidgetCommand.NEXT), widgetButtons(paused, WidgetSize.LARGE).map { it.command })
-        for (size in WidgetSize.entries) assertEquals(listOf(WidgetCommand.PLAY), widgetButtons(WidgetState.Empty, size).map { it.command })
+    fun `the layout follows the widget's height, small 4x1, medium 4x2, large 4x3`() {
+        for (height in listOf(0f, 40f, 56f, 102f, 169.9f)) assertEquals("$height", GlowLayout.SMALL, glowLayout(height))
+        for (height in listOf(170f, 220f, 260f, 289.9f)) assertEquals("$height", GlowLayout.MEDIUM, glowLayout(height))
+        for (height in listOf(290f, 337f, 420f, 900f)) assertEquals("$height", GlowLayout.LARGE, glowLayout(height))
+        // Each layout is drawn from its least height on.
+        for (layout in GlowLayout.entries) assertEquals(layout, glowLayout(layout.fromHeightDp.toFloat()))
     }
 
     @Test
-    fun `each button has its icon and its label`() {
+    fun `the medium and large layouts fit their least height, cover, controls and margins`() {
+        for (layout in listOf(GlowLayout.MEDIUM, GlowLayout.LARGE)) {
+            val needed = 2 * layout.paddingDp + layout.coverDp + GLOW_PLAY_DP
+            assertTrue("$layout needs $needed dp", needed <= layout.fromHeightDp)
+        }
+        // The small row: the cover and the Play button side by side, within the height of a small widget on most phones.
+        assertTrue(maxOf(GlowLayout.SMALL.coverDp, GLOW_PLAY_DP) + 2 * GlowLayout.SMALL.paddingDp <= 80)
+    }
+
+    @Test
+    fun `small shows Previous, Play or Pause and Next, medium and large add the jumps back and forward, empty only Play`() {
+        val playing = loaded(1, playing = true)
+        val paused = loaded(1, playing = false)
+        assertEquals(listOf(WidgetCommand.PREVIOUS, WidgetCommand.PAUSE, WidgetCommand.NEXT), widgetButtons(playing, GlowLayout.SMALL, WIDE).map { it.command })
+        assertEquals(listOf(WidgetCommand.PREVIOUS, WidgetCommand.PLAY, WidgetCommand.NEXT), widgetButtons(paused, GlowLayout.SMALL, WIDE).map { it.command })
+        for (layout in listOf(GlowLayout.MEDIUM, GlowLayout.LARGE)) {
+            assertEquals(
+                listOf(WidgetCommand.REWIND, WidgetCommand.PREVIOUS, WidgetCommand.PAUSE, WidgetCommand.NEXT, WidgetCommand.FORWARD),
+                widgetButtons(playing, layout, WIDE).map { it.command },
+            )
+            assertEquals(
+                listOf(WidgetCommand.REWIND, WidgetCommand.PREVIOUS, WidgetCommand.PLAY, WidgetCommand.NEXT, WidgetCommand.FORWARD),
+                widgetButtons(paused, layout, WIDE).map { it.command },
+            )
+        }
+        for (layout in GlowLayout.entries) assertEquals(listOf(WidgetCommand.PLAY), widgetButtons(WidgetState.Empty, layout, WIDE).map { it.command })
+    }
+
+    @Test
+    fun `in a book the widget jumps back and forward where Previous and Next are, as the notification does`() {
+        // A book's session takes no Previous or Next (LyrifyPlayer's NOT_IN_A_BOOK): its 30 s jumps stand in for them.
+        val book = QueueBook().play(refs, 0, QueueSource(SourceKind.BOOK, "book:harbour", "Harbour Glass"), now = 1).book
+        val inBook = widgetState(book, library, playing = true, favourites = emptyList(), settings) as WidgetState.Loaded
+        assertTrue(inBook.book)
+        for (layout in GlowLayout.entries) {
+            assertEquals(listOf(WidgetCommand.REWIND, WidgetCommand.PAUSE, WidgetCommand.FORWARD), widgetButtons(inBook, layout, WIDE).map { it.command })
+        }
+        assertEquals(
+            listOf(R.drawable.ic_replay_30, R.drawable.ic_pause_fill, R.drawable.ic_forward_30),
+            widgetButtons(inBook, GlowLayout.SMALL, WIDE).map { it.icon },
+        )
+        assertEquals(false, (widgetState(playingSecond, library, playing = true, favourites = emptyList(), settings) as WidgetState.Loaded).book)
+    }
+
+    @Test
+    fun `a narrow small widget leaves out its first button so the title keeps room, and the large cover gives way`() {
+        val playing = loaded(1, playing = true)
+        assertEquals(listOf(WidgetCommand.PAUSE, WidgetCommand.NEXT), widgetButtons(playing, GlowLayout.SMALL, GLOW_NARROW_DP - 1f).map { it.command })
+        assertEquals(listOf(WidgetCommand.PREVIOUS, WidgetCommand.PAUSE, WidgetCommand.NEXT), widgetButtons(playing, GlowLayout.SMALL, GLOW_NARROW_DP.toFloat()).map { it.command })
+        // Medium and large keep all five at any width.
+        for (layout in listOf(GlowLayout.MEDIUM, GlowLayout.LARGE)) assertEquals(5, widgetButtons(playing, layout, 250f).size)
+        // The large cover leaves room for the heart and Queue beside it on the narrowest widgets; the others never change.
+        assertEquals(128, glowCoverDp(GlowLayout.LARGE, WIDE))
+        assertEquals(124, glowCoverDp(GlowLayout.LARGE, 250f))
+        assertEquals(56, glowCoverDp(GlowLayout.SMALL, 250f))
+        assertEquals(76, glowCoverDp(GlowLayout.MEDIUM, 250f))
+    }
+
+    @Test
+    fun `each button has its icon and its label, the jumps their seconds as the player shows them`() {
         assertEquals(
             listOf(
+                WidgetButton(WidgetCommand.REWIND, R.drawable.ic_replay_30, R.plurals.player_back_seconds, seconds = 30),
                 WidgetButton(WidgetCommand.PREVIOUS, R.drawable.ic_skip_previous_fill, R.string.player_previous),
                 WidgetButton(WidgetCommand.PAUSE, R.drawable.ic_pause_fill, R.string.player_pause),
                 WidgetButton(WidgetCommand.NEXT, R.drawable.ic_skip_next_fill, R.string.player_next),
+                WidgetButton(WidgetCommand.FORWARD, R.drawable.ic_forward_10, R.plurals.player_forward_seconds, seconds = 10),
             ),
-            widgetButtons(loaded(0, playing = true), WidgetSize.LARGE),
+            widgetButtons(loaded(0, playing = true), GlowLayout.MEDIUM, WIDE),
         )
-        assertEquals(listOf(WidgetButton(WidgetCommand.PLAY, R.drawable.ic_play_arrow_fill, R.string.player_play)), widgetButtons(WidgetState.Empty, WidgetSize.SMALL))
+        val chosen = loaded(0, playing = false).copy(backSeconds = 5, forwardSeconds = 15)
+        assertEquals(
+            listOf(R.drawable.ic_replay_5, R.drawable.ic_skip_previous_fill, R.drawable.ic_play_arrow_fill, R.drawable.ic_skip_next_fill, R.drawable.ic_forward_15),
+            widgetButtons(chosen, GlowLayout.LARGE, WIDE).map { it.icon },
+        )
+        assertEquals(listOf(WidgetButton(WidgetCommand.PLAY, R.drawable.ic_play_arrow_fill, R.string.player_play)), widgetButtons(WidgetState.Empty, GlowLayout.SMALL, WIDE))
     }
 
     @Test
@@ -175,7 +270,8 @@ class WidgetTest {
         val sent = mutableListOf<String>()
         val player = Proxy.newProxyInstance(Player::class.java.classLoader, arrayOf(Player::class.java)) { _, method, _ -> sent += method.name; null } as Player
         for (command in WidgetCommand.entries) command.sendTo(player)
-        assertEquals(listOf("play", "pause", "seekToNext", "seekToPrevious"), sent)
+        // The jumps are the session's own seek back and forward: the player's "Skip amounts", a book's 30 s.
+        assertEquals(listOf("play", "pause", "seekToNext", "seekToPrevious", "seekBack", "seekForward"), sent)
     }
 
     @Test
@@ -190,6 +286,10 @@ class WidgetTest {
             assertEquals(true, skip.took(playing = true, happened = { it == Player.EVENT_POSITION_DISCONTINUITY }))
             assertEquals(false, skip.took(playing = true, happened = { it == Player.EVENT_IS_PLAYING_CHANGED }))
         }
+        for (jump in listOf(WidgetCommand.REWIND, WidgetCommand.FORWARD)) {
+            assertEquals(true, jump.took(playing = false, happened = { it == Player.EVENT_POSITION_DISCONTINUITY }))
+            assertEquals(false, jump.took(playing = true, happened = { it == Player.EVENT_PLAY_WHEN_READY_CHANGED }))
+        }
     }
 
     // The cover
@@ -201,6 +301,16 @@ class WidgetTest {
         assertEquals(FullScreen.Player, destinationView(DESTINATION_PLAYER))
         assertNull(destinationView(DESTINATION_AI))
         assertNull(destinationView(null))
+    }
+
+    @Test
+    fun `Queue opens KJB on the page of the queue playing`() {
+        val destination = queueDestination(loaded(1, playing = true).queue!!)
+        assertEquals(Page.Queue("q1"), destinationPage(destination))
+        assertNull(destinationView(destination))
+        // A queue's id is taken whole, whatever it holds.
+        assertEquals(Page.Queue("q/7"), destinationPage(queueDestination("q/7")))
+        assertNull(destinationPage("queue"))
     }
 
     @Test
@@ -221,7 +331,7 @@ class WidgetTest {
         // The cover could not be read now (CarCovers.read gave none): the default cover is drawn, and no path kept.
         val failed = Widgets.withCover(loaded(1, playing = true), Shown(WidgetState.Empty), now = 1_000) { reads += it; null }
         assertNull(failed.coverOf)
-        assertNull(failed.large)
+        assertNull(failed.cover)
         // Pause, the next update a moment later: it reads again, without waiting for NO_ART_RECHECK_MS.
         Widgets.withCover(loaded(1, playing = false), failed, now = 1_001) { reads += it; null }
         assertEquals(listOf("42", "42"), reads)
@@ -267,8 +377,8 @@ class WidgetTest {
         // MediaStore has no art for the song (FileNotFoundException, which it may also give for a moment's failure).
         val first = Widgets.withCover(loaded(1, playing = true), Shown(WidgetState.Empty), now = 1_000, noArt)
         assertEquals("42", first.coverOf)
-        assertNull(first.small)
-        assertNull(first.large)
+        assertNull(first.cover)
+        assertNull(first.glow)
         // Updates before the bound draw the default cover again, and read nothing.
         val paused = Widgets.withCover(loaded(1, playing = false), first, now = 1_000 + NO_ART_RECHECK_MS - 1, noArt)
         assertEquals("42", paused.coverOf)
@@ -321,18 +431,26 @@ class WidgetTest {
         // A copy without a cover: the default cover, kept as for a song with no art.
         assertEquals("default", own(reads.single(), null))
         assertEquals("opened-1763290000000-12", shown.coverOf)
-        assertNull(shown.large)
-    }
-
-    @Test
-    fun `covers are read at the size of their slot on the phone's screen`() {
-        assertEquals(154, coverPx(WidgetSize.SMALL, density = 3.5f))
-        assertEquals(308, coverPx(WidgetSize.LARGE, density = 3.5f))
-        assertEquals(44, coverPx(WidgetSize.SMALL, density = 1f))
-        assertEquals(132, coverPx(WidgetSize.LARGE, density = 1.5f))
+        assertNull(shown.cover)
     }
 
     // After the player is gone
+
+    @Test
+    fun `the player stopping while a cover is read leaves the empty state, never the song it had`() = runTest {
+        var alive = true
+        val stopped = Widgets.reconciled(Shown(loaded(1, playing = true)), { alive }, now = 1_000) { alive = false; CoverRead.NoArt }
+        assertEquals(WidgetState.Empty, stopped.state)
+        assertNull(stopped.coverOf)
+        // Alive throughout: the song, its cover read.
+        val kept = Widgets.reconciled(Shown(loaded(1, playing = true)), { true }, now = 1_000) { CoverRead.NoArt }
+        assertEquals(loaded(1, playing = true), kept.state)
+        assertEquals("42", kept.coverOf)
+        // Gone from the start: the empty state, nothing read.
+        var reads = 0
+        assertEquals(WidgetState.Empty, Widgets.reconciled(Shown(loaded(1, playing = true)), { false }, now = 1_000) { reads++; null }.state)
+        assertEquals(0, reads)
+    }
 
     @Test
     fun `without a live player the widgets show the empty state, whatever they last showed`() {

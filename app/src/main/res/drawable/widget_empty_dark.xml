@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The widget with nothing playing on Android 11, dark mode (widget/Widgets.kt Empty): KJB's surfaceContainer
+     (ui/Theme.kt DarkColors), its corners its own. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="#FF201E27" />
+    <corners android:radius="24dp" />
+</shape>

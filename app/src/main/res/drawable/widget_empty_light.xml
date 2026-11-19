@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The widget with nothing playing on Android 11, light mode (widget/Widgets.kt Empty): KJB's surfaceContainer
+     (ui/Theme.kt LightColors), its corners its own, as Android 11 draws no widget corners. Android 12 and later use
+     the same colours through Glance, picked by the home screen. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="#FFF1ECF7" />
+    <corners android:radius="24dp" />
+</shape>

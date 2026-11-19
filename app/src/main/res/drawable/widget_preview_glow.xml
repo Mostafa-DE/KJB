@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The widget picker's picture of the Glow widget (layout-v31/widget_preview_*.xml): KJB's default cover blurred and
+     darkened as the widget draws it, the black tile with a soft coral light from the note's corner and the K's lilac
+     below. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="#FF141218" />
+            <corners android:radius="24dp" />
+        </shape>
+    </item>
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:centerX="0.85"
+                android:centerY="0.15"
+                android:endColor="#00C9472C"
+                android:gradientRadius="90%p"
+                android:startColor="#73C9472C"
+                android:type="radial" />
+            <corners android:radius="24dp" />
+        </shape>
+    </item>
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:centerX="0.25"
+                android:centerY="0.9"
+                android:endColor="#005A50AE"
+                android:gradientRadius="80%p"
+                android:startColor="#665A50AE"
+                android:type="radial" />
+            <corners android:radius="24dp" />
+        </shape>
+    </item>
+</layer-list>

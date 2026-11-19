@@ -1,74 +1,149 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The widget picker's picture of "KJB large" (Android 12 and later, which reads previewLayout), in the wallpaper's
-     colours: the K on its black tile, the name and the heart, then Previous, Play and Next. The home screen paints no
-     background of its own behind it. -->
+<!-- The widget picker's picture of "KJB large" (Android 12 and later, which reads previewLayout): the Glow widget's large
+     layout on KJB's default cover, its glow drawn as a soft light: the big cover, the heart and Queue, the name, then
+     back 30 s, Previous, Play, Next and forward 10 s (the player's jumps by default). Gaps are empty FrameLayouts: a
+     picture the home screen draws as a RemoteViews may hold only the views those allow. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
     android:id="@android:id/background"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@android:color/system_accent2_50"
-    android:gravity="center_vertical"
-    android:orientation="horizontal"
-    android:padding="12dp"
+    android:background="@drawable/widget_preview_glow"
+    android:orientation="vertical"
+    android:padding="16dp"
     tools:ignore="Overdraw">
 
-    <ImageView
-        android:layout_width="88dp"
-        android:layout_height="88dp"
-        android:background="@android:color/black"
-        android:contentDescription="@null"
-        android:padding="22dp"
-        android:src="@drawable/ic_brand_k" />
-
     <LinearLayout
-        android:layout_width="0dp"
-        android:layout_height="88dp"
-        android:layout_marginStart="12dp"
-        android:layout_weight="1"
-        android:orientation="vertical">
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
 
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="44dp"
-            android:drawableEnd="@drawable/ic_favorite"
-            android:drawableTint="@android:color/system_neutral2_700"
-            android:gravity="center_vertical"
-            android:maxLines="1"
-            android:text="@string/app_name"
-            android:textColor="@android:color/system_neutral1_900"
-            android:textSize="16sp" />
+        <ImageView
+            android:layout_width="128dp"
+            android:layout_height="128dp"
+            android:background="@drawable/widget_preview_cover"
+            android:clipToOutline="true"
+            android:contentDescription="@null"
+            android:scaleType="centerCrop"
+            android:src="@drawable/kjb_default_cover" />
 
         <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="44dp"
-            android:gravity="center_vertical"
-            android:orientation="horizontal">
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="14dp"
+            android:layout_weight="1"
+            android:orientation="vertical">
 
-            <ImageView
-                android:layout_width="48dp"
-                android:layout_height="match_parent"
-                android:contentDescription="@null"
-                android:padding="10dp"
-                android:src="@drawable/ic_skip_previous_fill"
-                android:tint="@android:color/system_neutral1_900" />
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="40dp"
+                android:gravity="end"
+                android:orientation="horizontal">
 
-            <ImageView
-                android:layout_width="48dp"
-                android:layout_height="match_parent"
-                android:layout_marginHorizontal="12dp"
-                android:contentDescription="@null"
-                android:padding="10dp"
-                android:src="@drawable/ic_play_arrow_fill"
-                android:tint="@android:color/system_accent1_600" />
+                <ImageView
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:contentDescription="@null"
+                    android:padding="8dp"
+                    android:src="@drawable/ic_favorite"
+                    android:tint="#FFFFFFFF" />
 
-            <ImageView
-                android:layout_width="48dp"
-                android:layout_height="match_parent"
-                android:contentDescription="@null"
-                android:padding="10dp"
-                android:src="@drawable/ic_skip_next_fill"
-                android:tint="@android:color/system_neutral1_900" />
+                <ImageView
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:contentDescription="@null"
+                    android:padding="8dp"
+                    android:src="@drawable/ic_queues"
+                    android:tint="#FFFFFFFF" />
+            </LinearLayout>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:fontFamily="sans-serif-medium"
+                android:maxLines="1"
+                android:text="@string/app_name"
+                android:textColor="#FFFFFFFF"
+                android:textSize="15sp" />
         </LinearLayout>
+    </LinearLayout>
+
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        tools:ignore="UselessLeaf" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="46dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <ImageView
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:contentDescription="@null"
+            android:padding="8dp"
+            android:src="@drawable/ic_replay_30"
+            android:tint="#FFFFFFFF" />
+
+        <FrameLayout
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            tools:ignore="UselessLeaf" />
+
+        <ImageView
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:contentDescription="@null"
+            android:padding="8dp"
+            android:src="@drawable/ic_skip_previous_fill"
+            android:tint="#FFFFFFFF" />
+
+        <FrameLayout
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            tools:ignore="UselessLeaf" />
+
+        <ImageView
+            android:layout_width="46dp"
+            android:layout_height="46dp"
+            android:background="@drawable/widget_preview_play"
+            android:contentDescription="@null"
+            android:padding="11dp"
+            android:src="@drawable/ic_play_arrow_fill"
+            android:tint="#FF1A1426" />
+
+        <FrameLayout
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            tools:ignore="UselessLeaf" />
+
+        <ImageView
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:contentDescription="@null"
+            android:padding="8dp"
+            android:src="@drawable/ic_skip_next_fill"
+            android:tint="#FFFFFFFF" />
+
+        <FrameLayout
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            tools:ignore="UselessLeaf" />
+
+        <ImageView
+            android:layout_width="40dp"
+            android:layout_height="40dp"
+            android:contentDescription="@null"
+            android:padding="8dp"
+            android:src="@drawable/ic_forward_10"
+            android:tint="#FFFFFFFF" />
     </LinearLayout>
 </LinearLayout>
