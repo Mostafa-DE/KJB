@@ -81,6 +81,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
@@ -351,16 +352,19 @@ private fun DockItems(items: List<DockTab>, selected: DockTab, style: DockStyle,
                 .selectableGroup()
                 .heightIn(min = height)
                 .padding(horizontal = DOCK_SIDE)
-                .drawBehind {
-                    if (line < 0) return@drawBehind
+                .drawWithCache {
+                    // Built again only when the bar's size or items change; while the line travels only the draw runs.
                     val slots = DockSlots(items.size, size.width.roundToInt())
                     val half = SUNG_LINE_WIDTH.toPx() / 2
                     val thick = SUNG_LINE_HEIGHT.toPx()
-                    val left = slots.middle(min(start.value, end.value)) - half
-                    val right = slots.middle(max(start.value, end.value)) + half
-                    val x = if (layoutDirection == LayoutDirection.Rtl) size.width - right else left
-                    val bottom = (if (slim) SLIM_LINE_BOTTOM else LINE_BOTTOM).toPx()
-                    drawRoundRect(highlight, Offset(x, size.height - bottom - thick), Size(right - left, thick), CornerRadius(thick / 2))
+                    val top = size.height - (if (slim) SLIM_LINE_BOTTOM else LINE_BOTTOM).toPx() - thick
+                    onDrawBehind {
+                        if (line < 0) return@onDrawBehind
+                        val left = slots.middle(min(start.value, end.value)) - half
+                        val right = slots.middle(max(start.value, end.value)) + half
+                        val x = if (layoutDirection == LayoutDirection.Rtl) size.width - right else left
+                        drawRoundRect(highlight, Offset(x, top), Size(right - left, thick), CornerRadius(thick / 2))
+                    }
                 },
         ) { measurables, constraints ->
             // Each item gets its slot here, not from a Row's weight: Material's TooltipBox puts the modifier it is
