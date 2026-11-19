@@ -289,6 +289,40 @@ class DoubleTapTest {
     }
 
     @Test
+    fun `a touch on another row inside the wait that turns into a long press or a scroll plays the song at once, as a tap there does`() {
+        // A long press on the next row: the song plays as that finger lands, and the long press is the next row's own.
+        tapSong()
+        pass(100)
+        assertFalse(taps.down(now, next.center))
+        assertEquals(listOf(lantern), plays)
+        pass(timing.holdMs)
+        assertFalse(taps.up(now, next.center))
+        // A scroll from the next row.
+        tapSong()
+        pass(100)
+        assertFalse(taps.down(now, next.center))
+        assertEquals(listOf(lantern, lantern), plays)
+        assertFalse(taps.move(next.center + Offset(0f, -40f)))
+        pass(1_000)
+        assertEquals(listOf(lantern, lantern), plays)
+        assertEquals(emptyList<FavouriteTarget>(), favourited)
+    }
+
+    @Test
+    fun `a second tap on a song's row once the wait is over is a tap of its own, so the song plays again and is no favourite`() {
+        tapSong()
+        pass(TAP_WAIT_MS)
+        assertEquals(listOf(lantern), plays)
+        // 260 ms after the first lifted: inside the phone's double-tap time (300 ms), but the song already plays.
+        pass(10)
+        assertFalse(tapSong())
+        pass(TAP_WAIT_MS)
+        assertEquals(listOf(lantern, lantern), plays)
+        assertEquals(emptyList<FavouriteTarget>(), favourited)
+        assertEquals(emptyList<HeartPop>(), taps.pops)
+    }
+
+    @Test
     fun `the row's own touch held past a long press or moved is no tap, so nothing waits and nothing plays`() {
         // Its touch tells the host nothing and its clickable never clicks; the next touch finds nothing to act on.
         val watch = TapWatch(timing)

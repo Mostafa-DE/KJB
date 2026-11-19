@@ -3,6 +3,9 @@ package app.lyrify.ui
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.Interaction
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
@@ -10,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -41,8 +45,8 @@ import org.junit.runner.RunWith
  * Double-tap to favourite on a real window: a card's tap acts at once (nothing waits for a second), and a second tap
  * soon after has its lift taken by the host, so neither the card again nor the page the first tap opened acts on it; a
  * long press soon after a tap is still the item's. A song row's tap waits a moment and plays only if no second tap
- * comes: a double tap there only favourites, a long press soon after only selects, and a tap on another row plays the
- * first at once. The player's cover of a book's part, which has no tap of its own, double-taps too. Made-up names only.
+ * comes, its press showing at once: a double tap there only favourites, a long press soon after only selects, and a
+ * tap on another row plays the first at once. The player's cover of a book's part, which has no tap of its own, double-taps too. Made-up names only.
  */
 @RunWith(AndroidJUnit4::class)
 class DoubleTapDeviceTest {
@@ -119,6 +123,27 @@ class DoubleTapDeviceTest {
         compose.mainClock.advanceTimeBy(200)
         assertEquals(1, plays)
         assertEquals(emptyList<FavouriteTarget>(), favourited)
+    }
+
+    @Test
+    fun aSongRowsPressShowsAtOnceWhileItsTapWaits() {
+        var plays = 0
+        val seen = mutableListOf<Interaction>()
+        compose.setContent {
+            val press = remember { MutableInteractionSource() }
+            LaunchedEffect(press) { press.interactions.collect { seen += it } }
+            Host {
+                val tap = rememberWaitingTap { plays++ }
+                Box(Modifier.size(200.dp).testTag(ROW).doubleTapFavourite(lantern, waiting = tap).clickable(interactionSource = press, indication = null, onClick = tap::click))
+            }
+        }
+        compose.mainClock.autoAdvance = false
+        compose.onNodeWithTag(ROW).performTouchInput { click() }
+        compose.mainClock.advanceTimeBy(TAP_WAIT_MS - 100)
+        assertTrue(seen.firstOrNull() is PressInteraction.Press)
+        assertEquals(0, plays)
+        compose.mainClock.advanceTimeBy(200)
+        assertEquals(1, plays)
     }
 
     @Test
