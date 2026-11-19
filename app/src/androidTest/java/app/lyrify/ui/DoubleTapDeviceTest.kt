@@ -8,7 +8,10 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
@@ -20,6 +23,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.doubleClick
@@ -27,6 +31,7 @@ import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import app.lyrify.library.SongRef
@@ -45,8 +50,8 @@ import org.junit.runner.RunWith
  * Double-tap to favourite on a real window: a card's tap acts at once (nothing waits for a second), and a second tap
  * soon after has its lift taken by the host, so neither the card again nor the page the first tap opened acts on it; a
  * long press soon after a tap is still the item's. A song row's tap waits a moment and plays only if no second tap
- * comes, its press showing at once: a double tap there only favourites, a long press soon after only selects, and a
- * tap on another row plays the first at once. The player's cover of a book's part, which has no tap of its own, double-taps too. Made-up names only.
+ * comes, its press showing at once: a double tap there only favourites, a long press soon after only selects, a drag
+ * on its own handle soon after only drags, and a tap on another row plays the first at once. The player's cover of a book's part, which has no tap of its own, double-taps too. Made-up names only.
  */
 @RunWith(AndroidJUnit4::class)
 class DoubleTapDeviceTest {
@@ -144,6 +149,32 @@ class DoubleTapDeviceTest {
         assertEquals(0, plays)
         compose.mainClock.advanceTimeBy(200)
         assertEquals(1, plays)
+    }
+
+    @Test
+    fun aDragOnTheRowsOwnHandleSoonAfterItsTapNeverPlaysAndIsTheHandles() {
+        var plays = 0
+        var drags = 0
+        compose.setContent {
+            Host {
+                // A song's row as SongRow and QueueSongRow lay it out: the tap's part, then the handle, in one row.
+                Row(Modifier.size(320.dp, 80.dp)) {
+                    val tap = rememberWaitingTap { plays++ }
+                    Box(Modifier.weight(1f).fillMaxHeight().testTag(ROW).doubleTapFavourite(lantern, waiting = tap).clickable(onClick = tap::click))
+                    Box(Modifier.size(80.dp).testTag(HANDLE).pointerInput(Unit) { detectDragGestures(onDragStart = { drags++ }) { change, _ -> change.consume() } })
+                }
+            }
+        }
+        compose.mainClock.autoAdvance = false
+        compose.onNodeWithTag(ROW).performTouchInput { click() }
+        compose.onNodeWithTag(HANDLE).performTouchInput {
+            advanceEventTime(80)
+            swipeDown()
+        }
+        compose.mainClock.advanceTimeBy(1_000)
+        assertEquals(0, plays)
+        assertEquals(1, drags)
+        assertEquals(emptyList<FavouriteTarget>(), favourited)
     }
 
     @Test
@@ -301,6 +332,7 @@ class DoubleTapDeviceTest {
     private companion object {
         const val ROW = "row"
         const val NEXT = "next"
+        const val HANDLE = "handle"
         const val PAGE = "page"
         val COVER = 200.dp
     }

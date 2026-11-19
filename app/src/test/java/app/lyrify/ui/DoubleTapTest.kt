@@ -27,6 +27,10 @@ class DoubleTapTest {
     private val row = Rect(0f, 560f, 400f, 640f)
     private val here = row.center
     private val next = Rect(0f, 640f, 400f, 720f)
+    /** The whole of [row]'s line, its "⋯" and its handle after it, and the middle of each. */
+    private val wholeRow = Rect(0f, 560f, 496f, 640f)
+    private val more = Offset(424f, 600f)
+    private val handle = Offset(472f, 600f)
     private val favourited = mutableListOf<FavouriteTarget>()
     /** The touches' and the waits' one clock: a touch at [now] is one the waits see at the same time. */
     private val clock = TestScope()
@@ -50,11 +54,11 @@ class DoubleTapTest {
      * not take is the row's own tap, told by the row's touch ([doubleTapFavourite]) and then by its click. Whether the
      * host took it.
      */
-    private fun tapSong(target: FavouriteTarget = lantern, tap: WaitingTap = lanternTap, area: Rect = row, heldMs: Long = 60): Boolean {
+    private fun tapSong(target: FavouriteTarget = lantern, tap: WaitingTap = lanternTap, area: Rect = row, whole: Rect = area, heldMs: Long = 60): Boolean {
         taps.down(now, area.center)
         pass(heldMs)
         if (taps.up(now, area.center)) return true
-        taps.tapped(target, now, area, waiting = tap)
+        taps.tapped(target, now, area, waiting = tap, whole = whole)
         tap.click()
         return false
     }
@@ -323,6 +327,28 @@ class DoubleTapTest {
     }
 
     @Test
+    fun `a touch on the row's own handle or ⋯ inside the wait drops the tap and is left to them, so the song never plays`() {
+        // A drag on the handle: the host leaves it whole to the handle, which moves the song.
+        tapSong(whole = wholeRow)
+        pass(100)
+        assertFalse(taps.down(now, handle))
+        assertFalse(taps.move(handle + Offset(0f, 40f)))
+        pass(60)
+        assertFalse(taps.up(now, handle + Offset(0f, 40f)))
+        pass(1_000)
+        // A tap on "⋯": its lift is its own, and the song's sheet opens.
+        tapSong(whole = wholeRow)
+        pass(100)
+        assertFalse(taps.down(now, more))
+        pass(60)
+        assertFalse(taps.up(now, more))
+        pass(1_000)
+        assertEquals(emptyList<FavouriteTarget>(), plays)
+        assertEquals(emptyList<FavouriteTarget>(), favourited)
+        assertEquals(emptyList<HeartPop>(), taps.pops)
+    }
+
+    @Test
     fun `the row's own touch held past a long press or moved is no tap, so nothing waits and nothing plays`() {
         // Its touch tells the host nothing and its clickable never clicks; the next touch finds nothing to act on.
         val watch = TapWatch(timing)
@@ -349,6 +375,42 @@ class DoubleTapTest {
         assertEquals(listOf(lantern), plays)
         assertEquals(emptyList<FavouriteTarget>(), favourited)
         assertEquals(emptyList<HeartPop>(), taps.pops)
+    }
+
+    @Test
+    fun `a finger bounce on the row that turns into a long press or a scroll is no tap, so the song never plays`() {
+        // Held: the wait runs out while it is down, and the long press is the row's (it selects).
+        tapSong()
+        pass(timing.minGapMs - 1)
+        assertTrue(taps.down(now, here))
+        pass(timing.holdMs)
+        assertFalse(taps.up(now, here))
+        pass(1_000)
+        // Moved past the touch slop: a scroll.
+        tapSong()
+        pass(timing.minGapMs - 1)
+        assertTrue(taps.down(now, here))
+        assertFalse(taps.move(here + Offset(0f, 9f)))
+        pass(1_000)
+        assertEquals(emptyList<FavouriteTarget>(), plays)
+        assertEquals(emptyList<FavouriteTarget>(), favourited)
+        assertEquals(emptyList<HeartPop>(), taps.pops)
+    }
+
+    @Test
+    fun `a finger bounce still down as the wait runs out plays the song when it lifts as a tap, once`() {
+        tapSong()
+        pass(20)
+        assertTrue(taps.down(now, here))
+        pass(TAP_WAIT_MS)
+        assertEquals(emptyList<FavouriteTarget>(), plays)
+        // Lifted 310 ms after it landed, short of a long press: the host takes it, and the tap acts now.
+        pass(60)
+        assertTrue(taps.up(now, here))
+        assertEquals(listOf(lantern), plays)
+        pass(1_000)
+        assertEquals(listOf(lantern), plays)
+        assertEquals(emptyList<FavouriteTarget>(), favourited)
     }
 
     @Test
@@ -381,6 +443,17 @@ class DoubleTapTest {
         assertEquals(listOf(lantern), plays)
         pass(1_000)
         assertEquals(listOf(lantern), plays)
+    }
+
+    @Test
+    fun `a click of another kind while the row's own tap waits (a keyboard's) plays the song once, at once, and the wait never does`() {
+        tapSong()
+        pass(100)
+        lanternTap.click()
+        assertEquals(listOf(lantern), plays)
+        pass(1_000)
+        assertEquals(listOf(lantern), plays)
+        assertEquals(emptyList<FavouriteTarget>(), favourited)
     }
 
     @Test
