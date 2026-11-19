@@ -551,14 +551,17 @@ internal fun PlaylistPage(ui: LibraryUi, library: Library, id: String) {
     val ordered = remember { OrderedEntries() }
     val (shownSongs, entryKeys) = remember(playlist.songs, ordered.version) { ordered.of(playlist.songs) }
     // Each song with its place in the playlist, for "Remove from playlist" and moves; songs gone or hidden are left out.
-    // The playlist's entries are [ordered]'s: a move not stored yet shows over them, and each has a key that stays with it.
-    val listed = remember(shownSongs, library) { shownSongs.mapIndexedNotNull { at, ref -> library.resolver.find(ref)?.takeIf(library::shows)?.let { at to it } } }
-    val sorted = rememberInOrder(listed, order, ui.settings.library) { it.second }
+    // The playlist's entries are [ordered]'s: a move not stored yet shows over them, and each has a key that stays with it,
+    // carried by its song wherever the sort puts it ([listedEntries]).
+    val listed = remember(shownSongs, entryKeys, library) {
+        listedEntries(shownSongs.mapIndexedNotNull { at, ref -> library.resolver.find(ref)?.takeIf(library::shows)?.let { at to it } }, entryKeys)
+    }
+    val sorted = rememberInOrder(listed, order, ui.settings.library) { it.song }
     val entries = sorted.orEmpty()
-    val songs = remember(entries) { entries.map { it.second } }
+    val songs = remember(entries) { entries.map { it.song } }
     val reduced = LocalReducedMotion.current
     val rows = rememberLazyListState()
-    val reorder = rememberSongReorder(rows, ordered, { entries.map { it.first } }) { shown -> actions.arrange(playlist, shown) }
+    val reorder = rememberSongReorder(rows, ordered, { entries.map { it.place } }) { shown -> actions.arrange(playlist, shown) }
     SongListFrame(ui, songs, QueueSource(SourceKind.PLAYLIST, id, playlist.name), state = rows, loaded = sorted != null, topBar = { under, backdrop ->
         CollectionTopBar(playlist.name, under, backdrop, ui, heart = FavouriteCollection(CollectionKind.PLAYLIST, id)) {
             Box {
@@ -590,7 +593,7 @@ internal fun PlaylistPage(ui: LibraryUi, library: Library, id: String) {
                 AboveChrome { EmptyState(EmptyArt.Glyph, stringResource(R.string.songs_empty_title), rowMotion(reduced), text = stringResource(R.string.lib_playlist_empty)) }
             }
         }
-        songRows(list, place = { at -> SheetPlace.Playlist(id, entries[at].first) }, keys = entries.map { "entry ${entryKeys[it.first]}" }, reorder = reorder.takeIf { order.reorders })
+        songRows(list, place = { at -> SheetPlace.Playlist(id, entries[at].place) }, keys = entries.map { it.key }, reorder = reorder.takeIf { order.reorders })
     }
     if (sorting) ListSortSheet(SongList.PLAYLIST, order, R.string.lib_sort_custom, onOrder) { sorting = false }
     if (renaming) {
@@ -685,7 +688,7 @@ private fun BuiltInPage(ui: LibraryUi, library: Library, list: BuiltInList) {
  * something while that one is empty.
  */
 @Composable
-private fun FavouritesPage(ui: LibraryUi, library: Library, root: Boolean) {
+internal fun FavouritesPage(ui: LibraryUi, library: Library, root: Boolean) {
     val change = rememberSettingsChange()
     val title = stringResource(R.string.lib_favourites)
     val ordered = remember { OrderedEntries() }
@@ -693,12 +696,13 @@ private fun FavouritesPage(ui: LibraryUi, library: Library, root: Boolean) {
     val favourites = remember(library, ui.playlists, shownSongs) { Favourites.of(ui.playlists.copy(favouriteSongs = shownSongs), library) }
     val (order, onOrder) = rememberListSort(ui, SongList.FAVOURITES)
     var sorting by rememberSaveable { mutableStateOf(false) }
-    val placed = remember(favourites) { favourites.songPlaces.zip(favourites.songs) }
-    val entries = rememberInOrder(placed, order, ui.settings.library) { it.second }.orEmpty()
-    val songs = remember(entries) { entries.map { it.second } }
+    // Each song with its entry's key, carried wherever the sort puts it: the rows and their keys are one list ([listedEntries]).
+    val placed = remember(favourites, entryKeys) { listedEntries(favourites.songPlaces.zip(favourites.songs), entryKeys) }
+    val entries = rememberInOrder(placed, order, ui.settings.library) { it.song }.orEmpty()
+    val songs = remember(entries) { entries.map { it.song } }
     val actions = rememberSongActions()
     val rows = rememberLazyListState()
-    val reorder = rememberSongReorder(rows, ordered, { entries.map { it.first } }) { shown -> actions.arrangeFavourites(shown) }.takeIf { order.reorders }
+    val reorder = rememberSongReorder(rows, ordered, { entries.map { it.place } }) { shown -> actions.arrangeFavourites(shown) }.takeIf { order.reorders }
     val others = FavouritesTab.entries.filter { it != FavouritesTab.SONGS }.sumOf { favourites.count(it) }
     var picked by rememberSaveable { mutableStateOf<FavouritesTab?>(null) }
     val shown = favourites.shown(picked ?: ui.settings.nav.favouritesTab)
@@ -734,7 +738,7 @@ private fun FavouritesPage(ui: LibraryUi, library: Library, root: Boolean) {
                 }
                 when (shown) {
                     null -> item(key = "empty", contentType = "empty") { EmptyState(EmptyArt.Icon(R.drawable.ic_favorite), stringResource(R.string.lib_fav_empty_title), rowMotion(reduced), text = stringResource(R.string.lib_fav_empty)) }
-                    FavouritesTab.SONGS -> songRows(list, keys = entries.map { "entry ${entryKeys[it.first]}" }, reorder = reorder)
+                    FavouritesTab.SONGS -> songRows(list, keys = entries.map { it.key }, reorder = reorder)
                     else -> favouriteRows(shown, favourites, library, reduced)
                 }
             }
@@ -748,7 +752,7 @@ private fun FavouritesPage(ui: LibraryUi, library: Library, root: Boolean) {
                 TabPages(pager, Modifier.fillMaxSize(), swipe = !list.selection.active) { tab ->
                     LazyColumn(Modifier.fillMaxSize(), state = if (tab == FavouritesTab.SONGS) rows else rememberLazyListState(), contentPadding = bottom) {
                         when (tab) {
-                            FavouritesTab.SONGS -> songRows(list, keys = entries.map { "entry ${entryKeys[it.first]}" }, reorder = reorder)
+                            FavouritesTab.SONGS -> songRows(list, keys = entries.map { it.key }, reorder = reorder)
                             else -> favouriteRows(tab, favourites, library, reduced)
                         }
                     }

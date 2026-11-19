@@ -371,6 +371,24 @@ fun carried(before: List<SongRef>, keys: List<Long>, now: List<SongRef>, fresh: 
 }
 
 /**
+ * A song of a stored list as its page lists it (a playlist's songs, Favourites'): its [place] among the entries
+ * [OrderedEntries.of] gave and its row's [key], that entry's. The key goes with the song wherever a sort puts it, so
+ * a page's rows and their keys are always one list ([listedEntries]).
+ */
+data class ListedEntry(val place: Int, val song: Song, val key: String)
+
+/**
+ * The songs [found] among a stored list's entries (each with its place there), each with its row's key: its entry's in
+ * [keys], the keys [OrderedEntries.of] gave with those entries. A page sorted by a key shows the songs sorted before
+ * while the sort of a new list is worked out ([rememberInOrder]); those rows keep the keys they came with, never the
+ * keys of the list now (KJB 3.1 crashed as a favourite was taken out while Favourites was sorted by a key: the songs
+ * sorted before were keyed by place among the entries left, one place past them). A place past [keys] (never: the page
+ * takes both from one list) keeps its song with a key of its own, never a crash.
+ */
+fun listedEntries(found: List<Pair<Int, Song>>, keys: List<Long>): List<ListedEntry> =
+    found.map { (at, song) -> ListedEntry(at, song, keys.getOrNull(at)?.let { "entry $it" } ?: "place $at") }
+
+/**
  * A list of songs being put in another order by a row's handle, or by TalkBack ([move]). While a row is [held] the list
  * shows its songs in the drag's order ([shown]): the held row follows the finger, [offset] px from its place, and takes a
  * neighbour's place each time it passes half of it ([reorderStep], the queue's), with a [tick]. Each change of order

@@ -5,10 +5,14 @@ import app.lyrify.library.FavouriteCollection
 import app.lyrify.library.Library
 import app.lyrify.library.Playlist
 import app.lyrify.library.PlaylistsState
+import app.lyrify.library.SongRef
 import app.lyrify.library.albumKey
 import app.lyrify.library.song
 import app.lyrify.settings.FavouritesTab
+import app.lyrify.settings.LibrarySettings
+import app.lyrify.settings.ListSort
 import app.lyrify.settings.Settings
+import app.lyrify.settings.SortSongs
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -130,7 +134,7 @@ class FavouritesPageTest {
     @Test
     fun `the head is the small heart tile beside the title and its counts, not the big hero`() {
         val page = File("src/main/java/app/lyrify/ui/CollectionScreens.kt").readText()
-        val favourites = page.substringAfter("private fun FavouritesPage(").substringBefore("\n}\n")
+        val favourites = page.substringAfter("internal fun FavouritesPage(").substringBefore("\n}\n")
         assertTrue("FavouritesHead(" in favourites)
         assertFalse("Hero(" in favourites)
         val head = page.substringAfter("internal fun FavouritesHead(").substringBefore("\n}\n")
@@ -164,7 +168,7 @@ class FavouritesPageTest {
         assertNull(favouritesHeadTitle("Favourites", root = true))
         assertEquals("Favourites", favouritesHeadTitle("Favourites", root = false))
         val page = File("src/main/java/app/lyrify/ui/CollectionScreens.kt").readText()
-        val favourites = page.substringAfter("private fun FavouritesPage(").substringBefore("\n}\n")
+        val favourites = page.substringAfter("internal fun FavouritesPage(").substringBefore("\n}\n")
         assertTrue("FavouritesHead(favouritesHeadTitle(title, root)," in favourites)
     }
 
@@ -197,5 +201,61 @@ class FavouritesPageTest {
         assertTrue(favouritesSideBySide(width = 620, head = 248, gap = gap, beside = beside))
         assertFalse(favouritesSideBySide(width = 619, head = 248, gap = gap, beside = beside))
         assertFalse(favouritesSideBySide(width = 808, head = 480, gap = gap, beside = beside))
+    }
+
+    // KJB 3.1 crash: a favourite taken out while Favourites showed a sort (CR5)
+
+    @Test
+    fun `a sorted list keeps its own entries' keys while the sort of the list left is worked out, never a crash`() {
+        val ordered = OrderedEntries()
+
+        // The page's songs as it lists them: each favourite found, with its place among the entries and its row's key.
+        fun listed(stored: List<SongRef>): List<ListedEntry> {
+            val (entries, keys) = ordered.of(stored)
+            val found = favourites(PlaylistsState(favouriteSongs = entries))
+            return listedEntries(found.songPlaces.zip(found.songs), keys)
+        }
+
+        val before = listed(listOf(lantern.ref, bell.ref, water.ref))
+        val byTitle = inOrder(before, ListSort(SortSongs.TITLE), LibrarySettings()) { it.song }
+        assertEquals(listOf(water, lantern, bell), byTitle.map { it.song })
+        // Low Water, the last entry, taken out (Undo after a double tap, Remove from Favourites). Until the sort of the two
+        // left is ready the page shows the three sorted before ([rememberInOrder]); KJB 3.1 keyed those by the entries of
+        // now, by place, and asked Low Water's place 2 of the two keys left: the IndexOutOfBoundsException.
+        val now = listed(listOf(lantern.ref, bell.ref))
+        val keys = byTitle.map { it.key }
+        assertEquals(3, keys.toSet().size)
+        // The songs still there have the same keys in the list left, so their rows move rather than being made again.
+        assertEquals(now.associate { it.song to it.key }, byTitle.filter { it.song != water }.associate { it.song to it.key })
+    }
+
+    @Test
+    fun `an entry is keyed by its entry, and one with no key by a key of its own, never a crash`() {
+        val keyed = listedEntries(listOf(0 to lantern, 1 to bell), listOf(7L, 8L))
+        assertEquals(listOf("entry 7", "entry 8"), keyed.map { it.key })
+        // A place past the keys (never: the page takes both from one list) keeps its song, keyed apart from every entry.
+        val past = listedEntries(listOf(0 to lantern, 2 to water, 3 to bell), listOf(7L))
+        assertEquals(listOf(lantern, water, bell), past.map { it.song })
+        assertEquals(3, past.map { it.key }.toSet().size)
+        assertTrue(past.drop(1).none { it.key.startsWith("entry") })
+    }
+
+    @Test
+    fun `a row is keyed by its key, and one past the keys by a key of its own, never a crash`() {
+        val keys = listOf<Any>("entry 7", "entry 8")
+        assertEquals("entry 8", songRowKey(keys, 1))
+        val third = songRowKey(keys, 2)
+        assertFalse(third in keys)
+        assertEquals(third, songRowKey(keys, 2))
+        // One per row, and saveable on the phone as a lazy list's key must be.
+        assertTrue(third != songRowKey(keys, 3))
+        assertTrue(third is java.io.Serializable)
+    }
+
+    @Test
+    fun `Favourites and a playlist take their rows' keys from the rows they list, never from the entries of now by place`() {
+        val screens = File("src/main/java/app/lyrify/ui/CollectionScreens.kt").readText()
+        assertFalse("entryKeys[" in screens)
+        assertEquals(3, Regex("""keys = entries\.map \{ it\.key \}""").findAll(screens).count())
     }
 }
