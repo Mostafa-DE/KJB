@@ -11,7 +11,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -159,9 +158,12 @@ internal object Widgets {
      * A widget is drawn: without a live player (the process was killed and started again since) the empty state, else
      * the song with its cover, read now if it was not yet (the widget was placed after the song started).
      */
-    suspend fun reconcile(context: Context) = lock.withLock {
-        val state = onScreen(current.value.state, playerAlive)
-        current.value = if (state == WidgetState.Empty) Shown(state) else withCover(state, current.value, SystemClock.elapsedRealtime()) { thumbnails(context, it) }
+    suspend fun reconcile(context: Context) {
+        lock.withLock {
+            current.value = reconciled(current.value, { playerAlive }, SystemClock.elapsedRealtime()) { thumbnails(context, it) }
+            // The service stopped as it was set ([stopped] sets the empty state outside the lock): the empty state stays.
+            if (!playerAlive) current.value = Shown(WidgetState.Empty)
+        }
     }
 
     /** The widgets drawn again, after a tap that no player answers (the heart on a widget left from before a kill). */
@@ -210,6 +212,18 @@ internal object Widgets {
         CarCovers.read(context, CarCovers.uris(context).of(path), { own ->
             CoverRead.Own(sharpCover(own, px), GlowLayout.entries.associateWith { glowBitmap(own, it) })
         }) { CoverRead.NoArt }
+    }
+
+    /**
+     * What a widget drawn now shows ([reconcile]), from what it showed [before]: the empty state without a live player
+     * ([alive]), else the song with its cover ([withCover], at [now]). The service may stop while the cover is [read]:
+     * then the empty state, never the song it had.
+     */
+    internal suspend fun reconciled(before: Shown, alive: () -> Boolean, now: Long, read: suspend (String) -> CoverRead?): Shown {
+        val state = onScreen(before.state, alive())
+        if (state == WidgetState.Empty) return Shown(state)
+        val shown = withCover(state, before, now, read)
+        return if (alive()) shown else Shown(WidgetState.Empty)
     }
 
     /** Long enough for Glance to take the update, short enough for the service's onDestroy on the main thread. */
@@ -269,18 +283,14 @@ class WidgetPart : ServicePart {
 
 // The widgets
 
-/**
- * The sizes Glance draws the Glow widget at: each layout from its least height ([GlowLayout.fromHeightDp]). The home
- * screen shows the largest that fits the widget, so a widget resized to more rows gets the next layout at once.
- */
-private val GLOW_SIZES = SizeMode.Responsive(GlowLayout.entries.map { DpSize(GLOW_FROM_WIDTH_DP.dp, it.fromHeightDp.dp) }.toSet())
-
 /** "KJB", placed at 4×1: the Glow widget, its layout from its size ([GlowLayout]), as "KJB large"'s. */
 class SmallWidget : GlanceAppWidget() {
     // The state lives in memory ([Widgets]), not in a file per widget.
     override val stateDefinition: GlanceStateDefinition<*>? = null
 
-    override val sizeMode: SizeMode = GLOW_SIZES
+    // Drawn at each size the home screen gives it (portrait, landscape), so its layout and buttons follow the real width
+    // and height ([glowLayout], [widgetButtons]).
+    override val sizeMode: SizeMode = SizeMode.Exact
 
     override suspend fun provideGlance(context: Context, id: GlanceId) = provideGlow(context)
 }
@@ -289,7 +299,7 @@ class SmallWidget : GlanceAppWidget() {
 class LargeWidget : GlanceAppWidget() {
     override val stateDefinition: GlanceStateDefinition<*>? = null
 
-    override val sizeMode: SizeMode = GLOW_SIZES
+    override val sizeMode: SizeMode = SizeMode.Exact
 
     override suspend fun provideGlance(context: Context, id: GlanceId) = provideGlow(context)
 }
@@ -304,18 +314,20 @@ class LargeWidgetReceiver : GlanceAppWidgetReceiver() {
 
 /**
  * The widget drawn from [Widgets.shown], and again whenever it changes while Glance keeps the widget's session, at each
- * of [GLOW_SIZES]. A song without its own cover shows KJB's default cover on the default cover's glow, made off the main
- * thread here once per process ([defaultGlow]).
+ * of its sizes. A song without its own cover shows KJB's default cover on the default cover's glow, made off the main
+ * thread here once per process ([defaultGlow], [defaultCover]).
  */
 private suspend fun GlanceAppWidget.provideGlow(context: Context): Nothing {
     Widgets.reconcile(context)
     val fallback = withContext(Dispatchers.IO) { defaultGlow(context) }
+    val fallbackCover = withContext(Dispatchers.IO) { defaultCover(context) }
     provideContent {
         val shown by Widgets.shown.collectAsState()
-        val layout = glowLayout(LocalSize.current.height.value)
+        val size = LocalSize.current
+        val layout = glowLayout(size.height.value)
         when (val state = shown.state) {
-            WidgetState.Empty -> Empty(layout)
-            is WidgetState.Loaded -> Playing(shown, state, layout, (shown.glow ?: fallback)[layout])
+            WidgetState.Empty -> Empty(layout, size.width.value)
+            is WidgetState.Loaded -> Playing(state, layout, size.width.value, (shown.glow ?: fallback)[layout], shown.cover ?: fallbackCover)
         }
     }
 }
@@ -340,9 +352,12 @@ private fun frame(): GlanceModifier {
     return if (homeRoundsCorners) modifier.cornerRadius(android.R.dimen.system_app_widget_background_radius) else modifier
 }
 
-/** The song playing in [layout]: [glow] over the whole widget, the sharp cover on the left, white words and buttons. */
+/**
+ * The song playing in [layout] on a widget [widthDp] wide: [glow] over the whole widget, the sharp [cover] on the left
+ * (KJB's default cover's drawable when null), white words and buttons.
+ */
 @Composable
-private fun Playing(shown: Shown, state: WidgetState.Loaded, layout: GlowLayout, glow: Bitmap?) {
+private fun Playing(state: WidgetState.Loaded, layout: GlowLayout, widthDp: Float, glow: Bitmap?, cover: Bitmap?) {
     Box(modifier = if (homeRoundsCorners) frame().background(GlowBase) else frame()) {
         if (glow != null) Image(ImageProvider(glow), contentDescription = null, modifier = GlanceModifier.fillMaxSize(), contentScale = ContentScale.FillBounds)
         when (layout) {
@@ -350,35 +365,35 @@ private fun Playing(shown: Shown, state: WidgetState.Loaded, layout: GlowLayout,
                 modifier = GlanceModifier.fillMaxSize().padding(start = layout.paddingDp.dp, end = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                SharpCover(shown, layout)
-                Words(state, album = false, GlanceModifier.defaultWeight().padding(horizontal = 12.dp))
-                widgetButtons(state, layout).forEachIndexed { i, button ->
+                SharpCover(state, cover, glowCoverDp(layout, widthDp), layout)
+                Words(state, album = false, GlanceModifier.defaultWeight().padding(horizontal = layout.gapDp.dp))
+                widgetButtons(state, layout, widthDp).forEachIndexed { i, button ->
                     if (i > 0) Spacer(GlanceModifier.width(2.dp))
                     Transport(button)
                 }
             }
             GlowLayout.MEDIUM -> Column(modifier = GlanceModifier.fillMaxSize().padding(layout.paddingDp.dp)) {
                 Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    SharpCover(shown, layout)
-                    Words(state, album = false, GlanceModifier.defaultWeight().padding(start = 12.dp))
+                    SharpCover(state, cover, glowCoverDp(layout, widthDp), layout)
+                    Words(state, album = false, GlanceModifier.defaultWeight().padding(start = layout.gapDp.dp))
                     Box(modifier = GlanceModifier.height(layout.coverDp.dp), contentAlignment = Alignment.TopEnd) {
                         Row { Heart(state); Queue(state) }
                     }
                 }
                 Spacer(GlanceModifier.defaultWeight())
-                Controls(state, layout)
+                Controls(state, layout, widthDp)
             }
             GlowLayout.LARGE -> Column(modifier = GlanceModifier.fillMaxSize().padding(layout.paddingDp.dp)) {
                 Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-                    SharpCover(shown, layout)
-                    Column(modifier = GlanceModifier.defaultWeight().padding(start = 14.dp)) {
+                    SharpCover(state, cover, glowCoverDp(layout, widthDp), layout)
+                    Column(modifier = GlanceModifier.defaultWeight().padding(start = layout.gapDp.dp)) {
                         Row(modifier = GlanceModifier.fillMaxWidth(), horizontalAlignment = Alignment.End) { Heart(state); Queue(state) }
                         Spacer(GlanceModifier.height(8.dp))
                         Words(state, album = true, GlanceModifier.fillMaxWidth())
                     }
                 }
                 Spacer(GlanceModifier.defaultWeight())
-                Controls(state, layout)
+                Controls(state, layout, widthDp)
             }
         }
     }
@@ -395,26 +410,25 @@ private fun Words(state: WidgetState.Loaded, album: Boolean, modifier: GlanceMod
     }
 }
 
-/** The medium and large layouts' five buttons, across the widget's width with even room between them. */
+/** The medium and large layouts' buttons, across the widget's width with even room between them. */
 @Composable
-private fun Controls(state: WidgetState.Loaded, layout: GlowLayout) {
+private fun Controls(state: WidgetState.Loaded, layout: GlowLayout, widthDp: Float) {
     Row(modifier = GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        widgetButtons(state, layout).forEachIndexed { i, button ->
+        widgetButtons(state, layout, widthDp).forEachIndexed { i, button ->
             if (i > 0) Spacer(GlanceModifier.defaultWeight())
             Transport(button)
         }
     }
 }
 
-/** The song's cover, sharp, or KJB's default cover for a song without one; a tap opens the player. */
+/** The song's [cover], sharp, [sizeDp] square, or KJB's default cover's drawable without one; a tap opens the player. */
 @Composable
-private fun SharpCover(shown: Shown, layout: GlowLayout) {
+private fun SharpCover(state: WidgetState, cover: Bitmap?, sizeDp: Int, layout: GlowLayout) {
     val context = LocalContext.current
-    val image = shown.cover?.let { ImageProvider(it) } ?: ImageProvider(R.drawable.kjb_default_cover)
     Image(
-        provider = image,
+        provider = cover?.let { ImageProvider(it) } ?: ImageProvider(R.drawable.kjb_default_cover),
         contentDescription = context.getString(R.string.widget_open_player),
-        modifier = GlanceModifier.size(layout.coverDp.dp).cornerRadius(layout.coverCornerDp.dp).clickable(actionStartActivity(opening(context, coverDestination(shown.state)))),
+        modifier = GlanceModifier.size(sizeDp.dp).cornerRadius(layout.coverCornerDp.dp).clickable(actionStartActivity(opening(context, coverDestination(state)))),
         contentScale = ContentScale.Crop,
     )
 }
@@ -474,6 +488,7 @@ private fun Queue(state: WidgetState.Loaded) {
 
 // Nothing playing: KJB's own colours ([LightColors], [DarkColors]), as the phone's light or dark mode has them.
 
+private val EmptySurface = ColorProvider(day = LightColors.surfaceContainer, night = DarkColors.surfaceContainer)
 private val EmptyText = ColorProvider(day = LightColors.onSurface, night = DarkColors.onSurface)
 private val EmptyTextSoft = ColorProvider(day = LightColors.onSurfaceVariant, night = DarkColors.onSurfaceVariant)
 private val EmptyPlay = ColorProvider(day = LightColors.primary, night = DarkColors.primary)
@@ -481,28 +496,35 @@ private val EmptyOnPlay = ColorProvider(day = LightColors.onPrimary, night = Dar
 
 /**
  * Nothing loaded (the player is not running, or it was ended): the K on its black tile, "KJB" and "Nothing playing", and
- * Play, which resumes the last queue; the tile opens the player. Its corners drawn by its background on Android 11.
+ * Play, which resumes the last queue; the tile opens the player. From Android 12 the home screen picks the light or dark
+ * colours as it draws the widget, the words' and the surface's alike. Android 11 takes them when the widget is made, the
+ * words' as KJB's process has the phone's mode, so the surface (its corners drawn in) is picked the same way.
  */
 @Composable
-private fun Empty(layout: GlowLayout) {
+private fun Empty(layout: GlowLayout, widthDp: Float) {
     val context = LocalContext.current
+    val surface = when {
+        homeRoundsCorners -> GlanceModifier.background(EmptySurface)
+        context.resources.configuration.isNightModeActive -> GlanceModifier.background(ImageProvider(R.drawable.widget_empty_dark))
+        else -> GlanceModifier.background(ImageProvider(R.drawable.widget_empty_light))
+    }
     Row(
-        modifier = frame().background(ImageProvider(R.drawable.widget_empty_background)).padding(horizontal = layout.paddingDp.dp),
+        modifier = frame().then(surface).padding(horizontal = layout.paddingDp.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        val size = layout.coverDp.dp
+        val size = glowCoverDp(layout, widthDp).dp
         Box(
-            modifier = GlanceModifier.size(size).cornerRadius(layout.coverCornerDp.dp).background(Color.Black)
+            modifier = GlanceModifier.size(size).cornerRadius(layout.coverCornerDp.dp).background(ImageProvider(R.drawable.widget_k_tile))
                 .clickable(actionStartActivity(opening(context, coverDestination(WidgetState.Empty)))),
             contentAlignment = Alignment.Center,
         ) {
             Image(ImageProvider(R.drawable.ic_brand_k), context.getString(R.string.widget_open_player), GlanceModifier.size(size / 2))
         }
-        Column(modifier = GlanceModifier.defaultWeight().padding(horizontal = 12.dp)) {
+        Column(modifier = GlanceModifier.defaultWeight().padding(horizontal = layout.gapDp.dp)) {
             Text(context.getString(R.string.app_name), style = TextStyle(color = EmptyText, fontSize = 15.sp, fontWeight = FontWeight.Medium), maxLines = 1)
             Text(context.getString(R.string.playing_idle), style = TextStyle(color = EmptyTextSoft, fontSize = 13.sp), maxLines = 1)
         }
-        widgetButtons(WidgetState.Empty, layout).forEach { Transport(it, background = EmptyPlay, content = EmptyOnPlay) }
+        widgetButtons(WidgetState.Empty, layout, widthDp).forEach { Transport(it, background = EmptyPlay, content = EmptyOnPlay) }
     }
 }
 

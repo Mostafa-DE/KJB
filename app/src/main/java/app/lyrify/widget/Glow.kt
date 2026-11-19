@@ -200,5 +200,18 @@ internal fun defaultGlow(context: Context): Map<GlowLayout, Bitmap> = madeDefaul
 @Volatile
 private var madeDefault: Map<GlowLayout, Bitmap>? = null
 
+/**
+ * KJB's default cover for the sharp slot on Android 11, its corners cut round as a song's own cover's are ([sharpCover]);
+ * null from Android 12, where its drawable is drawn and the widget rounds it. Made at the first call. Blocking.
+ */
+internal fun defaultCover(context: Context): Bitmap? = if (homeRoundsCorners) {
+    null
+} else {
+    madeDefaultCover ?: sharpCover(CarCovers.defaultBitmap(context), coverPx(context.resources.displayMetrics.density)).also { madeDefaultCover = it }
+}
+
+@Volatile
+private var madeDefaultCover: Bitmap? = null
+
 /** [bitmap] in memory the CPU can read: a hardware bitmap is copied. */
 private fun software(bitmap: Bitmap): Bitmap = if (bitmap.config == Bitmap.Config.HARDWARE) bitmap.copy(Bitmap.Config.ARGB_8888, false) else bitmap

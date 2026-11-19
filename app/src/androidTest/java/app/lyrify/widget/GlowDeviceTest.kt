@@ -7,6 +7,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import app.lyrify.library.SongRef
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -64,6 +65,18 @@ class GlowDeviceTest {
         val first = defaultGlow(context)
         assertEquals(GlowLayout.entries.toSet(), first.keys)
         assertSame(first, defaultGlow(context))
+    }
+
+    @Test
+    fun theDefaultCoverIsRoundOnAndroid11AndADrawableLater() {
+        val cover = defaultCover(context)
+        if (homeRoundsCorners) {
+            assertNull(cover)
+        } else {
+            assertEquals(0, Color.alpha(cover!!.getPixel(0, 0)))
+            assertEquals(255, Color.alpha(cover.getPixel(cover.width / 2, cover.height / 2)))
+            assertSame(cover, defaultCover(context))
+        }
     }
 
     @Test

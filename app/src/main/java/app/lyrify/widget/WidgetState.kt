@@ -5,6 +5,7 @@ import androidx.annotation.PluralsRes
 import androidx.annotation.StringRes
 import androidx.media3.common.Player
 import app.lyrify.R
+import app.lyrify.books.inBook
 import app.lyrify.books.skipsFor
 import app.lyrify.library.Library
 import app.lyrify.library.SongRef
@@ -50,6 +51,8 @@ sealed interface WidgetState {
         /** The seek buttons' jumps back and forward, in seconds: the player's own ([skipsFor]). */
         val backSeconds: Int = 10,
         val forwardSeconds: Int = 10,
+        /** Whether the queue is a book's, whose session takes no Previous or Next: the jumps stand in for them. */
+        val book: Boolean = false,
     ) : WidgetState {
         /** What its cover is read for ([coverToRead]): its [cover], and its [coverVersion] once that is not 0. */
         val coverKey: String? get() = cover?.let { if (coverVersion == 0) it else "$it#$coverVersion" }
@@ -89,6 +92,7 @@ fun widgetState(
         queue = queue.id,
         backSeconds = (skips.backMs / 1_000).toInt(),
         forwardSeconds = (skips.forwardMs / 1_000).toInt(),
+        book = inBook(queue),
     )
 }
 
@@ -112,20 +116,20 @@ fun widgetStates(
 
 /**
  * The Glow widget's layouts (the design the user chose, handoff/preview-widgets.html), by the widget's height: "KJB" and
- * "KJB large" both draw the one their size calls for ([glowLayout]). [fromHeightDp] is the least height it is drawn at,
- * which Glance is given as its size (SizeMode.Responsive); [coverDp] and [coverCornerDp] the sharp cover's slot, and
- * [paddingDp] the margin around it all, as in the preview. [shapeHeightDp] is the height its background is made for, a
- * widget of that layout on a common phone ([GLOW_SHAPE_WIDTH_DP] wide).
+ * "KJB large" both draw the one their size calls for ([glowLayout]). [fromHeightDp] is the least height it is drawn at;
+ * [coverDp] and [coverCornerDp] the sharp cover's slot, [gapDp] the room after it, and [paddingDp] the margin around it
+ * all, as in the preview. [shapeHeightDp] is the height its background is made for, a widget of that layout on a common
+ * phone ([GLOW_SHAPE_WIDTH_DP] wide).
  */
-enum class GlowLayout(val fromHeightDp: Int, val coverDp: Int, val coverCornerDp: Int, val paddingDp: Int, val shapeHeightDp: Int) {
+enum class GlowLayout(val fromHeightDp: Int, val coverDp: Int, val coverCornerDp: Int, val gapDp: Int, val paddingDp: Int, val shapeHeightDp: Int) {
     /** 4×1: the cover, title and artist, Previous, Play or Pause, Next. */
-    SMALL(fromHeightDp = 40, coverDp = 56, coverCornerDp = 14, paddingDp = 12, shapeHeightDp = 96),
+    SMALL(fromHeightDp = 40, coverDp = 56, coverCornerDp = 14, gapDp = 12, paddingDp = 12, shapeHeightDp = 96),
 
     /** 4×2: the cover, title and artist, the heart and Queue, then back, Previous, Play or Pause, Next, forward. */
-    MEDIUM(fromHeightDp = 170, coverDp = 76, coverCornerDp = 14, paddingDp = 14, shapeHeightDp = 220),
+    MEDIUM(fromHeightDp = 170, coverDp = 76, coverCornerDp = 14, gapDp = 12, paddingDp = 14, shapeHeightDp = 220),
 
     /** 4×3: the medium's, with a bigger cover and the album. */
-    LARGE(fromHeightDp = 290, coverDp = 128, coverCornerDp = 18, paddingDp = 16, shapeHeightDp = 340),
+    LARGE(fromHeightDp = 290, coverDp = 128, coverCornerDp = 18, gapDp = 14, paddingDp = 16, shapeHeightDp = 340),
 }
 
 /**
@@ -134,8 +138,21 @@ enum class GlowLayout(val fromHeightDp: Int, val coverDp: Int, val coverCornerDp
  */
 fun glowLayout(heightDp: Float): GlowLayout = GlowLayout.entries.lastOrNull { heightDp >= it.fromHeightDp } ?: GlowLayout.SMALL
 
-/** The least width Glance is given for every layout: no 4-cell widget is narrower, so the height alone picks the layout. */
-const val GLOW_FROM_WIDTH_DP: Int = 200
+/**
+ * Below this width the small layout leaves out its first button, so the title keeps room: a 4-cell widget on a narrow
+ * phone whose home screen has five columns is about 270 dp wide, which left the title some 40 dp.
+ */
+const val GLOW_NARROW_DP: Int = 300
+
+/**
+ * [layout]'s sharp cover in dp on a widget [widthDp] wide: the large one gives way on the narrowest widgets, so the heart
+ * and Queue still fit beside it within the margins; the others never change.
+ */
+fun glowCoverDp(layout: GlowLayout, widthDp: Float): Int {
+    if (layout != GlowLayout.LARGE) return layout.coverDp
+    val room = (widthDp - 2 * layout.paddingDp - layout.gapDp - 2 * GLOW_BUTTON_DP).toInt()
+    return room.coerceIn(layout.coverDp / 2, layout.coverDp)
+}
 
 /** Play or Pause, the widget's one filled button, in dp; the other buttons are [GLOW_BUTTON_DP]. */
 const val GLOW_PLAY_DP: Int = 46
@@ -189,23 +206,26 @@ enum class WidgetCommand {
 data class WidgetButton(val command: WidgetCommand, @DrawableRes val icon: Int, @StringRes @PluralsRes val label: Int, val seconds: Int? = null)
 
 /**
- * The transport buttons [layout] shows for [state], left to right: Previous, Play or Pause and Next, with the jumps back
- * and forward on either side in the medium and large layouts, their icons showing the seconds as the player's do; only
- * Play when nothing is loaded. The heart and Queue are apart from these: they do not go to the session.
+ * The transport buttons [layout] shows for [state] on a widget [widthDp] wide, left to right: Previous, Play or Pause and
+ * Next, with the jumps back and forward on either side in the medium and large layouts, their icons showing the seconds
+ * as the player's do. In a book the jumps stand where Previous and Next are, as on the notification: a book's session
+ * takes neither. A small widget narrower than [GLOW_NARROW_DP] leaves out the first. Only Play when nothing is loaded.
+ * The heart and Queue are apart from these: they do not go to the session.
  */
-fun widgetButtons(state: WidgetState, layout: GlowLayout): List<WidgetButton> {
+fun widgetButtons(state: WidgetState, layout: GlowLayout, widthDp: Float): List<WidgetButton> {
     val play = WidgetButton(WidgetCommand.PLAY, R.drawable.ic_play_arrow_fill, R.string.player_play)
     if (state !is WidgetState.Loaded) return listOf(play)
     val toggle = if (state.playing) WidgetButton(WidgetCommand.PAUSE, R.drawable.ic_pause_fill, R.string.player_pause) else play
-    val skips = listOf(
-        WidgetButton(WidgetCommand.PREVIOUS, R.drawable.ic_skip_previous_fill, R.string.player_previous),
-        toggle,
-        WidgetButton(WidgetCommand.NEXT, R.drawable.ic_skip_next_fill, R.string.player_next),
-    )
-    if (layout == GlowLayout.SMALL) return skips
     val back = WidgetButton(WidgetCommand.REWIND, seekIcon(back = true, state.backSeconds), R.plurals.player_back_seconds, state.backSeconds)
     val forward = WidgetButton(WidgetCommand.FORWARD, seekIcon(back = false, state.forwardSeconds), R.plurals.player_forward_seconds, state.forwardSeconds)
-    return listOf(back) + skips + forward
+    val previous = WidgetButton(WidgetCommand.PREVIOUS, R.drawable.ic_skip_previous_fill, R.string.player_previous)
+    val next = WidgetButton(WidgetCommand.NEXT, R.drawable.ic_skip_next_fill, R.string.player_next)
+    val buttons = when {
+        state.book -> listOf(back, toggle, forward)
+        layout == GlowLayout.SMALL -> listOf(previous, toggle, next)
+        else -> listOf(back, previous, toggle, next, forward)
+    }
+    return if (layout == GlowLayout.SMALL && widthDp < GLOW_NARROW_DP) buttons.drop(1) else buttons
 }
 
 /** Where a tap on the cover opens KJB: the player, also from the empty state (it closes when nothing is loaded). */

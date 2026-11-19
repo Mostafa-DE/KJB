@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The black tile under the K on the widget with nothing playing (widget/Widgets.kt Empty): KJB's brand black
+     (ui/Theme.kt BrandBlack), its corners its own on Android 11, which does not draw GlanceModifier.cornerRadius. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="#FF0A0A0B" />
+    <corners android:radius="14dp" />
+</shape>
