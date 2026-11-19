@@ -710,11 +710,11 @@ internal fun RecentChips(others: List<Queue>, labels: Map<String, String>, onOpe
 }
 
 /**
- * A queue's songs, the place marked: a tap plays the queue from that song, and a second tap soon after also makes the
- * song a favourite ([doubleTapFavourite]); the handle drags a song to another place, the others sliding out of its way
- * ([Reorder]); a swipe to the start, or "Remove from queue" in the row's menu, takes it out (with Undo through
- * [onRemoved]), the rows under it closing up. Songs not on the phone stay listed, quietly marked, and are skipped (and
- * have no double tap).
+ * A queue's songs, the place marked: a tap plays the queue from that song once a moment has passed with no second tap
+ * ([WaitingTap]), and a double tap only makes the song a favourite ([doubleTapFavourite]); the handle drags a song to
+ * another place, the others sliding out of its way ([Reorder]); a swipe to the start, or "Remove from queue" in the
+ * row's menu, takes it out (with Undo through [onRemoved]), the rows under it closing up. Songs not on the phone stay
+ * listed, quietly marked, and are skipped (and have no double tap; their tap acts at once).
  */
 private fun LazyListScope.queueSongs(queue: Queue, playing: Boolean, library: Library?, names: LibrarySettings, connection: PlayerConnection, reorder: Reorder, surface: Color, onRemoved: (Undo?) -> Unit) {
     // Each row acts on its place in the queue itself, also while a drag shows another order.
@@ -852,6 +852,7 @@ private fun QueueSongRow(
     val latest by rememberUpdatedState(queue)
     val scope = rememberCoroutineScope()
     val remove = { onRemoved(connection.remove(queue.id, item.uid)) }
+    val tap = rememberWaitingTap { connection.jump(queue.id, index) }
     val state = rememberSwipeToDismissBoxState()
     var menu by remember { mutableStateOf(false) }
     val label = when {
@@ -913,8 +914,8 @@ private fun QueueSongRow(
                 modifier = Modifier
                     .weight(1f)
                     .heightIn(min = ROW)
-                    .doubleTapFavourite(song?.let { FavouriteTarget.Song(item.song) })
-                    .clickable(role = Role.Button) { connection.jump(queue.id, index) }
+                    .doubleTapFavourite(song?.let { FavouriteTarget.Song(item.song) }, waiting = tap)
+                    .clickable(role = Role.Button, onClick = tap::click)
                     .semantics(mergeDescendants = true) { contentDescription = "$label, $sub" }
                     .padding(start = ScreenPadding, top = 8.dp, bottom = 8.dp),
             ) {
