@@ -12,13 +12,17 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.TransactionTooLargeException
 import android.provider.MediaStore
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.heading
@@ -353,6 +357,38 @@ fun rememberLyricsShare(path: String, entry: LedgerEntry?): LyricsShare? {
         value = withContext(Dispatchers.IO) { lyricsShare(readLrc(path), entry) }
     }
     return share
+}
+
+/**
+ * A song's one Share ([content], given what a tap does): with lyrics to share ([lyrics], [lyricsShare]) a tap asks which
+ * first, in a small menu under it ([ShareMenu]), as a tag of several artists asks which one ([ArtistLink]); without, it
+ * shares the song at once ([onSong]).
+ */
+@Composable
+fun ShareChoice(lyrics: Boolean, onSong: () -> Unit, onLyrics: () -> Unit, content: @Composable (onClick: () -> Unit) -> Unit) {
+    var choosing by remember { mutableStateOf(false) }
+    Box {
+        content { if (lyrics) choosing = true else onSong() }
+        ShareMenu(choosing, onDismiss = { choosing = false }, onSong = onSong, onLyrics = onLyrics)
+    }
+}
+
+/**
+ * The small menu a song's Share opens while [expanded] (3.1, one row for both): "Song" shares its file ([onSong]),
+ * "Lyrics" opens Share lyrics ([onLyrics], [ShareLyricsSheet]); TalkBack hears "Share song" and "Share lyrics".
+ */
+@Composable
+fun ShareMenu(expanded: Boolean, onDismiss: () -> Unit, onSong: () -> Unit, onLyrics: () -> Unit) {
+    LyrifyMenu(expanded = expanded, onDismiss = onDismiss) {
+        MenuRow(stringResource(R.string.share_pick_song), R.drawable.ic_music_note, onClick = {
+            onDismiss()
+            onSong()
+        }, description = stringResource(R.string.share_song))
+        MenuRow(stringResource(R.string.share_pick_lyrics), R.drawable.ic_lyrics, onClick = {
+            onDismiss()
+            onLyrics()
+        }, description = stringResource(R.string.share_lyrics))
+    }
 }
 
 /** Share lyrics for the song [title]: "As text" always, "Lyrics file" for [synced] lyrics only, each with what goes. */

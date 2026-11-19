@@ -158,7 +158,7 @@ class PlayerScreenTest {
 
     @Test
     fun `the player's menu has the sleep timer after Speed, and Edit tags after Song info for a song of the library only`() {
-        val all = playerMenuRows(song = true, album = true, artist = true, tone = true, cut = true, lyrics = true)
+        val all = playerMenuRows(song = true, album = true, artist = true, tone = true, cut = true)
         assertEquals(PlayerMenuRow.entries, all)
         assertEquals(PlayerMenuRow.SLEEP, all[all.indexOf(PlayerMenuRow.SPEED) + 1])
         assertEquals(PlayerMenuRow.EDIT_TAGS, all[all.indexOf(PlayerMenuRow.SONG_INFO) + 1])
@@ -169,21 +169,24 @@ class PlayerScreenTest {
                 PlayerMenuRow.ADD_TO, PlayerMenuRow.SPEED, PlayerMenuRow.SLEEP, PlayerMenuRow.REPEAT_PART, PlayerMenuRow.BOOKMARK, PlayerMenuRow.PLAY_ON,
                 PlayerMenuRow.EQUALIZER, PlayerMenuRow.SHARE, PlayerMenuRow.SONG_INFO, PlayerMenuRow.EDIT_TAGS, PlayerMenuRow.MOVE_TO_TRASH,
             ),
-            playerMenuRows(song = true, album = false, artist = false, tone = false, cut = false, lyrics = false),
+            playerMenuRows(song = true, album = false, artist = false, tone = false, cut = false),
         )
         // A file another app opened, not in the library: nothing KJB could write to, share or trash.
         assertEquals(
             listOf(PlayerMenuRow.ADD_TO, PlayerMenuRow.SPEED, PlayerMenuRow.SLEEP, PlayerMenuRow.REPEAT_PART, PlayerMenuRow.BOOKMARK, PlayerMenuRow.PLAY_ON, PlayerMenuRow.EQUALIZER, PlayerMenuRow.TONE, PlayerMenuRow.SONG_INFO),
-            playerMenuRows(song = false, album = false, artist = false, tone = true, cut = false, lyrics = true),
+            playerMenuRows(song = false, album = false, artist = false, tone = true, cut = false),
         )
     }
 
     @Test
     fun `the player's menu has Cut right after Make a tone, for a song of the library KJB can cut and no book's part`() {
-        val rows = playerMenuRows(song = true, album = false, artist = false, tone = true, cut = true, lyrics = false)
+        val rows = playerMenuRows(song = true, album = false, artist = false, tone = true, cut = true)
         assertEquals(PlayerMenuRow.CUT, rows[rows.indexOf(PlayerMenuRow.TONE) + 1])
         assertEquals(PlayerMenuRow.SHARE, rows[rows.indexOf(PlayerMenuRow.CUT) + 1])
-        assertFalse(PlayerMenuRow.CUT in playerMenuRows(song = true, album = false, artist = false, tone = true, cut = false, lyrics = false))
+        assertFalse(PlayerMenuRow.CUT in playerMenuRows(song = true, album = false, artist = false, tone = true, cut = false))
+        // One Share in its place, Song or Lyrics asked from it for a song with lyrics (ShareMenu): no Share lyrics row.
+        val all = playerMenuRows(song = true, album = true, artist = true, tone = true, cut = true)
+        assertEquals(listOf(PlayerMenuRow.TONE, PlayerMenuRow.CUT, PlayerMenuRow.SHARE, PlayerMenuRow.SONG_INFO), all.subList(all.indexOf(PlayerMenuRow.TONE), all.indexOf(PlayerMenuRow.SONG_INFO) + 1))
         // The song sheet's rule: a format the phone decodes, not a book.
         val harbour = song("Music/Kite Weather/Paper Harbour.mp3")
         assertTrue(cutsSong(harbour, book = false))

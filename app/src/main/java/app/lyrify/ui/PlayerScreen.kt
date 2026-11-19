@@ -845,31 +845,30 @@ private fun Backdrop(path: String) {
 }
 
 /** The rows of the player's "⋯", in the order they show; Move to trash sits apart at the bottom, as on the song sheet. */
-enum class PlayerMenuRow { ADD_TO, ALBUM, ARTIST, SPEED, SLEEP, REPEAT_PART, BOOKMARK, PLAY_ON, EQUALIZER, TONE, CUT, SHARE, SHARE_LYRICS, SONG_INFO, EDIT_TAGS, MOVE_TO_TRASH }
+enum class PlayerMenuRow { ADD_TO, ALBUM, ARTIST, SPEED, SLEEP, REPEAT_PART, BOOKMARK, PLAY_ON, EQUALIZER, TONE, CUT, SHARE, SONG_INFO, EDIT_TAGS, MOVE_TO_TRASH }
 
 /**
- * The rows the player's "⋯" shows. A [song] of the library has Share, Edit tags and Move to trash, as on its sheet (a file
- * another app opened has none of them), and Share lyrics when it has [lyrics]; Go to album and Go to artist when the
- * song has their pages ([album], [artist]); Make a tone when [tone] ([makesTone]), and Cut right after it when [cut]
- * ([cutsSong]).
+ * The rows the player's "⋯" shows. A [song] of the library has Share (one row, Song or Lyrics asked from it when it has
+ * lyrics), Edit tags and Move to trash, as on its sheet (a file another app opened has none of them); Go to album and Go
+ * to artist when the song has their pages ([album], [artist]); Make a tone when [tone] ([makesTone]), and Cut right
+ * after it when [cut] ([cutsSong]).
  */
-fun playerMenuRows(song: Boolean, album: Boolean, artist: Boolean, tone: Boolean, cut: Boolean, lyrics: Boolean): List<PlayerMenuRow> = PlayerMenuRow.entries.filter { row ->
+fun playerMenuRows(song: Boolean, album: Boolean, artist: Boolean, tone: Boolean, cut: Boolean): List<PlayerMenuRow> = PlayerMenuRow.entries.filter { row ->
     when (row) {
         PlayerMenuRow.ALBUM -> album
         PlayerMenuRow.ARTIST -> artist
         PlayerMenuRow.TONE -> tone
         PlayerMenuRow.CUT -> cut
         PlayerMenuRow.SHARE, PlayerMenuRow.EDIT_TAGS, PlayerMenuRow.MOVE_TO_TRASH -> song
-        PlayerMenuRow.SHARE_LYRICS -> song && lyrics
         else -> true
     }
 }
 
 /**
- * The chevron, "From Album · Name", and "⋯" with the rows [playerMenuRows] gives: Share, Share lyrics ([lyricsShare]),
- * Edit tags and Move to trash (apart at the bottom, in red, as on the song sheet) for a song of the library, Make a tone
- * when [tone] ([makesTone]) and Cut when [cut] ([cutsSong]). Dragged down, as anywhere on it, the player follows
- * ([PlayerFrame]).
+ * The chevron, "From Album · Name", and "⋯" with the rows [playerMenuRows] gives: Share (Song or Lyrics in a small menu
+ * when there are lyrics to share, [lyricsShare]), Edit tags and Move to trash (apart at the bottom, in red, as on the
+ * song sheet) for a song of the library, Make a tone when [tone] ([makesTone]) and Cut when [cut] ([cutsSong]). Dragged
+ * down, as anywhere on it, the player follows ([PlayerFrame]).
  */
 @Composable
 private fun PlayerTopBar(ui: PlayerUi, lyricsShare: LyricsShare?, tone: Boolean, cut: Boolean, onClose: () -> Unit, onRoute: (PlayerRoute) -> Unit) {
@@ -878,6 +877,8 @@ private fun PlayerTopBar(ui: PlayerUi, lyricsShare: LyricsShare?, tone: Boolean,
     var menu by remember { mutableStateOf(false) }
     // Go to artist for a song of several artists: which one, under the same button (ArtistNames.kt).
     var artists by remember { mutableStateOf<List<String>?>(null) }
+    // Share for a song with lyrics: which one first (ShareMenu), under the same button.
+    var sharing by remember { mutableStateOf(false) }
     Row(
         verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
@@ -905,7 +906,7 @@ private fun PlayerTopBar(ui: PlayerUi, lyricsShare: LyricsShare?, tone: Boolean,
                 val album = song?.let(::albumKey)
                 val pages = song?.let { ui.library?.artistsOf(it) }.orEmpty().map { it.name }
                 val artist = artistTap(pages, { nav.open(Page.Artist(it)) }) { artists = it }
-                playerMenuRows(song != null, album != null, artist != null, tone, cut, lyricsShare != null).forEach { row ->
+                playerMenuRows(song != null, album != null, artist != null, tone, cut).forEach { row ->
                     key(row) {
                         when (row) {
                             PlayerMenuRow.ADD_TO -> MenuRow(stringResource(R.string.player_menu_add_to), R.drawable.ic_playlist_add, pick { onRoute(PlayerRoute.ADD_TO) })
@@ -922,8 +923,8 @@ private fun PlayerTopBar(ui: PlayerUi, lyricsShare: LyricsShare?, tone: Boolean,
                             PlayerMenuRow.TONE -> MenuRow(stringResource(R.string.player_menu_tone), R.drawable.ic_ring_volume, pick { onRoute(PlayerRoute.MAKE_TONE) })
                             // The song sheet's cutter, over the player.
                             PlayerMenuRow.CUT -> MenuRow(stringResource(R.string.cut_row), R.drawable.ic_content_cut, pick { onRoute(PlayerRoute.CUT) })
-                            PlayerMenuRow.SHARE -> MenuRow(stringResource(R.string.share), R.drawable.ic_share, pick { onRoute(PlayerRoute.SHARE) })
-                            PlayerMenuRow.SHARE_LYRICS -> MenuRow(stringResource(R.string.share_lyrics), R.drawable.ic_share, pick { onRoute(PlayerRoute.SHARE_LYRICS) })
+                            // With lyrics to share, Song or Lyrics in a small menu at the ⋯ (ShareMenu); else the song at once.
+                            PlayerMenuRow.SHARE -> MenuRow(stringResource(R.string.share), R.drawable.ic_share, pick { if (lyricsShare != null) sharing = true else onRoute(PlayerRoute.SHARE) })
                             PlayerMenuRow.SONG_INFO -> MenuRow(stringResource(R.string.player_menu_info), R.drawable.ic_info, pick { onRoute(PlayerRoute.SONG_INFO) })
                             // The tag editor over the player, as from the song's sheet; Back comes back here.
                             PlayerMenuRow.EDIT_TAGS -> song?.let { MenuRow(stringResource(R.string.lib_edit_tags), R.drawable.ic_sell, pick { nav.show(FullScreen.EditTags(listOf(it.ref))) }) }
@@ -936,6 +937,7 @@ private fun PlayerTopBar(ui: PlayerUi, lyricsShare: LyricsShare?, tone: Boolean,
                 }
             }
             ArtistsMenu(artists, { artists = null }) { nav.open(Page.Artist(it)) }
+            ShareMenu(sharing, onDismiss = { sharing = false }, onSong = { onRoute(PlayerRoute.SHARE) }, onLyrics = { onRoute(PlayerRoute.SHARE_LYRICS) })
         }
     }
 }
