@@ -389,6 +389,15 @@ fun listedEntries(found: List<Pair<Int, Song>>, keys: List<Long>): List<ListedEn
     found.map { (at, song) -> ListedEntry(at, song, keys.getOrNull(at)?.let { "entry $it" } ?: "place $at") }
 
 /**
+ * The place now of the song at [at] of the rows [shown]: its entry's place, found by its key, among [now], the page's
+ * songs as the stored list is now; null once its entry has left. Rows sorted before (while the sort of a new list is
+ * worked out, [rememberInOrder]) carry the places of the list then; a song taken out moves every later one up a place,
+ * so the old place may be another song's now.
+ */
+fun placeNow(shown: List<ListedEntry>, now: List<ListedEntry>, at: Int): Int? =
+    shown.getOrNull(at)?.let { row -> now.firstOrNull { it.key == row.key }?.place }
+
+/**
  * A list of songs being put in another order by a row's handle, or by TalkBack ([move]). While a row is [held] the list
  * shows its songs in the drag's order ([shown]): the held row follows the finger, [offset] px from its place, and takes a
  * neighbour's place each time it passes half of it ([reorderStep], the queue's), with a [tick]. Each change of order

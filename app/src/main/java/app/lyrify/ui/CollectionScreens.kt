@@ -593,7 +593,8 @@ internal fun PlaylistPage(ui: LibraryUi, library: Library, id: String) {
                 AboveChrome { EmptyState(EmptyArt.Glyph, stringResource(R.string.songs_empty_title), rowMotion(reduced), text = stringResource(R.string.lib_playlist_empty)) }
             }
         }
-        songRows(list, place = { at -> SheetPlace.Playlist(id, entries[at].place) }, keys = entries.map { it.key }, reorder = reorder.takeIf { order.reorders })
+        // Remove from playlist acts on the song's place now; a song already gone has none, and no Remove.
+        songRows(list, place = { at -> placeNow(entries, listed, at)?.let { SheetPlace.Playlist(id, it) } ?: SheetPlace.List }, keys = entries.map { it.key }, reorder = reorder.takeIf { order.reorders })
     }
     if (sorting) ListSortSheet(SongList.PLAYLIST, order, R.string.lib_sort_custom, onOrder) { sorting = false }
     if (renaming) {

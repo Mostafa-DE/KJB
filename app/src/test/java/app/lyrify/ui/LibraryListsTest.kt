@@ -165,6 +165,28 @@ class LibraryListsTest {
     }
 
     @Test
+    fun `Remove from playlist acts on the place of now of the row tapped, also while the rows still show the sort from before`() {
+        val ordered = OrderedEntries()
+        fun listed(stored: List<Song>): List<ListedEntry> {
+            val (entries, keys) = ordered.of(stored.map { it.ref })
+            return listedEntries(entries.mapIndexed { at, ref -> at to stored.first { it.ref == ref } }, keys)
+        }
+        val before = listed(listOf(lantern, bell, water, clock))
+        // Sorted by title: 9 o'clock, Low Water, Paper Lantern, Tide Bell.
+        val shown = inOrder(before, app.lyrify.settings.ListSort(SortSongs.TITLE), LibrarySettings()) { it.song }
+        assertEquals(listOf(clock, water, lantern, bell), shown.map { it.song })
+        // Tide Bell (place 1) taken out: until the new sort is ready the rows are the four sorted before, each with its old
+        // place. Low Water's was 2, which is now 9 o'clock's: a Remove there took 9 o'clock out instead.
+        val now = listed(listOf(lantern, water, clock))
+        assertEquals(1, placeNow(shown, now, shown.indexOfFirst { it.song == water }))
+        assertEquals(2, placeNow(shown, now, shown.indexOfFirst { it.song == clock }))
+        assertEquals(0, placeNow(shown, now, shown.indexOfFirst { it.song == lantern }))
+        // Tide Bell's row is the song gone: no place, so its sheet has no Remove from playlist.
+        assertEquals(null, placeNow(shown, now, shown.indexOfFirst { it.song == bell }))
+        assertEquals(null, placeNow(shown, now, shown.size))
+    }
+
+    @Test
     fun `Folders to skip offers every folder of the tree, with the songs in it or below, and any other folder skipped`() {
         val live = song("Music/Rips/Live/Harbour Night.mp3")
         val rip = song("Music/Rips/Low Tide.mp3")
