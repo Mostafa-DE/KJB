@@ -177,9 +177,13 @@ class BottomBarTest {
                 (0 until count).forEach { index ->
                     val middle = slots.start(index) + slots.size(index) / 2f
                     assertEquals("$count in $width, slot $index", middle, slots.middle(index.toFloat()), 0.5f)
-                    // Its own share of the bar, never the whole bar's middle.
-                    assertEquals("$count in $width, slot $index", (index + 0.5f) * width / count, slots.middle(index.toFloat()), 0.5f)
                 }
+                // Each its own place, never the whole bar's middle: evenly spaced, the first as far from the start as the
+                // last from the end.
+                (0 until count - 1).forEach { index ->
+                    assertEquals("$count in $width, after slot $index", width.toFloat() / count, slots.middle(index + 1f) - slots.middle(index.toFloat()), 0.01f)
+                }
+                assertEquals("$count in $width", width.toFloat(), slots.middle(0f) + slots.middle(count - 1f), 0.01f)
                 (0 until count - 1).forEach { index ->
                     val halfway = (slots.middle(index.toFloat()) + slots.middle(index + 1f)) / 2f
                     assertEquals("$count in $width, after slot $index", halfway, slots.middle(index + 0.5f), 0.01f)

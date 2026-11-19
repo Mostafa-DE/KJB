@@ -2,6 +2,7 @@ package app.lyrify.ui
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
@@ -9,6 +10,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
@@ -48,7 +50,7 @@ import kotlin.math.abs
 
 /**
  * The bottom bar's items on the phone (user 2026-11-19: on Slim only Library showed, in the bar's middle, with the line
- * under the first place): bars of 4, 5 and 6 items on a 360 dp and a 412 dp screen, Slim and Standard, at a large font
+ * under the first place): bars of 2 to 6 items on a 360 dp and a 412 dp screen, Slim and Standard, at a large font
  * and right to left. Every item has an equal slot of its own with its icon in the middle, the sung line sits under the
  * selected one, and holding a Slim item shows its name above it. The screen's width is set here by its density, so the
  * bar is the width it would be on such a phone, whatever phone runs the test.
@@ -87,7 +89,7 @@ class DockDeviceTest {
     }
 
     @Test
-    fun theStandardBarKeepsItsEqualSlotsWithTheNamesUnderTheIcons() {
+    fun theStandardBarKeepsItsEqualSlotsWithTheNamesUnderTheIconsOnTheDefaultFour() {
         everyBar(Bar(360.dp, items = 4, selected = 0, style = DockStyle.STANDARD))
         everyBar(Bar(412.dp, items = 4, selected = 0, style = DockStyle.STANDARD))
     }
@@ -100,6 +102,7 @@ class DockDeviceTest {
         compose.mainClock.autoAdvance = false
         item.performSemanticsAction(SemanticsActions.OnLongClick)
         compose.mainClock.advanceTimeBy(TIP_SHOWN_MS)
+        // Above, as on the phone: the bar is at the screen's bottom, so the tooltip has room over it and never flips under.
         val tip = compose.onNodeWithText(name)
         tip.assertIsDisplayed()
         // The tooltip is a window of its own, so both are compared on the screen.
@@ -109,12 +112,15 @@ class DockDeviceTest {
         val shownMiddle = shown.positionOnScreen.x + shown.size.width / 2f
         assertEquals("the name over its item", anchorMiddle, shownMiddle, 4 * pxPerDp)
         assertTrue("the name above its item", shown.positionOnScreen.y + shown.size.height <= anchor.positionOnScreen.y + 1f)
+        // Let the tooltip's own wait run out, so nothing is left waiting on a stopped clock.
+        compose.mainClock.advanceTimeBy(TIP_GONE_MS)
+        compose.mainClock.autoAdvance = true
     }
 
-    /** [first], then the same bar with 4, 5 and 6 items, the first, a middle and the last one selected. */
+    /** [first], then the same bar with 2 to 6 items, the first, a middle and the last one selected. */
     private fun everyBar(first: Bar) {
         if (started) bar = first else start(first)
-        (4..DOCK_SIX.size).forEach { items ->
+        (2..DOCK_SIX.size).forEach { items ->
             listOf(0, items / 2, items - 1).forEach { selected ->
                 bar = first.copy(items = items, selected = selected)
                 compose.waitForIdle()
@@ -123,13 +129,16 @@ class DockDeviceTest {
         }
     }
 
-    /** The bar alone, the whole screen wide, the screen [Bar.width] wide by its density; [bar] changes it after. */
+    /**
+     * The bar alone at the screen's bottom, as in the app, the whole screen wide, the screen [Bar.width] wide by its
+     * density; [bar] changes it after.
+     */
     private fun start(first: Bar) {
         bar = first
         started = true
         compose.setContent {
             val shown = bar
-            BoxWithConstraints {
+            BoxWithConstraints(Modifier.fillMaxSize()) {
                 val scale = constraints.maxWidth / shown.width.value
                 val direction = if (shown.rtl) LayoutDirection.Rtl else LayoutDirection.Ltr
                 CompositionLocalProvider(LocalDensity provides Density(scale, shown.fontScale), LocalLayoutDirection provides direction) {
@@ -140,9 +149,11 @@ class DockDeviceTest {
                             highlight = brand
                         }
                         val tabs = tabsOf(shown.items)
-                        key(shown) {
-                            Box(Modifier.fillMaxWidth().testTag(BAR)) {
-                                Dock(tabs, tabs[shown.selected], shown.style, dot = false, onSelect = {})
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
+                            key(shown) {
+                                Box(Modifier.fillMaxWidth().testTag(BAR)) {
+                                    Dock(tabs, tabs[shown.selected], shown.style, dot = false, onSelect = {})
+                                }
                             }
                         }
                     }
@@ -152,7 +163,10 @@ class DockDeviceTest {
         compose.waitForIdle()
     }
 
-    /** Every item in a slot of its own, all alike and side by side, its icon in the middle, the line under the selected one. */
+    /**
+     * Every item in a slot of its own, all alike and side by side, its icon in the middle (on Slim also of the bar's
+     * height; on Standard's default four above it, its name under it), the line under the selected one.
+     */
     private fun assertLaidOut() {
         val shown = bar
         val tabs = tabsOf(shown.items)
@@ -170,6 +184,12 @@ class DockDeviceTest {
             val icon = placed(compose.onNode(hasTestTag(DOCK_ICON_TAG) and hasAnyAncestor(hasContentDescription(name)), useUnmergedTree = true))
             assertEquals("$shown: $name's icon", 24 * pxPerDp, icon.width, 1f)
             assertEquals("$shown: $name's icon in its slot", slots[index].center.x, icon.center.x, 1f)
+            if (shown.style == DockStyle.SLIM) {
+                assertEquals("$shown: $name's icon halfway down", slots[index].center.y, icon.center.y, 1f)
+            } else if (shown.items == 4 && shown.fontScale == 1f) {
+                // Four names always fit at the phone's own size, so each is drawn under its icon, which sits higher.
+                assertTrue("$shown: $name's icon at ${icon.center.y}, its slot's middle ${slots[index].center.y}", icon.center.y < slots[index].center.y - 4 * pxPerDp)
+            }
         }
 
         val line = line()
@@ -181,12 +201,12 @@ class DockDeviceTest {
     }
 
     /**
-     * The sung line's ends, px from the bar's left: the highlight's pixels in the rows the line is drawn on (3 dp to 9 dp
-     * above the bar's bottom, under the icons and names). Null when there is none.
+     * The sung line's ends, px from the bar's left: the highlight's pixels in the rows the line is drawn on (3 dp to 11 dp
+     * above the bar's bottom: Slim's 5 to 8, Standard's 7 to 10, under the icons and names). Null when there is none.
      */
     private fun line(): Pair<Int, Int>? {
         val pixels = compose.onNodeWithTag(BAR).captureToImage().toPixelMap()
-        val rows = (pixels.height - 9 * pxPerDp).toInt()..(pixels.height - 3 * pxPerDp).toInt()
+        val rows = (pixels.height - 11 * pxPerDp).toInt()..(pixels.height - 3 * pxPerDp).toInt()
         val xs = rows.flatMap { y -> (0 until pixels.width).filter { x -> near(pixels[x, y], highlight) } }
         return if (xs.isEmpty()) null else xs.min() to xs.max()
     }
@@ -215,6 +235,7 @@ class DockDeviceTest {
     private companion object {
         const val BAR = "bar"
         const val TIP_SHOWN_MS = 300L
+        const val TIP_GONE_MS = 2_000L
 
         /** Six items in the order a user might set; a bar of n holds the first n - 1 and Tools. */
         val DOCK_SIX = listOf(DockTab.LIBRARY, DockTab.PLAYLISTS, DockTab.SEARCH, DockTab.QUEUES, DockTab.FAVOURITES, DockTab.TOOLS)
