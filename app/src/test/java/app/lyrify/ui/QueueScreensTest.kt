@@ -57,6 +57,44 @@ class QueueScreensTest {
     }
 
     @Test
+    fun `a queue's page opens at its song again, the song before it under the pinned buttons, or at its top without one`() {
+        val songs = (1..30).map { SongRef("/storage/emulated/0/Music/Kite Weather/Song $it.mp3") }
+        val source = QueueSource(SourceKind.SONGS, "tab:songs", "Songs")
+        val book = QueueBook().play(songs, 11, source, now = 1).book
+        val saved = book.current!!
+        // Rows: the head (0), Resume and Play from start (1, pinned), then the songs from row 2.
+        // A saved queue: the song it stopped at, 12th, with the 11th first under the buttons.
+        assertEquals(2 + 10, queuePageOpening(saved, live = null))
+        // The queue playing: the song playing now, wherever the stored place is.
+        val ui = playerUi(book, Repeat.OFF, place = null, Transport(), library = null, now = 0)!!
+        val on = ui.copy(queue = saved.copy(index = 20))
+        assertEquals(2 + 19, queuePageOpening(saved, live = on))
+        // Another queue playing says nothing of this one.
+        assertEquals(2 + 10, queuePageOpening(saved, live = on.copy(queue = saved.copy(id = "other", index = 20))))
+        // Among the first two songs: the top, the head showing above the buttons and the song.
+        assertEquals(0, queuePageOpening(saved.copy(index = 0), live = null))
+        assertEquals(0, queuePageOpening(saved.copy(index = 1), live = null))
+        assertEquals(2 + 28, queuePageOpening(saved.copy(index = 29), live = null))
+        // No song here (an empty queue, or a place past its end): the top.
+        assertEquals(0, queuePageOpening(saved.copy(items = emptyList(), index = 0), live = null))
+        assertEquals(0, queuePageOpening(saved.copy(index = 30), live = null))
+    }
+
+    @Test
+    fun `a queue's page opened further in moves back so the song before the song here shows under the pinned buttons`() {
+        // Opened with the song before at the list's top, under the 60 px buttons: back by all of them.
+        assertEquals(60, queuePageLift(buttons = 60, before = 0, hereEnd = 144, end = 1_500))
+        // Already partly clear of them: back by what they still cover.
+        assertEquals(40, queuePageLift(buttons = 60, before = 20, hereEnd = 164, end = 1_500))
+        assertEquals(0, queuePageLift(buttons = 60, before = 72, hereEnd = 216, end = 1_500))
+        // Near the queue's end the list stops short: never so far back that the song here goes past the list's end.
+        assertEquals(0, queuePageLift(buttons = 60, before = 30, hereEnd = 1_500, end = 1_500))
+        assertEquals(10, queuePageLift(buttons = 60, before = 0, hereEnd = 1_490, end = 1_500))
+        // A song here already past the end (a window shorter than two rows): no move at all.
+        assertEquals(0, queuePageLift(buttons = 60, before = 0, hereEnd = 1_600, end = 1_500))
+    }
+
+    @Test
     fun `a queue's page folds its head into the top bar once it has gone, and lines its pinned buttons while songs run under them`() {
         // At its top (the page opens there, 3.1), and while the head scrolls away: nothing folded.
         assertEquals(QueueHeadFold(folded = false, edge = false), queueHeadFold(firstIndex = 0, firstOffset = 0))
