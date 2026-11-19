@@ -175,11 +175,31 @@ fun queuePageOpening(queue: Queue, live: PlayerUi?): Int {
 }
 
 /**
- * How far back a queue page's list moves once laid out at its opening row ([queuePageOpening]), in px: by what the
- * pinned buttons, [buttons] tall, cover of the song before the song here (its top at [before]), but never so far that
- * the song here, its foot at [hereEnd], goes past the list's [end].
+ * How far back a queue page's list moves once laid out at its opening row ([queuePageOpening]), in px (negative: on):
+ * so the song before the song here (its top at [before]) sits right under the pinned buttons, [buttons] tall, but never
+ * so far that the song here, from [hereTop] to [hereEnd], goes past the list's [end]; in a window too short for the
+ * buttons and the song here whole, the song here goes right under the buttons.
  */
-fun queuePageLift(buttons: Int, before: Int, hereEnd: Int, end: Int): Int = (buttons - before).coerceAtMost(end - hereEnd).coerceAtLeast(0)
+fun queuePageLift(buttons: Int, before: Int, hereTop: Int, hereEnd: Int, end: Int): Int =
+    (buttons - before).coerceAtMost(end - hereEnd).coerceAtLeast(buttons - hereTop)
+
+/**
+ * Brings a queue page's [list] to its [opening] row ([queuePageOpening]) and, once that row is laid out and the pinned
+ * buttons measured ([buttons], px), moves it as [queuePageLift] says. When the song here is not laid out at all (the
+ * song before taller than the window), the song here goes right under the buttons.
+ */
+internal suspend fun openQueuePage(list: LazyListState, opening: Int, buttons: () -> Int) {
+    if (list.firstVisibleItemIndex != opening) list.scrollToItem(opening)
+    val layout = snapshotFlow { list.layoutInfo.takeIf { info -> buttons() > 0 && info.visibleItemsInfo.any { it.index == opening } } }.filterNotNull().first()
+    val before = layout.visibleItemsInfo.first { it.index == opening }
+    val here = layout.visibleItemsInfo.firstOrNull { it.index == opening + 1 }
+    if (here == null) {
+        list.scrollToItem(opening + 1)
+        list.scrollBy(-buttons().toFloat())
+    } else {
+        list.scrollBy(-queuePageLift(buttons(), before.offset, here.offset, here.offset + here.size, layout.viewportEndOffset - layout.afterContentPadding).toFloat())
+    }
+}
 
 /** Where [queue] is: at the song playing while it is the queue playing ([ui]), else at the song it stopped at. */
 private fun hereIndex(queue: Queue, ui: PlayerUi?): Int = ui?.takeIf { it.queue.id == queue.id }?.queue?.index ?: queue.index
@@ -366,21 +386,16 @@ private fun OneQueuePage(id: String) {
     SettleReorder(queue?.items, reorder)
     var dialog by remember { mutableStateOf<QueueDialog?>(null) }
     val sheets = rememberSongSheets()
-    // Opened at the song here; once laid out, the song before it comes out from under the pinned buttons. Only the
-    // first time: a turn of the phone keeps where the list was.
-    val opening = rememberSaveable { queue?.let { queuePageOpening(it, ui) } ?: 0 }
-    val list = rememberLazyListState(opening)
-    var lifting by rememberSaveable { mutableStateOf(opening > 0) }
+    // Opened at the song here (openQueuePage): the list starts on the row before it when the queue is known at once,
+    // and goes there once the queue is read otherwise. Only the first time: a turn of the phone keeps where it was.
+    val list = rememberLazyListState(remember { queue?.let { queuePageOpening(it, ui) } ?: 0 })
+    var opened by rememberSaveable { mutableStateOf(false) }
     var buttonsHeight by remember { mutableIntStateOf(0) }
-    LaunchedEffect(list) {
-        if (!lifting) return@LaunchedEffect
-        val layout = snapshotFlow { list.layoutInfo.takeIf { buttonsHeight > 0 && it.visibleItemsInfo.isNotEmpty() } }.filterNotNull().first()
-        val before = layout.visibleItemsInfo.firstOrNull { it.index == opening }
-        val here = layout.visibleItemsInfo.firstOrNull { it.index == opening + 1 }
-        if (before != null && here != null) {
-            list.scrollBy(-queuePageLift(buttonsHeight, before.offset, here.offset + here.size, layout.viewportEndOffset - layout.afterContentPadding).toFloat())
-        }
-        lifting = false
+    LaunchedEffect(list, queue != null) {
+        if (opened || queue == null) return@LaunchedEffect
+        val opening = queuePageOpening(queue, ui)
+        if (opening > 0) openQueuePage(list, opening) { buttonsHeight }
+        opened = true
     }
     val fold by remember(list) { derivedStateOf { queueHeadFold(list.firstVisibleItemIndex, list.firstVisibleItemScrollOffset) } }
     val reduced = LocalReducedMotion.current

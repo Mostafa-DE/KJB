@@ -81,22 +81,25 @@ class QueueScreensTest {
     }
 
     @Test
-    fun `a queue's page opened further in moves back so the song before the song here shows under the pinned buttons`() {
+    fun `a queue's page opened further in moves so the song before the song here shows right under the pinned buttons`() {
         // Opened with the song before at the list's top, under the 60 px buttons: back by all of them.
-        assertEquals(60, queuePageLift(buttons = 60, before = 0, hereEnd = 144, end = 1_500))
-        // Already partly clear of them: back by what they still cover.
-        assertEquals(40, queuePageLift(buttons = 60, before = 20, hereEnd = 164, end = 1_500))
-        assertEquals(0, queuePageLift(buttons = 60, before = 72, hereEnd = 216, end = 1_500))
+        assertEquals(60, queuePageLift(buttons = 60, before = 0, hereTop = 72, hereEnd = 144, end = 1_500))
+        // Already partly clear of them: back by what they still cover; clear by 12 px: up by those 12.
+        assertEquals(40, queuePageLift(buttons = 60, before = 20, hereTop = 92, hereEnd = 164, end = 1_500))
+        assertEquals(-12, queuePageLift(buttons = 60, before = 72, hereTop = 144, hereEnd = 216, end = 1_500))
         // Near the queue's end the list stops short: never so far back that the song here goes past the list's end.
-        assertEquals(0, queuePageLift(buttons = 60, before = 30, hereEnd = 1_500, end = 1_500))
-        assertEquals(10, queuePageLift(buttons = 60, before = 0, hereEnd = 1_490, end = 1_500))
-        // A song here already past the end (a window shorter than two rows): no move at all.
-        assertEquals(0, queuePageLift(buttons = 60, before = 0, hereEnd = 1_600, end = 1_500))
+        assertEquals(0, queuePageLift(buttons = 60, before = 30, hereTop = 1_428, hereEnd = 1_500, end = 1_500))
+        assertEquals(10, queuePageLift(buttons = 60, before = 0, hereTop = 1_418, hereEnd = 1_490, end = 1_500))
+        // A short window (a phone on its side, a large font): the song here whole above the list's end, the song before
+        // as far as it fits; too short even for the buttons and the song here: the song here right under the buttons.
+        assertEquals(36, queuePageLift(buttons = 60, before = 0, hereTop = 72, hereEnd = 144, end = 180))
+        assertEquals(-12, queuePageLift(buttons = 60, before = 0, hereTop = 72, hereEnd = 144, end = 100))
+        assertEquals(-60, queuePageLift(buttons = 60, before = 0, hereTop = 120, hereEnd = 240, end = 150))
     }
 
     @Test
     fun `a queue's page folds its head into the top bar once it has gone, and lines its pinned buttons while songs run under them`() {
-        // At its top (the page opens there, 3.1), and while the head scrolls away: nothing folded.
+        // At its top (a queue at one of its first songs opens there), and while the head scrolls away: nothing folded.
         assertEquals(QueueHeadFold(folded = false, edge = false), queueHeadFold(firstIndex = 0, firstOffset = 0))
         assertEquals(QueueHeadFold(folded = false, edge = false), queueHeadFold(firstIndex = 0, firstOffset = 400))
         // The head gone, the pinned buttons at their own place: the top bar names the queue.
