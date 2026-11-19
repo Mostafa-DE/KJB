@@ -249,7 +249,7 @@ internal fun QueuesList(
         // In a scroller of its own, though nothing scrolls: a pull down still reaches the shell, which brings back a bar
         // hidden while scrolling (KJB 3.1); on the bar's own Queues nothing else would.
         Box(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-            EmptyState(EmptyArt.Icon(R.drawable.ic_queue_music), stringResource(R.string.queues_none), Modifier.padding(top = padding.calculateTopPadding()), text = stringResource(R.string.queues_none_text))
+            EmptyState(EmptyArt.Icon(R.drawable.ic_queues), stringResource(R.string.queues_none), Modifier.padding(top = padding.calculateTopPadding()), text = stringResource(R.string.queues_none_text))
         }
         return
     }
@@ -411,7 +411,7 @@ private fun OneQueuePage(id: String) {
         },
     ) { padding ->
         if (queue == null) {
-            EmptyState(EmptyArt.Icon(R.drawable.ic_queue_music), stringResource(R.string.queue_gone), Modifier.padding(top = padding.calculateTopPadding()))
+            EmptyState(EmptyArt.Icon(R.drawable.ic_queues), stringResource(R.string.queue_gone), Modifier.padding(top = padding.calculateTopPadding()))
             return@PageFrame
         }
         val playing = id == book.currentId
@@ -667,7 +667,7 @@ fun QueueSheet(onDismiss: () -> Unit) {
             Box(Modifier.align(Alignment.CenterHorizontally).padding(vertical = 12.dp).size(36.dp, 4.dp).background(colors.onSurfaceVariant.copy(alpha = 0.4f), CircleShape))
             val queue = book.current
             if (queue == null) {
-                EmptyState(EmptyArt.Icon(R.drawable.ic_queue_music), stringResource(R.string.queue_nothing))
+                EmptyState(EmptyArt.Icon(R.drawable.ic_queues), stringResource(R.string.queue_nothing))
                 return@Column
             }
             val others = book.others
@@ -743,7 +743,7 @@ internal fun QueueSheetFoot(others: List<Queue>, labels: Map<String, String>, ma
 internal fun RecentChips(others: List<Queue>, labels: Map<String, String>, onOpen: (String) -> Unit) {
     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(horizontal = 20.dp, vertical = 4.dp)) {
         items(others, key = { it.id }, contentType = { "chip" }) { other ->
-            LyrifyChip(selected = false, onClick = { onOpen(other.id) }, role = Role.Button, icon = R.drawable.ic_queue_music) {
+            LyrifyChip(selected = false, onClick = { onOpen(other.id) }, role = Role.Button, icon = R.drawable.ic_queues) {
                 Text(labels.getValue(other.id), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = CHIP_NAME_MAX))
             }
         }

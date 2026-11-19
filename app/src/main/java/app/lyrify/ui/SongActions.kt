@@ -586,7 +586,7 @@ fun saidText(resources: Resources, said: Said): String = when (said) {
 @DrawableRes
 private fun saidIcon(said: Said): Int = when (said) {
     Said.PlaysNext -> R.drawable.ic_queue_play_next
-    Said.AddedToQueue, is Said.AlreadyIn -> R.drawable.ic_queue_music
+    Said.AddedToQueue, is Said.AlreadyIn -> R.drawable.ic_queues
     is Said.AddedTo, is Said.Made -> R.drawable.ic_playlist_add
     is Said.Favourites -> if (said.added) R.drawable.ic_favorite_fill else R.drawable.ic_favorite
     Said.AlreadyFavourite -> R.drawable.ic_favorite_fill
@@ -780,7 +780,7 @@ fun SongSheetsHost(sheets: SongSheets, ui: LibraryUi, onActed: () -> Unit = {}) 
         }
     }
     when (open) {
-        is OpenSheet.NewQueue -> NameDialog(stringResource(R.string.lib_new_queue), open.name, R.drawable.ic_queue_music, onDismiss = sheets::close) { name ->
+        is OpenSheet.NewQueue -> NameDialog(stringResource(R.string.lib_new_queue), open.name, R.drawable.ic_queues, onDismiss = sheets::close) { name ->
             done(actions.newQueue(name, open.songs, open.source))
         }
         is OpenSheet.NewPlaylist -> {

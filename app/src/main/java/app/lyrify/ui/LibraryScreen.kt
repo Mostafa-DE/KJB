@@ -646,7 +646,7 @@ private fun PlaylistsTab(ui: LibraryUi, library: Library, padding: PaddingValues
             Box(rowMotion(reduced)) { ListHeader(playlists.size + BuiltInList.entries.size, R.plurals.lib_noun_playlists, { playback.shuffle(songs.map { it.ref }, source) }, { playback.play(songs.map { it.ref }, 0, source) }, songs = songs.size) }
         }
         item(key = "queues", contentType = "row") {
-            NavRow(stringResource(R.string.lib_queues), queues?.let { pluralStringResource(R.plurals.lib_queues_count, it, it) }, rowMotion(reduced), lead = { Tile(R.drawable.ic_queue_music, brand.highlightContainer, brand.onHighlightContainer) }) {
+            NavRow(stringResource(R.string.lib_queues), queues?.let { pluralStringResource(R.plurals.lib_queues_count, it, it) }, rowMotion(reduced), lead = { Tile(R.drawable.ic_queues, brand.highlightContainer, brand.onHighlightContainer) }) {
                 nav.open(Page.Queues)
             }
         }

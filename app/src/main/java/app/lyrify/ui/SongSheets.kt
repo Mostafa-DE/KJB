@@ -337,7 +337,7 @@ internal fun AddToSheet(songs: List<SongRef>, title: String, ui: LibraryUi, onDi
                 is AddTarget.Queue -> NavRow(
                     title = target.queue.name,
                     sub = pluralStringResource(R.plurals.lib_songs, target.queue.songs, target.queue.songs),
-                    lead = { Tile(R.drawable.ic_queue_music) },
+                    lead = { Tile(R.drawable.ic_queues) },
                     trailing = null,
                 ) { onTarget(target) }
                 AddTarget.NewQueue -> NewRow(stringResource(R.string.lib_new_queue)) { onTarget(target) }

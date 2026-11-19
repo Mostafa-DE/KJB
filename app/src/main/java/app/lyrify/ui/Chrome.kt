@@ -259,7 +259,8 @@ private val DockTab.selectedIcon: Int
         DockTab.LIBRARY -> R.drawable.ic_library_music_fill
         DockTab.FAVOURITES -> R.drawable.ic_favorite_fill
         DockTab.TOOLS -> R.drawable.ic_handyman_fill
-        // Material Symbols' filled queue_music, download, auto_stories and search are the outlined shapes (or KJB has none).
+        // Material Symbols' filled queue_music, download, auto_stories and search are the outlined shapes (or KJB has none);
+        // Queues' Up next is strokes, the same in both states.
         else -> icon
     }
 

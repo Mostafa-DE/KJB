@@ -353,7 +353,7 @@ internal fun SecondaryRow(ui: PlayerUi, connection: PlayerConnection, onQueue: (
                     scope.launch { toasts.show(Toast(resources.getString(if (on) R.string.player_shuffled else R.string.player_unshuffled), R.drawable.ic_shuffle)) }
                 }
                 PlayerButton.CHAPTERS -> RoundButton(R.drawable.ic_format_list_numbered, stringResource(R.string.books_chapters), onClick = onChapters)
-                PlayerButton.QUEUE -> RoundButton(R.drawable.ic_queue_music, stringResource(R.string.player_queue), onClick = onQueue)
+                PlayerButton.QUEUE -> RoundButton(R.drawable.ic_queues, stringResource(R.string.player_queue), onClick = onQueue)
                 PlayerButton.FAVOURITE -> ToggleButton(if (favourite) R.drawable.ic_favorite_fill else R.drawable.ic_favorite, stringResource(heartLabel(favourite)), on = favourite, bar = false) {
                     val song = listOf(ui.item.song)
                     scope.launch {
