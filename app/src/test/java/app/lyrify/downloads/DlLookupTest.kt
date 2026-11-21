@@ -107,6 +107,35 @@ class DlLookupTest {
         assertEquals(listOf("unbind", "stopService"), calls)
     }
 
+    // The add-on's service, stopped only by the last of KJB's sessions to let go of it
+
+    @Test
+    fun `a session let go of while another of KJB's holds the add-on never stops its service, and the last one does`() {
+        val holds = DlHolds()
+        fun session(name: String) =
+            DlSession(FakePort(), CompletableDeferred(), { calls += "unbind $name" }, { true }, { calls += "stopService" }, holds.also { it.take() })
+        val run = session("run")
+        val sheet = session("sheet")
+
+        // The sheet goes while a download runs: a stop now would leave the add-on in its foreground service, bound by the
+        // run, and Android would count that service's time again, as the phone's whole uptime, when the run ends.
+        sheet.abandon()
+        assertEquals(listOf("unbind sheet"), calls)
+        run.abandon()
+        assertEquals(listOf("unbind sheet", "unbind run", "stopService"), calls)
+    }
+
+    @Test
+    fun `a session lets go once, and one closed is never stopped after`() {
+        val session = session()
+
+        session.close()
+        session.abandon()
+        session.close()
+
+        assertEquals(listOf("unbind"), calls)
+    }
+
     @Test
     fun `an add-on that cannot be bound says why`() = runTest {
         val lookup = DlLookup { DlConnection.Closed(AddonState.Missing) }
