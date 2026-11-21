@@ -987,6 +987,27 @@ class DlRunsTest {
     }
 
     @Test
+    fun `after the time ran out, KJB's next start while the work goes on asks for the foreground again, and holds it when let in`() = runTest {
+        memory.lastCheck = now
+        ytdlp.scripts += Script.Hang(mapOf("x.webm.part" to ByteArray(10)))
+        val runs = runs()
+        runs.start(song, Heard())
+        runCurrent()
+        val android = FakeForeground()
+        val answers = mutableListOf<Boolean>()
+        val foreground = JobForeground(listOf(runs.foregroundWork()), android, fromKjb = { it == "kjb" }, answered = { answers += it })
+        foreground.start(1, "kjb")
+        foreground.timeUp(ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+
+        // A lookup joins the run that goes on, and Android lets the add-on in again: it holds the foreground for both, and
+        // the refusal KJB is told about is over.
+        foreground.start(2, "kjb")
+
+        assertEquals(listOf("startForeground", "stopForeground", "stopSelf all", "startForeground"), android.calls)
+        assertEquals(listOf(false, true, false), answers)
+    }
+
+    @Test
     fun `a lookup stopped before it started still ends its busy time, so the foreground service is left`() = runTest {
         ytdlp.scripts += Script.Hang()
         val runs = runs()

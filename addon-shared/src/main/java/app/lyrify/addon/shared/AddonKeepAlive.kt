@@ -96,9 +96,11 @@ interface ForegroundPort<Tap : Any> {
 /**
  * One kind of work an add-on runs in its own foreground service ([JobForeground]): its [type]
  * (ServiceInfo.FOREGROUND_SERVICE_TYPE_*), whether some of it runs now ([busy]), and its end, as try later, when Android's
- * time for that type runs out ([timeUp]).
+ * time for that type runs out ([timeUp]). [goesOn]: the work goes on without the foreground when that time runs out (the
+ * Downloads add-on's, while KJB keeps it bound), so its type is asked for again at KJB's next start, never left out as
+ * for work that winds down.
  */
-class ForegroundWork(val type: Int, val busy: () -> Boolean, val timeUp: () -> Unit)
+class ForegroundWork(val type: Int, val busy: () -> Boolean, val timeUp: () -> Unit, val goesOn: Boolean = false)
 
 /**
  * An add-on's own foreground service while it works, as the types of the [works] under way: each kind's own, and all of
@@ -111,9 +113,10 @@ class ForegroundWork(val type: Int, val busy: () -> Boolean, val timeUp: () -> U
  * ([noticeChanged]). Each startForeground replaces the types, so they are told again whenever work joins (KJB's start for
  * it) or ends ([jobEnded]) while other work goes on. It leaves the foreground when no work is left ([jobEnded]), when KJB
  * lets go ([unbound]), and when Android's time runs out for the only type in use ([timeUp], Android 15+), which ends the
- * work of that type and no other. A start from anyone but KJB, by the creator of the [Tap] it brings ([fromKjb]), is
- * refused. Nothing here throws: a phone that refuses the foreground service leaves the work to run without it, and one
- * that refuses a change of its types leaves the service as it was.
+ * work of that type and no other, unless that work goes on without it ([ForegroundWork.goesOn]). A start from anyone
+ * but KJB, by the creator of the [Tap] it brings ([fromKjb]), is refused. Nothing here throws: a phone that refuses the
+ * foreground service leaves the work to run without it, and one that refuses a change of its types leaves the service as
+ * it was.
  */
 class JobForeground<Tap : Any>(
     /**
@@ -197,6 +200,8 @@ class JobForeground<Tap : Any>(
      * onTimeout (Android 15+): Android's time for [type] ran out. The work of that type ends as try later (all the work,
      * should none be of that type), and the service drops the type there and then, as Android requires within seconds: it
      * stays in the foreground as the types of the work that goes on, else (none, or Android refused them) leaves it.
+     * Work that goes on without it ([ForegroundWork.goesOn]) has its type dropped all the same, but asks for it again at
+     * KJB's next start, where Android says whether it lets it in.
      */
     @Synchronized
     fun timeUp(type: Int) {
@@ -204,8 +209,9 @@ class JobForeground<Tap : Any>(
         answered(true)
         val ending = works.filter { it.type and type != 0 }.ifEmpty { works }
         ending.forEach { it.timeUp() }
-        expired = expired or ending.fold(0) { types, work -> types or work.type }
-        val rest = wanted()
+        val out = ending.fold(0) { types, work -> types or work.type }
+        expired = expired or ending.filterNot { it.goesOn }.fold(0) { types, work -> types or work.type }
+        val rest = wanted() and out.inv()
         if (types == 0 || rest == 0 || !follow(rest)) leave(startId = null)
     }
 

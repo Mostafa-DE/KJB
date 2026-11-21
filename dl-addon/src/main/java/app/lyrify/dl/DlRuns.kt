@@ -105,9 +105,9 @@ object RefusalPolicy {
  * The add-on's work for its own foreground service ([JobForeground]), dataSync: held while a lookup or a run is under
  * way ([DlRuns.busy]). When Android's time for it runs out (onTimeout, Android 15+) the service leaves the foreground and
  * stops at once, as Android requires, and the work goes on without it while KJB keeps the add-on bound: KJB, told by
- * DlStatus, asks the user to keep it open.
+ * DlStatus, asks the user to keep it open. KJB's next start asks for the foreground again ([ForegroundWork.goesOn]).
  */
-fun DlRuns.foregroundWork(): ForegroundWork = ForegroundWork(ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC, busy = { busy }, timeUp = {})
+fun DlRuns.foregroundWork(): ForegroundWork = ForegroundWork(ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC, busy = { busy }, timeUp = {}, goesOn = true)
 
 /** What a run made in its folder: the media file, its cover (audio), and the tags yt-dlp printed. */
 private class Produced(val media: File, val cover: File?, val meta: DlMeta, val durationSec: Int) {
