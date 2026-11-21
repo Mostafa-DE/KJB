@@ -239,6 +239,18 @@ class WidgetTest {
     }
 
     @Test
+    fun `a narrow small widget in a book keeps the jump back and leaves out the jump forward`() {
+        // Going back to hear a part again is what a book's listener needs most; the title keeps the same room as a song's.
+        val book = QueueBook().play(refs, 0, QueueSource(SourceKind.BOOK, "book:harbour", "Harbour Glass"), now = 1).book
+        val inBook = widgetState(book, library, playing = true, favourites = emptyList(), settings) as WidgetState.Loaded
+        assertEquals(listOf(WidgetCommand.REWIND, WidgetCommand.PAUSE), widgetButtons(inBook, GlowLayout.SMALL, GLOW_NARROW_DP - 1f).map { it.command })
+        assertEquals(listOf(WidgetCommand.REWIND, WidgetCommand.PAUSE, WidgetCommand.FORWARD), widgetButtons(inBook, GlowLayout.SMALL, GLOW_NARROW_DP.toFloat()).map { it.command })
+        for (layout in listOf(GlowLayout.MEDIUM, GlowLayout.LARGE)) {
+            assertEquals(listOf(WidgetCommand.REWIND, WidgetCommand.PAUSE, WidgetCommand.FORWARD), widgetButtons(inBook, layout, 250f).map { it.command })
+        }
+    }
+
+    @Test
     fun `each button has its icon and its label, the jumps their seconds as the player shows them`() {
         assertEquals(
             listOf(
