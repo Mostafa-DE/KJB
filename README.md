@@ -62,9 +62,9 @@ in an app store.
 **Settings and updates**
 
 - Theme: System, Light or Dark, and Pure black for black pages in the dark theme.
-- Updates: once a day KJB checks github.com for a new version (Settings > About > Check for updates, which you can
-  turn off). Tap Install and KJB downloads it, checks it matches the release and is signed like KJB, then your phone
-  asks you to confirm.
+- Updates: while you use KJB, it checks github.com for a new version every hour (Settings > About > Check for updates
+  checks at once). Tap Install and KJB downloads it, checks it matches the release and is signed like KJB, then your
+  phone asks you to confirm.
 
 ## The promise
 
@@ -86,8 +86,8 @@ For lyrics and covers, only names and lengths leave your phone. Lyrics lookups s
 length to LRCLIB. Covers & tags sends album titles, artists, song titles, track counts and lengths to MusicBrainz, and
 gets covers from the Cover Art Archive and archive.org.
 
-- Once a day KJB asks github.com if there is a new version. You can turn this off in Settings > About > Check for
-  updates. KJB updates and the add-ons download from KJB's release page on GitHub.
+- While you use KJB, it asks github.com every hour if there is a new version. KJB updates and the add-ons download from
+  KJB's release page on GitHub.
 - The AI add-on downloads its models once, from Qualcomm AI Hub, GitHub and Hugging Face. The AI itself runs offline.
 - The Downloads add-on goes online for the links you share: it gets each one from that link's own site. Its
   downloader, yt-dlp, gets its updates from yt-dlp's releases on GitHub.
