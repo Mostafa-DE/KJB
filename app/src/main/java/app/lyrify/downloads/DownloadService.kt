@@ -497,7 +497,8 @@ internal object DownloadNotices {
     fun failureLabel(reason: DownloadFailure): Int = when (reason) {
         DownloadFailure.OFFLINE -> R.string.dl_failed_offline
         DownloadFailure.NOT_FOUND -> R.string.dl_failed_not_found
-        DownloadFailure.SITE_CHANGED -> R.string.dl_failed_site
+        DownloadFailure.SITE_CHANGED, DownloadFailure.SITE_CHANGED_NEWEST -> R.string.dl_failed_site
+        DownloadFailure.BLOCKED -> R.string.dl_failed_blocked
         DownloadFailure.NO_ROOM -> R.string.dl_failed_room
         DownloadFailure.HAND_OFF -> R.string.dl_failed_hand_off
         DownloadFailure.STALLED -> R.string.dl_failed_stalled

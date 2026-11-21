@@ -1,5 +1,7 @@
 package app.lyrify.dl.api
 
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -30,6 +32,28 @@ class DlWireTest {
     fun `fields a later version adds are ignored`() {
         assertEquals(DlProgress(DlStage.MERGING), DlWire.progress("""{"stage":"MERGING","fps":30}"""))
         assertEquals(DlEnd.Stopped, DlWire.end("""{"type":"stopped","why":"later"}"""))
+    }
+
+    /** The add-on's status as KJB 3.0 reads it, with DlWire's Json of then: before the add-on said whether Android refused it. */
+    @Serializable
+    private data class StatusIn30(val ytdlpVersion: String? = null, val updatedAt: Long? = null)
+
+    @Test
+    fun `whether Android refused the add-on its foreground service reads both ways across versions`() {
+        val refused = DlWire.encode(DlStatus("2026.11.01", 1_800_000_000_000, foregroundRefused = true))
+
+        // A newer add-on to an older KJB: the field is left out, the rest read as before.
+        assertEquals(StatusIn30("2026.11.01", 1_800_000_000_000), Json { ignoreUnknownKeys = true }.decodeFromString(StatusIn30.serializer(), refused))
+        // An older add-on to this KJB: not refused.
+        assertFalse(DlWire.status("""{"ytdlpVersion":"2026.10.26","updatedAt":1800000000000}""")!!.foregroundRefused)
+        assertTrue(DlWire.status(refused)!!.foregroundRefused)
+    }
+
+    @Test
+    fun `a failure kind a later add-on adds reads as unknown in an older KJB, and BLOCKED reads here`() {
+        // KJB 3.0's DlWire.end, the same as this one: a kind it does not know fails the read, a failure of an unknown kind.
+        assertEquals(DlEnd.Failed(DlFailure.UNKNOWN), DlWire.end("""{"type":"failed","failure":"SOMETHING_LATER","updated":false}"""))
+        assertEquals(DlEnd.Failed(DlFailure.BLOCKED), DlWire.end(DlWire.encode(DlEnd.Failed(DlFailure.BLOCKED))))
     }
 
     @Test

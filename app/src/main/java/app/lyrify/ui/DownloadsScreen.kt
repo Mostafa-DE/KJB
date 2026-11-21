@@ -484,10 +484,12 @@ private fun DownloadSheet(item: DownloadItem, onDismiss: () -> Unit) {
 }
 
 @StringRes
-private fun failureSentence(reason: DownloadFailure): Int = when (reason) {
+internal fun failureSentence(reason: DownloadFailure): Int = when (reason) {
     DownloadFailure.OFFLINE -> R.string.dl_failed_offline_detail
     DownloadFailure.NOT_FOUND -> R.string.dl_failed_not_found_detail
     DownloadFailure.SITE_CHANGED -> R.string.dl_failed_site_detail
+    DownloadFailure.SITE_CHANGED_NEWEST -> R.string.dl_failed_site_newest_detail
+    DownloadFailure.BLOCKED -> R.string.dl_failed_blocked_detail
     DownloadFailure.NO_ROOM -> R.string.dl_failed_room_detail
     DownloadFailure.HAND_OFF -> R.string.dl_failed_hand_off_detail
     DownloadFailure.STALLED -> R.string.dl_failed_stalled_detail

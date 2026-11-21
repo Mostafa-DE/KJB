@@ -23,9 +23,13 @@ object DlNames {
     fun permission(addonPackage: String): String = "$addonPackage.permission.BIND_DL"
 }
 
-/** The add-on now (IDlAddon.status): yt-dlp's version, and when it last looked for an update (wall-clock millis). */
+/**
+ * The add-on now (IDlAddon.status): yt-dlp's version, and when it last looked for an update (wall-clock millis).
+ * [foregroundRefused]: Android refused the add-on its own foreground service the last time it asked (its few hours a
+ * day of background work used up), so its work runs only while KJB keeps it bound; an older add-on never says so.
+ */
 @Serializable
-data class DlStatus(val ytdlpVersion: String? = null, val updatedAt: Long? = null)
+data class DlStatus(val ytdlpVersion: String? = null, val updatedAt: Long? = null, val foregroundRefused: Boolean = false)
 
 @Serializable
 enum class DlKind { AUDIO, VIDEO }
@@ -246,8 +250,14 @@ enum class DlFailure {
     /** No video at that link: removed, private, or a site yt-dlp does not know. */
     NOT_FOUND,
 
-    /** The site changed, or refused yt-dlp: an update of yt-dlp may fix it. */
+    /** The site changed: an update of yt-dlp may fix it. */
     SITE_CHANGED,
+
+    /**
+     * The site refused this network or client: a VPN's address, or too many requests ("sign in to confirm you're not a
+     * bot", HTTP 429). No update fixes it; another network or a later try may. An older KJB reads it as [UNKNOWN].
+     */
+    BLOCKED,
 
     /** No room on the phone: in the add-on's cache, or where KJB saves. */
     NO_ROOM,
@@ -275,7 +285,10 @@ sealed interface DlEnd {
     @SerialName("delivered")
     data class Delivered(val bytes: Long, val coverBytes: Long? = null) : DlEnd
 
-    /** [updated]: yt-dlp was updated during the run, so an update will not help again now. */
+    /**
+     * [updated]: a newer yt-dlp was put in place during the run and the run tried with it, so another update will not
+     * help now. False when yt-dlp was already the newest, or no update was made (offline, or another run used it).
+     */
     @Serializable
     @SerialName("failed")
     data class Failed(val failure: DlFailure, val updated: Boolean = false) : DlEnd

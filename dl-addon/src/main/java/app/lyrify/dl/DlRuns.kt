@@ -72,7 +72,10 @@ interface UpdateMemory {
 object UpdatePolicy {
     const val STALE_MS: Long = 24 * 60 * 60_000
 
-    /** Failures a newer yt-dlp may fix: a site that changed, a link it does not know yet, and what it did not say. */
+    /**
+     * Failures a newer yt-dlp may fix: a site that changed, a link it does not know yet, and what it did not say. Never a
+     * site that refuses this network ([DlFailure.BLOCKED]): an update does not change who asks.
+     */
     private val FIXABLE = setOf(DlFailure.SITE_CHANGED, DlFailure.NOT_FOUND, DlFailure.UNKNOWN)
 
     /** Before a run: never looked, more than a day ago, or a stored time after now (the clock went back). */
@@ -313,33 +316,45 @@ class DlRuns(
         val events = run.events
         if (notPublic(run.request.url)) return DlEnd.Failed(DlFailure.LOCAL_ADDRESS)
         if (!ytdlp.ready()) return DlEnd.Failed(DlFailure.ENGINE)
-        var checked = false
-        if (UpdatePolicy.beforeRun(memory.lastCheck, clock())) {
+        val before = if (UpdatePolicy.beforeRun(memory.lastCheck, clock())) {
             events.onProgress(DlProgress(DlStage.UPDATING))
-            checked = check().isCheck
+            check()
+        } else {
+            null
         }
+        // Only a newer yt-dlp put in place during the run lets KJB say it updated the downloader and tried again: not one
+        // already the newest, nor an update that was not made.
+        var updated = before == DlUpdate.Outcome.UPDATED
         withContext(io) { dir.mkdirs() }
         events.onProgress(DlProgress(DlStage.STARTING))
         var exit = execute(run, dir, attempt = 1)
-        if (exit is YtdlpExit.Failed && UpdatePolicy.afterFailure(YtdlpLines.failure(exit.err), checked)) {
+        var failed = (exit as? YtdlpExit.Failed)?.let { failure("run ${run.id}", it) }
+        if (failed != null && UpdatePolicy.afterFailure(failed, checkedThisRun = before?.isCheck == true)) {
             events.onProgress(DlProgress(DlStage.UPDATING))
-            val outcome = check()
-            checked = outcome.isCheck
-            if (outcome == DlUpdate.Outcome.UPDATED) {
+            if (check() == DlUpdate.Outcome.UPDATED) {
+                updated = true
                 events.onProgress(DlProgress(DlStage.RETRYING))
                 exit = execute(run, dir, attempt = 2)
+                failed = (exit as? YtdlpExit.Failed)?.let { failure("run ${run.id}", it) }
             }
         }
-        when (exit) {
-            is YtdlpExit.Failed -> return DlEnd.Failed(YtdlpLines.failure(exit.err), updated = checked)
-            // Killed by something other than a Cancel (the phone, low on memory): an end to try again.
-            YtdlpExit.Killed -> return DlEnd.Failed(DlFailure.UNKNOWN, updated = checked)
-            is YtdlpExit.Done -> Unit
-        }
-        val produced = withContext(io) { Produced.find(dir) } ?: return DlEnd.Failed(DlFailure.UNKNOWN, updated = checked)
+        failed?.let { return DlEnd.Failed(it, updated = updated) }
+        // Killed by something other than a Cancel (the phone, low on memory): an end to try again.
+        if (exit == YtdlpExit.Killed) return DlEnd.Failed(DlFailure.UNKNOWN, updated = updated)
+        val produced = withContext(io) { Produced.find(dir) } ?: return DlEnd.Failed(DlFailure.UNKNOWN, updated = updated)
         events.onFile(DlFile(produced.media.name, produced.media.length(), produced.cover?.length(), produced.meta, produced.durationSec))
         val sinks = withTimeoutOrNull(DELIVER_WAIT_MS) { run.delivery.await() } ?: return DlEnd.Failed(DlFailure.HAND_OFF)
         return handOff(produced, sinks)
+    }
+
+    /**
+     * What a failed yt-dlp process of [what] ("run 3", "lookup 4") says, logged by its kind, the pattern that told it and
+     * the site's extractor ([YtdlpError.note]): never its lines, which carry the link, the id and the title.
+     */
+    private fun failure(what: String, exit: YtdlpExit.Failed): DlFailure {
+        val error = YtdlpLines.diagnose(exit.err)
+        log("$what: yt-dlp failed (${error.note})")
+        return error.failure
     }
 
     /** One yt-dlp process for [run], killed if the run is cancelled; its lines go to KJB as progress, at most every [PROGRESS_EVERY_MS]. */
@@ -448,7 +463,7 @@ class DlRuns(
             full = true
             when {
                 info != null -> events.onInfo(info)
-                exit is YtdlpExit.Failed -> events.onFailed(DlEnd.Failed(YtdlpLines.failure(exit.err)))
+                exit is YtdlpExit.Failed -> events.onFailed(DlEnd.Failed(failure("lookup $id", exit)))
                 else -> events.onFailed(DlEnd.Failed(DlFailure.UNKNOWN))
             }
         }

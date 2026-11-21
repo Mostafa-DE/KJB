@@ -3,6 +3,7 @@ package app.lyrify.downloads
 import app.lyrify.books.Book
 import app.lyrify.books.inAudiobooksFolder
 import app.lyrify.dl.api.AudioQuality
+import app.lyrify.dl.api.DlEnd
 import app.lyrify.dl.api.DlFailure
 import app.lyrify.dl.api.DlFile
 import app.lyrify.dl.api.DlKind
@@ -193,10 +194,20 @@ class DownloadsModelTest {
     }
 
     @Test
-    fun `failures from the add-on read as KJB's own`() {
-        assertEquals(DownloadFailure.SITE_CHANGED, DownloadFailure.of(DlFailure.SITE_CHANGED))
-        assertEquals(DownloadFailure.UNKNOWN, DownloadFailure.of(DlFailure.REFUSED))
-        assertEquals(DownloadFailure.NO_ROOM, DownloadFailure.of(DlFailure.NO_ROOM))
+    fun `failures from the add-on read as KJB's own, a site that changed by whether the downloader was updated`() {
+        assertEquals(DownloadFailure.SITE_CHANGED, DownloadFailure.of(DlEnd.Failed(DlFailure.SITE_CHANGED, updated = true)))
+        assertEquals(DownloadFailure.SITE_CHANGED_NEWEST, DownloadFailure.of(DlEnd.Failed(DlFailure.SITE_CHANGED, updated = false)))
+        assertEquals(DownloadFailure.BLOCKED, DownloadFailure.of(DlEnd.Failed(DlFailure.BLOCKED)))
+        assertEquals(DownloadFailure.BLOCKED, DownloadFailure.of(DlEnd.Failed(DlFailure.BLOCKED, updated = true)))
+        assertEquals(DownloadFailure.UNKNOWN, DownloadFailure.of(DlEnd.Failed(DlFailure.REFUSED)))
+        assertEquals(DownloadFailure.NO_ROOM, DownloadFailure.of(DlEnd.Failed(DlFailure.NO_ROOM, updated = true)))
+    }
+
+    @Test
+    fun `a download that failed before KJB told a site that changed by the update still reads with the updated words`() {
+        val stored = DownloadsJson.encodeItem(item.copy(state = DownloadState.Failed(DownloadFailure.SITE_CHANGED)))
+
+        assertEquals(DownloadState.Failed(DownloadFailure.SITE_CHANGED), DownloadsJson.decode("""{"version":1,"items":[$stored]}""").items.single().state)
     }
 
     // The tags KJB writes

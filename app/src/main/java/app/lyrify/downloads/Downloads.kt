@@ -4,6 +4,7 @@ import android.content.Intent
 import app.lyrify.books.inAudiobooksFolder
 import app.lyrify.data.SharedWrites
 import app.lyrify.dl.api.AudioQuality
+import app.lyrify.dl.api.DlEnd
 import app.lyrify.dl.api.DlFailure
 import app.lyrify.dl.api.DlFile
 import app.lyrify.dl.api.DlKind
@@ -55,7 +56,15 @@ object ShareLinks {
 enum class DownloadFailure {
     OFFLINE,
     NOT_FOUND,
+
+    /** The site changed, and the add-on updated its downloader and tried again (a download stored before 3.1 reads so too). */
     SITE_CHANGED,
+
+    /** The site changed, and the add-on's downloader is already the newest (or could not be updated): a later one may fix it. */
+    SITE_CHANGED_NEWEST,
+
+    /** The site refused this connection: a VPN's address, or too many requests. */
+    BLOCKED,
     NO_ROOM,
 
     /** The file did not reach KJB whole. */
@@ -81,10 +90,12 @@ enum class DownloadFailure {
     UNKNOWN;
 
     companion object {
-        fun of(failure: DlFailure): DownloadFailure = when (failure) {
+        /** The add-on's failure [end]: a site that changed by whether the add-on really updated its downloader for it. */
+        fun of(end: DlEnd.Failed): DownloadFailure = when (end.failure) {
             DlFailure.OFFLINE -> OFFLINE
             DlFailure.NOT_FOUND -> NOT_FOUND
-            DlFailure.SITE_CHANGED -> SITE_CHANGED
+            DlFailure.SITE_CHANGED -> if (end.updated) SITE_CHANGED else SITE_CHANGED_NEWEST
+            DlFailure.BLOCKED -> BLOCKED
             DlFailure.NO_ROOM -> NO_ROOM
             DlFailure.HAND_OFF -> HAND_OFF
             DlFailure.ENGINE -> ADDON_GONE

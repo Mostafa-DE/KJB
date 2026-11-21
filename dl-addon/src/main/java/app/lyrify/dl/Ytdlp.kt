@@ -218,6 +218,15 @@ object DlArgs {
     fun info(marker: String): List<String> = listOf("-J", "--no-playlist", "--socket-timeout", SOCKET_TIMEOUT, "-o", "$marker%(id)s", "--")
 }
 
+/**
+ * What a failed yt-dlp run's error text says: its [failure], the key of the [pattern] that told it ("sign-in", "429",
+ * "nsig"), and the [extractor] of the site that failed ("youtube"), when there is one. Safe to log ([note]): never the
+ * line itself, which may carry the link, the video's id or its title.
+ */
+data class YtdlpError(val failure: DlFailure, val pattern: String? = null, val extractor: String? = null) {
+    val note: String get() = listOfNotNull(failure.name, pattern?.let { "matched $it" }, extractor?.let { "extractor $it" }).joinToString(", ")
+}
+
 /** What yt-dlp's lines and files say: progress, failures in plain kinds, and the tags it printed. Pure. */
 object YtdlpLines {
     /** `[download]  42.5% of   12.34MiB at    1.20MiB/s ETA 01:15` (the size may start with ~). */
@@ -243,31 +252,56 @@ object YtdlpLines {
         }
     }
 
-    private val NO_ROOM = listOf("no space left", "enospc", "errno 28")
-    private val OFFLINE = listOf(
-        "errno 7]", "errno 101]", "errno 110]", "errno 111]", "network is unreachable", "no address associated", "temporary failure in name resolution",
-        "timed out", "failed to resolve", "connection reset", "remote end closed connection",
-    )
-    private val NOT_FOUND = listOf(
-        "video unavailable", "private video", "unsupported url", "this video is unavailable", "has been removed", "does not exist", "is not a valid url",
-        "http error 404", "no video formats found",
-    )
-    private val SITE_CHANGED = listOf(
-        "unable to extract", "sign in to confirm", "http error 403", "http error 429", "nsig", "signature", "requested format is not available",
-        "player response", "unable to download video data",
+    /** A text a kind of failure is told by, in yt-dlp's ERROR line as lowercase, and the [key] the log names it by. */
+    private class Pattern(val key: String, val text: String)
+
+    private fun patterns(vararg pairs: Pair<String, String>): List<Pattern> = pairs.map { (key, text) -> Pattern(key, text) }
+
+    /**
+     * Each kind's patterns, in the order the kinds are read: a full phone first, then no network, then no video, then a
+     * site that refuses this network or client (a VPN's address), then a site that changed.
+     */
+    private val KINDS: List<Pair<DlFailure, List<Pattern>>> = listOf(
+        DlFailure.NO_ROOM to patterns("no-space" to "no space left", "enospc" to "enospc", "errno-28" to "errno 28"),
+        DlFailure.OFFLINE to patterns(
+            "errno-7" to "errno 7]", "errno-101" to "errno 101]", "errno-110" to "errno 110]", "errno-111" to "errno 111]",
+            "unreachable" to "network is unreachable", "no-address" to "no address associated", "name-resolution" to "temporary failure in name resolution",
+            "timed-out" to "timed out", "resolve" to "failed to resolve", "reset" to "connection reset", "closed" to "remote end closed connection",
+        ),
+        DlFailure.NOT_FOUND to patterns(
+            "unavailable" to "video unavailable", "private" to "private video", "unsupported-url" to "unsupported url", "unavailable" to "this video is unavailable",
+            "removed" to "has been removed", "not-exist" to "does not exist", "invalid-url" to "is not a valid url", "404" to "http error 404",
+            "no-formats" to "no video formats found",
+        ),
+        DlFailure.BLOCKED to patterns("sign-in" to "sign in to confirm", "not-a-bot" to "not a bot", "429" to "http error 429", "too-many-requests" to "too many requests"),
+        DlFailure.SITE_CHANGED to patterns(
+            "unable-to-extract" to "unable to extract", "403" to "http error 403", "nsig" to "nsig", "signature" to "signature",
+            "format-not-available" to "requested format is not available", "player-response" to "player response", "video-data" to "unable to download video data",
+        ),
     )
 
-    /** What a yt-dlp error means, in a kind KJB can say plainly; what it does not know is [DlFailure.UNKNOWN]. */
-    fun failure(err: String): DlFailure {
-        val text = err.lowercase()
-        return when {
-            NO_ROOM.any { it in text } -> DlFailure.NO_ROOM
-            OFFLINE.any { it in text } -> DlFailure.OFFLINE
-            NOT_FOUND.any { it in text } -> DlFailure.NOT_FOUND
-            SITE_CHANGED.any { it in text } -> DlFailure.SITE_CHANGED
-            else -> DlFailure.UNKNOWN
+    /** yt-dlp's own name for a site's extractor, in brackets at the start of its ERROR line: small letters, digits, ":" and ".". */
+    private val EXTRACTOR = Regex("""^\[([a-z0-9][a-z0-9:.]{0,31})]""")
+
+    private const val ERROR = "ERROR:"
+
+    /**
+     * What a failed run's error text (yt-dlp's standard error, all of it) means, in a kind KJB can say plainly; what it does
+     * not know is [DlFailure.UNKNOWN]. Only yt-dlp's ERROR lines are read: its warnings (a slow or refused try it retried,
+     * an nsig it could not solve) never say why it failed.
+     */
+    fun diagnose(err: String): YtdlpError {
+        val errors = err.lineSequence().map { it.trim() }.filter { it.startsWith(ERROR) }.map { it.removePrefix(ERROR).trimStart() }.toList()
+        for ((failure, patterns) in KINDS) {
+            for (pattern in patterns) {
+                val line = errors.firstOrNull { pattern.text in it.lowercase() } ?: continue
+                return YtdlpError(failure, pattern.key, extractor(line))
+            }
         }
+        return YtdlpError(DlFailure.UNKNOWN, extractor = errors.firstOrNull()?.let(::extractor))
     }
+
+    private fun extractor(line: String): String? = EXTRACTOR.find(line)?.groupValues?.get(1)
 
     private val json = Json { ignoreUnknownKeys = true }
 
