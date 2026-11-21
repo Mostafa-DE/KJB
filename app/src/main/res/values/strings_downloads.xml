@@ -47,6 +47,7 @@
     <string name="dl_done">Done</string>
     <string name="dl_empty">Share a link to KJB from any app, or paste one here. Save only what you have the right to save.</string>
     <string name="dl_files_access">KJB needs All files access to save downloads on your phone.</string>
+    <string name="dl_keep_open">Android allows background downloads for only a few hours a day, and KJB Downloads has used them. Keep KJB open until your downloads finish.</string>
     <string name="dl_files_access_action">Turn on</string>
     <string name="dl_cancel">Cancel</string>
     <string name="dl_retry">Retry</string>

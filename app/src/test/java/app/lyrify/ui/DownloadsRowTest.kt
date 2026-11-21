@@ -13,7 +13,9 @@ import app.lyrify.downloads.DownloadNotices
 import app.lyrify.downloads.DownloadState
 import app.lyrify.downloads.DownloadsUi
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -46,6 +48,18 @@ class DownloadsRowTest {
         val empty = downloadsEntry(AddonState.Ready, ui())
         assertEquals(ToolLine.Text(R.string.dl_nothing_yet), empty.line)
         assertNull(empty.badge)
+    }
+
+    @Test
+    fun `the page asks to keep KJB open only while downloads run and Android refuses the add-on's foreground service`() {
+        val running = item("a", DownloadState.Running)
+        val waiting = item("b", DownloadState.Queued)
+        val saved = item("c", DownloadState.Done("/x.mp3", 1))
+
+        assertTrue(DownloadsUi(items = listOf(running, saved), backgroundLimit = true).keepOpen)
+        assertTrue(DownloadsUi(items = listOf(waiting), backgroundLimit = true).keepOpen)
+        assertFalse("nothing left to download", DownloadsUi(items = listOf(saved), backgroundLimit = true).keepOpen)
+        assertFalse("the add-on works in its own foreground service", DownloadsUi(items = listOf(running), backgroundLimit = false).keepOpen)
     }
 
     @Test

@@ -239,6 +239,12 @@ fun DownloadsPage(onBack: (() -> Unit)?) {
                     }
                 }
             }
+            // Android's few hours a day of background work for the add-on used up: its downloads go on only while KJB is open.
+            if (ui.keepOpen) {
+                item(key = "keep-open", contentType = "keep-open") {
+                    Box(rowMotion(reduced)) { Banner(R.drawable.ic_hourglass_top_fill, stringResource(R.string.dl_keep_open), action = null) {} }
+                }
+            }
             if (!filesAccess) {
                 item(key = "access", contentType = "access") {
                     Box(rowMotion(reduced)) {
