@@ -389,7 +389,9 @@ class UpdateChecker(
                 val addons = addonsOffered.filter { offered -> port.addonInstalled(offered.addon)?.let { Releases.newer(offered.version, it) } == true }
                 val checked = UpdateState.Checked(release, addons, ask = false)
                 val offer = offerOf(checked)
-                checked.copy(ask = offer != null && (manual || offer != port.dismissed()))
+                // The offer the sheet shows stays shown, even one put off that Check for updates showed again.
+                val showing = (_state.value as? UpdateState.Checked)?.takeIf { it.ask }?.let(::offerOf)
+                checked.copy(ask = offer != null && (manual || offer == showing || offer != port.dismissed()))
             }
         }
         _state.value = result

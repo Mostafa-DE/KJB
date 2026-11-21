@@ -495,6 +495,24 @@ class UpdatesTest {
     }
 
     @Test
+    fun `an offer put off that Check for updates opened again stays open through the next hour's check`() = runTest {
+        val port = FakePort(Fetched.Answer(newer))
+        val checker = checker(port)
+        val offered = UpdateState.Checked(newer, addons = none, ask = true)
+
+        checker.checkWhileInFront()
+        runCurrent()
+        checker.dismiss()
+        runCurrent()
+        assertEquals(offered, checker.checkNow())
+        advanceTimeBy(HOUR)
+        runCurrent()
+
+        assertEquals(3, port.fetches)
+        assertEquals(offered, checker.state.value)
+    }
+
+    @Test
     fun `a check without an answer still counts for the hour`() = runTest {
         val port = FakePort(Fetched.NoAnswer)
         val checker = checker(port)
