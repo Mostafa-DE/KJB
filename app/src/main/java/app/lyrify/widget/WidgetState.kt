@@ -139,8 +139,8 @@ enum class GlowLayout(val fromHeightDp: Int, val coverDp: Int, val coverCornerDp
 fun glowLayout(heightDp: Float): GlowLayout = GlowLayout.entries.lastOrNull { heightDp >= it.fromHeightDp } ?: GlowLayout.SMALL
 
 /**
- * Below this width the small layout leaves out its first button, so the title keeps room: a 4-cell widget on a narrow
- * phone whose home screen has five columns is about 270 dp wide, which left the title some 40 dp.
+ * Below this width the small layout leaves out a button ([widgetButtons]), so the title keeps room: a 4-cell widget on a
+ * narrow phone whose home screen has five columns is about 270 dp wide, which left the title some 40 dp.
  */
 const val GLOW_NARROW_DP: Int = 300
 
@@ -209,8 +209,9 @@ data class WidgetButton(val command: WidgetCommand, @DrawableRes val icon: Int, 
  * The transport buttons [layout] shows for [state] on a widget [widthDp] wide, left to right: Previous, Play or Pause and
  * Next, with the jumps back and forward on either side in the medium and large layouts, their icons showing the seconds
  * as the player's do. In a book the jumps stand where Previous and Next are, as on the notification: a book's session
- * takes neither. A small widget narrower than [GLOW_NARROW_DP] leaves out the first. Only Play when nothing is loaded.
- * The heart and Queue are apart from these: they do not go to the session.
+ * takes neither. A small widget narrower than [GLOW_NARROW_DP] leaves out Previous, or in a book the jump forward, so the
+ * jump back stays. Only Play when nothing is loaded. The heart and Queue are apart from these: they do not go to the
+ * session.
  */
 fun widgetButtons(state: WidgetState, layout: GlowLayout, widthDp: Float): List<WidgetButton> {
     val play = WidgetButton(WidgetCommand.PLAY, R.drawable.ic_play_arrow_fill, R.string.player_play)
@@ -225,7 +226,9 @@ fun widgetButtons(state: WidgetState, layout: GlowLayout, widthDp: Float): List<
         layout == GlowLayout.SMALL -> listOf(previous, toggle, next)
         else -> listOf(back, previous, toggle, next, forward)
     }
-    return if (layout == GlowLayout.SMALL && widthDp < GLOW_NARROW_DP) buttons.drop(1) else buttons
+    if (layout != GlowLayout.SMALL || widthDp >= GLOW_NARROW_DP) return buttons
+    // Going back to hear a part again is what a book's listener needs most.
+    return if (state.book) buttons.dropLast(1) else buttons.drop(1)
 }
 
 /** Where a tap on the cover opens KJB: the player, also from the empty state (it closes when nothing is loaded). */
