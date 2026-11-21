@@ -2,6 +2,7 @@ package app.lyrify.ui
 
 import app.lyrify.settings.SettingsSection
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -23,6 +24,24 @@ class SettingsSectionsTest {
         val lyrics = screen.substring(screen.indexOf("section(SettingsSection.LYRICS"), screen.indexOf("section(SettingsSection.AI"))
         assertTrue(lyrics.contains("R.string.setup_files_title"))
         assertEquals("Turn on All files access in Settings.", strings("strings_library.xml").getValue("lib_unreadable"))
+    }
+
+    @Test
+    fun `Settings asked for again at its section while on top opens that section again and goes to it`() {
+        assertTrue(screen.contains("val opened = LocalNavigator.current.opened"))
+        val again = screen.substring(screen.indexOf("val opened = LocalNavigator.current.opened"))
+        assertTrue(again.contains("if (section != null && opened.page == Page.Settings(section))"))
+        assertTrue(again.contains("shownHere = shownHere + (section to true)"))
+        assertTrue(again.contains("list.scrollToItem(section.ordinal)"))
+    }
+
+    @Test
+    fun `closing Downloads leaves a yt-dlp update running, and one at a time`() {
+        val downloads = File("src/main/java/app/lyrify/ui/DownloadsScreen.kt").readText()
+        val item = downloads.substring(downloads.indexOf("internal fun LazyListScope.downloadsSettings("), downloads.indexOf("private enum class DownloadsSheet"))
+        val rows = downloads.substring(downloads.indexOf("private fun DownloadsSettings("), downloads.indexOf("/** A Settings row that opens a sheet"))
+        assertTrue(item.contains("rememberCoroutineScope()") && item.contains("var updating by remember"))
+        assertFalse(rows.contains("rememberCoroutineScope()") || rows.contains("var updating by remember"))
     }
 
     @Test

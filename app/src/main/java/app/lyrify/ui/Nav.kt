@@ -494,6 +494,9 @@ private val JSON = Json { ignoreUnknownKeys = true }
 
 // In the composition
 
+@Immutable
+data class PageOpened(val page: Page?, val count: Int)
+
 /** The shell's [NavState], one per activity; pages move around through it ([LocalNavigator]). Main thread only. */
 @Stable
 class Navigator(initial: NavState) {
@@ -517,6 +520,8 @@ class Navigator(initial: NavState) {
     /** The bar's items now, which pages open by ([homeOf]); the shell keeps them current ([dock]). */
     var docked: List<DockTab> = DOCK_TABS
         private set
+
+    val opened: PageOpened = PageOpened(null, 0)
 
     fun open(page: Page, sheet: SheetReturn? = null) {
         state = state.open(page, sheet, docked)

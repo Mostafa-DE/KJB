@@ -7,6 +7,7 @@ import app.lyrify.settings.LibraryTab
 import app.lyrify.settings.SettingsSection
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -699,6 +700,28 @@ class NavTest {
         assertEquals(listOf<Page>(Page.Settings(SettingsSection.LYRICS)), linked.pages)
         val saved = """{"tab":"TOOLS","stacks":{"TOOLS":[{"type":"settings"}]}}"""
         assertEquals(listOf<Page>(Page.Settings()), NavState.decode(saved)!!.pages)
+    }
+
+    @Test
+    fun `Settings on top gives way to Settings asked for at a section, rather than a second one above it`() {
+        val settings = NavState.start(DockTab.LIBRARY).open(Page.Settings()).select(DockTab.LIBRARY)
+        val linked = settings.open(Page.Settings(SettingsSection.LYRICS))
+        assertEquals(listOf<Page>(Page.Settings(SettingsSection.LYRICS)), linked.pages)
+        // And the other way, from the gear or Tools while Settings at a section is on top.
+        assertEquals(listOf<Page>(Page.Settings()), linked.select(DockTab.LIBRARY).open(Page.Settings()).pages)
+    }
+
+    @Test
+    fun `a page asked for again while it is on top stays as it is, and the navigator says it was asked for`() {
+        val nav = Navigator(NavState.start(DockTab.LIBRARY))
+        nav.open(Page.Settings(SettingsSection.LYRICS))
+        val first = nav.opened
+        nav.select(DockTab.LIBRARY)
+        nav.open(Page.Settings(SettingsSection.LYRICS))
+
+        assertEquals(listOf<Page>(Page.Settings(SettingsSection.LYRICS)), nav.state.pages)
+        assertEquals(Page.Settings(SettingsSection.LYRICS), nav.opened.page)
+        assertNotEquals(first, nav.opened)
     }
 
     @Test
