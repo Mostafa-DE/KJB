@@ -328,7 +328,7 @@
         <!-- auto -->
         <!-- Android Auto: KJB is a media app, and the car browses and plays through PlaybackService above. An app installed
              from outside an app store shows in Android Auto only once its developer setting "Unknown sources" is on
-             (Settings, About, "Using Android Auto"). The monochrome icon marks KJB's items in the car. -->
+             (README, "Using Android Auto"). The monochrome icon marks KJB's items in the car. -->
         <meta-data
             android:name="com.google.android.gms.car.application"
             android:resource="@xml/automotive_app_desc" />

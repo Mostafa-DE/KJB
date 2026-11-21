@@ -79,7 +79,7 @@ data class Grants(
 )
 
 /** The sheet open over Settings. */
-private enum class SettingsSheet { REMEMBER, PLAY_SHARE, SKIPS, LEVELLING, CROSSFADE, ANDROID_AUTO, NOTIFICATION_BUTTONS, BOOST, START_WHEN_CONNECTED, THEME, CRASHES }
+private enum class SettingsSheet { REMEMBER, PLAY_SHARE, SKIPS, LEVELLING, CROSSFADE, NOTIFICATION_BUTTONS, BOOST, START_WHEN_CONNECTED, THEME, CRASHES }
 
 /**
  * Tools > Settings: every option of 3.0 in its section (Playback, Library, Display, Lyrics, AI, Backup, About), engine detail
@@ -224,7 +224,6 @@ fun SettingsScreen(
                 }
                 ValueRow(R.drawable.ic_refresh, R.string.set_updates_now, updateLine(updates), onClick = checkNow)
                 ValueRow(R.drawable.ic_error, R.string.set_crashes, crashLine(sheet)) { sheet = SettingsSheet.CRASHES }
-                ActionRow(R.drawable.ic_directions_car, stringResource(R.string.set_auto)) { sheet = SettingsSheet.ANDROID_AUTO }
                 ActionRow(R.drawable.ic_description, R.string.set_licences) { onOpen(Page.Licences) }
             }
             item(key = "advanced", contentType = "advanced") {
@@ -288,7 +287,6 @@ fun SettingsScreen(
         SettingsSheet.THEME -> ChoiceSheet(R.string.set_theme, R.string.set_theme_sheet, ThemeChoice.entries, settings.display.theme, { it.label }, { it.detail }, close) { choice ->
             onChange { it.copy(display = it.display.copy(theme = choice)) }
         }
-        SettingsSheet.ANDROID_AUTO -> HelpSheet(stringResource(R.string.set_auto), stringResource(R.string.set_auto_sheet), onDismiss = close)
         SettingsSheet.START_WHEN_CONNECTED -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) StartWhenConnectedSheet(playback.connectDevices, close)
         SettingsSheet.CRASHES -> CrashReportsSheet(close)
         null -> Unit
@@ -436,15 +434,12 @@ internal fun SwitchRow(
     )
 }
 
-/** A row that does one thing when tapped, or with no [onClick] only says something (the version). */
+/** A row that does one thing when tapped. */
 @Composable
-private fun ActionRow(@DrawableRes icon: Int, text: String, first: Boolean = false, onClick: (() -> Unit)? = null) {
+private fun ActionRow(@DrawableRes icon: Int, @StringRes text: Int, first: Boolean = false, onClick: () -> Unit) {
     val (tile, onTile) = neutralTile()
-    GroupedRow(icon, text, tile = tile, onTile = onTile, first = first, onClick = onClick)
+    GroupedRow(icon, stringResource(text), tile = tile, onTile = onTile, first = first, onClick = onClick)
 }
-
-@Composable
-private fun ActionRow(@DrawableRes icon: Int, @StringRes text: Int, first: Boolean = false, onClick: () -> Unit) = ActionRow(icon, stringResource(text), first, onClick)
 
 /** A grant: its icon, title and setting, then [onLabel] with a check while it is on, else a button that opens it. */
 @Composable

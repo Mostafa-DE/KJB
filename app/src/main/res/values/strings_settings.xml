@@ -90,12 +90,10 @@
     <string name="set_auto_backup_detail">Weekly while charging</string>
 
     <!-- About -->
-    <string name="set_auto">Using Android Auto</string>
     <string name="set_licences">Licences</string>
     <string name="lic_sentence">KJB is free software under the GNU General Public License, version 3. Notices names the software KJB uses and shows each licence in full.</string>
     <string name="lic_copyright">Copyright %1$s</string>
     <string name="lic_unreadable">This licence can\'t be opened.</string>
-    <string name="set_auto_sheet">Android Auto shows apps from outside an app store only once you allow it. On your phone, open Android Auto\'s settings, tap Version, then tap Version and permission info 10 times and allow development settings. Open Developer settings from the ⋮ menu, turn on Unknown sources, then connect to your car again.</string>
 
     <!-- Advanced -->
     <string name="set_gapless">Gapless playback</string>
