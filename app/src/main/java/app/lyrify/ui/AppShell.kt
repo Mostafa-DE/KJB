@@ -400,7 +400,7 @@ private fun PageContent(
         Page.Downloads -> DownloadsPage { back() }
         Page.CoversTags -> CoversTagsPage()
         Page.TagHistory -> TagHistoryPage()
-        Page.Settings -> SettingsScreen(settings, onSettings, grants, ai, aiActions, backup, versionName, onOpen = nav::open) { back() }
+        is Page.Settings -> SettingsScreen(settings, onSettings, grants, ai, aiActions, backup, versionName, onOpen = nav::open, section = page.section) { back() }
         Page.LibraryTabs -> LibraryTabsScreen(settings, onSettings) { back() }
         Page.BottomBar -> BottomBarScreen(settings, onSettings) { back() }
         Page.Licences -> LicencesPage()

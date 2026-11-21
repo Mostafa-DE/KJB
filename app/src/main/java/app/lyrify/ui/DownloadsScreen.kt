@@ -114,6 +114,7 @@ import app.lyrify.library.SongRef
 import app.lyrify.player.QueueSource
 import app.lyrify.player.SourceKind
 import app.lyrify.settings.DockTab
+import app.lyrify.settings.SettingsSection
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.map
@@ -515,16 +516,17 @@ private fun openSaved(context: Context, item: DownloadItem, path: String) {
 
 /**
  * Settings' Downloads section (VidGrab's settings that still mean something in KJB): the audio quality, the original
- * language, where songs and videos go, the copy warning, the clipboard, and yt-dlp's update with its version.
+ * language, where songs and videos go, the copy warning, the clipboard, and yt-dlp's update with its version. Its rows,
+ * and their questions to the add-on, are there only while the section is open.
  */
-fun LazyListScope.downloadsSettings() {
-    item(key = "downloads", contentType = "section") { DownloadsSettings(rowMotion(LocalReducedMotion.current)) }
+internal fun LazyListScope.downloadsSettings(sections: SettingsSections) {
+    item(key = SettingsSection.DOWNLOADS.name, contentType = "section") { SettingsSectionCard(SettingsSection.DOWNLOADS, sections) { DownloadsSettings() } }
 }
 
 private enum class DownloadsSheet { QUALITY, AUDIO_FOLDER, VIDEO_FOLDER }
 
 @Composable
-private fun DownloadsSettings(modifier: Modifier) {
+private fun DownloadsSettings() {
     val context = LocalContext.current
     val resources = LocalResources.current
     val toasts = LocalToasts.current
@@ -544,29 +546,26 @@ private fun DownloadsSettings(modifier: Modifier) {
     LaunchedEffect(Unit) { Downloads.load(context) }
     val settings = ui.settings
     fun change(block: (DownloadSettings) -> DownloadSettings) = Downloads.settings(context, block)
-    Column(modifier) {
-        SectionTitle(stringResource(R.string.settings_downloads), Modifier.padding(start = ScreenPadding + 4.dp, end = ScreenPadding, top = 18.dp, bottom = 8.dp))
-        GroupedRows {
-            SettingValueRow(R.drawable.ic_music_note, R.string.set_dl_quality, stringResource(qualityLabel(settings.audioQuality)), first = true) { sheet = DownloadsSheet.QUALITY }
-            SettingSwitchRow(R.drawable.ic_lyrics, R.string.set_dl_language, R.string.set_dl_language_detail, settings.originalLanguage) { on -> change { it.copy(originalLanguage = on) } }
-            SettingValueRow(R.drawable.ic_folder_open, R.string.set_dl_audio_folder, settings.audioFolder) { sheet = DownloadsSheet.AUDIO_FOLDER }
-            SettingValueRow(R.drawable.ic_movie, R.string.set_dl_video_folder, settings.videoFolder) { sheet = DownloadsSheet.VIDEO_FOLDER }
-            SettingSwitchRow(R.drawable.ic_content_copy, R.string.set_dl_copies, R.string.set_dl_copies_detail, settings.warnDuplicates) { on -> change { it.copy(warnDuplicates = on) } }
-            SettingSwitchRow(R.drawable.ic_content_paste, R.string.set_dl_clipboard, R.string.set_dl_clipboard_detail, settings.checkClipboard) { on -> change { it.copy(checkClipboard = on) } }
-            val update = version?.let { stringResource(R.string.set_dl_update_value, it) } ?: stringResource(R.string.set_dl_update_none)
-            SettingValueRow(R.drawable.ic_system_update, R.string.set_dl_update, update) {
-                if (!updating) {
-                    updating = true
-                    scope.launch {
-                        val outcome = withContext(Dispatchers.IO) { DlAddon.withPort(context) { it.update() } }
-                        updating = false
-                        toasts.say(resources, updateMessage(outcome))
-                    }
+    GroupedRows {
+        SettingValueRow(R.drawable.ic_music_note, R.string.set_dl_quality, stringResource(qualityLabel(settings.audioQuality)), first = true) { sheet = DownloadsSheet.QUALITY }
+        SettingSwitchRow(R.drawable.ic_lyrics, R.string.set_dl_language, R.string.set_dl_language_detail, settings.originalLanguage) { on -> change { it.copy(originalLanguage = on) } }
+        SettingValueRow(R.drawable.ic_folder_open, R.string.set_dl_audio_folder, settings.audioFolder) { sheet = DownloadsSheet.AUDIO_FOLDER }
+        SettingValueRow(R.drawable.ic_movie, R.string.set_dl_video_folder, settings.videoFolder) { sheet = DownloadsSheet.VIDEO_FOLDER }
+        SettingSwitchRow(R.drawable.ic_content_copy, R.string.set_dl_copies, R.string.set_dl_copies_detail, settings.warnDuplicates) { on -> change { it.copy(warnDuplicates = on) } }
+        SettingSwitchRow(R.drawable.ic_content_paste, R.string.set_dl_clipboard, R.string.set_dl_clipboard_detail, settings.checkClipboard) { on -> change { it.copy(checkClipboard = on) } }
+        val update = version?.let { stringResource(R.string.set_dl_update_value, it) } ?: stringResource(R.string.set_dl_update_none)
+        SettingValueRow(R.drawable.ic_system_update, R.string.set_dl_update, update) {
+            if (!updating) {
+                updating = true
+                scope.launch {
+                    val outcome = withContext(Dispatchers.IO) { DlAddon.withPort(context) { it.update() } }
+                    updating = false
+                    toasts.say(resources, updateMessage(outcome))
                 }
             }
-            lockedRow(addon == AddonState.Ready, exempt)?.let { row ->
-                LockedPhoneRow(row, onAllow = requestExemption, onOpenAppInfo = { context.startFirst(listOf(AddonInstalls.addonInfo(KjbAddons.DOWNLOADS))) })
-            }
+        }
+        lockedRow(addon == AddonState.Ready, exempt)?.let { row ->
+            LockedPhoneRow(row, onAllow = requestExemption, onOpenAppInfo = { context.startFirst(listOf(AddonInstalls.addonInfo(KjbAddons.DOWNLOADS))) })
         }
     }
     val close = { sheet = null }

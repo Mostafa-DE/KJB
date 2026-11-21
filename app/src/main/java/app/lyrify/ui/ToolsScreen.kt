@@ -55,7 +55,7 @@ enum class Tool(@StringRes val title: Int, @DrawableRes val icon: Int, val page:
     COVERS_TAGS(R.string.tools_covers, R.drawable.ic_sell, Page.CoversTags),
     DOWNLOADS(R.string.dl_title, R.drawable.ic_download, Page.Downloads),
     AI(R.string.ai_title, R.drawable.ic_auto_awesome, Page.Ai),
-    SETTINGS(R.string.settings_title, R.drawable.ic_settings, Page.Settings),
+    SETTINGS(R.string.settings_title, R.drawable.ic_settings, Page.Settings()),
 }
 
 /**

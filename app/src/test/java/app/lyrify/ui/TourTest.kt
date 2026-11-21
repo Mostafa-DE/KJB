@@ -430,7 +430,7 @@ class TourTest {
     fun `from Settings the tour moves to Library once Settings has closed, and points once Library shows`() {
         val nav = Navigator(NavState.start(DockTab.LIBRARY))
         nav.select(DockTab.TOOLS)
-        nav.open(Page.Settings)
+        nav.open(Page.Settings())
         val layer = Layer(nav, frames = MOVE_FRAMES)
         repeat(MOVE_FRAMES * 2) { layer.frame() }
         // Show tour: Settings closes, and the tour starts at once.

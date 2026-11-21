@@ -8,6 +8,11 @@
     <string name="settings_ai">AI</string>
     <string name="settings_backup">Backup</string>
     <string name="settings_advanced">Advanced</string>
+    <!-- A section's title, for TalkBack: whether its rows show, and what a double tap does. -->
+    <string name="set_section_expanded">Expanded</string>
+    <string name="set_section_collapsed">Collapsed</string>
+    <string name="set_section_expand">Expand</string>
+    <string name="set_section_collapse">Collapse</string>
     <string name="settings_not_saved">Couldn\'t save that setting. Try again.</string>
     <string name="settings_done">Done</string>
 

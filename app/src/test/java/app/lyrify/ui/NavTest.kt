@@ -4,6 +4,7 @@ import app.lyrify.data.LyricsStatus
 import app.lyrify.library.SongRef
 import app.lyrify.settings.DockTab
 import app.lyrify.settings.LibraryTab
+import app.lyrify.settings.SettingsSection
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -37,7 +38,7 @@ class NavTest {
     fun `Tools pages open on Tools, Library pages on Library, Search's own pages on Search`() {
         val start = NavState.start(DockTab.LIBRARY)
         assertEquals(DockTab.TOOLS, start.open(Page.Check(null)).tab)
-        assertEquals(DockTab.TOOLS, start.open(Page.Settings).tab)
+        assertEquals(DockTab.TOOLS, start.open(Page.Settings()).tab)
         assertEquals(DockTab.TOOLS, start.open(Page.FoldersToSkip).tab)
         assertEquals(DockTab.TOOLS, start.open(Page.HiddenSongs).tab)
         assertEquals(DockTab.TOOLS, start.open(Page.SplitArtists).tab)
@@ -317,7 +318,7 @@ class NavTest {
     @Test
     fun `from the new items, Tools pages still open on Tools and Library's songs on Library`() {
         DockTab.entries.filter { it in BAR_ROOTS }.forEach { root ->
-            assertEquals("$root", DockTab.TOOLS, NavState.start(root).open(Page.Settings).tab)
+            assertEquals("$root", DockTab.TOOLS, NavState.start(root).open(Page.Settings()).tab)
             assertEquals("$root", DockTab.LIBRARY, NavState.start(root).open(Page.Songs(status = LyricsStatus.NOT_FOUND)).tab)
             assertEquals("$root", DockTab.SEARCH, NavState.start(root).open(Page.SearchAll(SearchGroup.SONGS, "lantern")).tab)
             // From the player over them, as from anywhere: an album on Library, a playlist on Playlists.
@@ -678,7 +679,7 @@ class NavTest {
             Page.Songs(SongGroup.NO_LYRICS, LyricsStatus.NOT_FOUND), Page.FoldersToSkip, Page.HiddenSongs, Page.SplitArtists, Page.Folder("Music/Rips"), Page.Genre("Folk"),
             Page.Playlist("p3"), Page.BuiltIn(BuiltInList.MOST_PLAYED), Page.UnknownAlbum,
             Page.Queue("q1"), Page.Listening, Page.TopList(TopKind.ARTISTS), Page.Tones, Page.Ai, Page.CoversTags, Page.TagHistory, Page.LibraryTabs,
-            Page.Licences, Page.Licence("Media3"),
+            Page.Licences, Page.Licence("Media3"), Page.Settings(), Page.Settings(SettingsSection.LYRICS),
         ).fold(NavState.start(DockTab.LIBRARY)) { state, page -> state.copy(stacks = state.stacks + (DockTab.LIBRARY to state.stacks[DockTab.LIBRARY].orEmpty() + StackEntry(page))) }
             .show(FullScreen.SyncEditor(SongRef("/music/a.mp3"))).show(FullScreen.EditAlbum("Harbour Glass")).show(FullScreen.CompanionNow)
         assertEquals(every, NavState.decode(every.encode()))
@@ -689,6 +690,15 @@ class NavTest {
         val reopened = origins.back()!!
         assertEquals(sheet, reopened.reopen)
         assertEquals(reopened, NavState.decode(reopened.encode()))
+    }
+
+    @Test
+    fun `Settings opened at a section opens on Tools, and Settings saved before sections reads as Settings from the top`() {
+        val linked = NavState.start(DockTab.LIBRARY).open(Page.Settings(SettingsSection.LYRICS))
+        assertEquals(DockTab.TOOLS, linked.tab)
+        assertEquals(listOf<Page>(Page.Settings(SettingsSection.LYRICS)), linked.pages)
+        val saved = """{"tab":"TOOLS","stacks":{"TOOLS":[{"type":"settings"}]}}"""
+        assertEquals(listOf<Page>(Page.Settings()), NavState.decode(saved)!!.pages)
     }
 
     @Test

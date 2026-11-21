@@ -249,7 +249,7 @@ class TourOverlayDeviceTest {
         // Library shown once (its root kept, as on the phone), then Tools > Settings, each move at rest.
         compose.runOnIdle { nav.select(DockTab.TOOLS) }
         settle()
-        compose.runOnIdle { nav.open(Page.Settings) }
+        compose.runOnIdle { nav.open(Page.Settings()) }
         settle()
         // Show tour, as Settings' row does it: Settings closes and the tour starts in the same tap.
         compose.runOnIdle {

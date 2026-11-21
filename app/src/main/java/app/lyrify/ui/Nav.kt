@@ -26,6 +26,7 @@ import app.lyrify.data.LyricsStatus
 import app.lyrify.library.SongRef
 import app.lyrify.settings.DockTab
 import app.lyrify.settings.LibraryTab
+import app.lyrify.settings.SettingsSection
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -144,8 +145,9 @@ sealed interface Page {
     @Serializable @SerialName("tagHistory")
     data object TagHistory : Page
 
+    /** Settings; a link into one of its sections opens it there and starts at it (Library's Can't read your songs, Lyrics). */
     @Serializable @SerialName("settings")
-    data object Settings : Page
+    data class Settings(val section: SettingsSection? = null) : Page
 
     /** Settings > Library tabs. */
     @Serializable @SerialName("libraryTabs")
@@ -482,7 +484,7 @@ fun homeOf(page: Page, from: DockTab, viewOpen: Boolean, docked: List<DockTab> =
         is Page.CollectionPages -> own ?: here?.takeIf { it == DockTab.SEARCH || it == DockTab.PLAYLISTS } ?: DockTab.LIBRARY
         is Page.SearchAll -> DockTab.SEARCH
         is Page.Songs -> DockTab.LIBRARY
-        is Page.Check, Page.Duplicates, Page.Trash, Page.Tones, Page.Ai, Page.Downloads, Page.CoversTags, Page.TagHistory, Page.Settings, Page.LibraryTabs, Page.FoldersToSkip, Page.HiddenSongs, Page.SplitArtists,
+        is Page.Check, Page.Duplicates, Page.Trash, Page.Tones, Page.Ai, Page.Downloads, Page.CoversTags, Page.TagHistory, is Page.Settings, Page.LibraryTabs, Page.FoldersToSkip, Page.HiddenSongs, Page.SplitArtists,
         Page.Licences, is Page.Licence, Page.BottomBar -> DockTab.TOOLS
     }
     return if (home == DockTab.PLAYLISTS && DockTab.PLAYLISTS !in docked) here?.takeUnless { it == DockTab.TOOLS } ?: DockTab.LIBRARY else home

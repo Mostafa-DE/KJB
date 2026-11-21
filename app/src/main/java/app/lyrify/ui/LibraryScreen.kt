@@ -75,6 +75,7 @@ import app.lyrify.settings.DockTab
 import app.lyrify.settings.LibrarySettings
 import app.lyrify.settings.LibraryTab
 import app.lyrify.settings.LyricsFilter
+import app.lyrify.settings.SettingsSection
 import app.lyrify.settings.SortAlbums
 import app.lyrify.settings.SortArtists
 import app.lyrify.settings.SongList
@@ -253,7 +254,8 @@ private fun LibraryUnavailable(state: LibraryState, modifier: Modifier) {
             stringResource(R.string.lib_unreadable_title),
             text = stringResource(R.string.lib_unreadable),
             action = stringResource(R.string.settings_title),
-            onAction = { nav.open(Page.Settings) },
+            // All files access is under Lyrics, which starts closed.
+            onAction = { nav.open(Page.Settings(SettingsSection.LYRICS)) },
         )
     }
 }
