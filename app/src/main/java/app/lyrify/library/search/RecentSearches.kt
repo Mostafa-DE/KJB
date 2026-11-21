@@ -67,9 +67,10 @@ object RecentSearchesJson {
 }
 
 /**
- * The recent searches in one app-private file (never backed up: allowBackup is off, and KJB's own backup leaves them
- * out), written whole or not at all (written aside, then moved over). One that cannot be read is logged by its size
- * only, and the list starts over. Blocking.
+ * The recent searches in one app-private file (Android's backup skips it, as allowBackup is off; KJB's own backup
+ * carries them in its searches section, and a restore adds them with [RecentSearches.addAll]), written whole or not at
+ * all (written aside, then moved over). One that cannot be read is logged by its size only, and the list starts over.
+ * Blocking.
  */
 class RecentSearchesStore(private val file: File, private val log: (String) -> Unit = {}) {
     fun load(): List<String> {
