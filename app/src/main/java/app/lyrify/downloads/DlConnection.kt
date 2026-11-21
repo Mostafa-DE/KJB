@@ -21,12 +21,14 @@ import app.lyrify.dl.api.DlWire
 import app.lyrify.dl.api.IDlAddon
 import app.lyrify.dl.api.IDlInfoCallback
 import app.lyrify.dl.api.IDlRunCallback
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.onStart
 import java.io.File
 import java.io.IOException
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** The lowest Downloads add-on API (IDlAddon.VERSION) this KJB speaks; an add-on that answers less needs an update. */
 const val MIN_DL_API: Int = 1
@@ -77,14 +79,77 @@ interface DlPort {
     fun update(): DlUpdate
 }
 
-/** A bound Downloads add-on after the handshake, until [close] unbinds it; [death] completes when its process dies. */
+/**
+ * KJB's sessions with the Downloads add-on open now, process-wide: the share sheet's lookup, the downloads service's run,
+ * the page's check. [DlAddon.connect] takes one before it binds, and a session's close lets go of it. KJB stops the
+ * add-on's service ([DlSession.abandon]) only as the last of them to let go: a stop while another of KJB's bindings
+ * keeps the add-on running in its foreground service makes Android count that service's time again when it leaves the
+ * foreground, as the phone's whole uptime. AOSP's stopServiceLocked counts the time and sets its start to zero
+ * (maybeStopFgsTimeoutLocked) but leaves a bound service in the foreground; its stopForeground later counts again from
+ * zero (ActiveServices and ServiceRecord.TimeLimitedFgsInfo, android16-release and main). That used up the add-on's
+ * 6 hours of dataSync at once on 2026-11-21: Android then ended its foreground service at its next start, and refused
+ * every start after.
+ *
+ * A stop asked for while another still holds the add-on is owed: the last to let go does it after its unbind, whichever
+ * way it lets go (a close, or a bind that opened no session), since an add-on the phone froze cannot leave its foreground
+ * service by itself. With no binding of KJB's left, the stop brings the service down and Android counts its time once
+ * (bringDownServiceLocked does not count it again).
+ */
+internal class DlHolds {
+    private var open = 0
+
+    /** A stop one asked for ([DlSession.abandon]) while another held the add-on, not done yet. */
+    private var stopOwed = false
+
+    @Synchronized
+    fun take() {
+        open++
+    }
+
+    /**
+     * Lets go of one, which asks for the add-on's service to be stopped when [stop]. [then] runs under the same lock, so
+     * none is taken meanwhile, told whether to stop it now: this was the last, and this one or one before it asked.
+     */
+    @Synchronized
+    fun release(stop: Boolean, then: (stop: Boolean) -> Unit) {
+        open = (open - 1).coerceAtLeast(0)
+        stopOwed = stopOwed || stop
+        val now = stopOwed && open == 0
+        if (now) stopOwed = false
+        then(now)
+    }
+
+    /**
+     * [bind] with one taken before it: the session it opens keeps it, and one it does not open lets go of it, stopping
+     * the add-on's service ([stopService]) when that stop is owed.
+     */
+    suspend fun held(bind: suspend () -> DlConnection, stopService: () -> Unit): DlConnection {
+        take()
+        val connection = try {
+            bind()
+        } catch (e: CancellationException) {
+            release(stop = false) { if (it) stopService() }
+            throw e
+        }
+        if (connection is DlConnection.Closed) release(stop = false) { if (it) stopService() }
+        return connection
+    }
+}
+
+/**
+ * A bound Downloads add-on after the handshake, until [close] unbinds it; [death] completes when its process dies.
+ * [holds]: KJB's sessions with the add-on, this one taken among them already ([DlAddon]'s, process-wide).
+ */
 class DlSession internal constructor(
     val port: DlPort,
     val death: Deferred<Unit>,
     private val unbind: () -> Unit,
     private val startForeground: () -> Boolean,
     private val stopService: () -> Unit,
+    private val holds: DlHolds = DlHolds().also { it.take() },
 ) : AutoCloseable {
+    private val gone = AtomicBoolean(false)
+
     /**
      * Has the add-on work in its own foreground service, which a phone's app freezer leaves alone (a service KJB binds
      * counts for nothing there), from the link it took to the file it hands back: KJB starts it right after a lookup or a
@@ -95,14 +160,24 @@ class DlSession internal constructor(
 
     /**
      * Lets go of an add-on the phone froze: unbinds it and stops the service KJB started for its work ([foreground]), so
-     * nothing of KJB's keeps it. Nothing is asked of the add-on itself.
+     * nothing of KJB's keeps it, unless another session of KJB's still holds it ([DlHolds]): the last of them to let go
+     * stops it then. Nothing is asked of the add-on itself.
      */
-    fun abandon() {
-        close()
-        stopService()
-    }
+    fun abandon() = letGo(stop = true)
 
-    override fun close() = unbind()
+    override fun close() = letGo(stop = false)
+
+    /**
+     * Unbinds the add-on, once; and stops its service when no other session of KJB's holds it and this one ([stop]) or
+     * one before it asked ([DlHolds]).
+     */
+    private fun letGo(stop: Boolean) {
+        if (!gone.compareAndSet(false, true)) return
+        holds.release(stop) { now ->
+            unbind()
+            if (now) stopService()
+        }
+    }
 }
 
 /**
@@ -172,9 +247,17 @@ object DlAddon {
         }
     }
 
+    /** KJB's sessions with the add-on ([DlHolds]). */
+    private val holds = DlHolds()
+
     /** Checks the add-on, binds it and asks its API: a session for one that speaks at least [MIN_DL_API], else why not. */
     suspend fun connect(context: Context): DlConnection {
         peek(context)?.let { return DlConnection.Closed(it) }
+        // Taken before the bind: a session that lets go meanwhile does not stop the service this one is binding.
+        return holds.held({ bound(context) }, android(context)::stopService)
+    }
+
+    private suspend fun bound(context: Context): DlConnection {
         val android = android(context)
         val bound = android.bind() ?: return DlConnection.Closed(AddonState.Unreachable)
         val port = AidlDlPort(IDlAddon.Stub.asInterface(bound.binder))
@@ -193,7 +276,7 @@ object DlAddon {
         }
         // KJB's Downloads page as the tap on the add-on's notice, which also tells the add-on the start is KJB's.
         return DlConnection.Open(
-            DlSession(port, bound.death, bound::close, { android.startForeground { it.putExtra(AddonKeepAlive.EXTRA_TAP, DownloadNotices.page(context.applicationContext)) } }, android::stopService),
+            DlSession(port, bound.death, bound::close, { android.startForeground { it.putExtra(AddonKeepAlive.EXTRA_TAP, DownloadNotices.page(context.applicationContext)) } }, android::stopService, holds),
         )
     }
 

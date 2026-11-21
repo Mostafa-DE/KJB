@@ -173,13 +173,69 @@ class YtdlpTest {
             "ERROR: [youtube] abc: Video unavailable. This video has been removed by the uploader" to DlFailure.NOT_FOUND,
             "ERROR: [youtube] abc: Private video. Sign in if you've been granted access" to DlFailure.NOT_FOUND,
             "ERROR: Unsupported URL: https://example.com/page" to DlFailure.NOT_FOUND,
-            "ERROR: [youtube] abc: Sign in to confirm you're not a bot" to DlFailure.SITE_CHANGED,
+            "ERROR: [youtube] abc: Sign in to confirm you're not a bot" to DlFailure.BLOCKED,
             "ERROR: [youtube] abc: Unable to extract initial player response" to DlFailure.SITE_CHANGED,
             "ERROR: unable to download video data: HTTP Error 403: Forbidden" to DlFailure.SITE_CHANGED,
             "ERROR: Postprocessing: [Errno 28] No space left on device" to DlFailure.NO_ROOM,
             "ERROR: something new" to DlFailure.UNKNOWN,
             "" to DlFailure.UNKNOWN,
-        ).forEach { (err, kind) -> assertEquals(err, kind, YtdlpLines.failure(err)) }
+        ).forEach { (err, kind) -> assertEquals(err, kind, YtdlpLines.diagnose(err).failure) }
+    }
+
+    @Test
+    fun `a site that refuses this network or client is blocked, by the pattern that said so and the site's extractor`() {
+        mapOf(
+            // YouTube's word to a VPN's address, its apostrophe a curly one.
+            "ERROR: [youtube] Zq9kXw3Lm0A: Sign in to confirm you’re not a bot. Use --cookies-from-browser or --cookies for the authentication." to
+                YtdlpError(DlFailure.BLOCKED, "sign-in", "youtube"),
+            "ERROR: [youtube] Zq9kXw3Lm0A: Please confirm you are not a bot" to YtdlpError(DlFailure.BLOCKED, "not-a-bot", "youtube"),
+            "ERROR: [youtube] Zq9kXw3Lm0A: Unable to download API page: HTTP Error 429: Too Many Requests" to YtdlpError(DlFailure.BLOCKED, "429", "youtube"),
+            "ERROR: [soundcloud] 1234: too many requests, slow down" to YtdlpError(DlFailure.BLOCKED, "too-many-requests", "soundcloud"),
+            "ERROR: [youtube] Zq9kXw3Lm0A: nsig extraction failed: You may experience throttling" to YtdlpError(DlFailure.SITE_CHANGED, "nsig", "youtube"),
+            "ERROR: Unsupported URL: https://made-up.example.test/page" to YtdlpError(DlFailure.NOT_FOUND, "unsupported-url", null),
+            "ERROR: [generic] something new" to YtdlpError(DlFailure.UNKNOWN, null, "generic"),
+        ).forEach { (err, error) -> assertEquals(err, error, YtdlpLines.diagnose(err)) }
+    }
+
+    @Test
+    fun `only ERROR lines say what failed, never a warning before them`() {
+        // yt-dlp warns of a slow or refused try, then gives the real reason on its ERROR line.
+        val warned = listOf(
+            "WARNING: [youtube] Zq9kXw3Lm0A: Sign in to confirm you're not a bot. Retrying (1/3)...",
+            "WARNING: [youtube] Zq9kXw3Lm0A: nsig extraction failed: Some formats may be missing",
+            "WARNING: [youtube] Unable to download webpage: The read operation timed out. Retrying (2/3)...",
+            "WARNING: [youtube] Zq9kXw3Lm0A: HTTP Error 429: Too Many Requests",
+        )
+        assertEquals(YtdlpError(DlFailure.UNKNOWN), YtdlpLines.diagnose(warned.joinToString("\n")))
+        assertEquals(YtdlpError(DlFailure.UNKNOWN, null, "youtube"), YtdlpLines.diagnose((warned + "ERROR: [youtube] Zq9kXw3Lm0A: something new").joinToString("\n")))
+        assertEquals(
+            YtdlpError(DlFailure.BLOCKED, "429", "youtube"),
+            YtdlpLines.diagnose((warned + "ERROR: [youtube] Zq9kXw3Lm0A: HTTP Error 429: Too Many Requests").joinToString("\n")),
+        )
+        assertEquals(
+            YtdlpError(DlFailure.NOT_FOUND, "unavailable", "youtube"),
+            YtdlpLines.diagnose((warned + "ERROR: [youtube] Zq9kXw3Lm0A: Video unavailable").joinToString("\r\n")),
+        )
+        assertEquals(
+            YtdlpError(DlFailure.SITE_CHANGED, "format-not-available", "youtube"),
+            YtdlpLines.diagnose((warned + "  ERROR: [youtube] Zq9kXw3Lm0A: Requested format is not available").joinToString("\n")),
+        )
+    }
+
+    @Test
+    fun `the log names the kind, the pattern and the extractor only, never the line`() {
+        val err = listOf(
+            "[youtube] Extracting URL: https://music.example.test/watch?v=Zq9kXw3Lm0A",
+            "WARNING: [youtube] Zq9kXw3Lm0A: Lantern Over Quiet Water: nsig extraction failed",
+            "ERROR: [youtube] Zq9kXw3Lm0A: Lantern Over Quiet Water: HTTP Error 429: Too Many Requests (https://music.example.test/watch?v=Zq9kXw3Lm0A)",
+        ).joinToString("\n")
+
+        val note = YtdlpLines.diagnose(err).note
+
+        assertEquals("BLOCKED, matched 429, extractor youtube", note)
+        // An extractor is a name of yt-dlp's own, in small letters: anything else in its place (an id, a path) is left out.
+        assertEquals("UNKNOWN", YtdlpLines.diagnose("ERROR: [Zq9kXw3Lm0A] what").note)
+        assertEquals("UNKNOWN", YtdlpLines.diagnose("ERROR: [/data/user/0/app.lyrify.dl/cache/dl/k1/Lantern.webm] what").note)
     }
 
     // The processes a Cancel kills

@@ -193,7 +193,7 @@ class DownloadRunner(
                         val whole = target != null && file != null && end.bytes == file.bytes
                         if (whole) saver.finish(item, target, file) else failed(DownloadFailure.HAND_OFF)
                     }
-                    is DlEnd.Failed -> failed(DownloadFailure.of(end.failure))
+                    is DlEnd.Failed -> failed(DownloadFailure.of(end))
                     // Stopped without KJB asking: the add-on let go of it (KJB unbound it, or it was stopping).
                     DlEnd.Stopped -> failed(DownloadFailure.ADDON_GONE)
                 }

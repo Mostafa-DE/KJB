@@ -287,6 +287,19 @@ class DownloadRunnerTest {
     }
 
     @Test
+    fun `a site that changed with the downloader already the newest, or one that refused the connection, says so`() = runTest {
+        val changed = running()
+        port.events!!.onEnd(DlEnd.Failed(DlFailure.SITE_CHANGED, updated = false))
+        runCurrent()
+        assertEquals(DownloadOutcome.Failed(DownloadFailure.SITE_CHANGED_NEWEST), changed.await())
+
+        val refused = running()
+        port.events!!.onEnd(DlEnd.Failed(DlFailure.BLOCKED))
+        runCurrent()
+        assertEquals(DownloadOutcome.Failed(DownloadFailure.BLOCKED), refused.await())
+    }
+
+    @Test
     fun `Cancel during the hand-off tells the add-on, keeps its parts, and deletes the part file`() = runTest {
         val outcome = running()
         port.events!!.onFile(file)

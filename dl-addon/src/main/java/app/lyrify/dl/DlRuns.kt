@@ -1,5 +1,7 @@
 package app.lyrify.dl
 
+import android.content.pm.ServiceInfo
+import app.lyrify.addon.shared.ForegroundWork
 import app.lyrify.addon.shared.beating
 import app.lyrify.dl.api.DlEnd
 import app.lyrify.dl.api.DlFailure
@@ -72,7 +74,10 @@ interface UpdateMemory {
 object UpdatePolicy {
     const val STALE_MS: Long = 24 * 60 * 60_000
 
-    /** Failures a newer yt-dlp may fix: a site that changed, a link it does not know yet, and what it did not say. */
+    /**
+     * Failures a newer yt-dlp may fix: a site that changed, a link it does not know yet, and what it did not say. Never a
+     * site that refuses this network ([DlFailure.BLOCKED]): an update does not change who asks.
+     */
     private val FIXABLE = setOf(DlFailure.SITE_CHANGED, DlFailure.NOT_FOUND, DlFailure.UNKNOWN)
 
     /** Before a run: never looked, more than a day ago, or a stored time after now (the clock went back). */
@@ -80,6 +85,29 @@ object UpdatePolicy {
 
     fun afterFailure(failure: DlFailure, checkedThisRun: Boolean): Boolean = !checkedThisRun && failure in FIXABLE
 }
+
+/** When Android last refused the add-on its own foreground service (wall-clock millis); null once it let it in again. */
+interface RefusalMemory {
+    var refusedAt: Long?
+}
+
+/**
+ * Whether the add-on tells KJB that Android refuses its foreground service (DlStatus.foregroundRefused): its last ask
+ * was refused (a start, or its time ran out), less than a day ago. Android's count of dataSync time starts over at the
+ * first start a day after the session that used it up began, so an older refusal says nothing; a stored time after now
+ * (the clock went back) is not believed. Pure.
+ */
+object RefusalPolicy {
+    fun standing(refusedAt: Long?, now: Long): Boolean = refusedAt != null && now >= refusedAt && now - refusedAt < UpdatePolicy.STALE_MS
+}
+
+/**
+ * The add-on's work for its own foreground service ([JobForeground]), dataSync: held while a lookup or a run is under
+ * way ([DlRuns.busy]). When Android's time for it runs out (onTimeout, Android 15+) the service leaves the foreground and
+ * stops at once, as Android requires, and the work goes on without it while KJB keeps the add-on bound: KJB, told by
+ * DlStatus, asks the user to keep it open. KJB's next start asks for the foreground again ([ForegroundWork.goesOn]).
+ */
+fun DlRuns.foregroundWork(): ForegroundWork = ForegroundWork(ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC, busy = { busy }, timeUp = {}, goesOn = true)
 
 /** What a run made in its folder: the media file, its cover (audio), and the tags yt-dlp printed. */
 private class Produced(val media: File, val cover: File?, val meta: DlMeta, val durationSec: Int) {
@@ -202,12 +230,6 @@ class DlRuns(
     /** A run or a lookup is under way: from the link taken until its end, the run's file handed back included. */
     val busy: Boolean get() = synchronized(lock) { runs.isNotEmpty() || lookups.isNotEmpty() }
 
-    /**
-     * Android's time for the add-on's foreground service ran out (onTimeout, Android 15+: 6 hours of dataSync in 24): the
-     * work stops as when KJB lets go, the runs' parts kept for the next try.
-     */
-    fun timeUp() = cancelAll()
-
     /** Stops every run, their parts kept: KJB let go of the add-on (it may come back to them). */
     fun cancelAll() {
         val (live, looking) = synchronized(lock) { runs.values.toList() to lookups.values.toList() }
@@ -313,33 +335,45 @@ class DlRuns(
         val events = run.events
         if (notPublic(run.request.url)) return DlEnd.Failed(DlFailure.LOCAL_ADDRESS)
         if (!ytdlp.ready()) return DlEnd.Failed(DlFailure.ENGINE)
-        var checked = false
-        if (UpdatePolicy.beforeRun(memory.lastCheck, clock())) {
+        val before = if (UpdatePolicy.beforeRun(memory.lastCheck, clock())) {
             events.onProgress(DlProgress(DlStage.UPDATING))
-            checked = check().isCheck
+            check()
+        } else {
+            null
         }
+        // Only a newer yt-dlp put in place during the run lets KJB say it updated the downloader and tried again: not one
+        // already the newest, nor an update that was not made.
+        var updated = before == DlUpdate.Outcome.UPDATED
         withContext(io) { dir.mkdirs() }
         events.onProgress(DlProgress(DlStage.STARTING))
         var exit = execute(run, dir, attempt = 1)
-        if (exit is YtdlpExit.Failed && UpdatePolicy.afterFailure(YtdlpLines.failure(exit.err), checked)) {
+        var failed = (exit as? YtdlpExit.Failed)?.let { failure("run ${run.id}", it) }
+        if (failed != null && UpdatePolicy.afterFailure(failed, checkedThisRun = before?.isCheck == true)) {
             events.onProgress(DlProgress(DlStage.UPDATING))
-            val outcome = check()
-            checked = outcome.isCheck
-            if (outcome == DlUpdate.Outcome.UPDATED) {
+            if (check() == DlUpdate.Outcome.UPDATED) {
+                updated = true
                 events.onProgress(DlProgress(DlStage.RETRYING))
                 exit = execute(run, dir, attempt = 2)
+                failed = (exit as? YtdlpExit.Failed)?.let { failure("run ${run.id}", it) }
             }
         }
-        when (exit) {
-            is YtdlpExit.Failed -> return DlEnd.Failed(YtdlpLines.failure(exit.err), updated = checked)
-            // Killed by something other than a Cancel (the phone, low on memory): an end to try again.
-            YtdlpExit.Killed -> return DlEnd.Failed(DlFailure.UNKNOWN, updated = checked)
-            is YtdlpExit.Done -> Unit
-        }
-        val produced = withContext(io) { Produced.find(dir) } ?: return DlEnd.Failed(DlFailure.UNKNOWN, updated = checked)
+        failed?.let { return DlEnd.Failed(it, updated = updated) }
+        // Killed by something other than a Cancel (the phone, low on memory): an end to try again.
+        if (exit == YtdlpExit.Killed) return DlEnd.Failed(DlFailure.UNKNOWN, updated = updated)
+        val produced = withContext(io) { Produced.find(dir) } ?: return DlEnd.Failed(DlFailure.UNKNOWN, updated = updated)
         events.onFile(DlFile(produced.media.name, produced.media.length(), produced.cover?.length(), produced.meta, produced.durationSec))
         val sinks = withTimeoutOrNull(DELIVER_WAIT_MS) { run.delivery.await() } ?: return DlEnd.Failed(DlFailure.HAND_OFF)
         return handOff(produced, sinks)
+    }
+
+    /**
+     * What a failed yt-dlp process of [what] ("run 3", "lookup 4") says, logged by its kind, the pattern that told it and
+     * the site's extractor ([YtdlpError.note]): never its lines, which carry the link, the id and the title.
+     */
+    private fun failure(what: String, exit: YtdlpExit.Failed): DlFailure {
+        val error = YtdlpLines.diagnose(exit.err)
+        log("$what: yt-dlp failed (${error.note})")
+        return error.failure
     }
 
     /** One yt-dlp process for [run], killed if the run is cancelled; its lines go to KJB as progress, at most every [PROGRESS_EVERY_MS]. */
@@ -402,13 +436,12 @@ class DlRuns(
      */
     fun info(url: String, events: InfoEvents): Long {
         val id = synchronized(lock) { nextId++ }
-        val job = scope.launch(start = CoroutineStart.LAZY) {
-            try {
-                lookUp(id, url, events)
-            } finally {
-                synchronized(lock) { lookups.remove(id) }
-                ended()
-            }
+        val job = scope.launch(start = CoroutineStart.LAZY) { lookUp(id, url, events) }
+        // Its end however it comes, also for a lookup stopped before its body ran: one left in the map would hold the
+        // foreground service for as long as the add-on runs.
+        job.invokeOnCompletion {
+            synchronized(lock) { lookups.remove(id) }
+            ended()
         }
         synchronized(lock) { lookups[id] = job }
         job.start()
@@ -448,7 +481,7 @@ class DlRuns(
             full = true
             when {
                 info != null -> events.onInfo(info)
-                exit is YtdlpExit.Failed -> events.onFailed(DlEnd.Failed(YtdlpLines.failure(exit.err)))
+                exit is YtdlpExit.Failed -> events.onFailed(DlEnd.Failed(failure("lookup $id", exit)))
                 else -> events.onFailed(DlEnd.Failed(DlFailure.UNKNOWN))
             }
         }

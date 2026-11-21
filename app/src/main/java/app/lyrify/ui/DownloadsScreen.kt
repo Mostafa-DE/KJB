@@ -240,6 +240,12 @@ fun DownloadsPage(onBack: (() -> Unit)?) {
                     }
                 }
             }
+            // Android's few hours a day of background work for the add-on used up: its downloads go on only while KJB is open.
+            if (ui.keepOpen) {
+                item(key = "keep-open", contentType = "keep-open") {
+                    Box(rowMotion(reduced)) { Banner(R.drawable.ic_hourglass_top_fill, stringResource(R.string.dl_keep_open), action = null) {} }
+                }
+            }
             if (!filesAccess) {
                 item(key = "access", contentType = "access") {
                     Box(rowMotion(reduced)) {
@@ -485,10 +491,12 @@ private fun DownloadSheet(item: DownloadItem, onDismiss: () -> Unit) {
 }
 
 @StringRes
-private fun failureSentence(reason: DownloadFailure): Int = when (reason) {
+internal fun failureSentence(reason: DownloadFailure): Int = when (reason) {
     DownloadFailure.OFFLINE -> R.string.dl_failed_offline_detail
     DownloadFailure.NOT_FOUND -> R.string.dl_failed_not_found_detail
     DownloadFailure.SITE_CHANGED -> R.string.dl_failed_site_detail
+    DownloadFailure.SITE_CHANGED_NEWEST -> R.string.dl_failed_site_newest_detail
+    DownloadFailure.BLOCKED -> R.string.dl_failed_blocked_detail
     DownloadFailure.NO_ROOM -> R.string.dl_failed_room_detail
     DownloadFailure.HAND_OFF -> R.string.dl_failed_hand_off_detail
     DownloadFailure.STALLED -> R.string.dl_failed_stalled_detail

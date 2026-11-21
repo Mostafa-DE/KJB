@@ -74,13 +74,21 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.coroutines.resume
 
-/** What the Downloads page, the share sheet and Settings show: the settings, the downloads (newest first), the progress of the one under way. */
+/**
+ * What the Downloads page, the share sheet and Settings show: the settings, the downloads (newest first), the progress of
+ * the one under way. [backgroundLimit]: Android refuses the add-on its own foreground service (its few hours a day used
+ * up), as the add-on said at the last download's start, so its downloads go on only while KJB is kept open.
+ */
 data class DownloadsUi(
     val settings: DownloadSettings = DownloadSettings(),
     val items: List<DownloadItem> = emptyList(),
     val progress: Map<String, DlProgress> = emptyMap(),
     val loaded: Boolean = false,
-)
+    val backgroundLimit: Boolean = false,
+) {
+    /** The page asks to keep KJB open: Android refuses the add-on's foreground service and downloads are still to come. */
+    val keepOpen: Boolean get() = backgroundLimit && items.any { it.active }
+}
 
 /**
  * The downloads, process-wide: `downloads.json` in KJB's files ([DownloadsStore]), the state the screens show, and the
@@ -226,6 +234,9 @@ object Downloads {
         memory.copy(items = memory.items.map { if (it.key == key && it.state == DownloadState.Running) it.copy(state = DownloadState.Queued) else it })
     }
 
+    /** Whether Android refuses the add-on its own foreground service, as the add-on said ([DownloadsUi.backgroundLimit]). */
+    fun backgroundLimit(refused: Boolean) = _state.update { it.copy(backgroundLimit = refused) }
+
     /** No add-on to download with: every queued download fails with [reason], for the page to say why. */
     internal suspend fun failQueued(context: Context, reason: DownloadFailure) = change(context) { memory ->
         memory.copy(items = memory.items.map { if (it.active) it.copy(state = DownloadState.Failed(reason)) else it })
@@ -306,6 +317,7 @@ class DownloadService : Service() {
                 }
             }
         } finally {
+            Downloads.backgroundLimit(false)
             withContext(NonCancellable + Dispatchers.Main) {
                 notice = null
                 stopForeground(STOP_FOREGROUND_REMOVE)
@@ -335,6 +347,7 @@ class DownloadService : Service() {
      * Cancel says so, and the discard after it covers a run that was still stopping).
      */
     private suspend fun run(item: DownloadItem, session: DlSession, saver: DownloadFinish): DownloadOutcome? = coroutineScope {
+        askForeground(session.port)
         val keepOnCancel = { !Downloads.isCancelled(item.key) }
         val run = async {
             DownloadRunner(session.port, session.death, saver, keepOnCancel = keepOnCancel, foreground = session::foreground).run(item) { progress -> shown(item, progress) }
@@ -352,6 +365,19 @@ class DownloadService : Service() {
             Downloads.running(null, null)
         }
     }.also { if (it == null && Downloads.wasCancelled(item.key)) discard(session, item.key) }
+
+    /**
+     * Whether Android refuses the add-on its own foreground service, asked of the add-on just bound, before the download
+     * starts: the page then asks the user to keep KJB open. An older add-on says not refused; a gone one says nothing.
+     */
+    private fun askForeground(port: DlPort) {
+        val status = try {
+            port.status()
+        } catch (_: AddonDiedException) {
+            null
+        } ?: return
+        Downloads.backgroundLimit(status.foregroundRefused)
+    }
 
     private fun discard(session: DlSession, key: String) {
         try {
@@ -497,7 +523,8 @@ internal object DownloadNotices {
     fun failureLabel(reason: DownloadFailure): Int = when (reason) {
         DownloadFailure.OFFLINE -> R.string.dl_failed_offline
         DownloadFailure.NOT_FOUND -> R.string.dl_failed_not_found
-        DownloadFailure.SITE_CHANGED -> R.string.dl_failed_site
+        DownloadFailure.SITE_CHANGED, DownloadFailure.SITE_CHANGED_NEWEST -> R.string.dl_failed_site
+        DownloadFailure.BLOCKED -> R.string.dl_failed_blocked
         DownloadFailure.NO_ROOM -> R.string.dl_failed_room
         DownloadFailure.HAND_OFF -> R.string.dl_failed_hand_off
         DownloadFailure.STALLED -> R.string.dl_failed_stalled

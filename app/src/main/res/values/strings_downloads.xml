@@ -47,6 +47,7 @@
     <string name="dl_done">Done</string>
     <string name="dl_empty">Share a link to KJB from any app, or paste one here. Save only what you have the right to save.</string>
     <string name="dl_files_access">KJB needs All files access to save downloads on your phone.</string>
+    <string name="dl_keep_open">Android allows background downloads for only a few hours a day, and KJB Downloads has used them. Keep KJB open until your downloads finish.</string>
     <string name="dl_files_access_action">Turn on</string>
     <string name="dl_cancel">Cancel</string>
     <string name="dl_retry">Retry</string>
@@ -74,6 +75,7 @@
     <string name="dl_failed_offline">No connection</string>
     <string name="dl_failed_not_found">Nothing found</string>
     <string name="dl_failed_site">Site changed</string>
+    <string name="dl_failed_blocked">Site refused</string>
     <string name="dl_failed_room">Phone is full</string>
     <string name="dl_failed_hand_off">Not saved whole</string>
     <string name="dl_failed_stalled">Stopped answering</string>
@@ -86,6 +88,8 @@
     <string name="dl_failed_offline_detail">Your phone is offline, or the site can\'t be reached. Retry once you are back online.</string>
     <string name="dl_failed_not_found_detail">There is no video at that link: it was removed, it is private, or the site is not one KJB can save from.</string>
     <string name="dl_failed_site_detail">The site changed. KJB updated the downloader and tried again; Retry later, when the downloader has caught up.</string>
+    <string name="dl_failed_site_newest_detail">The site changed, and KJB\'s downloader is already the newest. Retry later, when the downloader catches up.</string>
+    <string name="dl_failed_blocked_detail">The site refused this connection. If you use a VPN, turn it off and Retry, or try again later.</string>
     <string name="dl_failed_room_detail">Your phone has no room left for it. Free some space, then Retry.</string>
     <string name="dl_failed_hand_off_detail">The file did not reach KJB whole, so nothing was kept. Retry goes on from what was downloaded.</string>
     <string name="dl_failed_stalled_detail">The download stopped moving, so KJB stopped it. Retry goes on from what was downloaded.</string>

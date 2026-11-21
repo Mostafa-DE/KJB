@@ -408,6 +408,58 @@ class AddonKeepAliveTest {
     }
 
     @Test
+    fun `each answer Android gives the service's foreground is told - refused, let in, and its time run out`() {
+        var refusing = true
+        val port = FakeForeground(refuses = { refusing })
+        val answers = mutableListOf<Boolean>()
+        val foreground = JobForeground(
+            listOf(ForegroundWork(DATA_SYNC, busy = { busy }, timeUp = {})),
+            port,
+            fromKjb = { it.uid == KJB_UID },
+            answered = { refused -> answers += refused },
+        )
+
+        foreground.start(1, kjb)
+        refusing = false
+        foreground.start(2, kjb)
+        foreground.timeUp(DATA_SYNC)
+
+        assertEquals("refused, let in, its time run out", listOf(true, false, true), answers)
+    }
+
+    @Test
+    fun `work that goes on past its time leaves the foreground there and then, and KJB's next start holds it again when Android lets it in`() {
+        var refusing = false
+        val port = FakeForeground(refuses = { refusing })
+        val answers = mutableListOf<Boolean>()
+        val foreground = JobForeground(
+            listOf(ForegroundWork(DATA_SYNC, busy = { busy }, timeUp = {}, goesOn = true)),
+            port,
+            fromKjb = { it.uid == KJB_UID },
+            answered = { refused -> answers += refused },
+        )
+        foreground.start(1, kjb)
+
+        foreground.timeUp(DATA_SYNC)
+        assertEquals(listOf("start dataSync $KJB_UID", "stopForeground", "stopSelf all"), port.calls)
+
+        // The work goes on. Android refuses the next start (the day's time used up): it goes on without the foreground.
+        refusing = true
+        foreground.start(2, kjb)
+        assertEquals(listOf("start dataSync $KJB_UID", "stopSelf 2"), port.calls.drop(3))
+
+        // Android lets it in again (the add-on was on screen since, or the day's count started over): held, not in and out.
+        refusing = false
+        foreground.start(3, kjb)
+        assertEquals(listOf("start dataSync $KJB_UID"), port.calls.drop(5))
+        assertEquals("let in, its time run out, refused, let in", listOf(false, true, true, false), answers)
+
+        busy = false
+        foreground.jobEnded()
+        assertEquals(listOf("start dataSync $KJB_UID", "stopForeground", "stopSelf 3"), port.calls.drop(5))
+    }
+
+    @Test
     fun `KJB letting go leaves the foreground`() {
         val port = FakeForeground()
         val foreground = foreground(port)

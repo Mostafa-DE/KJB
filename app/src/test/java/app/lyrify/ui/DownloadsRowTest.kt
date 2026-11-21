@@ -4,13 +4,18 @@ import app.lyrify.R
 import app.lyrify.addon.AddonState
 import app.lyrify.addon.InstallFailure
 import app.lyrify.dl.api.AudioQuality
+import app.lyrify.dl.api.DlEnd
+import app.lyrify.dl.api.DlFailure
 import app.lyrify.dl.api.DlKind
 import app.lyrify.downloads.DownloadFailure
 import app.lyrify.downloads.DownloadItem
+import app.lyrify.downloads.DownloadNotices
 import app.lyrify.downloads.DownloadState
 import app.lyrify.downloads.DownloadsUi
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -43,6 +48,34 @@ class DownloadsRowTest {
         val empty = downloadsEntry(AddonState.Ready, ui())
         assertEquals(ToolLine.Text(R.string.dl_nothing_yet), empty.line)
         assertNull(empty.badge)
+    }
+
+    @Test
+    fun `the page asks to keep KJB open only while downloads run and Android refuses the add-on's foreground service`() {
+        val running = item("a", DownloadState.Running)
+        val waiting = item("b", DownloadState.Queued)
+        val saved = item("c", DownloadState.Done("/x.mp3", 1))
+
+        assertTrue(DownloadsUi(items = listOf(running, saved), backgroundLimit = true).keepOpen)
+        assertTrue(DownloadsUi(items = listOf(waiting), backgroundLimit = true).keepOpen)
+        assertFalse("nothing left to download", DownloadsUi(items = listOf(saved), backgroundLimit = true).keepOpen)
+        assertFalse("the add-on works in its own foreground service", DownloadsUi(items = listOf(running), backgroundLimit = false).keepOpen)
+    }
+
+    @Test
+    fun `a failure's words follow the add-on's kind and whether it really updated the downloader`() {
+        fun sentence(failure: DlFailure, updated: Boolean) = failureSentence(DownloadFailure.of(DlEnd.Failed(failure, updated)))
+        fun label(failure: DlFailure, updated: Boolean) = DownloadNotices.failureLabel(DownloadFailure.of(DlEnd.Failed(failure, updated)))
+
+        // A VPN's address refused: the same words, updated or not.
+        assertEquals(R.string.dl_failed_blocked_detail, sentence(DlFailure.BLOCKED, updated = false))
+        assertEquals(R.string.dl_failed_blocked_detail, sentence(DlFailure.BLOCKED, updated = true))
+        assertEquals(R.string.dl_failed_blocked, label(DlFailure.BLOCKED, updated = false))
+        // "Updated the downloader and tried again" only when it was.
+        assertEquals(R.string.dl_failed_site_detail, sentence(DlFailure.SITE_CHANGED, updated = true))
+        assertEquals(R.string.dl_failed_site_newest_detail, sentence(DlFailure.SITE_CHANGED, updated = false))
+        assertEquals(R.string.dl_failed_site, label(DlFailure.SITE_CHANGED, updated = false))
+        assertEquals(R.string.dl_failed_site, label(DlFailure.SITE_CHANGED, updated = true))
     }
 
     @Test

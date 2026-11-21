@@ -9,7 +9,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.PermissionInfo
-import android.content.pm.ServiceInfo
 import android.os.Binder
 import android.os.IBinder
 import android.os.ParcelFileDescriptor
@@ -20,7 +19,6 @@ import app.lyrify.addon.shared.AddonKeepAlive
 import app.lyrify.addon.shared.CallerCheck
 import app.lyrify.addon.shared.ExemptionActivity
 import app.lyrify.addon.shared.ForegroundPort
-import app.lyrify.addon.shared.ForegroundWork
 import app.lyrify.addon.shared.JobForeground
 import app.lyrify.dl.api.DlEnd
 import app.lyrify.dl.api.DlFile
@@ -61,6 +59,21 @@ private class PrefsMemory(context: Context) : UpdateMemory {
     }
 }
 
+/** When Android last refused the add-on its foreground service, in the add-on's own preferences: KJB asks after it. */
+private class PrefsRefusal(context: Context) : RefusalMemory {
+    private val prefs = context.getSharedPreferences("foreground", Context.MODE_PRIVATE)
+
+    override var refusedAt: Long?
+        get() = prefs.getLong(KEY, 0).takeIf { it > 0 }
+        set(value) {
+            prefs.edit().apply { if (value == null) remove(KEY) else putLong(KEY, value) }.apply()
+        }
+
+    private companion object {
+        const val KEY = "refusedAt"
+    }
+}
+
 /** KJB of this build type, signed with its pinned certificate: the one caller of the add-on's service and activity. */
 fun Context.kjbCallers(): CallerCheck = CallerCheck(
     packageName,
@@ -92,6 +105,8 @@ class DlService : Service() {
 
     private val memory by lazy { PrefsMemory(this) }
 
+    private val refusal by lazy { PrefsRefusal(this) }
+
     private val runs: DlRuns by lazy {
         val log: (String) -> Unit = { Log.d(LOG_TAG, it) }
         DlRuns(
@@ -111,7 +126,7 @@ class DlService : Service() {
 
     private val foreground: JobForeground<PendingIntent> by lazy {
         JobForeground(
-            listOf(ForegroundWork(ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC, busy = { runs.busy }, timeUp = { runs.timeUp() })),
+            listOf(runs.foregroundWork()),
             object : ForegroundPort<PendingIntent> {
                 override fun startForeground(type: Int, tap: PendingIntent?) = this@DlService.startForeground(NOTICE_ID, notice(tap), type)
 
@@ -123,6 +138,8 @@ class DlService : Service() {
             },
             fromKjb = { tap -> AddonKeepAlive.fromKjb(tap, callers) },
             log = { Log.i(LOG_TAG, it) },
+            // Kept across the add-on's restarts: KJB binds it anew for each download and asks its status first.
+            answered = { refused -> refusal.refusedAt = if (refused) System.currentTimeMillis() else null },
         )
     }
 
@@ -152,7 +169,10 @@ class DlService : Service() {
         return START_NOT_STICKY
     }
 
-    /** Android's time for the foreground service ran out (Android 15+): out of it within seconds, or Android ends the add-on. */
+    /**
+     * Android's time for the foreground service ran out (Android 15+): out of it and stopped within seconds, or Android
+     * ends the add-on. The work goes on without it while KJB keeps the add-on bound ([foregroundWork]).
+     */
     override fun onTimeout(startId: Int, fgsType: Int) = foreground.timeUp(fgsType)
 
     /**
@@ -188,7 +208,9 @@ class DlService : Service() {
     private val binder = object : IDlAddon.Stub() {
         override fun apiVersion(): Int = checked { IDlAddon.VERSION }
 
-        override fun status(): String = checked { DlWire.encode(DlStatus(runs.version(), memory.lastCheck)) }
+        override fun status(): String = checked {
+            DlWire.encode(DlStatus(runs.version(), memory.lastCheck, RefusalPolicy.standing(refusal.refusedAt, System.currentTimeMillis())))
+        }
 
         override fun info(url: String, callback: IDlInfoCallback): Long = checked {
             val events = InfoCallback(callback)

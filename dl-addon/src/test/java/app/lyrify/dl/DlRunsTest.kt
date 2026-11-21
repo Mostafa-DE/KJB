@@ -1,5 +1,8 @@
 package app.lyrify.dl
 
+import android.content.pm.ServiceInfo
+import app.lyrify.addon.shared.ForegroundPort
+import app.lyrify.addon.shared.JobForeground
 import app.lyrify.dl.api.AudioQuality
 import app.lyrify.dl.api.DlEnd
 import app.lyrify.dl.api.DlFailure
@@ -186,8 +189,12 @@ class DlRunsTest {
             io = StandardTestDispatcher(testScheduler),
             resolve = { host -> listOf(InetAddress.getByName(dns[host] ?: "93.184.216.34")) },
             ended = { ends++ },
+            log = { logs += it },
         )
     }
+
+    /** What the add-on logged: never a link, an id, a title or a path. */
+    private val logs = mutableListOf<String>()
 
     /** How many times the add-on said a run or a lookup ended: its foreground service is left when it is no longer busy. */
     private var ends = 0
@@ -304,10 +311,10 @@ class DlRunsTest {
     }
 
     @Test
-    fun `a site failure with yt-dlp already the newest is not tried again`() = runTest {
+    fun `a site failure with yt-dlp already the newest is not tried again, and says it was not updated`() = runTest {
         memory.lastCheck = now - 60_000
         ytdlp.updateOutcome = DlUpdate.Outcome.CURRENT
-        ytdlp.scripts += Script.Fail("ERROR: [youtube] abc: Sign in to confirm you're not a bot")
+        ytdlp.scripts += Script.Fail("ERROR: [youtube] abc: Unable to extract initial player response")
         val runs = runs()
         val heard = Heard()
 
@@ -315,7 +322,76 @@ class DlRunsTest {
         runCurrent()
 
         assertEquals(listOf("run", "update"), ytdlp.calls)
-        assertEquals(DlEnd.Failed(DlFailure.SITE_CHANGED, updated = true), heard.end)
+        assertEquals(DlEnd.Failed(DlFailure.SITE_CHANGED, updated = false), heard.end)
+    }
+
+    @Test
+    fun `a site failure whose update could not be made says it was not updated`() = runTest {
+        memory.lastCheck = now - 60_000
+        ytdlp.updateOutcome = DlUpdate.Outcome.FAILED
+        ytdlp.scripts += Script.Fail("ERROR: [youtube] abc: Unable to extract initial player response")
+        val runs = runs()
+        val heard = Heard()
+
+        runs.start(song, heard)
+        runCurrent()
+
+        assertEquals(listOf("run", "update"), ytdlp.calls)
+        assertEquals(DlEnd.Failed(DlFailure.SITE_CHANGED, updated = false), heard.end)
+    }
+
+    @Test
+    fun `a run that found yt-dlp the newest before it started says it was not updated after a site failure`() = runTest {
+        ytdlp.updateOutcome = DlUpdate.Outcome.CURRENT
+        ytdlp.scripts += Script.Fail("ERROR: [youtube] abc: Unable to extract initial player response")
+        val runs = runs()
+        val heard = Heard()
+
+        runs.start(song, heard)
+        runCurrent()
+
+        assertEquals(listOf("update", "run"), ytdlp.calls)
+        assertEquals(DlEnd.Failed(DlFailure.SITE_CHANGED, updated = false), heard.end)
+    }
+
+    @Test
+    fun `a site that refuses this connection is blocked, and no update or second try is made for it`() = runTest {
+        memory.lastCheck = now - 60_000
+        ytdlp.updateOutcome = DlUpdate.Outcome.UPDATED
+        ytdlp.scripts += Script.Fail("ERROR: [youtube] abc: Sign in to confirm you're not a bot")
+        val runs = runs()
+        val heard = Heard()
+
+        runs.start(song, heard)
+        runCurrent()
+
+        assertEquals(listOf("run"), ytdlp.calls)
+        assertEquals(DlEnd.Failed(DlFailure.BLOCKED, updated = false), heard.end)
+    }
+
+    @Test
+    fun `a failed run or lookup logs its kind, pattern and extractor, never the link, the id or the title`() = runTest {
+        memory.lastCheck = now
+        val link = "https://music.example.test/watch?v=Zq9kXw3Lm0A"
+        val err = listOf(
+            "[youtube] Extracting URL: $link",
+            "WARNING: [youtube] Zq9kXw3Lm0A: Lantern Over Quiet Water: nsig extraction failed",
+            "ERROR: [youtube] Zq9kXw3Lm0A: Lantern Over Quiet Water: HTTP Error 429: Too Many Requests ($link)",
+        ).joinToString("\n")
+        ytdlp.scripts += Script.Fail(err)
+        ytdlp.scripts += Script.Fail(err)
+        val runs = runs()
+
+        val run = runs.start(song.copy(url = link), Heard())
+        runCurrent()
+        val lookup = runs.info(link, Looked())
+        runCurrent()
+
+        assertTrue(logs.toString(), "run $run: yt-dlp failed (BLOCKED, matched 429, extractor youtube)" in logs)
+        assertTrue(logs.toString(), "lookup $lookup: yt-dlp failed (BLOCKED, matched 429, extractor youtube)" in logs)
+        listOf("Zq9kXw3Lm0A", "music.example.test", "Lantern", "k1").forEach { secret ->
+            assertTrue("$secret in ${logs.filter { secret in it }}", logs.none { secret in it })
+        }
     }
 
     @Test
@@ -871,26 +947,87 @@ class DlRunsTest {
         assertEquals(2, ends)
     }
 
+    /** Android's side of the add-on's foreground service, as JobForeground asks it. */
+    private class FakeForeground : ForegroundPort<String> {
+        val calls = mutableListOf<String>()
+
+        override fun startForeground(type: Int, tap: String?) {
+            calls += "startForeground"
+        }
+
+        override fun stopForeground() {
+            calls += "stopForeground"
+        }
+
+        override fun stopSelf(startId: Int?) {
+            calls += "stopSelf ${startId ?: "all"}"
+        }
+    }
+
     @Test
-    fun `Android's time for the foreground service running out stops the work, its parts kept for later`() = runTest {
+    fun `Android's time for the foreground service running out leaves it at once, and the work goes on without it`() = runTest {
         memory.lastCheck = now
         ytdlp.scripts += Script.Hang(mapOf("x.webm.part" to ByteArray(10)))
         val runs = runs()
         val heard = Heard()
         runs.start(song, heard)
         runCurrent()
+        val android = FakeForeground()
+        val foreground = JobForeground(listOf(runs.foregroundWork()), android, fromKjb = { it == "kjb" })
+        foreground.start(1, "kjb")
+
+        foreground.timeUp(ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        runCurrent()
+
+        // Out of it within seconds, as Android requires (onTimeout), while KJB keeps the add-on bound for the run.
+        assertEquals(listOf("startForeground", "stopForeground", "stopSelf all"), android.calls)
+        assertNull("the run goes on", heard.end)
+        assertTrue(runs.busy)
+        assertEquals(1, ytdlp.live.size)
+    }
+
+    @Test
+    fun `after the time ran out, KJB's next start while the work goes on asks for the foreground again, and holds it when let in`() = runTest {
+        memory.lastCheck = now
+        ytdlp.scripts += Script.Hang(mapOf("x.webm.part" to ByteArray(10)))
+        val runs = runs()
+        runs.start(song, Heard())
+        runCurrent()
+        val android = FakeForeground()
+        val answers = mutableListOf<Boolean>()
+        val foreground = JobForeground(listOf(runs.foregroundWork()), android, fromKjb = { it == "kjb" }, answered = { answers += it })
+        foreground.start(1, "kjb")
+        foreground.timeUp(ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+
+        // A lookup joins the run that goes on, and Android lets the add-on in again: it holds the foreground for both, and
+        // the refusal KJB is told about is over.
+        foreground.start(2, "kjb")
+
+        assertEquals(listOf("startForeground", "stopForeground", "stopSelf all", "startForeground"), android.calls)
+        assertEquals(listOf(false, true, false), answers)
+    }
+
+    @Test
+    fun `a lookup stopped before it started still ends its busy time, so the foreground service is left`() = runTest {
         ytdlp.scripts += Script.Hang()
-        runs.info("https://video.example.com/w", Looked())
-        runCurrent()
-        assertEquals(2, ytdlp.live.size)
+        val runs = runs()
 
-        runs.timeUp()
+        val lookup = runs.info("https://video.example.com/w", Looked())
+        runs.cancelInfo(lookup)
         runCurrent()
 
-        assertEquals(DlEnd.Stopped, heard.end)
-        assertTrue("its parts stay for the next run", File(root, "k1/x.webm.part").exists())
-        assertTrue(ytdlp.live.isEmpty())
         assertFalse(runs.busy)
+        assertEquals(1, ends)
+        assertTrue("yt-dlp never ran", ytdlp.calls.isEmpty())
+    }
+
+    @Test
+    fun `a refusal of the foreground service is told for a day, and a time after now is not believed`() {
+        assertFalse(RefusalPolicy.standing(refusedAt = null, now = now))
+        assertTrue(RefusalPolicy.standing(refusedAt = now - 60_000, now = now))
+        assertTrue(RefusalPolicy.standing(refusedAt = now - day + 1, now = now))
+        assertFalse("Android's count has started over by then", RefusalPolicy.standing(refusedAt = now - day, now = now))
+        assertFalse(RefusalPolicy.standing(refusedAt = now + 60_000, now = now))
     }
 
     // Updating yt-dlp
@@ -921,7 +1058,7 @@ class DlRunsTest {
         assertTrue(UpdatePolicy.beforeRun(lastCheck = now + day, now = now))
 
         listOf(DlFailure.SITE_CHANGED, DlFailure.NOT_FOUND, DlFailure.UNKNOWN).forEach { assertTrue(it.name, UpdatePolicy.afterFailure(it, checkedThisRun = false)) }
-        listOf(DlFailure.OFFLINE, DlFailure.NO_ROOM, DlFailure.HAND_OFF, DlFailure.ENGINE, DlFailure.REFUSED).forEach {
+        listOf(DlFailure.OFFLINE, DlFailure.BLOCKED, DlFailure.NO_ROOM, DlFailure.HAND_OFF, DlFailure.ENGINE, DlFailure.REFUSED).forEach {
             assertFalse(it.name, UpdatePolicy.afterFailure(it, checkedThisRun = false))
         }
         assertFalse(UpdatePolicy.afterFailure(DlFailure.SITE_CHANGED, checkedThisRun = true))
