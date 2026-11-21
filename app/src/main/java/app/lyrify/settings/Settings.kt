@@ -280,7 +280,12 @@ data class NavSettings(
     val notificationsDenied: Boolean = false,
     /** How often a request for notifications came back no: the second no is for good. */
     val notificationDenials: Int = 0,
-)
+    val settingsSections: Map<SettingsSection, Boolean> = emptyMap(),
+) {
+    fun opens(section: SettingsSection): Boolean = true
+}
+
+enum class SettingsSection(val openAtFirst: Boolean) { PLAYBACK(true), LIBRARY(true), DISPLAY(true), LYRICS(true), AI(true), DOWNLOADS(true), BACKUP(true), ABOUT(true) }
 
 /**
  * What the bottom bar (the dock) can hold, each with its own page stack: Library, Playlists, Search and Tools by default,

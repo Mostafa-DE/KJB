@@ -52,6 +52,7 @@ import app.lyrify.settings.LibrarySettings
 import app.lyrify.settings.NavSettings
 import app.lyrify.settings.PlaybackSettings
 import app.lyrify.settings.Settings
+import app.lyrify.settings.SettingsSection
 import app.lyrify.stats.FakePlayLog
 import app.lyrify.stats.LoggedPlay
 import kotlinx.coroutines.runBlocking
@@ -115,6 +116,17 @@ class BackupRestoreTest {
 
         assertEquals(BackupFixtures.settings.copy(backup = folder, nav = NavSettings(setupDone = true)), stores.settings)
         assertEquals(BackupFixtures.equalizer, stores.equalizer)
+    }
+
+    @Test
+    fun `a restore brings back which of Settings' sections were open and which closed`() {
+        val sections = mapOf(SettingsSection.LYRICS to true, SettingsSection.ABOUT to false)
+        val backup = BackupFixtures.contents(BackupFixtures.zip(BackupFixtures.snapshot.copy(settings = BackupFixtures.settings.copy(nav = NavSettings(settingsSections = sections)))))
+        val fresh = MemoryStores(settings = Settings())
+
+        runBlocking { plan(contents = backup).apply(setOf(Section.SETTINGS), fresh, newId) }
+
+        assertEquals(sections, fresh.settings.nav.settingsSections)
     }
 
     @Test
