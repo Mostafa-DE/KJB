@@ -34,8 +34,10 @@ import app.lyrify.models.ModelStore
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -57,11 +59,12 @@ import java.net.HttpURLConnection
 import java.net.URI
 import java.net.URISyntaxException
 
-// KJB's own update check (features-2026-11-15, item 2): once a day when KJB opens, and from Settings > About > Check now,
-// one small request to KJB's latest release on GitHub. A newer KJB shows "KJB <ver> is out" with its notes; Install
-// downloads its APK (GitHub only, https, its published size and SHA-256), checks it is KJB's own package, a higher version
-// and signed exactly like the KJB running, then installs it with Android's installer, the add-on's way (addon/). Installed
-// add-ons older than the one this KJB brings are offered too. "Check for updates" (on by default) turns the daily check off.
+// KJB's own update check (features-2026-11-15, item 2; every hour since 3.1): when KJB comes to the front and each hour
+// it stays there, at most once an hour, and from Settings > About > Check for updates at any time, one small request to
+// KJB's latest release on GitHub. A newer KJB shows "KJB <ver> is out" with its notes; Install downloads its APK (GitHub
+// only, https, its published size and SHA-256), checks it is KJB's own package, a higher version and signed exactly like
+// the KJB running, then installs it with Android's installer, the add-on's way (addon/). Installed add-ons older than the
+// one this KJB brings are offered too. The check is always on: 3.1 took its switch away (user).
 
 /** KJB's latest release on GitHub: its [version] ("3.0.1"), its notes as plain text, and its APK (null: none KJB can check). */
 data class Release(val version: String, val notes: String, val apk: ReleaseApk?)
@@ -175,11 +178,14 @@ internal class SingleInstall<K : Any, T : Any>(private val make: (K) -> T, priva
     }
 }
 
-/** A day, the daily check's spacing. */
-private const val DAY_MS: Long = 24 * 60 * 60_000L
+/** An hour, the check's spacing: GitHub answers 60 requests an hour from one address without an account. */
+private const val HOUR_MS: Long = 60 * 60_000L
 
-/** The daily check is due: switched on, and never done, or done a day ago or more (or the clock went back since). */
-fun checkDue(enabled: Boolean, lastCheck: Long?, now: Long): Boolean = enabled && (lastCheck == null || now < lastCheck || now - lastCheck >= DAY_MS)
+/** The shortest wait in front before the time is looked at again, should the last check's time not have been kept. */
+private const val MIN_WAIT_MS: Long = 60_000L
+
+/** The check is due: never done, or done an hour ago or more (or the clock went back since). */
+fun checkDue(lastCheck: Long?, now: Long): Boolean = lastCheck == null || now < lastCheck || now - lastCheck >= HOUR_MS
 
 /**
  * [apk] may replace the KJB running ([own]): the same package, a higher version code, and exactly the same signing
@@ -330,10 +336,11 @@ interface UpdatePort {
 }
 
 /**
- * The update check, one at a time in [scope]: [checkIfDue] when KJB opens (at most once a day, and quietly: an offer the
- * user put off is not shown again), [checkNow] from Settings (always asks, and shows any offer). [installed] is this KJB's
- * version, [addonsOffered] the add-on versions it pins ([offeredAddons]). The time of a check is kept before it asks, so a
- * check without an answer still counts for the day.
+ * The update check, one at a time in [scope]: [checkWhileInFront] while KJB is in front (at most once an hour, and
+ * quietly: an offer the user put off is not shown again, and what the last check found stays shown while it asks and
+ * when no answer comes), [checkNow] from Settings (always asks, and shows any offer). [installed] is this KJB's version,
+ * [addonsOffered] the add-on versions it pins ([offeredAddons]). The time of a check is kept before it asks, so a check
+ * without an answer (no network, or GitHub's rate limit) still counts for the hour, and Check for updates counts too.
  */
 class UpdateChecker(
     private val port: UpdatePort,
@@ -347,18 +354,23 @@ class UpdateChecker(
 
     private val one = Mutex()
 
-    /** KJB opened: checks when [enabled] and due ([checkDue]). */
-    fun checkIfDue(enabled: Boolean) {
-        if (!enabled) return
-        scope.launch {
-            one.withLock { if (checkDue(enabled = true, port.lastCheck(), clock())) check(manual = false) }
+    /**
+     * KJB is in front, until the job returned is cancelled (KJB went to the back): checks when due ([checkDue]), then
+     * again an hour after the last check, whichever asked. Each check is a job of its own in [scope], so one under way
+     * runs on when KJB goes.
+     */
+    fun checkWhileInFront(): Job = scope.launch {
+        while (true) {
+            scope.launch { one.withLock { if (checkDue(port.lastCheck(), clock())) check(manual = false) } }.join()
+            val now = clock()
+            delay(((port.lastCheck() ?: now) + HOUR_MS - now).coerceIn(MIN_WAIT_MS, HOUR_MS))
         }
     }
 
     /** Check now: asks GitHub whatever the time; the sheet shows any offer. It runs on when the screen that asked closes. */
     suspend fun checkNow(): UpdateState = scope.async { one.withLock { check(manual = true) } }.await()
 
-    /** Not now, or the sheet put away: it closes, and the daily check does not show this offer again. */
+    /** Not now, or the sheet put away: it closes, and the check in front does not show this offer again. */
     fun dismiss() {
         val shown = _state.value as? UpdateState.Checked ?: return
         _state.value = shown.copy(ask = false)
@@ -366,10 +378,12 @@ class UpdateChecker(
     }
 
     private suspend fun check(manual: Boolean): UpdateState {
-        _state.value = UpdateState.Checking
+        // The check in front shows no Checking: an update sheet open over KJB would close under the user while it asks.
+        if (manual) _state.value = UpdateState.Checking
         port.setLastCheck(clock())
         val result = when (val fetched = port.latest()) {
-            Fetched.NoAnswer -> UpdateState.Failed
+            // In front, no answer keeps what the last one found, its sheet too; the next hour asks again.
+            Fetched.NoAnswer -> _state.value.takeIf { !manual && it is UpdateState.Checked } ?: UpdateState.Failed
             is Fetched.Answer -> {
                 val release = fetched.release.takeIf { Releases.newer(it.version, installed) }
                 val addons = addonsOffered.filter { offered -> port.addonInstalled(offered.addon)?.let { Releases.newer(offered.version, it) } == true }

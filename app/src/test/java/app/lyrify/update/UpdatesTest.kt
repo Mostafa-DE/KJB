@@ -11,11 +11,15 @@ import app.lyrify.addon.KjbAddons
 import app.lyrify.addon.archiveSigningFlags
 import app.lyrify.addon.confirmFrom
 import app.lyrify.addon.signerDigests
-import app.lyrify.settings.AboutSettings
 import app.lyrify.settings.Settings
 import app.lyrify.settings.SettingsJson
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -33,7 +37,7 @@ import java.net.HttpURLConnection
 import java.net.URI
 import java.security.MessageDigest
 
-/** KJB's update check: GitHub's latest release read, compared, checked and asked at most once a day, against fakes. */
+/** KJB's update check: GitHub's latest release read, compared, checked and asked at most once an hour, against fakes. */
 @OptIn(ExperimentalCoroutinesApi::class)
 class UpdatesTest {
     @get:Rule
@@ -221,16 +225,17 @@ class UpdatesTest {
         assertEquals(ends, confirmFrom(ends) { false })
     }
 
-    // Once a day
+    // Every hour
 
     @Test
-    fun `the check is due when on and never done, or a day after the last one`() {
+    fun `the check is due when never done, or an hour after the last one`() {
         val now = 10 * DAY
-        assertFalse(checkDue(enabled = false, lastCheck = null, now = now))
-        assertTrue(checkDue(enabled = true, lastCheck = null, now = now))
-        assertFalse(checkDue(enabled = true, lastCheck = now - HOUR, now = now))
-        assertTrue(checkDue(enabled = true, lastCheck = now - DAY, now = now))
-        assertTrue("the clock went back", checkDue(enabled = true, lastCheck = now + HOUR, now = now))
+        assertTrue(checkDue(lastCheck = null, now = now))
+        assertFalse(checkDue(lastCheck = now - MINUTE, now = now))
+        assertFalse(checkDue(lastCheck = now - HOUR + 1, now = now))
+        assertTrue(checkDue(lastCheck = now - HOUR, now = now))
+        assertTrue(checkDue(lastCheck = now - DAY, now = now))
+        assertTrue("the clock went back", checkDue(lastCheck = now + MINUTE, now = now))
     }
 
     // GitHub's answer
@@ -282,6 +287,8 @@ class UpdatesTest {
         // A renamed or missing repository, or one with no release yet, must not read as "KJB is the latest" for good.
         assertEquals(Fetched.NoAnswer, github(Answer(404)).fetch())
         assertEquals(Fetched.NoAnswer, github(Answer(403)).fetch())
+        // GitHub's limit for asking without an account (60 an hour from one address) answers 403 or 429.
+        assertEquals(Fetched.NoAnswer, github(Answer(429)).fetch())
         assertEquals(Fetched.NoAnswer, github(Answer(200, "not json")).fetch())
         assertEquals(Fetched.NoAnswer, GitHubLatest("Mostafa-DE/KJB", "KJB/test") { throw IOException("offline") }.fetch())
     }
@@ -312,11 +319,15 @@ class UpdatesTest {
         var last: Long? = null
         var dismissedOffer: String? = null
 
+        /** GitHub answers once this completes; null: at once. */
+        var answers: CompletableDeferred<Unit>? = null
+
         /** The version of each add-on installed that is KJB's own. */
         val addons = mutableMapOf<KjbAddon, String>()
 
         override suspend fun latest(): Fetched {
             fetches++
+            answers?.await()
             return answer
         }
 
@@ -341,68 +352,174 @@ class UpdatesTest {
     /** GitHub's latest release, no newer than the KJB of these tests (3.0.0 or 3.0.1). */
     private val older = Releases.parse(release(tag = "v3.0.0"), REPO)!!
 
+    /** The checker's clock: [now], moved on by the test's own time as KJB stays in front. */
     private fun TestScope.checker(port: FakePort, installed: String = "3.0.0", addonsOffered: List<AddonUpdate> = emptyList()) =
-        UpdateChecker(port, installed, addonsOffered, { now }, backgroundScope)
+        UpdateChecker(port, installed, addonsOffered, { now + testScheduler.currentTime }, backgroundScope)
+
+    /** KJB comes to the front, and goes to the back again before an hour is up. */
+    private fun TestScope.cameToFront(checker: UpdateChecker) {
+        val front = checker.checkWhileInFront()
+        runCurrent()
+        front.cancel()
+    }
 
     private val none = emptyList<AddonUpdate>()
     private val ai = KjbAddons.AI
     private val downloads = KjbAddons.DOWNLOADS
 
     @Test
-    fun `opening KJB checks at most once a day`() = runTest {
+    fun `coming to the front checks at most once an hour`() = runTest {
         val port = FakePort(Fetched.Answer(newer))
         val checker = checker(port)
 
-        checker.checkIfDue(enabled = true)
-        runCurrent()
-        now += HOUR
-        checker.checkIfDue(enabled = true)
-        runCurrent()
+        cameToFront(checker)
+        now += 59 * MINUTE
+        cameToFront(checker)
         assertEquals(1, port.fetches)
 
-        now += DAY
-        checker.checkIfDue(enabled = true)
+        now += MINUTE
+        cameToFront(checker)
+        assertEquals(2, port.fetches)
+    }
+
+    @Test
+    fun `while KJB stays in front it checks again each hour, and stops when it goes`() = runTest {
+        val port = FakePort(Fetched.Answer(older))
+        val checker = checker(port)
+
+        val front = checker.checkWhileInFront()
+        runCurrent()
+        assertEquals(1, port.fetches)
+        advanceTimeBy(HOUR - 1)
+        runCurrent()
+        assertEquals(1, port.fetches)
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(2, port.fetches)
+        advanceTimeBy(HOUR)
+        runCurrent()
+        assertEquals(3, port.fetches)
+
+        front.cancel()
+        advanceTimeBy(3 * HOUR)
+        runCurrent()
+        assertEquals(3, port.fetches)
+    }
+
+    @Test
+    fun `coming to the front after a recent check waits only for the rest of its hour`() = runTest {
+        val port = FakePort(Fetched.Answer(older)).apply { last = now - 40 * MINUTE }
+        val checker = checker(port)
+
+        checker.checkWhileInFront()
+        runCurrent()
+        assertEquals(0, port.fetches)
+        advanceTimeBy(20 * MINUTE - 1)
+        runCurrent()
+        assertEquals(0, port.fetches)
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(1, port.fetches)
+    }
+
+    @Test
+    fun `Check now works at any time, and the check in front waits an hour after it`() = runTest {
+        val port = FakePort(Fetched.Answer(older))
+        val checker = checker(port)
+
+        checker.checkWhileInFront()
+        runCurrent()
+        advanceTimeBy(30 * MINUTE)
+        checker.checkNow()
+        assertEquals(2, port.fetches)
+
+        advanceTimeBy(30 * MINUTE)
+        runCurrent()
+        assertEquals("an hour after the first check, half an hour after Check now", 2, port.fetches)
+        advanceTimeBy(30 * MINUTE)
+        runCurrent()
+        assertEquals(3, port.fetches)
+    }
+
+    @Test
+    fun `a check under way when KJB goes to the back still finishes, and shows what it found`() = runTest {
+        val port = FakePort(Fetched.Answer(newer)).apply { answers = CompletableDeferred() }
+        val checker = checker(port)
+
+        val front = checker.checkWhileInFront()
+        runCurrent()
+        front.cancel()
+        port.answers!!.complete(Unit)
+        runCurrent()
+
+        assertEquals(UpdateState.Checked(newer, addons = none, ask = true), checker.state.value)
+    }
+
+    @Test
+    fun `two ways into the front at once still ask once an hour`() = runTest {
+        val port = FakePort(Fetched.Answer(older))
+        val checker = checker(port)
+
+        checker.checkWhileInFront()
+        checker.checkWhileInFront()
+        runCurrent()
+        assertEquals(1, port.fetches)
+        advanceTimeBy(HOUR)
         runCurrent()
         assertEquals(2, port.fetches)
     }
 
     @Test
-    fun `with the setting off, opening KJB asks nothing`() = runTest {
+    fun `the check in front is quiet, no answer (GitHub's rate limit too) keeps what it last found and the sheet open`() = runTest {
         val port = FakePort(Fetched.Answer(newer))
-        checker(port).checkIfDue(enabled = false)
-        runCurrent()
-        assertEquals(0, port.fetches)
+        val checker = checker(port)
+        val states = mutableListOf<UpdateState>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { checker.state.toList(states) }
+
+        cameToFront(checker)
+        val offered = UpdateState.Checked(newer, addons = none, ask = true)
+        assertEquals(offered, checker.state.value)
+
+        port.answer = Fetched.NoAnswer
+        now += HOUR
+        cameToFront(checker)
+        assertEquals(2, port.fetches)
+        assertEquals(offered, checker.state.value)
+
+        port.answer = Fetched.Answer(newer)
+        now += HOUR
+        cameToFront(checker)
+        assertEquals(3, port.fetches)
+        // Never "Checking" or "Couldn't check" in between: the update sheet would close under the user, even mid-download.
+        assertEquals(listOf(UpdateState.Idle, offered), states)
     }
 
     @Test
-    fun `a check without an answer still counts for the day`() = runTest {
+    fun `a check without an answer still counts for the hour`() = runTest {
         val port = FakePort(Fetched.NoAnswer)
         val checker = checker(port)
 
-        checker.checkIfDue(enabled = true)
-        runCurrent()
-        checker.checkIfDue(enabled = true)
-        runCurrent()
+        cameToFront(checker)
+        cameToFront(checker)
 
         assertEquals(1, port.fetches)
         assertEquals(UpdateState.Failed, checker.state.value)
     }
 
     @Test
-    fun `a newer KJB is offered once, after Not now the daily check keeps quiet and Check now still shows it`() = runTest {
+    fun `a newer KJB is offered once, after Not now the hourly check keeps quiet and Check now still shows it`() = runTest {
         val port = FakePort(Fetched.Answer(newer))
         val checker = checker(port)
 
-        checker.checkIfDue(enabled = true)
-        runCurrent()
+        cameToFront(checker)
         assertEquals(UpdateState.Checked(newer, addons = none, ask = true), checker.state.value)
 
         checker.dismiss()
         runCurrent()
         assertEquals(UpdateState.Checked(newer, addons = none, ask = false), checker.state.value)
-        now += DAY
-        checker.checkIfDue(enabled = true)
-        runCurrent()
+        now += HOUR
+        cameToFront(checker)
+        assertEquals(2, port.fetches)
         assertEquals(UpdateState.Checked(newer, addons = none, ask = false), checker.state.value)
 
         assertEquals(UpdateState.Checked(newer, addons = none, ask = true), checker.checkNow())
@@ -450,54 +567,54 @@ class UpdatesTest {
         val port = FakePort(Fetched.Answer(older)).apply { addons[ai] = "3.0.0" }
         val checker = checker(port, installed = "3.0.1", addonsOffered = offered)
 
-        checker.checkIfDue(enabled = true)
-        runCurrent()
+        cameToFront(checker)
         checker.dismiss()
         runCurrent()
-        now += DAY
-        checker.checkIfDue(enabled = true)
-        runCurrent()
+        now += HOUR
+        cameToFront(checker)
         assertEquals(UpdateState.Checked(null, addons = listOf(AddonUpdate(ai, "3.0.1")), ask = false), checker.state.value)
 
         port.addons[downloads] = "3.0.0"
-        now += DAY
-        checker.checkIfDue(enabled = true)
-        runCurrent()
+        now += HOUR
+        cameToFront(checker)
         assertEquals(UpdateState.Checked(null, addons = offered, ask = true), checker.state.value)
     }
 
     @Test
-    fun `Check now without an answer fails, and counts for the day`() = runTest {
+    fun `Check now without an answer fails, and counts for the hour`() = runTest {
         val port = FakePort(Fetched.NoAnswer)
         val checker = checker(port)
 
         assertEquals(UpdateState.Failed, checker.checkNow())
-        checker.checkIfDue(enabled = true)
-        runCurrent()
+        cameToFront(checker)
 
         assertEquals(1, port.fetches)
     }
 
-    // The setting and the privacy line
+    // No switch, and the privacy line
 
     @Test
-    fun `Check for updates is on by default, and kept in settings_json when switched off`() {
-        assertTrue(Settings().about.checkForUpdates)
-        val off = Settings().copy(about = AboutSettings(checkForUpdates = false))
-        assertEquals(off, SettingsJson.decode(SettingsJson.encode(off)))
-        assertTrue(SettingsJson.decode("{\"version\":4}")!!.about.checkForUpdates)
+    fun `the check has no switch, an old settings_json with it off reads as the defaults and nothing of it is written`() {
+        // 3.1 (user): the check is always on; a switch turned off before is left behind in the file and never read.
+        assertEquals(Settings(), SettingsJson.decode("""{"version":4,"about":{"checkForUpdates":false}}"""))
+        assertFalse("checkForUpdates" in SettingsJson.encode(Settings()))
     }
 
     @Test
-    fun `the privacy line says KJB asks github_com once a day`() {
+    fun `the privacy line says KJB asks github_com every hour, and Settings has Check for updates and no switch`() {
         val strings = File("src/main/res/values/strings.xml").readText()
         val privacy = Regex("""<string name="setup_privacy">(.*?)</string>""").find(strings)!!.groupValues[1]
-        assertTrue(privacy, "github.com once a day" in privacy)
+        assertTrue(privacy, "github.com every hour" in privacy)
+        assertFalse(privacy, "turn that off" in privacy)
+        val system = File("src/main/res/values/strings_system.xml").readText()
+        assertEquals("Check for updates", Regex("""<string name="set_updates_now">(.*?)</string>""").find(system)!!.groupValues[1])
+        assertFalse("name=\"set_updates_detail\"" in system)
     }
 
     private companion object {
         const val REPO: String = "Mostafa-DE/KJB"
-        const val HOUR: Long = 60 * 60_000L
+        const val MINUTE: Long = 60_000L
+        const val HOUR: Long = 60 * MINUTE
         const val DAY: Long = 24 * HOUR
     }
 }

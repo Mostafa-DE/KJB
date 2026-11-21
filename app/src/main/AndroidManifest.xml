@@ -4,8 +4,9 @@
 
     <!-- LRCLIB lookups carry artist, title, album and duration only. Covers & tags asks musicbrainz.org with album
          titles, artists, song titles, track counts and lengths, and gets covers from coverartarchive.org and the
-         archive.org servers it redirects to. The update check asks api.github.com once a day for KJB's latest release
-         (Settings > About > Check for updates, on by default), and Install downloads its APK from github.com. -->
+         archive.org servers it redirects to. The update check asks api.github.com for KJB's latest release every hour
+         while KJB is in front, and at once from Settings > About > Check for updates; Install downloads its APK from
+         github.com. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
     <!-- All files access: find songs in MediaStore and create .lrc files next to them in any
