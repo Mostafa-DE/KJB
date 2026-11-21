@@ -261,8 +261,8 @@ data class AboutSettings(
 enum class NotificationButtons { FAVOURITE, SHUFFLE_REPEAT }
 
 /**
- * Where the app reopens, and what the first run and its asks have shown. Library's own tab is not kept here: it opens on
- * [LibrarySettings.opensOn].
+ * Where the app reopens, how Settings' sections were left, and what the first run and its asks have shown. Library's own
+ * tab is not kept here: it opens on [LibrarySettings.opensOn].
  */
 data class NavSettings(
     /** The dock tab last open. */
@@ -280,7 +280,18 @@ data class NavSettings(
     val notificationsDenied: Boolean = false,
     /** How often a request for notifications came back no: the second no is for good. */
     val notificationDenials: Int = 0,
-)
+    /** Settings' sections the user opened (true) or closed (false) by tapping their titles; the others are as at first. */
+    val settingsSections: Map<SettingsSection, Boolean> = emptyMap(),
+) {
+    /** Whether Settings shows [section]'s rows: as the user left it, else as [SettingsSection.openAtFirst] says. */
+    fun opens(section: SettingsSection): Boolean = settingsSections[section] ?: section.openAtFirst
+}
+
+/**
+ * Settings' sections, in the screen's order, each opened and closed by its title. Lyrics, AI, Downloads and Backup start
+ * closed, the others open (user, 2026-11-21); Advanced, under About, is a row of its own that always starts closed.
+ */
+enum class SettingsSection(val openAtFirst: Boolean) { PLAYBACK(true), LIBRARY(true), DISPLAY(true), LYRICS(false), AI(false), DOWNLOADS(false), BACKUP(false), ABOUT(true) }
 
 /**
  * What the bottom bar (the dock) can hold, each with its own page stack: Library, Playlists, Search and Tools by default,
@@ -341,7 +352,8 @@ enum class FavouritesTab { SONGS, ALBUMS, ARTISTS, FOLDERS, PLAYLISTS }
  * pages' orders, the hidden songs and Display came later as new keys (features 2026-11-15), and "Artists with several
  * names" (3.1): a file without them reads as the defaults, a page order this version cannot use as that page's default.
  * The bottom bar, its style, Hide while scrolling and the tab Library opens on came in 3.1 as new keys too: a file
- * without them reads today's bar, Standard, never hiding, and Library on the first tab in its order.
+ * without them reads today's bar, Standard, never hiding, and Library on the first tab in its order. So did Settings'
+ * open and closed sections, after 3.1.0: a file without them reads each section as at first.
  */
 object SettingsJson {
     const val VERSION: Int = 4
@@ -416,6 +428,7 @@ object SettingsJson {
                         "tourSeen" to it.tourSeen,
                         "notificationsDenied" to it.notificationsDenied,
                         "notificationDenials" to it.notificationDenials,
+                        "settingsSections" to JsonObject(it.settingsSections.entries.associate { (section, open) -> section.name to JsonPrimitive(open) }),
                     )
                 },
                 "display" to settings.display.let {
@@ -516,6 +529,7 @@ object SettingsJson {
                     tourSeen = it.flag("tourSeen", d.nav.tourSeen),
                     notificationsDenied = it.flag("notificationsDenied", d.nav.notificationsDenied),
                     notificationDenials = it.number("notificationDenials", d.nav.notificationDenials) { count -> count >= 0 },
+                    settingsSections = (it["settingsSections"] as? JsonObject)?.let(::settingsSections) ?: d.nav.settingsSections,
                 )
             } ?: d.nav,
             display = root.section("display")?.let {
@@ -544,6 +558,12 @@ object SettingsJson {
             OWN_ORDER -> ListSort.OWN.takeIf { list.own } ?: return@mapNotNull null
             else -> ListSort(SortSongs.entries.firstOrNull { it.name == key } ?: return@mapNotNull null, sort.flag("reversed", false))
         }
+    }.toMap()
+
+    /** Settings' sections as the user left them: a section this version does not know, or a choice not true or false, is left out. */
+    private fun settingsSections(stored: JsonObject): Map<SettingsSection, Boolean> = stored.entries.mapNotNull { (name, open) ->
+        val section = SettingsSection.entries.firstOrNull { it.name == name } ?: return@mapNotNull null
+        section to ((open as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull ?: return@mapNotNull null)
     }.toMap()
 
     /**

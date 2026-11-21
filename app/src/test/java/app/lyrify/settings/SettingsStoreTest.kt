@@ -86,7 +86,11 @@ class SettingsStoreTest {
             levellingBoostDb = -4,
             keepAlbumsGapless = false,
         ),
-        nav = NavSettings(lastTab = DockTab.PLAYLISTS, favouritesTab = FavouritesTab.ARTISTS),
+        nav = NavSettings(
+            lastTab = DockTab.PLAYLISTS,
+            favouritesTab = FavouritesTab.ARTISTS,
+            settingsSections = mapOf(SettingsSection.LYRICS to true, SettingsSection.PLAYBACK to false),
+        ),
         display = DisplaySettings(
             theme = ThemeChoice.DARK,
             pureBlack = true,
@@ -547,5 +551,48 @@ class SettingsStoreTest {
         val phone = Settings(library = LibrarySettings(opensOn = LibraryTab.FOLDERS))
         assertEquals(LibraryTab.FOLDERS, opensOn("{}", phone))
         assertNull(opensOn("""{"opensOn":null}""", phone))
+    }
+
+    // Settings' sections
+
+    @Test
+    fun `Settings' sections start with Lyrics, AI, Downloads and Backup closed and the others open`() {
+        val nav = Settings().nav
+        // In the screen's order (user, 2026-11-21).
+        assertEquals(
+            listOf(
+                SettingsSection.PLAYBACK,
+                SettingsSection.LIBRARY,
+                SettingsSection.DISPLAY,
+                SettingsSection.LYRICS,
+                SettingsSection.AI,
+                SettingsSection.DOWNLOADS,
+                SettingsSection.BACKUP,
+                SettingsSection.ABOUT,
+            ),
+            SettingsSection.entries,
+        )
+        assertEquals(emptyMap<SettingsSection, Boolean>(), nav.settingsSections)
+        assertEquals(listOf(SettingsSection.PLAYBACK, SettingsSection.LIBRARY, SettingsSection.DISPLAY, SettingsSection.ABOUT), SettingsSection.entries.filter(nav::opens))
+    }
+
+    @Test
+    fun `a section the user opened or closed stays so, and the others are as at first`() {
+        val nav = NavSettings(settingsSections = mapOf(SettingsSection.LYRICS to true, SettingsSection.PLAYBACK to false))
+        assertEquals(listOf(SettingsSection.LIBRARY, SettingsSection.DISPLAY, SettingsSection.LYRICS, SettingsSection.ABOUT), SettingsSection.entries.filter(nav::opens))
+    }
+
+    @Test
+    fun `the sections' choices read back, and one this version does not know, or not true or false, is left out`() {
+        fun sections(json: String, base: Settings = Settings()) = SettingsJson.decode("""{"nav":{"settingsSections":$json}}""", base)?.nav?.settingsSections
+        assertEquals(
+            mapOf(SettingsSection.LYRICS to true, SettingsSection.PLAYBACK to false),
+            sections("""{"LYRICS":true,"PODCASTS":true,"AI":"yes","BACKUP":1,"DOWNLOADS":null,"PLAYBACK":false}"""),
+        )
+        // A file without them reads every section as at first; a backup without them, or with them not an object, keeps the phone's.
+        assertEquals(emptyMap<SettingsSection, Boolean>(), SettingsJson.decode("""{"version":4,"nav":{"lastTab":"TOOLS"}}""")?.nav?.settingsSections)
+        val phone = Settings(nav = NavSettings(settingsSections = mapOf(SettingsSection.AI to true)))
+        assertEquals(phone.nav.settingsSections, SettingsJson.decode("""{"nav":{"lastTab":"TOOLS"}}""", phone)?.nav?.settingsSections)
+        assertEquals(phone.nav.settingsSections, sections("[]", phone))
     }
 }

@@ -26,6 +26,7 @@ import app.lyrify.data.LyricsStatus
 import app.lyrify.library.SongRef
 import app.lyrify.settings.DockTab
 import app.lyrify.settings.LibraryTab
+import app.lyrify.settings.SettingsSection
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -144,8 +145,9 @@ sealed interface Page {
     @Serializable @SerialName("tagHistory")
     data object TagHistory : Page
 
+    /** Settings; a link into one of its sections opens it there and starts at it (Library's Can't read your songs, Lyrics). */
     @Serializable @SerialName("settings")
-    data object Settings : Page
+    data class Settings(val section: SettingsSection? = null) : Page
 
     /** Settings > Library tabs. */
     @Serializable @SerialName("libraryTabs")
@@ -291,6 +293,8 @@ data class NavState(
         val stack = moved.stacks[home].orEmpty()
         val top = stack.lastOrNull()
         return when {
+            // One Settings at a time: Settings asked for at a section (or from the top) takes the place of the one on top.
+            top?.page is Page.Settings && page is Page.Settings && top.page != page -> moved.copy(stacks = stacks + (home to stack.dropLast(1) + StackEntry(page, origin)))
             top?.page != page -> moved.copy(stacks = stacks + (home to stack + StackEntry(page, origin)))
             origin == null -> moved
             else -> moved.copy(stacks = stacks + (home to stack.dropLast(1) + top.copy(origin = origin)))
@@ -482,7 +486,7 @@ fun homeOf(page: Page, from: DockTab, viewOpen: Boolean, docked: List<DockTab> =
         is Page.CollectionPages -> own ?: here?.takeIf { it == DockTab.SEARCH || it == DockTab.PLAYLISTS } ?: DockTab.LIBRARY
         is Page.SearchAll -> DockTab.SEARCH
         is Page.Songs -> DockTab.LIBRARY
-        is Page.Check, Page.Duplicates, Page.Trash, Page.Tones, Page.Ai, Page.Downloads, Page.CoversTags, Page.TagHistory, Page.Settings, Page.LibraryTabs, Page.FoldersToSkip, Page.HiddenSongs, Page.SplitArtists,
+        is Page.Check, Page.Duplicates, Page.Trash, Page.Tones, Page.Ai, Page.Downloads, Page.CoversTags, Page.TagHistory, is Page.Settings, Page.LibraryTabs, Page.FoldersToSkip, Page.HiddenSongs, Page.SplitArtists,
         Page.Licences, is Page.Licence, Page.BottomBar -> DockTab.TOOLS
     }
     return if (home == DockTab.PLAYLISTS && DockTab.PLAYLISTS !in docked) here?.takeUnless { it == DockTab.TOOLS } ?: DockTab.LIBRARY else home
@@ -491,6 +495,10 @@ fun homeOf(page: Page, from: DockTab, viewOpen: Boolean, docked: List<DockTab> =
 private val JSON = Json { ignoreUnknownKeys = true }
 
 // In the composition
+
+/** The page last asked for ([Navigator.open]), and how many were asked for before it in this activity. */
+@Immutable
+data class PageOpened(val page: Page?, val count: Int)
 
 /** The shell's [NavState], one per activity; pages move around through it ([LocalNavigator]). Main thread only. */
 @Stable
@@ -516,8 +524,17 @@ class Navigator(initial: NavState) {
     var docked: List<DockTab> = DOCK_TABS
         private set
 
+    /**
+     * The last page asked for, a new value at each ask. A page asked for while it is on top already stays as it is (Settings
+     * at Lyrics, from Library's link a second time), so it reads this to do what the ask means again. Not kept when the
+     * activity is made again.
+     */
+    var opened: PageOpened by mutableStateOf(PageOpened(null, 0))
+        private set
+
     fun open(page: Page, sheet: SheetReturn? = null) {
         state = state.open(page, sheet, docked)
+        opened = PageOpened(page, opened.count + 1)
     }
 
     fun show(view: FullScreen) {

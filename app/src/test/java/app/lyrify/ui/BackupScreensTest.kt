@@ -18,7 +18,7 @@ class BackupScreensTest {
         val screens = File("src/main/java/app/lyrify/ui/BackupScreens.kt").readText()
 
         listOf(
-            "section(R.string.settings_backup)",
+            "section(SettingsSection.BACKUP, sections)",
             "R.string.set_backup_now, first = true, onClick = backup.backUpNow",
             "R.string.set_restore, onClick = backup.restore",
             "R.string.set_auto_backup, stringResource(R.string.set_auto_backup_detail), settings.backup.automatic, onSwitch = backup.setAutomatic",

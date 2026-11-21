@@ -6,7 +6,11 @@ import android.text.format.Formatter
 import androidx.activity.compose.BackHandler
 import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -20,6 +24,8 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
@@ -30,6 +36,8 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -39,13 +47,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.collapse
+import androidx.compose.ui.semantics.expand
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -61,6 +73,7 @@ import app.lyrify.settings.NotificationButtons
 import app.lyrify.settings.PlaybackSettings
 import app.lyrify.settings.RememberPlace
 import app.lyrify.settings.Settings
+import app.lyrify.settings.SettingsSection
 import app.lyrify.settings.ThemeChoice
 import app.lyrify.update.Updates
 
@@ -79,12 +92,13 @@ data class Grants(
 )
 
 /** The sheet open over Settings. */
-private enum class SettingsSheet { REMEMBER, PLAY_SHARE, SKIPS, LEVELLING, CROSSFADE, ANDROID_AUTO, NOTIFICATION_BUTTONS, BOOST, START_WHEN_CONNECTED, THEME, CRASHES }
+private enum class SettingsSheet { REMEMBER, PLAY_SHARE, SKIPS, LEVELLING, CROSSFADE, NOTIFICATION_BUTTONS, BOOST, START_WHEN_CONNECTED, THEME, CRASHES }
 
 /**
- * Tools > Settings: every option of 3.0 in its section (Playback, Library, Display, Lyrics, AI, Backup, About), engine detail
- * under a collapsed Advanced. Each row stores its value in [settings] through [onChange], also for features still to
- * come; the grants open the phone's own switches; AI lyrics keeps its own switch ([ai], [aiActions]).
+ * Tools > Settings: every option in its section (Playback, Library, Display, Lyrics, AI, Downloads, Backup, About), each
+ * opened and closed by its title ([SettingsSection]), engine detail under a collapsed Advanced. Each row stores its value
+ * in [settings] through [onChange], also for features still to come; the grants open the phone's own switches; AI lyrics
+ * keeps its own switch ([ai], [aiActions]). A link into a [section] opens it and starts there.
  */
 @Composable
 fun SettingsScreen(
@@ -96,11 +110,28 @@ fun SettingsScreen(
     backup: BackupActions,
     versionName: String,
     onOpen: (Page) -> Unit,
+    section: SettingsSection? = null,
     onBack: () -> Unit,
 ) {
     BackHandler(onBack = onBack)
     var sheet by rememberSaveable { mutableStateOf<SettingsSheet?>(null) }
     var advanced by rememberSaveable { mutableStateOf(false) }
+    // A tap on a title shows at once, and the stored choice follows; the section a link names opens on this visit only.
+    var shownHere by rememberSaveable { mutableStateOf(section?.let { mapOf(it to true) }.orEmpty()) }
+    val sections = SettingsSections({ shownHere[it] ?: settings.nav.opens(it) }) { tapped, open ->
+        shownHere = shownHere + (tapped to open)
+        onChange { it.copy(nav = it.nav.copy(settingsSections = it.nav.settingsSections + (tapped to open))) }
+    }
+    // Each section is one item, in SettingsSection's order: a link starts at its section.
+    val list = rememberLazyListState(initialFirstVisibleItemIndex = section?.ordinal ?: 0)
+    // The link again while this page is on top: its section opens again (the user may have closed it) and the list goes there.
+    val opened = LocalNavigator.current.opened
+    LaunchedEffect(opened) {
+        if (section != null && opened.page == Page.Settings(section)) {
+            shownHere = shownHere + (section to true)
+            list.scrollToItem(section.ordinal)
+        }
+    }
     val playback = settings.playback
     val library = settings.library
     val context = LocalContext.current
@@ -124,9 +155,8 @@ fun SettingsScreen(
         // Messages dock at the bottom, above the gesture area.
         bottomBar = { ToastSlot(Modifier.navigationBarsPadding().padding(horizontal = ScreenPadding), padding = PaddingValues(bottom = 12.dp)) },
     ) { padding ->
-        val reduced = LocalReducedMotion.current
-        LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = padding.calculateBottomPadding() + 24.dp)) {
-            section(R.string.settings_playback, first = true) {
+        LazyColumn(state = list, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(top = padding.calculateTopPadding(), bottom = padding.calculateBottomPadding() + 24.dp)) {
+            section(SettingsSection.PLAYBACK, sections, first = true) {
                 ValueRow(R.drawable.ic_resume, R.string.set_remember, stringResource(playback.rememberPlace.label), first = true) { sheet = SettingsSheet.REMEMBER }
                 SwitchRow(R.drawable.ic_headphones, R.string.set_headset, stringResource(R.string.set_headset_detail), playback.headsetButtons) { on -> setPlayback { it.copy(headsetButtons = on) } }
                 if (connect) {
@@ -140,7 +170,7 @@ fun SettingsScreen(
                 ValueRow(R.drawable.ic_volume_up, R.string.set_levelling, stringResource(settings.audio.levelling.label)) { sheet = SettingsSheet.LEVELLING }
                 ValueRow(R.drawable.ic_swap_horiz, R.string.set_crossfade, crossfadeText(settings.audio.crossfadeSeconds)) { sheet = SettingsSheet.CROSSFADE }
             }
-            section(R.string.settings_library) {
+            section(SettingsSection.LIBRARY, sections) {
                 val shown = library.tabs.count { it.shown }
                 ValueRow(R.drawable.ic_tab, R.string.set_tabs, pluralStringResource(R.plurals.set_tabs_value, shown, shown), first = true) { onOpen(Page.LibraryTabs) }
                 val skipped = library.foldersToSkip.size
@@ -156,7 +186,7 @@ fun SettingsScreen(
                     onChange { it.copy(library = it.library.copy(showFileNames = on)) }
                 }
             }
-            section(R.string.settings_display) {
+            section(SettingsSection.DISPLAY, sections) {
                 val display = settings.display
                 ValueRow(R.drawable.ic_dark_mode, R.string.set_theme, stringResource(display.theme.label), first = true) { sheet = SettingsSheet.THEME }
                 // Pure black darkens a dark theme only: with Light chosen it waits, switched off.
@@ -172,14 +202,14 @@ fun SettingsScreen(
                 val icons = LocalDockBar.current.items.size
                 ValueRow(R.drawable.ic_smartphone, R.string.set_bar, pluralStringResource(R.plurals.set_bar_value, icons, stringResource(display.dockStyle.label), icons)) { onOpen(Page.BottomBar) }
             }
-            section(R.string.settings_lyrics) {
+            section(SettingsSection.LYRICS, sections) {
                 GrantRow(R.drawable.ic_notifications, R.string.setup_notifications_title, R.string.set_notifications_detail, grants.access.notifications, R.string.setup_done, R.string.settings_turn_on, grants.onOpenNotificationAccess, first = true)
                 GrantRow(R.drawable.ic_folder_open, R.string.setup_files_title, R.string.settings_files, grants.access.allFiles, R.string.setup_done, R.string.settings_turn_on, grants.onOpenAllFilesAccess)
                 GrantRow(R.drawable.ic_battery_full, R.string.setup_battery_title, R.string.settings_battery, grants.unrestricted, R.string.settings_unrestricted, R.string.open_app_info, grants.onOpenAppInfo)
                 val locked = settings.lyrics.showWhenLocked
                 SwitchRow(R.drawable.ic_lock, R.string.set_lock, stringResource(if (locked) R.string.set_lock_on else R.string.set_lock_off), locked, onSwitch = showWhenLocked)
             }
-            section(R.string.settings_ai) {
+            section(SettingsSection.AI, sections) {
                 SwitchRow(
                     R.drawable.ic_auto_awesome,
                     R.string.set_ai,
@@ -191,14 +221,14 @@ fun SettingsScreen(
                 )
                 if (ai.supported) ValueRow(R.drawable.ic_download, R.string.set_ai_download, aiDownloadText(ai.models)) { onOpen(Page.Ai) }
             }
-            downloadsSettings()
-            section(R.string.settings_backup) {
+            downloadsSettings(sections)
+            section(SettingsSection.BACKUP, sections) {
                 ActionRow(R.drawable.ic_backup, R.string.set_backup_now, first = true, onClick = backup.backUpNow)
                 ActionRow(R.drawable.ic_settings_backup_restore, R.string.set_restore, onClick = backup.restore)
                 ValueRow(R.drawable.ic_download, R.string.import_row, stringResource(R.string.import_row_detail), onClick = backup.importFromApp)
                 SwitchRow(R.drawable.ic_schedule, R.string.set_auto_backup, stringResource(R.string.set_auto_backup_detail), settings.backup.automatic, onSwitch = backup.setAutomatic)
             }
-            section(R.string.settings_about) {
+            section(SettingsSection.ABOUT, sections) {
                 // Show tour: Settings closes and the tour starts from its first step; setup and the grants stay as they are.
                 if (tour != null) {
                     val brand = LocalBrandColors.current
@@ -224,12 +254,11 @@ fun SettingsScreen(
                 }
                 ValueRow(R.drawable.ic_refresh, R.string.set_updates_now, updateLine(updates), onClick = checkNow)
                 ValueRow(R.drawable.ic_error, R.string.set_crashes, crashLine(sheet)) { sheet = SettingsSheet.CRASHES }
-                ActionRow(R.drawable.ic_lyrics, stringResource(R.string.settings_source))
-                ActionRow(R.drawable.ic_directions_car, stringResource(R.string.set_auto)) { sheet = SettingsSheet.ANDROID_AUTO }
                 ActionRow(R.drawable.ic_description, R.string.set_licences) { onOpen(Page.Licences) }
             }
             item(key = "advanced", contentType = "advanced") {
-                GroupedRows(rowMotion(reduced).padding(top = 16.dp)) {
+                // No motion of its own: it follows a section above as that opens or closes.
+                GroupedRows(Modifier.padding(top = 16.dp)) {
                     GroupedRow(
                         R.drawable.ic_tune,
                         stringResource(R.string.settings_advanced),
@@ -289,7 +318,6 @@ fun SettingsScreen(
         SettingsSheet.THEME -> ChoiceSheet(R.string.set_theme, R.string.set_theme_sheet, ThemeChoice.entries, settings.display.theme, { it.label }, { it.detail }, close) { choice ->
             onChange { it.copy(display = it.display.copy(theme = choice)) }
         }
-        SettingsSheet.ANDROID_AUTO -> HelpSheet(stringResource(R.string.set_auto), stringResource(R.string.set_auto_sheet), onDismiss = close)
         SettingsSheet.START_WHEN_CONNECTED -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) StartWhenConnectedSheet(playback.connectDevices, close)
         SettingsSheet.CRASHES -> CrashReportsSheet(close)
         null -> Unit
@@ -384,15 +412,61 @@ fun LibraryTabsScreen(settings: Settings, onChange: ((Settings) -> Settings) -> 
 
 // Rows
 
-/** A section's title and its rows on one card. */
-private fun androidx.compose.foundation.lazy.LazyListScope.section(@StringRes title: Int, first: Boolean = false, rows: @Composable () -> Unit) {
-    item(key = title, contentType = "section") {
-        Column(rowMotion(LocalReducedMotion.current)) {
-            SectionTitle(stringResource(title), Modifier.padding(start = ScreenPadding + 4.dp, end = ScreenPadding, top = if (first) 4.dp else 18.dp, bottom = 8.dp))
-            GroupedRows { rows() }
-        }
+/** A section of Settings ([SettingsSectionCard]): its title, and its rows on one card. */
+private fun LazyListScope.section(section: SettingsSection, sections: SettingsSections, first: Boolean = false, rows: @Composable () -> Unit) {
+    item(key = section.name, contentType = "section") {
+        SettingsSectionCard(section, sections, first) { GroupedRows { rows() } }
     }
 }
+
+/** Settings' sections on this visit: whether each shows its rows ([open]), and [toggle] for a tap on its title. */
+@Stable
+internal class SettingsSections(val open: (SettingsSection) -> Boolean, private val onToggle: (section: SettingsSection, open: Boolean) -> Unit) {
+    /** Shows [section]'s rows when they are hidden, else hides them. */
+    fun toggle(section: SettingsSection) = onToggle(section, !open(section))
+}
+
+/**
+ * A section of Settings: its title, which shows or hides [rows] when tapped, its chevron turned up while they show. One
+ * TalkBack stop, a heading that says Expanded or Collapsed, with Expand or Collapse as its action. The rows grow in and
+ * out, or only fade with reduced motion. The list gives its items no motion of their own, so those below follow the card
+ * as it grows instead of easing after it.
+ */
+@Composable
+internal fun SettingsSectionCard(section: SettingsSection, sections: SettingsSections, first: Boolean = false, rows: @Composable () -> Unit) {
+    val open = sections.open(section)
+    val reduced = LocalReducedMotion.current
+    val colors = MaterialTheme.colorScheme
+    val turn by animateFloatAsState(if (open) 180f else 0f, motion(tween(Motion.SETTLE_MS, easing = Motion.Standard), reduced), label = "section chevron")
+    val state = stringResource(if (open) R.string.set_section_expanded else R.string.set_section_collapsed)
+    val action = stringResource(if (open) R.string.set_section_collapse else R.string.set_section_expand)
+    val toggle = { sections.toggle(section) }
+    Column {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .padding(start = ScreenPadding, end = ScreenPadding, top = if (first) 0.dp else 6.dp)
+                .fillMaxWidth()
+                .heightIn(min = 48.dp)
+                .clip(SectionTitleShape)
+                .clickable(onClickLabel = action, role = Role.Button, onClick = toggle)
+                .semantics {
+                    heading()
+                    stateDescription = state
+                    if (open) collapse(action) { toggle(); true } else expand(action) { toggle(); true }
+                }
+                // The title nearer its card than the one above, as a section's title sat before; the chevron in line
+                // with the rows' own.
+                .padding(start = 4.dp, end = 16.dp, top = 10.dp, bottom = 4.dp),
+        ) {
+            Text(stringResource(section.title), style = SectionLabel, color = colors.onSurfaceVariant, modifier = Modifier.weight(1f))
+            Icon(painterResource(R.drawable.ic_expand_more), contentDescription = null, tint = colors.onSurfaceVariant, modifier = Modifier.size(20.dp).graphicsLayer { rotationZ = turn })
+        }
+        AnimatedVisibility(open, enter = expandIn(reduced), exit = shrinkOut(reduced)) { rows() }
+    }
+}
+
+private val SectionTitleShape = RoundedCornerShape(12.dp)
 
 @Composable
 private fun neutralTile(): Pair<Color, Color> = MaterialTheme.colorScheme.let { it.surfaceContainerHighest to it.onSurfaceVariant }
@@ -437,15 +511,12 @@ internal fun SwitchRow(
     )
 }
 
-/** A row that does one thing when tapped, or with no [onClick] only says something (the version). */
+/** A row that does one thing when tapped. */
 @Composable
-private fun ActionRow(@DrawableRes icon: Int, text: String, first: Boolean = false, onClick: (() -> Unit)? = null) {
+private fun ActionRow(@DrawableRes icon: Int, @StringRes text: Int, first: Boolean = false, onClick: () -> Unit) {
     val (tile, onTile) = neutralTile()
-    GroupedRow(icon, text, tile = tile, onTile = onTile, first = first, onClick = onClick)
+    GroupedRow(icon, stringResource(text), tile = tile, onTile = onTile, first = first, onClick = onClick)
 }
-
-@Composable
-private fun ActionRow(@DrawableRes icon: Int, @StringRes text: Int, first: Boolean = false, onClick: () -> Unit) = ActionRow(icon, stringResource(text), first, onClick)
 
 /** A grant: its icon, title and setting, then [onLabel] with a check while it is on, else a button that opens it. */
 @Composable
@@ -560,6 +631,19 @@ internal fun ChoiceRow(label: String, detail: String, selected: Boolean, onClick
 }
 
 // Values as words
+
+@get:StringRes
+private val SettingsSection.title: Int
+    get() = when (this) {
+        SettingsSection.PLAYBACK -> R.string.settings_playback
+        SettingsSection.LIBRARY -> R.string.settings_library
+        SettingsSection.DISPLAY -> R.string.settings_display
+        SettingsSection.LYRICS -> R.string.settings_lyrics
+        SettingsSection.AI -> R.string.settings_ai
+        SettingsSection.DOWNLOADS -> R.string.settings_downloads
+        SettingsSection.BACKUP -> R.string.settings_backup
+        SettingsSection.ABOUT -> R.string.settings_about
+    }
 
 @get:StringRes
 private val ThemeChoice.label: Int

@@ -169,8 +169,6 @@ Android Auto shows apps from outside an app store only once you allow it:
 5. Connect to your car again. KJB shows your recent queues, playlists, albums and artists, and takes voice requests
    ("Play ... on KJB").
 
-KJB's Settings > About > Using Android Auto gives the same steps.
-
 ## Build
 
 Requirements:

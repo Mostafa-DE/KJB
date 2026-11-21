@@ -442,7 +442,7 @@ class StartWhenConnectedTest {
     fun `Settings has the row under Playback and opens the sheet`() {
         val screen = File("src/main/java/app/lyrify/ui/SettingsScreen.kt").readText()
         listOf("R.string.set_autostart", "StartWhenConnected.supported(", "StartWhenConnectedSheet(").forEach { assertTrue(it, screen.contains(it)) }
-        assertTrue(screen.indexOf("R.string.set_autostart") in screen.indexOf("R.string.settings_playback")..screen.indexOf("R.string.settings_library"))
+        assertTrue(screen.indexOf("R.string.set_autostart") in screen.indexOf("section(SettingsSection.PLAYBACK")..screen.indexOf("section(SettingsSection.LIBRARY"))
     }
 
     // Where the row shows
