@@ -293,6 +293,8 @@ data class NavState(
         val stack = moved.stacks[home].orEmpty()
         val top = stack.lastOrNull()
         return when {
+            // One Settings at a time: Settings asked for at a section (or from the top) takes the place of the one on top.
+            top?.page is Page.Settings && page is Page.Settings && top.page != page -> moved.copy(stacks = stacks + (home to stack.dropLast(1) + StackEntry(page, origin)))
             top?.page != page -> moved.copy(stacks = stacks + (home to stack + StackEntry(page, origin)))
             origin == null -> moved
             else -> moved.copy(stacks = stacks + (home to stack.dropLast(1) + top.copy(origin = origin)))
@@ -494,6 +496,7 @@ private val JSON = Json { ignoreUnknownKeys = true }
 
 // In the composition
 
+/** The page last asked for ([Navigator.open]), and how many were asked for before it in this activity. */
 @Immutable
 data class PageOpened(val page: Page?, val count: Int)
 
@@ -521,10 +524,17 @@ class Navigator(initial: NavState) {
     var docked: List<DockTab> = DOCK_TABS
         private set
 
-    val opened: PageOpened = PageOpened(null, 0)
+    /**
+     * The last page asked for, a new value at each ask. A page asked for while it is on top already stays as it is (Settings
+     * at Lyrics, from Library's link a second time), so it reads this to do what the ask means again. Not kept when the
+     * activity is made again.
+     */
+    var opened: PageOpened by mutableStateOf(PageOpened(null, 0))
+        private set
 
     fun open(page: Page, sheet: SheetReturn? = null) {
         state = state.open(page, sheet, docked)
+        opened = PageOpened(page, opened.count + 1)
     }
 
     fun show(view: FullScreen) {

@@ -520,20 +520,24 @@ private fun openSaved(context: Context, item: DownloadItem, path: String) {
  * and their questions to the add-on, are there only while the section is open.
  */
 internal fun LazyListScope.downloadsSettings(sections: SettingsSections) {
-    item(key = SettingsSection.DOWNLOADS.name, contentType = "section") { SettingsSectionCard(SettingsSection.DOWNLOADS, sections) { DownloadsSettings() } }
+    item(key = SettingsSection.DOWNLOADS.name, contentType = "section") {
+        // yt-dlp's update beside the section, not in its rows: closing the section leaves it running, its message to come,
+        // and opening it again starts no second one meanwhile.
+        val scope = rememberCoroutineScope()
+        var updating by remember { mutableStateOf(false) }
+        SettingsSectionCard(SettingsSection.DOWNLOADS, sections) { DownloadsSettings(scope, updating) { updating = it } }
+    }
 }
 
 private enum class DownloadsSheet { QUALITY, AUDIO_FOLDER, VIDEO_FOLDER }
 
 @Composable
-private fun DownloadsSettings() {
+private fun DownloadsSettings(scope: CoroutineScope, updating: Boolean, onUpdating: (Boolean) -> Unit) {
     val context = LocalContext.current
     val resources = LocalResources.current
     val toasts = LocalToasts.current
-    val scope = rememberCoroutineScope()
     val ui by Downloads.state.collectAsStateWithLifecycle()
     var sheet by remember { mutableStateOf<DownloadsSheet?>(null) }
-    var updating by remember { mutableStateOf(false) }
     val version by produceState<String?>(null, updating) { value = withContext(Dispatchers.IO) { DlAddon.withPort(context) { it.status()?.ytdlpVersion } } }
     // Locked phone, while the add-on is ready: left out of the phone's battery optimisation or not (AD9).
     val addon by remember(context) { DlAddon.states(context) }.collectAsStateWithLifecycle(initialValue = null)
@@ -556,10 +560,10 @@ private fun DownloadsSettings() {
         val update = version?.let { stringResource(R.string.set_dl_update_value, it) } ?: stringResource(R.string.set_dl_update_none)
         SettingValueRow(R.drawable.ic_system_update, R.string.set_dl_update, update) {
             if (!updating) {
-                updating = true
+                onUpdating(true)
                 scope.launch {
                     val outcome = withContext(Dispatchers.IO) { DlAddon.withPort(context) { it.update() } }
-                    updating = false
+                    onUpdating(false)
                     toasts.say(resources, updateMessage(outcome))
                 }
             }

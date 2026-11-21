@@ -36,6 +36,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -123,6 +124,14 @@ fun SettingsScreen(
     }
     // Each section is one item, in SettingsSection's order: a link starts at its section.
     val list = rememberLazyListState(initialFirstVisibleItemIndex = section?.ordinal ?: 0)
+    // The link again while this page is on top: its section opens again (the user may have closed it) and the list goes there.
+    val opened = LocalNavigator.current.opened
+    LaunchedEffect(opened) {
+        if (section != null && opened.page == Page.Settings(section)) {
+            shownHere = shownHere + (section to true)
+            list.scrollToItem(section.ordinal)
+        }
+    }
     val playback = settings.playback
     val library = settings.library
     val context = LocalContext.current
