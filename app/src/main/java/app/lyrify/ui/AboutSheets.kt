@@ -62,7 +62,7 @@ fun UpdateHost() {
 /**
  * "KJB <ver> is out": the version on the phone, the release notes and Install, which downloads, checks and installs the
  * update (its progress, the phone's install switch, Android's dialog, or why it failed); and each add-on's update (the AI,
- * Downloads) when this KJB brings a newer one. Not now, or putting the sheet away, keeps it for the next Check now.
+ * Downloads) when this KJB brings a newer one. Not now, or putting the sheet away, keeps it for Check for updates.
  */
 @Composable
 private fun UpdateSheet(checked: UpdateState.Checked, onDismiss: () -> Unit) {
@@ -178,7 +178,7 @@ private fun InstallButtons(
     }
 }
 
-/** Settings > About > Check now's line: where the update check stands. */
+/** Settings > About > Check for updates' line: where the update check stands. */
 @Composable
 fun updateLine(state: UpdateState): String = when (state) {
     UpdateState.Idle -> stringResource(R.string.update_line_idle)
@@ -191,7 +191,7 @@ fun updateLine(state: UpdateState): String = when (state) {
     }
 }
 
-/** Check now: asks GitHub at once; an offer shows in the update sheet, else a toast says KJB is up to date, or no answer came. */
+/** Check for updates: asks GitHub at once; an offer shows in the update sheet, else a toast says KJB is up to date, or no answer came. */
 @Composable
 fun rememberCheckNow(): () -> Unit {
     val context = LocalContext.current

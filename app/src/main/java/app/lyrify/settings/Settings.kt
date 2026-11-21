@@ -32,7 +32,6 @@ data class Settings(
     val advanced: AdvancedSettings = AdvancedSettings(),
     val nav: NavSettings = NavSettings(),
     val display: DisplaySettings = DisplaySettings(),
-    val about: AboutSettings = AboutSettings(),
 )
 
 /** Settings > Playback. */
@@ -251,12 +250,6 @@ data class AdvancedSettings(
     }
 }
 
-/** Settings > About. */
-data class AboutSettings(
-    /** "Check for updates": once a day when KJB opens, one request to KJB's latest release on github.com (update/). */
-    val checkForUpdates: Boolean = true,
-)
-
 /** "Notification buttons": a heart beside Next, or Shuffle and Repeat. */
 enum class NotificationButtons { FAVOURITE, SHUFFLE_REPEAT }
 
@@ -440,7 +433,6 @@ object SettingsJson {
                         "hideDockOnScroll" to it.hideDockOnScroll,
                     )
                 },
-                "about" to settings.about.let { obj("checkForUpdates" to it.checkForUpdates) },
             ),
         ),
     )
@@ -541,7 +533,6 @@ object SettingsJson {
                     hideDockOnScroll = it.flag("hideDockOnScroll", d.display.hideDockOnScroll),
                 )
             } ?: d.display,
-            about = root.section("about")?.let { AboutSettings(checkForUpdates = it.flag("checkForUpdates", d.about.checkForUpdates)) } ?: d.about,
         )
     }
 

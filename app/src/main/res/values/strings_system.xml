@@ -23,9 +23,7 @@
     <string name="launch_unreadable">KJB can\'t read your music yet</string>
 
     <!-- Updates -->
-    <string name="set_updates">Check for updates</string>
-    <string name="set_updates_detail">Once a day, from github.com</string>
-    <string name="set_updates_now">Check now</string>
+    <string name="set_updates_now">Check for updates</string>
     <string name="update_line_idle">Not checked yet</string>
     <string name="update_line_checking">Checking…</string>
     <string name="update_line_latest">KJB %1$s is the latest</string>

@@ -36,6 +36,7 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.core.content.edit
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.LifecycleResumeEffect
+import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.core.app.ActivityCompat
 import androidx.lifecycle.lifecycleScope
@@ -393,9 +394,12 @@ private fun App(ledger: LedgerStore, destination: Page?, view: FullScreen?, onVi
     }
     // Files another app opened, Shuffle all and Resume: they play, then the player shows.
     LaunchWork(opened.launch, opened.onLaunchDone, opened.onPlayer)
-    // KJB's update, when the check finds one; the check runs once a day when KJB opens, unless switched off.
+    // KJB's update, when the check finds one; the check runs when KJB comes to the front and each hour it stays there.
     UpdateHost()
-    LaunchedEffect(Unit) { Updates.checker(context).checkIfDue(settings.about.checkForUpdates) }
+    LifecycleStartEffect(context) {
+        val front = Updates.checker(context).checkWhileInFront()
+        onStopOrDispose { front.cancel() }
+    }
     AiAskSheets(
         ask = asks.firstOrNull()?.takeUnless { asking },
         onAllow = {

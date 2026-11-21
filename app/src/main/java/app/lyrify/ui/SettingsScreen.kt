@@ -248,10 +248,7 @@ fun SettingsScreen(
                 }
                 // The version beside the app's own mark, the Note arm K on black.
                 GroupedRow(R.drawable.ic_brand_k, stringResource(R.string.version_label, versionName), tile = BrandBlack, onTile = Color.Unspecified, first = tour == null)
-                // The update check and the crash reports (AboutSheets.kt): nothing leaves the phone but the daily check's one request.
-                SwitchRow(R.drawable.ic_system_update, R.string.set_updates, stringResource(R.string.set_updates_detail), settings.about.checkForUpdates) { on ->
-                    onChange { it.copy(about = it.about.copy(checkForUpdates = on)) }
-                }
+                // The update check and the crash reports (AboutSheets.kt): nothing leaves the phone but the hourly check's one request.
                 ValueRow(R.drawable.ic_refresh, R.string.set_updates_now, updateLine(updates), onClick = checkNow)
                 ValueRow(R.drawable.ic_error, R.string.set_crashes, crashLine(sheet)) { sheet = SettingsSheet.CRASHES }
                 ActionRow(R.drawable.ic_description, R.string.set_licences) { onOpen(Page.Licences) }
