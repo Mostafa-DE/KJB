@@ -11,6 +11,7 @@ import app.lyrify.dl.api.DlUpdate
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -123,6 +124,59 @@ class DlLookupTest {
         assertEquals(listOf("unbind sheet"), calls)
         run.abandon()
         assertEquals(listOf("unbind sheet", "unbind run", "stopService"), calls)
+    }
+
+    /** A session of KJB's with the add-on among [holds], heard in [calls] by [name]; [take]: false when [DlHolds.held] took its hold. */
+    private fun session(name: String, holds: DlHolds, take: Boolean = true) =
+        DlSession(FakePort(), CompletableDeferred(), { calls += "unbind $name" }, { true }, { calls += "stopService" }, holds.also { if (take) it.take() })
+
+    @Test
+    fun `a stop asked for while another of KJB's sessions held the add-on is done by the last to let go, a plain close too`() = runTest {
+        val holds = DlHolds()
+        val run = session("run", holds)
+        val page = (holds.held({ DlConnection.Open(session("page", holds, take = false)) }, { calls += "stopService" }) as DlConnection.Open).session
+
+        // The phone froze the add-on during a run while the Downloads page asked it something. An add-on the phone froze
+        // cannot leave its foreground service by itself, so the page's close, the last, stops the service KJB started.
+        run.abandon()
+        assertEquals(listOf("unbind run"), calls)
+        page.close()
+        assertEquals(listOf("unbind run", "unbind page", "stopService"), calls)
+
+        // Done once: the next session's close owes nothing.
+        session("next", holds).close()
+        assertEquals(listOf("unbind run", "unbind page", "stopService", "unbind next"), calls)
+    }
+
+    @Test
+    fun `a stop asked for while KJB was binding the add-on is done when that bind opens no session`() = runTest {
+        val holds = DlHolds()
+        val run = session("run", holds)
+        val bound = CompletableDeferred<DlConnection>()
+        val page = backgroundScope.async { holds.held({ bound.await() }, { calls += "stopService" }) }
+        runCurrent()
+
+        run.abandon()
+        assertEquals(listOf("unbind run"), calls)
+        bound.complete(DlConnection.Closed(AddonState.Unreachable))
+        page.await()
+
+        assertEquals(listOf("unbind run", "stopService"), calls)
+    }
+
+    @Test
+    fun `a stop asked for while KJB was binding the add-on is done when that bind is cancelled`() = runTest {
+        val holds = DlHolds()
+        val run = session("run", holds)
+        val page = backgroundScope.async { holds.held({ awaitCancellation() }, { calls += "stopService" }) }
+        runCurrent()
+
+        run.abandon()
+        assertEquals(listOf("unbind run"), calls)
+        page.cancel()
+        runCurrent()
+
+        assertEquals(listOf("unbind run", "stopService"), calls)
     }
 
     @Test
