@@ -125,6 +125,11 @@ class JobForeground<Tap : Any>(
     /** Whether KJB made [Tap] (its creator's uid and certificate, [CallerCheck]). */
     private val fromKjb: (Tap) -> Boolean,
     private val log: (String) -> Unit = {},
+    /**
+     * Android's answer each time the service asks for the foreground: refused (a start it did not allow, or its time ran
+     * out, [timeUp]) or let in. The Downloads add-on tells KJB the last one.
+     */
+    private val answered: (refused: Boolean) -> Unit = {},
 ) {
     /** The types the service is in the foreground as for KJB's work; 0 while it is out of it. */
     private var types = 0
@@ -196,6 +201,7 @@ class JobForeground<Tap : Any>(
     @Synchronized
     fun timeUp(type: Int) {
         log("Android's time for the foreground service ran out (type $type)")
+        answered(true)
         val ending = works.filter { it.type and type != 0 }.ifEmpty { works }
         ending.forEach { it.timeUp() }
         expired = expired or ending.fold(0) { types, work -> types or work.type }
@@ -229,11 +235,13 @@ class JobForeground<Tap : Any>(
     /** Into the foreground as [types]; false when Android refuses, and the work runs without it. */
     private fun enter(types: Int, tap: Tap?): Boolean = try {
         port.startForeground(types, tap)
+        answered(false)
         true
     } catch (e: RuntimeException) {
         // ForegroundServiceStartNotAllowedException (Android 12+: no exemption at this moment; 15+: the day's time used
         // up) or a SecurityException. KJB's watch covers a phone that freezes the add-on without it.
         log("the foreground service was refused (${e.javaClass.simpleName})")
+        answered(true)
         false
     }
 

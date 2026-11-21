@@ -1,5 +1,7 @@
 package app.lyrify.dl
 
+import android.content.pm.ServiceInfo
+import app.lyrify.addon.shared.ForegroundWork
 import app.lyrify.addon.shared.beating
 import app.lyrify.dl.api.DlEnd
 import app.lyrify.dl.api.DlFailure
@@ -83,6 +85,29 @@ object UpdatePolicy {
 
     fun afterFailure(failure: DlFailure, checkedThisRun: Boolean): Boolean = !checkedThisRun && failure in FIXABLE
 }
+
+/** When Android last refused the add-on its own foreground service (wall-clock millis); null once it let it in again. */
+interface RefusalMemory {
+    var refusedAt: Long?
+}
+
+/**
+ * Whether the add-on tells KJB that Android refuses its foreground service (DlStatus.foregroundRefused): its last ask
+ * was refused (a start, or its time ran out), less than a day ago. Android's count of dataSync time starts over at the
+ * first start a day after the session that used it up began, so an older refusal says nothing; a stored time after now
+ * (the clock went back) is not believed. Pure.
+ */
+object RefusalPolicy {
+    fun standing(refusedAt: Long?, now: Long): Boolean = refusedAt != null && now >= refusedAt && now - refusedAt < UpdatePolicy.STALE_MS
+}
+
+/**
+ * The add-on's work for its own foreground service ([JobForeground]), dataSync: held while a lookup or a run is under
+ * way ([DlRuns.busy]). When Android's time for it runs out (onTimeout, Android 15+) the service leaves the foreground and
+ * stops at once, as Android requires, and the work goes on without it while KJB keeps the add-on bound: KJB, told by
+ * DlStatus, asks the user to keep it open.
+ */
+fun DlRuns.foregroundWork(): ForegroundWork = ForegroundWork(ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC, busy = { busy }, timeUp = {})
 
 /** What a run made in its folder: the media file, its cover (audio), and the tags yt-dlp printed. */
 private class Produced(val media: File, val cover: File?, val meta: DlMeta, val durationSec: Int) {
@@ -204,12 +229,6 @@ class DlRuns(
 
     /** A run or a lookup is under way: from the link taken until its end, the run's file handed back included. */
     val busy: Boolean get() = synchronized(lock) { runs.isNotEmpty() || lookups.isNotEmpty() }
-
-    /**
-     * Android's time for the add-on's foreground service ran out (onTimeout, Android 15+: 6 hours of dataSync in 24): the
-     * work stops as when KJB lets go, the runs' parts kept for the next try.
-     */
-    fun timeUp() = cancelAll()
 
     /** Stops every run, their parts kept: KJB let go of the add-on (it may come back to them). */
     fun cancelAll() {
@@ -417,13 +436,12 @@ class DlRuns(
      */
     fun info(url: String, events: InfoEvents): Long {
         val id = synchronized(lock) { nextId++ }
-        val job = scope.launch(start = CoroutineStart.LAZY) {
-            try {
-                lookUp(id, url, events)
-            } finally {
-                synchronized(lock) { lookups.remove(id) }
-                ended()
-            }
+        val job = scope.launch(start = CoroutineStart.LAZY) { lookUp(id, url, events) }
+        // Its end however it comes, also for a lookup stopped before its body ran: one left in the map would hold the
+        // foreground service for as long as the add-on runs.
+        job.invokeOnCompletion {
+            synchronized(lock) { lookups.remove(id) }
+            ended()
         }
         synchronized(lock) { lookups[id] = job }
         job.start()

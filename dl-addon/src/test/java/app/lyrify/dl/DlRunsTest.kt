@@ -1,5 +1,8 @@
 package app.lyrify.dl
 
+import android.content.pm.ServiceInfo
+import app.lyrify.addon.shared.ForegroundPort
+import app.lyrify.addon.shared.JobForeground
 import app.lyrify.dl.api.AudioQuality
 import app.lyrify.dl.api.DlEnd
 import app.lyrify.dl.api.DlFailure
@@ -944,26 +947,66 @@ class DlRunsTest {
         assertEquals(2, ends)
     }
 
+    /** Android's side of the add-on's foreground service, as JobForeground asks it. */
+    private class FakeForeground : ForegroundPort<String> {
+        val calls = mutableListOf<String>()
+
+        override fun startForeground(type: Int, tap: String?) {
+            calls += "startForeground"
+        }
+
+        override fun stopForeground() {
+            calls += "stopForeground"
+        }
+
+        override fun stopSelf(startId: Int?) {
+            calls += "stopSelf ${startId ?: "all"}"
+        }
+    }
+
     @Test
-    fun `Android's time for the foreground service running out stops the work, its parts kept for later`() = runTest {
+    fun `Android's time for the foreground service running out leaves it at once, and the work goes on without it`() = runTest {
         memory.lastCheck = now
         ytdlp.scripts += Script.Hang(mapOf("x.webm.part" to ByteArray(10)))
         val runs = runs()
         val heard = Heard()
         runs.start(song, heard)
         runCurrent()
+        val android = FakeForeground()
+        val foreground = JobForeground(listOf(runs.foregroundWork()), android, fromKjb = { it == "kjb" })
+        foreground.start(1, "kjb")
+
+        foreground.timeUp(ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        runCurrent()
+
+        // Out of it within seconds, as Android requires (onTimeout), while KJB keeps the add-on bound for the run.
+        assertEquals(listOf("startForeground", "stopForeground", "stopSelf all"), android.calls)
+        assertNull("the run goes on", heard.end)
+        assertTrue(runs.busy)
+        assertEquals(1, ytdlp.live.size)
+    }
+
+    @Test
+    fun `a lookup stopped before it started still ends its busy time, so the foreground service is left`() = runTest {
         ytdlp.scripts += Script.Hang()
-        runs.info("https://video.example.com/w", Looked())
-        runCurrent()
-        assertEquals(2, ytdlp.live.size)
+        val runs = runs()
 
-        runs.timeUp()
+        val lookup = runs.info("https://video.example.com/w", Looked())
+        runs.cancelInfo(lookup)
         runCurrent()
 
-        assertEquals(DlEnd.Stopped, heard.end)
-        assertTrue("its parts stay for the next run", File(root, "k1/x.webm.part").exists())
-        assertTrue(ytdlp.live.isEmpty())
         assertFalse(runs.busy)
+        assertEquals(1, ends)
+        assertTrue("yt-dlp never ran", ytdlp.calls.isEmpty())
+    }
+
+    @Test
+    fun `a refusal of the foreground service is told for a day, and a time after now is not believed`() {
+        assertFalse(RefusalPolicy.standing(refusedAt = null, now = now))
+        assertTrue(RefusalPolicy.standing(refusedAt = now - 60_000, now = now))
+        assertTrue(RefusalPolicy.standing(refusedAt = now - day + 1, now = now))
+        assertFalse("Android's count has started over by then", RefusalPolicy.standing(refusedAt = now - day, now = now))
+        assertFalse(RefusalPolicy.standing(refusedAt = now + 60_000, now = now))
     }
 
     // Updating yt-dlp

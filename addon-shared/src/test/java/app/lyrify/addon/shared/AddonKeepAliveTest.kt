@@ -408,6 +408,26 @@ class AddonKeepAliveTest {
     }
 
     @Test
+    fun `each answer Android gives the service's foreground is told - refused, let in, and its time run out`() {
+        var refusing = true
+        val port = FakeForeground(refuses = { refusing })
+        val answers = mutableListOf<Boolean>()
+        val foreground = JobForeground(
+            listOf(ForegroundWork(DATA_SYNC, busy = { busy }, timeUp = {})),
+            port,
+            fromKjb = { it.uid == KJB_UID },
+            answered = { refused -> answers += refused },
+        )
+
+        foreground.start(1, kjb)
+        refusing = false
+        foreground.start(2, kjb)
+        foreground.timeUp(DATA_SYNC)
+
+        assertEquals("refused, let in, its time run out", listOf(true, false, true), answers)
+    }
+
+    @Test
     fun `KJB letting go leaves the foreground`() {
         val port = FakeForeground()
         val foreground = foreground(port)
