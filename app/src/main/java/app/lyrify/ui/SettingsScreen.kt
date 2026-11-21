@@ -224,7 +224,6 @@ fun SettingsScreen(
                 }
                 ValueRow(R.drawable.ic_refresh, R.string.set_updates_now, updateLine(updates), onClick = checkNow)
                 ValueRow(R.drawable.ic_error, R.string.set_crashes, crashLine(sheet)) { sheet = SettingsSheet.CRASHES }
-                ActionRow(R.drawable.ic_lyrics, stringResource(R.string.settings_source))
                 ActionRow(R.drawable.ic_directions_car, stringResource(R.string.set_auto)) { sheet = SettingsSheet.ANDROID_AUTO }
                 ActionRow(R.drawable.ic_description, R.string.set_licences) { onOpen(Page.Licences) }
             }
