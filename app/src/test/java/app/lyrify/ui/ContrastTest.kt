@@ -107,6 +107,8 @@ class ContrastTest {
             // The switch's white knob (Controls.kt) on its off track, and on the coral one in light (dark: onHighlight).
             assertReads("$theme knob off", Color.White, s.outline, 3f)
             if (!variant.dark) assertReads("$theme knob on", Color.White, brand.highlight, 3f)
+            // Suggestions' teal (Smart shuffle's button) where it is drawn: the player and Up next's surfaces.
+            listOf(s.background, s.surface, s.surfaceContainerHigh, chrome.sheet).forEach { under -> assertReads("$theme suggestions teal", brand.suggestion, under, 4.5f) }
         }
     }
 

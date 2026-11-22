@@ -260,13 +260,14 @@ val LocalDarkTheme = staticCompositionLocalOf { false }
 
 /**
  * KJB's accent on top of either scheme: [highlight] is the "sung line" coral (the glyph's sung part, the queue bar, the
- * AI ring, the active filter's underline); [highlightContainer] is for brand surfaces only, never a status.
+ * AI ring, the active filter's underline); [highlightContainer] is for brand surfaces only, never a status. [suggestion]
+ * is suggestions' teal (the approved suggestions mockup's pick colour): Smart shuffle's button, apart from Shuffle's coral.
  */
 @Immutable
-data class BrandColors(val highlight: Color, val onHighlight: Color, val highlightContainer: Color, val onHighlightContainer: Color)
+data class BrandColors(val highlight: Color, val onHighlight: Color, val highlightContainer: Color, val onHighlightContainer: Color, val suggestion: Color)
 
-internal val LightBrandColors = BrandColors(Color(0xFFC9472C), Color(0xFFFFFFFF), Color(0xFFFFDBD1), Color(0xFF3B0A00))
-internal val DarkBrandColors = BrandColors(Color(0xFFFF9A80), Color(0xFF4A1205), Color(0xFF7F2B17), Color(0xFFFFDBD1))
+internal val LightBrandColors = BrandColors(Color(0xFFC9472C), Color(0xFFFFFFFF), Color(0xFFFFDBD1), Color(0xFF3B0A00), Color(0xFF0B6B62))
+internal val DarkBrandColors = BrandColors(Color(0xFFFF9A80), Color(0xFF4A1205), Color(0xFF7F2B17), Color(0xFFFFDBD1), Color(0xFF7FD6CA))
 
 val LocalBrandColors = staticCompositionLocalOf { LightBrandColors }
 

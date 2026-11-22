@@ -11,6 +11,7 @@ import app.lyrify.player.PlayerUi
 import app.lyrify.player.QueueBook
 import app.lyrify.player.QueueSource
 import app.lyrify.player.Repeat
+import app.lyrify.player.ShuffleStep
 import app.lyrify.player.SourceKind
 import app.lyrify.player.Transport
 import app.lyrify.player.playerUi
@@ -21,6 +22,7 @@ import app.lyrify.settings.PlayerUiSettings
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -154,6 +156,20 @@ class PlayerScreenTest {
         assertEquals(music, secondaryButtons(book = false, chapters = true))
         // Five places whatever plays, the heart in the middle one; the sleep timer is in the "⋯" now.
         for (book in listOf(false, true)) for (chapters in listOf(false, true)) assertEquals(PlayerButton.FAVOURITE, secondaryButtons(book, chapters)[2])
+    }
+
+    @Test
+    fun `Smart shuffle's button is the suggestions teal, plain Shuffle's the coral, in light and dark, the compass badge kept`() {
+        listOf(LightBrandColors, DarkBrandColors).forEach { brand ->
+            assertEquals(brand.highlight, shuffleColor(ShuffleStep.SHUFFLE, brand))
+            assertEquals(brand.suggestion, shuffleColor(ShuffleStep.SMART, brand))
+            assertNotEquals(brand.highlight, brand.suggestion)
+        }
+        // The button draws its icon and its bar in that colour; Off stays the ink.
+        assertTrue(
+            java.io.File("src/main/java/app/lyrify/ui/PlayerControls.kt").readText()
+                .contains("on = step != ShuffleStep.OFF, badge = step == ShuffleStep.SMART, onColor = shuffleColor(step, LocalBrandColors.current)"),
+        )
     }
 
     @Test

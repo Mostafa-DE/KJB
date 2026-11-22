@@ -2,6 +2,7 @@ package app.lyrify.ui
 
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.shadow
 import androidx.annotation.DrawableRes
@@ -356,7 +357,7 @@ internal fun SecondaryRow(ui: PlayerUi, connection: PlayerConnection, onQueue: (
             when (button) {
                 // Off, Shuffle, Smart shuffle, and round again (Smart shuffle option A, user 2026-11-22); Smart shuffle wears
                 // the suggestion mark, and its message's Undo goes back to plain Shuffle.
-                PlayerButton.SHUFFLE -> ToggleButton(R.drawable.ic_shuffle, stringResource(shuffleLabel(step)), on = step != ShuffleStep.OFF, badge = step == ShuffleStep.SMART) {
+                PlayerButton.SHUFFLE -> ToggleButton(R.drawable.ic_shuffle, stringResource(shuffleLabel(step)), on = step != ShuffleStep.OFF, badge = step == ShuffleStep.SMART, onColor = shuffleColor(step, LocalBrandColors.current)) {
                     val next = connection.cycleShuffle()
                     shuffleSaid.value?.cancel()
                     shuffleSaid.value = scope.launch {
@@ -391,6 +392,9 @@ internal fun SecondaryRow(ui: PlayerUi, connection: PlayerConnection, onQueue: (
     }
 }
 
+/** The Shuffle button's colour when on: Smart shuffle in suggestions' teal, so it reads apart from Shuffle's coral (user 2026-11-22). */
+internal fun shuffleColor(step: ShuffleStep, brand: BrandColors): Color = if (step == ShuffleStep.SMART) brand.suggestion else brand.highlight
+
 private fun shuffleLabel(step: ShuffleStep): Int = when (step) {
     ShuffleStep.OFF -> R.string.player_shuffle_off
     ShuffleStep.SHUFFLE -> R.string.player_shuffle_on
@@ -411,17 +415,24 @@ internal fun RoundButton(@DrawableRes icon: Int, label: String, size: Dp = TOUCH
     ) { Icon(painterResource(icon), contentDescription = null, modifier = Modifier.size(iconSize)) }
 }
 
-/** A toggle of the second row: in the highlight colour with a bar while [on]; [badge]: the suggestion mark on its corner (Smart shuffle). */
+/** A toggle of the second row: in [onColor] (the highlight) with a bar while [on]; [badge]: the suggestion mark on its corner (Smart shuffle). */
 @Composable
-private fun ToggleButton(@DrawableRes icon: Int, label: String, on: Boolean, bar: Boolean = true, badge: Boolean = false, onClick: () -> Unit) {
-    val highlight = LocalBrandColors.current.highlight
+private fun ToggleButton(
+    @DrawableRes icon: Int,
+    label: String,
+    on: Boolean,
+    bar: Boolean = true,
+    badge: Boolean = false,
+    onColor: Color = LocalBrandColors.current.highlight,
+    onClick: () -> Unit,
+) {
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier.size(TOUCH).clip(CircleShape).clickable(role = Role.Button, onClick = onClick).semantics { contentDescription = label },
     ) {
-        Icon(painterResource(icon), contentDescription = null, tint = if (on) highlight else MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(26.dp))
+        Icon(painterResource(icon), contentDescription = null, tint = if (on) onColor else MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(26.dp))
         if (badge) SuggestionBadge(Modifier.align(Alignment.Center).offset(9.dp, 7.dp))
-        if (on && bar) Box(Modifier.align(Alignment.BottomCenter).padding(bottom = 5.dp).size(14.dp, 3.dp).clip(CircleShape).background(highlight))
+        if (on && bar) Box(Modifier.align(Alignment.BottomCenter).padding(bottom = 5.dp).size(14.dp, 3.dp).clip(CircleShape).background(onColor))
     }
 }
 
