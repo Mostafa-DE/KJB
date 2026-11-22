@@ -461,7 +461,7 @@ private fun interest(interactions: List<Interaction>, library: Library, now: Lon
     return Interest(capped(songs), capped(artists), capped(albums))
 }
 
-private const val INTEREST_MS: Long = 90 * 86_400_000L
+internal const val INTEREST_MS: Long = 90 * 86_400_000L
 private const val INTEREST_EACH = 0.1
 private const val INTEREST_CAP = 0.5
 
@@ -492,7 +492,7 @@ private fun friendLove(plays: List<FriendPlay>, library: Library, now: Long): Ma
 
 private fun nameKey(title: String, artist: String?): String = TrackNames.normalize(title) + "|" + TrackNames.normalize(artist.orEmpty())
 
-private const val FRIENDS_MS: Long = 30 * 86_400_000L
+internal const val FRIENDS_MS: Long = 30 * 86_400_000L
 private const val WEEK_MS: Long = 7 * 86_400_000L
 private const val FRIEND_LOVES_AT = 3
 private const val LENGTH_SLACK_MS: Long = 2_000

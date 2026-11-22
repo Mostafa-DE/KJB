@@ -35,7 +35,7 @@ fun bucketAt(counted: Int, lastPlayedAt: Long?, at: Long): Bucket = when {
     else -> Bucket.FAMILIAR
 }
 
-private fun bucketOf(taste: Taste, path: String): Bucket = taste.songs[path].let { bucketAt(it?.counted ?: 0, it?.lastPlayedAt, taste.now) }
+internal fun bucketOf(taste: Taste, path: String): Bucket = taste.songs[path].let { bucketAt(it?.counted ?: 0, it?.lastPlayedAt, taste.now) }
 
 /** Why a song is suggested, in plain words on screen (ui/SuggestionScreens.kt says them). */
 sealed interface Reason {

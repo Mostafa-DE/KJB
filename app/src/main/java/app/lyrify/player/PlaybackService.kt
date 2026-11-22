@@ -60,6 +60,7 @@ import app.lyrify.settings.Settings
 import app.lyrify.stats.PlayEnd
 import app.lyrify.stats.PlayStart
 import app.lyrify.stats.songKey
+import app.lyrify.suggestions.SuggestionsPart
 import app.lyrify.tags.CoverVersions
 import app.lyrify.ui.DESTINATION_PLAYER
 import app.lyrify.ui.EXTRA_DESTINATION
@@ -131,7 +132,7 @@ private const val OPEN_PLAYER: Int = 1
 @OptIn(UnstableApi::class)
 class PlaybackService : MediaLibraryService() {
     /** The service's parts: P2, A1, A3 and A4 each add one line here, in merge order. */
-    private val parts: List<ServicePart> = listOf(WidgetPart(), LockLyricsPart(), SleepPart(), ExtrasPart(), ButtonsPart(), ConnectPart(), OutputRoutesPart(), BookPart())
+    private val parts: List<ServicePart> = listOf(WidgetPart(), LockLyricsPart(), SleepPart(), ExtrasPart(), ButtonsPart(), ConnectPart(), OutputRoutesPart(), BookPart(), SuggestionsPart())
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate + logFailures)
     private val io = CoroutineScope(SupervisorJob() + Dispatchers.IO + logFailures)
