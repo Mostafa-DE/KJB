@@ -151,8 +151,8 @@ class PlaybackService : MediaLibraryService() {
 
     /** Songs that could not be played since one last played: the whole queue failing stops the player. */
     private var failedInARow = 0
-    /** The play counter, without a book's plays (books/BookPlayback.kt). */
-    private val plays = BookPlayFilter({ event -> Lyrify.playEvents(this).onEvent(event) }) { path -> playIsBook(path, core.book.value.current, library.value) }
+    /** The play counter, without a book's plays, which go to the book log (books/BookPlayback.kt). */
+    private val plays = BookPlayFilter({ event -> Lyrify.playEvents(this).onEvent(event) }, { event -> Lyrify.bookEvents(this).onEvent(event) }) { path -> playIsBook(path, core.book.value.current, library.value) }
     private val tracker = PlayTracker(plays::onEvent, System::currentTimeMillis)
     private val offload = OffloadGate { engine.setOffload(it) }
 

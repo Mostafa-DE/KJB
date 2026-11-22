@@ -26,6 +26,7 @@ import app.lyrify.player.partScope
 import app.lyrify.player.skipAmounts
 import app.lyrify.settings.PlaybackSettings
 import app.lyrify.stats.PlayEvent
+import app.lyrify.stats.NoPlayEvents
 import app.lyrify.stats.PlayEvents
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.cancel
@@ -236,10 +237,10 @@ fun sleepToChapterEnd(chapters: List<Chapter>, positionMs: Long): SleepTimer.ByC
 fun playIsBook(path: String, queue: Queue?, library: Library?): Boolean = isBookPart(path, library) || library == null && inBook(queue)
 
 /**
- * The play counter's events ([next]) without a book part's: a play whose song [isBook] when it starts is never logged,
- * none of its events passed on.
+ * The play counter's events ([next]) without a book part's: a play whose song [isBook] when it starts is never logged
+ * with the music, all its events going to the book log ([bookLog]) instead.
  */
-class BookPlayFilter(private val next: PlayEvents, private val isBook: (String) -> Boolean) : PlayEvents {
+class BookPlayFilter(private val next: PlayEvents, private val bookLog: PlayEvents = NoPlayEvents, private val isBook: (String) -> Boolean) : PlayEvents {
     /** The plays of books going on, by play id. */
     private val books = HashSet<Long>()
 
@@ -247,6 +248,7 @@ class BookPlayFilter(private val next: PlayEvents, private val isBook: (String) 
         if (event is PlayEvent.Started && isBook(event.song.path)) books += event.playId
         if (event.playId in books) {
             if (event is PlayEvent.Ended) books -= event.playId
+            bookLog.onEvent(event)
             return
         }
         next.onEvent(event)

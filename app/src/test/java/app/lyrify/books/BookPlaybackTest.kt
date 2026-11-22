@@ -116,9 +116,10 @@ class BookPlaybackTest {
     }
 
     @Test
-    fun `a play of a book's part is never logged, music plays are`() {
+    fun `a play of a book's part goes to the book log, never the music one, music plays the other way`() {
         val passed = mutableListOf<PlayEvent>()
-        val filter = BookPlayFilter({ passed += it }) { path -> library.bookOf(path) != null }
+        val booked = mutableListOf<PlayEvent>()
+        val filter = BookPlayFilter({ passed += it }, { booked += it }) { path -> library.bookOf(path) != null }
         val part = parts[0].ref
         filter.onEvent(PlayEvent.Started(1, part, 10, 600_000))
         filter.onEvent(PlayEvent.Position(1, part, 20, 5_000, playing = true))
@@ -126,7 +127,11 @@ class BookPlaybackTest {
         filter.onEvent(PlayEvent.Ended(1, part, 40, 61_000))
         filter.onEvent(PlayEvent.Started(2, music.ref, 50, 200_000))
         filter.onEvent(PlayEvent.Ended(2, music.ref, 60, 200_000))
-        assertEquals(listOf(2L, 2L), passed.map { it.playId })
+        // The same play id again, now music: its book play ended.
+        filter.onEvent(PlayEvent.Started(1, music.ref, 70, 200_000))
+        assertEquals(listOf(2L, 2L, 1L), passed.map { it.playId })
+        assertEquals(listOf(1L, 1L, 1L, 1L), booked.map { it.playId })
+        assertEquals(listOf(10L, 20L, 30L, 40L), booked.map { it.at })
     }
 
     @Test
@@ -150,7 +155,16 @@ class BookPlaybackTest {
         assertTrue(playIsBook("/data/user/0/app.lyrify/cache/opened/1800000000000/0/Quiet Orchard.m4b", inMusicQueue, withBooks))
         // The play counter wired to it in the service.
         val service = java.io.File("src/main/java/app/lyrify/player/PlaybackService.kt").readText()
-        assertTrue(service.contains("BookPlayFilter({ event -> Lyrify.playEvents(this).onEvent(event) }) { path -> playIsBook(path, core.book.value.current, library.value) }"))
+        assertTrue(
+            service.contains(
+                "BookPlayFilter({ event -> Lyrify.playEvents(this).onEvent(event) }, { event -> Lyrify.bookEvents(this).onEvent(event) }) { path -> playIsBook(path, core.book.value.current, library.value) }",
+            ),
+        )
+        // The book log: a play counter of its own over a file of its own, which Insights read and nothing else.
+        val graph = java.io.File("src/main/java/app/lyrify/stats/PlaysQuery.kt").readText()
+        assertTrue(graph.contains("PlayCounter(bookLog(context), share(context)"))
+        assertTrue(graph.contains("PlaysDb(context.applicationContext, name = BOOK_PLAYS"))
+        assertTrue(graph.contains("books = bookLog(context)"))
     }
 
     // The place, kept as the book plays
