@@ -486,9 +486,9 @@ private fun <T> rememberStats(key: Any, read: suspend (Context) -> T): T? {
     return value
 }
 
-/** The phone's date, turning just after its midnight ([dayOf]). */
+/** The phone's date, turning just after its midnight ([dayOf]): Insights' figures and the recap card's month. */
 @Composable
-private fun rememberToday(): LocalDate {
+internal fun rememberToday(): LocalDate {
     val today by produceState(dayOf(System.currentTimeMillis(), ZoneId.systemDefault()).date) {
         while (true) {
             val now = System.currentTimeMillis()

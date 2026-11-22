@@ -81,11 +81,27 @@ class ListeningScreenTest {
     }
 
     @Test
-    fun `the recap card sits first on every Library tab, and shows on the one Library opens on`() {
+    fun `the recap card sits first on every Library tab, only in Library itself, and shows on the one Library opens on`() {
         val library = source("LibraryScreen.kt") + source("BooksScreen.kt")
-        LibraryTab.entries.forEach { assertTrue("$it", library.contains("recapCard(LibraryTab.$it)")) }
+        val lines = library.lines()
+        LibraryTab.entries.forEach { tab ->
+            val at = lines.indexOfFirst { "recapCard(LibraryTab.$tab)" in it }
+            assertTrue("$tab", at > 0)
+            // The first row: right where its list opens.
+            assertTrue("$tab: ${lines[at - 1]}", lines[at - 1].trimEnd().let { it.endsWith("{") || it.endsWith("->") })
+        }
+        // Playlists and Books are bar items of their own too (PlaylistsPage, BooksPage): there the card is not drawn (Grok b-ui).
+        listOf(
+            "if (inLibrary) recapCard(LibraryTab.PLAYLISTS)", "if (inLibrary) recapCard(LibraryTab.BOOKS)",
+            "LibraryTab.PLAYLISTS -> PlaylistsTab(ui, library, padding, reselect, sheets, inLibrary = true)",
+            "LibraryTab.BOOKS -> BooksTab(library, padding, reselect, inLibrary = true)",
+            "PlaylistsTab(ui, shown, padding, nav.state.reselectsOf(DockTab.PLAYLISTS), sheets, inLibrary = false)",
+            "BooksTab(it, padding, nav.state.reselectsOf(DockTab.BOOKS), inLibrary = false)",
+        ).forEach { assertTrue(it, library.contains(it)) }
         val cards = source("InsightsCards.kt")
         assertTrue(cards.contains("if (tab != libraryOpensOn(shownLibraryTabs(read.library, (library as? LibraryState.Ready)?.library), read.library.opensOn)) return"))
+        // The month turns with the phone's day, so an app kept running across the 1st shows the new month's card (Grok b-ui).
+        assertTrue(cards.contains("val month = remember(today) { recapMonthOf(System.currentTimeMillis(), zone) }"))
         // On its own bar item Insights has no back arrow.
         assertTrue(source("AppShell.kt").contains("DockTab.INSIGHTS -> ListeningPage(Page.Listening, root = true)"))
     }

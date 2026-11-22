@@ -526,7 +526,7 @@ object SettingsJson {
                     notificationsDenied = it.flag("notificationsDenied", d.nav.notificationsDenied),
                     notificationDenials = it.number("notificationDenials", d.nav.notificationDenials) { count -> count >= 0 },
                     settingsSections = (it["settingsSections"] as? JsonObject)?.let(::settingsSections) ?: d.nav.settingsSections,
-                    recapSeen = it["recapSeen"]?.text()?.let { month -> runCatching { YearMonth.parse(month) }.getOrNull() },
+                    recapSeen = it["recapSeen"]?.text()?.let { month -> runCatching { YearMonth.parse(month) }.getOrNull() } ?: d.nav.recapSeen,
                 )
             } ?: d.nav,
             display = root.section("display")?.let {

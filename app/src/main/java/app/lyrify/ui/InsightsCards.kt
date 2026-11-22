@@ -343,10 +343,12 @@ private fun RecapStartCard(tab: LibraryTab, modifier: Modifier) {
     val change = rememberSettingsChange()
     val settings by remember(context) { Lyrify.settings(context).settings }.collectAsState(null)
     val library by remember(context) { LibraryGraph.repository(context).state }.collectAsState()
+    // The day, so an app kept running across the 1st (the player keeps it alive) turns to the new month's card.
+    val today = rememberToday()
     val read = settings ?: return
     if (tab != libraryOpensOn(shownLibraryTabs(read.library, (library as? LibraryState.Ready)?.library), read.library.opensOn)) return
     val zone = ZoneId.systemDefault()
-    val month = recapMonthOf(System.currentTimeMillis(), zone)
+    val month = remember(today) { recapMonthOf(System.currentTimeMillis(), zone) }
     // Opened or closed already this month: no need to read the plays.
     if (read.nav.recapSeen?.let { it >= month } == true) return
     val months by produceState<List<YearMonth>?>(null, month) { value = StatsGraph.stats(context).recaps(System.currentTimeMillis(), zone) }

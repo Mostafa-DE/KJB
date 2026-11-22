@@ -348,6 +348,9 @@ class SettingsStoreTest {
         assertNull(nav("""{"recapSeen":202610}""")?.recapSeen)
         assertNull(Settings().nav.recapSeen)
         assertTrue(""""recapSeen":"2026-10"""" in SettingsJson.encode(changed))
+        // A backup from before Insights, restored over the phone's settings, keeps the month the phone closed (Grok b-ui).
+        val phone = Settings(nav = NavSettings(recapSeen = YearMonth.of(2026, 10)))
+        assertEquals(YearMonth.of(2026, 10), SettingsJson.decode("""{"nav":{"lastTab":"TOOLS"}}""", phone)?.nav?.recapSeen)
     }
 
     @Test
