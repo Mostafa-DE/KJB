@@ -495,9 +495,10 @@ fun smartInserts(taste: Taste, library: Library, mix: Mix, playing: Song?, upcom
             return@forEachIndexed
         }
         run++
-        // A suggestion waiting just past the window counts too: the window moves on a song at a time.
+        // A suggestion waiting just past the window counts too: the window moves on a song at a time. And one goes only
+        // between the queue's songs, never after its last: there Autoplay takes over, or the music ends as the user set.
         val waiting = upcoming.subList(i + 1, min(upcoming.size, i + 1 + gap)).any { it.suggested }
-        if (run >= gap && !waiting) {
+        if (run >= gap && !waiting && i < upcoming.lastIndex) {
             slots += i
             run = 0
         }

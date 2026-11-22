@@ -247,18 +247,21 @@ class SuggestionsTest {
     fun `Smart shuffle mixes about 1 in 3 into the queue's own songs however often it runs, and never into Autoplay's batch`() = runBlocking {
         val service = suggestions(file = null)
         var book = queueOf(*IntArray(12) { it }).cycleShuffle(Random(1)).cycleShuffle(Random(1))
-        // As the playback service runs it: after every change, at every song, through the queue's own songs into Autoplay.
+        // As the playback service runs it: after every change, at every song, through the queue's own songs into Autoplay;
+        // after each, at most 1 per (oneIn - 1) of the queue's own songs, never two suggestions together, none at or past
+        // Autoplay's songs, and Up next never more than one batch of them.
         repeat(40) {
             repeat(2) { service.feed(book.current!!, Repeat.OFF, autoplay = true).forEach { book = book.suggest(it.queueId, it.songs, it.by) } }
+            val order = book.current!!.items.joinToString { "${it.suggested}" }
+            assertTrue(order, book.current!!.items.count { it.suggested == Suggested.SMART_SHUFFLE } <= 12 / (service.mix().oneIn - 1))
+            assertTrue(order, book.current!!.items.zipWithNext().none { (before, after) -> before.suggested != null && after.suggested != null && Suggested.SMART_SHUFFLE in listOf(before.suggested, after.suggested) })
+            assertTrue(order, book.current!!.items.dropWhile { it.suggested != Suggested.AUTOPLAY }.none { it.suggested == Suggested.SMART_SHUFFLE })
+            assertTrue(order, book.current!!.items.drop(book.current!!.index + 1).count { it.suggested == Suggested.AUTOPLAY } <= AUTOPLAY_SONGS)
             if (book.current!!.index < book.current!!.items.lastIndex) book = book.jump(book.current!!.id, book.current!!.index + 1, now).book
         }
-        val items = book.current!!.items
-        // About 1 in 3 of the queue's own songs, never two suggestions in a row, none among Autoplay's songs.
-        assertTrue(items.joinToString { "${it.suggested}" }, items.count { it.suggested == Suggested.SMART_SHUFFLE } <= 12 / (service.mix().oneIn - 1))
-        assertTrue(items.joinToString { "${it.suggested}" }, items.zipWithNext().none { (before, after) -> before.suggested != null && after.suggested == Suggested.SMART_SHUFFLE })
-        // Up next holds at most one batch of Autoplay.
-        assertTrue(items.drop(book.current!!.index + 1).count { it.suggested == Suggested.AUTOPLAY } <= AUTOPLAY_SONGS)
-        assertTrue(items.any { it.suggested == Suggested.AUTOPLAY })
+        // It did mix some in, and Autoplay took over at the end.
+        assertTrue(book.current!!.items.any { it.suggested == Suggested.SMART_SHUFFLE })
+        assertTrue(book.current!!.items.any { it.suggested == Suggested.AUTOPLAY })
     }
 
     @Test
