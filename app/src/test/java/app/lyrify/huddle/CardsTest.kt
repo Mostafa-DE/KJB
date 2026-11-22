@@ -20,6 +20,7 @@ class CardsTest {
             Message.Share("m3", 1_700_000_000_002, Card(CardKind.PLAYLIST, listOf(bell, lantern), name = "Sunday", note = "")),
             Message.Share("m4", 1_700_000_000_003, Card(CardKind.SONG, listOf(CardSong("وردة", null, null, 90_000)))),
             Message.Play("m5", 1_700_000_000_004, bell),
+            Message.Play("m7", 1_700_000_000_006, lantern, favourite = true),
             Message.Bye("m6", 1_700_000_000_005),
         ).forEach { message -> assertEquals(message, Messages.decode(Messages.encode(message))) }
     }

@@ -47,6 +47,7 @@ import app.lyrify.books.openedIntoBook
 import app.lyrify.books.playIsBook
 import app.lyrify.books.playingBook
 import app.lyrify.books.skipsFor
+import app.lyrify.huddle.HuddleGraph
 import app.lyrify.library.Library
 import app.lyrify.library.LibraryGraph
 import app.lyrify.library.LibraryState
@@ -58,6 +59,7 @@ import app.lyrify.media.NowPlaying
 import app.lyrify.media.QueueSweep
 import app.lyrify.settings.Settings
 import app.lyrify.stats.PlayEnd
+import app.lyrify.stats.PlayEvents
 import app.lyrify.stats.PlayStart
 import app.lyrify.stats.songKey
 import app.lyrify.tags.CoverVersions
@@ -151,8 +153,14 @@ class PlaybackService : MediaLibraryService() {
 
     /** Songs that could not be played since one last played: the whole queue failing stops the player. */
     private var failedInARow = 0
-    /** The play counter, without a book's plays (books/BookPlayback.kt). */
-    private val plays = BookPlayFilter({ event -> Lyrify.playEvents(this).onEvent(event) }) { path -> playIsBook(path, core.book.value.current, library.value) }
+    /** Friends sharing's plays (huddle/HuddleGraph.kt). */
+    private val shared: PlayEvents by lazy { HuddleGraph.plays(this) }
+
+    /** The play counter and Friends sharing, without a book's plays (books/BookPlayback.kt). */
+    private val plays = BookPlayFilter({ event ->
+        Lyrify.playEvents(this).onEvent(event)
+        shared.onEvent(event)
+    }) { path -> playIsBook(path, core.book.value.current, library.value) }
     private val tracker = PlayTracker(plays::onEvent, System::currentTimeMillis)
     private val offload = OffloadGate { engine.setOffload(it) }
 

@@ -66,9 +66,9 @@ data class PendingInvite(val publicKey: String, val privateKey: String, val toke
 @Serializable
 data class Received(val id: String, val friend: String, val at: Long, val card: Card, val opened: Boolean = false)
 
-/** A play [friend] (their id) shared, started [at]. */
+/** A play [friend] (their id) shared, started [at]; [favourite] when the song was one of theirs. */
 @Serializable
-data class FriendPlay(val friend: String, val at: Long, val song: CardSong)
+data class FriendPlay(val friend: String, val at: Long, val song: CardSong, val favourite: Boolean = false)
 
 /** A message's kind as the server knows it (huddle-server/API.md): it keeps a card 30 days until read, a play a day. */
 @Serializable

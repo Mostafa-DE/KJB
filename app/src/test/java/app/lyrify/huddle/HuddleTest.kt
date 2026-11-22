@@ -195,11 +195,12 @@ class HuddleTest {
         assertTrue(server.waiting(wrenOnJuniper.outBox).isEmpty())
 
         assertTrue(juniper.sharePlays(wrenOnJuniper.id, true))
-        juniper.played(bell, now + 1)
+        juniper.played(bell, now + 1, favourite = true)
         assertEquals(1, server.waiting(wrenOnJuniper.outBox).size)
         assertEquals(Kind.PLAY, server.kinds.values.last())
         wren.sync()
-        assertEquals(listOf(FriendPlay(juniperOnWren.id, now + 1, bell)), wrenState.now.plays)
+        assertEquals(listOf(FriendPlay(juniperOnWren.id, now + 1, bell, favourite = true)), wrenState.now.plays)
+        assertTrue("a play is gone from the server once read", server.waiting(wrenOnJuniper.outBox).isEmpty())
     }
 
     @Test

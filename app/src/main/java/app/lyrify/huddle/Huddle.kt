@@ -206,12 +206,12 @@ class Huddle(
         joins() && flushNow() && fetch()
     }
 
-    /** You played [song], from [at]: each friend you share plays with gets it, unless you listen privately. */
-    suspend fun played(song: CardSong, at: Long) {
+    /** You played [song], from [at], a [favourite] of yours or not: each friend you share plays with gets it, unless you listen privately. */
+    suspend fun played(song: CardSong, at: Long, favourite: Boolean = false) {
         val now = clock()
         val state = now()
         if (state.privateUntil?.let { now < it } == true) return
-        val outs = state.friends.filter { it.sharePlays }.mapNotNull { outgoing(it, Message.Play(newId(MESSAGE_ID_BYTES), at, song), Kind.PLAY, notBefore = now) }
+        val outs = state.friends.filter { it.sharePlays }.mapNotNull { outgoing(it, Message.Play(newId(MESSAGE_ID_BYTES), at, song, favourite), Kind.PLAY, notBefore = now) }
         if (outs.isNotEmpty() && storage.change { it.copy(outbox = it.outbox + outs) }) flush()
     }
 
@@ -411,7 +411,7 @@ class Huddle(
             state = state.copy(friends = state.friends.map { if (it.id == friendId) seen else it })
             state = when (message) {
                 is Message.Share -> state.copy(inbox = listOf(Received(message.id, friendId, message.at, message.card)) + state.inbox)
-                is Message.Play -> state.copy(plays = listOf(FriendPlay(friendId, message.at, message.song)) + state.plays)
+                is Message.Play -> state.copy(plays = listOf(FriendPlay(friendId, message.at, message.song, message.favourite)) + state.plays)
                 is Message.Bye -> state.copy(
                     friends = state.friends.filterNot { it.id == friendId },
                     inbox = state.inbox.filterNot { it.friend == friendId },

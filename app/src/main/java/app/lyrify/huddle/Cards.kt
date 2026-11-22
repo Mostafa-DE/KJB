@@ -1,6 +1,7 @@
 package app.lyrify.huddle
 
 import app.lyrify.backup.ImportSong
+import app.lyrify.backup.SectionJson.flag
 import app.lyrify.backup.SectionJson.int
 import app.lyrify.backup.SectionJson.jsonObject
 import app.lyrify.backup.SectionJson.long
@@ -32,8 +33,8 @@ sealed interface Message {
     /** A song, an album or a playlist, with its note. */
     data class Share(override val id: String, override val at: Long, val card: Card) : Message
 
-    /** The friend played [song] (from [at]), shared only when they chose to share their plays with you. */
-    data class Play(override val id: String, override val at: Long, val song: CardSong) : Message
+    /** The friend played [song] (from [at]), a [favourite] of theirs or not, shared only when they chose to share their plays with you. */
+    data class Play(override val id: String, override val at: Long, val song: CardSong, val favourite: Boolean = false) : Message
 
     /** The friend removed you: your KJB removes them too. */
     data class Bye(override val id: String, override val at: Long) : Message
@@ -42,7 +43,8 @@ sealed interface Message {
 /**
  * Messages as their sealed boxes hold them: JSON, then 0x80 and zero bytes up to one of a few sizes ([SIZES]), so the
  * server learns little from a box's length. Keys are short to fit long playlists: "v" format, "i" id, "t" time, "k" kind,
- * "c" card, "s" song or songs, "n" name, "m" note; a song is "t" title, "a" artist, "l" album, "d" length in millis.
+ * "c" card, "s" song or songs, "n" name, "m" note, "f" a favourite; a song is "t" title, "a" artist, "l" album, "d" length
+ * in millis.
  * A message of an unknown kind or format (a newer KJB's) reads as null and is dropped.
  */
 object Messages {
@@ -56,12 +58,11 @@ object Messages {
     const val NOTE_MAX: Int = 500
 
     /** A card of [songs] from the library, their tags as they are (a friend's KJB matches by tags, not by KJB's renames), trimmed to the limits. */
-    fun card(kind: CardKind, songs: List<Song>, name: String? = null, note: String? = null): Card = Card(
-        kind = kind,
-        songs = songs.take(SONGS_MAX).map { CardSong(clip(it.title, TEXT_MAX).orEmpty(), clip(it.artist, TEXT_MAX), clip(it.album, TEXT_MAX), it.durationMs) },
-        name = clip(name, TEXT_MAX),
-        note = clip(note, NOTE_MAX),
-    )
+    fun card(kind: CardKind, songs: List<Song>, name: String? = null, note: String? = null): Card =
+        Card(kind = kind, songs = songs.take(SONGS_MAX).map(::song), name = clip(name, TEXT_MAX), note = clip(note, NOTE_MAX))
+
+    /** [song] as a card or a shared play carries it: its tags, trimmed to [TEXT_MAX], and its length. */
+    fun song(song: Song): CardSong = CardSong(clip(song.title, TEXT_MAX).orEmpty(), clip(song.artist, TEXT_MAX), clip(song.album, TEXT_MAX), song.durationMs)
 
     /** [message] padded to its size; a share too long for the largest keeps its first songs, as many as fit. */
     fun encode(message: Message): ByteArray {
@@ -93,7 +94,7 @@ object Messages {
         val at = root.long(TIME_KEY) ?: return null
         return when (root.text(KIND_KEY)) {
             SHARE -> (root[CARD_KEY] as? JsonObject)?.let(::cardOf)?.let { Message.Share(id, at, it) }
-            PLAY -> (root[SONG_KEY] as? JsonObject)?.let(::songOf)?.let { Message.Play(id, at, it) }
+            PLAY -> (root[SONG_KEY] as? JsonObject)?.let(::songOf)?.let { Message.Play(id, at, it, favourite = root.flag(FAVOURITE_KEY) == true) }
             BYE -> Message.Bye(id, at)
             else -> null
         }
@@ -129,6 +130,7 @@ object Messages {
                 is Message.Play -> {
                     put(KIND_KEY, JsonPrimitive(PLAY))
                     put(SONG_KEY, songJson(message.song))
+                    if (message.favourite) put(FAVOURITE_KEY, JsonPrimitive(true))
                 }
                 is Message.Bye -> put(KIND_KEY, JsonPrimitive(BYE))
             }
@@ -165,6 +167,7 @@ object Messages {
     private const val SONG_KEY = "s"
     private const val NAME_KEY = "n"
     private const val NOTE_KEY = "m"
+    private const val FAVOURITE_KEY = "f"
     private const val TITLE_KEY = "t"
     private const val ARTIST_KEY = "a"
     private const val ALBUM_KEY = "l"
