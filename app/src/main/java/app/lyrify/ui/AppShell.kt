@@ -210,6 +210,8 @@ fun AppShell(
     val barOnScreen = slot == BottomSlot.BAR_AND_DOCK && bar != NowBarShows.Hidden
     val chromeStill = rememberChromeStill(slot != BottomSlot.NONE, state.views, barOnScreen, reduced)
     val dot = toolsDot(checks, dupes.badge, aiAttention(ai, aiWaiting))
+    // The bar's Huddle item pings while a friend plays now; read in the dock only, so nothing else redraws.
+    val huddleLive = rememberHuddleLive()
     // Hide while scrolling: never during the tour or for TalkBack; back on another item, page or Library tab, on a
     // selection or the keyboard (a full-screen view over it leaves it as it is, so the player closes into the bar where it is).
     val hide = rememberDockHide()
@@ -290,6 +292,7 @@ fun AppShell(
                                         DockTab.DOWNLOADS -> DownloadsPage(onBack = null)
                                         DockTab.BOOKS -> BooksPage()
                                         DockTab.INSIGHTS -> ListeningPage(Page.Listening, root = true)
+                                        DockTab.HUDDLE -> HuddlePage(onBack = null)
                                         DockTab.SEARCH -> SearchPage()
                                         DockTab.TOOLS -> ToolsScreen(rows, nav::open)
                                     }
@@ -313,9 +316,10 @@ fun AppShell(
                             other = otherPlayback,
                             onOpen = { nav.show(if (bar is NowBarShows.Own) FullScreen.Player else FullScreen.CompanionNow) },
                             onPlayPause = barPlayPause(bar, own::playPause, otherPlayback, other?.let { session -> session::playPause }),
+                            friend = { NowBarFriend(it.title, it.artist) },
                         )
                     },
-                    dock = { Dock(items, state.tab, display.dockStyle, dot = dot, onSelect = nav::select) },
+                    dock = { Dock(items, state.tab, display.dockStyle, dot = dot, onSelect = nav::select, live = huddleLive.value) },
                 )
             }
             // The views a back swipe from a page goes back to dim under it as the page does over a view.

@@ -1,0 +1,583 @@
+package app.lyrify.ui
+
+import androidx.annotation.StringRes
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.StartOffset
+import androidx.compose.animation.core.StartOffsetType
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.keyframes
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.BlurredEdgeTreatment
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import app.lyrify.R
+import app.lyrify.huddle.Match
+import app.lyrify.huddle.match
+import app.lyrify.library.Song
+import coil3.compose.AsyncImage
+
+// Huddle's faces, rings and cards, shared by its page, Library's friends row, the player and the Now bar (the approved
+// mockup, handoff/huddle/preview-huddle-v4.html, Mix 2). Every motion here stops when the phone's animations are off.
+
+/** A friend's colour, the same on every screen and every start: from their id, KJB's own random one. */
+fun friendColor(id: String): Color = FriendColors[Math.floorMod(id.hashCode(), FriendColors.size)]
+
+/** How a face is ringed: playing now (a turning, glowing ring), not right now (a quiet one), or not at all. */
+enum class FaceRing { LIVE, IDLE, NONE }
+
+/**
+ * A face: the first letter of [name], white on [color]. [ring] LIVE turns a ring of the friend's colour, gold and coral
+ * round it with a soft breathing glow, IDLE draws a quiet ring and greys the face a little; [gap] is the ground it sits
+ * on, kept as a thin ring between face and ring. [playing] adds the moving bars at its foot, [mail] a small wiggling
+ * badge at its top (a card not opened yet). Decorative: the name and what they play are words beside it.
+ */
+@Composable
+internal fun FriendFace(
+    name: String,
+    color: Color,
+    size: Dp,
+    modifier: Modifier = Modifier,
+    ring: FaceRing = FaceRing.NONE,
+    gap: Color = MaterialTheme.colorScheme.background,
+    playing: Boolean = false,
+    mail: Boolean = false,
+) {
+    val reduced = LocalReducedMotion.current
+    // Not right now: the colour a little greyed, toward the mean of its channels.
+    val mean = (color.red + color.green + color.blue) / 3
+    val ground = if (ring == FaceRing.IDLE) lerp(color, Color(mean, mean, mean), IDLE_GREY) else color
+    val letter = with(LocalDensity.current) { (size * INITIAL_SHARE).toSp() }
+    Box(modifier.size(size).clearAndSetSemantics {}) {
+        when (ring) {
+            FaceRing.LIVE -> LiveRing(color, reduced)
+            FaceRing.IDLE -> Box(Modifier.matchParentSize().border(2.dp, MaterialTheme.colorScheme.outlineVariant, CircleShape))
+            FaceRing.NONE -> Unit
+        }
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .matchParentSize()
+                .padding(if (ring == FaceRing.NONE) 0.dp else size * RING_SHARE + 1.dp)
+                .drawBehind {
+                    if (ring != FaceRing.NONE) drawCircle(gap, radius = this.size.minDimension / 2 + 2.dp.toPx())
+                    drawCircle(Brush.radialGradient(listOf(lerp(ground, BrandLilac, 0.3f), ground), Offset(this.size.width * 0.32f, this.size.height * 0.26f), this.size.width * 0.64f))
+                },
+        ) {
+            Text(
+                name.trim().takeIf(String::isNotEmpty)?.let { String(Character.toChars(it.codePointAt(0))).uppercase() }.orEmpty(),
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold, fontSize = letter, lineHeight = letter),
+                color = BrandLilac,
+                maxLines = 1,
+            )
+        }
+        if (playing) {
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .offset(3.dp, 3.dp)
+                    .size(24.dp)
+                    .drawBehind { drawCircle(gap, radius = this.size.minDimension / 2 + 2.dp.toPx()) }
+                    .background(lerp(color, BrandBlack, 0.18f), CircleShape),
+            ) { Equaliser(BrandLilac, Modifier.size(12.dp, 10.dp)) }
+        }
+        if (mail) MailBadge(gap, Modifier.align(Alignment.TopEnd).offset(6.dp, (-4).dp))
+    }
+}
+
+/** An empty seat: a dashed circle with a plus (Invite), or with [word] in it ("You", on the join screen). Decorative. */
+@Composable
+internal fun SeatFace(size: Dp, modifier: Modifier = Modifier, word: String? = null) {
+    val colors = MaterialTheme.colorScheme
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = modifier.size(size).clearAndSetSemantics {}.drawBehind {
+            val width = 2.dp.toPx()
+            drawCircle(colors.outline, radius = this.size.minDimension / 2 - width, style = Stroke(width, pathEffect = PathEffect.dashPathEffect(floatArrayOf(5.dp.toPx(), 4.dp.toPx()))))
+        },
+    ) {
+        if (word != null) {
+            Text(word, style = MaterialTheme.typography.titleMedium, color = colors.onSurfaceVariant, maxLines = 1)
+        } else {
+            Icon(painterResource(R.drawable.ic_add), contentDescription = null, tint = colors.onSurfaceVariant, modifier = Modifier.size(size * 0.46f))
+        }
+    }
+}
+
+/** The live ring: a sweep of the friend's colour, gold and coral turning once in [RING_TURN_MS], over a breathing glow; still when motion is off. */
+@Composable
+private fun BoxScope.LiveRing(color: Color, reduced: Boolean) {
+    val coral = LocalBrandColors.current.highlight
+    val motion = if (reduced) null else rememberInfiniteTransition(label = "live ring")
+    val turn = motion?.animateFloat(0f, 360f, infiniteRepeatable(tween(RING_TURN_MS, easing = LinearEasing)), label = "turn")
+    val glow = motion?.animateFloat(0f, 1f, infiniteRepeatable(tween(GLOW_MS, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "glow")
+    Canvas(Modifier.matchParentSize()) {
+        val breath = glow?.value ?: 0.5f
+        val radius = size.minDimension / 2
+        val reach = radius * (0.92f + 0.16f * breath) + GLOW_REACH.toPx()
+        drawCircle(Brush.radialGradient(0.7f to color.copy(alpha = 0.2f + 0.45f * breath), 1f to Color.Transparent, radius = reach), radius = reach)
+        rotate(turn?.value ?: 0f) { drawCircle(Brush.sweepGradient(listOf(color, HuddleGold, coral, color)), radius = radius) }
+    }
+}
+
+/** The badge of a card not opened yet: a coral capsule with the send icon, ringed in [gap], that wiggles now and then. */
+@Composable
+private fun MailBadge(gap: Color, modifier: Modifier) {
+    val brand = LocalBrandColors.current
+    val tilt = if (LocalReducedMotion.current) {
+        null
+    } else {
+        rememberInfiniteTransition(label = "mail").animateFloat(
+            0f,
+            0f,
+            infiniteRepeatable(
+                keyframes {
+                    durationMillis = NUDGE_MS
+                    0f at NUDGE_MS * 70 / 100
+                    -14f at NUDGE_MS * 76 / 100
+                    12f at NUDGE_MS * 84 / 100
+                    -6f at NUDGE_MS * 92 / 100
+                },
+            ),
+            label = "nudge",
+        )
+    }
+    Box(
+        contentAlignment = Alignment.Center,
+        modifier = modifier
+            .graphicsLayer { rotationZ = tilt?.value ?: 0f }
+            .drawBehind { drawRoundRect(gap, Offset(-2.dp.toPx(), -2.dp.toPx()), Size(size.width + 4.dp.toPx(), size.height + 4.dp.toPx()), CornerRadius(size.height / 2 + 2.dp.toPx())) }
+            .background(brand.highlight, CircleShape)
+            .size(24.dp),
+    ) {
+        Icon(painterResource(R.drawable.ic_send), contentDescription = null, tint = brand.onHighlight, modifier = Modifier.size(13.dp))
+    }
+}
+
+/**
+ * The moving bars that mean "playing now": four bars rising and falling each at its own pace, still at their resting
+ * heights when motion is off. Decorative.
+ */
+@Composable
+internal fun Equaliser(color: Color, modifier: Modifier = Modifier) {
+    val motion = if (LocalReducedMotion.current) null else rememberInfiniteTransition(label = "equaliser")
+    val bars = EQ_MS.indices.map { at ->
+        motion?.animateFloat(0.2f, 1f, infiniteRepeatable(tween(EQ_MS[at], easing = FastOutSlowInEasing), RepeatMode.Reverse, StartOffset(EQ_OFFSET_MS[at], StartOffsetType.FastForward)), label = "bar")
+    }
+    Canvas(modifier.clearAndSetSemantics {}) {
+        val gap = size.width * 0.12f
+        val width = (size.width - gap * (bars.size - 1)) / bars.size
+        bars.forEachIndexed { at, bar ->
+            val height = size.height * (bar?.value ?: EQ_STILL[at])
+            drawRoundRect(color, Offset(at * (width + gap), size.height - height), Size(width, height), CornerRadius(1.dp.toPx()))
+        }
+    }
+}
+
+/** A song's art for Huddle: its cover when [song] is in your library, else a pattern in the friend's [color] with a note (covers never travel). */
+@Composable
+internal fun FriendArt(song: Song?, color: Color, size: Dp, shape: Shape, modifier: Modifier = Modifier) {
+    if (song != null) {
+        SongCover(SongArt(song.path, song.ref.mediaStoreId), modifier, size = size, shape = shape)
+        return
+    }
+    Box(contentAlignment = Alignment.Center, modifier = modifier.size(size).clip(shape).background(Brush.radialGradient(listOf(lerp(color, BrandLilac, 0.4f), color)))) {
+        Icon(painterResource(R.drawable.ic_music_note), contentDescription = null, tint = BrandLilac.copy(alpha = 0.85f), modifier = Modifier.size(size * 0.38f))
+    }
+}
+
+/** The friend's song glowing behind a card: your cover blurred, or their colour's pattern when you do not have it. */
+@Composable
+internal fun BoxScope.FriendGlow(song: Song?, color: Color, blur: Dp, modifier: Modifier = Modifier) {
+    if (song == null) {
+        Box(modifier.matchParentSize().background(Brush.radialGradient(listOf(lerp(color, BrandLilac, 0.25f), color, lerp(color, BrandBlack, 0.5f)))))
+        return
+    }
+    val context = LocalContext.current
+    val art = backdropArt(song.path)
+    val request = remember(art, context) { backdropRequest(context, art) }
+    AsyncImage(
+        model = request,
+        contentDescription = null,
+        contentScale = ContentScale.Crop,
+        modifier = modifier.matchParentSize().graphicsLayer {
+            scaleX = 1.2f
+            scaleY = 1.2f
+        }.blur(blur, BlurredEdgeTreatment.Unbounded),
+    )
+}
+
+/** [content] on a ground that is dark in either theme (a friend's card, the empty card): KJB's dark theme for it, light words. */
+@Composable
+internal fun DarkGround(content: @Composable () -> Unit) {
+    MaterialTheme(colorScheme = DarkColors, shapes = MaterialTheme.shapes, typography = MaterialTheme.typography) {
+        CompositionLocalProvider(
+            LocalChromeColors provides chromeColors(DarkColors, DarkBrandColors, dark = true),
+            LocalBrandColors provides DarkBrandColors,
+            LocalContentColor provides BrandLilac,
+            content = content,
+        )
+    }
+}
+
+/** "New", on a card not opened yet: a small coral capsule. Read by TalkBack with the card. */
+@Composable
+internal fun NewMark() {
+    val brand = LocalBrandColors.current
+    Text(
+        stringResource(R.string.huddle_new).uppercase(),
+        style = MaterialTheme.typography.labelSmall.copy(fontSize = MaterialTheme.typography.labelSmall.fontSize * 0.9f, fontWeight = FontWeight.Bold, letterSpacing = MaterialTheme.typography.labelSmall.fontSize * 0.05f),
+        color = brand.onHighlight,
+        maxLines = 1,
+        modifier = Modifier.background(brand.highlight, RoundedCornerShape(9.dp)).padding(horizontal = 7.dp, vertical = 1.dp),
+    )
+}
+
+/** Whether a friend's song is here: in your library (teal, as suggestions'), maybe, or not (coral). [some]: "3 of 12" for a list. */
+@Composable
+internal fun HaveChip(match: Match?, modifier: Modifier = Modifier, some: Pair<Int, Int>? = null) {
+    val brand = LocalBrandColors.current
+    val colors = MaterialTheme.colorScheme
+    val (ground, ink, icon) = when {
+        some != null && some.first == some.second || match is Match.Found -> Triple(brand.suggestionContainer, brand.suggestion, R.drawable.ic_check)
+        some != null && some.first > 0 || match is Match.Maybe -> Triple(colors.surfaceContainerHighest, colors.onSurface, R.drawable.ic_help)
+        else -> Triple(brand.highlightContainer, brand.onHighlightContainer, R.drawable.ic_close)
+    }
+    @StringRes val words = when {
+        some != null && some.first in 1 until some.second -> null
+        some != null && some.first == some.second || match is Match.Found -> R.string.huddle_found
+        match is Match.Maybe -> R.string.huddle_maybe
+        else -> R.string.huddle_not_found
+    }
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        modifier = modifier.background(ground, RoundedCornerShape(10.dp)).padding(start = 4.dp, end = 8.dp),
+    ) {
+        Icon(painterResource(icon), contentDescription = null, tint = ink, modifier = Modifier.size(14.dp))
+        Text(
+            words?.let { stringResource(it) } ?: stringResource(R.string.huddle_found_some, some?.first ?: 0, some?.second ?: 0),
+            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
+            color = ink,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+/**
+ * A friend playing now, as a big card (Listening now): their song glowing behind, their face with its live ring, "Playing
+ * now" with the bars, the song's cover ([song]: yours, else their colour's pattern), title and artist, then Play along
+ * and Send. The card's ground is dark in either theme.
+ */
+@Composable
+internal fun FriendCard(friend: FriendNow, song: Song?, name: String, onPlayAlong: () -> Unit, onSend: () -> Unit, onMore: () -> Unit) {
+    val play = friend.play ?: return
+    val resources = LocalResources.current
+    val color = friendColor(friend.friend.id)
+    Box(Modifier.width(FRIEND_CARD_WIDTH).clip(RoundedCornerShape(28.dp)).background(HuddleCardGround)) {
+        FriendGlow(song, color, 22.dp)
+        Box(Modifier.matchParentSize().background(Brush.verticalGradient(0f to HuddleCardShade.copy(alpha = 0.3f), 0.7f to HuddleCardShade.copy(alpha = 0.66f))))
+        DarkGround {
+            Column(Modifier.padding(start = 14.dp, top = 12.dp, end = 8.dp, bottom = 14.dp)) {
+                val playing = stringResource(R.string.huddle_playing_now)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    FriendFace(name, color, 44.dp, ring = FaceRing.LIVE, gap = HuddleCardGround)
+                    Column(Modifier.weight(1f).semantics(mergeDescendants = true) { contentDescription = listOf(name, playing, songBy(resources, play.song)).joinToString(", ") }) {
+                        Text(name, style = CardName, color = BrandLilac, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Equaliser(BrandLilac.copy(alpha = 0.85f), Modifier.size(15.dp, 12.dp))
+                            Text(playing, style = MaterialTheme.typography.bodyMedium, color = BrandLilac.copy(alpha = 0.85f), maxLines = 1)
+                        }
+                    }
+                    ChromeIconButton(R.drawable.ic_more_horiz, stringResource(R.string.huddle_friend_more, name), onMore, glass = false)
+                }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp), modifier = Modifier.padding(top = 8.dp, end = 6.dp).clearAndSetSemantics {}) {
+                    FriendArt(song, color, 76.dp, RoundedCornerShape(18.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(play.song.title, style = CardTitle, color = BrandLilac, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        play.song.artist?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = BrandLilac.copy(alpha = 0.85f), maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 12.dp, end = 6.dp)) {
+                    LyrifyButton(stringResource(R.string.huddle_play_along), onClick = onPlayAlong, modifier = Modifier.weight(1f), icon = R.drawable.ic_headphones, compact = true)
+                    ChromeIconButton(R.drawable.ic_send, stringResource(R.string.huddle_send_song_to, name), onSend, tint = BrandLilac)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * A card a friend sent, as a postcard (Sent to you): their note in big type, the song's cover as the stamp (yours, else
+ * their colour's pattern), then who sent it, the song, whether you have it ([have], or [some] of a list) and a play
+ * button. Tilted a little, [tilt] degrees. A tap opens the card; the play button plays it (or opens it, when it is not here).
+ */
+@Composable
+internal fun Postcard(
+    note: String?,
+    from: String,
+    color: Color,
+    title: String,
+    song: Song?,
+    have: Match?,
+    some: Pair<Int, Int>?,
+    fresh: Boolean,
+    tilt: Float,
+    onOpen: () -> Unit,
+    onPlay: () -> Unit,
+) {
+    val paper = if (LocalDarkTheme.current) DarkPaper else LightPaper
+    val colors = MaterialTheme.colorScheme
+    val chrome = LocalChromeColors.current
+    val shape = RoundedCornerShape(18.dp)
+    Column(
+        Modifier
+            .width(POSTCARD_WIDTH)
+            .rotate(tilt)
+            .clip(shape)
+            .background(paper.paper)
+            .border(1.dp, paper.line, shape)
+            .clickable(role = Role.Button, onClick = onOpen)
+            .padding(start = 16.dp, top = 14.dp, end = 12.dp, bottom = 8.dp),
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                note?.let { stringResource(R.string.huddle_note_quoted, it) } ?: title,
+                style = PostcardNote,
+                color = colors.onSurface,
+                maxLines = 4,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            Box(
+                Modifier
+                    .rotate(3f)
+                    .size(56.dp, 64.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(chrome.sheet)
+                    .drawBehind {
+                        val width = 2.dp.toPx()
+                        drawRoundRect(lerp(color, paper.paper, 0.45f), Offset(width / 2, width / 2), Size(size.width - width, size.height - width), CornerRadius(6.dp.toPx()), Stroke(width, pathEffect = PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 3.dp.toPx()))))
+                    }
+                    .padding(6.dp)
+                    .clearAndSetSemantics {},
+            ) { FriendArt(song, color, 52.dp, RoundedCornerShape(3.dp)) }
+        }
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier
+                .padding(top = 6.dp)
+                .fillMaxWidth()
+                .drawBehind {
+                    val width = 1.dp.toPx()
+                    drawLine(paper.line, Offset(0f, 0f), Offset(size.width, 0f), width, pathEffect = PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 3.dp.toPx())))
+                }
+                .padding(top = 6.dp),
+        ) {
+            FriendFace(from, color, 28.dp, gap = paper.paper)
+            Column(Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(stringResource(R.string.huddle_from, from), style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold), color = lerp(color, colors.onSurface, 0.38f), maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                    if (fresh) NewMark()
+                }
+                Text(title, style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                HaveChip(have, Modifier.padding(top = 2.dp), some)
+            }
+            val playLabel = stringResource(R.string.huddle_play_card, title)
+            Box(
+                contentAlignment = Alignment.Center,
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(CircleShape)
+                    .background(chrome.action)
+                    .clickable(role = Role.Button, onClick = onPlay)
+                    .semantics { contentDescription = playLabel },
+            ) {
+                Icon(painterResource(R.drawable.ic_play_arrow_fill), contentDescription = null, tint = chrome.onAction, modifier = Modifier.size(26.dp))
+            }
+        }
+    }
+}
+
+/**
+ * One face of Library's friends row: [face] over the [name] and a short [line] (their song while they play, in the
+ * page's ink, [strong]); a tap does [onClick]. 74 dp wide, a TalkBack stop of its own named [description].
+ */
+@Composable
+internal fun RowFace(name: String, line: String?, strong: Boolean, description: String, onClick: () -> Unit, face: @Composable () -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier
+            .width(74.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .clickable(role = Role.Button, onClick = onClick)
+            .semantics(mergeDescendants = true) { contentDescription = description }
+            .heightIn(min = 48.dp)
+            .padding(vertical = 4.dp),
+    ) {
+        Box(Modifier.padding(bottom = 6.dp)) { face() }
+        Text(name, style = RowName, color = colors.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.clearAndSetSemantics {}.padding(horizontal = 2.dp))
+        line?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = if (strong) colors.onSurface else colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.clearAndSetSemantics {}.padding(horizontal = 2.dp)) }
+    }
+}
+
+/** A section's head on the Huddle page: its name in display type, a small count or note after it, maybe a button at the end. */
+@Composable
+internal fun HuddleHeading(title: String, count: String? = null, action: (@Composable () -> Unit)? = null) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(start = ScreenPadding + 4.dp, end = 12.dp, top = 4.dp)) {
+        Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.weight(1f).semantics(mergeDescendants = true) { heading() }) {
+            Text(title, style = HeadingStyle, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+            count?.let { Text(it, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold), color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1) }
+        }
+        action?.invoke()
+    }
+}
+
+/**
+ * No friend yet (the mockup's empty cards): three empty cards bobbing on a warm gradient, "Your Huddle has room for
+ * friends", one line, then Invite a friend and Paste invite. The cards stay still when motion is off.
+ */
+@Composable
+internal fun EmptyCard(onInvite: () -> Unit, onPaste: () -> Unit) {
+    val reduced = LocalReducedMotion.current
+    val bob = if (reduced) null else rememberInfiniteTransition(label = "empty cards").animateFloat(0f, 1f, infiniteRepeatable(tween(BOB_MS, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "bob")
+    Column(
+        Modifier
+            .padding(horizontal = ScreenPadding)
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(30.dp))
+            .background(HuddleEmptyGround)
+            .drawBehind {
+                drawRect(Brush.radialGradient(listOf(HuddleEmptyGlows[0], Color.Transparent), Offset(size.width * 0.15f, size.height * 0.15f), size.maxDimension * 0.55f))
+                drawRect(Brush.radialGradient(listOf(HuddleEmptyGlows[1], Color.Transparent), Offset(size.width * 0.9f, size.height * 0.25f), size.maxDimension * 0.55f))
+                drawRect(Brush.radialGradient(listOf(HuddleEmptyGlows[2], Color.Transparent), Offset(size.width * 0.5f, size.height * 1.1f), size.maxDimension * 0.6f))
+            }
+            .padding(start = 18.dp, end = 18.dp, top = 22.dp, bottom = 18.dp),
+    ) {
+        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxWidth().height(104.dp).clearAndSetSemantics {}) {
+            listOf(-1, 1, 0).forEach { side ->
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterVertically),
+                    modifier = Modifier
+                        .graphicsLayer {
+                            val rise = (bob?.value ?: 0f) * if (side == 0) 14.dp.toPx() else 8.dp.toPx()
+                            translationX = side * 74.dp.toPx()
+                            translationY = -rise - if (side == 0) 6.dp.toPx() else 0f
+                            rotationZ = side * (10f + 3f * (bob?.value ?: 0f))
+                        }
+                        .size(82.dp, 104.dp)
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(BrandLilac.copy(alpha = if (side == 0) 0.22f else 0.14f))
+                        .drawBehind {
+                            val width = 1.5.dp.toPx()
+                            drawRoundRect(BrandLilac.copy(alpha = 0.55f), Offset(width / 2, width / 2), Size(size.width - width, size.height - width), CornerRadius(20.dp.toPx()), Stroke(width, pathEffect = PathEffect.dashPathEffect(floatArrayOf(5.dp.toPx(), 4.dp.toPx()))))
+                        },
+                ) {
+                    Box(contentAlignment = Alignment.Center, modifier = Modifier.size(40.dp).background(BrandLilac.copy(alpha = 0.22f), CircleShape)) {
+                        Text("?", style = MaterialTheme.typography.titleLarge, color = BrandLilac)
+                    }
+                    Box(Modifier.size(44.dp, 6.dp).background(BrandLilac.copy(alpha = 0.4f), RoundedCornerShape(3.dp)))
+                }
+            }
+        }
+        Text(stringResource(R.string.huddle_empty_title), style = EmptyTitle, color = BrandLilac, modifier = Modifier.padding(top = 16.dp, bottom = 6.dp).semantics { heading() })
+        Text(stringResource(R.string.huddle_empty_text), style = MaterialTheme.typography.bodyLarge, color = BrandLilac.copy(alpha = 0.9f), modifier = Modifier.padding(bottom = 16.dp))
+        DarkGround {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                LyrifyButton(stringResource(R.string.huddle_invite), onClick = onInvite, icon = R.drawable.ic_add, compact = true)
+                LyrifyButton(stringResource(R.string.huddle_paste), onClick = onPaste, kind = ButtonKind.SECONDARY, icon = R.drawable.ic_content_paste, compact = true)
+            }
+        }
+    }
+}
+
+internal val FRIEND_CARD_WIDTH = 268.dp
+private val POSTCARD_WIDTH = 236.dp
+
+/** A ring takes this share of a face's size, plus a dp, between its edge and the face. */
+private const val RING_SHARE = 0.08f
+private const val INITIAL_SHARE = 0.4f
+private const val IDLE_GREY = 0.45f
+private const val RING_TURN_MS = 2_800
+private const val GLOW_MS = 1_600
+private val GLOW_REACH = 7.dp
+private const val NUDGE_MS = 2_400
+private val EQ_MS = intArrayOf(700, 900, 600, 850)
+private val EQ_OFFSET_MS = intArrayOf(0, 300, 500, 200)
+private val EQ_STILL = floatArrayOf(0.45f, 1f, 0.7f, 0.35f)
+
+private val CardName = display(17, 22, weight = 650)
+private val CardTitle = display(21, 26, -0.01, weight = 700)
+private val PostcardNote = display(18, 23, -0.005, weight = 650)
+private val HeadingStyle = display(18, 24, weight = 650)
+private val RowName = body(13f, 17, 600)
+
+/** How long a card of the empty state takes to rise and settle back. */
+private const val BOB_MS = 3_200
+
+
+private val EmptyTitle = display(26, 30, -0.01, weight = 700)

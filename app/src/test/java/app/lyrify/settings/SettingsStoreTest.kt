@@ -107,6 +107,7 @@ class SettingsStoreTest {
                 DockItemSetting(DockTab.DOWNLOADS, false),
                 DockItemSetting(DockTab.TOOLS, false),
                 DockItemSetting(DockTab.INSIGHTS, true),
+                DockItemSetting(DockTab.HUDDLE, false),
                 DockItemSetting(DockTab.SEARCH, true),
             ),
             dockStyle = DockStyle.SLIM,
@@ -590,8 +591,8 @@ class SettingsStoreTest {
             read?.take(4),
         )
         // The items the file does not carry follow, in their default order, on or off as by default.
-        assertEquals(listOf(DockTab.PLAYLISTS, DockTab.FAVOURITES, DockTab.DOWNLOADS, DockTab.BOOKS, DockTab.INSIGHTS), read?.drop(4)?.map { it.tab })
-        assertEquals(listOf(true, false, false, false, false), read?.drop(4)?.map { it.shown })
+        assertEquals(listOf(DockTab.PLAYLISTS, DockTab.FAVOURITES, DockTab.DOWNLOADS, DockTab.BOOKS, DockTab.INSIGHTS, DockTab.HUDDLE), read?.drop(4)?.map { it.tab })
+        assertEquals(listOf(true, false, false, false, false, false), read?.drop(4)?.map { it.shown })
         // Not a list, or nothing in it: the default bar.
         assertEquals(DisplaySettings.DEFAULT_DOCK, dock("""{"tab":"QUEUES"}"""))
         assertEquals(DisplaySettings.DEFAULT_DOCK, dock("[]"))

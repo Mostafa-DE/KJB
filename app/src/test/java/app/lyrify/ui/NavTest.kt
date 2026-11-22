@@ -348,7 +348,7 @@ class NavTest {
             assertEquals("$root", DockTab.LIBRARY, NavState.start(root).show(FullScreen.Player).open(album).tab)
             assertEquals("$root", DockTab.PLAYLISTS, NavState.start(root).show(FullScreen.Player).open(Page.Playlist("p3")).tab)
         }
-        assertEquals(setOf(DockTab.QUEUES, DockTab.FAVOURITES, DockTab.DOWNLOADS, DockTab.BOOKS, DockTab.INSIGHTS), BAR_ROOTS)
+        assertEquals(setOf(DockTab.QUEUES, DockTab.FAVOURITES, DockTab.DOWNLOADS, DockTab.BOOKS, DockTab.INSIGHTS, DockTab.HUDDLE), BAR_ROOTS)
     }
 
     @Test

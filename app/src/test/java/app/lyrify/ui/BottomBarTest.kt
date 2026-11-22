@@ -42,6 +42,17 @@ class BottomBarTest {
     }
 
     @Test
+    fun `Huddle is offered for the bar, off on a new bar and an upgraded one, so the default bar stays as it was`() {
+        assertTrue(dockOffers(DockTab.HUDDLE, downloads = false, books = false))
+        assertEquals(DockItemSetting(DockTab.HUDDLE, false), default.single { it.tab == DockTab.HUDDLE })
+        assertEquals(DOCK_TABS, dockItems(default, everything))
+        val stored = """{"display":{"dock":[{"tab":"LIBRARY","shown":true},{"tab":"PLAYLISTS","shown":false},{"tab":"SEARCH","shown":true},{"tab":"TOOLS","shown":true},{"tab":"INSIGHTS","shown":false}]}}"""
+        val upgraded = checkNotNull(SettingsJson.decode(stored)).display.dock
+        assertEquals(DockItemSetting(DockTab.HUDDLE, false), upgraded.single { it.tab == DockTab.HUDDLE })
+        assertEquals(listOf(DockTab.LIBRARY, DockTab.SEARCH, DockTab.TOOLS, DockTab.HUDDLE), dockItems(dockSwitched(upgraded, DockTab.HUDDLE, on = true, everything), everything))
+    }
+
+    @Test
     fun `the bar keeps the user's order and only the items switched on`() {
         val setting = on(DockTab.FAVOURITES, DockTab.LIBRARY, DockTab.QUEUES, DockTab.TOOLS)
         assertEquals(listOf(DockTab.FAVOURITES, DockTab.LIBRARY, DockTab.QUEUES, DockTab.TOOLS), dockItems(setting, everything))

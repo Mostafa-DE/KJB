@@ -316,7 +316,7 @@ enum class SettingsSection(val openAtFirst: Boolean) { PLAYBACK(true), SUGGESTIO
  * and Queues, Favourites, Downloads (only with KJB Downloads installed), Books (only while the library holds a book) and
  * Insights (KJB 3.2) when the user puts them there (Settings > Display > Bottom bar).
  */
-enum class DockTab { LIBRARY, PLAYLISTS, QUEUES, FAVOURITES, DOWNLOADS, BOOKS, INSIGHTS, SEARCH, TOOLS }
+enum class DockTab { LIBRARY, PLAYLISTS, QUEUES, FAVOURITES, DOWNLOADS, BOOKS, INSIGHTS, HUDDLE, SEARCH, TOOLS }
 
 /** Settings > Display. */
 data class DisplaySettings(

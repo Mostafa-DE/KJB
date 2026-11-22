@@ -497,10 +497,10 @@ fun pageKeys(state: NavState): Set<String> =
 fun restoreNav(saved: Any?, lastTab: DockTab): NavState = (saved as? String)?.let(NavState::decode) ?: NavState.start(lastTab)
 
 /**
- * The items the user can put on the bar besides the four that always were (KJB 3.1, Insights in 3.2): each a root with a
- * stack of its own, which keeps what opens on it as Library and Playlists do.
+ * The items the user can put on the bar besides the four that always were (KJB 3.1; Insights and Huddle in 3.2): each a
+ * root with a stack of its own, which keeps what opens on it as Library and Playlists do.
  */
-val BAR_ROOTS: Set<DockTab> = setOf(DockTab.QUEUES, DockTab.FAVOURITES, DockTab.DOWNLOADS, DockTab.BOOKS, DockTab.INSIGHTS)
+val BAR_ROOTS: Set<DockTab> = setOf(DockTab.QUEUES, DockTab.FAVOURITES, DockTab.DOWNLOADS, DockTab.BOOKS, DockTab.INSIGHTS, DockTab.HUDDLE)
 
 /**
  * The tab [page] opens on from [from] ([viewOpen]: from a full-screen view, such as the player, over [from]): Tools

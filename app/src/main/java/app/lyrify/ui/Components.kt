@@ -619,7 +619,7 @@ internal val DIALOG_BUTTONS = listOf(DialogButton.DISMISS, DialogButton.CONFIRM)
 
 /** A dialog window that draws its own scrim: no platform dim; the system bars' icons follow the theme. */
 @Composable
-private fun PlainDialogWindow() {
+internal fun PlainDialogWindow() {
     val view = LocalView.current
     val dark = LocalDarkTheme.current
     SideEffect {

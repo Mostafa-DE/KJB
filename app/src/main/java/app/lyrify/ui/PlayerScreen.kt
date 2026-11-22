@@ -594,6 +594,8 @@ fun PlayerView() {
                     modifier = Modifier.weight(1f),
                 )
                 TitleAndLinks(ui, settings.library, bookNow) { chapterSheet = true }
+                // A friend playing this song, or its artist, now (Huddle).
+                ui.song?.takeIf { bookNow == null }?.let { PlayerFriendChip(it.title, it.artist) }
                 SuggestedLine(ui, settings.suggestions.showReasons)
                 PlayerChips(ui, extras)
                 Spacer(Modifier.height(LINKS_GAP))
@@ -1012,7 +1014,11 @@ private fun FlipArea(
                     cameraDistance = CAMERA * density
                     alpha = frontAlpha
                 },
-            ) { CoverFace(ui, side, area, enabled = !lyricsShown, onFlip = if (flips) { { onFlip(true) } } else null, onNext, onPrevious, book, onFlipBack = { onFlip(false) }) }
+            ) {
+                CoverFace(ui, side, area, enabled = !lyricsShown, onFlip = if (flips) { { onFlip(true) } } else null, onNext, onPrevious, book, onFlipBack = { onFlip(false) })
+                // Friends playing this very song now, stuck on the cover's corner away from the flip chip (Huddle).
+                ui.song?.takeIf { book == null }?.let { CoverFriends(it.title, it.artist, Modifier.align(Alignment.BottomStart).offset((-12).dp, 12.dp)) }
+            }
         }
         if (lyricsShown || (reduced && fade.value > 0f)) {
             Box(
