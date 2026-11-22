@@ -64,9 +64,18 @@ object Messages {
     /** [song] as a card or a shared play carries it: its tags, trimmed to [TEXT_MAX], and its length. */
     fun song(song: Song): CardSong = CardSong(clip(song.title, TEXT_MAX).orEmpty(), clip(song.artist, TEXT_MAX), clip(song.album, TEXT_MAX), song.durationMs)
 
-    /** [message] padded to its size; a share too long for the largest keeps its first songs, as many as fit. */
+    /**
+     * [message] padded to its size; a share too long for the largest keeps its first songs, as many as fit. A play has the
+     * smallest size only (the server keeps plays of 2 KB at most): long tags in a script of several bytes a character are
+     * cut, each half as long again, until it fits.
+     */
     fun encode(message: Message): ByteArray {
         var plain = json(message)
+        var keep = TEXT_MAX
+        while (message is Message.Play && plain.size >= SIZES.first() && keep > 1) {
+            keep /= 2
+            plain = json(message.copy(song = message.song.let { CardSong(clip(it.title, keep).orEmpty(), clip(it.artist, keep), clip(it.album, keep), it.durationMs) }))
+        }
         if (plain.size > MAX_PLAIN && message is Message.Share) {
             // The most songs that fit: a few tries, as each try writes the whole card.
             var fits = 0
@@ -110,11 +119,11 @@ object Messages {
         },
     )
 
-    /** The card [json] holds: of a known kind, with one song at least; null else. */
+    /** The card [json] holds: of a known kind, with one song at least; null else. Its texts as [shown]. */
     internal fun cardOf(json: JsonObject): Card? {
         val kind = CardKind.entries.firstOrNull { it.name.lowercase() == json.text(KIND_KEY) } ?: return null
         val songs = (json[SONG_KEY] as? JsonArray)?.map { (it as? JsonObject)?.let(::songOf) ?: return null }?.takeIf { it.isNotEmpty() } ?: return null
-        return Card(kind, songs, json.text(NAME_KEY), json.text(NOTE_KEY))
+        return Card(kind, songs, json.text(NAME_KEY)?.let(::shown), json.text(NOTE_KEY)?.let(::shown))
     }
 
     private fun json(message: Message): ByteArray = JsonObject(
@@ -148,8 +157,18 @@ object Messages {
         },
     )
 
-    private fun songOf(json: JsonObject): CardSong? =
-        CardSong(json.text(TITLE_KEY) ?: return null, json.text(ARTIST_KEY), json.text(ALBUM_KEY), json.long(LENGTH_KEY)?.takeIf { it >= 0 } ?: return null)
+    private fun songOf(json: JsonObject): CardSong? = CardSong(
+        json.text(TITLE_KEY)?.let(::shown) ?: return null,
+        json.text(ARTIST_KEY)?.let(::shown),
+        json.text(ALBUM_KEY)?.let(::shown),
+        json.long(LENGTH_KEY)?.takeIf { it >= 0 } ?: return null,
+    )
+
+    /**
+     * A friend's [text] as KJB shows it: without control characters, nor the marks that reorder what follows (embeddings,
+     * overrides, isolates), so a title or a note never shows as another than the one Play and Ask use.
+     */
+    private fun shown(text: String): String = text.filterNot { it.isISOControl() || it in REORDERING }
 
     /** The sizes a message is padded to: most are one song (1 KB); a long playlist takes the largest. */
     private val SIZES: IntArray = intArrayOf(1024, 4 * 1024, 16 * 1024, 48 * 1024)
@@ -172,6 +191,7 @@ object Messages {
     private const val ARTIST_KEY = "a"
     private const val ALBUM_KEY = "l"
     private const val LENGTH_KEY = "d"
+    private const val REORDERING = "\u202A\u202B\u202C\u202D\u202E\u2066\u2067\u2068\u2069"
     private const val SHARE = "share"
     private const val PLAY = "play"
     private const val BYE = "bye"

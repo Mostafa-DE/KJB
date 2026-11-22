@@ -28,8 +28,8 @@ class HuddleTest {
     private val random = SecureRandom()
     private val song = Card(CardKind.SONG, listOf(lantern), note = "for the drive")
 
-    private fun TestScope.phone(name: String? = null, storage: MemoryHuddle = MemoryHuddle(HuddleState(name = name))): Pair<Huddle, MemoryHuddle> =
-        Huddle(storage, server, host, hosts, { now + testScheduler.currentTime }, random, backgroundScope) to storage
+    private fun TestScope.phone(name: String? = null, storage: MemoryHuddle = MemoryHuddle(HuddleState(name = name)), ahead: Long = 0): Pair<Huddle, MemoryHuddle> =
+        Huddle(storage, server, host, hosts, { now + ahead + testScheduler.currentTime }, random, backgroundScope) to storage
 
     /** [huddle]'s new invite link with [card]. */
     private suspend fun link(huddle: Huddle, card: Card? = null): String = (huddle.invite(card) as Invited.Link).text
@@ -196,11 +196,11 @@ class HuddleTest {
         assertTrue(server.waiting(wrenOnJuniper.outBox).isEmpty())
 
         assertTrue(juniper.sharePlays(wrenOnJuniper.id, true))
-        juniper.played(bell, now + 1, favourite = true)
+        juniper.played(bell, now - 1, favourite = true)
         assertEquals(1, server.waiting(wrenOnJuniper.outBox).size)
         assertEquals(Kind.PLAY, server.kinds.values.last())
         wren.sync()
-        assertEquals(listOf(FriendPlay(juniperOnWren.id, now + 1, bell, favourite = true)), wrenState.now.plays)
+        assertEquals(listOf(FriendPlay(juniperOnWren.id, now - 1, bell, favourite = true)), wrenState.now.plays)
         assertTrue("a play is gone from the server once read", server.waiting(wrenOnJuniper.outBox).isEmpty())
     }
 
@@ -447,6 +447,120 @@ class HuddleTest {
         advanceTimeBy(Huddle.UNDO_MS + 1)
         juniper.sync()
         assertEquals("the friend hears from the restored phone", listOf(song), juniperState.now.inbox.map { it.card })
+    }
+
+    @Test
+    fun `a link whose key was swapped joins no slot, and nobody is added on either side`() = runTest {
+        val (wren, wrenState) = phone("Wren")
+        val (juniper, juniperState) = phone("Juniper")
+        val real = juniper.parse(link(wren, song))!!
+        val swapped = Invite(HuddleCrypto.keyPair(random).public, real.token, real.name, real.card)
+        assertEquals(Accepted.Expired, juniper.accept(swapped))
+        assertTrue(juniperState.now.friends.isEmpty())
+        assertTrue(juniperState.now.inbox.isEmpty())
+        assertTrue(wren.sync())
+        assertEquals("the real invite still waits", 1, wrenState.now.invites.size)
+        assertTrue(juniper.accept(real) is Accepted.Joined)
+    }
+
+    @Test
+    fun `an accept whose answer was lost is sent again as it was, and both phones end as one friendship`() = runTest {
+        val (wren, wrenState) = phone("Wren")
+        val (juniper, juniperState) = phone("Juniper")
+        val invite = juniper.parse(link(wren))!!
+        server.lostAccepts = 1
+        assertEquals(Accepted.NoAnswer, juniper.accept(invite))
+        assertTrue(juniperState.now.friends.isEmpty())
+        val joined = juniper.accept(invite) as Accepted.Joined
+        assertTrue(wren.sync())
+        val juniperOnWren = wrenState.now.friends.single()
+        assertEquals(juniperOnWren.outBox, joined.friend.inBox)
+        juniper.send(joined.friend.id, song)
+        advanceTimeBy(Huddle.UNDO_MS + 1)
+        wren.sync()
+        assertEquals("the friendship works both ways", listOf(song), wrenState.now.inbox.map { it.card })
+        assertTrue("nothing of the join is left waiting", juniperState.now.joins.isEmpty())
+    }
+
+    @Test
+    fun `an accept the phone could not write is sent again as it was`() = runTest {
+        val (wren, wrenState) = phone("Wren")
+        val storage = MemoryHuddle(HuddleState(name = "Juniper"))
+        val (juniper, _) = phone(storage = storage)
+        val invite = juniper.parse(link(wren))!!
+        val sent = server.requests.size
+        storage.writable = false
+        assertEquals(Accepted.NoAnswer, juniper.accept(invite))
+        assertEquals("nothing is sent before the join is kept", sent, server.requests.size)
+        storage.writable = true
+        val joined = juniper.accept(invite) as Accepted.Joined
+        wren.sync()
+        assertEquals(wrenState.now.friends.single().outBox, joined.friend.inBox)
+    }
+
+    @Test
+    fun `Joined names the card that came with the invite`() = runTest {
+        val (wren, _) = phone("Wren")
+        val (juniper, juniperState) = phone("Juniper")
+        val joined = juniper.accept(juniper.parse(link(wren, song))!!) as Accepted.Joined
+        assertEquals(juniperState.now.inbox.single().id, joined.received)
+        val (rook, _) = phone("Rook")
+        assertNull((rook.accept(rook.parse(link(wren))!!) as Accepted.Joined).received)
+    }
+
+    @Test
+    fun `a card the server sends again after many plays is still dropped`() = runTest {
+        val (wren, wrenState) = phone("Wren")
+        val (juniper, _) = phone("Juniper")
+        val (juniperOnWren, wrenOnJuniper) = friends(wren, juniper)
+        juniper.send(wrenOnJuniper.id, song)
+        advanceTimeBy(Huddle.UNDO_MS + 1)
+        val data = server.waiting(juniperOnWren.inBox).single().data
+        wren.sync()
+        juniper.sharePlays(wrenOnJuniper.id, true)
+        repeat(250) { juniper.played(bell, now + testScheduler.currentTime + it) }
+        wren.sync()
+        server.replay(juniperOnWren.inBox, data)
+        wren.sync()
+        assertEquals(1, wrenState.now.inbox.size)
+    }
+
+    @Test
+    fun `plays waiting to go are dropped once you listen privately or stop sharing with that friend`() = runTest {
+        val (wren, _) = phone("Wren")
+        val (juniper, juniperState) = phone("Juniper")
+        val (_, wrenOnJuniper) = friends(wren, juniper)
+        juniper.sharePlays(wrenOnJuniper.id, true)
+        server.online = false
+        juniper.played(bell, now)
+        juniper.listenPrivately(HuddleState.FOREVER)
+        server.online = true
+        juniper.sync()
+        assertTrue(server.waiting(wrenOnJuniper.outBox).isEmpty())
+        assertTrue(juniperState.now.outbox.isEmpty())
+
+        juniper.listenPrivately(null)
+        server.online = false
+        juniper.played(lantern, now + 1)
+        juniper.sharePlays(wrenOnJuniper.id, false)
+        server.online = true
+        juniper.sync()
+        assertTrue(server.waiting(wrenOnJuniper.outBox).isEmpty())
+    }
+
+    @Test
+    fun `a friend's play or card dated in the future is kept as from now`() = runTest {
+        val (wren, wrenState) = phone("Wren")
+        val (juniper, _) = phone("Juniper", ahead = 10 * 24 * Huddle.HOUR_MS)
+        val (_, wrenOnJuniper) = friends(wren, juniper)
+        juniper.sharePlays(wrenOnJuniper.id, true)
+        juniper.played(bell, now + 10 * 24 * Huddle.HOUR_MS)
+        juniper.send(wrenOnJuniper.id, song)
+        advanceTimeBy(Huddle.UNDO_MS + 1)
+        wren.sync()
+        val today = now + testScheduler.currentTime
+        assertTrue(wrenState.now.plays.single().at <= today)
+        assertTrue(wrenState.now.inbox.single().at <= today)
     }
 
     @Test

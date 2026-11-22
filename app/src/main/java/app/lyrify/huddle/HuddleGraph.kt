@@ -9,6 +9,7 @@ import app.lyrify.USER_AGENT
 import app.lyrify.library.LibraryGraph
 import app.lyrify.library.LibraryState
 import app.lyrify.logFailures
+import app.lyrify.stats.HeardTime
 import app.lyrify.stats.PlayEvent
 import app.lyrify.stats.PlayEvents
 import app.lyrify.suggestions.FriendsSource
@@ -20,12 +21,14 @@ import kotlinx.coroutines.launch
 import java.security.SecureRandom
 
 /**
- * The player's plays for Friends sharing ([HuddleGraph.played]): a play is passed on once it has sounded
- * [SHARE_AFTER_MS] (half a shorter song), so skipping through songs shares nothing; each play once, and a lap of
- * Repeat one is a play of its own. A book's plays never come here (books/BookPlayFilter). The player's thread; never blocks.
+ * The player's plays for Friends sharing ([HuddleGraph.played]): a play is passed on once [SHARE_AFTER_MS] of it was heard
+ * (half a shorter song), as the play counter hears it ([HeardTime]: the time played, not where the song stands, so a seek
+ * or a play resumed at its place shares nothing yet), so skipping through songs shares nothing; each play once, and a lap
+ * of Repeat one is a play of its own. A book's plays never come here (books/BookPlayFilter). The player's thread; never
+ * blocks.
  */
 class SharedPlays(private val share: (path: String, at: Long) -> Unit) : PlayEvents {
-    private class Waiting(val path: String, val at: Long, val afterMs: Long)
+    private class Waiting(val path: String, val at: Long, val afterMs: Long, val heard: HeardTime)
 
     /** Plays begun and not shared yet, by play id. */
     private val waiting = LinkedHashMap<Long, Waiting>()
@@ -33,18 +36,20 @@ class SharedPlays(private val share: (path: String, at: Long) -> Unit) : PlayEve
     override fun onEvent(event: PlayEvent) {
         when (event) {
             is PlayEvent.Started -> {
-                waiting[event.playId] = Waiting(event.song.path, event.at, if (event.durationMs > 0) minOf(SHARE_AFTER_MS, event.durationMs / 2) else SHARE_AFTER_MS)
+                val afterMs = if (event.durationMs > 0) minOf(SHARE_AFTER_MS, event.durationMs / 2) else SHARE_AFTER_MS
+                waiting[event.playId] = Waiting(event.song.path, event.at, afterMs, HeardTime(event.durationMs))
                 while (waiting.size > MAX_WAITING) waiting.remove(waiting.keys.first())
             }
             is PlayEvent.Position -> {
                 val play = waiting[event.playId] ?: return
-                if (event.playing && event.positionMs >= play.afterMs) {
+                play.heard.position(event.positionMs, event.playing, event.at)
+                if (play.heard.heardMs >= play.afterMs) {
                     waiting.remove(event.playId)
                     share(play.path, play.at)
                 }
             }
+            is PlayEvent.Seeked -> waiting[event.playId]?.heard?.seeked(event.fromMs, event.toMs, event.at)
             is PlayEvent.Ended -> waiting.remove(event.playId)
-            is PlayEvent.Seeked -> Unit
         }
     }
 
@@ -83,14 +88,16 @@ object HuddleGraph {
     }
 
     /**
-     * The play of the song at [path], begun [at], to the friends who get your plays: music only (no audiobook or podcast),
+     * The play of the song at [path], begun [at], to the friends who get your plays: music only (no audiobook, podcast or book),
      * its tags as the library reads them and whether it is a favourite. Reads nothing when no friend gets plays.
      */
     private suspend fun played(context: Context, path: String, at: Long) {
         val huddle = huddle(context)
         if (huddle.state.first().friends.none { it.sharePlays }) return
-        val song = (LibraryGraph.repository(context).state.value as? LibraryState.Ready)?.library?.song(path) ?: return
-        if (song.isAudiobook || song.isPodcast) return
+        val library = (LibraryGraph.repository(context).state.value as? LibraryState.Ready)?.library ?: return
+        val song = library.song(path) ?: return
+        // A book's part the user marked can start before the player had the library: its play is no song's.
+        if (song.isAudiobook || song.isPodcast || library.bookOf(path) != null) return
         val favourite = Lyrify.favourites(context).songs.first().any { it.path == path }
         huddle.played(Messages.song(song), at, favourite)
     }

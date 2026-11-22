@@ -130,11 +130,12 @@ class HuddleClientTest {
     }
 
     @Test
-    fun `a 502 or a bare 503 while Railway restarts is tried once more, a full store is not`() = runTest {
+    fun `a 502 or a bare 503 while Railway restarts is tried once more, a full store is no answer for now`() = runTest {
         val huddle = client(Answer(502), Answer(201, """{"id":"1"}"""), Answer(503), Answer(503), Answer(503, """{"error":"storage_full"}"""))
         assertEquals(PostAnswer.POSTED, huddle.send(box, Kind.CARD, "ZGF0YQ"))
         assertEquals(PostAnswer.NO_ANSWER, huddle.send(box, Kind.CARD, "ZGF0YQ"))
-        assertEquals(PostAnswer.REFUSED, huddle.send(box, Kind.CARD, "ZGF0YQ"))
+        // The server takes messages again once it has cleared old ones: what waits to go stays.
+        assertEquals(PostAnswer.NO_ANSWER, huddle.send(box, Kind.PLAY, "ZGF0YQ"))
         assertEquals(5, opened.size)
     }
 
@@ -151,6 +152,15 @@ class HuddleClientTest {
         val second = (opened[1].json()["mailboxes"] as JsonArray).single() as JsonObject
         assertEquals(box, second.string("mailbox"))
         assertEquals("x", second.string("after"))
+    }
+
+    @Test
+    fun `a later inbox page that gets no answer keeps the pages read, as the server already let their plays go`() = runTest {
+        val huddle = client(
+            Answer(200, """{"now":1,"mailboxes":[{"mailbox":"$box","messages":[{"id":"3","kind":"play","data":"YQ","sentAt":1}],"more":true}]}"""),
+            Answer(0, fails = true),
+        )
+        assertEquals(mapOf(box to listOf(Posted(3, "YQ"))), huddle.inbox(listOf(box)))
     }
 
     @Test

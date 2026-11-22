@@ -83,6 +83,14 @@ class HuddleStoreTest {
     }
 
     @Test
+    fun `a section whose salt is empty or short opens to nothing, never a crash`() {
+        val section = HuddleBackup.seal(full.copy(backupKey = HuddleBackup.newKey("correct horse".toCharArray(), random, rounds = 1_000)), random)!!
+        val salt = Regex(""""salt":"([^"]*)"""").find(section)!!.groupValues[1]
+        assertNull(HuddleBackup.open(section.replace(salt, ""), "correct horse".toCharArray()))
+        assertNull(HuddleBackup.open(section.replace(salt, "AA"), "correct horse".toCharArray()))
+    }
+
+    @Test
     fun `without a passphrase there is no Huddle section`() {
         assertNull(HuddleBackup.seal(full.copy(backupKey = null), random))
     }

@@ -74,10 +74,11 @@ class InvitesTest {
     fun `the join mailbox is the same for both phones, secret, and one per invite`() {
         val (_, one) = invite()
         val (_, two) = invite()
-        val id = Invites.joinId(one.token)
+        val id = Invites.joinId(one.token, one.publicKey)
         assertEquals(43, id.length)
-        assertEquals(id, Invites.joinId(one.token.copyOf()))
-        assertNotEquals(id, Invites.joinId(two.token))
+        assertEquals(id, Invites.joinId(one.token.copyOf(), one.publicKey.copyOf()))
+        assertNotEquals(id, Invites.joinId(two.token, one.publicKey))
+        assertNotEquals("a link whose key was swapped names another slot", id, Invites.joinId(one.token, two.publicKey))
         assertFalse(id.contains(HuddleCrypto.encode(one.token)))
     }
 

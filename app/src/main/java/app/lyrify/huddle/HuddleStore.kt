@@ -62,6 +62,23 @@ data class Friend(
 @Serializable
 data class PendingInvite(val publicKey: String, val privateKey: String, val token: String, val owner: String, val madeAt: Long, val card: Card? = null)
 
+/**
+ * An invite this phone is joining: its join mailbox [joinId], the exact accept [data] posted there (sent again as it is
+ * when the answer was lost, so the server knows it), the friendship's keys from this side, and the inviter's [name] and
+ * first [card]. Kept before the accept goes, gone once it is answered.
+ */
+@Serializable
+data class PendingJoin(
+    val joinId: String,
+    val data: String,
+    val outBox: String,
+    val inBox: String,
+    val outKey: String,
+    val inKey: String,
+    val name: String,
+    val card: Card? = null,
+)
+
 /** A card [friend] (their id) sent, [at] when, under its message [id]; [opened] once you played it, looked at it or put it away. */
 @Serializable
 data class Received(val id: String, val friend: String, val at: Long, val card: Card, val opened: Boolean = false)
@@ -94,6 +111,8 @@ data class HuddleState(
     /** Plays friends shared, newest first: now playing, and the friends source of Suggestions. */
     val plays: List<FriendPlay> = emptyList(),
     val outbox: List<Outgoing> = emptyList(),
+    /** Invites this phone is joining, until the server answered ([PendingJoin]). */
+    val joins: List<PendingJoin> = emptyList(),
     /** Listen privately: no play is shared before this time (wall-clock millis); [FOREVER] until turned back on. */
     val privateUntil: Long? = null,
     val backupKey: BackupKey? = null,
@@ -172,7 +191,7 @@ object HuddleBackup {
         val root = jsonObject(section)?.takeIf { it.int(FORMAT_KEY) == FORMAT && it.text(KDF_KEY) == KDF } ?: return null
         val rounds = root.int(ROUNDS_KEY)?.takeIf { it in 1..MAX_ROUNDS } ?: return null
         val saltText = root.text(SALT_KEY) ?: return null
-        val salt = HuddleCrypto.decode(saltText) ?: return null
+        val salt = HuddleCrypto.decode(saltText)?.takeIf { it.size == SALT_BYTES } ?: return null
         val sealed = root.text(BOX_KEY)?.let(HuddleCrypto::decode) ?: return null
         val key = HuddleCrypto.passphraseKey(passphrase, salt, rounds)
         val plain = HuddleCrypto.open(key, sealed, AAD) ?: return null

@@ -48,6 +48,30 @@ class CardsTest {
     }
 
     @Test
+    fun `a play with long tags of two bytes a character still fits its kilobyte, its tags cut`() {
+        val long = "ن".repeat(Messages.TEXT_MAX)
+        val play = Message.Play("m1", 1_700_000_000_000, CardSong(long, long, long, 200_000), favourite = true)
+        val bytes = Messages.encode(play)
+        assertEquals(1024, bytes.size)
+        val back = Messages.decode(bytes) as Message.Play
+        assertTrue(long.startsWith(back.song.title))
+        assertTrue(back.song.title.isNotEmpty())
+        assertEquals(200_000L, back.song.durationMs)
+        assertTrue(back.favourite)
+    }
+
+    @Test
+    fun `a title, artist, album, list name or note loses the controls that reorder or hide text`() {
+        val tricky = "Paper\u202E Lantern\u0007\u2066"
+        val share = Message.Share("m1", 1, Card(CardKind.PLAYLIST, listOf(CardSong(tricky, tricky, tricky, 1_000)), name = tricky, note = tricky))
+        val card = (Messages.decode(Messages.encode(share)) as Message.Share).card
+        val clean = "Paper Lantern"
+        assertEquals(CardSong(clean, clean, clean, 1_000), card.songs.single())
+        assertEquals(clean, card.name)
+        assertEquals(clean, card.note)
+    }
+
+    @Test
     fun `what is not a message of this version is dropped`() {
         assertNull(Messages.decode(ByteArray(0)))
         assertNull(Messages.decode(ByteArray(1024)))

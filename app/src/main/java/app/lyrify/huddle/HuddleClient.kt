@@ -58,24 +58,28 @@ class HuddleClient(
         return when {
             answer == null -> PostAnswer.NO_ANSWER
             answer.code == CREATED -> PostAnswer.POSTED
-            // A full mailbox, a message too big, a request the server cannot take, or its store full: the same send would fail again soon.
-            answer.code in REFUSALS || (answer.code == SERVICE_UNAVAILABLE && answer.json?.text(ERROR) == STORAGE_FULL) -> PostAnswer.REFUSED
+            // A full mailbox, a message too big, a request the server cannot take: the same send would fail again soon. A full
+            // store is no answer for now: the server takes messages again once it has cleared old ones.
+            answer.code in REFUSALS -> PostAnswer.REFUSED
             else -> PostAnswer.NO_ANSWER
         }
     }
 
     override suspend fun inbox(boxes: List<String>): Map<String, List<Posted>>? {
         val read = LinkedHashMap<String, MutableList<Posted>>()
+        // The server lets plays go as it hands them out: once a page came, what was read is kept, and the next sync asks again.
+        var answered = false
         for (chunk in boxes.distinct().chunked(MAX_IDS)) {
             // Each box's cursor ("after") while the server has more for it; a box is asked again only then.
             var asking: Map<String, String?> = chunk.associateWith { null }
             repeat(MAX_PAGES) {
                 if (asking.isEmpty()) return@repeat
                 val ask = JsonArray(asking.map { (box, after) -> JsonObject(buildMap { put(MAILBOX, JsonPrimitive(box)); after?.let { put(AFTER, JsonPrimitive(it)) } }) })
-                val json = call("messages/inbox", body(MAILBOXES to ask))?.takeIf { it.code == OK }?.json ?: return null
-                val answered = json[MAILBOXES] as? JsonArray ?: return null
+                val json = call("messages/inbox", body(MAILBOXES to ask))?.takeIf { it.code == OK }?.json
+                val pages = json?.get(MAILBOXES) as? JsonArray ?: return read.takeIf { answered }
+                answered = true
                 val more = HashMap<String, String?>()
-                for (element in answered) {
+                for (element in pages) {
                     val one = element as? JsonObject ?: continue
                     val box = one.text(MAILBOX)?.takeIf { it in asking } ?: continue
                     val messages = (one[MESSAGES] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
@@ -214,6 +218,5 @@ class HuddleClient(
         private const val ACKS = "acks"
         private const val UP_TO = "upTo"
         private const val ERROR = "error"
-        private const val STORAGE_FULL = "storage_full"
     }
 }

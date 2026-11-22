@@ -73,8 +73,11 @@ object Invites {
         return Invite(key, token, name, card)
     }
 
-    /** The join mailbox of the invite with [token]: only the two phones know it, and it says nothing of the token. */
-    fun joinId(token: ByteArray): String = HuddleCrypto.encode(HuddleCrypto.hkdf(token, ByteArray(0), JOIN_INFO, HuddleCrypto.KEY_BYTES))
+    /**
+     * The join mailbox of the invite with [token] and the inviter's [publicKey]: only the two phones know it, it says
+     * nothing of the token, and a link whose key was swapped names another one, so it joins nothing.
+     */
+    fun joinId(token: ByteArray, publicKey: ByteArray): String = HuddleCrypto.encode(HuddleCrypto.hkdf(token, ByteArray(0), JOIN_INFO + publicKey, HuddleCrypto.KEY_BYTES))
 
     /** Joining [invite] as [name]: a key pair of this phone's own, the friendship's keys, and the sealed hello; null when the invite's key is not one. */
     fun join(invite: Invite, name: String, random: SecureRandom): Joining? {
@@ -82,7 +85,7 @@ object Invites {
         val secret = HuddleCrypto.agree(own.private, invite.publicKey) ?: return null
         val keys = pairKeys(secret, invite.token, inviterKey = invite.publicKey, joinerKey = own.public, inviter = false)
         val hello = JsonObject(mapOf(NAME_KEY to JsonPrimitive(name))).toString().encodeToByteArray()
-        return Joining(own.public, HuddleCrypto.seal(keys.outKey, hello, joinId(invite.token).encodeToByteArray(), random), keys)
+        return Joining(own.public, HuddleCrypto.seal(keys.outKey, hello, joinId(invite.token, invite.publicKey).encodeToByteArray(), random), keys)
     }
 
     /**
@@ -92,7 +95,7 @@ object Invites {
     fun joined(own: KeyPairBytes, token: ByteArray, joinerKey: ByteArray, hello: ByteArray): Joined? {
         val secret = HuddleCrypto.agree(own.private, joinerKey) ?: return null
         val keys = pairKeys(secret, token, inviterKey = own.public, joinerKey = joinerKey, inviter = true)
-        val opened = HuddleCrypto.open(keys.inKey, hello, joinId(token).encodeToByteArray()) ?: return null
+        val opened = HuddleCrypto.open(keys.inKey, hello, joinId(token, own.public).encodeToByteArray()) ?: return null
         val name = jsonObject(opened.decodeToString())?.text(NAME_KEY)?.let(::cleanName) ?: return null
         return Joined(name, keys)
     }

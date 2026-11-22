@@ -6,10 +6,12 @@ import kotlinx.coroutines.flow.StateFlow
 /**
  * Huddle's server in memory, as huddle-server/API.md has it: invite slots made by their owner, accepted once, read and
  * deleted by the owner; mailboxes of numbered messages, plays gone once read, cards until acknowledged; mailboxes
- * deleted on request. [online] false answers nothing; [requests] names each call.
+ * deleted on request. [online] false answers nothing; [requests] names each call. An accept sent again with the same data
+ * answers as joined (huddle-server makes it safe to retry); [lostAccepts] accepts are stored but their answer is lost.
  */
 class FakeServer : HuddleServer {
     var online: Boolean = true
+    var lostAccepts: Int = 0
     /** Invite id to its owner id and the accept's data, null while waiting. */
     val invites = HashMap<String, Pair<String, String?>>()
     val boxes = HashMap<String, MutableList<Posted>>()
@@ -31,8 +33,12 @@ class FakeServer : HuddleServer {
         requests += "acceptInvite"
         if (!online) return JoinAnswer.NO_ANSWER
         val (owner, accepted) = invites[invite] ?: return JoinAnswer.GONE
-        if (accepted != null) return JoinAnswer.TAKEN
+        if (accepted != null) return if (accepted == data) JoinAnswer.JOINED else JoinAnswer.TAKEN
         invites[invite] = owner to data
+        if (lostAccepts > 0) {
+            lostAccepts--
+            return JoinAnswer.NO_ANSWER
+        }
         return JoinAnswer.JOINED
     }
 

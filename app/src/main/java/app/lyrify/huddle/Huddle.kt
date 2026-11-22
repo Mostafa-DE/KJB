@@ -4,6 +4,7 @@ import app.lyrify.suggestions.FriendsSource
 import app.lyrify.suggestions.FriendPlay as SuggestionsPlay
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -12,6 +13,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import java.security.SecureRandom
 
 /** A message waiting in a mailbox: the server's [seq] in it (its message id), and the sealed [data] (base64url). */
@@ -73,7 +75,8 @@ sealed interface Invited {
 
 /** How accepting an invite went. */
 sealed interface Accepted {
-    data class Joined(val friend: Friend) : Accepted
+    /** Friends now; [received]: the id of the card that came with the invite, in your inbox. */
+    data class Joined(val friend: Friend, val received: String? = null) : Accepted
 
     /** Already friends through this invite: a second tap on the link. */
     data class Already(val friend: Friend) : Accepted
@@ -144,7 +147,7 @@ class Huddle(
         val token = ByteArray(Invites.TOKEN_BYTES).also(random::nextBytes)
         val inLink = card?.takeIf { Messages.cardJson(it).toString().encodeToByteArray().size <= LINK_CARD_MAX_BYTES }
         val pending = PendingInvite(HuddleCrypto.encode(pair.public), HuddleCrypto.encode(pair.private), HuddleCrypto.encode(token), newId(OWNER_ID_BYTES), clock(), card.takeIf { inLink == null })
-        if (!server.createInvite(Invites.joinId(token), pending.owner)) return Invited.NoAnswer
+        if (!server.createInvite(Invites.joinId(token, pair.public), pending.owner)) return Invited.NoAnswer
         if (!storage.change { it.copy(invites = (it.invites + pending).takeLast(INVITES_MAX)) }) {
             server.deleteInvite(pending.owner)
             return Invited.NoAnswer
@@ -155,25 +158,39 @@ class Huddle(
     /** The invite in [text] (a link on Huddle's hosts, or a pasted code); null for anything else. */
     fun parse(text: String): Invite? = Invites.parse(text, hosts)
 
-    /** Joins [invite]: the inviter becomes your friend, and the song in it waits in your inbox. Needs the server's answer. */
+    /**
+     * Joins [invite]: the inviter becomes your friend, and the song in it waits in your inbox. Needs the server's answer.
+     * The join ([PendingJoin]) is kept before its accept goes, and sent again as it was when the answer was lost or the
+     * friend could not be written, so the server knows it and both phones keep the same keys.
+     */
     suspend fun accept(invite: Invite): Accepted {
         val state = now()
-        val joinId = Invites.joinId(invite.token)
+        val joinId = Invites.joinId(invite.token, invite.publicKey)
         state.friends.firstOrNull { it.joinId == joinId }?.let { return Accepted.Already(it) }
         if (state.invites.any { it.token == HuddleCrypto.encode(invite.token) }) return Accepted.Own
         val name = state.name ?: return Accepted.NoName
-        // A parsed invite's key is a point of the curve (Invites.parse), so this joins; one that is not cannot be joined by anyone.
-        val joining = Invites.join(invite, name, random) ?: return Accepted.Taken
-        when (server.acceptInvite(joinId, HuddleCrypto.encode(joining.publicKey + joining.hello))) {
-            JoinAnswer.TAKEN -> return Accepted.Taken
-            JoinAnswer.GONE -> return Accepted.Expired
+        val join = state.joins.firstOrNull { it.joinId == joinId } ?: run {
+            // A parsed invite's key is a point of the curve (Invites.parse), so this joins; one that is not cannot be joined by anyone.
+            val joining = Invites.join(invite, name, random) ?: return Accepted.Taken
+            val keys = joining.keys
+            val made = PendingJoin(joinId, HuddleCrypto.encode(joining.publicKey + joining.hello), keys.outBox, keys.inBox, HuddleCrypto.encode(keys.outKey), HuddleCrypto.encode(keys.inKey), invite.name, invite.card)
+            if (!storage.change { it.copy(joins = (it.joins + made).takeLast(JOINS_MAX)) }) return Accepted.NoAnswer
+            made
+        }
+        when (val answer = server.acceptInvite(joinId, join.data)) {
             JoinAnswer.NO_ANSWER -> return Accepted.NoAnswer
+            JoinAnswer.TAKEN, JoinAnswer.GONE -> {
+                endJoin(joinId)
+                return if (answer == JoinAnswer.TAKEN) Accepted.Taken else Accepted.Expired
+            }
             JoinAnswer.JOINED -> Unit
         }
-        val friend = friendOf(invite.name, joining.keys, joinId)
-        val card = invite.card?.let { Received(newId(MESSAGE_ID_BYTES), friend.id, clock(), it) }
-        if (!storage.change { it.copy(friends = it.friends + friend, inbox = listOfNotNull(card) + it.inbox) }) return Accepted.NoAnswer
-        return Accepted.Joined(friend)
+        val friend = friendOf(join.name, join.outBox, join.inBox, join.outKey, join.inKey, joinId)
+        val card = join.card?.let { Received(newId(MESSAGE_ID_BYTES), friend.id, clock(), it) }
+        val kept = storage.change { state ->
+            state.copy(friends = state.friends + friend, inbox = listOfNotNull(card) + state.inbox, joins = state.joins.filterNot { it.joinId == joinId })
+        }
+        return if (kept) Accepted.Joined(friend, card?.id) else Accepted.NoAnswer
     }
 
     /**
@@ -225,7 +242,7 @@ class Huddle(
     suspend fun rename(friendId: String, name: String?): Boolean = changeFriend(friendId) { it.copy(rename = name?.let(Invites::cleanName)) }
 
     /** Friends sharing, per friend: [on] sends them each play from now. */
-    suspend fun sharePlays(friendId: String, on: Boolean): Boolean = changeFriend(friendId) { it.copy(sharePlays = on) }
+    suspend fun sharePlays(friendId: String, on: Boolean): Boolean = withContext(NonCancellable) { changeFriend(friendId) { it.copy(sharePlays = on) } }
 
     /**
      * Removes the friend [friendId]: they are told (and their KJB removes you too), your mailbox from them is dropped,
@@ -269,10 +286,12 @@ class Huddle(
     }
 
     /** Listen privately until [until] (wall-clock millis; [HuddleState.FOREVER] until turned back on), or no longer (null). */
-    suspend fun listenPrivately(until: Long?): Boolean = storage.change { it.copy(privateUntil = until) }
+    suspend fun listenPrivately(until: Long?): Boolean = withContext(NonCancellable) { storage.change { it.copy(privateUntil = until) } }
 
     /** The card [receivedId] was played, looked at or put away: it leaves the start screen. */
-    suspend fun opened(receivedId: String): Boolean = storage.change { state -> state.copy(inbox = state.inbox.map { if (it.id == receivedId) it.copy(opened = true) else it }) }
+    suspend fun opened(receivedId: String): Boolean = withContext(NonCancellable) {
+        storage.change { state -> state.copy(inbox = state.inbox.map { if (it.id == receivedId) it.copy(opened = true) else it }) }
+    }
 
     /**
      * The backup passphrase: kept as its key only ([HuddleBackup.newKey]), so each backup from now holds your friends,
@@ -311,16 +330,14 @@ class Huddle(
         return storage.change { state -> state.copy(friends = state.friends.map { if (it.id == friendId) change(it) else it }) }
     }
 
-    private fun friendOf(name: String, keys: PairKeys, joinId: String): Friend = Friend(
-        id = newId(FRIEND_ID_BYTES),
-        name = name,
-        outBox = keys.outBox,
-        inBox = keys.inBox,
-        outKey = HuddleCrypto.encode(keys.outKey),
-        inKey = HuddleCrypto.encode(keys.inKey),
-        joinId = joinId,
-        addedAt = clock(),
-    )
+    /** A new friend [name], with the friendship's mailboxes and keys (base64url) and the [joinId] that made it. */
+    private fun friendOf(name: String, outBox: String, inBox: String, outKey: String, inKey: String, joinId: String): Friend =
+        Friend(id = newId(FRIEND_ID_BYTES), name = name, outBox = outBox, inBox = inBox, outKey = outKey, inKey = inKey, joinId = joinId, addedAt = clock())
+
+    /** The join [joinId] answered for good (taken, or gone): nothing is left to send again. */
+    private suspend fun endJoin(joinId: String) {
+        storage.change { state -> state.copy(joins = state.joins.filterNot { it.joinId == joinId }) }
+    }
 
     /** [message] sealed for [friend]'s mailbox, bound to it; null when the friend's key is not readable. */
     private fun outgoing(friend: Friend, message: Message, kind: Kind, notBefore: Long): Outgoing? {
@@ -350,7 +367,9 @@ class Huddle(
                         log("huddle: an accept that does not open, invite ended")
                         if (forget(listOf(invite))) server.deleteInvite(invite.owner)
                     } else {
-                        val friend = friendOf(joined.name, joined.keys, Invites.joinId(HuddleCrypto.decode(invite.token) ?: continue))
+                        val joinId = Invites.joinId(HuddleCrypto.decode(invite.token) ?: continue, HuddleCrypto.decode(invite.publicKey) ?: continue)
+                        val keys = joined.keys
+                        val friend = friendOf(joined.name, keys.outBox, keys.inBox, HuddleCrypto.encode(keys.outKey), HuddleCrypto.encode(keys.inKey), joinId)
                         val card = invite.card?.let { outgoing(friend, Message.Share(newId(MESSAGE_ID_BYTES), now, it), Kind.CARD, notBefore = now) }
                         val kept = storage.change { state ->
                             state.copy(friends = state.friends + friend, invites = state.invites.filterNot { it.token == invite.token }, outbox = state.outbox + listOfNotNull(card))
@@ -382,8 +401,12 @@ class Huddle(
     /** Posts the outbox's due messages in order, dropping those older than the server would keep; stops at the first unanswered. */
     private suspend fun flushNow(): Boolean {
         val now = clock()
-        val outbox = now().outbox
-        val gone = outbox.filter { now - it.at > keptMs(it.kind) }.mapTo(HashSet()) { it.id }
+        val state = now()
+        val outbox = state.outbox
+        // A play still waiting goes only while you share with that friend and do not listen privately.
+        val private = state.privateUntil?.let { now < it } == true
+        val sharing = state.friends.filter { it.sharePlays }.mapTo(HashSet()) { it.outBox }
+        val gone = outbox.filter { now - it.at > keptMs(it.kind) || (it.kind == Kind.PLAY && (private || it.box !in sharing)) }.mapTo(HashSet()) { it.id }
         var answered = true
         for (out in outbox.filter { it.id !in gone && it.notBefore <= now }) {
             when (server.send(out.box, out.kind, out.data)) {
@@ -433,12 +456,20 @@ class Huddle(
         var state = this
         for ((friendId, message) in read) {
             val friend = state.friends.firstOrNull { it.id == friendId } ?: continue
+            // A friend's clock may be ahead: nothing is kept as from later than now.
+            val at = minOf(message.at, now)
+            if (message is Message.Play) {
+                // Plays are many: told apart by what they are, so the ids kept are those of cards and goodbyes only.
+                val play = FriendPlay(friendId, at, message.song, message.favourite)
+                if (play !in state.plays) state = state.copy(plays = listOf(play) + state.plays)
+                continue
+            }
             if (message.id in friend.seen) continue
             val seen = friend.copy(seen = (friend.seen + message.id).takeLast(SEEN_MAX))
             state = state.copy(friends = state.friends.map { if (it.id == friendId) seen else it })
             state = when (message) {
-                is Message.Share -> state.copy(inbox = listOf(Received(message.id, friendId, message.at, message.card)) + state.inbox)
-                is Message.Play -> state.copy(plays = listOf(FriendPlay(friendId, message.at, message.song, message.favourite)) + state.plays)
+                is Message.Share -> state.copy(inbox = listOf(Received(message.id, friendId, at, message.card)) + state.inbox)
+                is Message.Play -> state
                 is Message.Bye -> state.copy(
                     friends = state.friends.filterNot { it.id == friendId },
                     inbox = state.inbox.filterNot { it.friend == friendId },
@@ -479,6 +510,9 @@ class Huddle(
         /** A card fits the link when its JSON is at most this long: about one song with a note. */
         private const val LINK_CARD_MAX_BYTES: Int = 600
         private const val INVITES_MAX: Int = 20
+
+        /** Joins waiting for the server's answer: a few at most, the oldest let go. */
+        private const val JOINS_MAX: Int = 20
         private const val INBOX_MAX: Int = 100
         private const val PLAYS_MAX: Int = 5_000
         private const val SEEN_MAX: Int = 200
