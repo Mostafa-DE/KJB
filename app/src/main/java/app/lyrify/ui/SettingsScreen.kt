@@ -633,6 +633,7 @@ internal fun ChoiceRow(label: String, detail: String, selected: Boolean, onClick
 private val SettingsSection.title: Int
     get() = when (this) {
         SettingsSection.PLAYBACK -> R.string.settings_playback
+        SettingsSection.SUGGESTIONS -> R.string.settings_suggestions
         SettingsSection.LIBRARY -> R.string.settings_library
         SettingsSection.DISPLAY -> R.string.settings_display
         SettingsSection.LYRICS -> R.string.settings_lyrics
