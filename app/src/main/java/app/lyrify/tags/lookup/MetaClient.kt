@@ -37,7 +37,7 @@ sealed interface MetaAnswer<out T> {
 
     /**
      * Offline, refused, too large or unreadable. [reason] is for the log: a status code or an exception class name.
-     * [status]: the HTTP status the server answered with, when it answered.
+     * [status]: the HTTP status the server answered with, when it answered (200 for a body that did not read).
      */
     data class Failed(val reason: String, val status: Int? = null) : MetaAnswer<Nothing>
 }
@@ -248,7 +248,7 @@ class MetaClient(
                     read(hop.bytes).also { if (keep(it)) cache.put(key, hop.bytes) }.let { MetaAnswer.Ok(it) }
                 } catch (e: IllegalArgumentException) {
                     log("tags: unreadable answer: ${e.javaClass.simpleName}")
-                    MetaAnswer.Failed("unreadable: ${e.javaClass.simpleName}")
+                    MetaAnswer.Failed("unreadable: ${e.javaClass.simpleName}", HttpURLConnection.HTTP_OK)
                 }
             }
             is Hop.Status -> when (hop.code) {

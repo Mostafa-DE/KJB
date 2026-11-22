@@ -40,10 +40,19 @@ enum class Match { FOUND, NONE, AMBIGUOUS }
 
 /**
  * A library artist as last looked up ([at], wall-clock millis): its [name] as the library showed it, its MusicBrainz id
- * when one was [Match.FOUND] for sure, and its [neighbours], the closest first (empty: ListenBrainz has none).
+ * when one was [Match.FOUND] for sure, and its [neighbours], the closest first (empty: ListenBrainz has none). [failures]:
+ * its own lookups that failed in a row since, [at] the last one ([SimilarRules.ownFailure]); an artist never looked up
+ * before is kept as [Match.NONE] meanwhile.
  */
 @Serializable
-data class ArtistSimilar(val name: String, val match: Match, val mbid: String? = null, val neighbours: List<Neighbour> = emptyList(), val at: Long)
+data class ArtistSimilar(
+    val name: String,
+    val match: Match,
+    val mbid: String? = null,
+    val neighbours: List<Neighbour> = emptyList(),
+    val at: Long,
+    val failures: Int = 0,
+)
 
 /**
  * What `similar-artists.json` keeps: each artist looked up, by its name's key ([app.lyrify.tags.lookup.Names.key]); the
@@ -96,14 +105,38 @@ object SimilarRules {
     /** The pause before asking again after each failure in a row: 1 day, 2, 4, 8, then 14 days. */
     val PAUSE_DAYS: List<Long> = listOf(1, 2, 4, 8, 14)
 
+    /** The wait before an artist is asked again after each of its own failures in a row: 1 day, 7, 30, then [REFRESH_DAYS]. */
+    val ARTIST_RETRY_DAYS: List<Long> = listOf(1, 7, 30)
+
+    /** Artists failing on their own in a row that end a run and pause the lookups, as a failure: likely not theirs. */
+    const val MISSES_TO_PAUSE: Int = 3
+
+    /** Statuses that say the service refuses KJB, timed out or wants fewer requests, never one artist's own failure. */
+    private val REFUSING: Set<Int> = setOf(401, 403, 407, 408, 429)
+
     /**
      * Statuses that, for an artist ListenBrainz listed before, say its endpoint is gone or closed to KJB (removed, a
      * token needed); for one it never listed, that there is no list (user, 2026-11-22).
      */
     val GONE: Set<Int> = setOf(401, 403, 404, 410)
 
-    /** Whether an artist is looked up now: never before, [REFRESH_DAYS] ago or more, or at a time after [now] (the clock changed). */
-    fun due(entry: ArtistSimilar?, now: Long): Boolean = entry == null || entry.at > now || now - entry.at >= REFRESH_DAYS * DAY_MS
+    /**
+     * Whether an artist is looked up now: never before, [REFRESH_DAYS] ago or more (after its own failures,
+     * [ARTIST_RETRY_DAYS] by their count, then [REFRESH_DAYS]), or at a time after [now] (the clock changed).
+     */
+    fun due(entry: ArtistSimilar?, now: Long): Boolean =
+        entry == null || entry.at > now || now - entry.at >= ARTIST_RETRY_DAYS.getOrElse(entry.failures - 1) { REFRESH_DAYS } * DAY_MS
+
+    /**
+     * Whether [answer] failed for its artist alone: the service answered plainly (a 404, another 4xx, or a body that did
+     * not read) but not usably for it. Busy, a 5xx, a status that refuses KJB ([REFUSING]) or no answer at all is the
+     * service's or the phone's.
+     */
+    fun ownFailure(answer: MetaAnswer<*>): Boolean = when (answer) {
+        MetaAnswer.NotFound -> true
+        is MetaAnswer.Failed -> answer.status?.let { it < HttpURLConnection.HTTP_INTERNAL_ERROR && it !in REFUSING } == true
+        else -> false
+    }
 
     /** The pause after [failures] failures in a row, in millis. */
     fun pauseAfter(failures: Int): Long = PAUSE_DAYS[(failures - 1).coerceIn(0, PAUSE_DAYS.lastIndex)] * DAY_MS
@@ -289,9 +322,11 @@ class SimilarCache(private val store: SimilarStore, private val io: CoroutineDis
  * into its songs (a release lookup, from Covers & tags' cache when it has it), else from an earlier match, else from an
  * artist search by name, taken only when sure ([SimilarRules.match]); then ListenBrainz lists its neighbours. MusicBrainz
  * requests go through the [client]'s gate, which Covers & tags shares, with its backoff on 503. A busy or failed answer
- * ends the run and pauses the lookups ([SimilarRules.pauseAfter]); [SimilarRules.GONE_TO_STOP] "gone" answers in a row
- * for artists ListenBrainz listed before stop them until the next app [version]. Logs counts and status codes only,
- * never a name or id.
+ * ends the run and pauses the lookups ([SimilarRules.pauseAfter]); one that fails for its artist alone
+ * ([SimilarRules.ownFailure]) only puts that artist off ([SimilarRules.ARTIST_RETRY_DAYS]) and the run goes on, unless
+ * [SimilarRules.MISSES_TO_PAUSE] do in a row. [SimilarRules.GONE_TO_STOP] "gone" answers in a row for artists
+ * ListenBrainz listed before stop the lookups until the next app [version]. Logs counts and status codes only, never a
+ * name or id.
  */
 class SimilarLookups(
     private val cache: SimilarCache,
@@ -322,9 +357,12 @@ class SimilarLookups(
             .take(SimilarRules.PER_RUN)
         sent = false
         var lists = 0
+        var missed = 0
         for (artist in due) {
             val key = Names.key(artist.name)
-            when (val step = lookUp(artist, start.artists[key])) {
+            val step = lookUp(artist, start.artists[key])
+            missed = if (step is Step.Missed) missed + 1 else 0
+            when (step) {
                 is Step.Listed -> {
                     lists++
                     cache.update { it.copy(artists = it.artists + (key to step.entry), failures = 0, gone = 0) }
@@ -341,14 +379,25 @@ class SimilarLookups(
                         return
                     }
                 }
-                is Step.Failed -> {
-                    cache.update { it.copy(failures = it.failures + 1, pausedUntil = now() + SimilarRules.pauseAfter(it.failures + 1)) }
-                    log("similar: ${step.reason}; $lists of ${due.size} artists listed, paused")
-                    return
+                is Step.Missed -> {
+                    val at = now()
+                    cache.update { memory ->
+                        val entry = memory.artists[key] ?: ArtistSimilar(artist.name, Match.NONE, at = at)
+                        memory.copy(artists = memory.artists + (key to entry.copy(failures = entry.failures + 1, at = at)))
+                    }
+                    log("similar: an artist not looked up (${step.reason}), tried again later")
+                    if (missed >= SimilarRules.MISSES_TO_PAUSE) return pause("$missed artists in a row not looked up", lists, due.size)
                 }
+                is Step.Failed -> return pause(step.reason, lists, due.size)
             }
         }
         log("similar: $lists of ${due.size} artists listed")
+    }
+
+    /** Ends a run that failed for [reason]: the lookups pause ([SimilarRules.pauseAfter]). */
+    private suspend fun pause(reason: String, lists: Int, of: Int) {
+        cache.update { it.copy(failures = it.failures + 1, pausedUntil = now() + SimilarRules.pauseAfter(it.failures + 1)) }
+        log("similar: $reason; $lists of $of artists listed, paused")
     }
 
     /**
@@ -360,7 +409,7 @@ class SimilarLookups(
             when (val answer = paced { musicBrainz.release(written.release) }) {
                 is MetaAnswer.Ok -> SimilarRules.artistIdIn(answer.value, written.recording, artist.name)
                 MetaAnswer.NotFound -> null
-                else -> return Step.Failed(reason(answer))
+                else -> return failed(answer)
             }
         }
         val id = tagged
@@ -370,7 +419,7 @@ class SimilarLookups(
                     val (match, found) = SimilarRules.match(answer.value, artist.name)
                     found ?: return Step.Unlisted(ArtistSimilar(artist.name, match, at = now()))
                 }
-                else -> return Step.Failed(reason(answer))
+                else -> return failed(answer)
             }
         val answer = paced {
             client.get(ListenBrainzUrls.similarArtists(id), Body.JSON, fresh = true, keep = { false }, read = ListenBrainzJson::neighbours)
@@ -382,7 +431,7 @@ class SimilarLookups(
         }
         return when {
             answer is MetaAnswer.Ok -> Step.Listed(ArtistSimilar(artist.name, Match.FOUND, id, answer.value.take(SimilarRules.KEEP), now()))
-            gone == null -> Step.Failed(reason(answer))
+            gone == null -> failed(answer)
             before?.neighbours.isNullOrEmpty() -> Step.Unlisted(ArtistSimilar(artist.name, Match.FOUND, id, at = now()))
             else -> Step.Gone(gone)
         }
@@ -394,6 +443,9 @@ class SimilarLookups(
         sent = true
         return request()
     }
+
+    /** [answer]'s failure: its artist's own ([SimilarRules.ownFailure]), else the run's. */
+    private fun failed(answer: MetaAnswer<*>): Step = if (SimilarRules.ownFailure(answer)) Step.Missed(reason(answer)) else Step.Failed(reason(answer))
 
     /** For the log: a status code or an exception class name, never an address. */
     private fun reason(answer: MetaAnswer<*>): String = when (answer) {
@@ -415,6 +467,9 @@ class SimilarLookups(
 
         /** For an artist it listed before, ListenBrainz answered a status that says its endpoint is gone ([SimilarRules.GONE]). */
         data class Gone(val status: Int) : Step
+
+        /** Failed for this artist alone ([SimilarRules.ownFailure]): it is put off, the run goes on. */
+        data class Missed(val reason: String) : Step
 
         /** Busy, offline or refused: the run ends and the lookups pause. */
         data class Failed(val reason: String) : Step

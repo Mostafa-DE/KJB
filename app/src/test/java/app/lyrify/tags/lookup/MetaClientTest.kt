@@ -214,6 +214,15 @@ class MetaClientTest {
     }
 
     @Test
+    fun `a failed answer carries the status the server answered with, 200 for a body that did not read, none when it never answered`() = runTest {
+        val web = web()
+        web.on(json, status(500), ok("<html>"), FakeWeb.Reply(200, error = IOException("made-up")))
+        val client = client(web)
+
+        assertEquals(listOf<Int?>(500, 200, null), List(3) { (client.text(json) as MetaAnswer.Failed).status })
+    }
+
+    @Test
     fun `an unreadable cached answer is dropped and asked again`() = runTest {
         val web = web()
         web.on(json, ok("""{"a":1}"""))

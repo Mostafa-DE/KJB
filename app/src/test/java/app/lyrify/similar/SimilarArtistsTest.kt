@@ -300,7 +300,7 @@ class SimilarArtistsTest {
     }
 
     @Test
-    fun `ListenBrainz's 400 is a refusal that pauses, never a step towards the stop`() = runTest {
+    fun `ListenBrainz's 400 for an artist is that artist's own failure, its list kept, never a step towards the stop`() = runTest {
         val web = web()
         web.on(MusicBrainzUrls.artistSearch("Mira Solen"), ok(artistsJson(Hit(MIRA, "Mira Solen", 100))))
         web.on(ListenBrainzUrls.similarArtists(MIRA), ok(neighboursJson(MIRA, Neighbour(GLASS, "Glass Harbour", 10))), status(400))
@@ -311,9 +311,85 @@ class SimilarArtistsTest {
 
         lookups.run(played("Mira Solen"))
 
-        assertEquals(0, cache.memory().gone)
-        assertEquals(1, cache.memory().failures)
+        val memory = cache.memory()
+        assertEquals(0, memory.gone)
+        assertEquals(0, memory.failures)
+        assertEquals(1, memory.artists[Names.key("Mira Solen")]?.failures)
         assertEquals(listOf(Similar("Glass Harbour", 1f)), cache.similar(listOf("Mira Solen"))["Mira Solen"])
+    }
+
+    // An artist that keeps failing
+
+    @Test
+    fun `an artist whose lookup fails on its own is tried again later on its own, its list kept, and the run goes on`() = runTest {
+        val web = web()
+        web.on(MusicBrainzUrls.artistSearch("Mira Solen"), status(400))
+        web.artist("Glass Harbour", GLASS, Neighbour(ROWAN, "Rowan Vale", 10))
+        web.on(MusicBrainzUrls.artistSearch("Kit Calloway"), ok(artistsJson(Hit(KIT, "Kit Calloway", 100))))
+        // Then an answer that does not read: a score that is not a whole number.
+        val unreadable = ok("""[{"artist_mbid":"$ROWAN","name":"Rowan Vale","score":1.5,"reference_mbid":"$KIT"}]""")
+        web.on(ListenBrainzUrls.similarArtists(KIT), ok(neighboursJson(KIT, Neighbour(ROWAN, "Rowan Vale", 10))), unreadable)
+        val cache = cache()
+        val lookups = lookups(web, cache)
+        val everyone = played("Mira Solen", "Kit Calloway", "Glass Harbour")
+        lookups.run(played("Kit Calloway"))
+        later += day(SimilarRules.REFRESH_DAYS)
+
+        lookups.run(everyone)
+
+        val memory = cache.memory()
+        assertEquals(listOf(1, 1, 0), everyone.map { memory.artists[Names.key(it.name)]?.failures })
+        assertEquals(0, memory.failures)
+        assertEquals(0L, memory.pausedUntil)
+        assertEquals(0, memory.gone)
+        val rowan = listOf(Similar("Rowan Vale", 1f))
+        assertEquals(mapOf("Kit Calloway" to rowan, "Glass Harbour" to rowan), cache.similar(everyone.map { it.name }))
+        val asked = web.requests.size
+        later += day(1)
+        lookups.run(everyone)
+        assertEquals(
+            listOf(MusicBrainzUrls.artistSearch("Mira Solen"), ListenBrainzUrls.similarArtists(KIT)).map { it.toString() },
+            web.requests.drop(asked).map { it.uri },
+        )
+    }
+
+    @Test
+    fun `an artist's own failures wait 1 day, then 7, then 30, then its 60-day refresh`() {
+        val entry = ArtistSimilar("Mira Solen", Match.NONE, at = BASE)
+        listOf(1 to 1L, 2 to 7L, 3 to 30L, 4 to 60L, 9 to 60L).forEach { (failures, days) ->
+            val failed = entry.copy(failures = failures)
+            assertEquals("$failures failures", false, SimilarRules.due(failed, BASE + day(days) - 1))
+            assertTrue("$failures failures", SimilarRules.due(failed, BASE + day(days)))
+        }
+    }
+
+    @Test
+    fun `three artists failing on their own in a row end the run and pause it, never a step towards the stop`() = runTest {
+        val web = web()
+        val names = (0..2).map { "Made-up Artist $it" }
+        names.forEach { web.on(MusicBrainzUrls.artistSearch(it), status(400)) }
+        web.artist("Tamsin Reed", TAMSIN, Neighbour(ROWAN, "Rowan Vale", 10))
+        val cache = cache()
+
+        lookups(web, cache).run(played(*names.toTypedArray(), "Tamsin Reed"))
+
+        val memory = cache.memory()
+        assertEquals(3, web.requests.size)
+        assertEquals(1, memory.failures)
+        assertEquals(now() + day(1), memory.pausedUntil)
+        assertEquals(0, memory.gone)
+        assertNull(memory.stoppedIn)
+        assertEquals(listOf(1, 1, 1), names.map { memory.artists[Names.key(it)]?.failures })
+    }
+
+    @Test
+    fun `a failure is an artist's own only when the service answered it plainly, never busy, refusing KJB or offline`() {
+        val own = listOf(MetaAnswer.NotFound) + listOf(400, 414, 422, 200).map { MetaAnswer.Failed("HTTP $it", it) }
+        val service = listOf(MetaAnswer.Busy, MetaAnswer.Failed("UnknownHostException"), MetaAnswer.Failed("redirect refused")) +
+            listOf(401, 403, 407, 408, 429, 500, 502).map { MetaAnswer.Failed("HTTP $it", it) }
+
+        assertEquals(own.map { true }, own.map(SimilarRules::ownFailure))
+        assertEquals(service.map { false }, service.map(SimilarRules::ownFailure))
     }
 
     // The exact-match rule
