@@ -1,0 +1,125 @@
+/* KJB's palette (app/src/main/java/app/lyrify/ui/Theme.kt, LightColors and DarkColors). */
+:root {
+  color-scheme: light dark;
+  --primary: #4f44a6;
+  --on-primary: #ffffff;
+  --background: #fcf8ff;
+  --on-background: #1c1a23;
+  --surface-container: #f1ecf7;
+  --on-surface-variant: #49454f;
+  --outline: #7a7581;
+  --error-container: #ffdad6;
+  --on-error-container: #410002;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --primary: #c8bfff;
+    --on-primary: #2e2466;
+    --background: #13121a;
+    --on-background: #e6e1ec;
+    --surface-container: #201e27;
+    --on-surface-variant: #cac4d0;
+    --outline: #948f9a;
+    --error-container: #93000a;
+    --on-error-container: #ffdad6;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--on-background);
+  font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+.page {
+  max-width: 30rem;
+  margin: 0 auto;
+  padding: 32px 16px 48px;
+}
+
+.brand {
+  margin: 0;
+  color: var(--primary);
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+h1 {
+  margin: 8px 0 12px;
+  font-size: 1.75rem;
+  line-height: 1.2;
+}
+
+h2 {
+  margin: 0 0 8px;
+  font-size: 1.125rem;
+}
+
+section {
+  margin-top: 16px;
+  padding: 16px;
+  border-radius: 16px;
+  background: var(--surface-container);
+}
+
+section p,
+ol {
+  margin: 0 0 12px;
+  color: var(--on-surface-variant);
+}
+
+ol {
+  padding-left: 20px;
+}
+
+.button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 48px;
+  padding: 0 20px;
+  border: 1px solid var(--outline);
+  border-radius: 24px;
+  background: transparent;
+  color: var(--primary);
+  font: inherit;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.button.primary {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: var(--on-primary);
+}
+
+.code {
+  display: block;
+  margin: 0 0 12px;
+  padding: 12px;
+  border-radius: 12px;
+  background: var(--background);
+  font-family: ui-monospace, monospace;
+  word-break: break-all;
+  user-select: all;
+}
+
+.notice {
+  padding: 12px 16px;
+  border-radius: 12px;
+  background: var(--error-container);
+  color: var(--on-error-container);
+}
+
+:focus-visible {
+  outline: 3px solid var(--primary);
+  outline-offset: 2px;
+}
