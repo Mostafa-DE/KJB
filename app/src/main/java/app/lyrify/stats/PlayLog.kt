@@ -283,7 +283,7 @@ object PlaysSchema {
 
     /** [ALL] from a start on (inclusive), by plays_by_start: suggestions read only the plays since they last read. */
     const val SINCE: String = "SELECT path, started_at, media_id, heard_ms, counted, started_by, source, shuffled, zone_offset_min, song_key, " +
-        "ended_how, ended_at_ms, imported FROM plays WHERE started_at >= CAST(? AS INTEGER) ORDER BY started_at, path"
+        "ended_how, ended_at_ms, imported, clock_ms FROM plays WHERE started_at >= CAST(? AS INTEGER) ORDER BY started_at, path"
 
     const val KEEP_OPEN: String = "INSERT OR REPLACE INTO open_plays (path, started_at, duration_ms, position_ms, spans) VALUES (?, ?, ?, ?, ?)"
 
