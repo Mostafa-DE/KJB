@@ -10,6 +10,8 @@ import app.lyrify.dl.api.DlInfo
 import app.lyrify.dl.api.DlMeta
 import app.lyrify.dl.api.DlProgress
 import app.lyrify.dl.api.DlRequest
+import app.lyrify.dl.api.DlSearch
+import app.lyrify.dl.api.DlSearchResults
 import app.lyrify.dl.api.DlStage
 import app.lyrify.dl.api.DlUpdate
 import app.lyrify.dl.api.PublicAddresses
@@ -58,6 +60,13 @@ interface RunEvents {
 interface InfoEvents {
     /** The quick info (partial) first when there is one, then the full info, which ends the lookup. */
     fun onInfo(info: DlInfo)
+
+    fun onFailed(end: DlEnd.Failed)
+}
+
+/** What one search tells its caller: IDlSearchCallback, as Kotlin. One call, its last. */
+interface SearchEvents {
+    fun onResults(results: DlSearchResults)
 
     fun onFailed(end: DlEnd.Failed)
 }
@@ -128,14 +137,15 @@ private class Produced(val media: File, val cover: File?, val meta: DlMeta, val 
 }
 
 /**
- * The add-on's downloads and lookups (VidGrab's DownloadWorker and fetchInfo, fixed): each run has its own id and its own
- * events, and works in its key's folder under [folder], where what a stopped or failed run got stays for the next run of
- * that key (yt-dlp goes on from its parts) until KJB discards it or it is a week old ([sweep]). Cancel kills yt-dlp and its
- * ffmpeg ([Ytdlp.kill]): a process does not stop because its coroutine was cancelled. yt-dlp updates itself by
- * [UpdatePolicy], and never while a run or a lookup uses it. A finished file waits for KJB's descriptors ([deliver]) and
- * is streamed into them; the add-on never opens KJB's or the user's storage. It is [busy] from a link taken (a lookup or a
- * run) until the last of them ends, each end told to [ended]: the add-on's own foreground service is held meanwhile. A
- * run beats from its start to its end ([RunEvents.onBeat]), so KJB tells a frozen add-on from a quiet step.
+ * The add-on's downloads and lookups (VidGrab's DownloadWorker and fetchInfo, fixed), and YouTube searches, which are
+ * lookups of words: each run has its own id and its own events, and works in its key's folder under [folder], where what
+ * a stopped or failed run got stays for the next run of that key (yt-dlp goes on from its parts) until KJB discards it or
+ * it is a week old ([sweep]). Cancel kills yt-dlp and its ffmpeg ([Ytdlp.kill]): a process does not stop because its
+ * coroutine was cancelled. yt-dlp updates itself by [UpdatePolicy], and never while a run or a lookup uses it. A finished
+ * file waits for KJB's descriptors ([deliver]) and is streamed into them; the add-on never opens KJB's or the user's
+ * storage. It is [busy] from a link taken (a lookup or a run) until the last of them ends, each end told to [ended]: the
+ * add-on's own foreground service is held meanwhile. A run beats from its start to its end ([RunEvents.onBeat]), so KJB
+ * tells a frozen add-on from a quiet step.
  */
 class DlRuns(
     private val scope: CoroutineScope,
@@ -434,9 +444,19 @@ class DlRuns(
      * Looks up [url] and returns the lookup's id at once: the quick info from [quickInfo] while yt-dlp gets the full info,
      * which the quick one never follows.
      */
-    fun info(url: String, events: InfoEvents): Long {
+    fun info(url: String, events: InfoEvents): Long = lookup { id -> lookUp(id, url, events) }
+
+    /**
+     * Searches YouTube for [search] and returns its id at once: a lookup of words, which yt-dlp answers with YouTube's
+     * list and opens none of it. One that is not valid (null) is refused. It never updates yt-dlp: the download picked
+     * from it does when that is due.
+     */
+    fun search(search: DlSearch?, events: SearchEvents): Long = lookup { id -> find(id, search, events) }
+
+    /** Starts a lookup's (or a search's) [body] and returns its id at once: [busy] from now until its end. */
+    private fun lookup(body: suspend (id: Long) -> Unit): Long {
         val id = synchronized(lock) { nextId++ }
-        val job = scope.launch(start = CoroutineStart.LAZY) { lookUp(id, url, events) }
+        val job = scope.launch(start = CoroutineStart.LAZY) { body(id) }
         // Its end however it comes, also for a lookup stopped before its body ran: one left in the map would hold the
         // foreground service for as long as the add-on runs.
         job.invokeOnCompletion {
@@ -473,8 +493,7 @@ class DlRuns(
             events.onFailed(DlEnd.Failed(DlFailure.ENGINE))
             return@coroutineScope
         }
-        val marker = File(folder.parentFile, "lookup/$id").path + "/"
-        val exit = usingYtdlp { killable("info-$id", marker) { ytdlp.run("info-$id", DlArgs.info(marker), url) {} } }
+        val exit = answer(id, DlArgs::info, url)
         quick.cancel()
         val info = (exit as? YtdlpExit.Done)?.let { Info.full(url, it.out) }
         synchronized(told) {
@@ -485,6 +504,33 @@ class DlRuns(
                 else -> events.onFailed(DlEnd.Failed(DlFailure.UNKNOWN))
             }
         }
+    }
+
+    private suspend fun find(id: Long, search: DlSearch?, events: SearchEvents) {
+        if (search == null) return events.onFailed(DlEnd.Failed(DlFailure.REFUSED))
+        if (!ytdlp.ready()) return events.onFailed(DlEnd.Failed(DlFailure.ENGINE))
+        val words = search.query.trim()
+        val exit = answer(id, DlArgs::search, "ytsearch${search.limit}:$words")
+        val results = (exit as? YtdlpExit.Done)?.let { Info.results(it.out) }
+        when {
+            results != null -> events.onResults(results)
+            // yt-dlp names the search by its words in an ERROR line, before the reason ('[youtube:search] query "<words>"
+            // page 1: <why>'): taken out first, so words like "timed out" never decide why it failed.
+            exit is YtdlpExit.Failed -> {
+                val reasons = exit.err.lines().joinToString("\n") { it.replaceFirst(words, "") }
+                events.onFailed(DlEnd.Failed(failure("lookup $id", exit.copy(err = reasons))))
+            }
+            else -> events.onFailed(DlEnd.Failed(DlFailure.UNKNOWN))
+        }
+    }
+
+    /**
+     * yt-dlp's answer for lookup [id]: its [args] (given the marker its process is known by) then [target], a link or a
+     * search; killed as soon as the lookup is stopped.
+     */
+    private suspend fun answer(id: Long, args: (marker: String) -> List<String>, target: String): YtdlpExit {
+        val marker = File(folder.parentFile, "lookup/$id").path + "/"
+        return usingYtdlp { killable("info-$id", marker) { ytdlp.run("info-$id", args(marker), target) {} } }
     }
 
     /**

@@ -11,6 +11,9 @@ import app.lyrify.dl.api.DlInfo
 import app.lyrify.dl.api.DlKind
 import app.lyrify.dl.api.DlProgress
 import app.lyrify.dl.api.DlRequest
+import app.lyrify.dl.api.DlSearch
+import app.lyrify.dl.api.DlSearchResult
+import app.lyrify.dl.api.DlSearchResults
 import app.lyrify.dl.api.DlStage
 import app.lyrify.dl.api.DlUpdate
 import kotlinx.coroutines.CompletableDeferred
@@ -79,6 +82,10 @@ class DlRunsTest {
         val calls = mutableListOf<String>()
         val folders = mutableListOf<File>()
 
+        /** What each run was given: its arguments, and the link (or the search) after them. */
+        val argLists = mutableListOf<List<String>>()
+        val targets = mutableListOf<String>()
+
         /** Each live process, by id: completed only by [kill]. */
         val live = HashMap<String, CompletableDeferred<YtdlpExit>>()
 
@@ -86,6 +93,8 @@ class DlRunsTest {
 
         override suspend fun run(id: String, args: List<String>, url: String, line: (String) -> Unit): YtdlpExit {
             calls += "run"
+            argLists += args
+            targets += url
             val output = args.indexOf("-o").takeIf { it >= 0 }?.let { File(args[it + 1]).parentFile }
             output?.let { folders += it }
             return when (val script = scripts.removeFirstOrNull() ?: Script.Fail("ERROR: no script")) {
@@ -830,6 +839,135 @@ class DlRunsTest {
 
         assertTrue(ytdlp.calls.last().startsWith("kill "))
         assertTrue(ytdlp.live.isEmpty())
+    }
+
+    // Searching YouTube (IDlAddon VERSION 2)
+
+    private class Found : SearchEvents {
+        var results: DlSearchResults? = null
+        var failed: DlEnd.Failed? = null
+
+        override fun onResults(results: DlSearchResults) {
+            check(this.results == null && failed == null) { "two answers" }
+            this.results = results
+        }
+
+        override fun onFailed(end: DlEnd.Failed) {
+            check(results == null && failed == null) { "two answers" }
+            failed = end
+        }
+    }
+
+    /** yt-dlp's -J of a flat "ytsearch" (InfoTest has the long one): one video. */
+    private val searchAnswer = """{"id":"paper lantern","title":"paper lantern","_type":"playlist","entries":[""" +
+        """{"_type":"url","ie_key":"Youtube","id":"abc123def45","url":"https://www.youtube.com/watch?v=abc123def45",""" +
+        """"title":"The Quiet Hours - Paper Lantern","duration":214.0,"channel":"The Quiet Hours"}],"extractor":"youtube:search"}"""
+
+    @Test
+    fun `a search asks yt-dlp for YouTube's list only, never a download or an update, and tells what it found`() = runTest {
+        ytdlp.scripts += Script.Finish(emptyMap(), lines = listOf(searchAnswer))
+        val found = Found()
+
+        runs().search(DlSearch("  the quiet hours paper lantern ", limit = 5), found)
+        runCurrent()
+
+        assertEquals(DlSearchResults(listOf(DlSearchResult("https://www.youtube.com/watch?v=abc123def45", "The Quiet Hours - Paper Lantern", "The Quiet Hours", 214))), found.results)
+        assertEquals(listOf("ytsearch5:the quiet hours paper lantern"), ytdlp.targets)
+        val args = ytdlp.argLists.single()
+        assertTrue(args.toString(), args.containsAll(listOf("-J", "--flat-playlist")))
+        // "--" last: the search, like a link, is never read as an option.
+        assertEquals("--", args.last())
+        listOf("-f", "-x", "--write-thumbnail", "--print-to-file", "--no-playlist").forEach { assertFalse(it, it in args) }
+        // yt-dlp is more than a day old here: a run would update it first, a search never does.
+        assertEquals(listOf("run"), ytdlp.calls)
+    }
+
+    @Test
+    fun `a search that fails says why, and its log names the kind, never the words`() = runTest {
+        ytdlp.scripts += Script.Fail("WARNING: [youtube:search] the quiet hours paper lantern: retrying\nERROR: [youtube:search] the quiet hours paper lantern: Unable to download API page: HTTP Error 429: Too Many Requests")
+        ytdlp.scripts += Script.Fail("ERROR: [youtube:search] mira solen: Unable to download API page: <urlopen error [Errno 7] No address associated with hostname>")
+        ytdlp.scripts += Script.Finish(emptyMap(), lines = listOf("""{"title":"Paper Harbour","uploader":"Mira Solen"}"""))
+        val runs = runs()
+        val blocked = Found()
+        val offline = Found()
+        val odd = Found()
+
+        val first = runs.search(DlSearch("the quiet hours paper lantern"), blocked)
+        runCurrent()
+        runs.search(DlSearch("mira solen"), offline)
+        runCurrent()
+        runs.search(DlSearch("paper harbour"), odd)
+        runCurrent()
+
+        assertEquals(DlEnd.Failed(DlFailure.BLOCKED), blocked.failed)
+        assertEquals(DlEnd.Failed(DlFailure.OFFLINE), offline.failed)
+        assertEquals("an answer that is not a search's list", DlEnd.Failed(DlFailure.UNKNOWN), odd.failed)
+        assertTrue(logs.toString(), "lookup $first: yt-dlp failed (BLOCKED, matched 429, extractor youtube:search)" in logs)
+        listOf("quiet", "lantern", "mira", "solen", "harbour").forEach { word -> assertTrue(word, logs.none { word in it.lowercase() }) }
+    }
+
+    @Test
+    fun `a search's own words never decide why it failed, though yt-dlp names the search by them`() = runTest {
+        // yt-dlp 2026.10.26 names a search 'query "<words>"' in its ERROR lines (YoutubeTabBaseInfoExtractor._search_results).
+        ytdlp.scripts += Script.Fail("ERROR: [youtube:search] query \"timed out signature\" page 1: Unable to download API JSON: HTTP Error 429: Too Many Requests")
+        ytdlp.scripts += Script.Fail("ERROR: [youtube:search] query \"timed out\": Unable to download webpage: <urlopen error timed out> (caused by TimeoutError('timed out'))")
+        val runs = runs()
+        val blocked = Found()
+        val offline = Found()
+
+        runs.search(DlSearch("timed out signature"), blocked)
+        runCurrent()
+        runs.search(DlSearch("timed out"), offline)
+        runCurrent()
+
+        assertEquals("the reason, not the words", DlEnd.Failed(DlFailure.BLOCKED), blocked.failed)
+        assertEquals("the same words in the reason still count", DlEnd.Failed(DlFailure.OFFLINE), offline.failed)
+    }
+
+    @Test
+    fun `a search keeps the add-on busy until its answer, and cancelInfo kills its yt-dlp and ends its busy time`() = runTest {
+        ytdlp.scripts += Script.Hang()
+        ytdlp.scripts += Script.Finish(emptyMap(), lines = listOf(searchAnswer))
+        val runs = runs()
+        val stopped = Found()
+
+        val search = runs.search(DlSearch("paper lantern"), stopped)
+        assertTrue("from the moment it takes the words", runs.busy)
+        runCurrent()
+        assertTrue("while yt-dlp searches", runs.busy)
+        runs.cancelInfo(search)
+        runCurrent()
+
+        assertTrue(ytdlp.calls.last().startsWith("kill "))
+        assertTrue(ytdlp.live.isEmpty())
+        assertFalse(runs.busy)
+        assertEquals(1, ends)
+        assertNull("a stopped search tells nothing", stopped.results ?: stopped.failed)
+
+        runs.search(DlSearch("paper lantern"), Found())
+        assertTrue(runs.busy)
+        runCurrent()
+        assertFalse(runs.busy)
+        assertEquals(2, ends)
+    }
+
+    @Test
+    fun `a search the add-on does not take is refused at once, and one yt-dlp cannot start for fails as the engine`() = runTest {
+        val runs = runs()
+        val refused = Found()
+        val engine = Found()
+
+        runs.search(null, refused)
+        runCurrent()
+        ytdlp.ready = false
+        runs.search(DlSearch("paper lantern"), engine)
+        runCurrent()
+
+        assertEquals(DlEnd.Failed(DlFailure.REFUSED), refused.failed)
+        assertEquals(DlEnd.Failed(DlFailure.ENGINE), engine.failed)
+        assertTrue("yt-dlp never ran", ytdlp.calls.isEmpty())
+        assertFalse(runs.busy)
+        assertEquals(2, ends)
     }
 
     // Busy while it works: the add-on's own foreground service is held from a link taken to its last byte handed back

@@ -151,6 +151,69 @@ class DlWireTest {
         assertEquals(PublicAddresses.Verdict.NOT_PUBLIC, PublicAddresses.of("not a link", resolve))
     }
 
+    // YouTube search (VERSION 2)
+
+    @Test
+    fun `a search and what it found read back as they were written`() {
+        val search = DlSearch("the quiet hours paper lantern", limit = 5)
+        assertEquals(search, DlWire.search(DlWire.encode(search)))
+        val results = DlSearchResults(
+            listOf(
+                DlSearchResult("https://www.youtube.com/watch?v=abc123", "The Quiet Hours - Paper Lantern (Official Video)", "The Quiet Hours", 214, "https://i.ytimg.com/vi/abc123/hq720.jpg"),
+                DlSearchResult("https://www.youtube.com/shorts/def456", "Paper Lantern, live", "Glass Harbour Sessions"),
+            ),
+        )
+        assertEquals(results, DlWire.results(DlWire.encode(results)))
+        assertEquals(DlSearchResults(emptyList()), DlWire.results(DlWire.encode(DlSearchResults(emptyList()))))
+    }
+
+    @Test
+    fun `a search asks for 8 results unless it says otherwise`() {
+        assertEquals(8, DlSearch("paper lantern").limit)
+        assertEquals(DlSearch("paper lantern"), DlWire.search("""{"query":"paper lantern"}"""))
+    }
+
+    @Test
+    fun `a search the add-on would not take is refused`() {
+        listOf(
+            DlSearch(""),
+            DlSearch("   "),
+            DlSearch("paper\nlantern"),
+            DlSearch("paper\u0000lantern"),
+            DlSearch("x".repeat(201)),
+            DlSearch("paper lantern", limit = 0),
+            DlSearch("paper lantern", limit = 21),
+        ).forEach { refused ->
+            assertFalse(refused.toString(), refused.valid)
+            assertNull(refused.toString(), DlWire.search(DlWire.encode(refused)))
+        }
+        assertTrue(DlSearch("x".repeat(200), limit = 20).valid)
+        assertTrue(DlSearch("Mira Solen – Paper Harbour", limit = 1).valid)
+    }
+
+    @Test
+    fun `words as typed or pasted make a search the add-on takes`() {
+        // Every character the add-on refuses as a control character, U+0080 to U+009F too, becomes a space.
+        val controls = ((0x00..0x1F) + (0x7F..0x9F)).map { it.toChar() }.joinToString("")
+        val search = DlSearch.of(" paper${controls}lantern\r\n")
+        assertEquals("paper" + " ".repeat(controls.length) + "lantern", search.query)
+        assertTrue(search.valid)
+        assertEquals(DlSearch.DEFAULT_LIMIT, search.limit)
+        assertEquals(DlSearch.MAX_QUERY, DlSearch.of("x".repeat(DlSearch.MAX_QUERY + 50)).query.length)
+        assertTrue(DlSearch.of("x".repeat(DlSearch.MAX_QUERY + 50)).valid)
+        assertEquals("Mira Solen – Paper Harbour", DlSearch.of("Mira Solen – Paper Harbour").query)
+    }
+
+    @Test
+    fun `search results a later add-on adds fields to still read, and ones that cannot be read are no answer`() {
+        assertEquals(
+            DlSearchResults(listOf(DlSearchResult("https://www.youtube.com/watch?v=abc123", "Paper Lantern", "The Quiet Hours", 214))),
+            DlWire.results("""{"results":[{"url":"https://www.youtube.com/watch?v=abc123","title":"Paper Lantern","channel":"The Quiet Hours","durationSec":214,"views":12}],"more":true}"""),
+        )
+        assertNull(DlWire.results("not json"))
+        assertNull(DlWire.results("""{"results":[{"title":"no link"}]}"""))
+    }
+
     @Test
     fun `the bind permission carries the add-on's own id`() {
         assertEquals("app.lyrify.dl.permission.BIND_DL", DlNames.permission("app.lyrify.dl"))

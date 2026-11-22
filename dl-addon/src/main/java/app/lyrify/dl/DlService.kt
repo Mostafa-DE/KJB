@@ -25,11 +25,13 @@ import app.lyrify.dl.api.DlFile
 import app.lyrify.dl.api.DlInfo
 import app.lyrify.dl.api.DlNames
 import app.lyrify.dl.api.DlProgress
+import app.lyrify.dl.api.DlSearchResults
 import app.lyrify.dl.api.DlStatus
 import app.lyrify.dl.api.DlWire
 import app.lyrify.dl.api.IDlAddon
 import app.lyrify.dl.api.IDlInfoCallback
 import app.lyrify.dl.api.IDlRunCallback
+import app.lyrify.dl.api.IDlSearchCallback
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -220,6 +222,12 @@ class DlService : Service() {
 
         override fun cancelInfo(lookup: Long) = checked { runs.cancelInfo(lookup) }
 
+        override fun search(request: String, callback: IDlSearchCallback): Long = checked {
+            val events = SearchCallback(callback)
+            events.lookup = runs.search(DlWire.search(request), events)
+            events.lookup
+        }
+
         override fun start(request: String, callback: IDlRunCallback): Long = checked {
             val events = RunCallback(callback)
             events.run = runs.start(DlWire.request(request), events)
@@ -291,19 +299,34 @@ class DlService : Service() {
         }
     }
 
-    /** One lookup's events to its caller; the caller gone stops the lookup. */
-    private inner class InfoCallback(private val callback: IDlInfoCallback) : InfoEvents {
+    /** A lookup's (or a search's) caller, by [binder]: its going stops the lookup, until the lookup's last word [unlink]s it. */
+    private abstract inner class LookupCallback(private val binder: IBinder) {
         @Volatile
         var lookup: Long = 0
 
         private val death = IBinder.DeathRecipient { runs.cancelInfo(lookup) }
         private val linked = try {
-            callback.asBinder().linkToDeath(death, 0)
+            binder.linkToDeath(death, 0)
             true
         } catch (_: RemoteException) {
             false
         }
 
+        protected fun unlink() {
+            if (linked) runCatching { binder.unlinkToDeath(death, 0) }
+        }
+
+        protected fun send(call: () -> Unit) {
+            try {
+                call()
+            } catch (_: RemoteException) {
+                runs.cancelInfo(lookup)
+            }
+        }
+    }
+
+    /** One lookup's events to its caller; the caller gone stops the lookup. */
+    private inner class InfoCallback(private val callback: IDlInfoCallback) : LookupCallback(callback.asBinder()), InfoEvents {
         override fun onInfo(info: DlInfo) {
             send { callback.onInfo(lookup, DlWire.encode(info)) }
             if (!info.partial) unlink()
@@ -313,17 +336,18 @@ class DlService : Service() {
             send { callback.onFailed(lookup, DlWire.encode(end)) }
             unlink()
         }
+    }
 
-        private fun unlink() {
-            if (linked) runCatching { callback.asBinder().unlinkToDeath(death, 0) }
+    /** One search's answer to its caller; the caller gone stops the search. */
+    private inner class SearchCallback(private val callback: IDlSearchCallback) : LookupCallback(callback.asBinder()), SearchEvents {
+        override fun onResults(results: DlSearchResults) {
+            send { callback.onResults(lookup, DlWire.encode(results)) }
+            unlink()
         }
 
-        private inline fun send(call: () -> Unit) {
-            try {
-                call()
-            } catch (_: RemoteException) {
-                runs.cancelInfo(lookup)
-            }
+        override fun onFailed(end: DlEnd.Failed) {
+            send { callback.onFailed(lookup, DlWire.encode(end)) }
+            unlink()
         }
     }
 
