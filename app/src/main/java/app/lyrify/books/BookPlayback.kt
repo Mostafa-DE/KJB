@@ -27,7 +27,6 @@ import app.lyrify.settings.PlaybackSettings
 import app.lyrify.stats.PlayEvent
 import app.lyrify.stats.PlayEvents
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -37,7 +36,6 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 // Book mode (research section 3): a book's queue (SourceKind.BOOK) plays with 30 s back and forward in place of Previous
 // and Next, at the book's own speed, without crossfade or Repeat, its place kept in `books.json` every 15 s and at every
@@ -82,11 +80,15 @@ fun bookStart(path: String, library: Library?, state: BookState): BookStart? {
  * queue playing already on that part plays on where it is; on another part it goes there.
  */
 fun QueueBook.playBook(start: BookStart, now: Long): Switched {
-    val source = bookSource(start.book)
     val path = start.book.parts[start.place.partIndex].path
     val playing = current
-    if (playing != null && playing.from(source) && playing.current?.song?.path == path) return Switched(this, toRecent = false)
-    val played = play(start.book.parts.map { it.ref }, start.place.partIndex, source, now)
+    if (playing != null && playing.from(bookSource(start.book)) && playing.current?.song?.path == path) return Switched(this, toRecent = false)
+    return playBookAt(start, now)
+}
+
+/** [start]'s book plays from [BookStart.place] exactly: its own queue too, when that plays already, goes there. */
+private fun QueueBook.playBookAt(start: BookStart, now: Long): Switched {
+    val played = play(start.book.parts.map { it.ref }, start.place.partIndex, bookSource(start.book), now)
     val index = played.book.current?.index ?: return played
     return played.copy(book = played.book.place(index, start.place.positionMs))
 }
@@ -121,16 +123,29 @@ private fun QueueBook.openedAsBook(queue: Queue, library: Library?, state: BookS
     val book = library?.bookOf(path) ?: return null
     val heardHere = (state.entryOf(book)?.lastPlayedAt ?: Long.MIN_VALUE) < queue.updatedAt
     val place = if (heardHere) BookPlace(book.parts.indexOfFirst { it.path == path }, queue.positionMs) else state.placeOf(book)
-    return playBook(BookStart(book, place), now)
+    return playBookAt(BookStart(book, place), now)
 }
 
 /**
- * "Resume" on queue [queueId] ([QueueBook.resume]): an "Opened file" queue left on a book's file goes on as that book where
- * it was listened to last ([openedAsBook]; a cache copy is left to the service, which matches it once paused); any other
- * as a list's start would ([asBook]).
+ * "Resume" on queue [queueId] ([QueueBook.resume]): an "Opened file" queue left on a book's file (a cache copy by
+ * [copyOf]) goes on as that book where it was listened to last ([openedAsBook]); any other as a list's start would
+ * ([asBook]).
  */
-fun QueueBook.resumeAsBook(queueId: String, library: Library?, state: BookState, now: Long): Switched =
-    queue(queueId)?.let { openedAsBook(it, library, state, { null }, now) } ?: asBook(resume(queueId, now), library, state, now)
+fun QueueBook.resumeAsBook(queueId: String, library: Library?, state: BookState, copyOf: (SongRef) -> Song?, now: Long): Switched =
+    queue(queueId)?.let { openedAsBook(it, library, state, copyOf, now) } ?: asBook(resume(queueId, now), library, state, now)
+
+/**
+ * The "Opened file" queue playing, when it is left on a book's file, made that book's queue ([openedAsBook]) while the
+ * player is [paused] (not asked to play): a cache copy is looked up by [copyOf] first (by its name and size, off the main
+ * thread), the library's own file needs no lookup. Main thread.
+ */
+suspend fun PlayerCore.openedIntoBook(library: Library, books: () -> BookState, copyOf: suspend (String) -> Song?, paused: () -> Boolean) {
+    val item = book.value.current?.takeIf { it.source.kind == SourceKind.OPENED }?.current?.song ?: return
+    val copy = if (library.bookOf(item.path) == null) copyOf(item.path) else null
+    // Play pressed meanwhile: it goes on as it is, and becomes the book at its next pause.
+    if (!paused()) return
+    switch { it.openedAsBook(library, books(), { ref -> copy?.takeIf { ref == item } }, now()) }
+}
 
 /** The book whose queue plays, and the part playing in it ([partIndex] in [Book.parts]). */
 data class PlayingBook(val book: Book, val partIndex: Int)
@@ -343,12 +358,8 @@ class BookPart : ServicePart {
         scope.launch {
             combine(core.book, library, paused) { queues, state, still -> Triple(queues, state, still) }.collect { (queues, state, still) ->
                 val known = (state as? LibraryState.Ready)?.library ?: return@collect
-                val item = queues.current?.takeIf { still && it.source.kind == SourceKind.OPENED }?.current?.song ?: return@collect
-                // A copy is matched by its name and size, read off the main thread.
-                val copy = withContext(Dispatchers.IO) { OpenedFiles.libraryCopy(service, item.path, known.all) }
-                // Play pressed meanwhile: it goes on as it is, and becomes the book at its next pause.
-                if (engine.playWhenReady) return@collect
-                core.switch { it.openedAsBook(known, store.state.value, { ref -> copy?.takeIf { ref == item } }, System.currentTimeMillis()) }
+                if (!still || queues.current?.source?.kind != SourceKind.OPENED) return@collect
+                core.openedIntoBook(known, store.state::value, { path -> OpenedFiles.libraryCopyOf(service, path, known.all) }) { !engine.playWhenReady }
             }
         }
         // The chapters of a single file playing, read once for the player and the sleep timer.

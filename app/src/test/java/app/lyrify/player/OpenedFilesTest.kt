@@ -144,6 +144,17 @@ class OpenedFilesTest {
     }
 
     @Test
+    fun `a copy kept under a shortened name still matches the library's song by the name it was opened with`() {
+        val root = temp.newFolder("opened")
+        val long = "Quiet Orchard, the whole tale in one file, read slowly by a made-up narrator over three long winter evenings, part one of two.m4b"
+        assertTrue(long.length > 120)
+        // KJB keeps a copy under at most 120 characters, its extension kept.
+        val copy = File(root, "1800000000000/0/" + long.take(116) + ".m4b").apply { parentFile!!.mkdirs(); writeBytes(ByteArray(2_048)) }
+        val book = song("Audiobooks/$long").copy(sizeBytes = 2_048)
+        assertEquals(book, copyMatch(copy, root, listOf(book)))
+    }
+
+    @Test
     fun `the name and size are read by their columns, whatever order the opening app gives them in`() {
         // A provider that hands back more columns than asked for, the size not first.
         val row = rows(listOf(OpenableColumns.DISPLAY_NAME, "_data_length", OpenableColumns.SIZE), listOf("Quiet Orchard.m4b", 7L, 512_000_000L))

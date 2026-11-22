@@ -103,7 +103,9 @@ fun copyMatch(file: File, root: File, songs: List<Song>): Song? {
         false
     }
     if (!inside || !file.isFile) return null
-    return matchNamed(Openable(file.name, file.length()), songs)
+    // A copy keeps the name it was opened with, made safe ([OpenedFiles.safeName]): the library's name is made safe the same way.
+    val size = file.length().takeIf { it > 0 } ?: return null
+    return songs.filter { it.sizeBytes == size && OpenedFiles.safeName(it.fileName) == file.name }.singleOrNull()
 }
 
 /** [column] of the first row of [row] as a number, found by its name; null without a row, or with the column missing or empty. */
@@ -373,8 +375,15 @@ object OpenedFiles {
     fun song(context: Context, ref: SongRef): Song? =
         held.value[ref.path] ?: ref.path.takeIf { it.startsWith(folder(context).path + "/") }?.let { plainSong(File(it), readTags = false) }
 
-    /** The library's song the copy at [path] is, by its name and size ([copyMatch]); null for any other path. Blocking. */
-    fun libraryCopy(context: Context, path: String, songs: List<Song>): Song? = copyMatch(File(path), folder(context), songs)
+    /**
+     * The library's song the copy at [path] is, by its name and size ([copyMatch]), read on the IO threads; null at once
+     * for any other path.
+     */
+    suspend fun libraryCopyOf(context: Context, path: String, songs: List<Song>): Song? {
+        val root = folder(context)
+        if (!path.startsWith(root.path + "/")) return null
+        return withContext(Dispatchers.IO) { copyMatch(File(path), root, songs) }
+    }
 
     /**
      * The embedded cover of the copy at [path], decoded at the largest halving still at least [px] on its longer side
@@ -546,7 +555,7 @@ object OpenedFiles {
     }
 
     /** A file name safe to keep: no folders, control characters or leading dots, at most [MAX_NAME] characters. */
-    private fun safeName(name: String?): String {
+    internal fun safeName(name: String?): String {
         val clean = name.orEmpty().filterNot { it == '/' || it == '\\' || it.isISOControl() }.trim().trimStart('.')
         if (clean.isEmpty()) return "audio"
         val extension = clean.substringAfterLast('.', missingDelimiterValue = "").takeIf { it.length in 1..5 }?.let { ".$it" }.orEmpty()

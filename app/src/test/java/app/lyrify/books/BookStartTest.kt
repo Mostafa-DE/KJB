@@ -5,12 +5,19 @@ import app.lyrify.library.Song
 import app.lyrify.library.SongRef
 import app.lyrify.library.song
 import app.lyrify.player.Openable
+import app.lyrify.player.PlaybackPlace
+import app.lyrify.player.PlayerCore
 import app.lyrify.player.QueueBook
 import app.lyrify.player.QueueSource
+import app.lyrify.player.QueueStorage
+import app.lyrify.player.Repeat
 import app.lyrify.player.SourceKind
 import app.lyrify.player.Switched
 import app.lyrify.player.openedSong
 import app.lyrify.settings.Settings
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -265,23 +272,85 @@ class BookStartTest {
         val left = openedLeft(listOf(orchard.ref), 0, 600_000, at = 100)
         val openedId = left.currentId!!
         val music = left.play(listOf(tin.ref), 0, album, now = 150).book
-        val resumed = music.resumeAsBook(openedId, library, state, now = 300).book.current!!
+        val resumed = music.resumeAsBook(openedId, library, state, noCopy, now = 300).book.current!!
         assertEquals(bookSource(oneFile), resumed.source)
         assertEquals(600_000L, resumed.positionMs)
         // Played from the Books tab since (200): the book's own place.
         val later = state.withPlace(oneFile, BookPlace(0, 500_000), now = 200)
-        assertEquals(500_000L, music.resumeAsBook(openedId, library, later, now = 300).book.current!!.positionMs)
+        assertEquals(500_000L, music.resumeAsBook(openedId, library, later, noCopy, now = 300).book.current!!.positionMs)
         // Any other queue resumes as Resume does, a book's file in it starting its book (asBook).
         val musicId = music.currentId!!
-        val back = music.resumeAsBook(openedId, library, state, now = 300).book
-        assertEquals(musicId, back.resumeAsBook(musicId, library, state, now = 400).book.currentId)
+        val back = music.resumeAsBook(openedId, library, state, noCopy, now = 300).book
+        assertEquals(musicId, back.resumeAsBook(musicId, library, state, noCopy, now = 400).book.currentId)
     }
 
     @Test
-    fun `the service turns a paused Opened file queue into its book once the library is read`() {
+    fun `Resume of an Opened file queue goes to its place though the book's queue stands on that part elsewhere, and a copy found goes on as the book`() {
+        val left = openedLeft(listOf(orchard.ref), 0, 600_000, at = 100)
+        val openedId = left.currentId!!
+        // The book started since at its old place in books.json, not played yet.
+        val onIt = left.play(listOf(orchard.ref), 0, bookSource(oneFile), now = 150).book.place(0, 100_000)
+        val resumed = onIt.resumeAsBook(openedId, library, state, noCopy, now = 300).book
+        assertEquals(bookSource(oneFile), resumed.current!!.source)
+        assertEquals(600_000L, resumed.current!!.positionMs)
+        assertEquals(onIt.jumps + 1, resumed.jumps)
+        // A cache copy left in Recent, matched to the library's book.
+        val copy = SongRef("/data/user/0/app.lyrify/cache/opened/1800000000000/0/Quiet Orchard.m4b")
+        val copyLeft = openedLeft(listOf(copy), 0, 700_000, at = 100)
+        val copyId = copyLeft.currentId!!
+        val music = copyLeft.play(listOf(tin.ref), 0, album, now = 150).book
+        val found = music.resumeAsBook(copyId, library, state, { ref -> orchard.takeIf { ref == copy } }, now = 300).book.current!!
+        assertEquals(bookSource(oneFile), found.source)
+        assertEquals(700_000L, found.positionMs)
+    }
+
+    /** Queues as a restart reads them: [book] as stored. */
+    private class Stored(private val book: QueueBook) : QueueStorage {
+        override suspend fun load(): Pair<QueueBook, Repeat> = book to Repeat.OFF
+
+        override suspend fun saveBook(book: QueueBook) = Unit
+
+        override suspend fun savePlace(place: PlaybackPlace) = Unit
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `the service turns a paused Opened file queue into its book once, never while asked to play, and looks up only a copy`() = runTest {
+        val left = openedLeft(listOf(orchard.ref), 0, 600_000, at = 100)
+        val core = PlayerCore(Stored(left), backgroundScope, wall = { 300 })
+        runCurrent()
+        val asked = mutableListOf<String>()
+        val noneFound: suspend (String) -> Song? = { path -> asked += path; null }
+        // Asked to play (a headset, Play pressed meanwhile): as it is, until the next pause.
+        core.openedIntoBook(library, { state }, noneFound) { false }
+        assertEquals(left.currentId, core.book.value.currentId)
+        core.openedIntoBook(library, { state }, noneFound) { true }
+        val queue = core.book.value.current!!
+        assertEquals(bookSource(oneFile), queue.source)
+        assertEquals(600_000L, queue.positionMs)
+        // Once: the book's own queue changes nothing more.
+        val after = core.book.value
+        core.openedIntoBook(library, { state }, noneFound) { true }
+        assertSame(after, core.book.value)
+        // The library's file is never looked up as a copy.
+        assertTrue(asked.isEmpty())
+        // A copy is, and goes on as the library's book.
+        val copy = SongRef("/data/user/0/app.lyrify/cache/opened/1800000000000/0/Quiet Orchard.m4b")
+        val copyCore = PlayerCore(Stored(openedLeft(listOf(copy), 0, 700_000, at = 100)), backgroundScope, wall = { 300 })
+        runCurrent()
+        copyCore.openedIntoBook(library, { state }, { path -> asked += path; orchard.takeIf { path == copy.path } }) { true }
+        assertEquals(listOf(copy.path), asked)
+        assertEquals(bookSource(oneFile), copyCore.book.value.current!!.source)
+        assertEquals(700_000L, copyCore.book.value.current!!.positionMs)
+    }
+
+    @Test
+    fun `the service turns it before a headset's play gets the queue, and on every pause and library change`() {
         // Unit tests run in the module's folder.
+        val service = File("src/main/java/app/lyrify/player/PlaybackService.kt").readText()
+        assertTrue(service.contains("core.openedIntoBook(known, books.state::value, { path -> OpenedFiles.libraryCopyOf(this@PlaybackService, path, known.all) }) { !engine.playWhenReady }"))
         val part = File("src/main/java/app/lyrify/books/BookPlayback.kt").readText()
-        assertTrue(part.contains("core.switch { it.openedAsBook(known, store.state.value, { ref -> copy?.takeIf { ref == item } }, System.currentTimeMillis()) }"))
+        assertTrue(part.contains("core.openedIntoBook(known, store.state::value, { path -> OpenedFiles.libraryCopyOf(service, path, known.all) }) { !engine.playWhenReady }"))
     }
 
     @Test
@@ -291,7 +360,7 @@ class BookStartTest {
         listOf("it.play(songs, start, source, core.now())", "it.playFromStart(queueId, core.now())", "it.jump(queueId, index, core.now())").forEach { change ->
             assertTrue(change, connection.contains("switchAsBook { $change }"))
         }
-        assertTrue(connection.contains("core.switch { it.resumeAsBook(queueId, library(), books.value, core.now()) }"))
+        assertTrue(connection.contains("core.switch { it.resumeAsBook(queueId, known, books.value, { ref -> copy?.takeIf { ref == item } }, core.now()) }"))
         assertFalse(connection.contains("core.switch { it.play(songs, start, source"))
         assertTrue(connection.contains("core.switch { it.shuffle(songs, source"))
         assertTrue(connection.contains("core.switch { book -> book.play(songs, start, source, core.now())"))

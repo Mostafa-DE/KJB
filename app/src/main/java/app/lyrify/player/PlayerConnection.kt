@@ -302,9 +302,16 @@ class PlayerConnection(
         book.deleted(queueId)?.let { gone -> gone.book to Undo { core.change { it.undelete(gone) } } }
     }
 
+    /** "Resume": that queue plays at its place; an "Opened file" queue on a book's file as that book ([resumeAsBook]). */
     fun resume(queueId: String) {
-        core.switch { it.resumeAsBook(queueId, library(), books.value, core.now()) }
-        send { it.play() }
+        scope.launch {
+            val known = library()
+            val item = core.book.value.queue(queueId)?.takeIf { it.source.kind == SourceKind.OPENED }?.current?.song
+            // A cache copy is the library's book by its name and size, read off the main thread; nothing to read for any other.
+            val copy = if (known != null && item != null) OpenedFiles.libraryCopyOf(context, item.path, known.all) else null
+            core.switch { it.resumeAsBook(queueId, known, books.value, { ref -> copy?.takeIf { ref == item } }, core.now()) }
+            send { it.play() }
+        }
     }
 
     fun playFromStart(queueId: String) {
