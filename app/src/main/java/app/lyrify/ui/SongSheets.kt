@@ -94,12 +94,12 @@ internal fun SongMenuSheet(
                 when (row) {
                     SheetRow.PLAY_NEXT -> ActionRow(R.drawable.ic_queue_play_next, stringResource(R.string.lib_play_next)) { onRow(row) }
                     SheetRow.ADD_TO -> ActionRow(R.drawable.ic_playlist_add, stringResource(R.string.lib_add_to), chevron = true) { onRow(row) }
-                    SheetRow.NOT_NOW -> ActionRow(R.drawable.ic_snooze, stringResource(R.string.suggest_not_now), supporting = stringResource(R.string.suggest_not_now_line), iconTint = LocalBrandColors.current.highlight) { onRow(row) }
-                    SheetRow.NEVER -> ActionRow(R.drawable.ic_block, stringResource(R.string.suggest_never), supporting = stringResource(R.string.suggest_never_line), iconTint = LocalBrandColors.current.highlight) { onRow(row) }
+                    SheetRow.NOT_NOW -> ActionRow(R.drawable.ic_snooze, stringResource(R.string.suggest_not_now), supporting = stringResource(R.string.suggest_not_now_line), iconTint = LocalBrandColors.current.suggestion) { onRow(row) }
+                    SheetRow.NEVER -> ActionRow(R.drawable.ic_block, stringResource(R.string.suggest_never), supporting = stringResource(R.string.suggest_never_line), iconTint = LocalBrandColors.current.suggestion) { onRow(row) }
                     SheetRow.MORE_LIKE -> ActionRow(R.drawable.ic_explore, stringResource(R.string.suggest_more_like), supporting = stringResource(R.string.suggest_more_like_line), chevron = true) { onRow(row) }
                     // Why this? closes a suggestion's own choices; the song's usual rows follow under a line.
                     SheetRow.WHY -> {
-                        ActionRow(R.drawable.ic_help, stringResource(R.string.suggest_why), supporting = stringResource(R.string.suggest_why_line), chevron = true, iconTint = LocalBrandColors.current.highlight) { onRow(row) }
+                        ActionRow(R.drawable.ic_help, stringResource(R.string.suggest_why), supporting = stringResource(R.string.suggest_why_line), chevron = true, iconTint = LocalBrandColors.current.suggestion) { onRow(row) }
                         HorizontalDivider(Modifier.padding(horizontal = 8.dp, vertical = 4.dp), color = MaterialTheme.colorScheme.outlineVariant)
                     }
                     SheetRow.FAVOURITE -> FavouriteRow(favourite) { onRow(row) }

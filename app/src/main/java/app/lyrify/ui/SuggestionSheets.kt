@@ -68,13 +68,12 @@ import java.time.ZoneId
 
 // The mark and the reason
 
-/** The suggestion mark: the compass, and [text] ("Suggested") in the highlight colour, before a suggested song's artist. */
+/** The suggestion mark: the compass, and [text] ("Suggested") in suggestions' teal, before a suggested song's artist. */
 @Composable
 internal fun SuggestedMark(text: String, modifier: Modifier = Modifier) {
-    val highlight = LocalBrandColors.current.highlight
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp), modifier = modifier) {
-        Icon(painterResource(R.drawable.ic_explore), contentDescription = null, tint = highlight, modifier = Modifier.size(14.dp))
-        Text(text, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = highlight, maxLines = 1)
+        Icon(painterResource(R.drawable.ic_explore), contentDescription = null, tint = LocalBrandColors.current.suggestion, modifier = Modifier.size(14.dp))
+        Text(text, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = LocalBrandColors.current.suggestion, maxLines = 1)
     }
 }
 
@@ -96,7 +95,7 @@ internal fun ReasonLine(text: String, modifier: Modifier = Modifier, center: Boo
 @Composable
 internal fun SuggestionBadge(modifier: Modifier = Modifier) {
     Box(contentAlignment = Alignment.Center, modifier = modifier.size(14.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surface)) {
-        Icon(painterResource(R.drawable.ic_explore), contentDescription = null, tint = LocalBrandColors.current.highlight, modifier = Modifier.size(12.dp))
+        Icon(painterResource(R.drawable.ic_explore), contentDescription = null, tint = LocalBrandColors.current.suggestion, modifier = Modifier.size(12.dp))
     }
 }
 
@@ -302,10 +301,10 @@ internal fun SuggestedLine(ui: PlayerUi, showReasons: Boolean) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
-                modifier = Modifier.clip(CircleShape).background(LocalBrandColors.current.highlightContainer).padding(horizontal = 12.dp, vertical = 6.dp),
+                modifier = Modifier.clip(CircleShape).background(LocalBrandColors.current.suggestionContainer).padding(horizontal = 12.dp, vertical = 6.dp),
             ) {
-                Icon(painterResource(R.drawable.ic_explore), contentDescription = null, tint = LocalBrandColors.current.onHighlightContainer, modifier = Modifier.size(16.dp))
-                Text(stringResource(R.string.suggest_pill, mark), style = MaterialTheme.typography.labelLarge, color = LocalBrandColors.current.onHighlightContainer, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Icon(painterResource(R.drawable.ic_explore), contentDescription = null, tint = LocalBrandColors.current.suggestion, modifier = Modifier.size(16.dp))
+                Text(stringResource(R.string.suggest_pill, mark), style = MaterialTheme.typography.labelLarge, color = LocalBrandColors.current.suggestion, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
     }
@@ -358,14 +357,13 @@ fun autoplayCut(queue: Queue, shown: List<QueueItem>): Int? {
 @Composable
 private fun UpNextCard(icon: Int, badge: Boolean, title: String, line: String, modifier: Modifier = Modifier, trailing: (@Composable () -> Unit)? = null) {
     val colors = MaterialTheme.colorScheme
-    val brand = LocalBrandColors.current
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         modifier = modifier.padding(horizontal = ScreenPadding, vertical = 6.dp).fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(colors.surfaceContainerHigh).padding(12.dp),
     ) {
         Box {
-            Tile(icon, brand.highlightContainer, brand.onHighlightContainer, size = 40.dp)
+            Tile(icon, LocalBrandColors.current.suggestionContainer, LocalBrandColors.current.suggestion, size = 40.dp)
             if (badge) SuggestionBadge(Modifier.align(Alignment.BottomEnd))
         }
         Column(Modifier.weight(1f)) {

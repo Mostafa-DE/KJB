@@ -6,6 +6,7 @@ import app.lyrify.player.QueueSource
 import app.lyrify.player.SourceKind
 import app.lyrify.player.Suggested
 import app.lyrify.settings.SuggestionSettings
+import androidx.compose.ui.graphics.Color
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -38,6 +39,19 @@ class SuggestionScreensTest {
     fun `a book's queue has no Autoplay card`() {
         val book = playing(2, QueueSource(SourceKind.BOOK, "b1", "A long book")).current!!
         assertNull(autoplayCut(book, book.items))
+    }
+
+    @Test
+    fun `every suggestion mark is in suggestions' teal on its own teal ground, apart from KJB's coral, light and dark`() {
+        // The approved mockup's pick colours (v1, v2): #0B6B62 on #D6EEEA in light, #7FD6CA on #16322F in dark.
+        assertEquals(listOf(Color(0xFF0B6B62), Color(0xFFD6EEEA)), listOf(LightBrandColors.suggestion, LightBrandColors.suggestionContainer))
+        assertEquals(listOf(Color(0xFF7FD6CA), Color(0xFF16322F)), listOf(DarkBrandColors.suggestion, DarkBrandColors.suggestionContainer))
+        // The Suggested mark, its badge, the player's pill and Up next's Autoplay and Smart shuffle cards: no coral left.
+        val sheets = File("src/main/java/app/lyrify/ui/SuggestionSheets.kt").readText()
+        assertFalse(sheets.contains("highlight"))
+        assertTrue(sheets.contains("background(LocalBrandColors.current.suggestionContainer)"))
+        // A suggestion's sheet: Not now, Never suggest this and Why this? in the teal too.
+        assertEquals(3, Regex("iconTint = LocalBrandColors.current.suggestion\\)").findAll(File("src/main/java/app/lyrify/ui/SongSheets.kt").readText()).count())
     }
 
     @Test
