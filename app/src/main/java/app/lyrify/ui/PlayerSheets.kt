@@ -719,18 +719,20 @@ private fun BookmarkRow(mark: Bookmark, part: String?, onPlay: () -> Unit, onEdi
 /**
  * A bookmark's jump: [song] plays from [positionMs] inside the queue playing (the song playing: a seek; a song not in
  * the queue: Play next first), and it does not also resume at a place kept for it. A book's file plays its book's own
- * queue from there instead ([toBookmark]), as a book always does.
+ * queue from there instead ([toBookmark]), as a book always does, also while it plays: as music, reached by playing on,
+ * it goes to its book; in its book's queue that is a seek too.
  */
 internal fun jumpTo(context: Context, song: SongRef, positionMs: Long) {
     val connection = PlayerGraph.connection(context)
-    if (connection.ui.value?.path() == song.path) {
+    val library = connection.library.value
+    if (connection.ui.value?.path() == song.path && library?.bookOf(song.path) == null) {
         connection.seekTo(positionMs)
         connection.play()
         return
     }
     val core = PlayerGraph.core(context)
     PlayerExtras.of(context).jumpingTo = song.path
-    core.switch { it.toBookmark(song.path, positionMs, connection.library.value, core.now()) ?: it.toSpot(song, positionMs, pickedSource(""), core.now()) }
+    core.switch { it.toBookmark(song.path, positionMs, library, core.now()) ?: it.toSpot(song, positionMs, pickedSource(""), core.now()) }
     connection.play()
 }
 

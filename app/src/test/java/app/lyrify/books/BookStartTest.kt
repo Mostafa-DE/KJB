@@ -203,6 +203,15 @@ class BookStartTest {
         assertEquals(reading.currentId, jumped.currentId)
         assertEquals(0, jumped.current!!.index)
         assertEquals(30_000L, jumped.current!!.positionMs)
+        // On the very part it plays: the same queue, at the bookmark, as a jump the player seeks to.
+        val here = reading.toBookmark(parts[1].path, 30_000, library, now = 11)!!.book
+        assertEquals(reading.currentId, here.currentId)
+        assertEquals(1, here.current!!.index)
+        assertEquals(30_000L, here.current!!.positionMs)
+        assertEquals(reading.jumps + 1, here.jumps)
+        // The file playing as music, reached by playing on: the book's own queue, not a seek in the music.
+        val asMusic = QueueBook().play(listOf(lantern.ref, parts[0].ref), 1, album, now = 1).book
+        assertEquals(bookSource(folderBook), asMusic.toBookmark(parts[0].path, 30_000, library, now = 11)!!.book.current!!.source)
         // The one-file book, at the bookmark rather than its place.
         val single = musicPlaying.toBookmark(orchard.path, 61_000, library, now = 10)!!.book.current!!
         assertEquals(bookSource(oneFile), single.source)
