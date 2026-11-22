@@ -7,6 +7,7 @@ import app.lyrify.stats.FakePlayLog
 import app.lyrify.stats.LoggedPlay
 import app.lyrify.stats.PlayCounter
 import app.lyrify.stats.PlayEvent
+import app.lyrify.stats.as310
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -666,7 +667,7 @@ class QueueBridgeTest {
         after.end()
         runCurrent()
 
-        assertEquals(listOf(LoggedPlay(refs[0], started, 180_000, counted = true)), log.plays)
+        assertEquals(listOf(LoggedPlay(refs[0], started, 180_000, counted = true)), log.plays.as310())
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)

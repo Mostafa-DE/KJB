@@ -7,6 +7,7 @@ import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import androidx.core.database.sqlite.transaction
 import app.lyrify.library.SongRef
+import app.lyrify.player.SourceKind
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -79,6 +80,45 @@ fun storedPlayOf(path: String?, startedAt: Long?, mediaId: Long?, heardMs: Long?
     )
 }
 
+/** A row of `plays.db` as a query gives it: a column's value by its name, null when it is NULL or of another kind. */
+interface PlayRow {
+    fun text(column: String): String?
+
+    fun number(column: String): Long?
+}
+
+/**
+ * A play as a row of [PlaysSchema.ALL] has it, read as leniently as [storedPlayOf]: a code this version does not know is
+ * UNKNOWN (a kind of list: none), a time-zone offset out of range none; a row without how it began has no
+ * [LoggedPlay.start], one without how or where it ended no [LoggedPlay.end]. A row without a song or a start is dropped.
+ */
+fun loggedPlayOf(row: PlayRow): LoggedPlay? {
+    val play = storedPlayOf(row.text("path"), row.number("started_at"), row.number("media_id"), row.number("heard_ms"), row.number("counted"), null, null, null)?.play
+        ?: return null
+    return play.copy(
+        start = playStartOf(row.text("started_by"), row.text("source"), row.number("shuffled")?.let { it != 0L }, row.text("song_key")),
+        zoneOffsetMinutes = zoneOffsetOf(row.number("zone_offset_min")),
+        end = playEndedOf(row.text("ended_how"), row.number("ended_at_ms")),
+        imported = (row.number("imported") ?: 0) != 0L,
+    )
+}
+
+/**
+ * How a play began as `plays.db` or a backup keeps it, read leniently: none without how ([by]); a code this version
+ * does not know is [StartedBy.UNKNOWN], a kind of list it does not know none, Shuffle unknown off.
+ */
+fun playStartOf(by: String?, source: String?, shuffled: Boolean?, songKey: String?): PlayStart? =
+    by?.let { PlayStart(enumOf<StartedBy>(it) ?: StartedBy.UNKNOWN, enumOf<SourceKind>(source), shuffled ?: false, songKey) }
+
+/** How a play ended as kept, read leniently: none without how or where; a code unknown here is [PlayEnd.UNKNOWN], a place below 0 the start. */
+fun playEndedOf(how: String?, atMs: Long?): PlayEnded? =
+    if (how == null || atMs == null) null else PlayEnded(enumOf<PlayEnd>(how) ?: PlayEnd.UNKNOWN, atMs.coerceAtLeast(0))
+
+/** A time-zone offset as kept, in minutes; none past the farthest a zone is from UTC (18 hours). */
+fun zoneOffsetOf(minutes: Long?): Int? = minutes?.takeIf { it in -MAX_ZONE_OFFSET_MINUTES..MAX_ZONE_OFFSET_MINUTES }?.toInt()
+
+private const val MAX_ZONE_OFFSET_MINUTES: Long = 18 * 60
+
 /**
  * A song's totals as a row of [PlaysSchema.TOTALS] has them, read leniently, because the file may come from an older
  * KJB or a damaged backup: a missing value is none, a count or time below 0 is 0, a last play at 0 or before (or
@@ -107,6 +147,10 @@ object PlaysSchema {
      * Version 1: the play log. A play is its song's path and its start (wall-clock millis); [LoggedPlay]'s other fields,
      * the song's MediaStore id as a hint, and `counted` as 0 or 1. Each song's totals are worked out from it.
      * Version 2: the plays still going ([StoredPlay]), each beside its row in the log.
+     * Version 3: what each play keeps since the log keeps more ([LoggedPlay.start], [LoggedPlay.zoneOffsetMinutes],
+     * [LoggedPlay.end]), codes by name in lower case ([codeOf]); the plays from before keep NULL there. And `imported`:
+     * the plays an import made are marked, found by their shape (nothing heard and counted, which a play heard here never
+     * is), so a file 3.1.0 kept after a downgrade gets the imports it made marked on the next upgrade too.
      */
     val STEPS: List<List<String>> = listOf(
         listOf(
@@ -117,6 +161,17 @@ object PlaysSchema {
         listOf(
             "CREATE TABLE IF NOT EXISTS open_plays (path TEXT NOT NULL, started_at INTEGER NOT NULL, duration_ms INTEGER NOT NULL DEFAULT 0, " +
                 "position_ms INTEGER NOT NULL DEFAULT 0, spans TEXT NOT NULL DEFAULT '', PRIMARY KEY (path, started_at)) WITHOUT ROWID",
+        ),
+        listOf(
+            "ALTER TABLE plays ADD COLUMN started_by TEXT",
+            "ALTER TABLE plays ADD COLUMN source TEXT",
+            "ALTER TABLE plays ADD COLUMN shuffled INTEGER",
+            "ALTER TABLE plays ADD COLUMN zone_offset_min INTEGER",
+            "ALTER TABLE plays ADD COLUMN song_key TEXT",
+            "ALTER TABLE plays ADD COLUMN ended_how TEXT",
+            "ALTER TABLE plays ADD COLUMN ended_at_ms INTEGER",
+            "ALTER TABLE plays ADD COLUMN imported INTEGER NOT NULL DEFAULT 0",
+            "UPDATE plays SET imported = 1 WHERE heard_ms = 0 AND counted != 0",
         ),
     )
 
@@ -129,13 +184,58 @@ object PlaysSchema {
         return if (start < end) STEPS.subList(start, end).flatten() else emptyList()
     }
 
-    /** The same play again keeps the most heard, its count once counted, and its id hint unless a new one is given. */
-    const val PUT: String = "INSERT INTO plays (path, started_at, media_id, heard_ms, counted) VALUES (?, ?, ?, ?, ?) " +
-        "ON CONFLICT (path, started_at) DO UPDATE SET media_id = coalesce(excluded.media_id, media_id), " +
-        "heard_ms = max(heard_ms, excluded.heard_ms), counted = max(counted, excluded.counted)"
+    /**
+     * [upgrade]'s statements for a file whose tables have the columns [has] gives (none for a table not there), without
+     * the columns a step adds that a table has already: SQLite has no ADD COLUMN IF NOT EXISTS, and a file a newer KJB
+     * left goes through the same steps again after a downgrade.
+     */
+    fun upgrade(from: Int, to: Int, has: (table: String) -> Set<String>): List<String> {
+        val columns = HashMap<String, Set<String>>()
+        return upgrade(from, to).filterNot { sql ->
+            val (table, column) = ADD_COLUMN.matchEntire(sql)?.destructured ?: return@filterNot false
+            column in columns.getOrPut(table) { has(table) }
+        }
+    }
 
-    /** Every play, the oldest first: path, start, id hint, time heard, counted (a backup; [storedPlayOf] reads them). */
-    const val ALL: String = "SELECT path, started_at, media_id, heard_ms, counted FROM plays ORDER BY started_at, path"
+    /** A step's column: "ALTER TABLE plays ADD COLUMN song_key TEXT", its table and its name. */
+    private val ADD_COLUMN = Regex("""ALTER TABLE (\w+) ADD COLUMN (\w+) .+""")
+
+    /** [play]'s values in [PUT]'s order. */
+    fun putArgs(play: LoggedPlay): Array<Any?> = arrayOf(
+        play.song.path,
+        play.startedAt,
+        play.song.mediaStoreId,
+        play.heardMs,
+        flag(play.counted),
+        play.start?.by?.let(::codeOf),
+        play.start?.source?.let(::codeOf),
+        play.start?.shuffled?.let(::flag),
+        play.zoneOffsetMinutes?.toLong(),
+        play.start?.songKey,
+        play.end?.how?.let(::codeOf),
+        play.end?.atMs,
+        flag(play.imported),
+    )
+
+    private fun flag(on: Boolean): Long = if (on) 1L else 0L
+
+    /**
+     * The same play again keeps the most heard, its count once counted, its id hint unless a new one is given, how it
+     * began and its time zone as first written (a play that goes on after a restart began as it began), how it ended as
+     * last written, and its import mark once marked. Its values: [putArgs].
+     */
+    const val PUT: String = "INSERT INTO plays (path, started_at, media_id, heard_ms, counted, started_by, source, shuffled, zone_offset_min, song_key, " +
+        "ended_how, ended_at_ms, imported) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+        "ON CONFLICT (path, started_at) DO UPDATE SET media_id = coalesce(excluded.media_id, media_id), " +
+        "heard_ms = max(heard_ms, excluded.heard_ms), counted = max(counted, excluded.counted), " +
+        "started_by = coalesce(started_by, excluded.started_by), source = coalesce(source, excluded.source), " +
+        "shuffled = coalesce(shuffled, excluded.shuffled), zone_offset_min = coalesce(zone_offset_min, excluded.zone_offset_min), " +
+        "song_key = coalesce(song_key, excluded.song_key), ended_how = coalesce(excluded.ended_how, ended_how), " +
+        "ended_at_ms = coalesce(excluded.ended_at_ms, ended_at_ms), imported = max(imported, excluded.imported)"
+
+    /** Every play, the short ones too, the oldest first, with all it keeps (a backup; [loggedPlayOf] reads them). */
+    const val ALL: String = "SELECT path, started_at, media_id, heard_ms, counted, started_by, source, shuffled, zone_offset_min, song_key, " +
+        "ended_how, ended_at_ms, imported FROM plays ORDER BY started_at, path"
 
     const val KEEP_OPEN: String = "INSERT OR REPLACE INTO open_plays (path, started_at, duration_ms, position_ms, spans) VALUES (?, ?, ?, ?, ?)"
 
@@ -148,11 +248,16 @@ object PlaysSchema {
     const val OPEN_PLAYS: String = "SELECT o.path, o.started_at, p.media_id, p.heard_ms, p.counted, o.duration_ms, o.position_ms, o.spans " +
         "FROM open_plays AS o JOIN plays AS p ON p.path = o.path AND p.started_at = o.started_at"
 
-    /** Per song, between two bounds: path, latest id hint, plays counted, the last of those, time heard ([songPlaysOf]). */
+    /**
+     * Per song, between two bounds: path, latest id hint, plays counted, the last of those, time heard ([songPlaysOf]).
+     * Without the short plays ([LoggedPlay.isShort]), which the log keeps only since it keeps how plays end: every list,
+     * count and total read from here reads as it did before.
+     */
     const val TOTALS: String = "SELECT path, " +
-        "(SELECT media_id FROM plays AS latest WHERE latest.path = plays.path ORDER BY started_at DESC LIMIT 1), " +
+        "(SELECT media_id FROM plays AS latest WHERE latest.path = plays.path AND (latest.counted != 0 OR latest.heard_ms >= ${PlayCounter.MIN_LOGGED_MS}) " +
+        "ORDER BY started_at DESC LIMIT 1), " +
         "COUNT(CASE WHEN counted != 0 THEN 1 END), MAX(CASE WHEN counted != 0 THEN started_at END), SUM(heard_ms) " +
-        "FROM plays WHERE started_at >= CAST(? AS INTEGER) AND started_at < CAST(? AS INTEGER) GROUP BY path"
+        "FROM plays WHERE started_at >= CAST(? AS INTEGER) AND started_at < CAST(? AS INTEGER) AND (counted != 0 OR heard_ms >= ${PlayCounter.MIN_LOGGED_MS}) GROUP BY path"
 }
 
 /**
@@ -165,12 +270,18 @@ class PlaysDb(context: Context, name: String? = PlaysSchema.NAME, clock: () -> L
         setWriteAheadLoggingEnabled(true)
     }
 
-    override fun onCreate(db: SQLiteDatabase) = PlaysSchema.upgrade(0, PlaysSchema.VERSION).forEach(db::execSQL)
+    override fun onCreate(db: SQLiteDatabase) = PlaysSchema.upgrade(0, PlaysSchema.VERSION) { columns(db, it) }.forEach(db::execSQL)
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = PlaysSchema.upgrade(oldVersion, newVersion).forEach(db::execSQL)
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = PlaysSchema.upgrade(oldVersion, newVersion) { columns(db, it) }.forEach(db::execSQL)
 
     /** A newer KJB's file: kept as it is, since its steps only added to what this version reads. */
     override fun onDowngrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+
+    /** [table]'s columns now; none when it is not there. */
+    private fun columns(db: SQLiteDatabase, table: String): Set<String> = db.rawQuery("PRAGMA table_info($table)", null).use { rows ->
+        val name = rows.getColumnIndexOrThrow("name")
+        buildSet { while (rows.moveToNext()) add(rows.getString(name)) }
+    }
 
     private class KeepAside(private val clock: () -> Long, private val log: (String) -> Unit) : DatabaseErrorHandler {
         override fun onCorruption(db: SQLiteDatabase) {
@@ -207,7 +318,7 @@ class SqlPlayLog(private val db: SQLiteOpenHelper, private val io: CoroutineDisp
         try {
             val path = play.song.path
             db.writableDatabase.transaction {
-                execSQL(PlaysSchema.PUT, arrayOf<Any?>(path, play.startedAt, play.song.mediaStoreId, play.heardMs, if (play.counted) 1L else 0L))
+                execSQL(PlaysSchema.PUT, PlaysSchema.putArgs(play))
                 if (open == null) {
                     execSQL(PlaysSchema.LET_GO, arrayOf<Any?>(path, play.startedAt))
                 } else {
@@ -255,10 +366,9 @@ class SqlPlayLog(private val db: SQLiteOpenHelper, private val io: CoroutineDisp
     override suspend fun all(): List<LoggedPlay>? = withContext(io) {
         try {
             db.readableDatabase.rawQuery(PlaysSchema.ALL, null).use { rows ->
+                val row = CursorRow(rows)
                 buildList {
-                    while (rows.moveToNext()) {
-                        storedPlayOf(rows.text(0), rows.number(1), rows.number(2), rows.number(3), rows.number(4), null, null, null)?.let { add(it.play) }
-                    }
+                    while (rows.moveToNext()) loggedPlayOf(row)?.let(::add)
                 }
             }
         } catch (e: Exception) {
@@ -270,9 +380,7 @@ class SqlPlayLog(private val db: SQLiteOpenHelper, private val io: CoroutineDisp
     override suspend fun putAll(plays: List<LoggedPlay>): Boolean = withContext(io) {
         try {
             db.writableDatabase.transaction {
-                plays.forEach { play ->
-                    execSQL(PlaysSchema.PUT, arrayOf<Any?>(play.song.path, play.startedAt, play.song.mediaStoreId, play.heardMs, if (play.counted) 1L else 0L))
-                }
+                plays.forEach { play -> execSQL(PlaysSchema.PUT, PlaysSchema.putArgs(play)) }
             }
             true
         } catch (e: Exception) {
@@ -297,12 +405,19 @@ class SqlPlayLog(private val db: SQLiteOpenHelper, private val io: CoroutineDisp
         }
     }
 
-    private fun Cursor.text(column: Int): String? = if (isNull(column)) null else getString(column)
+    /** The row [rows] is at, its columns by name; a column the query lacks is none. */
+    private class CursorRow(private val rows: Cursor) : PlayRow {
+        override fun text(column: String): String? = rows.getColumnIndex(column).takeIf { it >= 0 }?.let(rows::text)
 
-    /** A number, whole or not, or null: a value of another kind (text in a damaged row) reads as none. */
-    private fun Cursor.number(column: Int): Long? = when (getType(column)) {
-        Cursor.FIELD_TYPE_INTEGER -> getLong(column)
-        Cursor.FIELD_TYPE_FLOAT -> getDouble(column).toLong()
-        else -> null
+        override fun number(column: String): Long? = rows.getColumnIndex(column).takeIf { it >= 0 }?.let(rows::number)
     }
+}
+
+private fun Cursor.text(column: Int): String? = if (isNull(column)) null else getString(column)
+
+/** A number, whole or not, or null: a value of another kind (text in a damaged row) reads as none. */
+private fun Cursor.number(column: Int): Long? = when (getType(column)) {
+    Cursor.FIELD_TYPE_INTEGER -> getLong(column)
+    Cursor.FIELD_TYPE_FLOAT -> getDouble(column).toLong()
+    else -> null
 }

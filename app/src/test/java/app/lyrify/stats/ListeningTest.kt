@@ -279,6 +279,71 @@ class ListeningTest {
         assertNull(stats.plays(ember.ref))
     }
 
+    // The short plays (skips) the log keeps since it keeps how plays end: each reader reads as it did without them.
+
+    /** Plays of every kind 3.1.0 logged: counted, heard a while, an import's, in this week and before. */
+    private val logged: List<LoggedPlay> = listOf(
+        play(alder, at("2026-11-02T10:00+01:00[Europe/Berlin]")),
+        play(alder, at("2026-11-10T10:00+01:00[Europe/Berlin]")),
+        play(birch, at("2026-11-10T11:00+01:00[Europe/Berlin]"), heardMs = 40_000, counted = false),
+        play(ember, at("2026-11-11T09:00+01:00[Europe/Berlin]")),
+        LoggedPlay(ember.ref, at("2026-10-01T09:00+02:00[Europe/Berlin]"), 0, counted = true, imported = true),
+    )
+
+    /** Skips: one the latest play of its song, one of a song only ever skipped, one of a song never counted. */
+    private val short: List<LoggedPlay> = listOf(
+        LoggedPlay(SongRef(alder.path, 77), at("2026-11-11T12:00+01:00[Europe/Berlin]"), 600, counted = false, end = PlayEnded(PlayEnd.NEXT, 600)),
+        LoggedPlay(salt.ref, at("2026-11-11T12:01+01:00[Europe/Berlin]"), 0, counted = false, end = PlayEnded(PlayEnd.JUMP, 0)),
+        LoggedPlay(birch.ref, at("2026-11-11T12:02+01:00[Europe/Berlin]"), 999, counted = false, end = PlayEnded(PlayEnd.BACK, 999)),
+    )
+
+    private val today: Long = at("2026-11-11T15:00+01:00[Europe/Berlin]")
+
+    /**
+     * [check] on `plays.db`'s own SQL holding [logged] alone, then [logged] and [short]: the two must read the same. What
+     * they read, so each test also checks it is not nothing.
+     */
+    private fun <T> sameWithShort(check: suspend (PlayStats) -> T): T = runBlocking {
+        JdbcPlayLog().use { before ->
+            JdbcPlayLog().use { now ->
+                before.putAll(logged)
+                now.putAll(logged + short)
+                check(PlayStats(before, { library }, Dispatchers.Unconfined)).also { assertEquals(it, check(PlayStats(now, { library }, Dispatchers.Unconfined))) }
+            }
+        }
+    }
+
+    @Test
+    fun `the short plays change nothing in Most played`() {
+        assertEquals(listOf(ember.ref to 2, alder.ref to 2), sameWithShort { it.mostPlayed() }.map { it.song to it.count })
+    }
+
+    @Test
+    fun `the short plays change nothing in Recently played`() {
+        assertEquals(listOf(ember.ref, alder.ref), sameWithShort { it.recentlyPlayed() }.map { it.song })
+    }
+
+    @Test
+    fun `the short plays change no song's plays line in Song info`() {
+        val lines = sameWithShort { stats -> listOf(alder, birch, ember, salt).map { stats.plays(it.ref)?.count } }
+        assertEquals(listOf(2, null, 2, null), lines)
+    }
+
+    @Test
+    fun `the short plays change nothing the lists sorted by plays go by`() {
+        assertEquals(setOf(alder.path, birch.path, ember.path), sameWithShort { it.everySong() }.keys)
+    }
+
+    @Test
+    fun `the short plays change nothing in Your listening, any period`() {
+        val periods = sameWithShort { stats -> ListeningPeriod.entries.map { stats.listening(it, today, berlin, DayOfWeek.MONDAY) } }
+        // All time: alder twice, ember once and once imported; birch only heard.
+        assertEquals(4, periods.last().plays)
+        assertEquals(3 * 120_000L + 40_000L, periods.last().heardMs)
+        // This week: alder and birch on the 10th, ember on the 11th.
+        assertEquals(2, periods.first().plays)
+    }
+
     // Last played
 
     @Test

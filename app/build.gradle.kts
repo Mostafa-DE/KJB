@@ -343,6 +343,8 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+    // plays.db's SQL on the laptop (stats/PlaysSqlTest.kt).
+    testImplementation(libs.sqlite.jdbc)
 
     androidTestImplementation(libs.androidx.test.core)
     androidTestImplementation(libs.androidx.test.runner)
