@@ -467,8 +467,9 @@ object BackupBundle {
      * sections are kept; every entry counts towards [limits] as it is unpacked, read or not. A section the manifest lists
      * must be there and read as what it says; one from a newer KJB ([Section.version]) or one this version does not know
      * is skipped. Unknown keys are ignored throughout, and items a store's own reading leaves out cost nothing else. The
-     * plays section's parts after its first must be there too, each unpacked within [ZipLimits.entryBytes] and all of
-     * them within [ZipLimits.partsBytes], and read one at a time; another section's are left, as a KJB without them does.
+     * play log's and the book log's parts after their first ([Section.inParts]) must be there too, each unpacked within
+     * [ZipLimits.entryBytes] and all of them together within [ZipLimits.partsBytes], and read one at a time; a parts
+     * count on another section is ignored, as a KJB without parts does.
      */
     fun read(input: InputStream, limits: ZipLimits = ZipLimits()): BackupRead {
         val files = when (val unzipped = unzip(input, limits)) {
