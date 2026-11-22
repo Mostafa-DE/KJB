@@ -97,7 +97,7 @@ read or delete it.
 ```
 
 `invite` and `owner` must differ (`400` with `"field":"owner"` otherwise). `201 {"expiresAt": 1764424800000}`.
-Unaccepted invites expire 7 days after creation. Errors: `400`, `409 invite_exists`, `429` (30 per hour per IP),
+Unaccepted invites expire 7 days after creation. Errors: `400`, `409 invite_exists`, `429` (60 per hour per IP),
 `503 storage_full`.
 
 ### `POST /api/v1/invites/accept`
@@ -113,7 +113,7 @@ display name. `200 {"acceptedAt": 1763820000000}`. Only the first accept wins. T
 with the first `acceptedAt`, so an accept whose answer was lost is safe to retry with the same body (until the owner
 deletes the invite: then `404`). An accepted invite is kept for 7 more days from the accept, until the owner deletes
 it. Errors: `400`, `404 not_found` (unknown or expired), `409 already_accepted` (accepted with other data), `413
-too_large`, `429` (30 per hour per IP), `503 storage_full`.
+too_large`, `429` (60 per hour per IP), `503 storage_full`.
 
 ### `POST /api/v1/invites/status`
 
@@ -170,8 +170,8 @@ album or playlist lists before sealing.
 ```
 
 `201 {"id": "1734", "sentAt": 1763820000000, "expiresAt": 1766412000000}`. Keep `id` and `mailbox` for "Undo".
-Errors: `400`, `409 mailbox_full`, `413 too_large`, `429` (240 sends per hour into one mailbox; 16 MiB of data per
-hour and 24 MiB per day per IP), `503 storage_full`.
+Errors: `400`, `409 mailbox_full`, `413 too_large`, `429` (240 sends per hour into one mailbox; 32 MiB of data per
+hour and 160 MiB per day per IP), `503 storage_full`.
 
 ### `POST /api/v1/messages/inbox`
 
@@ -258,7 +258,10 @@ Up to 64 entries, each mailbox at most once. Deletes every message in that mailb
 - Failures: on a network error, `5xx`, or `502/503` from Railway, retry after 30 s, then 60, 120, and so on, up to the
   normal interval. On `429`, wait `Retry-After` seconds. Use a 15 s request timeout.
 
-At 10 friends with the Huddle page open, a phone makes about 2 calls a minute, far under the limits below.
+At 10 friends with the Huddle page open, a phone makes about 2 calls a minute, far under the limits below. The
+per-IP limits leave room for several phones behind one address (one home Wi-Fi, or a mobile carrier's shared
+address): 10 friends behind one IP, each polling every 30 s and sending every play and card to 10 friends, make
+about 600 calls per 10 minutes, 20 MiB of data in a busy hour and 140 MiB in a heavy day.
 
 ## Limits
 
@@ -272,10 +275,12 @@ At 10 friends with the Huddle page open, a phone makes about 2 calls a minute, f
 | Kept: card, profile / play / waiting invite / accepted invite | 30 days / 24 h / 7 days / 7 days after accept |
 | `inbox` | 64 mailboxes, 100 messages each, about 1 MiB of data per answer |
 | `ack` / `mailboxes/delete` / `messages/delete` | 64 entries / 64 ids / 100 ids |
-| All requests (`/api/v1` calls, pages and `/health` together), per IP | 600 per 10 minutes |
-| `invites/create`, per IP | 30 per hour |
-| `invites/accept`, per IP | 30 per hour |
-| Data sent (`messages/send` plus `invites/accept`), per IP | 16 MiB per hour, and 24 MiB per day |
+| All `/api/v1` calls, per IP | 3,000 per 10 minutes |
+| Pages (`/`, `/i`, any other page), per IP, counted apart from API calls | 3,000 per 10 minutes |
+| `/health` and `/.well-known/assetlinks.json` | never limited |
+| `invites/create`, per IP | 60 per hour |
+| `invites/accept`, per IP | 60 per hour |
+| Data sent (`messages/send` plus `invites/accept`), per IP | 32 MiB per hour, and 160 MiB per day |
 | Sends into one mailbox | 240 per hour |
 | Storage guard (all messages and invites) | 1 GiB by default (`HUDDLE_MAX_STORE_MB`); writes get `503 storage_full` above it |
 

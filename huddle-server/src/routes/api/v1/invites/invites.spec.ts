@@ -63,7 +63,7 @@ describe("POST /api/v1/invites/create", () => {
     expect(JSON.stringify(rows)).not.toContain(ids.owner)
   })
 
-  it("allows 30 invites an hour from one address", async () => {
+  it("allows 60 invites an hour from one address", async () => {
     const ip = randomIp()
     for (let i = 0; i < LIMITS.rate.inviteCreate.limit; i++) {
       const created = await call(handleCreateInvite, { invite: randomId(), owner: randomId() }, { ip })
@@ -151,7 +151,7 @@ describe("POST /api/v1/invites/accept", () => {
     expect(tooBig).toMatchObject({ status: 413, body: { error: "too_large" } })
   })
 
-  it("allows 30 accepts an hour from one address", async () => {
+  it("allows 60 accepts an hour from one address", async () => {
     const ip = randomIp()
     for (let i = 0; i < LIMITS.rate.inviteAccept.limit; i++) {
       const accepted = await call(handleAcceptInvite, { invite: randomId(), data: sealed(10) }, { ip })

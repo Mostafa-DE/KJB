@@ -14,6 +14,9 @@ const SECURITY_HEADERS = {
   "X-Frame-Options": "DENY",
 }
 
+// Railway's health check, and the App Links verifiers (Google's, and every phone at install), are never limited.
+const UNLIMITED_PATHS = new Set(["/health", "/.well-known/assetlinks.json"])
+
 async function cleanUp() {
   try {
     const deleted = await deleteExpiredRows(new Date())
@@ -29,11 +32,15 @@ setInterval(cleanUp, LIMITS.cleanupEveryMs).unref()
 
 export default createServerEntry({
   async fetch(request, opts) {
-    const api = new URL(request.url).pathname.startsWith("/api/")
+    const { pathname } = new URL(request.url)
+    const api = pathname.startsWith("/api/")
     let response: Response
     try {
-      // Every request counts once against its address: API calls, pages and /health alike (srvx serves /assets first).
-      enforceRate(`ip:${clientIp(request)}`, LIMITS.rate.ip)
+      // Every other request counts once against its address: API calls in one window, pages in another (srvx serves
+      // /assets before this).
+      if (!UNLIMITED_PATHS.has(pathname)) {
+        enforceRate(`${api ? "ip" : "page"}:${clientIp(request)}`, api ? LIMITS.rate.ip : LIMITS.rate.pages)
+      }
       // Every API call is a POST (API.md): any other method, a browser's GET or a CORS preflight, gets a JSON refusal.
       response =
         api && request.method !== "POST"

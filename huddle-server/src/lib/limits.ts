@@ -19,14 +19,17 @@ export const LIMITS = {
   inboxBytes: MIB,
   batchEntries: 64,
   deleteIds: 100,
+  // Per-address limits leave room for carrier NAT and one home Wi-Fi. 10 friends behind one address, each with the
+  // Huddle page open (an inbox call every 30 s) and sending every play and card to 10 friends, make about 600 API
+  // calls per 10 minutes, 20 MiB of data in a busy hour and 140 MiB in a heavy day. The per-mailbox limit is the
+  // tight one. Pages count apart from API calls; /health and assetlinks.json are never limited (src/server.ts).
   rate: {
-    ip: { limit: 600, windowMs: 10 * MINUTE_MS },
-    inviteCreate: { limit: 30, windowMs: HOUR_MS },
-    inviteAccept: { limit: 30, windowMs: HOUR_MS },
-    ipBytes: { limit: 16 * MIB, windowMs: HOUR_MS },
-    // Cards wait up to 30 days: 30 days of this, as base64, stays under the storage guard's default 1 GiB, so one
-    // address alone can never fill it.
-    ipBytesDay: { limit: 24 * MIB, windowMs: DAY_MS },
+    ip: { limit: 3000, windowMs: 10 * MINUTE_MS },
+    pages: { limit: 3000, windowMs: 10 * MINUTE_MS },
+    inviteCreate: { limit: 60, windowMs: HOUR_MS },
+    inviteAccept: { limit: 60, windowMs: HOUR_MS },
+    ipBytes: { limit: 32 * MIB, windowMs: HOUR_MS },
+    ipBytesDay: { limit: 160 * MIB, windowMs: DAY_MS },
     mailboxSends: { limit: 240, windowMs: HOUR_MS },
   },
   rateKeys: 50_000,

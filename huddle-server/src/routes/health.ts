@@ -3,7 +3,7 @@ import { sql } from "drizzle-orm"
 import { db } from "@/db"
 import { describeError, json } from "@/lib/api"
 
-// Counted against the caller's address in src/server.ts, like every request.
+// Never rate limited (src/server.ts): Railway's health check calls it.
 export async function handleHealth() {
   try {
     await db.execute(sql`select 1`)

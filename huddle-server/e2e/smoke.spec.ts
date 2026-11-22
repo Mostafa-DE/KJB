@@ -12,6 +12,16 @@ function randomId() {
   return randomBytes(32).toString("base64url")
 }
 
+/** Runs `call` `count` times, 50 at a time, and gives back each answer in order. */
+async function inBatches<T>(count: number, call: () => Promise<T>) {
+  const answers: T[] = []
+  while (answers.length < count) {
+    const batch = Math.min(50, count - answers.length)
+    answers.push(...(await Promise.all(Array.from({ length: batch }, call))))
+  }
+  return answers
+}
+
 /** A raw GET with a chosen Host header, as each public host name reaches the one Railway service. */
 function getWithHost(path: string, host: string) {
   return new Promise<{ status: number; headers: Record<string, unknown>; body: string }>((resolve, reject) => {
@@ -146,27 +156,35 @@ describe("the built server", () => {
     expect(response.body).toEqual({ error: "not_found" })
   })
 
-  it("counts pages, API calls and refused methods in one window per address", async () => {
+  it("limits API calls and pages per address in separate windows, and never /health or assetlinks.json", async () => {
     const headers = { "X-Real-IP": "10.200.0.1" }
     const ack = JSON.stringify({ acks: [{ mailbox: randomId(), upTo: "1" }] })
-    const statuses: number[] = []
-    for (let i = 0; i < LIMITS.rate.ip.limit; i++) {
-      const response =
-        i % 2 === 0
-          ? await fetch(`${BASE}/`, { headers })
-          : await fetch(`${BASE}/api/v1/messages/ack`, {
-              method: "POST",
-              headers: { ...headers, "Content-Type": "application/json" },
-              body: ack,
-            })
-      statuses.push(response.status)
-    }
-    const refusedMethod = await fetch(`${BASE}/api/v1/messages/send`, { headers })
-    const unknownPath = await fetch(`${BASE}/api/v1/nothing`, { method: "POST", headers, body: "{}" })
+    const callApi = () =>
+      fetch(`${BASE}/api/v1/messages/ack`, {
+        method: "POST",
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: ack,
+      }).then((response) => response.status)
+    const getPage = () => fetch(`${BASE}/`, { headers }).then((response) => response.status)
 
-    expect(statuses.filter((status) => status === 200)).toHaveLength(LIMITS.rate.ip.limit)
-    expect(refusedMethod.status).toBe(429)
-    expect(unknownPath.status).toBe(429)
+    const apiCalls = await inBatches(LIMITS.rate.ip.limit, callApi)
+    const apiOver = [await callApi(), (await fetch(`${BASE}/api/v1/messages/send`, { headers })).status]
+    const pageAfterApi = await getPage()
+    const pages = await inBatches(LIMITS.rate.pages.limit - 1, getPage)
+    const pageOver = await getPage()
+    const free = await inBatches(50, () =>
+      Promise.all([
+        fetch(`${BASE}/health`, { headers }).then((response) => response.status),
+        fetch(`${BASE}/.well-known/assetlinks.json`, { headers }).then((response) => response.status),
+      ]),
+    )
+
+    expect(apiCalls.every((status) => status === 200)).toBe(true)
+    expect(apiOver).toEqual([429, 429])
+    expect(pageAfterApi).toBe(200)
+    expect(pages.every((status) => status === 200)).toBe(true)
+    expect(pageOver).toBe(429)
+    expect(free.flat().every((status) => status === 200)).toBe(true)
   })
 
   it("answers an unknown page with 404 and its own page", async () => {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { db } from "@/db"
 import { messages } from "@/db/schema"
+import { enforceRate } from "@/lib/api"
 import { LIMITS } from "@/lib/limits"
 import { advanceClock, call, randomId, randomIp, sealed } from "@/tests/api"
 import { handleDeleteMailboxes } from "../mailboxes/delete"
@@ -165,7 +166,7 @@ describe("POST /api/v1/messages/send", () => {
     expect(otherMailbox.status).toBe(201)
   })
 
-  it("allows 16 MiB of data an hour from one address", async () => {
+  it("allows 32 MiB of data an hour from one address", async () => {
     const ip = randomIp()
     const cardsInBudget = LIMITS.rate.ipBytes.limit / LIMITS.dataBytes.card
     for (let i = 0; i < cardsInBudget; i++) await send(randomId(), "card", sealed(LIMITS.dataBytes.card), ip)
@@ -175,14 +176,12 @@ describe("POST /api/v1/messages/send", () => {
     expect(refused).toMatchObject({ status: 429, body: { error: "rate_limited" } })
   })
 
-  it("allows 24 MiB of data a day from one address", async () => {
+  it("allows 160 MiB of data a day from one address", async () => {
     const ip = randomIp()
-    const cardsInHour = LIMITS.rate.ipBytes.limit / LIMITS.dataBytes.card
-    const cardsInDay = LIMITS.rate.ipBytesDay.limit / LIMITS.dataBytes.card
-    for (let i = 0; i < cardsInDay; i++) {
-      if (i === cardsInHour) advanceClock(HOUR_MS)
-      await send(randomId(), "card", sealed(LIMITS.dataBytes.card), ip)
-    }
+    // All but two cards' worth of the day spent already, as some 2,500 earlier cards would have.
+    enforceRate(`bytes-day:${ip}`, LIMITS.rate.ipBytesDay, LIMITS.rate.ipBytesDay.limit - 2 * LIMITS.dataBytes.card)
+    await send(randomId(), "card", sealed(LIMITS.dataBytes.card), ip)
+    await send(randomId(), "card", sealed(LIMITS.dataBytes.card), ip)
 
     advanceClock(HOUR_MS)
     const card = await call(handleSendMessage, { mailbox: randomId(), kind: "card", data: sealed(1) }, { ip })
