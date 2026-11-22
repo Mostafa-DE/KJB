@@ -140,8 +140,13 @@ class CutFiles(
         if (removed > 0) log("cut: $removed part files of stopped saves removed")
     }
 
-    /** Saves [request]; [onProgress] hears the share done. Cancellable: a cancelled save leaves no file. */
-    suspend fun save(request: CutRequest, onProgress: (Float) -> Unit): CutResult = withContext(io) {
+    /**
+     * Saves [request]; [onProgress] hears the share done. Cancellable, and a cancelled save leaves no file, until the cut
+     * is whole in its part file: then [commit] says whether it may take its name. False (Cancel came first) stops it
+     * there, its part file removed; true, and it is saved and scanned, as the runner no longer cancels it
+     * ([app.lyrify.ui.SaveRunner]), so the screen says Saved.
+     */
+    suspend fun save(request: CutRequest, commit: () -> Boolean = { true }, onProgress: (Float) -> Unit): CutResult = withContext(io) {
         val song = File(request.songPath)
         val folder = when (val place = folder(request.songPath)) {
             is CutFolder.NextToSong -> place.folder
@@ -173,7 +178,9 @@ class CutFiles(
             part = hidden
             Files.copy(out.toPath(), hidden.toPath(), StandardCopyOption.REPLACE_EXISTING)
             currentCoroutineContext().ensureActive()
-            // From here the cut is whole: it takes its name and is scanned even if Cancel comes now.
+            // The point of no return: from here the cut is whole, takes its name and is scanned even if Cancel comes now,
+            // and the screen says Saved. A Cancel that came first wins, and the part file goes.
+            if (!commit()) throw CancellationException("cancelled before the cut took its name")
             val saved = withContext(NonCancellable) { publish(hidden, place, base) } ?: return@withContext CutResult.Failed(CutFailure.NOT_SAVED)
             part = null
             withContext(NonCancellable) { scanned(saved) }

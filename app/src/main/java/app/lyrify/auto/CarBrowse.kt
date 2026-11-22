@@ -63,6 +63,7 @@ import com.google.common.util.concurrent.SettableFuture
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
@@ -114,6 +115,9 @@ class CarBrowse(
             core.book.map { book -> book.listed.map { it.id } }.distinctUntilChanged().drop(1)
                 .collect { session.notifyChildrenChanged(LibraryTree.QUEUES, it.size, null) }
         }
+        // A cover changed (Covers & tags, Edit tags, an Undo): once the burst settles, each list that shows one hears so,
+        // and a car showing it reads it again at the covers' new uris.
+        scope.launch { coverBursts(CoverVersions.versions, COVERS_SETTLE_MS, ::coversChanged) }
     }
 
     /** What [controller] may do, decided as it connects (the session's onConnect). */
@@ -147,6 +151,17 @@ class CarBrowse(
 
     fun item(mediaId: String): LibraryResult<MediaItem> =
         if (LibraryTree.isRoot(mediaId)) LibraryResult.ofItem(rootItem(mediaId), null) else LibraryResult.ofError(SessionError.ERROR_NOT_SUPPORTED)
+
+    /**
+     * [browser] subscribes to list [parentId], so it hears when the list changes (Recent queues, a new cover in it).
+     * Media3's own would ask [item], which knows only the root, and drop the subscription to any other list.
+     */
+    fun subscribe(browser: MediaSession.ControllerInfo, parentId: String, params: LibraryParams?): LibraryResult<Void> {
+        if (!LibraryTree.isList(parentId)) return LibraryResult.ofError(SessionError.ERROR_BAD_VALUE)
+        // As Media3's own does: a Media3 browser hears at once that the list is there to read (a car reads it as it subscribes).
+        if (browser.controllerVersion != MediaSession.ControllerInfo.LEGACY_CONTROLLER_VERSION) session.notifyChildrenChanged(browser, parentId, Int.MAX_VALUE, params)
+        return LibraryResult.ofVoid()
+    }
 
     /** A search typed or said in the car: the songs found, kept for [browser]'s app; then it hears how many, and asks for them. */
     fun search(browser: MediaSession.ControllerInfo, query: String, params: LibraryParams?): ListenableFuture<LibraryResult<Void>> {
@@ -199,9 +214,9 @@ class CarBrowse(
 
     /**
      * A snapshot of what the tree is built from, once the queues and the library are read, with [controller]'s app's
-     * searches; Most played and Recently played only for the lists that show them.
+     * searches (none without one); Most played and Recently played only for the lists that show them.
      */
-    private suspend fun data(controller: MediaSession.ControllerInfo, plays: Boolean = false): TreeData {
+    private suspend fun data(controller: MediaSession.ControllerInfo?, plays: Boolean = false): TreeData {
         core.ready.first { it }
         val settings = settings.value
         val state = LibraryGraph.repository(context).state.first { it !is LibraryState.Loading }
@@ -224,8 +239,21 @@ class CarBrowse(
             mostPlayed = most,
             recentlyPlayed = recent,
             now = System.currentTimeMillis(),
-            found = searches.of(controller.packageName),
+            found = controller?.let { searches.of(it.packageName) }.orEmpty(),
         ) { queueNames[it.id] ?: queueLabel(context, book, it) }
+    }
+
+    /** Each list that shows a cover of [paths] told it changed, once, with how many children it has now; false when it could not be. */
+    private suspend fun coversChanged(paths: Set<String>): Boolean = try {
+        val data = data(null, plays = true)
+        val lists = withContext(Dispatchers.Default) { LibraryTree.showing(paths, data) }
+        lists.forEach { (id, size) -> session.notifyChildrenChanged(id, size, null) }
+        Log.d(LOG_TAG, "car: ${lists.size} lists told of ${paths.size} new covers")
+        true
+    } catch (e: Exception) {
+        if (e is CancellationException) throw e
+        Log.w(LOG_TAG, "car lists not told of new covers: ${e.javaClass.simpleName}")
+        false
     }
 
     private suspend fun find(query: String, library: Library): Found =
@@ -293,6 +321,11 @@ class CarBrowse(
             }
         }
         return result
+    }
+
+    private companion object {
+        /** How long a burst of cover changes may go on before the car's lists hear of it: at most one reload a list in this time. */
+        const val COVERS_SETTLE_MS: Long = 2_000
     }
 }
 
@@ -418,6 +451,25 @@ fun coverPath(song: Song): String = song.ref.mediaStoreId?.toString() ?: openedC
  * session and the car's lists hand out, so a cover Covers & tags changed is a new uri.
  */
 fun coverUri(covers: CoverUris, song: Song): Uri = covers.of(coverPath(song), CoverVersions.of(song.path))
+
+/**
+ * Follows the covers' [versions] ([CoverVersions]) a burst at a time: from the first change, [settleMs] for more to come
+ * (Covers & tags applies album after album, an Undo puts several back), then [changed] hears every song whose version
+ * moved since it was last told, once. A change while [changed] runs is the next burst's; songs it could not tell of
+ * (false) go with the next burst, never tried again before it. Never returns.
+ */
+suspend fun coverBursts(versions: StateFlow<Map<String, Int>>, settleMs: Long, changed: suspend (Set<String>) -> Boolean): Nothing {
+    var told = versions.value
+    var owed = emptySet<String>()
+    while (true) {
+        versions.first { it != told }
+        delay(settleMs)
+        val now = versions.value
+        val paths = owed + (now.keys + told.keys).filter { now[it] != told[it] }
+        told = now
+        owed = if (paths.isEmpty() || changed(paths)) emptySet() else paths
+    }
+}
 
 /**
  * What [CarCovers] serves another app (the car) at [path]: song [path]'s embedded cover ([embedded], by its MediaStore id)

@@ -102,6 +102,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.abs
 
 /**
@@ -197,37 +198,58 @@ sealed interface SaveState<out R> {
     data class Finished<out R>(val result: R) : SaveState<R>
 }
 
+/** What a running save may ask its runner ([SaveRunner]). */
+fun interface SaveCommit {
+    /**
+     * The save's point of no return, asked once its file is whole and just before it takes its name: true when it goes
+     * on, and from then on Cancel no longer stops it, so its result shows; false when Cancel came first, and it must stop
+     * there, leaving nothing.
+     */
+    fun commit(): Boolean
+}
+
 /**
  * Runs saves (a tone's or a cut's) on [scope], one at a time. Only the save started last, until it is cancelled,
  * changes [state]: each of its updates is a compare-and-set on its own number, so a cancelled save's late progress (the
- * encoder reports a piece before it sees the cancel) or result is dropped. A save waits for the one before it to have
- * left its cleanup, cancelled or not, so two saves never use the same work files at once. [start] and [cancel] run on
- * one thread (the main).
+ * encoder reports a piece before it sees the cancel) or result is dropped. A save that passed its point of no return
+ * ([SaveCommit]) is not cancelled: it finishes and its result shows, so no file is kept without a word. A save waits for
+ * the one before it to have left its cleanup, cancelled or not, so two saves never use the same work files at once.
+ * [start] and [cancel] run on one thread (the main).
  */
 class SaveRunner<R>(private val scope: CoroutineScope) {
     private val current = MutableStateFlow<SaveState<R>>(SaveState.Idle)
     private var last: Job? = null
     private var count = 0L
 
+    /** Whether the save started last passed its point of no return or was cancelled first, set once by whichever came first. */
+    private var gate: AtomicReference<Gate>? = null
+
     val state: StateFlow<SaveState<R>> = current.asStateFlow()
 
-    /** Runs [save] unless one is shown saving; it hears its own progress reporter. */
-    fun start(save: suspend (onProgress: (Float) -> Unit) -> R) {
+    /** Runs [save] unless one is shown saving; it hears its own progress reporter, and may ask to [SaveCommit.commit]. */
+    fun start(save: suspend SaveCommit.(onProgress: (Float) -> Unit) -> R) {
         if (current.value is SaveState.Saving) return
         val id = ++count
         val before = last
+        val gate = AtomicReference(Gate.OPEN).also { this.gate = it }
+        val commit = SaveCommit { gate.updateAndGet { if (it == Gate.OPEN) Gate.COMMITTED else it } == Gate.COMMITTED }
         current.value = SaveState.Saving(0f, id)
         last = scope.launch {
             before?.join()
-            val result = save { progress -> current.update { if (it.isSaving(id)) SaveState.Saving(progress, id) else it } }
+            val result = commit.save { progress -> current.update { if (it.isSaving(id)) SaveState.Saving(progress, id) else it } }
             current.update { if (it.isSaving(id)) SaveState.Finished(result) else it }
         }
     }
 
-    /** Stops the save shown saving; it removes what it made in its own time, and the next save waits for that. */
-    fun cancel() {
+    /**
+     * Stops the save shown saving; it removes what it made in its own time, and the next save waits for that. False, and
+     * nothing stops, when the save passed its point of no return ([SaveCommit]): it finishes and its result shows.
+     */
+    fun cancel(): Boolean {
+        if (gate?.updateAndGet { if (it == Gate.OPEN) Gate.CANCELLED else it } == Gate.COMMITTED) return false
         last?.cancel()
         current.update { if (it is SaveState.Saving) SaveState.Idle else it }
+        return true
     }
 
     /** The screen showed the result. */
@@ -236,6 +258,8 @@ class SaveRunner<R>(private val scope: CoroutineScope) {
     }
 
     private fun SaveState<R>.isSaving(id: Long): Boolean = this is SaveState.Saving && this.id == id
+
+    private enum class Gate { OPEN, COMMITTED, CANCELLED }
 }
 
 /** The one tone save that can run at a time, outside any screen's lifetime; cancelling leaves no file. */
