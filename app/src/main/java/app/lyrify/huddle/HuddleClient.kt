@@ -87,7 +87,7 @@ class HuddleClient(
                     val messages = (one[MESSAGES] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
                     messages.forEach { message ->
                         val seq = message.text(ID)?.toLongOrNull() ?: return@forEach
-                        read.getOrPut(box) { ArrayList() } += Posted(seq, message.text(DATA) ?: return@forEach)
+                        message.text(DATA)?.let { read.getOrPut(box) { ArrayList() } += Posted(seq, it) }
                     }
                     if ((one[MORE] as? JsonPrimitive)?.content == "true") more[box] = messages.lastOrNull()?.text(ID) ?: asking[box]
                 }

@@ -189,6 +189,14 @@ class HuddleClientTest {
     }
 
     @Test
+    fun `a message without its data is left out, and a mailbox with nothing readable is not in the inbox`() = runTest {
+        val huddle = client(
+            Answer(200, """{"now":1,"mailboxes":[{"mailbox":"$box","messages":[{"id":"3","kind":"card","sentAt":1}],"more":false},{"mailbox":"$other","messages":[{"id":"4","kind":"card","data":"YQ","sentAt":1}],"more":false}]}"""),
+        )
+        assertEquals(mapOf(other to listOf(Posted(4, "YQ"))), huddle.inbox(listOf(box, other)))
+    }
+
+    @Test
     fun `no answer to the inbox is null, never an empty inbox`() = runTest {
         assertNull(client(Answer(0, fails = true)).inbox(listOf(box)))
         assertNull(client(Answer(200, "not json")).inbox(listOf(box)))
