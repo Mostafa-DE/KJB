@@ -1,6 +1,8 @@
 package app.lyrify.dl
 
 import app.lyrify.dl.api.DlInfo
+import app.lyrify.dl.api.DlSearchResult
+import app.lyrify.dl.api.DlSearchResults
 import app.lyrify.dl.api.VideoChoice
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -116,6 +118,77 @@ class InfoTest {
     @Test
     fun `oEmbed is asked as KJB-Downloads, its version and KJB's repository`() {
         assertEquals("KJB-Downloads/${BuildConfig.VERSION_NAME} ( https://github.com/Mostafa-DE/KJB )", USER_AGENT)
+    }
+
+    /**
+     * yt-dlp's answer to `-J --flat-playlist "ytsearch8:..."` (2026.10.26), written by hand after its search extractor
+     * (YoutubeTabBaseInfoExtractor._extract_video): a playlist whose entries are the videos as YouTube's search lists them,
+     * none of them opened. Made-up names, ids and addresses.
+     */
+    private val search = """
+        {"id": "the quiet hours paper lantern", "title": "the quiet hours paper lantern", "_type": "playlist", "entries": [
+          {"_type": "url", "ie_key": "Youtube", "id": "abc123def45", "url": "https://www.youtube.com/watch?v=abc123def45",
+           "title": "The Quiet Hours - Paper Lantern (Official Video)", "description": "The new single", "duration": 214.0,
+           "channel_id": "UCaaaaaaaaaaaaaaaaaaaaaa", "channel": "The Quiet Hours", "channel_url": "https://www.youtube.com/channel/UCaaaaaaaaaaaaaaaaaaaaaa",
+           "uploader": "The Quiet Hours", "uploader_id": "@thequiethours", "uploader_url": "https://www.youtube.com/@thequiethours",
+           "thumbnails": [
+             {"url": "https://i.ytimg.com/vi/abc123def45/hq720.jpg?sqp=-oaymwEcCOgCEMoBSFXyq4qpAw4IARUAAIhCGAFwAcABBg==&rs=AOn4CLAaaa", "height": 202, "width": 360},
+             {"url": "https://i.ytimg.com/vi/abc123def45/hq720.jpg?sqp=-oaymwEcCNAFEJQDSFXyq4qpAw4IARUAAIhCGAFwAcABBg==&rs=AOn4CLBbbb", "height": 404, "width": 720}
+           ],
+           "view_count": 1204331, "channel_is_verified": true},
+          {"_type": "url", "ie_key": "Youtube", "id": "ghi789jkl01", "url": "https://www.youtube.com/watch?v=ghi789jkl01",
+           "title": "Paper Lantern (Lyrics)", "duration": 213.6, "channel": "Lyric Harbour", "uploader": "Lyric Harbour",
+           "thumbnails": [{"url": "https://i.ytimg.com/vi/ghi789jkl01/default.jpg", "height": 94, "width": 168}], "view_count": 40211},
+          {"_type": "url", "ie_key": "Youtube", "id": "mno234pqr56", "url": "https://www.youtube.com/shorts/mno234pqr56",
+           "title": "paper lantern on a rainy night", "duration": 41, "uploader": "Saffron Coast", "view_count": 902},
+          {"_type": "url", "ie_key": "Youtube", "id": "stu567vwx89", "url": "https://www.youtube.com/watch?v=stu567vwx89",
+           "title": "The Quiet Hours radio 24/7", "channel": "Quiet Radio", "live_status": "is_live", "concurrent_view_count": 312},
+          {"_type": "url", "ie_key": "Youtube", "id": "yza890bcd12", "url": "https://www.youtube.com/watch?v=yza890bcd12",
+           "title": "Paper Lantern premiere", "channel": "The Quiet Hours", "live_status": "is_upcoming", "release_timestamp": 1800000000},
+          {"_type": "url", "ie_key": "Youtube", "id": "efg345hij67", "url": "https://www.youtube.com/watch?v=efg345hij67", "duration": 199},
+          {"_type": "url", "ie_key": "Youtube", "id": "klm678nop90", "url": "ytsearch1:paper lantern", "title": "Not a video"},
+          {"_type": "url", "ie_key": "Youtube", "id": "qrs901tuv23", "url": "https://www.youtube.com/watch?v=qrs901tuv23",
+           "title": "The Quiet Hours - Paper Lantern (Live at Glass Hall)", "duration": 251, "channel": "The Quiet Hours", "live_status": "was_live"}
+        ],
+        "webpage_url": "ytsearch8:the quiet hours paper lantern", "original_url": "ytsearch8:the quiet hours paper lantern",
+        "extractor": "youtube:search", "extractor_key": "YoutubeSearch", "epoch": 1800000000,
+        "_version": {"version": "2026.10.26", "current_git_head": null, "release_git_head": "c91f8de0bfb3577894abad716eaaa01659e6bd14", "repository": "yt-dlp/yt-dlp"}}
+    """.trimIndent()
+
+    @Test
+    fun `a search's videos are told in YouTube's order with their own title, channel, length and a small thumbnail`() {
+        val found = Info.results(search)?.results
+
+        assertEquals(
+            listOf(
+                // The title as YouTube shows it: "(Official Video)", "(Lyrics)" and "(Live ...)" tell uploads apart.
+                DlSearchResult(
+                    "https://www.youtube.com/watch?v=abc123def45",
+                    "The Quiet Hours - Paper Lantern (Official Video)",
+                    "The Quiet Hours",
+                    214,
+                    // The smallest at least 320 wide: sharp in the save sheet's cover, without the big one's bytes.
+                    "https://i.ytimg.com/vi/abc123def45/hq720.jpg?sqp=-oaymwEcCOgCEMoBSFXyq4qpAw4IARUAAIhCGAFwAcABBg==&rs=AOn4CLAaaa",
+                ),
+                // None that wide: the widest there is. The length rounded.
+                DlSearchResult("https://www.youtube.com/watch?v=ghi789jkl01", "Paper Lantern (Lyrics)", "Lyric Harbour", 214, "https://i.ytimg.com/vi/ghi789jkl01/default.jpg"),
+                // A Short, with the uploader for a channel and no thumbnail.
+                DlSearchResult("https://www.youtube.com/shorts/mno234pqr56", "paper lantern on a rainy night", "Saffron Coast", 41, null),
+                // A stream that ended is a video like any other; one live now or still to come is left out, as are one
+                // with no title and one whose link is not a web address.
+                DlSearchResult("https://www.youtube.com/watch?v=qrs901tuv23", "The Quiet Hours - Paper Lantern (Live at Glass Hall)", "The Quiet Hours", 251, null),
+            ),
+            found,
+        )
+    }
+
+    @Test
+    fun `a search that found nothing is an answer, and anything but a search's list is none`() {
+        assertEquals(DlSearchResults(emptyList()), Info.results("""{"id": "zzqx", "title": "zzqx", "_type": "playlist", "entries": [], "extractor": "youtube:search"}"""))
+        assertNull(Info.results("not json"))
+        assertNull(Info.results("[]"))
+        // A video's own info (-J of a link) has no entries.
+        assertNull(Info.results(json("title" to "Paper Lantern", "uploader" to "The Quiet Hours", "duration" to 214)))
     }
 
     @Test

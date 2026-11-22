@@ -204,6 +204,33 @@ data class DlInfo(
     val choices: List<VideoChoice> = emptyList(),
 )
 
+/**
+ * A YouTube search (IDlAddon.search, VERSION 2): the words as the user typed them ([query]) and how many results
+ * ([limit]). The add-on asks yt-dlp for the list only ("ytsearchN:"), never a download.
+ */
+@Serializable
+data class DlSearch(val query: String, val limit: Int = DEFAULT_LIMIT) {
+    /** Words to look for, on one line and not too long, and a sane limit: anything else is refused. */
+    val valid: Boolean get() = query.isNotBlank() && query.length <= MAX_QUERY && query.none { it.isISOControl() } && limit in 1..MAX_LIMIT
+
+    companion object {
+        const val DEFAULT_LIMIT: Int = 8
+        const val MAX_LIMIT: Int = 20
+        const val MAX_QUERY: Int = 200
+    }
+}
+
+/**
+ * One video a search found: its link, its [title] and [channel] as YouTube shows them (the title not cleaned up, so two
+ * uploads of a song tell apart), its length, and its thumbnail's address when YouTube gave one.
+ */
+@Serializable
+data class DlSearchResult(val url: String, val title: String, val channel: String = "", val durationSec: Int = 0, val thumbnail: String? = null)
+
+/** What a search found (IDlSearchCallback.onResults), in YouTube's order; none found is an answer too. */
+@Serializable
+data class DlSearchResults(val results: List<DlSearchResult>)
+
 /** Where a run is. */
 @Serializable
 enum class DlStage {
@@ -340,6 +367,15 @@ object DlWire {
 
     /** An end that cannot be read is a failure of an unknown kind. */
     fun end(text: String): DlEnd = read(text, DlEnd.serializer()) ?: DlEnd.Failed(DlFailure.UNKNOWN)
+
+    fun encode(search: DlSearch): String = json.encodeToString(DlSearch.serializer(), search)
+
+    /** Null when it cannot be read, or is not [DlSearch.valid]. */
+    fun search(text: String): DlSearch? = read(text, DlSearch.serializer())?.takeIf { it.valid }
+
+    fun encode(results: DlSearchResults): String = json.encodeToString(DlSearchResults.serializer(), results)
+
+    fun results(text: String): DlSearchResults? = read(text, DlSearchResults.serializer())
 
     fun encode(update: DlUpdate): String = json.encodeToString(DlUpdate.serializer(), update)
 

@@ -216,6 +216,12 @@ object DlArgs {
 
     /** A lookup's arguments: the full info as JSON. [marker] (in its -o, which -J never writes) names its process. */
     fun info(marker: String): List<String> = listOf("-J", "--no-playlist", "--socket-timeout", SOCKET_TIMEOUT, "-o", "$marker%(id)s", "--")
+
+    /**
+     * A search's arguments: YouTube's list as JSON, its videos never opened (--flat-playlist), so only the search itself is
+     * fetched; [marker] as [info]'s. The search ("ytsearch8:words") comes after "--", as a link does.
+     */
+    fun search(marker: String): List<String> = listOf("-J", "--flat-playlist", "--socket-timeout", SOCKET_TIMEOUT, "-o", "$marker%(id)s", "--")
 }
 
 /**

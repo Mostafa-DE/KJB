@@ -1,7 +1,10 @@
 package app.lyrify.dl
 
 import app.lyrify.dl.api.DlInfo
+import app.lyrify.dl.api.DlSearchResult
+import app.lyrify.dl.api.DlSearchResults
 import app.lyrify.dl.api.VideoChoice
+import app.lyrify.dl.api.isWebLink
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerializationException
@@ -17,10 +20,12 @@ import java.net.URISyntaxException
 import java.net.URL
 import java.net.URLEncoder
 import kotlin.math.max
+import kotlin.math.roundToInt
 
 /**
  * A link's info as VidGrab read it (its MediaInfo): yt-dlp's full info (`-J`, 7 to 14 s on the phone) and YouTube's quick
  * oEmbed info (about 0.3 s), named the same way, so the sheet can show the quick one at once and its buttons work on it.
+ * And what a YouTube search found ([results]), as YouTube lists it.
  */
 object Info {
     private val json = Json { ignoreUnknownKeys = true }
@@ -49,6 +54,12 @@ object Info {
     private val QUICK_CHOICES = listOf(VideoChoice(null, ""), VideoChoice(1080, "1080p"), VideoChoice(720, "720p"), VideoChoice(480, "480p"))
 
     private const val BYTES_PER_KBIT = 125
+
+    /** A search result's thumbnail width, in pixels: sharp in the save sheet's 72 dp cover, without the 720 px one's bytes. */
+    private const val SMALL_THUMBNAIL = 320
+
+    /** yt-dlp's live_status of a stream that is live now, or still to come. */
+    private val LIVE = setOf("is_live", "is_upcoming")
     private const val QUICK_TIMEOUT_MS = 3_000
 
     /**
@@ -97,6 +108,34 @@ object Info {
         val choices = heights.firstOrNull()?.let { top -> listOf(VideoChoice(null, label(top), bytes(top))) }.orEmpty() +
             heights.filter { it in HEIGHTS || it == heights.first() }.distinctBy(::label).map { VideoChoice(it, label(it), bytes(it)) }
         return DlInfo(url, title, artist, duration.toInt(), info.text("thumbnail"), partial = false, choices = choices)
+    }
+
+    /**
+     * What a YouTube search found ([text]: yt-dlp's -J of a flat "ytsearchN:", a playlist whose entries are the videos as
+     * the search lists them, none opened), in its order. A video needs a web link and a title; one live now or still to
+     * come is left out, as it never ends as a file. Null when [text] is not that.
+     */
+    fun results(text: String): DlSearchResults? {
+        val entries = parse(text)?.get("entries") as? JsonArray ?: return null
+        return DlSearchResults(
+            entries.mapNotNull { element ->
+                val video = element as? JsonObject ?: return@mapNotNull null
+                val url = video.text("url")?.takeIf(::isWebLink) ?: return@mapNotNull null
+                val title = video.text("title")?.trim() ?: return@mapNotNull null
+                if (video.text("live_status") in LIVE) return@mapNotNull null
+                val channel = (video.text("channel") ?: video.text("uploader")).orEmpty().trim()
+                DlSearchResult(url, title, channel, video.number("duration")?.roundToInt() ?: 0, thumbnail(video))
+            },
+        )
+    }
+
+    /** A search result's thumbnail ([SMALL_THUMBNAIL]): the smallest at least that wide, else the widest; null without one. */
+    private fun thumbnail(video: JsonObject): String? {
+        val sized = (video["thumbnails"] as? JsonArray).orEmpty().mapNotNull { element ->
+            val thumbnail = element as? JsonObject ?: return@mapNotNull null
+            thumbnail.text("url")?.takeIf(::isWebLink)?.let { it to (thumbnail.number("width")?.toInt() ?: 0) }
+        }
+        return (sized.filter { it.second >= SMALL_THUMBNAIL }.minByOrNull { it.second } ?: sized.maxByOrNull { it.second })?.first
     }
 
     /** YouTube's oEmbed answer ([text]: title, author_name, thumbnail_url) as the quick, partial info; null without a title. */

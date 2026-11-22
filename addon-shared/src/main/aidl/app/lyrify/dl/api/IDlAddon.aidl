@@ -2,14 +2,17 @@
 // Versioned: KJB asks apiVersion() before anything else (app.lyrify.downloads.DlClient). Frozen from the first public
 // release that ships it: from then on a method keeps its transaction code and signature for good, and new ones are only
 // added at the end with VERSION raised. Every call checks that the caller is KJB, by its uid and signing certificate. The
-// strings carry JSON (app.lyrify.dl.api.DlWire): DlStatus, DlInfo, DlRequest, DlProgress, DlFile, DlEnd, DlUpdate.
+// strings carry JSON (app.lyrify.dl.api.DlWire): DlStatus, DlInfo, DlRequest, DlProgress, DlFile, DlEnd, DlUpdate, and
+// from VERSION 2 DlSearch and DlSearchResults.
 package app.lyrify.dl.api;
 
 import app.lyrify.dl.api.IDlInfoCallback;
 import app.lyrify.dl.api.IDlRunCallback;
+import app.lyrify.dl.api.IDlSearchCallback;
 
 interface IDlAddon {
-    const int VERSION = 1;
+    // 2: search. KJB asks it only of an add-on that answers 2 or more: an older one would answer the call with nothing.
+    const int VERSION = 2;
 
     // VERSION of the add-on that answers.
     int apiVersion() = 1;
@@ -21,7 +24,7 @@ interface IDlAddon {
     // (YouTube's oEmbed, a partial DlInfo), then the full info, or why it failed. A lookup stops when its caller goes away.
     long info(String url, IDlInfoCallback callback) = 3;
 
-    // Stops a lookup: its yt-dlp process is killed.
+    // Stops a lookup, or a search (VERSION 2): its yt-dlp process is killed.
     void cancelInfo(long lookup) = 4;
 
     // Starts a download (JSON DlRequest) and returns the run's id at once. The callback hears its progress, then the
@@ -43,4 +46,9 @@ interface IDlAddon {
 
     // Updates yt-dlp now and returns JSON DlUpdate. Takes seconds: KJB calls it off its main thread.
     String update() = 9;
+
+    // VERSION 2. Searches YouTube for a request's words (JSON DlSearch) and returns the search's id at once, as info does:
+    // the callback hears the videos found (YouTube's list only, nothing downloaded), or why it failed. cancelInfo stops
+    // it, and so does its caller going away.
+    long search(String request, IDlSearchCallback callback) = 10;
 }
