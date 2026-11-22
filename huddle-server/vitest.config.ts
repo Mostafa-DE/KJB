@@ -13,5 +13,7 @@ export default defineConfig({
     setupFiles: ["./src/tests/setup.ts"],
     // One in-memory database for all files: run them one after another so a file's cleanup never meets another's rows.
     fileParallelism: false,
+    // Some tests send hundreds of messages one by one; on a busy machine that takes longer than the default 5 s.
+    testTimeout: 30_000,
   },
 })
