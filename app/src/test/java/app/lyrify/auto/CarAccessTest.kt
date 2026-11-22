@@ -13,7 +13,14 @@ import app.lyrify.tags.CoverVersions
 import app.lyrify.tags.CoverVersionsFile
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -510,6 +517,60 @@ class CarAccessTest {
         assertNull(car(listOf("21", uris.sign("20"))))
         assertNull(car(listOf("21")))
         assertEquals(listOf(20L, 22L), read)
+    }
+
+    // A cover changed while a car shows a list that holds it
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `covers changed in a burst are told once, when the burst has settled, and only those that changed`() = runTest {
+        val (quiet, ember, paper) = listOf("/made/up/Quiet Ember.mp3", "/made/up/Ember Road.mp3", "/made/up/Paper Harbour.mp3")
+        val versions = MutableStateFlow(mapOf(quiet to 1, paper to 4))
+        val told = mutableListOf<Set<String>>()
+        backgroundScope.launch { coverBursts(versions, settleMs = 2_000) { told += it } }
+        runCurrent()
+        // The versions there already are not changes.
+        advanceTimeBy(5_000)
+        assertEquals(emptyList<Set<String>>(), told)
+
+        // Covers & tags applies one album, then another, then an Undo, inside the window.
+        versions.value += ember to 1
+        advanceTimeBy(500)
+        versions.value += quiet to 2
+        advanceTimeBy(1_000)
+        versions.value += ember to 2
+        runCurrent()
+        assertEquals(emptyList<Set<String>>(), told)
+        advanceTimeBy(600)
+        assertEquals(listOf(setOf(ember, quiet)), told)
+
+        // A later change is a burst of its own, with only what changed since.
+        advanceTimeBy(10_000)
+        versions.value += paper to 5
+        advanceTimeBy(1_900)
+        assertEquals(1, told.size)
+        advanceTimeBy(200)
+        assertEquals(listOf(setOf(ember, quiet), setOf(paper)), told)
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `a cover changed while the car is being told of others is told next, never lost`() = runTest {
+        val versions = MutableStateFlow(emptyMap<String, Int>())
+        val told = mutableListOf<Set<String>>()
+        backgroundScope.launch {
+            coverBursts(versions, settleMs = 1_000) { paths ->
+                told += paths
+                // Building the lists takes a while.
+                delay(3_000)
+            }
+        }
+        runCurrent()
+        versions.value += "/made/up/Quiet Ember.mp3" to 1
+        advanceTimeBy(1_100)
+        versions.value += "/made/up/Ember Road.mp3" to 1
+        advanceTimeBy(5_000)
+        assertEquals(listOf(setOf("/made/up/Quiet Ember.mp3"), setOf("/made/up/Ember Road.mp3")), told)
     }
 
     // The car's searches

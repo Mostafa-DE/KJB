@@ -253,6 +253,58 @@ class LibraryTreeTest {
         assertNull(LibraryTree.play("|0", data()))
     }
 
+    // The lists a car subscribes to, and those a changed cover is in
+
+    @Test
+    fun `every list of the tree may be subscribed to, never a song, Shuffle all or a heading`() {
+        val lists = listOf(
+            LibraryTree.ROOT, LibraryTree.root(4), LibraryTree.root(1), LibraryTree.QUEUES, LibraryTree.PLAYLISTS, LibraryTree.ALBUMS, LibraryTree.ARTISTS,
+            LibraryTree.SONGS, LibraryTree.FAVOURITES, LibraryTree.MOST_PLAYED, LibraryTree.RECENTLY_PLAYED, LibraryTree.RECENTLY_ADDED,
+            "queue:q1", "playlist:p1", "album:k", "artist:Mira Solen", LibraryTree.searchId("road"),
+        )
+        lists.forEach { assertTrue(it, LibraryTree.isList(it)) }
+        // Every list the tree hands out, down to an album's, an artist's and a playlist's.
+        val data = data(favourites = listOf(ember.ref), mostPlayed = listOf(loose), recentlyPlayed = listOf(loose))
+        val handed = listOf(LibraryTree.ROOT, LibraryTree.PLAYLISTS, LibraryTree.ALBUMS, LibraryTree.ARTISTS).flatMap { children(it, data) }.filter { it.browsable }
+        assertTrue(handed.size > 10)
+        handed.forEach { assertTrue(it.id, LibraryTree.isList(it.id)) }
+        val others = listOf(
+            LibraryTree.SHUFFLE_ALL, children(LibraryTree.SONGS)[1].id, "album:k|2", LibraryTree.BUILT_FOR_YOU, LibraryTree.YOUR_PLAYLISTS,
+            "album:", "queue:", "root:x", "root:9", "", "nothing here",
+        )
+        others.forEach { assertFalse(it, LibraryTree.isList(it)) }
+    }
+
+    @Test
+    fun `a changed cover reaches every list that shows it, each once with its size, and no other`() {
+        val source = QueueSource(SourceKind.ALBUM, albumKey(harbour[0])!!, "Harbour Glass")
+        val book = QueueBook().play(harbour.map { it.ref }, 0, source, now = 1).book
+        val found = Found("lantern", listOf(harbour[0], loose), QueueSource(SourceKind.SEARCH, "search:lantern", "lantern"))
+        val data = data(book, favourites = listOf(harbour[0].ref, ember.ref), mostPlayed = listOf(harbour[0]), recentlyPlayed = listOf(loose), found = found)
+        fun album(title: String) = children(LibraryTree.ALBUMS, data).single { it.title == title }.id
+        fun artist(name: String) = children(LibraryTree.ARTISTS, data).single { it.title == name }.id
+        val queue = children(LibraryTree.QUEUES, data).single().id
+        val road = children(LibraryTree.PLAYLISTS, data).single { it.title == "Road trip" }.id
+
+        // The album's first song: its own lists, and Albums, where it is the album's cover. Songs counts Shuffle all; the
+        // playlist leaves out its song that is not on the phone. Search results are never told: a car never hears there.
+        val first = mapOf(
+            LibraryTree.SONGS to 7, LibraryTree.FAVOURITES to 2, LibraryTree.MOST_PLAYED to 1, LibraryTree.ALBUMS to 3,
+            queue to 4, road to 2, album("Harbour Glass") to 4, artist("Kit Calloway") to 4,
+        )
+        assertEquals(first, LibraryTree.showing(setOf(harbour[0].path), data))
+        // A song further on in the album: not Albums, where its album shows the first song's cover.
+        assertEquals(
+            mapOf(LibraryTree.SONGS to 7, queue to 4, album("Harbour Glass") to 4, artist("Kit Calloway") to 4),
+            LibraryTree.showing(setOf(harbour[2].path), data),
+        )
+        // A burst of changes: each list once.
+        val more = mapOf(LibraryTree.RECENTLY_PLAYED to 1, LibraryTree.RECENTLY_ADDED to 1, album("Night Ferry") to 1, artist("Mira Solen") to 1)
+        assertEquals(first + more, LibraryTree.showing(setOf(harbour[0].path, harbour[2].path, loose.path), data))
+        assertEquals(emptyMap<String, Int>(), LibraryTree.showing(setOf("/made/up/Gone.mp3"), data))
+        assertEquals(emptyMap<String, Int>(), LibraryTree.showing(emptySet(), data))
+    }
+
     // Search and voice
 
     @Test

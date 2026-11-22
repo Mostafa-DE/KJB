@@ -13,21 +13,30 @@ import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionToken
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.media3.session.LibraryResult
+import app.lyrify.library.LibraryGraph
+import app.lyrify.library.LibraryState
 import app.lyrify.player.COMMAND_FAVOURITE
 import app.lyrify.player.LibraryTree
 import app.lyrify.player.PlaybackService
+import app.lyrify.tags.CoverVersions
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 
 /**
  * The browse tree as a car asks for it, from the real service (debug build, its test folder's library): Android Auto's
- * root hint, the list and grid hints, and a search answered through the session's search callbacks; and what KJB's own
- * controller is offered as it connects. Plays nothing.
+ * root hint, the list and grid hints, a search answered through the session's search callbacks, and a list subscribed to
+ * hearing that a cover in it changed; and what KJB's own controller is offered as it connects. Plays nothing.
  */
 @OptIn(UnstableApi::class)
 @RunWith(AndroidJUnit4::class)
@@ -35,6 +44,9 @@ class CarBrowseDeviceTest {
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private val context = instrumentation.targetContext
     private val searched = CountDownLatch(1)
+
+    /** The lists the browser heard changed, in order. */
+    private val changed = LinkedBlockingQueue<String>()
     private var browser: MediaBrowser? = null
 
     @After
@@ -52,6 +64,10 @@ class CarBrowseDeviceTest {
         val token = SessionToken(context, ComponentName(context, PlaybackService::class.java))
         val listener = object : MediaBrowser.Listener {
             override fun onSearchResultChanged(browser: MediaBrowser, query: String, itemCount: Int, params: LibraryParams?) = searched.countDown()
+
+            override fun onChildrenChanged(browser: MediaBrowser, parentId: String, itemCount: Int, params: LibraryParams?) {
+                changed += parentId
+            }
         }
         return MediaBrowser.Builder(context, token).setListener(listener).setApplicationLooper(Looper.getMainLooper()).buildAsync().get(10, TimeUnit.SECONDS)
             .also { browser = it }
@@ -92,5 +108,24 @@ class CarBrowseDeviceTest {
         val results = onMain { browser.getSearchResult("a", 0, 50, null) }.get(10, TimeUnit.SECONDS).value!!
         assertTrue(results.all { it.mediaMetadata.isPlayable == true && it.mediaMetadata.isBrowsable == false })
         assertTrue(results.all { LibraryTree.playable(it.mediaId) })
+    }
+
+    /** FX3: an album a car shows stays subscribed, hears when a cover in it changes, and reads it again at the new uri. */
+    @Test
+    fun aListSubscribedToHearsWhenACoverInItChangesAndReadsTheNewUri() {
+        val library = (runBlocking { LibraryGraph.repository(context).state.first { it !is LibraryState.Loading } } as? LibraryState.Ready)?.library
+        val album = library?.albums?.firstOrNull()
+        assumeTrue("Music/KJB test needs an album", album != null)
+        val browser = connect()
+        fun children(id: String) = onMain { browser.getChildren(id, 0, 50, null) }.get(10, TimeUnit.SECONDS).value!!
+        val id = children(LibraryTree.ALBUMS).first { it.mediaMetadata.title == album!!.title }.mediaId
+        val before = children(id).first().mediaMetadata.artworkUri
+
+        assertEquals(LibraryResult.RESULT_SUCCESS, onMain { browser.subscribe(id, null) }.get(10, TimeUnit.SECONDS).resultCode)
+        // As Media3's own subscribe does: the browser hears at once that the list is there.
+        assertEquals(id, changed.poll(10, TimeUnit.SECONDS))
+        CoverVersions.bump(listOf(album!!.songs.first().path))
+        assertEquals("the album never heard its cover changed", id, changed.poll(10, TimeUnit.SECONDS))
+        assertNotEquals(before, children(id).first().mediaMetadata.artworkUri)
     }
 }

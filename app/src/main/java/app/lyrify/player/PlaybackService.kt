@@ -438,6 +438,9 @@ class PlaybackService : MediaLibraryService() {
         override fun onGetItem(session: MediaLibrarySession, browser: MediaSession.ControllerInfo, mediaId: String): ListenableFuture<LibraryResult<MediaItem>> =
             Futures.immediateFuture(browse.item(mediaId))
 
+        override fun onSubscribe(session: MediaLibrarySession, browser: MediaSession.ControllerInfo, parentId: String, params: LibraryParams?): ListenableFuture<LibraryResult<Void>> =
+            Futures.immediateFuture(browse.subscribe(browser, parentId, params))
+
         override fun onSearch(session: MediaLibrarySession, browser: MediaSession.ControllerInfo, query: String, params: LibraryParams?): ListenableFuture<LibraryResult<Void>> =
             browse.search(browser, query, params)
 

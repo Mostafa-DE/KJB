@@ -131,6 +131,25 @@ object LibraryTree {
     /** Whether [id] names something to play, a song in a list or Shuffle all; not whether it is still there. */
     fun playable(id: String): Boolean = id == SHUFFLE_ALL || songAt(id) != null
 
+    /** Whether [id] names a list of the tree, one a car may subscribe to; not whether it is still there. */
+    fun isList(id: String): Boolean =
+        !playable(id) && (isRoot(id) || id in TOP || id in BUILT_IN || SONG_LIST_PREFIXES.any { id.length > it.length && id.startsWith(it) })
+
+    /**
+     * The lists that show the cover of a song at one of [paths], each with how many children it has: the lists holding
+     * the song, and Albums when it is an album's first song (its cover there). A car showing one of these reads it again
+     * when those covers change. Search results are left out, as a car never hears that they changed.
+     */
+    fun showing(paths: Set<String>, data: TreeData): Map<String, Int> {
+        if (paths.isEmpty()) return emptyMap()
+        val library = data.library
+        val albums = ALBUMS.takeIf { library.albums.any { it.songs.firstOrNull()?.path in paths } }
+        val lists = listOf(SONGS) + BUILT_IN + data.book.listed.map { QUEUE + it.id } + data.playlists.map { PLAYLIST + it.id } +
+            library.albums.map { ALBUM + it.key } + library.artists.map { ARTIST + it.name }
+        val holding = lists.filter { id -> list(id, data)?.any { it?.path in paths } == true }
+        return (listOfNotNull(albums) + holding).associateWith { children(it, data)?.size ?: 0 }
+    }
+
     /** The children of [id], every one; null when there is no such list (a song, or one gone). */
     fun children(id: String, data: TreeData): List<TreeNode>? {
         val library = data.library
