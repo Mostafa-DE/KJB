@@ -26,8 +26,8 @@ class HuddleClientTest {
     private val box = "b".repeat(43)
     private val other = "c".repeat(43)
 
-    /** One answer: [code] and [body], or a network failure ([fails]). */
-    private class Answer(val code: Int, val body: String = "", val fails: Boolean = false)
+    /** One answer: [code], [body] and a Retry-After of [retryAfter] seconds, or a network failure ([fails]). */
+    private class Answer(val code: Int, val body: String = "", val fails: Boolean = false, val retryAfter: String? = null)
 
     private class FakeConnection(uri: URI, private val answer: Answer) : HttpURLConnection(uri.toURL()) {
         val headers = mutableMapOf<String, String>()
@@ -50,6 +50,8 @@ class HuddleClientTest {
 
         override fun getContentLengthLong(): Long = answer.body.length.toLong()
 
+        override fun getHeaderField(name: String): String? = answer.retryAfter.takeIf { name.equals("Retry-After", ignoreCase = true) }
+
         override fun disconnect() = Unit
 
         override fun usingProxy(): Boolean = false
@@ -61,9 +63,12 @@ class HuddleClientTest {
 
     private val opened = mutableListOf<FakeConnection>()
 
+    /** The wall clock the client reads. */
+    private var now = 1_700_000_000_000L
+
     private fun TestScope.client(vararg answers: Answer): HuddleClient {
         val queue = answers.toMutableList()
-        return HuddleClient(host, "KJB/test", StandardTestDispatcher(testScheduler)) { uri -> FakeConnection(uri, queue.removeAt(0)).also { opened += it } }
+        return HuddleClient(host, "KJB/test", StandardTestDispatcher(testScheduler), clock = { now }) { uri -> FakeConnection(uri, queue.removeAt(0)).also { opened += it } }
     }
 
     private fun JsonObject.string(key: String): String? = (this[key] as? JsonPrimitive)?.content
@@ -137,6 +142,26 @@ class HuddleClientTest {
         // The server takes messages again once it has cleared old ones: what waits to go stays.
         assertEquals(PostAnswer.NO_ANSWER, huddle.send(box, Kind.PLAY, "ZGF0YQ"))
         assertEquals(5, opened.size)
+    }
+
+    @Test
+    fun `after a 429 nothing is asked until its Retry-After is over, at most a day`() = runTest {
+        val huddle = client(
+            Answer(429, """{"error":"rate_limited"}""", retryAfter = "120"),
+            Answer(201, """{"id":"1"}"""),
+            Answer(429, """{"error":"rate_limited"}""", retryAfter = "9999999"),
+            Answer(201, """{"id":"2"}"""),
+        )
+        assertEquals(PostAnswer.NO_ANSWER, huddle.send(box, Kind.PLAY, "ZGF0YQ"))
+        assertNull("asked while it waits: no call at all", huddle.inbox(listOf(box)))
+        assertEquals(PostAnswer.NO_ANSWER, huddle.send(box, Kind.CARD, "ZGF0YQ"))
+        assertEquals(1, opened.size)
+        now += 120_000
+        assertEquals(PostAnswer.POSTED, huddle.send(box, Kind.CARD, "ZGF0YQ"))
+        assertEquals(PostAnswer.NO_ANSWER, huddle.send(box, Kind.CARD, "ZGF0YQ"))
+        now += 24 * 60 * 60_000L
+        assertEquals("a wait longer than a day is a day", PostAnswer.POSTED, huddle.send(box, Kind.CARD, "ZGF0YQ"))
+        assertEquals(4, opened.size)
     }
 
     @Test

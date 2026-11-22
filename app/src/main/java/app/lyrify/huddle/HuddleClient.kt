@@ -21,13 +21,15 @@ import java.net.URISyntaxException
  * [HuddleServer] over HTTPS on [host], as huddle-server/API.md has it: every call a POST of JSON to `/api/v1/...`, ids
  * only in the body (never in a URL a log could keep), 15 s timeouts, no redirect followed, at most [MAX_ANSWER_BYTES]
  * read. A 502, or a 503 without the server's own error, is Railway restarting: tried once more after [RETRY_MS]. A
- * 429, a 5xx or no network is no answer, and the next sync tries again. The log gets the call's name and status only.
+ * 5xx or no network is no answer, and the next sync tries again; a 429 is no answer, and nothing is asked until its
+ * Retry-After is over ([MAX_WAIT_MS] at most). The log gets the call's name and status only.
  */
 class HuddleClient(
     private val host: String,
     private val userAgent: String,
     private val io: CoroutineDispatcher = Dispatchers.IO,
     private val log: (String) -> Unit = {},
+    private val clock: () -> Long = System::currentTimeMillis,
     private val open: (URI) -> HttpURLConnection = { it.toURL().openConnection() as HttpURLConnection },
 ) : HuddleServer {
     override suspend fun createInvite(invite: String, owner: String): Boolean =
@@ -105,6 +107,10 @@ class HuddleClient(
         call("mailboxes/delete", body(MAILBOXES to JsonArray(chunk.map(::JsonPrimitive))))?.code == OK
     }
 
+    /** No call before this time (wall-clock millis): the server asked to wait (429, Retry-After). */
+    @Volatile
+    private var quietUntil = 0L
+
     /** What one call answered: its status and its JSON, if any. */
     private class Answer(val code: Int, val json: JsonObject?)
 
@@ -112,6 +118,7 @@ class HuddleClient(
 
     /** POSTs [body] to [endpoint] (`/api/v1/<endpoint>`), once more after a restart's 502 or bare 503; null without an answer. */
     private suspend fun call(endpoint: String, body: String): Answer? {
+        if (clock() < quietUntil) return null
         val first = withContext(io) { exchange(endpoint, body) }
         if (first == null || !restarting(first)) return first
         delay(RETRY_MS)
@@ -144,6 +151,11 @@ class HuddleClient(
             connection.setRequestProperty("User-Agent", userAgent)
             connection.outputStream.use { it.write(body.encodeToByteArray()) }
             val code = connection.responseCode
+            if (code == TOO_MANY_REQUESTS) {
+                connection.getHeaderField(RETRY_AFTER)?.trim()?.toLongOrNull()?.takeIf { it > 0 }?.let { seconds ->
+                    quietUntil = clock() + minOf(seconds, MAX_WAIT_MS / 1_000) * 1_000
+                }
+            }
             if (code in REDIRECTS) {
                 log("huddle: $endpoint redirected, not followed")
                 return null
@@ -181,6 +193,11 @@ class HuddleClient(
 
         /** How long after a restart's 502 or 503 the call is tried again. */
         const val RETRY_MS: Long = 3_000
+
+        /** The longest wait a 429's Retry-After can ask: a day. */
+        const val MAX_WAIT_MS: Long = 24 * 60 * 60_000L
+        private const val TOO_MANY_REQUESTS = 429
+        private const val RETRY_AFTER = "Retry-After"
         private const val API = "/api/v1"
         private const val POST = "POST"
         private const val JSON_TYPE = "application/json"
