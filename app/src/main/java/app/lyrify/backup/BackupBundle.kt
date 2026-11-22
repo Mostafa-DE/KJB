@@ -314,8 +314,13 @@ object BackupBundle {
             zip.put(MANIFEST, manifest(appVersion, createdAt, sections.map { it.first }, playsParts = plays?.size ?: 1))
             zip.put(SONGS, songs(songs))
             sections.forEach { (section, text) -> zip.put(section.file, text) }
-            // The plays' further parts, each made as it is written.
-            plays?.let { parts -> (1 until parts.size).forEach { at -> zip.put(Section.PLAYS.partFile(at + 1), gzipped(parts[at])) } }
+            // The plays' further parts, each made and gzipped as it is written.
+            plays?.let { parts ->
+                (1 until parts.size).forEach { at ->
+                    val gzipped = ByteArrayOutputStream().also { bytes -> GZIPOutputStream(bytes).use { it.write(parts[at].encodeToByteArray()) } }
+                    zip.put(Section.PLAYS.partFile(at + 1), gzipped.toByteArray())
+                }
+            }
         }
     }
 
@@ -326,8 +331,6 @@ object BackupBundle {
         write(bytes)
         closeEntry()
     }
-
-    private fun gzipped(text: String): ByteArray = ByteArrayOutputStream().also { bytes -> GZIPOutputStream(bytes).use { it.write(text.encodeToByteArray()) } }.toByteArray()
 
     /** Every song path a section names, in order, each once; Duplicates' groups through [pathOf], their MediaStore ids. */
     private fun named(snapshot: BackupSnapshot, pathOf: (Long) -> String?): List<String> = buildList {
