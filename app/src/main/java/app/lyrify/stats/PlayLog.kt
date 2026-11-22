@@ -76,13 +76,14 @@ fun spansOf(text: String?): List<HeardSpan> = text.orEmpty().split(',').mapNotNu
 
 /**
  * A kept play as a row of [PlaysSchema.OPEN_PLAYS] has it, read as leniently as [songPlaysOf]: a value missing or below
- * 0 is 0, a damaged part heard is dropped. A row without a song or a start is dropped.
+ * 0 is 0, a damaged part heard is dropped, real minutes missing none (a play from before they were kept). A row without
+ * a song or a start is dropped.
  */
 @Suppress("LongParameterList")
-fun storedPlayOf(path: String?, startedAt: Long?, mediaId: Long?, heardMs: Long?, counted: Long?, durationMs: Long?, positionMs: Long?, spans: String?): StoredPlay? {
+fun storedPlayOf(path: String?, startedAt: Long?, mediaId: Long?, heardMs: Long?, counted: Long?, durationMs: Long?, positionMs: Long?, spans: String?, clockMs: Long? = null): StoredPlay? {
     if (path.isNullOrBlank() || startedAt == null || startedAt <= 0) return null
     return StoredPlay(
-        LoggedPlay(SongRef(path, mediaId?.takeIf { it > 0 }), startedAt, (heardMs ?: 0).coerceAtLeast(0), (counted ?: 0) != 0L),
+        LoggedPlay(SongRef(path, mediaId?.takeIf { it > 0 }), startedAt, (heardMs ?: 0).coerceAtLeast(0), (counted ?: 0) != 0L, clockMs = clockMs?.coerceAtLeast(0)),
         OpenState((durationMs ?: 0).coerceAtLeast(0), (positionMs ?: 0).coerceAtLeast(0), spansOf(spans)),
     )
 }
@@ -100,7 +101,7 @@ interface PlayRow {
  * [LoggedPlay.start], one without how or where it ended no [LoggedPlay.end]. A row without a song or a start is dropped.
  */
 fun loggedPlayOf(row: PlayRow): LoggedPlay? {
-    val play = storedPlayOf(row.text("path"), row.number("started_at"), row.number("media_id"), row.number("heard_ms"), row.number("counted"), null, null, null)?.play
+    val play = storedPlayOf(row.text("path"), row.number("started_at"), row.number("media_id"), row.number("heard_ms"), row.number("counted"), null, null, null, row.number("clock_ms"))?.play
         ?: return null
     return play.copy(
         start = playStartOf(row.text("started_by"), row.text("source"), row.number("shuffled")?.let { it != 0L }, row.text("song_key")),
@@ -158,6 +159,7 @@ object PlaysSchema {
      * [LoggedPlay.end]), codes by name in lower case ([codeOf]); the plays from before keep NULL there. And `imported`:
      * the plays an import made are marked, found by their shape (nothing heard and counted, which a play heard here never
      * is), so a file 3.1.0 kept after a downgrade gets the imports it made marked on the next upgrade too.
+     * Version 4: each play's real minutes ([LoggedPlay.clockMs], Insights, KJB 3.2); the plays from before keep NULL.
      */
     val STEPS: List<List<String>> = listOf(
         listOf(
@@ -180,6 +182,7 @@ object PlaysSchema {
             "ALTER TABLE plays ADD COLUMN imported INTEGER NOT NULL DEFAULT 0",
             "UPDATE plays SET imported = 1 WHERE heard_ms = 0 AND counted != 0",
         ),
+        listOf("ALTER TABLE plays ADD COLUMN clock_ms INTEGER"),
     )
 
     val VERSION: Int = STEPS.size
@@ -222,6 +225,7 @@ object PlaysSchema {
         play.end?.how?.let(::codeOf),
         play.end?.atMs,
         flag(play.imported),
+        play.clockMs,
     )
 
     private fun flag(on: Boolean): Long = if (on) 1L else 0L
@@ -230,24 +234,26 @@ object PlaysSchema {
      * The same play again keeps the most heard, its count once counted, its id hint unless a new one is given, how it
      * began and its time zone as first written (a play that goes on after a restart began as it began; a part the first
      * write lacked, such as the song's key before the library was read, filled in by a later one), how it ended as last
-     * written, and its import mark once marked. Its values: [putArgs].
+     * written, its import mark once marked, and the most real minutes written (none until a write has them: NULL is no
+     * value to SQLite's max()). Its values: [putArgs].
      */
     const val PUT: String = "INSERT INTO plays (path, started_at, media_id, heard_ms, counted, started_by, source, shuffled, zone_offset_min, song_key, " +
-        "ended_how, ended_at_ms, imported) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+        "ended_how, ended_at_ms, imported, clock_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
         "ON CONFLICT (path, started_at) DO UPDATE SET media_id = coalesce(excluded.media_id, media_id), " +
         "heard_ms = max(heard_ms, excluded.heard_ms), counted = max(counted, excluded.counted), " +
         "started_by = coalesce(started_by, excluded.started_by), source = coalesce(source, excluded.source), " +
         "shuffled = coalesce(shuffled, excluded.shuffled), zone_offset_min = coalesce(zone_offset_min, excluded.zone_offset_min), " +
         "song_key = coalesce(song_key, excluded.song_key), ended_how = coalesce(excluded.ended_how, ended_how), " +
-        "ended_at_ms = coalesce(excluded.ended_at_ms, ended_at_ms), imported = max(imported, excluded.imported)"
+        "ended_at_ms = coalesce(excluded.ended_at_ms, ended_at_ms), imported = max(imported, excluded.imported), " +
+        "clock_ms = coalesce(max(clock_ms, excluded.clock_ms), clock_ms, excluded.clock_ms)"
 
     /** Every play, the short ones too, the oldest first, with all it keeps (a backup; [loggedPlayOf] reads them). */
     const val ALL: String = "SELECT path, started_at, media_id, heard_ms, counted, started_by, source, shuffled, zone_offset_min, song_key, " +
-        "ended_how, ended_at_ms, imported FROM plays ORDER BY started_at, path"
+        "ended_how, ended_at_ms, imported, clock_ms FROM plays ORDER BY started_at, path"
 
     /** [ALL]'s columns for the plays heard here between two bounds, the oldest first ([PlayLogStore.listened]). */
     const val LISTENED: String = "SELECT path, started_at, media_id, heard_ms, counted, started_by, source, shuffled, zone_offset_min, song_key, " +
-        "ended_how, ended_at_ms, imported FROM plays WHERE started_at >= CAST(? AS INTEGER) AND started_at < CAST(? AS INTEGER) " +
+        "ended_how, ended_at_ms, imported, clock_ms FROM plays WHERE started_at >= CAST(? AS INTEGER) AND started_at < CAST(? AS INTEGER) " +
         "AND imported = 0 AND (counted != 0 OR heard_ms >= ${PlayCounter.MIN_LOGGED_MS}) ORDER BY started_at, path"
 
     const val KEEP_OPEN: String = "INSERT OR REPLACE INTO open_plays (path, started_at, duration_ms, position_ms, spans) VALUES (?, ?, ?, ?, ?)"
@@ -257,8 +263,8 @@ object PlaysSchema {
     /** An import's Undo: its play taken out of the log ([PlayLogStore.removeAll]). */
     const val REMOVE: String = "DELETE FROM plays WHERE path = ? AND started_at = ?"
 
-    /** Per play still going: path, start, id hint, time heard, counted, length, position, parts heard ([storedPlayOf]). */
-    const val OPEN_PLAYS: String = "SELECT o.path, o.started_at, p.media_id, p.heard_ms, p.counted, o.duration_ms, o.position_ms, o.spans " +
+    /** Per play still going: path, start, id hint, time heard, counted, length, position, parts heard, real minutes ([storedPlayOf]). */
+    const val OPEN_PLAYS: String = "SELECT o.path, o.started_at, p.media_id, p.heard_ms, p.counted, o.duration_ms, o.position_ms, o.spans, p.clock_ms AS clock_ms " +
         "FROM open_plays AS o JOIN plays AS p ON p.path = o.path AND p.started_at = o.started_at"
 
     /**
@@ -348,9 +354,10 @@ class SqlPlayLog(private val db: SQLiteOpenHelper, private val io: CoroutineDisp
     override suspend fun openPlays(): List<StoredPlay> = withContext(io) {
         try {
             db.readableDatabase.rawQuery(PlaysSchema.OPEN_PLAYS, null).use { rows ->
+                val row = CursorRow(rows)
                 buildList {
                     while (rows.moveToNext()) {
-                        storedPlayOf(rows.text(0), rows.number(1), rows.number(2), rows.number(3), rows.number(4), rows.number(5), rows.number(6), rows.text(7))?.let(::add)
+                        storedPlayOf(rows.text(0), rows.number(1), rows.number(2), rows.number(3), rows.number(4), rows.number(5), rows.number(6), rows.text(7), row.number("clock_ms"))?.let(::add)
                     }
                 }
             }

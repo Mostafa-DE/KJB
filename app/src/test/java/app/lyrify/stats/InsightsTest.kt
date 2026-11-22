@@ -164,6 +164,22 @@ class InsightsTest {
     }
 
     @Test
+    fun `minutes are the real minutes a play kept, else its time heard (plays from before 3_2), on every card`() {
+        // At 2x: the whole song heard in half its length.
+        val fast = plays(alder, 10, nov(2), heardMs = 200_000).map { it.copy(clockMs = 100_000) }
+        val before = listOf(play(birch, nov(3), heardMs = 120_000), play(cedar, nov(4), heardMs = 60_000))
+        val book = LoggedPlay(SongRef(VOLUME + "Audiobooks/Salt Road/part 1.m4b"), nov(5), 600_000, counted = false, clockMs = 300_000)
+
+        val insights = insights(fast + before, books = listOf(book))
+
+        assertEquals(1_480_000L, shown(insights.totals).heardMs)
+        assertEquals(Spoken(booksMs = 300_000, podcastsMs = 0), insights.spoken)
+        // Birch and Cedar tie on plays: the latest played first.
+        assertEquals(listOf(alder to 1_000_000L, cedar to 60_000L, birch to 120_000L), insights.songs.map { it.item to it.heardMs })
+        assertEquals(1_180_000L, shown(insights.clock).hours.sum())
+    }
+
+    @Test
     fun `the top lists are music only, the most played first, ties going to the latest played`() {
         val heard = plays(alder, 4, nov(2)) + plays(birch, 3, nov(3)) + plays(ember, 3, nov(4)) + plays(veil, 5, nov(5)) + plays(episode, 5, nov(6)) + plays(tome, 5, nov(7))
 

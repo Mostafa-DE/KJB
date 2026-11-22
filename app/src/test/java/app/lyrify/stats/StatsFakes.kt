@@ -19,8 +19,8 @@ fun List<StoredPlay>.as310(): List<StoredPlay> = map { it.copy(play = it.play.as
  * `plays.db` made up, in memory, with its rules (PlaysDbDeviceTest checks the real one against the same, and
  * PlaysSqlTest its SQL on the laptop): a play written again is the one of the same song and start, and keeps the most
  * time heard, its count once counted, its id hint unless a newer one is given, how it began and its time zone as first
- * written (a part the first write lacked filled in by a later one), how it ended as last written, and its import mark
- * once marked; with an [OpenState] it is kept as still going,
+ * written (a part the first write lacked filled in by a later one), how it ended as last written, its import mark
+ * once marked, and the most real minutes written (none until a write has them); with an [OpenState] it is kept as still going,
  * without one it is let go. A song's totals count its plays that counted, the last of those, and the time heard in all
  * its plays, the short ones ([LoggedPlay.isShort]) left out; its id hint is its latest play's of those. The plays heard
  * here leave out an import's and the short ones. [failing]: every write fails.
@@ -46,6 +46,7 @@ class FakePlayLog(plays: List<LoggedPlay> = emptyList()) : PlayLogStore {
                 zoneOffsetMinutes = old.zoneOffsetMinutes ?: play.zoneOffsetMinutes,
                 end = play.end ?: old.end,
                 imported = old.imported || play.imported,
+                clockMs = listOfNotNull(old.clockMs, play.clockMs).maxOrNull(),
             )
         }
         plays.remove(old)
@@ -137,7 +138,7 @@ class JdbcPlayLog(version: Int = PlaysSchema.VERSION) : PlayLogStore, AutoClosea
             while (rows.next()) {
                 val row = ResultRow(rows)
                 storedPlayOf(
-                    rows.getString(1), row.at(2), row.at(3), row.at(4), row.at(5), row.at(6), row.at(7), rows.getString(8),
+                    rows.getString(1), row.at(2), row.at(3), row.at(4), row.at(5), row.at(6), row.at(7), rows.getString(8), row.number("clock_ms"),
                 )?.let(::add)
             }
         }

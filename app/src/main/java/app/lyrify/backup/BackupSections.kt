@@ -81,7 +81,8 @@ internal object SectionJson {
     /**
      * Every play with what it keeps, a key for each part it has; the skips ([LoggedPlay.isShort]) apart, under a key of
      * their own that 3.1.0 does not read, so it restores the plays it knew and none it never kept. No key marks an
-     * import's play: its shape does (nothing heard, counted), as `plays.db`'s own upgrade finds them.
+     * import's play: its shape does (nothing heard, counted), as `plays.db`'s own upgrade finds them. The book log's
+     * plays (Section.BOOK_PLAYS) are in the same form.
      */
     fun plays(plays: List<LoggedPlay>): String = JsonObject(
         mapOf(PLAYS_KEY to JsonArray(plays.filterNot { it.isShort }.map(::play)), SKIPS_KEY to JsonArray(plays.filter { it.isShort }.map(::play))),
@@ -104,6 +105,7 @@ internal object SectionJson {
                 put(ENDED_KEY, JsonPrimitive(codeOf(end.how)))
                 put(ENDED_AT_KEY, JsonPrimitive(end.atMs))
             }
+            play.clockMs?.let { put(CLOCK_KEY, JsonPrimitive(it)) }
         },
     )
 
@@ -131,6 +133,7 @@ internal object SectionJson {
             zoneOffsetMinutes = zoneOffsetOf(play.long(ZONE_KEY)),
             end = playEndedOf(play.text(ENDED_KEY), play.long(ENDED_AT_KEY)),
             imported = counted && heardMs == 0L,
+            clockMs = play.long(CLOCK_KEY)?.coerceAtLeast(0),
         )
     }
 
@@ -360,6 +363,7 @@ internal object SectionJson {
     private const val ZONE_KEY: String = "zoneOffset"
     private const val ENDED_KEY: String = "ended"
     private const val ENDED_AT_KEY: String = "endedAtMs"
+    private const val CLOCK_KEY: String = "clockMs"
     private const val PLACE_KEY: String = "placeMs"
     private const val BOOKMARKS_KEY: String = "bookmarks"
     private const val POSITION_KEY: String = "positionMs"

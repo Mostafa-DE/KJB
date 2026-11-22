@@ -38,14 +38,18 @@ data class HeardSpan(val startMs: Long, val endMs: Long)
 
 /**
  * One play's time heard, worked out from the player's raw events ([PlayEvent]): the position moving on while playing is
- * heard; paused time and a seek's jump are not. [heardMs] is the clock's time while the song played (listening time, in
- * real minutes at any speed: 2x counts half the song's length), [coveredMs] the part of the song heard at least once
- * (what "Count a play after" measures), so hearing a part again after seeking back adds listening time but no share. A
- * jump the player did not report (the position moving faster than [MAX_SPEED] times the clock) counts only the time it
- * took. A play the app kept before it stopped goes on from its [heardMs] and [spans].
+ * heard; paused time and a seek's jump are not. [heardMs] is all the time played (listening time), [coveredMs] the part
+ * of the song heard at least once (what "Count a play after" measures), so hearing a part again after seeking back adds
+ * listening time but no share. A jump the player did not report (the position moving faster than [MAX_SPEED] times
+ * the clock) counts only the time it took. [clockMs] is the real minutes (Insights, KJB 3.2): the clock's time while
+ * the song played, so 2x counts half the song's length. A play the app kept before it stopped goes on from its
+ * [heardMs], [spans] and [clockMs] (its [heardMs] when it kept none, as 3.1.1 did).
  */
-class HeardTime(val durationMs: Long, heardMs: Long = 0, spans: List<HeardSpan> = emptyList()) {
+class HeardTime(val durationMs: Long, heardMs: Long = 0, spans: List<HeardSpan> = emptyList(), clockMs: Long = heardMs) {
     var heardMs: Long = heardMs
+        private set
+
+    var clockMs: Long = clockMs
         private set
 
     /** The parts heard, in order and apart. */
@@ -91,9 +95,10 @@ class HeardTime(val durationMs: Long, heardMs: Long = 0, spans: List<HeardSpan> 
             val moved = positionMs - from
             val took = (now - at).coerceAtLeast(0)
             val heard = if (moved <= took * MAX_SPEED + SLACK_MS) moved else minOf(moved, took)
+            heardMs += heard
             // The clock's time, never more than the part moved takes at the slowest speed: a player that says it plays
             // while the song waits on its file is not heard meanwhile.
-            heardMs += minOf(took, moved * SLOWEST_STRETCH)
+            clockMs += minOf(took, moved * SLOWEST_STRETCH)
             cover(from, from + heard)
         }
         this.positionMs = positionMs
@@ -134,6 +139,7 @@ data class PlayEnded(val how: PlayEnd, val atMs: Long)
  * [counted]. Then what the log keeps of a play since it keeps more (none of it for a play from before): how it began
  * ([start]), how far the phone's clock was ahead of UTC then ([zoneOffsetMinutes]), and how it ended ([end]; none while it
  * goes on). [imported]: a play an import made (backup/ImportPlan.kt), a count from another app with nothing heard.
+ * [clockMs]: its real minutes ([HeardTime.clockMs], KJB 3.2); none for a play from before, whose [heardMs] stands in.
  */
 data class LoggedPlay(
     val song: SongRef,
@@ -144,6 +150,7 @@ data class LoggedPlay(
     val zoneOffsetMinutes: Int? = null,
     val end: PlayEnded? = null,
     val imported: Boolean = false,
+    val clockMs: Long? = null,
 ) {
     /**
      * Heard under [PlayCounter.MIN_LOGGED_MS] and not counted: a skip, which the log keeps only since it keeps how plays
@@ -258,7 +265,7 @@ class PlayCounter(
         if (abs(positionMs - stored.state.positionMs) > RESUME_SLACK_MS) return stop(stored)
         // How it began and the time zone then stay as the store first kept them (PlaysSchema.PUT keeps the first).
         play.startedAt = stored.play.startedAt
-        play.heard = HeardTime(play.heard.durationMs, stored.play.heardMs, stored.state.spans)
+        play.heard = HeardTime(play.heard.durationMs, stored.play.heardMs, stored.state.spans, stored.play.clockMs ?: stored.play.heardMs)
         play.counted = stored.play.counted
         play.keptAt = stored.play.startedAt
     }
@@ -274,7 +281,7 @@ class PlayCounter(
     private fun logged(play: Live): Boolean = play.counted || play.heard.heardMs >= MIN_LOGGED_MS
 
     private fun row(play: Live, end: PlayEnded? = null): LoggedPlay =
-        LoggedPlay(play.song, play.startedAt, play.heard.heardMs, play.counted, play.start, play.zoneOffsetMinutes, end)
+        LoggedPlay(play.song, play.startedAt, play.heard.heardMs, play.counted, play.start, play.zoneOffsetMinutes, end, clockMs = play.heard.clockMs)
 
     private suspend fun keep(play: Live, at: Long) {
         if (!logged(play)) return

@@ -198,42 +198,52 @@ class PlayRulesTest {
         heard.position(0, playing = true, at = T0)
         heard.position(150_000, playing = true, at = T0 + 10_000)
         assertEquals(10_000, heard.heardMs)
+        assertEquals(10_000, heard.clockMs)
 
-        // At double speed, 20 s of the song in 10 s is plain playing: 10 s heard (Insights count real minutes), all 20 s covered.
+        // At double speed, 20 s of the song in 10 s is plain playing: 20 s of the song heard, in 10 s of real time.
         heard.position(170_000, playing = true, at = T0 + 20_000)
-        assertEquals(20_000, heard.heardMs)
-        assertEquals(30_000, heard.coveredMs)
+        assertEquals(30_000, heard.heardMs)
+        assertEquals(20_000, heard.clockMs)
 
         // Going back without a seek is not heard either.
         heard.position(10_000, playing = true, at = T0 + 25_000)
-        assertEquals(20_000, heard.heardMs)
+        assertEquals(30_000, heard.heardMs)
+        assertEquals(20_000, heard.clockMs)
     }
 
     @Test
-    fun `time heard is the clock's time while the song plays, at any speed, so 2x counts real minutes`() {
+    fun `real minutes are the clock's time while the song plays, at any speed, and time heard stays the song's`() {
         // Twice as fast: the whole song in half its length.
         val fast = HeardTime(SONG_MS)
         fast.position(0, playing = true, at = T0)
         (1..20).forEach { fast.position(it * 10_000L, playing = true, at = T0 + it * 5_000L) }
-        assertEquals(100_000, fast.heardMs)
+        assertEquals(100_000, fast.clockMs)
+        assertEquals(SONG_MS, fast.heardMs)
         assertEquals(SONG_MS, fast.coveredMs)
 
         // Half as fast: half the song in its whole length.
         val slow = HeardTime(SONG_MS)
         slow.position(0, playing = true, at = T0)
         (1..40).forEach { slow.position(it * 2_500L, playing = true, at = T0 + it * 5_000L) }
-        assertEquals(SONG_MS, slow.heardMs)
+        assertEquals(SONG_MS, slow.clockMs)
+        assertEquals(100_000, slow.heardMs)
         assertEquals(100_000, slow.coveredMs)
 
-        // The player said it played but the song barely moved (it waited on the file): only what the song moved, at the slowest speed, is heard.
+        // The player said it played but the song barely moved (it waited on the file): only what the song moved, at the
+        // slowest speed, is real time.
         val stuck = HeardTime(SONG_MS)
         stuck.position(0, playing = true, at = T0)
         stuck.position(5_000, playing = true, at = T0 + 60_000)
-        assertEquals(10_000, stuck.heardMs)
+        assertEquals(10_000, stuck.clockMs)
+        assertEquals(5_000, stuck.heardMs)
+
+        // A play kept before a restart goes on from its real minutes, or from its time heard when it has none (3.1.1's).
+        assertEquals(42_000, HeardTime(SONG_MS, heardMs = 60_000, clockMs = 42_000).clockMs)
+        assertEquals(60_000, HeardTime(SONG_MS, heardMs = 60_000).clockMs)
     }
 
     @Test
-    fun `a song played at double speed counts by the share of it heard, and its play keeps the real time`() = runTest {
+    fun `a song played at double speed counts by the share of it heard, and its play keeps its real minutes`() = runTest {
         val counter = counter()
         val id = 1L
         counter.onEvent(PlayEvent.Started(id, lantern, clock.now, SONG_MS))
@@ -245,7 +255,33 @@ class PlayRulesTest {
         counter.onEvent(PlayEvent.Ended(id, lantern, clock.now, SONG_MS, PlayEnd.FINISHED))
         runCurrent()
 
-        assertEquals(listOf(LoggedPlay(lantern, T0, 100_000, counted = true)), store.plays.as310())
+        assertEquals(listOf(LoggedPlay(lantern, T0, SONG_MS, counted = true)), store.plays.as310())
+        assertEquals(100_000L, store.plays.single().clockMs)
+    }
+
+    @Test
+    fun `real minutes go on after a restart from where the kept play left them`() = runTest {
+        // 2x before the restart: 60 s of the song in 30 s.
+        val counter = counter()
+        counter.onEvent(PlayEvent.Started(1, lantern, clock.now, SONG_MS))
+        counter.onEvent(PlayEvent.Position(1, lantern, clock.now, 0, playing = true))
+        (1..6).forEach {
+            clock.now += 5_000
+            counter.onEvent(PlayEvent.Position(1, lantern, clock.now, it * 10_000L, playing = true))
+        }
+        counter.onEvent(PlayEvent.Position(1, lantern, clock.now, 60_000, playing = false))
+        runCurrent()
+        assertEquals(30_000L, store.openPlays().single().play.clockMs)
+
+        // 1x after it, to the end.
+        Lap(counter(), id = 1, from = 60_000).apply {
+            play(140_000)
+            end(how = PlayEnd.FINISHED)
+        }
+        runCurrent()
+
+        assertEquals(SONG_MS, store.plays.single().heardMs)
+        assertEquals(170_000L, store.plays.single().clockMs)
     }
 
     @Test
@@ -356,7 +392,7 @@ class PlayRulesTest {
         }
         runCurrent()
 
-        assertEquals(listOf(LoggedPlay(lantern, T0, 900, counted = false, zoneOffsetMinutes = 180, end = PlayEnded(PlayEnd.NEXT, 900))), store.plays)
+        assertEquals(listOf(LoggedPlay(lantern, T0, 900, counted = false, zoneOffsetMinutes = 180, end = PlayEnded(PlayEnd.NEXT, 900), clockMs = 900)), store.plays)
         assertTrue(store.plays.single().isShort)
         assertEquals(1, counter.written.value)
         assertEquals(emptyList<StoredPlay>(), store.openPlays())
@@ -405,9 +441,10 @@ class PlayRulesTest {
         next.end()
         runCurrent()
 
-        // The laps take turns on one clock, so each one's last 5 s of song took 10 s of it, which is heard (time heard is
-        // the clock's, up to twice the song's at the slowest speed).
-        assertEquals(listOf(LoggedPlay(lantern, T0, 40_000, counted = false), LoggedPlay(kettle, T0 + 30_000, 15_000, counted = false)), store.plays.sortedBy { it.startedAt }.as310())
+        assertEquals(listOf(LoggedPlay(lantern, T0, 35_000, counted = false), LoggedPlay(kettle, T0 + 30_000, 10_000, counted = false)), store.plays.sortedBy { it.startedAt }.as310())
+        // The laps take turns on one clock, so each one's last 5 s of song took 10 s of it: real minutes are the clock's,
+        // up to twice the song's at the slowest speed.
+        assertEquals(listOf(40_000L, 15_000L), store.plays.sortedBy { it.startedAt }.map { it.clockMs })
     }
 
     @Test
@@ -563,9 +600,9 @@ class PlayRulesTest {
 
         assertEquals(
             listOf(
-                LoggedPlay(lantern, T0, SONG_MS, counted = true, start = begun, zoneOffsetMinutes = 180, end = PlayEnded(PlayEnd.FINISHED, SONG_MS)),
+                LoggedPlay(lantern, T0, SONG_MS, counted = true, start = begun, zoneOffsetMinutes = 180, end = PlayEnded(PlayEnd.FINISHED, SONG_MS), clockMs = SONG_MS),
                 // January in New York; a play the player said nothing of how it began keeps none.
-                LoggedPlay(kettle, T0 + SONG_MS, 40_000, counted = false, zoneOffsetMinutes = -300, end = PlayEnded(PlayEnd.NEXT, 40_000)),
+                LoggedPlay(kettle, T0 + SONG_MS, 40_000, counted = false, zoneOffsetMinutes = -300, end = PlayEnded(PlayEnd.NEXT, 40_000), clockMs = 40_000),
             ),
             store.plays.sortedBy { it.startedAt },
         )
@@ -586,7 +623,7 @@ class PlayRulesTest {
     }
 
     @Test
-    fun `a song crossfaded out is left where its fade began, and counts as covered to its end`() = runTest {
+    fun `a song crossfaded out is left where its fade began, and counts as heard to its end`() = runTest {
         val counter = counter()
         Lap(counter, id = 1).apply {
             play(185_000)
@@ -596,8 +633,9 @@ class PlayRulesTest {
         }
         runCurrent()
 
-        // Covered to its end, so it counts; heard for the 190 s of clock time it played alone (its fade is the next song's time).
-        assertEquals(listOf(LoggedPlay(lantern, T0, 190_000, counted = true, zoneOffsetMinutes = 180, end = PlayEnded(PlayEnd.FINISHED, 190_000))), store.plays)
+        // Heard to its end, so it counts; its real minutes are the 190 s of clock time it played alone (its fade is the next
+        // song's time).
+        assertEquals(listOf(LoggedPlay(lantern, T0, SONG_MS, counted = true, zoneOffsetMinutes = 180, end = PlayEnded(PlayEnd.FINISHED, 190_000), clockMs = 190_000)), store.plays)
     }
 
     @Test
@@ -608,7 +646,7 @@ class PlayRulesTest {
         }
         runCurrent()
 
-        assertEquals(listOf(LoggedPlay(lantern, T0, 20_000, counted = false, start = begun, zoneOffsetMinutes = 180)), store.plays)
+        assertEquals(listOf(LoggedPlay(lantern, T0, 20_000, counted = false, start = begun, zoneOffsetMinutes = 180, clockMs = 20_000)), store.plays)
     }
 
     @Test
@@ -620,7 +658,7 @@ class PlayRulesTest {
         Lap(counter, id = 3, song = kettle)
         runCurrent()
 
-        assertEquals(LoggedPlay(lantern, T0, 500, counted = false, zoneOffsetMinutes = 180, end = PlayEnded(PlayEnd.UNKNOWN, 500)), store.plays.firstOrNull { it.song == lantern })
+        assertEquals(LoggedPlay(lantern, T0, 500, counted = false, zoneOffsetMinutes = 180, end = PlayEnded(PlayEnd.UNKNOWN, 500), clockMs = 500), store.plays.firstOrNull { it.song == lantern })
     }
 
     @Test
@@ -654,7 +692,7 @@ class PlayRulesTest {
         }
         runCurrent()
 
-        assertEquals(listOf(LoggedPlay(lantern, T0, SONG_MS, counted = true, start = begun, zoneOffsetMinutes = 180, end = PlayEnded(PlayEnd.FINISHED, SONG_MS))), store.plays)
+        assertEquals(listOf(LoggedPlay(lantern, T0, SONG_MS, counted = true, start = begun, zoneOffsetMinutes = 180, end = PlayEnded(PlayEnd.FINISHED, SONG_MS), clockMs = SONG_MS)), store.plays)
     }
 
     @Test

@@ -92,7 +92,41 @@ class PlaysSqlTest {
         assertEquals(listOf(kept, imported.copy(imported = true)), store.all())
     }
 
+    @Test
+    fun `a 3_1_1 file keeps every play as it was, without real minutes, so Insights fall back on the time heard`() = runBlocking {
+        val store = store(version = 3)
+        store.update(
+            "INSERT INTO plays (path, started_at, media_id, heard_ms, counted, zone_offset_min) VALUES (?, ?, ?, ?, ?, ?)",
+            salt.path, T0, 12, 200_000, 1, 180,
+        )
+
+        store.upgrade(3, PlaysSchema.VERSION)
+
+        assertEquals(PLAYS_310 + NEW_COLUMNS, store.columns("plays"))
+        assertEquals(listOf(LoggedPlay(salt, T0, 200_000, counted = true, zoneOffsetMinutes = 180)), store.all())
+    }
+
     // Writing a play again
+
+    @Test
+    fun `a play keeps the most real minutes written, and a write without them takes none away`() = runBlocking {
+        val store = store()
+        val begun = LoggedPlay(salt, T0, 30_000, counted = false, clockMs = 15_000)
+        store.put(begun, OpenState(210_000, 30_000, listOf(HeardSpan(0, 30_000))))
+        // Kept as still going with them, so a restart goes on from them.
+        assertEquals(listOf(begun), store.openPlays().map { it.play })
+
+        store.put(begun.copy(heardMs = 60_000, clockMs = 45_000))
+        assertEquals(listOf(45_000L), store.all().map { it.clockMs })
+        // A restore of a backup from before (3.1.1's) or the same play told again from scratch.
+        store.putAll(listOf(begun.copy(clockMs = null), begun.copy(clockMs = 2_000)))
+        assertEquals(listOf(45_000L), store.all().map { it.clockMs })
+
+        // A play from before, without them, gets them from a later write.
+        store.put(LoggedPlay(ember, T0 + 1, 20_000, counted = false))
+        store.put(LoggedPlay(ember, T0 + 1, 20_000, counted = false, clockMs = 20_000))
+        assertEquals(listOf(45_000L, 20_000L), store.all().map { it.clockMs })
+    }
 
     @Test
     fun `a play keeps how it began and its time zone as first written, and how it ended as last written`() = runBlocking {
@@ -133,7 +167,7 @@ class PlaysSqlTest {
     fun `a backup reads every play with all it keeps, the short ones too, the oldest first`() = runBlocking {
         val store = store()
         val plays = listOf(
-            LoggedPlay(salt, T0, 200_000, counted = true, start = picked, zoneOffsetMinutes = 180, end = PlayEnded(PlayEnd.FINISHED, 210_000)),
+            LoggedPlay(salt, T0, 200_000, counted = true, start = picked, zoneOffsetMinutes = 180, end = PlayEnded(PlayEnd.FINISHED, 210_000), clockMs = 100_000),
             LoggedPlay(
                 ember, T0 + 1_000, 400, counted = false,
                 start = PlayStart(StartedBy.AUTO, SourceKind.PLAYLIST, shuffled = true, songKey = "ember ledger||night ferry|90"),
@@ -199,7 +233,7 @@ class PlaysSqlTest {
     @Test
     fun `Insights read the plays heard here between two bounds, the oldest first, without an import's or the short ones`() = runBlocking {
         val store = store()
-        val heard = LoggedPlay(salt, T0, 200_000, counted = true, start = picked, zoneOffsetMinutes = 180, end = PlayEnded(PlayEnd.FINISHED, 210_000))
+        val heard = LoggedPlay(salt, T0, 200_000, counted = true, start = picked, zoneOffsetMinutes = 180, end = PlayEnded(PlayEnd.FINISHED, 210_000), clockMs = 100_000)
         val skippedLate = LoggedPlay(ember, T0 + 3_000, 1_000, counted = false, zoneOffsetMinutes = -300)
         val plays = listOf(
             heard,
@@ -218,15 +252,17 @@ class PlaysSqlTest {
     @Test
     fun `the fake log keeps plays as plays_db does`() = runBlocking {
         val writes = listOf(
-            LoggedPlay(salt, T0, 15_000, counted = false, start = picked, zoneOffsetMinutes = 120) to OpenState(210_000, 15_000, emptyList()),
-            LoggedPlay(SongRef(salt.path), T0, 200_000, counted = true, start = PlayStart(StartedBy.UNKNOWN, null, true, null), zoneOffsetMinutes = 60, end = PlayEnded(PlayEnd.FINISHED, 210_000)) to null,
+            LoggedPlay(salt, T0, 15_000, counted = false, start = picked, zoneOffsetMinutes = 120, clockMs = 7_500) to OpenState(210_000, 15_000, emptyList()),
+            LoggedPlay(SongRef(salt.path), T0, 200_000, counted = true, start = PlayStart(StartedBy.UNKNOWN, null, true, null), zoneOffsetMinutes = 60, end = PlayEnded(PlayEnd.FINISHED, 210_000), clockMs = 100_000) to null,
             LoggedPlay(ember, T0 + 1_000, 500, counted = false, end = PlayEnded(PlayEnd.NEXT, 500)) to null,
             LoggedPlay(ember, T0 + 2_000, 0, counted = true, imported = true) to null,
             LoggedPlay(ember, T0 + 2_000, 0, counted = true) to null,
             LoggedPlay(SongRef(alder.path, 5), T0 + 3_000, 300, counted = false) to null,
             // The song's key, missing at first, is filled in by a later write; how it began is not.
             LoggedPlay(alder, T0 + 4_000, 20_000, counted = false, start = PlayStart(StartedBy.NEXT, SourceKind.FOLDER, false, null)) to OpenState(200_000, 20_000, emptyList()),
-            LoggedPlay(alder, T0 + 4_000, 30_000, counted = false, start = PlayStart(StartedBy.UNKNOWN, null, true, "alder smoke||harbour glass|100")) to null,
+            LoggedPlay(alder, T0 + 4_000, 30_000, counted = false, start = PlayStart(StartedBy.UNKNOWN, null, true, "alder smoke||harbour glass|100"), clockMs = 30_000) to null,
+            // Real minutes told again without them.
+            LoggedPlay(alder, T0 + 4_000, 30_000, counted = false) to null,
         )
         val fake = FakePlayLog()
         val sql = store()
@@ -248,7 +284,7 @@ class PlaysSqlTest {
 
         val PLAYS_310: Set<String> = setOf("path", "started_at", "media_id", "heard_ms", "counted")
         val OPEN_PLAYS_310: Set<String> = setOf("path", "started_at", "duration_ms", "position_ms", "spans")
-        val NEW_COLUMNS: Set<String> = setOf("started_by", "source", "shuffled", "zone_offset_min", "song_key", "ended_how", "ended_at_ms", "imported")
+        val NEW_COLUMNS: Set<String> = setOf("started_by", "source", "shuffled", "zone_offset_min", "song_key", "ended_how", "ended_at_ms", "imported", "clock_ms")
 
         /** 3.1.0's PlaysSchema.PUT. */
         const val PUT_310: String = "INSERT INTO plays (path, started_at, media_id, heard_ms, counted) VALUES (?, ?, ?, ?, ?) " +

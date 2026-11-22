@@ -97,8 +97,11 @@ class PlayLogTest {
         assertEquals(StoredPlay(LoggedPlay(SongRef(path, 12), T0, 60_000, counted = true), open), storedPlayOf(path, T0, 12, 60_000, 1, 200_000, 60_000, "0-60000"))
         assertEquals(
             StoredPlay(LoggedPlay(SongRef(path), T0, 0, counted = false), OpenState(0, 0, emptyList())),
-            storedPlayOf(path, T0, -1, -5, null, null, -3, "junk"),
+            storedPlayOf(path, T0, -1, -5, null, null, -3, "junk", clockMs = null),
         )
+        // Its real minutes when kept (none from before they were: 3.1.1's), none below 0.
+        assertEquals(45_000L, storedPlayOf(path, T0, 12, 60_000, 1, 200_000, 60_000, "0-60000", clockMs = 45_000)?.play?.clockMs)
+        assertEquals(0L, storedPlayOf(path, T0, 12, 60_000, 1, 200_000, 60_000, "0-60000", clockMs = -4)?.play?.clockMs)
         assertNull(storedPlayOf(" ", T0, 12, 60_000, 1, 200_000, 60_000, "0-60000"))
         assertNull(storedPlayOf(path, null, 12, 60_000, 1, 200_000, 60_000, "0-60000"))
         assertNull(storedPlayOf(path, 0, 12, 60_000, 1, 200_000, 60_000, "0-60000"))
@@ -132,14 +135,22 @@ class PlayLogTest {
     @Test
     fun `an upgrade leaves out the columns a table has already, and adds those it lacks`() {
         val added = PlaysSchema.upgrade(2, PlaysSchema.VERSION).filter { it.startsWith("ALTER ") }
-        assertEquals(8, added.size)
+        assertEquals(9, added.size)
         // A file a newer KJB left, then 3.1.0 kept: every column there, so no column is added twice.
-        val all = setOf("path", "started_at", "started_by", "source", "shuffled", "zone_offset_min", "song_key", "ended_how", "ended_at_ms", "imported")
+        val all = setOf("path", "started_at", "started_by", "source", "shuffled", "zone_offset_min", "song_key", "ended_how", "ended_at_ms", "imported", "clock_ms")
         assertEquals(PlaysSchema.upgrade(2, PlaysSchema.VERSION) - added.toSet(), PlaysSchema.upgrade(2, PlaysSchema.VERSION) { if (it == "plays") all else emptySet() })
         // One column there: only the others are added.
         assertEquals(PlaysSchema.upgrade(2, PlaysSchema.VERSION).filterNot { it.contains(" song_key ") }, PlaysSchema.upgrade(2, PlaysSchema.VERSION) { if (it == "plays") setOf("song_key") else emptySet() })
         // A new file: every step, every statement.
         assertEquals(PlaysSchema.upgrade(0, PlaysSchema.VERSION), PlaysSchema.upgrade(0, PlaysSchema.VERSION) { emptySet() })
+    }
+
+    @Test
+    fun `step 4 adds the real minutes, an empty column on the plays from before, and nothing else`() {
+        assertEquals(listOf("ALTER TABLE plays ADD COLUMN clock_ms INTEGER"), PlaysSchema.STEPS.getOrNull(3))
+        // 3.1.1's file (version 3) gets only that; a file that has it already (a newer KJB's, kept by 3.1.1) nothing.
+        assertEquals(listOf("ALTER TABLE plays ADD COLUMN clock_ms INTEGER"), PlaysSchema.upgrade(3, 4))
+        assertEquals(emptyList<String>(), PlaysSchema.upgrade(3, 4) { if (it == "plays") setOf("clock_ms") else emptySet() })
     }
 
     // An unreadable plays.db (the open that finds it runs in PlaysDbDeviceTest)

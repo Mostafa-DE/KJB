@@ -18,10 +18,10 @@ import java.time.ZoneOffset
 
 // Insights (KJB 3.2, handoff/suggest/plan.md part 1): the figures behind the Insights page and the monthly recap, from
 // the plays heard here ([PlayLogStore.listened]: an import's and the short ones left out, so neither adds to a count),
-// the book log and the library. Two ledgers, as Spotify keeps them: the time heard counts everything (books, podcasts,
-// hidden songs, songs gone from the phone) and the plays everything but books, which never count one; the top lists and
-// the songs, artists and albums counted are music only (no books, podcasts or hidden songs). Every card has a minimum
-// before it shows. Pure, so the rules are tested on the JVM.
+// the book log and the library. Time is in real minutes ([realMs]). Two ledgers, as Spotify keeps them: the time heard
+// counts everything (books, podcasts, hidden songs, songs gone from the phone) and the plays everything but books, which
+// never count one; the top lists and the songs, artists and albums counted are music only (no books, podcasts or hidden
+// songs). Every card has a minimum before it shows. Pure, so the rules are tested on the JVM.
 
 /**
  * What Insights are worked out from, all time: the [plays] heard here, the oldest first, the book log's ([books]), each
@@ -204,6 +204,9 @@ private const val HOURS_IN_DAY = 24
 
 // How each card is worked out
 
+/** A play's real minutes: the clock's time it played ([LoggedPlay.clockMs]), or its time heard for a play from before KJB kept them. */
+private val LoggedPlay.realMs: Long get() = clockMs ?: heardMs
+
 /** What a play's song is now: music the lists show, a podcast, a book, or other (a hidden song, one gone from the phone). */
 private enum class Kind { MUSIC, PODCAST, BOOK, OTHER }
 
@@ -227,7 +230,7 @@ private class Kinds(private val library: Library?) {
 private class Ledger(val heardMs: Long, val plays: Int)
 
 private fun ledgerOf(heard: List<LoggedPlay>, books: List<LoggedPlay>, kinds: Kinds): Ledger =
-    Ledger(heard.sumOf { it.heardMs } + books.sumOf { it.heardMs }, heard.count { it.counted && kinds.of(it) != Kind.BOOK })
+    Ledger(heard.sumOf { it.realMs } + books.sumOf { it.realMs }, heard.count { it.counted && kinds.of(it) != Kind.BOOK })
 
 private operator fun Period.contains(at: Long): Boolean = at >= from && at < until
 
@@ -235,7 +238,7 @@ private fun List<LoggedPlay>.within(period: Period?): List<LoggedPlay> = if (per
 
 /** [plays] per song, as the log's totals give them: under the latest play's song, so its id hint is the latest. */
 private fun songPlaysOf(plays: List<LoggedPlay>): List<SongPlays> = plays.groupBy { it.song.path }.map { (_, its) ->
-    SongPlays(its.maxBy { it.startedAt }.song, its.count { it.counted }, its.filter { it.counted }.maxOfOrNull { it.startedAt }, its.sumOf { it.heardMs })
+    SongPlays(its.maxBy { it.startedAt }.song, its.count { it.counted }, its.filter { it.counted }.maxOfOrNull { it.startedAt }, its.sumOf { it.realMs })
 }
 
 /** The genres of the top [songs], each song's plays under its genre tag, the most played first. */
@@ -259,7 +262,7 @@ private fun versusOf(ledger: Ledger, data: InsightsData, period: Period?, previo
 private fun clockOf(heard: List<LoggedPlay>, zone: ZoneId): ListeningClock? {
     if (heard.count { it.counted } < MIN_CLOCK_PLAYS) return null
     val hours = LongArray(HOURS_IN_DAY)
-    heard.forEach { hours[localTimeOf(it, zone).hour] += it.heardMs }
+    heard.forEach { hours[localTimeOf(it, zone).hour] += it.realMs }
     return ListeningClock(hours.toList(), hours.indices.maxBy { hours[it] })
 }
 
@@ -299,7 +302,7 @@ private fun milestonesOf(data: InsightsData, period: Period?, going: Boolean, ki
     var heardMs = 0L
     (data.plays + data.books).sortedBy { it.startedAt }.forEach { play ->
         val before = heardMs
-        heardMs += play.heardMs
+        heardMs += play.realMs
         HOUR_MILESTONES.filter { it * HOUR_MS in (before + 1)..heardMs }.forEach { reached += Milestone(MilestoneKind.HOURS, it, play.startedAt) }
     }
     val inPeriod = reached.filter { period == null || it.at in period }.sortedWith(compareByDescending<Milestone> { it.at }.thenBy { it.kind })
@@ -320,8 +323,8 @@ private fun nextMilestone(plays: Int, heardMs: Long): NextMilestone? {
 
 /** Books (the book log, and plays logged before their file became a book) and podcasts, from a minute heard. */
 private fun spokenOf(heard: List<LoggedPlay>, books: List<LoggedPlay>, kinds: Kinds): Spoken? {
-    val booksMs = books.sumOf { it.heardMs } + heard.filter { kinds.of(it) == Kind.BOOK }.sumOf { it.heardMs }
-    val podcastsMs = heard.filter { kinds.of(it) == Kind.PODCAST }.sumOf { it.heardMs }
+    val booksMs = books.sumOf { it.realMs } + heard.filter { kinds.of(it) == Kind.BOOK }.sumOf { it.realMs }
+    val podcastsMs = heard.filter { kinds.of(it) == Kind.PODCAST }.sumOf { it.realMs }
     return Spoken(booksMs, podcastsMs).takeIf { booksMs + podcastsMs >= MIN_SPOKEN_MS }
 }
 
