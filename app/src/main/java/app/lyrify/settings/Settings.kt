@@ -332,6 +332,12 @@ enum class ThemeChoice { SYSTEM, LIGHT, DARK }
 enum class FavouritesTab { SONGS, ALBUMS, ARTISTS, FOLDERS, PLAYLISTS }
 
 /**
+ * Suggestions' "How adventurous": where the mix starts. Familiar: mostly songs you love, a few rediscoveries, rarely a
+ * new one; Mix (the default): about 1 suggestion in 3 a rediscovery or a new song; Discover: more of both.
+ */
+enum class Adventure { FAMILIAR, MIX, DISCOVER }
+
+/**
  * The stored form of [Settings]: a JSON object with a version and one object per section, enums by name. Read leniently,
  * field by field: a key this version does not know is ignored, and a field missing, of another type, out of range or
  * naming an unknown choice reads as its default while the fields around it are read as stored. A section that is
