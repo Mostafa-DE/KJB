@@ -8,6 +8,7 @@ import androidx.media3.common.PlaybackParameters
 import androidx.media3.session.MediaLibraryService
 import app.lyrify.LOG_TAG
 import app.lyrify.Lyrify
+import app.lyrify.books.Book
 import app.lyrify.books.BooksGraph
 import app.lyrify.books.bookSpeeds
 import app.lyrify.books.playsAsBook
@@ -76,8 +77,14 @@ data class Speed(val speed: Float = 1f, val keepPitch: Boolean = true, val semit
     )
 }
 
-/** A bookmark: a spot in a song, with the user's note (maybe empty). [id] is its own for good. */
-data class Bookmark(val id: Long, val positionMs: Long, val note: String)
+/**
+ * A bookmark: a spot in a song, with the user's note (maybe empty). [id] is its own for good. [addedAt] is when it was
+ * made (ms since 1970), 0 for one made before KJB kept that (3.1.1 and earlier): Tools > Bookmarks lists the newest first.
+ */
+data class Bookmark(val id: Long, val positionMs: Long, val note: String, val addedAt: Long = 0)
+
+/** A bookmark with the song it is in: a list of a book's bookmarks holds several parts. */
+data class SongMark(val song: SongRef, val mark: Bookmark)
 
 /** "Repeat a part": the part of the song at [path] from [startMs] (A) to [endMs] (B), in whole seconds, that loops. */
 data class AbPart(val path: String, val startMs: Long, val endMs: Long)
@@ -104,6 +111,10 @@ data class SongState(
     /** The bookmarks of the song at [path], in time order. */
     fun bookmarksOf(path: String?): List<Bookmark> = path?.let(bookmarks::get).orEmpty()
 
+    /** The bookmarks of the song at [path], or of every part of [book] (the book it is a part of), in the book's order. */
+    fun marksOf(path: String, book: Book?): List<SongMark> =
+        (book?.parts?.map { it.ref } ?: listOf(SongRef(path, ids[path]))).flatMap { song -> bookmarksOf(song.path).map { SongMark(song, it) } }
+
     /** [change] applied to the speed [song] plays at: its own when it has one, else the usual one. */
     fun withSpeed(song: SongRef?, change: (Speed) -> Speed): SongState {
         val own = song?.path?.let(speeds::get)
@@ -123,12 +134,12 @@ data class SongState(
     }
 
     /**
-     * A bookmark at [positionMs] (to the second) in [song], with [note] trimmed; the new bookmark too. Null when the song
-     * has [MAX_BOOKMARKS_PER_SONG] already, or all songs together [MAX_BOOKMARKS].
+     * A bookmark at [positionMs] (to the second) in [song], with [note] trimmed, made at [addedAt]; the new bookmark too.
+     * Null when the song has [MAX_BOOKMARKS_PER_SONG] already, or all songs together [MAX_BOOKMARKS].
      */
-    fun withBookmark(song: SongRef, positionMs: Long, note: String): Pair<SongState, Bookmark>? {
+    fun withBookmark(song: SongRef, positionMs: Long, note: String, addedAt: Long = 0): Pair<SongState, Bookmark>? {
         if (bookmarksOf(song.path).size >= MAX_BOOKMARKS_PER_SONG || bookmarks.values.sumOf { it.size } >= MAX_BOOKMARKS) return null
-        val mark = Bookmark(nextBookmarkId, wholeSeconds(positionMs.coerceAtLeast(0)), note.trim().take(MAX_NOTE))
+        val mark = Bookmark(nextBookmarkId, wholeSeconds(positionMs.coerceAtLeast(0)), note.trim().take(MAX_NOTE), addedAt)
         val list = (bookmarksOf(song.path) + mark).sortedWith(compareBy(Bookmark::positionMs, Bookmark::id))
         return copy(bookmarks = bookmarks + (song.path to list), nextBookmarkId = nextBookmarkId + 1).known(song) to mark
     }
@@ -138,6 +149,13 @@ data class SongState(
         if (list.none { it.id == id }) return this
         val left = list.filterNot { it.id == id }
         return copy(bookmarks = if (left.isEmpty()) bookmarks - path else bookmarks + (path to left)).known(SongRef(path, ids[path]))
+    }
+
+    /** The bookmark [id] of the song at [path] with its note changed to [note], trimmed; its spot, id and time kept. */
+    fun withNote(path: String, id: Long, note: String): SongState {
+        val list = bookmarksOf(path)
+        if (list.none { it.id == id }) return this
+        return copy(bookmarks = bookmarks + (path to list.map { if (it.id == id) it.copy(note = note.trim().take(MAX_NOTE)) else it }))
     }
 
     /** The place kept for [song]: [positionMs], or none when null; at most [MAX_PLACES], the oldest go first. */

@@ -36,7 +36,8 @@ import kotlinx.serialization.json.longOrNull
 /** A song's bookmarks (a spot and the user's note), its place (Remember my place) and its own speed, as a backup keeps them. */
 data class BackupMarks(val path: String, val placeMs: Long?, val bookmarks: List<BackupBookmark>, val speed: Speed? = null)
 
-data class BackupBookmark(val positionMs: Long, val note: String)
+/** A bookmark in a backup: its spot, the note, and when it was made ([app.lyrify.player.Bookmark.addedAt], 0 when not known). */
+data class BackupBookmark(val positionMs: Long, val note: String, val addedAt: Long = 0)
 
 /** The bookmarks section: each song's marks, the speed of every other song, and the part repeating. */
 data class BackupSongState(val marks: List<BackupMarks>, val usual: Speed?, val part: AbPart?)
@@ -146,7 +147,21 @@ internal object SectionJson {
                 buildMap {
                     put(PATH_KEY, JsonPrimitive(path))
                     state.places[path]?.let { put(PLACE_KEY, JsonPrimitive(it)) }
-                    put(BOOKMARKS_KEY, JsonArray(state.bookmarksOf(path).map { JsonObject(mapOf(POSITION_KEY to JsonPrimitive(it.positionMs), NOTE_KEY to JsonPrimitive(it.note))) }))
+                    put(
+                        BOOKMARKS_KEY,
+                        JsonArray(
+                            state.bookmarksOf(path).map { mark ->
+                                JsonObject(
+                                    buildMap {
+                                        put(POSITION_KEY, JsonPrimitive(mark.positionMs))
+                                        put(NOTE_KEY, JsonPrimitive(mark.note))
+                                        // When it was made, only when known; 3.1.1 reads the spot and the note alone.
+                                        if (mark.addedAt > 0) put(ADDED_AT_KEY, JsonPrimitive(mark.addedAt))
+                                    },
+                                )
+                            },
+                        ),
+                    )
                     state.speeds[path]?.let { put(SPEED_KEY, speed(it)) }
                 },
             )
@@ -162,7 +177,8 @@ internal object SectionJson {
 
     /**
      * Each song read on its own: a song without a path, a place below 0 and a bookmark without a spot are left out, and
-     * so is a song left with nothing; a note may be missing. A backup from before speeds were kept has none.
+     * so is a song left with nothing; a note may be missing. A backup from before speeds were kept has none; one from
+     * before KJB kept when a bookmark was made (3.1.1 and earlier) reads it as not known.
      */
     fun marks(text: String): BackupSongState? {
         val root = jsonObject(text) ?: return null
@@ -170,7 +186,7 @@ internal object SectionJson {
             val song = element as? JsonObject ?: return@mapNotNull null
             val bookmarks = (song[BOOKMARKS_KEY] as? JsonArray).orEmpty().mapNotNull { stored ->
                 val mark = stored as? JsonObject ?: return@mapNotNull null
-                BackupBookmark(mark.long(POSITION_KEY)?.takeIf { it >= 0 } ?: return@mapNotNull null, mark.text(NOTE_KEY).orEmpty())
+                BackupBookmark(mark.long(POSITION_KEY)?.takeIf { it >= 0 } ?: return@mapNotNull null, mark.text(NOTE_KEY).orEmpty(), mark.long(ADDED_AT_KEY)?.takeIf { it > 0 } ?: 0)
             }
             BackupMarks(song.text(PATH_KEY)?.takeIf(String::isNotEmpty) ?: return@mapNotNull null, song.long(PLACE_KEY)?.takeIf { it >= 0 }, bookmarks, song[SPEED_KEY]?.let(::speed))
                 .takeIf { it.placeMs != null || it.bookmarks.isNotEmpty() || it.speed != null }
@@ -364,6 +380,7 @@ internal object SectionJson {
     private const val BOOKMARKS_KEY: String = "bookmarks"
     private const val POSITION_KEY: String = "positionMs"
     private const val NOTE_KEY: String = "note"
+    private const val ADDED_AT_KEY: String = "addedAt"
     private const val SPEED_KEY: String = "speed"
     private const val KEEP_PITCH_KEY: String = "keepPitch"
     private const val SEMITONES_KEY: String = "semitones"

@@ -581,8 +581,8 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
 
         /**
          * [now] with the backup's places for songs that have none, its bookmarks not there yet (the same spot and note in
-         * the form the song state keeps them), its own speeds for songs without one, each on its song as this phone
-         * knows it (its path and id hint, [Song.ref]), so they follow it when it moves; the [usual] speed replaces the
+         * the form the song state keeps them, with when they were made), its own speeds for songs without one, each on
+         * its song as this phone knows it (its path and id hint, [Song.ref]), so they follow it when it moves; the [usual] speed replaces the
          * phone's, and the [part] repeating comes back when the phone repeats none. Through the song state's own API
          * ([SongState.withPlace], [SongState.withBookmark]), which gives each bookmark its new id. A restore never pushes
          * out the phone's own: a place or a bookmark past the song state's caps is left out, and counted; a speed past
@@ -600,7 +600,7 @@ class RestorePlan(val contents: BackupContents, phone: List<Song>) {
                 kept.bookmarks.forEach { mark ->
                     val stored = keptForm(key, mark)
                     if (state.bookmarksOf(key.path).none { it.positionMs == stored.positionMs && it.note == stored.note }) {
-                        val added = state.withBookmark(key, stored.positionMs, stored.note)
+                        val added = state.withBookmark(key, stored.positionMs, stored.note, mark.addedAt)
                         if (added == null) bookmarksLeftOut++ else state = added.first
                     }
                 }

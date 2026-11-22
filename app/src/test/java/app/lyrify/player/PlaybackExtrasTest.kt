@@ -102,6 +102,39 @@ class PlaybackExtrasTest {
     }
 
     @Test
+    fun `a bookmark keeps when it was made, and its note changes later, trimmed and capped, its spot, id and time kept`() {
+        val (one, mark) = SongState().withBookmark(lanternRef, 61_000, "Bridge", addedAt = 1_700_000_000_000)!!
+        assertEquals(Bookmark(1, 61_000, "Bridge", addedAt = 1_700_000_000_000), mark)
+        val noted = one.withNote(lantern, mark.id, "  Second verse  ")
+        assertEquals(listOf(mark.copy(note = "Second verse")), noted.bookmarksOf(lantern))
+        assertEquals(SongState.MAX_NOTE, one.withNote(lantern, mark.id, "x".repeat(500)).bookmarksOf(lantern).single().note.length)
+        // A note of spaces is no note; a bookmark or a song that is not there changes nothing.
+        assertEquals("", noted.withNote(lantern, mark.id, "   ").bookmarksOf(lantern).single().note)
+        assertEquals(noted, noted.withNote(lantern, 99, "Gone"))
+        assertEquals(noted, noted.withNote(thread, mark.id, "Gone"))
+        // Ids still never repeat, and the song keeps its id hint.
+        assertEquals(2, noted.nextBookmarkId)
+        assertEquals(mapOf(lantern to 11L), noted.ids)
+    }
+
+    @Test
+    fun `a song's bookmarks, or every part's of its book in the book's order, each with its song`() {
+        val parts = listOf("1", "2", "3").map { song("Audiobooks/Folder Book/$it.mp3", album = "Folder Book", durationMs = 600_000, id = it.toLong()) }
+        val book = Library.of(parts, Settings()).bookOf(parts[0].path)!!
+        val state = SongState()
+            .withBookmark(parts[2].ref, 5_000, "Late")!!.first
+            .withBookmark(parts[0].ref, 90_000, "")!!.first
+            .withBookmark(parts[0].ref, 30_000, "Early")!!.first
+            .withBookmark(lanternRef, 12_000, "Chorus")!!.first
+        assertEquals(
+            listOf(SongMark(parts[0].ref, Bookmark(3, 30_000, "Early")), SongMark(parts[0].ref, Bookmark(2, 90_000, "")), SongMark(parts[2].ref, Bookmark(1, 5_000, "Late"))),
+            state.marksOf(parts[1].path, book),
+        )
+        assertEquals(listOf(SongMark(lanternRef, Bookmark(4, 12_000, "Chorus"))), state.marksOf(lantern, null))
+        assertEquals(emptyList<SongMark>(), state.marksOf(thread, null))
+    }
+
+    @Test
     fun `bookmarks tick the progress bar at their share of the song, once each`() {
         val marks = listOf(Bookmark(1, 50_000, ""), Bookmark(2, 100_000, "Bridge"), Bookmark(3, 100_000, "Again"), Bookmark(4, 300_000, ""))
         assertEquals(listOf(0.25f, 0.5f, 1f), bookmarkTicks(marks, 200_000))
@@ -348,6 +381,16 @@ class PlaybackExtrasTest {
         assertEquals(SongState(), SongStateJson.decode(SongStateJson.encode(SongState())))
         // Places keep their order: the oldest first.
         assertEquals(listOf(thread, lantern), SongStateJson.decode(SongStateJson.encode(full))!!.places.keys.toList())
+    }
+
+    @Test
+    fun `when a bookmark was made is kept in song-state json, and one kept before, or unreadable, reads as not known`() {
+        val made = SongState(bookmarks = mapOf(lantern to listOf(Bookmark(1, 12_000, "", addedAt = 1_700_000_000_000), Bookmark(2, 61_000, "Bridge"))), nextBookmarkId = 3)
+        assertEquals(made, SongStateJson.decode(SongStateJson.encode(made)))
+        // Not known: nothing written for it.
+        assertEquals(1, Regex("addedAt").findAll(SongStateJson.encode(made)).count())
+        val old = """{"songs":[{"path":"$lantern","bookmarks":[{"id":1,"positionMs":12000,"note":"Chorus"},{"id":2,"positionMs":30000,"addedAt":"soon"},{"id":3,"positionMs":40000,"addedAt":-4}]}]}"""
+        assertEquals(listOf(Bookmark(1, 12_000, "Chorus"), Bookmark(2, 30_000, ""), Bookmark(3, 40_000, "")), SongStateJson.decode(old)!!.bookmarksOf(lantern))
     }
 
     @Test
