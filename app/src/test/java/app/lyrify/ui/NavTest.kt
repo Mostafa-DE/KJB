@@ -44,6 +44,7 @@ class NavTest {
         assertEquals(DockTab.TOOLS, start.open(Page.HiddenSongs).tab)
         assertEquals(DockTab.TOOLS, start.open(Page.SplitArtists).tab)
         assertEquals(DockTab.TOOLS, start.open(Page.Licences).tab)
+        assertEquals(DockTab.TOOLS, NavState.start(DockTab.LIBRARY).open(Page.Bookmarks).tab)
         assertEquals(DockTab.TOOLS, NavState.start(DockTab.LIBRARY).open(Page.Licence("Media3")).tab)
         assertEquals(DockTab.LIBRARY, NavState.start(DockTab.TOOLS).open(Page.Songs(status = LyricsStatus.AI_ALIGNED)).tab)
         assertEquals(DockTab.SEARCH, start.open(Page.SearchAll(SearchGroup.SONGS, "lantern")).tab)
@@ -693,7 +694,7 @@ class NavTest {
         val every = listOf(
             Page.Songs(SongGroup.NO_LYRICS, LyricsStatus.NOT_FOUND), Page.FoldersToSkip, Page.HiddenSongs, Page.SplitArtists, Page.Folder("Music/Rips"), Page.Genre("Folk"),
             Page.Playlist("p3"), Page.BuiltIn(BuiltInList.MOST_PLAYED), Page.UnknownAlbum,
-            Page.Queue("q1"), Page.Listening, Page.TopList(TopKind.ARTISTS), Page.TopList(TopKind.GENRES), Page.Recap("2026-10"), Page.Recaps, Page.Tones, Page.Ai, Page.CoversTags, Page.TagHistory, Page.LibraryTabs,
+            Page.Queue("q1"), Page.Listening, Page.TopList(TopKind.ARTISTS), Page.TopList(TopKind.GENRES), Page.Recap("2026-10"), Page.Recaps, Page.Tones, Page.Bookmarks, Page.Ai, Page.CoversTags, Page.TagHistory, Page.LibraryTabs,
             Page.Licences, Page.Licence("Media3"), Page.Settings(), Page.Settings(SettingsSection.LYRICS),
         ).fold(NavState.start(DockTab.LIBRARY)) { state, page -> state.copy(stacks = state.stacks + (DockTab.LIBRARY to state.stacks[DockTab.LIBRARY].orEmpty() + StackEntry(page))) }
             .show(FullScreen.SyncEditor(SongRef("/music/a.mp3"))).show(FullScreen.EditAlbum("Harbour Glass")).show(FullScreen.CompanionNow)

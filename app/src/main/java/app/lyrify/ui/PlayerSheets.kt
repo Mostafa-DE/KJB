@@ -29,7 +29,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
@@ -45,8 +45,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -55,6 +55,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.res.painterResource
@@ -70,8 +72,14 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
 import app.lyrify.R
+import app.lyrify.books.Book
+import app.lyrify.books.BookKind
+import app.lyrify.books.partTitle
+import app.lyrify.books.toBookmark
 import app.lyrify.library.SongRef
 import app.lyrify.library.displayTitle
 import app.lyrify.player.AbPart
@@ -89,6 +97,7 @@ import app.lyrify.player.SLEEP_SONGS
 import app.lyrify.player.SPEEDS
 import app.lyrify.player.SPEED_STEPS_PER_X
 import app.lyrify.player.SleepTimer
+import app.lyrify.player.SongMark
 import app.lyrify.player.SongState
 import app.lyrify.player.Speed
 import app.lyrify.player.abPart
@@ -108,7 +117,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
 // The player's extras (milestone P2), their sheets and actions: the sleep timer's sheets, the Speed sheet, Repeat a
-// part on and off, the bookmark dialog and the song sheet's bookmarks list, Play on, the player's Add to, Song info and
+// part on and off, the bookmark's note dialog and the bookmarks lists (the player's, the song sheet's, and those of Tools
+// and a book's sheet), Play on, the player's Add to, Song info and
 // Make a tone (the library's sheets), and the toasts the service sends. What shows on the player itself is in PlayerChips.kt; player/PlaybackExtras.kt and
 // player/Sleep.kt hold the rules and the state.
 
@@ -148,8 +158,8 @@ internal fun PlayerUi.ref(): SongRef = song?.ref ?: item.song
 
 // What the player opens
 
-/** The extras' sheets and dialogs: one at a time. */
-enum class ExtrasSheet { SLEEP, SLEEP_MINUTES, SLEEP_SONGS, SPEED, BOOKMARK }
+/** The extras' sheets and dialogs: one at a time. [BOOKMARK] is the note of the bookmark just added, [BOOKMARKS] the list. */
+enum class ExtrasSheet { SLEEP, SLEEP_MINUTES, SLEEP_SONGS, SPEED, BOOKMARK, BOOKMARKS }
 
 /**
  * The player's extras on screen: which sheet is open, and the actions of P2's routes ([route]). Add to, Song info, Make a
@@ -168,8 +178,8 @@ class PlayerExtrasUi internal constructor(
 ) {
     var open: ExtrasSheet? by mutableStateOf(null)
 
-    /** Where the bookmark being named sits. */
-    var bookmarkAt: Long by mutableLongStateOf(0)
+    /** The bookmark just added whose note the dialog writes. */
+    var noting: SongMark? by mutableStateOf(null)
         private set
 
     /**
@@ -194,10 +204,8 @@ class PlayerExtrasUi internal constructor(
             PlayerRoute.SLEEP -> open = ExtrasSheet.SLEEP
             PlayerRoute.REPEAT_PART -> togglePart(ui)
             PlayerRoute.PLAY_ON -> if (!playOn(context)) say(Toast(resources.getString(R.string.play_on_none), R.drawable.ic_speaker))
-            PlayerRoute.BOOKMARK -> {
-                bookmarkAt = ui.positionAt(SystemClock.elapsedRealtime())
-                open = ExtrasSheet.BOOKMARK
-            }
+            PlayerRoute.BOOKMARK -> addBookmark(ui)
+            PlayerRoute.BOOKMARKS -> open = ExtrasSheet.BOOKMARKS
             else -> return false
         }
         return true
@@ -235,16 +243,20 @@ class PlayerExtrasUi internal constructor(
         say(Toast(resources.getString(R.string.part_stopped), R.drawable.ic_repeat))
     }
 
-    /** The bookmark named in the dialog, at [bookmarkAt]; its toast takes it back. */
-    fun saveBookmark(ui: PlayerUi, note: String) {
-        open = null
+    /**
+     * A bookmark at the spot playing, kept at once: two taps from the player (its "⋯", Bookmark). Its toast's Add note
+     * opens the note dialog for it ([noting]); the bookmarks list removes one added by mistake.
+     */
+    fun addBookmark(ui: PlayerUi) {
         val song = ui.ref()
-        val path = song.path
-        val mark = extras.edit { it.withBookmark(song, bookmarkAt, note) }
+        val mark = extras.edit { it.withBookmark(song, ui.positionAt(SystemClock.elapsedRealtime()), "", System.currentTimeMillis()) }
             ?: return say(Toast(resources.getString(if (extras.ready.value) R.string.bookmark_full else R.string.bookmark_not_saved), R.drawable.ic_error, Tone.ERROR))
         scope.launch {
-            val undo = toasts.show(Toast(resources.getString(R.string.bookmark_at, clock(mark.positionMs)), R.drawable.ic_bookmark_add, action = resources.getString(R.string.player_undo)))
-            if (undo) extras.change { it.withoutBookmark(path, mark.id) }
+            val note = toasts.show(Toast(resources.getString(R.string.bookmark_added, clock(mark.positionMs)), R.drawable.ic_bookmark_add, action = resources.getString(R.string.bookmark_add_note)))
+            if (note) {
+                noting = SongMark(song, mark)
+                open = ExtrasSheet.BOOKMARK
+            }
         }
     }
 
@@ -274,7 +286,13 @@ fun PlayerExtrasHost(extras: PlayerExtrasUi, ui: PlayerUi) {
         ExtrasSheet.SLEEP_MINUTES -> CustomSleepSheet(extras, ui, songs = false)
         ExtrasSheet.SLEEP_SONGS -> CustomSleepSheet(extras, ui, songs = true)
         ExtrasSheet.SPEED -> SpeedSheet(extras, ui)
-        ExtrasSheet.BOOKMARK -> BookmarkDialog(extras, ui)
+        ExtrasSheet.BOOKMARK -> extras.noting?.let { at ->
+            BookmarkNoteDialog(at.mark, onDismiss = extras::close) { note ->
+                extras.close()
+                extras.extras.change { it.withNote(at.song.path, at.mark.id, note) }
+            }
+        }
+        ExtrasSheet.BOOKMARKS -> BookmarksSheet(extras, ui)
         null -> Unit
     }
     SongSheetsHost(extras.songSheets)
@@ -559,24 +577,26 @@ private fun SheetSwitch(@DrawableRes icon: Int, title: String, detail: String, c
 
 // Bookmarks
 
-/** "Bookmark at 1:02", with an optional note. */
+/** "Bookmark at 1:02" with its note to write or change ([mark]'s own to start), the keyboard up at once. */
 @Composable
-private fun BookmarkDialog(extras: PlayerExtrasUi, ui: PlayerUi) {
-    var note by rememberSaveable { mutableStateOf("") }
-    val save = { extras.saveBookmark(ui, note) }
+private fun BookmarkNoteDialog(mark: Bookmark, onDismiss: () -> Unit, onSave: (String) -> Unit) {
+    var note by rememberSaveable(mark.id) { mutableStateOf(mark.note) }
+    val focus = remember { FocusRequester() }
+    FocusOnOpen(focus, opens = 1)
+    val save = { onSave(note) }
     ConfirmDialog(
-        title = stringResource(R.string.bookmark_at, clock(extras.bookmarkAt)),
+        title = stringResource(R.string.bookmark_at, clock(mark.positionMs)),
         confirm = stringResource(R.string.bookmark_save),
         dismiss = stringResource(R.string.bookmark_cancel),
         onConfirm = save,
-        onDismiss = extras::close,
+        onDismiss = onDismiss,
         icon = R.drawable.ic_bookmark_add,
         destructive = false,
         body = {
             LyrifyField(
                 note,
                 { note = it.take(SongState.MAX_NOTE) },
-                Modifier.fillMaxWidth(),
+                Modifier.fillMaxWidth().focusRequester(focus),
                 label = stringResource(R.string.bookmark_note),
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences, imeAction = ImeAction.Done),
                 keyboardActions = KeyboardActions(onDone = { save() }),
@@ -585,46 +605,98 @@ private fun BookmarkDialog(extras: PlayerExtrasUi, ui: PlayerUi) {
     )
 }
 
+/** The bookmarks of what plays ([PlayerUi]): the song's, or every part's of the book it is a part of ([SongState.marksOf]). */
+@Composable
+internal fun rememberPlayingMarks(ui: PlayerUi): List<SongMark> {
+    val context = LocalContext.current
+    val extras = remember(context) { PlayerExtras.of(context) }
+    val state by extras.state.collectAsStateWithLifecycle()
+    val path = ui.path()
+    return remember(state, path, ui.library) { state.marksOf(path, ui.library?.bookOf(path)) }
+}
+
+/** The player's "Bookmarks": what plays has ([rememberPlayingMarks]), each playing from its spot. */
+@Composable
+private fun BookmarksSheet(extras: PlayerExtrasUi, ui: PlayerUi) {
+    val context = LocalContext.current
+    val marks = rememberPlayingMarks(ui)
+    LyrifySheet(onDismiss = extras::close, spacing = 4.dp, padding = 12.dp) {
+        Text(stringResource(R.string.bookmarks_title), style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp).semantics { heading() })
+        // The last one removed: the sheet stays open and says so, its Undo on screen.
+        if (marks.isEmpty()) Text(stringResource(R.string.tools_bookmarks_none), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(8.dp))
+        BookmarkList(marks, ui.library?.bookOf(ui.path())) { at ->
+            extras.close()
+            jumpTo(context, at.song, at.mark.positionMs)
+        }
+    }
+}
+
 /**
- * A song's bookmarks in its song sheet (L1's slot): each plays the song from there, inside the queue playing; × removes
- * it, with Undo. Nothing shows for a song without bookmarks. [close] closes the sheet.
+ * A song's bookmarks in its song sheet (L1's slot): each plays the song from there, inside the queue playing (a book's
+ * file: its book's queue). Nothing shows for a song without bookmarks. [close] closes the sheet.
  */
 @Composable
 fun SongBookmarks(song: SongRef, close: () -> Unit) {
     val context = LocalContext.current
-    val toasts = LocalToasts.current
-    val resources = LocalResources.current
-    val scope = rememberCoroutineScope()
     val extras = remember(context) { PlayerExtras.of(context) }
-    val marks = extras.state.collectAsStateWithLifecycle().value.bookmarksOf(song.path)
+    val marks = extras.state.collectAsStateWithLifecycle().value.marksOf(song.path, null)
     if (marks.isEmpty()) return
     Column {
         SectionTitle(stringResource(R.string.bookmarks_title), Modifier.padding(bottom = 4.dp))
-        marks.forEach { mark ->
+        BookmarkList(marks, null) { at ->
+            close()
+            jumpTo(context, at.song, at.mark.positionMs)
+        }
+    }
+}
+
+/**
+ * Bookmarks as a list ([marks]: a song's, or a [book]'s parts' in the book's order, a folder book's part named under
+ * the note): a tap plays from the spot ([onPlay]); the pencil changes the note in the note dialog; × removes it, with
+ * Undo, the bookmark back as it was.
+ */
+@Composable
+internal fun BookmarkList(marks: List<SongMark>, book: Book?, onPlay: (SongMark) -> Unit) {
+    val context = LocalContext.current
+    val toasts = LocalToasts.current
+    val resources = LocalResources.current
+    // The toast outlives the sheet or page the bookmark was removed in: it runs in the activity's scope, not theirs.
+    val scope = LocalLifecycleOwner.current.lifecycleScope
+    val extras = remember(context) { PlayerExtras.of(context) }
+    var editing by rememberSaveable { mutableStateOf<Long?>(null) }
+    marks.forEach { at ->
+        key(at.mark.id) {
             BookmarkRow(
-                mark,
-                onPlay = {
-                    close()
-                    jumpTo(context, song, mark.positionMs)
-                },
+                at.mark,
+                part = book?.takeIf { it.kind == BookKind.FOLDER }?.parts?.firstOrNull { it.path == at.song.path }?.let(::partTitle),
+                onPlay = { onPlay(at) },
+                onEdit = { editing = at.mark.id },
                 onRemove = {
-                    extras.change { it.withoutBookmark(song.path, mark.id) }
+                    val path = at.song.path
+                    extras.change { it.withoutBookmark(path, at.mark.id) }
                     scope.launch {
                         val undo = toasts.show(Toast(resources.getString(R.string.bookmark_removed), R.drawable.ic_bookmark, action = resources.getString(R.string.player_undo)))
-                        if (undo) extras.change { state -> state.copy(bookmarks = state.bookmarks + (song.path to (state.bookmarksOf(song.path) + mark).sortedBy(Bookmark::positionMs))) }
+                        if (undo) extras.change { state -> state.withBookmark(at.song, at.mark.positionMs, at.mark.note, at.mark.addedAt)?.first ?: state }
                     }
                 },
             )
         }
     }
+    marks.firstOrNull { it.mark.id == editing }?.let { at ->
+        BookmarkNoteDialog(at.mark, onDismiss = { editing = null }) { note ->
+            editing = null
+            extras.change { it.withNote(at.song.path, at.mark.id, note) }
+        }
+    }
 }
 
+/** A bookmark: its time and note (a folder book's [part] under it), one TalkBack stop that plays it; the pencil and ×. */
 @Composable
-private fun BookmarkRow(mark: Bookmark, onPlay: () -> Unit, onRemove: () -> Unit) {
+private fun BookmarkRow(mark: Bookmark, part: String?, onPlay: () -> Unit, onEdit: () -> Unit, onRemove: () -> Unit) {
     val colors = MaterialTheme.colorScheme
     val time = clock(mark.positionMs)
     val note = mark.note.ifEmpty { stringResource(R.string.bookmark_no_note) }
-    val play = stringResource(R.string.bookmark_play_from, time, note)
+    val play = listOfNotNull(stringResource(R.string.bookmark_play_from, time, note), part).joinToString(", ")
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -638,27 +710,35 @@ private fun BookmarkRow(mark: Bookmark, onPlay: () -> Unit, onRemove: () -> Unit
                 .padding(horizontal = 8.dp, vertical = 6.dp),
         ) {
             Icon(painterResource(R.drawable.ic_bookmark), contentDescription = null, tint = LocalBrandColors.current.highlight, modifier = Modifier.size(20.dp))
-            Text(time, style = MaterialTheme.typography.bodyLarge.tabular(), modifier = Modifier.width(56.dp))
-            Text(note, style = MaterialTheme.typography.bodyLarge, color = if (mark.note.isEmpty()) colors.onSurfaceVariant else colors.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            // An hour or more in, as podcasts and books often are, the time takes the room it needs.
+            Text(time, style = MaterialTheme.typography.bodyLarge.tabular(), modifier = Modifier.widthIn(min = 56.dp))
+            Column(Modifier.weight(1f)) {
+                Text(note, style = MaterialTheme.typography.bodyLarge, color = if (mark.note.isEmpty()) colors.onSurfaceVariant else colors.onSurface, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                part?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+            }
         }
+        ChromeIconButton(R.drawable.ic_edit, stringResource(R.string.bookmark_edit, time), onEdit, glass = false)
         ChromeIconButton(R.drawable.ic_close, stringResource(R.string.bookmark_remove, time), onRemove, glass = false)
     }
 }
 
 /**
  * A bookmark's jump: [song] plays from [positionMs] inside the queue playing (the song playing: a seek; a song not in
- * the queue: Play next first), and it does not also resume at a place kept for it.
+ * the queue: Play next first), and it does not also resume at a place kept for it. A book's file plays its book's own
+ * queue from there instead ([toBookmark]), as a book always does, also while it plays: as music, reached by playing on,
+ * it goes to its book; in its book's queue that is a seek too.
  */
 internal fun jumpTo(context: Context, song: SongRef, positionMs: Long) {
     val connection = PlayerGraph.connection(context)
-    if (connection.ui.value?.path() == song.path) {
+    val library = connection.library.value
+    if (connection.ui.value?.path() == song.path && library?.bookOf(song.path) == null) {
         connection.seekTo(positionMs)
         connection.play()
         return
     }
     val core = PlayerGraph.core(context)
     PlayerExtras.of(context).jumpingTo = song.path
-    core.switch { it.toSpot(song, positionMs, pickedSource(""), core.now()) }
+    core.switch { it.toBookmark(song.path, positionMs, library, core.now()) ?: it.toSpot(song, positionMs, pickedSource(""), core.now()) }
     connection.play()
 }
 

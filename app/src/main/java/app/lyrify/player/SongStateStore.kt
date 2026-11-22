@@ -125,14 +125,21 @@ object SongStateJson {
         ).normalised()
     }
 
-    private fun bookmark(mark: Bookmark): JsonElement =
-        JsonObject(mapOf(ID_KEY to JsonPrimitive(mark.id), POSITION_KEY to JsonPrimitive(mark.positionMs), NOTE_KEY to JsonPrimitive(mark.note)))
+    /** A bookmark; when it was made only when known, so a file without it reads as before. */
+    private fun bookmark(mark: Bookmark): JsonElement = JsonObject(
+        buildMap {
+            put(ID_KEY, JsonPrimitive(mark.id))
+            put(POSITION_KEY, JsonPrimitive(mark.positionMs))
+            put(NOTE_KEY, JsonPrimitive(mark.note))
+            if (mark.addedAt > 0) put(ADDED_AT_KEY, JsonPrimitive(mark.addedAt))
+        },
+    )
 
     private fun bookmark(element: JsonElement): Bookmark? {
         val stored = element as? JsonObject ?: return null
         val id = stored[ID_KEY]?.long() ?: return null
         val position = stored[POSITION_KEY]?.long()?.takeIf { it >= 0 } ?: return null
-        return Bookmark(id, position, stored[NOTE_KEY]?.text()?.take(SongState.MAX_NOTE).orEmpty())
+        return Bookmark(id, position, stored[NOTE_KEY]?.text()?.take(SongState.MAX_NOTE).orEmpty(), stored[ADDED_AT_KEY]?.long()?.takeIf { it > 0 } ?: 0)
     }
 
     private fun part(element: JsonElement): AbPart? {
@@ -165,6 +172,7 @@ object SongStateJson {
     private const val ID_KEY: String = "id"
     private const val POSITION_KEY: String = "positionMs"
     private const val NOTE_KEY: String = "note"
+    private const val ADDED_AT_KEY: String = "addedAt"
     private const val START_KEY: String = "startMs"
     private const val END_KEY: String = "endMs"
 }

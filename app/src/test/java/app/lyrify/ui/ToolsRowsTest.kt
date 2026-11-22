@@ -32,11 +32,12 @@ class ToolsRowsTest {
         ai: AiState = ai(enabled = false),
         aiWaiting: Int = 0,
         trash: List<TrashedSong>? = null,
-    ): Map<Tool, ToolRow> = toolRows(checks, dupes, dupesBadge, tones, coversTags, ai, aiWaiting, trash = trash).associateBy { it.tool }
+        bookmarks: Int? = null,
+    ): Map<Tool, ToolRow> = toolRows(checks, dupes, dupesBadge, tones, coversTags, ai, aiWaiting, trash = trash, bookmarks = bookmarks).associateBy { it.tool }
 
     @Test
-    fun `the rows come in the prototype's order, Trash after Duplicates, Settings last`() {
-        assertEquals(listOf(Tool.CHECK, Tool.DUPLICATES, Tool.TRASH, Tool.TONES, Tool.COVERS_TAGS, Tool.DOWNLOADS, Tool.AI, Tool.INSIGHTS, Tool.SETTINGS), toolRows(0, DupesView.Loading, 0, 0, null, ai(), 0).map { it.tool })
+    fun `the rows come in the prototype's order, Trash after Duplicates, Bookmarks after Tones, Settings last`() {
+        assertEquals(listOf(Tool.CHECK, Tool.DUPLICATES, Tool.TRASH, Tool.TONES, Tool.BOOKMARKS, Tool.COVERS_TAGS, Tool.DOWNLOADS, Tool.AI, Tool.INSIGHTS, Tool.SETTINGS), toolRows(0, DupesView.Loading, 0, 0, null, ai(), 0).map { it.tool })
     }
 
     @Test
@@ -69,6 +70,13 @@ class ToolsRowsTest {
     fun `Tones counts the tones made`() {
         assertEquals(ToolRow(Tool.TONES, ToolLine.Count(R.plurals.tools_tones, 2)), rows(tones = 2).getValue(Tool.TONES))
         assertEquals(ToolRow(Tool.TONES, ToolLine.Text(R.string.tools_tones_none)), rows(tones = 0).getValue(Tool.TONES))
+    }
+
+    @Test
+    fun `Bookmarks counts every bookmark, or says none yet, and says nothing until they are read`() {
+        assertNull(rows().getValue(Tool.BOOKMARKS).line)
+        assertEquals(ToolRow(Tool.BOOKMARKS, ToolLine.Text(R.string.tools_bookmarks_none)), rows(bookmarks = 0).getValue(Tool.BOOKMARKS))
+        assertEquals(ToolRow(Tool.BOOKMARKS, ToolLine.Count(R.plurals.tools_bookmarks, 7)), rows(bookmarks = 7).getValue(Tool.BOOKMARKS))
     }
 
     @Test

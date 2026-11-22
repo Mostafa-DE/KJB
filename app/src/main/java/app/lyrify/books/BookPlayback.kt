@@ -97,6 +97,16 @@ private fun QueueBook.playBookAt(start: BookStart, now: Long): Switched {
 }
 
 /**
+ * A bookmark's jump to [positionMs] in a book's file at [path] (BM1): the book's own queue plays from there
+ * ([playBookAt]), as a book always does, also when another queue holds the file. Null for music, whose bookmarks jump
+ * inside the queue playing ([app.lyrify.player.toSpot]).
+ */
+fun QueueBook.toBookmark(path: String, positionMs: Long, library: Library?, now: Long): Switched? {
+    val book = library?.bookOf(path) ?: return null
+    return playBookAt(BookStart(book, BookPlace(book.parts.indexOfFirst { it.path == path }, positionMs)), now)
+}
+
+/**
  * [switched], what a list's tap or a queue's song, Resume or Play from start made of this book of queues; or, when the song
  * it starts is a book's part ([bookStart], by [library] and [state]) in a queue that is not that book's, the book's own
  * queue instead ([playBook]). A change that changed nothing starts nothing either.

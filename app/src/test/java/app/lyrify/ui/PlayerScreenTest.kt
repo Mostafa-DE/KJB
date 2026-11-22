@@ -158,7 +158,7 @@ class PlayerScreenTest {
 
     @Test
     fun `the player's menu has the sleep timer after Speed, and Edit tags after Song info for a song of the library only`() {
-        val all = playerMenuRows(song = true, album = true, artist = true, tone = true, cut = true)
+        val all = playerMenuRows(song = true, album = true, artist = true, tone = true, cut = true, bookmarks = true)
         assertEquals(PlayerMenuRow.entries, all)
         assertEquals(PlayerMenuRow.SLEEP, all[all.indexOf(PlayerMenuRow.SPEED) + 1])
         assertEquals(PlayerMenuRow.EDIT_TAGS, all[all.indexOf(PlayerMenuRow.SONG_INFO) + 1])
@@ -176,6 +176,15 @@ class PlayerScreenTest {
             listOf(PlayerMenuRow.ADD_TO, PlayerMenuRow.SPEED, PlayerMenuRow.SLEEP, PlayerMenuRow.REPEAT_PART, PlayerMenuRow.BOOKMARK, PlayerMenuRow.PLAY_ON, PlayerMenuRow.EQUALIZER, PlayerMenuRow.TONE, PlayerMenuRow.SONG_INFO),
             playerMenuRows(song = false, album = false, artist = false, tone = true, cut = false),
         )
+    }
+
+    @Test
+    fun `the player's menu has Bookmarks right after Bookmark, only while what plays has bookmarks`() {
+        val marked = playerMenuRows(song = true, album = false, artist = false, tone = false, cut = false, bookmarks = true)
+        assertEquals(PlayerMenuRow.BOOKMARKS, marked[marked.indexOf(PlayerMenuRow.BOOKMARK) + 1])
+        // A file another app opened keeps its bookmarks too.
+        assertTrue(PlayerMenuRow.BOOKMARKS in playerMenuRows(song = false, album = false, artist = false, tone = false, cut = false, bookmarks = true))
+        assertFalse(PlayerMenuRow.BOOKMARKS in playerMenuRows(song = true, album = true, artist = true, tone = true, cut = true, bookmarks = false))
     }
 
     @Test
