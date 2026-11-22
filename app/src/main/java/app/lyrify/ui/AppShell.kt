@@ -275,6 +275,7 @@ fun AppShell(
                                         DockTab.FAVOURITES -> CollectionPage(Page.BuiltIn(BuiltInList.FAVOURITES), root = true)
                                         DockTab.DOWNLOADS -> DownloadsPage(onBack = null)
                                         DockTab.BOOKS -> BooksPage()
+                                        DockTab.INSIGHTS -> ListeningPage(Page.Listening)
                                         DockTab.SEARCH -> SearchPage()
                                         DockTab.TOOLS -> ToolsScreen(rows, nav::open)
                                     }

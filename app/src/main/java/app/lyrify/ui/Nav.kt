@@ -100,7 +100,7 @@ sealed interface Page {
     @Serializable @SerialName("queue")
     data class Queue(val id: String) : QueuePages
 
-    /** Your listening (ListeningScreen.kt, S1). */
+    /** Insights, which grew out of Your listening (ListeningScreen.kt, S1; KJB 3.2). */
     sealed interface ListeningPages : Page
 
     @Serializable @SerialName("listening")
@@ -109,6 +109,14 @@ sealed interface Page {
     /** "View all" of a top list. */
     @Serializable @SerialName("topList")
     data class TopList(val kind: TopKind) : ListeningPages
+
+    /** A month's recap, by its month ("2026-10"): from the recap card and Insights' recaps. */
+    @Serializable @SerialName("recap")
+    data class Recap(val month: String) : ListeningPages
+
+    /** Every month's recap, the latest first: "View all" of Insights' recaps. */
+    @Serializable @SerialName("recaps")
+    data object Recaps : ListeningPages
 
     /** "View all" of one group of results for [query] (SearchScreen.kt, L2). */
     @Serializable @SerialName("searchAll")
@@ -168,7 +176,7 @@ sealed interface Page {
 
 enum class BuiltInList { FAVOURITES, MOST_PLAYED, RECENTLY_PLAYED, RECENTLY_ADDED }
 
-enum class TopKind { SONGS, ARTISTS, ALBUMS }
+enum class TopKind { SONGS, ARTISTS, ALBUMS, GENRES }
 
 enum class SearchGroup { SONGS, ARTISTS, ALBUMS, FOLDERS, PLAYLISTS, LYRICS }
 
@@ -463,17 +471,17 @@ fun pageKeys(state: NavState): Set<String> =
 fun restoreNav(saved: Any?, lastTab: DockTab): NavState = (saved as? String)?.let(NavState::decode) ?: NavState.start(lastTab)
 
 /**
- * The items the user can put on the bar besides the four that always were (KJB 3.1): each a root with a stack of its
- * own, which keeps what opens on it as Library and Playlists do.
+ * The items the user can put on the bar besides the four that always were (KJB 3.1, Insights in 3.2): each a root with a
+ * stack of its own, which keeps what opens on it as Library and Playlists do.
  */
-val BAR_ROOTS: Set<DockTab> = setOf(DockTab.QUEUES, DockTab.FAVOURITES, DockTab.DOWNLOADS, DockTab.BOOKS)
+val BAR_ROOTS: Set<DockTab> = setOf(DockTab.QUEUES, DockTab.FAVOURITES, DockTab.DOWNLOADS, DockTab.BOOKS, DockTab.INSIGHTS)
 
 /**
  * The tab [page] opens on from [from] ([viewOpen]: from a full-screen view, such as the player, over [from]): Tools
  * pages on Tools; Search's "View all" on Search; Library > Songs with a filter on Library. A playlist, Built for you
- * (Favourites among them), Queues and Your listening open inside Library or Playlists when opened there, else on
- * Playlists. An album, artist, folder or genre opens inside Search or Playlists when opened there, else on Library.
- * Opened on Queues, Favourites, Downloads or Books ([BAR_ROOTS]), both stay there. With Playlists off the bar
+ * (Favourites among them), Queues and Insights open inside Library or Playlists when opened there (Insights inside Tools
+ * too), else on Playlists. An album, artist, folder or genre opens inside Search or Playlists when opened there, else on
+ * Library. Opened on Queues, Favourites, Downloads, Books or Insights ([BAR_ROOTS]), both stay there. With Playlists off the bar
  * ([docked]), what would open on it stays where it was opened, or opens on Library from the player or Tools (whose
  * pages are full screens).
  */
@@ -481,8 +489,10 @@ fun homeOf(page: Page, from: DockTab, viewOpen: Boolean, docked: List<DockTab> =
     val here = from.takeUnless { viewOpen }
     val own = here?.takeIf { it in BAR_ROOTS }
     val home = when (page) {
-        is Page.Playlist, is Page.BuiltIn, is Page.QueuePages, is Page.ListeningPages ->
+        is Page.Playlist, is Page.BuiltIn, is Page.QueuePages ->
             own ?: here?.takeIf { it == DockTab.LIBRARY || it == DockTab.PLAYLISTS } ?: DockTab.PLAYLISTS
+        // Insights opened from Tools is a Tools page, as Downloads is.
+        is Page.ListeningPages -> own ?: here?.takeIf { it == DockTab.LIBRARY || it == DockTab.PLAYLISTS || it == DockTab.TOOLS } ?: DockTab.PLAYLISTS
         is Page.CollectionPages -> own ?: here?.takeIf { it == DockTab.SEARCH || it == DockTab.PLAYLISTS } ?: DockTab.LIBRARY
         is Page.SearchAll -> DockTab.SEARCH
         is Page.Songs -> DockTab.LIBRARY

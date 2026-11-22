@@ -143,6 +143,20 @@ class NavTest {
     }
 
     @Test
+    fun `Insights from Tools stays on Tools with its recaps, from the recap card in Library, and on its own bar item there`() {
+        val tools = NavState.start(DockTab.TOOLS).open(Page.Listening).open(Page.Recap("2026-10"))
+        assertEquals(DockTab.TOOLS, tools.tab)
+        assertEquals(listOf(Page.Listening, Page.Recap("2026-10")), tools.pages)
+        assertFalse("Tools pages are full screens", tools.chrome)
+        val card = NavState.start(DockTab.LIBRARY).open(Page.Recap("2026-10"))
+        assertEquals(DockTab.LIBRARY, card.tab)
+        val bar = listOf(DockTab.LIBRARY, DockTab.INSIGHTS, DockTab.SEARCH, DockTab.TOOLS)
+        val own = NavState.start(DockTab.INSIGHTS).open(Page.TopList(TopKind.GENRES), docked = bar).open(Page.Recaps, docked = bar).open(album, docked = bar)
+        assertEquals(DockTab.INSIGHTS, own.tab)
+        assertEquals(listOf(Page.TopList(TopKind.GENRES), Page.Recaps, album), own.pages)
+    }
+
+    @Test
     fun `an album or artist opened inside Playlists stays in Playlists`() {
         val nav = NavState.start(DockTab.PLAYLISTS).open(Page.BuiltIn(BuiltInList.FAVOURITES)).open(album).open(artist)
         assertEquals(DockTab.PLAYLISTS, nav.tab)
@@ -326,7 +340,7 @@ class NavTest {
             assertEquals("$root", DockTab.LIBRARY, NavState.start(root).show(FullScreen.Player).open(album).tab)
             assertEquals("$root", DockTab.PLAYLISTS, NavState.start(root).show(FullScreen.Player).open(Page.Playlist("p3")).tab)
         }
-        assertEquals(setOf(DockTab.QUEUES, DockTab.FAVOURITES, DockTab.DOWNLOADS, DockTab.BOOKS), BAR_ROOTS)
+        assertEquals(setOf(DockTab.QUEUES, DockTab.FAVOURITES, DockTab.DOWNLOADS, DockTab.BOOKS, DockTab.INSIGHTS), BAR_ROOTS)
     }
 
     @Test
@@ -679,7 +693,7 @@ class NavTest {
         val every = listOf(
             Page.Songs(SongGroup.NO_LYRICS, LyricsStatus.NOT_FOUND), Page.FoldersToSkip, Page.HiddenSongs, Page.SplitArtists, Page.Folder("Music/Rips"), Page.Genre("Folk"),
             Page.Playlist("p3"), Page.BuiltIn(BuiltInList.MOST_PLAYED), Page.UnknownAlbum,
-            Page.Queue("q1"), Page.Listening, Page.TopList(TopKind.ARTISTS), Page.Tones, Page.Ai, Page.CoversTags, Page.TagHistory, Page.LibraryTabs,
+            Page.Queue("q1"), Page.Listening, Page.TopList(TopKind.ARTISTS), Page.TopList(TopKind.GENRES), Page.Recap("2026-10"), Page.Recaps, Page.Tones, Page.Ai, Page.CoversTags, Page.TagHistory, Page.LibraryTabs,
             Page.Licences, Page.Licence("Media3"), Page.Settings(), Page.Settings(SettingsSection.LYRICS),
         ).fold(NavState.start(DockTab.LIBRARY)) { state, page -> state.copy(stacks = state.stacks + (DockTab.LIBRARY to state.stacks[DockTab.LIBRARY].orEmpty() + StackEntry(page))) }
             .show(FullScreen.SyncEditor(SongRef("/music/a.mp3"))).show(FullScreen.EditAlbum("Harbour Glass")).show(FullScreen.CompanionNow)

@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Insights (KJB 3.2, lane in1): the page, its cards, the monthly recap and its card on the start screen. The page's
+     title, its period switch, its totals and top lists are Your listening's (strings_stats.xml). -->
+<resources>
+    <string name="insights_tool_line">Your week, month and year in music</string>
+    <string name="insights_private">Made on this phone from what you play. Nothing leaves it unless you share a picture.</string>
+
+    <!-- Under the totals: "61 songs · 24 artists · 12 albums". -->
+    <plurals name="insights_songs">
+        <item quantity="one">%1$s song</item>
+        <item quantity="other">%1$s songs</item>
+    </plurals>
+    <plurals name="insights_artists">
+        <item quantity="one">%1$s artist</item>
+        <item quantity="other">%1$s artists</item>
+    </plurals>
+    <plurals name="insights_albums">
+        <item quantity="one">%1$s album</item>
+        <item quantity="other">%1$s albums</item>
+    </plurals>
+    <string name="insights_top_genres">Top genres</string>
+    <!-- A row without a rank, for TalkBack: its name, then its line. -->
+    <string name="insights_row">%1$s, %2$s</string>
+
+    <!-- This period against the one before. -->
+    <string name="insights_versus_week">Against last week, up to now</string>
+    <string name="insights_versus_month">Against last month, up to now</string>
+    <string name="insights_versus_year">Against last year, up to now</string>
+    <!-- A month's recap: "Against September". -->
+    <string name="insights_versus_month_name">Against %1$s</string>
+    <!-- "40%". -->
+    <string name="insights_percent">%1$s%%</string>
+    <string name="insights_more">%1$s more</string>
+    <string name="insights_less">%1$s less</string>
+    <string name="insights_same">The same</string>
+
+    <!-- The listening clock and streaks. -->
+    <string name="insights_clock_title">When you listen</string>
+    <string name="insights_clock_peak">Most around %1$s</string>
+    <plurals name="insights_streak_longest">
+        <item quantity="one">Longest run: %1$d day of music</item>
+        <item quantity="other">Longest run: %1$d days in a row</item>
+    </plurals>
+    <plurals name="insights_streak_now">
+        <item quantity="one">Now: %1$d day of music</item>
+        <item quantity="other">Now: %1$d days in a row</item>
+    </plurals>
+
+    <!-- Milestones: "1,000 plays", "100 hours heard", then "Next: 2,500 plays, 62 to go". -->
+    <string name="insights_milestones_title">Milestones</string>
+    <plurals name="insights_hours">
+        <item quantity="one">%1$s hour heard</item>
+        <item quantity="other">%1$s hours heard</item>
+    </plurals>
+    <string name="insights_next">Next: %1$s, %2$s to go</string>
+
+    <!-- Books and podcasts: "12 h 5 min of books". -->
+    <string name="insights_spoken_title">Books and podcasts</string>
+    <string name="insights_books_time">%1$s of books</string>
+    <string name="insights_podcasts_time">%1$s of podcasts</string>
+
+    <!-- The nudges. -->
+    <string name="insights_never_title">Never played</string>
+    <plurals name="insights_never_count">
+        <item quantity="one">%1$s song you have never played</item>
+        <item quantity="other">%1$s songs you have never played</item>
+    </plurals>
+    <string name="insights_dig_title">Dig deeper</string>
+    <string name="insights_dig_text">Albums you played, with songs you have never played</string>
+    <string name="insights_dig_played">You played %1$s</string>
+    <plurals name="insights_dig_unplayed">
+        <item quantity="one">%1$s never played</item>
+        <item quantity="other">%1$s never played</item>
+    </plurals>
+    <string name="insights_forgotten_title">Forgotten favourites</string>
+    <string name="insights_forgotten_text">Songs you loved that went quiet</string>
+    <string name="insights_last_played">Last played %1$s</string>
+
+    <!-- The monthly recap: its card on the start screen, its page, its picture. -->
+    <string name="insights_recaps">Monthly recaps</string>
+    <string name="insights_recap_title">Your %1$s</string>
+    <string name="insights_recap_ready">Your month in music is ready</string>
+    <string name="insights_close">Close</string>
+    <string name="insights_share">Share as a picture</string>
+    <string name="insights_share_failed">Couldn\'t make the picture</string>
+    <string name="insights_top_artist">Top artist: %1$s</string>
+    <string name="insights_picture_footer">Made with KJB</string>
+</resources>

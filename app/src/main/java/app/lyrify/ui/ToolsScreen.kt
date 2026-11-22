@@ -46,7 +46,7 @@ import app.lyrify.overnight.NightStatus
 import app.lyrify.settings.DockTab
 import kotlinx.coroutines.launch
 
-/** The rows of Tools, in order: KJB's 2.0 features with Trash after Duplicates, Covers & tags, then Settings. */
+/** The rows of Tools, in order: KJB's 2.0 features with Trash after Duplicates, Covers & tags, then Insights and Settings. */
 enum class Tool(@StringRes val title: Int, @DrawableRes val icon: Int, val page: Page) {
     CHECK(R.string.check_title, R.drawable.ic_help_fill, Page.Check(null)),
     DUPLICATES(R.string.dupes_title, R.drawable.ic_content_copy, Page.Duplicates),
@@ -55,6 +55,7 @@ enum class Tool(@StringRes val title: Int, @DrawableRes val icon: Int, val page:
     COVERS_TAGS(R.string.tools_covers, R.drawable.ic_sell, Page.CoversTags),
     DOWNLOADS(R.string.dl_title, R.drawable.ic_download, Page.Downloads),
     AI(R.string.ai_title, R.drawable.ic_auto_awesome, Page.Ai),
+    INSIGHTS(R.string.stats_title, R.drawable.ic_bar_chart, Page.Listening),
     SETTINGS(R.string.settings_title, R.drawable.ic_settings, Page.Settings()),
 }
 
@@ -99,6 +100,7 @@ fun toolRows(
     ToolRow(Tool.COVERS_TAGS, coversTags?.line, badge = coversTags?.badge),
     ToolRow(Tool.DOWNLOADS, downloads?.line, badge = downloads?.badge),
     ToolRow(Tool.AI, aiLine(ai, aiWaiting), dot = aiAttention(ai, aiWaiting)).takeIf { ai.supported },
+    ToolRow(Tool.INSIGHTS, ToolLine.Text(R.string.insights_tool_line)),
     ToolRow(Tool.SETTINGS, null),
 )
 

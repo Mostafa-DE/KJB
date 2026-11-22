@@ -5,6 +5,7 @@
     <string name="nav_favourites">Favourites</string>
     <string name="nav_downloads">Downloads</string>
     <string name="nav_books">Books</string>
+    <string name="nav_insights">Insights</string>
 
     <!-- Settings > Display > Bottom bar. -->
     <string name="set_bar">Bottom bar</string>

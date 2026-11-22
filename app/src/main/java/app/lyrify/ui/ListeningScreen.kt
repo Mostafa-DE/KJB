@@ -80,6 +80,7 @@ fun ListeningPage(page: Page.ListeningPages) {
     when (page) {
         Page.Listening -> YourListening(onBack = { nav.back() }, onOpen = nav::open)
         is Page.TopList -> TopListPage(page.kind, onBack = { nav.back() }, onOpen = nav::open)
+        is Page.Recap, Page.Recaps -> Unit
     }
 }
 
@@ -371,6 +372,7 @@ private fun topsOf(listening: Listening, kind: TopKind): List<Top<*>> = when (ki
     TopKind.SONGS -> listening.songs
     TopKind.ARTISTS -> listening.artists
     TopKind.ALBUMS -> listening.albums
+    TopKind.GENRES -> emptyList()
 }
 
 private fun keyOf(top: Top<*>): String = when (val item = top.item) {
@@ -385,6 +387,7 @@ private val TopKind.title: Int
         TopKind.SONGS -> R.string.stats_top_songs
         TopKind.ARTISTS -> R.string.stats_top_artists
         TopKind.ALBUMS -> R.string.stats_top_albums
+        TopKind.GENRES -> R.string.stats_top_albums
     }
 
 /** "This week", "This month", "This year", "All time". */
