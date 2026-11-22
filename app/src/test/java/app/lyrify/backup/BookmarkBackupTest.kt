@@ -52,6 +52,18 @@ class BookmarkBackupTest {
     }
 
     @Test
+    fun `a bookmark whose note changed since the backup comes back once, with the note the phone has now`() {
+        // The chorus's note changed after the backup; another note at the backup's spot of a time not known is another bookmark.
+        val phone = made.withNote(lantern.path, 1, "Chorus, the second time")
+            .let { it.copy(bookmarks = it.bookmarks + (water.path to listOf(Bookmark(3, 12_000, "Other", addedAt = T0 + 1)))) }
+        val stores = MemoryStores(songState = phone)
+        runBlocking { RestorePlan(contents(backup()), BackupFixtures.library).apply(setOf(Section.BOOKMARKS), stores, newId = { "new" }) }
+
+        assertEquals(listOf(30_000L to "Chorus, the second time", 95_000L to ""), stores.songState.bookmarksOf(lantern.path).map { it.positionMs to it.note })
+        assertEquals(listOf("Other", "Changed later"), stores.songState.bookmarksOf(water.path).map { it.note })
+    }
+
+    @Test
     fun `the bookmarks section keeps its version, so 3_1_1 reads it`() {
         val manifest = Json.parseToJsonElement(entries(backup()).first { it.first == BackupBundle.MANIFEST }.second).jsonObject
         assertEquals(1, manifest["sections"]!!.jsonObject["bookmarks"]!!.jsonObject["version"]!!.jsonPrimitive.int)
