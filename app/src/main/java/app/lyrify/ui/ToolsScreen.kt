@@ -46,7 +46,7 @@ import app.lyrify.overnight.NightStatus
 import app.lyrify.settings.DockTab
 import kotlinx.coroutines.launch
 
-/** The rows of Tools, in order: KJB's 2.0 features with Trash after Duplicates and Bookmarks after Tones, Covers & tags, then Insights and Settings. */
+/** The rows of Tools, in order: KJB's 2.0 features with Trash after Duplicates and Bookmarks after Tones, Covers & tags, then Insights, Huddle and Settings. */
 enum class Tool(@StringRes val title: Int, @DrawableRes val icon: Int, val page: Page) {
     CHECK(R.string.check_title, R.drawable.ic_help_fill, Page.Check(null)),
     DUPLICATES(R.string.dupes_title, R.drawable.ic_content_copy, Page.Duplicates),
@@ -57,6 +57,7 @@ enum class Tool(@StringRes val title: Int, @DrawableRes val icon: Int, val page:
     DOWNLOADS(R.string.dl_title, R.drawable.ic_download, Page.Downloads),
     AI(R.string.ai_title, R.drawable.ic_auto_awesome, Page.Ai),
     INSIGHTS(R.string.stats_title, R.drawable.ic_bar_chart, Page.Listening),
+    HUDDLE(R.string.huddle_title, R.drawable.ic_group, Page.Huddle),
     SETTINGS(R.string.settings_title, R.drawable.ic_settings, Page.Settings()),
 }
 
@@ -80,9 +81,9 @@ data class ToolRow(val tool: Tool, val line: ToolLine?, val badge: Int? = null, 
 /**
  * The rows of Tools for what each feature says now: [checks] songs to check, Duplicates' [dupes] view and [dupesBadge]
  * groups not opened yet, the songs in the phone's [trash] ([trashSongs]; null until read), [tones] made, the
- * [bookmarks] kept (null until read), Covers & tags' line and badge ([coversTags], from its milestone), and the AI's
- * state with [aiWaiting] songs waiting for it. On a phone the AI does not run on there is no AI row at all, no dead
- * button (the AI add-on design).
+ * [bookmarks] kept (null until read), Covers & tags' line and badge ([coversTags], from its milestone), the AI's state
+ * with [aiWaiting] songs waiting for it, and Huddle's line and badge ([huddle], [huddleEntry]). On a phone the AI does
+ * not run on there is no AI row at all, no dead button (the AI add-on design).
  */
 fun toolRows(
     checks: Int,
@@ -95,6 +96,7 @@ fun toolRows(
     downloads: EntryRow? = null,
     trash: List<TrashedSong>? = null,
     bookmarks: Int? = null,
+    huddle: EntryRow? = null,
 ): List<ToolRow> = listOfNotNull(
     ToolRow(Tool.CHECK, if (checks > 0) ToolLine.Count(R.plurals.tools_check, checks) else ToolLine.Text(R.string.tools_check_none), badge = checks.takeIf { it > 0 }),
     ToolRow(Tool.DUPLICATES, dupesLine(dupes), badge = dupesBadge.takeIf { it > 0 }),
@@ -105,6 +107,7 @@ fun toolRows(
     ToolRow(Tool.DOWNLOADS, downloads?.line, badge = downloads?.badge),
     ToolRow(Tool.AI, aiLine(ai, aiWaiting), dot = aiAttention(ai, aiWaiting)).takeIf { ai.supported },
     ToolRow(Tool.INSIGHTS, ToolLine.Text(R.string.insights_tool_line)),
+    ToolRow(Tool.HUDDLE, huddle?.line, badge = huddle?.badge),
     ToolRow(Tool.SETTINGS, null),
 )
 

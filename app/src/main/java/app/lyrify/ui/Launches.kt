@@ -14,6 +14,7 @@ import androidx.compose.ui.platform.LocalResources
 import app.lyrify.LOG_TAG
 import app.lyrify.Lyrify
 import app.lyrify.R
+import app.lyrify.huddle.HuddleGraph
 import app.lyrify.library.LibraryGraph
 import app.lyrify.library.LibraryState
 import app.lyrify.player.OpenedFiles
@@ -52,6 +53,9 @@ sealed interface Launch {
 
     /** The Favourites page. */
     data object Favourites : Launch
+
+    /** A Huddle invite [link] (`https://<host>/i#<code>`): KJB asks whether to add the friend (HuddleSheets.kt). */
+    data class Invite(val link: String) : Launch
 }
 
 /**
@@ -73,12 +77,20 @@ private val AUDIO_TYPES = setOf("application/ogg", "application/x-ogg", "applica
 
 /**
  * What [intent] asks: a View of a `content:` address (its type is the filter's to check: Android resolves it without
- * putting it in the intent), a Share of audio files (each once, in their order, at most [MAX_OPENED]), or a shortcut.
+ * putting it in the intent), a View of a Huddle invite link on one of [inviteHosts] (the manifest's filter takes only
+ * those, but another app can name KJB's activity outright), a Share of audio files (each once, in their order, at most [MAX_OPENED]), or a shortcut.
  * Null for anything else, the launcher icon itself and shared text included. Never a `file:` address: KJB would read it
  * with its own All files access, so any app could make it read a file that app cannot.
  */
-fun launchOf(intent: LaunchIntent): Launch? = when (intent.action) {
-    Intent.ACTION_VIEW -> intent.data?.takeIf(::openable)?.let { Launch.Open(listOf(it)) }
+fun launchOf(intent: LaunchIntent, inviteHosts: Collection<String> = HuddleGraph.hosts): Launch? = when (intent.action) {
+    Intent.ACTION_VIEW -> intent.data?.let { data ->
+        when {
+            openable(data) -> Launch.Open(listOf(data))
+            intent.type == null && INVITE_LINK.matchEntire(data)?.groupValues?.get(1)?.let { host -> inviteHosts.any { it.equals(host, ignoreCase = true) } } == true ->
+                Launch.Invite(data)
+            else -> null
+        }
+    }
     Intent.ACTION_SEND -> intent.streams.takeIf { audio(intent.type) }?.firstOrNull(::openable)?.let { Launch.Open(listOf(it)) }
     Intent.ACTION_SEND_MULTIPLE ->
         intent.streams.takeIf { audio(intent.type) }?.filter(::openable)?.distinct()?.take(MAX_OPENED)?.takeIf { it.isNotEmpty() }?.let(Launch::Open)
@@ -86,6 +98,9 @@ fun launchOf(intent: LaunchIntent): Launch? = when (intent.action) {
 }
 
 private fun openable(uri: String): Boolean = uri.startsWith("content://", ignoreCase = true)
+
+/** A Huddle invite link: https, its host, Huddle's path and a code after the `#` (huddle/Invites.kt). */
+private val INVITE_LINK = Regex("""https://([A-Za-z0-9.-]+)(?::443)?/i/?#[A-Za-z0-9_.-]+""")
 
 private fun audio(type: String?): Boolean = type != null && (type.startsWith("audio/", ignoreCase = true) || type.lowercase() in AUDIO_TYPES)
 

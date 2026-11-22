@@ -31,6 +31,7 @@ import app.lyrify.data.LedgerState
 import app.lyrify.data.SharedWrite
 import app.lyrify.data.SharedWrites
 import app.lyrify.dupes.duplicates
+import app.lyrify.huddle.HuddleGraph
 import app.lyrify.library.LibraryGraph
 import app.lyrify.library.LibraryState
 import app.lyrify.library.PlaylistsState
@@ -270,7 +271,8 @@ object Backups {
     /** A backup of every store now, as the zip's bytes. */
     suspend fun make(context: Context): ByteArray = withContext(Dispatchers.IO) {
         val app = context.applicationContext
-        val snapshot = AppBackupStores(app).snapshot()
+        // Huddle's friends only with a backup passphrase, sealed with it (huddle/HuddleStore.kt, HuddleBackup).
+        val snapshot = AppBackupStores(app).snapshot().copy(huddle = HuddleGraph.huddle(app).backupSection())
         val songs = library(app)?.all.orEmpty()
         val bytes = ByteArrayOutputStream().also { BackupBundle.write(snapshot, songs, BuildConfig.VERSION_NAME, System.currentTimeMillis(), it) }.toByteArray()
         val read = listOfNotNull(snapshot.playlists, snapshot.queues, snapshot.plays, snapshot.songState, snapshot.equalizer, snapshot.ledger, snapshot.settings, snapshot.tones, snapshot.duplicates, snapshot.coversTags, snapshot.searches, snapshot.books)

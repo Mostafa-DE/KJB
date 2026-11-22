@@ -298,6 +298,8 @@ private fun SongsTab(ui: LibraryUi, library: Library, reselect: Int, topBar: @Co
     val reduced = LocalReducedMotion.current
     SongListFrame(ui, songs, source, topBar, state, loaded = listed != null) { list ->
         recapCard(LibraryTab.SONGS)
+        // A song, album or playlist a friend sent and you have not opened (Huddle, plan part 3).
+        item(key = "huddle", contentType = "huddle") { Box(rowMotion(reduced)) { HuddleFromRow() } }
         item(key = "for you", contentType = "for you") { Box(rowMotion(reduced)) { ForYouCard(ui) } }
         item(key = "favourites", contentType = "favourites") { Box(rowMotion(reduced)) { FavouritesRowView(ui, library) } }
         item(key = "header", contentType = "header") {

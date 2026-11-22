@@ -276,6 +276,10 @@ suspend fun shareLyricsText(context: Context, song: Song, title: String, entry: 
     return launchShare(1) { context.startActivity(shareSheet(lyricsTextShare(title, text), context.packageName)) }
 }
 
+/** Huddle's [text] for any chat app (an invite link, an ask for a song, HuddleSheets.kt): ACTION_SEND text/plain. */
+fun shareMessage(context: Context, text: String): Shared =
+    launchShare(1) { context.startActivity(shareSheet(ShareRequest(Intent.ACTION_SEND, TEXT_TYPE, text = text), context.packageName)) }
+
 /** "Lyrics file": the song's synced `.lrc` as it is on disk, through a copy in KJB's cache ([lrcCopy]). */
 suspend fun shareLyricsFile(context: Context, song: Song, title: String): Shared {
     val file = withContext(Dispatchers.IO) { lrcCopy(context.cacheDir, song.path, System.currentTimeMillis()) } ?: return Shared.NoLyrics

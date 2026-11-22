@@ -197,7 +197,7 @@ fun AppShell(
     // Bookmarks' count once they are read: a place kept as music plays changes no count, so it redraws nothing here.
     val extras = remember(context) { PlayerExtras.of(context) }
     val bookmarks by remember(extras) { extras.state.combine(extras.ready) { state, read -> state.bookmarks.values.sumOf { it.size }.takeIf { read } } }.collectAsStateWithLifecycle(null)
-    val rows = toolRows(checks, dupesView(dupes), dupes.badge, tones.tones.size, coversTagsRow(), ai, aiWaiting, downloadsRow(), rememberTrashSongs(), bookmarks)
+    val rows = toolRows(checks, dupesView(dupes), dupes.badge, tones.tones.size, coversTagsRow(), ai, aiWaiting, downloadsRow(), rememberTrashSongs(), bookmarks, huddleRow())
     val own = rememberOwnNow()
     val followed by NowPlaying.followed.collectAsStateWithLifecycle()
     val other = rememberOtherSession(followed?.takeIf { grants.access.notifications })
@@ -416,6 +416,7 @@ private fun PageContent(
         Page.Bookmarks -> BookmarksPage { back() }
         Page.Ai -> AiPage(ai, counts, aiWaiting, aiDoneToday, aiActions, onOpenStatus = { nav.open(Page.Songs(it.group, it)) }) { back() }
         Page.Downloads -> DownloadsPage { back() }
+        Page.Huddle -> HuddlePage { back() }
         Page.CoversTags -> CoversTagsPage()
         Page.TagHistory -> TagHistoryPage()
         is Page.Settings -> SettingsScreen(settings, onSettings, grants, ai, aiActions, backup, versionName, onOpen = nav::open, section = page.section) { back() }

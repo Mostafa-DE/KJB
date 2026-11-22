@@ -169,7 +169,7 @@ class PlayerScreenTest {
         assertEquals(
             listOf(
                 PlayerMenuRow.ADD_TO, PlayerMenuRow.MORE_LIKE, PlayerMenuRow.SPEED, PlayerMenuRow.SLEEP, PlayerMenuRow.REPEAT_PART, PlayerMenuRow.BOOKMARK, PlayerMenuRow.PLAY_ON,
-                PlayerMenuRow.EQUALIZER, PlayerMenuRow.SHARE, PlayerMenuRow.SONG_INFO, PlayerMenuRow.EDIT_TAGS, PlayerMenuRow.MOVE_TO_TRASH,
+                PlayerMenuRow.EQUALIZER, PlayerMenuRow.SHARE, PlayerMenuRow.SEND, PlayerMenuRow.SONG_INFO, PlayerMenuRow.EDIT_TAGS, PlayerMenuRow.MOVE_TO_TRASH,
             ),
             playerMenuRows(song = true, album = false, artist = false, tone = false, cut = false),
         )
@@ -197,7 +197,7 @@ class PlayerScreenTest {
         assertFalse(PlayerMenuRow.CUT in playerMenuRows(song = true, album = false, artist = false, tone = true, cut = false))
         // One Share in its place, Song or Lyrics asked from it for a song with lyrics (ShareMenu): no Share lyrics row.
         val all = playerMenuRows(song = true, album = true, artist = true, tone = true, cut = true)
-        assertEquals(listOf(PlayerMenuRow.TONE, PlayerMenuRow.CUT, PlayerMenuRow.SHARE, PlayerMenuRow.SONG_INFO), all.subList(all.indexOf(PlayerMenuRow.TONE), all.indexOf(PlayerMenuRow.SONG_INFO) + 1))
+        assertEquals(listOf(PlayerMenuRow.TONE, PlayerMenuRow.CUT, PlayerMenuRow.SHARE, PlayerMenuRow.SEND, PlayerMenuRow.SONG_INFO), all.subList(all.indexOf(PlayerMenuRow.TONE), all.indexOf(PlayerMenuRow.SONG_INFO) + 1))
         // The song sheet's rule: a format the phone decodes, not a book.
         val harbour = song("Music/Kite Weather/Paper Harbour.mp3")
         assertTrue(cutsSong(harbour, book = false))

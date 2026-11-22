@@ -44,6 +44,14 @@ val dlAddonUrl = findProperty("dlAddonUrl")?.toString() ?: "https://github.com/$
 val dlAddonSha256 = findProperty("dlAddonSha256")?.toString() ?: "e2d6f1fe469f0b1633c0715873086a35c6456d64ad64f3cc17200dbd5af4dbc9" // the release asset's SHA-256
 val dlAddonBytes = findProperty("dlAddonBytes")?.toString() ?: "55916018" // the release asset's size in bytes
 
+/**
+ * Huddle's server (huddle-server/, plan Q3.2): its Railway address (live since 2026-11-22, serving assetlinks.json for
+ * the release key), and the user's own domain, added later. KJB talks to the first and opens invite links on both (App
+ * Links), so the move to the domain needs no KJB update. -PhuddleHost points a test build at another server.
+ */
+val huddleHost = findProperty("huddleHost")?.toString() ?: "kjb-huddle.up.railway.app"
+val huddleDomain = "huddle.kjb.mostafade.com"
+
 android {
     namespace = "app.lyrify"
     compileSdk = 37
@@ -70,6 +78,10 @@ android {
         buildConfigField("String", "DL_ADDON_URL", "\"$dlAddonUrl\"")
         buildConfigField("String", "DL_ADDON_SHA256", "\"$dlAddonSha256\"")
         buildConfigField("long", "DL_ADDON_BYTES", "${dlAddonBytes}L")
+        buildConfigField("String", "HUDDLE_HOST", "\"$huddleHost\"")
+        buildConfigField("String", "HUDDLE_DOMAIN", "\"$huddleDomain\"")
+        manifestPlaceholders["huddleHost"] = huddleHost
+        manifestPlaceholders["huddleDomain"] = huddleDomain
 
         // Device tests (app/src/androidTest) run on the debug build, beside the release app.
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

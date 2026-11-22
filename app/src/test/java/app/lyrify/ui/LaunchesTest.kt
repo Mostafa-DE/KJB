@@ -34,6 +34,33 @@ class LaunchesTest {
     }
 
     @Test
+    fun `a Huddle invite link on one of its hosts opens the invite, and only a link with its code`() {
+        val hosts = listOf("kjb-huddle.up.railway.app", "huddle.example.org")
+        val link = "https://kjb-huddle.up.railway.app/i#AQSkZ_-x"
+        assertEquals(Launch.Invite(link), launchOf(LaunchIntent(Intent.ACTION_VIEW, null, link), hosts))
+        assertEquals(Launch.Invite("https://HUDDLE.example.org/i/#AQ"), launchOf(LaunchIntent(Intent.ACTION_VIEW, null, "https://HUDDLE.example.org/i/#AQ"), hosts))
+        assertNull("another host, sent straight to KJB", launchOf(LaunchIntent(Intent.ACTION_VIEW, null, "https://huddle.example.net/i#AQ"), hosts))
+        assertNull("a song's link is no invite", launchOf(LaunchIntent(Intent.ACTION_VIEW, null, "https://example.com/a.mp3"), hosts))
+        assertNull("the landing page without a code", launchOf(LaunchIntent(Intent.ACTION_VIEW, null, "https://kjb-huddle.up.railway.app/i"), hosts))
+        assertNull(launchOf(LaunchIntent(Intent.ACTION_VIEW, null, "http://kjb-huddle.up.railway.app/i#AQ"), hosts))
+        assertNull("a link with a type is a file", launchOf(LaunchIntent(Intent.ACTION_VIEW, "audio/mpeg", link), hosts))
+    }
+
+    @Test
+    fun `the manifest opens invite links of both of Huddle's hosts in one checked https filter`() {
+        val root = DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(File("src/main/AndroidManifest.xml")).documentElement
+        val filters = root.getElementsByTagName("intent-filter").let { list -> (0 until list.length).map { list.item(it) as Element } }
+        val links = filters.single { it.getAttribute("android:autoVerify") == "true" }
+        assertEquals("app.lyrify.ui.MainActivity".removePrefix("app.lyrify"), (links.parentNode as Element).getAttribute("android:name"))
+        fun values(tag: String, attribute: String) = links.getElementsByTagName(tag).let { list -> (0 until list.length).map { (list.item(it) as Element).getAttribute(attribute) }.filter(String::isNotEmpty) }
+        assertEquals(listOf("android.intent.action.VIEW"), values("action", "android:name"))
+        assertEquals(setOf("android.intent.category.DEFAULT", "android.intent.category.BROWSABLE"), values("category", "android:name").toSet())
+        assertEquals(listOf("https"), values("data", "android:scheme"))
+        assertEquals(listOf("\${huddleHost}", "\${huddleDomain}"), values("data", "android:host"))
+        assertEquals(listOf("/i"), values("data", "android:path"))
+    }
+
+    @Test
     fun `Share with one audio file plays it, and shared text is the downloads' and not opened here`() {
         assertEquals(Launch.Open(listOf(song)), launchOf(LaunchIntent(Intent.ACTION_SEND, "audio/flac", streams = listOf(song))))
         assertEquals(Launch.Open(listOf(song)), launchOf(LaunchIntent(Intent.ACTION_SEND, "application/ogg", streams = listOf(song))))

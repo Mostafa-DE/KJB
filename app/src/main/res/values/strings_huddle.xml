@@ -1,0 +1,133 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Huddle (huddle/, ui/HuddleScreen.kt, ui/HuddleSheets.kt): friends send each other songs, albums and playlists;
+         only song details travel, sealed on the phone. Labels are 3 words or fewer; sentences only in sheets and
+         dialogs. Never the words key, encrypt or relay in the main flow. -->
+    <string name="huddle_title">Huddle</string>
+
+    <!-- Tools row -->
+    <string name="huddle_tool_none">Send songs to friends</string>
+    <string name="huddle_tool_waiting">Waiting for a friend</string>
+    <plurals name="huddle_friends">
+        <item quantity="one">%d friend</item>
+        <item quantity="other">%d friends</item>
+    </plurals>
+
+    <!-- The Huddle page -->
+    <string name="huddle_empty_title">No friends yet</string>
+    <string name="huddle_empty_text">Invite a friend with a link in any chat. Once they open it, you can send each other songs.</string>
+    <string name="huddle_invite">Invite a friend</string>
+    <string name="huddle_paste">Paste invite</string>
+    <string name="huddle_paste_none">No invite on your clipboard. Copy the link your friend sent, then try again.</string>
+    <string name="huddle_friends_title">Friends</string>
+    <string name="huddle_inbox_title">Sent to you</string>
+    <string name="huddle_waiting_title">Invites waiting</string>
+    <!-- An invite no friend has joined yet: when it was sent ("Sent 2 hours ago"). -->
+    <string name="huddle_waiting_row">Sent %1$s</string>
+    <string name="huddle_cancel_invite">Cancel invite</string>
+    <string name="huddle_no_answer">Couldn\'t reach Huddle. Check your connection and try again.</string>
+    <!-- A friend's line: what they play now, or played last ("Played Paper Lantern, 2 hours ago"). -->
+    <string name="huddle_playing">Playing %1$s</string>
+    <string name="huddle_played">Played %1$s, %2$s</string>
+    <string name="huddle_friend_more">More for %1$s</string>
+    <string name="huddle_rename_title">Rename %1$s</string>
+    <string name="huddle_share_plays">Share what I play</string>
+    <string name="huddle_share_plays_on">%1$s sees each song you play</string>
+    <string name="huddle_share_plays_off">%1$s doesn\'t see what you play</string>
+    <string name="huddle_remove">Remove friend</string>
+    <string name="huddle_remove_title">Remove %1$s?</string>
+    <string name="huddle_remove_text">You stop sending each other songs. What they sent leaves this phone, and their KJB removes you too.</string>
+    <string name="huddle_removed">Removed %1$s</string>
+
+    <!-- Listen privately: no play is shared for a while. -->
+    <string name="huddle_private">Listen privately</string>
+    <string name="huddle_private_off">Friends you share with see what you play</string>
+    <string name="huddle_private_until">On until %1$s</string>
+    <string name="huddle_private_forever">On until you turn it off</string>
+    <string name="huddle_private_hour">For an hour</string>
+    <string name="huddle_private_always">Until I turn it off</string>
+    <string name="huddle_private_stop">Share again</string>
+
+    <!-- Your name, typed once; friends see it. -->
+    <string name="huddle_name_title">Your name</string>
+    <string name="huddle_name_text">Friends see this name. You can change it here.</string>
+    <string name="huddle_name_field">Name</string>
+    <string name="huddle_save">Save</string>
+
+    <!-- The backup passphrase. -->
+    <string name="huddle_backup">Keep friends in backups</string>
+    <string name="huddle_backup_off">Set a passphrase, so a new phone keeps your friends</string>
+    <string name="huddle_backup_on">On. Your backups hold your friends, locked with your passphrase</string>
+    <string name="huddle_passphrase_title">Backup passphrase</string>
+    <string name="huddle_passphrase_text">Your backups will hold your friends, locked with this passphrase. You need it to bring them back on a new phone. KJB can\'t show it to you again.</string>
+    <string name="huddle_passphrase_field">Passphrase</string>
+    <string name="huddle_passphrase_again">Passphrase again</string>
+    <string name="huddle_passphrase_short">At least 8 characters</string>
+    <string name="huddle_passphrase_differ">The two don\'t match</string>
+    <string name="huddle_passphrase_set">Set</string>
+    <string name="huddle_passphrase_saved">Your backups now keep your friends</string>
+
+    <!-- What leaves your phone. -->
+    <string name="huddle_privacy_title">What leaves your phone</string>
+    <string name="huddle_privacy">What you send goes through Huddle\'s server sealed, so only your friend\'s phone can read it: each song\'s title, artist, album and length, your note and your name, never the file. With Share what I play on, so does each song you play, unless you listen privately. The server keeps no names, accounts or phone numbers. It sees that two phones exchange messages, and when.</string>
+
+    <!-- Send to a friend: the song sheet, the player, an album's and a playlist's menu. -->
+    <string name="huddle_send">Send to a friend</string>
+    <string name="huddle_send_to">Send to %1$s</string>
+    <string name="huddle_note">Add a note</string>
+    <string name="huddle_sent">Sent to %1$s</string>
+    <string name="huddle_invite_gets_it">They get it when they open your link</string>
+    <!-- "Paper Lantern by Kit Calloway". -->
+    <string name="huddle_song_by">%1$s by %2$s</string>
+    <!-- What the chat app's message says with an invite link. -->
+    <string name="huddle_invite_message">Join me on KJB, so we can send each other songs: %1$s</string>
+    <string name="huddle_invite_message_song">I\'m sending you %1$s on KJB: %2$s</string>
+    <string name="huddle_invite_message_album">I\'m sending you the album %1$s on KJB: %2$s</string>
+    <string name="huddle_invite_message_playlist">I\'m sending you my playlist %1$s on KJB: %2$s</string>
+
+    <!-- The start screen's row, and a card sent to you. -->
+    <string name="huddle_from">From %1$s</string>
+    <string name="huddle_dismiss">Dismiss</string>
+    <string name="huddle_play">Play</string>
+    <plurals name="huddle_play_found">
+        <item quantity="one">Play the one you have</item>
+        <item quantity="other">Play the %d you have</item>
+    </plurals>
+    <string name="huddle_maybe_title">Is this the song?</string>
+    <string name="huddle_maybe_yes">Yes, play it</string>
+    <string name="huddle_maybe_no">No</string>
+    <string name="huddle_yes">Yes</string>
+    <string name="huddle_missing">You don\'t have this song. Ask %1$s to send it to you, or search for it on YouTube.</string>
+    <plurals name="huddle_missing_some">
+        <item quantity="one">You don\'t have %d of these songs.</item>
+        <item quantity="other">You don\'t have %d of these songs.</item>
+    </plurals>
+    <string name="huddle_ask">Ask %1$s</string>
+    <string name="huddle_ask_message">Can you send me %1$s? I don\'t have it.</string>
+    <string name="huddle_ask_message_many">Can you send me these songs? I don\'t have them:\n%1$s</string>
+    <string name="huddle_youtube">Search on YouTube</string>
+    <string name="huddle_get_it">Get it</string>
+    <string name="huddle_found">In your library</string>
+    <string name="huddle_maybe">Maybe in your library</string>
+    <string name="huddle_not_found">Not in your library</string>
+    <string name="huddle_done">Done</string>
+
+    <!-- Opening an invite link. -->
+    <string name="huddle_accept_title">%1$s invites you to Huddle</string>
+    <string name="huddle_accept_text">You can send each other songs. Only song details travel, never the files.</string>
+    <string name="huddle_accept_song">%1$s sent you %2$s</string>
+    <string name="huddle_accept">Add %1$s</string>
+    <string name="huddle_accept_play">Play and add %1$s</string>
+    <string name="huddle_not_now">Not now</string>
+    <string name="huddle_accept_taken">Someone already used this invite. Ask %1$s for a new one.</string>
+    <string name="huddle_accept_expired">This invite has expired. Ask %1$s for a new one.</string>
+    <string name="huddle_accept_own">This is your own invite. Send it to a friend.</string>
+    <string name="huddle_accept_bad">This invite link doesn\'t work. It may have been cut short.</string>
+    <string name="huddle_joined">%1$s is your friend now</string>
+    <string name="huddle_already">You\'re already friends with %1$s</string>
+
+    <!-- Restore: the backup's friends, with the passphrase. -->
+    <string name="huddle_restore_row">Huddle friends</string>
+    <string name="huddle_restore_wrong">That passphrase doesn\'t open your Huddle friends. Try again, or untick Huddle friends.</string>
+    <string name="huddle_restore_one_phone">Bring them back on one phone only: two phones with the same friends would take each other\'s songs.</string>
+</resources>

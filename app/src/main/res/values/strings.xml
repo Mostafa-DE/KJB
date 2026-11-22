@@ -69,7 +69,7 @@
     <string name="setup_restricted_title">Greyed out?</string>
     <string name="setup_restricted_detail">Your phone blocks this for apps from outside an app store. Open App info, tap the three dots, then Allow restricted settings. Then try again.</string>
     <string name="setup_battery_title">Keep running</string>
-    <string name="setup_privacy">Only names and lengths leave your phone. Lyrics lookups send the title, artist, album and length to LRCLIB. Covers &amp; tags sends album titles, artists, song titles, track counts and lengths to MusicBrainz, and gets covers from the Cover Art Archive and archive.org. To find similar artists, KJB sends the names of artists you play to MusicBrainz and their ids to ListenBrainz. While you use KJB, it asks github.com every hour for a newer version.</string>
+    <string name="setup_privacy">Only names and lengths leave your phone. Lyrics lookups send the title, artist, album and length to LRCLIB. Covers &amp; tags sends album titles, artists, song titles, track counts and lengths to MusicBrainz, and gets covers from the Cover Art Archive and archive.org. To find similar artists, KJB sends the names of artists you play to MusicBrainz and their ids to ListenBrainz. Huddle sends what you share with friends through its server, sealed so only their phones can read it. While you use KJB, it asks github.com every hour for a newer version.</string>
     <string name="open_app_info">Open App info</string>
 
     <!-- Now -->

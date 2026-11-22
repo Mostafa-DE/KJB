@@ -72,6 +72,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.lifecycleScope
 import app.lyrify.Lyrify
 import app.lyrify.R
+import app.lyrify.huddle.CardKind
 import app.lyrify.library.Album
 import app.lyrify.library.CollectionKind
 import app.lyrify.library.FavouriteCollection
@@ -344,8 +345,8 @@ private fun ArtistPage(ui: LibraryUi, library: Library, name: String) {
 
 /**
  * An album's "⋯" while [open]: Play next and Add to for its songs in album order (whatever order the page shows),
- * Shuffle as the header's, Go to artist when the artist has a page (an album artist tag of several names asks which,
- * [onChooseArtist]), Covers & tags at this album's review, Edit album.
+ * Shuffle as the header's, Send to a friend (Huddle), Go to artist when the artist has a page (an album artist tag of
+ * several names asks which, [onChooseArtist]), Covers & tags at this album's review, Edit album.
  */
 @Composable
 private fun AlbumMenu(open: Boolean, album: Album, library: Library, list: PageSongs, byTitle: Boolean, onChooseArtist: (List<String>) -> Unit, onClose: () -> Unit) {
@@ -361,6 +362,8 @@ private fun AlbumMenu(open: Boolean, album: Album, library: Library, list: PageS
         override fun addTo() = list.addTo(album.songs)
 
         override fun shuffle() = list.shuffle()
+
+        override fun send() = list.sheets.show(OpenSheet.SendTo(album.songs.map { it.ref }, CardKind.ALBUM, album.title))
 
         override fun goToArtist() {
             artistTap(artists, { nav.open(Page.Artist(it)) }, onChooseArtist)?.invoke()
@@ -407,6 +410,8 @@ private fun ArtistMenu(open: Boolean, artist: app.lyrify.library.Artist, list: P
         override fun mergeWith() = openMerge(artist.name)
 
         // An album's rows.
+        override fun send() = Unit
+
         override fun goToArtist() = Unit
 
         override fun coversTags() = Unit
@@ -528,9 +533,10 @@ private fun UnknownAlbumPage(ui: LibraryUi, library: Library) {
 }
 
 /**
- * One of the user's playlists, its songs in the user's order (a song possibly twice); "⋯" has Rename and Delete, and the
- * song sheet "Remove from playlist". Delete goes back to where the page was opened from, and its toast's Undo brings the
- * playlist back and opens it again. A playlist deleted elsewhere leaves its page saying so.
+ * One of the user's playlists, its songs in the user's order (a song possibly twice); "⋯" has Rename, Send to a friend
+ * (its songs as shown, Huddle) and Delete, and the song sheet "Remove from playlist". Delete goes back to where the page
+ * was opened from, and its toast's Undo brings the playlist back and opens it again. A playlist deleted elsewhere leaves
+ * its page saying so.
  */
 @Composable
 internal fun PlaylistPage(ui: LibraryUi, library: Library, id: String) {
@@ -542,6 +548,7 @@ internal fun PlaylistPage(ui: LibraryUi, library: Library, id: String) {
     var sorting by rememberSaveable { mutableStateOf(false) }
     var renaming by rememberSaveable { mutableStateOf(false) }
     var deleting by rememberSaveable { mutableStateOf(false) }
+    var sending by rememberSaveable { mutableStateOf(false) }
     var menu by remember { mutableStateOf(false) }
     val m3u = rememberM3uActions()
     val nav = LocalNavigator.current
@@ -574,6 +581,10 @@ internal fun PlaylistPage(ui: LibraryUi, library: Library, id: String) {
                         renaming = true
                     })
                     PlaylistExportRow(m3u, playlist, close = { menu = false })
+                    MenuRow(stringResource(R.string.huddle_send), R.drawable.ic_send, onClick = {
+                        menu = false
+                        sending = true
+                    })
                     MenuRow(stringResource(R.string.lib_delete_playlist), R.drawable.ic_delete, destructive = true, onClick = {
                         menu = false
                         deleting = true
@@ -599,6 +610,7 @@ internal fun PlaylistPage(ui: LibraryUi, library: Library, id: String) {
         songRows(list, place = { at -> placeNow(entries, listed, at)?.let { SheetPlace.Playlist(id, it) } ?: SheetPlace.List }, keys = entries.map { it.key }, reorder = reorder.takeIf { order.reorders })
     }
     if (sorting) ListSortSheet(SongList.PLAYLIST, order, R.string.lib_sort_custom, onOrder) { sorting = false }
+    if (sending) SendToFriendSheet(songs, CardKind.PLAYLIST, playlist.name) { sending = false }
     if (renaming) {
         NameDialog(stringResource(R.string.lib_rename_playlist), playlist.name, R.drawable.ic_edit, onDismiss = { renaming = false }, confirm = R.string.lib_rename) { name ->
             renaming = false

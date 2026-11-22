@@ -90,6 +90,9 @@ class MainActivity : ComponentActivity() {
     /** What another app or a shortcut asked to play (Launches.kt), until it plays. */
     private val launch = MutableStateFlow<Launch.Plays?>(null)
 
+    /** A Huddle invite link another app opened, until the shell has shown it (HuddleScreen.kt). */
+    private val invite = MutableStateFlow<String?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -120,7 +123,14 @@ class MainActivity : ComponentActivity() {
                         view.collectAsStateWithLifecycle().value,
                         { view.value = null },
                         { destination.value = null },
-                        Opened(tab.collectAsStateWithLifecycle().value, { tab.value = null }, launch.collectAsStateWithLifecycle().value, { launch.value = null }) {
+                        Opened(
+                            tab.collectAsStateWithLifecycle().value,
+                            { tab.value = null },
+                            launch.collectAsStateWithLifecycle().value,
+                            { launch.value = null },
+                            invite.collectAsStateWithLifecycle().value,
+                            { invite.value = null },
+                        ) {
                             view.value = FullScreen.Player
                         },
                     )
@@ -152,6 +162,7 @@ class MainActivity : ComponentActivity() {
             Launch.Search -> tab.value = DockTab.SEARCH
             Launch.Favourites -> destination.value = Page.BuiltIn(BuiltInList.FAVOURITES)
             is Launch.Plays -> launch.value = asked
+            is Launch.Invite -> invite.value = asked.link
         }
         val name = intent.getStringExtra(EXTRA_DESTINATION) ?: return
         intent.removeExtra(EXTRA_DESTINATION)
@@ -163,9 +174,17 @@ class MainActivity : ComponentActivity() {
 
 /**
  * What another app or a launcher shortcut asked, for the shell: a [tab] to open, something to play ([launch], then
- * [onPlayer]), each cleared once done.
+ * [onPlayer]), a Huddle [invite] to answer, each cleared once done.
  */
-private class Opened(val tab: DockTab?, val onTabOpened: () -> Unit, val launch: Launch.Plays?, val onLaunchDone: () -> Unit, val onPlayer: () -> Unit)
+private class Opened(
+    val tab: DockTab?,
+    val onTabOpened: () -> Unit,
+    val launch: Launch.Plays?,
+    val onLaunchDone: () -> Unit,
+    val invite: String?,
+    val onInviteTaken: () -> Unit,
+    val onPlayer: () -> Unit,
+)
 
 /**
  * The first-run screen while [setupShows] says so, then the app's shell, opened at [destination] when a notification
@@ -394,6 +413,8 @@ private fun App(ledger: LedgerStore, destination: Page?, view: FullScreen?, onVi
     }
     // Files another app opened, Shuffle all and Resume: they play, then the player shows.
     LaunchWork(opened.launch, opened.onLaunchDone, opened.onPlayer)
+    // Huddle: its syncs while KJB is in front, and an invite link another app opened.
+    HuddleHost(opened.invite, opened.onInviteTaken)
     // KJB's update, when the check finds one; the check runs when KJB comes to the front and each hour it stays there.
     UpdateHost()
     LifecycleStartEffect(context) {

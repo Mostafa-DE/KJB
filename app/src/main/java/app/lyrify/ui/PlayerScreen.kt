@@ -461,6 +461,7 @@ enum class PlayerRoute {
     CUT,
     SHARE,
     SHARE_LYRICS,
+    SEND,
     SONG_INFO,
     SLEEP,
     SEARCH_LYRICS,
@@ -863,13 +864,14 @@ private fun Backdrop(path: String) {
 }
 
 /** The rows of the player's "⋯", in the order they show; Move to trash sits apart at the bottom, as on the song sheet. */
-enum class PlayerMenuRow { ADD_TO, ALBUM, ARTIST, MORE_LIKE, SPEED, SLEEP, REPEAT_PART, BOOKMARK, BOOKMARKS, PLAY_ON, EQUALIZER, TONE, CUT, SHARE, SONG_INFO, EDIT_TAGS, MOVE_TO_TRASH }
+enum class PlayerMenuRow { ADD_TO, ALBUM, ARTIST, MORE_LIKE, SPEED, SLEEP, REPEAT_PART, BOOKMARK, BOOKMARKS, PLAY_ON, EQUALIZER, TONE, CUT, SHARE, SEND, SONG_INFO, EDIT_TAGS, MOVE_TO_TRASH }
 
 /**
  * The rows the player's "⋯" shows. A [song] of the library has Share (one row, Song or Lyrics asked from it when it has
- * lyrics), Edit tags and Move to trash, as on its sheet (a file another app opened has none of them); Go to album and Go
- * to artist when the song has their pages ([album], [artist]); Make a tone when [tone] ([makesTone]), and Cut right
- * after it when [cut] ([cutsSong]); Bookmarks, the list, right after Bookmark while what plays has [bookmarks].
+ * lyrics), Send to a friend (Huddle), Edit tags and Move to trash, as on its sheet (a file another app opened has none
+ * of them); Go to album and Go to artist when the song has their pages ([album], [artist]); Make a tone when [tone]
+ * ([makesTone]), and Cut right after it when [cut] ([cutsSong]); Bookmarks, the list, right after Bookmark while what
+ * plays has [bookmarks].
  */
 fun playerMenuRows(song: Boolean, album: Boolean, artist: Boolean, tone: Boolean, cut: Boolean, bookmarks: Boolean = false): List<PlayerMenuRow> = PlayerMenuRow.entries.filter { row ->
     when (row) {
@@ -878,7 +880,7 @@ fun playerMenuRows(song: Boolean, album: Boolean, artist: Boolean, tone: Boolean
         PlayerMenuRow.ARTIST -> artist
         PlayerMenuRow.TONE -> tone
         PlayerMenuRow.CUT -> cut
-        PlayerMenuRow.SHARE, PlayerMenuRow.EDIT_TAGS, PlayerMenuRow.MOVE_TO_TRASH, PlayerMenuRow.MORE_LIKE -> song
+        PlayerMenuRow.SHARE, PlayerMenuRow.SEND, PlayerMenuRow.EDIT_TAGS, PlayerMenuRow.MOVE_TO_TRASH, PlayerMenuRow.MORE_LIKE -> song
         else -> true
     }
 }
@@ -950,6 +952,7 @@ private fun PlayerTopBar(ui: PlayerUi, lyricsShare: LyricsShare?, tone: Boolean,
                             PlayerMenuRow.CUT -> MenuRow(stringResource(R.string.cut_row), R.drawable.ic_content_cut, pick { onRoute(PlayerRoute.CUT) })
                             // With lyrics to share, Song or Lyrics in a small menu at the ⋯ (ShareMenu); else the song at once.
                             PlayerMenuRow.SHARE -> MenuRow(stringResource(R.string.share), R.drawable.ic_share, pick { if (lyricsShare != null) sharing = true else onRoute(PlayerRoute.SHARE) })
+                            PlayerMenuRow.SEND -> MenuRow(stringResource(R.string.huddle_send), R.drawable.ic_send, pick { onRoute(PlayerRoute.SEND) })
                             PlayerMenuRow.SONG_INFO -> MenuRow(stringResource(R.string.player_menu_info), R.drawable.ic_info, pick { onRoute(PlayerRoute.SONG_INFO) })
                             // The tag editor over the player, as from the song's sheet; Back comes back here.
                             PlayerMenuRow.EDIT_TAGS -> song?.let { MenuRow(stringResource(R.string.lib_edit_tags), R.drawable.ic_sell, pick { nav.show(FullScreen.EditTags(listOf(it.ref))) }) }

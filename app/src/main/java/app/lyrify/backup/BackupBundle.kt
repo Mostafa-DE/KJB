@@ -142,6 +142,8 @@ data class BackupSnapshot(
     /** The interaction log, kept with the plays; null when it could not be read. */
     val interactions: List<Interaction>? = null,
     val bookPlays: List<LoggedPlay>? = null,
+    /** Huddle's friends and keys, sealed with the user's backup passphrase (huddle/HuddleStore.kt, HuddleBackup); null without one. */
+    val huddle: String? = null,
 )
 
 /**
@@ -186,6 +188,8 @@ data class BackupContents(
     val books: BookState? = null,
     /** The book log's plays, by path, as the plays are. */
     val bookPlays: List<LoggedPlay>? = null,
+    /** Huddle's part as the backup sealed it, opened only with its passphrase (huddle/HuddleStore.kt, HuddleBackup); null for none. */
+    val huddle: String? = null,
     /** Sections a newer KJB wrote in a form this version cannot read: skipped, and the summary says so. */
     val tooNew: List<Section> = emptyList(),
     /** How many sections this version does not know at all (a newer KJB's): skipped. */
@@ -276,6 +280,15 @@ object BackupBundle {
     const val MANIFEST: String = "manifest.json"
     const val SONGS: String = "songs.json"
     const val SONGS_VERSION: Int = 1
+
+    /**
+     * Huddle's part (plan Q3.3): its friends and keys, sealed on the phone with the user's backup passphrase
+     * (huddle/HuddleStore.kt, HuddleBackup), only when one is set. Not a [Section]: it is opened with that passphrase at
+     * the restore, apart from the sections, and names no song. The manifest names it with its version; a KJB without
+     * Huddle neither reads nor keeps it.
+     */
+    const val HUDDLE: String = "huddle.json"
+    const val HUDDLE_VERSION: Int = 1
     const val MIME_TYPE: String = "application/zip"
 
     /**
@@ -320,7 +333,7 @@ object BackupBundle {
             BackupSong(song.path, song.title, song.artist, song.album, song.durationMs, (song.folder + song.fileName).trimStart('/'), song.sizeBytes.takeIf { it > 0 })
         }
         ZipOutputStream(output).use { zip ->
-            zip.put(MANIFEST, manifest(appVersion, createdAt, sections.map { it.first }, playsParts = plays?.size ?: 1))
+            zip.put(MANIFEST, manifest(appVersion, createdAt, sections.map { it.first }, playsParts = plays?.size ?: 1, huddle = snapshot.huddle != null))
             zip.put(SONGS, songs(songs))
             sections.forEach { (section, text) -> zip.put(section.file, text) }
             // The plays' further parts, each made and gzipped as it is written.
@@ -330,6 +343,7 @@ object BackupBundle {
                     zip.put(Section.PLAYS.partFile(at + 1), gzipped.toByteArray())
                 }
             }
+            snapshot.huddle?.let { zip.put(HUDDLE, it) }
         }
     }
 
@@ -401,15 +415,15 @@ object BackupBundle {
     private fun withKeys(text: String, vararg extra: Pair<String, JsonElement?>): String =
         JsonObject(checkNotNull(jsonObject(text)) + extra.mapNotNull { (key, value) -> value?.let { key to it } }).toString()
 
-    /** The manifest; the plays section's parts counted when it has more than one ([playsParts]). */
-    private fun manifest(appVersion: String, createdAt: Long, sections: List<Section>, playsParts: Int): String = JsonObject(
+    /** The manifest; the plays section's parts counted when it has more than one ([playsParts]), and Huddle's part named when there is one. */
+    private fun manifest(appVersion: String, createdAt: Long, sections: List<Section>, playsParts: Int, huddle: Boolean): String = JsonObject(
         mapOf(
             FORMAT_KEY to JsonPrimitive(FORMAT),
             APP_VERSION_KEY to JsonPrimitive(appVersion),
             CREATED_AT_KEY to JsonPrimitive(createdAt),
             SectionJson.SONGS_KEY to version(SONGS_VERSION),
             SECTIONS_KEY to JsonObject(sections.associate { it.key to version(it.version, if (it == Section.PLAYS) playsParts else 1) }),
-        ),
+        ) + listOfNotNull((HUDDLE_KEY to version(HUDDLE_VERSION)).takeIf { huddle }),
     ).toString()
 
     private fun version(version: Int, parts: Int = 1): JsonObject = JsonObject(
@@ -469,6 +483,8 @@ object BackupBundle {
             createdAt = manifest.long(CREATED_AT_KEY) ?: 0,
             appVersion = manifest.text(APP_VERSION_KEY).orEmpty(),
             songs = songs,
+            // Opened only with its passphrase, at the restore: here only that it is what it says. One of another form is left out.
+            huddle = files[HUDDLE]?.decodeToString()?.takeIf { (manifest[HUDDLE_KEY] as? JsonObject)?.int(VERSION_KEY) == HUDDLE_VERSION && jsonObject(it) != null },
         )
         val tooNew = mutableListOf<Section>()
         var unknown = 0
@@ -619,6 +635,7 @@ object BackupBundle {
     private const val APP_VERSION_KEY: String = "appVersion"
     private const val CREATED_AT_KEY: String = "createdAt"
     private const val SECTIONS_KEY: String = "sections"
+    private const val HUDDLE_KEY: String = "huddle"
     private const val VERSION_KEY: String = "version"
     private const val PARTS_KEY: String = "parts"
     private const val ALBUM_KEY: String = "album"
@@ -630,5 +647,5 @@ object BackupBundle {
     private const val CONNECT_KEY: String = "startWhenConnected"
 
     /** The only entries read into memory: the plays section's parts too, as many as a zip may hold entries. */
-    private val KEPT: Set<String> = setOf(MANIFEST, SONGS) + Section.entries.map { it.file } + (2..ZipLimits().entries).map(Section.PLAYS::partFile)
+    private val KEPT: Set<String> = setOf(MANIFEST, SONGS, HUDDLE) + Section.entries.map { it.file } + (2..ZipLimits().entries).map(Section.PLAYS::partFile)
 }
