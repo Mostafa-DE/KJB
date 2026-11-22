@@ -306,8 +306,9 @@ class LibraryListsTest {
         val page = File("src/main/java/app/lyrify/ui/CollectionScreens.kt").readText().substringAfter("private fun BuiltInPage(").substringBefore("\n}\n")
         // The songs shown are those the search leaves of the chip's list.
         assertTrue(page.contains("findInList("))
-        // The hero's line ("83 songs · 423 min"), the header's count, and Shuffle, Play and Add all (the frame's songs) take them.
-        assertTrue(page.contains("songsMeta(songs)"))
+        // The hero's line, the header's count, and Shuffle, Play and Add all (the frame's songs) take them. The line says the
+        // length in hours and minutes as Insights do ("83 songs · 7 h 3 min", "42 min" under an hour; user 2026-11-22).
+        assertTrue(page.contains("songsMeta(songs, hours = true)"))
         assertTrue(page.contains("ListHeader(songs.size,"))
         assertTrue(page.contains("SongListFrame(ui, songs,"))
         // One chip per period, one picked at a time, kept for the list in settings.json.

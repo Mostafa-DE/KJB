@@ -5,6 +5,7 @@ import app.lyrify.library.Song
 import app.lyrify.library.SongRef
 import app.lyrify.library.VOLUME
 import app.lyrify.library.albumKey
+import app.lyrify.library.recentlyAdded
 import app.lyrify.library.song
 import app.lyrify.settings.LibrarySettings
 import app.lyrify.settings.ListPeriod
@@ -424,6 +425,20 @@ class ListeningTest {
 
         assertEquals(listOf(alder.ref), stats.mostPlayed(50, fifteenDays).map { it.song })
         assertEquals(listOf(alder.ref), stats.recentlyPlayed(500, fifteenDays).map { it.song })
+    }
+
+    @Test
+    fun `Most played and Recently played leave out podcast episodes, as Insights does, in a period and over all time`() = runBlocking {
+        val episode = song("Music/Talks/Episode 7.mp3", isPodcast = true, id = 60)
+        val withTalks = Library.of(listOf(alder, birch, episode), Settings())
+        val stats = stats(play(alder, lateToday - HOUR), play(episode, lateToday - 2 * HOUR), play(episode, lateToday - 3 * HOUR), library = withTalks)
+
+        assertEquals(listOf(alder.ref), stats.mostPlayed(50, fifteenDays).map { it.song })
+        assertEquals(listOf(alder.ref), stats.recentlyPlayed(500, fifteenDays).map { it.song })
+        assertEquals(listOf(alder.ref), stats.mostPlayed(50).map { it.song })
+        assertEquals(listOf(alder.ref), stats.recentlyPlayed(500).map { it.song })
+        // Recently added keeps them: an episode new on the phone is news.
+        assertEquals(setOf(alder.path, birch.path, episode.path), recentlyAdded(withTalks, null).map { it.path }.toSet())
     }
 
     @Test

@@ -264,12 +264,17 @@ private fun BigCover(song: Song?) {
     SongCover(song?.let { SongArt(it.path, it.ref.mediaStoreId) }, size = HERO, shape = RoundedCornerShape(28.dp))
 }
 
-/** "12 songs · 48 min", after the [lead] facts. */
+/**
+ * "12 songs · 48 min", after the [lead] facts; with [hours], the length as Insights say it ("83 songs · 7 h 3 min", only
+ * minutes under an hour: [listenedText]), as the period lists have it (user 2026-11-22).
+ */
 @Composable
-private fun songsMeta(songs: List<Song>, vararg lead: String?): String {
+private fun songsMeta(songs: List<Song>, vararg lead: String?, hours: Boolean = false): String {
     val minutes = TimeUnit.MILLISECONDS.toMinutes(songs.sumOf { it.durationMs.coerceAtLeast(0) }).toInt()
-    return (lead.filterNotNull() + pluralStringResource(R.plurals.lib_songs, songs.size, songs.size) + pluralStringResource(R.plurals.lib_minutes, minutes, minutes))
-        .joinToString(" · ")
+    return (
+        lead.filterNotNull() + pluralStringResource(R.plurals.lib_songs, songs.size, songs.size) +
+            (if (hours) listenedText(songs.sumOf { it.durationMs.coerceAtLeast(0) }) else pluralStringResource(R.plurals.lib_minutes, minutes, minutes))
+        ).joinToString(" · ")
 }
 
 /** An album: its cover, title, the artist as a link, year, count and length; then its tracks in disc and track order. */
@@ -697,7 +702,7 @@ private fun BuiltInPage(ui: LibraryUi, library: Library, list: BuiltInList) {
     }
     val reduced = LocalReducedMotion.current
     SongListFrame(ui, songs, QueueSource(kind, list.name, ""), topBar = { under, backdrop -> CollectionTopBar(title, under, backdrop, ui) }, loaded = rows != null && shown != null) { songList ->
-        item(key = "hero", contentType = "hero") { Box(rowMotion(reduced)) { Hero(title, songsMeta(songs), art = { BuiltInTile(list, HERO) }) } }
+        item(key = "hero", contentType = "hero") { Box(rowMotion(reduced)) { Hero(title, songsMeta(songs, hours = true), art = { BuiltInTile(list, HERO) }) } }
         if (list == BuiltInList.MOST_PLAYED) {
             item(key = "listening", contentType = "listening") { ListeningCard(rowMotion(reduced).padding(start = ScreenPadding, end = ScreenPadding, top = 8.dp, bottom = 4.dp)) }
         }

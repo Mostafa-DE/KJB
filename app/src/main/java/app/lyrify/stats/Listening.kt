@@ -160,7 +160,7 @@ class PlayStats(
     /** The library's songs played most since [since] ([totals]), under their paths now; ties as in [listeningOf]. */
     override suspend fun mostPlayed(limit: Int, since: Long?): List<SongPlays> {
         val totals = totals(since)
-        return withContext(compute) { listeningOf(totals, library()).songs.take(limit).map(::songPlays) }
+        return withContext(compute) { listeningOf(totals, library()).songs.filterNot { it.item.isPodcast }.take(limit).map(::songPlays) }
     }
 
     /** The library's songs whose last play that counted since [since] ([totals]) is the latest, the latest first. */
@@ -168,7 +168,7 @@ class PlayStats(
         val totals = totals(since)
         return withContext(compute) {
             val library = library() ?: return@withContext emptyList()
-            bySong(totals, library, shownOnly = true).filter { it.lastPlayedAt != null }
+            bySong(totals, library, shownOnly = true).filter { it.lastPlayedAt != null && !it.item.isPodcast }
                 .sortedWith(compareByDescending<Top<Song>> { it.lastPlayedAt }.thenBy { it.item.path })
                 .take(limit)
                 .map(::songPlays)
