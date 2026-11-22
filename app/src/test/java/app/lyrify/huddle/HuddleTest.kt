@@ -1,5 +1,6 @@
 package app.lyrify.huddle
 
+import app.lyrify.suggestions.FriendPlay as SuggestionsPlay
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.TestScope
@@ -360,6 +361,92 @@ class HuddleTest {
         advanceTimeBy(3 * Huddle.HOUR_MS)
         runCurrent()
         assertEquals(before + 5, server.fetches)
+    }
+
+    @Test
+    fun `a card held for a longer toast goes only once it ends, and Undo works until then`() = runTest {
+        val (wren, wrenState) = phone("Wren")
+        val (juniper, _) = phone("Juniper")
+        val (juniperOnWren, _) = friends(wren, juniper)
+        val id = wren.send(juniperOnWren.id, song, holdMs = 3 * Huddle.UNDO_MS)!!
+        advanceTimeBy(2 * Huddle.UNDO_MS)
+        wren.flush()
+        assertTrue("held while its toast shows", server.waiting(juniperOnWren.outBox).isEmpty())
+        assertTrue(wren.unsend(id))
+        wren.send(juniperOnWren.id, song, holdMs = 3 * Huddle.UNDO_MS)
+        advanceTimeBy(3 * Huddle.UNDO_MS + 1)
+        assertEquals(1, server.waiting(juniperOnWren.outBox).size)
+        assertTrue(wrenState.now.outbox.isEmpty())
+    }
+
+    @Test
+    fun `friends' plays stay on the phone 30 days, then go`() = runTest {
+        assertEquals(30 * 24 * Huddle.HOUR_MS, Huddle.PLAYS_KEPT_MS)
+        val (wren, wrenState) = phone("Wren")
+        val (juniper, _) = phone("Juniper")
+        val (_, wrenOnJuniper) = friends(wren, juniper)
+        juniper.sharePlays(wrenOnJuniper.id, true)
+        juniper.played(bell, now + testScheduler.currentTime)
+        wren.sync()
+        assertEquals(1, wrenState.now.plays.size)
+        advanceTimeBy(Huddle.PLAYS_KEPT_MS)
+        wren.sync()
+        assertEquals("still there on its 30th day", 1, wrenState.now.plays.size)
+        advanceTimeBy(1)
+        wren.sync()
+        assertTrue(wrenState.now.plays.isEmpty())
+    }
+
+    @Test
+    fun `friends' plays reach Suggestions the oldest first, from the time asked`() = runTest {
+        val plays = listOf(FriendPlay("f1", 300, bell, favourite = true), FriendPlay("f2", 200, lantern), FriendPlay("f1", 100, lantern))
+        assertEquals(
+            listOf(
+                SuggestionsPlay("f2", lantern.title, lantern.artist, lantern.album, lantern.durationMs, 200),
+                SuggestionsPlay("f1", bell.title, bell.artist, bell.album, bell.durationMs, 300, favourite = true),
+            ),
+            HuddleFriends(MemoryHuddle(HuddleState(plays = plays))).since(200),
+        )
+        assertEquals(null, HuddleFriends(MemoryHuddle(HuddleState(plays = listOf(FriendPlay("f1", 1, bell.copy(durationMs = 0)))))).since(0).single().durationMs)
+        assertTrue(HuddleFriends(MemoryHuddle()).since(0).isEmpty())
+    }
+
+    @Test
+    fun `a cancelled invite goes from the phone and the server, and its link no longer works`() = runTest {
+        val (wren, wrenState) = phone("Wren")
+        val (juniper, _) = phone("Juniper")
+        val invite = juniper.parse(link(wren, song))!!
+        server.online = false
+        assertFalse("kept while the server cannot hear it", wren.cancel(wrenState.now.invites.single().token))
+        assertEquals(1, wrenState.now.invites.size)
+        server.online = true
+        assertTrue(wren.cancel(wrenState.now.invites.single().token))
+        assertTrue(wrenState.now.invites.isEmpty())
+        assertTrue(server.invites.isEmpty())
+        assertEquals(Accepted.Expired, juniper.accept(invite))
+        assertFalse(wren.cancel("no-such-invite"))
+    }
+
+    @Test
+    fun `a backup opened with its passphrase brings the friends back on a new phone, and keeps the key for the next backups`() = runTest {
+        val (wren, wrenState) = phone("Wren")
+        val (juniper, juniperState) = phone("Juniper")
+        friends(wren, juniper)
+        assertNull("no passphrase, no Huddle in backups", wren.backupSection())
+        wrenState.change { it.copy(backupKey = HuddleBackup.newKey("correct horse".toCharArray(), random, rounds = 1_000)) }
+        val section = wren.backupSection()!!
+        val (newPhone, newState) = phone()
+        assertNull(newPhone.restore(section, "wrong horse".toCharArray()))
+        assertTrue(newState.now.friends.isEmpty())
+        assertEquals(1, newPhone.restore(section, "correct horse".toCharArray()))
+        assertEquals(wrenState.now.friends, newState.now.friends)
+        assertEquals("Wren", newState.now.name)
+        assertEquals(wrenState.now.backupKey, newState.now.backupKey)
+        assertNotNull("the next backup needs no typing", newPhone.backupSection())
+        newPhone.send(newState.now.friends.single().id, song)
+        advanceTimeBy(Huddle.UNDO_MS + 1)
+        juniper.sync()
+        assertEquals("the friend hears from the restored phone", listOf(song), juniperState.now.inbox.map { it.card })
     }
 
     @Test

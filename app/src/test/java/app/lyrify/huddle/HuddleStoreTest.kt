@@ -76,7 +76,7 @@ class HuddleStoreTest {
         assertEquals(full.plays, back.plays)
         assertEquals(full.invites, back.invites)
         assertTrue("what was waiting to go is not restored", back.outbox.isEmpty())
-        assertNull("the key never goes in", back.backupKey)
+        assertEquals("opened, it holds the key its passphrase makes, for the next backups", key, back.backupKey)
         assertNull(HuddleBackup.open(section, "correct horses".toCharArray()))
         assertNull(HuddleBackup.open(section.replace("\"rounds\":1000", "\"rounds\":1001"), "correct horse".toCharArray()))
         assertNull(HuddleBackup.open("not a section", "correct horse".toCharArray()))

@@ -164,15 +164,20 @@ object HuddleBackup {
         ).toString()
     }
 
-    /** What [section] holds, opened with [passphrase]; null for another passphrase, a changed section, or none. Slow, as [newKey]. */
+    /**
+     * What [section] holds, opened with [passphrase], with the key that opened it ([HuddleState.backupKey]) for the next
+     * backups; null for another passphrase, a changed section, or none. Slow, as [newKey].
+     */
     fun open(section: String, passphrase: CharArray): HuddleState? {
         val root = jsonObject(section)?.takeIf { it.int(FORMAT_KEY) == FORMAT && it.text(KDF_KEY) == KDF } ?: return null
         val rounds = root.int(ROUNDS_KEY)?.takeIf { it in 1..MAX_ROUNDS } ?: return null
-        val salt = root.text(SALT_KEY)?.let(HuddleCrypto::decode) ?: return null
+        val saltText = root.text(SALT_KEY) ?: return null
+        val salt = HuddleCrypto.decode(saltText) ?: return null
         val sealed = root.text(BOX_KEY)?.let(HuddleCrypto::decode) ?: return null
-        val plain = HuddleCrypto.open(HuddleCrypto.passphraseKey(passphrase, salt, rounds), sealed, AAD) ?: return null
+        val key = HuddleCrypto.passphraseKey(passphrase, salt, rounds)
+        val plain = HuddleCrypto.open(key, sealed, AAD) ?: return null
         return try {
-            HuddleJson.decode(plain.decodeToString())
+            HuddleJson.decode(plain.decodeToString()).copy(backupKey = BackupKey(saltText, rounds, HuddleCrypto.encode(key)))
         } catch (_: SerializationException) {
             null
         }

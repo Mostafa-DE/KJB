@@ -1,5 +1,7 @@
 package app.lyrify.huddle
 
+import app.lyrify.suggestions.FriendsSource
+import app.lyrify.suggestions.FriendPlay as SuggestionsPlay
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -174,18 +176,22 @@ class Huddle(
         return Accepted.Joined(friend)
     }
 
-    /** Sends [card] to the friend [friendId] after [UNDO_MS]: its message's id (for [unsend]), or null for a friend gone. */
-    suspend fun send(friendId: String, card: Card): String? {
+    /**
+     * Sends [card] to the friend [friendId] once [holdMs] is over (the toast's time, its Undo; [UNDO_MS] at least): its
+     * message's id (for [unsend]), or null for a friend gone.
+     */
+    suspend fun send(friendId: String, card: Card, holdMs: Long = UNDO_MS): String? {
         val now = clock()
         val friend = now().friends.firstOrNull { it.id == friendId } ?: return null
         val message = Message.Share(newId(MESSAGE_ID_BYTES), now, card)
-        val out = outgoing(friend, message, Kind.CARD, notBefore = now + UNDO_MS) ?: return null
+        val hold = holdMs.coerceAtLeast(UNDO_MS)
+        val out = outgoing(friend, message, Kind.CARD, notBefore = now + hold) ?: return null
         val kept = storage.change { state ->
             if (state.friends.none { it.id == friendId }) state else state.copy(outbox = state.outbox + out, friends = state.friends.map { if (it.id == friendId) it.copy(lastSentAt = now) else it })
         }
         if (!kept) return null
         scope.launch {
-            delay(UNDO_MS)
+            delay(hold)
             flush()
         }
         return message.id
@@ -240,6 +246,26 @@ class Huddle(
         flush()
         server.dropBoxes(listOf(friend.inBox))
         return true
+    }
+
+    /** Cancels your invite with [token] (base64url): it goes from the phone and the server, so the link no longer works. */
+    suspend fun cancel(token: String): Boolean = one.withLock {
+        val invite = now().invites.firstOrNull { it.token == token } ?: return@withLock false
+        server.deleteInvite(invite.owner) && forget(listOf(invite))
+    }
+
+    /** The backup's Huddle section now ([HuddleBackup.seal]); null without a backup passphrase. */
+    suspend fun backupSection(): String? = HuddleBackup.seal(now(), random)
+
+    /**
+     * Restores a backup's Huddle [section] opened with [passphrase] into what this phone has ([restored]), its key kept
+     * for the next backups: how many friends it holds, or null when the passphrase does not open it (or it could not be
+     * written). Slow, as [HuddleBackup.open]: off the main thread.
+     */
+    suspend fun restore(section: String, passphrase: CharArray): Int? {
+        val backup = HuddleBackup.open(section, passphrase) ?: return null
+        val key = backup.backupKey ?: return null
+        return backup.friends.size.takeIf { storage.change { it.restored(backup, key) } }
     }
 
     /** Listen privately until [until] (wall-clock millis; [HuddleState.FOREVER] until turned back on), or no longer (null). */
@@ -379,7 +405,9 @@ class Huddle(
         val friends = now().friends
         if (friends.isEmpty()) return true
         val posted = server.inbox(friends.map { it.inBox }) ?: return false
-        if (posted.isEmpty()) return true
+        val now = clock()
+        // Nothing new: only plays past their time go.
+        if (posted.isEmpty()) return now().plays.none { now - it.at > PLAYS_KEPT_MS } || storage.change { it.received(emptyList(), now) }
         val upTo = HashMap<String, Long>()
         val read = ArrayList<Pair<String, Message>>()
         for (friend in friends) {
@@ -392,7 +420,6 @@ class Huddle(
                 read += friend.id to message
             }
         }
-        val now = clock()
         if (!storage.change { it.received(read, now) }) return false
         server.ack(upTo)
         read.filter { it.second is Message.Bye }.mapNotNull { (id, _) -> friends.firstOrNull { it.id == id } }.forEach { gone ->
@@ -446,8 +473,8 @@ class Huddle(
         /** An invite nobody joined goes after a week, as the server's does. */
         const val INVITE_KEPT_MS: Long = 7 * DAY_MS
 
-        /** Friends' plays are kept 60 days: "this week" and "love" need no more. */
-        const val PLAYS_KEPT_MS: Long = 60 * DAY_MS
+        /** Friends' plays are kept 30 days, what Suggestions reads ("this week", "a friend loves this"), and no more. */
+        const val PLAYS_KEPT_MS: Long = 30 * DAY_MS
 
         /** A card fits the link when its JSON is at most this long: about one song with a note. */
         private const val LINK_CARD_MAX_BYTES: Int = 600
@@ -461,4 +488,12 @@ class Huddle(
         /** An invite's owner id: random, as the server's ids are 32 bytes (43 characters). */
         private const val OWNER_ID_BYTES: Int = 32
     }
+}
+
+/** Friends' plays for Suggestions (handoff/sg1-interfaces.md, section 3): what [storage] keeps, mapped to Suggestions' own form. */
+class HuddleFriends(private val storage: HuddleStorage) : FriendsSource {
+    override suspend fun since(from: Long): List<SuggestionsPlay> = storage.state.first().plays
+        .filter { it.at >= from }
+        .sortedBy { it.at }
+        .map { play -> SuggestionsPlay(play.friend, play.song.title, play.song.artist, play.song.album, play.song.durationMs.takeIf { it > 0 }, play.at, play.favourite) }
 }
