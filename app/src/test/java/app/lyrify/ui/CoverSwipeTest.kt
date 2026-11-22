@@ -141,6 +141,8 @@ class CoverSwipeTest {
         val now = bookNow(book, 0, 400_000, chapters)
         assertNull(incoming(queue, SkipWay.NEXT, Repeat.OFF, positionMs = 400_000, book = now))
         assertNull(incoming(queue, SkipWay.PREVIOUS, Repeat.ALL, positionMs = 301_000, book = now))
+        // Nothing slides in, yet the swipe still runs its chapter step (BookCoverDeviceTest swipes it on a phone).
+        assertEquals(Settled.SKIP, settledSwipe(startedOn = 9, playingNow = 9, coming = null))
     }
 
     @Test
