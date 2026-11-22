@@ -72,9 +72,12 @@ class ListeningScreenTest {
         assertTrue(listening.indexOf("TotalsCard(") < listening.indexOf("ForYouInsights(") && listening.indexOf("ForYouInsights(") < listening.indexOf("VersusCard("))
         assertTrue(listening.contains("if (viewAll) item(key = \"for you\""))
         // A month's recap: its picture, shared as drawn, and its own cards; the nudges only on Insights.
-        listOf("RecapPicture(", "shareRecapPicture(context, picture, shown, title)", "nudgeCards(insights, settings").forEach { assertTrue(it, listening.contains(it)) }
-        // Its definition and its one call, on Insights.
-        assertEquals(2, Regex(Regex.escape("nudgeCards(")).findAll(listening).count())
+        listOf("RecapPicture(", "shareRecapPicture(context, picture, shown, title)").forEach { assertTrue(it, listening.contains(it)) }
+        val recap = listening.substringAfter("private fun RecapPage(").substringBefore("private fun RecapsPage(")
+        listOf("NeverPlayedCard(", "DigDeeperCard(", "ForgottenCard(").forEach { card ->
+            assertEquals(card, 1, Regex(Regex.escape(card)).findAll(listening).count())
+            assertFalse(card, recap.contains(card))
+        }
     }
 
     @Test

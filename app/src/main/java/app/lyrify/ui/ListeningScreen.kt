@@ -124,7 +124,14 @@ private fun InsightsPage(onBack: (() -> Unit)?, onOpen: (Page) -> Unit) {
             if (insights != null) {
                 val period = shownPeriod
                 insightsCards(insights, { period.versus?.let { stringResource(it) }.orEmpty() }, settings, onOpen, sheets::openSong, reduced, viewAll = true)
-                nudgeCards(insights, settings, onOpen, sheets::openSong, reduced)
+                // The nudges look at all time, so they stay here, never on a month's recap.
+                if (insights.neverPlayed.isNotEmpty()) {
+                    item(key = "never", contentType = "card") { NeverPlayedCard(insights.neverPlayed, settings, { sheets.openSong(it.ref) }, rowMotion(reduced).padding(top = 12.dp)) }
+                }
+                if (insights.digDeeper.isNotEmpty()) item(key = "dig", contentType = "card") { DigDeeperCard(insights.digDeeper, settings, onOpen, rowMotion(reduced).padding(top = 12.dp)) }
+                if (insights.forgotten.isNotEmpty()) {
+                    item(key = "forgotten", contentType = "card") { ForgottenCard(insights.forgotten, settings, { sheets.openSong(it.ref) }, rowMotion(reduced).padding(top = 12.dp)) }
+                }
             }
             if (!recaps.isNullOrEmpty()) {
                 item(key = "recaps head", contentType = "head") {
@@ -183,13 +190,6 @@ private fun LazyListScope.insightsCards(
     if (insights.clock != null || insights.streaks != null) item(key = "clock", contentType = "card") { ClockCard(insights.clock, insights.streaks, rowMotion(reduced).padding(top = 12.dp)) }
     insights.milestones?.let { milestones -> item(key = "milestones", contentType = "card") { MilestonesCard(milestones, rowMotion(reduced).padding(top = 12.dp)) } }
     insights.spoken?.let { spoken -> item(key = "spoken", contentType = "card") { SpokenCard(spoken, rowMotion(reduced).padding(top = 12.dp)) } }
-}
-
-/** The nudges, which look at all time: never played, dig deeper, forgotten favourites; Insights' alone. */
-private fun LazyListScope.nudgeCards(insights: Insights, settings: Settings, onOpen: (Page) -> Unit, onSong: (SongRef) -> Unit, reduced: Boolean) {
-    if (insights.neverPlayed.isNotEmpty()) item(key = "never", contentType = "card") { NeverPlayedCard(insights.neverPlayed, settings, { onSong(it.ref) }, rowMotion(reduced).padding(top = 12.dp)) }
-    if (insights.digDeeper.isNotEmpty()) item(key = "dig", contentType = "card") { DigDeeperCard(insights.digDeeper, settings, onOpen, rowMotion(reduced).padding(top = 12.dp)) }
-    if (insights.forgotten.isNotEmpty()) item(key = "forgotten", contentType = "card") { ForgottenCard(insights.forgotten, settings, { onSong(it.ref) }, rowMotion(reduced).padding(top = 12.dp)) }
 }
 
 /**
