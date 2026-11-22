@@ -110,7 +110,8 @@ class SongActionsTest {
 
     @Test
     fun `the song sheet shows every row for a song in a list, and the rows of its place, Hide and Move to trash last`() {
-        val common = listOf(SheetRow.PLAY_NEXT, SheetRow.ADD_TO, SheetRow.FAVOURITE, SheetRow.LYRICS, SheetRow.MAKE_TONE, SheetRow.SHARE, SheetRow.SONG_INFO, SheetRow.EDIT_TAGS, SheetRow.BOOK)
+        // More like this (v4) for every song, after Add to.
+        val common = listOf(SheetRow.PLAY_NEXT, SheetRow.ADD_TO, SheetRow.MORE_LIKE, SheetRow.FAVOURITE, SheetRow.LYRICS, SheetRow.MAKE_TONE, SheetRow.SHARE, SheetRow.SONG_INFO, SheetRow.EDIT_TAGS, SheetRow.BOOK)
         assertEquals(common + SheetRow.HIDE + SheetRow.MOVE_TO_TRASH, sheetRows(SheetPlace.List, coversTags = false, removeFromQueue = false))
         assertEquals(common + SheetRow.COVERS_TAGS + SheetRow.HIDE + SheetRow.MOVE_TO_TRASH, sheetRows(SheetPlace.List, coversTags = true, removeFromQueue = true))
         assertEquals(
@@ -123,6 +124,18 @@ class SongActionsTest {
         )
         // Until P2 fills its slot, a queue's song has no Remove from queue.
         assertEquals(common + SheetRow.HIDE + SheetRow.MOVE_TO_TRASH, sheetRows(SheetPlace.Queue("q1", 3), coversTags = false, removeFromQueue = false))
+    }
+
+    @Test
+    fun `a suggestion's sheet starts with Not now, Never suggest this, More like this and Why this?, which no other sheet has`() {
+        val rows = sheetRows(SheetPlace.Suggestion, coversTags = false, removeFromQueue = false)
+        assertEquals(SUGGESTION_ROWS, rows.take(4))
+        assertEquals(listOf(SheetRow.NOT_NOW, SheetRow.NEVER, SheetRow.MORE_LIKE, SheetRow.WHY), SUGGESTION_ROWS)
+        assertEquals(listOf(SheetRow.PLAY_NEXT, SheetRow.ADD_TO, SheetRow.FAVOURITE), rows.subList(4, 7))
+        assertEquals(SheetRow.MOVE_TO_TRASH, rows.last())
+        listOf(SheetPlace.List, SheetPlace.Playlist("p1", 0), SheetPlace.Queue("q1", 3)).forEach { place ->
+            assertTrue(sheetRows(place, coversTags = true, removeFromQueue = true).none { it == SheetRow.NOT_NOW || it == SheetRow.NEVER || it == SheetRow.WHY })
+        }
     }
 
     @Test

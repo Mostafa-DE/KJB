@@ -110,6 +110,15 @@ class SettingsStoreTest {
             dockStyle = DockStyle.SLIM,
             hideDockOnScroll = true,
         ),
+        suggestions = SuggestionSettings(
+            autoplay = false,
+            adventure = Adventure.DISCOVER,
+            showReasons = false,
+            forYouCard = false,
+            forYouHiddenUntil = NOW + 3_600_000,
+            never = listOf(HeldSong(SongRef("/storage/emulated/0/Music/Odds/Glass Steps.mp3", 13), NOW - 86_400_000)),
+            notNow = listOf(HeldSong(SongRef("/storage/emulated/0/Music/Singles/Copper Moon.mp3"), NOW + 30 * 86_400_000L)),
+        ),
     )
 
     // Defaults
@@ -150,6 +159,8 @@ class SettingsStoreTest {
         assertEquals(emptyList<SongRef>(), s.library.hiddenSongs)
         // Artists with several names: on, commas split and "&" does not, AC/DC and Tyler, The Creator never split (2026-11-18).
         assertEquals(ArtistSplit(true, listOf(";", "/", ",", "feat.", "ft.", "featuring"), listOf("AC/DC", "Tyler, The Creator")), s.library.artistSplit)
+        // Suggestions (v4): Autoplay on, the mix where Mix starts, reasons shown, the For you card shown, nothing held out.
+        assertEquals(SuggestionSettings(true, Adventure.MIX, true, true, null, emptyList(), emptyList()), s.suggestions)
         assertEquals((10..100 step 10).toList(), PlaybackSettings.PLAY_SHARES)
         assertEquals(listOf(5, 10, 15, 30), PlaybackSettings.SKIP_SECONDS)
     }
@@ -580,6 +591,7 @@ class SettingsStoreTest {
         assertEquals(
             listOf(
                 SettingsSection.PLAYBACK,
+                SettingsSection.SUGGESTIONS,
                 SettingsSection.LIBRARY,
                 SettingsSection.DISPLAY,
                 SettingsSection.LYRICS,
@@ -591,13 +603,13 @@ class SettingsStoreTest {
             SettingsSection.entries,
         )
         assertEquals(emptyMap<SettingsSection, Boolean>(), nav.settingsSections)
-        assertEquals(listOf(SettingsSection.PLAYBACK, SettingsSection.LIBRARY, SettingsSection.DISPLAY, SettingsSection.ABOUT), SettingsSection.entries.filter(nav::opens))
+        assertEquals(listOf(SettingsSection.PLAYBACK, SettingsSection.SUGGESTIONS, SettingsSection.LIBRARY, SettingsSection.DISPLAY, SettingsSection.ABOUT), SettingsSection.entries.filter(nav::opens))
     }
 
     @Test
     fun `a section the user opened or closed stays so, and the others are as at first`() {
         val nav = NavSettings(settingsSections = mapOf(SettingsSection.LYRICS to true, SettingsSection.PLAYBACK to false))
-        assertEquals(listOf(SettingsSection.LIBRARY, SettingsSection.DISPLAY, SettingsSection.LYRICS, SettingsSection.ABOUT), SettingsSection.entries.filter(nav::opens))
+        assertEquals(listOf(SettingsSection.SUGGESTIONS, SettingsSection.LIBRARY, SettingsSection.DISPLAY, SettingsSection.LYRICS, SettingsSection.ABOUT), SettingsSection.entries.filter(nav::opens))
     }
 
     @Test
@@ -612,5 +624,29 @@ class SettingsStoreTest {
         val phone = Settings(nav = NavSettings(settingsSections = mapOf(SettingsSection.AI to true)))
         assertEquals(phone.nav.settingsSections, SettingsJson.decode("""{"nav":{"lastTab":"TOOLS"}}""", phone)?.nav?.settingsSections)
         assertEquals(phone.nav.settingsSections, sections("[]", phone))
+    }
+
+    // Suggestions
+
+    @Test
+    fun `songs held out of suggestions keep each path once with its id hint and time, and only whole entries`() {
+        val a = "/storage/emulated/0/Music/a.mp3"
+        val b = "/storage/emulated/0/Music/b.mp3"
+        val text = """{"suggestions":{"never":[{"path":"$a","id":7,"at":5},{"path":"$a","at":9},{"path":"$b"},{"at":4},3,""" +
+            """{"path":"$b","id":"x","at":6}],"notNow":"none","adventure":"WILD","autoplay":"no","forYouHiddenUntil":"soon"}}"""
+        val read = SettingsJson.decode(text)?.suggestions
+        assertEquals(listOf(HeldSong(SongRef(a, 7), 5), HeldSong(SongRef(b), 6)), read?.never)
+        assertEquals(emptyList<HeldSong>(), read?.notNow)
+        assertEquals(Adventure.MIX, read?.adventure)
+        assertTrue(read?.autoplay == true)
+        assertNull(read?.forYouHiddenUntil)
+        assertTrue(""""never":[{"path":"$a","id":7,"at":5}]""" in SettingsJson.encode(Settings(suggestions = SuggestionSettings(never = listOf(HeldSong(SongRef(a, 7), 5))))))
+    }
+
+    @Test
+    fun `a settings file from before Suggestions reads its defaults, and a backup without them keeps the phone's`() {
+        assertEquals(SuggestionSettings(), SettingsJson.decode("""{"version":4,"playback":{"headsetButtons":false}}""")?.suggestions)
+        val phone = Settings(suggestions = SuggestionSettings(autoplay = false, adventure = Adventure.FAMILIAR))
+        assertEquals(phone.suggestions, SettingsJson.decode("""{"playback":{}}""", phone)?.suggestions)
     }
 }

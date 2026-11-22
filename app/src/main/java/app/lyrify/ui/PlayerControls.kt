@@ -63,8 +63,10 @@ import app.lyrify.library.LibraryGraph
 import app.lyrify.player.PlayerConnection
 import app.lyrify.player.PlayerUi
 import app.lyrify.player.Repeat
+import app.lyrify.player.ShuffleStep
 import app.lyrify.settings.DockTab
 import app.lyrify.settings.Settings
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -344,14 +346,26 @@ internal fun SecondaryRow(ui: PlayerUi, connection: PlayerConnection, onQueue: (
     val favourites = remember(context) { LibraryGraph.favourites(context) }
     val favouriteSongs by favourites.songs.collectAsStateWithLifecycle(initialValue = emptyList())
     val favourite = favouriteSongs.any { it.path == ui.item.song.path }
-    val shuffled = ui.queue.shuffled
+    val step = ui.queue.shuffleStep
+    val suggestions = rememberSuggestions()
+    // The Shuffle button's last message: a newer tap cancels it, so a step already left is never announced, nor undone.
+    val shuffleSaid = remember { mutableStateOf<Job?>(null) }
     val repeat = ui.repeat
     Row(horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 8.dp)) {
         secondaryButtons(book != null, book?.chapters?.isNotEmpty() == true).forEach { button ->
             when (button) {
-                PlayerButton.SHUFFLE -> ToggleButton(R.drawable.ic_shuffle, stringResource(if (shuffled) R.string.player_shuffle_on else R.string.player_shuffle_off), on = shuffled) {
-                    val on = connection.toggleShuffle()
-                    scope.launch { toasts.show(Toast(resources.getString(if (on) R.string.player_shuffled else R.string.player_unshuffled), R.drawable.ic_shuffle)) }
+                // Off, Shuffle, Smart shuffle, and round again (Smart shuffle option A, user 2026-11-22); Smart shuffle wears
+                // the suggestion mark, and its message's Undo goes back to plain Shuffle.
+                PlayerButton.SHUFFLE -> ToggleButton(R.drawable.ic_shuffle, stringResource(shuffleLabel(step)), on = step != ShuffleStep.OFF, badge = step == ShuffleStep.SMART) {
+                    val next = connection.cycleShuffle()
+                    shuffleSaid.value?.cancel()
+                    shuffleSaid.value = scope.launch {
+                        if (next != ShuffleStep.SMART) {
+                            toasts.show(Toast(resources.getString(if (next == ShuffleStep.SHUFFLE) R.string.player_shuffled else R.string.player_unshuffled), R.drawable.ic_shuffle))
+                        } else if (toasts.show(Toast(resources.getString(R.string.suggest_smart_on, suggestions.mix().oneIn), R.drawable.ic_explore, action = resources.getString(R.string.player_undo)))) {
+                            connection.plainShuffle()
+                        }
+                    }
                 }
                 PlayerButton.CHAPTERS -> RoundButton(R.drawable.ic_format_list_numbered, stringResource(R.string.books_chapters), onClick = onChapters)
                 PlayerButton.QUEUE -> RoundButton(R.drawable.ic_queues, stringResource(R.string.player_queue), onClick = onQueue)
@@ -377,6 +391,12 @@ internal fun SecondaryRow(ui: PlayerUi, connection: PlayerConnection, onQueue: (
     }
 }
 
+private fun shuffleLabel(step: ShuffleStep): Int = when (step) {
+    ShuffleStep.OFF -> R.string.player_shuffle_off
+    ShuffleStep.SHUFFLE -> R.string.player_shuffle_on
+    ShuffleStep.SMART -> R.string.player_shuffle_smart
+}
+
 private fun repeatLabel(repeat: Repeat): Int = when (repeat) {
     Repeat.OFF -> R.string.player_repeat_off
     Repeat.ALL -> R.string.player_repeat_all
@@ -391,14 +411,16 @@ internal fun RoundButton(@DrawableRes icon: Int, label: String, size: Dp = TOUCH
     ) { Icon(painterResource(icon), contentDescription = null, modifier = Modifier.size(iconSize)) }
 }
 
+/** A toggle of the second row: in the highlight colour with a bar while [on]; [badge]: the suggestion mark on its corner (Smart shuffle). */
 @Composable
-private fun ToggleButton(@DrawableRes icon: Int, label: String, on: Boolean, bar: Boolean = true, onClick: () -> Unit) {
+private fun ToggleButton(@DrawableRes icon: Int, label: String, on: Boolean, bar: Boolean = true, badge: Boolean = false, onClick: () -> Unit) {
     val highlight = LocalBrandColors.current.highlight
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier.size(TOUCH).clip(CircleShape).clickable(role = Role.Button, onClick = onClick).semantics { contentDescription = label },
     ) {
         Icon(painterResource(icon), contentDescription = null, tint = if (on) highlight else MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(26.dp))
+        if (badge) SuggestionBadge(Modifier.align(Alignment.Center).offset(9.dp, 7.dp))
         if (on && bar) Box(Modifier.align(Alignment.BottomCenter).padding(bottom = 5.dp).size(14.dp, 3.dp).clip(CircleShape).background(highlight))
     }
 }

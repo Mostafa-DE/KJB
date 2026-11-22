@@ -185,6 +185,11 @@ class JdbcPlayLog(version: Int = PlaysSchema.VERSION) : PlayLogStore, AutoClosea
         buildList { while (rows.next()) loggedPlayOf(row)?.let(::add) }
     }
 
+    override suspend fun since(from: Long): List<LoggedPlay> = query(PlaysSchema.SINCE, from) { rows ->
+        val row = ResultRow(rows)
+        buildList { while (rows.next()) loggedPlayOf(row)?.let(::add) }
+    }
+
     override suspend fun listened(from: Long?, until: Long?): List<LoggedPlay> =
         query(PlaysSchema.LISTENED, (from ?: Long.MIN_VALUE).toString(), (until ?: Long.MAX_VALUE).toString()) { rows ->
             val row = ResultRow(rows)

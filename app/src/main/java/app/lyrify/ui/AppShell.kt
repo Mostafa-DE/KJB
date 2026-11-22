@@ -405,6 +405,9 @@ private fun PageContent(
         is Page.CollectionPages -> CollectionPage(page)
         is Page.QueuePages -> QueuePage(page)
         is Page.ListeningPages -> ListeningPage(page)
+        is Page.SuggestionPages -> SuggestionPage(page)
+        Page.NeverSuggest -> NeverSuggestPage()
+        Page.SuggestionsHealth -> SuggestionsHealthPage()
         is Page.SearchAll -> SearchAllPage(page)
         is Page.Check -> CheckScreen(lyrics.ledger, lyrics.timing, checkActions, checkAnswers, page.path) { back() }
         Page.Duplicates -> DuplicatesPage { back() }

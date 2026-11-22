@@ -65,6 +65,31 @@ class QueueStoreTest {
     }
 
     @Test
+    fun `suggested songs and Smart shuffle read back, and a mark this version does not know reads as a plain song`() {
+        val shuffled = book().cycleShuffle(Random(3))
+        val queue = shuffled.current!!
+        val smart = shuffled.suggest(queue.id, listOf(queue.items[0].uid to song("Glass Steps")), Suggested.SMART_SHUFFLE)
+            .let { it.suggest(queue.id, listOf(it.current!!.items.last().uid to song("Copper Moon")), Suggested.AUTOPLAY) }
+        assertEquals(smart.copy(jumps = 0), QueuesJson.decode(QueuesJson.encode(smart)))
+        val text = QueuesJson.encode(smart).replace("\"SMART_SHUFFLE\"", "\"RADIO\"")
+        val read = QueuesJson.decode(text)!!.current!!
+        assertEquals(listOf(Suggested.AUTOPLAY), read.items.mapNotNull { it.suggested })
+        assertTrue(read.smart)
+    }
+
+    @Test
+    fun `a list of suggestions is stored as picked songs with a mark, so an older KJB keeps its songs`() {
+        val forYou = QueueBook().play(listOf(song("Glass Steps"), song("Copper Moon", 4)), 1, QueueSource(SourceKind.SUGGESTIONS, "for-you", "For you"), now = 5).book
+        val text = QueuesJson.encode(forYou)
+        assertEquals(forYou.copy(jumps = 0), QueuesJson.decode(text))
+        assertFalse("SUGGESTIONS" in text)
+        // An older KJB knows no mark: it reads the songs a picked list, never drops them.
+        val older = QueuesJson.decode(text.replace(Regex(""","?suggestions"?:true"""), ""))!!.current!!
+        assertEquals(SourceKind.PICKED, older.source.kind)
+        assertEquals(forYou.current!!.items, older.items)
+    }
+
+    @Test
     fun `a queue stored before start times were kept starts at its last play`() {
         val old = QueuesJson.encode(book()).replace(Regex(""","?startedAt"?:\d+"""), "")
         val read = QueuesJson.decode(old)!!

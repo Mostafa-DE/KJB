@@ -805,4 +805,99 @@ class QueuesTest {
         assertFalse(albumInOrder(fromFolder, 1))
         assertFalse(albumInOrder(queue, 6))
     }
+
+    // Suggestions in the queue (v4)
+
+    private fun suggestedPaths(queue: Queue?) = queue!!.items.filter { it.suggested != null }.map { it.song.path.substringAfterLast('/').removeSuffix(".mp3") }
+
+    @Test
+    fun `the Shuffle button steps Off, Shuffle, Smart shuffle, then Off, and Smart shuffle keeps the order`() {
+        val book = playing(1)
+        assertEquals(ShuffleStep.OFF, book.current!!.shuffleStep)
+        val shuffled = book.cycleShuffle(Random(4))
+        assertEquals(ShuffleStep.SHUFFLE, shuffled.current!!.shuffleStep)
+        assertEquals(paths(book.current).toSet(), paths(shuffled.current).toSet())
+        val smart = shuffled.cycleShuffle(Random(4))
+        assertEquals(ShuffleStep.SMART, smart.current!!.shuffleStep)
+        assertEquals(paths(shuffled.current), paths(smart.current))
+        val off = smart.cycleShuffle(Random(4))
+        assertEquals(ShuffleStep.OFF, off.current!!.shuffleStep)
+        assertEquals(paths(book.current), paths(off.current))
+        assertFalse(off.current!!.smart)
+    }
+
+    @Test
+    fun `suggestions go right after the songs they name, marked, never a song the queue holds, never after one gone`() {
+        val book = playing(0).cycleShuffle(Random(2)).cycleShuffle(Random(2))
+        val queue = book.current!!
+        val first = queue.items[0].uid
+        val third = queue.items[2].uid
+        val suggested = book.suggest(queue.id, listOf(first to folder[0], first to folder[1], third to folder[2], third to album[4], 999L to folder[3]), Suggested.SMART_SHUFFLE)
+        val after = suggested.current!!
+        assertEquals(listOf("Rips 1", "Rips 2", "Rips 3"), suggestedPaths(after))
+        assertEquals(paths(queue).take(1) + listOf("Rips 1", "Rips 2") + paths(queue).subList(1, 3) + "Rips 3" + paths(queue).drop(3), paths(after))
+        assertTrue(after.items.filter { it.suggested != null }.all { it.suggested == Suggested.SMART_SHUFFLE && it.uid >= book.nextUid && !it.playNext && it.sourceIndex == null })
+        assertEquals(book.nextUid + 3, suggested.nextUid)
+        assertEquals(queue.current!!.uid, after.current!!.uid)
+        assertEquals(queue.unshuffled, after.unshuffled)
+    }
+
+    @Test
+    fun `Autoplay's songs go after the queue's last song, and leave again when it is turned off`() {
+        val book = playing(5)
+        val queue = book.current!!
+        val withAutoplay = book.suggest(queue.id, listOf(queue.items.last().uid to folder[0], queue.items.last().uid to folder[1]), Suggested.AUTOPLAY)
+        assertEquals(paths(queue) + listOf("Rips 1", "Rips 2"), paths(withAutoplay.current))
+        val off = withAutoplay.unsuggest(queue.id, Suggested.AUTOPLAY)
+        assertEquals(paths(queue), paths(off.current))
+    }
+
+    @Test
+    fun `suggestions of one kind leave only after the song playing, which stays even when it is one`() {
+        val book = playing(0).cycleShuffle(Random(2)).cycleShuffle(Random(2))
+        val queue = book.current!!
+        val withBoth = book.suggest(queue.id, listOf(queue.items[0].uid to folder[0], queue.items[3].uid to folder[1]), Suggested.SMART_SHUFFLE)
+            .let { it.suggest(queue.id, listOf(it.current!!.items.last().uid to folder[2]), Suggested.AUTOPLAY) }
+        val onFirst = withBoth.at(withBoth.current!!.items[1].uid, now = 9)
+        assertEquals("Rips 1", currentName(onFirst))
+        val gone = onFirst.unsuggest(queue.id, Suggested.SMART_SHUFFLE)
+        assertEquals(listOf("Rips 1", "Rips 3"), suggestedPaths(gone.current))
+        assertEquals("Rips 1", currentName(gone))
+    }
+
+    @Test
+    fun `a suggestion is a song a suggestion put in, or a song of a suggested list, never one the user added to it`() {
+        val book = playing(0).suggest(playing(0).current!!.id, listOf(playing(0).current!!.items.last().uid to folder[0]), Suggested.AUTOPLAY)
+        val queue = book.current!!
+        assertEquals(listOf("Rips 1"), queue.items.filter(queue::suggests).map { it.song.path.substringAfterLast('/').removeSuffix(".mp3") })
+        val forYou = QueueBook().play(album.take(3), 0, QueueSource(SourceKind.SUGGESTIONS, "for-you", "For you"), now = 1).book
+        val withPlayNext = forYou.playNext(listOf(folder[1]), picked, now = 2)!!.book
+        val list = withPlayNext.current!!
+        assertEquals(3, list.items.count(list::suggests))
+        assertFalse(list.suggests(list.items.single { it.song == folder[1] }))
+    }
+
+    @Test
+    fun `Smart shuffle's Undo goes back to plain Shuffle, its suggestions to come gone and the order kept`() {
+        val book = playing(0).cycleShuffle(Random(2)).cycleShuffle(Random(2))
+        val queue = book.current!!
+        val withSuggestions = book.suggest(queue.id, listOf(queue.items[0].uid to folder[0], queue.items[2].uid to folder[1]), Suggested.SMART_SHUFFLE)
+        val plain = withSuggestions.plainShuffle()
+        assertEquals(ShuffleStep.SHUFFLE, plain.current!!.shuffleStep)
+        assertEquals(paths(queue), paths(plain.current))
+        assertEquals(queue.unshuffled, plain.current!!.unshuffled)
+        assertEquals(playing(0), playing(0).plainShuffle())
+    }
+
+    @Test
+    fun `Smart shuffle off takes the suggestions still to come out with it, from the button or the notification`() {
+        val book = playing(0).cycleShuffle(Random(2)).cycleShuffle(Random(2))
+        val queue = book.current!!
+        val withSuggestions = book.suggest(queue.id, listOf(queue.items[0].uid to folder[0], queue.items[2].uid to folder[1]), Suggested.SMART_SHUFFLE)
+        val off = withSuggestions.cycleShuffle(Random(2))
+        assertEquals(paths(playing(0).current), paths(off.current))
+        val toggled = withSuggestions.toggleShuffle(Random(2))
+        assertEquals(paths(playing(0).current), paths(toggled.current))
+        assertEquals(ShuffleStep.OFF, toggled.current!!.shuffleStep)
+    }
 }

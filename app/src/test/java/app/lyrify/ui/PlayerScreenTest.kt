@@ -163,10 +163,12 @@ class PlayerScreenTest {
         assertEquals(PlayerMenuRow.SLEEP, all[all.indexOf(PlayerMenuRow.SPEED) + 1])
         assertEquals(PlayerMenuRow.EDIT_TAGS, all[all.indexOf(PlayerMenuRow.SONG_INFO) + 1])
         assertEquals(PlayerMenuRow.MOVE_TO_TRASH, all.last())
+        // More like this (v4) after Go to artist, for a song of the library.
+        assertEquals(PlayerMenuRow.MORE_LIKE, all[all.indexOf(PlayerMenuRow.ARTIST) + 1])
         // A song of the library with no album or artist page, no lyrics, a book's part (no tone): Edit tags still, as on its sheet.
         assertEquals(
             listOf(
-                PlayerMenuRow.ADD_TO, PlayerMenuRow.SPEED, PlayerMenuRow.SLEEP, PlayerMenuRow.REPEAT_PART, PlayerMenuRow.BOOKMARK, PlayerMenuRow.PLAY_ON,
+                PlayerMenuRow.ADD_TO, PlayerMenuRow.MORE_LIKE, PlayerMenuRow.SPEED, PlayerMenuRow.SLEEP, PlayerMenuRow.REPEAT_PART, PlayerMenuRow.BOOKMARK, PlayerMenuRow.PLAY_ON,
                 PlayerMenuRow.EQUALIZER, PlayerMenuRow.SHARE, PlayerMenuRow.SONG_INFO, PlayerMenuRow.EDIT_TAGS, PlayerMenuRow.MOVE_TO_TRASH,
             ),
             playerMenuRows(song = true, album = false, artist = false, tone = false, cut = false),

@@ -13,7 +13,8 @@ class SettingsSectionsTest {
 
     @Test
     fun `Settings shows every section once, in their order, so a link starts at its place in the list`() {
-        val shown = Regex("""\bsection\(SettingsSection\.(\w+)|downloadsSettings\(""").findAll(screen).map { it.groupValues[1].ifEmpty { SettingsSection.DOWNLOADS.name } }.toList()
+        val shown = Regex("""\bsection\(SettingsSection\.(\w+)|(downloads|suggestion)Settings\(""").findAll(screen)
+            .map { it.groupValues[1].ifEmpty { if (it.groupValues[2] == "downloads") SettingsSection.DOWNLOADS.name else SettingsSection.SUGGESTIONS.name } }.toList()
         assertEquals(SettingsSection.entries.map { it.name }, shown)
     }
 

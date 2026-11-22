@@ -96,15 +96,23 @@ sealed interface SheetPlace {
     /** A queue's page or the Queue sheet (P1), the song at [position] in queue [id]. */
     @Serializable @SerialName("queue")
     data class Queue(val id: String, val position: Int) : SheetPlace
+
+    /** A list of suggestions (For you, More like this; SG1): Not now, Never suggest this and Why this? come first. */
+    @Serializable @SerialName("suggestion")
+    data object Suggestion : SheetPlace
 }
 
-/** The song sheet's rows, in the order they show. Move to trash sits apart at the bottom. */
-enum class SheetRow { PLAY_NEXT, ADD_TO, FAVOURITE, LYRICS, MAKE_TONE, CUT, SHARE, SONG_INFO, EDIT_TAGS, BOOK, COVERS_TAGS, REMOVE_FROM_QUEUE, REMOVE_FROM_PLAYLIST, HIDE, MOVE_TO_TRASH }
+/**
+ * The song sheet's rows, in the order they show. Move to trash sits apart at the bottom. On a suggestion the choices it
+ * has ([SUGGESTION_ROWS]) come first.
+ */
+enum class SheetRow { PLAY_NEXT, ADD_TO, NOT_NOW, NEVER, MORE_LIKE, WHY, FAVOURITE, LYRICS, MAKE_TONE, CUT, SHARE, SONG_INFO, EDIT_TAGS, BOOK, COVERS_TAGS, REMOVE_FROM_QUEUE, REMOVE_FROM_PLAYLIST, HIDE, MOVE_TO_TRASH }
 
 /**
  * The rows the song sheet shows when opened at [place]. [coversTags] and [removeFromQueue]: their slots are filled
  * ([SongSheetSlots]); an empty slot's row does not show. Cut only for a song KJB can [cut] (a format the phone decodes,
- * not a book). One Share for every song: Song or Lyrics is asked from it for a song with lyrics ([ShareChoice]).
+ * not a book). One Share for every song: Song or Lyrics is asked from it for a song with lyrics ([ShareChoice]). More like
+ * this for every song; a suggestion's own choices only on a suggestion, and first there.
  */
 fun sheetRows(place: SheetPlace, coversTags: Boolean, removeFromQueue: Boolean, cut: Boolean = false): List<SheetRow> = SheetRow.entries.filter { row ->
     when (row) {
@@ -112,9 +120,13 @@ fun sheetRows(place: SheetPlace, coversTags: Boolean, removeFromQueue: Boolean, 
         SheetRow.COVERS_TAGS -> coversTags
         SheetRow.REMOVE_FROM_QUEUE -> removeFromQueue && place is SheetPlace.Queue
         SheetRow.REMOVE_FROM_PLAYLIST -> place is SheetPlace.Playlist
+        SheetRow.NOT_NOW, SheetRow.NEVER, SheetRow.WHY -> place is SheetPlace.Suggestion
         else -> true
     }
-}
+}.let { rows -> if (place is SheetPlace.Suggestion) rows.sortedBy { it !in SUGGESTION_ROWS } else rows }
+
+/** A suggestion's own choices, in their order (the mockup's "Hold a suggested song"). */
+val SUGGESTION_ROWS: List<SheetRow> = listOf(SheetRow.NOT_NOW, SheetRow.NEVER, SheetRow.MORE_LIKE, SheetRow.WHY)
 
 /** The rows of an album's or an artist's "⋯", in the order they show. */
 enum class CollectionRow { PLAY_NEXT, ADD_TO, SHUFFLE, GO_TO_ARTIST, COVERS_TAGS, EDIT_ALBUM, RENAME_ARTIST, MERGE_WITH }
@@ -447,6 +459,10 @@ sealed interface OpenSheet {
     @Serializable @SerialName("song")
     data class Menu(val song: SongRef, val place: SheetPlace = SheetPlace.List) : OpenSheet
 
+    /** Why this? for a suggested song (SG1). */
+    @Serializable @SerialName("why")
+    data class Why(val song: SongRef) : OpenSheet
+
     /** Add to, for [songs] from [source]; [name] is where a new queue's name starts. */
     @Serializable @SerialName("addTo")
     data class AddTo(val songs: List<SongRef>, val source: QueueSource?, val name: String) : OpenSheet
@@ -632,6 +648,7 @@ fun sourceLabel(resources: Resources, source: QueueSource): String = when (sourc
     SourceKind.RECENTLY_PLAYED -> resources.getString(R.string.lib_recently_played)
     SourceKind.RECENTLY_ADDED -> resources.getString(R.string.lib_recently_added)
     SourceKind.OPENED -> resources.getString(R.string.open_queue)
+    SourceKind.SUGGESTIONS -> source.name
     SourceKind.SONGS -> source.name.ifEmpty { resources.getString(R.string.library_tab_songs) }
     SourceKind.BOOK -> resources.getString(R.string.book_source, source.name)
 }
@@ -662,6 +679,7 @@ fun SongSheetsHost(sheets: SongSheets, ui: LibraryUi, onActed: () -> Unit = {}) 
     val settings = rememberSettingsStore()
     val trash = rememberDuplicates().trash
     val phoneTrash = rememberPhoneTrash(trash, toasts)
+    val suggestions = rememberSuggestions()
     // This host's place in the composition, which is the same when its page comes back, as rememberSaveable's keys are.
     val at = currentCompositeKeyHash.toString(36)
     LaunchedEffect(nav, sheets, at) { snapshotFlow { nav.state.reopen }.collect { nav.takeSheet(at)?.let(sheets::show) } }
@@ -736,8 +754,20 @@ fun SongSheetsHost(sheets: SongSheets, ui: LibraryUi, onActed: () -> Unit = {}) 
                             val book = library.bookOf(song.path)
                             scope.launch { toasts.markBooks(context, resources, marked = book == null) { it.toggled(song, book) } }
                         }
+                        SheetRow.NOT_NOW, SheetRow.NEVER -> {
+                            sheets.close()
+                            scope.launch { toasts.hold(context, suggestions, song.ref, never = row == SheetRow.NEVER) }
+                        }
+                        SheetRow.MORE_LIKE -> {
+                            sheets.close()
+                            nav.open(Page.MoreLike(SeedKind.SONG, song.path), SheetReturn(at, step))
+                        }
+                        SheetRow.WHY -> sheets.show(OpenSheet.Why(song.ref))
                     }
                 }
+            }
+            is OpenSheet.Why -> WhySheet(songOf(step.song) ?: return@SheetFlow Gone(sheets), after = null, by = null, onDismiss = sheets::close) { never ->
+                scope.launch { toasts.hold(context, suggestions, step.song, never) }
             }
             is OpenSheet.AddTo -> AddToSheet(step.songs, addToTitle(step.songs, ui, library), ui, onDismiss = sheets::close) { target ->
                 when (target) {

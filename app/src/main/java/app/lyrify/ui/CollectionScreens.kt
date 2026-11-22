@@ -117,7 +117,7 @@ fun CollectionPage(page: Page.CollectionPages, root: Boolean = false) {
 
 /** A page whose collection is gone from the phone (moved, deleted), or not read yet; the bar's Favourites while it is read ([root]). */
 @Composable
-private fun MissingPage(ui: LibraryUi, root: Boolean = false) {
+internal fun MissingPage(ui: LibraryUi, root: Boolean = false) {
     val nav = LocalNavigator.current
     PageFrame(topBar = { under, backdrop -> if (root) CollectionTopBar("", under, backdrop, ui, root = true) else BackTopBar("", under, backdrop) { nav.back() } }) { padding ->
         if (ui.library != null) {
@@ -294,6 +294,7 @@ private fun AlbumPage(ui: LibraryUi, library: Library, key: String) {
                 )
             }
         }
+        item(key = "more like", contentType = "more like") { Box(rowMotion(reduced)) { MoreLikeButton { nav.open(Page.MoreLike(SeedKind.ALBUM, key)) } } }
         item(key = "header", contentType = "header") {
             Box(rowMotion(reduced)) {
                 ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, onAddAll = list::addAll, sort = sortChip(sort, R.string.lib_sort_track), onSort = { sorting = true })
@@ -325,6 +326,7 @@ private fun ArtistPage(ui: LibraryUi, library: Library, name: String) {
             val face = artist.albums.firstOrNull()?.songs?.firstOrNull()
             Box(rowMotion(reduced)) { Hero(name, artistLine(artist), art = { ArtistAvatar(artist, size = AVATAR) }, glow = face?.let { SongArt(it.path, it.ref.mediaStoreId) }) }
         }
+        item(key = "more like", contentType = "more like") { Box(rowMotion(reduced)) { MoreLikeButton { nav.open(Page.MoreLike(SeedKind.ARTIST, name)) } } }
         if (artist.albums.isNotEmpty()) {
             item(key = "albums heading", contentType = "heading") { Box(rowMotion(reduced)) { ListHeading(stringResource(R.string.library_tab_albums), artist.albums.size) } }
             item(key = "albums", contentType = "albums") { Box(rowMotion(reduced)) { AlbumsRow(artist.albums) } }

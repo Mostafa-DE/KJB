@@ -148,13 +148,27 @@ object QueuesJson {
     /** A queue's members but its two lists ([Encoder] adds them). */
     private fun head(queue: Queue): Map<String, JsonElement> = buildMap {
         put(ID_KEY, JsonPrimitive(queue.id))
-        put(SOURCE_KEY, JsonObject(mapOf(KIND_KEY to JsonPrimitive(queue.source.kind.name), KEY_KEY to JsonPrimitive(queue.source.key), NAME_KEY to JsonPrimitive(queue.source.name))))
+        // A list KJB suggested is stored as picked songs with a mark: an older KJB, which knows no such list, keeps its songs.
+        val suggested = queue.source.kind == SourceKind.SUGGESTIONS
+        val kind = if (suggested) SourceKind.PICKED else queue.source.kind
+        put(
+            SOURCE_KEY,
+            JsonObject(
+                buildMap {
+                    put(KIND_KEY, JsonPrimitive(kind.name))
+                    put(KEY_KEY, JsonPrimitive(queue.source.key))
+                    put(NAME_KEY, JsonPrimitive(queue.source.name))
+                    if (suggested) put(SUGGESTIONS_KEY, JsonPrimitive(true))
+                },
+            ),
+        )
         queue.name?.let { put(NAME_KEY, JsonPrimitive(it)) }
         put(INDEX_KEY, JsonPrimitive(queue.index))
         put(POSITION_KEY, JsonPrimitive(queue.positionMs))
         put(UPDATED_AT_KEY, JsonPrimitive(queue.updatedAt))
         put(STARTED_AT_KEY, JsonPrimitive(queue.startedAt))
         queue.listSize?.let { put(LIST_SIZE_KEY, JsonPrimitive(it)) }
+        if (queue.smart) put(SMART_KEY, JsonPrimitive(true))
     }
 
     private fun item(item: QueueItem): JsonElement = JsonObject(
@@ -164,6 +178,7 @@ object QueuesJson {
             item.song.mediaStoreId?.let { put(MEDIA_STORE_ID_KEY, JsonPrimitive(it)) }
             item.sourceIndex?.let { put(SOURCE_INDEX_KEY, JsonPrimitive(it)) }
             if (item.playNext) put(PLAY_NEXT_KEY, JsonPrimitive(true))
+            item.suggested?.let { put(SUGGESTED_KEY, JsonPrimitive(it.name)) }
         },
     )
 
@@ -172,7 +187,8 @@ object QueuesJson {
         val stored = element as? JsonObject ?: return null
         val id = stored[ID_KEY]?.text() ?: return null
         val source = stored[SOURCE_KEY] as? JsonObject ?: return null
-        val kind = source[KIND_KEY]?.text()?.let { name -> SourceKind.entries.firstOrNull { it.name == name } } ?: return null
+        val named = source[KIND_KEY]?.text()?.let { name -> SourceKind.entries.firstOrNull { it.name == name } } ?: return null
+        val kind = if ((source[SUGGESTIONS_KEY] as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull == true) SourceKind.SUGGESTIONS else named
         val all = (stored[ITEMS_KEY] as? JsonArray).orEmpty()
         val items = all.mapNotNull(::item).distinctBy { it.uid }.distinctBy { it.song.path }
         if (items.size < all.size) onDropped(all.size - items.size)
@@ -193,6 +209,8 @@ object QueuesJson {
             startedAt = stored.long(STARTED_AT_KEY) ?: stored.long(UPDATED_AT_KEY) ?: 0,
             // A size that could not be the list's (shorter than a song's place in it) reads as unknown.
             listSize = stored.int(LIST_SIZE_KEY)?.takeIf { size -> items.all { (it.sourceIndex ?: -1) < size } },
+            // Smart shuffle is Shuffle with suggestions: only a shuffled queue has it.
+            smart = stored.containsKey(UNSHUFFLED_KEY) && (stored[SMART_KEY] as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull == true,
         )
     }
 
@@ -224,6 +242,8 @@ object QueuesJson {
             song = SongRef(path, stored.long(MEDIA_STORE_ID_KEY)),
             sourceIndex = stored.int(SOURCE_INDEX_KEY)?.takeIf { it >= 0 },
             playNext = (stored[PLAY_NEXT_KEY] as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull ?: false,
+            // A mark a newer KJB wrote that this one does not know reads as a song like any other.
+            suggested = stored[SUGGESTED_KEY]?.text()?.let { name -> Suggested.entries.firstOrNull { it.name == name } },
         )
     }
 
@@ -254,6 +274,9 @@ object QueuesJson {
     private const val MEDIA_STORE_ID_KEY: String = "mediaStoreId"
     private const val SOURCE_INDEX_KEY: String = "sourceIndex"
     private const val PLAY_NEXT_KEY: String = "playNext"
+    private const val SUGGESTED_KEY: String = "suggested"
+    private const val SMART_KEY: String = "smart"
+    private const val SUGGESTIONS_KEY: String = "suggestions"
 }
 
 /** The stored form of [PlaybackPlace]: read leniently, a field it cannot use as its default; null when it is no JSON object. */

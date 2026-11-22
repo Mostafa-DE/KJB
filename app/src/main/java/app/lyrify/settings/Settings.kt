@@ -33,6 +33,7 @@ data class Settings(
     val advanced: AdvancedSettings = AdvancedSettings(),
     val nav: NavSettings = NavSettings(),
     val display: DisplaySettings = DisplaySettings(),
+    val suggestions: SuggestionSettings = SuggestionSettings(),
 )
 
 /** Settings > Playback. */
@@ -286,8 +287,9 @@ data class NavSettings(
 /**
  * Settings' sections, in the screen's order, each opened and closed by its title. Lyrics, AI, Downloads and Backup start
  * closed, the others open (user, 2026-11-21); Advanced, under About, is a row of its own that always starts closed.
+ * Suggestions comes right after Playback (v4).
  */
-enum class SettingsSection(val openAtFirst: Boolean) { PLAYBACK(true), LIBRARY(true), DISPLAY(true), LYRICS(false), AI(false), DOWNLOADS(false), BACKUP(false), ABOUT(true) }
+enum class SettingsSection(val openAtFirst: Boolean) { PLAYBACK(true), SUGGESTIONS(true), LIBRARY(true), DISPLAY(true), LYRICS(false), AI(false), DOWNLOADS(false), BACKUP(false), ABOUT(true) }
 
 /**
  * What the bottom bar (the dock) can hold, each with its own page stack: Library, Playlists, Search and Tools by default,
@@ -333,6 +335,33 @@ enum class ThemeChoice { SYSTEM, LIGHT, DARK }
 
 /** The Favourites page's tabs: the favourite songs, then the albums, artists, folders and playlists with a heart. */
 enum class FavouritesTab { SONGS, ALBUMS, ARTISTS, FOLDERS, PLAYLISTS }
+
+/** Settings > Suggestions, and what the user told suggestions about songs. */
+data class SuggestionSettings(
+    /** "Autoplay": when the queue ends, KJB keeps playing songs picked from your listening. */
+    val autoplay: Boolean = true,
+    /** "How adventurous": where the mix starts. */
+    val adventure: Adventure = Adventure.MIX,
+    /** "Show reasons": a line under each suggested song; the Suggested mark stays either way. */
+    val showReasons: Boolean = true,
+    /** The For you card at the top of Library; the For you page's menu turns it off and on. */
+    val forYouCard: Boolean = true,
+    /** The For you card's Hide: hidden until this moment (the next day's mix), wall-clock millis; null while it shows. */
+    val forYouHiddenUntil: Long? = null,
+    /** "Never suggest this": songs left out of every suggestion, each with when it was said; they still play when picked. */
+    val never: List<HeldSong> = emptyList(),
+    /** "Not now": songs left out of suggestions until their [HeldSong.at]. */
+    val notNow: List<HeldSong> = emptyList(),
+)
+
+/** A song held out of suggestions: [song] by its path with its id hint, and [at] (since when, or until when). */
+data class HeldSong(val song: SongRef, val at: Long)
+
+/**
+ * Suggestions' "How adventurous": where the mix starts. Familiar: mostly songs you love, a few rediscoveries, rarely a
+ * new one; Mix (the default): about 1 suggestion in 3 a rediscovery or a new song; Discover: more of both.
+ */
+enum class Adventure { FAMILIAR, MIX, DISCOVER }
 
 /**
  * The stored form of [Settings]: a JSON object with a version and one object per section, enums by name. Read leniently,
@@ -437,6 +466,17 @@ object SettingsJson {
                         "hideDockOnScroll" to it.hideDockOnScroll,
                     )
                 },
+                "suggestions" to settings.suggestions.let {
+                    obj(
+                        "autoplay" to it.autoplay,
+                        "adventure" to it.adventure.name,
+                        "showReasons" to it.showReasons,
+                        "forYouCard" to it.forYouCard,
+                        "forYouHiddenUntil" to it.forYouHiddenUntil?.let(::JsonPrimitive),
+                        "never" to JsonArray(it.never.map(::heldSong)),
+                        "notNow" to JsonArray(it.notNow.map(::heldSong)),
+                    )
+                },
             ),
         ),
     )
@@ -538,6 +578,17 @@ object SettingsJson {
                     hideDockOnScroll = it.flag("hideDockOnScroll", d.display.hideDockOnScroll),
                 )
             } ?: d.display,
+            suggestions = root.section("suggestions")?.let {
+                SuggestionSettings(
+                    autoplay = it.flag("autoplay", d.suggestions.autoplay),
+                    adventure = it.choice("adventure", d.suggestions.adventure),
+                    showReasons = it.flag("showReasons", d.suggestions.showReasons),
+                    forYouCard = it.flag("forYouCard", d.suggestions.forYouCard),
+                    forYouHiddenUntil = (it["forYouHiddenUntil"] as? JsonPrimitive)?.takeUnless { at -> at.isString }?.longOrNull,
+                    never = (it["never"] as? JsonArray)?.let(::heldSongs) ?: d.suggestions.never,
+                    notNow = (it["notNow"] as? JsonArray)?.let(::heldSongs) ?: d.suggestions.notNow,
+                )
+            } ?: d.suggestions,
         )
     }
 
@@ -571,6 +622,17 @@ object SettingsJson {
         val path = song["path"]?.text()?.takeIf(String::isNotBlank) ?: return@mapNotNull null
         SongRef(path, (song["id"] as? JsonPrimitive)?.takeUnless { it.isString }?.longOrNull)
     }.distinctBy { it.path }
+
+    /** A song held out of suggestions as stored: its path, its id hint when known, and its time. */
+    private fun heldSong(held: HeldSong): JsonObject = obj("path" to held.song.path, "id" to held.song.mediaStoreId?.let(::JsonPrimitive), "at" to JsonPrimitive(held.at)).withoutNulls()
+
+    /** Songs held out of suggestions as stored, as [hiddenSongs] reads its songs, and each with its time: one without is left out. */
+    private fun heldSongs(stored: JsonArray): List<HeldSong> = stored.mapNotNull { item ->
+        val held = item as? JsonObject ?: return@mapNotNull null
+        val path = held["path"]?.text()?.takeIf(String::isNotBlank) ?: return@mapNotNull null
+        val at = (held["at"] as? JsonPrimitive)?.takeUnless { it.isString }?.longOrNull ?: return@mapNotNull null
+        HeldSong(SongRef(path, (held["id"] as? JsonPrimitive)?.takeUnless { it.isString }?.longOrNull), at)
+    }.distinctBy { it.song.path }
 
     /**
      * "Artists with several names" as stored: a list missing or not a list reads as [base]'s, an empty one is the user's

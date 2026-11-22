@@ -9,16 +9,23 @@ enum class Repeat { OFF, ALL, ONE }
 /**
  * One song in a queue. [uid] is the item's own for the queue's life (reorders, Shuffle, Undo); [sourceIndex] its place in
  * the list the queue came from, null for songs added with Play next or Add to queue; [playNext] while a Play next song
- * still waits its turn.
+ * still waits its turn; [suggested] when a suggestion put it there, not the user (v4).
  */
-data class QueueItem(val uid: Long, val song: SongRef, val sourceIndex: Int? = null, val playNext: Boolean = false)
+data class QueueItem(val uid: Long, val song: SongRef, val sourceIndex: Int? = null, val playNext: Boolean = false, val suggested: Suggested? = null)
+
+/** What put a song in a queue without the user picking it: Autoplay after the queue's end, or Smart shuffle among its songs. */
+enum class Suggested { AUTOPLAY, SMART_SHUFFLE }
+
+/** The Shuffle button's steps: off, Shuffle, Smart shuffle (Smart shuffle option A, user 2026-11-22). */
+enum class ShuffleStep { OFF, SHUFFLE, SMART }
 
 /**
  * A queue: its songs in play order, each song once (by path), the [index] of the current one and the [positionMs] in it,
  * the list it came from ([source]), and the user's [name] for it (Rename; null shows the source and [startedAt], see
  * [queueNames]). While shuffled, [unshuffled] keeps the order before, by uid, so turning Shuffle off restores it.
  * [startedAt] is when it was made, [updatedAt] when it last played or was left, wall-clock millis. [listSize] is how
- * many songs the list it came from had then (null for a queue stored before it was kept).
+ * many songs the list it came from had then (null for a queue stored before it was kept). [smart]: Smart shuffle is on, so
+ * suggestions are mixed in among its songs (only while shuffled).
  */
 data class Queue(
     val id: String,
@@ -31,10 +38,22 @@ data class Queue(
     val updatedAt: Long = 0,
     val startedAt: Long = 0,
     val listSize: Int? = null,
+    val smart: Boolean = false,
 ) {
     val shuffled: Boolean get() = unshuffled != null
 
+    /** Where the Shuffle button stands for this queue: Smart shuffle is Shuffle with suggestions mixed in ([smart]). */
+    val shuffleStep: ShuffleStep
+        get() = when {
+            !shuffled -> ShuffleStep.OFF
+            smart -> ShuffleStep.SMART
+            else -> ShuffleStep.SHUFFLE
+        }
+
     val current: QueueItem? get() = items.getOrNull(index)
+
+    /** Whether [item] is a suggestion (v4): one a suggestion put here, or a song of a list KJB suggested, not one added to it. */
+    fun suggests(item: QueueItem): Boolean = item.suggested != null || (source.kind == SourceKind.SUGGESTIONS && item.sourceIndex != null)
 
     /** Whether this queue came from the place [other] names: the same kind and key, whatever the name says now. */
     fun from(other: QueueSource): Boolean = source.kind == other.kind && source.key == other.key
@@ -317,13 +336,17 @@ data class QueueBook(
      * Shuffle on the queue playing: on, the current song goes first and plays on from where it is, the Play next songs
      * still waiting right after it in their order, then every other song, before it or after it, in a random order (3.1;
      * before, the songs before it stayed above it); off, the order before comes back, with songs added meanwhile at the
-     * end and Play next songs still waiting right after the current one.
+     * end and Play next songs still waiting right after the current one. Off from Smart shuffle, its suggestions still to
+     * come leave first; one playing stays, right after the song that played before it.
      */
     fun toggleShuffle(random: Random): QueueBook {
         val queue = current ?: return this
         val playing = queue.current ?: return this
         val currentUid = playing.uid
         val unshuffled = queue.unshuffled
+        if (unshuffled != null && queue.items.drop(queue.index + 1).any { it.suggested == Suggested.SMART_SHUFFLE }) {
+            return unsuggest(queue.id, Suggested.SMART_SHUFFLE).toggleShuffle(random)
+        }
         if (unshuffled == null) {
             val (waiting, rest) = queue.items.filterNot { it.uid == currentUid }.partition { it.playNext }
             val items = listOf(playing) + waiting + rest.shuffled(random)
@@ -333,10 +356,55 @@ data class QueueBook(
         val known = unshuffled.toSet()
         val restored = unshuffled.mapNotNull(byUid::get)
         val extras = queue.items.filterNot { it.uid in known }
-        val list = restored + extras.filterNot { it.playNext }
+        val suggestion = playing.takeIf { it.suggested != null && it.uid !in known }
+        var list = restored + extras.filterNot { it.playNext || it === suggestion }
+        if (suggestion != null) {
+            val before = queue.items.take(queue.index).lastOrNull { it.uid in known }?.uid
+            val place = list.indexOfFirst { it.uid == before } + 1
+            list = list.take(place) + suggestion + list.drop(place)
+        }
         val at = list.indexOfFirst { it.uid == currentUid }
         val items = list.take(at + 1) + extras.filter { it.playNext } + list.drop(at + 1)
-        return edit(queue.id) { it.copy(items = items, index = items.indexOfFirst { item -> item.uid == currentUid }, unshuffled = null) }
+        return edit(queue.id) { it.copy(items = items, index = items.indexOfFirst { item -> item.uid == currentUid }, unshuffled = null, smart = false) }
+    }
+
+    /**
+     * The Shuffle button's next step on the queue playing: Off to Shuffle ([toggleShuffle]), Shuffle to Smart shuffle (the
+     * order stays, suggestions come in as it plays), Smart shuffle to Off (the suggestions still to come leave, the order
+     * before comes back).
+     */
+    fun cycleShuffle(random: Random): QueueBook {
+        val queue = current ?: return this
+        return if (queue.shuffleStep == ShuffleStep.SHUFFLE) edit(queue.id) { it.copy(smart = true) } else toggleShuffle(random)
+    }
+
+    /** Smart shuffle back to plain Shuffle on the queue playing (its Undo): its suggestions still to come leave, the order stays. */
+    fun plainShuffle(): QueueBook {
+        val queue = current?.takeIf { it.shuffleStep == ShuffleStep.SMART } ?: return this
+        return unsuggest(queue.id, Suggested.SMART_SHUFFLE).edit(queue.id) { it.copy(smart = false) }
+    }
+
+    /**
+     * Suggestions into queue [queueId], marked [by]: each song of [songs] right after the item with the uid it names (a
+     * song after the same item in their order), none the queue holds already, none after an item that is gone.
+     */
+    fun suggest(queueId: String, songs: List<Pair<Long, SongRef>>, by: Suggested): QueueBook {
+        val queue = queue(queueId) ?: return this
+        val held = queue.items.mapTo(HashSet()) { it.song.path }
+        val uids = queue.items.mapTo(HashSet()) { it.uid }
+        val wanted = songs.filter { (after, song) -> after in uids && held.add(song.path) }
+        if (wanted.isEmpty()) return this
+        val coming = wanted.withIndex().groupBy({ it.value.first }) { QueueItem(nextUid + it.index, it.value.second, suggested = by) }
+        val currentUid = queue.current?.uid
+        val items = queue.items.flatMap { listOf(it) + coming[it.uid].orEmpty() }
+        return edit(queueId) { it.copy(items = items, index = items.indexOfFirst { item -> item.uid == currentUid }.coerceAtLeast(0)) }.copy(nextUid = nextUid + wanted.size)
+    }
+
+    /** The suggestions marked [by] still to come in queue [queueId] leave it; the song playing stays, even one of them. */
+    fun unsuggest(queueId: String, by: Suggested): QueueBook {
+        val queue = queue(queueId) ?: return this
+        val gone = queue.items.drop(queue.index + 1).filter { it.suggested == by }.mapTo(HashSet()) { it.uid }
+        return if (gone.isEmpty()) this else removeUids(queueId, gone)
     }
 
     /**

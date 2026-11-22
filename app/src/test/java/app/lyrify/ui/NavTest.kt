@@ -48,6 +48,12 @@ class NavTest {
         assertEquals(DockTab.TOOLS, NavState.start(DockTab.LIBRARY).open(Page.Licence("Media3")).tab)
         assertEquals(DockTab.LIBRARY, NavState.start(DockTab.TOOLS).open(Page.Songs(status = LyricsStatus.AI_ALIGNED)).tab)
         assertEquals(DockTab.SEARCH, start.open(Page.SearchAll(SearchGroup.SONGS, "lantern")).tab)
+        // Suggestions (v4): Never suggest and Suggestions health are Settings' pages; For you and More like this are lists.
+        assertEquals(DockTab.TOOLS, start.open(Page.NeverSuggest).tab)
+        assertEquals(DockTab.TOOLS, start.open(Page.SuggestionsHealth).tab)
+        assertEquals(DockTab.LIBRARY, NavState.start(DockTab.TOOLS).open(Page.ForYou).tab)
+        assertEquals(DockTab.LIBRARY, start.open(Page.MoreLike(SeedKind.SONG, "/music/a.mp3")).tab)
+        assertEquals(DockTab.SEARCH, NavState.start(DockTab.SEARCH).open(Page.MoreLike(SeedKind.ARTIST, "Kit Calloway")).tab)
     }
 
     @Test
@@ -696,6 +702,7 @@ class NavTest {
             Page.Playlist("p3"), Page.BuiltIn(BuiltInList.MOST_PLAYED), Page.UnknownAlbum,
             Page.Queue("q1"), Page.Listening, Page.TopList(TopKind.ARTISTS), Page.TopList(TopKind.GENRES), Page.Recap("2026-10"), Page.Recaps, Page.Tones, Page.Bookmarks, Page.Ai, Page.CoversTags, Page.TagHistory, Page.LibraryTabs,
             Page.Licences, Page.Licence("Media3"), Page.Settings(), Page.Settings(SettingsSection.LYRICS),
+            Page.ForYou, Page.MoreLike(SeedKind.ALBUM, "Harbour Glass"), Page.NeverSuggest, Page.SuggestionsHealth,
         ).fold(NavState.start(DockTab.LIBRARY)) { state, page -> state.copy(stacks = state.stacks + (DockTab.LIBRARY to state.stacks[DockTab.LIBRARY].orEmpty() + StackEntry(page))) }
             .show(FullScreen.SyncEditor(SongRef("/music/a.mp3"))).show(FullScreen.EditAlbum("Harbour Glass")).show(FullScreen.CompanionNow)
         assertEquals(every, NavState.decode(every.encode()))

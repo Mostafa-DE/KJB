@@ -298,6 +298,7 @@ private fun SongsTab(ui: LibraryUi, library: Library, reselect: Int, topBar: @Co
     val reduced = LocalReducedMotion.current
     SongListFrame(ui, songs, source, topBar, state, loaded = listed != null) { list ->
         recapCard(LibraryTab.SONGS)
+        item(key = "for you", contentType = "for you") { Box(rowMotion(reduced)) { ForYouCard(ui) } }
         item(key = "favourites", contentType = "favourites") { Box(rowMotion(reduced)) { FavouritesRowView(ui, library) } }
         item(key = "header", contentType = "header") {
             Box(rowMotion(reduced)) { ListHeader(songs.size, R.plurals.lib_noun_songs, list::shuffle, { list.play() }, sort = songsOrder(settings), onSort = { sorting = true }) }

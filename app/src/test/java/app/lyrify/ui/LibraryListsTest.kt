@@ -212,11 +212,12 @@ class LibraryListsTest {
     }
 
     @Test
-    fun `the Songs tab starts with the Favourites row, and Covers and tags is no longer there`() {
+    fun `the Songs tab starts with For you's card, then the Favourites row, and Covers and tags is no longer there`() {
         val screen = File("src/main/java/app/lyrify/ui/LibraryScreen.kt").readText()
         val songsTab = screen.substringAfter("private fun SongsTab(").substringBefore("\n}\n")
-        val firstItem = Regex("""item\(key = "([^"]+)"[,)]""").find(songsTab)?.groupValues?.get(1)
-        assertEquals("favourites", firstItem)
+        val items = Regex("""item\(key = "([^"]+)"[,)]""").findAll(songsTab).map { it.groupValues[1] }.toList()
+        // For you's card (v4) sits at the top of Library; it shows nothing while there is no mix, or it is hidden.
+        assertEquals(listOf("for you", "favourites"), items.take(2))
         assertFalse("CoversTagsEntry" in screen)
         assertFalse("CoversTagsEntry" in File("src/main/java/app/lyrify/ui/CoversTagsScreen.kt").readText())
     }

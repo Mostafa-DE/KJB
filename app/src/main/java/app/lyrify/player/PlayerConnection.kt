@@ -136,6 +136,7 @@ fun sourceLabel(context: Context, source: QueueSource, songs: Int): String {
         SourceKind.RECENTLY_PLAYED -> return context.getString(R.string.queue_source_recently_played)
         SourceKind.RECENTLY_ADDED -> return context.getString(R.string.queue_source_recently_added)
         SourceKind.OPENED -> return context.getString(R.string.open_queue)
+        SourceKind.SUGGESTIONS -> return source.name
         SourceKind.PICKED -> return context.getString(R.string.queue_source_picked, context.resources.getQuantityString(R.plurals.queue_songs, songs, songs))
         SourceKind.ALBUM -> R.string.queue_source_album
         SourceKind.ARTIST -> R.string.queue_source_artist
@@ -238,11 +239,14 @@ class PlayerConnection(
         return next
     }
 
-    /** Shuffle on the queue playing; true when it is now on. */
-    fun toggleShuffle(): Boolean {
-        core.change { it.toggleShuffle(core.shuffleRandom()) }
-        return core.book.value.current?.shuffled == true
+    /** The Shuffle button on the queue playing: Off, Shuffle, Smart shuffle, and round again; the step it is on now. */
+    fun cycleShuffle(): ShuffleStep {
+        core.change { it.cycleShuffle(core.shuffleRandom()) }
+        return core.book.value.current?.shuffleStep ?: ShuffleStep.OFF
     }
+
+    /** Smart shuffle's Undo: plain Shuffle again. */
+    fun plainShuffle() = core.change { it.plainShuffle() }
 
     // The lists' commands
 
