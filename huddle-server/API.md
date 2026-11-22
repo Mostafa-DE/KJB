@@ -65,7 +65,8 @@ Every error is `{"error": "<code>"}`. `bad_request` also names the first bad fie
 | Status | `error` | When |
 |---|---|---|
 | 400 | `bad_request` | Body is not JSON, or a field is missing, too long, or of the wrong shape. |
-| 404 | `not_found` | Invite unknown or expired. (Never used for mailboxes: an unknown mailbox is just empty.) |
+| 404 | `not_found` | Invite unknown or expired, or an unknown `/api` path. (Never used for mailboxes: an unknown mailbox is just empty.) |
+| 405 | `method_not_allowed` | Anything but `POST` on an `/api` path. The `Allow` header says `POST`. |
 | 409 | `invite_exists` | `invites/create` with an invite or owner id already in use. |
 | 409 | `already_accepted` | `invites/accept` on an invite someone already accepted. |
 | 409 | `mailbox_full` | The friend's mailbox already holds 200 cards and profiles or 4 MiB of them. |
@@ -282,4 +283,5 @@ Expired rows are never returned, and a cleanup deletes them when the server star
   encrypted data. No names, no song details, no keys, no IP addresses.
 - While a request is live: the IP address (Railway sees it too), and which mailboxes one phone reads together in one
   `inbox` call, so the server could link one person's friendships while they poll.
-- The server's own logs hold no ids, no data and no IPs; only unexpected errors.
+- The server's own logs hold one line per request (method, URL, status, time; no path or query ever carries an id),
+  and unexpected errors without request data. No ids, no data and no IPs.

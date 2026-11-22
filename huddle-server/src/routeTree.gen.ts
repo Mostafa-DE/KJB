@@ -13,6 +13,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as HealthRouteImport } from './routes/health'
 import { Route as IRouteImport } from './routes/i'
 import { Route as DotwellKnownAssetlinksDotjsonRouteImport } from './routes/[.]well-known/assetlinks[.]json'
+import { Route as ApiSplatRouteImport } from './routes/api/$'
 import { Route as ApiV1InvitesAcceptRouteImport } from './routes/api/v1/invites/accept'
 import { Route as ApiV1InvitesCreateRouteImport } from './routes/api/v1/invites/create'
 import { Route as ApiV1InvitesDeleteRouteImport } from './routes/api/v1/invites/delete'
@@ -44,6 +45,11 @@ const DotwellKnownAssetlinksDotjsonRoute =
     path: '/.well-known/assetlinks.json',
     getParentRoute: () => rootRouteImport,
   } as any)
+const ApiSplatRoute = ApiSplatRouteImport.update({
+  id: '/api/$',
+  path: '/api/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiV1InvitesAcceptRoute = ApiV1InvitesAcceptRouteImport.update({
   id: '/api/v1/invites/accept',
   path: '/api/v1/invites/accept',
@@ -95,6 +101,7 @@ export interface FileRoutesByFullPath {
   '/health': typeof HealthRoute
   '/i': typeof IRoute
   '/.well-known/assetlinks.json': typeof DotwellKnownAssetlinksDotjsonRoute
+  '/api/$': typeof ApiSplatRoute
   '/api/v1/invites/accept': typeof ApiV1InvitesAcceptRoute
   '/api/v1/invites/create': typeof ApiV1InvitesCreateRoute
   '/api/v1/invites/delete': typeof ApiV1InvitesDeleteRoute
@@ -110,6 +117,7 @@ export interface FileRoutesByTo {
   '/health': typeof HealthRoute
   '/i': typeof IRoute
   '/.well-known/assetlinks.json': typeof DotwellKnownAssetlinksDotjsonRoute
+  '/api/$': typeof ApiSplatRoute
   '/api/v1/invites/accept': typeof ApiV1InvitesAcceptRoute
   '/api/v1/invites/create': typeof ApiV1InvitesCreateRoute
   '/api/v1/invites/delete': typeof ApiV1InvitesDeleteRoute
@@ -126,6 +134,7 @@ export interface FileRoutesById {
   '/health': typeof HealthRoute
   '/i': typeof IRoute
   '/.well-known/assetlinks.json': typeof DotwellKnownAssetlinksDotjsonRoute
+  '/api/$': typeof ApiSplatRoute
   '/api/v1/invites/accept': typeof ApiV1InvitesAcceptRoute
   '/api/v1/invites/create': typeof ApiV1InvitesCreateRoute
   '/api/v1/invites/delete': typeof ApiV1InvitesDeleteRoute
@@ -143,6 +152,7 @@ export interface FileRouteTypes {
     | '/health'
     | '/i'
     | '/.well-known/assetlinks.json'
+    | '/api/$'
     | '/api/v1/invites/accept'
     | '/api/v1/invites/create'
     | '/api/v1/invites/delete'
@@ -158,6 +168,7 @@ export interface FileRouteTypes {
     | '/health'
     | '/i'
     | '/.well-known/assetlinks.json'
+    | '/api/$'
     | '/api/v1/invites/accept'
     | '/api/v1/invites/create'
     | '/api/v1/invites/delete'
@@ -173,6 +184,7 @@ export interface FileRouteTypes {
     | '/health'
     | '/i'
     | '/.well-known/assetlinks.json'
+    | '/api/$'
     | '/api/v1/invites/accept'
     | '/api/v1/invites/create'
     | '/api/v1/invites/delete'
@@ -189,6 +201,7 @@ export interface RootRouteChildren {
   HealthRoute: typeof HealthRoute
   IRoute: typeof IRoute
   DotwellKnownAssetlinksDotjsonRoute: typeof DotwellKnownAssetlinksDotjsonRoute
+  ApiSplatRoute: typeof ApiSplatRoute
   ApiV1InvitesAcceptRoute: typeof ApiV1InvitesAcceptRoute
   ApiV1InvitesCreateRoute: typeof ApiV1InvitesCreateRoute
   ApiV1InvitesDeleteRoute: typeof ApiV1InvitesDeleteRoute
@@ -228,6 +241,13 @@ declare module '@tanstack/react-router' {
       path: '/.well-known/assetlinks.json'
       fullPath: '/.well-known/assetlinks.json'
       preLoaderRoute: typeof DotwellKnownAssetlinksDotjsonRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/$': {
+      id: '/api/$'
+      path: '/api/$'
+      fullPath: '/api/$'
+      preLoaderRoute: typeof ApiSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/v1/invites/accept': {
@@ -301,6 +321,7 @@ const rootRouteChildren: RootRouteChildren = {
   HealthRoute: HealthRoute,
   IRoute: IRoute,
   DotwellKnownAssetlinksDotjsonRoute: DotwellKnownAssetlinksDotjsonRoute,
+  ApiSplatRoute: ApiSplatRoute,
   ApiV1InvitesAcceptRoute: ApiV1InvitesAcceptRoute,
   ApiV1InvitesCreateRoute: ApiV1InvitesCreateRoute,
   ApiV1InvitesDeleteRoute: ApiV1InvitesDeleteRoute,

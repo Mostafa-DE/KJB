@@ -13,7 +13,20 @@ export const Route = createRootRoute({
     links: [{ rel: "stylesheet", href: appCss }],
   }),
   component: RootDocument,
+  notFoundComponent: NotFound,
 })
+
+function NotFound() {
+  return (
+    <main className="page">
+      <p className="brand">KJB</p>
+      <h1>This page does not exist</h1>
+      <a className="button primary" href="/">
+        Go to KJB Huddle
+      </a>
+    </main>
+  )
+}
 
 function RootDocument() {
   return (
