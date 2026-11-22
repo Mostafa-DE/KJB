@@ -654,13 +654,14 @@ internal fun PlaylistPage(ui: LibraryUi, library: Library, id: String) {
 }
 
 /**
- * Most played (with Your listening at its top), Recently played, or Recently added: its period chips (each list keeps
- * the one it was left on, [ListPeriod]) and Search in this list over its header and songs. The hero's line, the header,
- * Shuffle and Play all go by the songs shown: the chip's, those the search leaves.
+ * Most played (with an Insights button beside its sort), Recently played, or Recently added: its period chips (each
+ * list keeps the one it was left on, [ListPeriod]) and Search in this list over its header and songs. The hero's line,
+ * the header, Shuffle and Play all go by the songs shown: the chip's, those the search leaves.
  */
 @Composable
 private fun BuiltInPage(ui: LibraryUi, library: Library, list: BuiltInList) {
     val context = LocalContext.current
+    val nav = LocalNavigator.current
     val change = rememberSettingsChange()
     val keyboard = LocalSoftwareKeyboardController.current
     val title = stringResource(list.words)
@@ -705,12 +706,12 @@ private fun BuiltInPage(ui: LibraryUi, library: Library, list: BuiltInList) {
         item(key = "hero", contentType = "hero") {
             Box(rowMotion(reduced)) {
                 FavouritesHead(title, songsMeta(songs, hours = true), list) {
-                    ListHeader(songs.size, R.plurals.lib_noun_songs, songList::shuffle, { songList.play() }, onAddAll = songList::addAll, sort = sortChip(order, R.string.lib_sort_title), onSort = { sorting = true }, gutter = 0.dp)
+                    ListHeader(songs.size, R.plurals.lib_noun_songs, songList::shuffle, { songList.play() }, onAddAll = songList::addAll, sort = sortChip(order, R.string.lib_sort_title), onSort = { sorting = true }, gutter = 0.dp) {
+                        // Most played's way to Insights: a small button beside the sort, not a card above the songs (user 2026-11-22).
+                        if (list == BuiltInList.MOST_PLAYED) HeaderButton(R.drawable.ic_bar_chart, stringResource(R.string.insights_open), enabled = true, primary = false, label = false) { nav.open(Page.Listening) }
+                    }
                 }
             }
-        }
-        if (list == BuiltInList.MOST_PLAYED) {
-            item(key = "listening", contentType = "listening") { ListeningCard(rowMotion(reduced).padding(start = ScreenPadding, end = ScreenPadding, top = 8.dp, bottom = 4.dp)) }
         }
         item(key = "periods", contentType = "periods") {
             // One row that scrolls sideways, opened with the chip picked in view and the one before it.

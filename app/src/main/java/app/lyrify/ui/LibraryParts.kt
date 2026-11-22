@@ -326,8 +326,9 @@ private data class PastTheKeys(val at: Int) : Serializable
 
 /**
  * Every list's header: the count, Shuffle and Play, then Add all on collection pages ([onAddAll]) and the sort chip
- * ([sort], the order shown). On a narrow screen the chip drops its word first, then Shuffle, then Play, then the chip
- * goes ([headerFit]), so nothing overlaps or scrolls sideways.
+ * ([sort], the order shown), with [besideSort] before it (Most played's Insights button). On a narrow screen the chip
+ * drops its word first, then Shuffle, then Play, then the chip goes ([headerFit]), so nothing overlaps or scrolls
+ * sideways; [besideSort] always stays.
  */
 @Composable
 fun ListHeader(
@@ -340,6 +341,7 @@ fun ListHeader(
     sort: String? = null,
     onSort: () -> Unit = {},
     gutter: Dp = ScreenPadding,
+    besideSort: @Composable () -> Unit = {},
 ) {
     val any = songs > 0
     SubcomposeLayout(Modifier.fillMaxWidth().padding(horizontal = gutter).heightIn(min = LIST_HEADER_HEIGHT)) { constraints ->
@@ -356,16 +358,17 @@ fun ListHeader(
         // Nothing to add from an empty list: no "Add all 0 songs".
         val add = onAddAll?.takeIf { any }?.let { onClick -> measure("add") { AddAllButton(songs, onClick) } }.orEmpty()
         val chips = sort?.let { order -> listOf(true, false).associateWith { label -> measure("sort $label") { SortChip(order, label, onSort) } } }
+        val beside = measure("beside sort", besideSort)
         fun width(parts: List<androidx.compose.ui.layout.Placeable>) = parts.sumOf { it.width }
         fun widths(parts: Map<Boolean, List<androidx.compose.ui.layout.Placeable>>, before: Int = 0) =
             PartWidth(width(parts.getValue(true)) + before, width(parts.getValue(false)) + before)
-        val fixed = width(countPart) + width(add) + gap * (2 + (if (add.isEmpty()) 0 else 1))
+        val fixed = width(countPart) + width(add) + gap * (2 + (if (add.isEmpty()) 0 else 1)) + (if (beside.isEmpty()) 0 else width(beside) + gap)
         val fit = headerFit(constraints.maxWidth, fixed, widths(shuffles), widths(plays), chips?.let { widths(it, before = gap) })
         val shuffle = shuffles.getValue(fit.shuffleLabel)
         val play = plays.getValue(fit.playLabel)
         val chip = chips?.takeIf { fit.chip != ChipFit.NONE }?.getValue(fit.chip == ChipFit.LABEL).orEmpty()
         val start = listOf(countPart, shuffle, play, add).filter { it.isNotEmpty() }
-        val height = (start + listOf(chip)).flatten().maxOfOrNull { it.height } ?: 0
+        val height = (start + listOf(chip, beside)).flatten().maxOfOrNull { it.height } ?: 0
         val rowHeight = maxOf(height, constraints.minHeight)
         layout(constraints.maxWidth, rowHeight) {
             var x = 0
@@ -374,6 +377,7 @@ fun ListHeader(
                 x += width(parts) + gap
             }
             chip.forEach { it.placeRelative(constraints.maxWidth - it.width, (rowHeight - it.height) / 2) }
+            beside.forEach { it.placeRelative(constraints.maxWidth - width(chip) - (if (chip.isEmpty()) 0 else gap) - it.width, (rowHeight - it.height) / 2) }
         }
     }
 }
@@ -394,8 +398,8 @@ data class HeaderFit(val shuffleLabel: Boolean, val playLabel: Boolean, val chip
 
 /**
  * The first way the list header fits [maxWidth]: the sort chip drops its word, then Shuffle, then Play, then the chip
- * goes, so nothing overlaps at 360 dp. [fixed] is what never shrinks (the count, Add all, the gaps between the parts on
- * the left); [chip] holds the gap before it, null when the header has no chip.
+ * goes, so nothing overlaps at 360 dp. [fixed] is what never shrinks (the count, Add all, a button beside the sort, the
+ * gaps between the parts); [chip] holds the gap before it, null when the header has no chip.
  */
 fun headerFit(maxWidth: Int, fixed: Int, shuffle: PartWidth, play: PartWidth, chip: PartWidth?): HeaderFit {
     val fits = listOf(

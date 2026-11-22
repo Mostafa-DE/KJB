@@ -35,8 +35,6 @@
     <string name="stats_open_artist">Open artist</string>
     <string name="stats_open_album">Open album</string>
     <string name="stats_song_options">Song options</string>
-    <!-- The card on Most played: "This month · 3 h 20 min · 41 plays". -->
-    <string name="stats_card_line">%1$s · %2$s · %3$s</string>
 
     <!-- Song info and Recently played. -->
     <plurals name="stats_played_times">

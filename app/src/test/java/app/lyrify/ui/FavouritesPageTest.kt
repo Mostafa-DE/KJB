@@ -172,6 +172,13 @@ class FavouritesPageTest {
         // Shuffle, Play, Add all and the sort in the head, as on Favourites; then the chips and Search, then the songs.
         assertTrue(page.indexOf("ListHeader(songs.size,") in page.indexOf("FavouritesHead(")..page.indexOf("key = \"periods\""))
         assertTrue(page.indexOf("key = \"periods\"") < page.indexOf("key = \"find\"") && page.indexOf("key = \"find\"") < page.indexOf("songRows("))
+        // On every list the chips come right after the head: Most played's way to Insights is a small button beside the
+        // sort ("Open Insights" for TalkBack), not a card above the songs (user 2026-11-22).
+        assertEquals(listOf("hero", "periods", "find"), Regex("""item\(key = "([^"]+)"""").findAll(page).map { it.groupValues[1] }.toList().take(3))
+        assertFalse("ListeningCard(" in page)
+        assertTrue(page.indexOf("if (list == BuiltInList.MOST_PLAYED) HeaderButton(R.drawable.ic_bar_chart, stringResource(R.string.insights_open), enabled = true, primary = false, label = false) { nav.open(Page.Listening) }") in page.indexOf("ListHeader(songs.size,")..page.indexOf("key = \"periods\""))
+        assertTrue("besideSort: @Composable () -> Unit = {}," in File("src/main/java/app/lyrify/ui/LibraryParts.kt").readText())
+        assertTrue(File("src/main/res/values/strings_insights.xml").readText().contains("""<string name="insights_open">Open Insights</string>"""))
     }
 
     // KJB 3.1: Favourites as a bar item has the bar's header with its name, as Queues, Downloads and Books do.

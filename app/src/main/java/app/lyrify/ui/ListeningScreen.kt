@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
@@ -22,7 +21,6 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -43,7 +41,6 @@ import androidx.compose.ui.graphics.layer.drawLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalResources
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -380,33 +377,6 @@ internal fun TopRowView(rank: Int?, title: String, line: String, plays: Int?, co
 private fun lineOf(name: String?, time: String): String = name?.trim()?.takeIf(String::isNotEmpty)?.let { stringResource(R.string.stats_row_line, it, time) } ?: time
 
 // What the library's screens show of plays (L1 places these)
-
-/** The card at the top of Most played: Insights' totals this month, its time and plays, as Insights shows them; opens Insights. */
-@Composable
-fun ListeningCard(modifier: Modifier = Modifier) {
-    val nav = LocalNavigator.current
-    val insights = rememberInsights(ListeningPeriod.MONTH)
-    val colors = MaterialTheme.colorScheme
-    val brand = LocalBrandColors.current
-    LyrifyCard(modifier, onClick = { nav.open(Page.Listening) }) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
-            modifier = Modifier.heightIn(min = 72.dp).padding(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 12.dp),
-        ) {
-            Tile(R.drawable.ic_bar_chart, brand.highlightContainer, brand.onHighlightContainer)
-            Column(Modifier.weight(1f)) {
-                Text(stringResource(R.string.stats_title), style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                if (insights != null) {
-                    val totals = insights.totals
-                    val line = stringResource(R.string.stats_card_line, stringResource(R.string.stats_this_month), listenedText(totals?.heardMs ?: 0), playsNote(totals?.plays ?: 0))
-                    Text(line, style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-            }
-            Icon(painterResource(R.drawable.ic_chevron_right), contentDescription = null, tint = colors.onSurfaceVariant, modifier = Modifier.size(20.dp))
-        }
-    }
-}
 
 /** Song info's plays lines: [plays] "Played 23 times" or "Not played yet", [lastPlayed] as [lastPlayedText] says it. */
 @Immutable

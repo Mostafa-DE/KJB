@@ -35,7 +35,8 @@ class ListeningScreenTest {
         val sheets = source("SongSheets.kt")
         val listening = source("ListeningScreen.kt")
 
-        listOf("ListeningCard(", "playsNote(", "lastPlayedText(", "StatsGraph.counter(context).written").forEach { assertTrue(it, pages.contains(it)) }
+        // Most played's card gave way to an Insights button in its head (user 2026-11-22: FavouritesPageTest).
+        listOf("playsNote(", "lastPlayedText(", "StatsGraph.counter(context).written").forEach { assertTrue(it, pages.contains(it)) }
         assertTrue(tabs.contains("StatsGraph.counter(context).written"))
         listOf("songPlaysInfo(song.ref)", "dateText(").forEach { assertTrue(it, sheets.contains(it)) }
         // A Top songs row opening the sheet is ListeningScreenDeviceTest's; the pages read plays.db and the library
