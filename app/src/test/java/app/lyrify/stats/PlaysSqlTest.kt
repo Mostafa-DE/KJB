@@ -112,6 +112,16 @@ class PlaysSqlTest {
     }
 
     @Test
+    fun `a song key the first write lacked is filled in by a later one, the rest of how the play began kept`() = runBlocking {
+        val store = store()
+        // Kept before the library was read, so without the song's key; after a restart the play goes on, the key known.
+        store.put(LoggedPlay(salt, T0, 15_000, counted = false, start = picked.copy(songKey = null), zoneOffsetMinutes = 120))
+        store.put(LoggedPlay(salt, T0, 200_000, counted = true, start = PlayStart(StartedBy.UNKNOWN, SourceKind.SEARCH, shuffled = true, songKey = picked.songKey)))
+
+        assertEquals(listOf(picked), store.all().map { it.start })
+    }
+
+    @Test
     fun `a play an import made stays marked when written again`() = runBlocking {
         val store = store()
         store.put(LoggedPlay(salt, T0, 0, counted = true, imported = true))
@@ -195,6 +205,9 @@ class PlaysSqlTest {
             LoggedPlay(ember, T0 + 2_000, 0, counted = true, imported = true) to null,
             LoggedPlay(ember, T0 + 2_000, 0, counted = true) to null,
             LoggedPlay(SongRef(alder.path, 5), T0 + 3_000, 300, counted = false) to null,
+            // The song's key, missing at first, is filled in by a later write; how it began is not.
+            LoggedPlay(alder, T0 + 4_000, 20_000, counted = false, start = PlayStart(StartedBy.NEXT, SourceKind.FOLDER, false, null)) to OpenState(200_000, 20_000, emptyList()),
+            LoggedPlay(alder, T0 + 4_000, 30_000, counted = false, start = PlayStart(StartedBy.UNKNOWN, null, true, "alder smoke||harbour glass|100")) to null,
         )
         val fake = FakePlayLog()
         val sql = store()

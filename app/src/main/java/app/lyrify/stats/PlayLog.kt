@@ -221,8 +221,9 @@ object PlaysSchema {
 
     /**
      * The same play again keeps the most heard, its count once counted, its id hint unless a new one is given, how it
-     * began and its time zone as first written (a play that goes on after a restart began as it began), how it ended as
-     * last written, and its import mark once marked. Its values: [putArgs].
+     * began and its time zone as first written (a play that goes on after a restart began as it began; a part the first
+     * write lacked, such as the song's key before the library was read, filled in by a later one), how it ended as last
+     * written, and its import mark once marked. Its values: [putArgs].
      */
     const val PUT: String = "INSERT INTO plays (path, started_at, media_id, heard_ms, counted, started_by, source, shuffled, zone_offset_min, song_key, " +
         "ended_how, ended_at_ms, imported) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +

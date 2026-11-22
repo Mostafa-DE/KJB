@@ -19,7 +19,8 @@ fun List<StoredPlay>.as310(): List<StoredPlay> = map { it.copy(play = it.play.as
  * `plays.db` made up, in memory, with its rules (PlaysDbDeviceTest checks the real one against the same, and
  * PlaysSqlTest its SQL on the laptop): a play written again is the one of the same song and start, and keeps the most
  * time heard, its count once counted, its id hint unless a newer one is given, how it began and its time zone as first
- * written, how it ended as last written, and its import mark once marked; with an [OpenState] it is kept as still going,
+ * written (a part the first write lacked filled in by a later one), how it ended as last written, and its import mark
+ * once marked; with an [OpenState] it is kept as still going,
  * without one it is let go. A song's totals count its plays that counted, the last of those, and the time heard in all
  * its plays, the short ones ([LoggedPlay.isShort]) left out; its id hint is its latest play's of those. [failing]: every
  * write fails.
@@ -41,7 +42,7 @@ class FakePlayLog(plays: List<LoggedPlay> = emptyList()) : PlayLogStore {
                 play.startedAt,
                 maxOf(old.heardMs, play.heardMs),
                 old.counted || play.counted,
-                start = old.start ?: play.start,
+                start = firstStart(old.start, play.start),
                 zoneOffsetMinutes = old.zoneOffsetMinutes ?: play.zoneOffsetMinutes,
                 end = play.end ?: old.end,
                 imported = old.imported || play.imported,
@@ -52,6 +53,10 @@ class FakePlayLog(plays: List<LoggedPlay> = emptyList()) : PlayLogStore {
         if (open != null) this.open[key] = open else this.open.remove(key)
         return true
     }
+
+    /** How a play began, as plays.db merges it: each part as first written, one the first write lacked filled in later. */
+    private fun firstStart(old: PlayStart?, new: PlayStart?): PlayStart? =
+        if (old == null || new == null) old ?: new else old.copy(source = old.source ?: new.source, songKey = old.songKey ?: new.songKey)
 
     override suspend fun all(): List<LoggedPlay>? = if (failing) null else plays.sortedBy { it.startedAt }
 
