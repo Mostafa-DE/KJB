@@ -12,6 +12,7 @@ export const handleAcceptInvite = apiRoute(
     const size = dataSize(data)
     if (size > LIMITS.acceptBytes) throw new ApiError(413, "too_large")
     enforceRate(`bytes:${ip}`, LIMITS.rate.ipBytes, size)
+    enforceRate(`bytes-day:${ip}`, LIMITS.rate.ipBytesDay, size)
     if (await storeIsFull()) throw new ApiError(503, "storage_full")
 
     const accepted = await acceptInvite(invite, data)

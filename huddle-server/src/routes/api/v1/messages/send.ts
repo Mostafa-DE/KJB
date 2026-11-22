@@ -15,6 +15,7 @@ export const handleSendMessage = apiRoute(
     // Keyed by the hash, so the rate counters never hold a mailbox id either.
     enforceRate(`sends:${storageKey(mailbox)}`, LIMITS.rate.mailboxSends)
     enforceRate(`bytes:${ip}`, LIMITS.rate.ipBytes, size)
+    enforceRate(`bytes-day:${ip}`, LIMITS.rate.ipBytesDay, size)
     if (await storeIsFull()) throw new ApiError(503, "storage_full")
 
     const sent = await sendMessage(mailbox, kind, data, size)

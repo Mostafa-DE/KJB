@@ -24,6 +24,9 @@ export const LIMITS = {
     inviteCreate: { limit: 30, windowMs: HOUR_MS },
     inviteAccept: { limit: 30, windowMs: HOUR_MS },
     ipBytes: { limit: 16 * MIB, windowMs: HOUR_MS },
+    // Cards wait up to 30 days: 30 days of this, as base64, stays under the storage guard's default 1 GiB, so one
+    // address alone can never fill it.
+    ipBytesDay: { limit: 24 * MIB, windowMs: DAY_MS },
     mailboxSends: { limit: 240, windowMs: HOUR_MS },
   },
   rateKeys: 50_000,

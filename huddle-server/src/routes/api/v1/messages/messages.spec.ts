@@ -113,6 +113,26 @@ describe("POST /api/v1/messages/send", () => {
     expect(answer.mailboxes[0].messages.map((message) => message.data)).toEqual([newer.data])
   })
 
+  it("keeps one profile when two arrive at once", async () => {
+    const mailbox = randomId()
+
+    await Promise.all([send(mailbox, "profile", sealed(50)), send(mailbox, "profile", sealed(50))])
+
+    expect(await db.$count(messages)).toBe(1)
+  })
+
+  it("never lets sends at once take a mailbox past 200 cards and profiles", async () => {
+    const mailbox = randomId()
+    for (let i = 0; i < LIMITS.mailboxMessages - 2; i++) await send(mailbox, "card", sealed(20))
+
+    const answers = await Promise.all(
+      Array.from({ length: 6 }, () => call(handleSendMessage, { mailbox, kind: "card", data: sealed(20) })),
+    )
+
+    expect(answers.map((answer) => answer.status).sort()).toEqual([201, 201, 409, 409, 409, 409])
+    expect(await db.$count(messages)).toBe(LIMITS.mailboxMessages)
+  })
+
   it("keeps only the newest 500 plays in a mailbox", async () => {
     const mailbox = randomId()
     const sentIds: string[] = []
@@ -153,6 +173,27 @@ describe("POST /api/v1/messages/send", () => {
     const refused = await call(handleSendMessage, { mailbox: randomId(), kind: "card", data: sealed(1) }, { ip })
 
     expect(refused).toMatchObject({ status: 429, body: { error: "rate_limited" } })
+  })
+
+  it("allows 24 MiB of data a day from one address", async () => {
+    const ip = randomIp()
+    const cardsInHour = LIMITS.rate.ipBytes.limit / LIMITS.dataBytes.card
+    const cardsInDay = LIMITS.rate.ipBytesDay.limit / LIMITS.dataBytes.card
+    for (let i = 0; i < cardsInDay; i++) {
+      if (i === cardsInHour) advanceClock(HOUR_MS)
+      await send(randomId(), "card", sealed(LIMITS.dataBytes.card), ip)
+    }
+
+    advanceClock(HOUR_MS)
+    const card = await call(handleSendMessage, { mailbox: randomId(), kind: "card", data: sealed(1) }, { ip })
+    const play = await call(handleSendMessage, { mailbox: randomId(), kind: "play", data: sealed(20) }, { ip })
+    advanceClock(DAY_MS)
+    const nextDay = await call(handleSendMessage, { mailbox: randomId(), kind: "card", data: sealed(1) }, { ip })
+
+    expect(card).toMatchObject({ status: 429, body: { error: "rate_limited" } })
+    expect(Number(card.headers.get("Retry-After"))).toBeGreaterThan(HOUR_MS / 1000)
+    expect(play.status).toBe(429)
+    expect(nextDay.status).toBe(201)
   })
 })
 
@@ -250,6 +291,35 @@ describe("POST /api/v1/messages/inbox", () => {
     expect(answer.mailboxes[0].messages).toHaveLength(cardsInBudget)
     expect(answer.mailboxes[0].more).toBe(true)
     expect(answer.mailboxes[1]).toMatchObject({ mailbox: other, messages: [], more: true })
+  })
+
+  it("says more only where something waits, once the answer is full", async () => {
+    const mailbox = randomId()
+    const waiting = randomId()
+    const empty = randomId()
+    const cardsInBudget = LIMITS.inboxBytes / LIMITS.dataBytes.card
+    for (let i = 0; i < cardsInBudget; i++) await send(mailbox, "card", sealed(LIMITS.dataBytes.card))
+    const card = await send(waiting, "card", sealed(10))
+
+    const answer = await inbox(mailbox, waiting, empty)
+    const after = await inbox(mailbox, { mailbox: waiting, after: card.id })
+
+    expect(answer.mailboxes.slice(1).map((entry) => [entry.messages.length, entry.more])).toEqual([
+      [0, true],
+      [0, false],
+    ])
+    expect(after.mailboxes[1]).toMatchObject({ messages: [], more: false })
+  })
+
+  it("hands each play to only one of several calls that overlap", async () => {
+    const mailbox = randomId()
+    const plays = []
+    for (let i = 0; i < 5; i++) plays.push((await send(mailbox, "play", sealed(20))).id)
+
+    const answers = await Promise.all([inbox(mailbox), inbox(mailbox), inbox(mailbox)])
+    const handed = answers.flatMap((answer) => answer.mailboxes[0].messages.map((message) => message.id))
+
+    expect(handed.sort()).toEqual([...plays].sort())
   })
 
   it("drops a play after 24 hours and a card after 30 days", async () => {

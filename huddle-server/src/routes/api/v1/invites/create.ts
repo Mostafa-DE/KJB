@@ -6,7 +6,8 @@ import { ApiError, apiRoute, enforceRate, idSchema, json } from "@/lib/api"
 import { LIMITS } from "@/lib/limits"
 
 export const handleCreateInvite = apiRoute(
-  z.object({ invite: idSchema, owner: idSchema }),
+  // One id for both would hand the owner's rights (read the answer, delete) to everyone who sees the link.
+  z.object({ invite: idSchema, owner: idSchema }).refine((ids) => ids.invite !== ids.owner, { path: ["owner"] }),
   async ({ invite, owner }, ip) => {
     enforceRate(`invite-create:${ip}`, LIMITS.rate.inviteCreate)
     if (await storeIsFull()) throw new ApiError(503, "storage_full")

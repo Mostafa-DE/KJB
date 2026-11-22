@@ -45,6 +45,14 @@ describe("POST /api/v1/invites/create", () => {
     expect(badCharacters).toMatchObject({ status: 400, body: { error: "bad_request", field: "owner" } })
   })
 
+  it("refuses the same id as invite and owner, so the link never carries the owner's rights", async () => {
+    const id = randomId()
+
+    const created = await call(handleCreateInvite, { invite: id, owner: id })
+
+    expect(created).toMatchObject({ status: 400, body: { error: "bad_request", field: "owner" } })
+  })
+
   it("stores only hashes of the ids", async () => {
     const ids = await createdInvite()
 
@@ -98,6 +106,17 @@ describe("POST /api/v1/invites/accept", () => {
 
     expect(second).toMatchObject({ status: 409, body: { error: "already_accepted" } })
     expect(status.body.data).toBe(first)
+  })
+
+  it("lets only one of two friends accepting at once win", async () => {
+    const ids = await createdInvite()
+
+    const answers = await Promise.all([
+      call(handleAcceptInvite, { invite: ids.invite, data: sealed(50) }),
+      call(handleAcceptInvite, { invite: ids.invite, data: sealed(50) }),
+    ])
+
+    expect(answers.map((answer) => answer.status).sort()).toEqual([200, 409])
   })
 
   it("does not know an invite nobody created", async () => {

@@ -15,6 +15,8 @@ export async function sendMessage(mailbox: string, kind: MessageKind, data: stri
   const expiresAt = new Date(now.getTime() + LIMITS.keepMs[kind])
 
   return db.transaction(async (tx) => {
+    // One send per mailbox at a time, so two at once cannot both pass the room check or both leave a profile.
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${mailboxHash}, 0))`)
     if (kind !== "play") {
       const counted = kind === "profile" ? eq(messages.kind, "card") : ne(messages.kind, "play")
       const [held] = await tx
@@ -49,28 +51,27 @@ export async function sendMessage(mailbox: string, kind: MessageKind, data: stri
 
 /**
  * Live messages of each asked mailbox after its cursor, oldest first, within the per-mailbox and per-answer limits.
- * Plays are deleted as they are handed out; cards and profiles wait for an ack.
+ * Plays are deleted as they are handed out, each to one call only; cards and profiles wait for an ack.
  */
 export async function readInbox(asked: Array<{ mailbox: string; after?: string }>, now: Date) {
   let budget = LIMITS.inboxBytes
-  const handedPlays: number[] = []
   const answers = []
 
   for (const { mailbox, after } of asked) {
+    const waiting = and(
+      eq(messages.mailboxHash, storageKey(mailbox)),
+      gt(messages.expiresAt, now),
+      after ? gt(messages.id, Number(after)) : undefined,
+    )
     if (budget <= 0) {
-      answers.push({ mailbox, messages: [], more: true })
+      const [next] = await db.select({ id: messages.id }).from(messages).where(waiting).limit(1)
+      answers.push({ mailbox, rows: [], more: next !== undefined })
       continue
     }
     const rows = await db
       .select({ id: messages.id, kind: messages.kind, data: messages.data, size: messages.size, sentAt: messages.sentAt })
       .from(messages)
-      .where(
-        and(
-          eq(messages.mailboxHash, storageKey(mailbox)),
-          gt(messages.expiresAt, now),
-          after ? gt(messages.id, Number(after)) : undefined,
-        ),
-      )
+      .where(waiting)
       .orderBy(asc(messages.id))
       .limit(LIMITS.inboxMessagesPerMailbox + 1)
 
@@ -83,14 +84,25 @@ export async function readInbox(asked: Array<{ mailbox: string; after?: string }
         break
       }
       budget -= row.size
-      handed.push({ id: String(row.id), kind: row.kind, data: row.data, sentAt: row.sentAt.getTime() })
-      if (row.kind === "play") handedPlays.push(row.id)
+      handed.push(row)
     }
-    answers.push({ mailbox, messages: handed, more })
+    answers.push({ mailbox, rows: handed, more })
   }
 
-  if (handedPlays.length > 0) await db.delete(messages).where(inArray(messages.id, handedPlays))
-  return answers
+  // A play goes to the call whose delete removed it; another call reading it at the same moment leaves it out.
+  const plays = answers.flatMap((answer) => answer.rows.filter((row) => row.kind === "play").map((row) => row.id))
+  const claimed = new Set(
+    plays.length === 0
+      ? []
+      : (await db.delete(messages).where(inArray(messages.id, plays)).returning({ id: messages.id })).map((row) => row.id),
+  )
+  return answers.map(({ mailbox, rows, more }) => ({
+    mailbox,
+    messages: rows
+      .filter((row) => row.kind !== "play" || claimed.has(row.id))
+      .map((row) => ({ id: String(row.id), kind: row.kind, data: row.data, sentAt: row.sentAt.getTime() })),
+    more,
+  }))
 }
 
 /** Deletes, per mailbox, every message up to and including `upTo`; answers how many went. */
