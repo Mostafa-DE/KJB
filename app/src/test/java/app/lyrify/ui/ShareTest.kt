@@ -201,6 +201,12 @@ class ShareTest {
     }
 
     @Test
+    fun `a recap's picture that could not be made says so in its own words`() {
+        assertTrue(File("src/main/res/values/strings_insights.xml").readText().contains("""<string name="insights_share_failed">Couldn\'t make the picture</string>"""))
+        assertTrue(File("src/main/java/app/lyrify/ui/Share.kt").readText().contains("Shared.NoPicture -> resources.getString(R.string.insights_share_failed)"))
+    }
+
+    @Test
     fun `a file to share goes in a folder of its own in the cache's share folder, and copies older than a day go`() {
         val cache = createTempDirectory("kjb-share").toFile()
         val old = File(cache, "share/1000").apply { mkdirs() }

@@ -3,6 +3,7 @@ package app.lyrify.ui
 import app.lyrify.settings.DisplaySettings
 import app.lyrify.settings.DockItemSetting
 import app.lyrify.settings.DockTab
+import app.lyrify.settings.SettingsJson
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -23,6 +24,21 @@ class BottomBarTest {
     fun `the default bar is today's, Library, Playlists, Search and Tools`() {
         assertEquals(listOf(DockTab.LIBRARY, DockTab.PLAYLISTS, DockTab.SEARCH, DockTab.TOOLS), dockItems(default, everything))
         assertEquals(DOCK_TABS, dockItems(default, everything))
+    }
+
+    @Test
+    fun `Insights is offered for the bar in Settings, but neither a new bar nor an upgraded one holds it`() {
+        assertTrue(dockOffers(DockTab.INSIGHTS, downloads = false, books = false))
+        assertTrue(DockTab.INSIGHTS in default.map { it.tab })
+        assertFalse(DockTab.INSIGHTS in dockItems(default, everything))
+        // A 3.1 bar (every item 3.1 had, kept before Insights was one): Insights comes after them, off, and the bar is as it was.
+        val items31 = listOf("LIBRARY" to true, "QUEUES" to true, "PLAYLISTS" to false, "FAVOURITES" to false, "DOWNLOADS" to false, "BOOKS" to false, "SEARCH" to true, "TOOLS" to true)
+        val stored = """{"display":{"dock":[${items31.joinToString(",") { (tab, shown) -> """{"tab":"$tab","shown":$shown}""" }}]}}"""
+        val upgraded = checkNotNull(SettingsJson.decode(stored)).display.dock
+        assertEquals(DockItemSetting(DockTab.INSIGHTS, false), upgraded.single { it.tab == DockTab.INSIGHTS })
+        assertEquals(listOf(DockTab.LIBRARY, DockTab.QUEUES, DockTab.SEARCH, DockTab.TOOLS), dockItems(upgraded, everything))
+        // Put there by the user, it takes its place.
+        assertEquals(listOf(DockTab.LIBRARY, DockTab.QUEUES, DockTab.SEARCH, DockTab.TOOLS, DockTab.INSIGHTS), dockItems(dockSwitched(upgraded, DockTab.INSIGHTS, on = true, everything), everything))
     }
 
     @Test

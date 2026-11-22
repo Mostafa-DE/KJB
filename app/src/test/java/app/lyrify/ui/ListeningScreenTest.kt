@@ -1,5 +1,6 @@
 package app.lyrify.ui
 
+import app.lyrify.settings.LibraryTab
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -28,7 +29,7 @@ class ListeningScreenTest {
     }
 
     @Test
-    fun `the library's pages show plays as Your listening says them, and both Your listening pages give Top songs a song sheet`() {
+    fun `the library's pages show plays as Insights says them, and every Insights page with top rows gives Top songs a song sheet`() {
         val pages = source("CollectionScreens.kt")
         val tabs = source("LibraryScreen.kt")
         val sheets = source("SongSheets.kt")
@@ -37,10 +38,53 @@ class ListeningScreenTest {
         listOf("ListeningCard(", "playsNote(", "lastPlayedText(", "StatsGraph.counter(context).written").forEach { assertTrue(it, pages.contains(it)) }
         assertTrue(tabs.contains("StatsGraph.counter(context).written"))
         listOf("songPlaysInfo(song.ref)", "dateText(").forEach { assertTrue(it, sheets.contains(it)) }
-        // A Top songs row opening the sheet is ListeningScreenDeviceTest's; the two pages read plays.db and the library
+        // A Top songs row opening the sheet is ListeningScreenDeviceTest's; the pages read plays.db and the library
         // themselves, with no seam for a test to draw them, so that each passes its rows a sheet stays a source check.
-        listOf("val sheets = rememberSongSheets()", "onOpen, sheets::openSong)", "SongSheetsHost(sheets)").forEach { assertEquals(it, 2, Regex(Regex.escape(it)).findAll(listening).count()) }
+        // Changed on purpose (IN1): Insights, a month's recap and View all, each with its sheet; the first two through
+        // their cards, the third through its rows.
+        listOf("val sheets = rememberSongSheets()", "SongSheetsHost(sheets)").forEach { assertEquals(it, 3, Regex(Regex.escape(it)).findAll(listening).count()) }
+        assertEquals(2, Regex(Regex.escape("settings, onOpen, sheets::openSong, reduced, viewAll = ")).findAll(listening).count())
+        assertTrue(listening.contains("TopRow(top, i + 1, settings, onOpen, onSong)"))
+        assertTrue(listening.contains("TopRow(top, i + 1, settings, onOpen, sheets::openSong)"))
         listOf(pages, tabs, sheets, listening).forEach { assertFalse(it.contains("S1:")) }
+    }
+
+    // Insights (KJB 3.2)
+
+    @Test
+    fun `against the period before is a whole percent of it, nothing without it`() {
+        assertEquals(40, percentChange(140, 100))
+        assertEquals(-25, percentChange(75, 100))
+        assertEquals(0, percentChange(100, 100))
+        // Rounded: a third more.
+        assertEquals(33, percentChange(4, 3))
+        assertEquals(0, percentChange(500, 0))
+    }
+
+    @Test
+    fun `Insights holds all eight cards, For you under the totals, and its nudges and recaps stay on the page itself`() {
+        val listening = source("ListeningScreen.kt")
+        listOf(
+            "TotalsCard(", "ForYouInsights(", "VersusCard(", "TopRow(", "ClockCard(", "MilestonesCard(", "SpokenCard(",
+            "NeverPlayedCard(", "DigDeeperCard(", "ForgottenCard(", "RecapRow(", "R.string.insights_private",
+        ).forEach { assertTrue(it, listening.contains(it)) }
+        // For you right under the totals, on Insights alone (viewAll), as agreed with sg1.
+        assertTrue(listening.indexOf("TotalsCard(") < listening.indexOf("ForYouInsights(") && listening.indexOf("ForYouInsights(") < listening.indexOf("VersusCard("))
+        assertTrue(listening.contains("if (viewAll) item(key = \"for you\""))
+        // A month's recap: its picture, shared as drawn, and its own cards; the nudges only on Insights.
+        listOf("RecapPicture(", "shareRecapPicture(context, picture, shown, title)", "nudgeCards(insights, settings").forEach { assertTrue(it, listening.contains(it)) }
+        // Its definition and its one call, on Insights.
+        assertEquals(2, Regex(Regex.escape("nudgeCards(")).findAll(listening).count())
+    }
+
+    @Test
+    fun `the recap card sits first on every Library tab, and shows on the one Library opens on`() {
+        val library = source("LibraryScreen.kt") + source("BooksScreen.kt")
+        LibraryTab.entries.forEach { assertTrue("$it", library.contains("recapCard(LibraryTab.$it)")) }
+        val cards = source("InsightsCards.kt")
+        assertTrue(cards.contains("if (tab != libraryOpensOn(shownLibraryTabs(read.library, (library as? LibraryState.Ready)?.library), read.library.opensOn)) return"))
+        // On its own bar item Insights has no back arrow.
+        assertTrue(source("AppShell.kt").contains("DockTab.INSIGHTS -> ListeningPage(Page.Listening, root = true)"))
     }
 
     private fun source(name: String): String = File("src/main/java/app/lyrify/ui", name).readText()

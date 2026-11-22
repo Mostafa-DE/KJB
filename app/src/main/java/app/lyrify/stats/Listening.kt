@@ -180,13 +180,6 @@ class PlayStats(
         }
     }
 
-    /** Your listening for [period] as of [now], in the phone's [zone] and with its [firstDayOfWeek]. */
-    suspend fun listening(period: ListeningPeriod, now: Long, zone: ZoneId, firstDayOfWeek: DayOfWeek): Listening {
-        val bounds = periodOf(period, now, zone, firstDayOfWeek)
-        val totals = store.totals(bounds?.from, bounds?.until)
-        return withContext(compute) { listeningOf(totals, library()) }
-    }
-
     /** Insights for [period] as of [now], in the phone's [zone] and with its [firstDayOfWeek], set against the period before. */
     suspend fun insights(period: ListeningPeriod, now: Long, zone: ZoneId, firstDayOfWeek: DayOfWeek): Insights {
         val bounds = periodOf(period, now, zone, firstDayOfWeek)

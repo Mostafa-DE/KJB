@@ -236,6 +236,9 @@ sealed interface Shared {
 
     /** The share of [songs] songs (1 for lyrics) could not start: MediaStore gave no answer, or nothing opens a share sheet. */
     data class Failed(val songs: Int) : Shared
+
+    /** A recap's picture could not be made or kept for the share (Insights, KJB 3.2). */
+    data object NoPicture : Shared
 }
 
 suspend fun ToastState.say(resources: Resources, shared: Shared) {
@@ -245,6 +248,7 @@ suspend fun ToastState.say(resources: Resources, shared: Shared) {
         is Shared.NotFound -> resources.getQuantityString(R.plurals.share_not_found, shared.songs, shared.songs)
         Shared.NoLyrics -> resources.getString(R.string.share_no_lyrics)
         is Shared.Failed -> resources.getQuantityString(R.plurals.share_failed, shared.songs, shared.songs)
+        Shared.NoPicture -> resources.getString(R.string.insights_share_failed)
     }
     show(Toast(text, R.drawable.ic_error, Tone.ERROR))
 }
@@ -350,7 +354,7 @@ internal fun shareCopy(cache: File, name: String, bytes: ByteArray, now: Long): 
 }
 
 /** The FileProvider's authority after the package name (AndroidManifest.xml, "share"). */
-private const val SHARE_AUTHORITY: String = ".share"
+internal const val SHARE_AUTHORITY: String = ".share"
 
 /** KJB's cache folder that FileProvider serves (res/xml/share_paths.xml). */
 private const val SHARE_FOLDER: String = "share"
