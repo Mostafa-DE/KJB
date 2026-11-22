@@ -49,6 +49,8 @@ class BackupScreensTest {
                 RestoreRow(Section.NAMES, 1, null),
                 RestoreRow(Section.SEARCHES, 2, null),
                 RestoreRow(Section.BOOKS, 2, null),
+                // Time in books: no count, which would be of listening sessions.
+                RestoreRow(Section.BOOK_PLAYS, null, null),
             ),
             restoreRows(BackupFixtures.contents()),
         )
@@ -98,6 +100,8 @@ class BackupScreensTest {
         )
 
         assertEquals(listOf(Section.PLAYLISTS to 6, Section.QUEUES to 4, Section.SETTINGS to null, Section.TONES to 0), restoredRows(result))
+        // Time in books counts nothing either: its count would be of listening sessions.
+        assertEquals(listOf(Section.BOOK_PLAYS to null), restoredRows(RestoreResult(listOf(Section.BOOK_PLAYS), emptyList(), counts = mapOf(Section.BOOK_PLAYS to 2))))
         assertEquals("12 songs not found on your phone", plural("restore_not_found")["other"]?.format("12"))
         assertEquals("1 song not found on your phone", plural("restore_not_found")["one"]?.format("1"))
         assertEquals("2 tones not restored: their files or their songs aren't on your phone.", plural("restore_tones_missing")["other"]?.replace("\\'", "'")?.format("2"))

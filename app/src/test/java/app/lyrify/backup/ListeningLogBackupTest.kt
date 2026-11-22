@@ -5,6 +5,8 @@ import app.lyrify.backup.BackupFixtures.bell
 import app.lyrify.backup.BackupFixtures.contents
 import app.lyrify.backup.BackupFixtures.entries
 import app.lyrify.backup.BackupFixtures.lantern
+import app.lyrify.backup.BackupFixtures.newArchive
+import app.lyrify.backup.BackupFixtures.newKeeperOne
 import app.lyrify.backup.BackupFixtures.newLibrary
 import app.lyrify.backup.BackupFixtures.newWater
 import app.lyrify.backup.BackupFixtures.newLantern
@@ -17,6 +19,7 @@ import app.lyrify.library.PlaylistsJson
 import app.lyrify.library.PlaylistsState
 import app.lyrify.library.SongRef
 import app.lyrify.player.SourceKind
+import app.lyrify.stats.FakePlayLog
 import app.lyrify.stats.LoggedPlay
 import app.lyrify.stats.PlayEnd
 import app.lyrify.stats.PlayEnded
@@ -45,7 +48,7 @@ class ListeningLogBackupTest {
 
     /** Plays of every kind 3.1.0 kept, with what is kept of them now. */
     private val plays = listOf(
-        LoggedPlay(lantern.ref, T0, 150_000, counted = true, start = picked, zoneOffsetMinutes = 180, end = PlayEnded(PlayEnd.FINISHED, 201_000)),
+        LoggedPlay(lantern.ref, T0, 150_000, counted = true, start = picked, zoneOffsetMinutes = 180, end = PlayEnded(PlayEnd.FINISHED, 201_000), clockMs = 120_000),
         LoggedPlay(bell.ref, T0 + 600_000, 20_000, counted = false, start = PlayStart(StartedBy.AUTO, null, shuffled = true, songKey = null), zoneOffsetMinutes = -300, end = PlayEnded(PlayEnd.NEXT, 20_000)),
         LoggedPlay(water.ref, T0 + 700_000, 0, counted = true, imported = true),
     )
@@ -162,6 +165,44 @@ class ListeningLogBackupTest {
 
         assertEquals(mapOf(newWater.path to T0 - 5_000, newLantern.path to T0 - 1_000), phone.playlists.favouriteAdded)
         assertTrue(phone.playlists.favouriteAdded.keys.all { path -> phone.playlists.favouriteSongs.any { it.path == path } })
+    }
+
+    // Insights (KJB 3.2): real minutes and the book log
+
+    @Test
+    fun `a play's real minutes go under a key of their own, only when the play kept them, and come back`() {
+        val rows = (Json.parseToJsonElement(section(backup(), Section.PLAYS)).jsonObject["plays"] as JsonArray).map { it.jsonObject }
+        assertEquals(listOf("120000", null, null), rows.map { it["clockMs"]?.jsonPrimitive?.content })
+        assertEquals(listOf(120_000L, null, null), contents(backup()).plays?.take(3)?.map { it.clockMs })
+        // Read leniently: below 0 is 0, not a number none.
+        val damaged = """{"plays":[{"path":"${lantern.path}","startedAt":$T0,"heardMs":150000,"counted":true,"clockMs":-5},""" +
+            """{"path":"${bell.path}","startedAt":${T0 + 1},"heardMs":90000,"counted":true,"clockMs":"soon"}]}"""
+        assertEquals(listOf(0L, null), SectionJson.plays(damaged)?.map { it.clockMs })
+    }
+
+    @Test
+    fun `the book log goes in a section of its own, in the plays' form, and comes back as it was`() {
+        assertEquals("bookPlays", Section.BOOK_PLAYS.key)
+        assertEquals(1, Section.BOOK_PLAYS.version)
+        val bytes = zip(BackupFixtures.snapshot)
+        assertEquals(SectionJson.plays(BackupFixtures.bookPlays), section(bytes, Section.BOOK_PLAYS))
+        assertEquals(BackupFixtures.bookPlays.map(::noId), contents(bytes).bookPlays)
+        // Never among the plays, and none in a backup from before.
+        assertEquals(BackupFixtures.plays.map(::noId), contents(bytes).plays)
+        assertEquals(null, contents(zip(BackupFixtures.snapshot.copy(bookPlays = null))).bookPlays)
+    }
+
+    @Test
+    fun `a backup takes the book log as the phone has it, and a restore puts it back there, on a new phone under the books' new paths`() {
+        val phone = MemoryStores(bookLog = FakePlayLog(BackupFixtures.bookPlays))
+        assertEquals(BackupFixtures.bookPlays, runBlocking { phone.snapshot().bookPlays })
+
+        val other = MemoryStores()
+        val result = runBlocking { RestorePlan(contents(zip(BackupFixtures.snapshot)), newLibrary).apply(setOf(Section.BOOK_PLAYS), other, newId = { "new" }) }
+        assertEquals(listOf(Section.BOOK_PLAYS), result.restored)
+        assertEquals(2, result.counts[Section.BOOK_PLAYS])
+        assertEquals(listOf(newKeeperOne.path to 600_000L, newArchive.path to 300_000L), other.bookLog.plays.sortedBy { it.startedAt }.map { it.song.path to it.clockMs })
+        assertEquals(emptyList<LoggedPlay>(), other.log.plays)
     }
 
     private companion object {

@@ -89,6 +89,9 @@ enum class Section(val key: String, val version: Int) {
      * never chapters (read again from the files).
      */
     BOOKS("books", 1),
+
+    /** The book log (`book-plays.db`, KJB 3.2): the time heard in books, its plays kept as the play log keeps its own. */
+    BOOK_PLAYS("bookPlays", 1),
     ;
 
     /** Its file in the zip. */
@@ -129,6 +132,7 @@ data class BackupSnapshot(
     val keptApart: Set<NamePair>? = null,
     val searches: List<String>? = null,
     val books: BookState? = null,
+    val bookPlays: List<LoggedPlay>? = null,
 )
 
 /**
@@ -171,6 +175,8 @@ data class BackupContents(
     val searches: List<String>? = null,
     /** The books by their ids on the phone that made it, their parts and the marked songs by path; no chapters. */
     val books: BookState? = null,
+    /** The book log's plays, by path, as the plays are. */
+    val bookPlays: List<LoggedPlay>? = null,
     /** Sections a newer KJB wrote in a form this version cannot read: skipped, and the summary says so. */
     val tooNew: List<Section> = emptyList(),
     /** How many sections this version does not know at all (a newer KJB's): skipped. */
@@ -193,6 +199,7 @@ data class BackupContents(
         Section.NAMES -> names != null
         Section.SEARCHES -> searches != null
         Section.BOOKS -> books != null
+        Section.BOOK_PLAYS -> bookPlays != null
     }
 }
 
@@ -241,7 +248,7 @@ data class ZipLimits(
  * AI switch, and the tones, Duplicates, Covers & tags, names kept apart and recent searches sections, all as new keys or
  * sections: format 1 backups read as before, and a format 1 KJB reads a format 2 backup's sections it knows. The queues
  * section keeps version 1: a format 1 KJB reads its Recent and Saved queues and leaves the one playing, as before. The
- * books section came later, a section only: a KJB without it skips it as one it does not know.
+ * books and book log sections came later, sections only: a KJB without them skips them as ones it does not know.
  *
  * Read as untrusted input: only the known entry names are kept, no entry name ever becomes a path, each entry and all of
  * them together are capped unpacked ([ZipLimits]), two entries of one name make it unreadable, and every section is
@@ -282,6 +289,7 @@ object BackupBundle {
             snapshot.keptApart?.let { add(Section.NAMES to SectionJson.names(it)) }
             snapshot.searches?.let { add(Section.SEARCHES to SectionJson.searches(it)) }
             snapshot.books?.let { add(Section.BOOKS to BooksJson.encode(bare(it))) }
+            snapshot.bookPlays?.let { add(Section.BOOK_PLAYS to SectionJson.plays(it)) }
         }
         val byPath = library.associateBy { it.path }
         val songs = named(snapshot, pathOf::get).mapNotNull(byPath::get).map { song ->
@@ -313,6 +321,7 @@ object BackupBundle {
         // Hidden songs, so another phone finds them and keeps them hidden.
         snapshot.settings?.let { settings -> settings.library.hiddenSongs.forEach { add(it.path) } }
         snapshot.books?.let { state -> state.books.values.forEach { entry -> addAll(entry.parts + listOfNotNull(entry.partPath)) }; addAll(state.marks.songs + state.marks.notSongs) }
+        snapshot.bookPlays?.forEach { add(it.song.path) }
     }.distinct()
 
     /** A song as a backup keeps it: by its path only, as a MediaStore id names a file on this phone alone. */
@@ -462,6 +471,7 @@ object BackupBundle {
         Section.NAMES -> SectionJson.names(text)?.let { contents.copy(names = it) }
         Section.SEARCHES -> SectionJson.searches(text)?.let { contents.copy(searches = it) }
         Section.BOOKS -> BooksJson.decode(text)?.let { contents.copy(books = bare(it)) }
+        Section.BOOK_PLAYS -> SectionJson.plays(text)?.let { contents.copy(bookPlays = it) }
     }
 
     private fun ledger(text: String): LedgerState? = try {

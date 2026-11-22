@@ -80,6 +80,8 @@ internal fun restoreRows(contents: BackupContents): List<RestoreRow> = listOfNot
     contents.names?.let { RestoreRow(Section.NAMES, it.size, null) },
     contents.searches?.let { RestoreRow(Section.SEARCHES, it.size, null) },
     contents.books?.let { RestoreRow(Section.BOOKS, it.books.size, null) },
+    // Time in books counts nothing: its count would be of listening sessions.
+    contents.bookPlays?.let { RestoreRow(Section.BOOK_PLAYS, null, null) },
 )
 
 @StringRes
@@ -97,14 +99,15 @@ internal fun sectionLabel(section: Section): Int = when (section) {
     Section.NAMES -> R.string.restore_section_names
     Section.SEARCHES -> R.string.restore_section_searches
     Section.BOOKS -> R.string.restore_section_books
+    Section.BOOK_PLAYS -> R.string.restore_section_bookPlays
 }
 
 /** Whether a restore brought back all it was asked to: else the summary after it is "Partly restored". */
 internal fun complete(result: RestoreResult): Boolean = result.failed.isEmpty() && result.placesLeftOut == 0 && result.bookmarksLeftOut == 0
 
-/** The summary's lines after a restore: each section restored with what it brought back (Settings counts nothing). */
+/** The summary's lines after a restore: each section restored with what it brought back (Settings and Time in books count nothing). */
 internal fun restoredRows(result: RestoreResult): List<Pair<Section, Int?>> =
-    result.restored.map { section -> section to result.counts[section].takeUnless { section == Section.SETTINGS } }
+    result.restored.map { section -> section to result.counts[section].takeUnless { section == Section.SETTINGS || section == Section.BOOK_PLAYS } }
 
 /** The line under a row: favourites, places to resume, own presets. */
 @PluralsRes

@@ -82,10 +82,10 @@ object StatsGraph {
 
     /**
      * The book log: `book-plays.db` beside `plays.db`, the same schema, so a book's plays are kept (for Insights' books)
-     * where no music list or count reads them. Not in backups.
+     * where no music list or count reads them; in backups as a section of its own (backup/, Section.BOOK_PLAYS).
      */
     @Synchronized
-    private fun bookLog(context: Context): PlayLogStore = bookLog ?: run {
+    fun bookLog(context: Context): PlayLogStore = bookLog ?: run {
         val log: (String) -> Unit = { Log.w(LOG_TAG, it) }
         SqlPlayLog(PlaysDb(context.applicationContext, name = BOOK_PLAYS, log = log), log = log)
     }.also { bookLog = it }
