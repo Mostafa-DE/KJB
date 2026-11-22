@@ -129,6 +129,30 @@ class BookPlaybackTest {
         assertEquals(listOf(2L, 2L), passed.map { it.playId })
     }
 
+    @Test
+    fun `while the library is read a play is a book's by its path or its book's queue, once read by the library`() {
+        val orchard = song("Download/Quiet Orchard.m4b", durationMs = 900_000)
+        val tagged = song("Music/Night Readings/01 Lantern Keeper.mp3", album = "Night Readings", genre = "Audiobook", durationMs = 900_000)
+        val withBooks = Library.of(parts + music + orchard + tagged, Settings())
+        val inBookQueue = QueueBook().play(listOf(tagged.ref), 0, bookSource(withBooks.bookOf(tagged.path)!!), now = 1).book.current
+        val inMusicQueue = musicQueue().current
+        // Not read yet (a cold start): an .m4b or a file in an Audiobooks folder by its path, a book's queue by its source.
+        assertTrue(playIsBook(orchard.path, inMusicQueue, null))
+        assertTrue(playIsBook(parts[0].path, inMusicQueue, null))
+        assertTrue(playIsBook(tagged.path, inBookQueue, null))
+        assertFalse(playIsBook(music.path, inMusicQueue, null))
+        // Read: the library says, whatever the queue.
+        assertTrue(playIsBook(tagged.path, inMusicQueue, withBooks))
+        assertTrue(playIsBook(orchard.path, inMusicQueue, withBooks))
+        assertFalse(playIsBook(music.path, inBookQueue, withBooks))
+        assertFalse(playIsBook(music.path, inMusicQueue, withBooks))
+        // A file the library does not have goes by its path, as the lyrics judge it: a cache copy of an .m4b is a book's.
+        assertTrue(playIsBook("/data/user/0/app.lyrify/cache/opened/1800000000000/0/Quiet Orchard.m4b", inMusicQueue, withBooks))
+        // The play counter wired to it in the service.
+        val service = java.io.File("src/main/java/app/lyrify/player/PlaybackService.kt").readText()
+        assertTrue(service.contains("BookPlayFilter({ event -> Lyrify.playEvents(this).onEvent(event) }) { path -> playIsBook(path, core.book.value.current, library.value) }"))
+    }
+
     // The place, kept as the book plays
 
     private class Run(val port: FakeExtrasPort, val store: BookStore, val driver: BookDriver, var playing: PlayingBook?)

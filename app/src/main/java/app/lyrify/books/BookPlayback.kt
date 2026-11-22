@@ -135,6 +135,13 @@ fun sleepToChapterEnd(chapters: List<Chapter>, positionMs: Long): SleepTimer.ByC
 }
 
 /**
+ * Whether a play of the file at [path] is a book's, for the play counter ([BookPlayFilter]): a book's part as the lyrics
+ * judge it ([isBookPart]: by [library] once it is read, else by what the path says), or, while the library is read, any
+ * song of a book's [queue], as [playsAsBook] decides then: a book resumed in its queue on a cold start is no music play.
+ */
+fun playIsBook(path: String, queue: Queue?, library: Library?): Boolean = isBookPart(path, library) || library == null && inBook(queue)
+
+/**
  * The play counter's events ([next]) without a book part's: a play whose song [isBook] when it starts is never logged,
  * none of its events passed on.
  */
