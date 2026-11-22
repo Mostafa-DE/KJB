@@ -28,8 +28,8 @@ class HuddleTest {
     private val random = SecureRandom()
     private val song = Card(CardKind.SONG, listOf(lantern), note = "for the drive")
 
-    private fun TestScope.phone(name: String? = null, storage: MemoryHuddle = MemoryHuddle(HuddleState(name = name)), ahead: Long = 0): Pair<Huddle, MemoryHuddle> =
-        Huddle(storage, server, host, hosts, { now + ahead + testScheduler.currentTime }, random, backgroundScope) to storage
+    private fun TestScope.phone(name: String? = null, storage: MemoryHuddle = MemoryHuddle(HuddleState(name = name)), ahead: Long = 0, log: (String) -> Unit = {}): Pair<Huddle, MemoryHuddle> =
+        Huddle(storage, server, host, hosts, { now + ahead + testScheduler.currentTime }, random, backgroundScope, log) to storage
 
     /** [huddle]'s new invite link with [card]. */
     private suspend fun link(huddle: Huddle, card: Card? = null): String = (huddle.invite(card) as Invited.Link).text
@@ -361,6 +361,113 @@ class HuddleTest {
         advanceTimeBy(3 * Huddle.HOUR_MS)
         runCurrent()
         assertEquals(before + 5, server.fetches)
+    }
+
+    @Test
+    fun `a sync step without an answer never keeps the others from running`() = runTest {
+        val (wren, wrenState) = phone("Wren")
+        val (juniper, _) = phone("Juniper")
+        val (juniperOnWren, wrenOnJuniper) = friends(wren, juniper)
+        link(wren)
+        juniper.send(wrenOnJuniper.id, song)
+        advanceTimeBy(Huddle.UNDO_MS + 1)
+        // The invite waiting gets no answer: the card from Juniper still arrives.
+        server.silent = setOf("inviteStatus")
+        assertFalse(wren.sync())
+        assertEquals(listOf(song), wrenState.now.inbox.map { it.card })
+        // Wren's own card gets no answer: Juniper's next one still arrives, and Wren's waits to go.
+        server.silent = emptySet()
+        val next = Card(CardKind.SONG, listOf(bell))
+        juniper.send(wrenOnJuniper.id, next)
+        advanceTimeBy(Huddle.UNDO_MS + 1)
+        server.silent = setOf("send")
+        wren.send(juniperOnWren.id, song)
+        advanceTimeBy(Huddle.UNDO_MS + 1)
+        assertFalse(wren.sync())
+        assertEquals(listOf(next, song), wrenState.now.inbox.map { it.card })
+        assertEquals(1, wrenState.now.outbox.size)
+    }
+
+    @Test
+    fun `a sync without an answer is tried again after 30 s, 2 min and 10 min, then hourly, and at once when KJB is back in front`() = runTest {
+        val (wren, _) = phone("Wren")
+        val (juniper, _) = phone("Juniper")
+        friends(wren, juniper)
+        server.online = false
+        val before = server.fetches
+        val front = wren.syncWhileInFront()
+        runCurrent()
+        assertEquals(before + 1, server.fetches)
+        for ((at, wait) in listOf(30_000L, 2 * 60_000L, 10 * 60_000L, Huddle.HOUR_MS).withIndex()) {
+            advanceTimeBy(wait - 1)
+            runCurrent()
+            assertEquals("not before try ${at + 2}", before + 1 + at, server.fetches)
+            advanceTimeBy(1)
+            runCurrent()
+            assertEquals("try ${at + 2}", before + 2 + at, server.fetches)
+        }
+        advanceTimeBy(Huddle.HOUR_MS)
+        runCurrent()
+        assertEquals("hourly from then on", before + 6, server.fetches)
+
+        // KJB goes and comes back (the other profile, another app): it asks at once, and with an answer each hour again.
+        front.cancel()
+        server.online = true
+        val again = wren.syncWhileInFront()
+        runCurrent()
+        assertEquals(before + 7, server.fetches)
+        advanceTimeBy(Huddle.HOUR_MS - 1)
+        runCurrent()
+        assertEquals(before + 7, server.fetches)
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(before + 8, server.fetches)
+        again.cancel()
+    }
+
+    @Test
+    fun `a card that could not go is sent again after 30 s, 2 min and 10 min, without waiting for the next sync`() = runTest {
+        val (wren, wrenState) = phone("Wren")
+        val (juniper, _) = phone("Juniper")
+        val (juniperOnWren, _) = friends(wren, juniper)
+        server.online = false
+        val sends = server.requests.count { it == "send" }
+        wren.send(juniperOnWren.id, song)
+        advanceTimeBy(Huddle.UNDO_MS + 1)
+        assertEquals(sends + 1, server.requests.count { it == "send" })
+        advanceTimeBy(30_000)
+        assertEquals(sends + 2, server.requests.count { it == "send" })
+        server.online = true
+        advanceTimeBy(2 * 60_000L - 1)
+        assertTrue(server.waiting(juniperOnWren.outBox).isEmpty())
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(1, server.waiting(juniperOnWren.outBox).size)
+        assertTrue(wrenState.now.outbox.isEmpty())
+        advanceTimeBy(Huddle.HOUR_MS)
+        assertEquals("sent once, then no more tries", sends + 3, server.requests.count { it == "send" })
+    }
+
+    @Test
+    fun `a sync step without an answer is logged with a reason code, never a name, an id or a title`() = runTest {
+        val logged = ArrayList<String>()
+        val (wren, wrenState) = phone("Wren", log = { logged += it })
+        val (juniper, _) = phone("Juniper")
+        val (juniperOnWren, _) = friends(wren, juniper)
+        link(wren)
+        server.online = false
+        wren.send(juniperOnWren.id, song)
+        advanceTimeBy(Huddle.UNDO_MS + 1)
+        val front = wren.syncWhileInFront()
+        runCurrent()
+        front.cancel()
+        assertTrue(logged.toString(), "huddle: invites not checked (no_answer)" in logged)
+        assertTrue(logged.toString(), "huddle: outbox stopped (no_answer)" in logged)
+        assertTrue(logged.toString(), "huddle: inbox not read (no_answer)" in logged)
+        assertTrue(logged.toString(), "huddle: card not sent, next try in 30 s" in logged)
+        assertTrue(logged.toString(), "huddle: sync failed 1 in a row, next try in 30 s" in logged)
+        val secret = listOf("Wren", "Juniper", lantern.title, lantern.artist!!, juniperOnWren.id, juniperOnWren.inBox, juniperOnWren.outBox) + wrenState.now.invites.map { it.owner }
+        assertTrue(logged.none { line -> secret.any { it in line } })
     }
 
     @Test

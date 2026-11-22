@@ -101,13 +101,16 @@ sealed interface Accepted {
  * Huddle (plan part 3, 3b): friends by invite, cards and plays through the server's mailboxes, all sealed on the phone.
  *
  * - Cards go after [UNDO_MS] (the toast's Undo), plays at once, each sealed with the friend's key for their mailbox;
- *   what cannot go waits in [HuddleState.outbox] and goes at the next [sync], a play within a day only.
+ *   what cannot go waits in [HuddleState.outbox] and goes at the next [sync], a play within a day only. A card without an
+ *   answer is tried again after each of [RETRY_MS]'s waits.
  * - A play goes only to friends you share plays with ([Friend.sharePlays]), never while you listen privately.
- * - [sync] asks the server only when there is something to ask: invites waiting for a join, friends' mailboxes, the outbox.
- *   Each message is read once ([Friend.seen]) and acknowledged so the server deletes it.
- * - [syncWhileInFront]: when KJB comes to the front, then every hour; every [FAST_MS] while the Huddle page is open ([pageOpen]).
+ * - [sync] asks the server only when there is something to ask: invites waiting for a join, friends' mailboxes, the outbox,
+ *   each whatever the others answered. Each message is read once ([Friend.seen]) and acknowledged so the server deletes it.
+ * - [syncWhileInFront]: when KJB comes to the front, then every hour; every [FAST_MS] while the Huddle page is open
+ *   ([pageOpen]); after a sync without an answer, after each of [RETRY_MS]'s waits first.
  *
- * Nothing here logs a name, a title, a note, a key or a mailbox. One sync or send at a time.
+ * Nothing here logs a name, a title, a note, a key or a mailbox: a step that did not go logs a reason code. One sync or
+ * send at a time.
  */
 class Huddle(
     private val storage: HuddleStorage,
@@ -215,7 +218,12 @@ class Huddle(
         if (!kept) return null
         scope.launch {
             delay(hold)
-            flush()
+            if (flush()) return@launch
+            for (wait in RETRY_MS) {
+                log("huddle: card not sent, next try in ${wait / 1_000} s")
+                delay(wait)
+                if (flush()) return@launch
+            }
         }
         return message.id
     }
@@ -229,10 +237,14 @@ class Huddle(
     /** Posts what waits to go and is due; false when the server did not answer. */
     suspend fun flush(): Boolean = one.withLock { flushNow() }
 
-    /** Joins, the outbox, then friends' mailboxes; false when the server did not answer. Asks nothing when there is nothing to ask. */
+    /**
+     * Joins, the outbox, then friends' mailboxes, each whatever the others answered; false when the server did not answer
+     * one. Asks nothing when there is nothing to ask.
+     */
     suspend fun sync(): Boolean = one.withLock {
         lastSync = clock()
-        joins() && flushNow() && fetch()
+        // `and`, not `&&`: a step without an answer never keeps the next from running.
+        joins() and flushNow() and fetch()
     }
 
     /** You played [song], from [at], a [favourite] of yours or not: each friend you share plays with gets it, unless you listen privately. */
@@ -311,20 +323,30 @@ class Huddle(
 
     /**
      * KJB is in front, until the job returned is cancelled: syncs now, then an hour after the last sync; while the Huddle
-     * page is open ([pageOpen]), at once and then every [FAST_MS]. Each sync is a job of its own in [scope], so one under
-     * way runs on when KJB goes.
+     * page is open ([pageOpen]), at once and then every [FAST_MS]. A sync without an answer is tried again after each of
+     * [RETRY_MS]'s waits (never later than the usual time), then as usual. Each sync is a job of its own in [scope], so one
+     * under way runs on when KJB goes.
      */
     fun syncWhileInFront(): Job = scope.launch {
         var first = true
+        // Syncs in a row without an answer (or that broke off): the next waits the step of RETRY_MS they reached.
+        var failed = 0
+        suspend fun trySync() {
+            var answered = false
+            scope.launch { answered = sync() }.join()
+            failed = if (answered) 0 else failed + 1
+        }
         pageOpen.collectLatest { open ->
             val every = if (open) FAST_MS else HOUR_MS
             if (first || open) {
                 first = false
-                scope.launch { sync() }.join()
+                trySync()
             }
             while (true) {
-                delay(((lastSync ?: clock()) + every - clock()).coerceIn(1, every))
-                scope.launch { sync() }.join()
+                val wait = RETRY_MS.getOrNull(failed - 1)?.coerceAtMost(every) ?: every
+                if (failed > 0) log("huddle: sync failed $failed in a row, next try in ${wait / 1_000} s")
+                delay(((lastSync ?: clock()) + wait - clock()).coerceIn(1, wait))
+                trySync()
             }
         }
     }
@@ -363,7 +385,11 @@ class Huddle(
         val expired = invites.filter { now - it.madeAt > INVITE_KEPT_MS }
         forget(expired)
         for (invite in invites - expired.toSet()) {
-            when (val status = server.inviteStatus(invite.owner) ?: return false) {
+            val status = server.inviteStatus(invite.owner) ?: run {
+                log("huddle: invites not checked (no_answer)")
+                return false
+            }
+            when (status) {
                 InviteStatus.Waiting -> Unit
                 InviteStatus.Gone -> forget(listOf(invite))
                 is InviteStatus.Accepted -> {
@@ -420,6 +446,7 @@ class Huddle(
                 // A play the friend's full mailbox refused is not tried again; a card is, until the server would have dropped it.
                 PostAnswer.REFUSED -> if (out.kind == Kind.PLAY) gone += out.id
                 PostAnswer.NO_ANSWER -> {
+                    log("huddle: outbox stopped (no_answer)")
                     answered = false
                     break
                 }
@@ -433,24 +460,32 @@ class Huddle(
     private suspend fun fetch(): Boolean {
         val friends = now().friends
         if (friends.isEmpty()) return true
-        val posted = server.inbox(friends.map { it.inBox }) ?: return false
+        val posted = server.inbox(friends.map { it.inBox }) ?: run {
+            log("huddle: inbox not read (no_answer)")
+            return false
+        }
         val now = clock()
         // Nothing new: only plays past their time go.
         if (posted.isEmpty()) return now().plays.none { now - it.at > PLAYS_KEPT_MS } || storage.change { it.received(emptyList(), now) }
         val upTo = HashMap<String, Long>()
         val read = ArrayList<Pair<String, Message>>()
+        var closed = 0
         for (friend in friends) {
             val box = posted[friend.inBox] ?: continue
             val key = HuddleCrypto.decode(friend.inKey) ?: continue
             for (one in box.sortedBy { it.seq }) {
                 upTo[friend.inBox] = maxOf(upTo[friend.inBox] ?: one.seq, one.seq)
                 // A box that does not open (another key, sealed for the other way, changed) is dropped with the rest.
-                val message = HuddleCrypto.decode(one.data)?.let { HuddleCrypto.open(key, it, friend.inBox.encodeToByteArray()) }?.let(Messages::decode) ?: continue
-                read += friend.id to message
+                val message = HuddleCrypto.decode(one.data)?.let { HuddleCrypto.open(key, it, friend.inBox.encodeToByteArray()) }?.let(Messages::decode)
+                if (message == null) closed++ else read += friend.id to message
             }
         }
-        if (!storage.change { it.received(read, now) }) return false
-        server.ack(upTo)
+        if (closed > 0) log("huddle: inbox dropped $closed that did not open (not_opened)")
+        if (!storage.change { it.received(read, now) }) {
+            log("huddle: inbox not kept (not_written)")
+            return false
+        }
+        if (!server.ack(upTo)) log("huddle: inbox not acknowledged (no_answer)")
         read.filter { it.second is Message.Bye }.mapNotNull { (id, _) -> friends.firstOrNull { it.id == id } }.forEach { gone ->
             server.dropBoxes(listOf(gone.inBox, gone.outBox))
         }
@@ -506,6 +541,9 @@ class Huddle(
 
         /** How long a sent card waits for Undo before it goes: the toast's time. */
         const val UNDO_MS: Long = 5_000
+
+        /** After a sync or a card without an answer, the waits before each new try: 30 s, 2 min, 10 min; then as usual. */
+        val RETRY_MS: List<Long> = listOf(30_000L, 2 * 60_000L, 10 * 60_000L)
 
         /** An invite nobody joined goes after a week, as the server's does. */
         const val INVITE_KEPT_MS: Long = 7 * DAY_MS
