@@ -129,6 +129,8 @@ data class BackupSnapshot(
     val keptApart: Set<NamePair>? = null,
     val searches: List<String>? = null,
     val books: BookState? = null,
+    /** Huddle's friends and keys, sealed with the user's backup passphrase (huddle/HuddleStore.kt, HuddleBackup); null without one. */
+    val huddle: String? = null,
 )
 
 /**
@@ -171,6 +173,8 @@ data class BackupContents(
     val searches: List<String>? = null,
     /** The books by their ids on the phone that made it, their parts and the marked songs by path; no chapters. */
     val books: BookState? = null,
+    /** Huddle's part as the backup sealed it, opened only with its passphrase (huddle/HuddleStore.kt, HuddleBackup); null for none. */
+    val huddle: String? = null,
     /** Sections a newer KJB wrote in a form this version cannot read: skipped, and the summary says so. */
     val tooNew: List<Section> = emptyList(),
     /** How many sections this version does not know at all (a newer KJB's): skipped. */
@@ -252,6 +256,15 @@ object BackupBundle {
     const val MANIFEST: String = "manifest.json"
     const val SONGS: String = "songs.json"
     const val SONGS_VERSION: Int = 1
+
+    /**
+     * Huddle's part (plan Q3.3): its friends and keys, sealed on the phone with the user's backup passphrase
+     * (huddle/HuddleStore.kt, HuddleBackup), only when one is set. Not a [Section]: it is opened with that passphrase at
+     * the restore, apart from the sections, and names no song. The manifest names it with its version; a KJB without
+     * Huddle neither reads nor keeps it.
+     */
+    const val HUDDLE: String = "huddle.json"
+    const val HUDDLE_VERSION: Int = 1
     const val MIME_TYPE: String = "application/zip"
 
     /** What the open dialog offers: zip files, as providers name them. */
@@ -288,9 +301,10 @@ object BackupBundle {
             BackupSong(song.path, song.title, song.artist, song.album, song.durationMs, (song.folder + song.fileName).trimStart('/'), song.sizeBytes.takeIf { it > 0 })
         }
         ZipOutputStream(output).use { zip ->
-            zip.put(MANIFEST, manifest(appVersion, createdAt, sections.map { it.first }))
+            zip.put(MANIFEST, manifest(appVersion, createdAt, sections.map { it.first }, huddle = snapshot.huddle != null))
             zip.put(SONGS, songs(songs))
             sections.forEach { (section, text) -> zip.put(section.file, text) }
+            snapshot.huddle?.let { zip.put(HUDDLE, it) }
         }
     }
 
@@ -358,14 +372,14 @@ object BackupBundle {
     private fun withKeys(text: String, vararg extra: Pair<String, JsonElement?>): String =
         JsonObject(checkNotNull(jsonObject(text)) + extra.mapNotNull { (key, value) -> value?.let { key to it } }).toString()
 
-    private fun manifest(appVersion: String, createdAt: Long, sections: List<Section>): String = JsonObject(
+    private fun manifest(appVersion: String, createdAt: Long, sections: List<Section>, huddle: Boolean): String = JsonObject(
         mapOf(
             FORMAT_KEY to JsonPrimitive(FORMAT),
             APP_VERSION_KEY to JsonPrimitive(appVersion),
             CREATED_AT_KEY to JsonPrimitive(createdAt),
             SectionJson.SONGS_KEY to version(SONGS_VERSION),
             SECTIONS_KEY to JsonObject(sections.associate { it.key to version(it.version) }),
-        ),
+        ) + listOfNotNull((HUDDLE_KEY to version(HUDDLE_VERSION)).takeIf { huddle }),
     ).toString()
 
     private fun version(version: Int): JsonObject = JsonObject(mapOf(VERSION_KEY to JsonPrimitive(version)))
@@ -418,6 +432,8 @@ object BackupBundle {
             createdAt = manifest.long(CREATED_AT_KEY) ?: 0,
             appVersion = manifest.text(APP_VERSION_KEY).orEmpty(),
             songs = songs,
+            // Opened only with its passphrase, at the restore: here only that it is what it says. One of another form is left out.
+            huddle = files[HUDDLE]?.decodeToString()?.takeIf { (manifest[HUDDLE_KEY] as? JsonObject)?.int(VERSION_KEY) == HUDDLE_VERSION && jsonObject(it) != null },
         )
         val tooNew = mutableListOf<Section>()
         var unknown = 0
@@ -536,6 +552,7 @@ object BackupBundle {
     private const val APP_VERSION_KEY: String = "appVersion"
     private const val CREATED_AT_KEY: String = "createdAt"
     private const val SECTIONS_KEY: String = "sections"
+    private const val HUDDLE_KEY: String = "huddle"
     private const val VERSION_KEY: String = "version"
     private const val ALBUM_KEY: String = "album"
     private const val DURATION_KEY: String = "durationMs"
@@ -546,5 +563,5 @@ object BackupBundle {
     private const val CONNECT_KEY: String = "startWhenConnected"
 
     /** The only entries read into memory. */
-    private val KEPT: Set<String> = setOf(MANIFEST, SONGS) + Section.entries.map { it.file }
+    private val KEPT: Set<String> = setOf(MANIFEST, SONGS, HUDDLE) + Section.entries.map { it.file }
 }
