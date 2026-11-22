@@ -207,6 +207,31 @@ class HuddleTest {
     }
 
     @Test
+    fun `a play without an answer is sent again after 30 s, 2 min and 10 min from the player, with KJB not in front`() = runTest {
+        val logged = ArrayList<String>()
+        val (wren, _) = phone("Wren")
+        val (juniper, juniperState) = phone("Juniper", log = { logged += it })
+        val (_, wrenOnJuniper) = friends(wren, juniper)
+        server.online = false
+        val sends = server.requests.count { it == "send" }
+        // No syncWhileInFront here: the screen is off, the music plays.
+        juniper.played(bell, now)
+        assertEquals(sends + 1, server.requests.count { it == "send" })
+        advanceTimeBy(30_000)
+        runCurrent()
+        assertEquals(sends + 2, server.requests.count { it == "send" })
+        assertTrue(logged.toString(), "huddle: play not sent, next try in 30 s" in logged)
+        server.online = true
+        advanceTimeBy(2 * 60_000L)
+        runCurrent()
+        assertEquals(1, server.waiting(wrenOnJuniper.outBox).size)
+        assertTrue(juniperState.now.outbox.isEmpty())
+        advanceTimeBy(Huddle.HOUR_MS)
+        runCurrent()
+        assertEquals("sent once, then no more tries", sends + 3, server.requests.count { it == "send" })
+    }
+
+    @Test
     fun `a newcomer named as a friend you have shows under a stand-in name and is asked for another, until they pick one`() = runTest {
         val (wren, wrenState) = phone("Wren")
         val (juniper, _) = phone("Juniper")

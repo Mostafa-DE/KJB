@@ -99,10 +99,10 @@ sealed interface Accepted {
 /**
  * Huddle (plan part 3, 3b): friends by invite, cards and plays through the server's mailboxes, all sealed on the phone.
  *
- * - Cards go after [UNDO_MS] (the toast's Undo), plays at once, each sealed with the friend's key for their mailbox;
- *   what cannot go waits in [HuddleState.outbox] and goes at the next [sync], a play within a day only. A card without an
- *   answer is tried again after each of [RETRY_MS]'s waits, one card's tries at a time, started over for a card that
- *   joined them.
+ * - Cards go after [UNDO_MS] (the toast's Undo), plays at once from the player (screen off or not), each sealed with
+ *   the friend's key for their mailbox; what cannot go waits in [HuddleState.outbox] and goes at the next [sync], a play
+ *   within a day only. A card or a play without an answer is tried again after each of [RETRY_MS]'s waits, one set of
+ *   tries at a time, started over for one that joined them.
  * - A play goes only to friends you share plays with ([Friend.sharePlays], on from the join), never while you listen
  *   privately.
  * - Names are one per friend list: a newcomer whose name another friend goes by shows under a stand-in ([Friend.taken])
@@ -131,7 +131,10 @@ class Huddle(
 
     private val one = Mutex()
 
-    /** Cards without an answer whose tries ([send]) are under way: the first one's job tries for them all; 0 for none. */
+    /**
+     * Cards and plays without an answer whose tries ([tryAgain]) are under way: the first one's job tries for them all; 0
+     * for none.
+     */
     private val waiting = AtomicInteger(0)
 
     /**
@@ -249,25 +252,7 @@ class Huddle(
         if (!kept) return null
         scope.launch {
             delay(hold)
-            // One card's tries at a time: a card without an answer while they run joins them (a flush posts the whole
-            // outbox), and they start over for it once they are through.
-            if (flush() || waiting.getAndIncrement() > 0) return@launch
-            try {
-                do {
-                    val joined = waiting.get()
-                    for (wait in RETRY_MS) {
-                        // Sent by a try or a sync, or taken back: no card is left to try for.
-                        if (now().outbox.none { it.kind == Kind.CARD }) break
-                        log("huddle: card not sent, next try in ${wait / 1_000} s")
-                        delay(wait)
-                        if (flush()) break
-                    }
-                } while (!waiting.compareAndSet(joined, 0))
-            } catch (e: Throwable) {
-                // Stopped by an error, or with the process: the next card without an answer starts the tries again.
-                waiting.set(0)
-                throw e
-            }
+            if (!flush()) tryAgain()
         }
         return message.id
     }
@@ -296,7 +281,35 @@ class Huddle(
         val state = now()
         if (state.privateUntil?.let { now < it } == true) return
         val outs = state.friends.filter { it.sharePlays }.mapNotNull { outgoing(it, Message.Play(newId(MESSAGE_ID_BYTES), at, song, favourite), Kind.PLAY, notBefore = now) }
-        if (outs.isNotEmpty() && storage.change { it.copy(outbox = it.outbox + outs) }) flush()
+        // From the player, KJB in front or not (music mostly plays with the screen off): one without an answer is tried
+        // again as a card is.
+        if (outs.isNotEmpty() && storage.change { it.copy(outbox = it.outbox + outs) } && !flush()) scope.launch { tryAgain() }
+    }
+
+    /**
+     * After a card or a play without an answer: the outbox is posted again after each of [RETRY_MS]'s waits, one set of
+     * tries at a time. One without an answer while they run joins them (a flush posts the whole outbox), and they start
+     * over for it once they are through.
+     */
+    private suspend fun tryAgain() {
+        if (waiting.getAndIncrement() > 0) return
+        try {
+            do {
+                val joined = waiting.get()
+                for (wait in RETRY_MS) {
+                    // Sent by a try or a sync, taken back, or let go (a play past its day, or not to share): nothing left to try.
+                    val left = now().outbox
+                    if (left.isEmpty()) break
+                    log("huddle: ${if (left.any { it.kind == Kind.CARD }) "card" else "play"} not sent, next try in ${wait / 1_000} s")
+                    delay(wait)
+                    if (flush()) break
+                }
+            } while (!waiting.compareAndSet(joined, 0))
+        } catch (e: Throwable) {
+            // Stopped by an error, or with the process: the next one without an answer starts the tries again.
+            waiting.set(0)
+            throw e
+        }
     }
 
     /** Your own name for the friend [friendId], on this phone only; null takes it back. */
