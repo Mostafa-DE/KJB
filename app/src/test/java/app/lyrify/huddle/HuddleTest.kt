@@ -489,6 +489,26 @@ class HuddleTest {
     }
 
     @Test
+    fun `a card that joins another card's tries late gets a full set of its own after them`() = runTest {
+        val (wren, wrenState) = phone("Wren")
+        val (juniper, _) = phone("Juniper")
+        val (juniperOnWren, _) = friends(wren, juniper)
+        server.online = false
+        // The first card's tries come at 35 s, 155 s and 755 s; the second gets no answer at 550 s and joins them.
+        wren.send(juniperOnWren.id, song)
+        advanceTimeBy(545_000)
+        wren.send(juniperOnWren.id, Card(CardKind.SONG, listOf(bell)))
+        advanceTimeBy(760_000 - testScheduler.currentTime)
+        assertEquals(2, wrenState.now.outbox.size)
+        server.online = true
+        // The tries start over for the second card: 30 s after the last one.
+        advanceTimeBy(30_000)
+        runCurrent()
+        assertTrue(wrenState.now.outbox.isEmpty())
+        assertEquals(2, server.waiting(juniperOnWren.outBox).size)
+    }
+
+    @Test
     fun `an inbox kept but not acknowledged is a sync without an answer, and the next acknowledges it`() = runTest {
         val (wren, wrenState) = phone("Wren")
         val (juniper, _) = phone("Juniper")

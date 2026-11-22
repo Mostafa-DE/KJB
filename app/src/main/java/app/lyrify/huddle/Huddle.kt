@@ -15,7 +15,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.security.SecureRandom
-import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 /** A message waiting in a mailbox: the server's [seq] in it (its message id), and the sealed [data] (base64url). */
 data class Posted(val seq: Long, val data: String)
@@ -103,7 +103,8 @@ sealed interface Accepted {
  *
  * - Cards go after [UNDO_MS] (the toast's Undo), plays at once, each sealed with the friend's key for their mailbox;
  *   what cannot go waits in [HuddleState.outbox] and goes at the next [sync], a play within a day only. A card without an
- *   answer is tried again after each of [RETRY_MS]'s waits, one card's tries at a time.
+ *   answer is tried again after each of [RETRY_MS]'s waits, one card's tries at a time, started over for a card that
+ *   joined them.
  * - A play goes only to friends you share plays with ([Friend.sharePlays]), never while you listen privately.
  * - [sync] asks the server only when there is something to ask: invites waiting for a join, friends' mailboxes, the outbox,
  *   each whatever the others answered. Each message is read once ([Friend.seen]) and acknowledged so the server deletes it.
@@ -135,8 +136,8 @@ class Huddle(
     @Volatile
     private var lastSync: Long? = null
 
-    /** A card's next tries ([send]) are under way. */
-    private val retrying = AtomicBoolean(false)
+    /** Cards without an answer whose tries ([send]) are under way: the first one's job tries for them all; 0 for none. */
+    private val waiting = AtomicInteger(0)
 
     /** Sets your name as friends see it; false when nothing is left of [name] ([Invites.cleanName]). */
     suspend fun setName(name: String): Boolean {
@@ -222,16 +223,24 @@ class Huddle(
         if (!kept) return null
         scope.launch {
             delay(hold)
-            // One card's tries at a time: a flush posts the whole outbox, so a card sent meanwhile goes with them.
-            if (flush() || !retrying.compareAndSet(false, true)) return@launch
+            // One card's tries at a time: a card without an answer while they run joins them (a flush posts the whole
+            // outbox), and they start over for it once they are through.
+            if (flush() || waiting.getAndIncrement() > 0) return@launch
             try {
-                for (wait in RETRY_MS) {
-                    log("huddle: card not sent, next try in ${wait / 1_000} s")
-                    delay(wait)
-                    if (flush()) return@launch
-                }
-            } finally {
-                retrying.set(false)
+                do {
+                    val joined = waiting.get()
+                    for (wait in RETRY_MS) {
+                        // Sent by a try or a sync, or taken back: no card is left to try for.
+                        if (now().outbox.none { it.kind == Kind.CARD }) break
+                        log("huddle: card not sent, next try in ${wait / 1_000} s")
+                        delay(wait)
+                        if (flush()) break
+                    }
+                } while (!waiting.compareAndSet(joined, 0))
+            } catch (e: Throwable) {
+                // Stopped by an error, or with the process: the next card without an answer starts the tries again.
+                waiting.set(0)
+                throw e
             }
         }
         return message.id
