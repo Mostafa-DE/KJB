@@ -433,6 +433,8 @@ class SharedWritesTest {
             "data/LedgerRepository.kt",
             // Downloads: downloads.json, written aside and moved over.
             "downloads/Downloads.kt",
+            // huddle.json (DataStore), and a copy of an unreadable one, in the app's files.
+            "huddle/HuddleStore.kt",
             "dupes/DuplicatesStore.kt",
             "library/Playlists.kt",
             "library/search/RecentSearches.kt",

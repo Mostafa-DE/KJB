@@ -153,14 +153,11 @@ class PlaybackService : MediaLibraryService() {
 
     /** Songs that could not be played since one last played: the whole queue failing stops the player. */
     private var failedInARow = 0
-    /** Friends sharing's plays (huddle/HuddleGraph.kt). */
+    /** Friends sharing's plays (huddle/HuddleGraph.kt), made once the service has its context. */
     private val shared: PlayEvents by lazy { HuddleGraph.plays(this) }
 
-    /** The play counter and Friends sharing, without a book's plays (books/BookPlayback.kt). */
-    private val plays = BookPlayFilter({ event ->
-        Lyrify.playEvents(this).onEvent(event)
-        shared.onEvent(event)
-    }) { path -> playIsBook(path, core.book.value.current, library.value) }
+    /** The play counter and Friends sharing (Huddle), without a book's plays (books/BookPlayback.kt). */
+    private val plays = BookPlayFilter({ event -> Lyrify.playEvents(this).onEvent(event); shared.onEvent(event) }) { path -> playIsBook(path, core.book.value.current, library.value) }
     private val tracker = PlayTracker(plays::onEvent, System::currentTimeMillis)
     private val offload = OffloadGate { engine.setOffload(it) }
 

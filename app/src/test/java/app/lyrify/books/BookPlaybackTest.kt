@@ -148,9 +148,9 @@ class BookPlaybackTest {
         assertFalse(playIsBook(music.path, inMusicQueue, withBooks))
         // A file the library does not have goes by its path, as the lyrics judge it: a cache copy of an .m4b is a book's.
         assertTrue(playIsBook("/data/user/0/app.lyrify/cache/opened/1800000000000/0/Quiet Orchard.m4b", inMusicQueue, withBooks))
-        // The play counter wired to it in the service.
+        // The play counter and Friends sharing (Huddle) wired to it in the service.
         val service = java.io.File("src/main/java/app/lyrify/player/PlaybackService.kt").readText()
-        assertTrue(service.contains("BookPlayFilter({ event -> Lyrify.playEvents(this).onEvent(event) }) { path -> playIsBook(path, core.book.value.current, library.value) }"))
+        assertTrue(service.contains("BookPlayFilter({ event -> Lyrify.playEvents(this).onEvent(event); shared.onEvent(event) }) { path -> playIsBook(path, core.book.value.current, library.value) }"))
     }
 
     // The place, kept as the book plays
