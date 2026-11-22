@@ -561,6 +561,49 @@ class HuddleTest {
     }
 
     @Test
+    fun `a read that finds none that does not open starts the count over, the inbox empty or not`() = runTest {
+        val (wren, wrenState) = phone("Wren")
+        val (juniper, _) = phone("Juniper")
+        val (juniperOnWren, _) = friends(wren, juniper)
+        val (rook, rookState) = phone("Rook")
+        rook.accept(rook.parse(link(wren))!!)
+        assertTrue(wren.sync())
+        val count = { wrenState.now.friends.single { it.id == juniperOnWren.id }.notOpenedReads }
+        // One that does not open, then gone from the server unacknowledged (a play goes once read, a card after 30 days).
+        server.replay(juniperOnWren.inBox, HuddleCrypto.encode(ByteArray(120) { 7 }))
+        assertTrue(wren.sync())
+        assertEquals(1, count())
+        server.boxes.getValue(juniperOnWren.inBox).clear()
+        rook.send(rookState.now.friends.single().id, song)
+        advanceTimeBy(Huddle.UNDO_MS + 1)
+        assertTrue(wren.sync())
+        assertEquals("a read with only another friend's card", 0, count())
+
+        server.replay(juniperOnWren.inBox, HuddleCrypto.encode(ByteArray(120) { 7 }))
+        assertTrue(wren.sync())
+        assertEquals(1, count())
+        server.boxes.getValue(juniperOnWren.inBox).clear()
+        assertTrue(wren.sync())
+        assertEquals("a read with nothing at all", 0, count())
+    }
+
+    @Test
+    fun `a message let go whose acknowledgement got no answer is let go again at the next read`() = runTest {
+        val (wren, wrenState) = phone("Wren")
+        val (juniper, _) = phone("Juniper")
+        val (juniperOnWren, _) = friends(wren, juniper)
+        server.replay(juniperOnWren.inBox, HuddleCrypto.encode(ByteArray(120) { 7 }))
+        repeat(Huddle.NOT_OPENED_RETRIES) { assertTrue(wren.sync()) }
+        server.silent = setOf("ack")
+        assertFalse(wren.sync())
+        assertEquals(1, server.waiting(juniperOnWren.inBox).size)
+        server.silent = emptySet()
+        assertTrue(wren.sync())
+        assertTrue("let go at once, not after 3 more reads", server.waiting(juniperOnWren.inBox).isEmpty())
+        assertEquals(0, wrenState.now.friends.single().notOpenedReads)
+    }
+
+    @Test
     fun `a sync step without an answer is logged with a reason code, never a name, an id or a title`() = runTest {
         val logged = ArrayList<String>()
         val (wren, wrenState) = phone("Wren", log = { logged += it })

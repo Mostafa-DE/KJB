@@ -488,8 +488,8 @@ class Huddle(
             return false
         }
         val now = clock()
-        // Nothing new: only plays past their time go.
-        if (posted.isEmpty()) return now().plays.none { now - it.at > PLAYS_KEPT_MS } || storage.change { it.received(emptyList(), now) }
+        // Nothing new and no count of messages that did not open to start over: only plays past their time go.
+        if (posted.isEmpty() && friends.none { it.notOpenedReads > 0 }) return now().plays.none { now - it.at > PLAYS_KEPT_MS } || storage.change { it.received(emptyList(), now) }
         val upTo = HashMap<String, Long>()
         val read = ArrayList<Pair<String, Message>>()
         // By friend: their Friend.notOpenedReads after this read.
@@ -497,7 +497,8 @@ class Huddle(
         var kept = 0
         var dropped = 0
         for (friend in friends) {
-            val box = posted[friend.inBox]?.sortedBy { it.seq } ?: continue
+            // A mailbox with nothing in it is read too: it found none that does not open.
+            val box = posted[friend.inBox]?.sortedBy { it.seq }.orEmpty()
             val key = HuddleCrypto.decode(friend.inKey) ?: continue
             // A box that does not open (another key, sealed for the other way, changed, a newer KJB's): its seq.
             val closed = ArrayList<Long>()
@@ -507,7 +508,8 @@ class Huddle(
             }
             val reads = if (closed.isEmpty()) 0 else friend.notOpenedReads + 1
             val again = reads in 1..NOT_OPENED_RETRIES
-            notOpened[friend.id] = if (again) reads else 0
+            // Let go, it stays past NOT_OPENED_RETRIES until the server takes the acknowledgement, so a lost one goes again.
+            notOpened[friend.id] = reads
             if (again) kept += closed.size else dropped += closed.size
             // Read again: acknowledged only up to the first that did not open, so it and what came after it wait.
             (if (again) box.lastOrNull { it.seq < closed.first() } else box.lastOrNull())?.let { upTo[friend.inBox] = it.seq }
@@ -520,6 +522,8 @@ class Huddle(
         }
         val acknowledged = server.ack(upTo)
         if (!acknowledged) log("huddle: inbox not acknowledged (no_answer)")
+        // What was let go is gone: the next one that does not open gets its reads again.
+        if (acknowledged && dropped > 0) storage.change { state -> state.copy(friends = state.friends.map { if (it.notOpenedReads > NOT_OPENED_RETRIES) it.copy(notOpenedReads = 0) else it }) }
         read.filter { it.second is Message.Bye }.mapNotNull { (id, _) -> friends.firstOrNull { it.id == id } }.forEach { gone ->
             server.dropBoxes(listOf(gone.inBox, gone.outBox))
         }

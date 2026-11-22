@@ -53,7 +53,8 @@ data class Friend(
     val seen: List<String> = emptyList(),
     /**
      * Reads of their mailbox in a row that found a message that does not open: it waits on the server, unacknowledged, for
-     * [Huddle.NOT_OPENED_RETRIES] more reads, then goes and this is 0 again, as it is after a read that found none.
+     * [Huddle.NOT_OPENED_RETRIES] more reads, then is let go. 0 again once the server took that acknowledgement, or after
+     * a read that found none.
      */
     val notOpenedReads: Int = 0,
 ) {
