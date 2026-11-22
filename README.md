@@ -138,13 +138,14 @@ Two parts of KJB come as separate apps, so KJB itself stays small. Both are opti
 
 - **KJB AI** (`KJB-AI-3.0.3.apk`, about 70 MB): AI lyrics. It needs Android 15 or newer and a supported Snapdragon
   chip (see "Requirements").
-- **KJB Downloads** (`KJB-Downloads-3.0.3.apk`, about 54 MB): saves audio or video from a link you share to **Save to
+- **KJB Downloads** (`KJB-Downloads-3.1.0.apk`, about 53 MB): saves audio or video from a link you share to **Save to
   KJB**, or one you paste in Tools > Downloads. Save only what you have the right to save.
 
 KJB gets the add-ons itself: tap **Get AI** in Tools > AI lyrics, or **Get Downloads** in Tools > Downloads. KJB
-downloads the add-on, then your phone asks you to confirm the install. The files are also on the same
-[release page](https://github.com/Mostafa-DE/KJB/releases/latest): download the APK on your phone and open it, before
-or after installing KJB.
+downloads the add-on, then your phone asks you to confirm the install. The files are also on GitHub, KJB Downloads on
+the [v3.1.0 release](https://github.com/Mostafa-DE/KJB/releases/tag/v3.1.0) and KJB AI on the
+[v3.0.3 release](https://github.com/Mostafa-DE/KJB/releases/tag/v3.0.3): download the APK on your phone and open it,
+before or after installing KJB.
 
 The add-ons have no icon of their own; they show in your phone's settings under Apps. They work only with KJB from the
 release page, as Android lets them talk only to an app signed with the same key.
