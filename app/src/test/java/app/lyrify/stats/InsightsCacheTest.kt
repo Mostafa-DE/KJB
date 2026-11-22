@@ -12,11 +12,11 @@ import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.lang.management.ManagementFactory
 import java.time.DayOfWeek
 import java.time.YearMonth
 import java.time.ZoneId
 import java.time.ZonedDateTime
-import kotlin.system.measureNanoTime
 
 /**
  * Insights at scale (lead, 2026-11-22): what Insights keep of the logs between reads, so a play written reads again only
@@ -63,6 +63,19 @@ class InsightsCacheTest {
     private fun fresh(log: PlayLogStore, books: PlayLogStore? = null, ask: suspend PlayStats.() -> Insights): Insights = runBlocking { stats(log, books).ask() }
 
     private suspend fun PlayStats.month(): Insights = insights(ListeningPeriod.MONTH, now, berlin, DayOfWeek.MONDAY)
+
+    /**
+     * The CPU time this thread spends on [work], in ms: the work itself. The wall clock also counts the wait for a core
+     * while other builds load the laptop (3,332 ms against the 3,000 ms budget at load average 49 on 2026-11-22; 4,212 ms
+     * with 32 busy loops beside the test, handoff/int4-insightstiming-red.log). With Dispatchers.Unconfined and the fake
+     * log, Insights do all their work on this thread.
+     */
+    private inline fun cpuMs(work: () -> Unit): Long {
+        val threads = ManagementFactory.getThreadMXBean()
+        val start = threads.currentThreadCpuTime
+        work()
+        return (threads.currentThreadCpuTime - start) / 1_000_000
+    }
 
     @Test
     fun `a play written after Insights were read is read again alone, and nothing written reads nothing`() = runBlocking {
@@ -170,14 +183,14 @@ class InsightsCacheTest {
         val stats = PlayStats(read, { big }, Dispatchers.Unconfined)
         val written = WatchedPlayLog(log, stats::changed)
 
-        val cold = measureNanoTime {
+        val cold = cpuMs {
             ListeningPeriod.entries.forEach { stats.insights(it, now, berlin, DayOfWeek.MONDAY) }
             stats.recaps(now, berlin)
-        } / 1_000_000
+        }
         written.put(LoggedPlay(many[7].ref, now - MINUTE, 150_000, counted = true, zoneOffsetMinutes = 60, clockMs = 140_000))
         read.rows = 0
-        val warm = measureNanoTime { stats.month() } / 1_000_000
-        println("IN1 measure: Insights on $PLAYS plays, every period and the recaps from cold: $cold ms; this month again after one play: $warm ms")
+        val warm = cpuMs { stats.month() }
+        println("IN1 measure: Insights on $PLAYS plays, every period and the recaps from cold: $cold ms of CPU; this month again after one play: $warm ms")
 
         assertEquals(1, read.rows)
         assertTrue("from cold: $cold ms", cold < COLD_MS)
@@ -199,7 +212,10 @@ class InsightsCacheTest {
         const val DAY: Long = 86_400_000
         const val PLAYS: Int = 100_000
 
-        /** Measured on the laptop (2026-11-22): see the report; with room for other lanes' builds running at once. */
+        /**
+         * CPU time ([cpuMs]). Measured on the laptop (2026-11-22, in1's report): 488 to 544 ms from cold and 52 to 60 ms
+         * after one play; the budgets leave room for a slower machine, and other builds running at once no longer count.
+         */
         const val COLD_MS: Long = 3_000
         const val WARM_MS: Long = 400
     }
