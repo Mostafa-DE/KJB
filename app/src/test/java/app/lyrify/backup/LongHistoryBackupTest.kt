@@ -165,8 +165,10 @@ class LongHistoryBackupTest {
         assertEquals(asOnePart(books), read.bookPlays)
         assertEquals(asOnePart(plays), read.plays)
         // A book log part missing makes it no backup, as a plays part does.
-        val stored = ZipInputStream(ByteArrayInputStream(bytes)).use { zip -> generateSequence { zip.nextEntry }.map { it.name to zip.readBytes() }.toList() }
-        assertEquals(BackupRead.Unreadable(BackupRead.Why.NOT_A_BACKUP), read(zipOf(stored.filterNot { it.first == Section.BOOK_PLAYS.partFile(2) })))
+        assertEquals(
+            BackupRead.Unreadable(BackupRead.Why.NOT_A_BACKUP),
+            read(zipOf(ZipInputStream(ByteArrayInputStream(bytes)).use { zip -> generateSequence { zip.nextEntry }.map { it.name to zip.readBytes() }.toList() }.filterNot { it.first == Section.BOOK_PLAYS.partFile(2) })),
+        )
     }
 
     // The real sizes

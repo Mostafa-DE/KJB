@@ -237,9 +237,8 @@ class SuggestionsTest {
 
     @Test
     fun `the app's Suggestions read the interaction log, the similar artists found and friends' plays`() {
-        val graph = File("src/main/java/app/lyrify/suggestions/Suggestions.kt").readText().substringAfter("object SuggestionsGraph")
         listOf("interactions = StatsGraph.interactions(app)", "similar = SimilarGraph.cache(app)", "friends = HuddleGraph.friends(app)").forEach {
-            assertTrue(it, graph.contains(it))
+            assertTrue(it, File("src/main/java/app/lyrify/suggestions/Suggestions.kt").readText().substringAfter("object SuggestionsGraph").contains(it))
         }
     }
 }
