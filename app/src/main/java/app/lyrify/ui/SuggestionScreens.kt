@@ -47,7 +47,9 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
 import app.lyrify.R
 import app.lyrify.library.Library
 import app.lyrify.library.SongRef
@@ -65,8 +67,7 @@ import app.lyrify.suggestions.Suggestions
 import app.lyrify.suggestions.SuggestionsGraph
 import kotlinx.coroutines.launch
 import java.text.NumberFormat
-import java.time.LocalDate
-import java.time.ZoneId
+import java.time.ZonedDateTime
 import java.util.concurrent.TimeUnit
 
 // Suggestions' pages (SG1, the approved mockup suggest/preview-suggestions-v2.html): For you (the Library card, its page
@@ -110,7 +111,8 @@ internal fun ForYouCard(ui: LibraryUi) {
     val toasts = LocalToasts.current
     val resources = LocalResources.current
     val store = rememberSettingsStore()
-    val scope = rememberCoroutineScope()
+    // The card goes once hidden; what hides it, and Hide's message, outlive it (as LibraryHiding.kt's rows do).
+    val scope = LocalLifecycleOwner.current.lifecycleScope
     val playback = rememberPlayback()
     val settings = ui.settings.suggestions
     val picks = rememberForYou(ui.library, settings).orEmpty()
@@ -139,13 +141,19 @@ internal fun ForYouCard(ui: LibraryUi) {
             }
         }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 12.dp)) {
-            LyrifyButton(stringResource(R.string.lib_play), { playback.play(refs, 0, source) }, icon = R.drawable.ic_play_arrow_fill, compact = true)
-            LyrifyButton(stringResource(R.string.lib_shuffle), { playback.shuffle(refs, source) }, kind = ButtonKind.SECONDARY, icon = R.drawable.ic_shuffle, compact = true)
+            // Play and Shuffle hide the card until tomorrow too: its mix is playing (user 2026-11-22).
+            LyrifyButton(stringResource(R.string.lib_play), {
+                playback.play(refs, 0, source)
+                scope.launch { store.update { it.copy(suggestions = it.suggestions.hiddenTillTomorrow(ZonedDateTime.now())) } }
+            }, icon = R.drawable.ic_play_arrow_fill, compact = true)
+            LyrifyButton(stringResource(R.string.lib_shuffle), {
+                playback.shuffle(refs, source)
+                scope.launch { store.update { it.copy(suggestions = it.suggestions.hiddenTillTomorrow(ZonedDateTime.now())) } }
+            }, kind = ButtonKind.SECONDARY, icon = R.drawable.ic_shuffle, compact = true)
             Spacer(Modifier.weight(1f))
             LyrifyButton(stringResource(R.string.suggest_hide), {
-                val tomorrow = LocalDate.now().plusDays(1).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
                 scope.launch {
-                    store.update { it.copy(suggestions = it.suggestions.copy(forYouHiddenUntil = tomorrow)) }
+                    store.update { it.copy(suggestions = it.suggestions.hiddenTillTomorrow(ZonedDateTime.now())) }
                     toasts.show(Toast(resources.getString(R.string.suggest_hidden_till_tomorrow), R.drawable.ic_explore))
                 }
             }, kind = ButtonKind.GHOST, compact = true)
@@ -155,6 +163,13 @@ internal fun ForYouCard(ui: LibraryUi) {
 
 /** The card names this many songs, then "and 17 more". */
 private const val CARD_NAMES = 3
+
+/**
+ * The For you card hidden until the next day's mix ([SuggestionSettings.forYouHiddenUntil]: the next midnight in [now]'s
+ * zone): its Hide, and its Play and Shuffle, which play the mix the card stood for.
+ */
+internal fun SuggestionSettings.hiddenTillTomorrow(now: ZonedDateTime): SuggestionSettings =
+    copy(forYouHiddenUntil = now.toLocalDate().plusDays(1).atStartOfDay(now.zone).toInstant().toEpochMilli())
 
 /**
  * For you on the Insights page, one item of its list right under the period's totals (agreed with lane in1, which calls
