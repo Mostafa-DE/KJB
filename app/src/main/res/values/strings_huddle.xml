@@ -46,12 +46,10 @@
     <string name="huddle_private_forever">On until you turn it off</string>
     <string name="huddle_private_hour">For an hour</string>
     <string name="huddle_private_always">Until I turn it off</string>
-    <string name="huddle_private_stop">Share again</string>
 
     <!-- Your name, typed once; friends see it. -->
     <string name="huddle_name_title">Your name</string>
     <string name="huddle_name_text">Friends see this name. You can change it here.</string>
-    <string name="huddle_name_field">Name</string>
     <string name="huddle_save">Save</string>
 
     <!-- The backup passphrase. -->
