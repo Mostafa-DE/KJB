@@ -17,6 +17,7 @@ import app.lyrify.tags.lookup.MetaGate
 import app.lyrify.tags.lookup.MusicBrainz
 import app.lyrify.tags.lookup.MusicBrainzJson
 import app.lyrify.tags.lookup.MusicBrainzUrls
+import app.lyrify.tags.lookup.Names
 import app.lyrify.tags.lookup.T
 import app.lyrify.tags.lookup.TEST_AGENT
 import app.lyrify.tags.lookup.ok
@@ -220,19 +221,20 @@ class SimilarArtistsTest {
     // The kill flag
 
     @Test
-    fun `ListenBrainz gone for 3 artists in a row stops the lookups until the next app version, the cache still read`() = runTest {
+    fun `ListenBrainz gone for 3 artists in a row that had lists stops the lookups until the next app version, the cache still read`() = runTest {
         val web = web()
-        web.artist("Rowan Vale", ROWAN, Neighbour(GLASS, "Glass Harbour", 10))
-        val cache = cache()
-        lookups(web, cache).run(played("Rowan Vale"))
-        listOf(MIRA to 404, GLASS to 410, KIT to 404).forEachIndexed { i, (id, code) ->
+        web.artist("Rowan Vale", ROWAN, Neighbour(OTHER, "Glass Harbour", 10))
+        val names = listOf(MIRA to 404, GLASS to 410, KIT to 401).mapIndexed { i, (id, code) ->
             web.on(MusicBrainzUrls.artistSearch("Made-up Artist $i"), ok(artistsJson(Hit(id, "Made-up Artist $i", 100))))
-            web.on(ListenBrainzUrls.similarArtists(id), status(code))
+            web.on(ListenBrainzUrls.similarArtists(id), ok(neighboursJson(id, Neighbour(ROWAN, "Rowan Vale", 10))), status(code))
+            "Made-up Artist $i"
         }
         web.artist("Tamsin Reed", TAMSIN, Neighbour(ROWAN, "Rowan Vale", 10))
-        later += day(1)
+        val cache = cache()
+        lookups(web, cache).run(played("Rowan Vale", *names.toTypedArray()))
+        later += day(SimilarRules.REFRESH_DAYS)
 
-        lookups(web, cache).run(played("Made-up Artist 0", "Made-up Artist 1", "Made-up Artist 2", "Tamsin Reed"))
+        lookups(web, cache).run(played(*names.toTypedArray(), "Tamsin Reed"))
 
         assertEquals(VERSION, cache.memory().stoppedIn)
         assertEquals(0, web.count(MusicBrainzUrls.artistSearch("Tamsin Reed")))
@@ -250,30 +252,78 @@ class SimilarArtistsTest {
     @Test
     fun `a list fetched between two gone answers starts the count again`() = runTest {
         val web = web()
-        listOf(MIRA to 404, GLASS to 200, KIT to 410, ROWAN to 404).forEachIndexed { i, (id, code) ->
+        val names = listOf(MIRA to 404, GLASS to 200, KIT to 403, ROWAN to 404).mapIndexed { i, (id, code) ->
             web.on(MusicBrainzUrls.artistSearch("Made-up Artist $i"), ok(artistsJson(Hit(id, "Made-up Artist $i", 100))))
-            web.on(ListenBrainzUrls.similarArtists(id), if (code == 200) ok(neighboursJson(id)) else status(code))
+            val first = ok(neighboursJson(id, Neighbour(TAMSIN, "Tamsin Reed", 10)))
+            web.on(ListenBrainzUrls.similarArtists(id), first, if (code == 200) ok(neighboursJson(id)) else status(code))
+            "Made-up Artist $i"
         }
         val cache = cache()
+        lookups(web, cache).run(played(*names.toTypedArray()))
+        later += day(SimilarRules.REFRESH_DAYS)
 
-        lookups(web, cache).run(played("Made-up Artist 0", "Made-up Artist 1", "Made-up Artist 2", "Made-up Artist 3"))
+        lookups(web, cache).run(played(*names.toTypedArray()))
 
         assertNull(cache.memory().stoppedIn)
         assertEquals(2, cache.memory().gone)
-        assertEquals(8, web.requests.size)
+        assertEquals(12, web.requests.size)
+    }
+
+    @Test
+    fun `a gone answer for an artist that never had a list is no list for it, kept as such, and neither counts nor resets the count`() = runTest {
+        val web = web()
+        web.on(MusicBrainzUrls.artistSearch("Rowan Vale"), ok(artistsJson(Hit(ROWAN, "Rowan Vale", 100))))
+        web.on(ListenBrainzUrls.similarArtists(ROWAN), ok(neighboursJson(ROWAN, Neighbour(GLASS, "Glass Harbour", 10))), status(404))
+        listOf(MIRA to 404, GLASS to 410, KIT to 403).forEachIndexed { i, (id, code) ->
+            web.on(MusicBrainzUrls.artistSearch("Made-up Artist $i"), ok(artistsJson(Hit(id, "Made-up Artist $i", 100))))
+            web.on(ListenBrainzUrls.similarArtists(id), status(code))
+        }
+        val cache = cache()
+        lookups(web, cache).run(played("Rowan Vale"))
+        later += day(SimilarRules.REFRESH_DAYS)
+
+        lookups(web, cache).run(played("Rowan Vale", "Made-up Artist 0", "Made-up Artist 1", "Made-up Artist 2"))
+
+        val memory = cache.memory()
+        assertEquals(1, memory.gone)
+        assertNull(memory.stoppedIn)
+        assertEquals(0, memory.failures)
+        assertEquals(9, web.requests.size)
+        val kept = (0..2).map { memory.artists[Names.key("Made-up Artist $it")] }
+        assertEquals(listOf(MIRA, GLASS, KIT), kept.map { it?.mbid })
+        assertTrue(kept.all { it != null && it.match == Match.FOUND && it.neighbours.isEmpty() && !SimilarRules.due(it, now()) })
+        assertEquals(emptyMap<String, List<Similar>>(), cache.similar(listOf("Made-up Artist 0", "Made-up Artist 1", "Made-up Artist 2")))
+    }
+
+    @Test
+    fun `ListenBrainz's 400 is a refusal that pauses, never a step towards the stop`() = runTest {
+        val web = web()
+        web.on(MusicBrainzUrls.artistSearch("Mira Solen"), ok(artistsJson(Hit(MIRA, "Mira Solen", 100))))
+        web.on(ListenBrainzUrls.similarArtists(MIRA), ok(neighboursJson(MIRA, Neighbour(GLASS, "Glass Harbour", 10))), status(400))
+        val cache = cache()
+        val lookups = lookups(web, cache)
+        lookups.run(played("Mira Solen"))
+        later += day(SimilarRules.REFRESH_DAYS)
+
+        lookups.run(played("Mira Solen"))
+
+        assertEquals(0, cache.memory().gone)
+        assertEquals(1, cache.memory().failures)
+        assertEquals(listOf(Similar("Glass Harbour", 1f)), cache.similar(listOf("Mira Solen"))["Mira Solen"])
     }
 
     // The exact-match rule
 
     @Test
-    fun `a name matches only as the top hit at score 100, by name, sort name or alias, with no other hit within 5 points`() {
+    fun `a name matches only as the top hit at score 100, by name, sort name or alias, with every other hit at 85 or lower`() {
         fun match(vararg hits: MbArtist) = SimilarRules.match(hits.toList(), "Mira Solen")
         assertEquals(Match.FOUND to MIRA, match(artist(MIRA, "Mira Solen", 100), artist(OTHER, "Mira Sol", 80)))
         assertEquals(Match.FOUND to MIRA, match(artist(MIRA, "ميرا سولن", 100, aliases = listOf("Mira Solen"))))
         assertEquals(Match.FOUND to MIRA, match(artist(MIRA, "ميرا سولن", 100, sortName = "Mira Solen")))
         assertEquals(Match.FOUND to MIRA, match(artist(MIRA, "ميرا سولن", 100, sortName = "Solen, Mira")))
-        assertEquals(Match.FOUND to MIRA, match(artist(MIRA, "Mira Solen", 100), artist(OTHER, "Mira Solen", 94)))
-        assertEquals(Match.AMBIGUOUS to null, match(artist(MIRA, "Mira Solen", 100), artist(OTHER, "Mira Solen", 95)))
+        assertEquals(Match.FOUND to MIRA, match(artist(MIRA, "Mira Solen", 100), artist(OTHER, "Mira Solen", 85)))
+        assertEquals(Match.AMBIGUOUS to null, match(artist(MIRA, "Mira Solen", 100), artist(OTHER, "Mira Solen", 86)))
+        assertEquals(Match.AMBIGUOUS to null, match(artist(MIRA, "Mira Solen", 100), artist(OTHER, "Mira Sol", 94)))
         assertEquals(Match.AMBIGUOUS to null, match(artist(MIRA, "Mira Solen", 100), artist(OTHER, "Mira Solen", 100)))
         assertEquals(Match.NONE to null, match(artist(MIRA, "Mira Solen", 98)))
         assertEquals(Match.NONE to null, match(artist(MIRA, "Mira Solenne", 100)))
@@ -371,6 +421,23 @@ class SimilarArtistsTest {
 
         assertEquals(listOf(ListenBrainzUrls.similarArtists(CREDITED).toString()), web.requests.drop(before).map { it.uri })
         assertEquals(CREDITED, cache.memory().artists.values.singleOrNull()?.mbid)
+    }
+
+    @Test
+    fun `the ids KJB wrote win over an earlier match by name`() = runTest {
+        val web = web()
+        web.artist("Mira Solen", MIRA, Neighbour(GLASS, "Glass Harbour", 10))
+        web.on(MusicBrainzUrls.release(ID_A), ok(releaseJson(ID_A, artist = "Mira Solen", discs = listOf(listOf(T("Quiet Ember", 254_000))))))
+        web.on(ListenBrainzUrls.similarArtists(CREDITED), ok(neighboursJson(CREDITED, Neighbour(KIT, "Kit Calloway", 10))))
+        val cache = cache()
+        lookups(web, cache).run(played("Mira Solen"))
+        later += day(SimilarRules.REFRESH_DAYS)
+
+        lookups(web, cache).run(listOf(PlayedArtist("Mira Solen", WrittenIds(ID_A, recording = null))))
+
+        assertEquals(1, web.count(ListenBrainzUrls.similarArtists(CREDITED)))
+        assertEquals(CREDITED, cache.memory().artists.values.singleOrNull()?.mbid)
+        assertEquals(listOf(Similar("Kit Calloway", 1f)), cache.similar(listOf("Mira Solen"))["Mira Solen"])
     }
 
     @Test

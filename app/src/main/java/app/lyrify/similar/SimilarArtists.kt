@@ -90,14 +90,17 @@ object SimilarRules {
     /** A name matches for sure only as MusicBrainz's top hit at this score... */
     const val SURE_SCORE: Int = 100
 
-    /** ...with no other hit this many points or fewer below it. */
-    const val CLOSE_POINTS: Int = 5
+    /** ...with every other hit at this score or lower: a clear gap (user, 2026-11-22). */
+    const val OTHERS_AT_MOST: Int = 85
 
     /** The pause before asking again after each failure in a row: 1 day, 2, 4, 8, then 14 days. */
     val PAUSE_DAYS: List<Long> = listOf(1, 2, 4, 8, 14)
 
-    /** Statuses that say ListenBrainz's endpoint is gone or closed to KJB (removed, renamed, a token needed). */
-    val GONE: Set<Int> = setOf(400, 401, 403, 404, 410)
+    /**
+     * Statuses that, for an artist ListenBrainz listed before, say its endpoint is gone or closed to KJB (removed, a
+     * token needed); for one it never listed, that there is no list (user, 2026-11-22).
+     */
+    val GONE: Set<Int> = setOf(401, 403, 404, 410)
 
     /** Whether an artist is looked up now: never before, [REFRESH_DAYS] ago or more, or at a time after [now] (the clock changed). */
     fun due(entry: ArtistSimilar?, now: Long): Boolean = entry == null || entry.at > now || now - entry.at >= REFRESH_DAYS * DAY_MS
@@ -107,14 +110,14 @@ object SimilarRules {
 
     /**
      * How [hits] match [name]: the top hit at [SURE_SCORE], named so (its name, sort name or an alias, as
-     * [app.lyrify.tags.lookup.Names.key] compares them), with no other hit within [CLOSE_POINTS]: found, with its id;
-     * another hit that close: ambiguous; else none.
+     * [app.lyrify.tags.lookup.Names.key] compares them), with every other hit at [OTHERS_AT_MOST] or lower: found, with
+     * its id; another hit above that (a tie included): ambiguous; else none.
      */
     fun match(hits: List<MbArtist>, name: String): Pair<Match, String?> {
         val ranked = hits.sortedByDescending { it.score ?: 0 }
         val top = ranked.firstOrNull()?.takeIf { (it.score ?: 0) >= SURE_SCORE } ?: return Match.NONE to null
         return when {
-            ranked.drop(1).any { (it.score ?: 0) >= SURE_SCORE - CLOSE_POINTS } -> Match.AMBIGUOUS to null
+            ranked.drop(1).any { (it.score ?: 0) > OTHERS_AT_MOST } -> Match.AMBIGUOUS to null
             named(top, Names.key(name)) -> Match.FOUND to top.id
             else -> Match.NONE to null
         }
@@ -281,12 +284,13 @@ class SimilarCache(private val store: SimilarStore, private val io: CoroutineDis
 
 /**
  * One run of lookups, in the background: up to [SimilarRules.PER_RUN] of the artists given that are due, one at a time,
- * each request [SimilarRules.SPACING_MS] after the previous one. An artist's MusicBrainz id comes from an earlier match,
- * else from the ids KJB wrote into its songs (a release lookup, from Covers & tags' cache when it has it), else from an
+ * each request [SimilarRules.SPACING_MS] after the previous one. An artist's MusicBrainz id comes from the ids KJB wrote
+ * into its songs (a release lookup, from Covers & tags' cache when it has it), else from an earlier match, else from an
  * artist search by name, taken only when sure ([SimilarRules.match]); then ListenBrainz lists its neighbours. MusicBrainz
  * requests go through the [client]'s gate, which Covers & tags shares, with its backoff on 503. A busy or failed answer
- * ends the run and pauses the lookups ([SimilarRules.pauseAfter]); [SimilarRules.GONE_TO_STOP] "gone" answers from
- * ListenBrainz in a row stop them until the next app [version]. Logs counts and status codes only, never a name or id.
+ * ends the run and pauses the lookups ([SimilarRules.pauseAfter]); [SimilarRules.GONE_TO_STOP] "gone" answers in a row
+ * for artists ListenBrainz listed before stop them until the next app [version]. Logs counts and status codes only,
+ * never a name or id.
  */
 class SimilarLookups(
     private val cache: SimilarCache,
@@ -324,7 +328,7 @@ class SimilarLookups(
                     lists++
                     cache.update { it.copy(artists = it.artists + (key to step.entry), failures = 0, gone = 0) }
                 }
-                is Step.Unmatched -> cache.update { it.copy(artists = it.artists + (key to step.entry), failures = 0) }
+                is Step.Unlisted -> cache.update { it.copy(artists = it.artists + (key to step.entry), failures = 0) }
                 is Step.Gone -> {
                     log("similar: ListenBrainz answered HTTP ${step.status}")
                     val after = cache.update { memory ->
@@ -347,33 +351,39 @@ class SimilarLookups(
     }
 
     /**
-     * One artist: its id ([before]'s match, else the ids KJB wrote into its songs, else a search by name), then its
+     * One artist: its id (the ids KJB wrote into its songs, else [before]'s match, else a search by name), then its
      * neighbours on ListenBrainz.
      */
     private suspend fun lookUp(artist: PlayedArtist, before: ArtistSimilar?): Step {
-        val id = before?.mbid?.takeIf { before.match == Match.FOUND }
-            ?: artist.written?.let { written ->
-                when (val answer = paced { musicBrainz.release(written.release) }) {
-                    is MetaAnswer.Ok -> SimilarRules.artistIdIn(answer.value, written.recording, artist.name)
-                    MetaAnswer.NotFound -> null
-                    else -> return Step.Failed(reason(answer))
-                }
+        val tagged = artist.written?.let { written ->
+            when (val answer = paced { musicBrainz.release(written.release) }) {
+                is MetaAnswer.Ok -> SimilarRules.artistIdIn(answer.value, written.recording, artist.name)
+                MetaAnswer.NotFound -> null
+                else -> return Step.Failed(reason(answer))
             }
+        }
+        val id = tagged
+            ?: before?.mbid?.takeIf { before.match == Match.FOUND }
             ?: when (val answer = paced { musicBrainz.searchArtists(artist.name) }) {
                 is MetaAnswer.Ok -> {
                     val (match, found) = SimilarRules.match(answer.value, artist.name)
-                    found ?: return Step.Unmatched(ArtistSimilar(artist.name, match, at = now()))
+                    found ?: return Step.Unlisted(ArtistSimilar(artist.name, match, at = now()))
                 }
                 else -> return Step.Failed(reason(answer))
             }
         val answer = paced {
             client.get(ListenBrainzUrls.similarArtists(id), Body.JSON, fresh = true, keep = { false }, read = ListenBrainzJson::neighbours)
         }
+        val gone = when (answer) {
+            MetaAnswer.NotFound -> HttpURLConnection.HTTP_NOT_FOUND
+            is MetaAnswer.Failed -> answer.status?.takeIf { it in SimilarRules.GONE }
+            else -> null
+        }
         return when {
             answer is MetaAnswer.Ok -> Step.Listed(ArtistSimilar(artist.name, Match.FOUND, id, answer.value.take(SimilarRules.KEEP), now()))
-            answer is MetaAnswer.NotFound -> Step.Gone(HttpURLConnection.HTTP_NOT_FOUND)
-            answer is MetaAnswer.Failed && answer.status in SimilarRules.GONE -> Step.Gone(answer.status ?: 0)
-            else -> Step.Failed(reason(answer))
+            gone == null -> Step.Failed(reason(answer))
+            before?.neighbours.isNullOrEmpty() -> Step.Unlisted(ArtistSimilar(artist.name, Match.FOUND, id, at = now()))
+            else -> Step.Gone(gone)
         }
     }
 
@@ -396,10 +406,13 @@ class SimilarLookups(
         /** Found, with its neighbours (maybe none). */
         data class Listed(val entry: ArtistSimilar) : Step
 
-        /** No artist, or none for sure: nothing asked of ListenBrainz. */
-        data class Unmatched(val entry: ArtistSimilar) : Step
+        /**
+         * Nothing to list, kept so: no artist or none for sure (ListenBrainz not asked), or a "gone" status for an artist
+         * ListenBrainz never listed. The count of "gone" answers stays as it is.
+         */
+        data class Unlisted(val entry: ArtistSimilar) : Step
 
-        /** ListenBrainz answered a status that says its endpoint is gone ([SimilarRules.GONE]). */
+        /** For an artist it listed before, ListenBrainz answered a status that says its endpoint is gone ([SimilarRules.GONE]). */
         data class Gone(val status: Int) : Step
 
         /** Busy, offline or refused: the run ends and the lookups pause. */
