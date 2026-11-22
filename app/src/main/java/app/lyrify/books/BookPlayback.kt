@@ -35,6 +35,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 // Book mode (research section 3): a book's queue (SourceKind.BOOK) plays with 30 s back and forward in place of Previous
@@ -151,6 +152,8 @@ fun BookState.keptFor(queues: QueueBook, library: Library?, now: Long): BookStat
 }
 
 suspend fun PlayerCore.openedIntoBook(library: Library, books: BookStore, copyOf: suspend (String) -> Song?, paused: () -> Boolean) {
+    // A change asked for before the queues are read waits for them (PlayerCore.switch would), and is then looked at anew.
+    ready.first { it }
     val item = book.value.current?.takeIf { it.source.kind == SourceKind.OPENED }?.current?.song ?: return
     val copy = if (library.bookOf(item.path) == null) copyOf(item.path) else null
     // Play pressed meanwhile: it goes on as it is, and becomes the book at its next pause.
@@ -158,6 +161,35 @@ suspend fun PlayerCore.openedIntoBook(library: Library, books: BookStore, copyOf
     val was = book.value.currentId
     switch { it.openedAsBook(library, books.state.value, { ref -> copy?.takeIf { ref == item } }, now()) }
     if (book.value.currentId != was) books.change { it.keptFor(book.value, library, now()) }
+}
+
+/**
+ * "Resume" on queue [queueId] from the queues pages ([resumeAsBook]), once the queues are read: an "Opened file" queue's
+ * cache copy is looked up by [copyOf] first, and the place an Opened file queue goes on at as its book is kept in
+ * `books.json` ([books], [keptFor]). False, changing nothing, when another queue started while the copy was looked up:
+ * the later start wins. Main thread.
+ */
+suspend fun PlayerCore.resumeIntoBook(queueId: String, library: Library?, books: BookStore, copyOf: suspend (String) -> Song?): Boolean {
+    ready.first { it }
+    val was = book.value.currentId
+    val item = book.value.queue(queueId)?.takeIf { it.source.kind == SourceKind.OPENED }?.current?.song
+    val copy = if (library != null && item != null) copyOf(item.path) else null
+    if (book.value.currentId != was) return false
+    switch { it.resumeAsBook(queueId, library, books.state.value, { ref -> copy?.takeIf { ref == item } }, now()) }
+    if (item != null) books.change { it.keptFor(book.value, library, now()) }
+    return true
+}
+
+/**
+ * Turns the "Opened file" queue into its book whenever the player is left [paused] on it ([openedIntoBook]): as the
+ * queues are read, as the library is read or changes, and at each pause. Runs until cancelled. Main thread.
+ */
+suspend fun PlayerCore.openedIntoBooks(library: Flow<LibraryState>, paused: StateFlow<Boolean>, books: BookStore, copyOf: suspend (Library, String) -> Song?) {
+    combine(book, library, paused) { queues, state, still -> Triple(queues, state, still) }.collect { (queues, state, still) ->
+        val known = (state as? LibraryState.Ready)?.library ?: return@collect
+        if (!still || queues.current?.source?.kind != SourceKind.OPENED) return@collect
+        openedIntoBook(known, books, { path -> copyOf(known, path) }) { paused.value }
+    }
 }
 
 /** The book whose queue plays, and the part playing in it ([partIndex] in [Book.parts]). */
@@ -368,13 +400,7 @@ class BookPart : ServicePart {
         scope.launch { made.run() }
         // An "Opened file" queue left paused on a book's file goes on as its book (BK1): on a restart or an update, on a
         // pause, and once the library is read, so any Play resumes it as a book.
-        scope.launch {
-            combine(core.book, library, paused) { queues, state, still -> Triple(queues, state, still) }.collect { (queues, state, still) ->
-                val known = (state as? LibraryState.Ready)?.library ?: return@collect
-                if (!still || queues.current?.source?.kind != SourceKind.OPENED) return@collect
-                core.openedIntoBook(known, store, { path -> OpenedFiles.libraryCopyOf(service, path, known.all) }) { !engine.playWhenReady }
-            }
-        }
+        scope.launch { core.openedIntoBooks(library, paused, store) { known, path -> OpenedFiles.libraryCopyOf(service, path, known.all) } }
         // The chapters of a single file playing, read once for the player and the sleep timer.
         scope.launch {
             combine(core.book, library) { queues, state -> playingBook(queues.current, (state as? LibraryState.Ready)?.library)?.book }

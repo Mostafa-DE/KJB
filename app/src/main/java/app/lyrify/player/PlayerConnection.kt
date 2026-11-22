@@ -18,8 +18,7 @@ import app.lyrify.R
 import app.lyrify.books.BookState
 import app.lyrify.books.BookStore
 import app.lyrify.books.asBook
-import app.lyrify.books.keptFor
-import app.lyrify.books.resumeAsBook
+import app.lyrify.books.resumeIntoBook
 import app.lyrify.library.Library
 import app.lyrify.library.LibraryGraph
 import app.lyrify.library.LibraryRepository
@@ -28,6 +27,7 @@ import app.lyrify.library.Song
 import app.lyrify.library.SongRef
 import com.google.common.util.concurrent.ListenableFuture
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -171,6 +171,9 @@ class PlayerConnection(
     private var connecting: ListenableFuture<MediaController>? = null
     private val waiting = mutableListOf<(MediaController) -> Unit>()
     private var users = 0
+
+    /** A Resume waiting on a cache copy's lookup. */
+    private var resuming: Job? = null
     /** The library, for the songs of queues that are not playing; null while it is read. */
     val library: StateFlow<Library?> = repository.state.map { (it as? LibraryState.Ready)?.library }.stateIn(scope, SharingStarted.Eagerly, null)
 
@@ -306,18 +309,14 @@ class PlayerConnection(
         book.deleted(queueId)?.let { gone -> gone.book to Undo { core.change { it.undelete(gone) } } }
     }
 
-    /** "Resume": that queue plays at its place; an "Opened file" queue on a book's file as that book ([resumeAsBook]). */
+    /**
+     * "Resume": that queue plays at its place; an "Opened file" queue on a book's file as that book ([resumeIntoBook]), a
+     * cache copy looked up off the main thread. A later Resume, or another start meanwhile, wins.
+     */
     fun resume(queueId: String) {
-        scope.launch {
-            val known = library()
-            val item = core.book.value.queue(queueId)?.takeIf { it.source.kind == SourceKind.OPENED }?.current?.song
-            // A cache copy is the library's book by its name and size, read off the main thread; nothing to read for any other.
-            val copy = if (known != null && item != null) OpenedFiles.libraryCopyOf(context, item.path, known.all) else null
-            val opened = item != null
-            core.switch { it.resumeAsBook(queueId, known, books.value, { ref -> copy?.takeIf { ref == item } }, core.now()) }
-            // The place it goes on at is the book's own now (nothing for music).
-            if (opened) bookStore.change { it.keptFor(core.book.value, known, core.now()) }
-            send { it.play() }
+        resuming?.cancel()
+        resuming = scope.launch {
+            if (core.resumeIntoBook(queueId, library(), bookStore) { path -> library()?.let { OpenedFiles.libraryCopyOf(context, path, it.all) } }) send { it.play() }
         }
     }
 
