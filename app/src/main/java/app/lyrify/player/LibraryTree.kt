@@ -9,8 +9,11 @@ import app.lyrify.library.recentlyAdded
 import app.lyrify.library.sortSongs
 import app.lyrify.library.search.searchSource
 import app.lyrify.settings.LibrarySettings
+import app.lyrify.settings.SongList
 import app.lyrify.settings.SortSongs
+import app.lyrify.stats.sinceOf
 import java.text.Normalizer
+import java.time.ZoneId
 import java.util.Locale
 
 /**
@@ -62,6 +65,8 @@ class TreeData(
     val recentlyPlayed: List<Song> = emptyList(),
     /** Wall-clock millis, for Recently added. */
     val now: Long = 0,
+    /** The phone's time zone, for the days of the period Recently added was left on in the app. */
+    val zone: ZoneId = ZoneId.systemDefault(),
     /** The car's latest searches by their words, so a song picked in their results plays them. */
     val found: Map<String, Found> = emptyMap(),
     /** A queue's name as the app shows it ("Album · Harbour Glass"). */
@@ -232,7 +237,7 @@ object LibraryTree {
             id == FAVOURITES -> library.listed(data.favourites)
             id == MOST_PLAYED -> data.mostPlayed
             id == RECENTLY_PLAYED -> data.recentlyPlayed
-            id == RECENTLY_ADDED -> recentlyAdded(library, data.now)
+            id == RECENTLY_ADDED -> recentlyAdded(library, sinceOf(data.settings.periodOf(SongList.RECENTLY_ADDED), data.now, data.zone))
             id.startsWith(QUEUE) -> data.book.queue(id.removePrefix(QUEUE))?.items?.map { library.resolver.find(it.song) }
             id.startsWith(PLAYLIST) -> data.playlists.firstOrNull { it.id == id.removePrefix(PLAYLIST) }?.let { library.listed(it.songs) }
             id.startsWith(ALBUM) -> library.album(id.removePrefix(ALBUM))?.songs

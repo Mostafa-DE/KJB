@@ -82,6 +82,7 @@ import app.lyrify.settings.SongList
 import app.lyrify.settings.SortSongs
 import app.lyrify.stats.SongPlays
 import app.lyrify.stats.StatsGraph
+import app.lyrify.stats.sinceOf
 import app.lyrify.tags.NameKind
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -640,11 +641,19 @@ private fun PlaylistsTab(ui: LibraryUi, library: Library, padding: PaddingValues
     val playlists = remember(ui.playlists.playlists) { ui.playlists.playlists.sortedWith(compareBy(Collator.getInstance()) { it.name }) }
     val favourites = remember(library, ui.playlists) { library.listed(ui.playlists.favouriteSongs) }
     val songs = remember(library, ui.playlists) { (favourites + playlists.flatMap { library.listed(it.songs) }).distinctBy { it.path } }
-    // Counted again on each play logged.
+    // Counted again on each play logged and as the day turns, each over the period its list was left on.
     val written by remember(context) { StatsGraph.counter(context).written }.collectAsState()
-    val most by produceState(0, library, written) { value = mostPlayed(Lyrify.plays(context), library).size }
-    val played by produceState(0, library, written) { value = recentlyPlayed(Lyrify.plays(context), library).size }
-    val added = remember(library) { recentlyAdded(library, System.currentTimeMillis()).size }
+    val today = rememberToday()
+    val most by produceState(0, library, written, ui.settings.library, today) {
+        value = mostPlayed(Lyrify.plays(context), library, sinceOf(ui.settings.library.periodOf(SongList.MOST_PLAYED), System.currentTimeMillis(), ZoneId.systemDefault())).size
+    }
+    val played by produceState(0, library, written, ui.settings.library, today) {
+        value = recentlyPlayed(Lyrify.plays(context), library, sinceOf(ui.settings.library.periodOf(SongList.RECENTLY_PLAYED), System.currentTimeMillis(), ZoneId.systemDefault())).size
+    }
+    // Off the main thread: over all time it is the whole library.
+    val added by produceState(0, library, ui.settings.library, today) {
+        value = withContext(Dispatchers.Default) { recentlyAdded(library, sinceOf(ui.settings.library.periodOf(SongList.RECENTLY_ADDED), System.currentTimeMillis(), ZoneId.systemDefault())).size }
+    }
     val queues = queuesCount(ui.queues)
     val source = QueueSource(SourceKind.SONGS, "tab:playlists", stringResource(R.string.library_tab_playlists))
     val state = rememberLazyListState()

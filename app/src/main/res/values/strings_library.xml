@@ -111,7 +111,14 @@
     <string name="lib_your_playlists">Your playlists</string>
     <string name="lib_new_playlist">New playlist</string>
     <string name="lib_played_empty">Play some music and it shows here.</string>
-    <string name="lib_added_empty">Songs added in the last 30 days show here.</string>
+    <!-- Recently added with nothing in its period: every period ends today, so a new song shows. -->
+    <string name="lib_added_empty">New songs on your phone show here.</string>
+    <!-- The period chips of Recently added, Recently played and Most played: today and the days before it. -->
+    <plurals name="lib_past_days">
+        <item quantity="one">Past day</item>
+        <item quantity="other">Past %d days</item>
+    </plurals>
+    <string name="lib_find_in_list">Search in this list</string>
     <string name="lib_playlist_empty">Use Add to on any song.</string>
     <string name="lib_gone_title">Not on your phone</string>
     <string name="lib_gone">It was moved, renamed or deleted.</string>

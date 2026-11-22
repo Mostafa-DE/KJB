@@ -25,7 +25,6 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.nio.file.Files
 import java.nio.file.StandardOpenOption
-import java.util.concurrent.TimeUnit
 
 /** One of the user's playlists: its songs in the user's order, a song possibly twice. [id] never changes. */
 data class Playlist(val id: String, val name: String, val songs: List<SongRef>, val createdAt: Long)
@@ -400,20 +399,28 @@ class PlaylistsRepository internal constructor(
         writeWithRetries(onFailure = { log("playlists not written: ${it.javaClass.simpleName}") }) { store.updateData(change) }
 }
 
-/** How far back "Recently added" goes. */
+/** The Songs tab's "This month" run of its Recently added order: the last 30 days, today one of them. */
 const val RECENTLY_ADDED_DAYS: Long = 30
 
-/** "Recently added": the library's songs MediaStore added in the [RECENTLY_ADDED_DAYS] days before [now], the newest first. */
-fun recentlyAdded(library: Library, now: Long): List<Song> {
-    val since = now - TimeUnit.DAYS.toMillis(RECENTLY_ADDED_DAYS)
-    return library.songs.filter { (it.addedAt ?: return@filter false) >= since }.sortedByDescending { it.addedAt }
-}
+/**
+ * "Recently added": the library's songs MediaStore added from [since] on (wall-clock millis, where its period chip
+ * starts), the newest first; for all time (null) the whole library, songs without a date last.
+ */
+fun recentlyAdded(library: Library, since: Long?): List<Song> =
+    library.songs.filter { song -> since == null || song.addedAt?.let { it >= since } == true }.sortedByDescending { it.addedAt }
 
-/** How many songs "Most played" and "Recently played" hold. */
+/** How many songs "Most played" holds: its top 50, in any period. */
 const val PLAYED_LIST_SIZE: Int = 50
 
-/** "Most played": the [PLAYED_LIST_SIZE] songs played most, all time, the most first; those gone or hidden left out. */
-suspend fun mostPlayed(plays: PlaysQuery, library: Library): List<Song> = library.listed(plays.mostPlayed(PLAYED_LIST_SIZE).map { it.song })
+/**
+ * How many songs "Recently played" holds: its latest 500, so its chips show their own songs (the latest 50 would be
+ * the same in every period of a few weeks), while years of plays stay a quick list.
+ */
+const val RECENTLY_PLAYED_SIZE: Int = 500
 
-/** "Recently played": the [PLAYED_LIST_SIZE] songs played last, the latest first; those gone or hidden left out. */
-suspend fun recentlyPlayed(plays: PlaysQuery, library: Library): List<Song> = library.listed(plays.recentlyPlayed(PLAYED_LIST_SIZE).map { it.song })
+/** "Most played": the [PLAYED_LIST_SIZE] songs played most since [since] (null: all time), the most first; those gone or hidden left out. */
+suspend fun mostPlayed(plays: PlaysQuery, library: Library, since: Long?): List<Song> = library.listed(plays.mostPlayed(PLAYED_LIST_SIZE, since).map { it.song })
+
+/** "Recently played": the [RECENTLY_PLAYED_SIZE] songs played last since [since] (null: all time), the latest first; those gone or hidden left out. */
+suspend fun recentlyPlayed(plays: PlaysQuery, library: Library, since: Long?): List<Song> =
+    library.listed(plays.recentlyPlayed(RECENTLY_PLAYED_SIZE, since).map { it.song })

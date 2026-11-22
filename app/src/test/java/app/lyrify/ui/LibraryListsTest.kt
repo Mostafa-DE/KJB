@@ -277,6 +277,48 @@ class LibraryListsTest {
         assertEquals("Paper Lantern, Tin Roof", songRowWords("Paper Lantern", "Tin Roof", null, note = null, line = null, playing = null))
     }
 
+    // Recently added, Recently played and Most played (RP1): their chips, Search in this list, and the songs they show
+
+    @Test
+    fun `Search in this list finds a song by its title as shown, its artist or its album, as Search compares words`() {
+        val cafe = song("Music/Loose/Corner Cafe.mp3", title = "Café Lights", artist = "Rowan Fennick", album = "Élan Nights")
+        val list = songs + cafe
+        val names = LibrarySettings()
+
+        assertEquals(list, findInList(list, "", names))
+        assertEquals(list, findInList(list, "   ", names))
+        assertEquals(listOf(lantern), findInList(list, "lantern", names))
+        assertEquals(listOf(water), findInList(list, "MIRA", names))
+        assertEquals(listOf(lantern, bell), findInList(list, "harbour glass", names))
+        assertEquals(listOf(clock), findInList(list, "o'clock", names))
+        // Accents, case and marks aside, as Search: "cafe" finds "Café", "elan" the album "Élan Nights".
+        assertEquals(listOf(cafe), findInList(list, "cafe", names))
+        assertEquals(listOf(cafe), findInList(list, "elan", names))
+        assertEquals(emptyList<Song>(), findInList(list, "nothing like this", names))
+        // Under "Show file names" a title is found by the file's name it shows.
+        assertEquals(listOf(cafe), findInList(list, "corner", LibrarySettings(showFileNames = true)))
+        assertEquals(emptyList<Song>(), findInList(list, "lights", LibrarySettings(showFileNames = true)))
+    }
+
+    @Test
+    fun `a list with chips hands the songs its search leaves to its hero line, header and frame, and stores the chip picked (the page's wiring, read from its source)`() {
+        // No Compose renderer on the JVM: the period lists are ListeningTest's and PlaylistsTest's, the search findInList's above.
+        val page = File("src/main/java/app/lyrify/ui/CollectionScreens.kt").readText().substringAfter("private fun BuiltInPage(").substringBefore("\n}\n")
+        // The songs shown are those the search leaves of the chip's list.
+        assertTrue(page.contains("findInList("))
+        // The hero's line ("83 songs · 423 min"), the header's count, and Shuffle, Play and Add all (the frame's songs) take them.
+        assertTrue(page.contains("songsMeta(songs)"))
+        assertTrue(page.contains("ListHeader(songs.size,"))
+        assertTrue(page.contains("SongListFrame(ui, songs,"))
+        // One chip per period, one picked at a time, kept for the list in settings.json.
+        assertTrue(page.contains("ListPeriod.entries"))
+        assertTrue(page.contains("Role.RadioButton"))
+        assertTrue(page.contains("listPeriods = it.library.listPeriods + (list.songList to"))
+        val strings = File("src/main/res/values/strings_library.xml").readText()
+        assertTrue(strings.contains("<item quantity=\"other\">Past %d days</item>"))
+        assertTrue(strings.contains(">Search in this list<"))
+    }
+
     @Test
     fun `album cards carry a tag a device test finds them by, never their album's name`() {
         // UiAutomator sees a Compose test tag only as a resource id, and only where the tree asks for that.

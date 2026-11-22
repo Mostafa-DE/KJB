@@ -352,7 +352,7 @@ class PlaylistsTest {
     // Built for you
 
     @Test
-    fun `Recently added is the library's songs added in the last 30 days, the newest first`() {
+    fun `Recently added is the library's songs added from its period's start, the newest first, and the whole library for all time`() {
         val day = TimeUnit.DAYS.toMillis(1)
         val library = Library.of(
             listOf(
@@ -361,32 +361,35 @@ class PlaylistsTest {
                 song("Music/c.mp3", addedAt = NOW - 1 * day),
                 song("Music/d.mp3", addedAt = null),
                 song("Music/e.mp3", addedAt = NOW - day, durationMs = 2_000),
+                song("Music/f.mp3", addedAt = NOW - 30 * day),
             ),
             Settings(),
         )
 
-        assertEquals(listOf("c", "a"), recentlyAdded(library, NOW).map { it.title })
+        assertEquals(listOf("c", "a", "f"), recentlyAdded(library, NOW - 30 * day).map { it.title })
+        // All time: every song, those MediaStore gave no date last.
+        assertEquals(listOf("c", "a", "f", "b", "d"), recentlyAdded(library, null).map { it.title })
     }
 
     @Test
-    fun `Most played and Recently played are the play counter's top 50, found in the library in its order`() = runBlocking {
+    fun `Most played is the play counter's top 50 and Recently played its latest 500, over the period asked, found in the library in its order`() = runBlocking {
         val a = song("Music/a.mp3", id = 1)
         val b = song("Music/b.mp3", id = 2)
         val clip = song("Music/clip.mp3", id = 3, durationMs = 1_000)
         val library = Library.of(listOf(a, b, clip), Settings())
-        val asked = mutableListOf<Int>()
+        val asked = mutableListOf<Pair<Int, Long?>>()
         val plays = object : PlaysQuery {
-            override suspend fun mostPlayed(limit: Int): List<SongPlays> =
-                listOf(b.ref, clip.ref, SongRef(VOLUME + "Music/Gone/x.mp3"), a.ref).map { SongPlays(it, 3, null, 0) }.also { asked += limit }
+            override suspend fun mostPlayed(limit: Int, since: Long?): List<SongPlays> =
+                listOf(b.ref, clip.ref, SongRef(VOLUME + "Music/Gone/x.mp3"), a.ref).map { SongPlays(it, 3, null, 0) }.also { asked += limit to since }
 
-            override suspend fun recentlyPlayed(limit: Int): List<SongPlays> = listOf(a.ref, b.ref).map { SongPlays(it, 1, NOW, 0) }.also { asked += limit }
+            override suspend fun recentlyPlayed(limit: Int, since: Long?): List<SongPlays> = listOf(a.ref, b.ref).map { SongPlays(it, 1, NOW, 0) }.also { asked += limit to since }
 
             override suspend fun plays(song: SongRef): SongPlays? = null
         }
 
-        assertEquals(listOf(b, a), mostPlayed(plays, library))
-        assertEquals(listOf(a, b), recentlyPlayed(plays, library))
-        assertEquals(listOf(50, 50), asked)
+        assertEquals(listOf(b, a), mostPlayed(plays, library, NOW - 1_000))
+        assertEquals(listOf(a, b), recentlyPlayed(plays, library, null))
+        assertEquals(listOf(50 to NOW - 1_000, 500 to null), asked)
     }
 
     private companion object {
