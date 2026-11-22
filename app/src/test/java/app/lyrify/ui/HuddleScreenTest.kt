@@ -77,9 +77,20 @@ class HuddleScreenTest {
         assertTrue(File("src/main/java/app/lyrify/player/PlayerConnection.kt").readText().contains("SourceKind.HUDDLE -> return context.getString(R.string.huddle_from, source.name)"))
         assertTrue(File("src/main/java/app/lyrify/ui/SongActions.kt").readText().contains("SourceKind.HUDDLE -> resources.getString(R.string.huddle_from, source.name)"))
         // The player's own line is "From <name>" already: the friend's name goes in it as it is.
-        assertTrue(File("src/main/java/app/lyrify/ui/PlayerScreen.kt").readText().contains("val queueName = ui.queue.name ?: ui.queue.source.name.takeIf { ui.queue.source.kind == SourceKind.HUDDLE } ?: sourceLabel("))
+        val player = File("src/main/java/app/lyrify/ui/PlayerScreen.kt").readText()
+        assertTrue(player.contains("val queueName = ui.queue.name ?: ui.queue.source.name.takeIf { ui.queue.source.kind == SourceKind.HUDDLE } ?: sourceLabel("))
+        assertTrue(player.contains("fromLine(stringResource(R.string.player_from, name), bold,"))
         assertTrue("""<string name="huddle_from">From %1${'$'}s</string>""" in File("src/main/res/values/strings_huddle.xml").readText())
         assertTrue("""<string name="player_from">From %1${'$'}s</string>""" in File("src/main/res/values/strings_player.xml").readText())
+    }
+
+    @Test
+    fun `a card not opened yet is New in words too, not colour alone, in Library and on the Huddle page`() {
+        // The redesign (HD3) says it with a visible "New" mark, which TalkBack reads with the card.
+        assertTrue(File("src/main/java/app/lyrify/ui/HuddleEverywhere.kt").readText().contains("if (!received.opened) NewMark()"))
+        assertTrue(File("src/main/java/app/lyrify/ui/HuddleParts.kt").readText().contains("if (fresh) NewMark()"))
+        assertTrue(File("src/main/java/app/lyrify/ui/HuddleScreen.kt").readText().contains("fresh = !received.opened,"))
+        assertTrue("""<string name="huddle_new">New</string>""" in File("src/main/res/values/strings_huddle.xml").readText())
     }
 
     @Test

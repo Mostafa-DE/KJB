@@ -59,6 +59,12 @@ data class Friend(
     val taken: String? = null,
     /** They told you your name is the name of another of their friends: KJB asks you to pick another. */
     val asksNewName: Boolean = false,
+    /**
+     * Reads of their mailbox in a row that found a message that does not open: it waits on the server, unacknowledged, for
+     * [Huddle.NOT_OPENED_RETRIES] more reads, then is let go. 0 again once the server took that acknowledgement, or after
+     * a read that found none.
+     */
+    val notOpenedReads: Int = 0,
 ) {
     val shownName: String get() = rename ?: taken ?: name
 }

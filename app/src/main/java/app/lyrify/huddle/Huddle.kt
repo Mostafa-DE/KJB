@@ -13,6 +13,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.security.SecureRandom
+import java.util.concurrent.atomic.AtomicInteger
 
 /** A message waiting in a mailbox: the server's [seq] in it (its message id), and the sealed [data] (base64url). */
 data class Posted(val seq: Long, val data: String)
@@ -100,7 +101,8 @@ sealed interface Accepted {
  *
  * - Cards go after [UNDO_MS] (the toast's Undo), plays at once, each sealed with the friend's key for their mailbox;
  *   what cannot go waits in [HuddleState.outbox] and goes at the next [sync], a play within a day only. A card without an
- *   answer is tried again after each of [RETRY_MS]'s waits.
+ *   answer is tried again after each of [RETRY_MS]'s waits, one card's tries at a time, started over for a card that
+ *   joined them.
  * - A play goes only to friends you share plays with ([Friend.sharePlays], on from the join), never while you listen
  *   privately.
  * - Names are one per friend list: a newcomer whose name another friend goes by shows under a stand-in ([Friend.taken])
@@ -128,6 +130,9 @@ class Huddle(
     val state: Flow<HuddleState> = storage.state
 
     private val one = Mutex()
+
+    /** Cards without an answer whose tries ([send]) are under way: the first one's job tries for them all; 0 for none. */
+    private val waiting = AtomicInteger(0)
 
     /**
      * Sets your name as friends see it; false when nothing is left of [name] ([Invites.cleanName]). A new one goes to
@@ -244,11 +249,24 @@ class Huddle(
         if (!kept) return null
         scope.launch {
             delay(hold)
-            if (flush()) return@launch
-            for (wait in RETRY_MS) {
-                log("huddle: card not sent, next try in ${wait / 1_000} s")
-                delay(wait)
-                if (flush()) return@launch
+            // One card's tries at a time: a card without an answer while they run joins them (a flush posts the whole
+            // outbox), and they start over for it once they are through.
+            if (flush() || waiting.getAndIncrement() > 0) return@launch
+            try {
+                do {
+                    val joined = waiting.get()
+                    for (wait in RETRY_MS) {
+                        // Sent by a try or a sync, or taken back: no card is left to try for.
+                        if (now().outbox.none { it.kind == Kind.CARD }) break
+                        log("huddle: card not sent, next try in ${wait / 1_000} s")
+                        delay(wait)
+                        if (flush()) break
+                    }
+                } while (!waiting.compareAndSet(joined, 0))
+            } catch (e: Throwable) {
+                // Stopped by an error, or with the process: the next card without an answer starts the tries again.
+                waiting.set(0)
+                throw e
             }
         }
         return message.id
@@ -353,8 +371,8 @@ class Huddle(
     /**
      * KJB is in front, until the job returned is cancelled: syncs now, then every [FAST_MS] on any page (friends' plays
      * show in Library, on the player and the Now bar too). A sync without an answer is tried again after each of
-     * [RETRY_MS]'s waits, then each hour until one answers. Each sync is a job of its own in [scope], so one under way
-     * runs on when KJB goes.
+     * [RETRY_MS]'s waits from its end, then each hour until one answers. Each sync is a job of its own in [scope], so one
+     * under way runs on when KJB goes.
      */
     fun syncWhileInFront(): Job = scope.launch {
         // Syncs in a row without an answer (or that broke off): the next waits the step of RETRY_MS they reached.
@@ -489,7 +507,11 @@ class Huddle(
         return answered
     }
 
-    /** Friends' mailboxes: each message opened with its friend's key, kept once, then acknowledged; a goodbye removes the friend. */
+    /**
+     * Friends' mailboxes: each message opened with its friend's key, kept once, then acknowledged; a goodbye removes the
+     * friend. One that does not open is read again at [NOT_OPENED_RETRIES] syncs, unacknowledged with what came after it,
+     * then acknowledged too. False when the server did not answer, the acknowledgement included.
+     */
     private suspend fun fetch(): Boolean {
         val friends = now().friends
         if (friends.isEmpty()) return true
@@ -498,37 +520,53 @@ class Huddle(
             return false
         }
         val now = clock()
-        // Nothing new: only plays past their time go.
-        if (posted.isEmpty()) return now().plays.none { now - it.at > PLAYS_KEPT_MS } || storage.change { it.received(emptyList(), now) }
+        // Nothing new and no count of messages that did not open to start over: only plays past their time go.
+        if (posted.isEmpty() && friends.none { it.notOpenedReads > 0 }) return now().plays.none { now - it.at > PLAYS_KEPT_MS } || storage.change { it.received(emptyList(), now) }
         val upTo = HashMap<String, Long>()
         val read = ArrayList<Pair<String, Message>>()
-        var closed = 0
+        // By friend: their Friend.notOpenedReads after this read.
+        val notOpened = HashMap<String, Int>()
+        var kept = 0
+        var dropped = 0
         for (friend in friends) {
-            val box = posted[friend.inBox] ?: continue
+            // A mailbox with nothing in it is read too: it found none that does not open.
+            val box = posted[friend.inBox]?.sortedBy { it.seq }.orEmpty()
             val key = HuddleCrypto.decode(friend.inKey) ?: continue
-            for (one in box.sortedBy { it.seq }) {
-                upTo[friend.inBox] = maxOf(upTo[friend.inBox] ?: one.seq, one.seq)
-                // A box that does not open (another key, sealed for the other way, changed) is dropped with the rest.
+            // A box that does not open (another key, sealed for the other way, changed, a newer KJB's): its seq.
+            val closed = ArrayList<Long>()
+            for (one in box) {
                 val message = HuddleCrypto.decode(one.data)?.let { HuddleCrypto.open(key, it, friend.inBox.encodeToByteArray()) }?.let(Messages::decode)
-                if (message == null) closed++ else read += friend.id to message
+                if (message == null) closed += one.seq else read += friend.id to message
             }
+            val reads = if (closed.isEmpty()) 0 else friend.notOpenedReads + 1
+            val again = reads in 1..NOT_OPENED_RETRIES
+            // Let go, it stays past NOT_OPENED_RETRIES until the server takes the acknowledgement, so a lost one goes again.
+            notOpened[friend.id] = reads
+            if (again) kept += closed.size else dropped += closed.size
+            // Read again: acknowledged only up to the first that did not open, so it and what came after it wait.
+            (if (again) box.lastOrNull { it.seq < closed.first() } else box.lastOrNull())?.let { upTo[friend.inBox] = it.seq }
         }
-        if (closed > 0) log("huddle: inbox dropped $closed that did not open (not_opened)")
+        if (kept > 0) log("huddle: inbox kept $kept that did not open, to read again (not_opened)")
+        if (dropped > 0) log("huddle: inbox dropped $dropped that did not open (not_opened)")
         // Whether what came asks for an answer (a name taken in your list, or free again): it goes in this sync.
         var answers = false
-        val kept = storage.change { state ->
-            state.received(read, now).also { next -> answers = next.outbox.any { out -> state.outbox.none { it.id == out.id } } }
+        val written = storage.change { state ->
+            val counted = state.copy(friends = state.friends.map { it.copy(notOpenedReads = notOpened[it.id] ?: it.notOpenedReads) })
+            counted.received(read, now).also { next -> answers = next.outbox.any { out -> state.outbox.none { it.id == out.id } } }
         }
-        if (!kept) {
+        if (!written) {
             log("huddle: inbox not kept (not_written)")
             return false
         }
-        if (!server.ack(upTo)) log("huddle: inbox not acknowledged (no_answer)")
+        val acknowledged = server.ack(upTo)
+        if (!acknowledged) log("huddle: inbox not acknowledged (no_answer)")
+        // What was let go is gone: the next one that does not open gets its reads again.
+        if (acknowledged && dropped > 0) storage.change { state -> state.copy(friends = state.friends.map { if (it.notOpenedReads > NOT_OPENED_RETRIES) it.copy(notOpenedReads = 0) else it }) }
         read.filter { it.second is Message.Bye }.mapNotNull { (id, _) -> friends.firstOrNull { it.id == id } }.forEach { gone ->
             server.dropBoxes(listOf(gone.inBox, gone.outBox))
         }
         if (answers) flushNow()
-        return true
+        return acknowledged
     }
 
     /** This state with [read] messages kept: each once, from friends still here; cards and plays kept within their limits. */
@@ -607,6 +645,9 @@ class Huddle(
 
         /** After a sync or a card without an answer, the waits before each new try: 30 s, 2 min, 10 min; then as usual. */
         val RETRY_MS: List<Long> = listOf(30_000L, 2 * 60_000L, 10 * 60_000L)
+
+        /** A message that does not open is read again at this many syncs, unacknowledged, before it goes. */
+        const val NOT_OPENED_RETRIES: Int = 3
 
         /** An invite nobody joined goes after a week, as the server's does. */
         const val INVITE_KEPT_MS: Long = 7 * DAY_MS
