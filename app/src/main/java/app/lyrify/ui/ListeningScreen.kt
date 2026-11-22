@@ -360,8 +360,9 @@ private fun rememberToday(): LocalDate {
     return today
 }
 
+/** The settings now; the defaults while they are read (here, and Suggestions' screens and sheets). */
 @Composable
-private fun rememberSettings(): Settings {
+internal fun rememberSettings(): Settings {
     val context = LocalContext.current
     val settings by remember(context) { Lyrify.settings(context).settings }.collectAsState(Settings())
     return settings

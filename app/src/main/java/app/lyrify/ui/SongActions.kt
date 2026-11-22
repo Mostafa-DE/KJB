@@ -757,7 +757,9 @@ fun SongSheetsHost(sheets: SongSheets, ui: LibraryUi, onActed: () -> Unit = {}) 
                     }
                 }
             }
-            is OpenSheet.Why -> WhySheet(songOf(step.song) ?: return@SheetFlow Gone(sheets), after = null, by = null, onDismiss = sheets::close)
+            is OpenSheet.Why -> WhySheet(songOf(step.song) ?: return@SheetFlow Gone(sheets), after = null, by = null, onDismiss = sheets::close) { never ->
+                scope.launch { toasts.hold(context, suggestions, step.song, never) }
+            }
             is OpenSheet.AddTo -> AddToSheet(step.songs, addToTitle(step.songs, ui, library), ui, onDismiss = sheets::close) { target ->
                 when (target) {
                     AddTarget.PlayNext -> done(actions.playNext(step.songs))

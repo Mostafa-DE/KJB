@@ -66,6 +66,7 @@ import app.lyrify.player.Repeat
 import app.lyrify.player.ShuffleStep
 import app.lyrify.settings.DockTab
 import app.lyrify.settings.Settings
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -347,6 +348,8 @@ internal fun SecondaryRow(ui: PlayerUi, connection: PlayerConnection, onQueue: (
     val favourite = favouriteSongs.any { it.path == ui.item.song.path }
     val step = ui.queue.shuffleStep
     val suggestions = rememberSuggestions()
+    // The Shuffle button's last message: a newer tap cancels it, so a step already left is never announced, nor undone.
+    val shuffleSaid = remember { mutableStateOf<Job?>(null) }
     val repeat = ui.repeat
     Row(horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 8.dp)) {
         secondaryButtons(book != null, book?.chapters?.isNotEmpty() == true).forEach { button ->
@@ -355,7 +358,8 @@ internal fun SecondaryRow(ui: PlayerUi, connection: PlayerConnection, onQueue: (
                 // the suggestion mark, and its message's Undo goes back to plain Shuffle.
                 PlayerButton.SHUFFLE -> ToggleButton(R.drawable.ic_shuffle, stringResource(shuffleLabel(step)), on = step != ShuffleStep.OFF, badge = step == ShuffleStep.SMART) {
                     val next = connection.cycleShuffle()
-                    scope.launch {
+                    shuffleSaid.value?.cancel()
+                    shuffleSaid.value = scope.launch {
                         if (next != ShuffleStep.SMART) {
                             toasts.show(Toast(resources.getString(if (next == ShuffleStep.SHUFFLE) R.string.player_shuffled else R.string.player_unshuffled), R.drawable.ic_shuffle))
                         } else if (toasts.show(Toast(resources.getString(R.string.suggest_smart_on, suggestions.mix().oneIn), R.drawable.ic_explore, action = resources.getString(R.string.player_undo)))) {

@@ -482,6 +482,7 @@ fun rememberOwnNow(): OwnNowSource {
     val ui by connection.ui.collectAsStateWithLifecycle()
     val now = rememberClock(ui?.playing == true)
     ExtrasToasts()
+    AutoplayMessage(ui)
     val toasts = LocalToasts.current
     val resources = LocalResources.current
     val shown by rememberUpdatedState(settings.playerUi.recentQueueHintShown)
