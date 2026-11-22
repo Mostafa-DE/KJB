@@ -212,6 +212,33 @@ class VectorIconsTest {
     }
 
     @Test
+    fun `the chapter icons are the skip arrow and KJB's book as the skip icons are drawn, Previous the mirror of Next`() {
+        val next = parse(File(drawables, "ic_chapter_next.xml"))
+        val previous = parse(File(drawables, "ic_chapter_previous.xml"))
+        listOf(next, previous).forEach { vector ->
+            assertEquals("24dp", vector.attr("width"))
+            assertEquals("24dp", vector.attr("height"))
+            assertEquals(2, paths(vector).size)
+            assertTrue(paths(vector).all { (path, offset) -> path.attr("fillColor") == "#FF000000" && offset == 0f to 0f })
+        }
+        // The same shapes, every x turned round the middle: the arrow points back at the book.
+        val pairs = { vector: Element -> paths(vector).map { (path, _) -> path.attr("pathData").orEmpty() } }
+        pairs(next).zip(pairs(previous)).forEach { (forward, back) ->
+            assertEquals(forward.filter(Char::isLetter), back.filter(Char::isLetter))
+            val a = points(forward)
+            val b = points(back)
+            assertEquals(a.size, b.size)
+            a.zip(b).forEach { (p, q) ->
+                assertEquals(24f - p.first, q.first, 0.002f)
+                assertEquals(p.second, q.second, 0.002f)
+            }
+        }
+        // Next: the arrow on the left, pointing at the book on the right.
+        val (arrow, book) = paths(next).map { (path, _) -> bounds(path.attr("pathData").orEmpty())!! }
+        assertTrue("$arrow before $book", arrow.right < book.left + 1f)
+    }
+
+    @Test
     fun `a path's bounds take relative moves, curves and arcs into account`() {
         assertEquals(Box(10f, 20f, 30f, 40f), bounds("M10,20L30,40Z"))
         assertEquals(Box(10f, 20f, 30f, 40f), bounds("m10,20 l20,20 z"))

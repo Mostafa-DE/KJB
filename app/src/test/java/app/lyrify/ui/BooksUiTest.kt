@@ -1,5 +1,6 @@
 package app.lyrify.ui
 
+import app.lyrify.R
 import app.lyrify.library.Library
 import app.lyrify.library.song
 import app.lyrify.settings.LibraryTab
@@ -25,6 +26,21 @@ class BooksUiTest {
         assertFalse(libraryTabShows(LibraryTab.BOOKS, null))
         assertTrue(libraryTabShows(LibraryTab.BOOKS, withBook))
         LibraryTab.entries.filter { it != LibraryTab.BOOKS }.forEach { assertTrue(libraryTabShows(it, music)) }
+    }
+
+    @Test
+    fun `the player's book row shows the chapter icons and music the skip icons, TalkBack hearing chapter words in a book`() {
+        assertEquals(R.drawable.ic_chapter_previous to R.drawable.ic_chapter_next, stepIcons(book = true))
+        assertEquals(R.drawable.ic_skip_previous_fill to R.drawable.ic_skip_next_fill, stepIcons(book = false))
+        // Unit tests run in the module's folder.
+        val controls = File("src/main/java/app/lyrify/ui/PlayerControls.kt").readText()
+        assertTrue(controls.contains("val icons = stepIcons(book != null)"))
+        assertTrue(controls.contains("RoundButton(icons.first, stringResource(R.string.book_previous_chapter)"))
+        assertTrue(controls.contains("RoundButton(icons.second, stringResource(R.string.book_next_chapter)"))
+        assertTrue(controls.contains("RoundButton(icons.first, stringResource(R.string.player_previous)"))
+        assertTrue(controls.contains("RoundButton(icons.second, stringResource(R.string.player_next)"))
+        assertEquals("Previous chapter", strings["book_previous_chapter"])
+        assertEquals("Next chapter", strings["book_next_chapter"])
     }
 
     @Test
