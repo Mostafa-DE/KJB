@@ -37,12 +37,12 @@ val updateRepo = findProperty("updateRepo")?.toString() ?: kjbRepo
 
 /**
  * The Downloads add-on's APK that KJB downloads (Tools > Downloads > Get Downloads): KJB-Downloads-<version>.apk on the same
- * release, pinned the same way: KJB Downloads 3.0.3 on v3.0.3. -PdlAddonUrl, -PdlAddonSha256 and -PdlAddonBytes point
+ * release, pinned the same way: KJB Downloads 3.1.0 on v3.1.0. -PdlAddonUrl, -PdlAddonSha256 and -PdlAddonBytes point
  * a test build at another file.
  */
-val dlAddonUrl = findProperty("dlAddonUrl")?.toString() ?: "https://github.com/$kjbRepo/releases/download/v3.0.3/KJB-Downloads-3.0.3.apk"
-val dlAddonSha256 = findProperty("dlAddonSha256")?.toString() ?: "4080c42a85cbc5b9add00bcd62e605844c04d74e82690f3e5631f2111fc03816" // the release asset's SHA-256
-val dlAddonBytes = findProperty("dlAddonBytes")?.toString() ?: "55912034" // the release asset's size in bytes
+val dlAddonUrl = findProperty("dlAddonUrl")?.toString() ?: "https://github.com/$kjbRepo/releases/download/v3.1.0/KJB-Downloads-3.1.0.apk"
+val dlAddonSha256 = findProperty("dlAddonSha256")?.toString() ?: "e2d6f1fe469f0b1633c0715873086a35c6456d64ad64f3cc17200dbd5af4dbc9" // the release asset's SHA-256
+val dlAddonBytes = findProperty("dlAddonBytes")?.toString() ?: "55916018" // the release asset's size in bytes
 
 android {
     namespace = "app.lyrify"
